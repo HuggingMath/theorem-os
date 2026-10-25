@@ -14,6 +14,7 @@ import { layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLa
 import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
 import { renderAgentCards } from './ui/AgentCards';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
+import { renderTaskInspector } from './ui/TaskInspector';
 
 type Task = WebObservation['inspection']['tasks'][number];
 type TaskView = 'graph' | 'list';
@@ -433,18 +434,41 @@ export class CollaborationView {
     const current = observation?.inspection.tasks.find(task => task.id === view.selectedTask);
     const guide = view.element.querySelector<HTMLButtonElement>('[data-collab-guide-task]')!;
     guide.disabled = !task || Boolean(record?.historical);
-    if (!observation || !task) { patchSection(view.element.querySelector('[data-collab-inspector]')!, view.selectedVersion ? `<h4 data-inspected-task-heading data-focus-key="inspected-${h(view.selectedTask)}-${h(view.selectedVersion)}" tabindex="-1">${h(view.selectedTask)}</h4><p data-task-history-notice>所选任务合同未保留，不能以当前同名任务替代。</p><code data-inspected-task-version>${h(view.selectedVersion)}</code>${current ? '<button type="button" class="button" data-task-current>查看当前版本</button>' : ''}` : '<p class="collab-help">选择一个任务查看合同与证据</p>'); return; }
+    const root = view.element.querySelector<HTMLElement>('[data-collab-inspector]')!;
+    if (!observation || !task) {
+      renderTaskInspector(root, view.selectedVersion ? { mode: 'missing', id: view.selectedTask, version: view.selectedVersion, hasCurrent: Boolean(current) } : { mode: 'empty' });
+      return;
+    }
     const historical = record!.historical;
     const blockers = observation.inspection.mathematics.snapshot.blockers.filter(blocker => blocker.taskId === task.id && blocker.taskDigest === task.version);
     const sources = observation.sources.filter(source=>source.taskId===task.id && (!historical || source.taskVersion===task.version)), checks = observation.checks.filter(check=>check.taskId===task.id && (!historical || check.taskVersion===task.version));
     const plannedConsumers = observation.inspection.tasks.filter(consumer=>consumer.plannedDependencies.includes(task.id)).map(consumer=>consumer.id);
     const actualConsumers = observation.inspection.tasks.filter(consumer=>consumer.proof.actualReferences?.tasks?.some(reference => reference.taskId === task.id && reference.taskDigest === task.version)).map(consumer=>({taskId:consumer.id,taskVersion:consumer.version,references:consumer.proof.actualReferences}));
-    patchSection(view.element.querySelector('[data-collab-inspector]')!, `<h4 data-inspected-task-heading data-focus-key="inspected-${h(task.id)}-${h(task.version)}" tabindex="-1">${h(task.id)} · ${h(kindLabel[task.kind])}</h4>${historical ? `<p class="collab-notice" data-task-history-notice>正在查看历史任务合同。${current ? `当前版本为 ${h(current.version)}` : '当前计划已无此任务'}；旧合同未保存完整调度历史。</p>${current ? '<button type="button" class="button" data-task-current data-focus-key="task-current">查看当前版本</button>' : ''}` : ''}<p>${h(task.objective)}</p><div class="collab-inspected-version"><span>${historical ? '历史任务版本' : '当前任务版本'}</span><code data-inspected-task-version>${h(task.version)}</code></div>${factList([
-      ...(!historical ? [['负责人',task.owner],['任务状态',`${label(task.status)} / ${label(task.control)}`],['尝试次数',task.attempts]] as const : []),
+    const facts: [string, unknown][] = [
+      ...(!historical ? [['负责人',task.owner],['任务状态',`${label(task.status)} / ${label(task.control)}`],['尝试次数',task.attempts]] as [string, unknown][] : []),
       ['记录的证明状态',label(task.proof.status)],['本版本计划依赖 AND',task.plannedDependencies.join(', ')||'无'],
-      ...(!historical ? [['计划消费者',plannedConsumers.join(', ')||'无']] as const : []),
-    ])}<div class="collab-artifact-links"><button type="button" class="text-button" data-collab-deliveries-task>查看此任务交付</button><button type="button" class="text-button" data-collab-changes-task>查看此任务变化</button><button type="button" class="text-button" data-collab-reviews-task>查看此任务审阅</button></div><h5>精确类型</h5>${codeBlock(task.type??'本任务未提供类型')}${detailBlock('前提',task.premises,`premises-${task.id}-${task.version}`)}${detailBlock('实际证明引用',task.proof.actualReferences??'未记录',`refs-${task.id}-${task.version}`)}${detailBlock('实际消费者',actualConsumers,`consumers-${task.id}-${task.version}`)}${blockers.length?detailBlock('数学阻塞',blockers,`blockers-${task.id}-${task.version}`):''}${task.feedback?detailBlock('检查反馈',task.feedback,`feedback-${task.id}-${task.version}`):''}${task.finding?detailBlock('研究发现',task.finding,`finding-${task.id}-${task.version}`):''}${task.parkedBy.length?detailBlock('路线停放原因',{parkedBy:task.parkedBy,parkedRoutes:task.parkedRoutes},`parked-${task.id}-${task.version}`):''}
-      <h5>源码与检查回执</h5><p class="collab-help">每份产物固定到其任务版本、commit 和环境。</p><div class="collab-artifact-links">${sources.map(source=>`<button type="button" class="button" data-collab-source="${h(source.taskId)}" data-source-version="${h(source.taskVersion)}" data-source-snapshot="${h(taskSourceKey(source))}" data-focus-key="source-${h(taskSourceKey(source))}">${source.taskVersion===current?.version?'当前':'历史'}源码 · ${h(source.file)} · ${h(source.commit.slice(0, 8))}</button>`).join('')}${!sources.some(source=>source.taskVersion===task.version)?`<button type="button" class="button" data-collab-source="${h(task.id)}" data-source-version="${h(task.version)}" data-focus-key="source-${h(task.id)}-${h(task.version)}">读取${historical ? '所选历史' : '当前'}版本源码</button>`:''}${checks.map(check=>`<button type="button" class="button" data-collab-check="${h(check.id)}" data-check-identity="${h(taskCheckKey(check))}" data-focus-key="check-${h(taskCheckKey(check))}">${check.taskVersion===current?.version?'当前':'历史'}检查 · ${h(check.id)}</button>`).join('')}</div>${checks.length?'':'<p class="collab-help">尚无已归档检查回执</p>'}`);
+      ...(!historical ? [['计划消费者',plannedConsumers.join(', ')||'无']] as [string, unknown][] : []),
+    ];
+    const detail = (title: string, value: unknown, id: string) => ({ title, value, id: `${id}-${task.id}-${task.version}` });
+    const state = taskState(task);
+    renderTaskInspector(root, { mode: 'task', task: {
+      id: task.id, version: task.version, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), proof: task.proof.status,
+      objective: task.objective, historical, ...(current ? { currentVersion: current.version } : {}),
+      facts: facts.map(([name, value]) => ({ name, value: String(value ?? '未记录') })), type: task.type ?? '本任务未提供类型',
+      details: [detail('前提', task.premises, 'premises'), detail('实际证明引用', task.proof.actualReferences ?? '未记录', 'refs'), detail('实际消费者', actualConsumers, 'consumers'),
+        ...(blockers.length ? [detail('数学阻塞', blockers, 'blockers')] : []), ...(task.feedback ? [detail('检查反馈', task.feedback, 'feedback')] : []),
+        ...(task.finding ? [detail('研究发现', task.finding, 'finding')] : []),
+        ...(task.parkedBy.length ? [detail('路线停放原因', { parkedBy: task.parkedBy, parkedRoutes: task.parkedRoutes }, 'parked')] : [])],
+      artifacts: [
+        ...sources.map(source => ({ kind: 'source' as const, label: `${source.taskVersion===current?.version?'当前':'历史'}源码 · ${source.file} · ${source.commit.slice(0, 8)}`,
+          attributes: { 'data-collab-source': source.taskId, 'data-source-version': source.taskVersion, 'data-source-snapshot': taskSourceKey(source), 'data-focus-key': `source-${taskSourceKey(source)}` } })),
+        ...(!sources.some(source=>source.taskVersion===task.version) ? [{ kind: 'source' as const, label: `读取${historical ? '所选历史' : '当前'}版本源码`,
+          attributes: { 'data-collab-source': task.id, 'data-source-version': task.version, 'data-focus-key': `source-${task.id}-${task.version}` } }] : []),
+        ...checks.map(check => ({ kind: 'check' as const, label: `${check.taskVersion===current?.version?'当前':'历史'}检查 · ${check.id}`,
+          attributes: { 'data-collab-check': check.id, 'data-check-identity': taskCheckKey(check), 'data-focus-key': `check-${taskCheckKey(check)}` } })),
+      ],
+      hasChecks: checks.length > 0,
+    } });
   }
   private renderAgents(view: ViewState) {
     const workers = view.observation?.inspection.workers ?? [];
