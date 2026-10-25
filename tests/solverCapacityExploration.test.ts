@@ -10,7 +10,6 @@ import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { captureObligationSnapshot } from '../src/solver/obligationProgress';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
-import { pendingResearchHandoffs } from '../src/solver/researchHandoffs';
 import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion,
   type CooperativeAction, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
@@ -65,6 +64,8 @@ describe('host exploration for spare cooperative capacity', () => {
     }
   };
   const startLead = async () => {
+    // Stand in for an ordinary Lead planning input; these cases only need a running Lead.
+    (cooperative as any).needsLead = true; refresh();
     const action = await track(cooperative.next(workers[0], budget));
     if (action?.kind !== 'lead') throw new Error('fixture_expected_lead');
     activate(workers[0], action);
@@ -282,7 +283,7 @@ describe('host exploration for spare cooperative capacity', () => {
     expect(context.manifest!.omitted).not.toContainEqual(expect.objectContaining({ id: 'capacity-exploration' }));
   });
 
-  it('accepts a dispatched handoff rejection while a new target revision retires its host exploration', async () => {
+  it('accepts a plan revision that retires a host exploration with an unadopted proposal', async () => {
     await startGeneralists();
     const worker = provers()[0], action = await claim(worker);
     const helper: CooperativeTask = { id: 'proposed_typed_bridge', kind: 'lemma',
@@ -292,22 +293,21 @@ describe('host exploration for spare cooperative capacity', () => {
       summary: 'The spare-capacity investigation proposes an exact typed bridge.', lemmaRequests: [helper] });
     (cooperative as any).record(worker, action.task, 'research', 'advisory',
       'An exact typed bridge needs a Lead decision.', { finding, findingDigest: mathDigest(finding), lemmaRequests: [helper] });
-    const handoff = pendingResearchHandoffs(state.cooperation!)[0];
-    expect(handoff).toBeDefined();
+    const byId = () => new Map(state.cooperation!.tasks.map(item => [item.task.id, item]));
+    expect(contextCompiler.leadResearchInputs(state.cooperation!.deliveries ?? [], byId())).toHaveLength(1);
     const lead = await startLead();
-    expect(lead.handoffIds).toContain(handoff.id);
     const proposal = plan();
     proposal.tasks = proposal.tasks.map(task => task.id === 'busy_helper' ? { ...task, revision: task.revision + 1 } : task);
     fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(lead)!), JSON.stringify({
       kind: 'plan', dispatchNonce: lead.planNonce, baseVersion: lead.planVersion,
-      summary: 'Revise the exact consumer and reject the obsolete candidate interface.', ...proposal,
-      handoffDecisions: [{ id: handoff.id, status: 'rejected', reason: 'This proposed bridge does not close the revised consumer.' }],
+      summary: 'Revise the exact consumer without adopting the obsolete candidate interface.', ...proposal,
     }) + '\n');
     await cooperative.pulse();
     expect(events.filter(item => item.event === 'plan_published')).toHaveLength(1);
     expect(state.cooperation!.tasks.some(item => item.task.id === action.task.id)).toBe(false);
     expect(cooperative.current(action)).toBe(false);
-    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({ id: handoff.id, status: 'rejected' }));
+    // The retired source version no longer presents its proposal to Lead.
+    expect(contextCompiler.leadResearchInputs(state.cooperation!.deliveries ?? [], byId())).toEqual([]);
     expect(state.cooperation!.error).toBeUndefined();
   });
 
@@ -398,39 +398,6 @@ describe('host exploration for spare cooperative capacity', () => {
       theoremName: 'Tutorial.engineer_typed_work', type: 'True', dependsOn: [], revision: 0 }, status: 'pending', attempts: 0 };
     state.cooperation!.tasks.push(typed); refresh();
     expect(cooperative.shouldYieldCapacityExploration(engineer, action)).toBe(true);
-  });
-
-  it('turns exhausted discovery into one explicit typed-decomposition assessment instead of more research', async () => {
-    await startGeneralists();
-    const actions = await Promise.all(provers().map(claim));
-    await complete(provers()[0], actions[0]);
-    expect((cooperative as any).stagnationRecovery()).toBeUndefined();
-    for (const [index, action] of actions.entries()) if (index) await complete(provers()[index], action);
-    const ledger = structuredClone(state.cooperation!.capacityExplorationInputs);
-    const busyAssignment = node('busy_helper').assignment;
-    const lead = await startLead();
-    expect(lead.stagnationRecovery).toMatchObject({ taskIds: ['busy_helper'], reason: 'frontier-not-decomposed' });
-    const receipt = structuredClone(lead.stagnationRecovery);
-    fs.writeFileSync(path.join(workers[0].worktree, 'RESEARCH.md'), JSON.stringify({ kind: 'assessment',
-      dispatchNonce: lead.planNonce, baseVersion: lead.planVersion,
-      assessments: ([['capacity', lead.capacityRefill], ['stagnation', lead.stagnationRecovery]] as const)
-        .flatMap(([kind, request]) => request ? [{ kind, requestId: request.requestId, inputDigest: request.inputDigest,
-          outcome: 'no-independent-work',
-          reason: 'The four completed investigations have not identified a closed helper for the remaining busy_helper proof.' }] : []),
-    }));
-    cooperative.deactivate(workers[0]);
-    await cooperative.deliver(workers[0], lead, commitSolverSources(problem, workers[0].worktree));
-    expect(state.cooperation!.lastStagnationRecovery).toMatchObject({ ...receipt, status: 'assessed', outcome: 'no-independent-work' });
-    expect((cooperative as any).stagnationRecovery()).toBeUndefined();
-    await waitForCapacity(provers()[0]);
-    expect(overlays()).toHaveLength(4);
-    expect(state.cooperation!.capacityExplorationInputs).toEqual(ledger);
-    expect(node('busy_helper').status).toBe('running');
-    expect(node('busy_helper').assignment).toBe(busyAssignment);
-    expect(interrupts.get('engineer')).not.toHaveBeenCalled();
-    expect(events.filter(item => item.event === 'stagnation_recovery_requested')).toHaveLength(1);
-    expect(events.filter(item => item.event === 'capacity_exploration_requested')).toHaveLength(4);
-    expect(state.cooperation!.blockers ?? []).toEqual([]);
   });
 
   it('resumes a running exploration with its original assignment rather than spending another method tombstone', async () => {

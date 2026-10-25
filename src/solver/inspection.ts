@@ -5,7 +5,6 @@ import { canonicalMathJson, mathDigest, readMathJson } from '../math/mathRuntime
 import { taskGroup, taskVersion, type TaskRecord } from './tasks';
 import { researchFailureCategory } from './modules/search';
 import { buildProofContinuation, recordedTaskProofStatus } from './progress';
-import { researchHandoffs } from './researchHandoffs';
 import { buildTokenBudget } from './usageBudget';
 import { captureObligationSnapshot } from './obligationProgress';
 import { contributionExecutionAttempts, type ContributionObservation, type ResearchContributionFlow } from './contributionFlow';
@@ -84,8 +83,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       preparing: scheduled.filter(worker => worker.scheduling!.status === 'preparing').length,
       stopping: scheduled.filter(worker => worker.scheduling!.status === 'stopping').length,
       idle: scheduled.filter(worker => worker.scheduling!.status === 'idle').length,
-      stopped: scheduled.filter(worker => worker.scheduling!.status === 'stopped').length,
-      capacityRefill: cooperative?.lastCapacityRefill },
+      stopped: scheduled.filter(worker => worker.scheduling!.status === 'stopped').length },
     knowledge: { status: state.knowledgeDigest ? 'enabled' : 'disabled', catalogDigest: state.knowledgeDigest,
       evidence: 'recorded-not-replayed', attribution: 'model-reported-origin',
       retrievalCoverage: state.knowledgeRetrievals ? 'recorded' : 'unknown',
@@ -96,7 +94,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
           currentTaskVersion: tasks.some(node => node.task.id === use.consumer.taskId && taskVersion(node.task) === use.consumer.taskDigest) }))) },
     tokenBudget: buildTokenBudget(state.tokenBudget?.maxTotalTokens ?? 0, state.workers ?? [state], state.tokenBudget?.enforcement),
     continuation: buildProofContinuation(tasks, { groups: cooperative?.groups, environmentDigest: state.environmentDigest,
-      proofRoutes: cooperative?.proofRoutes, researchHandoffs: cooperative ? researchHandoffs(cooperative) : [] }),
+      proofRoutes: cooperative?.proofRoutes }),
     mathematics: { snapshot: captureObligationSnapshot(tasks, { groups: cooperative?.groups, environmentDigest: state.environmentDigest,
       blockers: cooperative?.blockers, proofRoutes: cooperative?.proofRoutes }),
       recentChanges: cooperative?.progressReceipts ?? [], retainedChangeLimit: 64 },
@@ -104,7 +102,6 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       conditionalProofTasks: tasks.filter(node => proofRecord(node, state).status === 'conditional').length,
       completedResearchTasks: tasks.filter(node => ['research', 'sketch'].includes(node.task.kind) && node.status === 'completed').length,
       openProofTasks: tasks.filter(node => ['lemma', 'goal'].includes(node.task.kind) && !checked.includes(node)).map(node => node.task.id) },
-    waiting: cooperative?.frontierWaiting ? { ...cooperative.frontierWaiting } : undefined,
     groups: cooperative?.groups ?? [],
     tasks: (cooperative?.tasks ?? []).map(node => ({
       id: node.task.id, kind: node.task.kind, objective: node.task.objective,
@@ -193,32 +190,15 @@ function renderStoredArtifacts(artifacts: StoredRunInspectionArtifacts): string 
 
 function renderContributionFlow(flow: ResearchContributionFlow): string {
   let text = section('Contribution flow', 'Evidence: ' + flow.evidence + '; journal binding: ' + flow.coverage.journal +
-    '; decision history: ' + flow.coverage.decisionHistory + '; execution history: ' + flow.coverage.executionHistory + '.');
+    '; execution history: ' + flow.coverage.executionHistory + '.');
   text += '\nTimes are recorded Unix milliseconds; elapsed values require exact identities and both endpoints. ' +
     'The first observed start belongs to the supplied journal prefix. Missing evidence and clock/order conflicts remain unknown or ambiguous.\n';
   text += section('Research sources', flow.sources.length ? table([
-    'Delivery', 'Source task / version', 'Status', 'Current version', 'Created', 'Published in this run', 'Handoff aliases', 'Proposals',
+    'Delivery', 'Source task / version', 'Status', 'Current version', 'Created', 'Published in this run', 'Proposals',
   ], flow.sources.map(source => [source.deliveryId, source.taskId + '@' + source.taskDigest, source.status, source.currentTaskVersion,
-    observation(source.created), observation(source.publication), source.handoffAliases.map(item => item.handoffId).join(', ') || 'none recorded',
+    observation(source.created), observation(source.publication),
     source.proposals.map(item => item.task.id + '@' + item.taskDigest).join(', ') || 'none recorded',
   ])) : 'No research deliveries recorded.');
-  if (flow.handoffs.length) text += section('Current handoffs', table([
-    'Handoff', 'Proposal', 'Status', 'Context', 'Activation', 'Source deliveries',
-  ], flow.handoffs.map(item => [item.id, item.proposal.id, item.status, item.contextDigest, item.activationDigest,
-    item.sources.map(source => source.deliveryId).join(', ')])));
-  text += section('Handoff decision observations', flow.decisionOccurrences.length || flow.storedDecisions.length ? table([
-    'Evidence', 'Handoff', 'Delivery', 'Decision', 'Context', 'Activation', 'Plan', 'Task / version', 'At',
-    'Publication to decision', 'Decision to first observed start',
-  ], [
-    ...flow.decisionOccurrences.map(item => ['journal line ' + item.evidence.line, item.id, item.deliveryId, item.status,
-      item.contextDigest, item.activationDigest, item.planVersion,
-      item.taskId ? item.taskId + '@' + item.taskDigest : 'none recorded', observation(item.at),
-      observation(item.publicationToDecisionMs, ' ms'), observation(item.decisionToFirstObservedStartMs, ' ms')]),
-    ...flow.storedDecisions.map(item => [item.evidence.path + ' (stored latest)', item.id, item.deliveryId, item.status,
-      item.contextDigest, 'unknown', 'unknown', item.taskId ? item.taskId + '@' + item.taskDigest : 'none recorded',
-      observation(item.at), 'unknown', 'unknown']),
-  ]) : 'No decision records available.');
-  text += '\nStored latest decisions are separate from journal occurrences. Deferred and repeated decisions remain separate; adoption creates a proof obligation.\n';
   text += section('Versioned contribution obligations', flow.obligations.length ? table([
     'Task / version', 'Current version', 'Execution', 'Assignments', 'Check IDs', 'Planned consumers',
     'Proof consumers', 'Statement consumers', 'Conditional consumers', 'Reference coverage',
@@ -291,9 +271,6 @@ export function renderRunInspection(report: Inspection): string {
     'Usage origins are model-reported; checked references confirm a declaration in a recorded proof, not historical authorship or current acceptance.\n';
   text += section('Original targets', table(['Declaration', 'File'], report.problem.targets.map(target => [target.theoremName, target.proofPath])));
   text += section('Recorded progress', `${report.progress.checkedProofTasks} checked proof tasks; ${report.progress.conditionalProofTasks} conditional; ${report.progress.completedResearchTasks} completed research tasks.\n\nOpen proof tasks: ${report.progress.openProofTasks.join(', ') || 'none'}. Dispatch counts include retries and do not measure mathematical progress.`);
-  if (report.waiting) text += section('Waiting for input', `${report.waiting.reason}${report.waiting.investigation
-    ? `; investigation ${report.waiting.investigation.state}${report.waiting.investigation.reason ? ` (${report.waiting.investigation.reason})` : ''}` : ''}
-Waiting is a scheduling state, not a mathematical failure. An abandoned or rejected advisory investigation produced no accepted finding.`);
   text += section('Proof continuation', table(['Original goal', 'Recorded proof', 'Open dependency frontier', 'Missing tasks'],
     report.continuation.goals.map(goal => [goal.taskId, goal.recordedProof, goal.frontier.join(', ') || 'none', goal.missingDependencies.join(', ') || 'none'])));
   const transitions = report.mathematics.recentChanges.filter(receipt => receipt.kind === 'transition').slice(-12);
@@ -324,12 +301,6 @@ Waiting is a scheduling state, not a mathematical failure. An abandoned or rejec
       report.continuation.reuse.map(item => [item.taskId, item.plannedConsumers.join(', ') || 'none',
         item.proofConsumers.join(', ') || 'none recorded', item.statementConsumers.join(', ') || 'none recorded',
         item.conditionalConsumers.join(', ') || 'none recorded'])) : 'No integrated lemmas with current recorded receipts.');
-  if (report.continuation.adoptedResearch.length) text += section('Adopted research', table([
-    'Source task', 'Adopted lemma', 'Recorded proof', 'Planned original goals', 'Proof consumers', 'Statement references', 'Conditional consumers', 'Reference coverage',
-  ], report.continuation.adoptedResearch.map(item => [item.sourceTaskId, item.taskId, item.recordedProof,
-    item.plannedGoalIds.join(', ') || 'none', item.proofConsumers.join(', ') || 'none recorded',
-    item.statementConsumers.join(', ') || 'none recorded', item.conditionalConsumers.join(', ') || 'none recorded',
-    item.referenceCoverage]))) + '\nAdoption schedules a proof obligation. Missing reference coverage leaves actual use unknown.\n';
   text += '\nTasks without a planned path to an active original goal: ' +
     (report.continuation.unconnectedTasks.join(', ') || 'none') + '. This does not establish that a result is mathematically unhelpful.\n';
   if (report.continuation.referenceCoverageMissing.length) text += '\nActual-reference evidence unavailable for: ' +

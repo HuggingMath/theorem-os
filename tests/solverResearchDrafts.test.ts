@@ -7,7 +7,6 @@ import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { commitSolverSources, git, type SolverProblem } from '../src/solver/problem';
 import * as problemSource from '../src/solver/problem';
-import { pendingResearchHandoffs } from '../src/solver/researchHandoffs';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
@@ -20,6 +19,9 @@ describe('isolated advisory research drafts', () => {
   const notes = () => path.join(peer.worktree, 'RESEARCH.md');
   const source = (worker = peer) => path.join(worker.worktree, problem.projectRelative, 'Submission.lean');
   const node = (id: string) => state.cooperation!.tasks.find(node => node.task.id === id)!;
+  // Current research deliveries whose exact lemma proposals are not yet in the plan.
+  const pendingProposals = () => (state.cooperation!.deliveries ?? []).filter(delivery => delivery.kind === 'research' &&
+    delivery.status !== 'superseded' && delivery.lemmaRequests?.some(task => !state.cooperation!.tasks.some(node => node.task.id === task.id)));
   const write = (worker: ResearchWorker, value: unknown, code = '') => fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'),
     '```math\n' + JSON.stringify(value) + '\n```\n' + code);
   const finding = () => ({ conclusion: 'supporting', summary: 'FIRST_ROUTE_FINDING',
@@ -115,7 +117,7 @@ describe('isolated advisory research drafts', () => {
       seedCommit: action.assignment.seedCommit, taskDigest: taskVersion(action.task),
       artifacts: { scope: 'advisory-unverified', artifacts: [{ kind: 'notes-lean' }] } });
     expect(git(lead.worktree, ['rev-parse', `refs/math/${state.runId}/evidence/${commit}`])).toBe(commit);
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
     expect(directSolverModules.M3.ready(state.cooperation!.tasks, state.cooperation!.groups).some(node => node.task.kind === 'goal')).toBe(false);
     await switchTask(); await restart();
     const resumed = await task(); expect(resumed.task.id).toBe('first_route');
@@ -123,12 +125,12 @@ describe('isolated advisory research drafts', () => {
     expect(fs.readFileSync(notes(), 'utf8')).toContain('FIRST_ROUTE_FINDING');
     expect(fs.readFileSync(notes(), 'utf8')).not.toContain('SECOND_ROUTE_FINDING');
     expect(node('first_route').status).toBe('running');
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
     await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree));
     expect(node('first_route').status).toBe('completed');
     expect(state.cooperation!.deliveries!.filter(delivery => delivery.kind === 'research' && delivery.taskId === 'first_route'))
       .toMatchObject([{ summary: 'FIRST_ROUTE_FINDING', artifacts: { reportedChecks: [{ status: 'passed' }] }, lemmaRequests: [{ id: 'bridge' }] }]);
-    expect(pendingResearchHandoffs(state.cooperation!)).toHaveLength(1);
+    expect(pendingProposals()).toHaveLength(1);
     expect(state.cooperation!.tasks.filter(node => node.task.kind === 'goal').every(node => node.status === 'pending')).toBe(true);
   });
 
@@ -141,7 +143,7 @@ describe('isolated advisory research drafts', () => {
       expect(state.cooperation!.researchCheckpoints?.first_route).toBeUndefined();
     }
     expect(state.cooperation!.deliveries ?? []).toEqual([]);
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
     expect(node('goal_1').attempts).toBe(0);
   });
 
@@ -185,7 +187,7 @@ describe('isolated advisory research drafts', () => {
     expect(node('first_route').feedback).toContain('math_research_draft_unavailable');
     await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree));
     expect(node('first_route').status).not.toBe('completed');
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
     expect(state.cooperation!.deliveries!.some(delivery => delivery.kind === 'research' && delivery.taskId === 'first_route')).toBe(false);
   });
 
@@ -207,7 +209,7 @@ describe('isolated advisory research drafts', () => {
     expect(resumed.assignment.seedCommit).not.toBe(action.assignment.seedCommit);
     expect(resumed.assignment.assignmentId).not.toBe(action.assignment.assignmentId);
     expect(node('first_route').status).toBe('running');
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
   });
 
   it('does not restore a task paused while its snapshot is being read', async () => {
@@ -218,7 +220,7 @@ describe('isolated advisory research drafts', () => {
     expect(node('first_route').task.status).toBe('paused');
     expect(fs.readFileSync(notes(), 'utf8')).not.toContain('FIRST_ROUTE_FINDING');
     expect(state.cooperation!.researchDrafts!.first_route.suspended).toBe(true);
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
   });
 
   it('rejects a feasibility draft when its reviewer becomes an input owner during the snapshot read', async () => {
@@ -256,7 +258,7 @@ describe('isolated advisory research drafts', () => {
     expect(node('goal_1').status).toBe('pending');
     expect(node('goal_1').proof).toBeUndefined();
     expect(node('goal_1').integratedCheck).toBeUndefined();
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
   });
 
   it('uses canonical source changes that arrive while a snapshot is being read', async () => {
@@ -282,7 +284,7 @@ describe('isolated advisory research drafts', () => {
     expect(fs.readFileSync(source(), 'utf8')).toContain('by rfl');
     expect(fs.readFileSync(notes(), 'utf8')).toBe('');
     expect(node('first_route').status).toBe('running');
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
   });
 
   it('restores notes after a fixed candidate review uses the same worker', async () => {
@@ -298,6 +300,6 @@ describe('isolated advisory research drafts', () => {
     state.cooperation!.review = undefined;
     expect((await task()).task.id).toBe('first_route');
     expect(fs.readFileSync(notes(), 'utf8')).toContain('FIRST_ROUTE_FINDING');
-    expect(pendingResearchHandoffs(state.cooperation!)).toEqual([]);
+    expect(pendingProposals()).toEqual([]);
   });
 });

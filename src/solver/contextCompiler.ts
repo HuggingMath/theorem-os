@@ -6,8 +6,6 @@ import { deliveryFinding, type DeliveryRecord } from './deliveries';
 import type { SolverProblem } from './problem';
 import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
 import { buildProofContinuation } from './progress';
-import { pendingResearchHandoffs, researchHandoffContext, selectResearchHandoffBatch } from './researchHandoffs';
-import { COORDINATION_INLINE_FINDING_BYTES, pendingResearchChallenges, researchChallengeContext, selectResearchChallengeBatch } from './researchChallenges';
 import { contextTaskConsumers } from './taskConsumers';
 import { mathematicalGapContext } from './mathematicalGaps';
 import { leadPlanPublicationFeedback } from './cooperationShared';
@@ -166,7 +164,6 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
   const required = new Set<string>(), visiting = new Set<string>();
   const action = input.action;
   const scopedLead = action?.kind === 'lead' && tasks.some(node => node.task.kind === 'goal');
-  const coordination = action?.kind === 'lead' && action.coordination;
   if (action?.kind === 'task') {
     if (action.assignment.taskId !== action.task.id || action.assignment.taskDigest !== taskVersion(action.task))
       return stale(`assignment:${action.task.id}`);
@@ -200,60 +197,26 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
       if (taskVersion(dependency.task) !== condition.taskDigest) return stale(`condition:${condition.taskId}`);
       visit(condition.taskId);
     }
-    if ((!scopedLead || !closedLeadHelper(node)) && !(coordination && node.task.kind === 'goal')) {
+    if (!scopedLead || !closedLeadHelper(node)) {
       for (const dependency of node.task.dependsOn) visit(dependency, node);
-      if (action?.kind === 'lead' && !coordination) for (const route of [
+      if (action?.kind === 'lead') for (const route of [
         ...(input.cooperation?.proofRoutes ?? []), ...(node.alternativeRoutes ?? []),
       ]) if (route.targetTaskId === id) [...route.prerequisiteTaskIds, route.closingTaskId].forEach(dependency => visit(dependency));
     }
     visiting.delete(id);
   };
-  const visitLeadInputs = (handoffIds: ReadonlySet<string>, challengeIds: ReadonlySet<string>) => {
-    const visitDeliveryInputs = (deliveryId: string) => {
-      const delivery = input.cooperation?.deliveries?.find(item => item.id === deliveryId);
-      if (!delivery) return missing(`delivery:${deliveryId}`);
-      for (const dependency of delivery.dependencies) {
-        const node = byId.get(dependency.taskId);
-        if (!node) return missing(`dependency:${dependency.taskId}`);
-        if (taskVersion(node.task) !== dependency.taskDigest) return stale(`dependency:${dependency.taskId}`);
-        visit(dependency.taskId);
-      }
-    };
-    for (const item of pendingResearchHandoffs(input.cooperation!)) if (handoffIds.has(item.id) ||
-        item.sources.some(source => handoffIds.has(source.handoffId))) {
-      visit(item.sourceTaskId);
-      item.sources.forEach(source => visitDeliveryInputs(source.deliveryId));
-      item.proposal.dependsOn.filter(id => byId.has(id)).forEach(id => visit(id));
+  // Unadopted proposals and refutations are ordinary planning inputs; their sources join the Lead's scope.
+  const visitLeadInputs = () => {
+    for (const delivery of leadResearchInputs(input.cooperation?.deliveries ?? [], byId)) {
+      visit(delivery.taskId!);
+      delivery.dependencies.forEach(input => visit(input.taskId));
+      for (const proposal of delivery.lemmaRequests ?? []) proposal.dependsOn.filter(id => byId.has(id)).forEach(id => visit(id));
     }
-    for (const item of pendingResearchChallenges(input.cooperation!))
-      if (challengeIds.has(item.id)) { visit(item.sourceTaskId); visitDeliveryInputs(item.deliveryId); }
   };
   if (action?.kind === 'task') visit(action.task.id);
-  else if (coordination) {
-    // Coordination consumes a fixed inbox, not every open mathematical investigation.
-    // The complete archive remains available for an explicit full-plan replacement.
-    tasks.filter(node => node.task.kind === 'goal').forEach(node => visit(node.task.id));
-    action.stagnationRecovery?.taskIds.forEach(id => visit(id));
-    action.capacityRefill?.ownershipCandidates?.forEach(item => visit(item.taskId));
-    const handoffIds = new Set(action.handoffIds ?? []);
-    const challengeIds = new Set(action.challengeIds ?? []);
-    visitLeadInputs(handoffIds, challengeIds);
-    if (!handoffIds.size && !challengeIds.size) {
-      const continuation = buildProofContinuation(tasks, { groups: input.cooperation?.groups,
-        environmentDigest: input.environmentDigest, proofRoutes: input.cooperation?.proofRoutes });
-      continuation.frontier.forEach(item => visit(item.taskId));
-    }
-    for (const node of tasks) if (!required.has(node.task.id))
-      omitted.push({ id: `interface:${node.task.id}`, kind: 'interfaces', reason: 'outside-task-scope' });
-  }
   else if (scopedLead) {
     tasks.filter(node => node.task.kind === 'goal').forEach(node => visit(node.task.id));
-    action.recovery?.taskIds.forEach(id => visit(id));
-    action.recovery?.goalIds.forEach(id => visit(id));
-    action.stagnationRecovery?.taskIds.forEach(id => visit(id));
-    action.capacityRefill?.ownershipCandidates?.forEach(item => visit(item.taskId));
-    visitLeadInputs(new Set(action.handoffIds ?? selectResearchHandoffBatch(input.cooperation!).map(item => item.id)),
-      new Set(action.challengeIds ?? selectResearchChallengeBatch(input.cooperation!).map(item => item.id)));
+    visitLeadInputs();
   }
   else tasks.forEach(node => visit(node.task.id));
   const route = action?.kind === 'task' && action.assignment.routeId ?
@@ -273,7 +236,7 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
       visit(dependency.taskId);
     }
   }
-  const deferred = scopedLead && !coordination ? tasks.filter(node => !required.has(node.task.id)) : [];
+  const deferred = scopedLead ? tasks.filter(node => !required.has(node.task.id)) : [];
   for (const node of deferred)
     omitted.push({ id: `interface:${node.task.id}`, kind: 'interfaces', reason: 'advisory-details-by-reference' });
   return { tasks: tasks.filter(node => required.has(node.task.id)), deferred, byId, required, route };
@@ -312,6 +275,38 @@ function sourceReferences(input: TaskContextInput) {
 function proofSources(problem: SolverProblem, node: TaskRecord) {
   const proof = node.integratedCheck ?? node.proof;
   return proof && { path: node.task.proofPath && sourcePath(problem, node.task.proofPath), evidenceFrom: 'evidence' };
+}
+
+const LEAD_RESEARCH_INPUTS = 8, LEAD_RESEARCH_PROPOSALS = 8, LEAD_INLINE_FINDING_BYTES = 2 * 1024;
+
+/** Current research deliveries the Lead must review: unadopted lemma proposals, refutations and decision requests. */
+export function leadResearchInputs(deliveries: readonly DeliveryRecord[], byId: ReadonlyMap<string, TaskRecord>) {
+  return deliveries.filter(record => {
+    const source = record.taskId ? byId.get(record.taskId) : undefined;
+    if (record.kind !== 'research' || record.status === 'superseded' || !source || record.taskDigest !== taskVersion(source.task) ||
+        record.dependencies.some(input => !byId.has(input.taskId) || taskVersion(byId.get(input.taskId)!.task) !== input.taskDigest))
+      return false;
+    if (record.lemmaRequests?.some(task => !byId.has(task.id))) return true;
+    const text = deliveryFinding(record, source.finding);
+    if (text === undefined) return false;
+    try {
+      const finding = JSON.parse(text);
+      return finding?.conclusion === 'refuted' || finding?.needsDecision === true;
+    } catch { return false; }
+  });
+}
+
+/** Exact proposals stay inline; a long finding is retrievable by digest from its saved notes. */
+function leadResearchInput(record: DeliveryRecord, byId: ReadonlyMap<string, TaskRecord>) {
+  const finding = deliveryFinding(record, byId.get(record.taskId!)?.finding);
+  const proposals = (record.lemmaRequests ?? []).filter(task => !byId.has(task.id));
+  return { deliveryId: record.id, producer: record.producer, taskId: record.taskId, taskDigest: record.taskDigest,
+    summary: record.summary, evidenceRefs: record.evidenceRefs, remainingObligations: record.remainingObligations,
+    ...(finding === undefined ? {} : Buffer.byteLength(finding) <= LEAD_INLINE_FINDING_BYTES ? { finding } : {
+      findingBytes: Buffer.byteLength(finding), findingDigest: record.findingDigest }),
+    ...(record.commit ? { savedSource: { commit: record.commit, notesPath: 'RESEARCH.md' } } : {}),
+    ...(proposals.length ? { lemmaRequests: proposals.slice(0, LEAD_RESEARCH_PROPOSALS),
+      ...(proposals.length > LEAD_RESEARCH_PROPOSALS ? { unshownProposals: proposals.length - LEAD_RESEARCH_PROPOSALS } : {}) } : {}) };
 }
 
 function deliveryMatchesFinding(record: DeliveryRecord, node?: TaskRecord): boolean {
@@ -380,16 +375,6 @@ function optionalDeliveries(input: TaskContextInput, required: ReadonlySet<strin
   return { sections, findingSources };
 }
 
-/** Unshown queue items counted per source task, in first-seen order. */
-function backlogSources(items: readonly { id: string; sourceTaskId: string; sourceTaskDigest: string }[], shown: ReadonlySet<string>) {
-  const sources = new Map<string, { taskId: string; taskDigest: string; remaining: number }>();
-  for (const item of items) if (!shown.has(item.id)) {
-    const source = sources.get(item.sourceTaskId) ?? { taskId: item.sourceTaskId, taskDigest: item.sourceTaskDigest, remaining: 0 };
-    source.remaining++; sources.set(item.sourceTaskId, source);
-  }
-  return [...sources.values()];
-}
-
 /** Compile a task's mathematical interface before dispatch. A budget can omit hints, never hypotheses. */
 export function compileTaskContext(input: TaskContextInput): { message: string; manifest: ContextManifest } {
   const { problem, action } = input;
@@ -442,34 +427,12 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
       'Persistent mathematical gaps (advisory; historical-scope reports require review of changed inputs; complete records remain in COOPERATION.json):',
       mathematicalGapContext(input.cooperation.mathematicalGaps)));
     if (action?.kind === 'lead') {
-      if (action.stagnationRecovery) mandatory.push(section('stagnation-recovery', 'assignment',
-        'Host stagnation recovery request (advisory scheduling evidence; not proof failure or acceptance):',
-        action.stagnationRecovery));
-      const challenges = pendingResearchChallenges(input.cooperation);
-      const challengeContextOptions = action.coordination ? { maxFindingBytes: COORDINATION_INLINE_FINDING_BYTES } : {};
-      const challengeIds = new Set(action.challengeIds ?? selectResearchChallengeBatch(input.cooperation, challengeContextOptions).map(item => item.id));
-      const shownChallenges = challenges.filter(item => challengeIds.has(item.id));
-      if (shownChallenges.length) mandatory.push(section('research-challenges', 'assignment',
-        'Research challenges requiring a route decision (advisory, not proof acceptance):',
-        shownChallenges.map(item => researchChallengeContext(item, challengeContextOptions))));
-      if (challenges.length > shownChallenges.length) mandatory.push(section('research-challenge-backlog', 'assignment',
-        'Queued challenges for later dispatches; preserve their source tasks and inputs. Full records are in COOPERATION.json researchChallenges:', {
-          pending: challenges.length, shown: shownChallenges.length, remaining: challenges.length - shownChallenges.length,
-          sources: backlogSources(challenges, challengeIds),
-        }));
-      const pending = pendingResearchHandoffs(input.cooperation);
-      const aliases = new Map(pending.flatMap(item => item.sources.map(source => [source.handoffId, item.id] as const)));
-      const shown = new Set((action.handoffIds ?? selectResearchHandoffBatch(input.cooperation).map(item => item.id))
-        .map(id => aliases.get(id) ?? id));
-      const handoffs = pending.filter(item => shown.has(item.id));
-      if (handoffs.length) mandatory.push(section('research-handoffs', 'assignment',
-        'Pending research proposals requiring a Lead decision (advisory; not checked lemmas). Duplicate provenance is in ' +
-        'COOPERATION.json researchHandoffs: match sourceSet.reference.handoffId and contextDigest, then verify ' +
-        'sourceSet.digest against SHA-256 of canonical JSON of sources before using the full source list. ' +
-        'A missing or mismatched source list is unavailable and grants no proof acceptance:', handoffs.map(researchHandoffContext)));
-      if (pending.length > handoffs.length) mandatory.push(section('research-handoff-backlog', 'assignment',
-        'Queued research proposals (not required in this response; preserve their sources and prerequisites for subsequent batches):', {
-          pending: pending.length, shown: handoffs.length, remaining: pending.length - handoffs.length, sources: backlogSources(pending, shown),
+      // Newest first, so a stale unanswered input never hides newer evidence.
+      const inputs = leadResearchInputs(input.cooperation.deliveries ?? [], byId).reverse();
+      if (inputs.length) mandatory.push(section('lead-research-inputs', 'assignment',
+        'Research inputs for this planning decision (advisory, not checked lemmas or proof acceptance; retrieve a long finding from savedSource commit and notesPath):', {
+          inputs: inputs.slice(0, LEAD_RESEARCH_INPUTS).map(record => leadResearchInput(record, byId)),
+          ...(inputs.length > LEAD_RESEARCH_INPUTS ? { unshown: inputs.length - LEAD_RESEARCH_INPUTS } : {}),
         }));
     }
     mandatory.push(section('task-interfaces', 'interfaces', 'Lead task graph and host feedback:', graph));
@@ -502,7 +465,7 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
         }));
     }
     if (action?.kind === 'lead') {
-      const continuation = buildProofContinuation(action.coordination ? input.cooperation.tasks : tasks, { groups: input.cooperation.groups,
+      const continuation = buildProofContinuation(tasks, { groups: input.cooperation.groups,
         environmentDigest: input.environmentDigest, proofRoutes: input.cooperation.proofRoutes });
       const goals = continuation.goals.filter(goal => goal.status !== 'integrated' || goal.recordedProof !== 'checked');
       const frontierIds = new Set(goals.flatMap(goal => goal.frontier));

@@ -12,11 +12,9 @@ import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from './archive';
 import { checkTaskProofs, createTaskSourceProjector, isAttributedTaskProof, type TaskProof, type TaskProofRequest } from './cooperativeProof';
 import { rejectionCode, taskSourceRejections } from './cooperationShared';
-import { freezeContinuationInput, readContinuationSnapshot, type ContinuationManifest, type ContinuationSnapshot } from './continuationInput';
+import { freezeContinuationInput, readContinuationSnapshot, type ContinuationManifest } from './continuationInput';
 import { readRunInspection } from './inspection';
 import type { DeliveryRecord } from './deliveries';
-import { normalizedResearchHandoffDecisions, researchHandoffs, type ResearchHandoffDecision } from './researchHandoffs';
-import { researchChallenges, type ResearchChallengeDecision } from './researchChallenges';
 import { researchRecordSchema, researchSourceDigest, restoreResearch } from './researchRecords';
 import { researchSourceTasks, scopedResearchSources, type ResearchSourceTask } from './researchSources';
 import { mathematicalGapSchema } from './mathematicalGaps';
@@ -96,8 +94,6 @@ const researchDelivery = z.object({ id: z.string().min(1), producer: id, taskId:
   statement: value.statement, premises: value.premises, dependencies: value.dependencies,
   remainingObligations: value.remainingObligations, summary: value.summary, evidenceRefs: value.evidenceRefs,
   createdAt: value.createdAt, lemmaRequests: value.lemmaRequests }));
-const handoffDelivery = researchDelivery.refine(value => Boolean(value.lemmaRequests?.length),
-  'Handoff requires an exact typed lemma');
 const researchProofInput = z.object({ passed: z.boolean(), taskDigest: hash,
   conditions: z.array(handoffReference).optional() }).strict()
   .transform(value => ({ ...value, passed: value.passed, taskDigest: value.taskDigest }));
@@ -109,38 +105,6 @@ const researchTaskInput = z.object({ task: handoffTask,
   visibleDependencies: value.visibleDependencies, sourceDependencies: value.sourceDependencies, sourceHelpers: value.sourceHelpers }));
 const researchContext = z.object({ environmentDigest: hash, problemReceiptDigest: hash,
   tasks: z.array(researchTaskInput), deliveries: z.array(researchDelivery) }).strict();
-const handoffDecision = z.object({ id: hash, deliveryId: z.string().min(1),
-  status: z.enum(['adopted', 'rejected', 'deferred']), taskId: id.optional(), taskDigest: hash.optional(),
-  reason: z.string().optional(), contextDigest: hash.optional(), waitsOn: z.array(handoffReference).nonempty().optional(),
-}).strict().refine(value => value.status !== 'adopted' || Boolean(value.taskId && value.taskDigest),
-  'Adoption requires an exact task contract').refine(value => !value.waitsOn || value.status === 'deferred',
-  'Only deferred decisions may wait on tasks')
-  .transform((value): ResearchHandoffDecision => ({ ...value, id: value.id, deliveryId: value.deliveryId, status: value.status }));
-const handoffRecord = z.object({ delivery: handoffDelivery, sourceTask: handoffTask.optional(),
-  environmentDigest: hash, problemReceiptDigest: hash,
-  inputs: z.array(z.object({ taskId: id, taskDigest: hash.nullable() }).strict()
-    .transform(value => ({ taskId: value.taskId, taskDigest: value.taskDigest }))),
-}).strict().refine(value => !value.sourceTask || value.sourceTask.id === value.delivery.taskId &&
-  taskVersion(value.sourceTask) === value.delivery.taskDigest, 'Handoff source task identity changed');
-const handoffSource = z.object({ records: z.array(handoffRecord), decisions: z.array(handoffDecision),
-  notes: z.array(z.object({ deliveryId: z.string().min(1), commit: oid, notes: z.string() }).strict()),
-}).strict().refine(value => new Set(value.records.map(record => record.delivery.id)).size === value.records.length,
-  'Handoff delivery identity repeated');
-type HandoffSource = z.infer<typeof handoffSource>;
-const challengeDecision = z.object({ id: hash, deliveryId: z.string().min(1), contextDigest: hash,
-  status: z.enum(['revised', 'disputed', 'deferred']), reason: z.string().trim().min(1),
-  evidenceRefs: z.array(z.string().trim().min(1)).optional(), reopenOn: z.string().trim().min(1).optional(),
-  waitsOn: z.array(handoffReference).nonempty()
-    .refine(items => new Set(items.map(item => item.taskId)).size === items.length).optional(),
-}).strict().refine(value => value.status !== 'disputed' || Boolean(value.evidenceRefs?.length))
-  .refine(value => value.status !== 'deferred' || Boolean(value.reopenOn || value.waitsOn?.length))
-  .refine(value => !value.waitsOn || value.status === 'deferred')
-  .transform((value): ResearchChallengeDecision => ({ ...value, id: value.id, deliveryId: value.deliveryId,
-    contextDigest: value.contextDigest, status: value.status, reason: value.reason }));
-const challengeSource = z.object({ environmentDigest: hash, problemReceiptDigest: hash,
-  decisions: z.array(challengeDecision) }).strict()
-  .refine(value => new Set(value.decisions.map(decision => decision.id)).size === value.decisions.length);
-type ChallengeSource = z.infer<typeof challengeSource>;
 const sourceSchema = z.object({
   schema: z.literal('theorem-os.continuation-seed-source.v1'), capturedAt: z.number().int().nonnegative(),
   taskDigest: hash, problemReceiptDigest: hash, sourcePolicyDigest: hash,
@@ -156,8 +120,6 @@ const sourceSchema = z.object({
     sources: z.record(z.string()), notes: z.string().nullable(), assignment: z.unknown().optional() }).strict()),
   history: z.unknown(),
   capacityExplorations: capacitySource.optional(),
-  researchHandoffs: handoffSource.optional(),
-  researchChallengeDecisions: challengeSource.optional(),
   completedResearch: z.array(completedResearchRecord).optional(),
   researchContext: researchContext.optional(),
 }).strict();
@@ -336,50 +298,6 @@ function capturedResearchContext(state: SolverRunState): z.infer<typeof research
       delivery.taskId && delivery.taskDigest).map(advisoryResearchDelivery) });
 }
 
-const handoffDeliveryOrigin = ({ status: _status, ...delivery }: DeliveryRecord) => delivery;
-function adoptedHandoffInputs(state: Parameters<typeof researchHandoffs>[0]) {
-  const inputs = new Map<string, Set<string>>();
-  if (!state.researchDecisions?.length) return inputs;
-  for (const handoff of researchHandoffs(state)) if (handoff.status === 'adopted') for (const source of handoff.sources) {
-    const current = inputs.get(source.deliveryId) ?? new Set<string>();
-    for (const id of handoff.proposal.dependsOn) current.add(id);
-    inputs.set(source.deliveryId, current);
-  }
-  return inputs;
-}
-function currentHandoffRecord(record: HandoffSource['records'][number], state: SolverRunState,
-  adoptedInputs: ReadonlyMap<string, ReadonlySet<string>>): boolean {
-  const { delivery, sourceTask } = record, nodes = new Map(state.cooperation?.tasks.map(node => [node.task.id, node]));
-  const source = nodes.get(delivery.taskId!);
-  if (record.environmentDigest !== state.environmentDigest || record.problemReceiptDigest !== state.problem.receiptDigest ||
-      !sourceTask || !source || taskVersion(source.task) !== taskVersion(sourceTask) ||
-      delivery.taskDigest !== taskVersion(sourceTask) || delivery.dependencies.some(reference =>
-        !nodes.has(reference.taskId) || taskVersion(nodes.get(reference.taskId)!.task) !== reference.taskDigest)) return false;
-  const proposals = new Map(delivery.lemmaRequests!.map(task => [task.id, task]));
-  const inputs = [...new Set(delivery.lemmaRequests!.flatMap(task => task.dependsOn))];
-  if (record.inputs.length !== inputs.length || new Set(record.inputs.map(input => input.taskId)).size !== inputs.length ||
-      inputs.some(id => {
-        const task = nodes.get(id)?.task ?? proposals.get(id);
-        // The original input pins remain provenance. A current, context-bound
-        // adoption can also retain its obligation after scheduling metadata edits.
-        return !task || !record.inputs.some(reference => reference.taskId === id && reference.taskDigest !== null &&
-          (reference.taskDigest === taskVersion(task) || adoptedInputs.get(delivery.id)?.has(id)));
-      })) return false;
-  if (source.capacityExploration) {
-    const owner = state.workers?.find(worker => worker.id === source.capacityExploration!.workerId);
-    if (!owner || !researchWorkerCanNode(owner, source) || !currentCapacityExploration(source, state.cooperation!.tasks,
-      { environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest })) return false;
-  }
-  return true;
-}
-
-function restoredHandoffDeliveries(source: HandoffSource, state: SolverRunState): DeliveryRecord[] {
-  const adoptedInputs = adoptedHandoffInputs({ ...state.cooperation!,
-    deliveries: source.records.map(record => record.delivery), researchDecisions: source.decisions });
-  return source.records.map(record => ({ ...record.delivery,
-    status: record.delivery.status === 'superseded' || !currentHandoffRecord(record, state, adoptedInputs) ? 'superseded' : 'advisory' }));
-}
-
 function restoredResearchDeliveries(source: SeedSource, state: SolverRunState): DeliveryRecord[] {
   const nodes = new Map(state.cooperation!.tasks.map(node => [node.task.id, node.task]));
   const deliveries = new Map((source.researchContext?.deliveries ?? []).map(delivery => {
@@ -390,133 +308,7 @@ function restoredResearchDeliveries(source: SeedSource, state: SolverRunState): 
         nodes.has(input.taskId) && taskVersion(nodes.get(input.taskId)!) === input.taskDigest);
     return [delivery.id, { ...delivery, status: current ? delivery.status : 'superseded' as const }];
   }));
-  for (const delivery of source.researchHandoffs ? restoredHandoffDeliveries(source.researchHandoffs, state) : [])
-    deliveries.set(delivery.id, delivery);
   return [...deliveries.values()];
-}
-
-function currentChallengeDecisions(state: SolverRunState, decisions: readonly ResearchChallengeDecision[]) {
-  return researchChallenges({ ...state.cooperation!, challengeDecisions: decisions })
-    .flatMap(challenge => challenge.decision ? [challengeDecision.parse(challenge.decision)] : []);
-}
-
-function capturedChallengeDecisions(state: SolverRunState, previous?: ChallengeSource): ChallengeSource {
-  const sameContext = previous?.environmentDigest === state.environmentDigest &&
-    previous.problemReceiptDigest === state.problem.receiptDigest;
-  const decisions = new Map((sameContext ? previous.decisions : []).map(decision => [decision.id, decision]));
-  // A newer record supersedes the ancestor even if the newer record is stale.
-  // Filtering before this merge could silently resurrect an older decision.
-  for (const decision of state.cooperation!.challengeDecisions ?? []) decisions.set(decision.id, decision);
-  return challengeSource.parse({ environmentDigest: state.environmentDigest,
-    problemReceiptDigest: state.problem.receiptDigest, decisions: currentChallengeDecisions(state, [...decisions.values()]) });
-}
-
-function restoredChallengeDecisions(source: SeedSource, state: SolverRunState) {
-  const previous = source.researchChallengeDecisions;
-  return previous?.environmentDigest === state.environmentDigest && previous.problemReceiptDigest === state.problem.receiptDigest
-    ? currentChallengeDecisions(state, previous.decisions) : [];
-}
-
-function snapshotAttachment(directory: string, attachment: ContinuationManifest['attachments'][number]) {
-  const bytes = readMathFile(path.join(directory, attachment.contentPath), attachment.bytes).bytes;
-  if (bytes.length !== attachment.bytes || mathDigest(bytes) !== attachment.sha256)
-    throw new Error('math_continuation_content_changed');
-  return JSON.parse(bytes.toString('utf8'));
-}
-
-function previousChallengeDecisions(state: SolverRunState, stateFile: string, snapshot: ContinuationSnapshot,
-  visited = new Set<string>()): ChallengeSource | undefined {
-  const directory = path.dirname(stateFile);
-  const attachment = snapshot.manifest.attachments.find(item => item.id === 'seed-research-challenge-decisions');
-  if (attachment) return challengeSource.parse(snapshotAttachment(directory, attachment));
-  // Old releases omitted this field. Their frozen capture and pinned history are
-  // sufficient to recover decisions only while the exact ancestor state exists.
-  const history = snapshot.manifest.attachments.find(item => item.id === 'seed-history');
-  const file = path.join(directory, 'continuation-seed-source.json');
-  if (!history || visited.has(stateFile) || !fs.lstatSync(file, { throwIfNoEntry: false })) return undefined;
-  visited.add(stateFile);
-  assertMathCanonicalPath(file);
-  if ((fs.lstatSync(file).mode & 0o777) !== 0o400) throw new Error('math_continuation_seed_source_not_frozen');
-  const lineage = sourceSchema.parse(readMathJson(file));
-  if (lineage.researchChallengeDecisions) return undefined;
-  if (lineage.taskDigest !== state.taskDigest || lineage.problemReceiptDigest !== state.problem.receiptDigest ||
-      lineage.sourcePolicyDigest !== policyDigest(state.problem) || lineage.destination.runId !== state.runId ||
-      lineage.destination.stateFile !== stateFile || lineage.destination.buildDigest !== state.buildDigest ||
-      lineage.destination.methodDigest !== state.methodDigest || lineage.destination.environmentDigest !== state.environmentDigest)
-    throw new Error('math_continuation_seed_identity_changed');
-  const recorded = z.object({ source: sourceSchema.shape.source, capturedAt: z.number().int().nonnegative() })
-    .passthrough().parse(snapshotAttachment(directory, history));
-  if (canonicalMathJson(recorded.source) !== canonicalMathJson(lineage.source) || recorded.capturedAt !== lineage.capturedAt)
-    throw new Error('math_continuation_content_changed');
-  const ancestorFile = lineage.source.stateFile;
-  if (visited.has(ancestorFile)) return undefined;
-  let ancestor: SolverRunState;
-  try {
-    if (!fs.lstatSync(ancestorFile, { throwIfNoEntry: false })) return undefined;
-    assertMathCanonicalPath(ancestorFile);
-    ancestor = readSolverRunState(ancestorFile);
-  } catch { return undefined; }
-  // Ancestors may have legitimately progressed or been removed after capture.
-  // Such files remain useful history, but cannot restore omitted decisions.
-  if (mathDigest(canonicalMathJson(ancestor)) !== lineage.source.stateDigest ||
-      ancestor.runId !== lineage.source.runId || ancestor.taskDigest !== state.taskDigest ||
-      ancestor.problem.receiptDigest !== state.problem.receiptDigest || ancestor.environmentDigest !== state.environmentDigest ||
-      policyDigest(ancestor.problem) !== lineage.sourcePolicyDigest || ancestor.buildDigest !== lineage.source.buildDigest ||
-      ancestor.methodDigest !== lineage.source.methodDigest || ancestor.cooperation?.canonicalCommit !== lineage.source.canonicalCommit ||
-      ancestor.cooperation?.planVersion !== lineage.source.planVersion ||
-      ancestor.worktree !== path.join(path.dirname(ancestorFile), 'worktree')) return undefined;
-  let prior: ChallengeSource | undefined;
-  if (ancestor.continuationDigest) {
-    try {
-      prior = previousChallengeDecisions(ancestor, ancestorFile,
-        readContinuationSnapshot(path.join(path.dirname(ancestorFile), 'continuation.json'), ancestor.continuationDigest,
-          { taskDigest: ancestor.taskDigest, problemReceiptDigest: ancestor.problem.receiptDigest }), visited);
-    } catch {
-      // More distant history is optional recovery input. Missing or changed
-      // history cannot invalidate the exact ancestor's own advisory decisions.
-    }
-  }
-  return capturedChallengeDecisions(ancestor, prior);
-}
-
-function capturedHandoffs(state: SolverRunState, previous?: HandoffSource): HandoffSource | undefined {
-  const deliveries = state.cooperation!.deliveries?.filter(delivery => delivery.kind === 'research' && delivery.lemmaRequests?.length) ?? [];
-  if (!deliveries.length && !previous) return undefined;
-  const records = new Map<string, HandoffSource['records'][number]>(), originals = new Map(previous?.records.map(record =>
-    [record.delivery.id, record]));
-  const nodes = new Map(state.cooperation!.tasks.map(node => [node.task.id, node.task]));
-  const adoptedInputs = adoptedHandoffInputs(state.cooperation!);
-  for (const item of deliveries) {
-    const delivery = handoffDelivery.parse(advisoryResearchDelivery(item)), original = originals.get(delivery.id);
-    if (original && canonicalMathJson(handoffDeliveryOrigin(original.delivery)) !== canonicalMathJson(handoffDeliveryOrigin(delivery)))
-      throw new Error('math_continuation_seed_handoff_changed');
-    const sourceTask = [...state.cooperation!.tasks, ...(state.cooperation!.history ?? [])].find(node =>
-      node.task.id === delivery.taskId && taskVersion(node.task) === delivery.taskDigest)?.task;
-    const proposals = new Map(delivery.lemmaRequests!.map(task => [task.id, task]));
-    const record = original ? { ...original, delivery: { ...delivery,
-      status: original.delivery.status === 'superseded' ? 'superseded' as const : delivery.status } } : handoffRecord.parse({
-      delivery, sourceTask, environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest,
-      inputs: [...new Set(delivery.lemmaRequests!.flatMap(task => task.dependsOn))].map(taskId => {
-        const task = nodes.get(taskId) ?? proposals.get(taskId);
-        return { taskId, taskDigest: task ? taskVersion(task) : null };
-      }) });
-    if (!currentHandoffRecord(record, state, adoptedInputs)) record.delivery = { ...record.delivery, status: 'superseded' };
-    records.set(delivery.id, record);
-  }
-  for (const record of previous?.records ?? []) if (!records.has(record.delivery.id))
-    records.set(record.delivery.id, { ...record, delivery: { ...record.delivery, status: 'superseded' } });
-  const decisions = new Map(previous?.decisions.map(decision => [decision.id, decision]));
-  for (const decision of normalizedResearchHandoffDecisions(state.cooperation!)) if (records.has(decision.deliveryId))
-    decisions.set(decision.id, handoffDecision.parse({ id: decision.id, deliveryId: decision.deliveryId, status: decision.status,
-      taskId: decision.taskId, taskDigest: decision.taskDigest, reason: decision.reason, contextDigest: decision.contextDigest,
-      waitsOn: decision.waitsOn }));
-  const notes = new Map(previous?.notes.map(note => [canonicalMathJson([note.deliveryId, note.commit]), note]));
-  for (const { delivery } of records.values()) if (delivery.commit) {
-    const key = canonicalMathJson([delivery.id, delivery.commit]);
-    if (!notes.has(key)) notes.set(key, { deliveryId: delivery.id, commit: delivery.commit,
-      notes: committedSource(state.worktree, delivery.commit, 'RESEARCH.md') });
-  }
-  return handoffSource.parse({ records: [...records.values()], decisions: [...decisions.values()], notes: [...notes.values()] });
 }
 
 function captureSource(sourceStateFile: string, stateFile: string, state: SolverRunState): SeedSource {
@@ -559,9 +351,7 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     receiptIds: proof.verification.results.map(result => result.receiptId).filter(Boolean) });
   const capacities = capturedCapacityRecords(archived);
   let previousCapacity: z.infer<typeof capacitySource> | undefined;
-  let previousHandoffs: HandoffSource | undefined;
   let previousResearch: CompletedResearchRecord[] | undefined;
-  let previousChallenges: ChallengeSource | undefined;
   if (archived.continuationDigest) {
     const snapshot = readContinuationSnapshot(path.join(sourceDirectory, 'continuation.json'), archived.continuationDigest,
       { taskDigest: archived.taskDigest, problemReceiptDigest: archived.problem.receiptDigest });
@@ -575,13 +365,6 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
       for (const record of previousCapacity.records)
         if (!captured.has(canonicalMathJson([record.task.id, record.capacityExploration]))) capacities.push({ ...record, archived: true });
     }
-    const handoffs = snapshot.manifest.attachments.find(item => item.id === 'seed-research-handoffs');
-    if (handoffs) {
-      const bytes = readMathFile(path.join(sourceDirectory, handoffs.contentPath), handoffs.bytes).bytes;
-      if (bytes.length !== handoffs.bytes || mathDigest(bytes) !== handoffs.sha256)
-        throw new Error('math_continuation_content_changed');
-      previousHandoffs = handoffSource.parse(JSON.parse(bytes.toString('utf8')));
-    }
     const research = snapshot.manifest.attachments.find(item => item.id === 'seed-completed-research');
     if (research) {
       const bytes = readMathFile(path.join(sourceDirectory, research.contentPath), research.bytes).bytes;
@@ -589,7 +372,6 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
         throw new Error('math_continuation_content_changed');
       previousResearch = z.array(completedResearchRecord).parse(JSON.parse(bytes.toString('utf8')));
     }
-    previousChallenges = previousChallengeDecisions(archived, sourceStateFile, snapshot);
   }
   const capacityVersions = new Set(capacities.map(record =>
     canonicalMathJson([record.task.id, record.capacityExploration.taskDigest])));
@@ -604,7 +386,6 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
       deliveryId: delivery.id, commit: delivery.commit,
       notes: committedSource(archived.worktree, delivery.commit, 'RESEARCH.md') });
   }
-  const handoffs = capturedHandoffs(archived, previousHandoffs);
   const completedResearch = capturedCompletedResearch(archived, previousResearch);
   const context = capturedResearchContext(archived);
   const conditionalCandidates = planned.filter(node => !isAdvisoryTask(node.task) &&
@@ -638,8 +419,6 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
         (node.integratedCheck?.passed && !node.integratedCheck.conditions?.length))).map(node => node.task.id),
     ...(capacities.length || archived.cooperation.capacityExplorationInputs !== undefined ? { capacityExplorations: {
       records: capacities, inputs: archived.cooperation.capacityExplorationInputs, notes: [...notes.values()] } } : {}),
-    ...(handoffs ? { researchHandoffs: handoffs } : {}),
-    researchChallengeDecisions: capturedChallengeDecisions(archived, previousChallenges),
     ...(completedResearch.length ? { completedResearch } : {}),
     ...(completedResearch.length || context.deliveries.length ? { researchContext: context } : {}),
     history: { evidence: 'recorded-not-replayed', sourcePhase: archived.phase,
@@ -672,10 +451,6 @@ function freezeSource(source: SeedSource, directory: string) {
       text: canonicalMathJson(candidate) })),
     ...(source.capacityExplorations ? [{ id: 'seed-capacity-explorations', kind: 'research-notes' as const,
       text: canonicalMathJson(source.capacityExplorations), commit: null }] : []),
-    ...(source.researchHandoffs ? [{ id: 'seed-research-handoffs', kind: 'research-notes' as const,
-      text: canonicalMathJson(source.researchHandoffs), commit: null }] : []),
-    ...(source.researchChallengeDecisions ? [{ id: 'seed-research-challenge-decisions', kind: 'research-notes' as const,
-      text: canonicalMathJson(source.researchChallengeDecisions), commit: null }] : []),
     ...(source.completedResearch ? [{ id: 'seed-completed-research', kind: 'research-notes' as const,
       text: canonicalMathJson(source.completedResearch), commit: null }] : []),
     ...(source.researchContext ? [{ id: 'seed-research-context', kind: 'research-notes' as const,
@@ -750,11 +525,8 @@ export async function seedSolverContinuation(options: {
           canonicalMathJson(capacityOrigin(source.capacityExplorations?.records ?? [])) ||
         canonicalMathJson(state.cooperation.capacityExplorationInputs ?? []) !==
           canonicalMathJson(source.capacityExplorations?.inputs ?? []) ||
-        (source.researchHandoffs || source.researchContext) && (canonicalMathJson(state.cooperation.deliveries ?? []) !==
+        source.researchContext && canonicalMathJson(state.cooperation.deliveries ?? []) !==
           canonicalMathJson(restoredResearchDeliveries(source, state)) ||
-          canonicalMathJson(state.cooperation.researchDecisions ?? []) !== canonicalMathJson(source.researchHandoffs?.decisions ?? [])) ||
-        source.researchChallengeDecisions && canonicalMathJson(state.cooperation.challengeDecisions ?? []) !==
-          canonicalMathJson(restoredChallengeDecisions(source, state)) ||
         source.completedResearch && ![pendingResearch, restoredResearch].some(records =>
           state.cooperation.tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration)
             .every(node => matchesResearch(node, records))) ||
@@ -816,10 +588,6 @@ export async function seedSolverContinuation(options: {
         deliveries: [], history: [...capacities.filter(record => record.archived).map(archivedCapacity),
           ...completedResearchHistory(source)], edits: [], cursors: {} };
       state.cooperation.deliveries = restoredResearchDeliveries(source, state);
-      if (source.researchHandoffs) {
-        state.cooperation.researchDecisions = source.researchHandoffs.decisions.map(decision => ({ ...decision }));
-      }
-      if (source.researchChallengeDecisions) state.cooperation.challengeDecisions = restoredChallengeDecisions(source, state);
       // Publish pending obligations before installing sources; interruption cannot manufacture acceptance.
       writeSolverRunState(stateFile, state);
       git(state.worktree, ['reset', '--hard', canonical]);
@@ -913,7 +681,6 @@ export async function seedSolverContinuation(options: {
         if (node.status === 'integrated') report.evidence = 'fresh-helper-receipts';
         state.cooperation.recheck.completed++; state.cooperation.recheck.taskId = undefined;
         state.cooperation.deliveries = restoredResearchDeliveries(source, state);
-        if (source.researchChallengeDecisions) state.cooperation.challengeDecisions = restoredChallengeDecisions(source, state);
         writeSolverRunState(stateFile, state); saveReport();
         emit('continuation_seed_checked', { taskId, passed: node.status === 'integrated' || node.status === 'conditional' });
       };
@@ -1007,7 +774,6 @@ export async function seedSolverContinuation(options: {
         state.cooperation.history!.push(archivedCapacity(record));
       }
       state.cooperation.deliveries = restoredResearchDeliveries(source, state);
-      if (source.researchChallengeDecisions) state.cooperation.challengeDecisions = restoredChallengeDecisions(source, state);
       const completedResearch = currentCompletedResearch(source, state, plan.tasks, tasks, state.cooperation.deliveries);
       for (const node of tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration)) {
         const completion = completedResearch.get(node.task.id);

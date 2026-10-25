@@ -3,7 +3,6 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MathAgentOptions } from '../src/runtime/codexSession';
 import type { SolverRunState } from '../src/solver/archive';
-import { CooperativeResearch } from '../src/solver/cooperation';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { git, type SolverProblem } from '../src/solver/problem';
@@ -316,28 +315,6 @@ describe('saved Lead plans after request failure', () => {
     expect(retry).not.toHaveBeenCalled();
     expect(events.some(item => item.event === 'lead_decision_superseded')).toBe(true);
     expect(events.some(item => item.event === 'assignment_superseded')).toBe(true);
-    expect(events.some(item => item.event === 'worker_recovered')).toBe(false);
-    expect(state.cooperation!.tasks[0].task.objective).toBe(plan().tasks[0].objective);
-  });
-
-  it('keeps failed frontier recovery plans subject to explicit completion', async () => {
-    existingPlan();
-    const next = CooperativeResearch.prototype.next;
-    vi.spyOn(CooperativeResearch.prototype, 'next').mockImplementation(async function(worker, budget) {
-      const action = await next.call(this, worker, budget);
-      // Keep the dispatched object's identity; the host binds its authority to this object.
-      if (action?.kind === 'lead') Object.assign(action, {
-        recovery: { id: 'fixture-recovery', taskIds: ['goal_1'], goalIds: ['goal_1'] },
-      });
-      return action;
-    });
-    execute = async (_action, options) => {
-      const revised = plan(); revised.tasks[0].objective = 'An incomplete recovery proposal';
-      writePlan(options, revised);
-      return 'failed';
-    };
-    await expect(run()).rejects.toThrow('math_model_request_failed');
-    expect(retry).toHaveBeenCalledOnce();
     expect(events.some(item => item.event === 'worker_recovered')).toBe(false);
     expect(state.cooperation!.tasks[0].task.objective).toBe(plan().tasks[0].objective);
   });

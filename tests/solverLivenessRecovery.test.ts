@@ -7,14 +7,16 @@ import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { CooperativeResearch } from '../src/solver/cooperation';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { runResearchWorkers } from '../src/solver/research';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, type CooperativeAction } from '../src/solver/tasks';
+import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import { deferred } from './helpers/async';
 import { workerAccess } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 
-describe('Lead coordination liveness across checkpoints and restore', () => {
+const SEEDED_DECISION = 'The exact route choice needs a Lead decision.';
+
+describe('Lead planning liveness across checkpoints and restore', () => {
   let directory: string;
   let controllers: AbortController[], running: Promise<unknown>[];
 
@@ -43,17 +45,23 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
         objective: `Prove ${target.theoremName}`, ...target, dependsOn: ['investigate'] })),
     ] });
     const check = vi.fn(async () => { throw new Error('fixture_unexpected_proof_acceptance'); });
+    // A current decision request is the ordinary planning input that starts these Lead turns.
+    const investigate = plan.tasks.find(task => task.id === 'investigate')!;
+    const decision = JSON.stringify({ taskId: investigate.id, summary: SEEDED_DECISION, conclusion: 'inconclusive', needsDecision: true });
     const fixture = {
       state: solverState(problem, workspace, { runId: 'liveness-recovery-fixture', phase: 'prepared',
         environmentDigest: mathDigest('offline-liveness-environment'),
         workers: workers.map(worker => ({ ...worker, phase: 'prepared', turns: 0 })),
         cooperation: { canonicalCommit: problem.baseCommit,
           tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })),
-          groups: plan.groups.map(group => ({ group, turns: 0 })) } }),
+          groups: plan.groups.map(group => ({ group, turns: 0 })),
+          deliveries: [{ id: 'route-decision', producer: 'researcher', taskId: investigate.id, taskDigest: taskVersion(investigate),
+            kind: 'research' as const, status: 'advisory' as const, finding: decision, findingDigest: mathDigest(decision),
+            summary: SEEDED_DECISION, statement: '', premises: [], dependencies: [], remainingObligations: [], evidenceRefs: [],
+            createdAt: 1 }] } }),
       workers, check,
     };
-    const start = (leadModes?: readonly ('planning' | 'coordination')[],
-      behavior: { stallLeadInterrupt?: boolean; saveResearchProgress?: boolean; saveLeadProgress?: boolean } = {}) => {
+    const start = (behavior: { saveResearchProgress?: boolean; saveLeadProgress?: boolean } = {}) => {
       const controller = new AbortController(); controllers.push(controller);
       const events: { event: string; details?: Record<string, unknown> }[] = [];
       const messages: { assignment: CooperativeAction; inbox: string[]; threadId: string }[] = [];
@@ -65,15 +73,9 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
       const actual = (action: CooperativeAction) => action.kind === 'lead'
         ? dispatched.get(action.planNonce ?? action.initialPlanNonce!) ?? action : action;
       const next = CooperativeResearch.prototype.next;
-      let leadDispatches = 0;
       const capture = vi.spyOn(CooperativeResearch.prototype, 'next').mockImplementation(async function(worker, budget) {
         cooperation = this;
         const action = await next.call(this, worker, budget);
-        if (action?.kind === 'lead' && leadModes?.length) {
-          const mode = leadModes[Math.min(leadDispatches++, leadModes.length - 1)];
-          if (mode === 'coordination') action.coordination = true;
-          else delete action.coordination;
-        }
         if (action?.kind === 'lead') dispatched.set(action.planNonce ?? action.initialPlanNonce!, action);
         return action;
       });
@@ -85,7 +87,6 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
         return { threadId,
           interrupt: async () => {
             sessionInterrupts.push({ workerId, threadId });
-            if (behavior.stallLeadInterrupt && workerId === workers[0].id) return new Promise<void>(() => {});
             if (behavior.saveLeadProgress && workerId === workers[0].id)
               fs.appendFileSync(path.join(workers[0].worktree, 'RESEARCH.md'),
                 `Lead construction ${++leadSlices}: a new exact inference is saved for continuation.\n`);
@@ -145,31 +146,15 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
         expect(fixture.state.cooperation!.deliveries).toContainEqual(expect.objectContaining({
           kind: 'research', summary, producer: workers[2].id }));
       };
-      const assess = async (action = latestLead().assignment) => {
-        const request = action.capacityRefill!;
-        expect(request).toBeDefined();
+      /** Publish an unchanged complete plan as the Lead's answer to its dispatched planning input. */
+      const answer = async (action = latestLead().assignment) => {
         fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify({
-          kind: 'assessment', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
-          assessments: [{ kind: 'capacity', requestId: request.requestId, inputDigest: request.inputDigest,
-            outcome: 'no-independent-work', reason: 'The exact missing construction has no independent typed split yet.' }],
+          kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
+          tasks: fixture.state.cooperation!.tasks.map(node => node.task),
+          groups: fixture.state.cooperation!.groups!.map(route => route.group),
         }) + '\n');
         await cooperation!.pulse(workers[0].id);
-      };
-      const decideChallenges = async (kind: 'plan' | 'handoff' = 'plan', noWork = false) => {
-        const action = latestLead().assignment;
-        expect(action.challengeIds?.length).toBeGreaterThan(0);
-        fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify({
-          kind, dispatchNonce: action.planNonce, baseVersion: action.planVersion,
-          ...(kind === 'plan' ? { tasks: fixture.state.cooperation!.tasks.map(node => node.task),
-            groups: fixture.state.cooperation!.groups!.map(route => route.group) } : {}),
-          challengeDecisions: action.challengeIds!.map(id => ({ id, status: 'deferred',
-            reason: 'The missing construction still requires a new mathematical input.',
-            reopenOn: 'A concrete construction or independently checked smaller obligation becomes available.' })),
-          ...(noWork ? { assessments: [{ kind: 'capacity', requestId: action.capacityRefill!.requestId,
-            inputDigest: action.capacityRefill!.inputDigest, outcome: 'no-independent-work',
-            reason: 'The exact missing construction has no independent typed split yet.' }] } : {}),
-        }) + '\n');
-        await cooperation!.pulse(workers[0].id);
+        expect(fixture.state.cooperation!.lastLeadInputDigest).toBeTruthy();
       };
       const stop = async () => {
         controller.abort(new Error('fixture_complete'));
@@ -177,7 +162,8 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
         capture.mockRestore();
       };
       return { completion, controller, events, messages, notifications, sessionInterrupts, sessionCloses,
-        leads, latestLead, waitForLead, publish, assess, decideChallenges, stop, open,
+        leads, latestLead, waitForLead, publish, answer, stop, open,
+        planningInputDigest: () => (cooperation as unknown as { planningInputDigest: () => string }).planningInputDigest(),
         current: (action: CooperativeAction) => cooperation!.current(actual(action)),
         ready: ({ research = true } = {}) => Promise.race([Promise.all(research
           ? [firstLead.promise, firstResearch.promise] : [firstLead.promise]), completion.then(() => {
@@ -187,16 +173,16 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
     return { ...fixture, get state() { return fixture.state; }, set state(value) { fixture.state = value; }, start };
   }
 
-  it('enters coordination from a legacy planning thread once, preserves its draft and resumes the saved coordination mode', async () => {
+  it('replaces a legacy coordination thread once, preserves its draft and resumes the planning thread', async () => {
     const fixtureState = fixture(), lead = fixtureState.state.workers![0];
-    lead.threadId = 'legacy-mathematical-planning'; lead.sessionRole = 'lead';
+    lead.threadId = 'legacy-mathematical-coordination'; lead.sessionRole = 'lead'; lead.sessionLeadMode = 'coordination';
     const draft = path.join(lead.worktree, 'RESEARCH.md');
     fs.writeFileSync(draft, 'Saved mathematical construction and precise unresolved inference.\n');
-    const run = fixtureState.start(undefined, { saveLeadProgress: true }); await run.ready();
+    const run = fixtureState.start({ saveLeadProgress: true }); await run.ready();
     const first = run.latestLead().threadId;
-    expect(first).not.toBe('legacy-mathematical-planning');
-    expect(lead.previousThreadIds).toContain('legacy-mathematical-planning');
-    expect(lead.sessionLeadMode).toBe('coordination');
+    expect(first).not.toBe('legacy-mathematical-coordination');
+    expect(lead.previousThreadIds).toContain('legacy-mathematical-coordination');
+    expect(lead.sessionLeadMode).toBe('planning');
     expect(fs.readFileSync(draft, 'utf8')).toContain('Saved mathematical construction');
     await vi.advanceTimersByTimeAsync(14 * 60_000);
     expect(run.leads().length).toBeGreaterThanOrEqual(4);
@@ -205,63 +191,23 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
       .toBe(run.leads().length);
     expect(run.events.filter(item => item.event === 'context_restarted' && item.details?.workerId === lead.id &&
       item.details?.reason === 'responsibility')).toHaveLength(1);
-    const saved = path.join(directory, 'coordination-mode-state.json');
+    const saved = path.join(directory, 'legacy-coordination-state.json');
     writeSolverRunState(saved, fixtureState.state);
     await run.stop(); fixtureState.state = readSolverRunState(saved);
-    expect(fixtureState.state.workers![0].sessionLeadMode).toBe('coordination');
-    const paused = fixtureState.state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
-    expect(paused).toMatchObject({ status: 'blocked', feedback: expect.stringContaining('math_research_checkpoint_unchanged') });
-    expect(fixtureState.state.cooperation!.researchCheckpoints!.investigate).toMatchObject({ count: 3, paused: true });
+    expect(fixtureState.state.workers![0].sessionLeadMode).toBe('planning');
     const resumed = fixtureState.start(); await resumed.ready({ research: false });
     expect(resumed.latestLead().threadId).toBe(first);
     expect(resumed.events.some(item => item.event === 'context_restarted' && item.details?.workerId === lead.id &&
       item.details?.reason === 'responsibility')).toBe(false);
     expect(fs.readFileSync(draft, 'utf8')).toContain('Saved mathematical construction');
-    expect(paused.status).toBe('blocked');
-    expect(resumed.messages.every(message => message.assignment.kind === 'lead')).toBe(true);
     expect(fixtureState.check).not.toHaveBeenCalled();
     await resumed.stop();
-  });
-
-  it('changes the Lead thread only when entering or leaving coordination', async () => {
-    const fixtureState = fixture(), lead = fixtureState.state.workers![0];
-    lead.threadId = 'legacy-planning'; lead.sessionRole = 'lead';
-    const run = fixtureState.start(['coordination', 'coordination', 'planning', 'planning', 'coordination'], { saveLeadProgress: true });
-    await run.ready();
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
-    const threads = run.leads().slice(0, 5).map(item => item.threadId);
-    expect(threads).toHaveLength(5);
-    expect(threads[0]).toBe(threads[1]); expect(threads[2]).toBe(threads[3]);
-    expect(new Set(threads).size).toBe(3);
-    expect(lead.previousThreadIds).toEqual(['legacy-planning', threads[0], threads[2]]);
-    expect(lead.sessionLeadMode).toBe('coordination');
-    expect(fixtureState.check).not.toHaveBeenCalled();
-    await run.stop();
-  });
-
-  it('gives unfinished coordination with new saved inferences two, four and at most eight minutes without ending the solving budget', async () => {
-    const fixtureState = fixture(), run = fixtureState.start(undefined, { saveLeadProgress: true }); await run.ready();
-    const scheduled = () => run.events.filter(item => item.event === 'cooperative_checkpoint_scheduled' &&
-      item.details?.workerId === fixtureState.workers[0].id).map(item => item.details!);
-    await vi.advanceTimersByTimeAsync(90_000);
-    const notice = run.notifications.find(item => item.workerId === fixtureState.workers[0].id)!.message;
-    expect(notice).toContain('short handoff or assessment protocol');
-    expect(notice).not.toContain('complete task graph');
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.advanceTimersByTimeAsync(4 * 60_000);
-    await vi.advanceTimersByTimeAsync(8 * 60_000);
-    expect(scheduled().slice(0, 4).map(item => item.checkpointAfterMs)).toEqual([120_000, 240_000, 480_000, 480_000]);
-    expect(scheduled().at(-1)).toMatchObject({ protected: false, backoffCapped: true });
-    expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
-    expect(fixtureState.state.cooperation!.lastCapacityRefill!.status).toBe('requested');
-    expect(run.events.some(item => item.event === 'capacity_refill_assessed')).toBe(false);
-    expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   });
 
   it('keeps ordinary Lead planning with new saved inferences on its two-minute cadence and reuses a legacy planning thread', async () => {
     const fixtureState = fixture(), lead = fixtureState.state.workers![0];
     lead.threadId = 'legacy-planning'; lead.sessionRole = 'lead';
-    const run = fixtureState.start(['planning'], { saveLeadProgress: true }); await run.ready();
+    const run = fixtureState.start({ saveLeadProgress: true }); await run.ready();
     await vi.advanceTimersByTimeAsync(6 * 60_000);
     expect(run.leads()).toHaveLength(4);
     expect(new Set(run.leads().map(item => item.threadId))).toEqual(new Set(['legacy-planning']));
@@ -272,10 +218,8 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   });
 
-  it('waits for hours after an unchanged checkpoint, then reconsiders evidence arriving before an acknowledgement', async () => {
-    const fixtureState = fixture(), run = fixtureState.start(undefined, { saveResearchProgress: true }); await run.ready();
-    const original = structuredClone(fixtureState.state.cooperation!.lastCapacityRefill!);
-    expect(original).toMatchObject({ status: 'requested', workerIds: ['idle-prover'] });
+  it('waits for hours after an unchanged checkpoint, then wakes for new evidence until a plan answers it', async () => {
+    const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
     await vi.advanceTimersByTimeAsync(8 * 60_000);
     const pausedTurns = run.leads().length;
     expect(fixtureState.state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
@@ -284,28 +228,19 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
     expect(run.leads()).toHaveLength(pausedTurns);
     const nonces = run.leads().map(message => (message.assignment as Extract<CooperativeAction, { kind: 'lead' }>).planNonce);
     expect(new Set(nonces).size).toBe(nonces.length);
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({
-      requestId: original.requestId, inputDigest: original.inputDigest, requestedAt: original.requestedAt, status: 'requested' });
-    expect(run.events.some(item => item.event === 'capacity_refill_assessed')).toBe(false);
     expect(fixtureState.state.cooperation!.tasks.find(node => node.task.id === 'investigate')!.status).toBe('running');
     expect(fixtureState.state.cooperation!.researchCheckpoints?.investigate?.paused).not.toBe(true);
 
     const oldNonce = run.latestLead().assignment.planNonce;
-    await run.publish('An independent saved construction reopens the unfinished capacity input.');
-    await run.waitForLead(oldNonce);
-    const admitted = run.latestLead().assignment;
-    const summary = 'A new scoped negative result identifies the exact missing construction.';
+    const summary = 'An independent saved construction changes the unanswered planning input.';
     await run.publish(summary);
-    await run.assess(admitted);
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({
-      requestId: admitted.capacityRefill!.requestId, status: 'assessed', outcome: 'no-independent-work' });
-    // The old acknowledgement is valid only for its frozen inputs; the new finding still needs a decision.
-    await run.waitForLead(admitted.planNonce);
+    await run.waitForLead(oldNonce);
     expect(run.latestLead().inbox).toContain(summary);
-    expect(run.latestLead().assignment.capacityRefill!.inputDigest).not.toBe(admitted.capacityRefill!.inputDigest);
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'requested' });
-    await run.assess();
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'assessed', outcome: 'no-independent-work' });
+    await run.answer();
+    expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(run.planningInputDigest());
+    const answeredTurns = run.leads().length;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(run.leads()).toHaveLength(answeredTurns);
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(run.open.mock.calls.every(([options]) => options.turnTimeoutMs === undefined)).toBe(true);
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
@@ -313,111 +248,44 @@ describe('Lead coordination liveness across checkpoints and restore', () => {
     await run.stop();
   });
 
-  it('routes a new needs-decision finding to the next Lead slice instead of letting a short acknowledgement swallow it', async () => {
-    const fixtureState = fixture(), run = fixtureState.start(undefined, { saveResearchProgress: true }); await run.ready();
-    await vi.advanceTimersByTimeAsync(4 * 120_000);
-    const superseded = run.latestLead().assignment;
+  it('routes a needs-decision finding arriving during a Lead plan to the next Lead slice instead of letting that plan swallow it', async () => {
+    const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
+    const running = run.latestLead().assignment;
     const summary = 'The new scoped obstruction requires an explicit route decision.';
     await run.publish(summary, true);
-    expect(run.current(superseded)).toBe(false);
-    await run.assess(superseded);
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'requested' });
-    expect(run.events.some(item => item.event === 'capacity_refill_assessed')).toBe(false);
-    expect(fixtureState.state.cooperation!.planPublication).toBeUndefined();
-    await run.waitForLead(superseded.planNonce);
-    expect(run.latestLead().assignment.planNonce).not.toBe(superseded.planNonce);
-    expect(run.latestLead().assignment.challengeIds?.length).toBeGreaterThan(0);
-    expect(run.latestLead().assignment.capacityRefill!.inputDigest).not.toBe(superseded.capacityRefill!.inputDigest);
-    expect(run.latestLead().inbox).toContain(summary);
-    await run.decideChallenges();
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'requested' });
-    expect(fixtureState.state.cooperation!.challengeDecisions).toContainEqual(expect.objectContaining({ status: 'deferred' }));
-    expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBeTruthy();
-    const decidedNonce = run.latestLead().assignment.planNonce;
-    await run.waitForLead(decidedNonce);
-    expect(run.latestLead().assignment.challengeIds ?? []).toEqual([]);
-    await run.assess();
-    const settledTurns = run.leads().length;
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(run.leads()).toHaveLength(settledTurns);
-    expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
-    expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
-    await run.stop();
-  });
-
-  it('settles a short challenge decision with an explicit no-work reason, waits, then wakes for new evidence', async () => {
-    const fixtureState = fixture(), run = fixtureState.start(undefined, { saveResearchProgress: true }); await run.ready();
-    const superseded = run.latestLead().assignment;
-    await run.publish('The scoped obstruction needs an explicit decision.', true);
-    expect(run.current(superseded)).toBe(false);
-    await run.waitForLead(superseded.planNonce);
-    expect(run.latestLead().assignment.planNonce).not.toBe(superseded.planNonce);
-    expect(run.latestLead().assignment.challengeIds?.length).toBeGreaterThan(0);
-    const version = fixtureState.state.cooperation!.planVersion;
-    await run.decideChallenges('handoff', true);
-    expect(fixtureState.state.cooperation!.planVersion).toBe(version);
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'assessed', outcome: 'no-independent-work' });
-    const settledTurns = run.leads().length;
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(run.leads()).toHaveLength(settledTurns);
-    const finding = 'A new finite construction changes the available mathematical input.';
-    await run.publish(finding);
+    // A finding does not interrupt the running planning turn; its answer covers only the frozen input.
+    expect(run.current(running)).toBe(true);
+    await run.answer(running);
+    expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(running.planningInputDigest);
+    expect(fixtureState.state.cooperation!.lastLeadInputDigest).not.toBe(run.planningInputDigest());
+    // The next slice starts when the answered turn reaches its ordinary two-minute checkpoint.
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(run.leads().length).toBeGreaterThan(settledTurns);
-    expect(run.latestLead().inbox).toContain(finding);
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'requested' });
-    expect(fixtureState.check).not.toHaveBeenCalled();
-    await run.stop();
-  });
-
-  it('closes a superseded Lead after ten seconds when interrupt stalls and dispatches the saved inbox without losing its draft', async () => {
-    const fixtureState = fixture(), run = fixtureState.start(undefined, { stallLeadInterrupt: true });
-    await run.ready();
-    const old = run.latestLead(), draft = path.join(fixtureState.workers[0].worktree, 'RESEARCH.md');
-    fs.writeFileSync(draft, 'Saved mathematical construction with the precise unresolved inference.\n');
-    await run.publish('A new scoped obstruction requires the next explicit coordination decision.', true);
-    expect(run.current(old.assignment)).toBe(false);
-    expect(run.sessionInterrupts).toContainEqual({ workerId: fixtureState.workers[0].id, threadId: old.threadId });
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(run.latestLead().assignment.planNonce).toBe(old.assignment.planNonce);
-    expect(run.sessionCloses).not.toContainEqual({ workerId: fixtureState.workers[0].id, threadId: old.threadId });
-    await vi.advanceTimersByTimeAsync(1);
-    expect(run.sessionCloses).toContainEqual({ workerId: fixtureState.workers[0].id, threadId: old.threadId });
-    expect(run.latestLead().assignment.planNonce).not.toBe(old.assignment.planNonce);
-    expect(run.latestLead().assignment.challengeIds?.length).toBeGreaterThan(0);
-    expect(fs.readFileSync(draft, 'utf8')).toContain('Saved mathematical construction with the precise unresolved inference.');
-    expect(fixtureState.state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'requested' });
-    expect(run.events.some(item => item.event === 'capacity_refill_assessed')).toBe(false);
+    await run.waitForLead(running.planNonce);
+    expect(run.latestLead().inbox).toContain(summary);
+    await run.answer();
+    expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(run.planningInputDigest());
+    const settledTurns = run.leads().length;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(run.leads()).toHaveLength(settledTurns);
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
-    expect(fixtureState.state.cooperation!.tasks.every(node => !['integrated', 'conditional'].includes(node.status))).toBe(true);
     await run.stop();
   });
 
-  it.each([false, true])('restores a pending refill without losing a newly arrived finding (%s)', async newFinding => {
+  it.each([false, true])('restores an unanswered decision request without losing a newly arrived finding (%s)', async newFinding => {
     const fixtureState = fixture(), first = fixtureState.start(); await first.ready();
-    await vi.advanceTimersByTimeAsync(4 * 120_000);
-    const original = structuredClone(fixtureState.state.cooperation!.lastCapacityRefill!);
-    expect(original.status).toBe('requested');
-    const summary = 'Saved external evidence remains unassessed when the process stops.';
+    const summary = 'Saved external evidence remains unanswered when the process stops.';
     if (newFinding) await first.publish(summary);
-    const saved = path.join(directory, 'pending-refill-state.json');
+    const saved = path.join(directory, 'pending-decision-state.json');
     writeSolverRunState(saved, fixtureState.state);
     await first.stop();
     fixtureState.state = readSolverRunState(saved);
+    expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBeUndefined();
     const resumed = fixtureState.start(); await resumed.ready();
-    expect(fixtureState.state.cooperation!.lastCapacityRefill!.status).toBe('requested');
-    expect(resumed.events.some(item => item.event === 'capacity_refill_assessed')).toBe(false);
-    const current = resumed.latestLead().assignment.capacityRefill!;
-    if (newFinding) {
-      expect(resumed.latestLead().inbox).toContain(summary);
-      expect(current.inputDigest).not.toBe(original.inputDigest);
-    } else {
-      expect(current).toMatchObject({ requestId: original.requestId, inputDigest: original.inputDigest,
-        requestedAt: original.requestedAt });
-    }
-    await resumed.assess();
-    expect(fixtureState.state.cooperation!.lastCapacityRefill!.status).toBe('assessed');
+    expect(resumed.latestLead().inbox).toContain(SEEDED_DECISION);
+    if (newFinding) expect(resumed.latestLead().inbox).toContain(summary);
+    await resumed.answer();
+    expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(resumed.planningInputDigest());
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
     await resumed.stop();

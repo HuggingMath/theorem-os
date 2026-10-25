@@ -58,13 +58,6 @@ describe('Lead plan response selection', () => {
     expect(() => parse(fence('math', '{"tasks":'))).toThrow(SyntaxError);
   });
 
-  it.each([
-    { kind: 'assessment', baseVersion: 'version', dispatchNonce: 'nonce', assessments: [] },
-    { handoffDecisions: [{ id: 'proposal', status: 'deferred' }], challengeDecisions: [] },
-  ])('retains coordination responses for downstream protocol validation', response => {
-    expect(parse(fence('json', response))).toEqual(response);
-  });
-
   it('does not promote ordinary JSON or another control response into a plan', () => {
     expect(() => parse(fence('json', { remaining: 'An open inference', metadata: { tasks: [] } })))
       .toThrow('math_math-plan_requires_one_block');

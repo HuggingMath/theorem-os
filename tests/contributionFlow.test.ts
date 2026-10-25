@@ -3,7 +3,6 @@ import type { SolverRunState } from '../src/solver/archive';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import type { DeliveryRecord } from '../src/solver/deliveries';
 import { buildResearchContributionFlow, contributionExecutionAttempts, type ContributionJournal } from '../src/solver/contributionFlow';
-import { researchHandoffs } from '../src/solver/researchHandoffs';
 import { assignmentDeliveryFile, freshlyAccepted, hasTaskAcceptance, taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { buildRunInspection, renderRunInspection } from '../src/solver/inspection';
 
@@ -47,15 +46,11 @@ function fixture() {
         taskId: helper.id, taskDigest: taskVersion(helper), seedCommit: seed, problemReceiptDigest: 'problem',
         environmentDigest: 'environment', requestedAt: 120, frozenAt: 140, status: 'checked',
         snapshotCommit: snapshot, sourceDigest: check.sourceDigest, evidence: 'unconditional', receiptIds: ['lean-receipt'] }] } };
-  const handoff = researchHandoffs(state.cooperation!)[0];
-  const decision = { id: handoff.id, deliveryId: handoff.deliveryId, status: 'adopted' as const,
-    taskId: helper.id, taskDigest: taskVersion(helper), contextDigest: handoff.contextDigest };
-  state.cooperation!.researchDecisions = [decision];
   const taskIdentity = { taskId: helper.id, taskDigest: taskVersion(helper), assignmentKey, workerId: 'prover', seedCommit: seed };
   const log: Record<string, unknown>[] = [
     { event: 'ready', at: 1 },
     { event: 'delivery_published', deliveryId: delivery.id, taskId: research.id, taskDigest: taskVersion(research), commit: seed, at: 50 },
-    { event: 'research_handoff_decided', ...decision, activationDigest: handoff.activationDigest, planVersion: 'plan-1', at: 100 },
+    { event: 'plan_updated', planVersion: 'plan-1', at: 100 },
     { event: 'task_assigned', ...taskIdentity, kind: 'lemma', planVersion: 'plan-1', at: 110 },
     { event: 'turn_started', ...taskIdentity, turnId: 'turn-1', threadId: 'thread-1', at: 115 },
     { event: 'proof_ready_frozen', ...taskIdentity, readyId: 'ready-record', snapshotCommit: snapshot,
@@ -67,7 +62,7 @@ function fixture() {
   const journal = (): ContributionJournal => ({ runBinding: 'matched', digest: 'journal-digest',
     events: log.map((data, index) => ({ line: index + 1, data: { runId: state.runId,
       problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest, ...data } })) });
-  return { state, log, journal, assignment, assignmentKey, check, handoff };
+  return { state, log, journal, assignment, assignmentKey, check };
 }
 
 function failedReadyFixture() {
@@ -95,17 +90,11 @@ function sourceAttemptsFixture() {
 }
 
 describe('research contribution flow', () => {
-  it('projects multiple sources through one handoff, exact execution and a deduplicated recorded check', () => {
+  it('projects multiple sources, exact execution and a deduplicated recorded check', () => {
     const f = fixture(), before = structuredClone(f.state), report = buildResearchContributionFlow(f.state, f.journal());
     expect(report).toMatchObject({ evidence: 'recorded-not-replayed', runId: 'run', journalDigest: 'journal-digest' });
     expect(report.sources).toHaveLength(2);
-    expect(report.handoffs).toHaveLength(1);
-    expect(report.handoffs[0].sources).toHaveLength(2);
-    expect(report.sources.every(source => source.handoffAliases[0].currentHandoffId === f.handoff.id)).toBe(true);
-    expect(report.decisionOccurrences[0]).toMatchObject({
-      publicationToDecisionMs: { status: 'recorded', value: 50 },
-      decisionToFirstObservedStartMs: { status: 'recorded', value: 15 }, executionAssignmentKey: f.assignmentKey,
-    });
+    expect(report.sources.every(source => source.proposals[0]?.task === helper)).toBe(true);
     const obligation = report.obligations.find(item => item.taskId === helper.id)!;
     expect(obligation.attempts[0]).toMatchObject({ identity: { status: 'recorded' },
       assignedToFirstObservedStartMs: { status: 'recorded', value: 5 },
@@ -121,11 +110,9 @@ describe('research contribution flow', () => {
     expect(freshlyAccepted(f.state.cooperation!.tasks[1], taskVersion(helper))).toBe(false);
   });
 
-  it('keeps durable decisions without inventing their time, and does not use imported creation time as current publication', () => {
+  it('does not use imported creation time as current publication', () => {
     const f = fixture(), report = buildResearchContributionFlow(f.state);
     expect(report.coverage.journal).toBe('absent');
-    expect(report.storedDecisions[0].at).toMatchObject({ status: 'unknown' });
-    expect(report.decisionOccurrences).toEqual([]);
     expect(report.sources[0]).toMatchObject({ created: { status: 'recorded', value: 10 },
       publication: { status: 'unknown' }, publicationInThisRun: false });
     expect(report.obligations.find(item => item.taskId === helper.id)!.attempts[0]).toMatchObject({
@@ -133,30 +120,24 @@ describe('research contribution flow', () => {
     });
     const journal = f.journal();
     const noPublication = { ...journal, events: journal.events.filter(item => item.data.event !== 'delivery_published') };
-    expect(buildResearchContributionFlow(f.state, noPublication).decisionOccurrences[0].publicationToDecisionMs.status).toBe('unknown');
+    expect(buildResearchContributionFlow(f.state, noPublication).sources[0]).toMatchObject({ publication: { status: 'unknown' },
+      publicationInThisRun: false });
   });
 
   it.each(['unknown', 'mismatched'] as const)('does not attribute an %s journal to saved assignments', runBinding => {
     const f = fixture(), report = buildResearchContributionFlow(f.state, { ...f.journal(), runBinding });
-    expect(report.decisionOccurrences).toEqual([]);
     expect(report.obligations.find(item => item.taskId === helper.id)!.attempts[0].starts).toEqual([]);
     expect(report.coverage.journal).toBe(runBinding);
   });
 
-  it('retains deferred and re-decided occurrences, including sources no longer in the current inbox', () => {
+  it('retains superseded sources and their exact proposals', () => {
     const f = fixture();
-    f.log.splice(2, 0, { ...f.log[2], status: 'deferred', taskId: undefined, taskDigest: undefined,
-      waitsOn: [{ taskId: 'input', taskDigest: 'input-v1' }], at: 80 });
     f.state.cooperation!.deliveries![0].status = 'superseded';
     f.state.cooperation!.deliveries![1].status = 'superseded';
     const report = buildResearchContributionFlow(f.state, f.journal());
-    expect(report.handoffs).toEqual([]);
-    expect(report.decisionOccurrences.map(item => item.status)).toEqual(['deferred', 'adopted']);
-    expect(report.decisionOccurrences[0]).toMatchObject({ waitsOn: [{ taskId: 'input', taskDigest: 'input-v1' }] });
-    expect(report.sources[0]).toMatchObject({ status: 'superseded', handoffAliases: [{ handoffId: f.handoff.id }] });
+    expect(report.sources[0]).toMatchObject({ status: 'superseded' });
     expect(report.sources[0].proposals[0]).toMatchObject({ task: helper, taskDigest: taskVersion(helper) });
-    expect(report.storedDecisions[0].id).toBe(f.handoff.id);
-    expect(report.unresolved.some(item => item.event === 'research_handoff_decided')).toBe(false);
+    expect(report.unresolved).toEqual([]);
   });
 
   it('retains a stale check version even when its task definition and assignment are no longer current', () => {
@@ -170,10 +151,10 @@ describe('research contribution flow', () => {
     expect(report.obligations.find(item => item.currentTaskVersion && item.taskId === helper.id)!.checkIds).toEqual([]);
   });
 
-  it('keeps an adopted historical obligation without a remaining task definition and does not turn old research execution into a lemma', () => {
+  it('keeps a historical obligation without a remaining task definition and does not turn old research execution into a lemma', () => {
     const f = fixture();
-    const historical = { ...f.log[2], taskId: 'old-lemma', taskDigest: 'old-version', planVersion: 'old-plan', at: 90 };
-    f.log.splice(2, 0, historical);
+    f.log.push({ event: 'task_assigned', taskId: 'old-lemma', taskDigest: 'old-version', workerId: 'prover',
+      seedCommit: seed, assignmentKey: 'old-assignment', planVersion: 'old-plan', at: 90 });
     f.state.cooperation!.deliveries![0].assignmentKey = 'research-assignment';
     f.log.push({ event: 'task_assigned', taskId: research.id, taskDigest: taskVersion(research), workerId: 'researcher',
       seedCommit: seed, assignmentKey: 'research-assignment', at: 250 });
@@ -254,7 +235,6 @@ describe('research contribution flow', () => {
     expect(attempt.starts.map(item => item.turnId)).toEqual(['turn-1', 'turn-2']);
     expect(attempt.assigned.status).toBe('ambiguous');
     expect(attempt.assignedToFirstObservedStartMs.status).toBe('ambiguous');
-    expect(report.decisionOccurrences[0].decisionToFirstObservedStartMs.status).toBe('ambiguous');
   });
 
   it.each(['reversed-clock', 'missing-first-time'] as const)('does not hide %s with a later start', mode => {
@@ -264,37 +244,13 @@ describe('research contribution flow', () => {
     const report = buildResearchContributionFlow(f.state, f.journal()), attempt = report.obligations.find(item => item.taskId === helper.id)!.attempts[0];
     expect(attempt.assignedToFirstObservedStartMs).toMatchObject({ status: 'unknown',
       reason: mode === 'reversed-clock' ? 'time-order-conflict' : 'endpoint-unavailable' });
-    expect(report.decisionOccurrences[0].decisionToFirstObservedStartMs.status).toBe('unknown');
   });
 
-  it.each(['planVersion', 'activationDigest', 'contextDigest'] as const)('leaves decision-to-start unknown without %s', field => {
-    const f = fixture(); delete f.log[2][field];
-    expect(buildResearchContributionFlow(f.state, f.journal()).decisionOccurrences[0].decisionToFirstObservedStartMs.status).toBe('unknown');
-  });
-
-  it('does not join a decision to a different accepted plan or choose among repeated adoption occurrences', () => {
-    const f = fixture(); f.log[3].planVersion = 'other-plan';
-    expect(buildResearchContributionFlow(f.state, f.journal()).decisionOccurrences[0].decisionToFirstObservedStartMs.status).toBe('unknown');
-    f.log[3].planVersion = 'plan-1'; f.log.splice(3, 0, { ...f.log[2], at: 101 });
-    expect(buildResearchContributionFlow(f.state, f.journal()).decisionOccurrences.every(
-      item => item.decisionToFirstObservedStartMs.status === 'ambiguous')).toBe(true);
-  });
-
-  it('leaves reverse event order and a decision-to-assignment clock conflict unknown', () => {
+  it('leaves reverse event order unknown', () => {
     const f = fixture(), started = f.log.splice(4, 1)[0];
     started.at = 150; f.log.splice(3, 0, started);
-    let report = buildResearchContributionFlow(f.state, f.journal());
+    const report = buildResearchContributionFlow(f.state, f.journal());
     expect(report.obligations.find(item => item.taskId === helper.id)!.attempts[0].assignedToFirstObservedStartMs)
-      .toMatchObject({ status: 'unknown', reason: 'event-order-conflict' });
-    f.log.splice(3, 1); f.log.splice(4, 0, started); f.log[2].at = 120;
-    report = buildResearchContributionFlow(f.state, f.journal());
-    expect(report.decisionOccurrences[0].decisionToFirstObservedStartMs.status).toBe('unknown');
-  });
-
-  it('does not report publication-to-decision latency from a publication logged after the decision', () => {
-    const f = fixture(), publication = f.log.splice(1, 1)[0];
-    f.log.push(publication);
-    expect(buildResearchContributionFlow(f.state, f.journal()).decisionOccurrences[0].publicationToDecisionMs)
       .toMatchObject({ status: 'unknown', reason: 'event-order-conflict' });
   });
 
@@ -456,7 +412,7 @@ describe('research contribution flow', () => {
     expect(obligation.referenceCoverage).toBe('unknown');
     expect(obligation.uses!.proofConsumers).toEqual([]);
     expect(report.modelReportedUses[0]).toMatchObject({ attribution: 'model-reported-origin', origin: 'delivery', deliveryId: 'finding-1' });
-    f.state.cooperation!.deliveries = []; f.state.cooperation!.researchDecisions = [];
+    f.state.cooperation!.deliveries = [];
     expect(buildResearchContributionFlow(f.state).obligations.find(item => item.taskId === helper.id)!.referenceCoverage).toBe('unknown');
   });
 
@@ -465,8 +421,8 @@ describe('research contribution flow', () => {
     const text = renderRunInspection({ ...buildRunInspection(f.state), contributionFlow: flow });
     expect(text).toContain('## Contribution flow');
     expect(text).toContain('recorded-not-replayed');
-    expect(text).toContain('50 ms');
-    expect(text).toContain('15 ms');
+    expect(text).toContain('| 5 ms |');
+    expect(text).toContain('40 ms');
     const legacy = renderRunInspection({ ...buildRunInspection(f.state), contributionFlow: buildResearchContributionFlow(f.state) });
     expect(legacy).toContain('unknown');
     expect(legacy).not.toMatch(/\| 0 ms \|/u);

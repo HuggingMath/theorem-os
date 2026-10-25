@@ -16,7 +16,7 @@ const researchDeliveryGuidance = 'As soon as a useful helper or glue step has an
   'publish it promptly in lemmaRequests with a full closed Lean type and actual typed input dependencies. ' +
   'In its objective, state the distinct scope, first construction or Lean step, and intended consumer with the application back to it. ' +
   'Name the nearest consumer task/declaration and its remaining premises; include the typed glue consumer as a sibling lemmaRequest when that step is implementable. ' +
-  'The handoff application records known typed inputs and consumers; an unrecorded consumer is a question for Lead, not an invented proof edge. ' +
+  'Record the known typed inputs and consumers; an unrecorded consumer is a question for Lead, not an invented proof edge. ' +
   'Retain reusable Lean probe code in RESEARCH.md and request a Lead decision; do not keep researching an already implementable step. ' +
   'If the method is still unknown, report the precise missing inference instead of presenting another form of the same gap as ready proof work. ' +
   finiteWorkGuidance + ' Proposals remain advisory and require a separate proof assignment and independent checking.';
@@ -26,21 +26,16 @@ export function cooperativeWorkContract(action: CooperativeAction, tasks: readon
   const exploration = action.kind === 'task' ? tasks.find(node => node.task.id === action.task.id)?.capacityExploration : undefined;
   const stage = action.kind === 'task' ? isFeasibilityReview(action.task) ? 'feasibility-review' :
     exploration ? 'capacity-exploration' : isAdvisoryTask(action.task) ? 'investigation' : action.assignment.connectionCheck ? 'consumer-connection' : 'formal-proof' :
-    action.kind === 'lead' ? action.coordination ? 'coordination-decision' : 'route-planning' : action.kind === 'review' ? 'candidate-review' :
+    action.kind === 'lead' ? 'route-planning' : action.kind === 'review' ? 'candidate-review' :
       action.kind === 'assemble' ? 'integration' : action.kind;
   const products = {
-    'route-planning': { owner: 'lead', output: 'validated-task-graph-and-handoff-decisions',
+    'route-planning': { owner: 'lead', output: 'validated-task-graph',
       consumer: 'M3-ready-selection-and-M5-assignment', acceptance: 'host-plan-validation', sourcePolicy: 'host-checks-any-source-repair',
       deliveryGuidance: planningDeliveryGuidance },
-    'coordination-decision': { owner: 'lead', output: 'version-bound-inbox-or-capacity-decision',
-      consumer: 'M3-ready-selection-and-M5-assignment', acceptance: 'host-coordination-validation', sourcePolicy: 'read-only',
-      deliveryGuidance: 'Decide the shown handoff/challenge activations or capacity/stagnation request using the current planVersion and dispatchNonce. ' +
-        'Prefer the offered short decision event; a decision does not require rewriting the complete task graph. ' +
-        'Use a complete plan when the work needs a graph change. ' + planningDeliveryGuidance },
     investigation: { owner: 'researcher', output: 'advisory-finding-retained-code-and-exact-lemma-proposals',
-      consumer: 'lead-handoff-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only', deliveryGuidance: researchDeliveryGuidance },
+      consumer: 'lead-plan-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only', deliveryGuidance: researchDeliveryGuidance },
     'capacity-exploration': { owner: 'idle-proof-or-research-worker', output: 'distinct-frontier-finding-retained-lean-probe-and-exact-interface',
-      consumer: 'target-owner-and-lead-handoff-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only', deliveryGuidance: researchDeliveryGuidance },
+      consumer: 'target-owner-and-lead-plan-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only', deliveryGuidance: researchDeliveryGuidance },
     'feasibility-review': { owner: 'independent-researcher', output: 'core-inference-risk-and-discriminating-evidence',
       consumer: 'lead-route-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only' },
     'formal-proof': { owner: 'proof-worker', output: 'saved-exact-typed-declaration',
@@ -61,10 +56,6 @@ export function cooperativeWorkContract(action: CooperativeAction, tasks: readon
       seedCommit: action.assignment.seedCommit, dependencies: action.assignment.dependencies ?? [],
       ...(action.assignment.connectionCheck ? { connectionCheck: action.assignment.connectionCheck,
         purpose: 'check-consumer-sufficiency-with-fixed-inputs', acceptance: 'conditional-only-until-inputs-checked' } : {}) } : { seedCommit: action.seedCommit },
-    ...(action.kind === 'lead' ? { handoffIds: action.handoffIds ?? [],
-      handoffActivations: action.handoffActivations ?? {}, challengeIds: action.challengeIds ?? [],
-      challengeActivations: action.challengeActivations ?? {},
-      ...(action.capacityRefill ? { capacityRefill: action.capacityRefill } : {}) } : {}),
     ...(action.kind === 'task' ? { plannedConsumers: contextTaskConsumers(action.task, tasks, context)
       .map(consumer => consumer.task.id) } : {}),
     ...(exploration ? { capacityExploration: exploration } : {}),

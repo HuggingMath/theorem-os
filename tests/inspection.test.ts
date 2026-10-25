@@ -10,7 +10,6 @@ import { taskVersion, type TaskRecord } from '../src/solver/tasks';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import { researchFailureCategory } from '../src/solver/modules/search';
 import type { RequestUsageAccounting } from '../src/solver/usageBudget';
-import { researchHandoffs, resolveResearchHandoffs } from '../src/solver/researchHandoffs';
 
 const roots: string[] = [];
 function fixture() {
@@ -344,32 +343,6 @@ describe('run inspection', () => {
     expect(buildRunInspection(state).tasks[0].proof.status).toBe('conditional');
     node.task = { ...node.task, revision: 1 };
     expect(buildRunInspection(state).tasks[0].proof.status).toBe('stale');
-  });
-
-  it('reports adoption and planned use independently from proof evidence after JSON restore', () => {
-    const { state, stateFile } = fixture(), cooperative = state.cooperation!;
-    const source: TaskRecord = { task: { id: 'investigation', kind: 'research', objective: 'Find a bridge',
-      dependsOn: [], revision: 0 }, status: 'completed', attempts: 1 };
-    const adopted: TaskRecord = { task: { id: 'bridge', kind: 'lemma', objective: 'Prove the bridge', dependsOn: [],
-      revision: 0, theoremName: 'Original.bridge', proofPath: 'Submission.lean', type: 'True' }, status: 'pending', attempts: 0 };
-    cooperative.tasks.push(source, adopted);
-    cooperative.deliveries = [{ id: 'proposal', producer: 'researcher', taskId: source.task.id,
-      taskDigest: taskVersion(source.task), kind: 'research', status: 'advisory', summary: 'A reusable bridge.',
-      statement: '', premises: [], dependencies: [], remainingObligations: [], evidenceRefs: [], createdAt: 1,
-      lemmaRequests: [adopted.task] }];
-    const handoff = researchHandoffs(cooperative)[0];
-    cooperative.researchDecisions = resolveResearchHandoffs(cooperative, [handoff.id], cooperative.tasks.map(item => item.task), undefined);
-    state.knowledgeDigest = 'c'.repeat(64);
-    writeSolverRunState(stateFile, state);
-    const restored = readSolverRunState(stateFile), before = JSON.stringify(restored), report = buildRunInspection(restored);
-    expect(report.configuration.knowledgeDigest).toBe(state.knowledgeDigest);
-    expect(report.continuation.adoptedResearch).toEqual([expect.objectContaining({ sourceTaskId: source.task.id,
-      taskId: adopted.task.id, recordedProof: 'none', plannedGoalIds: [], referenceCoverage: 'unknown' })]);
-    expect(report.progress.checkedProofTasks).toBe(0);
-    expect(renderRunInspection(report)).toContain('| investigation | bridge | none | none | none recorded | none recorded | none recorded | unknown |');
-    expect(JSON.stringify(restored)).toBe(before);
-    restored.cooperation!.tasks[0].task.dependsOn = [adopted.task.id];
-    expect(buildRunInspection(restored).continuation.adoptedResearch[0].plannedGoalIds).toEqual(['goal']);
   });
 
   it.each(['proof', 'integratedCheck'] as const)('recognizes %s receipts bound to a verification projection', field => {

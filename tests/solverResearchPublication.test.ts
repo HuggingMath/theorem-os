@@ -2,13 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { SolverRunState } from '../src/solver/archive';
+import { leadResearchInputs } from '../src/solver/contextCompiler';
 import { parseCooperationPlan, type CooperativeResearch } from '../src/solver/cooperation';
 import * as knowledgeApplications from '../src/solver/knowledgeApplications';
 import { buildResearchContext } from '../src/solver/modules/context';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { committedSource, commitSolverSources, git } from '../src/solver/problem';
-import { pendingResearchChallenges } from '../src/solver/researchChallenges';
-import { pendingResearchHandoffs } from '../src/solver/researchHandoffs';
 import { captureResearchBasis, researchSourceDigest } from '../src/solver/researchRecords';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import { deferred } from './helpers/async';
@@ -20,6 +19,9 @@ let controller: AbortController, action: Extract<CooperativeAction, { kind: 'tas
 const finding = (summary = 'EXACT_LOCAL_COUNTEREXAMPLE') => ({ summary, conclusion: 'refuted', needsDecision: true,
   evidenceRefs: ['nine-listed-constraints-only'], remainingObligations: ['original_goal_1'] });
 const publish = (value: unknown) => (cooperative as any).receive(workers[1], action, value, true);
+const leadInputs = () => leadResearchInputs(state.cooperation!.deliveries ?? [],
+  new Map(state.cooperation!.tasks.map(node => [node.task.id, node])));
+const summaries = () => leadInputs().map(item => item.summary);
 const create = () => cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal });
 const freezeResearchBasis = () => action.assignment.researchBasis = captureResearchBasis(action.task, {
   problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
@@ -96,7 +98,7 @@ it('publishes to mandatory Lead input while proof remains active, without touchi
       committedSource(workers[0].worktree, state.problem.baseCommit, `${state.problem.projectRelative}/${file}`)])),
     maxOptionalContextBytes: 0 });
   expect(context.message).toContain('EXACT_LOCAL_COUNTEREXAMPLE');
-  expect(context.manifest!.included).toContainEqual(expect.objectContaining({ id: 'research-challenges', required: true }));
+  expect(context.manifest!.included).toContainEqual(expect.objectContaining({ id: 'lead-research-inputs', required: true }));
 });
 
 it('retains multiple findings and proposals independently across restart and duplicate submissions', async () => {
@@ -108,14 +110,16 @@ it('retains multiple findings and proposals independently across restart and dup
   await publish({ ...first, finding: { ...first.finding, summary: 'UPDATED_FINDING_AFTER_ADOPTION' } });
   await publish({ kind: 'research', finding: finding('SECOND_DISTINCT_FINDING') });
   expect(state.cooperation!.deliveries).toHaveLength(3);
-  expect(pendingResearchHandoffs(state.cooperation!)).toHaveLength(1);
-  expect(pendingResearchChallenges(state.cooperation!)).toHaveLength(3);
+  const ordered = ['EXACT_LOCAL_COUNTEREXAMPLE', 'UPDATED_FINDING_AFTER_ADOPTION', 'SECOND_DISTINCT_FINDING'];
+  expect(summaries()).toEqual(ordered);
+  // The adopted proposal is no longer shown as an unadopted planning input.
+  expect(leadInputs().flatMap(item => item.lemmaRequests ?? []).filter(task =>
+    !state.cooperation!.tasks.some(node => node.task.id === task.id))).toEqual([]);
   cooperative.deactivate(workers[1]); await cooperative.stop();
   state = JSON.parse(JSON.stringify(state)); cooperative = create();
   await publish(first);
   expect(state.cooperation!.deliveries).toHaveLength(3);
-  expect(pendingResearchChallenges(state.cooperation!).map(item => item.summary)).toEqual([
-    'EXACT_LOCAL_COUNTEREXAMPLE', 'UPDATED_FINDING_AFTER_ADOPTION', 'SECOND_DISTINCT_FINDING']);
+  expect(summaries()).toEqual(ordered);
 });
 
 it('keeps private findings within their route and excludes stale or late events from decisions', async () => {
@@ -127,7 +131,21 @@ it('keeps private findings within their route and excludes stale or late events 
   state.cooperation!.tasks[0].task = { ...action.task, revision: 1 };
   await publish({ kind: 'research', finding: finding('LATE_FINDING') });
   expect(state.cooperation!.deliveries!.at(-1)?.status).toBe('superseded');
-  expect(pendingResearchChallenges(state.cooperation!)).toEqual([]);
+  expect(leadInputs()).toEqual([]);
+});
+
+it('wakes Lead after restore for an unanswered refutation until a plan answers its exact input', async () => {
+  expect((cooperative as any).needsLead).toBe(false);
+  await publish({ kind: 'research', finding: finding() });
+  const restore = async () => {
+    controller.abort(); await cooperative.stop();
+    state = JSON.parse(JSON.stringify(state)); controller = new AbortController(); cooperative = create();
+  };
+  await restore();
+  expect((cooperative as any).needsLead).toBe(true);
+  state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
+  await restore();
+  expect((cooperative as any).needsLead).toBe(false);
 });
 
 it('rejects an invalid research event and continues consuming the following line', async () => {
@@ -137,7 +155,7 @@ it('rejects an invalid research event and continues consuming the following line
   const cursors = {};
   await (cooperative as any).readWorkerDeliveries(workers[1], action, cursors);
   expect(state.cooperation!.deliveries).toHaveLength(1);
-  expect(pendingResearchChallenges(state.cooperation!)).toHaveLength(1);
+  expect(leadInputs()).toHaveLength(1);
   expect(state.cooperation!.deliveryReceipts).toEqual([expect.objectContaining({
     status: 'needs-correction', taskId: action.task.id, assignmentKey: assignmentDeliveryFile(action.assignment),
     issues: [{ path: 'conclusion', message: 'Use supporting, refuted, or inconclusive.' }],

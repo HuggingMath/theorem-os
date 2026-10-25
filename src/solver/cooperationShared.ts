@@ -8,8 +8,6 @@ import { type StatementReview } from './statementReview';
 import { type DeliveryArtifactManifest } from './deliveryArtifacts';
 import { type BlockerBasis, type RouteBlocker } from './routeControl';
 import { type ProofRoute } from './proofRoutes';
-import { type ResearchHandoffDecision } from './researchHandoffs';
-import { type ResearchChallengeDecision } from './researchChallenges';
 import { type ObligationSnapshot, type ObligationProgressReceipt } from './obligationProgress';
 import { type TaskConsumerProjection } from './taskConsumers';
 import { type CheckpointCandidate } from './researchEvidence';
@@ -24,7 +22,6 @@ import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteReco
 
 export const digest = taskVersion;
 /** Derived from stored task and failure records; the marker is never a separate acceptance state. */
-export type InvestigationOutcome = { taskId: string; state: 'dispatched' | 'delivered' | 'rejected' | 'abandoned'; reason?: string };
 export const taskSourceRejections = new Set(['math_task_source_outside_scope', 'math_task_ambiguous_declaration',
   'math_task_existing_declaration_removed', 'math_task_existing_declaration_changed', 'math_task_requires_theorem',
   'math_task_helper_is_original_declaration', 'math_task_conditional_header_unsupported',
@@ -60,7 +57,6 @@ export type PlanPublication = { nonce: string; file: string; offset: number; eve
   baseVersion: string; planVersion: string; acceptedAt: number; finalized?: boolean };
 export type InitialPlanPublication = PlanPublication;
 export type PlanPublicationRejection = { nonce: string; file: string; offset: number; baseVersion: string; reason: string };
-export type AdvisoryDecisions = { handoffs: readonly ResearchHandoffDecision[]; challenges: readonly ResearchChallengeDecision[] };
 export type FailedTaskInput = { id: string; taskId: string; taskDigest: string; inputDigest: string; basis: BlockerBasis;
   attemptFingerprint?: string; relatedFailureIds?: string[];
   sourceDigest: string; targetDigest: string; seedSourceDigest: string; seedTargetDigest: string;
@@ -79,8 +75,6 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   deliveryReceipts?: DeliveryReceipt[];
   proofReadyRecords?: ProofReadyRecord[];
   proofImports?: ProofImportRecord[];
-  researchDecisions?: ResearchHandoffDecision[];
-  challengeDecisions?: ResearchChallengeDecision[];
   planVersion?: string; planEdited?: boolean; statementReviews?: StatementReview[];
   initialPlanPublication?: InitialPlanPublication;
   /** Last immutable live publication; its dispatch continuation is process-local. */
@@ -93,19 +87,9 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   lastLeadInputDigest?: string;
   /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
   lastLeadPauseInputDigest?: string;
-  /** One capacity assessment per mathematical input, including across process restarts. */
-  lastCapacityRefill?: import('./leadAssessment').LeadAssessmentReceipt & { workerIds: string[] };
-  /** One planning assessment per mathematical/evidence input; unresolved need remains visible. */
-  lastStagnationRecovery?: import('./leadAssessment').LeadAssessmentReceipt & { taskIds: string[]; workerIds: string[];
-    reason: 'advisory-no-durable-progress' | 'frontier-not-decomposed' };
   /** Durable mathematical input/method tombstones, independent of scheduling and plan revisions. */
   capacityExplorationInputs?: { inputDigest: string; focus: import('./capacityExploration').CapacityExplorationFocus;
     targetTaskId: string; taskId: string }[];
-  frontierRecoveries?: { id: string; taskIds: string[]; goalIds: string[];
-    status: 'requested' | 'planned' | 'awaiting-input'; taskInputDigests: string[]; readyTaskIds?: string[]; reason?: string;
-    investigationTaskId?: string; investigationAttempts?: number }[];
-  frontierWaiting?: { inputDigest: string; taskIds: string[]; goalIds: string[]; reason: 'awaiting-new-mathematical-input';
-    investigation?: InvestigationOutcome };
   failedTaskInputs?: FailedTaskInput[];
   blockers?: RouteBlocker[];
   proofRoutes?: ProofRoute[];

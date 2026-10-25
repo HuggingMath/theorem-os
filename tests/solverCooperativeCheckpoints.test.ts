@@ -264,40 +264,6 @@ describe('cooperative advisory scheduling checkpoints', () => {
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
   });
 
-  it('retains a real capacity request as requested when an unfinished Lead checkpoint has no saved decision', async () => {
-    const { state, workers, check, events, controller, run, pulse, wake } = fixture(false, undefined, 'lead-capacity');
-    const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
-    await held.wait(0, completion);
-    const first = held.messages[0].assignment;
-    if (first.kind !== 'lead') throw new Error('fixture_not_lead');
-    expect(first.capacityRefill).toMatchObject({ workerIds: ['researcher'] });
-    expect(state.cooperation!.lastCapacityRefill?.status).toBe('requested');
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(held.open).toHaveBeenCalledOnce();
-    expect(state.cooperation!.lastLeadPauseInputDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
-    expect(state.cooperation!.lastCapacityRefill?.status).toBe('requested');
-    await vi.advanceTimersByTimeAsync(240_000);
-    expect(held.open).toHaveBeenCalledOnce();
-    fs.writeFileSync(path.join(workers[0].worktree, 'RESEARCH.md'), 'A new exact independent construction is saved.\n');
-    await pulse(workers[0].id);
-    wake();
-    await vi.advanceTimersByTimeAsync(5_000); await held.wait(1, completion);
-    const latest = held.messages[1].assignment;
-    if (latest.kind !== 'lead') throw new Error('fixture_not_lead');
-    expect(held.messages[1].mode).toBe('short');
-    expect(latest.capacityRefill).toEqual(state.cooperation!.lastCapacityRefill && {
-      requestId: state.cooperation!.lastCapacityRefill.requestId,
-      inputDigest: state.cooperation!.lastCapacityRefill.inputDigest,
-      workerIds: state.cooperation!.lastCapacityRefill.workerIds,
-      requestedAt: state.cooperation!.lastCapacityRefill.requestedAt,
-    });
-    expect(state.cooperation!.lastCapacityRefill?.status).toBe('requested');
-    expect(events.some(item => item.event === 'capacity_refill_assessed')).toBe(false);
-    expect(check).not.toHaveBeenCalled(); expect(state.check).toBeUndefined();
-    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
-  });
-
   it('sends the complete revised mathematical graph when the Lead plan version changes in the same thread', async () => {
     const { state, check, events, controller, run } = fixture(false, undefined, 'lead');
     const exactType = '∀ (n : Nat), ' + 'True ∧ '.repeat(250) + 'True';

@@ -58,14 +58,14 @@ function planResponse(text: string): unknown {
   if (explicit.length) return JSON.parse(explicit[0][2]);
   if (/```math-[a-z-]+\s*\n/u.test(text)) throw new Error('math_math-plan_requires_one_block');
   if (text.startsWith('{')) return JSON.parse(text);
-  const planKeys = /"(?:tasks|groups|proofRoutes|recovery|handoffDecisions|challengeDecisions|assessments|dispatchNonce|baseVersion)"\s*:/u;
+  const planKeys = /"(?:tasks|groups|proofRoutes|dispatchNonce|baseVersion)"\s*:/u;
   const legacy = blocks.filter(block => {
     if (!['math', 'json'].includes(block[1]) || !block[2].trimStart().startsWith('{')) return false;
     try {
       const value = JSON.parse(block[2]);
       return value && typeof value === 'object' && !Array.isArray(value) &&
         (Object.keys(value).some(key => planKeys.test(JSON.stringify(key) + ':')) ||
-          ['plan', 'handoff', 'assessment'].includes(value.kind));
+          value.kind === 'plan');
     } catch { return planKeys.test(block[2]); }
   });
   if (legacy.length > 1) throw new Error('math_math-plan_requires_one_block');

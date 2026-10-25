@@ -20,11 +20,10 @@ import { isStatementAction, statementReviewSummary } from './statementReview';
 import { type ProofReferences } from './proofReferences';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { buildProofContinuation } from './progress';
+import { leadResearchInputs } from './contextCompiler';
 import { recordRouteBlockers, refreshRouteBlockers, validateBlockerProposals } from './routeControl';
 import { parseProofRoutes } from './proofRoutes';
 import { createProofRoutePriorityIndex } from './routePriority';
-import { pendingResearchHandoffs, researchHandoffs, selectResearchHandoffBatch } from './researchHandoffs';
-import { pendingResearchChallenges, researchChallenges, selectResearchChallengeBatch } from './researchChallenges';
 import { captureObligationSnapshot, diffObligationProgress } from './obligationProgress';
 import { bindMathematicalGap, mathematicalGapVisible } from './mathematicalGaps';
 import { taskConnectionCheckCurrent } from './taskConnections';
@@ -84,9 +83,6 @@ export abstract class CooperationCore {
   protected abstract syncEditChecks(nodes: ReadonlyMap<string, TaskRecord>, versions: TaskVersions): void;
   protected abstract refreshFeasibilityAssignments(): boolean;
   protected abstract planningInputDigest(): string;
-  protected abstract markCapacityRefillAssessed(action: CooperativeAction): void;
-  protected abstract leadAssessmentInput(kind: import('./leadAssessment').LeadAssessmentKind):
-    { inputDigest: string; evidenceDigest: string } | undefined;
   protected abstract refreshFailedTaskInputs(): boolean;
   protected abstract refreshResearchCheckpoints(): void;
   protected abstract suspendResearchDrafts(worker: ResearchWorker, taskId?: string): void;
@@ -125,9 +121,13 @@ export abstract class CooperationCore {
       this.checkedDeliveries.add(proof); markTaskAcceptance(proof);
     }
     this.liveWorkers = new Set(input.workers.map(worker => worker.id));
+    // Unadopted proposals, refutations and decision requests are ordinary planning inputs;
+    // restart must not lose their pending Lead review.
+    const researchInputs = leadResearchInputs(this.archive.deliveries ?? [],
+      new Map(this.archive.tasks.map(node => [node.task.id, node]))).length > 0;
     this.needsLead = !this.archive.tasks.length || Boolean(this.archive.error) ||
-      pendingResearchHandoffs(this.archive).length > 0 || pendingResearchChallenges(this.archive).length > 0 ||
-      (this.archive.tasks.some(node => node.status === 'blocked') && this.archive.lastLeadInputDigest !== this.planningInputDigest());
+      ((researchInputs || this.archive.tasks.some(node => node.status === 'blocked')) &&
+        this.archive.lastLeadInputDigest !== this.planningInputDigest());
   }
   protected get livePeers() { return this.input.workers.filter(worker => worker.id !== this.lead.id && this.liveWorkers.has(worker.id)); }
   protected get allocationPeers() {
@@ -194,14 +194,6 @@ export abstract class CooperationCore {
       plan.tasks.push(node.task); ids.add(node.task.id);
     }
     return plan;
-  }
-  /** Preview expiry for inbox validation; rejected plans must leave the live archive untouched. */
-  protected advisoryArchiveForPlan(plan: ReturnType<typeof parseCooperationPlan>) {
-    const proposed = new Map(plan.tasks.map(task => [task.id, digest(task)]));
-    const retired = new Set(this.archive.tasks.filter(node => node.capacityExploration &&
-      proposed.get(node.task.id) !== digest(node.task)).map(node => node.task.id));
-    return retired.size ? { ...this.archive, deliveries: this.archive.deliveries?.map(record =>
-      record.taskId && retired.has(record.taskId) ? { ...record, status: 'superseded' as const } : record) } : this.archive;
   }
   protected syncProofRoutes() {
     for (const node of this.archive.tasks) node.alternativeRoutes = this.archive.proofRoutes?.filter(route => route.targetTaskId === node.task.id);
@@ -300,7 +292,6 @@ export abstract class CooperationCore {
       const scoped = this.contextState(action, worker, versions);
       const visible = new Set(scoped.tasks.map(node => node.task.id));
       const deliveries = (scoped.deliveries ?? []).slice(-16);
-      const handoffs = researchHandoffs(scoped);
       writeMathJsonDurable(path.join(worker.worktree, 'COOPERATION.json'), {
         planVersion: this.archive.planVersion,
         edits: (this.archive.edits ?? []).slice(-16),
@@ -312,8 +303,6 @@ export abstract class CooperationCore {
           return [{ workerId: peer.id, ...wait, candidates,
             omittedCandidates: wait.omittedCandidates + wait.candidates.length - candidates.length }];
         }),
-        ...(worker.id === this.lead.id && scoped.lastCapacityRefill ? { lastCapacityRefill: scoped.lastCapacityRefill } : {}),
-        ...(worker.id === this.lead.id && scoped.lastStagnationRecovery ? { lastStagnationRecovery: scoped.lastStagnationRecovery } : {}),
         ...(scoped.planPublicationRejection ? { planPublicationRejection: scoped.planPublicationRejection } : {}),
         ...(scoped.contextCheckpointRejection ? { contextCheckpointRejection: scoped.contextCheckpointRejection } : {}),
         capacityExplorations: scoped.tasks.filter(node => node.capacityExploration).map(node => ({
@@ -330,18 +319,15 @@ export abstract class CooperationCore {
         deliveries: deliveries.map(({ evidence: _evidence, researchRecord: _researchRecord, ...record }) => record),
         deliveryReceipts: scoped.deliveryReceipts ?? [],
         proofReadyRecords: scoped.proofReadyRecords ?? [],
-        researchHandoffs: handoffs,
-        researchChallenges: researchChallenges(scoped),
         mathematicalGaps: scoped.mathematicalGaps ?? [],
         blockers: scoped.blockers ?? [],
         proofRoutes: scoped.proofRoutes ?? [],
         routePriority: createProofRoutePriorityIndex(scoped.tasks, { groups: scoped.groups,
           environmentDigest: this.input.state.environmentDigest, proofRoutes: scoped.proofRoutes }),
         frontierFocus: originalGoalFrontierSnapshot(originalGoalTaskFocus(scoped.tasks, scoped.groups, this.input.state.environmentDigest)),
-        frontierRecoveries: scoped.frontierRecoveries ?? [],
         mathematicalChanges: scoped.progressReceipts?.slice(-16) ?? [],
         continuation: buildProofContinuation(scoped.tasks, { groups: scoped.groups, environmentDigest: this.input.state.environmentDigest,
-          proofRoutes: scoped.proofRoutes, researchHandoffs: handoffs }),
+          proofRoutes: scoped.proofRoutes }),
         statements: (scoped.statementReviews ?? []).map(statementReviewSummary),
       });
     }
@@ -499,18 +485,6 @@ export abstract class CooperationCore {
   current(action: CooperativeAction) {
     if (action.kind === 'assemble') return !this.failure && !this.stopping && this.liveWorkers.has(this.lead.id) && this.canAssemble(action.seedCommit);
     if (action.kind === 'lead' && (action.planNonce || action.initialPlanNonce) && !this.leadEvidence.has(action)) return false;
-    if (action.kind === 'lead' && action.coordination && !action.handoffIds?.length && !action.challengeIds?.length &&
-        !this.publishedPlans.has(action) && (pendingResearchHandoffs(this.archive).length || pendingResearchChallenges(this.archive).length))
-      return false; // An assessment-only dispatch must yield to newly arrived inbox work before consuming another turn.
-    if (action.kind === 'lead' && action.handoffActivations) {
-      const pending = new Map(pendingResearchHandoffs(this.archive).flatMap(item =>
-        item.sources.map(source => [source.handoffId, item.activationDigest] as const)));
-      if (action.handoffIds?.some(id => pending.has(id) && pending.get(id) !== action.handoffActivations![id])) return false;
-    }
-    if (action.kind === 'lead' && action.challengeActivations) {
-      const pending = new Map(pendingResearchChallenges(this.archive).map(item => [item.id, item.activationDigest]));
-      if (action.challengeIds?.some(id => pending.has(id) && pending.get(id) !== action.challengeActivations![id])) return false;
-    }
     if (isStatementAction(action)) {
       const review = this.archive.statementReviews?.find(item => item.id === action.reviewId);
       const node = this.node(action.taskId);
@@ -641,14 +615,6 @@ export abstract class CooperationCore {
   protected async waitForDispatch(): Promise<typeof RETRY_DISPATCH> {
     await this.wait();
     return RETRY_DISPATCH;
-  }
-  protected handoffDispatch(batch = selectResearchHandoffBatch(this.archive),
-    limits?: { maxItems?: number; maxBytes?: number; maxFindingBytes?: number }) {
-    const challenges = selectResearchChallengeBatch(this.archive, limits);
-    return { handoffIds: batch.map(item => item.id),
-      handoffActivations: Object.fromEntries(batch.map(item => [item.id, item.activationDigest])),
-      challengeIds: challenges.map(item => item.id),
-      challengeActivations: Object.fromEntries(challenges.map(item => [item.id, item.activationDigest])) };
   }
   protected visible(task: CooperativeTask): TaskRecord[] {
     const nodes = new Map(this.archive.tasks.map(node => [node.task.id, node]));

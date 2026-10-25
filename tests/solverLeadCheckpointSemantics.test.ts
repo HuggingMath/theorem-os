@@ -6,7 +6,6 @@ import type { CooperativeResearch } from '../src/solver/cooperation';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { committedSource, commitSolverSources, type SolverProblem } from '../src/solver/problem';
 import { advisoryCheckpointScope } from '../src/solver/research';
-import { pendingResearchHandoffs } from '../src/solver/researchHandoffs';
 import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
@@ -20,27 +19,17 @@ vi.mock('../src/runtime/codexSession', () => ({ createCodexMathSession: host.cre
 
 type Lead = Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>;
 const lead = (fields: Partial<Lead> = {}): Lead => ({ kind: 'lead', seedCommit: 'seed-a', planVersion: 'graph-a', responsibilityDigest: 'responsibility-a',
-  planNonce: 'nonce-a', planningInputDigest: 'operational-input-a',
-  handoffIds: ['h2', 'h1'], handoffActivations: { h1: 'ha', h2: 'hb' },
-  challengeIds: ['c2', 'c1'], challengeActivations: { c1: 'ca', c2: 'cb' },
-  capacityRefill: { inputDigest: 'capacity-a', workerIds: ['worker-a'], requestedAt: 1 }, ...fields });
+  planNonce: 'nonce-a', planningInputDigest: 'operational-input-a', ...fields });
 
 describe('semantic advisory checkpoint inputs', () => {
-  it('preserves the same scope across nonce, seed, status, allocation and inbox ordering changes', () => {
+  it('preserves the same scope across nonce, seed and planning input changes', () => {
     const original = lead();
-    const replay = lead({ planNonce: 'nonce-b', seedCommit: 'seed-b', planningInputDigest: 'operational-input-b',
-      handoffIds: ['h1', 'h2', 'h1'], handoffActivations: { h2: 'hb', unshown: 'new', h1: 'ha' },
-      challengeIds: ['c1', 'c2'], challengeActivations: { c2: 'cb', c1: 'ca', unshown: 'new' },
-      capacityRefill: { inputDigest: 'capacity-a', workerIds: ['worker-b', 'worker-c'], requestedAt: 999 } });
+    const replay = lead({ planNonce: 'nonce-b', seedCommit: 'seed-b', planningInputDigest: 'operational-input-b' });
     expect(advisoryCheckpointScope(replay)).toBe(advisoryCheckpointScope(original));
   });
 
   it.each([
-    ['handoff activation', { handoffActivations: { h1: 'new', h2: 'hb' } }],
-    ['handoff identity', { handoffIds: ['h1', 'h3'], handoffActivations: { h1: 'ha', h3: 'hb' } }],
-    ['challenge activation', { challengeActivations: { c1: 'new', c2: 'cb' } }],
-    ['challenge identity', { challengeIds: ['c1', 'c3'], challengeActivations: { c1: 'ca', c3: 'cb' } }],
-    ['capacity input', { capacityRefill: { inputDigest: 'capacity-b', workerIds: ['worker-a'], requestedAt: 1 } }],
+    ['planning input', { planningInputDigest: 'operational-input-b' }],
     ['new base graph presentation', { planVersion: 'graph-b' }],
   ] as const)('keeps new %s from resetting the same responsibility guard', (_label, change) => {
     expect(advisoryCheckpointScope(lead(change as Partial<Lead>))).toBe(advisoryCheckpointScope(lead()));
@@ -48,28 +37,6 @@ describe('semantic advisory checkpoint inputs', () => {
 
   it('gives a changed mathematical responsibility a fresh scope', () => {
     expect(advisoryCheckpointScope(lead({ responsibilityDigest: 'responsibility-b' }))).not.toBe(advisoryCheckpointScope(lead()));
-    expect(advisoryCheckpointScope(lead({ recovery: { id: 'recovery-a', taskIds: ['task'], goalIds: ['goal'] } })))
-      .not.toBe(advisoryCheckpointScope(lead()));
-  });
-
-  it('resets the scheduling scope when entering coordination, then preserves it across dispatch refreshes', () => {
-    const coordination = lead({ coordination: true });
-    expect(advisoryCheckpointScope(coordination)).not.toBe(advisoryCheckpointScope(lead()));
-    expect(advisoryCheckpointScope(coordination)).toBe(advisoryCheckpointScope(lead({ coordination: true,
-      planNonce: 'next-admission', planVersion: 'new-graph-presentation', planningInputDigest: 'new-input',
-      handoffIds: ['new-handoff'], handoffActivations: { 'new-handoff': 'new-activation' },
-      capacityRefill: { requestId: 'new-request', inputDigest: 'new-capacity-input', workerIds: [], requestedAt: 20 } })));
-  });
-
-  it('keeps recovery inputs stable when reordered but resets changed recovery contracts', () => {
-    const original = lead({ recovery: { id: 'recovery-a', taskIds: ['a', 'b'], goalIds: ['x', 'y'] } });
-    const same = lead({ planNonce: 'another-nonce', recovery: { id: 'recovery-a', taskIds: ['b', 'a', 'a'], goalIds: ['y', 'x'] } });
-    expect(advisoryCheckpointScope(same)).toBe(advisoryCheckpointScope(original));
-    for (const recovery of [
-      { id: 'recovery-b', taskIds: ['a', 'b'], goalIds: ['x', 'y'] },
-      { id: 'recovery-a', taskIds: ['a', 'c'], goalIds: ['x', 'y'] },
-      { id: 'recovery-a', taskIds: ['a', 'b'], goalIds: ['x', 'z'] },
-    ]) expect(advisoryCheckpointScope(lead({ recovery }))).not.toBe(advisoryCheckpointScope(original));
   });
 
   it('distinguishes initial planning without using the initial dispatch nonce', () => {
@@ -96,6 +63,9 @@ describe('Lead scheduling checkpoint control responses', () => {
   let cooperative: CooperativeResearch, controller: AbortController;
   let events: { event: string; details?: Record<string, unknown> }[];
   let proposal: CooperativeTask;
+  // Current research deliveries whose exact lemma proposals are not yet in the plan.
+  const pendingProposals = () => (state.cooperation!.deliveries ?? []).filter(delivery => delivery.kind === 'research' &&
+    delivery.status !== 'superseded' && delivery.lemmaRequests?.some(task => !state.cooperation!.tasks.some(node => node.task.id === task.id)));
   const graph = () => ({ tasks: state.cooperation!.tasks.map(node => node.task),
     groups: state.cooperation!.groups!.map(route => route.group) });
   const notes = () => path.join(workers[0].worktree, 'RESEARCH.md');
@@ -146,9 +116,9 @@ describe('Lead scheduling checkpoint control responses', () => {
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  it.each([false, true])('preserves an unchanged control draft without rejecting or resolving its inbox (prose-only: %s)', async prose => {
+  it.each([false, true])('preserves an unchanged control draft without rejecting it or adopting its proposal (prose-only: %s)', async prose => {
     const action = await start(), before = structuredClone(state.cooperation!.tasks), base = state.cooperation!.planVersion;
-    const pending = pendingResearchHandoffs(state.cooperation!).map(item => item.id);
+    const pending = pendingProposals().map(item => item.id);
     if (prose) fs.appendFileSync(notes(), '\nA still unfinished mathematical investigation.\n');
     await expect(checkpoint(action)).resolves.toEqual({ checkWhole: false });
     expect(events).toContainEqual(expect.objectContaining({ event: 'lead_checkpoint_saved',
@@ -156,17 +126,9 @@ describe('Lead scheduling checkpoint control responses', () => {
     expect(events.some(item => item.event === 'plan_rejected' || item.event === 'plan_updated')).toBe(false);
     expect(state.cooperation!.tasks).toEqual(before);
     expect(state.cooperation!.planVersion).toBe(base);
-    expect(state.cooperation!.researchDecisions).toBeUndefined();
-    expect(pendingResearchHandoffs(state.cooperation!).map(item => item.id)).toEqual(pending);
+    expect(pending).toEqual(['proposal-delivery']);
+    expect(pendingProposals().map(item => item.id)).toEqual(pending);
     expect(fs.readFileSync(notes(), 'utf8')).toContain(prose ? 'unfinished mathematical' : 'math-plan');
-  });
-
-  it('accepts a new explicit handoff rejection even when the task graph is unchanged', async () => {
-    const action = await start(), handoff = pendingResearchHandoffs(state.cooperation!)[0];
-    write({ ...graph(), handoffDecisions: [{ id: handoff.id, status: 'rejected', reason: 'The proposed claim cannot supply the needed consumer.' }] });
-    await checkpoint(action);
-    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({ id: handoff.id, status: 'rejected' }));
-    expect(events.some(item => item.event === 'lead_checkpoint_saved' || item.event === 'plan_rejected')).toBe(false);
   });
 
   it.each(['ordinary Markdown with no control response', null])('preserves an unchanged non-JSON draft: %s', async baseline => {
@@ -174,15 +136,15 @@ describe('Lead scheduling checkpoint control responses', () => {
     await checkpoint(action);
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(true);
     expect(events.some(item => item.event === 'plan_rejected')).toBe(false);
-    expect(pendingResearchHandoffs(state.cooperation!)).toHaveLength(1);
+    expect(pendingProposals()).toHaveLength(1);
   });
 
   it('keeps initial dispatch response validation even if an existing graph is present', async () => {
     const action = await start();
     action.initialPlanNonce = 'initial-dispatch-with-bootstrap-graph';
     await checkpoint(action);
-    expect(events).toContainEqual(expect.objectContaining({ event: 'plan_rejected',
-      details: expect.objectContaining({ error: expect.stringContaining('math_handoff_unresolved:') }) }));
+    // Ordinary validation accepts the inherited graph; the unchanged-draft shortcut is not taken.
+    expect(events.some(item => item.event === 'plan_updated')).toBe(true);
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(false);
   });
 
@@ -190,10 +152,10 @@ describe('Lead scheduling checkpoint control responses', () => {
     const action = await start(), commit = commitSolverSources(problem, workers[0].worktree);
     cooperative.deactivate(workers[0]);
     await cooperative.deliver(workers[0], action, commit, kind !== 'final', kind === 'final' ? 'checkpoint' : kind);
-    expect(events).toContainEqual(expect.objectContaining({ event: 'plan_rejected',
-      details: expect.objectContaining({ error: expect.stringContaining('math_handoff_unresolved:') }) }));
+    expect(events.some(item => item.event === 'plan_updated')).toBe(true);
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(false);
-    expect(state.cooperation!.researchDecisions).toBeUndefined();
+    // The unadopted proposal stays a planning input for the next Lead decision.
+    expect(pendingProposals()).toHaveLength(1);
   });
 
   it('accepts a changed complete checkpoint plan as a new unproved obligation', async () => {
@@ -202,7 +164,7 @@ describe('Lead scheduling checkpoint control responses', () => {
     await checkpoint(action);
     expect(state.cooperation!.tasks.find(node => node.task.id === proposal.id)).toMatchObject({ status: 'pending', task: proposal });
     expect(state.cooperation!.tasks.find(node => node.task.id === proposal.id)?.integratedCheck).toBeUndefined();
-    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({ status: 'adopted', taskId: proposal.id }));
+    expect(pendingProposals()).toEqual([]);
     expect(events.some(item => item.event === 'lead_checkpoint_saved' || item.event === 'plan_rejected')).toBe(false);
   });
 
@@ -217,7 +179,7 @@ describe('Lead scheduling checkpoint control responses', () => {
     fs.writeFileSync(notes(), inherited);
     await checkpoint(action);
     expect(state.cooperation!.tasks.some(node => node.task.id === proposal.id)).toBe(true);
-    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({ status: 'adopted', taskId: proposal.id }));
+    expect(pendingProposals()).toEqual([]);
     expect(events.some(item => item.event === 'lead_checkpoint_saved' || item.event === 'plan_rejected')).toBe(false);
   });
 
@@ -229,7 +191,7 @@ describe('Lead scheduling checkpoint control responses', () => {
     expect(committedSource(workers[0].worktree, canonical, `${problem.projectRelative}/Submission.lean`)).toContain('lemma checkpoint_draft : True');
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(true);
     expect(events.some(item => item.event === 'plan_rejected')).toBe(false);
-    expect(pendingResearchHandoffs(state.cooperation!)).toHaveLength(1);
+    expect(pendingProposals()).toHaveLength(1);
     expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
   });
 });

@@ -61,18 +61,6 @@ export function checkSolverRunState(state: SolverRunState): StateViolation[] {
       } else if (!color.has(next)) { color.set(next, 1); stack.push([next, 0]); }
     }
   }
-  for (const recovery of cooperation.frontierRecoveries ?? []) {
-    const missing = [...recovery.taskIds, ...recovery.goalIds].filter(id => !ids.has(id));
-    if (missing.length) add('recovery_reference_missing', 'warning', 'A frontier recovery names removed tasks.', recovery.id, ...missing);
-    if (recovery.investigationTaskId && !ids.has(recovery.investigationTaskId))
-      add('recovery_investigation_missing', 'warning', 'The recorded investigation is no longer in the task graph.',
-        recovery.id, recovery.investigationTaskId);
-  }
-  const waiting = cooperation.frontierWaiting;
-  if (waiting) {
-    const missing = [...waiting.taskIds, ...waiting.goalIds].filter(id => !ids.has(id));
-    if (missing.length) add('frontier_waiting_reference_missing', 'warning', 'The frontier wait names removed tasks.', ...missing);
-  }
   for (const blocker of cooperation.blockers ?? [])
     if (blocker.status !== 'superseded' && !ids.has(blocker.taskId))
       add('blocker_task_missing', 'warning', `Blocker ${blocker.id} names a removed task.`, blocker.id, blocker.taskId);
@@ -84,10 +72,9 @@ export function checkSolverRunState(state: SolverRunState): StateViolation[] {
   const ready = readyResearchTasks(tasks, cooperation.groups);
   if (ready.length) add('quiescent_with_ready_work', 'error', 'No worker is active although tasks are ready.',
     ...ready.map(node => node.task.id));
-  else if (tasks.some(node => node.task.kind === 'goal' && !terminal(node)) &&
-      !(cooperation.frontierRecoveries ?? []).some(recovery => recovery.status === 'requested'))
+  else if (tasks.some(node => node.task.kind === 'goal' && !terminal(node)))
     add('quiescent_awaiting_external_input', 'warning',
-      'No worker is active, no task is ready and no recovery is requested; only new outside input can advance the run.',
+      'No worker is active and no task is ready; only new outside input can advance the run.',
       ...tasks.filter(node => node.task.kind === 'goal' && !terminal(node)).map(node => node.task.id));
   return violations;
 }

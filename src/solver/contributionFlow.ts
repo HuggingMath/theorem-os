@@ -4,7 +4,6 @@ import type { ProofCheck } from './modules/evidence';
 import type { ProofReadyRecord } from './proofReady';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { buildProofContinuation, recordedTaskProofStatus } from './progress';
-import { researchHandoffs } from './researchHandoffs';
 import { assignmentDeliveryFile, isAdvisoryTask, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 
 export type ContributionEvidence = { kind: 'state'; path: string } | { kind: 'journal'; line: number };
@@ -119,51 +118,14 @@ function associateSourceAttempt(source: Partial<AttemptRef>, attempts: ReadonlyM
   return attempt ? [attempt] : [];
 }
 
-function associateAdoptionExecution(event: Event, source: { deliveryId: string } | undefined,
-  decisionEvents: readonly Event[], attempts: Iterable<Attempt>): {
-    executionAssignmentKey?: string; decisionToFirstObservedStartMs: ContributionObservation<number>;
-  } {
-  const data = event.data;
-  const unavailable = { decisionToFirstObservedStartMs: unknown<number>('decision-execution-link-unavailable') };
-  if (!source || source.deliveryId !== data.deliveryId || !text(data.id) || data.status !== 'adopted' ||
-      !text(data.taskId) || !text(data.taskDigest) || !text(data.planVersion) ||
-      !text(data.contextDigest) || !text(data.activationDigest)) return unavailable;
-  const decisions = decisionEvents.filter(item => item.data.status === 'adopted' && item.data.taskId === data.taskId &&
-    item.data.taskDigest === data.taskDigest && item.data.planVersion === data.planVersion);
-  const candidates = [...attempts].filter(attempt => attempt.taskId === data.taskId &&
-    attempt.taskDigest === data.taskDigest && attempt.assignments.some(assigned =>
-      assigned.planVersion === data.planVersion && assigned.evidence.kind === 'journal' && assigned.evidence.line > event.line));
-  if (decisions.length > 1) return {
-    decisionToFirstObservedStartMs: ambiguous('multiple-decisions-for-execution', decisions.map(eventRef)),
-  };
-  if (candidates.some(attempt => attempt.identity.status === 'ambiguous' || attempt.assignments.length > 1)) return {
-    decisionToFirstObservedStartMs: ambiguous('ambiguous-assignment', candidates.flatMap(attempt =>
-      attempt.identityRecords.map(item => item.evidence))),
-  };
-  const first = candidates.flatMap(attempt => {
-    const assigned = attempt.assignments[0], start = attempt.starts[0];
-    return start && assigned.evidence.kind === 'journal' && start.evidence.kind === 'journal' &&
-      start.evidence.line > assigned.evidence.line ? [{ attempt, assigned, start, line: start.evidence.line }] : [];
-  }).toSorted((left, right) => left.line - right.line)[0];
-  if (!first) return unavailable;
-  const at = observedTime([{ value: data.at, evidence: eventRef(event) }]);
-  const decisionToFirstObservedStartMs = first.attempt.assignedToFirstObservedStartMs.status === 'recorded' &&
-    elapsed(at, first.assigned.at).status === 'recorded'
-    ? elapsed(at, first.start.at) : unknown<number>('assignment-start-order-unavailable');
-  if (decisionToFirstObservedStartMs.status === 'recorded')
-    decisionToFirstObservedStartMs.evidence.push(first.assigned.evidence);
-  return { executionAssignmentKey: first.attempt.assignmentKey, decisionToFirstObservedStartMs };
-}
-
-const trackedEvents = new Set(['delivery_published', 'research_handoff_decided', 'task_assigned', 'turn_started',
+const trackedEvents = new Set(['delivery_published', 'task_assigned', 'turn_started',
   'proof_ready_frozen', 'proof_ready_checked', 'task_checked', 'task_integrated']);
 
 /** Pure host report. Saved records never restore process-local proof trust or grant acceptance. */
 export function buildResearchContributionFlow(state: SolverRunState, journal?: ContributionJournal) {
   const archive = state.cooperation, tasks = archive?.tasks ?? [], deliveries = archive?.deliveries ?? [];
-  const handoffs = archive ? researchHandoffs(archive) : [];
   const continuation = buildProofContinuation(tasks, { groups: archive?.groups, environmentDigest: state.environmentDigest,
-    proofRoutes: archive?.proofRoutes, researchHandoffs: handoffs });
+    proofRoutes: archive?.proofRoutes });
   const unresolved: { event: string; evidence: ContributionEvidence; reason: string }[] = [];
   const used = new Set<number>();
   const events = (journal?.runBinding === 'matched' ? journal.events : []).filter(event => {
@@ -313,18 +275,11 @@ export function buildResearchContributionFlow(state: SolverRunState, journal?: C
     entry.frozenToCheckMs = elapsed(entry.frozen, start);
   }
 
-  const decisionEvents = use(matching('research_handoff_decided', () => true));
   const sources = deliveries.flatMap((delivery, index) => {
     if (delivery.kind !== 'research') return [];
     const publications = use(matching('delivery_published', data => data.deliveryId === delivery.id &&
       compatible(data, { taskId: delivery.taskId, taskDigest: delivery.taskDigest, commit: delivery.commit,
         assignmentKey: delivery.assignmentKey, sourceDigest: delivery.sourceDigest })));
-    const aliases = new Map<string, { handoffId: string; currentHandoffId?: string }>();
-    for (const handoff of handoffs) for (const source of handoff.sources)
-      if (source.deliveryId === delivery.id) aliases.set(source.handoffId, { handoffId: source.handoffId, currentHandoffId: handoff.id });
-    for (const decision of [...(archive?.researchDecisions ?? []), ...decisionEvents.map(event => event.data)])
-      if (decision.deliveryId === delivery.id && text(decision.id) && !aliases.has(decision.id))
-        aliases.set(decision.id, { handoffId: decision.id });
     return [{ deliveryId: delivery.id, producer: delivery.producer, taskId: delivery.taskId, taskDigest: delivery.taskDigest,
       assignmentKey: delivery.assignmentKey, commit: delivery.commit, sourceDigest: delivery.sourceDigest,
       findingDigest: delivery.findingDigest, status: delivery.status,
@@ -332,37 +287,10 @@ export function buildResearchContributionFlow(state: SolverRunState, journal?: C
       currentTaskVersion: tasks.some(node => node.task.id === delivery.taskId && taskVersion(node.task) === delivery.taskDigest),
       created: observedTime([{ value: delivery.createdAt, evidence: stateRef('cooperation.deliveries[' + index + '].createdAt') }]),
       publication: observedTime(times(publications), journalReason), publicationInThisRun: publications.length > 0,
-      publicationEvents: publications.map(eventRef), handoffAliases: [...aliases.values()],
+      publicationEvents: publications.map(eventRef),
       attempts: associateSourceAttempt(delivery, attempts),
     }];
   });
-
-  const decisionOccurrences = decisionEvents.map(event => {
-    const data = event.data, at = observedTime([{ value: data.at, evidence: eventRef(event) }]);
-    const handoff = handoffs.find(item => item.sources.some(source => source.handoffId === data.id && source.deliveryId === data.deliveryId));
-    const source = sources.find(item => item.deliveryId === data.deliveryId);
-    const { executionAssignmentKey, decisionToFirstObservedStartMs } =
-      associateAdoptionExecution(event, source, decisionEvents, attempts.values());
-    return { id: data.id, deliveryId: data.deliveryId, status: data.status, contextDigest: data.contextDigest,
-      activationDigest: data.activationDigest, planVersion: data.planVersion, taskId: data.taskId, taskDigest: data.taskDigest,
-      reason: data.reason, waitsOn: data.waitsOn, currentHandoffId: handoff?.id,
-      context: !handoff || !text(data.contextDigest) ? 'unknown' as const :
-        data.contextDigest === handoff.contextDigest || data.contextDigest === handoff.decision?.contextDigest
-          ? 'current' as const : 'historical' as const,
-      at, evidence: eventRef(event), executionAssignmentKey, decisionToFirstObservedStartMs,
-      publicationToDecisionMs: !source ? unknown<number>('publication-unavailable')
-        : source.publicationEvents.some(item => item.line >= event.line) ? unknown<number>('event-order-conflict')
-        : elapsed(source.publication, at) };
-  });
-  const storedDecisions = (archive?.researchDecisions ?? []).map((decision, index) => ({
-    ...decision, at: unknown<number>('decision-time-not-stored'), evidence: stateRef('cooperation.researchDecisions[' + index + ']'),
-  }));
-  const handoffReports = handoffs.map(handoff => ({
-    id: handoff.id, contextDigest: handoff.contextDigest, activationDigest: handoff.activationDigest,
-    status: handoff.status, sources: handoff.sources, proposal: handoff.proposal, decision: handoff.decision,
-    decisionOccurrences: decisionOccurrences.filter(item => item.currentHandoffId === handoff.id),
-    decisionHistory: journal?.runBinding === 'matched' ? 'partial' as const : 'unknown' as const,
-  }));
 
   const obligations = new Map<string, TaskRef>();
   const advisoryKeys = new Set([
@@ -378,20 +306,14 @@ export function buildResearchContributionFlow(state: SolverRunState, journal?: C
   for (const check of checks) if (text(check.taskDigest)) {
     const task = { taskId: check.taskId, taskDigest: check.taskDigest }; obligations.set(taskKey(task), task);
   }
-  for (const decision of [...decisionOccurrences, ...storedDecisions]) if (decision.status === 'adopted' &&
-      text(decision.taskId) && text(decision.taskDigest)) {
-    const task = { taskId: decision.taskId, taskDigest: decision.taskDigest };
-    if (!advisoryKeys.has(taskKey(task))) obligations.set(taskKey(task), task);
-  }
   const obligationReports = [...obligations.values()].map(task => {
     const definition = definitions.get(taskKey(task));
     const reuse = definition?.current ? continuation.reuse.find(item => item.taskId === task.taskId) : undefined;
-    const adopted = definition?.current ? continuation.adoptedResearch.find(item => item.taskId === task.taskId) : undefined;
     return { ...task, currentTaskVersion: definition?.current ?? false, task: definition?.task, status: definition?.status,
       attempts: [...attempts.values()].filter(attempt => taskKey(attempt) === taskKey(task)),
       checkIds: checks.filter(check => check.taskId === task.taskId && check.taskDigest === task.taskDigest).map(check => check.id),
       // Reuse the continuation module's planned / proof / statement / conditional distinctions.
-      uses: reuse ?? adopted, referenceCoverage: adopted?.referenceCoverage ?? 'unknown' as const };
+      uses: reuse, referenceCoverage: 'unknown' as const };
   });
 
   for (const event of events) if (trackedEvents.has(String(event.data.event)) && !used.has(event.line)) {
@@ -404,10 +326,9 @@ export function buildResearchContributionFlow(state: SolverRunState, journal?: C
   return { schema: 'theoremos.contribution-flow.v1' as const, evidence: 'recorded-not-replayed' as const,
     runId: state.runId, problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
     stateDigest: mathDigest(canonicalMathJson(state)), journalDigest: journal?.digest,
-    coverage: { journal: journal?.runBinding ?? 'absent', decisionHistory: journal?.runBinding === 'matched' ? 'partial' : 'unknown',
-      executionHistory: 'partial' as const },
+    coverage: { journal: journal?.runBinding ?? 'absent', executionHistory: 'partial' as const },
     continuation: state.continuationDigest ? { snapshotDigest: state.continuationDigest, executionHistory: 'not-inferred' as const } : undefined,
-    sources, handoffs: handoffReports, decisionOccurrences, storedDecisions, obligations: obligationReports, checks,
+    sources, obligations: obligationReports, checks,
     modelReportedUses: [
       ...(state.knowledgeUses ?? []).map(item => ({ ...item, origin: 'run-original' as const })),
       ...deliveries.flatMap(delivery => (delivery.knowledgeUses ?? []).map(item => ({ ...item,

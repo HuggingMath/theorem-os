@@ -17,20 +17,16 @@ const state = (phase: SolverRunState['phase'], tasks: TaskRecord[], workers: Sol
 const codes = (value: SolverRunState) => checkSolverRunState(value).map(item => `${item.severity}:${item.code}`);
 
 describe('persisted solver state invariants', () => {
-  it('reports the dangling investigation and external-input stall seen in the M4 putnam_2010_a3 hang', () => {
-    // Shape of the real snapshot: the goal waits on a blocked lemma; the recovery points at a removed task.
+  it('reports the external-input stall seen in the M4 putnam_2010_a3 hang', () => {
+    // Shape of the real snapshot: the goal waits on a blocked lemma and nothing can run.
     const stalled = state('checking', [
       node(task('fderiv_pair', 'lemma'), 'integrated', 'researcher-1'),
       node(task('line_hasDerivAt', 'lemma', ['fderiv_pair']), 'integrated', 'engineer'),
       node(task('bounded_self', 'lemma'), 'blocked', 'researcher-2'),
       node(task('goal', 'goal', ['line_hasDerivAt', 'bounded_self']), 'pending'),
     ], [worker('solver', 'checking', 'idle'), worker('researcher-1', 'checking', 'idle'),
-      worker('researcher-2', 'finished', 'stopped'), worker('engineer', 'checking', 'idle')], {
-      frontierRecoveries: [{ id: 'recovery', taskIds: ['bounded_self'], goalIds: ['goal'], status: 'awaiting-input',
-        taskInputDigests: ['input'], investigationTaskId: 'frontier_input_recovery' }],
-      frontierWaiting: { inputDigest: 'input', taskIds: ['bounded_self'], goalIds: ['goal'], reason: 'awaiting-new-mathematical-input' },
-    });
-    expect(codes(stalled)).toEqual(['warning:recovery_investigation_missing', 'warning:quiescent_awaiting_external_input']);
+      worker('researcher-2', 'finished', 'stopped'), worker('engineer', 'checking', 'idle')]);
+    expect(codes(stalled)).toEqual(['warning:quiescent_awaiting_external_input']);
     expect(checkSolverRunState(stalled).at(-1)!.refs).toEqual(['goal']);
   });
 

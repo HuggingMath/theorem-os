@@ -162,13 +162,15 @@ describe('live replacement plan publication', () => {
     expect(state.cooperation!.planPublication?.finalized).toBe(true);
   });
 
-  it('refills and claims three successive proof waves while a long original-goal writer keeps its assignment', async () => {
+  it('publishes and claims three successive proof waves while a long original-goal writer keeps its assignment', async () => {
     delete state.cooperation!.error; cooperative = create();
     const goal = await cooperative.next(workers[1], budget);
     if (goal?.kind !== 'task') throw new Error('fixture_expected_long_goal');
     const goalInterrupt = vi.fn(async () => {});
     cooperative.activate(workers[1], goal, goalInterrupt, async () => {});
     for (let wave = 1; wave <= 3; wave++) {
+      // Stand in for an ordinary planning input; each wave is one Lead plan turn.
+      (cooperative as any).needsLead = true;
       const action = await start(), id = `wave_${wave}`;
       await publish(action, line(action, withHelper(id)));
       const task = await cooperative.next(workers[2], budget);
@@ -185,25 +187,13 @@ describe('live replacement plan publication', () => {
       expect(cooperative.current(goal)).toBe(true);
       expect(goalInterrupt).not.toHaveBeenCalled();
     }
-    const finalAssessment = await start();
-    fs.writeFileSync(path.join(workers[0].worktree, 'RESEARCH.md'), JSON.stringify({ kind: 'assessment',
-      dispatchNonce: finalAssessment.planNonce, baseVersion: finalAssessment.planVersion,
-      assessments: ([['capacity', finalAssessment.capacityRefill], ['stagnation', finalAssessment.stagnationRecovery]] as const)
-        .flatMap(([kind, request]) => request ? [{ kind, requestId: request.requestId, inputDigest: request.inputDigest,
-          outcome: 'no-independent-work',
-          reason: 'The three independent helpers are integrated; no further closed helper for the active original-goal proof has been identified.' }] : []),
-    }));
-    cooperative.deactivate(workers[0]);
-    await cooperative.deliver(workers[0], finalAssessment, commitSolverSources(problem, workers[0].worktree));
     let dispatched = false;
     const waiting = cooperative.next(workers[0], budget); pending.push(waiting);
     void waiting.then(() => { dispatched = true; }, () => {});
     for (let poll = 0; poll < 6; poll++) { await cooperative.pulse(); await Promise.resolve(); }
     expect(dispatched).toBe(false);
-    expect(events.filter(event => event.event === 'capacity_refill_requested')).toHaveLength(4);
     expect(events.filter(event => event.event === 'plan_published')).toHaveLength(3);
     expect(state.cooperation!.tasks.filter(node => node.task.id.startsWith('wave_') && node.status === 'integrated')).toHaveLength(3);
-    expect(state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'assessed', outcome: 'no-independent-work' });
     expect(state.check).toBeUndefined();
   });
 });

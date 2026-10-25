@@ -18,12 +18,7 @@ it('deduplicates repeated findings and progress while preserving exact Lean type
     statement: '', premises: [], dependencies: [], remainingObligations: ['core'], summary, evidenceRefs: [], createdAt: 1 });
   const finding = 'library-finding: ' + 'long advisory explanation '.repeat(500);
   const action: CooperativeAction = { kind: 'lead', seedCommit: 'fixed-commit', planVersion: 'current-plan',
-    planNonce: 'latest-dispatch-nonce', planningInputDigest: 'latest-planning-input',
-    capacityRefill: { inputDigest: 'latest-capacity-receipt', workerIds: ['prover'], requestedAt: 24 },
-    stagnationRecovery: { inputDigest: 'latest-stagnation-receipt', taskIds: ['core'], workerIds: ['researcher'],
-      requestedAt: 25, reason: 'frontier-not-decomposed' },
-    handoffIds: ['latest-handoff'], handoffActivations: { 'latest-handoff': 'current-activation' },
-    challengeIds: ['latest-challenge'], challengeActivations: { 'latest-challenge': 'current-challenge-activation' } };
+    planNonce: 'latest-dispatch-nonce', planningInputDigest: 'latest-planning-input' };
   const state = { cooperation: { tasks: [{ task, status: 'pending', attempts: 0 },
     { task: library,
       status: 'completed', attempts: 1, finding }], deliveries: [delivery('progress', 'obsolete-progress', 'old'),
@@ -49,11 +44,6 @@ it('deduplicates repeated findings and progress while preserving exact Lean type
   expect(context.continuationMessage).toContain('COOPERATION.json');
   expect(context.continuationMessage).toContain('complete current math-plan');
   expect(context.continuationMessage).toContain('proof acceptance');
-  for (const message of [context.instructions, context.continuationMessage]) {
-    expect(message).toContain('Resolve the shown coordination requests before extended mathematical investigation');
-    expect(message).toContain('A coordination decision does not require solving the missing theorem');
-    expect(message).toContain('Lead scheduling checkpoints yield every two minutes even when notes are unchanged');
-  }
   expect(context.manifest!.usedBytes).toBeLessThanOrEqual(context.manifest!.maxBytes);
   const graph = context.message.split('Lead task graph and host feedback:\n')[1].split('\n\nRoute groups')[0];
   expect(JSON.parse(graph)[0].type).toBe(exactType);
@@ -78,8 +68,7 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
   expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
 });
 
-const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review',
-  stagnationRecovery?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>['stagnationRecovery']) => {
+const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => {
   const formal = 'theorem target : True := by sorry';
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'],
     declarations: { 'Submission.lean': [{ name: 'target', header: 'target : True' }] }, targets: [],
@@ -89,7 +78,7 @@ const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review',
     objective: 'Resolve the precise missing classification input.', dependsOn: [], revision: 0,
     ...(['lemma', 'goal'].includes(kind) ? { theoremName: 'target', proofPath: 'Submission.lean', type: 'True' } : {}) };
   const state = { cooperation: { tasks: [{ task, status: 'pending', attempts: 0 }] } } as unknown as SolverRunState;
-  const action: CooperativeAction = kind === 'lead' ? { kind, seedCommit: 'fixed-commit', stagnationRecovery } :
+  const action: CooperativeAction = kind === 'lead' ? { kind, seedCommit: 'fixed-commit' } :
     kind === 'review' ? { kind, seedCommit: 'fixed-commit', sourceDigest: 'fixed-source' } :
       { kind: 'task', task, assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'worker', seedCommit: 'fixed-commit' } };
   return buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
@@ -139,26 +128,17 @@ it.each(['research', 'lemma', 'goal'] as const)('keeps scoped no-rescan and dura
   }
 });
 
-it('asks the Lead for a real reduction and preserves the dispatch recovery packet with zero optional context', () => {
-  const recovery = { inputDigest: 'd'.repeat(64), taskIds: ['frontier'], workerIds: ['worker'], requestedAt: 25,
-    reason: 'frontier-not-decomposed' as const };
-  const context = gapContext('lead', recovery);
+it('asks the Lead for a real reduction with zero optional context', () => {
+  const context = gapContext('lead');
   expect(context.instructions).toContain('genuinely weaker, independently Lean-checkable exact lemma tasks');
   expect(context.instructions).toContain('its hypotheses do not assume the unresolved core result');
-  expect(context.instructions).toContain('This dispatch requests recovery from advisory stagnation, not proof failure');
-  expect(context.instructions).toContain('no new recovery response schema is required');
-  expect(context.manifest!.included).toContainEqual(expect.objectContaining({ id: 'stagnation-recovery', required: true }));
-  const encoded = context.message.split('Host stagnation recovery request (advisory scheduling evidence; not proof failure or acceptance):\n')[1];
-  expect(JSON.parse(encoded.split('\n\n')[0])).toEqual(recovery);
-  expect(gapContext('lead').manifest!.included.some(item => item.id === 'stagnation-recovery')).toBe(false);
+  expect(context.manifest!.optionalBytes).toBe(0);
 });
 
 it('does not inject work recovery instructions into fixed-candidate independent review', () => {
   const context = gapContext('review');
   expect(context.instructions).toContain('You are the Independent Reviewer');
   expect(context.instructions).not.toContain('Before any checkpoint, recovery decision or context rotation');
-  expect(context.instructions).not.toContain('This dispatch requests recovery from advisory stagnation');
-  expect(context.manifest!.included.some(item => item.id === 'stagnation-recovery')).toBe(false);
 });
 
 it.each(['research', 'lemma', 'goal'] as const)(

@@ -7,12 +7,12 @@ import type { CooperativeResearch } from '../src/solver/cooperation';
 import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import type { SolverProblem } from '../src/solver/problem';
-import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
+import { leadPlanDeliveryFile, parseCooperationPlan, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 type Lead = Extract<CooperativeAction, { kind: 'lead' }>;
-type Publication = 'initial' | 'replacement' | 'handoff' | 'assessment';
+type Publication = 'initial' | 'replacement';
 
 describe('live Lead publication correction feedback', () => {
   const budget = { maxTurns: Infinity, remainingMs: Infinity };
@@ -38,14 +38,9 @@ describe('live Lead publication correction feedback', () => {
   };
   const prepare = (kind: Publication = 'replacement') => {
     state.cooperation = { canonicalCommit: problem.baseCommit,
-      tasks: kind === 'initial' ? [] : completePlan.tasks.map(task => ({ task, attempts: 0,
-        status: kind === 'handoff' && task.id === 'question' ? 'completed' : 'pending' })),
+      tasks: kind === 'initial' ? [] : completePlan.tasks.map(task => ({ task, attempts: 0, status: 'pending' })),
       groups: completePlan.groups.map(group => ({ group, turns: 0 })),
       ...(kind === 'initial' ? {} : { error: 'fixture_request_new_plan' }),
-      ...(kind === 'handoff' ? { deliveries: [{ id: 'bridge-proposal', producer: workers[2].id, taskId: 'question',
-        taskDigest: taskVersion(completePlan.tasks.find(task => task.id === 'question')!), kind: 'research', status: 'advisory',
-        summary: 'The exact bridge needs a Lead decision.', statement: '', premises: [], dependencies: [],
-        remainingObligations: [], evidenceRefs: [], createdAt: 1, lemmaRequests: [helper] }] } : {}),
     };
     cooperative = create();
   };
@@ -58,20 +53,11 @@ describe('live Lead publication correction feedback', () => {
   };
   const event = (action: Lead, kind: Publication = 'replacement'): Record<string, unknown> => {
     const base = { dispatchNonce: nonce(action), baseVersion: action.planVersion };
-    if (kind === 'handoff') return { ...base, kind: 'handoff',
-      handoffDecisions: [{ id: action.handoffIds![0], status: 'adopted' }] };
-    if (kind === 'assessment') return { ...base, kind: 'assessment',
-      assessments: ([['capacity', action.capacityRefill], ['stagnation', action.stagnationRecovery]] as const)
-        .flatMap(([requestKind, request]) => request ? [{ kind: requestKind, requestId: request.requestId,
-          inputDigest: request.inputDigest, outcome: 'no-independent-work',
-          reason: 'The exact missing construction remains unresolved; no independent closed obligation is available.' }] : []),
-    };
     return { ...base, kind: 'plan', groups: completePlan.groups,
       tasks: [...completePlan.tasks, ...(kind === 'replacement' ? [helper] : [])] };
   };
   const invalid = (action: Lead, kind: Publication = 'replacement') => kind === 'initial' ? '{broken JSON' :
-    JSON.stringify({ ...event(action, kind), ...(kind === 'handoff' ? { handoffDecisions: [] } :
-      kind === 'assessment' ? { assessments: [] } : { baseVersion: 'stale-version' }) });
+    JSON.stringify({ ...event(action, kind), baseVersion: 'stale-version' });
   const publish = async (action: Lead, value: Record<string, unknown> | string) => {
     fs.appendFileSync(path.join(workers[0].worktree, log(action)), (typeof value === 'string' ? value : JSON.stringify(value)) + '\n');
     await cooperative.pulse();
@@ -123,12 +109,10 @@ describe('live Lead publication correction feedback', () => {
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  it.each(['initial', 'replacement', 'handoff', 'assessment'] as const)(
+  it.each(['initial', 'replacement'] as const)(
     'saves and notifies a rejected %s before accepting its same-dispatch correction', async kind => {
       prepare(kind);
       const action = await start(), before = structuredClone(state.cooperation), originalAction = structuredClone(action);
-      if (kind === 'handoff') expect(action.handoffIds).toHaveLength(1);
-      if (kind === 'assessment') expect(action.capacityRefill).toBeDefined();
       let savedAtNotification: SolverRunState | undefined, rejectedOffset: number | undefined;
       notify.mockImplementation(async message => {
         savedAtNotification = readSolverRunState(savedFile());
@@ -161,8 +145,7 @@ describe('live Lead publication correction feedback', () => {
       expect(rejected()).toHaveLength(1);
       expect(state.cooperation!.planPublicationRejection).toBeUndefined();
       expect(json().planPublicationRejection).toBeUndefined();
-      if (kind === 'assessment') expect(state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'assessed' });
-      else expect(state.cooperation!.planPublication).toMatchObject({ nonce: nonce(action) });
+      expect(state.cooperation!.planPublication).toMatchObject({ nonce: nonce(action) });
       expect(state.check).toBeUndefined();
       expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
     });
@@ -231,8 +214,8 @@ describe('live Lead publication correction feedback', () => {
       expect(state.cooperation!.planPublicationRejection).toBeUndefined();
     });
 
-  it.each(['replacement', 'assessment'] as const)(
-    'keeps later rejected events audit-only once the %s dispatch has succeeded', async kind => {
+  it('keeps later rejected events audit-only once the replacement dispatch has succeeded', async () => {
+      const kind = 'replacement';
       prepare(kind);
       const action = await start();
       await publish(action, invalid(action, kind));
@@ -245,7 +228,6 @@ describe('live Lead publication correction feedback', () => {
       expect(state.cooperation!.planPublicationRejection).toBeUndefined();
       expect(state.cooperation!.tasks).toEqual(accepted!.tasks);
       expect(state.cooperation!.planPublication).toEqual(accepted!.planPublication);
-      expect(state.cooperation!.lastCapacityRefill).toEqual(accepted!.lastCapacityRefill);
       expect(notify).not.toHaveBeenCalled();
     });
 

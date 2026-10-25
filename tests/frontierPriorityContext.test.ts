@@ -6,7 +6,6 @@ import type { SolverProblem } from '../src/solver/problem';
 import { buildResearchContext } from '../src/solver/modules/context';
 import { assignmentDeliveryFile, initialPlanDeliveryFile, taskVersion, type CooperativeAction, type TaskRecord } from '../src/solver/tasks';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
-import { researchHandoffs, resolveResearchHandoffs } from '../src/solver/researchHandoffs';
 
 const seedCommit = 'a'.repeat(40);
 const formal = 'namespace Original\ntheorem target : True := by sorry\nend Original';
@@ -145,33 +144,6 @@ it('builds mandatory Lead focus and task focus only from the supplied scoped gra
     assignedTaskId: 'seed', relationship: 'independent-exploration', plannedConsumers: [] });
   expect(context.message).not.toContain('private_original_goal');
   expect(context.message).not.toContain('Original.core');
-});
-
-it('shows adopted research and its missing consumer connection to Lead without requiring an immediate consumer', () => {
-  const source = node('investigation', 'research'), adopted = node('bridge'), goal = node('goal', 'goal');
-  source.status = 'completed';
-  const cooperation: CooperationState = { canonicalCommit: seedCommit, tasks: [source, adopted, goal], deliveries: [{
-    id: 'proposal', producer: 'researcher', taskId: source.task.id, taskDigest: taskVersion(source.task),
-    kind: 'research', status: 'advisory', summary: 'A reusable bridge.', statement: '', premises: [], dependencies: [],
-    remainingObligations: [], evidenceRefs: [], createdAt: 1, lemmaRequests: [adopted.task],
-  }] };
-  const handoff = researchHandoffs(cooperation)[0];
-  cooperation.researchDecisions = resolveResearchHandoffs(cooperation, [handoff.id], cooperation.tasks.map(item => item.task), undefined);
-  const context = contextFor(cooperation, { kind: 'lead', seedCommit });
-  const continuation = JSON.parse(context.message.split(
-    'Proof continuation (stored evidence, not replayed; planned use and actual proof use are separate):\n')[1].split('\n\n')[0]);
-  expect(continuation.adoptedResearch).toEqual([expect.objectContaining({
-    sourceTaskId: source.task.id, taskId: adopted.task.id, recordedProof: 'none', plannedGoalIds: [],
-    proofConsumers: [], referenceCoverage: 'unknown',
-  })]);
-  expect(context.instructions).toContain('continuation.adoptedResearch in COOPERATION.json');
-  expect(context.instructions).toContain('does not prove a target or require every exploratory proposal to have a consumer immediately');
-  expect(adopted.status).toBe('pending');
-
-  withoutOptionalContext();
-  const compact = contextFor(cooperation, { kind: 'lead', seedCommit });
-  expect(compact.manifest!.omitted).toContainEqual({ id: 'proof-continuation', kind: 'continuation', reason: 'optional-budget' });
-  expect(compact.instructions).toContain('continuation.adoptedResearch in COOPERATION.json');
 });
 
 it('gives an early feasibility reviewer complete unproved interfaces even with no optional context budget', () => {

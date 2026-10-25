@@ -60,7 +60,6 @@ async function simulate(seed: number, cleanup: (() => Promise<void>)[], maxSteps
   const plan = parseCooperationPlan(problem, { tasks: goals });
   const planGraph = () => parseCooperationPlan(problem, {
     tasks: state.cooperation!.tasks.map(node => node.task), groups: state.cooperation!.groups?.map(route => route.group) });
-  const planNotes = () => '```math-plan\n' + JSON.stringify(planGraph()) + '\n```\n';
   fs.writeFileSync(path.join(workspace, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify(plan) + '\n```');
   let state: SolverRunState = solverState(problem, workspace, { runId: `simulation-${seed}`, phase: 'running', failures: [],
     workers: workers.map(worker => ({ id: worker.id, role: worker.role, worktree: worker.worktree, phase: 'running', turns: 0 })),
@@ -99,7 +98,7 @@ async function simulate(seed: number, cleanup: (() => Promise<void>)[], maxSteps
   };
   // Scheduling fields belong to research.ts; here liveness is judged by the dispatch loop itself.
   const violations = () => checkSolverRunState(state).filter(item => !item.code.startsWith('quiescent_') &&
-    (item.severity === 'error' || item.code === 'recovery_investigation_missing'));
+    item.severity === 'error');
 
   for (let step = 0; step < maxSteps; step++) {
     for (const worker of workers) if (live.has(worker.id) && !slots.has(worker.id)) request(worker);
@@ -166,38 +165,28 @@ async function simulate(seed: number, cleanup: (() => Promise<void>)[], maxSteps
               Boolean(node.proof), Boolean(node.pendingValidation)]) } };
         }
       } else if (action.kind === 'lead') {
-        const mode = roll < 0.15 ? 'interrupted' : action.recovery ? 'recovery'
-          : action.capacityRefill || action.stagnationRecovery ? 'assessment' : 'plan';
+        // A failed original route is reconsidered in an ordinary plan turn; there is no separate recovery dispatch.
+        const failed = state.cooperation!.tasks.filter(node => node.status === 'blocked' && node.attempts > 0).map(node => node.task.id);
+        const mode = roll < 0.15 ? 'interrupted' : failed.length ? 'replan' : 'plan';
         trace.push(`${step} lead ${mode}${action.coordination ? ' coordination' : ''}`);
         if (mode === 'interrupted') { cooperative.interrupted(worker, action); continue; }
         // The bounded protocol: one complete event in the dispatch's delivery log, then the turn ends.
-        const assessments = [
-          ...action.capacityRefill ? [{ kind: 'capacity', requestId: action.capacityRefill.requestId,
-            inputDigest: action.capacityRefill.inputDigest, outcome: 'no-independent-work',
-            reason: 'Both original goals are owned by the engineer; no independent typed split exists.' }] : [],
-          ...action.stagnationRecovery ? [{ kind: 'stagnation', requestId: action.stagnationRecovery.requestId,
-            inputDigest: action.stagnationRecovery.inputDigest, outcome: 'no-independent-work',
-            reason: 'The open goals are already assigned; no new executable support task exists.' }] : []];
-        if (mode === 'recovery') {
-          // A new typed input for the blocked goals: the same answer a real Lead gives after a failed route.
+        let graph = planGraph();
+        if (mode === 'replan') {
+          // A new typed input for the failed tasks: the answer a real Lead gives after a failed route.
           const helper: CooperativeTask = { id: `helper_${++helpers}`, kind: 'lemma', objective: 'Prove the auxiliary fact.',
-            // Lemma inputs are compared by type, not name: each recovery must state a different fact.
+            // Lemma inputs are compared by type, not name: each new input must state a different fact.
             theoremName: `Tutorial.helper_${helpers}`, proofPath: 'Submission.lean', type: `${helpers} = ${helpers}`,
             dependsOn: [], revision: 0 };
-          const graph = planGraph();
-          fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({ ...graph,
-            tasks: [...graph.tasks.map(item => action.recovery!.goalIds.includes(item.id) || action.recovery!.taskIds.includes(item.id)
-              ? { ...item, dependsOn: [...item.dependsOn, helper.id] } : item), helper],
-            recovery: { status: 'planned', taskIds: [helper.id] } }) + '\n```\n');
-          await cooperative.deliver(worker, action, commitSolverSources(problem, worker.worktree));
-          continue;
+          graph = parseCooperationPlan(problem, { ...graph, tasks: [...graph.tasks.map(item => failed.includes(item.id)
+            ? { ...item, dependsOn: [...item.dependsOn, helper.id] } : item), helper] });
         }
         const file = leadPlanDeliveryFile(action);
-        if (file) fs.appendFileSync(path.join(worker.worktree, file), JSON.stringify(mode === 'assessment'
-          ? { kind: 'assessment', dispatchNonce: action.planNonce, baseVersion: action.planVersion, assessments }
-          : { kind: 'plan', dispatchNonce: action.planNonce ?? action.initialPlanNonce, baseVersion: action.planVersion,
-            summary: 'The current graph remains the complete next step.', ...planGraph() }) + '\n');
-        else fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), planNotes());
+        if (file) fs.appendFileSync(path.join(worker.worktree, file), JSON.stringify({ kind: 'plan',
+          dispatchNonce: action.planNonce ?? action.initialPlanNonce, baseVersion: action.planVersion,
+          summary: mode === 'replan' ? 'Split the failed inference through a new helper.'
+            : 'The current graph remains the complete next step.', ...graph }) + '\n');
+        else fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify(graph) + '\n```\n');
         await cooperative.pulse(worker.id);
         await cooperative.deliver(worker, action, commitSolverSources(problem, worker.worktree));
       } else {
