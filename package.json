@@ -41,6 +41,7 @@
     "test:web-performance": "bun scripts/test-web-performance.ts",
     "test:web-motion": "bun scripts/test-web-motion.ts",
     "test": "vitest run",
+    "test:formalization": "bun scripts/test-formalization.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

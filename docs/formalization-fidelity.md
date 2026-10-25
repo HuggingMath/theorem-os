@@ -72,3 +72,25 @@ source contract captures every natural-language requirement, establish independe
 model errors or accept an original theorem proof. Artifacts still record
 `authority: "model"` and `proofVerified: false`. Generation fidelity, review
 performance and subsequent proof acceptance need separate measurements.
+
+Run the complete formalization regression suite with both pinned environments:
+
+```bash
+bun run test:formalization \
+  --current-env-file /absolute/path/to/current-math.env \
+  --legacy-env-file /absolute/path/to/lean48-math.env \
+  --report /absolute/path/to/formalization-tests.json
+```
+
+The command enables native reference checks and passes the Lean 4.8 installation,
+packages and environment file to every relevant test. The environment files must
+point to the pinned toolchains and matching precompiled Mathlib packages; their
+`PATH` must include the working sandbox and FUSE tools. The legacy `ELAN_HOME`
+may identify its native toolchain or an Elan home containing the pinned 4.8.0
+toolchain. The command resolves the native binaries, rejects unresolved Elan
+shims and checks the compiler and Lake versions before starting the tests.
+The legacy trusted cache root identifies the package directory, or supply
+`--legacy-packages` explicitly. The current Lean 4.33 tests
+also require the installed toolchain under the usual `~/.elan/toolchains` path.
+The command runs offline without model calls and fails on any failed, skipped
+or todo test. Missing dependencies must be fixed before this check can pass.
