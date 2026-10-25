@@ -10,7 +10,7 @@ import { recordedTask, ResearchProgressView, taskCheckKey } from './researchProg
 import { MathematicalChangesView } from './mathematicalChangesView';
 import { ReviewView } from './reviewView';
 import { CollaborationNavigation } from './collaborationNavigation';
-import { layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
+import { compactGraphMetrics, compactGraphTasks, graphMetrics, layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
 import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
 import { renderAgentCards } from './ui/AgentCards';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
@@ -19,6 +19,8 @@ import { renderTaskInspector } from './ui/TaskInspector';
 type Task = WebObservation['inspection']['tasks'][number];
 type TaskView = 'graph' | 'list';
 type ScrollPosition = { top: number; left: number };
+// Low enough for "fit" to show a large compact plan whole; card text is then a status overview.
+const minGraphZoom = 0.3;
 type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
 const kindLabel: Record<string,string> = { research: '研究', sketch: '草图', lemma: '引理', goal: '原始目标' };
 const statusLabel: Record<string,string> = { pending: '待调度', running: '进行中', blocked: '受阻', conditional: '有条件结果', delivered: '已交付', integrated: '已集成', completed: '已完成', none: '尚无证明', checked: '已记录检查', stale: '旧版本证据', unverified: '未验证', active: '继续', paused: '暂停', stopped: '停止', queued: '排队中', deliveredGuidance: '已送达', deferred: '暂缓', failed: '失败' };
@@ -353,15 +355,17 @@ export class CollaborationView {
       ...routes.filter(route => taskById.has(route.closingTaskId) && taskById.has(route.targetTaskId)).map(route => ({ from: route.closingTaskId, to: route.targetTaskId, kind: 'or' as const }))];
     // Layout covers every task so filtering never moves cards; it is recomputed only when the plan's structure changes.
     const layoutKey = JSON.stringify([allTasks.map(task => task.id), graphEdges.map(edge => [edge.from, edge.to, edge.kind])]);
-    if (view.graphLayout?.key !== layoutKey) view.graphLayout = { key: layoutKey, layout: layoutTaskGraph(allTasks.map(task => task.id), graphEdges) };
-    const { positions, width, height } = view.graphLayout.layout;
+    const compact = allTasks.length >= compactGraphTasks;
+    if (view.graphLayout?.key !== layoutKey) view.graphLayout = { key: layoutKey, layout: layoutTaskGraph(allTasks.map(task => task.id), graphEdges, compact ? compactGraphMetrics : graphMetrics) };
+    const { positions, width, height, independentTop } = view.graphLayout.layout;
     const visible = new Set(tasks.map(task => task.id));
     const edges = view.graphLayout.layout.paths.filter(({ edge }) => visible.has(edge.from) && visible.has(edge.to)).map(({ edge, d }) => ({ ...edge, d }));
     const graph = view.element.querySelector<HTMLElement>('[data-collab-graph]')!;
     if (graph.style.width !== `${width}px`) graph.style.width = `${width}px`;
     if (graph.style.height !== `${height}px`) graph.style.height = `${height}px`;
+    graph.dataset.density = compact ? 'compact' : 'comfortable';
     this.applyGraphZoom(view);
-    renderTaskGraph(graph, { cards: tasks.map(task => this.taskCard(view, task)), edges, positions, width, height, selected: view.selectedTask });
+    renderTaskGraph(graph, { cards: tasks.map(task => this.taskCard(view, task)), edges, positions, width, height, selected: view.selectedTask, compact, independentTop });
   }
   private bindGraphViewport(view: ViewState, pane: HTMLElement) {
     // Dragging empty space pans; cards keep their click behaviour and touch keeps native scrolling.
@@ -388,12 +392,18 @@ export class CollaborationView {
       if (action) { event.preventDefault(); this.zoomGraph(view, action); }
     });
   }
+  // The pane's bottom padding keeps the floating legend clear of the last row; fit within what remains.
+  private fitZoom(pane: HTMLElement, layout: GraphLayout) {
+    const style = getComputedStyle(pane);
+    const height = parseFloat(style.maxHeight) - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    return Math.min(pane.clientWidth / layout.width, height / layout.height, 1);
+  }
   private zoomGraph(view: ViewState, target: number | 'in' | 'out' | 'reset' | 'fit', anchor?: { x: number; y: number }) {
     const pane = view.element.querySelector<HTMLElement>('.collab-graph-scroll')!, layout = view.graphLayout?.layout;
     const previous = view.graphZoom;
     const next = target === 'in' ? previous * 1.2 : target === 'out' ? previous / 1.2 : target === 'reset' ? 1
-      : target === 'fit' ? (layout ? Math.min(pane.clientWidth / layout.width, parseFloat(getComputedStyle(pane).maxHeight) / layout.height, 1) : 1) : target;
-    view.graphZoom = Math.min(1.6, Math.max(0.4, Math.round(next * 100) / 100));
+      : target === 'fit' ? (layout ? this.fitZoom(pane, layout) : 1) : target;
+    view.graphZoom = Math.min(1.6, Math.max(minGraphZoom, Math.round(next * 100) / 100));
     // Keep the point under the pointer (or the viewport centre) in place.
     const box = pane.getBoundingClientRect(), x = anchor ? anchor.x - box.left : pane.clientWidth / 2, y = anchor ? anchor.y - box.top : pane.clientHeight / 2;
     const contentX = (pane.scrollLeft + x) / previous, contentY = (pane.scrollTop + y) / previous;
@@ -407,7 +417,7 @@ export class CollaborationView {
     const level = view.element.querySelector<HTMLElement>('[data-collab-graph-zoom-level]')!, text = `${Math.round(view.graphZoom * 100)}%`;
     if (level.textContent !== text) level.textContent = text;
     for (const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-graph-zoom="in"],[data-collab-graph-zoom="out"]'))
-      button.disabled = button.dataset.collabGraphZoom === 'in' ? view.graphZoom >= 1.6 : view.graphZoom <= 0.4;
+      button.disabled = button.dataset.collabGraphZoom === 'in' ? view.graphZoom >= 1.6 : view.graphZoom <= minGraphZoom;
   }
   private taskCard(view: ViewState, task: Task): TaskCard {
     const state = taskState(task);

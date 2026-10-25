@@ -1,14 +1,16 @@
 import { Fragment, render } from 'preact';
 import { useMemo, useState } from 'preact/hooks';
+import { compactGraphMetrics, graphMetrics } from '../taskGraphLayout';
 
 export type TaskCard = { id: string; version: string; kind: string; kindLabel: string; state: string; stateLabel: string;
   objective: string; owner: string; proof: string; proofLabel: string; selected: boolean };
 export type TaskEdgePath = { from: string; to: string; kind: 'and' | 'or'; d: string };
 
-function Card({ card, graph, x, y, dimmed, onHover }: { card: TaskCard; graph: boolean; x?: number; y?: number; dimmed?: boolean; onHover?: (id: string | undefined) => void }) {
+function Card({ card, graph, compact, x, y, dimmed, onHover }: { card: TaskCard; graph: boolean; compact?: boolean; x?: number; y?: number; dimmed?: boolean; onHover?: (id: string | undefined) => void }) {
   const leave = onHover && (() => onHover(undefined));
   return <button type="button" class={`collab-task${card.selected ? ' selected' : ''}${dimmed ? ' dimmed' : ''}`} data-collab-task={card.id} data-focus-key={`${graph ? 'graph' : 'list'}-${card.id}`}
     data-task-state={card.state} data-task-kind={card.kind} data-task-proof={card.proof} aria-pressed={card.selected}
+    title={compact ? `${card.id}\n${card.objective}\n${card.owner} · ${card.proofLabel}` : undefined}
     style={graph ? { left: `${x}px`, top: `${y}px` } : undefined}
     onPointerEnter={onHover && (() => onHover(card.id))} onPointerLeave={leave} onFocus={onHover && (() => onHover(card.id))} onBlur={leave}>
     <span class="collab-task-top"><span>{card.kindLabel}</span><span class="collab-task-state">{card.stateLabel}</span></span>
@@ -29,8 +31,8 @@ function lineage(id: string, edges: readonly TaskEdgePath[]) {
   return nodes;
 }
 
-function TaskGraph({ cards, edges, positions, width, height, selected }: { cards: readonly TaskCard[]; edges: readonly TaskEdgePath[];
-  positions: ReadonlyMap<string, { x: number; y: number }>; width: number; height: number; selected: string }) {
+function TaskGraph({ cards, edges, positions, width, height, selected, compact, independentTop }: { cards: readonly TaskCard[]; edges: readonly TaskEdgePath[];
+  positions: ReadonlyMap<string, { x: number; y: number }>; width: number; height: number; selected: string; compact?: boolean; independentTop?: number }) {
   const [hovered, setHovered] = useState<string>();
   const focus = hovered && cards.some(card => card.id === hovered) ? hovered : undefined;
   const chain = useMemo(() => focus ? lineage(focus, edges) : undefined, [focus, edges]);
@@ -41,9 +43,10 @@ function TaskGraph({ cards, edges, positions, width, height, selected }: { cards
       {edges.map(edge => <path key={`${edge.kind}:${edge.from}>${edge.to}`} class={`${edge.kind === 'or' ? 'collab-or-edge' : 'collab-and-edge'}${related(edge) ? ' related' : ''}`}
         data-from={edge.from} data-to={edge.to} d={edge.d} />)}
     </svg>
+    {independentTop !== undefined && <p class="collab-graph-caption" style={{ top: `${independentTop}px`, left: `${(compact ? compactGraphMetrics : graphMetrics).margin}px` }}>独立任务 · 没有前置或后续依赖</p>}
     {cards.map(card => {
       const position = positions.get(card.id)!;
-      return <Card key={card.id} card={card} graph x={position.x} y={position.y} dimmed={Boolean(chain && !chain.has(card.id))} onHover={setHovered} />;
+      return <Card key={card.id} card={card} graph compact={compact} x={position.x} y={position.y} dimmed={Boolean(chain && !chain.has(card.id))} onHover={setHovered} />;
     })}
   </>;
 }

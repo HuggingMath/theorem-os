@@ -4,16 +4,24 @@
  * Columns follow dependency depth; rows are not a grid. Each column is ordered to reduce edge crossings, then every
  * card settles toward the height of the tasks it connects to while keeping a minimum gap. Edges that skip columns pass
  * through reserved lanes between cards instead of over them, and each card spreads its edges over separate ports.
+ * Tasks with no edges at all are packed into a grid below the graph, so they do not stretch its first column.
  */
 export type GraphEdge = { from: string; to: string; kind: 'and' | 'or' };
 export type GraphLayout = {
   positions: Map<string, { x: number; y: number }>;
   paths: { edge: GraphEdge; d: string }[];
   width: number; height: number;
+  /** Top of the grid of unconnected tasks, when the graph has both connected and unconnected tasks. */
+  independentTop?: number;
 };
 export type GraphMetrics = { width: number; cardHeight: number; columnGap: number; rowGap: number; lane: number; margin: number };
 
 export const graphMetrics: GraphMetrics = { width: 218, cardHeight: 104, columnGap: 84, rowGap: 22, lane: 14, margin: 20 };
+/** Large plans drop the objective and owner lines from graph cards; the inspector and list keep them. */
+export const compactGraphMetrics: GraphMetrics = { width: 184, cardHeight: 54, columnGap: 64, rowGap: 12, lane: 10, margin: 16 };
+export const compactGraphTasks = 30;
+/** Height reserved above the grid of unconnected tasks for its caption. */
+export const independentCaption = 28;
 
 type Slot = { id: string; layer: number; real: boolean; up: number[]; down: number[]; y: number };
 
@@ -21,6 +29,33 @@ export function layoutTaskGraph(ids: readonly string[], edges: readonly GraphEdg
   const known = new Set(ids), seen = new Set<string>();
   const unique = edges.filter(edge => known.has(edge.from) && known.has(edge.to) && edge.from !== edge.to
     && !seen.has(`${edge.from}\0${edge.to}`) && seen.add(`${edge.from}\0${edge.to}`));
+  const linked = new Set(unique.flatMap(edge => [edge.from, edge.to]));
+  const connected = ids.filter(id => linked.has(id)), independent = ids.filter(id => !linked.has(id));
+  if (!independent.length) return layoutConnected(connected, unique, metrics);
+  // Unconnected tasks share one grid; with no columns to align to, aim for a landscape block.
+  const pitch = metrics.width + metrics.rowGap;
+  if (!connected.length) {
+    const columns = Math.max(1, Math.min(independent.length, Math.ceil(Math.sqrt(independent.length * 0.67))));
+    const { positions, width, height } = grid(independent, columns, metrics.margin, metrics);
+    return { positions, paths: [], width, height };
+  }
+  const graph = layoutConnected(connected, unique, metrics);
+  const columns = Math.max(1, Math.min(independent.length, Math.floor((graph.width - 2 * metrics.margin + metrics.rowGap) / pitch)));
+  const independentTop = graph.height + metrics.rowGap - metrics.margin;
+  const block = grid(independent, columns, independentTop + independentCaption, metrics);
+  for (const [id, point] of block.positions) graph.positions.set(id, point);
+  return { ...graph, width: Math.max(graph.width, block.width), height: block.height, independentTop };
+}
+
+function grid(ids: readonly string[], columns: number, top: number, metrics: GraphMetrics) {
+  const positions = new Map(ids.map((id, index) => [id, { x: metrics.margin + (index % columns) * (metrics.width + metrics.rowGap),
+    y: top + Math.floor(index / columns) * (metrics.cardHeight + metrics.rowGap) }]));
+  const rows = Math.ceil(ids.length / columns);
+  return { positions, width: Math.max(330, 2 * metrics.margin + columns * metrics.width + (columns - 1) * metrics.rowGap),
+    height: Math.max(160, top + rows * metrics.cardHeight + (rows - 1) * metrics.rowGap + metrics.margin) };
+}
+
+function layoutConnected(ids: readonly string[], unique: readonly GraphEdge[], metrics: GraphMetrics): GraphLayout {
   const inputs = new Map(ids.map(id => [id, [] as string[]])), outputs = new Map(ids.map(id => [id, [] as string[]]));
   for (const edge of unique) { inputs.get(edge.to)!.push(edge.from); outputs.get(edge.from)!.push(edge.to); }
 

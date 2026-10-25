@@ -1074,6 +1074,8 @@ function renderPanel(force = false) {
   if (navigating) finishMotion(panel);
   const samePanel = panel.dataset.renderRunId === run.id && panel.dataset.tab === state.tab;
   const switchingReport = samePanel && state.tab === 'report' && panel.dataset.renderReportMode !== state.reportMode;
+  // A tab opens at its top; the collaboration view restores its own reading position below.
+  const switchingTab = panel.dataset.renderRunId === run.id && panel.dataset.tab !== state.tab;
   const sameView = samePanel && (state.tab !== 'source' || panel.dataset.renderSourceView === state.sourceView);
   const previousScroll = panel.querySelector('.code-scroll,.activity-scroll,.diff-scroll');
   const scrollTop = sameView ? previousScroll?.scrollTop ?? 0 : 0;
@@ -1107,7 +1109,7 @@ function renderPanel(force = false) {
   panel.dataset.renderRunId = run.id; panel.dataset.tab = state.tab;
   panel.dataset.renderSourceView = state.sourceView;
   panel.dataset.renderReportMode = state.reportMode;
-  if (switchingReport) { panel.scrollTop = 0; panel.scrollLeft = 0; }
+  if (switchingReport || switchingTab) { panel.scrollTop = 0; panel.scrollLeft = 0; }
   const scroll = panel.querySelector<HTMLElement>('.code-scroll,.activity-scroll,.diff-scroll');
   if (scroll && state.tab !== 'events') { scroll.scrollTop = scrollTop; scroll.scrollLeft = scrollLeft; }
   if (samePanel && action) panel.querySelector<HTMLElement>(`[data-action="${action}"]`)?.focus({ preventScroll: true });

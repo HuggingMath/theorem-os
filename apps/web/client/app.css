@@ -2020,3 +2020,12 @@ li.active .stage-clock{color:var(--blue-600)}
 .activity-table tbody tr:hover td{background:var(--gray-25)}
 .activity-table tbody tr:last-child td{border-bottom:0}
 @media(max-width:560px){.activity-table th:nth-child(2){width:96px}}
+/* Room under the last row for the floating legend and zoom controls. */
+.collab-graph-scroll{padding-bottom:52px}
+/* Large plans: compact graph cards keep kind, state and name; the tooltip, list and inspector keep the rest. */
+.collab-graph[data-density=compact] .collab-task{width:184px;height:54px;padding:6px 9px 6px 10px}
+.collab-graph[data-density=compact] .collab-task-objective,.collab-graph[data-density=compact] .collab-task small{display:none}
+.collab-graph[data-density=compact] .collab-task strong{margin-top:1px}
+.collab-graph-caption{position:absolute;margin:0;font-size:var(--text-xs);color:var(--gray-500)}
+.collab-inspector .collab-inspected-objective[data-clamped]{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden;margin-bottom:4px}
+.collab-objective-toggle{display:block;margin:0 0 12px auto;font-size:var(--text-xs)}

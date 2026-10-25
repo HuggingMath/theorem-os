@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { graphMetrics, layoutTaskGraph, separate, type GraphEdge } from '../apps/web/client/taskGraphLayout';
+import { compactGraphMetrics, graphMetrics, independentCaption, layoutTaskGraph, separate, type GraphEdge } from '../apps/web/client/taskGraphLayout';
 
 const and = (from: string, to: string): GraphEdge => ({ from, to, kind: 'and' });
 const overlapping = (positions: Map<string, { x: number; y: number }>) => {
@@ -49,6 +49,24 @@ describe('task graph layout', () => {
     const order = (a: string, b: string) => Math.sign(y(a) - y(b));
     expect(order('s1', 's2')).toBe(order('t3', 't2'));
     expect(order('s2', 's3')).toBe(order('t2', 't1'));
+  });
+
+  it('moves unconnected tasks into a grid below the dependency graph', () => {
+    const lone = Array.from({ length: 13 }, (_, index) => `lone${index}`);
+    const chain = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
+    const metrics = compactGraphMetrics;
+    const layout = layoutTaskGraph([...lone.slice(0, 5), ...chain, ...lone.slice(5)], chain.slice(1).map((id, index) => and(chain[index]!, id)), metrics);
+    const graphBottom = Math.max(...chain.map(id => layout.positions.get(id)!.y)) + metrics.cardHeight;
+    expect(layout.independentTop).toBeGreaterThanOrEqual(graphBottom);
+    const lonePositions = lone.map(id => layout.positions.get(id)!);
+    for (const { x, y } of lonePositions) {
+      expect(y).toBeGreaterThanOrEqual(layout.independentTop! + independentCaption);
+      expect(x + metrics.width).toBeLessThanOrEqual(layout.width); expect(y + metrics.cardHeight).toBeLessThanOrEqual(layout.height);
+    }
+    expect(new Set(lonePositions.map(({ x }) => x)).size).toBeGreaterThan(1);
+    expect(layout.width).toBe(layoutTaskGraph(chain, chain.slice(1).map((id, index) => and(chain[index]!, id)), metrics).width);
+    expect(layoutTaskGraph(lone, [], metrics).independentTop).toBeUndefined();
+    expect(layoutTaskGraph(chain, [], metrics).paths).toHaveLength(0);
   });
 });
 

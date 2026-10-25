@@ -1,4 +1,5 @@
 import { render } from 'preact';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { jsonText } from '../collaborationUi';
 
 export type InspectorDetail = { title: string; value: unknown; id: string };
@@ -17,6 +18,23 @@ export type TaskInspectorProps =
 const Detail = ({ title, value, id }: InspectorDetail) => <details class="collab-detail" data-detail-key={id}>
   <summary>{title}</summary><pre class="collab-code" tabIndex={0}>{typeof value === 'string' ? value : jsonText(value)}</pre></details>;
 
+// Long objectives start clamped so the type, facts and evidence stay within reach; remounts per task version.
+function Objective({ text }: { text: string }) {
+  const node = useRef<HTMLParagraphElement>(null), [expanded, setExpanded] = useState(false), [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const element = node.current!;
+    const measure = () => { if (!expanded) setOverflows(element.scrollHeight > element.clientHeight + 1); };
+    measure();
+    const observer = new ResizeObserver(measure); observer.observe(element);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+  return <>
+    <p ref={node} class="collab-inspected-objective" data-clamped={expanded ? undefined : 'true'}>{text}</p>
+    {(overflows || expanded) && <button type="button" class="text-button collab-objective-toggle" aria-expanded={expanded}
+      onClick={() => setExpanded(value => !value)}>{expanded ? '收起目标' : '展开完整目标'}</button>}
+  </>;
+}
+
 function Task({ task }: { task: InspectedTask }) {
   return <>
     <div class="collab-inspected-title" data-task-state={task.state} data-task-proof={task.proof}>
@@ -27,7 +45,7 @@ function Task({ task }: { task: InspectedTask }) {
       <p class="collab-notice" data-task-history-notice>正在查看历史任务合同。{task.currentVersion ? `当前版本为 ${task.currentVersion}` : '当前计划已无此任务'}；旧合同未保存完整调度历史。</p>
       {task.currentVersion && <button type="button" class="button" data-task-current data-focus-key="task-current">查看当前版本</button>}
     </>}
-    <p class="collab-inspected-objective">{task.objective}</p>
+    <Objective text={task.objective} />
     <div class="collab-inspected-version"><span>{task.historical ? '历史任务版本' : '当前任务版本'}</span><code data-inspected-task-version>{task.version}</code></div>
     <dl class="collab-facts">{task.facts.map(fact => <div key={fact.name}><dt>{fact.name}</dt><dd>{fact.value}</dd></div>)}</dl>
     <div class="collab-artifact-links">
