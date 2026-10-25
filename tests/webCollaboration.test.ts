@@ -431,6 +431,9 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
   });
 
   it('protects the new endpoints and retains same-session history after a service restart', async () => {
+    // A pooled keep-alive socket may still look idle after the old server closes it ("other side closed").
+    const fetch = (url: string, init: RequestInit = {}) =>
+      globalThis.fetch(url, { ...init, headers: { ...init.headers as Record<string, string>, Connection: 'close' } });
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-collaboration-http-')); roots.push(root);
     fs.writeFileSync(path.join(root, 'index.html'), '<title>Offline fixture</title>');
     const reservation = net.createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));

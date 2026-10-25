@@ -43,6 +43,15 @@ describe('run-local task proof projection cache', () => {
       'commit', '--allow-empty', '--no-gpg-sign', '--quiet', '-m', 'Equivalent source snapshot']);
     return git(workspace, ['rev-parse', 'HEAD']);
   };
+  // Compact single-target projections keep only the target's references and this delivery's own changes.
+  // Equal projections across seeds therefore need the sibling helper to be used by the target.
+  const useSibling = () => {
+    const file = path.join(project, 'Submission.lean');
+    const source = fs.readFileSync(file, 'utf8');
+    const helpers = 'lemma first : True := by trivial\nlemma second : True := by trivial';
+    expect(source).toContain(helpers);
+    fs.writeFileSync(file, source.replace(helpers, 'lemma second : True := by trivial\nlemma first : True := second'));
+  };
   const hold = () => {
     const gate = deferred(), started = deferred();
     host.verify.mockImplementationOnce(async input => { started.resolve(); await gate.promise; return verified(input); });
@@ -175,6 +184,7 @@ describe('run-local task proof projection cache', () => {
   });
 
   it('recomputes seed-relative changes and imports while reusing the same projection', async () => {
+    useSibling();
     const file = path.join(project, 'Submission.lean');
     fs.writeFileSync(file, `import Mathlib.Data.Nat.Basic\n${fs.readFileSync(file, 'utf8')}`);
     const changedCommit = commitSolverSources(problem, workspace);
@@ -191,6 +201,7 @@ describe('run-local task proof projection cache', () => {
   });
 
   it('reuses a delivery when integration changes worktree, seed and worker and omits empty dependencies', async () => {
+    useSibling();
     const file = path.join(project, 'Submission.lean');
     fs.writeFileSync(file, `import Mathlib.Data.Nat.Basic\n${fs.readFileSync(file, 'utf8')}`);
     const deliveryCommit = commitSolverSources(problem, workspace);
@@ -214,6 +225,8 @@ describe('run-local task proof projection cache', () => {
   });
 
   it('rebuilds each caller attribution when equal-tree commits share a verification in flight', async () => {
+    useSibling();
+    commit = commitSolverSources(problem, workspace);
     const { release, entered } = hold();
     const first = check();
     await entered;
