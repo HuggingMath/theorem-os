@@ -386,7 +386,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
       this.reportBlockers(node.task, value.blockers);
       const remaining = [...new Set([...(value.remainingObligations ?? []),
         ...this.dependencies(node.task).filter(dependency => !['integrated', 'completed'].includes(dependency.status)).map(dependency => dependency.task.id)])] as string[];
-      if (value.needsDecision === true) this.needsLead = true;
+      if (value.needsDecision === true) this.wakeLead('progress-decision-requested');
       this.record(worker, node.task, 'progress', remaining.length || node.task.kind === 'sketch' ? 'conditional' : 'advisory', details.summary,
         { ...details, submissionId: value.id, assignmentKey, remainingObligations: remaining });
       return;

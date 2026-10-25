@@ -25,6 +25,7 @@ import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { taskTypePreflightEnvironmentIdentity, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
+import { consumeLeadWakes, dropLeadWakes, leadWakePending, settleLeadWakes } from './leadWakes';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded,
   readCooperationPlan } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
@@ -110,7 +111,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (active?.action.kind === 'task' && active.action.assignment === assignment && !active.cancelled) {
         active.cancelled = true; void active.interrupt().catch(() => {});
       }
-      if (node.task.ownerId) this.needsLead = true;
+      if (node.task.ownerId) this.wakeLead('feasibility-review-reassigned');
       this.input.emit('feasibility_review_reassigned', { taskId: node.task.id, workerId: assignment.workerId,
         assignmentId: assignment.assignmentId, reason: 'reviewer-no-longer-independent', draftCommit: draft?.commit });
       changed = true;
@@ -201,7 +202,7 @@ export class CooperativeResearch extends CooperationInputs {
           const plan = readCooperationPlan(this.input.state.problem, this.lead.worktree);
           const initial = !this.archive.tasks.length;
           await this.acceptPlan(plan);
-          if (initial) this.needsLead = false;
+          if (initial) dropLeadWakes(this.archive.leadWakes!);
         }
       } catch (error) { this.rejectPlan(error); }
     }
@@ -215,7 +216,7 @@ export class CooperativeResearch extends CooperationInputs {
       for (const node of this.archive.tasks.filter(node => node.status === 'integrated')) {
         node.status = 'blocked'; node.feedback = 'math_canonical_source_invalid';
       }
-      this.needsLead = true;
+      this.wakeLead('canonical-source-invalid');
     }
     for (const node of this.archive.tasks) if (node.status === 'running') node.status = 'pending';
     for (const node of this.archive.tasks.filter(node => node.status === 'delivered')) await this.integrate(node);
@@ -287,21 +288,24 @@ export class CooperativeResearch extends CooperationInputs {
     if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, running);
     if (!running && !this.livePeers.length) return;
     if (this.archive.review && ['pending', 'running'].includes(this.archive.review.status)) return this.waitForDispatch();
+    const wakes = this.archive.leadWakes!, through = wakes.requested;
+    // Conditions recomputed from durable state; only one-shot events are saved wake-ups.
+    let wake = leadWakePending(wakes);
     const rejection = this.archive.planRejection;
     if (rejection?.stalled) {
       if (rejection.inputDigest === this.planningInputDigest() && rejection.proposalDigest === this.proposedPlanDigest()) {
-        this.needsLead = false;
+        dropLeadWakes(wakes, through);
         if (!running && !this.canAdvance()) {
           if (this.input.continuousResearch) return this.idleFrontier(this.activeGoalFrontier(), rejection.inputDigest);
           this.input.emit('plan_stalled', { ...rejection }); return;
         }
         return this.waitForDispatch();
       }
-      this.needsLead = true;
+      wake = true;
     }
     if (this.archive.lastLeadPauseInputDigest &&
-        this.archive.lastLeadPauseInputDigest !== this.leadPauseInputDigest()) this.needsLead = true;
-    if (!this.needsLead && this.archive.tasks.length) {
+        this.archive.lastLeadPauseInputDigest !== this.leadPauseInputDigest()) wake = true;
+    if (!wake && this.archive.tasks.length) {
       const support = originalGoalTaskFocus(this.archive.tasks, this.archive.groups).support;
       const supportingWork = this.archive.tasks.some(node => support.has(node.task.id) &&
         (this.preparingTaskTypes.has(node) || ['running', 'delivered'].includes(node.status) ||
@@ -312,32 +316,35 @@ export class CooperativeResearch extends CooperationInputs {
       if (!supportingWork && !this.hasAssignableTask(support) && !this.canAdvance(support)) {
         const frontier = this.activeGoalFrontier(), inputDigest = this.planningInputDigest();
         if (frontier.some(item => item.status === 'blocked' && item.attempts > 0) && inputDigest !== this.archive.lastLeadInputDigest) {
-          this.needsLead = true;
+          wake = true;
           this.input.emit('blocked_tasks_reconsidered', { taskIds: frontier.map(item => item.taskId),
             goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], inputDigest });
         }
       }
     }
-    if (!running && !this.needsLead && this.archive.tasks.length && (!this.archive.review || this.archive.review.status === 'changes_requested') &&
+    if (!running && !wake && this.archive.tasks.length && (!this.archive.review || this.archive.review.status === 'changes_requested') &&
         !this.canAdvance()) {
       // Parking prevents repeating an inference, not reconsidering its unfinished original goal.
       const frontier = this.activeGoalFrontier();
       const inputDigest = this.planningInputDigest();
       if (!frontier.length || inputDigest === this.archive.lastLeadInputDigest) return this.idleFrontier(frontier, inputDigest);
-      this.needsLead = true;
+      wake = true;
       this.input.emit('blocked_tasks_reconsidered', { taskIds: frontier.map(item => item.taskId),
         goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], inputDigest });
     }
-    if (this.needsLead || (!running && (!this.livePeers.length || !this.hasAssignableTask()))) {
-      this.needsLead = false;
+    if (wake || (!running && (!this.livePeers.length || !this.hasAssignableTask()))) {
       const inputDigest = this.planningInputDigest();
+      // The previous decision (or pause) already answers these inputs; drop the wake-ups without a turn.
       if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error) {
+        dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask() ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : RETRY_DISPATCH;
       }
       if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest()) {
+        dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask()
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
       }
+      consumeLeadWakes(wakes, through);
       this.syncPlanNotes();
       const planVersion = this.archive.planVersion ??= this.planVersion();
       const action: CooperativeAction = { kind: 'lead', seedCommit: this.seed(worker, head), planVersion,
@@ -497,7 +504,7 @@ export class CooperativeResearch extends CooperationInputs {
           node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) +
             (checked.result.artifact ? `\nAdvisory type diagnostics: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
             '\nRevise the closed helper type or its context before proving it. This is not proof acceptance or a mathematical refutation.';
-          this.needsLead = true; this.changed(); return RETRY_DISPATCH;
+          this.wakeLead('task-type-invalid'); this.changed(); return RETRY_DISPATCH;
         }
         if (leadAccess && workerAccess && this.canonicalHelperCandidate(node, worker, scopedSeed)) {
           // A failed probe is not a model delivery. Keep it outside failure memory and archive acceptance.
@@ -730,7 +737,7 @@ export class CooperativeResearch extends CooperationInputs {
     recovering: boolean, recoveryKind: 'checkpoint' | 'request-failure' | 'scheduling-checkpoint'): Promise<{ checkWhole: boolean; savedPlan?: boolean }> {
     const staged = await this.input.exclusiveCheck(async () => {
       if (!this.current(action)) {
-        this.input.emit('lead_decision_superseded', { commit }); this.syncPlanNotes(); this.needsLead = true; this.changed();
+        this.input.emit('lead_decision_superseded', { commit }); this.syncPlanNotes(); this.wakeLead('lead-turn-superseded'); this.changed();
         return { finished: true as const, checkWhole: false };
       }
       const sourceChanged = ownedSourceDigest(this.input.state.problem, worker.worktree, action.seedCommit) !==
@@ -758,7 +765,7 @@ export class CooperativeResearch extends CooperationInputs {
         if (unchangedCheckpoint) {
           // Inherited control notes are a draft, not a fresh response to this dispatch.
           // Continue below so saved Lean source changes still take the ordinary merge path.
-          this.pin(commit); this.needsLead = true;
+          this.pin(commit); this.wakeLead('lead-checkpoint-unchanged');
           this.input.emit('lead_checkpoint_saved', { commit, seedCommit: action.seedCommit,
             reason: 'unchanged-control-response' });
         } else if (publishedPlan && !hasFinalPlan) {
@@ -793,6 +800,8 @@ export class CooperativeResearch extends CooperationInputs {
           !action.initialPlanNonce && !decisionProgress) {
         this.archive.lastLeadPauseInputDigest = this.leadPauseInputs.get(action);
       }
+      // The decision or pause above is durable now; a restart must not re-ask this turn's wake-ups.
+      settleLeadWakes(this.archive.leadWakes!);
       this.changed();
       return { finished: false as const, sourceChanged, savedPlan, planVersion: this.archive.planVersion };
     });
@@ -873,7 +882,7 @@ export class CooperativeResearch extends CooperationInputs {
       }
       review.workerId = undefined;
       if (review.status === 'accepted') this.lastAssembly = undefined;
-      else { this.archive.error = review.summary; this.needsLead = true; }
+      else { this.archive.error = review.summary; this.wakeLead('review-changes-requested'); }
       this.record(worker, undefined, 'review', review.status, review.summary ?? '', { commit: review.commit, sourceDigest: review.sourceDigest, evidenceRefs });
       return { checkWhole: false };
     }
@@ -976,7 +985,7 @@ export class CooperativeResearch extends CooperationInputs {
       const review = this.archive.review;
       if (review && this.current(action) && review.workerId === worker.id) { review.status = 'pending'; review.workerId = undefined; }
     }
-    else this.needsLead = true;
+    else this.wakeLead('lead-turn-interrupted');
     this.changed();
   }
   rejected(action: CooperativeAction, feedback: string, commit?: string, incomplete = false) {
@@ -989,7 +998,7 @@ export class CooperativeResearch extends CooperationInputs {
       review.status = 'changes_requested'; review.summary = feedback;
       const worker = this.input.workers.find(item => item.id === review.workerId);
       review.workerId = undefined;
-      this.archive.error = feedback; this.needsLead = true;
+      this.archive.error = feedback; this.wakeLead('statement-review-rejected');
       if (worker) this.record(worker, this.node(review.taskId).task, 'failure', 'failed', feedback,
         { sourceDigest: review.snapshotDigest, commit: review.commit });
       else this.changed();
@@ -1013,11 +1022,12 @@ export class CooperativeResearch extends CooperationInputs {
     } else this.archive.error = feedback;
     const worker = action.kind === 'task' ? this.input.workers.find(item => item.id === action.assignment.workerId) :
       action.kind === 'review' ? reviewWorker : this.lead;
-    if (!localRepair) this.needsLead = true;
+    if (!localRepair) this.wakeLead(action.kind === 'task' ? 'task-delivery-rejected' :
+      action.kind === 'review' ? 'review-changes-requested' : 'lead-turn-rejected');
     if (worker) this.record(worker, action.kind === 'task' ? action.task : undefined, 'failure', 'failed', feedback, { commit });
     else this.changed();
   }
-  assemblyFailed(check: ProofCheck) { this.archive.error = solverProofFeedback(check); this.needsLead = true; this.changed(); }
+  assemblyFailed(check: ProofCheck) { this.archive.error = solverProofFeedback(check); this.wakeLead('assembly-failed'); this.changed(); }
   /** A reserved turn may still be refunded; the caller rechecks synchronously after waking. */
   waitForTurn(maxTurns: number): Promise<void> | undefined {
     return this.input.state.turns >= maxTurns && this.reservedTurns.size ? this.wait() : undefined;
@@ -1097,7 +1107,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (review.workerId === worker.id && ['translating', 'reviewing'].includes(review.status)) resetStatementReview(review);
     for (const node of this.archive.tasks.filter(node => node.status === 'running' && node.assignment?.workerId === worker.id)) {
       node.status = 'pending'; node.feedback = error;
-      if (error) this.needsLead = true;
+      if (error) this.wakeLead('worker-stopped');
     }
     this.changed();
   }

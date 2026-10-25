@@ -85,6 +85,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   contextCheckpointRejection?: ContextCheckpointRejection;
   planRejection?: { proposalDigest: string; inputDigest: string; error: string; stalled: boolean };
   lastLeadInputDigest?: string;
+  /** Durable Lead wake-ups; a restart re-asks those whose dispatch did not settle. */
+  leadWakes?: import('./leadWakes').LeadWakes;
   /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
   lastLeadPauseInputDigest?: string;
   /** Durable mathematical input/method tombstones, independent of scheduling and plan revisions. */

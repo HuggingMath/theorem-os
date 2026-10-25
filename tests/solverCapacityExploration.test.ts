@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
+import { requestLeadWake } from '../src/solver/leadWakes';
 import { readCooperationPlan } from '../src/solver/cooperationShared';
 import * as contextCompiler from '../src/solver/contextCompiler';
 import { directSolverModules } from '../src/solver/modules';
@@ -65,7 +66,7 @@ describe('host exploration for spare cooperative capacity', () => {
   };
   const startLead = async () => {
     // Stand in for an ordinary Lead planning input; these cases only need a running Lead.
-    (cooperative as any).needsLead = true; refresh();
+    requestLeadWake(state.cooperation!.leadWakes!, 'research-finding'); refresh();
     const action = await track(cooperative.next(workers[0], budget));
     if (action?.kind !== 'lead') throw new Error('fixture_expected_lead');
     activate(workers[0], action);

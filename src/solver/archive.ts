@@ -297,6 +297,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     proofImports: z.array(proofImportRecordSchema).optional(),
     initialPlanPublication: planPublication.optional(), planPublication: planPublication.optional(),
     lastLeadPauseInputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+    leadWakes: z.object({ requested: safeCount, consumed: safeCount, settled: safeCount,
+      recent: z.array(z.object({ seq: safeCount, reason: z.string(), at: safeCount })).max(64).optional() }).optional(),
     capacityExplorationInputs: z.array(z.object({ inputDigest: z.string().regex(/^[a-f0-9]{64}$/u),
       focus: z.enum(['construction', 'interface', 'decomposition', 'boundary']), targetTaskId: z.string(), taskId: z.string() }).strict()).optional(),
     leadSeedCommit: z.string().regex(/^[a-f0-9]{40,64}$/u).optional(),

@@ -183,7 +183,7 @@ export abstract class CooperationStatements extends CooperationCore {
     }
     review.workerId = undefined;
     if (review.status === 'accepted') this.lastAssembly = undefined;
-    if (review.status === 'changes_requested') { this.archive.error = review.summary; this.needsLead = true; }
+    if (review.status === 'changes_requested') { this.archive.error = review.summary; this.wakeLead('statement-review-rejected'); }
     this.record(worker, this.node(review.taskId).task, kind, review.status === 'translated' ? 'advisory' : review.status,
       review.summary ?? '', { ...options, evidenceRefs });
     this.input.emit('statement_review_completed', { workerId: worker.id, taskId: review.taskId, reviewId: review.id, kind, status: review.status });

@@ -151,7 +151,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       ...(relatedFailureIds.length ? { relatedFailureIds } : {}), ...(repair ? { repair } : {}) };
     records.push(record);
     if (relatedFailureIds.length) {
-      this.needsLead = true;
+      this.wakeLead('task-repeated-attempt');
       this.input.emit('task_attempt_repeated_advisory', { taskId: record.taskId, failureId: record.id,
         attemptFingerprint: record.attemptFingerprint, relatedFailureIds, evidence: 'same-target-and-local-inputs-not-equivalence' });
     }
@@ -219,7 +219,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (record && !this.pendingTaskRepair(node, record)) {
         const feedback = this.repeatedTaskFeedback(record);
         if (node.status === 'blocked' && node.feedback === feedback) continue;
-        node.status = 'blocked'; node.feedback = feedback; this.needsLead = true; changed = true;
+        node.status = 'blocked'; node.feedback = feedback; this.wakeLead('task-repeated-input-blocked'); changed = true;
         this.input.emit('task_repeated_input_blocked', { taskId: node.task.id, taskDigest: digest(node.task),
           failureId: record.id, inputDigest, sourceDigest });
       } else if (!record && node.status === 'blocked' && node.feedback?.startsWith('math_task_repeated_failed_input\n')) {
@@ -440,7 +440,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         if (this.archive.unchangedResearch) delete this.archive.unchangedResearch[node.task.id];
         if (this.archive.researchCheckpoints) delete this.archive.researchCheckpoints[node.task.id];
       }
-      if (finding.needsDecision === true || finding.conclusion === 'refuted' || lemmaRequests.length || artifactWarning) this.needsLead = true;
+      if (finding.needsDecision === true || finding.conclusion === 'refuted' || lemmaRequests.length || artifactWarning) this.wakeLead('research-finding');
       this.resolveDeliveryReceipts(worker, action, finding.replacesReceipt, complete);
       this.publishDeliveryRecord(record);
       this.observeKnowledgeUses(node.task, fixedCommit, knowledgeUses, knowledge.rejected);
@@ -520,7 +520,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
           const node = this.node(task.id);
           const mathematicalBlocker = node?.assignment === assignment && this.reportedTaskMathematicalBlocker(node, candidate);
           // Persist the block with the failure so restart recovery cannot invent a code repair.
-          if (mathematicalBlocker) { node.status = 'blocked'; node.feedback = error.message; this.needsLead = true; }
+          if (mathematicalBlocker) { node.status = 'blocked'; node.feedback = error.message; this.wakeLead('task-blocked'); }
           this.rememberTaskFailure(candidate, error.message, mathematicalBlocker ? undefined : reserveRepair());
         }
         throw error;
@@ -747,7 +747,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       node.feedback = solverProofFeedback(proof);
       const repairable = this.deterministicTaskFailure(proof) || proof.verification.status === 'failed' && proof.verification.results.some(result =>
         result.status === 'failed' && ((result.sorryCount ?? 0) > 0 || result.error === 'Lean exited with status 1.'));
-      if (!repairable || !this.retryTaskLocally(node, proof.commit)) this.needsLead = true;
+      if (!repairable || !this.retryTaskLocally(node, proof.commit)) this.wakeLead('task-check-failed');
     }
     this.input.emit('task_checked', { taskId: node.task.id, passed: proof.passed, conditional: Boolean(proof.conditions?.length), commit: proof.commit });
     this.changed();

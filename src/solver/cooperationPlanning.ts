@@ -13,6 +13,7 @@ import { taskConnectionCheckCurrent } from './taskConnections';
 import { taskGroup, taskVersion, taskProofContractVersion, taskReferenceDependencies, invalidatedTaskIds, type TaskRecord,
   type CooperativeAction } from './tasks';
 import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan } from './cooperationShared';
+import { dropLeadWakes } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
@@ -131,7 +132,8 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const stalled = previous?.proposalDigest === proposalDigest && previous.inputDigest === inputDigest && previous.error === reason;
     this.archive.error = reason;
     this.archive.planRejection = { proposalDigest, inputDigest, error: reason, stalled };
-    this.needsLead = !stalled;
+    // A repeated rejection of the same proposal for the same input answers its wake-ups; it is not new input.
+    if (stalled) dropLeadWakes(this.archive.leadWakes!); else this.wakeLead('plan-rejected');
     this.input.emit('plan_rejected', { ...this.archive.planRejection });
   }
   protected async mergeLeadSources(commit: string, seedCommit: string, canonical = this.archive.canonicalCommit!) {
@@ -158,7 +160,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
         record.commit === commit && record.summary.startsWith('Saved Lead draft pending integration:'))) {
       this.record(this.lead, undefined, 'progress', 'advisory', summary, { commit });
     }
-    if (requestDecision) { this.archive.error = reason; this.needsLead = true; }
+    if (requestDecision) { this.archive.error = reason; this.wakeLead('lead-draft-preserved'); }
     this.input.emit('lead_draft_preserved', { commit, seedCommit, canonicalCommit: this.archive.canonicalCommit, reason });
   }
   protected async restoreLeadSources() {
@@ -339,7 +341,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
           .map(target => target.theoremName).join(', ') || 'the original targets'}. Report concrete evidence and unresolved gaps; findings are advisory.` })),
     ];
     await this.acceptPlan(parseCooperationPlan(this.input.state.problem, { tasks }));
-    this.needsLead = false;
+    dropLeadWakes(this.archive.leadWakes!);
     this.archive.initialPlanFallback = { at: Date.now(), reason };
     this.archive.planEdited = true;
     this.syncPlanNotes();

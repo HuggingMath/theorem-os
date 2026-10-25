@@ -31,12 +31,12 @@ import { TaskTypePreflightCache } from './taskTypePreflight';
 import { currentCapacityExploration, plannedTaskRecords } from './capacityExploration';
 import { assignmentDeliveryFile, isFeasibilityReview, markTaskAcceptance, markTaskReferences, taskGroup, taskReferenceDependencies, type CooperativeTask, type TaskRecord, type CooperativeAction } from './tasks';
 import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, RETRY_DISPATCH, bounded } from './cooperationShared';
+import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type LeadWakeReason } from './leadWakes';
 
 /** Shared cooperation state, scheduling primitives and the per-worker context projection. */
 export abstract class CooperationCore {
   protected readonly lead: ResearchWorker;
   protected readonly archive: CooperationState;
-  protected needsLead = false;
   protected lastAssembly?: string;
   private waiters = new Set<() => void>();
   protected reservedTurns = new Set<string>();
@@ -99,6 +99,9 @@ export abstract class CooperationCore {
     modules: SolverModules; exclusiveCheck: <T>(check: () => Promise<T>) => Promise<T> }) {
     this.lead = input.workers[0];
     this.archive = input.state.cooperation ??= { tasks: [] };
+    const legacyLeadWakes = !this.archive.leadWakes;
+    if (this.archive.leadWakes) reopenLeadWakes(this.archive.leadWakes);
+    else this.archive.leadWakes = emptyLeadWakes();
     this.archive.proofRoutes = parseProofRoutes(this.archive.proofRoutes, this.archive.tasks.map(node => node.task));
     this.syncProofRoutes();
     if (!this.archive.canonicalCommit) {
@@ -121,14 +124,19 @@ export abstract class CooperationCore {
       this.checkedDeliveries.add(proof); markTaskAcceptance(proof);
     }
     this.liveWorkers = new Set(input.workers.map(worker => worker.id));
-    // Unadopted proposals, refutations and decision requests are ordinary planning inputs;
-    // restart must not lose their pending Lead review.
-    const researchInputs = leadResearchInputs(this.archive.deliveries ?? [],
-      new Map(this.archive.tasks.map(node => [node.task.id, node]))).length > 0;
-    this.needsLead = !this.archive.tasks.length || Boolean(this.archive.error) ||
-      ((researchInputs || this.archive.tasks.some(node => node.status === 'blocked')) &&
-        this.archive.lastLeadInputDigest !== this.planningInputDigest());
+    if (!this.archive.tasks.length) {
+      // Without a graph every peer is idle; the first plan is always owed.
+      if (!leadWakePending(this.archive.leadWakes)) this.wakeLead('initial-plan');
+    } else if (legacyLeadWakes) {
+      // Older states saved no wake-ups: infer the unanswered decision once from its durable inputs.
+      const researchInputs = leadResearchInputs(this.archive.deliveries ?? [],
+        new Map(this.archive.tasks.map(node => [node.task.id, node]))).length > 0;
+      if (this.archive.error || (researchInputs || this.archive.tasks.some(node => node.status === 'blocked')) &&
+          this.archive.lastLeadInputDigest !== this.planningInputDigest()) this.wakeLead('restored-legacy-state');
+    }
   }
+  /** Ask the Lead for a decision; the request is saved with the state change that caused it. */
+  protected wakeLead(reason: LeadWakeReason) { requestLeadWake(this.archive.leadWakes!, reason); }
   protected get livePeers() { return this.input.workers.filter(worker => worker.id !== this.lead.id && this.liveWorkers.has(worker.id)); }
   protected get allocationPeers() {
     const occupied = new Set([...this.active].filter(([, active]) => active.action.kind !== 'task').map(([id]) => id));
@@ -231,7 +239,7 @@ export abstract class CooperationCore {
     this.refreshResearchCheckpoints();
     for (const blocker of refreshRouteBlockers(this.archive.blockers ?? [], this.archive.tasks,
       this.input.state.environmentDigest, this.input.state.problem.receiptDigest)) {
-      this.needsLead = true;
+      this.wakeLead('route-reopened');
       this.input.emit('route_reopened', { blockerId: blocker.id, taskId: blocker.taskId, reason: blocker.reopenedReason });
     }
     this.refreshFailedTaskInputs();
@@ -584,7 +592,7 @@ export abstract class CooperationCore {
     const proposals = validateBlockerProposals(value, task, this.archive.tasks);
     for (const blocker of recordRouteBlockers(this.archive.blockers ??= [], proposals, task, this.archive.tasks,
       this.input.state.environmentDigest, this.input.state.problem.receiptDigest)) {
-      this.needsLead = true;
+      this.wakeLead('route-blocker-recorded');
       this.input.emit(blocker.status === 'parked' ? 'route_parked' : 'route_blocker_recorded', {
         blockerId: blocker.id, taskId: blocker.taskId, groupId: blocker.groupId, count: blocker.count,
         scope: blocker.scope, evidenceStatus: blocker.evidenceStatus, reopenOn: blocker.reopenOn });

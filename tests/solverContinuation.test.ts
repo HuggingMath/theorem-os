@@ -5,6 +5,7 @@ import { continuationResearchTasks, readyResearchTasks, researchCanAdvance } fro
 import { assignSharedResearchTask, type ResearchWorker } from '../src/solver/modules/organization';
 import { taskVersion, parseCooperationPlan, markTaskAcceptance, type CooperativeAction, type TaskRecord, type RouteRecord } from '../src/solver/tasks';
 import { CooperativeResearch, type CooperationState } from '../src/solver/cooperation';
+import { requestLeadWake } from '../src/solver/leadWakes';
 import { directSolverModules } from '../src/solver/modules';
 import { git, type SolverProblem } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
@@ -466,7 +467,7 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
 
   const pausedLead = async (beforeCheckpoint?: () => void) => {
     parkCore(); record.status = 'running';
-    (cooperative as any).needsLead = true;
+    requestLeadWake(state.cooperation!.leadWakes!, 'research-finding');
     const next = await cooperative.next(lead, budget);
     if (next?.kind !== 'lead') throw new Error('expected_unfinished_lead');
     const admitted = (cooperative as any).leadPauseInputDigest(next.seedCommit);
@@ -528,7 +529,7 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
 
   it('admits initial planning despite an unchanged pause marker and never pauses its checkpoint', async () => {
     state.cooperation!.tasks = [];
-    (cooperative as any).needsLead = true;
+    requestLeadWake(state.cooperation!.leadWakes!, 'initial-plan');
     vi.spyOn(cooperative as any, 'seed').mockReturnValue(seed);
     vi.spyOn(cooperative as any, 'acceptPlan').mockResolvedValue(undefined);
     state.cooperation!.lastLeadPauseInputDigest = (cooperative as any).leadPauseInputDigest();

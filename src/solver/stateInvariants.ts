@@ -1,4 +1,5 @@
 import type { SolverRunState } from './archive';
+import { leadWakeViolations } from './leadWakes';
 import { readyResearchTasks } from './modules/search';
 import { taskGroup, type TaskRecord } from './tasks';
 
@@ -61,6 +62,8 @@ export function checkSolverRunState(state: SolverRunState): StateViolation[] {
       } else if (!color.has(next)) { color.set(next, 1); stack.push([next, 0]); }
     }
   }
+  if (cooperation.leadWakes) for (const message of leadWakeViolations(cooperation.leadWakes))
+    add('lead_wakes_invalid', 'error', message);
   for (const blocker of cooperation.blockers ?? [])
     if (blocker.status !== 'superseded' && !ids.has(blocker.taskId))
       add('blocker_task_missing', 'warning', `Blocker ${blocker.id} names a removed task.`, blocker.id, blocker.taskId);

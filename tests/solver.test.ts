@@ -21,6 +21,7 @@ import { prepareDeepSeekProfile } from '../src/runtime/deepseek';
 import { prepareWestlakeProfile } from '../src/runtime/westlake';
 import { prepareSub2apiProfile } from '../src/runtime/sub2api';
 import { CooperativeResearch, readCooperationPlan, parseCooperationPlan, taskVersion, assignmentDeliveryFile, type CooperativeAction, type CooperativeTask, type RouteGroup } from '../src/solver/cooperation';
+import { leadWakePending } from '../src/solver/leadWakes';
 import { canonicalMathJson } from '../src/math/mathRuntimeIo';
 import { deliveryDetails, readDeliveryLines, readMathResponse } from '../src/solver/deliveries';
 import { assertStatementSnapshot, captureStatementContexts, isStatementAction, readBacktranslation, statementSnapshot, writeStatementSnapshot } from '../src/solver/statementReview';
@@ -1912,7 +1913,7 @@ describe('isolated solver and host acceptance', () => {
     await resumed.stop(); state = JSON.parse(JSON.stringify(state));
     const completed = create(); await completed.restore();
     // The answered blocked frontier does not request the same Lead input again.
-    expect((completed as any).needsLead).toBe(false);
+    expect(leadWakePending(state.cooperation.leadWakes)).toBe(false);
     await completed.stop();
     expect(host.createSession).not.toHaveBeenCalled();
     expect(host.officialGate).not.toHaveBeenCalled();

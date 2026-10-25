@@ -5,6 +5,7 @@ import { parseCooperationPlan, type CooperativeResearch } from '../src/solver/co
 import { git } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
 import type { ResearchWorker } from '../src/solver/modules/organization';
+import { dropLeadWakes } from '../src/solver/leadWakes';
 import { TaskTypePreflightCache, type TaskTypePreflight } from '../src/solver/taskTypePreflight';
 import { taskVersion } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
@@ -222,7 +223,7 @@ describe('typed helper dispatch admission', () => {
     const held = holdPreflight();
     state.cooperation!.tasks[1].task = { ...state.cooperation!.tasks[1].task, status: 'paused' };
     const pending = peer();
-    (cooperative as any).needsLead = false;
+    dropLeadWakes(state.cooperation!.leadWakes!);
     let settled = false;
     const lead = (cooperative as any).nextLead(workers[0], budget, true).then(() => { settled = true; });
     await new Promise(resolve => setTimeout(resolve, 15));

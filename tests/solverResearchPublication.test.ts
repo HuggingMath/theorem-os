@@ -3,6 +3,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { SolverRunState } from '../src/solver/archive';
 import { leadResearchInputs } from '../src/solver/contextCompiler';
+import { RETRY_DISPATCH } from '../src/solver/cooperationShared';
+import { leadWakePending } from '../src/solver/leadWakes';
 import { parseCooperationPlan, type CooperativeResearch } from '../src/solver/cooperation';
 import * as knowledgeApplications from '../src/solver/knowledgeApplications';
 import { buildResearchContext } from '../src/solver/modules/context';
@@ -134,18 +136,40 @@ it('keeps private findings within their route and excludes stale or late events 
   expect(leadInputs()).toEqual([]);
 });
 
+const restart = async () => {
+  controller.abort(); await cooperative.stop();
+  state = JSON.parse(JSON.stringify(state)); controller = new AbortController(); cooperative = create();
+};
+const wakePending = () => leadWakePending(state.cooperation!.leadWakes!);
+
 it('wakes Lead after restore for an unanswered refutation until a plan answers its exact input', async () => {
-  expect((cooperative as any).needsLead).toBe(false);
+  expect(wakePending()).toBe(false);
   await publish({ kind: 'research', finding: finding() });
-  const restore = async () => {
-    controller.abort(); await cooperative.stop();
-    state = JSON.parse(JSON.stringify(state)); controller = new AbortController(); cooperative = create();
-  };
-  await restore();
-  expect((cooperative as any).needsLead).toBe(true);
+  await restart();
+  expect(wakePending()).toBe(true);
   state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
-  await restore();
-  expect((cooperative as any).needsLead).toBe(false);
+  await restart();
+  // The saved wake-up survives, but the decision already answering this exact input absorbs it without a turn.
+  expect(wakePending()).toBe(true);
+  await expect((cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true))
+    .resolves.toBe(RETRY_DISPATCH);
+  expect(wakePending()).toBe(false);
+});
+
+it('keeps a progress decision request across restart while other work is still running', async () => {
+  // Progress is not a research input the restore path could rediscover; only its saved wake-up asks the Lead.
+  expect(wakePending()).toBe(false);
+  await publish({ kind: 'progress', summary: 'The construction needs a route decision.', needsDecision: true });
+  expect(wakePending()).toBe(true);
+  expect(state.cooperation!.leadWakes!.recent?.at(-1)?.reason).toBe('progress-decision-requested');
+  await restart();
+  expect(state.cooperation!.tasks.find(node => node.task.id === 'helper')?.status).toBe('running');
+  const lead = await cooperative.next(workers[0], { maxTurns: Infinity, remainingMs: Infinity });
+  expect(lead).toMatchObject({ kind: 'lead' });
+  expect(wakePending()).toBe(false);
+  // A restart before the dispatch settles asks again; the in-flight turn did not survive the process.
+  await restart();
+  expect(wakePending()).toBe(true);
 });
 
 it('rejects an invalid research event and continues consuming the following line', async () => {

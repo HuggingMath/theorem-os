@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
+import { requestLeadWake } from '../src/solver/leadWakes';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
 import { leadPlanDeliveryFile, parseCooperationPlan, type CooperativeAction } from '../src/solver/tasks';
@@ -170,7 +171,7 @@ describe('live replacement plan publication', () => {
     cooperative.activate(workers[1], goal, goalInterrupt, async () => {});
     for (let wave = 1; wave <= 3; wave++) {
       // Stand in for an ordinary planning input; each wave is one Lead plan turn.
-      (cooperative as any).needsLead = true;
+      requestLeadWake(state.cooperation!.leadWakes!, 'research-finding');
       const action = await start(), id = `wave_${wave}`;
       await publish(action, line(action, withHelper(id)));
       const task = await cooperative.next(workers[2], budget);
