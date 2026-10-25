@@ -10,11 +10,15 @@ import { recordedTask, ResearchProgressView, taskCheckKey } from './researchProg
 import { MathematicalChangesView } from './mathematicalChangesView';
 import { ReviewView } from './reviewView';
 import { CollaborationNavigation } from './collaborationNavigation';
+import { layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
+import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
+import { renderAgentCards } from './ui/AgentCards';
+import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 
 type Task = WebObservation['inspection']['tasks'][number];
 type TaskView = 'graph' | 'list';
 type ScrollPosition = { top: number; left: number };
-type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string };
+type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
 const kindLabel: Record<string,string> = { research: '研究', sketch: '草图', lemma: '引理', goal: '原始目标' };
 const statusLabel: Record<string,string> = { pending: '待调度', running: '进行中', blocked: '受阻', conditional: '有条件结果', delivered: '已交付', integrated: '已集成', completed: '已完成', none: '尚无证明', checked: '已记录检查', stale: '旧版本证据', unverified: '未验证', active: '继续', paused: '暂停', stopped: '停止', queued: '排队中', deliveredGuidance: '已送达', deferred: '暂缓', failed: '失败' };
 const label = (value: string) => statusLabel[value] ?? value;
@@ -84,7 +88,7 @@ export class CollaborationView {
     const element = createElement('div', 'collab-surface');
     const taskView: TaskView = matchMedia('(max-width:850px)').matches ? 'list' : 'graph';
     element.innerHTML = `<div class="collab-heading"><h2 class="sr-only">研究协作</h2><p data-collab-observation class="collab-help"></p><div class="collab-heading-actions"><button type="button" class="button" data-collab-refresh>刷新观察</button><button type="button" class="button" data-collab-plan disabled>编辑计划</button><button type="button" class="button" data-collab-archive disabled>归档知识</button></div></div><div data-collab-navigation></div><div data-collab-summary></div><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
-      <div data-collab-progress></div><div class="collab-layout"><section class="collab-map" data-task-view="graph"><div class="collab-section-heading"><h3>数学任务</h3><div class="collab-task-view" role="group" aria-label="任务显示方式"><button type="button" data-collab-task-view="graph" aria-pressed="true">依赖图</button><button type="button" data-collab-task-view="list" aria-pressed="false">任务列表</button></div></div><div class="collab-map-tools"><label class="sr-only" for="task-search-${h(runId)}">搜索任务、类型或负责人</label><input id="task-search-${h(runId)}" data-collab-task-search type="search" placeholder="搜索任务、类型或负责人"><label class="sr-only" for="route-${h(runId)}">筛选证明路线</label><select id="route-${h(runId)}" data-collab-route><option value="">全部路线</option></select><label class="sr-only" for="task-state-${h(runId)}">筛选任务状态</label><select id="task-state-${h(runId)}" data-collab-task-state><option value="">全部状态</option>${taskStates.map(state => `<option value="${state}">${h(label(state))}</option>`).join('')}</select></div><div class="collab-task-result"><span data-collab-task-count role="status"></span><button type="button" class="text-button" data-collab-task-reset hidden>清除筛选</button></div><div data-collab-task-selection class="collab-task-selection" hidden></div><div data-collab-routes class="collab-route-summary"></div><p class="collab-graph-legend collab-help">实线 AND 前置 · 虚线 OR 路线</p><div data-collab-task-empty class="collab-task-empty" hidden></div><div class="collab-graph-scroll" tabindex="0" data-focus-key="task-graph-scroll" aria-label="任务依赖图，可横向滚动"><div data-collab-graph class="collab-graph"></div></div><div data-collab-task-list class="collab-task-list" data-focus-key="task-list-scroll" tabindex="0" aria-label="任务列表"></div></section>
+      <div data-collab-progress></div><div class="collab-layout"><section class="collab-map" data-task-view="graph"><div class="collab-section-heading"><h3>数学任务</h3><div class="collab-task-view" role="group" aria-label="任务显示方式"><button type="button" data-collab-task-view="graph" aria-pressed="true">依赖图</button><button type="button" data-collab-task-view="list" aria-pressed="false">任务列表</button></div></div><div class="collab-map-tools"><label class="sr-only" for="task-search-${h(runId)}">搜索任务、类型或负责人</label><input id="task-search-${h(runId)}" data-collab-task-search type="search" placeholder="搜索任务、类型或负责人"><label class="sr-only" for="route-${h(runId)}">筛选证明路线</label><select id="route-${h(runId)}" data-collab-route><option value="">全部路线</option></select><label class="sr-only" for="task-state-${h(runId)}">筛选任务状态</label><select id="task-state-${h(runId)}" data-collab-task-state><option value="">全部状态</option>${taskStates.map(state => `<option value="${state}">${h(label(state))}</option>`).join('')}</select></div><div class="collab-task-result"><span data-collab-task-count role="status"></span><button type="button" class="text-button" data-collab-task-reset hidden>清除筛选</button></div><div data-collab-task-selection class="collab-task-selection" hidden></div><div data-collab-routes class="collab-route-summary"></div><div data-collab-task-empty class="collab-task-empty" hidden></div><div class="collab-graph-frame"><div class="collab-graph-scroll" tabindex="0" data-focus-key="task-graph-scroll" aria-label="任务依赖图，可滚动、拖动平移和缩放"><div data-collab-graph class="collab-graph"></div></div><div class="collab-graph-legend"><p class="collab-help"><span class="collab-legend-and">AND 前置</span><span class="collab-legend-or">OR 路线</span><span>悬停查看上下游 · 拖动平移 · Ctrl 或 ⌘ 加滚轮缩放</span></p><div class="collab-graph-zoom" role="group" aria-label="依赖图缩放"><button type="button" data-collab-graph-zoom="out" aria-label="缩小">−</button><button type="button" data-collab-graph-zoom="reset" aria-label="恢复 100%" data-collab-graph-zoom-level>100%</button><button type="button" data-collab-graph-zoom="in" aria-label="放大">+</button><button type="button" data-collab-graph-zoom="fit">适应</button></div></div></div><div data-collab-task-list class="collab-task-list" data-focus-key="task-list-scroll" tabindex="0" aria-label="任务列表"></div></section>
       <section class="collab-inspector"><div class="collab-section-heading"><h3>任务检查器</h3><div class="collab-inspector-actions"><button type="button" class="text-button" data-collab-back-to-list hidden>返回任务列表</button><button type="button" class="text-button" data-collab-guide-task data-focus-key="guide-task">指导此任务</button></div></div><div data-collab-inspector></div><div data-collab-artifact class="collab-artifact" aria-live="polite"></div></section></div>
       <div data-collab-reviews></div><div data-collab-math-changes></div><section class="collab-agents"><div class="collab-section-heading"><h3>Agent 分工</h3><span class="collab-help">固定角色 / 当前会话角色</span></div><div data-collab-agents class="collab-agent-list"></div></section>
       <div data-collab-deliveries></div><div data-collab-guidance></div>
@@ -102,7 +106,7 @@ export class CollaborationView {
     element.querySelector('[data-collab-math-changes]')!.replaceWith(components.changes.element);
     element.querySelector('[data-collab-reviews]')!.replaceWith(components.reviews.element);
     element.append(components.knowledge.element);
-    const view: ViewState = { element, ...components, selectedTask: '', route: '', loading: false, taskSearchComposing: false,
+    const view: ViewState = { element, ...components, selectedTask: '', route: '', loading: false, taskSearchComposing: false, graphZoom: 1,
       navigation: new CollaborationNavigation(element, runId, () => this.provideGuidance(view, () => view.guidance.focus())),
       taskPositions: { graph: { top: 0, left: 0 }, list: { top: 0, left: 0 } },
       archiveBusy: false, active: false, artifactRequest: 0, scrollTop: 0, scrollLeft: 0, archives: [] };
@@ -118,6 +122,7 @@ export class CollaborationView {
     taskSearch.addEventListener('compositionend', () => { view.taskSearchComposing = false; this.scheduleTaskRender(view); });
     taskSearch.addEventListener('input', () => { if (!view.taskSearchComposing) this.scheduleTaskRender(view); });
     element.querySelector('[data-collab-task-state]')!.addEventListener('change', () => this.renderTasks(view));
+    this.bindGraphViewport(view, element.querySelector<HTMLElement>('.collab-graph-scroll')!);
     element.addEventListener('click', event => {
       const button = (event.target as Element).closest<HTMLButtonElement>('button'); if (!button) return;
       if (button.dataset.collabTask) {
@@ -127,6 +132,7 @@ export class CollaborationView {
         this.selectTask(view, button.dataset.collabTask, button.dataset.taskVersion, reveal);
       }
       else if (button.dataset.collabTaskView) this.switchTaskView(view, button.dataset.collabTaskView as TaskView);
+      else if (button.dataset.collabGraphZoom) this.zoomGraph(view, button.dataset.collabGraphZoom as 'in' | 'out' | 'reset' | 'fit');
       else if (button.hasAttribute('data-collab-task-reset')) { this.resetTaskFilters(view); element.querySelector<HTMLInputElement>('[data-collab-task-search]')!.focus({ preventScroll: true }); }
       else if (button.hasAttribute('data-collab-task-show-selected')) { this.resetTaskFilters(view); this.revealSelectedTask(view); }
       else if (button.hasAttribute('data-collab-task-inspect-selected')) this.selectTask(view, view.selectedTask, view.selectedVersion, true);
@@ -258,9 +264,24 @@ export class CollaborationView {
   private render(view: ViewState, run: WebRun) {
     const observation = view.observation;
     const summary = view.element.querySelector<HTMLElement>('[data-collab-summary]')!;
-    if (!observation) { patchSection(summary, '<div class="collab-empty">正在等待运行时任务计划。已有运行产物仍可从源码和报告查看。</div>'); return; }
+    if (!observation) { renderProgressSummary(summary); return; }
     const inspection = observation.inspection;
-    patchSection(summary, `<div class="collab-metrics"><div><span>证明任务</span><strong>${inspection.progress.checkedProofTasks} / ${inspection.tasks.filter(task => task.kind === 'lemma' || task.kind === 'goal').length}</strong><small>已记录检查</small></div><div><span>Agent</span><strong>${inspection.scheduling.working} / ${inspection.workers.length}</strong><small>实际工作中</small></div><div><span>最终验收 S3</span><strong class="${isAcceptedRun(run) ? 'collab-accepted' : ''}">${isAcceptedRun(run) ? '验收通过' : '尚未验收通过'}</strong><small>以完整报告独立判断</small></div></div>`);
+    // Proof tasks split by recorded proof status first, then by scheduling state; checked uses the server's count.
+    const proofTasks = inspection.tasks.filter(task => task.kind === 'lemma' || task.kind === 'goal');
+    const proofState = (task: Task) => task.proof.status === 'checked' ? 'checked' : task.proof.status === 'conditional' ? 'conditional'
+      : ['running', 'delivered', 'integrated'].includes(taskState(task)) ? 'running' : ['blocked', 'paused', 'stopped'].includes(taskState(task)) ? 'blocked' : 'pending';
+    const proofCount = (state: string) => proofTasks.filter(task => proofState(task) === state).length;
+    const scheduling = inspection.scheduling;
+    const meter = (name: string, segments: [string, string, number][]): Meter => ({ name, segments: segments.map(([key, label, count]) => ({ key, label, count })) });
+    renderProgressSummary(summary, {
+      proof: { checked: inspection.progress.checkedProofTasks, total: proofTasks.length, meter: meter('proof', [['checked', '已检查', inspection.progress.checkedProofTasks],
+        ['conditional', '有条件', inspection.progress.conditionalProofTasks], ['running', '进行中', proofCount('running')], ['blocked', '受阻或暂停', proofCount('blocked')], ['pending', '待调度', proofCount('pending')]]) },
+      // Same aggregate as the headline; workers outside the recorded dispatch state are shown separately.
+      agents: { working: scheduling.working, total: inspection.workers.length, meter: meter('agents', [['working', '工作中', scheduling.working], ['preparing', '准备中', scheduling.preparing],
+        ['idle', '空闲', scheduling.idle], ['stopping', '停止中', scheduling.stopping], ['stopped', '已停止', scheduling.stopped],
+        ['unscheduled', '未记录调度', Math.max(0, inspection.workers.length - scheduling.observedWorkers)]]) },
+      accepted: isAcceptedRun(run), completedResearch: inspection.progress.completedResearchTasks,
+    });
     this.renderTasks(view); this.renderInspector(view); this.renderAgents(view); view.progress.update(observation); view.changes.update(observation); view.reviews.update(observation, run);
     patchSection(view.element.querySelector('[data-collab-edits]')!, inspection.edits.length ? inspection.edits.map(edit => `<article class="collab-edit"><strong>${h(edit.id)} · ${h(edit.status)}</strong>${factList([['基准版本',edit.baseVersion],['应用版本',edit.planVersion],['重新检查',edit.recheck?.status ?? '未记录'],['影响任务',edit.affectedTasks?.join(', ')]])}${edit.reason ? `<p>${h(edit.reason)}</p>` : ''}${edit.recheck ? detailBlock('各任务重新检查记录',edit.recheck,`edit-${edit.id}`) : ''}</article>`).join('') : '<p class="collab-help">尚无人工计划编辑记录</p>');
     this.updateKnowledge(view, run);
@@ -320,83 +341,92 @@ export class CollaborationView {
   private renderTaskCards(view: ViewState, tasks: readonly Task[], mode: TaskView) {
     const observation = view.observation!;
     if (mode === 'list') {
-      const list = view.element.querySelector<HTMLElement>('[data-collab-task-list]')!;
-      const byId = new Map([...list.querySelectorAll<HTMLButtonElement>(':scope > [data-collab-task]')].map(card => [card.dataset.collabTask!, card]));
-      const retained = new Set(tasks.map(task => task.id));
-      for (const [id, card] of byId) if (!retained.has(id)) { card.remove(); list.querySelector(`[data-collab-task-dependencies="${CSS.escape(id)}"]`)?.remove(); }
-      let cursor: ChildNode | null = list.firstChild;
-      for (const task of tasks) {
-        let card = byId.get(task.id);
-        if (!card) { card = document.createElement('button'); card.type = 'button'; }
-        this.updateTaskCard(view, card, task, false);
-        if (card !== cursor) list.insertBefore(card, cursor);
-        cursor = card.nextSibling;
-        let dependencies = list.querySelector<HTMLElement>(`[data-collab-task-dependencies="${CSS.escape(task.id)}"]`);
-        if (!dependencies) { dependencies = createElement('p', 'collab-list-deps'); dependencies.dataset.collabTaskDependencies = task.id; }
-        const dependencyText = `AND 前置：${task.plannedDependencies.join(', ') || '无'}`;
-        if (dependencies.textContent !== dependencyText) dependencies.textContent = dependencyText;
-        if (dependencies !== cursor) list.insertBefore(dependencies, cursor);
-        cursor = dependencies.nextSibling;
-      }
+      renderTaskList(view.element.querySelector<HTMLElement>('[data-collab-task-list]')!,
+        tasks.map(task => ({ ...this.taskCard(view, task), dependencies: `AND 前置：${task.plannedDependencies.join(', ') || '无'}` })));
       return;
     }
     const allTasks = observation.inspection.tasks;
     const taskById = new Map(allTasks.map(task => [task.id, task]));
     const routes = observation.plan?.proofRoutes ?? [];
-    const targets = new Map<string, string[]>();
-    for (const route of routes) targets.set(route.targetTaskId, [...(targets.get(route.targetTaskId) ?? []), route.closingTaskId]);
-    const levels = new Map<string,number>(), visiting = new Set<string>();
-    const level = (task: Task): number => {
-      if (levels.has(task.id)) return levels.get(task.id)!; if (visiting.has(task.id)) return 0;
-      visiting.add(task.id);
-      const inputs = [...task.plannedDependencies, ...(targets.get(task.id) ?? [])];
-      const depth = inputs.reduce((max,id) => { const dependency = taskById.get(id); return dependency ? Math.max(max,level(dependency)+1) : max; },0);
-      visiting.delete(task.id); levels.set(task.id,depth); return depth;
-    };
-    const positions = new Map<string,{x:number;y:number}>(), counts = new Map<number,number>();
-    for (const task of allTasks) { const column = level(task), row = counts.get(column) ?? 0; counts.set(column,row+1); positions.set(task.id,{x:20+column*248,y:20+row*126}); }
-    const width = Math.max(330,...[...positions.values()].map(point=>point.x+238)), height = Math.max(160,...[...positions.values()].map(point=>point.y+116));
-    const path = (from:string,to:string,alternative:boolean) => { const a=positions.get(from),b=positions.get(to); if(!a||!b)return ''; const x=a.x+218,y=a.y+48,end=b.x,ey=b.y+48; return `<path class="${alternative?'collab-or-edge':'collab-and-edge'}" d="M ${x} ${y} C ${x+40} ${y}, ${end-40} ${ey}, ${end} ${ey}"/>`; };
+    const graphEdges: GraphEdge[] = [...allTasks.flatMap(task => task.plannedDependencies.filter(id => taskById.has(id)).map(id => ({ from: id, to: task.id, kind: 'and' as const }))),
+      ...routes.filter(route => taskById.has(route.closingTaskId) && taskById.has(route.targetTaskId)).map(route => ({ from: route.closingTaskId, to: route.targetTaskId, kind: 'or' as const }))];
+    // Layout covers every task so filtering never moves cards; it is recomputed only when the plan's structure changes.
+    const layoutKey = JSON.stringify([allTasks.map(task => task.id), graphEdges.map(edge => [edge.from, edge.to, edge.kind])]);
+    if (view.graphLayout?.key !== layoutKey) view.graphLayout = { key: layoutKey, layout: layoutTaskGraph(allTasks.map(task => task.id), graphEdges) };
+    const { positions, width, height } = view.graphLayout.layout;
     const visible = new Set(tasks.map(task => task.id));
-    const edges = tasks.flatMap(task=>task.plannedDependencies.filter(id => visible.has(id)).map(id=>path(id,task.id,false))).join('') + routes.filter(route => visible.has(route.closingTaskId) && visible.has(route.targetTaskId)).map(route=>path(route.closingTaskId,route.targetTaskId,true)).join('');
+    const edges = view.graphLayout.layout.paths.filter(({ edge }) => visible.has(edge.from) && visible.has(edge.to)).map(({ edge, d }) => ({ ...edge, d }));
     const graph = view.element.querySelector<HTMLElement>('[data-collab-graph]')!;
     if (graph.style.width !== `${width}px`) graph.style.width = `${width}px`;
     if (graph.style.height !== `${height}px`) graph.style.height = `${height}px`;
-    let svg = graph.querySelector<SVGSVGElement>(':scope > svg.collab-edges');
-    if (!svg) { svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.classList.add('collab-edges'); svg.setAttribute('aria-hidden', 'true'); graph.prepend(svg); }
-    if (svg.getAttribute('width') !== String(width)) svg.setAttribute('width', String(width));
-    if (svg.getAttribute('height') !== String(height)) svg.setAttribute('height', String(height));
-    if (svg.dataset.markup !== edges) { svg.innerHTML = edges; svg.dataset.markup = edges; }
-    const byId = new Map([...graph.querySelectorAll<HTMLButtonElement>(':scope > [data-collab-task]')].map(card => [card.dataset.collabTask!, card]));
-    const retained = new Set(tasks.map(task => task.id));
-    for (const [id, card] of byId) if (!retained.has(id)) card.remove();
-    let cursor: ChildNode | null = svg.nextSibling;
-    for (const task of tasks) {
-      let card = byId.get(task.id);
-      if (!card) { card = document.createElement('button'); card.type = 'button'; }
-      this.updateTaskCard(view, card, task, true);
-      const position = positions.get(task.id)!;
-      if (card.style.left !== `${position.x}px`) card.style.left = `${position.x}px`;
-      if (card.style.top !== `${position.y}px`) card.style.top = `${position.y}px`;
-      if (card !== cursor) graph.insertBefore(card, cursor);
-      cursor = card.nextSibling;
-    }
+    this.applyGraphZoom(view);
+    renderTaskGraph(graph, { cards: tasks.map(task => this.taskCard(view, task)), edges, positions, width, height, selected: view.selectedTask });
   }
-  private updateTaskCard(view: ViewState, card: HTMLButtonElement, task: Task, graph: boolean) {
-    const selected = view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version);
-    const content = `<span class="collab-task-top"><span>${h(kindLabel[task.kind])}</span><span>${h(label(taskState(task)))}</span></span><strong>${h(task.id)}</strong><span class="collab-task-objective">${h(task.objective)}</span><small>${h(task.owner ?? '待分配')} · ${h(label(task.proof.status))}</small>`;
-    card.className = `collab-task${selected ? ' selected' : ''}`;
-    card.dataset.collabTask = task.id; card.dataset.focusKey = `${graph ? 'graph' : 'list'}-${task.id}`;
-    card.setAttribute('aria-pressed', String(selected));
-    if (card.dataset.content !== content) { card.innerHTML = content; card.dataset.content = content; }
+  private bindGraphViewport(view: ViewState, pane: HTMLElement) {
+    // Dragging empty space pans; cards keep their click behaviour and touch keeps native scrolling.
+    let drag: { id: number; x: number; y: number; left: number; top: number } | undefined;
+    pane.addEventListener('pointerdown', event => {
+      if (event.pointerType !== 'mouse' || event.button !== 0 || (event.target as Element).closest('button')) return;
+      if (event.offsetX >= pane.clientWidth || event.offsetY >= pane.clientHeight) return;
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: pane.scrollLeft, top: pane.scrollTop };
+      pane.setPointerCapture(event.pointerId); pane.classList.add('panning'); pane.focus({ preventScroll: true }); event.preventDefault();
+    });
+    pane.addEventListener('pointermove', event => {
+      if (drag?.id !== event.pointerId) return;
+      pane.scrollLeft = drag.left - (event.clientX - drag.x); pane.scrollTop = drag.top - (event.clientY - drag.y);
+    });
+    pane.addEventListener('lostpointercapture', () => { drag = undefined; pane.classList.remove('panning'); });
+    pane.addEventListener('wheel', event => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      this.zoomGraph(view, view.graphZoom * Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015)), { x: event.clientX, y: event.clientY });
+    }, { passive: false });
+    pane.addEventListener('keydown', event => {
+      if (event.target !== pane || event.altKey || event.ctrlKey || event.metaKey) return;
+      const action = event.key === '+' || event.key === '=' ? 'in' : event.key === '-' ? 'out' : event.key === '0' ? 'reset' : undefined;
+      if (action) { event.preventDefault(); this.zoomGraph(view, action); }
+    });
+  }
+  private zoomGraph(view: ViewState, target: number | 'in' | 'out' | 'reset' | 'fit', anchor?: { x: number; y: number }) {
+    const pane = view.element.querySelector<HTMLElement>('.collab-graph-scroll')!, layout = view.graphLayout?.layout;
+    const previous = view.graphZoom;
+    const next = target === 'in' ? previous * 1.2 : target === 'out' ? previous / 1.2 : target === 'reset' ? 1
+      : target === 'fit' ? (layout ? Math.min(pane.clientWidth / layout.width, parseFloat(getComputedStyle(pane).maxHeight) / layout.height, 1) : 1) : target;
+    view.graphZoom = Math.min(1.6, Math.max(0.4, Math.round(next * 100) / 100));
+    // Keep the point under the pointer (or the viewport centre) in place.
+    const box = pane.getBoundingClientRect(), x = anchor ? anchor.x - box.left : pane.clientWidth / 2, y = anchor ? anchor.y - box.top : pane.clientHeight / 2;
+    const contentX = (pane.scrollLeft + x) / previous, contentY = (pane.scrollTop + y) / previous;
+    this.applyGraphZoom(view);
+    if (target === 'fit') { pane.scrollLeft = 0; pane.scrollTop = 0; }
+    else { pane.scrollLeft = contentX * view.graphZoom - x; pane.scrollTop = contentY * view.graphZoom - y; }
+  }
+  private applyGraphZoom(view: ViewState) {
+    const graph = view.element.querySelector<HTMLElement>('[data-collab-graph]')!, value = view.graphZoom === 1 ? '' : String(view.graphZoom);
+    if (graph.style.zoom !== value) graph.style.zoom = value;
+    const level = view.element.querySelector<HTMLElement>('[data-collab-graph-zoom-level]')!, text = `${Math.round(view.graphZoom * 100)}%`;
+    if (level.textContent !== text) level.textContent = text;
+    for (const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-graph-zoom="in"],[data-collab-graph-zoom="out"]'))
+      button.disabled = button.dataset.collabGraphZoom === 'in' ? view.graphZoom >= 1.6 : view.graphZoom <= 0.4;
+  }
+  private taskCard(view: ViewState, task: Task): TaskCard {
+    const state = taskState(task);
+    return { id: task.id, version: task.version, kind: task.kind, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), objective: task.objective,
+      owner: task.owner ?? '待分配', proof: task.proof.status, proofLabel: label(task.proof.status),
+      selected: view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version) };
   }
   private updateTaskSelection(view: ViewState) {
+    // Graph and list cards are component-rendered; other task links (agents, frontier, deliveries) are toggled here.
     for (const card of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-task]')) {
+      if (card.closest('[data-collab-graph],[data-collab-task-list],[data-collab-agents]')) continue;
       const task = view.observation?.inspection.tasks.find(item => item.id === card.dataset.collabTask);
       const selected = Boolean(task && view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version));
       card.classList.toggle('selected', selected); card.setAttribute('aria-pressed', String(selected));
     }
-    if (view.observation) this.renderTaskSelection(view, this.visibleTasks(view), view.observation.inspection.tasks);
+    if (view.observation) {
+      const tasks = this.visibleTasks(view);
+      this.renderTaskCards(view, tasks, this.taskMode(view)); this.renderAgents(view);
+      this.renderTaskSelection(view, tasks, view.observation.inspection.tasks);
+    }
   }
   private renderInspector(view: ViewState) {
     const observation = view.observation, record = observation && recordedTask(observation, view.selectedTask, view.selectedVersion), task = record?.task;
@@ -417,34 +447,16 @@ export class CollaborationView {
       <h5>源码与检查回执</h5><p class="collab-help">每份产物固定到其任务版本、commit 和环境。</p><div class="collab-artifact-links">${sources.map(source=>`<button type="button" class="button" data-collab-source="${h(source.taskId)}" data-source-version="${h(source.taskVersion)}" data-source-snapshot="${h(taskSourceKey(source))}" data-focus-key="source-${h(taskSourceKey(source))}">${source.taskVersion===current?.version?'当前':'历史'}源码 · ${h(source.file)} · ${h(source.commit.slice(0, 8))}</button>`).join('')}${!sources.some(source=>source.taskVersion===task.version)?`<button type="button" class="button" data-collab-source="${h(task.id)}" data-source-version="${h(task.version)}" data-focus-key="source-${h(task.id)}-${h(task.version)}">读取${historical ? '所选历史' : '当前'}版本源码</button>`:''}${checks.map(check=>`<button type="button" class="button" data-collab-check="${h(check.id)}" data-check-identity="${h(taskCheckKey(check))}" data-focus-key="check-${h(taskCheckKey(check))}">${check.taskVersion===current?.version?'当前':'历史'}检查 · ${h(check.id)}</button>`).join('')}</div>${checks.length?'':'<p class="collab-help">尚无已归档检查回执</p>'}`);
   }
   private renderAgents(view: ViewState) {
-    const root = view.element.querySelector<HTMLElement>('[data-collab-agents]')!;
     const workers = view.observation?.inspection.workers ?? [];
-    const byId = new Map([...root.querySelectorAll<HTMLElement>(':scope > .collab-agent')].map(card => [card.dataset.workerId!, card]));
-    const retained = new Set(workers.map(worker => worker.id));
-    for (const [id, card] of byId) if (!retained.has(id)) card.remove();
-    let cursor: ChildNode | null = root.firstChild;
-    for (const worker of workers) {
-      let card = byId.get(worker.id);
-      if (!card) {
-        card = createElement('article', 'collab-agent'); card.dataset.workerId = worker.id;
-        card.innerHTML = `<div class="collab-section-heading"><strong>${h(worker.id)}</strong><span class="collab-agent-actions"><button type="button" class="text-button" data-collab-deliveries-worker="${h(worker.id)}" data-focus-key="deliveries-worker-${h(worker.id)}">交付</button><button type="button" class="text-button" data-collab-guide-worker="${h(worker.id)}" data-focus-key="guide-worker-${h(worker.id)}">指导</button></span></div><span class="collab-eyebrow" data-worker-role></span><dl class="collab-facts" data-worker-facts><div><dt>调度</dt><dd data-worker-fact="scheduling"></dd></div><div><dt>会话阶段</dt><dd data-worker-fact="phase"></dd></div><div><dt>轮次</dt><dd data-worker-fact="turns"></dd></div></dl><div class="collab-agent-assignment"><span>当前任务</span><button type="button" class="text-button" data-worker-task></button></div><div data-worker-wait></div><div data-worker-failure></div><div data-worker-recovery></div>`;
-      }
-      const role = card.querySelector<HTMLElement>('[data-worker-role]')!;
-      const roleText = `${worker.role} / ${worker.sessionRole??'无当前会话'}`; if (role.textContent !== roleText) role.textContent = roleText;
-      const facts: Record<string, string> = { scheduling: worker.scheduling?.status ?? '未记录', phase: worker.phase, turns: String(worker.turns) };
-      for (const [key, value] of Object.entries(facts)) { const node = card.querySelector<HTMLElement>(`[data-worker-fact="${key}"]`)!; if (node.textContent !== value) node.textContent = value; }
-      const task = card.querySelector<HTMLButtonElement>('[data-worker-task]')!;
-      task.hidden = !worker.task;
-      if (worker.task) { task.dataset.collabTask = worker.task; task.dataset.focusKey = `agent-task-${worker.id}`; task.setAttribute('aria-label', `查看任务 ${worker.task}`); const text = `${worker.task} →`; if (task.textContent !== text) task.textContent = text; }
-      else { delete task.dataset.collabTask; delete task.dataset.focusKey; task.removeAttribute('aria-label'); if (task.textContent !== '未分配') task.textContent = '未分配'; }
-      patchSection(card.querySelector<HTMLElement>('[data-worker-wait]')!, worker.dispatchWait.status !== 'unknown' ? detailBlock(`等待原因 · ${worker.dispatchWait.status}`, worker.dispatchWait, `wait-${worker.id}`) : '');
-      patchSection(card.querySelector<HTMLElement>('[data-worker-failure]')!, worker.lastFailure ? detailBlock('最近故障', worker.lastFailure, `failure-${worker.id}`) : '');
-      patchSection(card.querySelector<HTMLElement>('[data-worker-recovery]')!, worker.recovery ? detailBlock('恢复状态', worker.recovery, `recovery-${worker.id}`) : '');
-      if (card !== cursor) root.insertBefore(card, cursor);
-      cursor = card.nextSibling;
-    }
-    if (!workers.length && !root.querySelector(':scope > .collab-help')) patchSection(root, '<p class="collab-help">尚无 Agent 调度记录</p>');
-    else if (workers.length) root.querySelector(':scope > .collab-help')?.remove();
+    renderAgentCards(view.element.querySelector<HTMLElement>('[data-collab-agents]')!, workers.map(worker => ({
+      id: worker.id, role: `${worker.role} / ${worker.sessionRole ?? '无当前会话'}`, scheduling: worker.scheduling?.status ?? '未记录', schedulingStatus: worker.scheduling?.status ?? 'unknown',
+      phase: worker.phase, turns: String(worker.turns), task: worker.task,
+      details: [
+        ...(worker.dispatchWait.status !== 'unknown' ? [{ title: `等待原因 · ${worker.dispatchWait.status}`, value: worker.dispatchWait, id: `wait-${worker.id}` }] : []),
+        ...(worker.lastFailure ? [{ title: '最近故障', value: worker.lastFailure, id: `failure-${worker.id}` }] : []),
+        ...(worker.recovery ? [{ title: '恢复状态', value: worker.recovery, id: `recovery-${worker.id}` }] : []),
+      ],
+    })));
   }
   private updateCommands(view: ViewState) {
     const refresh = view.element.querySelector<HTMLButtonElement>('[data-collab-refresh]')!;

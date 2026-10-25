@@ -11,8 +11,10 @@ export function recordedTask(observation: WebObservation, id: string, version?: 
 
 export const taskCheckKey = (check: WebCheckReceipt) => JSON.stringify([check.id, check.taskId, check.taskVersion, check.commit, check.sourceDigest, check.environmentDigest]);
 const kindLabels: Record<string, string> = { progress: '研究进展', research: '研究发现', proof: '证明交付', review: '审阅', backtranslation: '声明回译', 'statement-review': '声明审阅', failure: '失败报告' };
-const statusLabels: Record<string, string> = { advisory: '提示性材料', conditional: '有条件结果', verified: '记录为已验证', failed: '失败', superseded: '已被替代', accepted: '审阅接受', changes_requested: '请求修改', open: '待解决', parked: '已停放', reopened: '已重开' };
+const statusLabels: Record<string, string> = { active: '生效中', advisory: '提示性材料', conditional: '有条件结果', verified: '记录为已验证', failed: '失败', superseded: '已被替代', accepted: '审阅接受', changes_requested: '请求修改', open: '待解决', parked: '已停放', reopened: '已重开' };
 const label = (value: string) => statusLabels[value] ?? value;
+const proofLabels: Record<string, string> = { none: '尚无证明', conditional: '有条件结果', checked: '已记录检查', stale: '旧版本证据', unverified: '未验证' };
+const scopeLabels: Record<string, string> = { 'assigned-local-inference': '当前任务的局部推理' };
 
 /** Browse recorded mathematical frontiers and immutable Agent publications without inferring acceptance. */
 export class ResearchProgressView {
@@ -68,13 +70,30 @@ export class ResearchProgressView {
     return record ? `<button type="button" class="text-button collab-reference" data-collab-task="${h(id)}" data-task-version="${h(version)}" data-focus-key="${h(key)}" aria-label="查看任务 ${h(id)} 的版本 ${h(version)}">${h(id)}${record.historical ? ' · 历史版本' : ''}</button>` : `<span class="collab-reference">${h(id)} · ${version ? '合同未保留' : '版本未记录'}</span>`;
   }
 
+  private routeSteps(routeId: string) {
+    const route = this.observation!.inspection.mathematics.snapshot.routes.find(item => item.routeId === routeId);
+    if (!route) return '';
+    const total = route.prerequisiteTaskIds.length, remaining = route.remainingPrerequisiteTaskIds.length;
+    const closing = route.closingStatus === 'checked' ? 'done' : route.closingStatus === 'conditional' ? 'partial' : 'waiting';
+    const steps: [string, string, string][] = [
+      [total ? remaining ? 'partial' : 'done' : 'done', '前置', total ? `${total - remaining} / ${total} 已就绪${remaining ? ` · 等待 ${route.remainingPrerequisiteTaskIds.join(', ')}` : ''}` : '无额外前置'],
+      [closing, `收束 ${route.closingTaskId}`, proofLabels[route.closingStatus] ?? route.closingStatus],
+      [route.connection === 'closed-by-original-check' ? 'done' : 'waiting', `连通 ${route.targetTaskId}`, route.connection === 'closed-by-original-check' ? '已由原题检查连通' : '等待原题检查'],
+    ];
+    return `<ol class="collab-route-steps" aria-label="路线 ${h(routeId)} 的记录进度">${steps.map(([state, title, detail]) => `<li data-step-state="${state}"><strong>${h(title)}</strong><span>${h(detail)}</span></li>`).join('')}</ol>`;
+  }
+
   private renderOverview() {
     const observation = this.observation!, snapshot = observation.inspection.mathematics.snapshot;
     const refs = (items: { taskId: string; taskDigest: string | null }[], key: string) => items.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `${key}-${index}`)).join('') || '<span class="collab-help">未记录开放前沿</span>';
-    patchSection(this.overview.querySelector('[data-research-frontier]')!, snapshot.goals.map(goal => `<article class="collab-frontier-goal" data-frontier-goal="${h(goal.taskId)}"><div class="collab-section-heading">${this.taskLink(goal.taskId, goal.taskDigest, `goal-${goal.taskId}`)}<span class="badge">${goal.closed ? '记录中局部闭合' : '待推进'}</span></div>${goal.routeCombination === 'any' && goal.alternatives?.length ? `<p class="collab-help">OR：以下路线择一</p>${goal.alternatives.map(route => `<div class="collab-frontier-route"><strong>${h(route.routeId)}</strong><div class="collab-reference-list">${refs(route.frontier, `frontier-${goal.taskId}-${route.routeId}`)}</div>${route.missingDependencies.length ? `<p>缺失依赖：${h(route.missingDependencies.join(', '))}</p>` : ''}${route.parkedBy.length ? `<p>停放依据：${h(route.parkedBy.join(', '))}</p>` : ''}</div>`).join('')}` : `<div class="collab-reference-list">${refs(goal.frontier, `frontier-${goal.taskId}`)}</div>`}${goal.missingDependencies.length ? `<p class="collab-help">缺失依赖：${h(goal.missingDependencies.join(', '))}</p>` : ''}</article>`).join('') || `<p class="collab-help">${snapshot.blockers.length ? '本次观察尚无原始目标的证明前沿' : '本次观察尚无原始目标的证明前沿，也没有已记录的数学阻塞'}</p>`);
+    patchSection(this.overview.querySelector('[data-research-frontier]')!, snapshot.goals.map(goal => `<article class="collab-frontier-goal" data-frontier-goal="${h(goal.taskId)}"><div class="collab-section-heading">${this.taskLink(goal.taskId, goal.taskDigest, `goal-${goal.taskId}`)}<span class="badge">${goal.closed ? '记录中局部闭合' : '待推进'}</span></div>${goal.routeCombination === 'any' && goal.alternatives?.length ? `<p class="collab-help">OR：以下路线择一</p>${goal.alternatives.map(route => `<div class="collab-frontier-route"><strong>${h(route.routeId)}</strong>${this.routeSteps(route.routeId)}<div class="collab-reference-list"><span class="collab-reference-caption">当前前沿</span>${refs(route.frontier, `frontier-${goal.taskId}-${route.routeId}`)}</div>${route.missingDependencies.length ? `<p>缺失依赖：${h(route.missingDependencies.join(', '))}</p>` : ''}${route.parkedBy.length ? `<p>停放依据：${h(route.parkedBy.join(', '))}</p>` : ''}</div>`).join('')}` : `<div class="collab-reference-list">${refs(goal.frontier, `frontier-${goal.taskId}`)}</div>`}${goal.missingDependencies.length ? `<p class="collab-help">缺失依赖：${h(goal.missingDependencies.join(', '))}</p>` : ''}</article>`).join('') || `<p class="collab-help">${snapshot.blockers.length ? '本次观察尚无原始目标的证明前沿' : '本次观察尚无原始目标的证明前沿，也没有已记录的数学阻塞'}</p>`);
     this.overview.dataset.empty = String(!snapshot.goals.length && !snapshot.blockers.length);
+    const blockerCount = this.overview.querySelector<HTMLElement>('.collab-research-blocker-heading>.collab-help')!;
+    const openBlockers = snapshot.blockers.filter(blocker => !['parked', 'superseded'].includes(blocker.status)).length;
+    const blockerText = snapshot.blockers.length ? `${openBlockers} 项生效 · 共 ${snapshot.blockers.length} 项记录` : '作用范围与重开条件';
+    if (blockerCount.textContent !== blockerText) blockerCount.textContent = blockerText;
     patchSection(this.overview.querySelector('[data-research-waiting]')!, observation.inspection.waiting ? `<div class="collab-research-waiting"><strong>研究正在等待新的数学输入</strong><p>${h(observation.inspection.waiting.reason)}</p>${factList([['等待任务', observation.inspection.waiting.taskIds.join(', ') || '未记录'], ['关联目标', observation.inspection.waiting.goalIds.join(', ') || '未记录']])}</div>` : '');
-    patchSection(this.overview.querySelector('[data-research-blockers]')!, snapshot.blockers.map(blocker => `<article class="collab-research-blocker" data-research-blocker="${h(blocker.id)}"><div class="collab-section-heading">${this.taskLink(blocker.taskId, blocker.taskDigest, `blocker-${blocker.id}`)}<span class="badge">${h(label(blocker.status))}</span></div><p>${h(blocker.mechanism)}</p>${factList([['阻塞 ID', blocker.id], ['作用范围', blocker.scope], ['路线', blocker.routeId ?? '未限定路线'], ['证据性质', label(blocker.evidenceStatus)]])}${detailBlock('重开条件', blocker.reopenOn, `reopen-${blocker.id}`)}${blocker.evidenceRefs?.length ? detailBlock('原始提示引用', blocker.evidenceRefs, `blocker-refs-${blocker.id}`) : ''}</article>`).join('') || '<p class="collab-help">本次观察没有已记录的数学阻塞</p>');
+    patchSection(this.overview.querySelector('[data-research-blockers]')!, snapshot.blockers.map(blocker => `<article class="collab-research-blocker" data-research-blocker="${h(blocker.id)}"><div class="collab-section-heading">${this.taskLink(blocker.taskId, blocker.taskDigest, `blocker-${blocker.id}`)}<span class="badge">${h(label(blocker.status))}</span></div><p><code class="collab-blocker-mechanism">${h(blocker.mechanism)}</code></p>${factList([['阻塞 ID', blocker.id], ['作用范围', scopeLabels[blocker.scope] ?? blocker.scope], ['路线', blocker.routeId ?? '未限定路线'], ['证据性质', label(blocker.evidenceStatus)]])}${detailBlock('重开条件', blocker.reopenOn, `reopen-${blocker.id}`)}${blocker.evidenceRefs?.length ? detailBlock('原始提示引用', blocker.evidenceRefs, `blocker-refs-${blocker.id}`) : ''}</article>`).join('') || '<p class="collab-help">本次观察没有已记录的数学阻塞</p>');
   }
 
   private filtered() {

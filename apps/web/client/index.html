@@ -11,12 +11,7 @@
 </head>
 <body data-mobile-view="compose">
   <a class="skip-link" href="#main">跳到工作区</a>
-  <header class="topbar">
-    <button type="button" id="open-history" class="icon-button" aria-label="打开研究记录" title="研究记录"><i data-lucide="panel-left"></i></button>
-    <a class="brand" href="https://likc1606.github.io/theorem-os/" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
-    <span class="topbar-divider" aria-hidden="true"></span><span id="workspace-title" class="workspace-name">新研究</span>
-    <div class="topbar-actions"><button type="button" id="open-settings" class="model-menu" title="研究配置" aria-haspopup="dialog"><i data-lucide="sliders-horizontal"></i><span id="current-model">模型配置</span><i data-lucide="chevron-down"></i></button><span id="connection-status" class="connection-status" role="status"><span class="status-dot"></span>连接中</span></div>
-  </header>
+  <header class="topbar" id="topbar"></header>
   <main id="main" tabindex="-1">
     <div id="global-notice" class="global-notice" role="alert" hidden><i data-lucide="triangle-alert"></i><span id="global-notice-text"></span><button type="button" id="retry-connection" class="text-button" title="重新连接" aria-label="重新连接"><i data-lucide="refresh-cw"></i><span>重新连接</span></button></div>
     <nav class="mobile-switch" role="tablist" aria-label="工作区视图"><button type="button" id="mobile-compose" role="tab" aria-selected="true" aria-controls="compose-panel" data-mobile-view="compose"><i data-lucide="message-square"></i>对话</button><button type="button" id="mobile-runs" role="tab" aria-selected="false" aria-controls="runs-panel" tabindex="-1" data-mobile-view="runs"><i data-lucide="panel-right"></i>工作区<span id="mobile-run-count" class="count">0</span></button></nav>

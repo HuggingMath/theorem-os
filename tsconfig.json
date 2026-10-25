@@ -12,7 +12,9 @@
     "noEmit": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["node"]
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
   },
-  "include": ["bin/**/*.ts", "scripts/**/*.ts", "src/**/*.ts", "apps/**/*.ts"]
+  "include": ["bin/**/*.ts", "scripts/**/*.ts", "src/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx"]
 }
