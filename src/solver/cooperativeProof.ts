@@ -13,6 +13,7 @@ import { hasDeterministicLeanFailure, proofReuseEnvironment } from './proofReuse
 import { TaskProofCache, type TaskVerificationArtifact } from './taskProofCache';
 import { formalVerificationToolIdentity, type MathematicsVerifierBatchItem } from '../math/verifier';
 import { hasTaskConnectionCheck } from './taskConnections';
+import { compactTaskSources } from './taskProjection';
 
 export { TaskProofCache } from './taskProofCache';
 
@@ -20,6 +21,8 @@ export type DeclarationChange = { file: string; name: string; before?: string; a
 export type TaskProjectionReuse = Readonly<{ schema: 'theorem-os.task-projection-reuse.v1'; projectionCommit: string;
   checkedProjectionCommit: string; projectionTree: string; inputDigest: string }>;
 export type TaskProof = ProofCheck & { taskDigest: string; seedCommit: string; changes: DeclarationChange[];
+  /** Host-attributed projection choice; restored or modified records cannot authorize it. */
+  projectionMode?: 'compact';
   imports?: { file: string; module: string }[];
   projectionReuse?: TaskProjectionReuse;
   /** Set by the host after checking the exact projection and its receipts. */
@@ -116,7 +119,8 @@ export function taskChanges(problem: SolverProblem, worktree: string, sourceComm
 
 /** Deterministic proof projection shared by the checker and the host receipt boundary. One immutable canonical snapshot
  * shares source reads and declaration indexes across its targets. */
-export function createTaskSourceProjector(problem: SolverProblem, worktree: string, sourceCommit: string) {
+export function createTaskSourceProjector(problem: SolverProblem, worktree: string, sourceCommit: string,
+  options: { compact?: boolean; preserved?: readonly { file: string; name: string }[] } = {}) {
   problem = structuredClone(problem);
   const sourceSnapshot = new Map(problem.ownedFiles.map(file => [file,
     committedSource(worktree, sourceCommit, `${problem.projectRelative}/${file}`)]));
@@ -243,7 +247,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       }
       sources.set(file, source);
     }
-    return sources;
+    return options.compact ? compactTaskSources(problem, sources, task, retainedGoals, options.preserved) : sources;
   };
 }
 
@@ -260,6 +264,24 @@ export async function checkTaskProof(problem: SolverProblem, worktree: string, s
 export async function checkTaskProofs(problem: SolverProblem, worktree: string, sourceCommit: string,
   requests: readonly TaskProofRequest[], env: NodeJS.ProcessEnv, signal: AbortSignal, timeoutMs = 180_000,
   environmentDigest = mathDigest(canonicalMathJson(env)), cache?: TaskProofCache): Promise<TaskProof[]> {
+  // Keep multi-target checks on their shared full projection. Single-target checks can
+  // omit unrelated plain helpers without fragmenting the existing 32-target batches.
+  const proofs = await checkTaskProofsWithProjection(problem, worktree, sourceCommit, requests, env, signal,
+    timeoutMs, environmentDigest, cache, requests.length === 1);
+  // Automatic tactics may discover declarations absent from their source text.
+  // Retry only Lean elaboration failures; forbidden-axiom and draft-source
+  // rejections cannot be repaired by restoring unrelated helpers.
+  if (proofs.some(proof => proof.projectionMode === 'compact' && !proof.passed &&
+      hasDeterministicLeanFailure(proof.verification) && proof.verification.results.some(result =>
+        result.status === 'failed' && (!result.error || /^Lean exited with status 1\.?$/u.test(result.error.trim())))))
+    return checkTaskProofsWithProjection(problem, worktree, sourceCommit, requests, env, signal,
+      timeoutMs, environmentDigest, cache, false);
+  return proofs;
+}
+
+async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: string, sourceCommit: string,
+  requests: readonly TaskProofRequest[], env: NodeJS.ProcessEnv, signal: AbortSignal, timeoutMs: number,
+  environmentDigest: string, cache: TaskProofCache | undefined, compact: boolean): Promise<TaskProof[]> {
   signal.throwIfAborted();
   if (!requests.length) return [];
   problem = structuredClone(problem);
@@ -295,9 +317,14 @@ export async function checkTaskProofs(problem: SolverProblem, worktree: string, 
         taskDigest: taskVersion(task), sources: projectSources(task, retainedGoals, conditions),
         expectedType: task.kind === 'lemma' ? conditions.length ? `∀ ${binders}, ${task.type}` : task.type : undefined };
     });
-    const sources = prepared[0]!.sources;
-    if (prepared.some(item => canonicalMathJson([...item.sources]) !== canonicalMathJson([...sources])))
+    const fullSources = prepared[0]!.sources;
+    if (prepared.some(item => canonicalMathJson([...item.sources]) !== canonicalMathJson([...fullSources])))
       throw new Error('math_task_batch_projection_mismatch');
+    // Every declaration changed by this delivery remains checked. Only inherited helpers
+    // may be omitted; an unused new sibling must not enter canonical without elaboration.
+    const sources = compact ? compactTaskSources(problem, fullSources, prepared[0]!.task, prepared[0]!.retainedGoals,
+      prepared.flatMap(item => item.changes)) : fullSources;
+    const compacted = compact && canonicalMathJson([...sources]) !== canonicalMathJson([...fullSources]);
     const project = path.join(checkout, problem.projectRelative);
     for (const [file, source] of sources) fs.writeFileSync(path.join(project, file), source);
     const commit = commitSolverProjection(problem, checkout, `Check cooperative tasks ${requests.map(item => item.task.id).join(', ')}`);
@@ -372,6 +399,7 @@ export async function checkTaskProofs(problem: SolverProblem, worktree: string, 
         { name: task.theoremName!, file: task.proofPath! }, result.declarationReferences, environmentDigest) : undefined;
       const proof: TaskProof = { commit: sourceCommit, sourceDigest, passed, verification,
         taskDigest, seedCommit: assignment.seedCommit, changes, ...(imports.length ? { imports } : {}),
+        ...(compacted ? { projectionMode: 'compact' as const } : {}),
         ...(projectionReuse ? { projectionReuse: { ...projectionReuse } } : {}),
         ...(references ? { references } : {}),
         ...(conditions.length ? { conditions: conditions.map(dependency => ({ taskId: dependency.id, taskDigest: taskVersion(dependency) })) } : {}) };

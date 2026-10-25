@@ -8,6 +8,7 @@ import { assignmentDeliveryFile, type CooperativeAction } from '../src/solver/ta
 import { commitSolverSources, git, type SolverProblem } from '../src/solver/problem';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { proofReadyRecordSchema } from '../src/solver/proofReady';
+import { setWorkerResearchPhase, WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { verifiedBatch } from './helpers/verifier';
@@ -105,6 +106,39 @@ describe('host-owned proof readiness intake', () => {
     append(); await cooperative.pulse(workers[1].id);
     expect(host.verify).toHaveBeenCalledTimes(calls); expect(callback).toHaveBeenCalledOnce();
     expect(cooperative.pendingProofReady(workers[1], action)).toBeUndefined();
+  });
+
+  it.each([false, true])('restores a checking worker after a frozen check settles (failure: %s)', async failed => {
+    state.workers = workers.map(worker => ({ ...worker, phase: 'running', turns: 0 }));
+    append(); await cooperative.pulse(workers[1].id);
+    cooperative.proofReadyFrozen(workers[1], action, saveHelper());
+    const pending = deferred();
+    const original = cooperative.deliver.bind(cooperative);
+    vi.spyOn(cooperative, 'deliver').mockImplementationOnce(async (...args) => {
+      await pending.promise; return original(...args);
+    });
+    const lifecycle = new WorkerProofLifecycle({ state, research: state.workers[1], worker: workers[1],
+      cooperation: cooperative, close: async () => {}, save: () => saves.push(structuredClone(state)),
+      emit: () => {}, checked: () => {} });
+    const check = lifecycle.resumeFrozen(action);
+    const result = failed ? expect(check).rejects.toThrow('fixture_check_failed') : expect(check).resolves.toBe(true);
+    await vi.waitFor(() => expect(state.workers![1].phase).toBe('checking'));
+    expect(state.phase).toBe('checking');
+    if (failed) pending.reject(new Error('fixture_check_failed')); else pending.resolve();
+    await result;
+    expect(state.workers[1].phase).toBe('running'); expect(state.phase).toBe('running');
+    expect(saves.at(-1)?.workers?.[1].phase).toBe('running');
+  });
+
+  it('retains the root checking phase only while another worker still checks', () => {
+    state.workers = workers.map(worker => ({ ...worker, phase: 'checking', turns: 0 }));
+    setWorkerResearchPhase(state, state.workers[1], 'running');
+    expect(state.workers[1].phase).toBe('running'); expect(state.phase).toBe('checking');
+    setWorkerResearchPhase(state, state.workers[0], 'running');
+    expect(state.phase).toBe('running');
+    setWorkerResearchPhase(state, state, 'checking');
+    setWorkerResearchPhase(state, state, 'running');
+    expect(state.phase).toBe('running');
   });
 
   it('requires a newly consumed ready event before freezing an unfrozen request after restart', async () => {

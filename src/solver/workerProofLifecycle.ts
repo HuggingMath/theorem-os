@@ -11,6 +11,13 @@ import type { CooperativeAction } from './tasks';
 
 type TaskAction = Extract<CooperativeAction, { kind: 'task' }>;
 
+/** A completed check must not keep a waiting worker in the checking phase. */
+export function setWorkerResearchPhase(state: SolverRunState, research: Pick<SolverRunState, 'phase'>,
+  phase: 'running' | 'checking'): void {
+  research.phase = phase;
+  state.phase = state !== research && state.workers?.some(worker => worker.phase === 'checking') ? 'checking' : phase;
+}
+
 /** Owns the writer-stop, immutable-snapshot, independent-check sequence for one worker. */
 export class WorkerProofLifecycle {
   constructor(private readonly input: {
@@ -78,15 +85,17 @@ export class WorkerProofLifecycle {
   private async checkSnapshot(assignment: TaskAction, ready: ProofReadyRecord): Promise<void> {
     const { state, research, worker, cooperation, save, emit, checked } = this.input;
     if (!ready.snapshotCommit) throw new Error('math_proof_ready_snapshot_missing');
-    state.phase = research.phase = 'checking'; save();
-    const delivery = await cooperation.deliver(worker, assignment, ready.snapshotCommit);
-    research.check = delivery.check;
-    cooperation.proofReadyCompleted(worker, assignment, delivery.check);
-    emit('proof_ready_checked', { receiptId: ready.id, readyId: ready.id, taskId: ready.taskId, taskDigest: ready.taskDigest,
-      workerId: ready.workerId, assignmentKey: ready.assignmentKey, seedCommit: ready.seedCommit,
-      commit: ready.snapshotCommit, sourceDigest: ready.sourceDigest,
-      receiptIds: delivery.check?.verification.results.map(result => result.receiptId),
-      passed: delivery.check?.passed === true, conditional: ready.evidence === 'conditional' });
-    checked(); save();
+    setWorkerResearchPhase(state, research, 'checking'); save();
+    try {
+      const delivery = await cooperation.deliver(worker, assignment, ready.snapshotCommit);
+      research.check = delivery.check;
+      cooperation.proofReadyCompleted(worker, assignment, delivery.check);
+      emit('proof_ready_checked', { receiptId: ready.id, readyId: ready.id, taskId: ready.taskId, taskDigest: ready.taskDigest,
+        workerId: ready.workerId, assignmentKey: ready.assignmentKey, seedCommit: ready.seedCommit,
+        commit: ready.snapshotCommit, sourceDigest: ready.sourceDigest,
+        receiptIds: delivery.check?.verification.results.map(result => result.receiptId),
+        passed: delivery.check?.passed === true, conditional: ready.evidence === 'conditional' });
+      checked();
+    } finally { setWorkerResearchPhase(state, research, 'running'); save(); }
   }
 }

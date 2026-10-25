@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { MathAgentActivity, MathAgentFailureDiagnostic, MathAgentSession } from '../runtime/codexSession';
+import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import type { SolverRunState, SolverWorkerState } from './archive';
@@ -27,7 +28,8 @@ import { parseMathResponse } from './deliveries';
 import { readCheckpointNotesDigest, savedContextCheckpoint } from './contextCheckpoint';
 import { committedSource } from './problem';
 import type { ContinuationSnapshot } from './continuationInput';
-import { WorkerProofLifecycle } from './workerProofLifecycle';
+import { setWorkerResearchPhase, WorkerProofLifecycle } from './workerProofLifecycle';
+import { importAssignedProof, syncProofImports } from './proofImport';
 import type { TaskProof } from './cooperativeProof';
 import { captureResearchBasis, researchSourceDigest, type ResearchBasis } from './researchRecords';
 
@@ -88,7 +90,7 @@ export async function runResearchWorkers(input: {
   state.tokenBudget = buildTokenBudget(input.maxTotalTokens, records.map(record => record.research), enforcement);
   const dispatchAllowed = () => modelDispatchAllowed(state.tokenBudget!);
   const accepted = records.find(({ worker }) => worker.id === (state.winningWorker ?? 'solver'));
-  if (accepted && state.check?.passed && ['checking', 'evaluating', 'finished'].includes(state.phase) &&
+  if (accepted && state.check?.passed && ['running', 'checking', 'evaluating', 'finished'].includes(state.phase) &&
       !solverSourceFeedback(state.problem, accepted.worker.worktree) &&
       solverProofIsCurrent(state.problem, accepted.worker.worktree, state.check)) {
     return { worktree: accepted.worker.worktree, check: state.check };
@@ -510,7 +512,7 @@ export async function runResearchWorkers(input: {
         state.turns++;
         if (parallel) research.turns++;
         cooperation?.reserveTurn(worker);
-        state.phase = research.phase = 'running'; save();
+        setWorkerResearchPhase(state, research, 'running'); save();
         return true;
       };
       /** Return a reserved but unstarted turn to the shared budget; false when none was reserved. */
@@ -628,8 +630,9 @@ export async function runResearchWorkers(input: {
         // Opening a session can await while another worker exhausts the shared allowance.
         return dispatchAllowed();
       };
-      const retryFailedTurn = async (error?: string): Promise<void> => {
-        research.lastFailure = { at: Date.now(), reason: researchFailureReason(error),
+      const retryFailedTurn = async (error?: string, diagnostic?: MathAgentFailureDiagnostic): Promise<void> => {
+        research.lastFailure = { at: Date.now(), reason: researchFailureReason(error, diagnostic),
+          ...(diagnostic ? { diagnostic: safeFailureDiagnostic(diagnostic) } : {}),
           taskId: parallel ? (research as SolverWorkerState).sessionTaskId : undefined };
         save();
         if (!dispatchAllowed()) return;
@@ -731,6 +734,7 @@ export async function runResearchWorkers(input: {
       try {
         await waitForRecovery(true);
         while (!signal.aborted) {
+          if (research.phase === 'checking') { setWorkerResearchPhase(state, research, 'running'); save(); }
           if (compactionRestart) {
             await rotateSession('context');
             compactionRestart = false;
@@ -739,16 +743,21 @@ export async function runResearchWorkers(input: {
           unstarted = assignment?.kind === 'assemble' ? undefined : assignment;
           if (cooperation && !assignment) break;
           if (assignment?.kind === 'assemble') {
-            state.phase = research.phase = 'checking'; save();
+            setWorkerResearchPhase(state, research, 'checking'); save();
             emit('assembly_started', { commit: assignment.seedCommit });
-            await exclusiveCheck(async () => {
-              if (!cooperation!.current(assignment)) return;
-              await checkWhole();
-              if (!winner && !research.check!.passed) cooperation!.assemblyFailed(research.check!);
-            });
+            try {
+              await exclusiveCheck(async () => {
+                if (!cooperation!.current(assignment)) return;
+                await checkWhole();
+                if (!winner && !research.check!.passed) cooperation!.assemblyFailed(research.check!);
+              });
+            } finally { setWorkerResearchPhase(state, research, 'running'); save(); }
             continue;
           }
-          if (await proofLifecycle?.resumeFrozen(assignment)) continue;
+          if (await proofLifecycle?.resumeFrozen(assignment)) { syncProofImports(state); save(); continue; }
+          if (cooperation && proofLifecycle && await importAssignedProof({ state,
+            directory: path.dirname(input.workers[0].worktree), worker, action: assignment, cooperation,
+            lifecycle: proofLifecycle, close, save, emit })) { unstarted = undefined; continue; }
           while ((pendingTurn = waitForTurn())) await pendingTurn;
           if (!dispatchAllowed() || state.turns >= input.maxTurns || budget().remainingMs <= 0) break;
           if (assignment) {
@@ -858,7 +867,7 @@ export async function runResearchWorkers(input: {
                 retries = 0;
                 cooperation!.interrupted(worker, assignment); emit('turn_checkpoint', { turn: research.turns });
               } else {
-                const diagnostic = session?.lastFailureDiagnostic;
+                const diagnostic = safeFailureDiagnostic(session?.lastFailureDiagnostic);
                 const turnError = executionError ?? failureDetail(session?.lastError, undefined, diagnostic);
                 await close();
                 if (!cooperation!.current(assignment)) {
@@ -868,7 +877,7 @@ export async function runResearchWorkers(input: {
                 }
                 emit('turn_failed', { reason: researchFailureReason(turnError), ...(diagnostic ? { diagnostic } : {}) });
                 cooperation!.interrupted(worker, assignment);
-                await retryFailedTurn(turnError);
+                await retryFailedTurn(turnError, diagnostic);
               }
             } finally {
               try { await rotateSession('context'); } finally { cooperation!.deactivate(worker); }
@@ -943,7 +952,7 @@ export async function runResearchWorkers(input: {
             }
           } finally { cooperation?.deactivate(worker); }
           const lastInputTokens = session?.lastInputTokens;
-          const diagnostic = session?.lastFailureDiagnostic;
+          const diagnostic = safeFailureDiagnostic(session?.lastFailureDiagnostic);
           const turnError = executionError ?? failureDetail(session?.lastError, undefined, diagnostic);
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
@@ -997,35 +1006,37 @@ export async function runResearchWorkers(input: {
               recordAdvisoryOutput(false);
               await cooperation.deliver(worker, assignment, commit, true, 'request-failure');
             } else cooperation.interrupted(worker, assignment);
-            await retryFailedTurn(turnError);
+            await retryFailedTurn(turnError, diagnostic);
             continue;
           }
-          state.phase = research.phase = 'checking'; save();
+          setWorkerResearchPhase(state, research, 'checking'); save();
           const previousCheck = research.check;
           const previousFailures = research.failures;
           let checkWholeRequired = true;
           let savedTaskProof = false;
           let savedPlan = false;
-          if (cooperation && assignment) {
-            const commit = commitSolverSources(state.problem, worker.worktree);
-            const coordination = assignment.kind === 'lead' && assignment.coordination;
-            if (!coordination) recordAdvisoryOutput(turn === 'checkpoint');
-            const deliver = () => cooperation.deliver(worker, assignment, commit, turn !== 'completed',
-              turn === 'failed' ? 'request-failure' : cooperativeCheckpoint ? 'scheduling-checkpoint' : 'checkpoint');
-            const delivery = assignment.kind === 'task' || assignment.kind === 'lead' ? await deliver() : await exclusiveCheck(deliver);
-            if (coordination) recordAdvisoryOutput(turn === 'checkpoint');
-            if (assignment.kind === 'lead' && turn === 'checkpoint') await cooperation.startInitialTasks();
-            research.check = delivery.check;
-            savedTaskProof = delivery.check?.passed === true;
-            savedPlan = delivery.savedPlan === true;
-            checkWholeRequired = delivery.checkWhole;
-            if (!checkWholeRequired) save();
-          }
-          if (checkWholeRequired) await exclusiveCheck(() => checkWhole(candidate));
+          try {
+            if (cooperation && assignment) {
+              const commit = commitSolverSources(state.problem, worker.worktree);
+              const coordination = assignment.kind === 'lead' && assignment.coordination;
+              if (!coordination) recordAdvisoryOutput(turn === 'checkpoint');
+              const deliver = () => cooperation.deliver(worker, assignment, commit, turn !== 'completed',
+                turn === 'failed' ? 'request-failure' : cooperativeCheckpoint ? 'scheduling-checkpoint' : 'checkpoint');
+              const delivery = assignment.kind === 'task' || assignment.kind === 'lead' ? await deliver() : await exclusiveCheck(deliver);
+              if (coordination) recordAdvisoryOutput(turn === 'checkpoint');
+              if (assignment.kind === 'lead' && turn === 'checkpoint') await cooperation.startInitialTasks();
+              research.check = delivery.check;
+              savedTaskProof = delivery.check?.passed === true;
+              savedPlan = delivery.savedPlan === true;
+              checkWholeRequired = delivery.checkWhole;
+              if (!checkWholeRequired) save();
+            }
+            if (checkWholeRequired) await exclusiveCheck(() => checkWhole(candidate));
+          } finally { setWorkerResearchPhase(state, research, 'running'); save(); }
           feedbackCheck = previousCheck; feedbackFailures = previousFailures;
           if (!winner && turn === 'failed') {
             if ((!savedTaskProof && !savedPlan) || researchFailureReason(turnError) === 'math_model_context_window_exceeded')
-              await retryFailedTurn(turnError);
+              await retryFailedTurn(turnError, diagnostic);
             else if (recoverableResearchFailure(turnError)) {
               // Accepted saved work can continue after repairing the session.
               retries = 0;

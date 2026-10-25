@@ -56,9 +56,11 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       ? source.replace(/```(?:math|math-plan)\s*\n[\s\S]*?\n```/u, () => plan) : plan + '\n' + bounded(source, 8000));
     this.archive.planEdited = false;
   }
-  protected planningInputDigest() {
+  protected planningInputDigest(omitLeadDrafts = false) {
     const versions = new Map(this.archive.tasks.map(node => [node.task.id, digest(node.task)]));
     const deliveries = [...new Set((this.archive.deliveries ?? []).filter(record => record.status !== 'superseded' &&
+      !(omitLeadDrafts && record.producer === this.lead.id && record.kind === 'progress' &&
+        record.summary.startsWith('Saved Lead draft pending integration:')) &&
       (!record.taskId || versions.get(record.taskId) === record.taskDigest))
       .map(record => canonicalMathJson(deliveryInputFields(record))))].sort();
     return mathDigest(canonicalMathJson({ problemReceiptDigest: this.input.state.problem.receiptDigest,
@@ -82,10 +84,27 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       deliveries: (this.archive.deliveries ?? []).filter(record => record.producer !== this.lead.id)
         .map(({ status: _status, evidence: _evidence, ...record }) => record) }));
   }
+  /** Ignore the draft-preservation bookkeeping produced by pausing this same turn. */
+  protected leadPauseInputDigest(commit?: string) {
+    const problem = this.input.state.problem;
+    const sourceDigest = commit ? ownedSourceDigest(problem, this.lead.worktree, commit) :
+      mathDigest(canonicalMathJson(problem.ownedFiles.map(file => [file,
+        mathDigest(fs.readFileSync(path.join(this.lead.worktree, problem.projectRelative, file)))])));
+    const notes = commit ? (git(this.lead.worktree, ['ls-tree', '--name-only', commit, '--', 'RESEARCH.md'])
+      ? committedSource(this.lead.worktree, commit, 'RESEARCH.md') : '') :
+      (fs.existsSync(path.join(this.lead.worktree, 'RESEARCH.md'))
+        ? readMathText(path.join(this.lead.worktree, 'RESEARCH.md'), MAX_RESEARCH_NOTES_BYTES) : '');
+    return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest(true), planVersion: this.planVersion(),
+      sourceDigest, notesDigest: mathDigest(notes),
+      requestedRecoveries: this.archive.frontierRecoveries?.filter(record => record.status === 'requested') }));
+  }
   /** A completed decision covers its own bookkeeping, but never evidence arriving during that dispatch. */
   protected rememberLeadDecision(action: CooperativeAction) {
-    if (action.kind === 'lead' && action.planningInputDigest) this.archive.lastLeadInputDigest =
-      this.leadEvidence.get(action) === this.planningEvidenceDigest() ? this.planningInputDigest() : action.planningInputDigest;
+    if (action.kind === 'lead' && action.planningInputDigest) {
+      this.archive.lastLeadInputDigest = this.leadEvidence.get(action) === this.planningEvidenceDigest()
+        ? this.planningInputDigest() : action.planningInputDigest;
+      this.archive.lastLeadPauseInputDigest = undefined;
+    }
   }
   protected activeGoalFrontier() {
     const focus = originalGoalTaskFocus(this.archive.tasks, this.archive.groups, this.input.state.environmentDigest, { includeParkedTasks: true });

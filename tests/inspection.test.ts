@@ -278,6 +278,39 @@ describe('run inspection', () => {
     expect(renderRunInspection(buildRunInspection(state))).toContain('lean_lock_waiting');
   });
 
+  it.each(['dependency-blocked', 'integration-queue', 'synchronizing'] as const)
+  ('roundtrips explicit %s waits without changing the worker phase or proof status', stage => {
+    const f = fixture(), task = f.state.cooperation!.tasks[0].task;
+    const wait: DispatchWaitObservation = { observedAt: 1234, stage, candidateCount: 1, omittedCandidates: 0,
+      candidates: [{ taskId: task.id, taskDigest: taskVersion(task),
+        reason: stage === 'dependency-blocked' ? 'dependency' : stage }] };
+    f.state.workers![1].scheduling = { status: 'idle', since: 1234, wait };
+    writeSolverRunState(f.stateFile, f.state);
+    const report = buildRunInspection(readSolverRunState(f.stateFile));
+    expect(report.workers[1].dispatchWait).toEqual({ status: 'recorded', observation: wait });
+    expect(report.workers[1].phase).toBe('running');
+    expect(report.progress.checkedProofTasks).toBe(0);
+    expect(renderRunInspection(report)).toContain(stage);
+  });
+
+  it.each([503, '429', 99, 600, 401.5, 'HTTP status 503 https://private.invalid/key', '0503'])
+  ('persists and renders only a validated provider status from %j', status => {
+    const f = fixture();
+    f.state.workers![1].lastFailure = { at: 1234, reason: 'math_model_request_failed', diagnostic: {
+      code: 'httpConnectionFailed', httpStatusCode: status, body: 'private provider body', url: 'https://private.invalid/key',
+    } as unknown as NonNullable<SolverRunState['lastFailure']>['diagnostic'] };
+    writeSolverRunState(f.stateFile, f.state);
+    const saved = fs.readFileSync(f.stateFile, 'utf8'), report = buildRunInspection(readSolverRunState(f.stateFile));
+    const expected = status === 503 ? 503 : status === '429' ? 429 : undefined;
+    expect(report.workers[1].lastFailure?.diagnostic).toEqual({ code: 'httpConnectionFailed',
+      ...(expected === undefined ? {} : { httpStatusCode: expected }) });
+    expect(saved).not.toMatch(/private|https:|body/);
+    const markdown = renderRunInspection(report);
+    expect(markdown).toContain('Provider code | HTTP status');
+    expect(markdown).toContain(`httpConnectionFailed | ${expected ?? '—'} |`);
+    expect(JSON.stringify(report)).not.toMatch(/private|https:|body/);
+  });
+
   it.each(['cooling-down', 'retrying', 'recovered'] as const)('reads and renders persisted %s recovery without treating old retries as pending', phase => {
     const f = fixture(), nextRetryAt = Date.UTC(2026, 9, 19, 1, 0);
     f.state.workers![1].recovery = { phase, reason: 'math_model_request_failed', cycles: 2,

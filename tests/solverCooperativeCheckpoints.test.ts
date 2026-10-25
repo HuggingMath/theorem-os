@@ -103,7 +103,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
       running.push(completion); return completion;
     };
     return { state, workers, problem, check, events, controller, run, contextSettings,
-      pulse: (workerId: string) => cooperation!.pulse(workerId) };
+      pulse: (workerId: string) => cooperation!.pulse(workerId),
+      wake: () => cooperation!.modelBudgetChanged() };
   }
 
   function heldAdvisoryTurns(count: number) {
@@ -168,7 +169,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
 
   it('pauses the Lead scheduling clock during compaction and resumes its remaining work slice', async () => {
     const { events, controller, run } = fixture(false, undefined, 'lead');
-    const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
+    const held = heldContinuationTurns({ saveNotes: true }), completion = run(held.open, Infinity); void completion.catch(() => {});
     await held.wait(0, completion);
     await vi.advanceTimersByTimeAsync(30_000);
     const activity = held.open.mock.calls[0][0].onActivity!;
@@ -209,7 +210,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
   it.each(['lead', 'custom-full'] as const)(
     'keeps first Lead dispatch full and resumes %s with the current nonce and receipt', async mode => {
       const { state, check, events, controller, run } = fixture(false, undefined, mode);
-      const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
+      const held = heldContinuationTurns({ saveNotes: true }), completion = run(held.open, Infinity); void completion.catch(() => {});
       await held.wait(0, completion);
       expect(held.messages[0].assignment.kind).toBe('lead');
       expect(held.messages[0].mode).toBe('full');
@@ -264,14 +265,24 @@ describe('cooperative advisory scheduling checkpoints', () => {
   });
 
   it('retains a real capacity request as requested when an unfinished Lead checkpoint has no saved decision', async () => {
-    const { state, check, events, controller, run } = fixture(false, undefined, 'lead-capacity');
+    const { state, workers, check, events, controller, run, pulse, wake } = fixture(false, undefined, 'lead-capacity');
     const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
     await held.wait(0, completion);
     const first = held.messages[0].assignment;
     if (first.kind !== 'lead') throw new Error('fixture_not_lead');
     expect(first.capacityRefill).toMatchObject({ workerIds: ['researcher'] });
     expect(state.cooperation!.lastCapacityRefill?.status).toBe('requested');
-    await vi.advanceTimersByTimeAsync(120_000); await held.wait(1, completion);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(held.open).toHaveBeenCalledOnce();
+    expect(state.cooperation!.lastLeadPauseInputDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
+    expect(state.cooperation!.lastCapacityRefill?.status).toBe('requested');
+    await vi.advanceTimersByTimeAsync(240_000);
+    expect(held.open).toHaveBeenCalledOnce();
+    fs.writeFileSync(path.join(workers[0].worktree, 'RESEARCH.md'), 'A new exact independent construction is saved.\n');
+    await pulse(workers[0].id);
+    wake();
+    await vi.advanceTimersByTimeAsync(5_000); await held.wait(1, completion);
     const latest = held.messages[1].assignment;
     if (latest.kind !== 'lead') throw new Error('fixture_not_lead');
     expect(held.messages[1].mode).toBe('short');
@@ -302,7 +313,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
       }
       return action;
     });
-    const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
+    const held = heldContinuationTurns({ saveNotes: true }), completion = run(held.open, Infinity); void completion.catch(() => {});
     await held.wait(0, completion);
     await vi.advanceTimersByTimeAsync(120_000); await held.wait(1, completion);
     const [first, revised] = held.messages;

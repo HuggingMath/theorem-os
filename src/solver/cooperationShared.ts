@@ -17,6 +17,7 @@ import { type ParallelQuestion } from './taskQuestions';
 import { mathematicalGaps } from './mathematicalGaps';
 import type { DeliveryReceipt } from './deliveryReceipts';
 import type { ProofReadyRecord } from './proofReady';
+import type { ProofImportRecord } from './proofImportRecord';
 import type { ResearchRecord } from './researchRecords';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
 import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
@@ -77,6 +78,7 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   deliveries?: DeliveryRecord[]; cursors?: Record<string, number>; edits?: HumanEditRecord[];
   deliveryReceipts?: DeliveryReceipt[];
   proofReadyRecords?: ProofReadyRecord[];
+  proofImports?: ProofImportRecord[];
   researchDecisions?: ResearchHandoffDecision[];
   challengeDecisions?: ResearchChallengeDecision[];
   planVersion?: string; planEdited?: boolean; statementReviews?: StatementReview[];
@@ -89,6 +91,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   contextCheckpointRejection?: ContextCheckpointRejection;
   planRejection?: { proposalDigest: string; inputDigest: string; error: string; stalled: boolean };
   lastLeadInputDigest?: string;
+  /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
+  lastLeadPauseInputDigest?: string;
   /** One capacity assessment per mathematical input, including across process restarts. */
   lastCapacityRefill?: import('./leadAssessment').LeadAssessmentReceipt & { workerIds: string[] };
   /** One planning assessment per mathematical/evidence input; unresolved need remains visible. */

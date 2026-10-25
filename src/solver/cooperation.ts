@@ -184,6 +184,7 @@ export class CooperativeResearch extends CooperationInputs {
     return { ...input, workerIds: [...workerIds], ...(ownershipCandidates.length ? { ownershipCandidates } : {}) };
   }
   private leadExecutableWork = new WeakMap<CooperativeAction, Set<string>>();
+  private leadPauseInputs = new WeakMap<CooperativeAction, string>();
   private executableWork() {
     const { groups, peers, ready } = this.capacityAvailability();
     return this.archive.tasks.filter(node => !node.capacityExploration && (node.status === 'running' && node.assignment &&
@@ -436,7 +437,10 @@ export class CooperativeResearch extends CooperationInputs {
     }
   }
   private async nextLead(worker: ResearchWorker, budget: DispatchBudget, modelAllowed: boolean): Promise<DispatchResult> {
-    if (this.synchronizationPending()) return this.waitForDispatch();
+    if (this.synchronizationPending()) {
+      this.recordDispatchWait(worker, { stage: 'synchronizing', candidates: [], candidateCount: 0, omittedCandidates: 0 });
+      return this.waitForDispatch();
+    }
     if (this.pendingFixedStatementReviews()) {
       if (!this.livePeers.length || budget.remainingMs <= 0 ||
           this.input.state.turns >= budget.maxTurns && !this.reservedTurns.size || !modelAllowed && !this.active.size) return;
@@ -474,6 +478,8 @@ export class CooperativeResearch extends CooperationInputs {
     }
     const pendingHandoffs = selectResearchHandoffBatch(this.archive);
     if (pendingHandoffs.length || pendingResearchChallenges(this.archive).length) this.needsLead = true;
+    if (this.archive.lastLeadPauseInputDigest &&
+        this.archive.lastLeadPauseInputDigest !== this.leadPauseInputDigest()) this.needsLead = true;
     if (!this.needsLead && this.archive.tasks.length) {
       const support = originalGoalTaskFocus(this.archive.tasks, this.archive.groups).support;
       const supportingWork = this.archive.tasks.some(node => support.has(node.task.id) &&
@@ -514,6 +520,10 @@ export class CooperativeResearch extends CooperationInputs {
         const recovery = this.requestFrontierRecovery(this.activeGoalFrontier());
         if (recovery) return recovery;
       }
+      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest()) {
+        return !running && !this.hasAssignableTask()
+          ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
+      }
       this.syncPlanNotes();
       const planVersion = this.archive.planVersion ??= this.planVersion();
       const coordination = this.archive.tasks.length > 0 &&
@@ -527,6 +537,7 @@ export class CooperativeResearch extends CooperationInputs {
         ...(!this.archive.tasks.length && !this.archive.initialPlanPublication ? { initialPlanNonce: crypto.randomUUID() } : {}),
         ...(this.archive.tasks.length ? { planNonce: crypto.randomUUID() } : {}) };
       this.leadEvidence.set(action, this.planningEvidenceDigest());
+      this.leadPauseInputs.set(action, this.leadPauseInputDigest(action.seedCommit));
       this.leadExecutableWork.set(action, new Set(this.executableWork().filter(node => !advisory(node.task))
         .map(node => taskProofContractVersion(node.task))));
       if (stagnation) {
@@ -564,6 +575,16 @@ export class CooperativeResearch extends CooperationInputs {
       return 'capacity-expired';
   }
   private recordTaskWait(worker: ResearchWorker, ranked: readonly TaskRecord[], ready: readonly TaskRecord[]) {
+    const dependencies = !ranked.length ? this.archive.tasks.filter(node =>
+      ['pending', 'blocked'].includes(node.status) && assessTaskResponsibility(node, worker, this.archive).kind === 'matches' &&
+      routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) && !this.synchronizationBlocked(node.task) &&
+      !taskCanStart(node.task, this.archive.tasks, this.archive.groups)) : [];
+    if (dependencies.length) {
+      this.recordDispatchWait(worker, { stage: 'dependency-blocked', candidateCount: dependencies.length,
+        omittedCandidates: Math.max(0, dependencies.length - 16), candidates: dependencies.slice(0, 16).map(node => ({
+          taskId: node.task.id, taskDigest: digest(node.task), reason: 'dependency' })) });
+      return;
+    }
     const candidates: DispatchWaitObservation['candidates'] = ranked.slice(0, 16).map(node => {
       const hostBlock = this.taskDispatchBlock(node);
       const assessment = assessTaskResponsibility(node, worker, this.archive);
@@ -1070,6 +1091,10 @@ export class CooperativeResearch extends CooperationInputs {
       }
       if (accepted && (!recovering || decisionProgress)) this.rememberLeadDecision(action);
       if (accepted && (!recovering || decisionProgress)) this.markCapacityRefillAssessed(action);
+      if (recovering && recoveryKind !== 'request-failure' && action.kind === 'lead' &&
+          !action.initialPlanNonce && !action.recovery && !decisionProgress) {
+        this.archive.lastLeadPauseInputDigest = this.leadPauseInputs.get(action);
+      }
       this.changed();
       if (accepted) this.rememberCoordinationCompletion(action, decisionProgress);
       return { finished: false as const, sourceChanged, savedPlan, planVersion: this.archive.planVersion };

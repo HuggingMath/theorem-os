@@ -6,6 +6,7 @@ import type { ResearchCandidate } from './modules/execution';
 import type { ResearchRole } from './modules/organization';
 import type { CooperationState } from './cooperation';
 import type { MathAgentActivity } from '../runtime/codexSession';
+import { safeFailureDiagnostic, type MathAgentFailureDiagnostic } from '../runtime/failureDiagnostic';
 import type { TokenBudget, UsageAccounting, RequestUsageAccounting } from './usageBudget';
 import type { ContextManifest } from './contextCompiler';
 import type { KnowledgeRetrievalObservation, KnowledgeUse } from './knowledgeUsage';
@@ -13,6 +14,7 @@ import { knowledgeUseSchema } from './knowledgeUsage';
 import { z } from 'zod';
 import { deliveryReceiptSchema } from './deliveryReceipts';
 import { proofReadyRecordSchema } from './proofReady';
+import { proofImportRecordSchema } from './proofImportRecord';
 import { researchBasisSchema, researchRecordSchema } from './researchRecords';
 
 const leadAssessmentFields = {
@@ -29,13 +31,14 @@ export type DispatchWaitObservation = {
   observedAt: number;
   endedAt?: number;
   planVersion?: string;
-  stage: 'm3-no-ready' | 'host-filtered' | 'm5-no-selection' | 'budget-gated' | 'lead-unavailable';
+  stage: 'm3-no-ready' | 'host-filtered' | 'm5-no-selection' | 'budget-gated' | 'lead-unavailable' |
+    'dependency-blocked' | 'integration-queue' | 'synchronizing';
   gate?: 'time-limit' | 'turn-limit' | 'model-disabled';
   candidateCount: number;
   omittedCandidates: number;
   candidates: { taskId: string; taskDigest: string;
     reason: 'role' | 'engineer' | 'owner' | 'saved-assignment' | 'review-independence' | 'running-duplicate' |
-      'preparing-type' | 'synchronizing' | 'capacity-expired' | 'policy-no-selection' }[];
+      'preparing-type' | 'synchronizing' | 'capacity-expired' | 'policy-no-selection' | 'dependency' | 'integration-queue' }[];
 };
 
 export type SolverWorkerState = Pick<SolverRunState, 'worktree' | 'threadId' | 'previousThreadIds' |
@@ -85,7 +88,7 @@ export type SolverRunState = {
   previousThreadIds?: string[];
   lastInputTokens?: number;
   lastActivity?: MathAgentActivity & { at: number };
-  lastFailure?: { at: number; reason: string; taskId?: string };
+  lastFailure?: { at: number; reason: string; taskId?: string; diagnostic?: MathAgentFailureDiagnostic };
   /** This workspace cannot host another writer without independent recovery. */
   writerStopUnconfirmed?: { at: number; reason: string };
   recovery?: ResearchRecovery;
@@ -124,12 +127,13 @@ const count = z.number().int().nonnegative();
 const record = z.record(z.unknown());
 const safeCount = count.max(Number.MAX_SAFE_INTEGER);
 const dispatchWaitObservation = z.object({ observedAt: safeCount, endedAt: safeCount.optional(), planVersion: z.string().optional(),
-  stage: z.enum(['m3-no-ready', 'host-filtered', 'm5-no-selection', 'budget-gated', 'lead-unavailable']),
+  stage: z.enum(['m3-no-ready', 'host-filtered', 'm5-no-selection', 'budget-gated', 'lead-unavailable',
+    'dependency-blocked', 'integration-queue', 'synchronizing']),
   gate: z.enum(['time-limit', 'turn-limit', 'model-disabled']).optional(),
   candidateCount: safeCount, omittedCandidates: safeCount,
   candidates: z.array(z.object({ taskId: z.string(), taskDigest: z.string(),
     reason: z.enum(['role', 'engineer', 'owner', 'saved-assignment', 'review-independence', 'running-duplicate',
-      'preparing-type', 'synchronizing', 'capacity-expired', 'policy-no-selection']) })).max(16),
+      'preparing-type', 'synchronizing', 'capacity-expired', 'policy-no-selection', 'dependency', 'integration-queue']) })).max(16),
 }).refine(value => value.candidateCount === value.candidates.length + value.omittedCandidates);
 const planPublication = z.object({ nonce: z.string().min(1), file: z.string().regex(/^DELIVERIES-[a-f0-9]{64}\.jsonl$/u),
   offset: safeCount, eventDigest: z.string().regex(/^[a-f0-9]{64}$/u), baseVersion: z.string(), planVersion: z.string(),
@@ -179,7 +183,8 @@ const research = z.object({ worktree: z.string().min(1), phase, turns: count, th
   solveStartedAt: count.optional(), solveFinishedAt: count.optional(),
   previousThreadIds: z.array(z.string()).optional(), lastInputTokens: count.optional(), check: check.optional(),
   lastActivity: z.object({ at: count, event: z.string().min(1).max(64), itemType: z.string().max(64).optional() }).optional(),
-  lastFailure: z.object({ at: count, reason: z.string(), taskId: z.string().optional() }).optional(),
+  lastFailure: z.object({ at: count, reason: z.string(), taskId: z.string().optional(),
+    diagnostic: z.unknown().transform(safeFailureDiagnostic).optional() }).optional(),
   writerStopUnconfirmed: z.object({ at: safeCount, reason: z.string().min(1) }).optional(),
   recovery: z.object({ phase: z.enum(['cooling-down', 'retrying', 'recovered']), reason: z.string(),
     cycles: safeCount.min(1), startedAt: safeCount, nextRetryAt: safeCount, waitedMs: safeCount,
@@ -311,9 +316,11 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     deliveries: z.array(z.object({ researchRecord: researchRecordSchema.optional() }).passthrough()).optional(),
     deliveryReceipts: z.array(deliveryReceiptSchema).optional(), blockers: z.array(routeBlocker).optional(),
     proofReadyRecords: z.array(proofReadyRecordSchema).optional(),
+    proofImports: z.array(proofImportRecordSchema).optional(),
     researchDecisions: z.array(handoffDecision).optional(),
     challengeDecisions: z.array(challengeDecision).optional(),
     initialPlanPublication: planPublication.optional(), planPublication: planPublication.optional(),
+    lastLeadPauseInputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
     lastCapacityRefill: z.object({ inputDigest: z.string().regex(/^[a-f0-9]{64}$/u), workerIds: z.array(z.string()),
       requestedAt: safeCount, ...leadAssessmentFields, status: z.enum(['requested', 'assessed']) }).optional(),
     lastStagnationRecovery: z.object({ inputDigest: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -338,4 +345,9 @@ export const readSolverRunState = (file: string): SolverRunState => {
   if (!parsed.success) throw new Error(`math_resume_state_invalid:${parsed.error.issues[0]?.path.join('.')}`);
   return parsed.data as unknown as SolverRunState;
 };
-export const writeSolverRunState = (file: string, state: SolverRunState): void => writeMathJsonDurable(file, state);
+export const writeSolverRunState = (file: string, state: SolverRunState): void => {
+  const safeResearch = <T extends Pick<SolverRunState, 'lastFailure'>>(research: T): T => research.lastFailure
+    ? { ...research, lastFailure: { ...research.lastFailure, diagnostic: safeFailureDiagnostic(research.lastFailure.diagnostic) } }
+    : research;
+  writeMathJsonDurable(file, { ...safeResearch(state), workers: state.workers?.map(safeResearch) });
+};

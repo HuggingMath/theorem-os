@@ -1,6 +1,8 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import type { DeliveryRecord } from './deliveries';
 import { freshlyAccepted, isAdvisoryTask, parseWaitsOn, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+import { createTaskApplicationEvidence } from './planningEvidence';
+import type { ProofRoute } from './proofRoutes';
 
 export type ResearchHandoffDecision = Readonly<{
   id: string; deliveryId: string; status: 'adopted' | 'rejected' | 'deferred';
@@ -11,6 +13,7 @@ type HandoffState = Readonly<{
   tasks: readonly TaskRecord[]; deliveries?: readonly DeliveryRecord[];
   researchDecisions?: readonly ResearchHandoffDecision[];
   history?: readonly { task: CooperativeTask }[];
+  proofRoutes?: readonly ProofRoute[];
 }>;
 export type ResearchHandoff = Readonly<{
   id: string; deliveryId: string; producer: string; sourceTaskId: string; sourceTaskDigest: string;
@@ -21,6 +24,7 @@ export type ResearchHandoff = Readonly<{
   activationDigest: string; reopened?: 'checked-prerequisites';
   decision?: ResearchHandoffDecision;
   source?: { commit: string; notesPath: 'RESEARCH.md' };
+  application?: ReturnType<ReturnType<typeof createTaskApplicationEvidence>>;
 }>;
 
 function freshlyChecked(nodes: ReadonlyMap<string, TaskRecord>, reference: { taskId: string; taskDigest: string }): boolean {
@@ -91,8 +95,23 @@ export function researchHandoffs(state: HandoffState): ResearchHandoff[] {
       groups.set(context.digest, group);
     }
   }
+  const applications = new Map<DeliveryRecord, ReturnType<typeof createTaskApplicationEvidence>>();
+  const applicationFor = (delivery: DeliveryRecord) => {
+    let application = applications.get(delivery);
+    if (!application) {
+      application = createTaskApplicationEvidence(state.tasks,
+        { proofRoutes: state.proofRoutes, proposals: delivery.lemmaRequests });
+      applications.set(delivery, application);
+    }
+    return application;
+  };
   return [...groups].map(([contextDigest, group]) => {
     const [id, delivery] = group.entries.entries().next().value!;
+    const application = applicationFor(delivery)(group.proposal);
+    const consumers = new Map(application.consumers.map(consumer => [consumer.taskDigest, consumer]));
+    for (const source of group.entries.values()) if (source !== delivery)
+      for (const consumer of applicationFor(source)(group.proposal).consumers)
+        consumers.set(consumer.taskDigest, consumer);
     const sources = [...group.entries].map(([handoffId, item]) => ({ handoffId, deliveryId: item.id, producer: item.producer,
       ...(item.commit ? { source: { commit: item.commit, notesPath: 'RESEARCH.md' as const } } : {}) }));
     const recorded = [...group.entries].flatMap(([key, item]) => {
@@ -143,6 +162,8 @@ export function researchHandoffs(state: HandoffState): ResearchHandoff[] {
     return { id, deliveryId: delivery.id, producer: delivery.producer,
       sourceTaskId: delivery.taskId!, sourceTaskDigest: delivery.taskDigest!, proposal: group.proposal,
       contextDigest, sources,
+      application: { ...application, consumers: [...consumers.values()],
+        consumerConnection: consumers.size ? 'recorded' as const : 'not-recorded' as const },
       // Additional identical deliveries are provenance, not a new activation of the same mathematical input.
       activationDigest: mathDigest(canonicalMathJson({ contextDigest, decisions: decisionStates })),
       status: reopened ? 'pending' : decision?.status ?? 'pending', ...(decision ? { decision } : {}),

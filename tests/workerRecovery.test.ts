@@ -147,6 +147,23 @@ describe('bounded role session recovery', () => {
     ]);
     expect(JSON.stringify(events())).not.toContain('private provider response');
     expect(host.official).toHaveBeenCalledOnce();
+    expect(state().lastFailure).toMatchObject({ reason: 'math_model_request_failed',
+      diagnostic: { code: 'responseStreamDisconnected', httpStatusCode: 503 } });
+    expect(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).not.toContain('private provider response');
+  });
+
+  it('resumes an accepted check saved after restoring the running phase without another model turn', async () => {
+    host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
+      fs.writeFileSync(proof(options), completed); return 'completed';
+    }));
+    expect(await runSolver(args, directory)).toBe(0);
+    const checkpoint = state(), checks = events().filter(event => event.event === 'proof_check_started').length;
+    checkpoint.phase = 'running';
+    fs.writeFileSync(`${output}.runtime/state.json`, JSON.stringify(checkpoint));
+    expect(await runSolver([...args, '--resume'], directory)).toBe(0);
+    expect(host.open).toHaveBeenCalledOnce();
+    expect(events().filter(event => event.event === 'proof_check_started')).toHaveLength(checks);
+    expect(host.official).toHaveBeenCalledTimes(2);
   });
 
   it('recovers first-turn context overflow below the rotation threshold with saved work and a leaner fresh prompt', async () => {

@@ -11,6 +11,7 @@ import { hasTaskConnectionCheck } from './taskConnections';
 import { assignmentDeliveryFile, taskGroup, taskReferenceDependencies, hasTaskAcceptance, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { digest, taskSourceRejections, integrationRejections, rejectionCode, bounded } from './cooperationShared';
 import { CooperationTaskProofs, type ProofDeliveryAnnotation } from './cooperationTaskProofs';
+import type { ResearchWorker } from './modules/organization';
 
 const recheckBatchFallbacks = new Set([...taskSourceRejections, 'math_task_batch_projection_mismatch', 'math_task_missing_declaration']);
 const integrationBatchFallbacks = new Set([...taskSourceRejections, 'math_task_integration_conflict', 'math_task_integration_missing_context',
@@ -25,13 +26,18 @@ function expectedRejection(error: unknown, expected: ReadonlySet<string>): Error
 
 /** Integration of checked task proofs into the canonical commit and their rechecks. */
 export abstract class CooperationIntegration extends CooperationTaskProofs {
-  protected queueIntegration<T>(operation: () => Promise<T>): Promise<T> {
+  private integrationQueueDepth = 0;
+  protected queueIntegration<T>(operation: () => Promise<T>, worker?: ResearchWorker, task?: CooperativeTask): Promise<T> {
     const queuedAt = Date.now();
-    const pending = this.integrationQueue.then(() => {
+    const waiting = this.integrationQueueDepth++ > 0 && worker && task;
+    if (waiting) this.recordDispatchWait(worker, { stage: 'integration-queue', candidateCount: 1, omittedCandidates: 0,
+      candidates: [{ taskId: task.id, taskDigest: digest(task), reason: 'integration-queue' }] });
+    const pending = this.integrationQueue.then(async () => {
+      if (waiting) { this.clearDispatchWait(worker, 'selected'); this.changed(); }
       this.input.signal.throwIfAborted();
       this.input.emit('integration_queue_started', { waitedMs: Date.now() - queuedAt });
-      return operation();
-    });
+      return await operation();
+    }).finally(() => { this.integrationQueueDepth--; });
     this.integrationQueue = pending.then(() => {}, () => {});
     return pending;
   }

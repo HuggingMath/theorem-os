@@ -11,37 +11,23 @@ import { DEEPSEEK_PROVIDER } from './deepseek';
 import { WESTLAKE_PROVIDER, validateWestlakeModel } from './westlake';
 import { SUB2API_PROVIDER } from './sub2api';
 import type { ModelRequestGate } from './modelRequest';
+import { safeFailureDiagnostic, type MathAgentFailureDiagnostic } from './failureDiagnostic';
+export type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 
 type Json = Record<string, unknown>;
 const object = (value: unknown): Json => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('math_codex_invalid_message');
   return value as Json;
 };
-const CODEX_FAILURE_CODES = [
-  'contextWindowExceeded', 'sessionBudgetExceeded', 'usageLimitExceeded', 'rateLimitExceeded', 'flexUnavailable',
-  'serverOverloaded', 'cyberPolicy', 'misalignmentPolicyViolation', 'tooManyDenials', 'httpConnectionFailed',
-  'responseStreamConnectionFailed', 'internalServerError', 'unauthorized', 'badRequest', 'threadRollbackFailed',
-  'sandboxError', 'responseStreamDisconnected', 'responseTooManyFailedAttempts', 'activeTurnNotSteerable', 'other',
-] as const;
-export type MathAgentFailureDiagnostic = Readonly<{
-  code: typeof CODEX_FAILURE_CODES[number];
-  httpStatusCode?: number;
-}>;
-const HTTP_FAILURE_CODES = new Set(['httpConnectionFailed', 'responseStreamConnectionFailed',
-  'responseStreamDisconnected', 'responseTooManyFailedAttempts']);
 const failureDiagnostic = (error: Json): MathAgentFailureDiagnostic | undefined => {
   const info = error.codexErrorInfo;
   const structured = info && typeof info === 'object' && !Array.isArray(info) ? info as Json : undefined;
   const keys = structured ? Object.keys(structured) : [];
   const candidate = typeof info === 'string' ? info : keys.length === 1 ? keys[0] : undefined;
-  const code = CODEX_FAILURE_CODES.find(value => value === candidate);
-  if (!code) return undefined;
-  const payload = structured?.[code];
+  const payload = candidate ? structured?.[candidate] : undefined;
   const status = payload && typeof payload === 'object' && !Array.isArray(payload)
     ? (payload as Json).httpStatusCode : undefined;
-  return { code,
-    ...(HTTP_FAILURE_CODES.has(code) && typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
-      ? { httpStatusCode: status } : {}) };
+  return safeFailureDiagnostic({ code: candidate, httpStatusCode: status });
 };
 export type MathAgentActivity = {
   event: 'item_started' | 'item_completed' | 'reasoning' | 'message' | 'command_output' | 'lean_lock_waiting' | 'lean_lock_acquired';

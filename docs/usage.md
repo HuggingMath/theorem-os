@@ -210,6 +210,24 @@ bun run math edit --run "$MATH_RUN_ROOT/result.json" \
 
 保留导出计划的 `baseVersion` 和全部原题目标。`edit` 校验计划并追加到修改队列；运行中或恢复后的求解器继续检查版本、应用修改和重检受影响证明。`queued`、`applied` 与证明重检结果分别展示；过期计划需要重新导出。导出文件默认拒绝覆盖已有文件。
 
+已有外部 Lean 证明片段时，可交给宿主导入待处理的引理任务。先导出当前计划，读取其中的 `baseVersion`，再计算片段的 SHA-256：
+
+```bash
+FRAGMENT="/absolute/path/to/fragment.lean"
+FRAGMENT_SHA256="$(sha256sum "$FRAGMENT" | cut -d ' ' -f 1)"
+PLAN_BASE_VERSION="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).baseVersion' "$MATH_RUN_ROOT/plan.json")"
+bun run math import-proof --run "$MATH_RUN_ROOT/result.json" \
+  --task TASK_ID --fragment "$FRAGMENT" --sha256 "$FRAGMENT_SHA256" \
+  --base-version "$PLAN_BASE_VERSION" --dry-run
+bun run math import-proof --run "$MATH_RUN_ROOT/result.json" \
+  --task TASK_ID --fragment "$FRAGMENT" --sha256 "$FRAGMENT_SHA256" \
+  --base-version "$PLAN_BASE_VERSION"
+```
+
+仅支持计划中启用、状态为 `pending` 且有 `proofPath` / `theoremName` 的 `lemma` 任务；运行中的任务不能被导入抢占。片段只能包含具名 `theorem` / `lemma` 声明，不能含 `sorry`、`admit`、公理、导入、作用域命令、选项或定义；声明在任务已有源码上下文内追加，保留原声明。`--dry-run` 只校验；可选 `--id ID` 指定请求身份，完全相同的重试返回 `already_queued`，同一任务不能同时排队多个未结束请求。过期计划或哈希不符会被拒绝。
+
+命令捕获片段内容及运行、任务、计划、源码与环境身份，追加到运行目录的 `proof-imports.jsonl`，不直接修改 checkpoint。运行中或恢复后的求解器在正常任务派发后、打开模型前读取该队列；排队本身不唤醒等待者，也不绕过任务依赖、负责人、路线或预算门控，因此不保证立即处理。宿主冻结导入提交，再沿现有 proof-ready 流程独立检查 Lean 和规范源码合并；后续修改外部片段或工作文件不会替换已冻结内容，导入本身不计模型轮次或证明尝试。CLI 的 `queued` 仅表示已排队；消费后的 `proofImports`、proof-ready 检查和任务集成结果可用 `inspect --format json` 分别查看，排队或冻结都不等于证明已接纳。
+
 ### 6. 同时求解多道题
 
 分别准备每题的工作区和任务文件，将原有单题命令的完整参数数组保存到各自的 `launch.json`：
@@ -367,6 +385,7 @@ bun run math bootstrap-lean-eval --help
 | `run` | 启动、预检或恢复运行 |
 | `inspect` | 查看存档研究报告，导出 JSON 或带版本的可编辑计划 |
 | `edit` | 校验并提交人工计划修改，支持 `--dry-run` |
+| `import-proof` | 将纯 Lean 声明排队给待处理引理，由宿主冻结、检查并合并，支持 `--dry-run` |
 | `compare` | 准备、运行并汇总固定预算的单 Agent / 独立并行 / 协作对照 |
 | `check-lean` | 获取局部诊断、预检闭合类型或具体应用表达式 |
 | `continuation` | 按摘要及附件 ID 分页读取冻结的续跑材料 |

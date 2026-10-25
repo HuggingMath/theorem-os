@@ -26,6 +26,7 @@ import { compileTaskContext, frozenSourceContext, TaskContextError,
 import type { CustomResearchModule, ResearchModuleSlot } from './policy';
 import { defaultResearchRouteConcurrency, researchTaskRole, type ResearchWorker } from './organization';
 import { buildLeadDecisionContext } from './leadDecisionContext';
+import { leadPlanningEvidence } from '../planningEvidence';
 
 export type ContextAccess = Readonly<{
   root: string;
@@ -298,6 +299,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     alternativeRoutes: proofRoutes.filter(route => route.targetTaskId === node.task.id) }));
   const continuation = buildProofContinuation(routeTasks, { groups: cooperation.groups,
     environmentDigest: compilation.environmentDigest, proofRoutes, researchHandoffs: researchHandoffs(cooperation) });
+  const planningEvidence = action.kind === 'lead' ? leadPlanningEvidence(cooperation, compilation.environmentDigest) : undefined;
   const focus = originalGoalTaskFocus(routeTasks, cooperation.groups, compilation.environmentDigest);
   const frontierSnapshot = originalGoalFrontierSnapshot(focus);
   const routeIndex = createProofRoutePriorityIndex(routeTasks, {
@@ -407,6 +409,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'Before further investigation, update worktree-root RESEARCH.md with the current argument and precise unresolved inference. Read the latest COOPERATION.json for new findings, handoffs, blockers and active peers; read their referenced saved evidence as needed. Preserve the complete current math-plan in RESEARCH.md.',
     'Current cooperative assignment (replaces every previous dispatch nonce and receipt):\n' + JSON.stringify(action),
     'Current host work contract:\n' + JSON.stringify(workContract),
+    planningEvidence ? 'Current route applications and remaining obligations (recorded, not proof acceptance):\n' + JSON.stringify(planningEvidence) : '',
     compilation.feedback ? 'Current host feedback:\n' + compilation.feedback : '',
     leadPlanPublicationFeedback(action, cooperation),
     contextCheckpointRejectionFeedback(cooperation.contextCheckpointRejection, leadPlanDeliveryFile(action)),
@@ -435,6 +438,8 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     ...compileTaskContext({ ...compilation, instructions, optional,
       mandatory: [...(compilation.mandatory ?? []),
         { id: 'work-contract', kind: 'assignment', text: 'Host work contract (one product; completion is not proof acceptance):\n' + JSON.stringify(workContract) },
+        ...(planningEvidence ? [{ id: 'planning-evidence', kind: 'continuation' as const,
+          text: 'Current route applications and remaining obligations (recorded, not proof acceptance):\n' + JSON.stringify(planningEvidence) }] : []),
         ...(handoffPublicationRules ? [{ id: 'handoff-publication', kind: 'assignment' as const, text: handoffPublicationRules }] : []),
         ...(capacityExploration ? [{ id: 'capacity-exploration', kind: 'assignment' as const,
           text: 'Host capacity exploration (one distinct mathematical question; advisory only):\n' + JSON.stringify({

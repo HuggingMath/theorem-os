@@ -10,6 +10,7 @@ import { buildTokenBudget } from './usageBudget';
 import { captureObligationSnapshot } from './obligationProgress';
 import { contributionExecutionAttempts, type ContributionObservation, type ResearchContributionFlow } from './contributionFlow';
 import type { StoredRunInspectionArtifacts } from './storedRunInspection';
+import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 
 /** Binds a report to the stored observation; this does not replay or accept its proof evidence. */
 export function runInspectionSnapshot(state: SolverRunState, result?: Record<string, unknown>) {
@@ -124,7 +125,8 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       dispatchWait: dispatchWaitRecord(state, 'scheduling' in worker ? worker.scheduling?.wait : undefined),
       usage: worker.usage,
       lastActivity: worker.lastActivity,
-      lastFailure: worker.lastFailure && { ...worker.lastFailure, category: researchFailureCategory(worker.lastFailure.reason) },
+      lastFailure: worker.lastFailure && { ...worker.lastFailure, diagnostic: safeFailureDiagnostic(worker.lastFailure.diagnostic),
+        category: researchFailureCategory(worker.lastFailure.reason) },
       recovery: worker.recovery && { ...worker.recovery, category: researchFailureCategory(worker.recovery.reason) },
       task: 'scheduling' in worker && worker.scheduling ? worker.scheduling.taskId :
         'sessionTaskId' in worker ? worker.sessionTaskId : undefined,
@@ -137,7 +139,8 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       intendedStatement: review.intendedStatement, leanStatement: review.leanStatement,
       translation: review.translation, summary: review.summary,
     })),
-    review: cooperative?.review, edits: cooperative?.edits ?? [], error: cooperative?.error ?? state.error,
+    review: cooperative?.review, edits: cooperative?.edits ?? [], proofImports: cooperative?.proofImports ?? [],
+    error: cooperative?.error ?? state.error,
     failureCategory: researchFailureCategory(cooperative?.error ?? state.error),
   };
 }
@@ -360,8 +363,9 @@ Waiting is a scheduling state, not a mathematical failure. An abandoned or rejec
       recovery.phase === 'cooling-down' ? new Date(recovery.nextRetryAt).toISOString() : undefined, recovery.waitedMs];
   })));
   const failures = report.workers.filter(worker => worker.lastFailure || worker.error);
-  if (failures.length) text += section('Execution failures', table(['Worker', 'Category', 'Last failure', 'At'], failures.map(worker => [
+  if (failures.length) text += section('Execution failures', table(['Worker', 'Category', 'Last failure', 'Provider code', 'HTTP status', 'At'], failures.map(worker => [
     worker.id, worker.failureCategory ?? worker.lastFailure?.category, worker.error ?? worker.lastFailure?.reason,
+    worker.lastFailure?.diagnostic?.code, worker.lastFailure?.diagnostic?.httpStatusCode,
     worker.lastFailure ? new Date(worker.lastFailure.at).toISOString() : undefined])));
   text += section('Routes', report.groups.length ? table(['Route', 'Objective', 'Control', 'Engineer', 'Turns'],
     report.groups.map(({ group, turns }) => [group.id, group.objective, group.status, group.engineerId, turns])) : 'No cooperative routes recorded.');

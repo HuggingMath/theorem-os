@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LEAN_EVAL_BENCHMARK_COMMIT } from '../src/math/leanEvalCatalogAdapter';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
-import { inspectScopedLeanDeclarations } from '../src/math/leanSource';
+import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../src/math/leanSource';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { readCooperationPlan, type CooperativeResearch } from '../src/solver/cooperation';
 import type { ResearchWorker } from '../src/solver/modules/organization';
@@ -75,7 +75,11 @@ describe('conditional proof declaration ownership', () => {
       const result = verifiedBatch(request, { sessionId: 'conditional-fixture' });
       const parent = request.items.find(item => item.theoremName.endsWith('.add_zero'));
       const namespace = parent?.theoremName.split('.').slice(0, -1).join('.');
-      const required = parent ? [{ file: 'Submission.lean', name: `${namespace}.support` }, ...requiredParentHelpers] : [];
+      const target = parent && inspectLeanDeclarationRegions(files[parent.proofPath] ?? '').find(item => item.name === 'add_zero');
+      const usesSupport = target && /\bsupport\b/u.test(files[parent!.proofPath]!.slice(target.startOffset, target.endOffset));
+      // Compact rechecks may omit the inherited support lemma when this parent uses a different helper.
+      const required = parent ? [...(usesSupport ? [{ file: 'Submission.lean', name: `${namespace}.support` }] : []),
+        ...requiredParentHelpers] : [];
       const missing = required.some(helper => !inspectScopedLeanDeclarations(files[helper.file] ?? '')
         .some(declaration => declaration.qualifiedName === helper.name));
       return missing || Object.values(files).some(source => /\b(?:sorry|admit)\b/u.test(source)) ? { ...result, status: 'failed',

@@ -11,6 +11,7 @@ import type { SolverRunState } from '../src/solver/archive';
 import { readMathResponse } from '../src/solver/deliveries';
 import { recordRouteBlockers, refreshRouteBlockers } from '../src/solver/routeControl';
 import { ownedSourceDigest, type TaskProof } from '../src/solver/cooperativeProof';
+import { mathDigest } from '../src/math/mathRuntimeIo';
 import { temporaryDirectory } from './helpers/files';
 import { cooperativeResearch } from './helpers/cooperation';
 
@@ -700,6 +701,122 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     vi.spyOn(resumed as any, 'seed').mockReturnValue(seed);
     try { expect(await resumed.next(lead, budget)).toMatchObject({ kind: 'lead' }); }
     finally { await resumed.stop(); }
+  });
+
+  const pausedLead = async (beforeCheckpoint?: () => void) => {
+    parkCore(); record.status = 'running';
+    (cooperative as any).needsLead = true;
+    const next = await cooperative.next(lead, budget);
+    if (next?.kind !== 'lead') throw new Error('expected_unfinished_lead');
+    const admitted = (cooperative as any).leadPauseInputDigest(next.seedCommit);
+    beforeCheckpoint?.();
+    await cooperative.deliver(lead, next, seed, true, 'scheduling-checkpoint');
+    expect(state.cooperation!.lastLeadPauseInputDigest).toBe(admitted);
+    expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
+    expect(state.cooperation!.lastCapacityRefill).toBeUndefined();
+    expect(state.cooperation!.lastStagnationRecovery).toBeUndefined();
+    return next;
+  };
+
+  it('waits through repeated budget wakeups after an unchanged unfinished Lead checkpoint', async () => {
+    await pausedLead();
+    let dispatched = false;
+    const pending = cooperative.next(lead, budget).then(next => { dispatched = true; return next; });
+    for (let wake = 0; wake < 3; wake++) {
+      cooperative.modelBudgetChanged(); await new Promise(setImmediate);
+      expect(dispatched).toBe(false);
+    }
+    await cooperative.stop();
+    expect(await pending).toBeUndefined();
+    expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
+  });
+
+  it.each(['peer-evidence', 'environment', 'source', 'notes', 'task-feedback', 'task-control'] as const)(
+    'immediately admits new %s after an unfinished Lead checkpoint', async change => {
+      await pausedLead();
+      if (change === 'peer-evidence')
+        (cooperative as any).record(researcher, record.task, 'research', 'advisory', 'A new exact cancellation estimate.');
+      else if (change === 'environment') state.environmentDigest = 'new-pinned-environment';
+      else if (change === 'source') addSource('\ntheorem saved_input : True := by trivial\n');
+      else if (change === 'notes') fs.writeFileSync(path.join(directory, 'RESEARCH.md'), 'A newly saved exact mathematical inference.');
+      else if (change === 'task-feedback') record.feedback = 'A new checked premise narrows the unresolved inference.';
+      else record.task = { ...record.task, status: 'paused' };
+      expect(await cooperative.next(lead, budget)).toMatchObject({ kind: 'lead' });
+      expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
+    });
+
+  it('keeps peer evidence arriving during the unfinished Lead turn outside its pause identity', async () => {
+    await pausedLead(() => (cooperative as any).record(researcher, record.task, 'research', 'advisory',
+      'A concurrent peer supplies a new exact estimate.'));
+    expect(state.cooperation!.lastLeadPauseInputDigest).not.toBe((cooperative as any).leadPauseInputDigest());
+    expect(await cooperative.next(lead, budget)).toMatchObject({ kind: 'lead' });
+  });
+
+  it('restores the unfinished pause without turning it into a completed Lead decision', async () => {
+    await pausedLead();
+    const restored = JSON.parse(JSON.stringify(state));
+    const resumed = resume(restored);
+    vi.spyOn(resumed as any, 'seed').mockReturnValue(seed);
+    let dispatched = false;
+    const pending = resumed.next(lead, budget).then(next => { dispatched = true; return next; });
+    try {
+      await new Promise(setImmediate); resumed.modelBudgetChanged(); await new Promise(setImmediate);
+      expect(dispatched).toBe(false);
+      expect(restored.cooperation.lastLeadPauseInputDigest).toBe(state.cooperation!.lastLeadPauseInputDigest);
+      expect(restored.cooperation.lastLeadInputDigest).toBeUndefined();
+    } finally { await resumed.stop(); await pending; }
+  });
+
+  it.each(['handoff', 'challenge'] as const)('waits for an unchanged pending %s and admits a new activation', async kind => {
+    parkCore(); record.status = 'running';
+    const addInbox = (id: string) => {
+      const finding = JSON.stringify({ conclusion: 'inconclusive', needsDecision: true, summary: id });
+      (state.cooperation!.deliveries ??= []).push({ id, producer: researcher.id, kind: 'research', status: 'advisory',
+        taskId: record.task.id, taskDigest: taskVersion(record.task), summary: id, statement: '', premises: [],
+        evidenceRefs: [], remainingObligations: [], dependencies: [], createdAt: 1,
+        ...(kind === 'challenge' ? { finding, findingDigest: mathDigest(finding) } : { lemmaRequests: [{
+          id: id + '_lemma', kind: 'lemma', objective: 'Prove the exact missing bridge.', dependsOn: [], revision: 0,
+          theoremName: id + '_lemma', proofPath: 'Submission.lean', type: 'True',
+        }] }) });
+    };
+    addInbox('first_input');
+    const next = await cooperative.next(lead, budget);
+    if (next?.kind !== 'lead') throw new Error('expected_inbox_lead');
+    expect(kind === 'handoff' ? next.handoffIds : next.challengeIds).toHaveLength(1);
+    await cooperative.deliver(lead, next, seed, true, 'scheduling-checkpoint');
+    let dispatched = false;
+    const pending = cooperative.next(lead, budget).then(next => { dispatched = true; return next; });
+    await new Promise(setImmediate); cooperative.modelBudgetChanged(); await new Promise(setImmediate);
+    expect(dispatched).toBe(false);
+    addInbox('second_input'); cooperative.modelBudgetChanged();
+    const admitted = await pending;
+    expect(admitted).toMatchObject({ kind: 'lead' });
+    if (admitted?.kind !== 'lead') throw new Error('expected_new_inbox_lead');
+    expect(kind === 'handoff' ? admitted.handoffIds : admitted.challengeIds).toHaveLength(2);
+    expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
+  });
+
+  it('admits initial planning despite an unchanged pause marker and never pauses its checkpoint', async () => {
+    state.cooperation!.tasks = [];
+    (cooperative as any).needsLead = true;
+    vi.spyOn(cooperative as any, 'seed').mockReturnValue(seed);
+    vi.spyOn(cooperative as any, 'acceptPlan').mockResolvedValue(undefined);
+    state.cooperation!.lastLeadPauseInputDigest = (cooperative as any).leadPauseInputDigest();
+    const initial = await cooperative.next(lead, budget);
+    expect(initial).toMatchObject({ kind: 'lead', initialPlanNonce: expect.any(String) });
+    if (initial?.kind !== 'lead') throw new Error('expected_initial_lead');
+    state.cooperation!.lastLeadPauseInputDigest = undefined;
+    await cooperative.deliver(lead, initial, seed, true, 'scheduling-checkpoint');
+    expect(state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
+  });
+
+  it('admits explicit failed-frontier recovery despite an unchanged unfinished pause', async () => {
+    prepareRecovery();
+    state.cooperation!.lastLeadPauseInputDigest = (cooperative as any).leadPauseInputDigest();
+    const recovery = await getRecovery();
+    await cooperative.deliver(lead, recovery, seed, true, 'scheduling-checkpoint');
+    expect(state.cooperation!.frontierRecoveries![0].status).toBe('requested');
+    expect(await cooperative.next(lead, budget)).toMatchObject({ kind: 'lead', recovery: { taskIds: ['core'] } });
   });
 
   it('ignores a repeated advisory decision hint while a peer is still running on unchanged input', async () => {

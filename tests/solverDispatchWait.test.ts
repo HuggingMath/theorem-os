@@ -81,6 +81,16 @@ describe('recorded dispatch waits', () => {
     expect(node().proof).toBeUndefined(); expect(node().attempts).toBe(0);
   });
 
+  it('records actual unavailable dependency inputs when M3 has no ready tasks', async () => {
+    const helper = node();
+    helper.task = { ...helper.task, ownerId: 'idle', dependsOn: ['ongoing'] };
+    const next = track(cooperative.next(workers[2], budget));
+    await vi.waitFor(() => expect(wait()).toMatchObject({ stage: 'dependency-blocked', candidateCount: 1,
+      candidates: [{ taskId: 'helper', taskDigest: taskVersion(helper.task), reason: 'dependency' }] }));
+    expect(helper.assignment).toBeUndefined();
+    controller.abort(); await Promise.allSettled([next]);
+  });
+
   it('retains a saved assignment when ownerId is removed and records its actual reservation', async () => {
     const helper = node(); helper.task = { ...helper.task, ownerId: undefined };
     helper.assignment = { taskId: helper.task.id, taskDigest: taskVersion(helper.task), workerId: 'busy',

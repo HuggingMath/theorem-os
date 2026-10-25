@@ -6,6 +6,7 @@ import { pendingResearchHandoffs, retainedResearchHandoffs, researchHandoffs, re
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import type { DeliveryRecord } from '../src/solver/deliveries';
 import { markTaskAcceptance, taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
+import { integratedProof } from './helpers/taskProof';
 
 const research: CooperativeTask = { id: 'investigate', kind: 'research', objective: 'Find the missing bridge', dependsOn: [], revision: 0 };
 const proposal: CooperativeTask = { id: 'bridge', kind: 'lemma', objective: 'Prove the bridge', theoremName: 'Original.bridge',
@@ -17,6 +18,36 @@ const delivery: DeliveryRecord = { id: 'delivery', producer: 'researcher', taskI
 type TestState = { tasks: TaskRecord[]; deliveries: DeliveryRecord[]; researchDecisions?: ResearchHandoffDecision[];
   history?: { task: CooperativeTask }[] };
 const fixture = (): TestState => ({ tasks: [{ ...node(research), status: 'completed' }], deliveries: [structuredClone(delivery)] });
+
+it('presents exact typed inputs and the nearest recorded consumer with the immutable proposal', () => {
+  const state = fixture(), input = node({ ...proposal, id: 'input', theoremName: 'Original.input', type: '∀ P : Prop, P → P' });
+  integratedProof(input, { accept: false });
+  const consumer = { ...proposal, id: 'consumer', theoremName: 'Original.consumer', type: '∀ n : Nat, n + 0 = n', dependsOn: [proposal.id, 'classification'] };
+  state.tasks.push(input);
+  state.deliveries[0].dependencies = [{ taskId: input.task.id, taskDigest: taskVersion(input.task) }];
+  state.deliveries[0].lemmaRequests = [{ ...proposal, dependsOn: ['input'] }, consumer];
+  const before = structuredClone(state), handoff = pendingResearchHandoffs(state)[0];
+  const context = researchHandoffContext(handoff);
+  expect(context.proposal.type).toBe(proposal.type);
+  expect(context.application).toMatchObject({ evidence: 'planning-only', consumerConnection: 'recorded',
+    inputs: [{ taskId: 'input', taskDigest: taskVersion(input.task), type: input.task.type, availability: 'recorded-checked' }],
+    consumers: [{ taskId: 'consumer', type: consumer.type, uses: [{ kind: 'dependency' }], remainingInputTaskIds: ['classification'] }],
+    unprovedInputTaskIds: [], missingInputTaskIds: [] });
+  expect(state).toEqual(before);
+  expect(context.sourceSet.reference.contextDigest).toBe(handoff.contextDigest);
+});
+
+it('exposes an unrecorded application and missing typed input without rejecting independent research', () => {
+  const state = fixture(); state.deliveries[0].lemmaRequests = [{ ...proposal, dependsOn: ['missing'] }];
+  const context = researchHandoffContext(pendingResearchHandoffs(state)[0]);
+  expect(context.application).toMatchObject({ consumerConnection: 'not-recorded', consumers: [],
+    missingInputTaskIds: ['missing'], unprovedInputTaskIds: ['missing'] });
+  expect(context.status).toBe('pending');
+  state.deliveries[0].lemmaRequests = [proposal];
+  const handoff = pendingResearchHandoffs(state)[0];
+  expect(resolveResearchHandoffs(state, [handoff.id], [research, proposal], undefined))
+    .toMatchObject([{ status: 'adopted', taskId: proposal.id }]);
+});
 
 it('reconstructs an unresolved exact proposal from its immutable delivery across restarts', () => {
   const state = fixture(), before = structuredClone(state);
@@ -510,6 +541,8 @@ it('keeps merged prerequisite order and its original task id while a consumer in
   const batch = selectResearchHandoffBatch(state);
   expect(batch.map(item => item.proposal.id)).toEqual([proposal.id, consumer.id]);
   expect(batch[0].sources).toHaveLength(2);
+  expect(batch[0].application).toMatchObject({ consumerConnection: 'recorded',
+    consumers: [{ taskId: consumer.id, taskDigest: taskVersion(consumer), type: consumer.type }] });
   expect(() => resolveResearchHandoffs(state, [batch[0].id], [{ ...proposal, id: 'renamed' }], undefined))
     .toThrow('math_handoff_dependency_id_required:' + proposal.id);
 });

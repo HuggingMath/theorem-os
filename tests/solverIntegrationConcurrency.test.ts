@@ -233,6 +233,24 @@ describe('task integration with concurrent host control', () => {
     expectNoMathematicalFailure();
   });
 
+  it('records a worker waiting on the real canonical integration queue and clears it on entry', async () => {
+    state.workers = workers.map(worker => ({ id: worker.id, role: worker.role, worktree: worker.worktree,
+      phase: 'running', turns: 0 }));
+    const held = deferred(), release = () => held.resolve(); releases.push(release);
+    const first = track((cooperative as any).queueIntegration(() => held.promise));
+    const commit = writeLemma(workers[1], 'lemma integration_lemma : True := by trivial');
+    const delivery = track(cooperative.deliver(workers[1], action, commit));
+    const worker = state.workers[1];
+    await vi.waitFor(() => expect(worker.scheduling?.wait).toMatchObject({ stage: 'integration-queue',
+      candidates: [{ taskId: action.task.id, reason: 'integration-queue' }] }));
+    expect(node()).toMatchObject({ status: 'delivered', proof: { passed: true } });
+    expect(state.cooperation!.canonicalCommit).toBe(problem.baseCommit);
+    release(); await Promise.all([first, delivery]);
+    expect(worker.scheduling?.wait).toBeUndefined();
+    expect(node()).toMatchObject({ status: 'integrated', integratedCheck: { passed: true } });
+    expect(events.some(item => item.event === 'dispatch_wait_ended' && item.details?.stage === 'integration-queue')).toBe(true);
+  });
+
   it.each(['abort', 'storage', 'unavailable'] as const)
   ('retains the checked delivery after a merged %s fault and retries only integration', async (failure: Failure) => {
     const commit = writeLemma(workers[1], 'lemma integration_lemma : True := by trivial');

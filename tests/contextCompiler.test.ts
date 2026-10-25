@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import fs from 'node:fs';
 import path from 'node:path';
 import { compileTaskContext, DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES, DEFAULT_TASK_CONTEXT_BYTES,
   frozenSourceContext, type TaskContextInput } from '../src/solver/contextCompiler';
@@ -14,6 +15,8 @@ import { buildProofContinuation } from '../src/solver/progress';
 import { pendingResearchHandoffs } from '../src/solver/researchHandoffs';
 import { pendingResearchChallenges } from '../src/solver/researchChallenges';
 import { createCapacityExploration } from '../src/solver/capacityExploration';
+import { cooperativeResearch } from './helpers/cooperation';
+import { localExample, leadWorker, peerWorker, solverState } from './helpers/solver';
 
 const baseCommit = 'a'.repeat(40), proofCommit = 'b'.repeat(40);
 const formal = 'namespace Original\nvariable (n : Nat)\ntheorem target (h : n > 0) : n > 0 := by sorry\nend Original';
@@ -964,8 +967,10 @@ function freshlyChecked(task: CooperativeTask, conditions: TaskProof['conditions
 }
 const helperCatalog = (message: string): any[] => contextLine(message,
   'Checked helpers outside the current open-task closure (retrieve before using; recorded, not replayed):').helpers;
+const taskRecordIndex = (message: string): any[] => contextLine(message,
+  'Other visible task records outside the current goal and requested-input closure (retrieve exact interfaces before use):').tasks;
 
-it('keeps the open Lead frontier complete while encapsulating freshly checked unconditional implementation helpers', () => {
+it('keeps the original-goal closure exact and indexes unrelated unfinished work and checked implementation helpers', () => {
   const implementation = freshlyChecked(lemma('implementation', [], '∀ n : Nat, n + 0 = n')),
     wrapper = freshlyChecked(lemma('wrapper', ['implementation'])), goal = originalGoal(['wrapper']);
   const research = node({ ...lemma('open_research'), kind: 'research' as const,
@@ -974,30 +979,36 @@ it('keeps the open Lead frontier complete while encapsulating freshly checked un
     premises: ['FULL_UNFINISHED_MATHEMATICAL_PREMISE'] });
   const context = compileTaskContext({ ...input([implementation, wrapper, goal, research, current], lead), maxOptionalContextBytes: 0 }),
     catalog = helperCatalog(context.message), graph = compiledGraph(context.message);
-  expect(new Set(context.manifest.requiredTaskIds)).toEqual(new Set(['wrapper', 'original_goal', 'open_research', 'open_proof']));
-  expect(graph.map(row => row.id)).toEqual(['wrapper', 'original_goal', 'open_research', 'open_proof']);
+  expect(new Set(context.manifest.requiredTaskIds)).toEqual(new Set(['wrapper', 'original_goal']));
+  expect(graph.map(row => row.id)).toEqual(['wrapper', 'original_goal']);
   expect(graph.find(row => row.id === wrapper.task.id).type).toBe(wrapper.task.type);
-  expect(context.message).toContain('FULL_UNFINISHED_RESEARCH_DESCRIPTION');
-  expect(context.message).toContain('FULL_UNFINISHED_PROOF_DESCRIPTION');
-  expect(context.message).toContain('FULL_UNFINISHED_MATHEMATICAL_PREMISE');
+  expect(context.message).not.toContain('FULL_UNFINISHED_RESEARCH_DESCRIPTION');
+  expect(context.message).not.toContain('FULL_UNFINISHED_PROOF_DESCRIPTION');
+  expect(context.message).not.toContain('FULL_UNFINISHED_MATHEMATICAL_PREMISE');
+  expect(taskRecordIndex(context.message).map(row => row.id)).toEqual(['open_research', 'open_proof']);
   expect(catalog).toHaveLength(1);
   expect(catalog[0]).toMatchObject({ id: implementation.task.id, taskDigest: taskVersion(implementation.task),
     theoremName: implementation.task.theoremName, proofPath: implementation.task.proofPath,
-    objectiveDigest: mathDigest(implementation.task.objective), source: { commit: implementation.integratedCheck!.commit,
-      path: `${problem.projectRelative}/${implementation.task.proofPath}`, sourceDigest: implementation.integratedCheck!.sourceDigest },
-    verification: { status: implementation.integratedCheck!.verification.status,
-      targetCommit: implementation.integratedCheck!.verification.targetCommit,
-      receipts: implementation.integratedCheck!.verification.results } });
-  expect(context.message).toContain('taskDigest matches this row');
+    recordDigest: mathDigest(canonicalMathJson(implementation)), source: { commit: implementation.integratedCheck!.commit,
+      path: `${problem.projectRelative}/${implementation.task.proofPath}`, sourceDigest: implementation.integratedCheck!.sourceDigest } });
+  expect(catalog[0].verification).toBeUndefined();
+  expect(catalog[0].referenceSource).toBeUndefined();
+  expect(context.message).toContain('SHA-256(canonicalMathJson(record)) = row.recordDigest');
   expect(context.message).toContain('not an immutable proof source');
   expect(context.manifest.included).toContainEqual(expect.objectContaining({ id: 'checked-helper-catalog', required: true }));
-  expect(context.manifest.omitted).toContainEqual({ id: `interface:${implementation.task.id}`, kind: 'interfaces', reason: 'optional-budget' });
+  expect(context.manifest.omitted).toContainEqual({ id: `interface:${implementation.task.id}`, kind: 'interfaces', reason: 'advisory-details-by-reference' });
 });
 
-it('preserves an integrated helper interface when it is a direct input of any unfinished task', () => {
+it('loads an unrelated unfinished task and its exact direct inputs when recovery explicitly selects it', () => {
   const first = freshlyChecked(lemma('first')), second = freshlyChecked(lemma('second', ['first'])),
     current = node({ ...lemma('current', ['first']), objective: 'This unfinished task still needs first.' });
-  const context = compileTaskContext({ ...input([first, second, originalGoal(['second']), current], lead), maxOptionalContextBytes: 0 });
+  const records = [first, second, originalGoal(['second']), current],
+    regular = compileTaskContext({ ...input(records, lead), maxOptionalContextBytes: 0 });
+  expect(regular.manifest.requiredTaskIds).not.toContain('first');
+  expect(taskRecordIndex(regular.message)).toContainEqual(expect.objectContaining({ id: current.task.id, dependsOn: ['first'] }));
+  expect(helperCatalog(regular.message).map(row => row.id)).toEqual(['first']);
+  const context = compileTaskContext({ ...input(records, { ...lead,
+    recovery: { id: 'recover-current', taskIds: ['current'], goalIds: [] } }), maxOptionalContextBytes: 0 });
   expect(context.manifest.requiredTaskIds).toContain('first');
   expect(compiledGraph(context.message).find(row => row.id === first.task.id).type).toBe(first.task.type);
   expect(context.manifest.included.some(section => section.id === 'checked-helper-catalog')).toBe(false);
@@ -1099,7 +1110,7 @@ it.each(['restored', 'conditional', 'failed'] as const)('never replaces a %s pro
   expect(context.message).toContain('UNRESOLVED_PROOF_PLAN');
 });
 
-it('retains unfinished advisory objectives and leaves worker dependency descriptions complete', () => {
+it('indexes off-closure advisory objectives and leaves worker dependency descriptions complete', () => {
   const completed = node({ ...lemma('completed_research'), kind: 'research' as const, type: undefined,
     objective: 'COMPLETED_RESEARCH_OBJECTIVE '.repeat(100) });
   completed.status = 'completed';
@@ -1110,10 +1121,12 @@ it('retains unfinished advisory objectives and leaves worker dependency descript
     current = node(lemma('current', ['worker_input'])), records = [completed, blocked, helper, current, originalGoal(['current'])];
   const leadContext = compileTaskContext({ ...input(records, lead), maxOptionalContextBytes: 0 }),
     graph = compiledGraph(leadContext.message);
-  expect(graph.find(row => row.id === completed.task.id)).toMatchObject({ status: 'completed',
-    objectiveDigest: mathDigest(completed.task.objective) });
+  expect(graph.find(row => row.id === completed.task.id)).toBeUndefined();
+  expect(taskRecordIndex(leadContext.message)).toContainEqual(expect.objectContaining({ id: completed.task.id,
+    status: 'completed', recordDigest: mathDigest(canonicalMathJson(completed)) }));
   expect(leadContext.message).not.toContain('COMPLETED_RESEARCH_OBJECTIVE');
-  expect(graph.find(row => row.id === blocked.task.id).objective).toBe(blocked.task.objective);
+  expect(leadContext.message).not.toContain('OPEN_RESEARCH_OBJECTIVE');
+  expect(taskRecordIndex(leadContext.message)).toContainEqual(expect.objectContaining({ id: blocked.task.id, status: 'blocked' }));
   const workerContext = compileTaskContext({ ...input(records, assign(current.task)), maxOptionalContextBytes: 0 });
   expect(compiledGraph(workerContext.message).find(row => row.id === helper.task.id).objective).toBe(helper.task.objective);
   expect(workerContext.manifest.included.some(item => item.id === 'task-objective-reference-encoding')).toBe(false);
@@ -1135,7 +1148,8 @@ it('fits a mature Lead graph with many direct checked inputs without raising the
   const context = compileTaskContext({ ...input(records, lead), maxOptionalContextBytes: 0 }), graph = compiledGraph(context.message);
   expect(context.manifest.maxBytes).toBe(DEFAULT_TASK_CONTEXT_BYTES);
   expect(context.manifest.usedBytes).toBeLessThan(DEFAULT_TASK_CONTEXT_BYTES * 0.65);
-  expect(new Set(context.manifest.requiredTaskIds)).toEqual(new Set(records.map(node => node.task.id)));
+  expect(new Set(context.manifest.requiredTaskIds)).toEqual(new Set([...helpers.map(node => node.task.id), current.task.id, 'original_goal']));
+  expect(taskRecordIndex(context.message).map(row => row.id)).toEqual(research.map(node => node.task.id));
   expect(graph.filter(row => row.kind === 'lemma').map(row => row.type)).toEqual([...helpers.map(node => node.task.type), current.task.type]);
   for (const helper of helpers) {
     const row = graph.find(row => row.id === helper.task.id);
@@ -1145,4 +1159,142 @@ it('fits a mature Lead graph with many direct checked inputs without raising the
   }
   expect(context.message).toContain('COMPLETE_OPEN_TASK_DESCRIPTION');
   expect(context.message).toContain('COMPLETE_OPEN_TASK_PREMISE');
+});
+
+it('keeps every off-closure task discoverable with zero optional context, including running, blocked and conditional work', () => {
+  const condition = node(lemma('condition')), records = [
+    { ...node({ ...lemma('running', [], 'RUNNING_EXACT_TYPE'), ownerId: 'assigned-owner', status: 'paused' as const }),
+      status: 'running' as const, assignment: { ...assign(lemma('running')).assignment, workerId: 'live-worker' } },
+    { ...node(lemma('blocked', ['condition'], 'BLOCKED_EXACT_TYPE')), status: 'blocked' as const },
+    { ...node({ ...lemma('disconnected'), kind: 'research' as const, type: undefined }), status: 'completed' as const },
+    freshlyChecked(lemma('conditional', [], 'CONDITIONAL_EXACT_TYPE'),
+      [{ taskId: condition.task.id, taskDigest: taskVersion(condition.task) }]), condition,
+  ];
+  const context = compileTaskContext({ ...input([...records, originalGoal()], lead), maxOptionalContextBytes: 0 }),
+    index = taskRecordIndex(context.message);
+  expect(context.manifest.requiredTaskIds).toEqual(['original_goal']);
+  expect(index.map(row => row.id)).toEqual(records.map(record => record.task.id));
+  for (const record of records) expect(index.find(row => row.id === record.task.id)).toMatchObject({
+    taskDigest: taskVersion(record.task), recordDigest: mathDigest(canonicalMathJson(record)),
+    kind: record.task.kind, status: record.status, control: record.task.status ?? 'active', dependsOn: record.task.dependsOn,
+  });
+  expect(index.find(row => row.id === 'running')).toMatchObject({ owner: 'live-worker', status: 'running', control: 'paused' });
+  expect(index.find(row => row.id === 'blocked').dependsOn).toEqual(['condition']);
+  expect(context.message).not.toContain('RUNNING_EXACT_TYPE');
+  expect(context.message).not.toContain('BLOCKED_EXACT_TYPE');
+  expect(context.message).not.toContain('CONDITIONAL_EXACT_TYPE');
+  expect(context.manifest.included).toContainEqual(expect.objectContaining({ id: 'task-record-index', required: true }));
+  expect(context.message).toContain('Retrieve exact Lean types, premises, conditions, feedback and evidence before reasoning');
+  expect(context.message).toContain('Missing or mismatched records are unavailable');
+});
+
+it.each(['type', 'premises', 'control', 'feedback', 'proof'] as const)
+('binds the complete indexed record when its %s changes', field => {
+  const record = node({ ...lemma('indexed'), premises: ['initial premise'] }),
+    compile = () => taskRecordIndex(compileTaskContext({ ...input([record, originalGoal()], lead),
+      maxOptionalContextBytes: 0 }).message)[0], before = compile();
+  if (field === 'type') record.task = { ...record.task, type: 'False' };
+  if (field === 'premises') record.task = { ...record.task, premises: ['changed premise'] };
+  if (field === 'control') record.task = { ...record.task, status: 'paused' };
+  if (field === 'feedback') record.feedback = 'A precise new feedback diagnostic.';
+  if (field === 'proof') record.proof = { ...checked(record.task), passed: false };
+  const after = compile();
+  expect(after.recordDigest).toBe(mathDigest(canonicalMathJson(record)));
+  expect(after.recordDigest).not.toBe(before.recordDigest);
+  if (['control', 'feedback', 'proof'].includes(field)) expect(after.taskDigest).toBe(before.taskDigest);
+  else expect(after.taskDigest).not.toBe(before.taskDigest);
+});
+
+it('keeps excluded checked-helper prompt size constant as receipt and reference inventories grow', () => {
+  const helper = freshlyChecked(lemma('implementation')), wrapper = freshlyChecked(lemma('wrapper', ['implementation'])),
+    goal = originalGoal(['wrapper']), compile = () => compileTaskContext({ ...input([helper, wrapper, goal], lead),
+      maxOptionalContextBytes: 0 }), before = compile(), proof = helper.integratedCheck!;
+  proof.verification.results = Array.from({ length: 2000 }, (_, index) => ({ ...proof.verification.results[0],
+    receiptId: `HISTORICAL_ONLY_RECEIPT_${index}` }));
+  proof.references!.inputs = Array.from({ length: 2000 }, (_, index) => ({ file: 'Submission.lean',
+    name: `HISTORICAL_ONLY_REFERENCE_${index}`, digest: mathDigest(`reference-${index}`) }));
+  markTaskAcceptance(proof);
+  const after = compile(), reference = helperCatalog(after.message)[0];
+  expect(after.manifest.requiredTaskIds).toEqual(before.manifest.requiredTaskIds);
+  expect(after.manifest.mandatoryBytes).toBe(before.manifest.mandatoryBytes);
+  expect(after.manifest.usedBytes).toBe(before.manifest.usedBytes);
+  expect(reference.recordDigest).toBe(mathDigest(canonicalMathJson(helper)));
+  expect(reference.recordDigest).not.toBe(helperCatalog(before.message)[0].recordDigest);
+  expect(after.message).not.toContain('HISTORICAL_ONLY_RECEIPT');
+  expect(after.message).not.toContain('HISTORICAL_ONLY_REFERENCE');
+  expect(compiledGraph(after.message).find(row => row.id === wrapper.task.id).evidence.verification.receipts)
+    .toEqual(wrapper.integratedCheck!.verification.results);
+});
+
+it('loads the exact closure of an explicitly offered ownership candidate without loading unrelated work', () => {
+  const dependency = node({ ...lemma('candidate_input'), premises: ['EXACT_CANDIDATE_PREMISE'] }),
+    candidate = node(lemma('candidate', ['candidate_input'], 'EXACT_CANDIDATE_TYPE')), unrelated = node(lemma('unrelated'));
+  const context = compileTaskContext({ ...input([dependency, candidate, unrelated, originalGoal()], { ...lead,
+    capacityRefill: { inputDigest: 'capacity-input', requestedAt: 1, workerIds: ['idle'], ownershipCandidates: [{
+      taskId: candidate.task.id, taskDigest: taskVersion(candidate.task), ownerId: 'busy', eligibleWorkerIds: ['idle'],
+    }] } }), maxOptionalContextBytes: 0 });
+  expect(new Set(context.manifest.requiredTaskIds)).toEqual(new Set(['original_goal', 'candidate', 'candidate_input']));
+  expect(context.message).toContain('EXACT_CANDIDATE_TYPE');
+  expect(context.message).toContain('EXACT_CANDIDATE_PREMISE');
+  expect(taskRecordIndex(context.message).map(row => row.id)).toEqual(['unrelated']);
+});
+
+it.each(['handoff', 'challenge'] as const)('loads only the selected %s source and its delivery-input closure', kind => {
+  const prerequisite = lemma('selected_input', [], 'EXACT_SELECTED_DELIVERY_INPUT'),
+    source = { ...lemma('selected_source'), kind: 'research' as const, type: undefined },
+    queuedSource = { ...lemma('queued_source'), kind: 'research' as const, type: undefined },
+    queuedInput = lemma('queued_input', [], 'UNSELECTED_DELIVERY_INPUT'),
+    finding = JSON.stringify({ conclusion: 'refuted', summary: 'A precise mathematical witness.' });
+  const makeDelivery = (task: CooperativeTask, dependency: CooperativeTask): DeliveryRecord => ({
+    ...delivery(task, task.id), kind: 'research', status: 'advisory', commit: proofCommit, findingDigest: mathDigest(finding),
+    ...(kind === 'handoff' ? { lemmaRequests: [lemma(`${task.id}_proposal`, [dependency.id])] } : {}),
+    dependencies: [{ taskId: dependency.id, taskDigest: taskVersion(dependency) }],
+  });
+  const records = [node(prerequisite), { ...node(source), finding }, { ...node(queuedSource), finding }, node(queuedInput), originalGoal()],
+    cooperation = { tasks: records, deliveries: [makeDelivery(source, prerequisite), makeDelivery(queuedSource, queuedInput)] },
+    selected = kind === 'handoff' ? pendingResearchHandoffs(cooperation)[0] : pendingResearchChallenges(cooperation)[0];
+  const context = compileTaskContext({ ...input(records, { ...lead,
+    handoffIds: kind === 'handoff' ? [selected.id] : [], challengeIds: kind === 'challenge' ? [selected.id] : [] }),
+    cooperation, maxOptionalContextBytes: 0 });
+  expect(new Set(context.manifest.requiredTaskIds)).toEqual(new Set(['original_goal', source.id, prerequisite.id]));
+  expect(context.message).toContain('EXACT_SELECTED_DELIVERY_INPUT');
+  expect(context.message).not.toContain('UNSELECTED_DELIVERY_INPUT');
+  expect(taskRecordIndex(context.message).map(row => row.id)).toEqual([queuedSource.id, queuedInput.id]);
+});
+
+it('writes exact digest-retrievable task records and failed inputs to each worker archive within its visibility scope', async () => {
+  const example = localExample('context-record-retrieval-', 'lead'), controller = new AbortController(),
+    workers = [leadWorker(example.problem, example.workspace, 'lead'), peerWorker(example, 'peer')],
+    sameGroup = node({ ...lemma('peer_task'), groupId: 'first', sharing: 'group' }),
+    privateOther = node({ ...lemma('private_task'), groupId: 'other', sharing: 'group' }),
+    publicHelper = { ...node({ ...lemma('public_helper'), groupId: 'other', sharing: 'problem' }), status: 'completed' as const };
+  sameGroup.status = 'running';
+  sameGroup.assignment = { ...assign(sameGroup.task).assignment, workerId: workers[1].id, seedCommit: example.problem.baseCommit };
+  const failedInputs = [sameGroup, privateOther].map(record => ({ id: `failure-${record.task.id}`, taskId: record.task.id,
+    taskDigest: taskVersion(record.task), inputDigest: `input-${record.task.id}`, feedback: `Exact feedback for ${record.task.id}`,
+    basis: { contractDigest: 'contract', environmentDigest: 'environment', dependencies: {} } })),
+    state = solverState(example.problem, example.workspace, { runId: 'context-record-retrieval', phase: 'running',
+      cooperation: { canonicalCommit: example.problem.baseCommit, tasks: [sameGroup, privateOther, publicHelper], failedTaskInputs: failedInputs } }),
+    cooperative = cooperativeResearch({ state, workers, retrievalRoot: example.directory, signal: controller.signal });
+  try {
+    cooperative.activate(workers[1], { kind: 'task', task: sameGroup.task, assignment: sameGroup.assignment }, async () => {}, async () => {});
+    for (const worker of workers) {
+      const archive = JSON.parse(fs.readFileSync(path.join(worker.worktree, 'COOPERATION.json'), 'utf8')),
+        action = worker.id === 'lead' ? undefined : { kind: 'task' as const, task: sameGroup.task, assignment: sameGroup.assignment! },
+        scoped = cooperative.contextState(action, worker);
+      expect(archive.tasks).toEqual(JSON.parse(canonicalMathJson(scoped.tasks)));
+      expect(archive.failedTaskInputs).toEqual(JSON.parse(canonicalMathJson(scoped.failedTaskInputs)));
+      for (const record of scoped.tasks) {
+        const archived = archive.tasks.find((item: TaskRecord) => item.task.id === record.task.id);
+        expect(mathDigest(canonicalMathJson(archived))).toBe(mathDigest(canonicalMathJson(record)));
+        expect(archive.peers.find((peer: { id: string }) => peer.id === record.task.id).taskDigest).toBe(taskVersion(record.task));
+      }
+      if (worker.id === 'peer') {
+        expect(archive.tasks.map((record: TaskRecord) => record.task.id)).toEqual(['peer_task', 'public_helper']);
+        expect(archive.failedTaskInputs.map((record: { taskId: string }) => record.taskId)).toEqual(['peer_task']);
+      } else expect(archive.tasks.map((record: TaskRecord) => record.task.id)).toContain('private_task');
+    }
+  } finally {
+    controller.abort(); await cooperative.stop(); fs.rmSync(example.directory, { recursive: true, force: true });
+  }
 });

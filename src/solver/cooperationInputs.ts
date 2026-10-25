@@ -24,6 +24,12 @@ import { acceptContextCheckpoint, contextCheckpointRejection, contextCheckpointR
 
 /** Worker delivery intake. */
 export abstract class CooperationInputs extends CooperationPlanning {
+  /** A host import has no model writer; retain the normal readiness, snapshot and receipt boundary. */
+  freezeImportedProof(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>,
+    submissionId: string, commit: string) {
+    this.receiveProofReady(worker, action, submissionId);
+    return this.proofReadyFrozen(worker, action, commit);
+  }
   private planPublicationNotification?: PlanPublicationRejection;
   private contextCheckpointNotifications?: WeakMap<object, object>;
   private completedCoordination = new WeakMap<CooperativeAction, {

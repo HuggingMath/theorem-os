@@ -208,11 +208,7 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
     }
     visiting.delete(id);
   };
-  if (action?.kind === 'task') visit(action.task.id);
-  else if (coordination) {
-    // Coordination consumes a fixed inbox, not every open mathematical investigation.
-    // The complete archive remains available for an explicit full-plan replacement.
-    tasks.filter(node => node.task.kind === 'goal').forEach(node => visit(node.task.id));
+  const visitLeadInputs = (handoffIds: ReadonlySet<string>, challengeIds: ReadonlySet<string>) => {
     const visitDeliveryInputs = (deliveryId: string) => {
       const delivery = input.cooperation?.deliveries?.find(item => item.id === deliveryId);
       if (!delivery) return missing(`delivery:${deliveryId}`);
@@ -223,18 +219,25 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
         visit(dependency.taskId);
       }
     };
-    action.stagnationRecovery?.taskIds.forEach(id => visit(id));
-    action.capacityRefill?.ownershipCandidates?.forEach(item => visit(item.taskId));
-    const handoffIds = new Set(action.handoffIds ?? []);
     for (const item of pendingResearchHandoffs(input.cooperation!)) if (handoffIds.has(item.id) ||
         item.sources.some(source => handoffIds.has(source.handoffId))) {
       visit(item.sourceTaskId);
       item.sources.forEach(source => visitDeliveryInputs(source.deliveryId));
       item.proposal.dependsOn.filter(id => byId.has(id)).forEach(id => visit(id));
     }
-    const challengeIds = new Set(action.challengeIds ?? []);
     for (const item of pendingResearchChallenges(input.cooperation!))
       if (challengeIds.has(item.id)) { visit(item.sourceTaskId); visitDeliveryInputs(item.deliveryId); }
+  };
+  if (action?.kind === 'task') visit(action.task.id);
+  else if (coordination) {
+    // Coordination consumes a fixed inbox, not every open mathematical investigation.
+    // The complete archive remains available for an explicit full-plan replacement.
+    tasks.filter(node => node.task.kind === 'goal').forEach(node => visit(node.task.id));
+    action.stagnationRecovery?.taskIds.forEach(id => visit(id));
+    action.capacityRefill?.ownershipCandidates?.forEach(item => visit(item.taskId));
+    const handoffIds = new Set(action.handoffIds ?? []);
+    const challengeIds = new Set(action.challengeIds ?? []);
+    visitLeadInputs(handoffIds, challengeIds);
     if (!handoffIds.size && !challengeIds.size) {
       const continuation = buildProofContinuation(tasks, { groups: input.cooperation?.groups,
         environmentDigest: input.environmentDigest, proofRoutes: input.cooperation?.proofRoutes });
@@ -244,7 +247,13 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
       omitted.push({ id: `interface:${node.task.id}`, kind: 'interfaces', reason: 'outside-task-scope' });
   }
   else if (scopedLead) {
-    for (const node of tasks) if (node.task.kind === 'goal' || !closedLeadHelper(node)) visit(node.task.id);
+    tasks.filter(node => node.task.kind === 'goal').forEach(node => visit(node.task.id));
+    action.recovery?.taskIds.forEach(id => visit(id));
+    action.recovery?.goalIds.forEach(id => visit(id));
+    action.stagnationRecovery?.taskIds.forEach(id => visit(id));
+    action.capacityRefill?.ownershipCandidates?.forEach(item => visit(item.taskId));
+    visitLeadInputs(new Set(action.handoffIds ?? selectResearchHandoffBatch(input.cooperation!).map(item => item.id)),
+      new Set(action.challengeIds ?? selectResearchChallengeBatch(input.cooperation!).map(item => item.id)));
   }
   else tasks.forEach(node => visit(node.task.id));
   const route = action?.kind === 'task' && action.assignment.routeId ?
@@ -264,18 +273,23 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
       visit(dependency.taskId);
     }
   }
-  return { tasks: tasks.filter(node => required.has(node.task.id)),
-    deferred: scopedLead && !coordination ? tasks.filter(node => !required.has(node.task.id) && closedLeadHelper(node)) : [], byId, required, route };
+  const deferred = scopedLead && !coordination ? tasks.filter(node => !required.has(node.task.id)) : [];
+  for (const node of deferred)
+    omitted.push({ id: `interface:${node.task.id}`, kind: 'interfaces', reason: 'advisory-details-by-reference' });
+  return { tasks: tasks.filter(node => required.has(node.task.id)), deferred, byId, required, route };
+}
+
+function taskRecordReference(node: TaskRecord) {
+  return { id: node.task.id, taskDigest: taskVersion(node.task), recordDigest: mathDigest(canonicalMathJson(node)),
+    kind: node.task.kind, status: node.status, control: node.task.status ?? 'active', groupId: taskGroup(node.task),
+    owner: node.assignment?.workerId ?? node.task.ownerId, dependsOn: node.task.dependsOn,
+    theoremName: node.task.theoremName, proofPath: node.task.proofPath };
 }
 
 function checkedHelperReference(input: TaskContextInput, node: TaskRecord) {
   const proof = evidence(node, input.environmentDigest)!;
-  return { id: node.task.id, taskDigest: taskVersion(node.task), status: node.status,
-    theoremName: node.task.theoremName, proofPath: node.task.proofPath, groupId: taskGroup(node.task),
-    sharing: node.task.sharing ?? 'problem', objectiveDigest: mathDigest(node.task.objective),
+  return { ...taskRecordReference(node), sharing: node.task.sharing ?? 'problem',
     source: { commit: proof.commit, path: sourcePath(input.problem, node.task.proofPath!), sourceDigest: proof.sourceDigest },
-    verification: proof.verification, referenceSource: proof.references && { sourceCommit: proof.references.sourceCommit,
-      environmentDigest: proof.references.environmentDigest, contextDigest: proof.references.contextDigest },
     evidence: 'recorded-not-replayed' };
 }
 
@@ -467,16 +481,26 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
           'This live file is not an immutable proof source and grants no proof acceptance. Exact Lean types, premises, dependencies, ' +
           'unresolved conditions and evidence stay inline; completed research/sketch tasks remain advisory.',
       }));
-    if (deferred.length) mandatory.push(section('checked-helper-catalog', 'sources',
-      'Checked helpers outside the current open-task closure (retrieve before using; recorded, not replayed):', {
-        retrieval: 'Each source commit/path identifies the complete immutable Lean declaration and proof. Read it with git show COMMIT:PATH. ' +
-          'The exact original goals, all unfinished task descriptions and interfaces, and unresolved conditions remain in the task graph. ' +
-          'Only freshly checked unconditional helpers are encapsulated here; this catalog grants no proof acceptance. ' +
-          'Their earlier objective is advisory planning material, not their Lean interface. Its UTF-8 SHA-256 is objectiveDigest. ' +
-          'A current description may be read from COOPERATION.json peers by id only if its taskDigest matches this row and its objective hash matches objectiveDigest; ' +
-          'that live file is not an immutable proof source. A missing or mismatched description is unavailable, never a new mathematical premise.',
-        helpers: deferred.map(node => checkedHelperReference(input, node)),
-      }));
+    if (deferred.length) {
+      mandatory.push(section('task-record-reference-encoding', 'sources',
+        'Digest-bound task record retrieval (required before using an indexed task):', {
+          retrieval: 'Read worktree-root COOPERATION.json tasks[] and match record.task.id to row.id. Require taskVersion(record.task) = row.taskDigest ' +
+            'and SHA-256(canonicalMathJson(record)) = row.recordDigest; canonicalMathJson sorts object keys recursively and omits undefined object fields. ' +
+            'Missing or mismatched records are unavailable. Retrieve exact Lean types, premises, conditions, feedback and evidence before reasoning from ' +
+            'an indexed task or replacing the full plan. Every visible task remains discoverable, including running and blocked work. ' +
+            'This live file is not an immutable proof source and grants no proof acceptance. A checked helper source commit/path identifies ' +
+            'immutable Lean content retrievable with git show COMMIT:PATH; its recorded acceptance must still be independently checked when used.',
+        }));
+      const helpers = deferred.filter(closedLeadHelper), others = deferred.filter(node => !closedLeadHelper(node));
+      if (helpers.length) mandatory.push(section('checked-helper-catalog', 'sources',
+        'Checked helpers outside the current open-task closure (retrieve before using; recorded, not replayed):', {
+          helpers: helpers.map(node => checkedHelperReference(input, node)),
+        }));
+      if (others.length) mandatory.push(section('task-record-index', 'sources',
+        'Other visible task records outside the current goal and requested-input closure (retrieve exact interfaces before use):', {
+          tasks: others.map(taskRecordReference),
+        }));
+    }
     if (action?.kind === 'lead') {
       const continuation = buildProofContinuation(action.coordination ? input.cooperation.tasks : tasks, { groups: input.cooperation.groups,
         environmentDigest: input.environmentDigest, proofRoutes: input.cooperation.proofRoutes });
@@ -570,6 +594,7 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     'Latest related failed attempt (advisory; full-source checks remain independent). Older search hints use the optional budget:',
     { relatedAttemptFingerprints: repeatedAttempts.length, latest: attemptHint(repeatedAttempts[0]) }));
   const rank = scopeRank(active, required);
+  const deferredIds = new Set(deferred.map(node => node.task.id));
   const optional: ContextSection[] = [];
   if (repeatedAttempts.length > 1) optional.push({ ...section('repeated-attempt-history', 'feedback',
     'Earlier related failed attempts (advisory; not permission to reuse verification):',
@@ -595,7 +620,7 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
       taskId: node.task.id, taskDigest: taskVersion(node.task), finding: node.finding,
       savedSource: findingSources.get(node.task.id),
     }), priority: priority + 1 });
-    if (!required.has(node.task.id) && !consumerIds.has(node.task.id)) optional.push({ ...section(`interface:${node.task.id}`, 'interfaces', 'Other visible task (advisory planning context):',
+    if (!required.has(node.task.id) && !consumerIds.has(node.task.id) && !deferredIds.has(node.task.id)) optional.push({ ...section(`interface:${node.task.id}`, 'interfaces', 'Other visible task (advisory planning context):',
       { ...node.task, taskDigest: taskVersion(node.task), status: node.status }), priority: priority + 8 });
   }
   for (const route of input.cooperation?.proofRoutes ?? []) {

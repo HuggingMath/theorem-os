@@ -283,7 +283,7 @@ export abstract class CooperationCore {
       const taskId = work?.kind === 'task' ? work.task.id : preparation?.task.id;
       const record = this.input.state.workers?.find(worker => worker.id === peer.id);
       if (record) {
-        if (work || preparation) this.clearDispatchWait(peer, 'selected');
+        if ((work || preparation) && record.scheduling?.wait?.stage !== 'integration-queue') this.clearDispatchWait(peer, 'selected');
         const previous = record.scheduling;
         const same = previous?.status === status && previous.action === action && previous.taskId === taskId;
         record.scheduling = { status, action, taskId, since: same ? previous.since : Date.now(), wait: previous?.wait };
@@ -319,6 +319,8 @@ export abstract class CooperationCore {
         capacityExplorations: scoped.tasks.filter(node => node.capacityExploration).map(node => ({
           taskId: node.task.id, status: node.status, ...node.capacityExploration })),
         parallelQuestions: scoped.parallelQuestions ?? [],
+        tasks: scoped.tasks,
+        failedTaskInputs: scoped.failedTaskInputs ?? [],
         peers: this.archive.tasks.map(node => ({ id: node.task.id, taskDigest: digest(node.task),
           objectiveDigest: mathDigest(node.task.objective), groupId: taskGroup(node.task), kind: node.task.kind,
           status: node.status, owner: node.assignment?.workerId ?? node.task.ownerId, dependsOn: node.task.dependsOn,

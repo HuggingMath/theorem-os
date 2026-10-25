@@ -26,6 +26,7 @@ const commands: Readonly<Record<string, string>> = {
   inspect: 'scripts/mathematics/inspectMathRun.ts',
   recover: 'scripts/mathematics/recoverMathSnapshot.ts',
   edit: 'scripts/mathematics/editMathRun.ts',
+  'import-proof': 'scripts/mathematics/importProofFragment.ts',
   compare: 'scripts/mathematics/compareMathRuns.ts',
   'sample-putnam': 'scripts/mathematics/samplePutnamRuns.ts',
   summarize: 'scripts/mathematics/summarizeMathProofRuns.ts',
@@ -53,6 +54,7 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   inspect              Read a research report or export a versioned task plan
   recover              Restore a research snapshot and recheck saved helpers
   edit                 Validate and queue a human plan edit
+  import-proof         Queue a Lean fragment for host-checked task delivery
   compare              Compare fixed-budget coordination arms or module plans
   sample-putnam        Prepare and report reproducible PutnamBench samples
   summarize           Summarize saved proof-run receipts

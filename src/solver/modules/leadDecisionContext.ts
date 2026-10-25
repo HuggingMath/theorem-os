@@ -7,6 +7,7 @@ import { leadPlanDeliveryFile, taskVersion, type CooperativeAction } from '../ta
 import { cooperativeWorkContract } from './contracts';
 import type { ContextBundle } from './context';
 import type { ResearchWorker } from './organization';
+import { leadPlanningEvidence } from '../planningEvidence';
 
 /** The decision uses the same intake protocol as full planning, with a smaller work product. */
 export function buildLeadDecisionContext(problem: SolverProblem, cooperation: CooperationState, context: ContextBundle,
@@ -40,6 +41,7 @@ export function buildLeadDecisionContext(problem: SolverProblem, cooperation: Co
     shown: { handoffIds: shownHandoffs.map(item => item.id), challengeIds: shownChallenges.map(item => item.id) },
     queuedForLater: handoffs.length + challenges.length - shownHandoffs.length - shownChallenges.length,
     capacity: action.capacityRefill, stagnation: action.stagnationRecovery,
+    mathematics: leadPlanningEvidence(cooperation, compilation.environmentDigest),
     peers: workers.map(worker => ({ id: worker.id, role: worker.role, assignments: cooperation.tasks.filter(node =>
       ['running', 'delivered'].includes(node.status) && node.assignment?.workerId === worker.id).map(node => ({
         taskId: node.task.id, taskDigest: taskVersion(node.task), kind: node.task.kind })) })),
@@ -53,12 +55,14 @@ export function buildLeadDecisionContext(problem: SolverProblem, cooperation: Co
   const decisionRules = [
     'You are the Lead handling one bounded coordination decision. Resolve this dispatch before further mathematical investigation. A decision does not require proving the missing theorem.',
     'Use the fixed shown inbox, exact task interfaces and cited evidence below. Decide each shown item; do not wait for every other research task to finish. Preserve unshown items for subsequent dispatches.',
+    'Inspect mathematics.goals and localPackages before extending a route. Local checked results do not close a goal without a recorded consumer chain. Resolve the exact missing bridge or retain it as exploration; a conditional consumer checks sufficiency, not feasibility of its premises. For mathematics.repeatedInputs, state the concrete changed proof step/method or new mathematical input and a discriminating check before proposing the same work again. Ordinary turn counts are not failure evidence.',
     'First inspect the capacity request, eligible ownership candidates and shown evidence for executable new work or an ownership repair. If supported, publish the complete plan now with decisions for every shown inbox id; queuedForLater need not be zero. Otherwise resolve the shown inbox with a short decision. Only a no-independent-work assessment must wait for all pending inbox input.',
     'Large finding bodies use exact digest-bound references to COOPERATION.json researchChallenges. The inline summary is advisory; retrieve and verify the complete referenced finding before relying on details absent from the summary. A reference is not a decision or permission to acknowledge an unshown id.',
     'Leave Lean sources unchanged and do not run Lean diagnostics during coordination. Keep existing RESEARCH.md and saved source drafts. A short publication does not require rewriting the complete plan or reproducing old research notes.',
     'Append one complete JSON line to worktree-root ' + file + ' and return promptly. Current response envelope (a schema example, not a recommendation to defer; replace statuses and placeholders with your supported decisions):\n' + JSON.stringify(response),
     ...(hasInbox ? [
       'For handoffs, choose status adopted, rejected or deferred. Adoption copies the exact immutable proposal and its actual typed inputs into a separate proof assignment; it never accepts a proof. For adopted use only id, status and optional ownerId; omit reason and waitsOn. Rejected/deferred decisions require a precise reason. Optional ownerId applies only to a newly adopted task; omit it for shared work. Optional waitsOn lists actual proof task ids.',
+      'Read each handoff application with its exact proposal.type: inputs name the available or missing typed contracts, consumers name recorded nearest uses. Supply an implementable missing glue task through kind plan, or state the exact missing application/input in the decision. A missing consumer alone does not invalidate useful independent research or require rejection.',
       'For challenges, choose status revised, disputed or deferred with a concrete response. A disputed decision requires nonempty evidenceRefs. A deferred decision requires actual waitsOn inputs or a nonempty, specific reopenOn condition. Resolve exactly the shown ids, using their supplied activation identities; do not acknowledge unseen input.',
       'Do not attach no-independent-work assessments to this inbox publication. Capacity/stagnation requests remain pending while the host presents subsequent inbox batches, including concurrent arrivals.',
     ] : [

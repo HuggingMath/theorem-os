@@ -8,6 +8,7 @@ import type { SolverProblem } from '../src/solver/problem';
 import { pendingResearchChallenges } from '../src/solver/researchChallenges';
 import { pendingResearchHandoffs, selectResearchHandoffBatch } from '../src/solver/researchHandoffs';
 import { taskVersion, type CooperativeAction, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
+import { integratedProof } from './helpers/taskProof';
 
 const formal = 'namespace Original\ntheorem target : True := by sorry\nend Original';
 const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {
@@ -118,6 +119,44 @@ it('emits the exact explicit no-work envelope only after the inbox has been cons
       outcome: 'no-independent-work', reason: 'EXACT_MISSING_INPUT_AND_REOPEN_TRIGGER' }] });
   expect(result.workContract).toMatchObject({ stage: 'coordination-decision', sourcePolicy: 'read-only' });
   expect(result.instructions).toContain('New pending inbox input prevents its acceptance');
+});
+
+it.each([false, true])('keeps the current missing goal connection visible with no optional context (coordination=%s)', coordination => {
+  const state = base(), local = node(task('checked_row')), bridge = node(task('row_application', 'lemma', ['checked_row', 'missing_classification']));
+  integratedProof(local, { accept: false, environmentDigest: 'environment' });
+  state.tasks.push(local, bridge, node(task('missing_classification')));
+  const current = action(state); if (!coordination) delete current.coordination;
+  const result = context(state, current);
+  if (coordination) {
+    const evidence = packet(result.message).mathematics;
+    expect(evidence.goals[0]).toMatchObject({ taskId: 'goal', recordedProof: 'none', frontier: [{ taskId: 'core' }] });
+    expect(evidence.localPackages).toContainEqual(expect.objectContaining({ taskId: 'row_application',
+      consumerConnection: 'not-recorded', unprovedInputTaskIds: ['missing_classification'] }));
+  } else {
+    expect(result.manifest!.included).toContainEqual(expect.objectContaining({ id: 'planning-evidence', required: true }));
+  }
+  expect(result.message).toContain('No planned dependency or proof route connects this package to an original goal.');
+  expect(result.continuationMessage).toContain('No planned dependency or proof route connects this package to an original goal.');
+  expect(state.tasks[0].status).toBe('pending');
+});
+
+it('keeps large local interfaces and repeated failure bodies in the archive within the coordination budget', () => {
+  const state = base(), exactType = '∀ P : Prop, ' + 'P → '.repeat(8000) + 'P';
+  for (let i = 0; i < 8; i++) {
+    const local = node({ ...task('local_' + i), type: exactType });
+    integratedProof(local, { accept: false, environmentDigest: 'environment' });
+    state.tasks.push(local, node({ ...task('application_' + i, 'lemma', [local.task.id]), type: exactType }));
+    state.tasks.push({ ...node(task('blocked_' + i)), status: 'blocked',
+      feedback: 'math_task_repeated_failed_input\n' + 'Archived diagnostic detail. '.repeat(300) });
+  }
+  const result = context(state), evidence = packet(result.message).mathematics;
+  expect(evidence.localPackages).toHaveLength(8);
+  expect(evidence.repeatedInputs).toHaveLength(8);
+  expect(evidence.repeatedInputs[0]).toMatchObject({ feedbackTruncated: true,
+    feedbackSource: { path: 'COOPERATION.json', field: 'peers[].feedback', match: 'id-and-taskDigest' } });
+  expect(result.message).not.toContain(JSON.stringify(exactType));
+  expect(result.message).not.toContain('Archived diagnostic detail. '.repeat(30));
+  expect(result.manifest!.mandatoryBytes).toBeLessThan(32 * 1024);
 });
 
 it('keeps an oversized exact proposal intact and lets the required-context budget reject it', () => {

@@ -42,7 +42,7 @@ export type ProofDeliveryAnnotation = () => Promise<void>;
 /** Task proof checks, failed-input memory and research checkpoints. */
 export abstract class CooperationTaskProofs extends CooperationStatements {
   // Implemented by later layers; listed here because this layer calls them.
-  protected abstract queueIntegration<T>(operation: () => Promise<T>): Promise<T>;
+  protected abstract queueIntegration<T>(operation: () => Promise<T>, worker?: ResearchWorker, task?: CooperativeTask): Promise<T>;
   protected abstract integrateReadyNow(annotations: ProofDeliveryAnnotation[]): Promise<void>;
   protected abstract integrateNow(node: TaskRecord): Promise<void>;
   private proofDeliveryRequests = new Map<string, ProofDeliveryRequest>();
@@ -457,10 +457,11 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       });
     }
   }
-  private sourceProjector(worktree: string, commit: string) {
-    const identity = mathDigest(canonicalMathJson({ problem: this.input.state.problem, worktree, commit }));
+  private sourceProjector(worktree: string, commit: string, compact = false,
+    preserved: readonly { file: string; name: string }[] = []) {
+    const identity = mathDigest(canonicalMathJson({ problem: this.input.state.problem, worktree, commit, compact, preserved }));
     if (this.preparedSources?.identity !== identity) this.preparedSources = { identity,
-      project: createTaskSourceProjector(this.input.state.problem, worktree, commit) };
+      project: createTaskSourceProjector(this.input.state.problem, worktree, commit, { compact, preserved }) };
     return this.preparedSources.project;
   }
   private assignmentConditions(task: CooperativeTask, assignment?: TaskAssignment,
@@ -551,7 +552,9 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       throw new Error('math_task_check_identity_changed');
     const declarationHash = proof.passed && proof.verification.targetCommit && hashMathFormalSourceDeclaration(
       committedSource(worktree, proof.verification.targetCommit, `${this.input.state.problem.projectRelative}/${task.proofPath}`), task.theoremName!);
-    const projected = (proof.passed || reuse) && this.sourceProjector(worktree, commit)(task, retainedGoals, conditions);
+    const compact = isAttributedTaskProof(proof) && proof.projectionMode === 'compact';
+    const projected = (proof.passed || reuse) && this.sourceProjector(worktree, commit, compact,
+      compact ? proof.changes : [])(task, retainedGoals, conditions);
     const allowed = new Set(this.input.state.problem.ownedFiles.map(file => `${this.input.state.problem.projectRelative}/${file}`));
     allowed.add('RESEARCH.md');
     const projectionMatches = projected && projectionCommit &&
@@ -657,7 +660,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       }
       await this.integrateReadyNow(annotations);
       return submitted;
-    }));
+    }, worker, action.task));
   }
   protected currentTaskSourceRepair(node: TaskRecord) {
     const repair = node.sourceRepair, assignment = node.assignment;

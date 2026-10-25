@@ -404,7 +404,7 @@ describe('automatic proof and ownership capacity refill', () => {
     expect(events.filter(item => item.event === 'capacity_refill_resumed')).toHaveLength(1);
   });
 
-  it.each(['request-failure', 'checkpoint', 'scheduling-checkpoint'] as const)('retries a %s Lead that only retained the previously seeded plan', async recovery => {
+  it.each(['request-failure', 'checkpoint', 'scheduling-checkpoint'] as const)('resumes a %s Lead that only retained the previously seeded plan when eligible input is available', async recovery => {
     state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
     const action = (await nextLead())!, receipt = state.cooperation!.lastCapacityRefill!;
     const firstRequest = requestFor(action), snapshot = structuredClone(firstRequest);
@@ -415,7 +415,13 @@ describe('automatic proof and ownership capacity refill', () => {
     expect(result.savedPlan).not.toBe(true);
     expect(state.cooperation!.lastCapacityRefill).toMatchObject({ status: 'requested', inputDigest: receipt.inputDigest });
     expect((cooperative as any).capacityRefill()).toBeDefined();
-    const retry = (await nextLead())!;
+    const retry = recovery === 'request-failure' ? (await nextLead())! : await (async () => {
+      const paused = await waitsForInput();
+      expect(state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
+      fs.appendFileSync(path.join(workers[0].worktree, 'RESEARCH.md'), '\nA new exact inference is saved for the unfinished capacity decision.\n');
+      refresh();
+      return (await paused.waiting)!;
+    })();
     expect(retry.kind).toBe('lead');
     expect(requestFor(retry)).toEqual(archivedRequest());
     expect(requestFor(retry)).not.toBe(firstRequest);
@@ -441,6 +447,12 @@ describe('automatic proof and ownership capacity refill', () => {
   });
 
   describe.each(['request-failure', 'checkpoint', 'scheduling-checkpoint'] as const)('%s interrupted planning', recovery => {
+    const resumeWithCorrection = async (file: string, attempt: number) => {
+      const paused = await waitsForInput();
+      fs.appendFileSync(file, `\nCorrective inference ${attempt}: the draft still needs a complete graph.\n`);
+      refresh();
+      return (await paused.waiting)!;
+    };
     const expectDraftOutcome = (attempt: number, action: CooperativeAction, commit: string, since: number) => {
       const unchangedSchedulingDraft = recovery === 'scheduling-checkpoint' && attempt > 0;
       const currentEvents = events.slice(since);
@@ -460,7 +472,7 @@ describe('automatic proof and ownership capacity refill', () => {
       expect(state.cooperation!.tasks.every(item => !item.proof && !item.integratedCheck)).toBe(true);
       expect(state.check).toBeUndefined();
       expect(state.cooperation!.deliveries).toContainEqual(expect.objectContaining({
-        producer: workers[0].id, kind: 'progress', status: 'advisory', commit,
+        producer: workers[0].id, kind: 'progress', status: 'advisory', ...(!unchangedSchedulingDraft ? { commit } : {}),
         summary: expect.stringContaining('Saved Lead draft pending integration:'),
       }));
     };
@@ -472,21 +484,23 @@ describe('automatic proof and ownership capacity refill', () => {
       const originalPlan = structuredClone(plan()), version = state.cooperation!.planVersion, canonical = state.cooperation!.canonicalCommit;
       const busy = node('busy_helper'), assignment = structuredClone(busy.assignment);
       for (let attempt = 0; attempt < 3; attempt++) {
-        const action = (await nextLead())!;
+        const action = attempt > 1 && recovery !== 'request-failure'
+          ? await resumeWithCorrection(file, attempt) : (await nextLead())!;
         expect(action.kind).toBe('lead');
-        fs.writeFileSync(file, notes);
+        if (attempt === 0 || recovery === 'request-failure') fs.writeFileSync(file, notes);
+        const savedNotes = fs.readFileSync(file, 'utf8');
         const commit = commitSolverSources(problem, workers[0].worktree), since = events.length;
         const result = await cooperative.deliver(workers[0], action, commit, true, recovery);
         expect(result).toEqual({ checkWhole: false });
         expectDraftOutcome(attempt, action, commit, since);
-        expect(committedSource(workers[0].worktree, commit, 'RESEARCH.md')).toBe(notes);
+        expect(committedSource(workers[0].worktree, commit, 'RESEARCH.md')).toBe(savedNotes);
         expect(plan()).toEqual(originalPlan);
         expect(state.cooperation!.planVersion).toBe(version); expect(state.cooperation!.canonicalCommit).toBe(canonical);
         expect(node('busy_helper')).toBe(busy); expect(busy.assignment).toEqual(assignment);
         expect(busy.status).toBe('running'); expect(busyInterrupt).not.toHaveBeenCalled();
         expect(state.cooperation!.lastCapacityRefill!.status).toBe('requested');
         expect(state.cooperation!.planRejection?.stalled).not.toBe(true);
-        expect(fs.readFileSync(file, 'utf8')).toBe(notes);
+        expect(fs.readFileSync(file, 'utf8')).toBe(savedNotes);
         expect((cooperative as any).capacityRefill()).toBeDefined();
       }
       expect(events.filter(item => item.event === 'plan_rejected')).toHaveLength(recovery === 'scheduling-checkpoint' ? 1 : 3);
@@ -495,7 +509,7 @@ describe('automatic proof and ownership capacity refill', () => {
         item.details?.incomplete === true && item.details.stalled === false)).toBe(true);
       expect(events.filter(item => item.event === 'capacity_refill_requested')).toHaveLength(1);
       expect(events.filter(item => item.event === 'capacity_refill_resumed')).toHaveLength(2);
-      await assess((await nextLead())!);
+      await assess(recovery === 'request-failure' ? (await nextLead())! : await resumeWithCorrection(file, 3));
       await waitsForInput();
     });
 
@@ -508,8 +522,10 @@ describe('automatic proof and ownership capacity refill', () => {
         state.cooperation!.canonicalCommit!, path.join(problem.projectRelative, relative)));
       const originalSources = canonicalSources();
       for (let attempt = 0; attempt < 3; attempt++) {
-        const action = (await nextLead())!;
-        fs.writeFileSync(file, notes);
+        const action = attempt > 1 && recovery !== 'request-failure'
+          ? await resumeWithCorrection(file, attempt) : (await nextLead())!;
+        if (attempt === 0 || recovery === 'request-failure') fs.writeFileSync(file, notes);
+        const savedNotes = fs.readFileSync(file, 'utf8');
         const commit = commitSolverSources(problem, workers[0].worktree), since = events.length;
         expect(await cooperative.deliver(workers[0], action, commit, true, recovery)).toEqual({ checkWhole: false });
         expectDraftOutcome(attempt, action, commit, since);
@@ -521,21 +537,21 @@ describe('automatic proof and ownership capacity refill', () => {
         state = readSolverRunState(saved); cooperative = create(); await cooperative.restore();
         expect(events.filter(item => item.event === 'plan_rejected')).toHaveLength(rejectedBeforeRestore);
         expect(events.filter(item => item.event === 'lead_checkpoint_saved')).toHaveLength(checkpointsBeforeRestore);
-        expect(committedSource(workers[0].worktree, commit, 'RESEARCH.md')).toBe(notes);
+        expect(committedSource(workers[0].worktree, commit, 'RESEARCH.md')).toBe(savedNotes);
         expect(plan()).toEqual(originalPlan);
         expect(state.cooperation!.planVersion).toBe(version); expect(canonicalSources()).toEqual(originalSources);
         expect(state.cooperation!.tasks.every(item => !item.proof && !item.integratedCheck)).toBe(true);
         expect(state.cooperation!.planPublication).toBeUndefined(); expect(state.check).toBeUndefined();
         expect(state.cooperation!.lastCapacityRefill!.status).toBe('requested');
         expect(state.cooperation!.planRejection?.stalled).not.toBe(true);
-        expect(fs.readFileSync(file, 'utf8')).toBe(notes);
+        expect(fs.readFileSync(file, 'utf8')).toBe(savedNotes);
         expect((cooperative as any).capacityRefill()).toBeDefined();
       }
       expect(events.filter(item => item.event === 'plan_rejected')).toHaveLength(recovery === 'scheduling-checkpoint' ? 1 : 3);
       expect(events.filter(item => item.event === 'lead_checkpoint_saved')).toHaveLength(recovery === 'scheduling-checkpoint' ? 2 : 0);
       expect(events.filter(item => item.event === 'plan_rejected').every(item =>
         item.details?.incomplete === true && item.details.stalled === false)).toBe(true);
-      await assess((await nextLead())!);
+      await assess(recovery === 'request-failure' ? (await nextLead())! : await resumeWithCorrection(file, 3));
       await waitsForInput();
     });
   });
