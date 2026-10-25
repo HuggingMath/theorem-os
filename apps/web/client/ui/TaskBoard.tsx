@@ -1,14 +1,27 @@
 import { Fragment, render } from 'preact';
-import { useMemo, useState } from 'preact/hooks';
+import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { compactGraphMetrics, graphMetrics } from '../taskGraphLayout';
 
 export type TaskCard = { id: string; version: string; kind: string; kindLabel: string; state: string; stateLabel: string;
   objective: string; owner: string; proof: string; proofLabel: string; selected: boolean };
 export type TaskEdgePath = { from: string; to: string; kind: 'and' | 'or'; d: string };
 
+const settledStates = new Set(['integrated', 'completed']);
+
 function Card({ card, graph, compact, x, y, dimmed, onHover }: { card: TaskCard; graph: boolean; compact?: boolean; x?: number; y?: number; dimmed?: boolean; onHover?: (id: string | undefined) => void }) {
   const leave = onHover && (() => onHover(undefined));
-  return <button type="button" class={`collab-task${card.selected ? ' selected' : ''}${dimmed ? ' dimmed' : ''}`} data-collab-task={card.id} data-focus-key={`${graph ? 'graph' : 'list'}-${card.id}`}
+  // A card that reaches a settled state while on screen pulses once; remounts with that state stay still.
+  const node = useRef<HTMLButtonElement>(null), previous = useRef(card.state);
+  useLayoutEffect(() => {
+    const element = node.current!, changed = previous.current !== card.state && settledStates.has(card.state);
+    previous.current = card.state;
+    if (!changed) return;
+    element.dataset.changed = ''; const clear = () => delete element.dataset.changed;
+    element.addEventListener('animationend', clear, { once: true });
+    const timer = setTimeout(clear, 1200);
+    return () => clearTimeout(timer);
+  }, [card.state]);
+  return <button ref={node} type="button" class={`collab-task${card.selected ? ' selected' : ''}${dimmed ? ' dimmed' : ''}`} data-collab-task={card.id} data-focus-key={`${graph ? 'graph' : 'list'}-${card.id}`}
     data-task-state={card.state} data-task-kind={card.kind} data-task-proof={card.proof} aria-pressed={card.selected}
     title={compact ? `${card.id}\n${card.objective}\n${card.owner} · ${card.proofLabel}` : undefined}
     style={graph ? { left: `${x}px`, top: `${y}px` } : undefined}

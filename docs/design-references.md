@@ -1,5 +1,17 @@
 # 首页设计参考
 
+2026-10-26 工作台与官网改为暖纸风格，参考以下公开仓库（本地只读克隆，未复制组件代码）：
+
+| 仓库 | 参考内容 | 在 TheoremOS 中的应用 |
+| --- | --- | --- |
+| [anthropics/skills](https://github.com/anthropics/skills) `brand-guidelines`、`frontend-design`（dbd4588） | 纸色 `#faf9f5`、墨色 `#141413`、次要灰 `#b0aea5`，陶土 `#d97757`、蓝 `#6a9bcc`、橄榄绿 `#788c5d`；衬线标题配无衬线正文 | 灰阶整体偏暖，品牌强调色改为陶土，验收状态用橄榄绿；标题、品牌名和研究目标使用衬线 |
+| [openai/apps-sdk-ui](https://github.com/openai/apps-sdk-ui)（MIT，0f00143） | 灰阶 token、圆角与阴影层级、按压反馈 | 卡片与输入框用两级阴影和更大圆角，按钮按下缩放到 0.97 |
+| [anthropics/claude-quickstarts](https://github.com/anthropics/claude-quickstarts)（930ad10） | 对话界面的输入框与消息气泡 | 输入框浮起，发送按钮用陶土色，用户消息改为圆角气泡 |
+
+`frontend-design` 提醒奶油底配陶土色容易显得模板化；本轮仍按这套配色执行，用真实界面、衬线标题和运动反馈区分。小字号文字的对比度保持 4.5:1 以上，因此文字用的陶土和琥珀比品牌色深一级（`#a24e31`、`#82591f`）。
+
+动效只用于状态变化：任务图首次出现时卡片按列依次浮现、依赖线逐段画出；任务进入完成或已整合时卡片外圈闪一次橄榄色；详情标签的指示条滑动。系统开启减少动态效果、页面隐藏或任务图不可见时跳过这些动画。
+
 2026-10-17 补充：现已安装并执行 taste-skill，官网按同一随机 seed 重做排版、成果表格与手机组件网格。完整方向、适配理由、真实素材和截图审查见 [design-taste.md](design-taste.md)。下方保留前一轮调研记录，其中旧组件图与横向标签已由本轮方案替换。
 
 同日继续使用 GSAP 官方技能与 React Bits 社区技能，从 React Bits 官方 registry 获取 GooeyNav 源码，参考其目标测量与重排校准，在原生 TypeScript 官网加入 GSAP 滑动选中背景。应用位置为研究组件、证明回放和部署命令；没有将官网改为 React。实现与验证见 [design-taste.md](design-taste.md#gsap-与-react-bits-实际应用)。

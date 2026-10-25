@@ -16,6 +16,15 @@ docker compose -f apps/web/compose.yml up -d web
 docker compose -f apps/web/compose.yml ps
 ```
 
+不想在本机构建时，可拉取 GitHub Actions 发布到 GHCR 的镜像。`.github/workflows/images.yml` 在 `main` 推送、`v*` 标签和手动触发时构建 `web` 与 `worker` 两个目标，发布为 `ghcr.io/likc1606/theorem-os-web` 和 `ghcr.io/likc1606/theorem-os-worker`，标签为分支名、完整 commit SHA 和版本号。worker 镜像约 16 GB，其中 Mathlib 层约 7.5 GB，首次拉取较慢。
+
+```bash
+docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web
+docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-build web
+```
+
+`THEOREMOS_IMAGE_TAG` 把两个镜像固定到同一次构建，例如 `THEOREMOS_IMAGE_TAG=v1.2.0` 或某个完整 commit SHA；默认使用 `main`。runner 以 `--pull=never` 创建运行容器，因此 worker 镜像需要先拉取到本机。GHCR 包首次发布后默认私有；需要匿名拉取时，在仓库 Packages 设置中把两个包改为 Public。
+
 浏览器打开 <http://127.0.0.1:8787>，左侧输入研究任务，右侧预览 Lean 原题。点击研究配置选择证明环境、模型并输入自己的 API Key，发送任务开始研究。新建研究默认使用 Mathlib；可切换到 Lean 标准库。配置中显示当前环境的固定 Lean 工具链和 Mathlib revision，模板列表只包含所选环境的示例。切换环境时，已选择的模板会更换为对应示例；自定义源码与任务保留，请自行确认其 import 和 tactic 属于所选环境。
 
 提交后默认进入「研究协作」。任务依赖、Agent 分工、源码与检查回执、人工指导、计划修改和知识检索均读取实际运行；尚未建立计划时显示等待状态。独立并行运行也可查看已有观测，协作计划编辑需要运行时提供对应计划。
@@ -346,7 +355,7 @@ bun scripts/test-web-runtime.ts
 
 ## 部署到服务器
 
-在 Linux 服务器按上述命令构建、运行，再用 Nginx / Caddy 将 HTTPS 域名反向代理至 `127.0.0.1:8787`。设置 `THEOREMOS_WEB_PUBLIC_URL=https://research.example.com`，保留原始 Host 请求头。服务设置 Secure / HttpOnly / SameSite Cookie，并检查请求来源与 CSRF token。不要在反向代理中记录请求体；其中包含访客 Key。
+在 Linux 服务器按上述命令构建或拉取 GHCR 镜像并运行，再用 Nginx / Caddy 将 HTTPS 域名反向代理至 `127.0.0.1:8787`。设置 `THEOREMOS_WEB_PUBLIC_URL=https://research.example.com`，保留原始 Host 请求头。服务设置 Secure / HttpOnly / SameSite Cookie，并检查请求来源与 CSRF token。不要在反向代理中记录请求体；其中包含访客 Key。
 
 Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删除运行容器；请将它部署在用于此产品的受控宿主机上。Worker 不挂载该 socket 或宿主目录，以 UID 10001 和只读根文件系统运行。每次 Mathlib 运行只映射 `/dev/fuse:rw`，并创建一个挂载到 `/var/tmp` 的匿名 local 磁盘卷供准备验证环境；正常结束、取消和失败清理均使用 `docker rm --volumes`。标准库 worker 不映射设备，也不创建磁盘卷。
 

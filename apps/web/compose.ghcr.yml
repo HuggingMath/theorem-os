@@ -1,0 +1,11 @@
+# Run the images published by .github/workflows/images.yml instead of building them locally:
+#   docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web
+#   docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-build web
+# THEOREMOS_IMAGE_TAG pins both images to one build (a commit sha, or a release such as v1.2.0).
+services:
+  web:
+    image: ghcr.io/likc1606/theorem-os-web:${THEOREMOS_IMAGE_TAG:-main}
+    environment:
+      THEOREMOS_WEB_WORKER_IMAGE: ghcr.io/likc1606/theorem-os-worker:${THEOREMOS_IMAGE_TAG:-main}
+  worker:
+    image: ghcr.io/likc1606/theorem-os-worker:${THEOREMOS_IMAGE_TAG:-main}

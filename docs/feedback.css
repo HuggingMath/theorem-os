@@ -42,7 +42,7 @@
 .feedback-footer span { margin-right: auto; }
 .feedback-footer a { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
 .feedback-review { width: min(720px, calc(100% - 32px)); max-height: calc(100dvh - 32px); padding: 28px; border: 0; border-radius: 8px; color: var(--ink); background: var(--bg); font: inherit; overflow: auto; overscroll-behavior: contain; }
-.feedback-review::backdrop { background: rgb(23 33 31 / .65); }
+.feedback-review::backdrop { background: rgb(20 20 19 / .6); }
 .feedback-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .feedback-review-heading h2 { font-size: 28px; }
 .feedback-icon-button { display: inline-grid; place-items: center; width: 44px; height: 44px; padding: 0; flex-shrink: 0; }

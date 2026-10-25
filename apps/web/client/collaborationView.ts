@@ -12,6 +12,7 @@ import { ReviewView } from './reviewView';
 import { CollaborationNavigation } from './collaborationNavigation';
 import { compactGraphMetrics, compactGraphTasks, graphMetrics, layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
 import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
+import { revealGraph } from './motion';
 import { renderAgentCards } from './ui/AgentCards';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 import { renderTaskInspector } from './ui/TaskInspector';
@@ -366,6 +367,8 @@ export class CollaborationView {
     graph.dataset.density = compact ? 'compact' : 'comfortable';
     this.applyGraphZoom(view);
     renderTaskGraph(graph, { cards: tasks.map(task => this.taskCard(view, task)), edges, positions, width, height, selected: view.selectedTask, compact, independentTop });
+    // Grow the graph once per mounted view, the first time it shows cards.
+    if (!graph.dataset.revealed && tasks.length && graph.getClientRects().length) { graph.dataset.revealed = 'true'; revealGraph(graph); }
   }
   private bindGraphViewport(view: ViewState, pane: HTMLElement) {
     // Dragging empty space pans; cards keep their click behaviour and touch keeps native scrolling.
