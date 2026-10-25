@@ -1,6 +1,6 @@
 # Snaky 普通 35 步必胜策略
 
-最新进度：V8 已通过原目标、集成和全目标内核检查；全目标回执 `lean-63766151ffe8a0523a860487`，整批耗时 8188.206 秒，仅三项标准公理。当前固定版本复审中，仍待最终工作区检查与原比较器，尚未计入最终通过数。见[原始全目标回执与复审事件](../native-check-hotspot-20261024/snaky-all-target-review-20261024/README.md)。以下保留早期版本记录。
+最新进度：V8 已于北京时间 2026-10-25 04:37:08 完成原生最终验收，result.status/run_outcome 均为 evaluated_passed，state.phase 为 finished。原目标、集成、全目标检查、固定版本复审及本地原官方 comparator 全部通过，比较器 exit 0、无 timeout/abort，仅三项标准公理；完整目标计入第 7 项最终通过。见[最终回执、精确源码与比较器输出](../native-check-hotspot-20261024/snaky-native-final-20261025/README.md)。以下保留早期版本记录。
 
 证明覆盖原题的全局合法策略、35 步获得 Snaky、Maker/Breaker 集合不交与每步棋子数要求。先由 616 行证书建立威胁语义，再组合开局几何，最后构造合法普通策略。最终声明使用原目标名 OAI.SnakyConditional.snaky_winning_strategy_with_legal_states。
 
@@ -10,9 +10,9 @@
 
 原生入口按短名比较声明，V6 中不同命名空间的三个新增 projection 同名被拒。后续 [V7 源码](single-file/SubmissionCanonicalV7.lean)只重命名这三个新增 helper 及引用，保留原题和计算表，SHA-256 为 `2edd54515230fd886561c1a79a37155c90162f85611567f2fbb63db9ea5284a3`，968,236 字节。V7 经正常投递，于 23:31 UTC 获得原生目标检查通过，完整 verification 见 [V7 goal proof](evidence/canonical-v7/native-goal-proof.json)，仅标准三公理、无剩余目标或 sorry。此后集成阶段于 2026-10-24 01:46 UTC 报 math_verifier_unavailable 并停止，最终比较器未执行；具体底层诊断未保留，原因仍在定位，见 [V7 阶段与错误摘要](evidence/canonical-v7/goal-pass-integration-error-summary.json)。V6 的历史整题回执不作为 V7 最终验收证据。
 
-最新 V8 已于 2026-10-24 06:53:48 UTC 获得真实原生原目标内核回执 `lean-9d717a842be4b918425377eb`，exitCode=0，耗时 8,072,025 ms，仅标准三公理；原生事件确认 `task_checked passed=true, conditional=false`。后续集成源码只删除 1,101 个空行，15,263 行非空源码逐字节相同，见[V8 回执与集成核查](../native-check-hotspot-20261024/snaky-v8-kernel-progress/ORIGINAL-INTEGRATION-IDENTITY.md)。集成内核检查现已通过，回执 `lean-78b317b5823543bbdf5c270f`，耗时 8343.538 秒，仅三项标准公理；09:17:09 UTC 原生状态已记录 integrated，进入 lead 全目标检查。见[原始集成回执](../native-check-hotspot-20261024/snaky-integration-cost-20261024/native-integration-verification-20261024T0917Z.json)。最终比较器及原生最终验收仍待完成。
+最新 V8 已于 2026-10-24 06:53:48 UTC 获得真实原生原目标内核回执 `lean-9d717a842be4b918425377eb`，exitCode=0，耗时 8,072,025 ms，仅标准三公理；原生事件确认 `task_checked passed=true, conditional=false`。后续集成源码只删除 1,101 个空行，15,263 行非空源码逐字节相同，见[V8 回执与集成核查](../native-check-hotspot-20261024/snaky-v8-kernel-progress/ORIGINAL-INTEGRATION-IDENTITY.md)。集成内核检查现已通过，回执 `lean-78b317b5823543bbdf5c270f`，耗时 8343.538 秒，仅三项标准公理；09:17:09 UTC 原生状态已记录 integrated，进入 lead 全目标检查。见[原始集成回执](../native-check-hotspot-20261024/snaky-integration-cost-20261024/native-integration-verification-20261024T0917Z.json)。该历史截点的最终比较器及原生最终验收尚待完成，当前结果见本页顶部。
 
-此题尚不能计为原生 accepted，OpenAI 托管认证也无确认。C 档为本项目判断。新增证明含外部代理辅助，不算模型从零独立发现。
+当前 V8 已计为原生最终通过，OpenAI 托管认证无确认。C 档为本项目判断。新增证明含外部代理辅助，不算模型从零独立发现。
 
 源码顺序见 module-order.json，最终声明及公理输出见 ExactTarget.lean 和 evidence/axioms.txt；各模块均有源码 SHA 与 exit 0 回执摘要。原始冗长 linter 输出未复制；回执记录原日志和原回执的 SHA。
 

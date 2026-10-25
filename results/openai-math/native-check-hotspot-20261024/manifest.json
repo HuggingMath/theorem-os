@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-10-24T18:57:56.016599+00:00",
+  "capturedAt": "2026-10-25T03:50:59.892568+00:00",
   "characterV1KernelCheck": "failed: two section-parameter application mismatches",
   "characterV2FullSourceCompile": "passed: exit0 in 635.028472 seconds",
   "characterV2AxiomAudit": "passed: only propext/Classical.choice/Quot.sound",
@@ -8,8 +8,8 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 25651,
-      "sha256": "1c23f45c551a9e0cd5a391c9ba5c251281451fbc307f69495160c715dd28c0b4"
+      "bytes": 25501,
+      "sha256": "dacb973454734821d7e650ff9b9012aa13f48562f1115525b8849e197c756ab4"
     },
     {
       "path": "adopt-verified-character-candidate/README.md",
@@ -5932,6 +5932,11 @@
       "sha256": "9b25f20a7a4b8ecdf2bee4a34002ca0683fad2e440baead6e11526d129a849e0"
     },
     {
+      "path": "optimization-progress-20261025T034734Z.json",
+      "bytes": 7119,
+      "sha256": "71413fad880735f377a54728d9c9b63dcd251a36cd419e0c11ab04ba7fd4bf53"
+    },
+    {
       "path": "run-character-candidate.py",
       "bytes": 3154,
       "sha256": "15c36940e430219505468f751b9a388a094908e4376a3eeab549f39e694a5652"
@@ -6507,6 +6512,196 @@
       "sha256": "7986fde8fb4a9c209800574b1d325f60771f23adbee38ec8256ad5882f3dd432"
     },
     {
+      "path": "snaky-native-final-20261025/README.md",
+      "bytes": 5137,
+      "sha256": "e334b13e282a2c1eefa336a979bff7f0c40324691d52c7c09091e7c81a229462"
+    },
+    {
+      "path": "snaky-native-final-20261025/SHA256SUMS",
+      "bytes": 3503,
+      "sha256": "02b06265638a45c9b6d5c2e0fd95aa8c3fa8ff594f19d0438040f75ace4e1716"
+    },
+    {
+      "path": "snaky-native-final-20261025/accepted-source/Challenge.lean",
+      "bytes": 2069,
+      "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea"
+    },
+    {
+      "path": "snaky-native-final-20261025/accepted-source/Submission.lean",
+      "bytes": 967683,
+      "sha256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae"
+    },
+    {
+      "path": "snaky-native-final-20261025/accepted-source/current-source-identities.json",
+      "bytes": 768,
+      "sha256": "05343acf342a7dad1b67f5a34893a7e37de1ea0b0990217c0a3bad91c2d1c880"
+    },
+    {
+      "path": "snaky-native-final-20261025/accepted-source/git-capture.json",
+      "bytes": 2355,
+      "sha256": "0e53f83961b7e05b8291c08281cf50145064c4e0546f0d0551cc015f4cada790"
+    },
+    {
+      "path": "snaky-native-final-20261025/accepted-source/lake-manifest.json",
+      "bytes": 3571,
+      "sha256": "56b918a082b3903ef9071b7a550747f47221eceaece153c346310cfe38408829"
+    },
+    {
+      "path": "snaky-native-final-20261025/accepted-source/lakefile.toml",
+      "bytes": 321,
+      "sha256": "5626031b96b817d4ed6b2615ac3ebddeb0f1856208d6363bddea8b64cfe6e6b6"
+    },
+    {
+      "path": "snaky-native-final-20261025/accepted-source/lean-toolchain",
+      "bytes": 25,
+      "sha256": "d5edba4e4b8faad9c1baeadb265716d20d03be4d1a2647dc5e35b0c0325bea7b"
+    },
+    {
+      "path": "snaky-native-final-20261025/archive-origins.json",
+      "bytes": 14462,
+      "sha256": "014f18257615802ce2a2fbb452bc606c2e77a74e2b542dba98c982332288ef90"
+    },
+    {
+      "path": "snaky-native-final-20261025/delivery-files.json",
+      "bytes": 5844,
+      "sha256": "eb4169a039fe7a7b24b9586e100ce6b5fd69c60e2b7f685969b4301885c43780"
+    },
+    {
+      "path": "snaky-native-final-20261025/events/acceptance-index.json",
+      "bytes": 6354,
+      "sha256": "3f75db9313f10ca73d2919d895dc79868b3502faff6a3aae432d321e83227997"
+    },
+    {
+      "path": "snaky-native-final-20261025/events/acceptance.raw-lines.jsonl",
+      "bytes": 1930,
+      "sha256": "c52f5b180af733e7080e20b5d7b4cf1723afbaa3665e7adfe9775e60b49eb372"
+    },
+    {
+      "path": "snaky-native-final-20261025/fixed-evaluator/command.sh",
+      "bytes": 2407,
+      "sha256": "7cb9c632ad7e9a8890d64357fe178bf996f28ada0cbc6fe50f32e1f4d01d766f"
+    },
+    {
+      "path": "snaky-native-final-20261025/fixed-evaluator/comparator.runtime-config.json",
+      "bytes": 304,
+      "sha256": "6f57fd04134fde866b0d0babcdcf0a2f09f2c81690c72395a0f92196129bbcdc"
+    },
+    {
+      "path": "snaky-native-final-20261025/fixed-evaluator/record.json",
+      "bytes": 12668,
+      "sha256": "091cd5ebb08db9166c992a8bd175fac63870bad6f2fb58e6d3e42c885389edfd"
+    },
+    {
+      "path": "snaky-native-final-20261025/fixed-evaluator/stderr-captured.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "snaky-native-final-20261025/fixed-evaluator/stdout-captured.txt",
+      "bytes": 12000,
+      "sha256": "0e0baeb41497b64dcedb5c3b41d6b3a4b864b22ab164bfa2f44dcdb0ed055f7b"
+    },
+    {
+      "path": "snaky-native-final-20261025/fixed-review/review.json",
+      "bytes": 1462,
+      "sha256": "f62e504ffb054daa953d3ce780ffee7f3ac959ee585c8551df5aeff4a328d792"
+    },
+    {
+      "path": "snaky-native-final-20261025/implementation/evaluation.ts",
+      "bytes": 3693,
+      "sha256": "2ae89fd28e8cc553370fa3cf6aca18545080e90637c3721037c902c26cec5006"
+    },
+    {
+      "path": "snaky-native-final-20261025/implementation/mathProcess.ts",
+      "bytes": 9454,
+      "sha256": "7bcd06cc307b09022723444cd63d026cdd93e8b8e65694d85da8874ab10a4188"
+    },
+    {
+      "path": "snaky-native-final-20261025/manifest.json",
+      "bytes": 5987,
+      "sha256": "80fdb55bfb809ae3395aa06a2c2559555a19c0d48f4d6e9970d2c8397ced0a30"
+    },
+    {
+      "path": "snaky-native-final-20261025/native-verification/batch.json",
+      "bytes": 33878,
+      "sha256": "f7f7c0c51bc0c4f1494f041026811d0cc13015ed92dd5321f2c5c60cabf53f91"
+    },
+    {
+      "path": "snaky-native-final-20261025/native-verification/check.json",
+      "bytes": 34388,
+      "sha256": "0df8a1b821b6b7807e4e06be952dca17ae2b1e9124483823a5a95ef853e7d583"
+    },
+    {
+      "path": "snaky-native-final-20261025/native-verification/receipt.json",
+      "bytes": 15724,
+      "sha256": "c832217429e0ce0c2de7e4c1c87f8a07d9e01c7347fb9d3cbde710b2ea1e4a75"
+    },
+    {
+      "path": "snaky-native-final-20261025/native-verification/stderr-preview.txt",
+      "bytes": 11999,
+      "sha256": "402369b039c6860a30ab1e17efc5b23dfd96617d7db28deb518e2e732bf71e62"
+    },
+    {
+      "path": "snaky-native-final-20261025/native-verification/stdout-preview.txt",
+      "bytes": 1392,
+      "sha256": "0564fcb63a2bde159a695cb54bce6d214fd98ab82d22acacadc5af8c8b45cdda"
+    },
+    {
+      "path": "snaky-native-final-20261025/official/SnakyConditional.json",
+      "bytes": 358,
+      "sha256": "2e6949771d8f090de4dc7811d9fe2fe78ee983052c27144b562841b7f8c6c20d"
+    },
+    {
+      "path": "snaky-native-final-20261025/official/SnakyConditional.lean",
+      "bytes": 2069,
+      "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea"
+    },
+    {
+      "path": "snaky-native-final-20261025/official/target-map-entry.json",
+      "bytes": 2562,
+      "sha256": "366de27768923dc028bab6035780d49afb906d79de61b6aa40af44aaef3367cd"
+    },
+    {
+      "path": "snaky-native-final-20261025/raw/active-problem.json",
+      "bytes": 6534,
+      "sha256": "3e69bf97a26ad47386a2ad2e5dd7c4b1aef642c6149bb82133b248273c2c50bb"
+    },
+    {
+      "path": "snaky-native-final-20261025/raw/build-manifest.json",
+      "bytes": 50168,
+      "sha256": "3cf310891edf8cb396f218531e1eb6c5a997622adb6d835e4b368ffa1c8e637d"
+    },
+    {
+      "path": "snaky-native-final-20261025/raw/build.json",
+      "bytes": 406,
+      "sha256": "72c130ff2c0c01a05dfb8db66ca7abf154432ad2a1a23912df9605da9ce793c4"
+    },
+    {
+      "path": "snaky-native-final-20261025/raw/launch.json",
+      "bytes": 4621,
+      "sha256": "7ece53853e37a39f69a41a4814c60041c16c65c1c285495f7661592a4e6180c1"
+    },
+    {
+      "path": "snaky-native-final-20261025/raw/result.json",
+      "bytes": 14291,
+      "sha256": "7c7ac917b28831d350503d1bbe4650c11564509a551e1659235ed3e0bf3b89c8"
+    },
+    {
+      "path": "snaky-native-final-20261025/raw/terminal-state-metadata.json",
+      "bytes": 1446,
+      "sha256": "32b8a4faf05f68e87a87c6db0c7b5267f628b8cf67660991be14dc6899140371"
+    },
+    {
+      "path": "snaky-native-final-20261025/raw/tools-manifest.json",
+      "bytes": 758,
+      "sha256": "7eded4a0ed533eaf6b1520ed6d5b8f2187d995586164abfd00a6f6177f31360e"
+    },
+    {
+      "path": "snaky-native-final-20261025/verification.json",
+      "bytes": 6335,
+      "sha256": "bd898893f29c1792bf94bf038d5ace412c5271747dcdfcb0feb8f384acc52196"
+    },
+    {
       "path": "snaky-publisher-gate-health-20261025/README.md",
       "bytes": 1325,
       "sha256": "b23f86a9317353765b0a6ecba3f4935e6e9e9bc9e3bf89b352459b5db76e8de1"
@@ -6787,17 +6982,17 @@
       "sha256": "f3a9ec8cbeaa88621bb3fb5e77a4e5107910c013256a7c669d0fc154468eead5"
     }
   ],
-  "nativeFinalPassCount": 6,
+  "nativeFinalPassCount": 7,
   "characterV2IndependentOriginalComparator": "passed: unchanged binary, original target and axioms; genuine prebuilt artifact; exit0 in 41.153155 seconds",
   "honeycombSumsReduction": "native kernel and integration passed; original goal resumed; growth estimate still unproved",
   "characterV2NativeDelivery": "evaluated_passed; fixed review, independent final check and fixed original comparator passed",
-  "latestProgressSnapshot": "optimization-progress-20261024T185756Z.json",
-  "honeycombCurrentProgress": "heights 1-5 native checked and integrated; height-five compact handoff attempt 8 succeeded; all-height original goal remains conditional and unsolved",
+  "latestProgressSnapshot": "optimization-progress-20261025T034734Z.json",
+  "honeycombCurrentProgress": "heights 1-5 remain native integrated; no new native integration since height five; all-height strip growth theorem missing and blocked, original goal conditional; three research tasks running",
   "honeycombAdvisoryRoute": "direct first-moment summability via exact finite-state encoding and finite-box mass; unproved geometric inputs; ordinary advisory edit applied at turn104",
   "characterV2NativeOriginalGoal": "passed: lean-adc266b0e003d64e5ebdf91b",
   "honeycombFiniteBoxHelpers": "four declarations locally kernel-checked; normal advisory edit applied; original goal unproved",
   "futureSealedCacheFix": "171 tests passed, 0 failed, 1 skipped; 3 bundles built; current runs unchanged",
-  "nativeFinalPassedCount": 6,
+  "nativeFinalPassedCount": 7,
   "characterV2NativeIntegration": "passed: lean-7e3b44ab0595415016076711",
   "honeycombMatrixHelpers": "passed locally: two declarations, three standard axioms; normal shared advisory applied, all four worker contexts visible; not original goal or native TaskProof",
   "honeycombReuseFixBuild": "554d6726-fa7b-4b1c-b84b-f846f20b609d; 27 focused tests passed, not activated",
@@ -6828,10 +7023,10 @@
   "characterNativeFinalAccepted": true,
   "characterNativeFinalResult": "evaluated_passed",
   "snakyIntegrationCheck": "passed",
-  "snakyAllTargetCheck": "passed: lean-63766151ffe8a0523a860487; fixed review accepted and independent final host check completed",
-  "snakyNativeFinalAccepted": false,
+  "snakyAllTargetCheck": "passed: lean-63766151ffe8a0523a860487; fixed review, S3 independent final host check and fixed original comparator passed",
+  "snakyNativeFinalAccepted": true,
   "honeycombOriginalGoalSolved": false,
-  "latestProgress": "optimization-progress-20261024T185756Z.json",
+  "latestProgress": "optimization-progress-20261025T034734Z.json",
   "newFixedSupportBuild": "46551899-4922-4905-b81e-0ff4503842e6",
   "newFixedSupportBuildActivated": false,
   "allFiveBudgetCaps": 0,
@@ -6873,20 +7068,21 @@
     "originalGoalSolved": false
   },
   "currentArchiveValidation": {
-    "checkedAt": "2026-10-24T18:58:20.490026+00:00",
-    "oldPayloadHashesVerifiedBeforeManifestUpdate": 1323,
-    "newPackageHashesVerified": 16,
+    "checkedAt": "2026-10-25T03:51:29.998311+00:00",
+    "previousPayloadHashesVerifiedBeforeUpdate": 1356,
+    "newSnakyFinalPackageFiles": 38,
+    "newSnakyFinalPackageHashesVerified": 37,
     "kernelTestsRepeatedForArchiving": false,
+    "activeSourceStateRuntimeOrQueueModified": false,
     "rawLogsAndFailureEvidencePreserved": true,
-    "gitDiffCheck": "passed with blank-at-eof disabled; no file exclusions needed for this native receipt commit",
-    "jsonFilesParsed": 692,
-    "changedMarkdownFilesChecked": 3,
-    "changedMarkdownLocalLinksChecked": 111,
-    "previousPayloadHashesVerified": 1335,
-    "allPayloadHashesVerified": 1356,
-    "heightFiveNativePackageHashesVerified": 19
+    "gitDiffCheck": "passed with blank-at-eof disabled for byte-exact archived source; no file exclusions",
+    "allPayloadHashesVerified": 1395,
+    "snakyProofPackageManifestHashesVerified": 51,
+    "jsonFilesParsed": 716,
+    "changedMarkdownFilesChecked": 4,
+    "changedMarkdownLocalLinksChecked": 122
   },
-  "fileCount": 1356,
+  "fileCount": 1395,
   "honeycombNativeColumnWord": {
     "status": "integrated",
     "proofReceipt": "lean-d1533e50af2bd394228d788c",
@@ -6895,8 +7091,8 @@
   },
   "honeycombNativeColumnTasksIntegrated": 2,
   "snakyHostFinalGateCompleted": true,
-  "snakyCurrentGate": "original frozen comparator in flight after publisher build",
-  "snakyFinalGateHealth": "snaky-comparator-inflight-20261025/README.md",
+  "snakyCurrentGate": "finished: original frozen comparator passed, exit0",
+  "snakyFinalGateHealth": "snaky-native-final-20261025/README.md",
   "honeycombNewSummability": {
     "heightOne": "native checked and integrated; full six clauses",
     "heightTwo": "native checked and integrated; unconfined pair",
@@ -7174,5 +7370,33 @@
     "referencesAbsentAsRecorded": true,
     "report": "honeycomb-native-width-five-20261025/README.md",
     "originalAllHeightGoalSolved": false
+  },
+  "nativeFinalPassedTargets": [
+    "TruffetCounterexample",
+    "SurfaceConeCandidateSupport",
+    "HadamardCubeFiber",
+    "CartierChartCompactnessSupport",
+    "SnakyCertificate",
+    "CharacterVarietiesAllSeamsSupport",
+    "SnakyConditional"
+  ],
+  "nativeFinalCountScope": "Complete formal target tasks; SnakyCertificate and SnakyConditional are different targets of manuscript 187-01.",
+  "snakyNativeFinalResult": "evaluated_passed",
+  "snakyNativeFinalReport": "snaky-native-final-20261025/README.md",
+  "snakyNativeFinalAcceptedAt": "2026-10-25T04:37:08.772000+08:00",
+  "snakyNativeFinalEvidence": {
+    "report": "snaky-native-final-20261025/README.md",
+    "resultSHA256": "7c7ac917b28831d350503d1bbe4650c11564509a551e1659235ed3e0bf3b89c8",
+    "solutionCommit": "14d49c0f2bb94a8973471120f675554798126117",
+    "acceptedSourceSHA256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae",
+    "evaluatorExitCode": 0,
+    "timedOut": false,
+    "aborted": false,
+    "runtimeOfficial": false,
+    "stdoutStoredBytes": 12000,
+    "fullStdoutPersisted": false,
+    "separateS3FinalCheckReceiptPersisted": false,
+    "savedNativeAllTargetReceipt": "lean-63766151ffe8a0523a860487",
+    "openAIHostedAcceptance": false
   }
 }

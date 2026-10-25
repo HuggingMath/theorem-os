@@ -1,0 +1,28 @@
+{
+  "capturedAt": "2026-10-25T03:49:38.099846+00:00",
+  "sourceFile": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json",
+  "sourceBytes": 3564976,
+  "sourceSHA256": "92d1a60dad644c6031c0b0a913a839d34282bbe2c71af06cfe9a1add51297054",
+  "schema": "deepscientist.math.solver.v1",
+  "runId": "e2b78e94-e26d-4b02-a8e5-53375547ef4d",
+  "phase": "finished",
+  "turns": 7,
+  "worktree": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+  "solveStartedAt": 1792816386039,
+  "solveFinishedAt": 1792849829323,
+  "buildDigest": "3cf310891edf8cb396f218531e1eb6c5a997622adb6d835e4b368ffa1c8e637d",
+  "environmentDigest": "8bb02b80b9a30617b8d03aeaa67465db33534491566f19301f3ae51ac494093d",
+  "evaluatorDigest": "7cb9c632ad7e9a8890d64357fe178bf996f28ada0cbc6fe50f32e1f4d01d766f",
+  "canonicalCommit": "14d49c0f2bb94a8973471120f675554798126117",
+  "checkCommit": "14d49c0f2bb94a8973471120f675554798126117",
+  "sourceDigest": "1a75c56a0beaa6df7578a0317d90f40fa2c6b1a9faf43511e1c69fa0bcee4f4f",
+  "winningWorker": "solver",
+  "tokenBudget": {
+    "enforcement": "provider-observed-dispatch-limit",
+    "maxTotalTokens": 0,
+    "overrunTokens": 0,
+    "reportedTotalTokens": 8499478,
+    "status": "unlimited",
+    "usageComplete": false
+  }
+}

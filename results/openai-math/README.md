@@ -10,18 +10,11 @@
 | [Cartier 图域回缩的紧致性](cartier_chart_compactness_support/README.md) | C | 066-02 | Lean、隔离原比较器、新受保护环境原生 evaluated_passed | 尚无确认 |
 | [Snaky 616 行证书](snaky_certificate/README.md) | C | 187-01 | 原目标、集成、全目标、固定复审和原比较器全部通过；原生 evaluated_passed | 尚无确认 |
 | [CharacterVarieties 全部 seam 方程](character_varieties_all_seams_support/README.md) | C | 027-01 | 原目标、集成、全目标、固定复审和原比较器全部通过；原生 evaluated_passed | 尚无确认 |
+| [Snaky 普通 35 步必胜策略](snaky_conditional/README.md) | C | 187-01 | 原目标、集成、全目标、固定复审和原比较器全部通过；原生 evaluated_passed | 尚无确认 |
 
-归档 7 个完整原题证明：**6 个原生最终通过**。CharacterVarieties 于北京时间 2026-10-24 20:26:55 完成原生最终验收，见[原始终态与比较器证据](native-check-hotspot-20261024/character-native-final-20261024/README.md)。SnakyConditional V8 已通过原目标、集成、全目标内核检查、固定版本复审及宿主最终检查，现已完成 publisher 构建并进入原比较器，尚待比较器返回。上述记录为本地执行原官方比较器的结果，尚无 OpenAI 托管认证（主 campaign 保留历史状态）。保留源码、固定依赖、身份、SHA 和归因；不计入根目录 6 个 LeanEval 官方记录。新增证明含外部辅助，归因见各成果包。
+归档 7 个完整形式化目标证明：**7 个原生最终通过**。SnakyConditional V8 于北京时间 2026-10-25 04:37:08 完成最终验收，result 为 evaluated_passed，原比较器 exit 0，见[最终回执与接受源码](native-check-hotspot-20261024/snaky-native-final-20261025/README.md)。CharacterVarieties 的[此前终态证据](native-check-hotspot-20261024/character-native-final-20261024/README.md)保留原样。SnakyCertificate 与 SnakyConditional 是手稿 187-01 的两个独立形式化目标，分别计数。上述记录为本地执行原官方比较器的结果，尚无 OpenAI 托管认证（主 campaign 保留历史状态）。保留源码、固定依赖、身份、SHA 和归因；不计入根目录 6 个 LeanEval 官方记录。新增证明含外部辅助，归因见各成果包。
 
-## 新增完整内核证明
-
-| 题目 | 档位 | 手稿 | 已完成 | 待完成 |
-| --- | --- | --- | --- | --- |
-| [Snaky 普通 35 步必胜策略](snaky_conditional/README.md) | C | 187-01 | 完整合法策略与棋子数；V8 原目标、集成、全目标内核检查、固定复审及宿主最终检查通过，已进入原比较器 | 原比较器返回及最终回执 |
-
-此项为外部辅助完成的本地内核证明，尚无 OpenAI 托管验收确认。
-
-[2026-10-24 阶段进度与回执](verification-progress-20261024/README.md)保留此前快照；最新总数为上列 6，阶段通过不计入最终通过数。
+[2026-10-24 阶段进度与回执](verification-progress-20261024/README.md)保留此前快照；最新总数为上列 7，阶段通过不计入最终通过数。
 
 [2026-10-24 验收加速与实际提交](acceleration-20261024/README.md)：提前检查合并兼容性、使用固定点源码复用严格缓存，消除额外串行检查；正式原生验收仍保留。
 
@@ -33,7 +26,7 @@
 
 [高度 3](native-check-hotspot-20261024/honeycomb-native-width-three-20261025/README.md)与[高度 4](native-check-hotspot-20261024/honeycomb-native-width-four-20261025/README.md)现均已通过原生任务检查并集成，每次约 26–28 秒，无附加条件，目标 sorry/admit/剩余目标均为 0，仅三项标准公理。回执缺少 declarationReferences 的边界已如实记录。此前[正常递交记录](native-check-hotspot-20261024/honeycomb-width-three-four-adoption-20261025/README.md)及[在途观察](native-check-hotspot-20261024/honeycomb-width-three-four-native-observation-20261025/README.md)保留原截点。
 
-[高度 1 的全部六项结论](native-check-hotspot-20261024/honeycomb-native-width-one-20261025/README.md)、[高度 2 的两项可和性](native-check-hotspot-20261024/honeycomb-native-width-two-20261025/README.md)及[所有高度 confined 三项](native-check-hotspot-20261024/honeycomb-native-confined-sums-20261025/README.md)均已通过原生任务检查并集成。一般高度 Honeycomb 仍未解。Snaky 现已[进入原比较器](native-check-hotspot-20261024/snaky-comparator-inflight-20261025/README.md)，比较器进程始于北京时间 02:28:51，冻结命令与资源约束保持，尚未返回结果；原题最终通过仍为 6。[02:14 快照](native-check-hotspot-20261024/optimization-progress-20261024T181420Z.json)保留先前构建截点。
+[高度 1 的全部六项结论](native-check-hotspot-20261024/honeycomb-native-width-one-20261025/README.md)、[高度 2 的两项可和性](native-check-hotspot-20261024/honeycomb-native-width-two-20261025/README.md)及[所有高度 confined 三项](native-check-hotspot-20261024/honeycomb-native-confined-sums-20261025/README.md)均已通过原生任务检查并集成。一般高度 Honeycomb 仍未解；高度 5 之后尚无新增原生集成。Snaky 已于北京时间 04:37:08 [完成原比较器及原生最终验收](native-check-hotspot-20261024/snaky-native-final-20261025/README.md)，完整形式化目标最终通过数为 7。[02:14 快照](native-check-hotspot-20261024/optimization-progress-20261024T181420Z.json)保留先前构建截点。
 
 [2026-10-25 首次可求和性递交](native-check-hotspot-20261024/honeycomb-verified-summability-adoption-20261025/README.md)保留所有高度 confined 三项和宽度 1 六项结论的完整递交记录，以及当时两位研究员的领取状态。后续正式通过状态以本页最新进度为准。
 

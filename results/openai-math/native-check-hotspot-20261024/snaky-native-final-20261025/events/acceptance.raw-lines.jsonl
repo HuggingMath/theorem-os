@@ -1,0 +1,14 @@
+{"event":"proof_check_started","at":1792833429221,"workerId":"solver","turn":2}
+{"event":"proof_checked","at":1792841617605,"workerId":"solver","passed":true,"commit":"14d49c0f2bb94a8973471120f675554798126117","reused":false,"durationMs":8188384}
+{"event":"review_requested","at":1792841617617,"commit":"14d49c0f2bb94a8973471120f675554798126117"}
+{"event":"final_statement_review_scope","at":1792841617617,"commit":"14d49c0f2bb94a8973471120f675554798126117","sourceDigest":"1a75c56a0beaa6df7578a0317d90f40fa2c6b1a9faf43511e1c69fa0bcee4f4f","referenceCoverage":"unknown","requiredTaskIds":[],"unusedTaskIds":[]}
+{"event":"review_assigned","at":1792841617679,"workerId":"researcher-1","commit":"14d49c0f2bb94a8973471120f675554798126117","role":"reviewer"}
+{"event":"review_assigned","at":1792845218576,"workerId":"researcher-1","commit":"14d49c0f2bb94a8973471120f675554798126117","role":"reviewer"}
+{"event":"review_assigned","at":1792848634200,"workerId":"researcher-1","commit":"14d49c0f2bb94a8973471120f675554798126117","role":"reviewer"}
+{"event":"review_completed","at":1792849828833,"commit":"14d49c0f2bb94a8973471120f675554798126117","verdict":"accepted","workerId":"researcher-1"}
+{"event":"proof_check_started","at":1792849828974,"workerId":"solver","turn":2}
+{"event":"proof_checked","at":1792849829002,"workerId":"solver","passed":true,"commit":"14d49c0f2bb94a8973471120f675554798126117","reused":true,"durationMs":28}
+{"event":"candidate_selected","at":1792849829039,"workerId":"solver","commit":"14d49c0f2bb94a8973471120f675554798126117"}
+{"event":"evaluation_started","at":1792849829347,"workerId":"solver"}
+{"event":"evaluation_finished","at":1792874228732,"status":"passed","durationMs":24399385}
+{"event":"finished","at":1792874228772,"status":"evaluated_passed","output":"/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json"}

@@ -1,0 +1,67 @@
+[
+  {
+    "file": "Submission.lean",
+    "command": [
+      "git",
+      "-C",
+      "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+      "show",
+      "14d49c0f2bb94a8973471120f675554798126117:generated/problem/Submission.lean"
+    ],
+    "exitCode": 0,
+    "bytes": 967683,
+    "sha256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae"
+  },
+  {
+    "file": "Challenge.lean",
+    "command": [
+      "git",
+      "-C",
+      "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+      "show",
+      "14d49c0f2bb94a8973471120f675554798126117:generated/problem/Challenge.lean"
+    ],
+    "exitCode": 0,
+    "bytes": 2069,
+    "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea"
+  },
+  {
+    "file": "lean-toolchain",
+    "command": [
+      "git",
+      "-C",
+      "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+      "show",
+      "14d49c0f2bb94a8973471120f675554798126117:generated/problem/lean-toolchain"
+    ],
+    "exitCode": 0,
+    "bytes": 25,
+    "sha256": "d5edba4e4b8faad9c1baeadb265716d20d03be4d1a2647dc5e35b0c0325bea7b"
+  },
+  {
+    "file": "lakefile.toml",
+    "command": [
+      "git",
+      "-C",
+      "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+      "show",
+      "14d49c0f2bb94a8973471120f675554798126117:generated/problem/lakefile.toml"
+    ],
+    "exitCode": 0,
+    "bytes": 321,
+    "sha256": "5626031b96b817d4ed6b2615ac3ebddeb0f1856208d6363bddea8b64cfe6e6b6"
+  },
+  {
+    "file": "lake-manifest.json",
+    "command": [
+      "git",
+      "-C",
+      "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+      "show",
+      "14d49c0f2bb94a8973471120f675554798126117:generated/problem/lake-manifest.json"
+    ],
+    "exitCode": 0,
+    "bytes": 3571,
+    "sha256": "56b918a082b3903ef9071b7a550747f47221eceaece153c346310cfe38408829"
+  }
+]

@@ -1,0 +1,304 @@
+{
+  "schema": "theorem-os.archive-origins.v1",
+  "frozenAt": "2026-10-25T03:49:38.099846+00:00",
+  "files": [
+    {
+      "path": "raw/result.json",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json",
+      "bytes": 14291,
+      "sha256": "7c7ac917b28831d350503d1bbe4650c11564509a551e1659235ed3e0bf3b89c8"
+    },
+    {
+      "path": "raw/launch.json",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/launch.json",
+      "bytes": 4621,
+      "sha256": "7ece53853e37a39f69a41a4814c60041c16c65c1c285495f7661592a4e6180c1"
+    },
+    {
+      "path": "raw/build.json",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/build.json",
+      "bytes": 406,
+      "sha256": "72c130ff2c0c01a05dfb8db66ca7abf154432ad2a1a23912df9605da9ce793c4"
+    },
+    {
+      "path": "raw/build-manifest.json",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/build-state/builds/5716a06e-c26f-4f09-a3a2-9f5d484b3818/manifest.json",
+      "bytes": 50168,
+      "sha256": "3cf310891edf8cb396f218531e1eb6c5a997622adb6d835e4b368ffa1c8e637d"
+    },
+    {
+      "path": "raw/active-problem.json",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/workspace/active-problem.json",
+      "bytes": 6534,
+      "sha256": "3e69bf97a26ad47386a2ad2e5dd7c4b1aef642c6149bb82133b248273c2c50bb"
+    },
+    {
+      "path": "raw/tools-manifest.json",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/environment/tools-v4.34.1/manifest.json",
+      "bytes": 758,
+      "sha256": "7eded4a0ed533eaf6b1520ed6d5b8f2187d995586164abfd00a6f6177f31360e"
+    },
+    {
+      "path": "raw/terminal-state-metadata.json",
+      "kind": "extracted-json",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json selected public state fields; not the whole state",
+      "bytes": 1446,
+      "sha256": "32b8a4faf05f68e87a87c6db0c7b5267f628b8cf67660991be14dc6899140371"
+    },
+    {
+      "path": "native-verification/check.json",
+      "kind": "extracted-json",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json $.check",
+      "bytes": 34388,
+      "sha256": "0df8a1b821b6b7807e4e06be952dca17ae2b1e9124483823a5a95ef853e7d583"
+    },
+    {
+      "path": "native-verification/batch.json",
+      "kind": "extracted-json",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json $.check.verification",
+      "bytes": 33878,
+      "sha256": "f7f7c0c51bc0c4f1494f041026811d0cc13015ed92dd5321f2c5c60cabf53f91"
+    },
+    {
+      "path": "native-verification/receipt.json",
+      "kind": "extracted-json",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json $.check.verification.results[0]",
+      "bytes": 15724,
+      "sha256": "c832217429e0ce0c2de7e4c1c87f8a07d9e01c7347fb9d3cbde710b2ea1e4a75"
+    },
+    {
+      "path": "native-verification/stdout-preview.txt",
+      "kind": "extracted-preview",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json $.check.verification.results[0].stdoutPreview",
+      "bytes": 1392,
+      "sha256": "0564fcb63a2bde159a695cb54bce6d214fd98ab82d22acacadc5af8c8b45cdda"
+    },
+    {
+      "path": "native-verification/stderr-preview.txt",
+      "kind": "extracted-preview",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json $.check.verification.results[0].stderrPreview",
+      "bytes": 11999,
+      "sha256": "402369b039c6860a30ab1e17efc5b23dfd96617d7db28deb518e2e732bf71e62"
+    },
+    {
+      "path": "fixed-review/review.json",
+      "kind": "extracted-json",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/state.json $.cooperation.review; public verdict and summary",
+      "bytes": 1462,
+      "sha256": "f62e504ffb054daa953d3ce780ffee7f3ac959ee585c8551df5aeff4a328d792"
+    },
+    {
+      "path": "accepted-source/Submission.lean",
+      "kind": "exact-commit-git-source",
+      "source": {
+        "command": [
+          "git",
+          "-C",
+          "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+          "show",
+          "14d49c0f2bb94a8973471120f675554798126117:generated/problem/Submission.lean"
+        ],
+        "exitCode": 0,
+        "stdoutBytes": 967683,
+        "stdoutSHA256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae",
+        "stderrBytes": 0
+      },
+      "bytes": 967683,
+      "sha256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae"
+    },
+    {
+      "path": "accepted-source/Challenge.lean",
+      "kind": "exact-commit-git-source",
+      "source": {
+        "command": [
+          "git",
+          "-C",
+          "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+          "show",
+          "14d49c0f2bb94a8973471120f675554798126117:generated/problem/Challenge.lean"
+        ],
+        "exitCode": 0,
+        "stdoutBytes": 2069,
+        "stdoutSHA256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea",
+        "stderrBytes": 0
+      },
+      "bytes": 2069,
+      "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea"
+    },
+    {
+      "path": "accepted-source/lean-toolchain",
+      "kind": "exact-commit-git-source",
+      "source": {
+        "command": [
+          "git",
+          "-C",
+          "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+          "show",
+          "14d49c0f2bb94a8973471120f675554798126117:generated/problem/lean-toolchain"
+        ],
+        "exitCode": 0,
+        "stdoutBytes": 25,
+        "stdoutSHA256": "d5edba4e4b8faad9c1baeadb265716d20d03be4d1a2647dc5e35b0c0325bea7b",
+        "stderrBytes": 0
+      },
+      "bytes": 25,
+      "sha256": "d5edba4e4b8faad9c1baeadb265716d20d03be4d1a2647dc5e35b0c0325bea7b"
+    },
+    {
+      "path": "accepted-source/lakefile.toml",
+      "kind": "exact-commit-git-source",
+      "source": {
+        "command": [
+          "git",
+          "-C",
+          "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+          "show",
+          "14d49c0f2bb94a8973471120f675554798126117:generated/problem/lakefile.toml"
+        ],
+        "exitCode": 0,
+        "stdoutBytes": 321,
+        "stdoutSHA256": "5626031b96b817d4ed6b2615ac3ebddeb0f1856208d6363bddea8b64cfe6e6b6",
+        "stderrBytes": 0
+      },
+      "bytes": 321,
+      "sha256": "5626031b96b817d4ed6b2615ac3ebddeb0f1856208d6363bddea8b64cfe6e6b6"
+    },
+    {
+      "path": "accepted-source/lake-manifest.json",
+      "kind": "exact-commit-git-source",
+      "source": {
+        "command": [
+          "git",
+          "-C",
+          "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json.runtime/worktree",
+          "show",
+          "14d49c0f2bb94a8973471120f675554798126117:generated/problem/lake-manifest.json"
+        ],
+        "exitCode": 0,
+        "stdoutBytes": 3571,
+        "stdoutSHA256": "56b918a082b3903ef9071b7a550747f47221eceaece153c346310cfe38408829",
+        "stderrBytes": 0
+      },
+      "bytes": 3571,
+      "sha256": "56b918a082b3903ef9071b7a550747f47221eceaece153c346310cfe38408829"
+    },
+    {
+      "path": "accepted-source/git-capture.json",
+      "kind": "extracted-json",
+      "source": "Read-only git show of precise accepted commit",
+      "bytes": 2355,
+      "sha256": "0e53f83961b7e05b8291c08281cf50145064c4e0546f0d0551cc015f4cada790"
+    },
+    {
+      "path": "accepted-source/current-source-identities.json",
+      "kind": "extracted-json",
+      "source": "Read-only SHA comparison at archive capture; no mutation",
+      "bytes": 768,
+      "sha256": "05343acf342a7dad1b67f5a34893a7e37de1ea0b0990217c0a3bad91c2d1c880"
+    },
+    {
+      "path": "official/SnakyConditional.lean",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/metadata/challenges/SnakyConditional.lean",
+      "bytes": 2069,
+      "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea"
+    },
+    {
+      "path": "official/SnakyConditional.json",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/metadata/challenges/SnakyConditional.json",
+      "bytes": 358,
+      "sha256": "2e6949771d8f090de4dc7811d9fe2fe78ee983052c27144b562841b7f8c6c20d"
+    },
+    {
+      "path": "official/target-map-entry.json",
+      "kind": "extracted-json",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/metadata/target-map.json $.targets[id=SnakyConditional]",
+      "bytes": 2562,
+      "sha256": "366de27768923dc028bab6035780d49afb906d79de61b6aa40af44aaef3367cd"
+    },
+    {
+      "path": "fixed-evaluator/command.sh",
+      "kind": "launch-argument-extraction",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/launch.json $.args[after --evaluator-command]; no newline added",
+      "bytes": 2407,
+      "sha256": "7cb9c632ad7e9a8890d64357fe178bf996f28ada0cbc6fe50f32e1f4d01d766f"
+    },
+    {
+      "path": "fixed-evaluator/comparator.runtime-config.json",
+      "kind": "exact-heredoc-text-reconstruction",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/launch.json evaluator command heredoc OAI_COMPARATOR_JSON; original temporary file has been cleaned",
+      "bytes": 304,
+      "sha256": "6f57fd04134fde866b0d0babcdcf0a2f09f2c81690c72395a0f92196129bbcdc"
+    },
+    {
+      "path": "fixed-evaluator/record.json",
+      "kind": "extracted-json",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json $.evaluator",
+      "bytes": 12668,
+      "sha256": "091cd5ebb08db9166c992a8bd175fac63870bad6f2fb58e6d3e42c885389edfd"
+    },
+    {
+      "path": "fixed-evaluator/stdout-captured.txt",
+      "kind": "persisted-tail-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json $.evaluator.result.stdout; no newline added",
+      "bytes": 12000,
+      "sha256": "0e0baeb41497b64dcedb5c3b41d6b3a4b864b22ab164bfa2f44dcdb0ed055f7b"
+    },
+    {
+      "path": "fixed-evaluator/stderr-captured.txt",
+      "kind": "persisted-capture-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/result.json $.evaluator.result.stderr; no newline added",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "implementation/evaluation.ts",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/runtime/src/solver/evaluation.ts",
+      "bytes": 3693,
+      "sha256": "2ae89fd28e8cc553370fa3cf6aca18545080e90637c3721037c902c26cec5006"
+    },
+    {
+      "path": "implementation/mathProcess.ts",
+      "kind": "raw-file-copy",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/runtime/src/math/mathProcess.ts",
+      "bytes": 9454,
+      "sha256": "7bcd06cc307b09022723444cd63d026cdd93e8b8e65694d85da8874ab10a4188"
+    },
+    {
+      "path": "events/acceptance.raw-lines.jsonl",
+      "kind": "exact-safe-native-event-lines",
+      "source": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/snaky-conditional-native-followup-20261023/native-v8-recovery1/solve.log selected complete original lines; excludes worker activity",
+      "bytes": 1930,
+      "sha256": "c52f5b180af733e7080e20b5d7b4cf1723afbaa3665e7adfe9775e60b49eb372"
+    },
+    {
+      "path": "events/acceptance-index.json",
+      "kind": "extracted-json",
+      "source": "Exact source log line numbers, byte offsets, hashes, and public event metadata",
+      "bytes": 6354,
+      "sha256": "3f75db9313f10ca73d2919d895dc79868b3502faff6a3aae432d321e83227997"
+    },
+    {
+      "path": "verification.json",
+      "kind": "extracted-json",
+      "source": "Assertions over original terminal result, selected public state/check/review fields, exact git source, native safe events, launch command, original comparator config and existing tool identities",
+      "bytes": 6335,
+      "sha256": "bd898893f29c1792bf94bf038d5ace412c5271747dcdfcb0feb8f384acc52196"
+    },
+    {
+      "path": "README.md",
+      "kind": "archive-documentation",
+      "source": "Current original terminal evidence and explicit persistence boundaries",
+      "bytes": 5137,
+      "sha256": "e334b13e282a2c1eefa336a979bff7f0c40324691d52c7c09091e7c81a229462"
+    }
+  ]
+}

@@ -98,8 +98,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 4232,
-      "sha256": "4518d0e7c06de1db9278591ac6f196aca5c24bd46eb69df535ae04f7b62a923f"
+      "bytes": 4373,
+      "sha256": "24440062c1efb612a8db53b0353cc301aa5a110676de78d496dd21703cd44636"
     },
     {
       "path": "evidence/CertificateData.receipt.json",
@@ -262,5 +262,5 @@
       "sha256": "ae1cfb1f730048e2d3576e2411f1f5a7a1869d2cc490daa59dc851b8286ef127"
     }
   ],
-  "readmeUpdatedAt": "2026-10-24T13:12:10.144549+00:00"
+  "readmeUpdatedAt": "2026-10-25T03:48:27.880877+00:00"
 }
