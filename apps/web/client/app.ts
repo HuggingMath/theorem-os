@@ -1252,7 +1252,7 @@ function renderDetail(force = false) {
       <div class="detail-statusline"><span class="badge"></span><span class="run-environment"></span><span class="updated-at"></span></div>
       <div class="inline-error" data-detail-error role="alert" hidden></div>
       <div class="detail-tabs" role="tablist" aria-label="运行详情视图">${detailTabs.map(([tab, label]) => `<button type="button" role="tab" id="detail-tab-${tab}" data-detail-tab="${tab}" aria-controls="detail-panel">${label}</button>`).join('')}</div>
-      <section class="artifact-progress" aria-label="实时运行进度"><div class="artifact-progress-heading"><span data-phase-label></span><span class="mono" data-total-clock></span></div><ol class="artifact-stages"></ol></section>
+      <section class="artifact-progress" aria-label="实时运行进度"><ol class="artifact-stages"></ol><span class="mono" data-total-clock title="总用时"></span></section>
       <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0"></div>`;
     detail.dataset.renderRunId = run.id;
     state.panelSignature = '';
@@ -1273,7 +1273,6 @@ function renderDetail(force = false) {
     patchText(detail.querySelector('.run-environment')!, environmentName(run.environment));
     const error = detail.querySelector<HTMLElement>('[data-detail-error]')!;
     patchText(error, state.detailError); error.hidden = !state.detailError;
-    patchMarkup(detail.querySelector<HTMLElement>('[data-phase-label]')!, `${activeRun(run) ? '<span class="spinner"></span>' : icon(value.symbol)}${html(progress.phaseLabel)}`);
     patchMarkup(detail.querySelector<HTMLElement>('.artifact-stages')!, progress.steps.map(step => `<li class="${step.state}" ${step.state === 'active' ? 'aria-current="step"' : ''}>${icon(step.state === 'done' ? 'check' : step.state === 'error' ? 'x' : 'clock-3')}<span>${step.label}</span></li>`).join(''));
     patchText(detail.querySelector('[data-total-clock]')!, formatDuration(progress.elapsed));
   }

@@ -1,5 +1,5 @@
 import type { WebObservation } from '../collaboration';
-import { createElement, escapeHtml as h } from './collaborationUi';
+import { createElement, escapeHtml as h, observedTime } from './collaborationUi';
 
 const sections = [
   ['overview', '进展', '.collab-research-overview'], ['tasks', '任务', '.collab-layout'],
@@ -76,7 +76,7 @@ export class CollaborationNavigation {
     const sync = this.element.querySelector<HTMLElement>('[data-collab-sync]')!;
     sync.textContent = connected ? observation ? `观察 #${observation.sequence}` : '等待观察' : '连接中断';
     sync.dataset.connected = String(connected);
-    sync.title = connected ? observation?.observedAt ?? '等待运行时观察' : '已保留最近观察和当前草稿';
+    sync.title = connected ? observation ? observedTime(observation.observedAt) : '等待运行时观察' : '已保留最近观察和当前草稿';
   }
 
   go(id: CollaborationSection) {

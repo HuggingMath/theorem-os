@@ -5,6 +5,13 @@ export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"
 export const jsonText = (value: unknown) => JSON.stringify(value, null, 2) ?? '—';
 export const errorText = (error: unknown) => error instanceof Error ? error.message : '请求失败，请重试';
 export const commandId = () => crypto.randomUUID();
+/** Observation timestamps arrive as ISO strings; show local date and time to the second, keep unparseable values verbatim. */
+export function observedTime(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit',
+    minute: '2-digit', second: '2-digit', hour12: false }).format(date) : value;
+}
+export const coverageLabel = (value: 'recorded' | 'partial') => value === 'recorded' ? '已完整记录' : '仅部分记录';
 export function createElement<T extends keyof HTMLElementTagNameMap>(tag: T, className = '', markup?: string) {
   const node = document.createElement(tag); node.className = className;
   if (markup !== undefined) node.innerHTML = markup;

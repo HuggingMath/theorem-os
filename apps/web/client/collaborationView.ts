@@ -1,7 +1,7 @@
 import type { WebRun } from '../shared';
 import type { WebObservation, WebTaskSource, WebCheckReceipt, WebArchive } from '../collaboration';
 import { isAcceptedRun } from '../presentation';
-import { createElement, errorText, escapeHtml as h, patchSection, codeBlock, detailBlock, factList, type WebApi } from './collaborationUi';
+import { createElement, errorText, escapeHtml as h, patchSection, codeBlock, detailBlock, factList, observedTime, coverageLabel, type WebApi } from './collaborationUi';
 import { TaskPlanEditor } from './taskPlanEditor';
 import { KnowledgeView } from './knowledgeView';
 import { TaskSourceComparison, taskSourceKey } from './taskSourceComparison';
@@ -18,6 +18,7 @@ type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?:
 const kindLabel: Record<string,string> = { research: '研究', sketch: '草图', lemma: '引理', goal: '原始目标' };
 const statusLabel: Record<string,string> = { pending: '待调度', running: '进行中', blocked: '受阻', conditional: '有条件结果', delivered: '已交付', integrated: '已集成', completed: '已完成', none: '尚无证明', checked: '已记录检查', stale: '旧版本证据', unverified: '未验证', active: '继续', paused: '暂停', stopped: '停止', queued: '排队中', deliveredGuidance: '已送达', deferred: '暂缓', failed: '失败' };
 const label = (value: string) => statusLabel[value] ?? value;
+const routeConnectionLabel: Record<string,string> = { 'closed-by-original-check': '已由原题检查连通', 'awaiting-original-check': '等待原题检查连通' };
 const taskState = (task: Task) => task.control === 'active' ? task.status : task.control;
 const taskStates = ['pending', 'running', 'blocked', 'conditional', 'delivered', 'integrated', 'completed', 'paused', 'stopped'];
 const dependencyClosure = (ids: readonly string[], tasks: readonly Task[]) => {
@@ -82,7 +83,7 @@ export class CollaborationView {
   private create(runId: string): ViewState {
     const element = createElement('div', 'collab-surface');
     const taskView: TaskView = matchMedia('(max-width:850px)').matches ? 'list' : 'graph';
-    element.innerHTML = `<div class="collab-heading"><div><span class="collab-eyebrow">研究协作</span><h2>共同推进证明</h2></div><div class="collab-heading-actions"><button type="button" class="button" data-collab-refresh>刷新观察</button><button type="button" class="button" data-collab-plan disabled>编辑计划</button><button type="button" class="button" data-collab-archive disabled>归档知识</button></div></div><div data-collab-navigation></div><div data-collab-summary></div><p data-collab-observation class="collab-help"></p><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
+    element.innerHTML = `<div class="collab-heading"><h2 class="sr-only">研究协作</h2><p data-collab-observation class="collab-help"></p><div class="collab-heading-actions"><button type="button" class="button" data-collab-refresh>刷新观察</button><button type="button" class="button" data-collab-plan disabled>编辑计划</button><button type="button" class="button" data-collab-archive disabled>归档知识</button></div></div><div data-collab-navigation></div><div data-collab-summary></div><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
       <div data-collab-progress></div><div class="collab-layout"><section class="collab-map" data-task-view="graph"><div class="collab-section-heading"><h3>数学任务</h3><div class="collab-task-view" role="group" aria-label="任务显示方式"><button type="button" data-collab-task-view="graph" aria-pressed="true">依赖图</button><button type="button" data-collab-task-view="list" aria-pressed="false">任务列表</button></div></div><div class="collab-map-tools"><label class="sr-only" for="task-search-${h(runId)}">搜索任务、类型或负责人</label><input id="task-search-${h(runId)}" data-collab-task-search type="search" placeholder="搜索任务、类型或负责人"><label class="sr-only" for="route-${h(runId)}">筛选证明路线</label><select id="route-${h(runId)}" data-collab-route><option value="">全部路线</option></select><label class="sr-only" for="task-state-${h(runId)}">筛选任务状态</label><select id="task-state-${h(runId)}" data-collab-task-state><option value="">全部状态</option>${taskStates.map(state => `<option value="${state}">${h(label(state))}</option>`).join('')}</select></div><div class="collab-task-result"><span data-collab-task-count role="status"></span><button type="button" class="text-button" data-collab-task-reset hidden>清除筛选</button></div><div data-collab-task-selection class="collab-task-selection" hidden></div><div data-collab-routes class="collab-route-summary"></div><p class="collab-graph-legend collab-help">实线 AND 前置 · 虚线 OR 路线</p><div data-collab-task-empty class="collab-task-empty" hidden></div><div class="collab-graph-scroll" tabindex="0" data-focus-key="task-graph-scroll" aria-label="任务依赖图，可横向滚动"><div data-collab-graph class="collab-graph"></div></div><div data-collab-task-list class="collab-task-list" data-focus-key="task-list-scroll" tabindex="0" aria-label="任务列表"></div></section>
       <section class="collab-inspector"><div class="collab-section-heading"><h3>任务检查器</h3><div class="collab-inspector-actions"><button type="button" class="text-button" data-collab-back-to-list hidden>返回任务列表</button><button type="button" class="text-button" data-collab-guide-task data-focus-key="guide-task">指导此任务</button></div></div><div data-collab-inspector></div><div data-collab-artifact class="collab-artifact" aria-live="polite"></div></section></div>
       <div data-collab-reviews></div><div data-collab-math-changes></div><section class="collab-agents"><div class="collab-section-heading"><h3>Agent 分工</h3><span class="collab-help">固定角色 / 当前会话角色</span></div><div data-collab-agents class="collab-agent-list"></div></section>
@@ -306,7 +307,7 @@ export class CollaborationView {
     patchSection(empty, observation.inspection.tasks.length ? '<strong>没有匹配的任务</strong><p>可以调整关键词、路线或状态，或清除筛选查看全部任务。</p>' : '<strong>尚无数学任务</strong><p>运行生成任务计划后会显示在这里。</p>');
     view.element.querySelector<HTMLElement>('.collab-map')!.dataset.taskEmpty = String(!tasks.length);
     this.renderTaskSelection(view, tasks, observation.inspection.tasks);
-    patchSection(view.element.querySelector('[data-collab-routes]')!, missingRoute ? `<span>所选路线 ${h(view.route)} 已从当前计划移除，请选择其他路线或清除筛选。</span>` : routes.map(route => `<span><strong>OR ${h(route.id)}</strong>：(${h(route.prerequisiteTaskIds.join(' AND ') || '无额外前置')}) → ${h(route.closingTaskId)} → ${h(route.targetTaskId)}${(() => { const recorded = observation.inspection.mathematics.snapshot.routes.find(item => item.routeId === route.id); return recorded ? ` · ${recorded.ready ? '前置已就绪' : `等待 ${h(recorded.remainingPrerequisiteTaskIds.join(', ') || recorded.closingStatus)}`} · 连接 ${h(recorded.connection)}` : ''; })()}</span>`).join('') || '<span>当前计划按任务的 AND 前置依赖推进</span>');
+    patchSection(view.element.querySelector('[data-collab-routes]')!, missingRoute ? `<span>所选路线 ${h(view.route)} 已从当前计划移除，请选择其他路线或清除筛选。</span>` : routes.map(route => `<span><strong>OR ${h(route.id)}</strong>：(${h(route.prerequisiteTaskIds.join(' AND ') || '无额外前置')}) → ${h(route.closingTaskId)} → ${h(route.targetTaskId)}${(() => { const recorded = observation.inspection.mathematics.snapshot.routes.find(item => item.routeId === route.id); return recorded ? ` · ${recorded.ready ? '前置已就绪' : `等待 ${h(recorded.remainingPrerequisiteTaskIds.join(', ') || label(recorded.closingStatus))}`} · ${h(routeConnectionLabel[recorded.connection] ?? `连接 ${recorded.connection}`)}` : ''; })()}</span>`).join('') || '<span>当前计划按任务的 AND 前置依赖推进</span>');
     this.renderTaskCards(view, tasks, mode);
   }
   private renderTaskSelection(view: ViewState, tasks: readonly Task[], currentTasks: readonly Task[]) {
@@ -454,7 +455,7 @@ export class CollaborationView {
     archive.disabled=!this.connected||!view.observation||view.archiveBusy;
     archive.textContent = view.archiveBusy ? '归档中…' : '归档知识'; archive.setAttribute('aria-busy', String(view.archiveBusy));
     const observation = view.observation;
-    view.element.querySelector('[data-collab-observation]')!.textContent = view.observationError ?? (observation ? `观察 #${observation.sequence} · ${observation.observedAt} · 历史记录未重新运行 Lean · 源码 ${observation.coverage.sources} / 检查 ${observation.coverage.checks}` : '运行尚未生成协作观察，可从源码、报告和活动查看已有材料。');
+    view.element.querySelector('[data-collab-observation]')!.textContent = view.observationError ?? (observation ? `观察 #${observation.sequence} · ${observedTime(observation.observedAt)} · 历史记录未重新运行 Lean · 源码${coverageLabel(observation.coverage.sources)} · 检查${coverageLabel(observation.coverage.checks)}` : '运行尚未生成协作观察，可从源码、报告和活动查看已有材料。');
     view.guidance.update(view.observation, view.active, this.connected);
     view.navigation.update(view.observation, this.connected, view.archives.length);
   }
