@@ -629,6 +629,7 @@ export class CooperativeResearch extends CooperationInputs {
     }
     const ranked = this.input.modules.M3.ready(this.archive.tasks, this.archive.groups);
     const ready = ranked.filter(node => !this.taskDispatchBlock(node));
+    this.releaseStoppedAssignments(ready, worker);
     const node = this.input.modules.M5.assign(ready, worker,
       this.allocationPeers, this.archive.groups, this.archive.tasks);
     if (!node) {
@@ -1334,6 +1335,23 @@ export class CooperativeResearch extends CooperationInputs {
       if (node.status === 'running') node.status = 'pending';
       this.changed();
     } else this.interrupted(worker, action);
+  }
+  /**
+   * A stopped worker never returns in this process, so its saved assignment would block every peer.
+   * The record stays durable until a responsible live peer actually takes the task: a restart resumes the
+   * original worker's draft and repair chain instead.
+   */
+  private releaseStoppedAssignments(ready: readonly TaskRecord[], worker: ResearchWorker) {
+    for (const node of ready) {
+      const assignment = node.assignment;
+      if (!assignment || assignment.workerId === worker.id || this.liveWorkers.has(assignment.workerId) ||
+          !this.input.workers.some(item => item.id === assignment.workerId)) continue;
+      node.assignment = undefined;
+      if (assessTaskResponsibility(node, worker, this.archive).kind !== 'matches') { node.assignment = assignment; continue; }
+      this.input.emit('task_assignment_released', { taskId: node.task.id, workerId: assignment.workerId,
+        takenBy: worker.id, reason: 'worker-stopped' });
+      this.changed();
+    }
   }
   private reviewer(): ResearchWorker | undefined {
     const available = this.livePeers.filter(worker => !this.active.has(worker.id) &&
