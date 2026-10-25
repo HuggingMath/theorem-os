@@ -21,6 +21,7 @@ import { attributeTaskReferences } from './taskReferenceAttribution';
 import { taskConsumerProjection } from './taskConsumers';
 import { parallelQuestions } from './taskQuestions';
 import { contextCheckpointRejection } from './contextCheckpoint';
+import { deliverHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { taskTypePreflightEnvironmentIdentity, type TaskTypePreflight } from './taskTypePreflight';
@@ -39,6 +40,26 @@ export type { ReviewRecord, HumanEditRecord, InitialPlanPublication, Cooperation
 
 /** Lead plans; workers claim distinct ready obligations; only checked source enters the canonical proof. */
 export class CooperativeResearch extends CooperationInputs {
+  private guidancePulse?: Promise<void>;
+  private humanGuidanceCheckpoint(stopped = false): Promise<void> {
+    return this.guidancePulse ??= deliverHumanGuidance({
+      stateFile: path.join(path.dirname(this.lead.worktree), 'state.json'), state: this.input.state, stopped,
+      recipients: () => [...this.active].flatMap(([workerId, active]) => {
+        const worker = this.input.workers.find(item => item.id === workerId);
+        if (!worker || active.cancelled || isStatementAction(active.action)) return [];
+        const action = active.action;
+        return [{ workerId, role: worker.role,
+          ...(action.kind === 'task' ? { taskRef: { id: action.task.id, version: action.assignment.taskDigest } } : {}),
+          current: () => !this.stopping && !this.input.signal.aborted && this.active.get(workerId) === active &&
+            !active.cancelled && this.current(action), notify: active.notify }];
+      }),
+      onRecord: record => this.input.emit('human_guidance_' + record.status, { id: record.id, recipient: record.recipient,
+        taskRef: record.taskRef, deliveredTo: record.deliveredTo, reason: record.reason }),
+    }).catch(error => {
+      if (error instanceof Error && error.message === 'math_runtime_lease_busy') return;
+      this.input.emit('human_guidance_unavailable', { reason: error instanceof Error ? error.message : 'math_guidance_unavailable' });
+    }).finally(() => { this.guidancePulse = undefined; });
+  }
   /** Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. */
   private async requestCapacityExploration(worker: ResearchWorker, budget: DispatchBudget, previousReady: readonly TaskRecord[]) {
     if (!this.input.continuousResearch || this.input.workers.length <= 4 ||
@@ -125,7 +146,7 @@ export class CooperativeResearch extends CooperationInputs {
   }
   initialPlanSnapshot(action: CooperativeAction) { return this.planSnapshot(action); }
   start() {
-    this.timer = setInterval(() => { void this.inputs().catch(error => {
+    this.timer = setInterval(() => { void this.humanGuidanceCheckpoint(); void this.inputs().catch(error => {
       this.input.emit('cooperation_poll_failed', { reason: error instanceof Error ? error.message : 'unknown' });
       if (error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
     }); }, 200);
@@ -133,6 +154,8 @@ export class CooperativeResearch extends CooperationInputs {
   }
   async stop() {
     this.stopping = true;
+    await this.guidancePulse;
+    await this.humanGuidanceCheckpoint(true);
     for (const worker of this.input.workers) this.clearDispatchWait(worker, 'stopped');
     this.wake();
     clearInterval(this.timer);
@@ -160,6 +183,7 @@ export class CooperativeResearch extends CooperationInputs {
     this.input.save();
   }
   async pulse(workerId?: string): Promise<void> {
+    await this.humanGuidanceCheckpoint();
     if (workerId) await this.deliveryChecks.get(workerId);
     const pending = await this.inputs();
     const checks = await Promise.allSettled(workerId ? [pending.get(workerId)] : [...pending.values()]);

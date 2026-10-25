@@ -9,6 +9,7 @@ import { WebJobs } from '../apps/web/jobs';
 import { DockerWebRunner } from '../apps/web/runner';
 import { webTemplates } from '../apps/web/config';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
+import { buildTheoremKnowledge } from '../src/solver/theoremKnowledge';
 import type { WebEnvironment, WebRun, WebRunInput, WorkerMessage } from '../apps/web/shared';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,7 +99,7 @@ export async function runWebRuntimeSmoke(argv = process.argv.slice(2)) {
   const owner = `web-runtime-smoke-${crypto.randomUUID()}`;
   const messages = new Map<string, { type: WorkerMessage['type']; observedAt: string;
     runStatus?: WebRun['status']; resultAlreadyPresent: boolean }[]>();
-  const jobs = new WebJobs({ readiness: () => runner.readiness(), run: (input, onMessage, signal) =>
+  const jobs = new WebJobs({ readiness: () => runner.readiness(), command: (id, command) => runner.command(id, command), run: (input, onMessage, signal) =>
     runner.run(input, message => {
       onMessage(message);
       const run = jobs.get(owner, input.id);
@@ -196,10 +197,18 @@ export async function runWebRuntimeSmoke(argv = process.argv.slice(2)) {
         name === 'mathlib-cancel' ? 'WEB_SMOKE_MATHLIB_WAIT_FOR_CANCEL' : name === 'invalid' ? 'WEB_SMOKE_INVALID_PROOF' :
           name === 'cancel' ? 'WEB_SMOKE_WAIT_FOR_CANCEL' : 'WEB_SMOKE_VALID_PROOF';
       const input = makeInput(marker);
+      if (name === 'valid' || name === 'mathlib-valid')
+        input.knowledgeDigest = jobs.knowledge.importCatalog(owner, buildTheoremKnowledge([])).digest;
       const run = jobs.create(owner, input, provider);
       containerIds.add(run.id);
       if (name === 'cancel' || name === 'mathlib-cancel') {
         await waitFor(run, () => run.events.some(event => event.type === 'worker_activity'));
+        const captured = await runner.command(run.id, { type: 'capture' });
+        assert.equal(captured.status, 'captured', 'The active container must acknowledge a structured capture command.');
+        assert.equal(captured.observation?.webRunId, run.id, 'The command observation must bind the Web run identity.');
+        assert.equal(captured.observation?.acceptance, 'not-assessed', 'A recorded observation cannot accept the proof.');
+        assert.equal(captured.observation?.inspection.configuration.methodDigest, run.moduleConfiguration?.methodDigest,
+          'The recorded worker method must match the configuration frozen by the service.');
         const running = await docker(['container', 'inspect', `theoremos-web-${run.id}`]);
         const volumes = assertWebContainerBoundary(running.stdout, apiKey, input.environment);
         for (const name of volumes) {
@@ -212,15 +221,27 @@ export async function runWebRuntimeSmoke(argv = process.argv.slice(2)) {
         jobs.cancel(owner, run.id);
         assert.equal(run.status, 'cancelled');
         await noContainer(run);
+        assert.ok(jobs.storage.getObservation(owner, run.id), 'Cancellation must retain a real observation before removing its worker.');
+        const archive = await jobs.archive(owner, run.id);
+        assert.ok(jobs.storage.getArchive(owner, run.id, archive.id), 'Cancelled evidence must remain downloadable after container removal.');
         for (const name of volumes) await noVolume(name);
         outcomes.push({ case: name, status: run.status, containerRemoved: true, containerBoundaryVerified: true,
-          keyAbsentFromDockerMetadata: true, anonymousVolumesRemoved: volumes.length });
+          keyAbsentFromDockerMetadata: true, anonymousVolumesRemoved: volumes.length,
+          commandCaptureVerified: true, observationRetained: true, archiveSaved: true });
       } else {
         await waitFor(run, () => terminal(run));
         try {
           assert.ok(run.result, `Worker produced no result: ${run.error || run.status}`);
           assert.equal(run.status, 'completed', `Runtime failed before Lean verification: ${JSON.stringify(run.result)}`);
           assertWebEnvironmentReport(run.result.report, input.environment!);
+          assert.equal(run.observation?.webRunId, run.id, 'The real worker must publish its saved run observation.');
+          assert.ok(run.observation?.solverRunId && run.observation.solverRunId !== run.id,
+            'The solver and Web run identities must remain distinct.');
+          assert.equal(run.observation.acceptance, 'not-assessed', 'The observation itself does not grant S3 acceptance.');
+          assert.equal(run.observation.inspection.configuration.methodDigest, run.moduleConfiguration?.methodDigest,
+            'The recorded worker method must match the configuration frozen by the service.');
+          assert.equal(run.observation.inspection.configuration.knowledgeDigest, input.knowledgeDigest,
+            'The worker must bind exactly the catalog selected when the run was created.');
           const expectedCandidate = input.environment === 'mathlib'
             ? input.source.replaceAll('by sorry', name === 'mathlib-valid' ? 'by ring' : 'by exact True.intro')
             : name === 'valid' ? input.source.replace('by sorry', 'by rfl').replace('by sorry', 'by exact Nat.zero_add n')

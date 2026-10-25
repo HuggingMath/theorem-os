@@ -132,7 +132,9 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       failureCategory: researchFailureCategory(worker.error),
     })),
     statementReviews: (cooperative?.statementReviews ?? []).map(review => ({
+      id: review.id, snapshotDigest: review.snapshotDigest, environmentDigest: review.environmentDigest, commit: review.commit,
       taskId: review.taskId, version: review.taskDigest, status: review.status,
+      premises: review.premises, dependencies: review.dependencies, workerId: review.workerId, assignmentId: review.assignmentId,
       intendedStatement: review.intendedStatement, leanStatement: review.leanStatement,
       translation: review.translation, summary: review.summary,
     })),

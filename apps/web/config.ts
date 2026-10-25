@@ -14,6 +14,7 @@ export type WebConfig = {
   port: number;
   publicUrl: string;
   staticRoot: string;
+  dataRoot?: string;
   workerImage: string;
   concurrency: number;
   queueLimit: number;
@@ -46,10 +47,12 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   return {
     host: env.THEOREMOS_WEB_HOST || '127.0.0.1', port, publicUrl: publicUrl.origin,
     staticRoot: path.resolve(env.THEOREMOS_WEB_STATIC_ROOT || 'out/web'),
+    ...(env.THEOREMOS_WEB_DATA_ROOT ? { dataRoot: path.resolve(env.THEOREMOS_WEB_DATA_ROOT) } : {}),
     workerImage: env.THEOREMOS_WEB_WORKER_IMAGE || 'theorem-os-worker:local',
     concurrency: integer(env.THEOREMOS_WEB_CONCURRENCY, 1, 1, 8),
     queueLimit: integer(env.THEOREMOS_WEB_QUEUE_LIMIT, 8, 1, 32),
-    sessionTtlMs: 60 * 60 * 1000, providers,
+    sessionTtlMs: 1000 * integer(env.THEOREMOS_WEB_SESSION_TTL_SECONDS,
+      env.THEOREMOS_WEB_DATA_ROOT ? 30 * 24 * 60 * 60 : 60 * 60, 60, 365 * 24 * 60 * 60), providers,
   };
 }
 

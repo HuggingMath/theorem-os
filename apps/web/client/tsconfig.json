@@ -5,5 +5,5 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": []
   },
-  "include": ["./**/*.ts", "../shared.ts"]
+  "include": ["./**/*.ts", "./**/*.tsx", "../shared.ts"]
 }

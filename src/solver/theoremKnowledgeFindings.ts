@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import type { TheoremKnowledgeBase } from './theoremKnowledge';
-import { mathematicalGapSchema } from './mathematicalGaps';
+import { mathematicalGapSchema } from './mathematicalGapContract';
 import { largestFittingPage, splitsSurrogate } from './textPage';
 import { knowledgeRequestBatch } from './theoremKnowledgeSearch';
 

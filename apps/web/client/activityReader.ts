@@ -151,6 +151,7 @@ export class ActivityReader {
       time.dateTime = event.at; row.cells[0]!.title = event.at;
       this.text(time, this.timestamp(event.at));
       this.text(row.cells[1]!, event.type); this.text(row.cells[2]!, event.message);
+      if (row.cells[1]!.title !== event.type) row.cells[1]!.title = event.type;
       if (row === cursor) cursor = cursor.nextElementSibling;
       else body.insertBefore(row, cursor);
     }

@@ -3,7 +3,7 @@ import type { WebEvent, WebEventDetails, WebModuleId, WebModuleSnapshot, WebRun 
 const ids = /^[A-Za-z0-9_-]{1,64}$/u;
 const statuses = /^[a-z][a-z0-9_-]{0,63}$/u;
 const operations = ['direct', 'decompose', 'bridge', 'prove-lemma', 'integrate-lemma'] as const;
-const roles = ['lead', 'researcher', 'engineer', 'reviewer'] as const;
+const roles = ['lead', 'researcher', 'prover', 'engineer', 'reviewer'] as const;
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;

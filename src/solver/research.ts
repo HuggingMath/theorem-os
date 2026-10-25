@@ -366,7 +366,12 @@ export async function runResearchWorkers(input: {
             interruptTimer.unref();
             try { await activeSession.interrupt(); } catch { closeStalledTurn(); }
           },
-          async message => { if (!isStatementAction(assignment)) await activeSession.notify?.(message); },
+          async message => {
+            // A queued human message needs a real active turn; optional/no-op notifications cannot earn a delivery receipt.
+            if (!live() || !armed || isStatementAction(assignment) || !activeSession.notify)
+              throw new Error('math_guidance_recipient_not_running');
+            await activeSession.notify(message);
+          },
           async () => {
             if (!current() || readyRequested) return;
             readyRequested = true;

@@ -8,7 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web');
 fs.mkdirSync(output, { recursive: true });
 await build({ entryPoints: [path.join(root, 'apps/web/client/app.ts')], outfile: path.join(output, 'app.js'),
-  bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent' });
+  bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
+  jsx: 'automatic', jsxImportSource: 'preact' });
 for (const [source, destination] of [['index.html', 'index.html'], ['app.css', 'app.css']])
   fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });

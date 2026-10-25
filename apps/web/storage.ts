@@ -1,0 +1,194 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
+import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
+import type { WebEvent, WebRun } from './shared';
+
+export type StoredWebSession = { id: string; csrf: string; touchedAt: number };
+export type StoredWebArchive = {
+  schema: 'theorem-os.web-archive.v1';
+  summary: WebArchive;
+  run: WebRun;
+  observations: WebObservation[];
+  sources: WebTaskSource[];
+  checks: WebCheckReceipt[];
+  events: WebEvent[];
+  commands: WebCommandResult[];
+};
+
+export class WebStorageError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
+const digestKey = (value: string) => mathDigest(value);
+const encoded = (value: unknown) => canonicalMathJson(value) + '\n';
+const safeRunId = (id: string) => {
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(id)) throw new WebStorageError(400, '运行标识无效。');
+  return id;
+};
+const bySequence = <T extends { sequence: number }>(items: T[]) => items.sort((a, b) => a.sequence - b.sequence);
+const credentialFields = new Set(['apiKey', 'api_key', 'access_token', 'refresh_token', 'authorization']);
+/** Records accept visible run data only. Credential objects never become restart state. */
+const publicRecord = <T>(value: T): T => JSON.parse(JSON.stringify(value,
+  (key, item) => credentialFields.has(key) ? undefined : item));
+
+/** Optional web-only persistence. An omitted root keeps the same API in memory for disposable fixtures. */
+export class WebStorage {
+  readonly root?: string;
+  private readonly memory = new Map<string, string>();
+
+  constructor(dataRoot?: string) {
+    if (dataRoot) {
+      fs.mkdirSync(path.resolve(dataRoot), { recursive: true, mode: 0o700 });
+      this.root = fs.realpathSync(path.resolve(dataRoot));
+    }
+  }
+
+  ownerDirectory(owner: string): string | undefined {
+    return this.root ? path.join(this.root, 'owners', digestKey(owner)) : undefined;
+  }
+  private ownerPath(owner: string): string[] {
+    if (!owner || owner.length > 256) throw new WebStorageError(400, '会话标识无效。');
+    return ['owners', digestKey(owner)];
+  }
+  private runPath(owner: string, id: string): string[] { return [...this.ownerPath(owner), 'runs', safeRunId(id)]; }
+  private key(segments: string[]): string {
+    if (!segments.length || segments.some(segment => !/^[A-Za-z0-9_.-]+$/u.test(segment) || segment === '.' || segment === '..'))
+      throw new Error('web_storage_invalid_key');
+    return segments.join('/');
+  }
+  getRecord<T>(segments: string[]): T | undefined {
+    const key = this.key(segments), file = this.root ? path.join(this.root, key) : undefined;
+    const text = file ? (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined) : this.memory.get(key);
+    return text === undefined ? undefined : JSON.parse(text) as T;
+  }
+  saveRecord(segments: string[], value: unknown, immutable = false): void {
+    const key = this.key(segments), text = encoded(publicRecord(value));
+    if (!this.root) {
+      const previous = this.memory.get(key);
+      if (immutable && previous !== undefined && previous !== text) throw new Error('web_storage_immutable_record_changed');
+      this.memory.set(key, text); return;
+    }
+    const file = path.join(this.root, key);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    if (immutable) {
+      if (fs.existsSync(file)) {
+        if (fs.readFileSync(file, 'utf8') !== text) throw new Error('web_storage_immutable_record_changed');
+        return;
+      } else writeMathFrozen(file, text);
+    } else {
+      const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+      const fd = fs.openSync(temporary, 'wx', 0o600);
+      try { fs.writeFileSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      fs.renameSync(temporary, file);
+    }
+    syncMathDirectory(path.dirname(file));
+  }
+  listRecords(segments: string[]): string[] {
+    const key = this.key(segments);
+    if (!this.root) return [...new Set([...this.memory.keys()].filter(item => item.startsWith(key + '/'))
+      .map(item => item.slice(key.length + 1).split('/')[0]!))].sort();
+    const directory = path.join(this.root, key);
+    return fs.existsSync(directory) ? fs.readdirSync(directory).sort() : [];
+  }
+  deleteRecord(segments: string[]): void {
+    const key = this.key(segments);
+    if (this.root) fs.rmSync(path.join(this.root, key), { recursive: true, force: true });
+    else for (const item of this.memory.keys()) if (item === key || item.startsWith(key + '/')) this.memory.delete(item);
+  }
+
+  saveSession(session: StoredWebSession): void {
+    this.saveRecord(['sessions', `${digestKey(session.id)}.json`], { id: session.id, csrf: session.csrf, touchedAt: session.touchedAt });
+  }
+  getSession(id: string): StoredWebSession | undefined { return this.getRecord(['sessions', `${digestKey(id)}.json`]); }
+  listSessions(): StoredWebSession[] {
+    return this.listRecords(['sessions']).map(file => this.getRecord<StoredWebSession>(['sessions', file])!);
+  }
+  deleteSession(id: string): void { this.deleteRecord(['sessions', `${digestKey(id)}.json`]); }
+
+  saveRun(owner: string, run: WebRun): void {
+    const directory = this.runPath(owner, run.id);
+    this.saveRecord([...this.ownerPath(owner), 'owner.json'], { owner }, true);
+    if (run.observation) this.saveObservation(owner, run.observation);
+    for (const event of run.events) this.saveRecord([...directory, 'events', `${event.sequence}.json`], event, true);
+    this.saveRecord([...directory, 'run.json'], { owner, run });
+  }
+  getRun(owner: string, id: string): WebRun | undefined {
+    return this.getRecord<{ owner: string; run: WebRun }>([...this.runPath(owner, id), 'run.json'])?.run;
+  }
+  loadRuns(): { owner: string; run: WebRun }[] {
+    return this.listRecords(['owners']).flatMap(directory => this.listRecords(['owners', directory, 'runs'])
+      .map(id => this.getRecord<{ owner: string; run: WebRun }>(['owners', directory, 'runs', id, 'run.json']))
+      .filter((item): item is { owner: string; run: WebRun } => Boolean(item)))
+      .sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
+  }
+  deleteRun(owner: string, id: string): void { this.deleteRecord(this.runPath(owner, id)); }
+
+  saveObservation(owner: string, observation: WebObservation): void {
+    if (!Number.isSafeInteger(observation.sequence) || observation.sequence < 1) throw new Error('web_storage_invalid_observation_sequence');
+    const directory = this.runPath(owner, observation.webRunId);
+    this.saveRecord([...directory, 'observations', `${observation.sequence}.json`], observation, true);
+  }
+  listObservations(owner: string, runId: string): WebObservation[] {
+    const directory = [...this.runPath(owner, runId), 'observations'];
+    return bySequence(this.listRecords(directory).map(file => this.getRecord<WebObservation>([...directory, file])!));
+  }
+  getObservation(owner: string, runId: string, sequence?: number): WebObservation | undefined {
+    if (sequence !== undefined) return this.getRecord([...this.runPath(owner, runId), 'observations', `${sequence}.json`]);
+    return this.listObservations(owner, runId).at(-1);
+  }
+  getTaskSource(owner: string, runId: string, taskId: string, version?: string): WebTaskSource | undefined {
+    return this.listObservations(owner, runId).reverse().flatMap(item => item.sources)
+      .find(item => item.taskId === taskId && (version === undefined || item.taskVersion === version));
+  }
+  getCheckReceipt(owner: string, runId: string, receiptId: string): WebCheckReceipt | undefined {
+    return this.listObservations(owner, runId).reverse().flatMap(item => item.checks).find(item => item.id === receiptId);
+  }
+
+  saveCommand(owner: string, runId: string, id: string, result: WebCommandResult): void {
+    this.saveRecord([...this.runPath(owner, runId), 'commands', `${digestKey(id)}.json`], result);
+  }
+  getCommand(owner: string, runId: string, id: string): WebCommandResult | undefined {
+    return this.getRecord([...this.runPath(owner, runId), 'commands', `${digestKey(id)}.json`]);
+  }
+  listCommands(owner: string, runId: string): WebCommandResult[] {
+    const directory = [...this.runPath(owner, runId), 'commands'];
+    return this.listRecords(directory).map(file => this.getRecord<WebCommandResult>([...directory, file])!);
+  }
+  listEvents(owner: string, runId: string): WebEvent[] {
+    const directory = [...this.runPath(owner, runId), 'events'];
+    return bySequence(this.listRecords(directory).map(file => this.getRecord<WebEvent>([...directory, file])!));
+  }
+  getEvents(owner: string, runId: string): WebEvent[] { return this.listEvents(owner, runId); }
+
+  archiveRun(owner: string, run: WebRun, catalogDigest?: string): WebArchive {
+    if (!this.getRun(owner, run.id)) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
+    this.saveRun(owner, run);
+    const observations = this.listObservations(owner, run.id), events = this.listEvents(owner, run.id);
+    const unique = <T>(items: T[]) => [...new Map(items.map(item => [mathDigest(encoded(item)), item])).values()];
+    const sources = unique(observations.flatMap(item => item.sources)), checks = unique(observations.flatMap(item => item.checks));
+    const last = observations.at(-1);
+    const coverage: WebArchive['coverage'] = {
+      events: events.every((event, index) => event.sequence === index + 1) ? 'complete' : 'partial',
+      sources: last?.coverage.sources ?? 'partial', checks: last?.coverage.checks ?? 'partial',
+    };
+    const identity = { id: crypto.randomUUID(), runId: run.id, createdAt: new Date().toISOString(),
+      evidence: 'recorded-not-replayed' as const, requiresFreshCheck: true as const,
+      sources: sources.length, checks: checks.length, coverage, ...(catalogDigest ? { catalogDigest } : {}) };
+    const payload = publicRecord({ schema: 'theorem-os.web-archive.v1' as const, run, observations, sources, checks, events,
+      commands: this.listCommands(owner, run.id) });
+    const summary: WebArchive = { ...identity, digest: mathDigest(encoded({ ...payload, identity })) };
+    this.saveRecord([...this.runPath(owner, run.id), 'archives', `${summary.id}.json`], { ...payload, summary }, true);
+    return summary;
+  }
+  getArchive(owner: string, runId: string, archiveId: string): StoredWebArchive | undefined {
+    if (!/^[a-f0-9-]{36}$/u.test(archiveId)) return undefined;
+    const stored = this.getRecord<StoredWebArchive>([...this.runPath(owner, runId), 'archives', `${archiveId}.json`]);
+    if (stored) {
+      const { summary, ...payload } = stored, { digest, ...identity } = summary;
+      if (mathDigest(encoded({ ...payload, identity })) !== digest) throw new Error('web_archive_identity_changed');
+    }
+    return stored;
+  }
+}

@@ -20,11 +20,21 @@ import { SourceReader } from './sourceReader';
 import { ActivityReader } from './activityReader';
 import { ModuleView, type ModuleViewInput } from './moduleView';
 import { ModulePlanEditor } from './modulePlanEditor';
+import { CollaborationView } from './collaborationView';
+import { RunUpdates } from './runUpdates';
+import type { WebObservation } from '../collaboration';
+import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
 import { animateEntrance, finishHiddenMotion, finishMotion } from './motion';
+import { renderTopbar } from './ui/Topbar';
+import { renderRunMonitor as drawRunMonitor, type MonitorItem } from './ui/RunMonitor';
+import { renderRunHeader as drawRunHeader, unmountRunHeader } from './ui/RunHeader';
+import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
+import { renderRunOverview, unmountRunOverview, type RunOverviewProps } from './ui/RunOverview';
+import { renderConversation as drawConversation } from './ui/Conversation';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
@@ -64,18 +74,18 @@ const timestamp = (value: string, timeOnly = false) => {
 };
 const byteSize = (text: string) => new TextEncoder().encode(text).length;
 const byteLabel = (bytes: number) => bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
-type DetailTab = 'overview' | 'source' | 'modules' | 'report' | 'events';
-const detailTabs = [['source', 'Lean 源码'], ['modules', '模块'], ['overview', '概览'], ['report', '报告'], ['events', '活动']] as const;
+type DetailTab = 'collaboration' | 'overview' | 'source' | 'modules' | 'report' | 'events';
+const detailTabs = [['collaboration', '研究协作'], ['source', 'Lean 源码'], ['modules', '模块'], ['overview', '概览'], ['report', '报告'], ['events', '活动']] as const;
 const state = {
   session: undefined as WebSession | undefined,
   runs: [] as WebRun[], selectedId: '', selectedRun: undefined as WebRun | undefined,
   query: '', filter: 'all' as RunFilter,
-  tab: 'source' as DetailTab, sourceView: 'proof' as 'proof' | 'input' | 'diff', submitting: false, cancelling: new Set<string>(),
+  tab: 'collaboration' as DetailTab, sourceView: 'proof' as 'proof' | 'input' | 'diff', submitting: false, cancelling: new Set<string>(),
   draftView: 'source' as 'source' | 'modules',
   foldUnchanged: true, diffChange: 0,
   reportMode: 'summary' as 'summary' | 'json', deleting: new Set<string>(),
-  detailError: '', listGeneration: 0,
-  listSignature: '', detailSignature: '', panelSignature: '',
+  detailError: '', listGeneration: 0, runsEtag: '',
+  listSignature: '', panelSignature: '',
   connected: false, refreshing: false, connectionEpoch: 0,
   composing: false, conversationSignature: '', conversationRunId: '',
   finishedRuns: new Set<string>(),
@@ -84,6 +94,7 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let clockTimer: ReturnType<typeof setInterval> | undefined;
 let connectionRequest: Promise<void> | undefined;
+let liveRefreshPending = false;
 let readController = new AbortController();
 let pageActive = true;
 let sourceRevision = 0;
@@ -113,6 +124,12 @@ const activityReader = new ActivityReader(icons, at => timestamp(at, true),
   (filename, text) => download(filename, text, 'application/json'));
 const moduleView = new ModuleView(icons);
 const modulePlanEditor = new ModulePlanEditor(element('#module-plan'), icons, () => draftChanged());
+const collaborationView = new CollaborationView(api, receiveRunObservation);
+const runUpdates = new RunUpdates(version => {
+  if (pageActive && state.connected && !document.hidden && version !== state.runsEtag) requestRunsRefresh();
+}, schedulePoll);
+const serverModulePlans = new ServerModulePlans(element('#module-plan'), api, () => modulePlanEditor.value(),
+  plan => modulePlanEditor.setValue(plan), () => draftChanged());
 const modulePlanLibrary = new ModulePlanLibraryView(element('#module-plan-library'), new ModulePlanLibrary(() => localStorage),
   () => modulePlanEditor.value(), plan => { modulePlanEditor.setValue(plan); draftChanged(); });
 const editorNavigation = new EditorNavigation(element<HTMLDialogElement>('#source-editor'), updateEditorPosition,
@@ -128,7 +145,9 @@ let historyReading: { top: number; anchors: Array<{ id: string; offset: number }
 class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
+function api<T>(url: string, init?: RequestInit): Promise<T>;
+function api<T>(url: string, init: RequestInit, etag: (value: string | null) => void): Promise<T | undefined>;
+async function api<T>(url: string, init: RequestInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new Error('请求超时，请重新连接')), 15_000);
   const signals = [timeout.signal];
@@ -138,6 +157,7 @@ async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.any(signals),
       headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } });
+    if (etag && response.status === 304) { etag(response.headers.get('ETag')); return; }
     const payload: unknown = await response.json().catch(error => {
       if (timeout.signal.aborted) throw timeout.signal.reason;
       if (!response.ok) return undefined;
@@ -149,6 +169,7 @@ async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
       throw new ApiError(message, response.status);
     }
     if (payload === undefined) throw new Error('服务器返回了无法读取的响应');
+    etag?.(response.headers.get('ETag'));
     return payload as T;
   } catch (error) {
     if (timeout.signal.aborted) throw timeout.signal.reason;
@@ -217,6 +238,7 @@ function syncSettingsNavigation() {
 function openSettings(focusId?: string) {
   if (!state.session || state.submitting) return;
   modulePlanLibrary.refresh();
+  void serverModulePlans.refresh();
   const dialog = element<HTMLDialogElement>('#run-settings');
   if (!dialog.open && document.body.dataset.mobileView === 'runs') {
     settingsWorkspaceReturn = { focus: document.activeElement instanceof HTMLElement ? document.activeElement : undefined };
@@ -301,10 +323,8 @@ function renderTemplateSelection() {
   });
 }
 function renderComposerSummary() {
-  patchText(element('#current-model'), field('model').value || '模型配置');
   patchText(element('#composer-environment'), environmentName(field('environment').value));
   patchText(element('#attached-lines'), `${field('source').value.split(/\r\n|\r|\n/).length} 行`);
-  patchText(element('#workspace-title'), currentRun()?.title ?? '新研究');
   const stop = element<HTMLButtonElement>('#stop-research');
   const run = currentRun();
   const cancelling = Boolean(run && state.cancelling.has(run.id));
@@ -319,6 +339,7 @@ function renderComposerSummary() {
   back.disabled = state.submitting;
   renderPreparation();
   renderTemplateSelection();
+  renderShell();
 }
 function rememberConversationScroll() {
   const scroll = element('#conversation-scroll');
@@ -349,51 +370,30 @@ function renderConversation() {
   if (newConversation) { conversationScroll.top = 0; conversationScroll.following = true; }
   const thread = element('#conversation');
   const entrances: Array<{ target: HTMLElement; kind: 'message' | 'event' }> = [];
-  if (!run) {
-    finishMotion(thread);
-    thread.innerHTML = `<div class="chat-welcome"><img src="assets/mark.svg" alt="" width="40" height="40"><h2>从一道定理开始</h2><div class="chat-suggestions" aria-label="示例题目"><span class="suggestions-label">示例题目</span>${(state.session?.templates ?? []).map(template => `<button type="button" class="template-suggestion" data-chat-template="${html(template.id)}">${icon('file-code-2')}<span>${html(template.name)}</span><span class="suggestion-environment">${html(environmentName(template.environment))}</span>${icon('arrow-up-right')}</button>`).join('')}</div></div>`;
-  } else {
-    const events = run.events.filter((event, index, all) => index === 0 || event.message !== all[index - 1].message || event.type !== all[index - 1].type);
-    const value = status(run);
-    const working = activeRun(run);
-    if (newConversation || !thread.querySelector('.chat-message.user')) {
-      finishMotion(thread);
-      thread.innerHTML = `<article class="chat-message user" aria-label="用户研究任务"><div class="message-body">${html(run.task)}</div><button type="button" class="message-attachment" data-chat-action="source">${icon('file-code-2')}<span>Submission.lean</span><span>${html(environmentName(run.environment))}</span></button></article>
-        <article class="chat-message assistant" aria-label="TheoremOS 研究反馈"><div class="assistant-identity"><img src="assets/mark.svg" alt="" width="24" height="24"><span>TheoremOS</span><span class="assistant-model mono">${html(run.model)}</span></div><div class="message-body"><ol class="research-timeline"></ol><div class="chat-result"></div><div class="chat-result-actions"></div></div></article>`;
-      thread.querySelectorAll<HTMLElement>('.chat-message').forEach(target => entrances.push({ target, kind: 'message' }));
-    }
-    const timeline = thread.querySelector<HTMLOListElement>('.research-timeline')!;
-    const rows = new Map(Array.from(timeline.children, row => [(row as HTMLElement).dataset.sequence, row as HTMLElement]));
-    const sequences = new Set(events.map(event => String(event.sequence)));
-    for (const [sequence, row] of rows) if (!sequences.has(sequence!)) { finishMotion(row); row.remove(); }
-    let cursor = timeline.firstElementChild;
-    for (const [index, event] of events.entries()) {
-      const sequence = String(event.sequence);
-      let row = rows.get(sequence);
-      if (!row) {
-        row = document.createElement('li');
-        row.className = 'timeline-event'; row.dataset.sequence = sequence;
-        row.innerHTML = '<span class="timeline-marker" aria-hidden="true"></span><div class="timeline-text"><span></span><time></time></div>';
-        if (!newConversation && conversationScroll.following && index >= events.length - 3) entrances.push({ target: row, kind: 'event' });
-      }
-      const active = index === events.length - 1 && working;
-      row.dataset.tone = active ? 'active' : 'done';
-      patchMarkup(row.querySelector<HTMLElement>('.timeline-marker')!, active ? '<span class="spinner"></span>' : icon('check'));
-      patchText(row.querySelector('.timeline-text>span')!, event.message);
-      const time = row.querySelector('time')!;
-      time.dateTime = event.at; patchText(time, timestamp(event.at, true));
-      if (row !== cursor) timeline.insertBefore(row, cursor);
-      cursor = row.nextElementSibling;
-    }
-    const result = thread.querySelector<HTMLElement>('.chat-result')!;
-    result.className = `chat-result ${value.tone}`;
-    patchMarkup(result, `<h3>${working ? '<span class="spinner"></span>' : icon(value.symbol)}${html(value.label)}</h3><p>${html(resultDescription(run))}</p>${run.artifact && working ? '<span class="candidate-notice">候选源码已更新 · 尚未验收</span>' : ''}`);
-    patchMarkup(thread.querySelector<HTMLElement>('.chat-result-actions')!, `<button type="button" class="text-button" data-chat-action="${working ? 'events' : 'report'}">${icon(working ? 'list' : 'file-json-2')}${working ? '活动记录' : '查看报告'}</button>${!working ? `<button type="button" class="text-button" data-chat-action="reuse">${icon('copy-plus')}基于此题新建研究</button>` : ''}`);
+  const events = run ? run.events.filter((event, index, all) => index === 0 || event.message !== all[index - 1].message || event.type !== all[index - 1].type) : [];
+  const rendered = () => Array.from(thread.querySelectorAll<HTMLElement>('.timeline-event'));
+  const previous = new Set(rendered().map(row => row.dataset.sequence));
+  const freshThread = Boolean(run) && (newConversation || !thread.querySelector('.chat-message.user'));
+  if (!run || freshThread) finishMotion(thread);
+  else {
+    const kept = new Set(events.map(event => String(event.sequence)));
+    for (const row of rendered()) if (!kept.has(row.dataset.sequence!)) finishMotion(row);
+  }
+  const working = Boolean(run && activeRun(run)), value = run ? status(run) : undefined;
+  drawConversation(thread, {
+    templates: (state.session?.templates ?? []).map(template => ({ id: template.id, name: template.name, environment: environmentName(template.environment) })),
+    ...(run && value ? { run: { id: run.id, task: run.task, environment: environmentName(run.environment), model: run.model, working,
+      events: events.map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), message: event.message })),
+      result: { tone: value.tone, symbol: value.symbol, label: value.label, description: resultDescription(run), candidate: Boolean(run.artifact && working) } } } : {}),
+  });
+  if (freshThread) thread.querySelectorAll<HTMLElement>('.chat-message').forEach(target => entrances.push({ target, kind: 'message' }));
+  if (run && !newConversation && conversationScroll.following) {
+    const recent = new Set(events.slice(-3).map(event => String(event.sequence)));
+    for (const row of rendered()) if (recent.has(row.dataset.sequence!) && !previous.has(row.dataset.sequence)) entrances.push({ target: row, kind: 'event' });
   }
   const announcement = run ? `${status(run).label}。${activeRun(run) ? run.events.at(-1)?.message ?? '' : resultDescription(run)}` : '';
   const live = element('#conversation-announcement');
   if (live.textContent !== announcement) live.textContent = announcement;
-  icons(thread);
   renderTemplateSelection();
   restoreConversationScroll();
   for (const { target, kind } of entrances) animateEntrance(target, kind);
@@ -444,6 +444,7 @@ function captureDraft(): TaskDraft {
     source: field('source').value, task: field('task').value, templateId: field('template').value,
     maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: field('workers').value,
     coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+    ...(serverModulePlans.knowledgeDigest() ? { knowledgeDigest: serverModulePlans.knowledgeDigest() } : {}),
     ...(modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full' ? { modulePlan } : {}) };
 }
 function setDraftStatus(text: string, warning = false) {
@@ -529,6 +530,7 @@ function applyTaskDraft(draft: TaskDraft) {
   field('template').value = template?.id ?? '';
   element<HTMLInputElement>(`input[name="coordination"][value="${draft.coordination}"]`).checked = true;
   modulePlanEditor.setValue(draft.modulePlan);
+  serverModulePlans.setKnowledgeDigest(draft.knowledgeDigest);
   field('api-key').value = '';
   element<HTMLInputElement>('#api-key').type = 'password';
   updateKeyToggle(); providerAddress(); updateEnvironment(); sourceChanged();
@@ -601,7 +603,7 @@ function resetForm() {
     draftReady = false;
     clearTimeout(draftTimer); draftDirty = false;
     element<HTMLFormElement>('#run-form').reset();
-    modulePlanLibrary.resetSelection(); modulePlanEditor.setValue();
+    modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(); serverModulePlans.setKnowledgeDigest();
     field('api-key').value = '';
     element<HTMLInputElement>('#api-key').type = 'password';
     updateKeyToggle();
@@ -757,9 +759,6 @@ function updateKeyToggle() {
 function renderRuntime() {
   const session = state.session;
   const ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
-  const connection = element('#connection-status');
-  connection.className = `connection-status ${ready ? 'ready' : 'offline'}`;
-  connection.innerHTML = `<span class="status-dot"></span>${!state.connected ? connectionRequest ? '连接中' : '连接中断' : ready ? '环境就绪' : '环境未就绪'}`;
   element('#runtime-note').textContent = !state.connected ? '连接恢复后可提交' : session
     ? !session.providers.length ? '未配置可用服务商' : session.runtime.message || (ready ? '环境就绪' : '环境未就绪')
     : '等待连接';
@@ -772,7 +771,6 @@ function renderRuntime() {
   element<HTMLButtonElement>('#import-task').disabled = !session || state.submitting;
   element<HTMLButtonElement>('#export-draft').disabled = !session || state.submitting;
   element<HTMLButtonElement>('#new-research').disabled = !session || state.submitting;
-  element<HTMLButtonElement>('#open-settings').disabled = !session || state.submitting;
   renderDraftRecovery();
   renderRunMonitor();
   renderImportState();
@@ -805,38 +803,17 @@ function renderRunMonitor() {
   root.hidden = !runs.length;
   root.dataset.stale = String(!state.connected);
   patchText(element('#run-monitor-summary'), [active ? `${active} 项进行中` : '', finished ? `${finished} 项已结束` : ''].filter(Boolean).join('\n'));
-  const rows = new Map(Array.from(list.children, row => [(row as HTMLElement).dataset.monitorId, row as HTMLElement]));
   const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : undefined;
-  const left = list.scrollLeft, ids = new Set(runs.map(run => run.id));
-  for (const [id, row] of rows) if (!ids.has(id!)) row.remove();
-  let cursor = list.firstElementChild;
-  for (const run of runs) {
-    let row = rows.get(run.id);
-    if (!row) {
-      row = document.createElement('div'); row.className = 'run-monitor-entry'; row.dataset.monitorId = run.id;
-      row.innerHTML = `<button type="button" class="run-monitor-open" data-monitor-run-id="${html(run.id)}"><span class="run-monitor-icon" aria-hidden="true"></span><span class="run-monitor-copy"><span class="run-monitor-title"></span><span class="run-monitor-state"></span></span>${icon('arrow-up-right')}</button><button type="button" class="icon-button run-monitor-dismiss" data-dismiss-run-notice="${html(run.id)}" hidden>${icon('x')}</button>`;
-      icons(row);
-    }
+  const left = list.scrollLeft;
+  drawRunMonitor(list, runs.map((run): MonitorItem => {
     const value = status(run), cancelling = activeRun(run) && state.cancelling.has(run.id);
     const label = cancelling ? '正在取消' : value.label;
-    const description = state.connected ? label : `待同步 · ${label}`;
-    row.dataset.tone = value.tone;
-    const button = row.querySelector<HTMLButtonElement>('.run-monitor-open')!;
-    const current = String(run.id === state.selectedId), title = `${run.title} · ${description}`;
-    if (button.getAttribute('aria-current') !== current) button.setAttribute('aria-current', current);
-    if (button.title !== title) button.title = title;
-    patchText(row.querySelector('.run-monitor-title')!, run.title);
-    patchText(row.querySelector('.run-monitor-state')!, description);
-    patchMarkup(row.querySelector<HTMLElement>('.run-monitor-icon')!, cancelling ? '<span class="spinner"></span>' : icon(value.symbol));
-    const dismiss = row.querySelector<HTMLButtonElement>('.run-monitor-dismiss')!;
-    dismiss.hidden = activeRun(run);
-    dismiss.title = `忽略结束提醒：${run.title}`;
-    dismiss.setAttribute('aria-label', dismiss.title);
-    if (row !== cursor) list.insertBefore(row, cursor);
-    cursor = row.nextElementSibling;
-  }
+    return { id: run.id, title: run.title, description: state.connected ? label : `待同步 · ${label}`, tone: value.tone, symbol: value.symbol,
+      current: run.id === state.selectedId, cancelling, active: activeRun(run), stages: runProgress(run).steps.map(step => step.state) };
+  }));
   list.scrollLeft = left;
   if (focused && !focused.isConnected && !document.querySelector('dialog[open]')) element('#open-history').focus({ preventScroll: true });
+  renderShell();
 }
 function rememberHistoryScroll() {
   const list = element('#run-list');
@@ -938,53 +915,54 @@ function clearFilters() {
 }
 const currentRun = () => state.selectedRun?.id === state.selectedId ? state.selectedRun : state.runs.find(run => run.id === state.selectedId);
 const downloadUrl = (id: string) => `/api/runs/${encodeURIComponent(id)}/download`;
-function resultBanner(run: WebRun) {
-  const value = status(run);
-  const title = passed(run) ? '完整原题已通过独立验收'
+function resultTitle(run: WebRun) {
+  return passed(run) ? '完整原题已通过独立验收'
     : activeRun(run) ? run.status === 'queued' ? '任务已排队' : '研究正在运行'
       : run.status === 'cancelled' ? '运行已取消'
         : run.status === 'error' ? '运行发生错误'
           : ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '') ? '完整原题验收未通过' : '运行已结束，完整原题尚未验收通过';
-  return `<div class="result-banner ${value.tone}">${icon(value.symbol)}<div><h3>${title}</h3><p>${html(resultDescription(run))}</p></div></div>`;
 }
-function progressView(run: WebRun) {
-  const progress = runProgress(run);
-  const labels = { done: '已完成', active: '进行中', stopped: '已停止', error: '未通过', pending: '等待中', skipped: '未执行' };
-  return `<section class="run-progress" aria-label="运行进度">
-    <div class="progress-summary"><div><span class="progress-caption">运行进度</span><h3>${html(progress.phaseLabel)}</h3></div><div class="elapsed-summary"><span>总用时</span><strong class="mono" data-total-clock>${formatDuration(progress.elapsed)}</strong></div></div>
-    ${activeRun(run) ? `<p class="progress-description">${html(resultDescription(run))}</p>` : ''}
-    <ol class="progress-steps">${progress.steps.map((step, index) => `<li class="progress-step ${step.state}" ${step.state === 'active' ? 'aria-current="step"' : ''}>
-      <span class="step-marker" aria-hidden="true">${step.state === 'done' ? icon('check') : step.state === 'active' ? '<span class="spinner"></span>' : step.state === 'error' ? icon('x') : String(index + 1).padStart(2, '0')}</span><span class="step-label">${step.label}</span><span class="step-state">${labels[step.state]}</span><span class="step-duration mono" data-stage-clock="${index}">${formatDuration(step.elapsed)}</span>
-    </li>`).join('')}</ol>
-    <div class="progress-budget">${icon('clock-3')}<span>解题预算 <strong class="mono">${formatDuration(run.maxRunSeconds * 1000)}</strong></span><span>研究用时 <strong class="mono" data-solving-clock>${progress.solvingElapsed === null ? '尚未开始' : formatDuration(progress.solvingElapsed)}</strong></span></div>
-  </section>`;
+function resultBanner(run: WebRun) {
+  const value = status(run);
+  return `<div class="result-banner ${value.tone}">${icon(value.symbol)}<div><h3>${resultTitle(run)}</h3><p>${html(resultDescription(run))}</p></div></div>`;
+}
+const fact = (label: string, value: unknown, mono = false) => `<div><dt>${label}</dt><dd${mono ? ' class="mono"' : ''}>${html(value)}</dd></div>`;
+const stepLabels = { done: '已完成', active: '进行中', stopped: '已停止', error: '未通过', pending: '等待中', skipped: '未执行' };
+function overviewProps(run: WebRun): RunOverviewProps {
+  const progress = runProgress(run), value = status(run);
+  const provider = state.session?.providers.find(item => item.id === run.providerId);
+  const environment = environmentInfo(run.environment);
+  const total = Math.max(1, progress.elapsed ?? 0);
+  const item = (label: string, value: unknown, mono = false) => ({ label, value: String(value), mono });
+  return {
+    runId: run.id, active: activeRun(run), tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: resultDescription(run),
+    phaseLabel: progress.phaseLabel, elapsed: formatDuration(progress.elapsed),
+    solving: progress.solvingElapsed === null ? '尚未开始' : formatDuration(progress.solvingElapsed),
+    budget: formatDuration(run.maxRunSeconds * 1000), budgetUsed: (progress.solvingElapsed ?? 0) / (run.maxRunSeconds * 1000),
+    steps: progress.steps.map(step => ({ label: step.label, state: step.state, stateLabel: stepLabels[step.state], clock: formatDuration(step.elapsed),
+      share: step.elapsed === null ? 0 : Math.min(1, step.elapsed / total) })),
+    downloads: { proof: Boolean(run.result?.proof), report: Boolean(run.result) },
+    task: run.task,
+    facts: [item('证明环境', environmentName(run.environment)), ...(environment ? [item('Lean 版本', environment.toolchain, true)] : []),
+      ...(environment?.mathlibRevision ? [item('Mathlib 版本', environment.mathlibRevision, true)] : []), item('服务商', provider?.name ?? run.providerId),
+      item('模型', run.model, true), item('推理强度', run.effort), item('协作模式', run.coordination === 'cooperative' ? '任务协作' : '独立并行'),
+      item('Agent 数量', run.workers), item('轮次上限', run.maxTurns), item('解题预算', `${run.maxRunSeconds} 秒`), item('创建时间', timestamp(run.createdAt)),
+      ...(run.finishedAt ? [item('结束时间', timestamp(run.finishedAt))] : [])],
+    agents: (activeRun(run) ? run.observation?.inspection.workers ?? [] : []).map(worker => ({ id: worker.id, state: worker.scheduling?.status ?? 'unknown', phase: worker.phase,
+      ...(worker.task ? { task: worker.task } : {}) })),
+    events: run.events.slice(-6).reverse().map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), type: event.type, message: event.message })),
+    eventCount: run.events.length,
+  };
+}
+function renderOverview(run: WebRun) {
+  const root = document.querySelector<HTMLElement>('#detail-panel .overview-workspace');
+  if (root) renderRunOverview(root, overviewProps(run));
 }
 function updateClocks() {
   const run = currentRun();
-  if (!run || document.hidden) return;
-  const progress = runProgress(run);
-  const update = (selector: string, value: string) => {
-    document.querySelectorAll(selector).forEach(target => {
-      if (target.textContent !== value) target.textContent = value;
-    });
-  };
-  update('[data-total-clock]', formatDuration(progress.elapsed));
-  update('[data-solving-clock]', progress.solvingElapsed === null ? '尚未开始' : formatDuration(progress.solvingElapsed));
-  progress.steps.forEach((step, index) => update(`[data-stage-clock="${index}"]`, formatDuration(step.elapsed)));
-}
-function resultDownloads(run: WebRun) {
-  if (!run.result) return '';
-  return `<div class="result-toolbar">${run.result.proof ? `<button type="button" class="button" data-action="download-proof">${icon('file-code-2')}下载 Lean</button>` : ''}<button type="button" class="button" data-action="download-report">${icon('file-json-2')}下载报告</button></div>`;
-}
-const fact = (label: string, value: unknown, mono = false) => `<div><dt>${label}</dt><dd${mono ? ' class="mono"' : ''}>${html(value)}</dd></div>`;
-function overview(run: WebRun) {
-  const provider = state.session?.providers.find(item => item.id === run.providerId);
-  const environment = environmentInfo(run.environment);
-  const latest = run.events.at(-1);
-  return `${activeRun(run) ? '' : resultBanner(run)}${progressView(run)}${resultDownloads(run)}
-    <div class="overview-section"><h3>研究任务</h3><p class="task-content">${html(run.task)}</p></div>
-    <div class="overview-section"><h3>执行配置</h3><dl class="facts">${fact('证明环境', environmentName(run.environment))}${environment ? fact('Lean 版本', environment.toolchain, true) : ''}${environment?.mathlibRevision ? fact('Mathlib 版本', environment.mathlibRevision, true) : ''}${fact('服务商', provider?.name ?? run.providerId)}${fact('模型', run.model, true)}${fact('推理强度', run.effort)}${fact('协作模式', run.coordination === 'cooperative' ? '任务协作' : '独立并行')}${fact('Agent 数量', run.workers)}${fact('轮次上限', run.maxTurns)}${fact('解题预算', `${run.maxRunSeconds} 秒`)}${fact('创建时间', timestamp(run.createdAt))}${run.finishedAt ? fact('结束时间', timestamp(run.finishedAt)) : ''}</dl></div>
-    <div class="overview-section"><h3>最近活动</h3>${latest ? `<div class="last-activity"><time datetime="${html(latest.at)}">${html(timestamp(latest.at, true))}</time><span>${html(latest.message)}</span></div>` : '<p class="task-content">暂无活动记录</p>'}</div>`;
+  if (!run || document.hidden || !activeRun(run)) return;
+  if (state.tab === 'overview') renderOverview(run);
+  renderRunHeader(run); renderShell();
 }
 const candidateSource = (run: WebRun) => run.result?.proof || run.artifact?.source || '';
 const displayedSource = (run: WebRun) => state.sourceView !== 'input' && candidateSource(run) ? candidateSource(run) : run.source;
@@ -1084,7 +1062,10 @@ function renderPanel(force = false) {
   const signature = JSON.stringify([run.id, state.tab, content ? [state.sourceView, state.foldUnchanged, content.source, content.controls, content.status, content.tone]
     : state.tab === 'report' ? [state.reportMode, run.status, run.error, run.result] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
-  if (!force && signature === state.panelSignature) return;
+  if (!force && signature === state.panelSignature) {
+    if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected);
+    return;
+  }
   state.panelSignature = signature;
   const panel = element('#detail-panel');
   const navigating = panel.dataset.renderRunId === run.id && (panel.dataset.tab !== state.tab
@@ -1106,9 +1087,13 @@ function renderPanel(force = false) {
   const reuseSource = content && samePanel && !(content.hasProof && state.sourceView === 'diff') && panel.querySelector('.source-code-grid');
   const reuseEvents = state.tab === 'events' && samePanel && panel.querySelector('.activity-workspace');
   const reuseModules = state.tab === 'modules' && samePanel && panel.querySelector('.module-workspace');
+  const reuseCollaboration = state.tab === 'collaboration' && samePanel && panel.querySelector('.collaboration-workspace');
+  const reuseOverview = state.tab === 'overview' && samePanel && panel.querySelector('.overview-workspace');
   if (!reuseEvents) activityReader.update(undefined, run);
   if (!reuseModules) moduleView.update(undefined, moduleInput(run));
-  if (!reuseSource && !reuseEvents && !reuseModules) panel.innerHTML = content ? sourceView(run, content) : state.tab === 'report' ? reportView(run) : state.tab === 'events' ? '<div class="activity-workspace"></div>' : state.tab === 'modules' ? '<div class="module-workspace"></div>' : overview(run);
+  if (!reuseCollaboration) collaborationView.update();
+  if (!reuseOverview) unmountRunOverview(panel);
+  if (!reuseSource && !reuseEvents && !reuseModules && !reuseCollaboration && !reuseOverview) panel.innerHTML = content ? sourceView(run, content) : state.tab === 'report' ? reportView(run) : state.tab === 'events' ? '<div class="activity-workspace"></div>' : state.tab === 'modules' ? '<div class="module-workspace"></div>' : state.tab === 'collaboration' ? '<div class="collaboration-workspace"></div>' : '<div class="overview-workspace"></div>';
   if (content) {
     patchMarkup(panel.querySelector<HTMLElement>('.source-topline')!, content.controls);
     const sourceStatus = panel.querySelector<HTMLElement>('.source-status')!;
@@ -1131,8 +1116,10 @@ function renderPanel(force = false) {
   else if (sameView && focused === previousScroll) scroll?.focus({ preventScroll: true });
   else if (samePanel && focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
   icons(panel);
+  if (state.tab === 'collaboration') collaborationView.update(panel.querySelector<HTMLElement>('.collaboration-workspace')!, run, state.connected);
   if (state.tab === 'events') activityReader.update(panel.querySelector<HTMLElement>('.activity-workspace')!, run);
   if (state.tab === 'modules') moduleView.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
+  if (state.tab === 'overview') renderOverview(run);
   updateDiffNavigation(0, !sameView);
   if (navigating) animateEntrance(panel, 'panel');
   updateSourceReader();
@@ -1173,6 +1160,7 @@ function renderDraftPreview(force = false) {
   if (!detail.querySelector('#draft-preview')) {
     moduleView.update();
     finishMotion(detail);
+    unmountRunOverview(detail); unmountRunHeader(detail);
     detail.innerHTML = `<div class="detail-empty draft-preview" id="draft-preview">
       <header class="preview-heading"><div><span class="preview-eyebrow">Lean 工作区</span><h2></h2></div><div class="detail-actions"><span class="badge preview-status">${icon('file-code-2')}未提交</span><button type="button" class="icon-button" data-draft-action="edit" aria-label="编辑原始题目" title="编辑原始题目">${icon('square-pen')}</button><button type="button" class="icon-button" data-draft-action="settings" aria-label="配置证明环境" title="配置证明环境">${icon('sliders-horizontal')}</button></div></header>
       <dl class="preview-facts">${facts.map(([id, label, , mono]) => `<div><dt>${label}</dt><dd data-preview-value="${id}"${mono ? ' class="mono"' : ''}></dd></div>`).join('')}</dl>
@@ -1206,13 +1194,13 @@ function renderDetail(force = false) {
   const run = currentRun();
   if (sourceComparison && sourceComparison.runId !== run?.id) sourceComparison = undefined;
   if (!run) {
+    collaborationView.update();
     activityReader.update();
-    state.detailSignature = ''; state.panelSignature = '';
+    state.panelSignature = '';
     if (state.session) renderDraftPreview();
-    else { element('#run-detail').innerHTML = `<div class="empty-state detail-empty"><span class="spinner"></span><h2>正在连接工作台</h2></div>`; sourceReader.update(); }
+    else { unmountRunOverview(element('#run-detail')); unmountRunHeader(element('#run-detail')); element('#run-detail').innerHTML = `<div class="empty-state detail-empty"><span class="spinner"></span><h2>正在连接工作台</h2></div>`; sourceReader.update(); }
     return;
   }
-  const signature = JSON.stringify([run.id, run.title, run.status, run.phase, run.environment, run.updatedAt, run.result?.status, state.cancelling.has(run.id), state.deleting.has(run.id), state.detailError, state.connected]);
   const detail = element('#run-detail');
   const focused = document.activeElement instanceof HTMLElement && detail.contains(document.activeElement)
     ? document.activeElement : undefined;
@@ -1220,53 +1208,40 @@ function renderDetail(force = false) {
   const focusAction = focused?.dataset.action;
   const newDetail = detail.dataset.renderRunId !== run.id || !detail.querySelector('#detail-panel');
   if (newDetail) {
+    collaborationView.update();
     moduleView.update();
     finishMotion(detail);
-    detail.innerHTML = `<header class="detail-heading"><div class="detail-heading-text"><h2></h2><div class="detail-identifier"><code></code><button type="button" class="icon-button" data-action="copy-id" aria-label="复制运行 ID" title="复制运行 ID">${icon('copy')}</button></div></div><div class="detail-actions"></div></header>
-      <div class="detail-statusline"><span class="badge"></span><span class="run-environment"></span><span class="updated-at"></span></div>
-      <div class="inline-error" data-detail-error role="alert" hidden></div>
-      <div class="detail-tabs" role="tablist" aria-label="运行详情视图">${detailTabs.map(([tab, label]) => `<button type="button" role="tab" id="detail-tab-${tab}" data-detail-tab="${tab}" aria-controls="detail-panel">${label}</button>`).join('')}</div>
-      <section class="artifact-progress" aria-label="实时运行进度"><div class="artifact-progress-heading"><span data-phase-label></span><span class="mono" data-total-clock></span></div><ol class="artifact-stages"></ol></section>
-      <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0"></div>`;
+    unmountRunOverview(detail); unmountRunHeader(detail);
+    detail.textContent = '';
+    renderRunHeader(run);
+    const panel = document.createElement('div');
+    panel.className = 'detail-panel'; panel.id = 'detail-panel'; panel.setAttribute('role', 'tabpanel'); panel.tabIndex = 0;
+    detail.append(panel);
     detail.dataset.renderRunId = run.id;
     state.panelSignature = '';
-    icons(detail);
-  }
-  if (force || newDetail || signature !== state.detailSignature) {
-    state.detailSignature = signature;
-    patchText(detail.querySelector('.detail-heading h2')!, run.title);
-    patchText(detail.querySelector('.detail-identifier code')!, run.id);
-    patchMarkup(detail.querySelector<HTMLElement>('.detail-actions')!, `<button type="button" class="icon-button" data-action="reuse-run" aria-label="复用任务配置" title="复用任务配置">${icon('copy-plus')}</button>${activeRun(run) ? `<button type="button" class="button button-danger" data-action="cancel" ${state.cancelling.has(run.id) || !state.connected ? 'disabled' : ''}>${icon('square')}${state.cancelling.has(run.id) ? '正在取消' : '取消运行'}</button>` : `<button type="button" class="icon-button danger" data-action="delete-run" aria-label="删除运行记录" title="删除运行记录" ${!state.connected || state.deleting.has(run.id) ? 'disabled' : ''}>${icon('trash-2')}</button>`}${run.result || !activeRun(run) ? `<a class="icon-button" href="${downloadUrl(run.id)}" download title="下载运行档案 JSON" aria-label="下载运行档案 JSON">${icon('download')}</a>` : ''}`);
-    const value = status(run), progress = runProgress(run);
-    const statusBadge = detail.querySelector<HTMLElement>('.detail-statusline .badge')!;
-    const statusChanged = !newDetail && statusBadge.dataset.status !== `${run.status}:${run.phase}:${value.label}`;
-    statusBadge.className = `badge ${value.tone}`;
-    patchMarkup(statusBadge, `${icon(value.symbol)}${html(value.label)}`);
-    statusBadge.dataset.status = `${run.status}:${run.phase}:${value.label}`;
-    if (statusChanged) animateEntrance(statusBadge, 'status');
-    patchText(detail.querySelector('.run-environment')!, environmentName(run.environment));
-    patchText(detail.querySelector('.updated-at')!, `更新 ${timestamp(run.updatedAt)}`);
-    const error = detail.querySelector<HTMLElement>('[data-detail-error]')!;
-    patchText(error, state.detailError); error.hidden = !state.detailError;
-    patchMarkup(detail.querySelector<HTMLElement>('[data-phase-label]')!, `${activeRun(run) ? '<span class="spinner"></span>' : icon(value.symbol)}${html(progress.phaseLabel)}`);
-    patchMarkup(detail.querySelector<HTMLElement>('.artifact-stages')!, progress.steps.map(step => `<li class="${step.state}" ${step.state === 'active' ? 'aria-current="step"' : ''}>${icon(step.state === 'done' ? 'check' : step.state === 'error' ? 'x' : 'clock-3')}<span>${step.label}</span></li>`).join(''));
-    patchText(detail.querySelector('[data-total-clock]')!, formatDuration(progress.elapsed));
-  }
-  detail.querySelectorAll<HTMLButtonElement>('[data-detail-tab]').forEach(button => {
-    const selected = button.dataset.detailTab === state.tab;
-    button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
-  });
+  } else renderRunHeader(run);
   element('#detail-panel').setAttribute('aria-labelledby', `detail-tab-${state.tab}`);
   renderPanel(force);
   if (focused?.isConnected) focused.focus({ preventScroll: true });
   else if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
   else if (focusAction) detail.querySelector<HTMLElement>(`[data-action="${focusAction}"]`)?.focus({ preventScroll: true });
 }
+function renderRunHeader(run: WebRun) {
+  const value = status(run), progress = runProgress(run), cancelling = state.cancelling.has(run.id);
+  drawRunHeader(element('#run-detail'), {
+    title: run.title, id: run.id, environment: environmentName(run.environment), updated: `更新 ${timestamp(run.updatedAt)}`, error: state.detailError,
+    status: { key: `${run.status}:${run.phase}:${value.label}`, ...value },
+    stages: progress.steps.map(step => ({ label: step.label, state: step.state, clock: step.elapsed === null ? '' : formatDuration(step.elapsed) })),
+    elapsed: formatDuration(progress.elapsed), tabs: detailTabs, tab: state.tab,
+    active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
+    download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined,
+  });
+}
 function selectRun(id: string, closeHistory = true) {
   if (!state.runs.some(run => run.id === id)) return;
   state.composing = false;
   state.selectedId = id; state.selectedRun = state.runs.find(run => run.id === id);
-  state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
+  state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
   state.diffChange = 0;
   renderRunList(); renderDetail(true);
   if (closeHistory) closeHistoryDialog();
@@ -1277,7 +1252,7 @@ function startDraft(reset = false) {
   state.tab = 'source'; state.sourceView = 'proof'; state.detailError = '';
   state.draftView = 'source';
   moduleView.update(undefined, moduleInput());
-  state.detailSignature = ''; state.panelSignature = ''; draftPreviewSignature = '';
+  state.panelSignature = ''; draftPreviewSignature = '';
   if (reset) resetForm();
   renderRunList(); renderDetail(true); setMobileView('compose');
 }
@@ -1285,28 +1260,56 @@ const currentConnection = (epoch: number) => pageActive && epoch === state.conne
 const sessionFailure = (error: unknown) => error instanceof ApiError
   && (error.status === 401 || error.status === 403 && error.message.includes('会话校验'));
 function invalidateReads() {
+  runUpdates.stop();
+  liveRefreshPending = false;
   state.connectionEpoch++;
   state.listGeneration++;
+  state.runsEtag = '';
   readController.abort();
   readController = new AbortController();
   state.refreshing = false;
 }
 function disconnected(text: string) {
   state.connected = false;
+  runUpdates.stop();
+  liveRefreshPending = false;
   setGlobalNotice(text);
   element('#runs-error').textContent = '连接中断，记录可能不是最新状态';
   element('#runs-error').hidden = false;
   renderRuntime(); renderDetail();
 }
-async function refreshRuns(epoch: number) {
+function retainLatestObservation(run: WebRun, previous?: WebRun): WebRun {
+  const observation = previous?.observation;
+  if (!observation || run.observation && run.observation.solverRunId === observation.solverRunId
+    && run.observation.sequence > observation.sequence) return run;
+  return { ...run, observation, updatedAt: run.updatedAt > previous.updatedAt ? run.updatedAt : previous.updatedAt };
+}
+function receiveRunObservation(observation: WebObservation) {
+  const previous = state.runs.find(run => run.id === observation.webRunId);
+  if (!previous || previous.observation && (previous.observation.solverRunId !== observation.solverRunId
+    || previous.observation.sequence >= observation.sequence)) return;
+  const run = { ...previous, observation,
+    updatedAt: previous.updatedAt > observation.observedAt ? previous.updatedAt : observation.observedAt };
+  state.runs = state.runs.map(item => item.id === run.id ? run : item);
+  if (state.selectedId === run.id) state.selectedRun = run;
+  renderRunList(); renderDetail();
+}
+async function refreshRuns(epoch: number, force = false) {
   const generation = ++state.listGeneration;
-  const { runs } = await api<{ runs: WebRun[] }>('/api/runs');
+  let etag: string | null = null;
+  const result = await api<{ runs: WebRun[] }>('/api/runs', {
+    headers: !force && state.runsEtag ? { 'If-None-Match': state.runsEtag } : {},
+  }, value => { etag = value; });
   if (generation !== state.listGeneration || !currentConnection(epoch)) return;
+  state.runsEtag = etag ?? '';
+  element('#runs-error').hidden = true;
+  if (!result) return;
   const previous = state.runs;
-  state.runs = runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const byId = new Map(previous.map(run => [run.id, run]));
+  state.runs = result.runs.map(run => retainLatestObservation(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (!state.composing && (!state.selectedId || !state.runs.some(run => run.id === state.selectedId))) {
     state.selectedId = state.runs[0]?.id ?? '';
-    state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
+    state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
   }
   state.selectedRun = state.runs.find(run => run.id === state.selectedId);
   rememberFinishedRuns(previous);
@@ -1314,15 +1317,16 @@ async function refreshRuns(epoch: number) {
   element('#runs-error').hidden = true;
   renderRunList(); renderDetail(); renderDeleteState();
 }
-async function poll() {
+async function poll(force = false) {
   if (!pageActive) return;
   if (connectionRequest) return connectionRequest;
   if (!state.connected) return initialize();
   if (state.refreshing) return;
   const epoch = state.connectionEpoch;
+  liveRefreshPending = false;
   state.refreshing = true;
   element<HTMLButtonElement>('#refresh-runs').disabled = true;
-  try { await refreshRuns(epoch); }
+  try { await refreshRuns(epoch, force); }
   catch (error) {
     if (!currentConnection(epoch)) return;
     disconnected(`${message(error)}。未提交内容已保留。`);
@@ -1330,7 +1334,12 @@ async function poll() {
   } finally {
     if (currentConnection(epoch)) state.refreshing = false;
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive || Boolean(connectionRequest) || state.refreshing;
+    if (currentConnection(epoch) && state.connected && !document.hidden && liveRefreshPending) void poll();
   }
+}
+function requestRunsRefresh() {
+  liveRefreshPending = true;
+  void poll();
 }
 function schedulePoll() {
   clearTimeout(pollTimer);
@@ -1338,7 +1347,7 @@ function schedulePoll() {
   pollTimer = setTimeout(async () => {
     if (!document.hidden) await poll();
     if (pageActive) schedulePoll();
-  }, state.connected && state.runs.some(activeRun) ? 1800 : 5000);
+  }, runUpdates.connected ? 30_000 : state.connected && state.runs.some(activeRun) ? 1800 : 5000);
 }
 function initialize(): Promise<void> {
   if (connectionRequest) return connectionRequest;
@@ -1390,11 +1399,64 @@ function initialize(): Promise<void> {
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive;
     renderRuntime(); renderDetail();
     if (pageActive && !clockTimer) clockTimer = setInterval(updateClocks, 1000);
+    if (pageActive && state.connected && !document.hidden) runUpdates.start();
     schedulePoll();
   });
   renderRuntime(); renderDetail();
   return connectionRequest;
 }
+const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+function renderShell() {
+  const session = state.session, ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
+  const run = currentRun(), running = state.runs.filter(activeRun);
+  const live = run && activeRun(run)
+    ? { label: state.cancelling.has(run.id) ? '正在取消' : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }
+    : running.length ? { label: `${running.length} 项研究进行中`, detail: '', tone: 'running', count: running.length } : undefined;
+  renderTopbar(element('#topbar'), {
+    title: run?.title ?? '新研究', model: field('model').value || '模型配置', mac, live,
+    connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? '连接中' : '连接中断' : ready ? '环境就绪' : '环境未就绪' },
+    settingsDisabled: !session || state.submitting,
+    onHistory: openHistory, onSettings: () => openSettings(), onPalette: () => palette.open(),
+    onLive: () => {
+      const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
+      if (!target) return;
+      if (target.id !== state.selectedId) selectRun(target.id);
+      setMobileView('runs');
+      element(`#detail-tab-${state.tab}`).focus({ preventScroll: true });
+    },
+  });
+}
+function openHistory() {
+  showDialog(element<HTMLDialogElement>('#history-dialog'));
+  restoreHistoryScroll();
+  field('run-search').focus();
+}
+function paletteCommands(): PaletteCommand[] {
+  const run = currentRun(), click = (selector: string) => () => element(selector).click();
+  const usable = (selector: string) => !element<HTMLButtonElement>(selector).disabled && !element(selector).hidden;
+  const commands: PaletteCommand[] = [
+    { id: 'new-research', group: '操作', label: '新研究', icon: 'square-pen', keywords: 'new draft 草稿', run: click('#new-research') },
+    { id: 'open-history', group: '操作', label: '打开研究记录', icon: 'panel-left', keywords: 'history runs', run: openHistory },
+    { id: 'open-settings', group: '操作', label: '研究配置', hint: field('model').value, icon: 'sliders-horizontal', keywords: 'settings model 模型', run: click('#open-settings') },
+    { id: 'return-to-draft', group: '操作', label: '返回未提交草稿', icon: 'arrow-left', keywords: 'draft back', run: click('#return-to-draft') },
+  ].filter(command => usable(`#${command.id}`));
+  const tabIcons: Record<DetailTab, string> = { collaboration: 'network', source: 'file-code-2', modules: 'blocks', overview: 'gauge', report: 'file-json-2', events: 'activity' };
+  if (run) for (const [tab, label] of detailTabs) commands.push({ id: `tab-${tab}`, group: '当前研究', label, hint: tab === state.tab ? '当前视图' : undefined, icon: tabIcons[tab],
+    keywords: tab, run: () => { state.tab = tab; setMobileView('runs'); renderDetail(true); element(`#detail-tab-${tab}`).focus({ preventScroll: true }); } });
+  for (const item of state.runs.toReversed().slice(0, 30)) {
+    const value = status(item);
+    commands.push({ id: `run-${item.id}`, group: '研究记录', label: item.title, hint: value.label, icon: value.symbol, keywords: `${item.id} ${item.model}`,
+      run: () => { selectRun(item.id); setMobileView('runs'); } });
+  }
+  return commands;
+}
+const palette = createCommandPalette(paletteCommands);
+renderShell();
+document.addEventListener('keydown', event => {
+  if (event.key.toLowerCase() !== 'k' || !(mac ? event.metaKey : event.ctrlKey) || event.altKey || event.shiftKey || event.isComposing) return;
+  if (document.querySelector('dialog[open]')) return;
+  event.preventDefault(); palette.open();
+}, true);
 element<HTMLFormElement>('#run-form').addEventListener('submit', async event => {
   event.preventDefault();
   const session = state.session;
@@ -1417,6 +1479,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       workers: Number(field('workers').value),
       coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
       ...(captureDraft().modulePlan ? { modulePlan: captureDraft().modulePlan } : {}),
+      ...(captureDraft().knowledgeDigest ? { knowledgeDigest: captureDraft().knowledgeDigest } : {}),
     };
     closeSettings(false);
     state.submitting = true; renderRuntime();
@@ -1424,7 +1487,8 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     modulePlanEditor.clearDeleted();
     modulePlanLibrary.clearUndo();
     draftRecovery.clear(); renderDraftRecovery();
-    const { run } = await api<{ run: WebRun }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    const result = await api<{ run: WebRun }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    const run = state.runs.find(item => item.id === result.run.id) ?? result.run;
     field('api-key').value = '';
     clearValidation();
     element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle();
@@ -1435,11 +1499,12 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     state.listGeneration++;
     state.runs = [run, ...state.runs.filter(item => item.id !== run.id)];
     state.composing = false;
-    state.selectedId = run.id; state.selectedRun = run; state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';
+    state.selectedId = run.id; state.selectedRun = run; state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';
     clearFilters();
     field('task').value = ''; updateCounts(); draftChanged();
     state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('compose');
     schedulePoll();
+    requestRunsRefresh();
     toast('研究已提交');
   } catch (error) {
     const key = field('api-key').value.trim();
@@ -1470,9 +1535,11 @@ async function cancelRun() {
     state.listGeneration++;
     const previous = state.runs.slice();
     const index = state.runs.findIndex(item => item.id === run.id);
-    if (index >= 0) state.runs[index] = result.run;
-    if (state.selectedId === run.id) state.selectedRun = result.run;
+    const updated = retainLatestObservation(result.run, state.runs[index]);
+    if (index >= 0) state.runs[index] = updated;
+    if (state.selectedId === run.id) state.selectedRun = updated;
     rememberFinishedRuns(previous);
+    requestRunsRefresh();
     toast('已请求取消运行');
   } catch (error) {
     if (state.session?.csrfToken !== sessionToken) return;
@@ -1523,10 +1590,11 @@ function removeLocalRun(id: string) {
   if (state.selectedId === id) {
     const visible = visibleRuns();
     state.selectedId = visible[Math.min(Math.max(index, 0), visible.length - 1)]?.id ?? state.runs[0]?.id ?? '';
-    state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
+    state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
   }
   state.selectedRun = state.runs.find(run => run.id === state.selectedId);
   renderRunList(); renderDetail();
+  requestRunsRefresh();
   if (document.body.dataset.mobileView === 'runs') setMobileView('runs');
 }
 async function deleteRun() {
@@ -1587,6 +1655,7 @@ function reuseRun(run: WebRun) {
       'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers })) field(id).value = String(value);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(run.modulePlan);
+    serverModulePlans.setKnowledgeDigest(run.knowledgeDigest);
     field('api-key').value = '';
     element<HTMLInputElement>('#api-key').type = 'password';
     updateKeyToggle(); providerAddress(); updateEnvironment(); sourceChanged();
@@ -1666,6 +1735,10 @@ element('#run-detail').addEventListener('click', event => {
   if (target.dataset.action === 'copy-source') void copyText(displayedSource(run), 'Lean 源码已复制');
   if (target.dataset.action === 'copy-report' && run.result) void copyText(JSON.stringify(run.result.report, null, 2), '报告 JSON 已复制');
   if (target.dataset.action === 'reuse-run') reuseRun(run);
+  if (target.dataset.action === 'show-events' || target.dataset.action === 'show-agents') {
+    state.tab = target.dataset.action === 'show-events' ? 'events' : 'collaboration';
+    renderDetail(true); element(`#detail-tab-${state.tab}`).focus({ preventScroll: true }); return;
+  }
   if (target.dataset.action === 'diff-prev') updateDiffNavigation(-1);
   if (target.dataset.action === 'diff-next') updateDiffNavigation(1);
   if (target.dataset.action === 'download-proof' && candidateSource(run)) download(`${run.id}-Submission.lean`, candidateSource(run), 'text/plain;charset=utf-8');
@@ -1853,8 +1926,8 @@ element('#dismiss-draft-recovery').addEventListener('click', () => {
   draftRecovery.clear(); renderDraftRecovery(); field('task').focus({ preventScroll: true });
 });
 element('#retry-connection').addEventListener('click', () => void initialize());
-element('#refresh-runs').addEventListener('click', () => void poll());
-for (const id of ['open-settings', 'composer-settings']) element(`#${id}`).addEventListener('click', () => openSettings());
+element('#refresh-runs').addEventListener('click', () => void poll(true));
+element('#composer-settings').addEventListener('click', () => openSettings());
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-section]')) {
   button.addEventListener('click', () => {
     const section = element(`#${button.dataset.settingsSection}`);
@@ -1886,11 +1959,6 @@ element('#run-settings').addEventListener('close', () => {
 });
 element('#run-settings').addEventListener('keydown', event => {
   if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
-});
-element('#open-history').addEventListener('click', () => {
-  showDialog(element<HTMLDialogElement>('#history-dialog'));
-  restoreHistoryScroll();
-  field('run-search').focus();
 });
 element('#close-history').addEventListener('click', closeHistoryDialog);
 element('#history-dialog').addEventListener('cancel', rememberHistoryScroll);
@@ -2005,7 +2073,12 @@ window.matchMedia('(max-width:850px)').addEventListener('change', () => {
   renderDraftPreview();
   if (state.tab === 'events') renderPanel(true);
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); else saveDraft(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    if (pageActive && state.connected) runUpdates.start();
+    void poll();
+  } else { saveDraft(); runUpdates.stop(); }
+});
 window.addEventListener('offline', () => {
   invalidateReads(); disconnected('网络已断开，未提交内容已保留。'); schedulePoll();
 });

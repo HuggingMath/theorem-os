@@ -13,11 +13,14 @@ services:
       THEOREMOS_WEB_PUBLIC_URL: ${THEOREMOS_WEB_PUBLIC_URL:-http://127.0.0.1:8787}
       THEOREMOS_WEB_WORKER_IMAGE: theorem-os-worker:local
       THEOREMOS_WEB_CONCURRENCY: ${THEOREMOS_WEB_CONCURRENCY:-1}
+      THEOREMOS_WEB_DATA_ROOT: /var/lib/theorem-os
+      THEOREMOS_WEB_SESSION_TTL_SECONDS: ${THEOREMOS_WEB_SESSION_TTL_SECONDS:-2592000}
       THEOREMOS_WEB_PROVIDERS: "${THEOREMOS_WEB_PROVIDERS:-}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - research-data:/var/lib/theorem-os
     restart: unless-stopped
-    stop_grace_period: 30s
+    stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/healthz"]
       interval: 30s
@@ -30,3 +33,6 @@ services:
       context: ../..
       dockerfile: apps/web/Dockerfile
       target: worker
+
+volumes:
+  research-data:
