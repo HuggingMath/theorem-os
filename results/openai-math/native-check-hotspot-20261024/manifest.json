@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-10-25T03:50:59.892568+00:00",
+  "capturedAt": "2026-10-25T04:06:57.575159+00:00",
   "characterV1KernelCheck": "failed: two section-parameter application mismatches",
   "characterV2FullSourceCompile": "passed: exit0 in 635.028472 seconds",
   "characterV2AxiomAudit": "passed: only propext/Classical.choice/Quot.sound",
@@ -8,8 +8,8 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 25501,
-      "sha256": "dacb973454734821d7e650ff9b9012aa13f48562f1115525b8849e197c756ab4"
+      "bytes": 25468,
+      "sha256": "848045fa7eb09e273eb51a7e6b191b03a04ef0aa463f93a699c45716fd3695dc"
     },
     {
       "path": "adopt-verified-character-candidate/README.md",
@@ -3777,6 +3777,61 @@
       "sha256": "4e78e2e8e9cd42c5706ee2a50718a0ae5a52ebe646d9be2a90170e10ffc8d439"
     },
     {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/README.md",
+      "bytes": 1848,
+      "sha256": "21eda2bb6d9d3ac093c3530cd1eb21ca0089bc933249bfd1b3953a14c5e6df59"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/SHA256SUMS",
+      "bytes": 861,
+      "sha256": "9a7e38e5afe0d695aa7ac29667a493ddd32a11e1dbb70d891a6460f3c36f01d1"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/applied-readback.json",
+      "bytes": 2789,
+      "sha256": "9e89a0589ed8bc2e47d6e136ffe6f0427e2c82b4b379b46bb4a374b9f496b66e"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/diagnosis.json",
+      "bytes": 2405,
+      "sha256": "346de4c354cd3addda69e0fcce1c2eccfaacefb3efbd72fa15268866fb66ce38"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/dispatch-events-safe-raw.jsonl",
+      "bytes": 711,
+      "sha256": "00eefd042d0ecc5f13e0ea1afe4a2211dc37b5e9d4595133b9476f8e55dec8e6"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/dispatch-readback.json",
+      "bytes": 2517,
+      "sha256": "577e3dcb5a422023bd8c1ff442da7fe814f909faaade260c5e11b158999a4d3c"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/events-index.json",
+      "bytes": 1085,
+      "sha256": "9f1fe721a51cef6e85e59ef750847e5de1a29f6f1b3f0d9df2a58cfde3e0ee82"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/events-safe-raw.jsonl",
+      "bytes": 3468,
+      "sha256": "439dfcff30e08c98ed34a946189eaf9b440582f15dfb183210d92c6781e9d6aa"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/preparation.json",
+      "bytes": 181486,
+      "sha256": "9eb27df429aef7758cf32e50e5dd9b17d9f173fca63ffeec40b3a49a0e0d681e"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/queue-receipt.json",
+      "bytes": 402,
+      "sha256": "568ea0fccf62fe2efe84d4b4a88eb5a06668a2e332e62bdc6936e231a8895871"
+    },
+    {
+      "path": "honeycomb-typed-task-priority-recovery-20261025/queue-typed-priority.ts",
+      "bytes": 4326,
+      "sha256": "cd48036398a9a4eacc0ab6bfcb7415f4286495d60f66f3e01dcef255957bfae1"
+    },
+    {
       "path": "honeycomb-verified-summability-adoption-20261025/README.md",
       "bytes": 2614,
       "sha256": "7fef30a48297a6d029738b5aaad5957c9c2e256560cb3fc4e3e38bf83cdb42cf"
@@ -6986,8 +7041,8 @@
   "characterV2IndependentOriginalComparator": "passed: unchanged binary, original target and axioms; genuine prebuilt artifact; exit0 in 41.153155 seconds",
   "honeycombSumsReduction": "native kernel and integration passed; original goal resumed; growth estimate still unproved",
   "characterV2NativeDelivery": "evaluated_passed; fixed review, independent final check and fixed original comparator passed",
-  "latestProgressSnapshot": "optimization-progress-20261025T034734Z.json",
-  "honeycombCurrentProgress": "heights 1-5 remain native integrated; no new native integration since height five; all-height strip growth theorem missing and blocked, original goal conditional; three research tasks running",
+  "latestProgressSnapshot": "honeycomb-typed-task-priority-recovery-20261025/dispatch-readback.json",
+  "honeycombCurrentProgress": "confirmed research scheduling starvation; normal task-order edit applied and engineer now proving first previously starved lemma; no new native acceptance yet; all-height goal still unsolved",
   "honeycombAdvisoryRoute": "direct first-moment summability via exact finite-state encoding and finite-box mass; unproved geometric inputs; ordinary advisory edit applied at turn104",
   "characterV2NativeOriginalGoal": "passed: lean-adc266b0e003d64e5ebdf91b",
   "honeycombFiniteBoxHelpers": "four declarations locally kernel-checked; normal advisory edit applied; original goal unproved",
@@ -7026,7 +7081,7 @@
   "snakyAllTargetCheck": "passed: lean-63766151ffe8a0523a860487; fixed review, S3 independent final host check and fixed original comparator passed",
   "snakyNativeFinalAccepted": true,
   "honeycombOriginalGoalSolved": false,
-  "latestProgress": "optimization-progress-20261025T034734Z.json",
+  "latestProgress": "honeycomb-typed-task-priority-recovery-20261025/dispatch-readback.json",
   "newFixedSupportBuild": "46551899-4922-4905-b81e-0ff4503842e6",
   "newFixedSupportBuildActivated": false,
   "allFiveBudgetCaps": 0,
@@ -7068,21 +7123,17 @@
     "originalGoalSolved": false
   },
   "currentArchiveValidation": {
-    "checkedAt": "2026-10-25T03:51:29.998311+00:00",
-    "previousPayloadHashesVerifiedBeforeUpdate": 1356,
-    "newSnakyFinalPackageFiles": 38,
-    "newSnakyFinalPackageHashesVerified": 37,
+    "checkedAt": "2026-10-25T04:07:28.513080+00:00",
     "kernelTestsRepeatedForArchiving": false,
-    "activeSourceStateRuntimeOrQueueModified": false,
-    "rawLogsAndFailureEvidencePreserved": true,
-    "gitDiffCheck": "passed with blank-at-eof disabled for byte-exact archived source; no file exclusions",
-    "allPayloadHashesVerified": 1395,
-    "snakyProofPackageManifestHashesVerified": 51,
-    "jsonFilesParsed": 716,
-    "changedMarkdownFilesChecked": 4,
-    "changedMarkdownLocalLinksChecked": 122
+    "activeSourceRuntimeOrStateDirectWrites": false,
+    "queueEditValidatedAndApplied": true,
+    "gitDiffCheck": "passed with blank-at-eof disabled; no exclusions",
+    "allPayloadHashesVerified": 1406,
+    "jsonFilesParsed": 722,
+    "newPackageHashesVerified": 10,
+    "changedMarkdownLocalLinksChecked": 108
   },
-  "fileCount": 1395,
+  "fileCount": 1406,
   "honeycombNativeColumnWord": {
     "status": "integrated",
     "proofReceipt": "lean-d1533e50af2bd394228d788c",
@@ -7398,5 +7449,21 @@
     "separateS3FinalCheckReceiptPersisted": false,
     "savedNativeAllTargetReceipt": "lean-63766151ffe8a0523a860487",
     "openAIHostedAcceptance": false
+  },
+  "honeycombSchedulingStallRecovery": {
+    "report": "honeycomb-typed-task-priority-recovery-20261025/README.md",
+    "editId": "honeycomb-bounded-typed-priority-20261025",
+    "editStatus": "applied",
+    "affectedTasks": [],
+    "allTaskContractsUnchanged": true,
+    "nativeAcceptanceAdded": false,
+    "newLemmaAssignmentObserved": true,
+    "recoveryEffectVerified": false,
+    "newAssignedTask": "bridge_adjacent_layer_cases_researcher1_v1",
+    "newAssignedWorker": "engineer",
+    "role": "prover",
+    "dispatchRecoveryEffectVerified": true,
+    "originalGoalSolved": false,
+    "dispatchReport": "honeycomb-typed-task-priority-recovery-20261025/dispatch-readback.json"
   }
 }

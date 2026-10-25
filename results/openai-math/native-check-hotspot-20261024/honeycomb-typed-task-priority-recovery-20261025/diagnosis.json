@@ -1,0 +1,62 @@
+{
+  "schema": "theorem-os.honeycomb-scheduling-stall.v1",
+  "observedAt": "2026-10-25T04:05:42.588136+00:00",
+  "stateAtDiagnosis": {
+    "phase": "running",
+    "turns": 902,
+    "groupBusy": 3,
+    "defaultGroupMaxConcurrent": 3,
+    "oldResearchTaskAttempts": [
+      88,
+      143,
+      148
+    ],
+    "pendingLemmaAttempts": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "lastNativeIntegratedAtAsiaShanghai": "2026-10-25T02:56:04.488000+08:00",
+  "canonicalCommitAtDiagnosis": "5d2165a5ca78f10d630ae578127b9396f6c2ac33",
+  "hoursWithoutNewIntegrationAtDiagnosis": 9.091,
+  "postIntegrationEventsThroughLogLine": 67392,
+  "turnCheckpointCount": 408,
+  "contextThresholdCheckpointCount": 48,
+  "stagnationRecoveryRequestedCount": 26,
+  "recent12PublicDeliveryCommitsOnlyChangedResearchReport": true,
+  "recent12AuditBoundary": "Read-only git diff-tree inspection at 2026-10-25T04:01 UTC; no model reasoning inspected.",
+  "cause": "All three group slots occupied by repeated research. Equal priority and stable task order repeatedly choose old research before five independent pending lemma tasks.",
+  "automaticPlanRepairRejected": "math_plan_assessment_inbox_unresolved",
+  "evidenceSources": {
+    "search": "validation/honeycomb-new-build-continuation-20261024/runtime/src/solver/modules/search.ts:20,131",
+    "routePriority": "validation/honeycomb-new-build-continuation-20261024/runtime/src/solver/routePriority.ts:34",
+    "organization": "validation/honeycomb-new-build-continuation-20261024/runtime/src/solver/modules/organization.ts:91"
+  },
+  "operationalEdit": {
+    "affectedTasks": [],
+    "appliedAt": 1792901055379,
+    "baseVersion": "62b57e1798bdc6a8c707745047871025f79e3806ac87d4da4c4c83241801d27f",
+    "id": "honeycomb-bounded-typed-priority-20261025",
+    "planVersion": "9794f656e278f3dc8df72dcbaa7362d700d8d3531ed8214181a06e4caeb4b058",
+    "receivedAt": 1792901055234,
+    "recheck": {
+      "status": "not-required",
+      "tasks": []
+    },
+    "status": "applied"
+  },
+  "taskContractsUnchanged": true,
+  "tasksInvalidated": [],
+  "newNativeProofAccepted": false,
+  "newLemmaAssignmentObservedAtReadback": false,
+  "fixEffectNotYetVerified": true,
+  "nativeFinalPassedCount": 7,
+  "openAIHostedAcceptance": false,
+  "activeSourceRuntimeStateOrCacheDirectlyModified": false,
+  "leanInvocations": 0,
+  "queueApi": "queueRunEdit",
+  "budgetCapsChanged": false
+}

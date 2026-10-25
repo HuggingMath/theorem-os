@@ -1,6 +1,6 @@
 # 原生检查热点与加速候选（2026-10-24）
 
-最新进度（北京时间 2026-10-25 11:47 核查）：Snaky 已于 04:37:08 [完成原生最终验收](snaky-native-final-20261025/README.md)，原比较器 exit 0，完整形式化目标最终通过数升至 7。Honeycomb 高度 1–5 仍已集成；此后尚无新增原生通过，一般高度增长界仍未证明，当前为研究阶段。预算五项继续为 0，持久服务 active/running、未重启。 见[本轮进度快照](optimization-progress-20261025T034734Z.json)。
+最新进度（北京时间 2026-10-25 12:06 核查）：Honeycomb 此前调度停滞约 9 小时，旧 research 反复占槽；[正常顺序调整已应用并产生实际分配](honeycomb-typed-task-priority-recovery-20261025/README.md)，engineer 已领取第一个待证引理、切换 prover 并开始第 1 次证明尝试。尚无新增原生通过，一般高度原题仍未解。Snaky 已最终通过，完整形式化目标最终通过数为 7。
 
 此前状态见 [10 月 25 日 02:14 北京时间进度快照](optimization-progress-20261024T181420Z.json)。两个活动运行的实际进程五项预算均为 0，Honeycomb 持久服务正常运行。
 
