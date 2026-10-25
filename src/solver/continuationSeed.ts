@@ -23,6 +23,7 @@ import { CAPACITY_EXPLORATION_FOCUSES, currentCapacityExploration, plannedTaskRe
 import { assertSolverSources, committedSource, commitSolverSources, git, readSolverProblem, withSolverWorktree, type SolverProblem } from './problem';
 import { isAdvisoryTask, isFinalCandidateReview, parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 import { createTaskConnectionCheck } from './taskConnections';
+import { setTaskStatus } from './taskLifecycle';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), oid = z.string().regex(/^[a-f0-9]{40,64}$/u);
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u);
@@ -670,7 +671,7 @@ export async function seedSolverContinuation(options: {
       };
       const blockCandidate = (node: TaskRecord, error: unknown) => {
         lease.signal.throwIfAborted(); lease.assertHeld();
-        node.status = 'blocked'; node.integratedCheck = undefined; node.proof = undefined; node.assignment = undefined;
+        setTaskStatus(node, 'blocked', 'reconstructed'); node.integratedCheck = undefined; node.proof = undefined; node.assignment = undefined;
         node.feedback = error instanceof Error ? error.message : 'math_continuation_seed_helper_check_failed';
       };
       const completeCandidate = (node: TaskRecord) => {
@@ -700,10 +701,10 @@ export async function seedSolverContinuation(options: {
           if (savedConditional) {
             node.proof = proof;
             node.assignment = fresh ? assignment : undefined;
-            node.status = fresh ? 'conditional' : 'blocked';
+            setTaskStatus(node, fresh ? 'conditional' : 'blocked', 'reconstructed');
           } else {
             node.integratedCheck = proof;
-            node.status = fresh ? 'integrated' : 'blocked';
+            setTaskStatus(node, fresh ? 'integrated' : 'blocked', 'reconstructed');
             if (fresh) freshChecks.push(proof);
           }
           node.feedback = fresh ? undefined : 'math_continuation_seed_helper_not_verified';
@@ -777,7 +778,7 @@ export async function seedSolverContinuation(options: {
       const completedResearch = currentCompletedResearch(source, state, plan.tasks, tasks, state.cooperation.deliveries);
       for (const node of tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration)) {
         const completion = completedResearch.get(node.task.id);
-        node.status = completion ? 'completed' : 'pending';
+        setTaskStatus(node, completion ? 'completed' : 'pending', 'reconstructed');
         node.finding = completion?.finding; node.researchCompletion = completion?.record;
       }
       state.cooperation.history = [...state.cooperation.history!.filter(record => 'capacityExploration' in record),

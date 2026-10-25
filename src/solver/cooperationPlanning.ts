@@ -107,7 +107,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.livePeers.some(worker => this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks) === node));
     if (!resumed.length) return false;
     // A planning assessment is not an execution attempt at an imported unresolved obligation.
-    for (const node of resumed) node.status = 'pending';
+    for (const node of resumed) this.moveTask(node, 'pending', 'reopened');
     this.input.emit('unattempted_frontier_resumed', { taskIds: resumed.map(node => node.task.id),
       goalIds: [...new Set(frontier.flatMap(item => item.goalIds))] });
     this.changed();
@@ -253,7 +253,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
         previous.task = task;
         const owner = task.ownerId ?? (task.kind === 'goal' ? configuredGroups.find(group => group.id === taskGroup(task))?.engineerId : undefined);
         if (owner && previous.assignment && previous.assignment.workerId !== owner && ['pending', 'running'].includes(previous.status)) {
-          previous.status = 'pending'; previous.assignment = undefined;
+          this.moveTask(previous, 'pending', 'reassigned'); previous.assignment = undefined;
         }
         return previous;
       }
@@ -273,7 +273,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
           (node.task.ownerId && node.task.ownerId !== id) ||
           (node.task.kind === 'goal' && group.engineerId && group.engineerId !== id)) {
         if (node && !invalidated.has(node.task.id) && node.status === 'running') {
-          node.status = 'pending';
+          this.moveTask(node, 'pending', 'interrupted');
           if ((node.task.ownerId && node.task.ownerId !== id) || (node.task.kind === 'goal' && group?.engineerId && group.engineerId !== id)) node.assignment = undefined;
         }
         if (!active.cancelled) { active.cancelled = true; void active.interrupt().catch(() => {}); }

@@ -219,11 +219,11 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (record && !this.pendingTaskRepair(node, record)) {
         const feedback = this.repeatedTaskFeedback(record);
         if (node.status === 'blocked' && node.feedback === feedback) continue;
-        node.status = 'blocked'; node.feedback = feedback; this.wakeLead('task-repeated-input-blocked'); changed = true;
+        this.moveTask(node, 'blocked', 'input-blocked'); node.feedback = feedback; this.wakeLead('task-repeated-input-blocked'); changed = true;
         this.input.emit('task_repeated_input_blocked', { taskId: node.task.id, taskDigest: digest(node.task),
           failureId: record.id, inputDigest, sourceDigest });
       } else if (!record && node.status === 'blocked' && node.feedback?.startsWith('math_task_repeated_failed_input\n')) {
-        node.status = 'pending'; node.feedback = undefined; changed = true;
+        this.moveTask(node, 'pending', 'reopened'); node.feedback = undefined; changed = true;
         this.input.emit('task_failed_input_reopened', { taskId: node.task.id, inputDigest, sourceDigest });
       }
     }
@@ -249,7 +249,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (!inputChanged && !outputChanged) continue;
       const blocker = this.archive.blockers?.find(record => record.id === checkpoint.blockerId);
       if (blocker) { blocker.status = 'reopened'; blocker.reopenedReason = inputChanged ? 'checkpoint-input-changed' : 'checkpoint-output-changed'; }
-      node.status = 'pending'; node.feedback = undefined;
+      this.moveTask(node, 'pending', 'reopened'); node.feedback = undefined;
       delete this.archive.researchCheckpoints![taskId];
       this.input.emit('research_checkpoint_reopened', { taskId, reason: inputChanged ? 'new-input' : 'new-output' });
     }
@@ -435,7 +435,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       }] : undefined));
       (this.archive.deliveries ??= []).push(record);
       if (complete) {
-        node.finding = text; node.status = 'completed'; node.feedback = undefined;
+        node.finding = text; this.moveTask(node, 'completed', 'research-completed'); node.feedback = undefined;
         node.researchCompletion = record.researchRecord;
         if (this.archive.unchangedResearch) delete this.archive.unchangedResearch[node.task.id];
         if (this.archive.researchCheckpoints) delete this.archive.researchCheckpoints[node.task.id];
@@ -520,7 +520,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
           const node = this.node(task.id);
           const mathematicalBlocker = node?.assignment === assignment && this.reportedTaskMathematicalBlocker(node, candidate);
           // Persist the block with the failure so restart recovery cannot invent a code repair.
-          if (mathematicalBlocker) { node.status = 'blocked'; node.feedback = error.message; this.wakeLead('task-blocked'); }
+          if (mathematicalBlocker) { this.moveTask(node, 'blocked', 'input-blocked'); node.feedback = error.message; this.wakeLead('task-blocked'); }
           this.rememberTaskFailure(candidate, error.message, mathematicalBlocker ? undefined : reserveRepair());
         }
         throw error;
@@ -685,7 +685,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (repair ? !repair.pending : node.attempts !== 1) return false;
     repair ??= node.sourceRepair = { taskDigest: digest(node.task), workerId: assignment.workerId,
       assignmentId: assignment.assignmentId, seedCommit: assignment.seedCommit, pending: true };
-    node.status = 'pending';
+    this.moveTask(node, 'pending', 'local-repair');
     this.input.emit('task_repair_requested', { taskId: node.task.id, workerId: assignment.workerId,
       taskDigest: assignment.taskDigest, reason: 'source-contract' });
     return true;
@@ -706,7 +706,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (failed?.repair ? !this.pendingTaskRepair(node, failed) : node.attempts !== 1) return false;
     if (failed && !failed.repair) failed.repair = { taskId: node.task.id, taskDigest: digest(node.task),
       workerId: node.assignment.workerId, pending: true };
-    node.status = 'pending';
+    this.moveTask(node, 'pending', 'local-repair');
     this.input.emit('task_repair_requested', { taskId: node.task.id, workerId: node.assignment.workerId,
       taskDigest: node.assignment.taskDigest });
     return true;
@@ -717,7 +717,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (!repair || repair.pending || repair.taskId !== node.task.id || repair.taskDigest !== digest(node.task) ||
         repair.workerId !== worker.id || repair.startedAttempt !== node.attempts) return false;
     repair.pending = true; delete repair.startedAttempt;
-    node.feedback = failed!.feedback; node.status = 'pending';
+    node.feedback = failed!.feedback; this.moveTask(node, 'pending', 'local-repair');
     this.input.emit('task_repair_interrupted', { taskId: node.task.id, workerId: worker.id, failureId: failed!.id });
     this.changed(); return true;
   }
@@ -742,7 +742,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (['unavailable', 'blocked'].includes(proof.verification.status)) throw new Error('math_verifier_unavailable');
     this.settleTaskSourceRepair(node);
     if (proof.passed || this.deterministicTaskFailure(proof)) this.settleTaskRepair(node);
-    node.status = proof.passed ? proof.conditions?.length ? 'conditional' : 'delivered' : 'blocked';
+    this.moveTask(node, proof.passed ? proof.conditions?.length ? 'conditional' : 'delivered' : 'blocked', 'proof-checked');
     if (!proof.passed) {
       node.feedback = solverProofFeedback(proof);
       const repairable = this.deterministicTaskFailure(proof) || proof.verification.status === 'failed' && proof.verification.results.some(result =>

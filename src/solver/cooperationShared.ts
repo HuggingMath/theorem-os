@@ -87,6 +87,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   lastLeadInputDigest?: string;
   /** Durable Lead wake-ups; a restart re-asks those whose dispatch did not settle. */
   leadWakes?: import('./leadWakes').LeadWakes;
+  /** Status changes their named cause does not admit; recorded for diagnosis, never repaired. */
+  invalidTaskTransitions?: import('./taskLifecycle').InvalidTaskTransition[];
   /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
   lastLeadPauseInputDigest?: string;
   /** Durable mathematical input/method tombstones, independent of scheduling and plan revisions. */

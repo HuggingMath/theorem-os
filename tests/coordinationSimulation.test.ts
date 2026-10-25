@@ -5,7 +5,7 @@ import { readSolverRunState, writeSolverRunState, type SolverRunState } from '..
 import { CooperativeResearch, parseCooperationPlan } from '../src/solver/cooperation';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
-import { checkSolverRunState } from '../src/solver/stateInvariants';
+import { checkSolverRunState, restoreResidue } from '../src/solver/stateInvariants';
 import { leadPlanDeliveryFile, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
@@ -120,6 +120,8 @@ async function simulate(seed: number, cleanup: (() => Promise<void>)[], maxSteps
       // A new process starts every worker again, including one that crashed before the restart.
       for (const item of workers) live.add(item.id);
       await cooperative.restore();
+      const residue = restoreResidue(state.cooperation!);
+      if (residue.length) return { status: 'violation', steps: step, trace, detail: { residue } };
       continue;
     }
     const worker = ready[Math.floor(draw() * ready.length)]!;

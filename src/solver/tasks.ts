@@ -33,7 +33,7 @@ export type TaskAssignment = { taskId: string; taskDigest: string; workerId: str
     receiptIds: readonly string[]; feedback: string }>;
   /** Actual prompt inputs, frozen when a research turn starts. */
   researchBasis?: ResearchBasis };
-export type TaskRecord = { task: CooperativeTask; status: 'pending' | 'running' | 'blocked' | 'conditional' | 'delivered' | 'integrated' | 'completed';
+export type TaskRecord = { task: CooperativeTask; readonly status: 'pending' | 'running' | 'blocked' | 'conditional' | 'delivered' | 'integrated' | 'completed';
   /** Host-owned advisory work; never supplied by a model plan. */
   capacityExploration?: CapacityExploration;
   attempts: number; assignment?: TaskAssignment; proof?: TaskProof; integratedCheck?: TaskProof; feedback?: string; finding?: string;

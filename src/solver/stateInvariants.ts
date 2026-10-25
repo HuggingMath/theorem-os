@@ -1,5 +1,6 @@
 import type { SolverRunState } from './archive';
-import { leadWakeViolations } from './leadWakes';
+import type { CooperationState } from './cooperationShared';
+import { leadWakePending, leadWakeViolations } from './leadWakes';
 import { readyResearchTasks } from './modules/search';
 import { taskGroup, type TaskRecord } from './tasks';
 
@@ -64,6 +65,8 @@ export function checkSolverRunState(state: SolverRunState): StateViolation[] {
   }
   if (cooperation.leadWakes) for (const message of leadWakeViolations(cooperation.leadWakes))
     add('lead_wakes_invalid', 'error', message);
+  for (const item of cooperation.invalidTaskTransitions ?? [])
+    add('task_transition_invalid', 'error', `Task ${item.taskId} moved ${item.from} -> ${item.to} by ${item.cause}.`, item.taskId);
   for (const blocker of cooperation.blockers ?? [])
     if (blocker.status !== 'superseded' && !ids.has(blocker.taskId))
       add('blocker_task_missing', 'warning', `Blocker ${blocker.id} names a removed task.`, blocker.id, blocker.taskId);
@@ -80,4 +83,29 @@ export function checkSolverRunState(state: SolverRunState): StateViolation[] {
       'No worker is active and no task is ready; only new outside input can advance the run.',
       ...tasks.filter(node => node.task.kind === 'goal' && !terminal(node)).map(node => node.task.id));
   return violations;
+}
+
+/**
+ * A restored state has no live process: nothing may still claim a writer, a reviewer or an unsettled Lead
+ * dispatch from the process that saved it. Saved assignments on pending tasks are kept on purpose (resume).
+ */
+export function restoreResidue(cooperation: CooperationState): StateViolation[] {
+  const residue: StateViolation[] = [];
+  for (const node of cooperation.tasks)
+    if (node.status === 'running') residue.push({ code: 'restore_running_task', severity: 'error',
+      message: 'A restored task still claims a running writer.', refs: [node.task.id] });
+  if (cooperation.review?.status === 'running' || cooperation.review?.workerId)
+    residue.push({ code: 'restore_running_review', severity: 'error', message: 'A restored review still claims a reviewer.', refs: [] });
+  for (const review of cooperation.statementReviews ?? [])
+    if (['translating', 'reviewing'].includes(review.status) || review.status !== 'superseded' && review.workerId)
+      residue.push({ code: 'restore_running_statement_review', severity: 'error',
+        message: 'A restored statement review still claims a worker.', refs: [review.id, review.taskId] });
+  const wakes = cooperation.leadWakes;
+  if (wakes && wakes.consumed !== wakes.settled)
+    residue.push({ code: 'restore_unsettled_lead_dispatch', severity: 'error',
+      message: 'A restored state still counts a Lead dispatch from the previous process.', refs: [] });
+  if (!cooperation.tasks.length && wakes && !leadWakePending(wakes))
+    residue.push({ code: 'restore_missing_initial_plan', severity: 'error',
+      message: 'A restored state without a graph does not ask the Lead for one.', refs: [] });
+  return residue;
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SolverRunState, SolverWorkerState } from '../src/solver/archive';
 import type { CooperationState } from '../src/solver/cooperationShared';
-import { checkSolverRunState } from '../src/solver/stateInvariants';
+import { checkSolverRunState, restoreResidue } from '../src/solver/stateInvariants';
+import { setTaskStatus, taskTransitionAllowed } from '../src/solver/taskLifecycle';
 import type { CooperativeTask, TaskRecord } from '../src/solver/tasks';
 
 const task = (id: string, kind: CooperativeTask['kind'], dependsOn: string[] = []): CooperativeTask =>
@@ -57,5 +58,40 @@ describe('persisted solver state invariants', () => {
   it('accepts a consistent graph with an imported continuation proof', () => {
     expect(codes(state('running', [node(task('lemma', 'lemma'), 'integrated', 'continuation'),
       node(task('goal', 'goal', ['lemma']), 'running', 'solver')], [worker('solver', 'running', 'working')]))).toEqual([]);
+  });
+
+  it('reports out-of-order Lead wake counters and recorded invalid task transitions', () => {
+    const tasks = [node(task('goal', 'goal'), 'pending')], workers = [worker('solver', 'finished')];
+    expect(codes(state('finished', tasks, workers, { leadWakes: { requested: 2, consumed: 2, settled: 1 } }))).toEqual([]);
+    expect(codes(state('finished', tasks, workers, { leadWakes: { requested: 1, consumed: 2, settled: 0 } })))
+      .toEqual(['error:lead_wakes_invalid']);
+    expect(codes(state('finished', tasks, workers, { invalidTaskTransitions: [
+      { taskId: 'goal', from: 'completed', to: 'running', cause: 'dispatched', at: 1 }] })))
+      .toEqual(['error:task_transition_invalid']);
+  });
+
+  it('admits each status change only through a cause that can produce it', () => {
+    expect(taskTransitionAllowed('pending', 'running', 'dispatched')).toBe(true);
+    expect(taskTransitionAllowed('completed', 'running', 'dispatched')).toBe(false);
+    expect(taskTransitionAllowed('integrated', 'pending', 'interrupted')).toBe(false);
+    expect(taskTransitionAllowed('delivered', 'integrated', 'integrated')).toBe(true);
+    // An unchanged status is never a transition.
+    expect(taskTransitionAllowed('blocked', 'blocked', 'dispatched')).toBe(true);
+    const record = node(task('lemma', 'lemma'), 'completed');
+    // The write still happens: diagnosis must see the state the code produced, not a silently repaired one.
+    expect(setTaskStatus(record, 'running', 'dispatched')).toBe(false);
+    expect(record.status).toBe('running');
+  });
+
+  it('finds process-local claims that a restore left behind', () => {
+    const settled = { requested: 3, consumed: 2, settled: 2 };
+    expect(restoreResidue({ tasks: [node(task('lemma', 'lemma'), 'pending', 'prover-1')], leadWakes: settled })).toEqual([]);
+    const residue = restoreResidue({ tasks: [node(task('lemma', 'lemma'), 'running', 'prover-1')],
+      review: { commit: 'c', sourceDigest: 's', status: 'running', workerId: 'reviewer' } as CooperationState['review'],
+      leadWakes: { requested: 3, consumed: 3, settled: 2 } });
+    expect(residue.map(item => item.code)).toEqual(['restore_running_task', 'restore_running_review',
+      'restore_unsettled_lead_dispatch']);
+    expect(restoreResidue({ tasks: [], leadWakes: { requested: 1, consumed: 1, settled: 1 } }).map(item => item.code))
+      .toEqual(['restore_missing_initial_plan']);
   });
 });

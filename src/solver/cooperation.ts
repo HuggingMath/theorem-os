@@ -26,6 +26,7 @@ import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnec
 import { taskTypePreflightEnvironmentIdentity, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
 import { consumeLeadWakes, dropLeadWakes, leadWakePending, settleLeadWakes } from './leadWakes';
+import { restoreResidue } from './stateInvariants';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded,
   readCooperationPlan } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
@@ -103,7 +104,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (!assignment || !isFeasibilityReview(node.task) || !['pending', 'running'].includes(node.status)) continue;
       const worker = this.input.workers.find(worker => worker.id === assignment.workerId);
       if (worker && independentFeasibilityWorker(node, worker, this.archive.tasks, this.archive.groups)) continue;
-      node.status = 'pending'; node.assignment = undefined;
+      this.moveTask(node, 'pending', 'reassigned'); node.assignment = undefined;
       node.feedback = 'math_feasibility_review_independence_lost: Reassign this advisory review to a peer who does not own or produce the inspected inputs.';
       const draft = this.archive.researchDrafts?.[node.task.id];
       if (draft?.assignmentId === assignment.assignmentId && draft.workerId === assignment.workerId) draft.suspended = true;
@@ -214,11 +215,11 @@ export class CooperativeResearch extends CooperationInputs {
       await this.input.exclusiveCheck(() => this.recheckConditional());
     } else {
       for (const node of this.archive.tasks.filter(node => node.status === 'integrated')) {
-        node.status = 'blocked'; node.feedback = 'math_canonical_source_invalid';
+        this.moveTask(node, 'blocked', 'invalidated'); node.feedback = 'math_canonical_source_invalid';
       }
       this.wakeLead('canonical-source-invalid');
     }
-    for (const node of this.archive.tasks) if (node.status === 'running') node.status = 'pending';
+    for (const node of this.archive.tasks) if (node.status === 'running') this.moveTask(node, 'pending', 'interrupted');
     for (const node of this.archive.tasks.filter(node => node.status === 'delivered')) await this.integrate(node);
     await this.integrateReady();
     const statements = this.prepareStatementContexts(); if (statements) await statements;
@@ -228,6 +229,8 @@ export class CooperativeResearch extends CooperationInputs {
       this.archive.planEdited = true; this.syncPlanNotes();
     }
     this.changed();
+    const residue = restoreResidue(this.archive);
+    if (residue.length) this.input.emit('restore_residue', { violations: residue });
   }
   private dispatchBudgetExhausted(budget: DispatchBudget, modelAllowed: boolean) {
     return this.input.state.turns >= budget.maxTurns || budget.remainingMs <= 0 || !modelAllowed;
@@ -500,7 +503,7 @@ export class CooperativeResearch extends CooperationInputs {
         if (checked.result.status === 'invalid') {
           this.invalidTaskTypes.set(node, { canonical: seed, environment, taskDigest, dependencies, project, workerId: worker.id,
             environmentIdentity: taskTypePreflightEnvironmentIdentity(project, workerAccess!.environment) });
-          node.status = 'blocked';
+          this.moveTask(node, 'blocked', 'rejected');
           node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) +
             (checked.result.artifact ? `\nAdvisory type diagnostics: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
             '\nRevise the closed helper type or its context before proving it. This is not proof acceptance or a mathematical refutation.';
@@ -578,7 +581,7 @@ export class CooperativeResearch extends CooperationInputs {
         { trustedFiles: problem.trustedFiles, declarations, sourceStructure: problem.sourceStructure,
           sourceImports: problem.sourceImports }, 0o400);
     }
-    node.status = 'running';
+    this.moveTask(node, 'running', 'dispatched');
     const route = this.archive.groups?.find(record => record.group.id === taskGroup(node.task));
     this.input.emit('task_assigned', { taskId: node.task.id, workerId: worker.id, kind: node.task.kind,
       taskDigest: node.assignment.taskDigest, assignmentKey: assignmentDeliveryFile(node.assignment),
@@ -613,7 +616,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (prior && access && prior.canonical === this.archive.canonicalCommit && prior.environment === this.input.state.environmentDigest &&
           prior.taskDigest === digest(node.task) && prior.dependencies === this.typePreflightDependencies(node.task) &&
           prior.environmentIdentity === taskTypePreflightEnvironmentIdentity(prior.project, access.environment)) continue;
-      node.status = 'pending'; node.typePreflight = undefined;
+      this.moveTask(node, 'pending', 'reopened'); node.typePreflight = undefined;
       if (node.feedback?.startsWith('math_task_type_invalid\n')) node.feedback = undefined;
       this.invalidTaskTypes.delete(node); changed = true;
     }
@@ -979,7 +982,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (review && this.current(action) && review.workerId === worker.id) resetStatementReview(review);
     } else if (action.kind === 'task') {
       const node = this.node(action.task.id);
-      if (this.current(action) && node.status === 'running' && node.assignment?.workerId === worker.id) node.status = 'pending';
+      if (this.current(action) && node.status === 'running' && node.assignment?.workerId === worker.id) this.moveTask(node, 'pending', 'interrupted');
     }
     else if (action.kind === 'review') {
       const review = this.archive.review;
@@ -1004,7 +1007,7 @@ export class CooperativeResearch extends CooperationInputs {
       else this.changed();
       return;
     } else if (action.kind === 'task') {
-      const node = this.node(action.task.id); node.status = 'blocked'; node.feedback = feedback;
+      const node = this.node(action.task.id); this.moveTask(node, 'blocked', 'rejected'); node.feedback = feedback;
       if (incomplete) this.restoreTaskSourceRepair(node);
       else this.settleTaskSourceRepair(node);
       if (isTaskSourceRepairFeedback(feedback)) localRepair = this.retryTaskSourceLocally(node);
@@ -1038,7 +1041,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (action.kind === 'task' && this.current(action)) {
       const node = this.node(action.task.id);
       if (!node.attempts) node.assignment = undefined;
-      if (node.status === 'running') node.status = 'pending';
+      if (node.status === 'running') this.moveTask(node, 'pending', 'interrupted');
       this.changed();
     } else this.interrupted(worker, action);
   }
@@ -1106,7 +1109,7 @@ export class CooperativeResearch extends CooperationInputs {
     for (const review of this.archive.statementReviews ?? [])
       if (review.workerId === worker.id && ['translating', 'reviewing'].includes(review.status)) resetStatementReview(review);
     for (const node of this.archive.tasks.filter(node => node.status === 'running' && node.assignment?.workerId === worker.id)) {
-      node.status = 'pending'; node.feedback = error;
+      this.moveTask(node, 'pending', 'interrupted'); node.feedback = error;
       if (error) this.wakeLead('worker-stopped');
     }
     this.changed();

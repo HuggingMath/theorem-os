@@ -12,6 +12,7 @@ import { readSolverRunState, writeSolverRunState, type SolverRunState } from './
 import { assertSolverSources, git, type SolverProblem } from './problem';
 import { checkTaskProofs, createTaskSourceProjector, isAttributedTaskProof, type TaskProof, type TaskProofRequest } from './cooperativeProof';
 import { taskVersion, type TaskRecord } from './tasks';
+import { setTaskStatus } from './taskLifecycle';
 
 const oid = /^[a-f0-9]{40,64}$/u;
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -283,7 +284,7 @@ export async function recheckMathSnapshot(output: string, options: { env: NodeJS
     }
   };
   const nodes = state.cooperation!.tasks.filter(node => report.candidates.includes(node.task.id));
-  for (const node of nodes) { node.status = 'pending'; node.proof = undefined; node.integratedCheck = undefined; node.feedback = undefined; }
+  for (const node of nodes) { setTaskStatus(node, 'pending', 'reconstructed'); node.proof = undefined; node.integratedCheck = undefined; node.feedback = undefined; }
   const pending = [...nodes];
   let projectSources: ReturnType<typeof createTaskSourceProjector> | undefined;
   const projections = new Map<TaskRecord, string | Error>();
@@ -348,12 +349,12 @@ export async function recheckMathSnapshot(output: string, options: { env: NodeJS
         options.signal.throwIfAborted();
         for (let index = 0; index < group.length; index++) {
           const item = group[index]!, proof = proofs[index]!; pin(proof);
-          item.integratedCheck = proof; item.status = proof.passed ? 'integrated' : 'blocked';
+          item.integratedCheck = proof; setTaskStatus(item, proof.passed ? 'integrated' : 'blocked', 'reconstructed');
           item.feedback = proof.passed ? undefined : proof.verification.results.map(result => result.error).filter(Boolean).join('\n') || proof.verification.status;
         }
       } catch (error) {
         options.signal.throwIfAborted();
-        for (const item of group) { item.status = 'blocked'; item.feedback = error instanceof Error ? error.message : 'math_recovery_check_failed'; }
+        for (const item of group) { setTaskStatus(item, 'blocked', 'reconstructed'); item.feedback = error instanceof Error ? error.message : 'math_recovery_check_failed'; }
       }
       for (const item of group) { const index = pending.indexOf(item); if (index >= 0) pending.splice(index, 1); }
       state.cooperation!.recheck!.completed += group.length; state.cooperation!.recheck!.taskId = undefined; save();

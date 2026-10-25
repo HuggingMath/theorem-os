@@ -168,7 +168,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           if (!publishable.has(node.task.id)) { this.markPendingValidation([node], ids); continue; }
           const checked = snapshot.tasks.find(item => item.task.id === node.task.id)!;
           if (ids.has(node.task.id)) {
-            node.integratedCheck = checked.integratedCheck; node.status = checked.status; node.feedback = checked.feedback;
+            node.integratedCheck = checked.integratedCheck; this.moveTask(node, checked.status, 'integrated'); node.feedback = checked.feedback;
             if (node.status === 'blocked') this.wakeLead('integration-blocked');
           }
           delete node.pendingValidation;
@@ -307,15 +307,15 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw new Error('math_verifier_unavailable');
         if (snapshot && !snapshot.current()) return false;
         node.integratedCheck = receipt;
-        if (!receipt.passed) { node.status = 'blocked'; node.feedback = solverProofFeedback(receipt); if (!snapshot) this.wakeLead('integration-blocked'); }
+        if (!receipt.passed) { this.moveTask(node, 'blocked', 'invalidated'); node.feedback = solverProofFeedback(receipt); if (!snapshot) this.wakeLead('integration-blocked'); }
         else if (!taskDependenciesReady(node.task, tasks)) {
-          node.status = 'blocked'; node.feedback = 'math_task_dependency_invalidated'; if (!snapshot) this.wakeLead('integration-blocked');
+          this.moveTask(node, 'blocked', 'invalidated'); node.feedback = 'math_task_dependency_invalidated'; if (!snapshot) this.wakeLead('integration-blocked');
         }
       } catch (error) {
         this.input.signal.throwIfAborted();
         const rejected = expectedRejection(error, integrationRejections);
         if (snapshot && !snapshot.current()) return false;
-        node.status = 'blocked'; node.feedback = rejected.message; if (!snapshot) this.wakeLead('integration-blocked');
+        this.moveTask(node, 'blocked', 'invalidated'); node.feedback = rejected.message; if (!snapshot) this.wakeLead('integration-blocked');
       }
       await finish(node);
     }
@@ -325,7 +325,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
     // restored receipts that could not authorize an earlier dependency order.
     for (const node of tasks) if (selected.has(node.task.id) && node.status === 'integrated' &&
         !taskDependenciesReady(node.task, tasks)) {
-      node.status = 'blocked'; node.feedback = 'math_task_dependency_invalidated';
+      this.moveTask(node, 'blocked', 'invalidated'); node.feedback = 'math_task_dependency_invalidated';
       if (!snapshot) this.wakeLead('integration-blocked');
       this.input.emit('task_recheck_dependency_invalidated', { ...progress, taskId: node.task.id, ...(snapshot ? { staged: true } : {}) });
     }
@@ -352,11 +352,11 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         if (['unavailable', 'blocked'].includes(proof.verification.status)) throw new Error('math_verifier_unavailable');
         node.proof = proof;
         if (!proof.passed) {
-          node.status = 'blocked'; node.feedback = solverProofFeedback(proof); this.wakeLead('conditional-recheck-failed');
+          this.moveTask(node, 'blocked', 'invalidated'); node.feedback = solverProofFeedback(proof); this.wakeLead('conditional-recheck-failed');
         }
       } catch (error) {
         this.input.signal.throwIfAborted();
-        node.feedback = expectedRejection(error, integrationRejections).message; node.status = 'blocked'; this.wakeLead('conditional-recheck-failed');
+        node.feedback = expectedRejection(error, integrationRejections).message; this.moveTask(node, 'blocked', 'invalidated'); this.wakeLead('conditional-recheck-failed');
       }
       this.input.emit('task_conditional_recheck_finished', { taskId: node.task.id, passed: node.status === 'conditional' });
       this.changed();
@@ -485,7 +485,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       if (receipts.some(receipt => receipt.references && canonicalMathJson(receipt.references.tasks) !==
           canonicalMathJson(attributeTaskReferences(receipt.references, this.archive.tasks)))) return 'retry' as const;
       this.archive.canonicalCommit = merged;
-      snapshots.forEach((snapshot, index) => { snapshot.node.integratedCheck = receipts[index]; snapshot.node.status = 'integrated'; });
+      snapshots.forEach((snapshot, index) => { snapshot.node.integratedCheck = receipts[index]; this.moveTask(snapshot.node, 'integrated', 'integrated'); });
       snapshots.forEach((snapshot, index) => this.input.emit('task_integrated', { taskId: snapshot.task.id,
         taskDigest: snapshot.taskDigest, assignmentKey: assignmentDeliveryFile(snapshot.assignment),
         workerId: snapshot.assignment.workerId, seedCommit: snapshot.assignment.seedCommit,
@@ -561,7 +561,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         }
         if (failure) {
           this.changed();
-          node.feedback = `${expectedRejection(failure, integrationRejections).message}\n${node.feedback ?? ''}`; node.status = 'blocked';
+          node.feedback = `${expectedRejection(failure, integrationRejections).message}\n${node.feedback ?? ''}`; this.moveTask(node, 'blocked', 'integrated');
           this.wakeLead('integration-blocked'); this.changed(); return 'blocked';
         }
         if (!receipt || !merged) throw new Error('math_task_integration_missing_receipt');
@@ -572,7 +572,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           this.input.emit('task_integration_superseded', { taskId: snapshot.task.id, reason: 'actual-reference-changed' });
           this.changed(); return 'superseded';
         }
-        node.integratedCheck = receipt; this.archive.canonicalCommit = merged; node.status = 'integrated';
+        node.integratedCheck = receipt; this.archive.canonicalCommit = merged; this.moveTask(node, 'integrated', 'integrated');
         this.input.emit('task_integrated', { taskId: node.task.id, taskDigest: snapshot.taskDigest,
           assignmentKey: assignmentDeliveryFile(snapshot.assignment), workerId: snapshot.assignment.workerId,
           seedCommit: snapshot.assignment.seedCommit, sourceDigest: receipt.sourceDigest,

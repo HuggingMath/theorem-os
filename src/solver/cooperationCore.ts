@@ -32,6 +32,7 @@ import { currentCapacityExploration, plannedTaskRecords } from './capacityExplor
 import { assignmentDeliveryFile, isFeasibilityReview, markTaskAcceptance, markTaskReferences, taskGroup, taskReferenceDependencies, type CooperativeTask, type TaskRecord, type CooperativeAction } from './tasks';
 import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, RETRY_DISPATCH, bounded } from './cooperationShared';
 import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type LeadWakeReason } from './leadWakes';
+import { MAX_INVALID_TASK_TRANSITIONS, setTaskStatus, type TaskStatus, type TaskTransitionCause } from './taskLifecycle';
 
 /** Shared cooperation state, scheduling primitives and the per-worker context projection. */
 export abstract class CooperationCore {
@@ -137,6 +138,14 @@ export abstract class CooperationCore {
   }
   /** Ask the Lead for a decision; the request is saved with the state change that caused it. */
   protected wakeLead(reason: LeadWakeReason) { requestLeadWake(this.archive.leadWakes!, reason); }
+  /** The only live task status write. Staged validation copies are checked but never recorded. */
+  protected moveTask(node: TaskRecord, to: TaskStatus, cause: TaskTransitionCause) {
+    const from = node.status;
+    if (setTaskStatus(node, to, cause) || !this.archive.tasks.includes(node)) return;
+    const record = { taskId: node.task.id, from, to, cause, at: Date.now() };
+    this.archive.invalidTaskTransitions = [...this.archive.invalidTaskTransitions ?? [], record].slice(-MAX_INVALID_TASK_TRANSITIONS);
+    this.input.emit('task_transition_invalid', record);
+  }
   protected get livePeers() { return this.input.workers.filter(worker => worker.id !== this.lead.id && this.liveWorkers.has(worker.id)); }
   protected get allocationPeers() {
     const occupied = new Set([...this.active].filter(([, active]) => active.action.kind !== 'task').map(([id]) => id));
@@ -158,7 +167,7 @@ export abstract class CooperationCore {
       if (!node.capacityExploration || (node.task.status ?? 'active') !== 'active' ||
           currentCapacityExploration(node, this.archive.tasks, this.explorationIdentity)) continue;
       node.task = { ...node.task, status: 'stopped' };
-      node.status = 'blocked'; node.feedback = 'math_capacity_exploration_expired: Its frozen target or mathematical inputs are no longer current.';
+      this.moveTask(node, 'blocked', 'expired'); node.feedback = 'math_capacity_exploration_expired: Its frozen target or mathematical inputs are no longer current.';
       for (const record of this.archive.deliveries ?? []) if (record.taskId === node.task.id) record.status = 'superseded';
       const active = node.assignment && this.active.get(node.assignment.workerId);
       if (active?.action.kind === 'task' && active.action.assignment === node.assignment && !active.cancelled) {
