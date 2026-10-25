@@ -1,0 +1,12 @@
+{
+  "coverage": [
+    {
+      "originalText": "REPLACE: an exact substantive TeX clause from the official problem",
+      "targetNames": ["REPLACE_WITH_ACTUAL_LEAN_TARGET"],
+      "explanation": "REPLACE: explain the quantifiers, all parts of the question, definitions and correspondence to this target"
+    }
+  ],
+  "assumptions": [],
+  "assumptionsExplanation": "REPLACE: explain every original or additional assumption and why no conclusion is assumed",
+  "definitionsExplanation": "REPLACE: explain the definitions and referenced mathematical objects, including nonvacuity where needed"
+}

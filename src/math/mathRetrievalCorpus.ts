@@ -273,13 +273,22 @@ export function assertMathRetrievalCorpus(root: string, value: unknown): void {
 /** Track ordinary source scopes; names remain lookup hints until checked in Lean. */
 function searchableDeclarations(source: string) {
   const clean = maskLeanCommentsAndStrings(source);
+  // `deriving instance C for T` generates an instance; C is not its name.
+  // Hide only that keyword from the shared declaration lexer, preserving all
+  // offsets and leaving the following named declaration available for parsing.
+  let declarationSource = source;
+  for (const match of clean.matchAll(/\bderiving\s+instance\b/gu)) {
+    const offset = match.index! + match[0].lastIndexOf('instance');
+    declarationSource = declarationSource.slice(0, offset) + ' '.repeat('instance'.length) +
+      declarationSource.slice(offset + 'instance'.length);
+  }
   const commands = leanScopeCommands(clean);
   const scopes: LeanScope[] = [];
   const context: string[][] = [[]];
   let command = commands.next();
   let sourceLine = 1;
   let newline = source.indexOf('\n');
-  return inspectLeanDeclarations(source).map(declaration => {
+  return inspectLeanDeclarations(declarationSource).map(declaration => {
     while (!command.done && command.value.index < declaration.startOffset) {
       const [, kind, rest] = command.value;
       const name = rest?.trim();

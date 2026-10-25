@@ -953,7 +953,8 @@ axioms=$8
 packages=$9
 shift 9
 overrides=$1
-shift
+manifest=$2
+shift 2
 mount --make-rprivate /
 ulimit -v ${LEAN_SANDBOX_ADDRESS_SPACE_KB} 2>/dev/null || true
 ulimit -u 256 2>/dev/null || true
@@ -978,6 +979,12 @@ if [ -n "$overrides" ]; then
   if [ -n "$project_relative" ]; then override_target="$override_target/$project_relative"; fi
   mount --bind "$overrides" "$override_target/.lake/package-overrides.json"
   mount -o remount,bind,ro "$override_target/.lake/package-overrides.json"
+fi
+if [ -n "$manifest" ]; then
+  manifest_target="$root/workspace"
+  if [ -n "$project_relative" ]; then manifest_target="$manifest_target/$project_relative"; fi
+  mount --bind "$manifest" "$manifest_target/lake-manifest.json"
+  mount -o remount,bind,ro "$manifest_target/lake-manifest.json"
 fi
 if [ -n "$toolchain" ]; then
   mount --bind "$toolchain" "$root/toolchains/elan"
@@ -1104,7 +1111,8 @@ const sandboxVariables = (input: { runtimeRoot: string; toolchainBin: string; te
 const buildBwrapArguments = (input: {
   candidateRoot: string; projectRelative: string; toolchainRoot: string; toolchainBin: string; runtimeRoot: string;
   lakePackagesPath: string; lakePackagesMountPath?: string; writablePackageOverlay?: boolean; lakePackagesFd?: number;
-  leanLauncherPath?: string; lakePackageOverridesPath?: string; command: string; commandArgs: readonly string[];
+  leanLauncherPath?: string; lakePackageOverridesPath?: string; lakeManifestPath?: string;
+  command: string; commandArgs: readonly string[];
   testCounter: string; testAxioms: string;
 }): string[] => {
   const projectPath = bwrapProjectPath(input.projectRelative);
@@ -1126,6 +1134,8 @@ const buildBwrapArguments = (input: {
     args.push(input.writablePackageOverlay ? '--bind' : '--ro-bind', input.lakePackagesPath, packagesPath);
   if (input.lakePackageOverridesPath)
     args.push('--ro-bind', input.lakePackageOverridesPath, `${projectPath}/.lake/package-overrides.json`);
+  if (input.lakeManifestPath)
+    args.push('--ro-bind', input.lakeManifestPath, `${projectPath}/lake-manifest.json`);
   if (input.toolchainRoot) args.push('--ro-bind', input.toolchainRoot, '/toolchains/elan');
   if (input.leanLauncherPath && input.toolchainBin) {
     const relativeBin = path.relative('/toolchains/elan', input.toolchainBin);
@@ -1142,7 +1152,8 @@ const buildBwrapArguments = (input: {
 
 const buildContainerArguments = (input: {
   checkoutRoot: string; projectRelative: string; toolchainRoot: string; toolchainBin: string; runtimeRoot: string;
-  lakePackagesPath: string; lakePackageOverridesPath?: string; command: string; commandArgs: readonly string[];
+  lakePackagesPath: string; lakePackageOverridesPath?: string; lakeManifestPath?: string;
+  command: string; commandArgs: readonly string[];
   testCounter: string; testAxioms: string; image: string; interactive?: boolean; cidfile?: string;
 }): string[] => {
   const projectPath = bwrapProjectPath(input.projectRelative);
@@ -1158,6 +1169,8 @@ const buildContainerArguments = (input: {
     ...(input.lakePackagesPath ? ['--mount', `type=bind,src=${input.lakePackagesPath},dst=${projectPath}/.lake/packages,ro`] : []),
     ...(input.lakePackageOverridesPath
       ? ['--mount', `type=bind,src=${input.lakePackageOverridesPath},dst=${projectPath}/.lake/package-overrides.json,ro`] : []),
+    ...(input.lakeManifestPath
+      ? ['--mount', `type=bind,src=${input.lakeManifestPath},dst=${projectPath}/lake-manifest.json,ro`] : []),
     '--workdir', projectPath, ...sandboxVariables(input, true).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
     input.image, input.command, ...input.commandArgs,
   ];
@@ -1342,6 +1355,7 @@ exec /runtime/pinned-lean/bin/lean "$@" -j1
       'package-overrides.json'
     );
     let sandboxPackageOverridesPath: string | undefined;
+    let sandboxManifestPath: string | undefined;
     if (input.lakePackagesPath && (proofLease || fs.existsSync(projectOverridesPath))) {
       if (proofLease && !fs.existsSync(projectOverridesPath)) {
         fs.mkdirSync(path.dirname(projectOverridesPath), { recursive: true, mode: 0o700 });
@@ -1375,6 +1389,12 @@ exec /runtime/pinned-lean/bin/lean "$@" -j1
       fs.writeFileSync(sandboxPackageOverridesPath, JSON.stringify({ schemaVersion: '1.2.0', packages }) + '\n', {
         mode: 0o600,
       });
+      if (manifest.version === 7) {
+        // Lake 4.8 predates package-overrides.json. Give only its isolated process
+        // a path manifest, retaining the frozen host Git manifest and sealed packages.
+        sandboxManifestPath = path.join(temporaryRoot, 'lake-manifest.json');
+        fs.writeFileSync(sandboxManifestPath, JSON.stringify({ ...manifest, packages }) + '\n', { mode: 0o600 });
+      }
     }
     let commandForSandbox = sandboxCommand;
     if (customCommand) {
@@ -1421,6 +1441,7 @@ exec /runtime/pinned-lean/bin/lean "$@" -j1
         projectRelative: input.projectRelative.replaceAll(path.sep, '/'),
         toolchainRoot: mountedElanHome, toolchainBin: mountedToolchainBin, runtimeRoot: trustedRuntimeRoot,
         lakePackagesPath: input.lakePackagesPath || '', lakePackageOverridesPath: sandboxPackageOverridesPath,
+        lakeManifestPath: sandboxManifestPath,
         command: commandForSandbox, commandArgs: input.args,
         testCounter: testCounterPath ? '/workspace/.deepscientist-test-counter' : '',
         testAxioms: input.env?.DEEPSCIENTIST_TEST_LEAN_AXIOMS || '',
@@ -1432,7 +1453,7 @@ exec /runtime/pinned-lean/bin/lean "$@" -j1
               '/bin/sh', '-ceu', LEAN_SANDBOX_SCRIPT, '--', sandboxRoot, input.checkoutRoot,
               mounts.projectRelative, mountedElanHome, mountedToolchainBin, trustedRuntimeRoot,
               '/workspace/.deepscientist-test-counter', mounts.testAxioms, input.lakePackagesPath || '',
-              sandboxPackageOverridesPath || '', commandForSandbox, ...input.args,
+              sandboxPackageOverridesPath || '', sandboxManifestPath || '', commandForSandbox, ...input.args,
             ]
           : backend.kind === 'bwrap'
             ? buildBwrapArguments({

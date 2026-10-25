@@ -27,6 +27,9 @@ const commands: Readonly<Record<string, string>> = {
   edit: 'scripts/mathematics/editMathRun.ts',
   compare: 'scripts/mathematics/compareMathRuns.ts',
   'sample-putnam': 'scripts/mathematics/samplePutnamRuns.ts',
+  'first-proof': 'scripts/mathematics/firstProof.ts',
+  formalize: 'scripts/mathematics/formalize.ts',
+  'evaluate-formalization': 'scripts/mathematics/evaluateFormalization.ts',
   summarize: 'scripts/mathematics/summarizeMathProofRuns.ts',
 };
 const [command, ...args] = process.argv.slice(2);
@@ -53,6 +56,9 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   edit                 Validate and queue a human plan edit
   compare              Compare fixed-budget coordination arms or module plans
   sample-putnam        Prepare and report reproducible PutnamBench samples
+  first-proof          Audit and prepare the First Proof Batch 3 Lean adaptation offline
+  formalize            Formalize an informal problem and review its Lean statement
+  evaluate-formalization Prepare, review and score blind formalization candidates
   summarize           Summarize saved proof-run receipts
 
 Use theorem-os <command> --help for command arguments.`);

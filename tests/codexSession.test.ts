@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../src/runtime/codexSession';
 import { deepSeekProfileDigest, prepareDeepSeekProfile } from '../src/runtime/deepseek';
 import { prepareWestlakeProfile, westlakeProfileDigest } from '../src/runtime/westlake';
+import { prepareSub2apiProfile, sub2apiProfileDigest } from '../src/runtime/sub2api';
 
 describe('Codex app-server adapter without provider calls', () => {
   let root: string;
@@ -24,7 +25,7 @@ if (process.env.WESTLAKEHPC_API_KEY) fs.writeFileSync(process.env.CODEX_HOME + '
   receivedLocalCredential: process.env.WESTLAKEHPC_API_KEY !== 'upstream-westlake-fixture-secret',
   receivedSecondaryCredential: Boolean(process.env.WESTLAKEHPC_API_KEY_2),
 }));
-let settings, turn, catalogs = 0;
+let settings, turn, deferredSteerError, catalogs = 0;
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const call = JSON.parse(line);
@@ -91,12 +92,26 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       else complete();
     }
     result({ turn });
+    if (deferredSteerError) { const respond = deferredSteerError; deferredSteerError = undefined; respond(); }
   }
   if (call.method === 'turn/interrupt') {
-    send({ method: 'turn/completed', params: { threadId: settings.threadId || 'thread-fixture', turn: { ...turn, status: 'interrupted' } } });
+    if (process.env.THEOREM_OS_FIXTURE_INTERRUPT_EXIT === '1') return process.exit(28);
+    send({ method: 'turn/completed', params: { threadId: settings.threadId || 'thread-fixture', turn: {
+      ...turn, status: process.env.THEOREM_OS_FIXTURE_INTERRUPT_STATUS || 'interrupted' } } });
     result({});
   }
-  if (call.method === 'turn/steer') result({ turnId: turn.id });
+  if (call.method === 'turn/steer') {
+    if (process.env.THEOREM_OS_FIXTURE_DEFER_STEER_ERROR === '1') {
+      deferredSteerError = () => send({ id: call.id, error: { code: -32600, message: 'Turn already finished' } });
+      return;
+    }
+    if (process.env.THEOREM_OS_FIXTURE_REPAIR_JSON) {
+      const file = process.env.CODEX_HOME + '/OUTPUT.json';
+      fs.writeFileSync(file + '.tmp', process.env.THEOREM_OS_FIXTURE_REPAIR_JSON);
+      fs.renameSync(file + '.tmp', file);
+    }
+    result({ turnId: turn.id });
+  }
 });
 `);
     fs.chmodSync(executable, 0o700);
@@ -166,6 +181,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       prepare: prepareDeepSeekProfile, profileDigest: deepSeekProfileDigest },
     { provider: 'westlake', model: 'deepseek-flash', apiKeyEnvironment: 'WESTLAKEHPC_API_KEY',
       prepare: prepareWestlakeProfile, profileDigest: westlakeProfileDigest },
+    { provider: 'sub2api', model: 'deepseek-flash', apiKeyEnvironment: 'SUB2API_WESTLAKE_API_KEY',
+      prepare: prepareSub2apiProfile, profileDigest: sub2apiProfileDigest },
   ])('isolates $provider trust writes, refreshes frozen settings and preserves state for resume without copying auth', async ({
     provider, model, apiKeyEnvironment, prepare, profileDigest,
   }) => {
@@ -351,6 +368,203 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(await session.run('proof', 'next-turn', root, () => {})).toBe('completed');
     const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(calls.filter(call => call.method === 'turn/interrupt')).toHaveLength(1);
+  });
+
+  const validSubmission = (value: unknown) => {
+    if (!value || typeof value !== 'object' || (value as Record<string, unknown>).answer !== 'valid')
+      throw new Error('invalid fixture submission');
+  };
+  const interrupts = (directory: string) => fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\n')
+    .map(line => JSON.parse(line)).filter(call => call.method === 'turn/interrupt');
+  const calls = (directory: string) => fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\n')
+    .map(line => JSON.parse(line));
+
+  it('steers an invalid exact quote and admits its repaired unknown in the original turn', async () => {
+    const file = path.join(root, 'OUTPUT.json'), source = '∀ n : Nat, n = n';
+    const invalidText = JSON.stringify({ candidateFragment: '∀ n : Nat, ... (reflexivity)', verdict: 'unknown' });
+    const corrected = { candidateFragment: source, verdict: 'unknown' };
+    const validate = (value: unknown) => {
+      if (!value || typeof value !== 'object' || !source.includes((value as { candidateFragment: string }).candidateFragment))
+        throw new Error('formalization_review_fragment_not_found');
+    };
+    const feedback = vi.fn((error: unknown, output: { text: string; turnId: string }) => {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('formalization_review_fragment_not_found');
+      expect(output).toEqual({ text: invalidText, turnId: 'repair-turn' });
+      return 'Quote a continuous exact substring. Put explanations in explanation and preserve your verdict.';
+    });
+    session = await createCodexMathSession({ ...options, turnTimeoutMs: 0,
+      environment: { ...process.env, THEOREM_OS_FIXTURE_REPAIR_JSON: JSON.stringify(corrected) },
+      completedOutput: { file, validate, validationFeedback: feedback } });
+    let started = false;
+    const done = session.run('wait', 'repair-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    fs.writeFileSync(file, invalidText);
+    expect(await done).toBe('submitted');
+    expect(feedback).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(corrected);
+    const traffic = calls(root);
+    expect(traffic.filter(call => call.method === 'thread/start')).toHaveLength(1);
+    expect(traffic.filter(call => call.method === 'turn/start')).toHaveLength(1);
+    expect(traffic.filter(call => call.method === 'turn/steer').map(call => call.params)).toEqual([{
+      threadId: 'thread-fixture', expectedTurnId: 'repair-turn',
+      input: [{ type: 'text', text: feedback.mock.results[0].value, text_elements: [] }],
+    }]);
+    expect(interrupts(root)).toHaveLength(1);
+  });
+
+  it('reports each invalid output only once per session and reports new bytes with the same error', async () => {
+    const file = path.join(root, 'OUTPUT.json'), invalidText = '{"answer":"wrong"}';
+    const validate = vi.fn(validSubmission), feedback = vi.fn(() => 'Repair the output contract.');
+    session = await createCodexMathSession({ ...options,
+      completedOutput: { file, validate, validationFeedback: feedback } });
+    let started = false;
+    const first = session.run('wait', 'first-invalid-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    fs.writeFileSync(file, invalidText);
+    await expect.poll(() => validate.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(feedback).toHaveBeenCalledTimes(1);
+    fs.writeFileSync(file, '{"answer":"still wrong"}');
+    await expect.poll(() => feedback.mock.calls.length).toBe(2);
+    fs.writeFileSync(file, invalidText);
+    const before = validate.mock.calls.length;
+    await expect.poll(() => validate.mock.calls.length).toBeGreaterThanOrEqual(before + 3);
+    expect(feedback).toHaveBeenCalledTimes(2);
+    await session.interrupt();
+    expect(await first).toBe('interrupted');
+    started = false;
+    const second = session.run('wait', 'second-invalid-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    const previous = validate.mock.calls.length;
+    await expect.poll(() => validate.mock.calls.length).toBeGreaterThanOrEqual(previous + 3);
+    expect(feedback).toHaveBeenCalledTimes(2);
+    fs.writeFileSync(file, '{"answer":"valid"}');
+    expect(await second).toBe('submitted');
+    expect(calls(root).filter(call => call.method === 'turn/steer')).toHaveLength(2);
+  });
+
+  it.each(['missing', 'partial', 'symlink', 'hardlink'] as const)('does not send validation feedback for a %s output', async kind => {
+    const file = path.join(root, 'OUTPUT.json'), target = path.join(root, 'other.json');
+    const feedback = vi.fn(() => 'Repair the output contract.');
+    session = await createCodexMathSession({ ...options,
+      completedOutput: { file, validate: validSubmission, validationFeedback: feedback } });
+    let started = false;
+    const done = session.run('wait', 'unready-output-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    if (kind === 'partial') fs.writeFileSync(file, '{"answer":');
+    if (kind === 'symlink' || kind === 'hardlink') {
+      fs.writeFileSync(target, '{"answer":"wrong"}');
+      if (kind === 'symlink') fs.symlinkSync(target, file); else fs.linkSync(target, file);
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(feedback).not.toHaveBeenCalled();
+    expect(calls(root).filter(call => call.method === 'turn/steer')).toHaveLength(0);
+    fs.rmSync(file, { force: true }); fs.writeFileSync(file, '{"answer":"valid"}');
+    expect(await done).toBe('submitted');
+  });
+
+  it('handles a late steer rejection without affecting the next turn or overlapping feedback requests', async () => {
+    const file = path.join(root, 'OUTPUT.json'), feedback = vi.fn(() => 'Repair the output contract.');
+    session = await createCodexMathSession({ ...options,
+      environment: { ...process.env, THEOREM_OS_FIXTURE_DEFER_STEER_ERROR: '1' },
+      completedOutput: { file, validate: validSubmission, validationFeedback: feedback } });
+    let started = false;
+    const first = session.run('wait', 'late-steer-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    fs.writeFileSync(file, '{"answer":"wrong"}');
+    await expect.poll(() => calls(root).filter(call => call.method === 'turn/steer').length).toBe(1);
+    fs.writeFileSync(file, '{"answer":"different wrong"}');
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(feedback).toHaveBeenCalledTimes(1);
+    await session.interrupt(); expect(await first).toBe('interrupted');
+    started = false;
+    const second = session.run('wait', 'after-late-steer-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    await expect.poll(() => calls(root).filter(call => call.method === 'turn/steer').length).toBe(2);
+    expect(session.lastError).toBeUndefined();
+    fs.writeFileSync(file, '{"answer":"valid"}');
+    expect(await second).toBe('submitted');
+    expect(session.lastError).toBeUndefined();
+    expect(calls(root).filter(call => call.method === 'turn/steer').map(call => call.params.expectedTurnId))
+      .toEqual(['late-steer-turn', 'after-late-steer-turn']);
+  });
+
+  it('surfaces a validation-feedback callback failure through the current run', async () => {
+    const file = path.join(root, 'OUTPUT.json'), failure = new Error('feedback_evidence_write_failed');
+    session = await createCodexMathSession({ ...options,
+      completedOutput: { file, validate: validSubmission, validationFeedback: () => { throw failure; } } });
+    let started = false;
+    const done = session.run('wait', 'failed-feedback-turn', root, () => { started = true; });
+    const rejected = expect(done).rejects.toBe(failure);
+    await expect.poll(() => started).toBe(true);
+    fs.writeFileSync(file, '{"answer":"wrong"}');
+    await rejected;
+    expect(calls(root).filter(call => call.method === 'turn/steer')).toHaveLength(0);
+    expect(session.lastError).toBe('feedback_evidence_write_failed');
+  });
+
+  it('does not steer a turn whose completion arrived before turn/start returned', async () => {
+    const file = path.join(root, 'OUTPUT.json'), feedback = vi.fn(() => 'Repair the output contract.');
+    fs.writeFileSync(file, '{"answer":"wrong"}');
+    session = await createCodexMathSession({ ...options,
+      completedOutput: { file, validate: validSubmission, validationFeedback: feedback } });
+    expect(await session.run('proof', 'already-completed-turn', root, () => {})).toBe('completed');
+    expect(feedback).not.toHaveBeenCalled();
+    expect(calls(root).filter(call => call.method === 'turn/steer')).toHaveLength(0);
+  });
+
+  it('submits a valid atomic file and waits for confirmed writer interruption without a model deadline', async () => {
+    const file = path.join(root, 'OUTPUT.json');
+    session = await createCodexMathSession({ ...options, turnTimeoutMs: 0, completedOutput: { file, validate: validSubmission } });
+    let started = false;
+    const done = session.run('wait', 'submit-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    fs.writeFileSync(file + '.tmp', JSON.stringify({ answer: 'valid' }));
+    fs.renameSync(file + '.tmp', file);
+    expect(await done).toBe('submitted');
+    expect(interrupts(root)).toHaveLength(1);
+    await session.close();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ answer: 'valid' });
+  });
+
+  it.each(['partial', 'invalid', 'symlink', 'hardlink'] as const)('keeps a %s output editable until a valid regular file exists', async kind => {
+    const file = path.join(root, 'OUTPUT.json'), target = path.join(root, 'other.json');
+    session = await createCodexMathSession({ ...options, completedOutput: { file, validate: validSubmission } });
+    let started = false;
+    const done = session.run('wait', 'edit-turn', root, () => { started = true; });
+    await expect.poll(() => started).toBe(true);
+    if (kind === 'partial') fs.writeFileSync(file, '{"answer":');
+    if (kind === 'invalid') fs.writeFileSync(file, '{"answer":"wrong"}');
+    if (kind === 'symlink' || kind === 'hardlink') {
+      fs.writeFileSync(target, '{"answer":"valid"}');
+      if (kind === 'symlink') fs.symlinkSync(target, file); else fs.linkSync(target, file);
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(interrupts(root)).toHaveLength(0);
+    fs.rmSync(file); fs.writeFileSync(file, '{"answer":"valid"}');
+    expect(await done).toBe('submitted');
+    expect(interrupts(root)).toHaveLength(1);
+  });
+
+  it('keeps finite budget expiration a checkpoint when output remains invalid', async () => {
+    const file = path.join(root, 'OUTPUT.json'); fs.writeFileSync(file, '{}');
+    session = await createCodexMathSession({ ...options, turnTimeoutMs: 30, completedOutput: { file, validate: validSubmission } });
+    expect(await session.run('wait', 'checkpoint-turn', root, () => {})).toBe('checkpoint');
+  });
+
+  it('requires the submission interruption to complete and refuses transport failure as success', async () => {
+    const file = path.join(root, 'OUTPUT.json'); fs.writeFileSync(file, '{"answer":"valid"}');
+    session = await createCodexMathSession({ ...options, completedOutput: { file, validate: validSubmission },
+      environment: { ...process.env, THEOREM_OS_FIXTURE_INTERRUPT_EXIT: '1' } });
+    await expect(session.run('wait', 'failed-submit-turn', root, () => {})).rejects.toThrow('math_codex_transport_closed');
+    expect(interrupts(root)).toHaveLength(1);
+  });
+
+  it('does not promote a failed turn to submitted even when its output is valid', async () => {
+    const file = path.join(root, 'OUTPUT.json'); fs.writeFileSync(file, '{"answer":"valid"}');
+    session = await createCodexMathSession({ ...options, completedOutput: { file, validate: validSubmission },
+      environment: { ...process.env, THEOREM_OS_FIXTURE_INTERRUPT_STATUS: 'failed' } });
+    expect(await session.run('wait', 'failed-submit-turn', root, () => {})).toBe('failed');
   });
 
   it('rejects a mismatched model before any provider request and fails a disconnected turn', async () => {

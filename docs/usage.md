@@ -296,6 +296,8 @@ bun run math bootstrap-lean-eval --help
 | `component` | 生成 M3 排序组件模板，检查基本任务约束 |
 | `bootstrap-imo` | 从固定公开提交准备 IMO2026 题目 |
 | `bootstrap-lean-eval` | 准备 Lean-Eval 题目与评测绑定 |
+| `first-proof` | 固定第三批 10 题，审核形式化后离线准备，汇总原始目标 S3 证据；见 [First Proof 接入](../examples/first-proof/README.md) |
+| `formalize` | 自然语言/TeX → Lean 题面，编译修订、独立回译审核、冻结求解任务；见 [形式化流程](formalization.md) |
 | `run` | 启动、预检或恢复运行 |
 | `inspect` | 查看存档研究报告，导出 JSON 或带版本的可编辑计划 |
 | `edit` | 校验并提交人工计划修改，支持 `--dry-run` |
