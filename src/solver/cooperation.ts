@@ -51,7 +51,7 @@ export class CooperativeResearch extends CooperationInputs {
         return [{ workerId, role: worker.role,
           ...(action.kind === 'task' ? { taskRef: { id: action.task.id, version: action.assignment.taskDigest } } : {}),
           current: () => !this.stopping && !this.input.signal.aborted && this.active.get(workerId) === active &&
-            !active.cancelled && this.current(action), notify: active.notify }];
+            !active.cancelled && this.current(action), notify: message => active.notify(message, { requireTurn: true }) }];
       }),
       onRecord: record => this.input.emit('human_guidance_' + record.status, { id: record.id, recipient: record.recipient,
         taskRef: record.taskRef, deliveredTo: record.deliveredTo, reason: record.reason }),
@@ -154,11 +154,11 @@ export class CooperativeResearch extends CooperationInputs {
   }
   async stop() {
     this.stopping = true;
-    await this.guidancePulse;
-    await this.humanGuidanceCheckpoint(true);
     for (const worker of this.input.workers) this.clearDispatchWait(worker, 'stopped');
     this.wake();
     clearInterval(this.timer);
+    await this.guidancePulse;
+    await this.humanGuidanceCheckpoint(true);
     let pending: ReadonlyMap<string, Promise<void>> | undefined;
     try { pending = await this.pendingPulse; } catch (error) { if (!this.input.signal.aborted) throw error; }
     const drained = new Set<Promise<unknown>>();

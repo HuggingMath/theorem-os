@@ -13,6 +13,7 @@ import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { captureObligationSnapshot, diffObligationProgress, type GoalObligationFrontier,
   type ObligationProgressReceipt, type ObligationSnapshot } from '../src/solver/obligationProgress';
 import { taskVersion, type TaskRecord } from '../src/solver/tasks';
+import { setTaskStatus } from '../src/solver/taskLifecycle';
 import type { ProofRoute } from '../src/solver/proofRoutes';
 import type { RouteBlocker } from '../src/solver/routeControl';
 import { integratedProof } from '../tests/helpers/taskProof';
@@ -67,9 +68,10 @@ assert.deepEqual(closure.obligations.closed.map(change => change.after.taskId), 
 const historical = nodes.map(inspected);
 base.task = { ...base.task, type: 'True ∧ True', revision: 1, objective: 'base revised mathematical contract' };
 closing.task = { ...closing.task, type: 'True → True', revision: 1, objective: 'closing revised mathematical contract' };
-delete base.integratedCheck; delete closing.integratedCheck; base.status = closing.status = 'pending';
+delete base.integratedCheck; delete closing.integratedCheck;
+for (const item of [base, closing]) setTaskStatus(item, 'pending', 'reconstructed');
 nodes.splice(nodes.indexOf(obsolete), 1); nodes.splice(nodes.indexOf(oldNote), 1);
-nodes.push(node('fresh'), node('proposed', 'sketch')); note.status = 'completed'; note.finding = `Advisory mathematical idea ${raw}`;
+nodes.push(node('fresh'), node('proposed', 'sketch')); setTaskStatus(note, 'completed', 'reconstructed'); note.finding = `Advisory mathematical idea ${raw}`;
 blockers.push({ id: 'local_obstruction', taskId: alternative.task.id, taskDigest: taskVersion(alternative.task), groupId: 'main', routeId: 'B',
   mechanism: `Inspect the local inference ${raw}`, scope: `Local route B inference ${raw}`, evidenceStatus: 'advisory', evidenceRefs: [raw, retainedLines, 'not-a-check-receipt'],
   reopenOn: [{ kind: 'contract-changed' }, { kind: 'dependency-checked', taskId: 'base' }],

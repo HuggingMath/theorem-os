@@ -97,7 +97,8 @@ async function pollSnapshot(page: Page, id: string, expected: { sequence?: numbe
     return Boolean(run && (expected.sequence === undefined || (run.events.at(-1)?.sequence ?? 0) >= expected.sequence)
       && (expected.status === undefined || run.status === expected.status) && (expected.result === undefined || run.result?.status === expected.result));
   });
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('#refresh-runs')!.click());
   await observed; await settled(page);
 }
 async function sync(h: Harness, id: string) {
@@ -251,7 +252,7 @@ try {
     await page.keyboard.press('ArrowRight'); await page.locator('#detail-tab-overview[aria-selected="true"]').waitFor();
     await page.keyboard.press('ArrowLeft'); await page.locator('#detail-tab-modules[aria-selected="true"]').waitFor();
     await page.keyboard.press('End'); await page.locator('#detail-tab-events[aria-selected="true"]').waitFor();
-    await page.keyboard.press('Home'); await page.locator('#detail-tab-source[aria-selected="true"]').waitFor();
+    await page.keyboard.press('Home'); await page.locator('#detail-tab-collaboration[aria-selected="true"]').waitFor();
   });
 
   await scenario('Latest module activity can be followed, paused, located and reset across runs', async h => {

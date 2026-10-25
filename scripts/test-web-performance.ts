@@ -211,6 +211,7 @@ try {
   for (let index = 0; index < 24; index++) control.progress(`Initial research step ${index + 1}`);
   const firstCandidate = run.source.replace('  sorry', '  trivial') + '\n-- Candidate version 0\n';
   control.artifact(firstCandidate);
+  await page.locator('#detail-tab-source').click();
   await sourceMatches(page, '#detail-panel .code-scroll code', firstCandidate);
   const runNodes = { detailHeading: '#run-detail > .detail-heading', detailTabs: '#run-detail > .detail-tabs',
     panel: '#detail-panel', sourceScroll: '#detail-panel .code-scroll', sourceCode: '#detail-panel .code-scroll code' };

@@ -21,6 +21,7 @@ describe('web BYOK provider configuration and offline app-server fixture', () =>
         source: 'namespace Tutorial\n\ntheorem add_zero (n : Nat) : n + 0 = n := by sorry\n\ntheorem zero_add (n : Nat) : 0 + n = n := by sorry\n\nend Tutorial\n',
         task: 'Offline fixture', maxTurns: 1, maxRunSeconds: 30, workers: 1, coordination: 'independent' } };
     fs.copyFileSync(fixture, path.join(root, 'codex'));
+    fs.copyFileSync(path.join(path.dirname(fixture), 'web-cooperative-codex.mjs'), path.join(root, 'web-cooperative-codex.mjs'));
     fs.chmodSync(path.join(root, 'codex'), 0o700);
     fs.mkdirSync(path.join(root, 'profile'), { mode: 0o700 });
     fs.mkdirSync(path.join(root, 'workspace/generated/problem'), { recursive: true });

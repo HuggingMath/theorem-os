@@ -200,7 +200,7 @@ async function createRun(h: Harness, title: string) {
 async function poll(h: Harness) {
   await h.page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
   const loaded = h.page.waitForResponse(response => response.request().method() === 'GET'
-    && new URL(response.url()).pathname === '/api/runs' && response.status() === 200);
+    && new URL(response.url()).pathname === '/api/runs' && [200, 304].includes(response.status()));
   await h.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await loaded;
   await h.page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' }); await settled(h.page);
 }

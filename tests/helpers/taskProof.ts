@@ -1,5 +1,6 @@
 import type { TaskProof } from '../../src/solver/cooperativeProof';
 import { markTaskAcceptance, taskVersion, type TaskRecord } from '../../src/solver/tasks';
+import { setTaskStatus } from '../../src/solver/taskLifecycle';
 
 type Options = { uses?: readonly TaskRecord[]; statementOnly?: boolean; accept?: boolean; receiptId?: string; result?: object;
   sourceCommit?: string; environmentDigest?: string; inputs?: { file: string; name?: string; digest: string }[];
@@ -21,7 +22,7 @@ export function integratedProof(item: TaskRecord, options: Options = {}): TaskPr
       root: { file: item.task.proofPath!, name: item.task.theoremName! },
       tasks: uses.map(input => ({ taskId: input.task.id, taskDigest: taskVersion(input.task) })),
       statement: statementOnly ? used() : [], proof: statementOnly ? [] : used() } } as TaskProof;
-  item.status = 'integrated';
+  setTaskStatus(item, 'integrated', 'reconstructed');
   if (accept) markTaskAcceptance(proof);
   return proof;
 }

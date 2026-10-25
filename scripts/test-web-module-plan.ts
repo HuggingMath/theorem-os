@@ -173,7 +173,10 @@ async function createRun(h: Harness, plan: ResearchModulePlan, workers = 2) {
 async function sync(h: Harness, id: string) {
   const run = await readRun(h, id), sequence = run.events.at(-1)!.sequence;
   const observed = h.page.waitForResponse(async response => {
-    if (new URL(response.url()).pathname !== '/api/runs' || response.request().method() !== 'GET' || response.status() !== 200) return false;
+    if (new URL(response.url()).pathname !== '/api/runs' || response.request().method() !== 'GET') return false;
+    // The server state was read first, so an unchanged-version 304 means the client already holds it.
+    if (response.status() === 304) return true;
+    if (response.status() !== 200) return false;
     const payload = await response.json() as { runs: WebRun[] };
     return payload.runs.some(run => run.id === id && run.events.at(-1)!.sequence >= sequence);
   });
@@ -818,11 +821,17 @@ try {
     };
     try {
       await page.locator('#submit-run').click(); await created;
-      assert.equal(await graphToggle(page, second.id).isDisabled(), true, 'submitting must disable graph switches');
-      await graphToggle(page, second.id).evaluate(control => {
-        (control as HTMLInputElement).checked = false; control.dispatchEvent(new Event('change', { bubbles: true }));
-      });
-      assert.equal(await graphToggle(page, second.id).isChecked(), true, 'a queued submission must reject forced changes');
+      // The live stream may show the created run before its POST returns, replacing the draft switches.
+      // Either way a queued submission must not accept a forced switch change.
+      const forced = await page.evaluate(id => {
+        const selector = `[data-module-custom-enabled="${id}"]`, control = document.querySelector<HTMLInputElement>(selector);
+        if (!control) return 'replaced';
+        if (!control.disabled) return 'enabled';
+        control.checked = false; control.dispatchEvent(new Event('change', { bubbles: true }));
+        const after = document.querySelector<HTMLInputElement>(selector);
+        return !after ? 'replaced' : after.checked ? 'rejected' : 'changed';
+      }, second.id);
+      assert.ok(['replaced', 'rejected'].includes(forced), `a queued submission must lock or replace graph switches (${forced})`);
       assert.deepEqual(await editorPlan(page), plan);
       assert.deepEqual(submittedRun!.modulePlan, plan); assert.deepEqual(received.get(submittedRun!.id)!.modulePlan, plan);
     } finally { release(); }

@@ -243,7 +243,7 @@ try {
       1, `${role} message must enter exactly once`);
     const afterEntrance = await offset(h.page);
     const listed = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
-    await listed; await nextPaint(h.page); await settled(h.page);
+    await h.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await listed; await nextPaint(h.page); await settled(h.page);
     assert.deepEqual(await record(h.page, 'unchanged-poll', afterEntrance), [], 'an unchanged poll replayed an entrance or status animation');
     assert.equal(h.requests.filter(request => request.method === 'POST').length, 1);
     await screenshot(h.page, 'desktop-conversation.png');
@@ -251,6 +251,7 @@ try {
 
   await scenario('Following animates only new activity; history reading keeps messages, focus, selection and both reading positions intact', async h => {
     const { control } = await createRun(h);
+    await h.page.locator('#detail-tab-source').click(); await settled(h.page);
     for (let index = 0; index < 28; index++) control.progress(`Existing research step ${index + 1}`);
     await h.page.waitForFunction(() => document.querySelectorAll('#conversation .timeline-event').length >= 28);
     await settled(h.page);
@@ -313,7 +314,8 @@ try {
     assert.equal(entered.filter(entry => entry.status).length, 1, 'the changed status must receive one cue');
     assert.equal(entered.some(entry => entry.code || entry.panel), false, 'a status change animated the source');
     const next = await offset(h.page);
-    await h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
+    const listed = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
+    await h.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await listed;
     await settled(h.page);
     assert.deepEqual(await record(h.page, 'unchanged-terminal-poll', next), []);
   });

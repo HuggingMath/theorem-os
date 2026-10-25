@@ -61,7 +61,7 @@ export abstract class CooperationCore {
   protected planSynchronization?: Promise<void>;
   protected planSynchronizations = new Set<Promise<void>>();
   protected leadDeliveries = new Set<Promise<unknown>>();
-  protected active = new Map<string, { action: CooperativeAction; interrupt: () => Promise<void>; notify: (message: string) => Promise<void>;
+  protected active = new Map<string, { action: CooperativeAction; interrupt: () => Promise<void>; notify: (message: string, options?: { requireTurn?: boolean }) => Promise<void>;
     requestReady?: () => Promise<void>; cancelled?: boolean }>();
   private freshProofReady = new WeakMap<CooperativeAction, string>();
   protected notifications = new Set<Promise<void>>();
@@ -494,7 +494,7 @@ export abstract class CooperationCore {
     record.status = 'failed'; record.reason = 'Freeze unconfirmed: ' + reason;
     this.freshProofReady.delete(action); this.changed();
   }
-  activate(worker: ResearchWorker, action: CooperativeAction, interrupt: () => Promise<void>, notify: (message: string) => Promise<void>,
+  activate(worker: ResearchWorker, action: CooperativeAction, interrupt: () => Promise<void>, notify: (message: string, options?: { requireTurn?: boolean }) => Promise<void>,
     requestReady?: () => Promise<void>) {
     this.active.set(worker.id, { action, interrupt, notify, requestReady }); this.changed();
   }

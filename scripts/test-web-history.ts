@@ -134,9 +134,9 @@ async function poll(h: Harness) {
   const { page } = h;
   await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
   const loaded = page.waitForResponse(response => response.request().method() === 'GET'
-    && new URL(response.url()).pathname === '/api/runs' && response.status() === 200);
-  // Exercise the existing background-refresh path without moving keyboard focus to a refresh button.
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    && new URL(response.url()).pathname === '/api/runs' && [200, 304].includes(response.status()));
+  // In-place fixture edits keep the list version, so force the unconditional read without moving focus.
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('#refresh-runs')!.click());
   await loaded;
   await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
   await settled(page);
@@ -402,10 +402,11 @@ try {
     const { page } = h; await open(h);
     const runs = await seed(h, 6); await show(h, runs);
     const moved = runs.at(-1)!; await bookmark(page, moved.id);
+    const selection = (await page.locator('.detail-identifier code').textContent())!;
     service.jobs.get(h.owner, moved.id)!.createdAt = orderedAt(100);
     await poll(h); await rows(page, [moved, ...runs.slice(0, -1)]);
     await retained(page, 'focused history row reordered'); await focused(page, button(moved.id));
-    await selected(page, runs[0]!.id);
+    await selected(page, selection);
     await screenshot(page, 'history-reordered-focus.png');
   });
 
