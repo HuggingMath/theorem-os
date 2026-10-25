@@ -6,7 +6,7 @@ import { createProofRoutePriority } from '../routePriority';
 import { freshTaskConnection } from '../taskConnections';
 import { capacityExplorationWorkerCanTask } from '../capacityExploration';
 
-export const MAX_RESEARCH_WORKERS = 8;
+export { MAX_RESEARCH_WORKERS } from './moduleIdentity';
 export type ResearchRole = 'lead' | 'researcher' | 'prover' | 'engineer' | 'reviewer';
 export type ResearchWorker = Readonly<{ id: string; role: ResearchRole; worktree: string; ownedFiles: readonly string[] }>;
 export type ResponsibilityContext = Readonly<{

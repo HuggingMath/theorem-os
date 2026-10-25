@@ -17,6 +17,7 @@ export type TaskDraft = {
   coordination: WebCoordination;
   templateId: string;
   modulePlan?: ResearchModulePlan;
+  knowledgeDigest?: string;
 };
 
 const archiveSchema = 'theorem-os.web-export.v1';
@@ -70,6 +71,7 @@ function validatedDraft(value: unknown): TaskDraft {
     environment: enumeration(draft, 'environment', ['standard', 'mathlib']),
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
     templateId: text(draft, 'templateId', 64),
+    ...(Object.hasOwn(draft, 'knowledgeDigest') ? { knowledgeDigest: text(draft, 'knowledgeDigest', 256) } : {}),
     ...(Object.hasOwn(draft, 'modulePlan') ? { modulePlan: researchModulePlanDraftSchema.parse(draft.modulePlan) as ResearchModulePlan } : {}),
   };
 }
@@ -95,6 +97,7 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
       providerId: own(run, 'providerId'), model: own(run, 'model'), source: own(run, 'source'), task: own(run, 'task'),
       maxTurns: archiveBudget(run, 'maxTurns'), maxRunSeconds: archiveBudget(run, 'maxRunSeconds'), workers: archiveBudget(run, 'workers'),
       effort: own(run, 'effort'), environment: own(run, 'environment'), coordination: own(run, 'coordination'), templateId: '',
+      ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),
       ...(Object.hasOwn(run, 'modulePlan') ? { modulePlan: run.modulePlan } : {}),
     });
   } catch { return invalid(); }

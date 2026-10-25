@@ -41,6 +41,34 @@ function fixture() {
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('run inspection', () => {
+  it('keeps statement review identities distinct from task versions and hides snapshot workspaces', () => {
+    const { state, stateFile } = fixture(), task = state.cooperation!.tasks[0].task;
+    const original = { id: 'review-original', taskId: task.id, taskDigest: taskVersion(task), snapshotDigest: 'snapshot-original',
+      environmentDigest: state.environmentDigest, commit: 'a'.repeat(40), intendedStatement: 'Original intended meaning',
+      leanStatement: 'True', premises: ['Original assumption'], dependencies: [{ taskId: 'helper', taskDigest: 'helper-v0' }],
+      workspace: path.join(state.worktree, 'private-statement-snapshot'), files: [{ path: 'context.lean', digest: 'private-file-digest' }],
+      status: 'superseded' as const, translation: { mathematics: 'Original backtranslation', assumptions: [], definitions: [], evidenceRefs: [] },
+      summary: 'Original comparison retained' };
+    // An intent-only edit need not change the task version. Its review is still a distinct object.
+    state.cooperation!.statementReviews = [original, { ...original, id: 'review-replacement', snapshotDigest: 'snapshot-replacement',
+      intendedStatement: 'Replacement intended meaning', status: 'accepted', assignmentId: 'statement-assignment' }];
+    state.cooperation!.review = { commit: 'b'.repeat(40), sourceDigest: 'whole-proof-source', status: 'accepted' };
+    writeSolverRunState(stateFile, state);
+    const saved = readSolverRunState(stateFile), before = JSON.stringify(saved), report = buildRunInspection(saved);
+    expect(report.statementReviews.map(review => [review.id, review.version, review.snapshotDigest, review.status])).toEqual([
+      ['review-original', taskVersion(task), 'snapshot-original', 'superseded'],
+      ['review-replacement', taskVersion(task), 'snapshot-replacement', 'accepted'],
+    ]);
+    expect(report.statementReviews[0]).toMatchObject({ commit: original.commit, environmentDigest: state.environmentDigest,
+      intendedStatement: original.intendedStatement, premises: original.premises, dependencies: original.dependencies, translation: original.translation });
+    expect(report.statementReviews[0]).not.toHaveProperty('workspace');
+    expect(report.statementReviews[0]).not.toHaveProperty('files');
+    expect(report.review).toEqual(state.cooperation!.review);
+    expect(report.recordedOutcome).toBeUndefined();
+    expect(report.progress.checkedProofTasks).toBe(0);
+    expect(JSON.stringify(saved)).toBe(before);
+  });
+
   it('uses saved dispatch state for concurrency and hides tasks left over from an idle session', () => {
     const { state, stateFile } = fixture();
     state.workers![0].phase = 'checking';

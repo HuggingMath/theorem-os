@@ -1,29 +1,20 @@
-import { canonicalMathJson, mathDigest } from '../../math/mathRuntimeIo';
 import { configuredSolverModules, directSolverModules, type SolverModules } from './index';
-import { researchModulePlanSchema, type ResearchModulePlan, type ResearchModuleSlot } from './policy';
-import { MAX_RESEARCH_WORKERS } from './organization';
+import type { ResearchModulePlan } from './policy';
+import { configuredResearchModuleIdentity } from './moduleIdentity';
 
 export function configurableSolverModules(plan?: ResearchModulePlan,
   coordination: 'cooperative' | 'independent' = 'cooperative', workers = 4): SolverModules {
-  if (plan === undefined) return directSolverModules;
-  if (!['cooperative', 'independent'].includes(coordination)) throw new Error('math_module_invalid_coordination');
-  if (!Number.isSafeInteger(workers) || workers < 1 || workers > MAX_RESEARCH_WORKERS) throw new Error('math_module_invalid_workers');
-  const configuration = researchModulePlanSchema.parse(plan) as ResearchModulePlan;
+  const resolved = configuredResearchModuleIdentity(plan, coordination, workers);
+  if (resolved.plan === null) return directSolverModules;
+  const configuration = resolved.plan;
   const base = configuredSolverModules('direct', configuration.scheduler);
-  const rules = configuration.custom.filter(module => module.enabled &&
-    (module.slot !== 'M5' || coordination === 'cooperative' && workers > 1));
-  if (!rules.length && configuration.context === 'full') return base;
-  const digest = mathDigest(canonicalMathJson({ schema: 'theorem-os.research-module-plan.v1',
-    scheduler: configuration.scheduler, context: configuration.context, custom: rules }));
-  const version = (slot: Exclude<ResearchModuleSlot, 'M4'>) => {
-    const selected = rules.filter(module => module.slot === slot);
-    return selected.length ? `${base[slot].version}/custom-rules-v1:${mathDigest(canonicalMathJson(selected))}` : base[slot].version;
-  };
-  return { ...base, id: `${base.id}/custom-plan-v1:${digest}`,
-    M1: { ...base.M1, version: version('M1') },
-    M3: { ...base.M3, version: version('M3') },
-    M5: { ...base.M5, version: version('M5') },
-    M4: { ...base.M4, version: `${base.M4.version}/custom-context-v1:${digest}`,
+  const { identity, rules } = resolved;
+  if (!resolved.customized) return base;
+  return { ...base, id: identity.id,
+    M1: { ...base.M1, version: identity.versions.M1! },
+    M3: { ...base.M3, version: identity.versions.M3! },
+    M5: { ...base.M5, version: identity.versions.M5! },
+    M4: { ...base.M4, version: identity.versions.M4!,
       build: (problem, state, access) => {
         const applied = rules.filter(module => module.slot !== 'M5' || Boolean(state.cooperation));
         const context = base.M4.build(problem, state, { ...access, customModuleRules: applied,

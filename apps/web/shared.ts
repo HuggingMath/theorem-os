@@ -1,9 +1,16 @@
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../src/solver/modules/policy';
+import type { WebObservation, WebArchive } from './collaboration';
 
 export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
 export type WebRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'error';
 export type WebEnvironment = 'standard' | 'mathlib';
+export type WebFrozenModuleConfiguration = {
+  registryVersion: 'theorem-os.web-module-registry.v1'; id: string; versions: Record<string, string>; methodDigest: string;
+  coordination: WebCoordination; workers: number;
+  selection: { scheduler: ResearchModulePlan['scheduler']; context: ResearchModulePlan['context'];
+    implementations: { slot: string; id: string; version: string }[] };
+};
 
 export type WebProvider = { id: string; name: string; baseUrl: string };
 export type WebEnvironmentOption = { id: WebEnvironment; name: string; description: string;
@@ -22,6 +29,7 @@ export type WebRunInput = {
   workers: number;
   coordination: WebCoordination;
   modulePlan?: ResearchModulePlan;
+  knowledgeDigest?: string;
 };
 export type WebModuleId = 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'S3';
 export type WebEventDetails = {
@@ -35,7 +43,7 @@ export type WebEventDetails = {
   maxBytes?: number;
   status?: string;
   taskId?: string;
-  role?: 'lead' | 'researcher' | 'engineer' | 'reviewer';
+  role?: 'lead' | 'researcher' | 'prover' | 'engineer' | 'reviewer';
   moduleId?: string;
   slot?: ResearchModuleSlot;
   mode?: 'append' | 'replace';
@@ -74,6 +82,11 @@ export type WebRun = {
   workers: number;
   coordination: WebCoordination;
   modulePlan?: ResearchModulePlan;
+  knowledgeDigest?: string;
+  observation?: WebObservation;
+  archives?: WebArchive[];
+  knowledgeCatalogDigest?: string;
+  moduleConfiguration?: WebFrozenModuleConfiguration;
   events: WebEvent[];
   modules?: Partial<Record<WebModuleId, WebModuleSnapshot>>;
   moduleApplications?: Record<string, WebModuleSnapshot>;
@@ -90,9 +103,12 @@ export type WebSession = {
   limits: { maxTurns: number; maxRunSeconds: number; maxWorkers: number; maxSourceBytes: number; maxTaskBytes: number };
   runtime: { ready: boolean; message: string };
 };
-export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider };
+/** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
+export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown };
 export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
   | { type: 'artifact'; artifact: WebArtifact }
+  | { type: 'observation'; observation: WebObservation }
+  | { type: 'catalog'; catalog: unknown }
   | { type: 'result'; result: WebResult }
   | { type: 'error'; message: string };

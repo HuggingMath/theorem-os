@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import { createCooperativeFixture } from './web-cooperative-codex.mjs';
 
 const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const args = process.argv.slice(2);
@@ -18,6 +19,7 @@ if (args[0] !== 'app-server' || args[1] !== '--listen' || args[2] !== 'stdio://'
 let settings;
 let turn;
 let threadId = 'web-fixture-thread';
+let cooperative;
 function checkProvider() {
   const apiKey = process.env.THEOREMOS_PROVIDER_API_KEY;
   const profile = process.env.CODEX_HOME;
@@ -68,6 +70,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       fs.writeFileSync(path.join(process.env.CODEX_HOME, 'web-fixture-checks.json'), JSON.stringify(checks), { mode: 0o600 });
       send({ method: 'item/started', params: { threadId,
         item: { id: 'web-fixture-byok', type: 'commandExecution', command: 'offline fixture checks passed' } } });
+      cooperative = createCooperativeFixture({ workspace, source, message,
+        instructions: settings.developerInstructions, complete });
+      if (cooperative) return;
       if (message.includes('WEB_SMOKE_WAIT_FOR_CANCEL') || message.includes('WEB_SMOKE_MATHLIB_WAIT_FOR_CANCEL')) return;
       const mathlib = message.includes('WEB_SMOKE_MATHLIB_');
       const original = fs.readFileSync(source, 'utf8');
@@ -83,8 +88,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       complete();
       return;
     }
-    if (request.method === 'turn/interrupt') { reply({}); complete('interrupted'); return; }
-    if (request.method === 'turn/steer') { reply({ turnId: turn?.id }); return; }
+    if (request.method === 'turn/interrupt') { cooperative?.cancel(); reply({}); complete('interrupted'); return; }
+    if (request.method === 'turn/steer') {
+      reply({ turnId: turn?.id });
+      cooperative?.steer(request.params.input.filter(item => item.type === 'text').map(item => item.text).join('\n'));
+      return;
+    }
     if (request.id !== undefined) send({ id: request.id, error: { code: -32601, message: 'web_fixture_unknown_method' } });
   } catch (error) {
     // Fixture diagnostics identify the failed assertion without forwarding input or a key.

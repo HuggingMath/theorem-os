@@ -20,6 +20,10 @@ import { SourceReader } from './sourceReader';
 import { ActivityReader } from './activityReader';
 import { ModuleView, type ModuleViewInput } from './moduleView';
 import { ModulePlanEditor } from './modulePlanEditor';
+import { CollaborationView } from './collaborationView';
+import { RunUpdates } from './runUpdates';
+import type { WebObservation } from '../collaboration';
+import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
@@ -64,17 +68,17 @@ const timestamp = (value: string, timeOnly = false) => {
 };
 const byteSize = (text: string) => new TextEncoder().encode(text).length;
 const byteLabel = (bytes: number) => bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
-type DetailTab = 'overview' | 'source' | 'modules' | 'report' | 'events';
-const detailTabs = [['source', 'Lean 源码'], ['modules', '模块'], ['overview', '概览'], ['report', '报告'], ['events', '活动']] as const;
+type DetailTab = 'collaboration' | 'overview' | 'source' | 'modules' | 'report' | 'events';
+const detailTabs = [['collaboration', '研究协作'], ['source', 'Lean 源码'], ['modules', '模块'], ['overview', '概览'], ['report', '报告'], ['events', '活动']] as const;
 const state = {
   session: undefined as WebSession | undefined,
   runs: [] as WebRun[], selectedId: '', selectedRun: undefined as WebRun | undefined,
   query: '', filter: 'all' as RunFilter,
-  tab: 'source' as DetailTab, sourceView: 'proof' as 'proof' | 'input' | 'diff', submitting: false, cancelling: new Set<string>(),
+  tab: 'collaboration' as DetailTab, sourceView: 'proof' as 'proof' | 'input' | 'diff', submitting: false, cancelling: new Set<string>(),
   draftView: 'source' as 'source' | 'modules',
   foldUnchanged: true, diffChange: 0,
   reportMode: 'summary' as 'summary' | 'json', deleting: new Set<string>(),
-  detailError: '', listGeneration: 0,
+  detailError: '', listGeneration: 0, runsEtag: '',
   listSignature: '', detailSignature: '', panelSignature: '',
   connected: false, refreshing: false, connectionEpoch: 0,
   composing: false, conversationSignature: '', conversationRunId: '',
@@ -84,6 +88,7 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let clockTimer: ReturnType<typeof setInterval> | undefined;
 let connectionRequest: Promise<void> | undefined;
+let liveRefreshPending = false;
 let readController = new AbortController();
 let pageActive = true;
 let sourceRevision = 0;
@@ -113,6 +118,12 @@ const activityReader = new ActivityReader(icons, at => timestamp(at, true),
   (filename, text) => download(filename, text, 'application/json'));
 const moduleView = new ModuleView(icons);
 const modulePlanEditor = new ModulePlanEditor(element('#module-plan'), icons, () => draftChanged());
+const collaborationView = new CollaborationView(api, receiveRunObservation);
+const runUpdates = new RunUpdates(version => {
+  if (pageActive && state.connected && !document.hidden && version !== state.runsEtag) requestRunsRefresh();
+}, schedulePoll);
+const serverModulePlans = new ServerModulePlans(element('#module-plan'), api, () => modulePlanEditor.value(),
+  plan => modulePlanEditor.setValue(plan), () => draftChanged());
 const modulePlanLibrary = new ModulePlanLibraryView(element('#module-plan-library'), new ModulePlanLibrary(() => localStorage),
   () => modulePlanEditor.value(), plan => { modulePlanEditor.setValue(plan); draftChanged(); });
 const editorNavigation = new EditorNavigation(element<HTMLDialogElement>('#source-editor'), updateEditorPosition,
@@ -128,7 +139,9 @@ let historyReading: { top: number; anchors: Array<{ id: string; offset: number }
 class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
+function api<T>(url: string, init?: RequestInit): Promise<T>;
+function api<T>(url: string, init: RequestInit, etag: (value: string | null) => void): Promise<T | undefined>;
+async function api<T>(url: string, init: RequestInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new Error('请求超时，请重新连接')), 15_000);
   const signals = [timeout.signal];
@@ -138,6 +151,7 @@ async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.any(signals),
       headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } });
+    if (etag && response.status === 304) { etag(response.headers.get('ETag')); return; }
     const payload: unknown = await response.json().catch(error => {
       if (timeout.signal.aborted) throw timeout.signal.reason;
       if (!response.ok) return undefined;
@@ -149,6 +163,7 @@ async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
       throw new ApiError(message, response.status);
     }
     if (payload === undefined) throw new Error('服务器返回了无法读取的响应');
+    etag?.(response.headers.get('ETag'));
     return payload as T;
   } catch (error) {
     if (timeout.signal.aborted) throw timeout.signal.reason;
@@ -217,6 +232,7 @@ function syncSettingsNavigation() {
 function openSettings(focusId?: string) {
   if (!state.session || state.submitting) return;
   modulePlanLibrary.refresh();
+  void serverModulePlans.refresh();
   const dialog = element<HTMLDialogElement>('#run-settings');
   if (!dialog.open && document.body.dataset.mobileView === 'runs') {
     settingsWorkspaceReturn = { focus: document.activeElement instanceof HTMLElement ? document.activeElement : undefined };
@@ -444,6 +460,7 @@ function captureDraft(): TaskDraft {
     source: field('source').value, task: field('task').value, templateId: field('template').value,
     maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: field('workers').value,
     coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+    ...(serverModulePlans.knowledgeDigest() ? { knowledgeDigest: serverModulePlans.knowledgeDigest() } : {}),
     ...(modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full' ? { modulePlan } : {}) };
 }
 function setDraftStatus(text: string, warning = false) {
@@ -529,6 +546,7 @@ function applyTaskDraft(draft: TaskDraft) {
   field('template').value = template?.id ?? '';
   element<HTMLInputElement>(`input[name="coordination"][value="${draft.coordination}"]`).checked = true;
   modulePlanEditor.setValue(draft.modulePlan);
+  serverModulePlans.setKnowledgeDigest(draft.knowledgeDigest);
   field('api-key').value = '';
   element<HTMLInputElement>('#api-key').type = 'password';
   updateKeyToggle(); providerAddress(); updateEnvironment(); sourceChanged();
@@ -601,7 +619,7 @@ function resetForm() {
     draftReady = false;
     clearTimeout(draftTimer); draftDirty = false;
     element<HTMLFormElement>('#run-form').reset();
-    modulePlanLibrary.resetSelection(); modulePlanEditor.setValue();
+    modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(); serverModulePlans.setKnowledgeDigest();
     field('api-key').value = '';
     element<HTMLInputElement>('#api-key').type = 'password';
     updateKeyToggle();
@@ -1084,7 +1102,10 @@ function renderPanel(force = false) {
   const signature = JSON.stringify([run.id, state.tab, content ? [state.sourceView, state.foldUnchanged, content.source, content.controls, content.status, content.tone]
     : state.tab === 'report' ? [state.reportMode, run.status, run.error, run.result] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
-  if (!force && signature === state.panelSignature) return;
+  if (!force && signature === state.panelSignature) {
+    if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected);
+    return;
+  }
   state.panelSignature = signature;
   const panel = element('#detail-panel');
   const navigating = panel.dataset.renderRunId === run.id && (panel.dataset.tab !== state.tab
@@ -1106,9 +1127,11 @@ function renderPanel(force = false) {
   const reuseSource = content && samePanel && !(content.hasProof && state.sourceView === 'diff') && panel.querySelector('.source-code-grid');
   const reuseEvents = state.tab === 'events' && samePanel && panel.querySelector('.activity-workspace');
   const reuseModules = state.tab === 'modules' && samePanel && panel.querySelector('.module-workspace');
+  const reuseCollaboration = state.tab === 'collaboration' && samePanel && panel.querySelector('.collaboration-workspace');
   if (!reuseEvents) activityReader.update(undefined, run);
   if (!reuseModules) moduleView.update(undefined, moduleInput(run));
-  if (!reuseSource && !reuseEvents && !reuseModules) panel.innerHTML = content ? sourceView(run, content) : state.tab === 'report' ? reportView(run) : state.tab === 'events' ? '<div class="activity-workspace"></div>' : state.tab === 'modules' ? '<div class="module-workspace"></div>' : overview(run);
+  if (!reuseCollaboration) collaborationView.update();
+  if (!reuseSource && !reuseEvents && !reuseModules && !reuseCollaboration) panel.innerHTML = content ? sourceView(run, content) : state.tab === 'report' ? reportView(run) : state.tab === 'events' ? '<div class="activity-workspace"></div>' : state.tab === 'modules' ? '<div class="module-workspace"></div>' : state.tab === 'collaboration' ? '<div class="collaboration-workspace"></div>' : overview(run);
   if (content) {
     patchMarkup(panel.querySelector<HTMLElement>('.source-topline')!, content.controls);
     const sourceStatus = panel.querySelector<HTMLElement>('.source-status')!;
@@ -1131,6 +1154,7 @@ function renderPanel(force = false) {
   else if (sameView && focused === previousScroll) scroll?.focus({ preventScroll: true });
   else if (samePanel && focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
   icons(panel);
+  if (state.tab === 'collaboration') collaborationView.update(panel.querySelector<HTMLElement>('.collaboration-workspace')!, run, state.connected);
   if (state.tab === 'events') activityReader.update(panel.querySelector<HTMLElement>('.activity-workspace')!, run);
   if (state.tab === 'modules') moduleView.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
   updateDiffNavigation(0, !sameView);
@@ -1206,13 +1230,14 @@ function renderDetail(force = false) {
   const run = currentRun();
   if (sourceComparison && sourceComparison.runId !== run?.id) sourceComparison = undefined;
   if (!run) {
+    collaborationView.update();
     activityReader.update();
     state.detailSignature = ''; state.panelSignature = '';
     if (state.session) renderDraftPreview();
     else { element('#run-detail').innerHTML = `<div class="empty-state detail-empty"><span class="spinner"></span><h2>正在连接工作台</h2></div>`; sourceReader.update(); }
     return;
   }
-  const signature = JSON.stringify([run.id, run.title, run.status, run.phase, run.environment, run.updatedAt, run.result?.status, state.cancelling.has(run.id), state.deleting.has(run.id), state.detailError, state.connected]);
+  const signature = JSON.stringify([run.id, run.title, run.status, run.phase, run.environment, run.result?.status, state.cancelling.has(run.id), state.deleting.has(run.id), state.detailError, state.connected]);
   const detail = element('#run-detail');
   const focused = document.activeElement instanceof HTMLElement && detail.contains(document.activeElement)
     ? document.activeElement : undefined;
@@ -1220,6 +1245,7 @@ function renderDetail(force = false) {
   const focusAction = focused?.dataset.action;
   const newDetail = detail.dataset.renderRunId !== run.id || !detail.querySelector('#detail-panel');
   if (newDetail) {
+    collaborationView.update();
     moduleView.update();
     finishMotion(detail);
     detail.innerHTML = `<header class="detail-heading"><div class="detail-heading-text"><h2></h2><div class="detail-identifier"><code></code><button type="button" class="icon-button" data-action="copy-id" aria-label="复制运行 ID" title="复制运行 ID">${icon('copy')}</button></div></div><div class="detail-actions"></div></header>
@@ -1245,13 +1271,13 @@ function renderDetail(force = false) {
     statusBadge.dataset.status = `${run.status}:${run.phase}:${value.label}`;
     if (statusChanged) animateEntrance(statusBadge, 'status');
     patchText(detail.querySelector('.run-environment')!, environmentName(run.environment));
-    patchText(detail.querySelector('.updated-at')!, `更新 ${timestamp(run.updatedAt)}`);
     const error = detail.querySelector<HTMLElement>('[data-detail-error]')!;
     patchText(error, state.detailError); error.hidden = !state.detailError;
     patchMarkup(detail.querySelector<HTMLElement>('[data-phase-label]')!, `${activeRun(run) ? '<span class="spinner"></span>' : icon(value.symbol)}${html(progress.phaseLabel)}`);
     patchMarkup(detail.querySelector<HTMLElement>('.artifact-stages')!, progress.steps.map(step => `<li class="${step.state}" ${step.state === 'active' ? 'aria-current="step"' : ''}>${icon(step.state === 'done' ? 'check' : step.state === 'error' ? 'x' : 'clock-3')}<span>${step.label}</span></li>`).join(''));
     patchText(detail.querySelector('[data-total-clock]')!, formatDuration(progress.elapsed));
   }
+  patchText(detail.querySelector('.updated-at')!, `更新 ${timestamp(run.updatedAt)}`);
   detail.querySelectorAll<HTMLButtonElement>('[data-detail-tab]').forEach(button => {
     const selected = button.dataset.detailTab === state.tab;
     button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
@@ -1266,7 +1292,7 @@ function selectRun(id: string, closeHistory = true) {
   if (!state.runs.some(run => run.id === id)) return;
   state.composing = false;
   state.selectedId = id; state.selectedRun = state.runs.find(run => run.id === id);
-  state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
+  state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
   state.diffChange = 0;
   renderRunList(); renderDetail(true);
   if (closeHistory) closeHistoryDialog();
@@ -1285,28 +1311,56 @@ const currentConnection = (epoch: number) => pageActive && epoch === state.conne
 const sessionFailure = (error: unknown) => error instanceof ApiError
   && (error.status === 401 || error.status === 403 && error.message.includes('会话校验'));
 function invalidateReads() {
+  runUpdates.stop();
+  liveRefreshPending = false;
   state.connectionEpoch++;
   state.listGeneration++;
+  state.runsEtag = '';
   readController.abort();
   readController = new AbortController();
   state.refreshing = false;
 }
 function disconnected(text: string) {
   state.connected = false;
+  runUpdates.stop();
+  liveRefreshPending = false;
   setGlobalNotice(text);
   element('#runs-error').textContent = '连接中断，记录可能不是最新状态';
   element('#runs-error').hidden = false;
   renderRuntime(); renderDetail();
 }
-async function refreshRuns(epoch: number) {
+function retainLatestObservation(run: WebRun, previous?: WebRun): WebRun {
+  const observation = previous?.observation;
+  if (!observation || run.observation && run.observation.solverRunId === observation.solverRunId
+    && run.observation.sequence > observation.sequence) return run;
+  return { ...run, observation, updatedAt: run.updatedAt > previous.updatedAt ? run.updatedAt : previous.updatedAt };
+}
+function receiveRunObservation(observation: WebObservation) {
+  const previous = state.runs.find(run => run.id === observation.webRunId);
+  if (!previous || previous.observation && (previous.observation.solverRunId !== observation.solverRunId
+    || previous.observation.sequence >= observation.sequence)) return;
+  const run = { ...previous, observation,
+    updatedAt: previous.updatedAt > observation.observedAt ? previous.updatedAt : observation.observedAt };
+  state.runs = state.runs.map(item => item.id === run.id ? run : item);
+  if (state.selectedId === run.id) state.selectedRun = run;
+  renderRunList(); renderDetail();
+}
+async function refreshRuns(epoch: number, force = false) {
   const generation = ++state.listGeneration;
-  const { runs } = await api<{ runs: WebRun[] }>('/api/runs');
+  let etag: string | null = null;
+  const result = await api<{ runs: WebRun[] }>('/api/runs', {
+    headers: !force && state.runsEtag ? { 'If-None-Match': state.runsEtag } : {},
+  }, value => { etag = value; });
   if (generation !== state.listGeneration || !currentConnection(epoch)) return;
+  state.runsEtag = etag ?? '';
+  element('#runs-error').hidden = true;
+  if (!result) return;
   const previous = state.runs;
-  state.runs = runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const byId = new Map(previous.map(run => [run.id, run]));
+  state.runs = result.runs.map(run => retainLatestObservation(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (!state.composing && (!state.selectedId || !state.runs.some(run => run.id === state.selectedId))) {
     state.selectedId = state.runs[0]?.id ?? '';
-    state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
+    state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
   }
   state.selectedRun = state.runs.find(run => run.id === state.selectedId);
   rememberFinishedRuns(previous);
@@ -1314,15 +1368,16 @@ async function refreshRuns(epoch: number) {
   element('#runs-error').hidden = true;
   renderRunList(); renderDetail(); renderDeleteState();
 }
-async function poll() {
+async function poll(force = false) {
   if (!pageActive) return;
   if (connectionRequest) return connectionRequest;
   if (!state.connected) return initialize();
   if (state.refreshing) return;
   const epoch = state.connectionEpoch;
+  liveRefreshPending = false;
   state.refreshing = true;
   element<HTMLButtonElement>('#refresh-runs').disabled = true;
-  try { await refreshRuns(epoch); }
+  try { await refreshRuns(epoch, force); }
   catch (error) {
     if (!currentConnection(epoch)) return;
     disconnected(`${message(error)}。未提交内容已保留。`);
@@ -1330,7 +1385,12 @@ async function poll() {
   } finally {
     if (currentConnection(epoch)) state.refreshing = false;
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive || Boolean(connectionRequest) || state.refreshing;
+    if (currentConnection(epoch) && state.connected && !document.hidden && liveRefreshPending) void poll();
   }
+}
+function requestRunsRefresh() {
+  liveRefreshPending = true;
+  void poll();
 }
 function schedulePoll() {
   clearTimeout(pollTimer);
@@ -1338,7 +1398,7 @@ function schedulePoll() {
   pollTimer = setTimeout(async () => {
     if (!document.hidden) await poll();
     if (pageActive) schedulePoll();
-  }, state.connected && state.runs.some(activeRun) ? 1800 : 5000);
+  }, runUpdates.connected ? 30_000 : state.connected && state.runs.some(activeRun) ? 1800 : 5000);
 }
 function initialize(): Promise<void> {
   if (connectionRequest) return connectionRequest;
@@ -1390,6 +1450,7 @@ function initialize(): Promise<void> {
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive;
     renderRuntime(); renderDetail();
     if (pageActive && !clockTimer) clockTimer = setInterval(updateClocks, 1000);
+    if (pageActive && state.connected && !document.hidden) runUpdates.start();
     schedulePoll();
   });
   renderRuntime(); renderDetail();
@@ -1417,6 +1478,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       workers: Number(field('workers').value),
       coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
       ...(captureDraft().modulePlan ? { modulePlan: captureDraft().modulePlan } : {}),
+      ...(captureDraft().knowledgeDigest ? { knowledgeDigest: captureDraft().knowledgeDigest } : {}),
     };
     closeSettings(false);
     state.submitting = true; renderRuntime();
@@ -1424,7 +1486,8 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     modulePlanEditor.clearDeleted();
     modulePlanLibrary.clearUndo();
     draftRecovery.clear(); renderDraftRecovery();
-    const { run } = await api<{ run: WebRun }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    const result = await api<{ run: WebRun }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    const run = state.runs.find(item => item.id === result.run.id) ?? result.run;
     field('api-key').value = '';
     clearValidation();
     element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle();
@@ -1435,11 +1498,12 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     state.listGeneration++;
     state.runs = [run, ...state.runs.filter(item => item.id !== run.id)];
     state.composing = false;
-    state.selectedId = run.id; state.selectedRun = run; state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';
+    state.selectedId = run.id; state.selectedRun = run; state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';
     clearFilters();
     field('task').value = ''; updateCounts(); draftChanged();
     state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('compose');
     schedulePoll();
+    requestRunsRefresh();
     toast('研究已提交');
   } catch (error) {
     const key = field('api-key').value.trim();
@@ -1470,9 +1534,11 @@ async function cancelRun() {
     state.listGeneration++;
     const previous = state.runs.slice();
     const index = state.runs.findIndex(item => item.id === run.id);
-    if (index >= 0) state.runs[index] = result.run;
-    if (state.selectedId === run.id) state.selectedRun = result.run;
+    const updated = retainLatestObservation(result.run, state.runs[index]);
+    if (index >= 0) state.runs[index] = updated;
+    if (state.selectedId === run.id) state.selectedRun = updated;
     rememberFinishedRuns(previous);
+    requestRunsRefresh();
     toast('已请求取消运行');
   } catch (error) {
     if (state.session?.csrfToken !== sessionToken) return;
@@ -1523,10 +1589,11 @@ function removeLocalRun(id: string) {
   if (state.selectedId === id) {
     const visible = visibleRuns();
     state.selectedId = visible[Math.min(Math.max(index, 0), visible.length - 1)]?.id ?? state.runs[0]?.id ?? '';
-    state.tab = 'source'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
+    state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
   }
   state.selectedRun = state.runs.find(run => run.id === state.selectedId);
   renderRunList(); renderDetail();
+  requestRunsRefresh();
   if (document.body.dataset.mobileView === 'runs') setMobileView('runs');
 }
 async function deleteRun() {
@@ -1587,6 +1654,7 @@ function reuseRun(run: WebRun) {
       'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers })) field(id).value = String(value);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(run.modulePlan);
+    serverModulePlans.setKnowledgeDigest(run.knowledgeDigest);
     field('api-key').value = '';
     element<HTMLInputElement>('#api-key').type = 'password';
     updateKeyToggle(); providerAddress(); updateEnvironment(); sourceChanged();
@@ -1853,7 +1921,7 @@ element('#dismiss-draft-recovery').addEventListener('click', () => {
   draftRecovery.clear(); renderDraftRecovery(); field('task').focus({ preventScroll: true });
 });
 element('#retry-connection').addEventListener('click', () => void initialize());
-element('#refresh-runs').addEventListener('click', () => void poll());
+element('#refresh-runs').addEventListener('click', () => void poll(true));
 for (const id of ['open-settings', 'composer-settings']) element(`#${id}`).addEventListener('click', () => openSettings());
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-section]')) {
   button.addEventListener('click', () => {
@@ -2005,7 +2073,12 @@ window.matchMedia('(max-width:850px)').addEventListener('change', () => {
   renderDraftPreview();
   if (state.tab === 'events') renderPanel(true);
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); else saveDraft(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    if (pageActive && state.connected) runUpdates.start();
+    void poll();
+  } else { saveDraft(); runUpdates.stop(); }
+});
 window.addEventListener('offline', () => {
   invalidateReads(); disconnected('网络已断开，未提交内容已保留。'); schedulePoll();
 });

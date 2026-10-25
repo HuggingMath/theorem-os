@@ -375,7 +375,7 @@ try {
     await prepare(page, source); await find(page, 'draftNeedle', '1/1'); await closeFind(page);
     const a = await createRun(h, 'Read-only run A'), b = await createRun(h, 'Read-only run B'); await poll(h);
     for (const run of [a, b]) {
-      await selectHistoryRun(page, run.id); await find(page, 'candidateNeedle', '1/1'); await locationAvailable(page, false);
+      await selectHistoryRun(page, run.id); await page.locator('#detail-tab-source').click(); await find(page, 'candidateNeedle', '1/1'); await locationAvailable(page, false);
       await page.locator('[data-source-view="input"]').click(); await find(page, 'runOriginalNeedle', '1/1'); await locationAvailable(page, false);
       if (page.viewportSize()!.width <= 850) await page.locator('#mobile-compose').click();
       await enter(page, source, 0, 0, '#edit-draft-source', 'run view opens a separate draft editor'); await closeEditor(page);

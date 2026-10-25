@@ -253,7 +253,10 @@ try {
     assert.equal(await h.page.locator('.run-row.selected .badge.passed').count(), 1);
   });
 
-  await scenario('A poll settling after pagehide cannot restart the stopped polling timer', async h => {
+  await scenario('A fallback poll settling after pagehide cannot restart the stopped polling timer', async h => {
+    await h.page.route('**/api/runs/stream', route => route.fulfill({
+      status: 503, json: { error: 'Fixture exercises polling without a live stream' },
+    }));
     await open(h);
     const held = deferred(), release = deferred(), settled = deferred();
     h.releases.push(release.resolve);
@@ -267,6 +270,7 @@ try {
       settled.resolve();
       return true;
     };
+    await refreshHistory(h.page);
     await held.promise;
     await transition(h.page, 'pagehide');
     const listCount = count(h, 'GET', '/api/runs');

@@ -7,12 +7,34 @@ import type { WorkerInput, WorkerMessage } from './shared';
 import { webArtifactMaxBytes } from './shared';
 import { isWebEventDetails } from './moduleTelemetry';
 import type { WebEventDetails } from './shared';
+import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
+import { validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string }>;
   run(input: WorkerInput, onMessage: (message: WorkerMessage) => void, signal: AbortSignal): Promise<void>;
+  command?(id: string, command: WebCommand): Promise<WebCommandResult>;
 };
 const execute = promisify(execFile);
+const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+/** Inspect only a projection emitted by the worker, never accept arbitrary checkpoint objects. */
+export function isWebObservation(value: unknown): value is WebObservation {
+  if (!object(value) || value.schema !== 'theorem-os.web-observation.v1' ||
+      value.evidence !== 'recorded-not-replayed' || value.acceptance !== 'not-assessed' ||
+      typeof value.webRunId !== 'string' || typeof value.solverRunId !== 'string' ||
+      typeof value.observedAt !== 'string' || !Number.isFinite(Date.parse(value.observedAt)) ||
+      !Number.isSafeInteger(value.sequence) || Number(value.sequence) < 1 ||
+      !object(value.inspection) || !object(value.snapshot) ||
+      value.snapshot.runId !== value.solverRunId || value.inspection.runId !== value.solverRunId ||
+      !/^[a-f0-9]{64}$/u.test(String(value.snapshot.stateDigest)) ||
+      !Array.isArray(value.inspection.tasks) || !Array.isArray(value.inspection.workers) ||
+      !Array.isArray(value.sources) || !Array.isArray(value.checks) || !Array.isArray(value.guidance) ||
+      !object(value.coverage)) return false;
+  return value.sources.every(source => object(source) && source.scope === 'owned-file' &&
+    ['taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest', 'file', 'source'].every(field => typeof source[field] === 'string')) &&
+    value.checks.every(check => object(check) && object(check.record) &&
+      ['id', 'taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest'].every(field => typeof check[field] === 'string'));
+}
 const workerMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('progress'), event: z.string().min(1).max(100), message: z.string().max(2_000),
     details: z.custom<WebEventDetails>(isWebEventDetails).optional() }).strict(),
@@ -28,14 +50,51 @@ const workerMessageSchema = z.discriminatedUnion('type', [
 
 export function parseWorkerMessage(line: string): WorkerMessage | undefined {
   try {
-    const message = workerMessageSchema.safeParse(JSON.parse(line));
+    const value: unknown = JSON.parse(line);
+    if (object(value) && value.type === 'observation' && Object.keys(value).length === 2 && isWebObservation(value.observation))
+      return { type: 'observation', observation: value.observation };
+    if (object(value) && value.type === 'catalog' && Object.keys(value).length === 2)
+      return { type: 'catalog', catalog: validateTheoremKnowledge(value.catalog) };
+    const message = workerMessageSchema.safeParse(value);
     return message.success ? message.data as WorkerMessage : undefined;
   } catch { return undefined; }
 }
 
 export class DockerWebRunner implements WebRunner {
   private cached?: { at: number; result: { ready: boolean; message: string } };
+  private active = new Set<string>();
   constructor(private readonly config: Pick<WebConfig, 'workerImage'>) {}
+
+  async command(id: string, command: WebCommand): Promise<WebCommandResult> {
+    if (!this.active.has(id)) throw new Error('运行环境尚未就绪或已结束。');
+    return new Promise((resolve, reject) => {
+      const child = spawn('docker', ['exec', '--interactive', `theoremos-web-${id}`,
+        'bun', 'apps/web/worker-command.ts'], { stdio: ['pipe', 'pipe', 'ignore'] });
+      let output = '', settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        if (error) { child.kill('SIGKILL'); reject(error); return; }
+        try {
+          const value: unknown = JSON.parse(output);
+          if (!object(value) || typeof value.id !== 'string' || typeof value.status !== 'string') throw new Error();
+          if (value.observation && !isWebObservation(value.observation)) throw new Error();
+          if (value.catalog) validateTheoremKnowledge(value.catalog);
+          resolve(value as WebCommandResult);
+        } catch { reject(new Error('运行环境未返回有效命令回执。')); }
+      };
+      const timer = setTimeout(() => finish(new Error('命令回执超时，请先查询当前回执再重试。')), 15_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', chunk => {
+        output += chunk;
+        if (Buffer.byteLength(output) > 32 * 1024 * 1024) finish(new Error('命令回执超出传输限制。'));
+      });
+      child.once('error', () => finish(new Error('无法向运行环境投递命令。')));
+      child.once('close', code => finish(code ? new Error('运行环境拒绝了命令。') : undefined));
+      child.stdin.on('error', () => {});
+      child.stdin.end(JSON.stringify(command) + '\n');
+    });
+  }
 
   async readiness() {
     if (this.cached && Date.now() - this.cached.at < 10_000) return this.cached.result;
@@ -80,14 +139,23 @@ export class DockerWebRunner implements WebRunner {
     }
     try { await new Promise<void>((resolve, reject) => {
       const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
+      this.active.add(input.id);
       let buffer = '', finished = false, receivedResult = false;
       let stopping: Promise<void> | undefined;
-      const stop = () => stopping ??= new Promise<void>(done => {
+      const stop = () => stopping ??= (async () => {
+        // Capture the actual saved checkpoint and source evidence before deleting the container.
+        try {
+          const captured = await this.command(input.id, { type: 'capture' });
+          if (captured.observation) onMessage({ type: 'observation', observation: captured.observation });
+          if (captured.catalog) onMessage({ type: 'catalog', catalog: captured.catalog });
+        } catch { /* A run cancelled during bootstrap may not have a checkpoint yet. */ }
+        await new Promise<void>(done => {
         const cleanup = spawn('docker', ['rm', '--force', '--volumes', name], { stdio: 'ignore' });
         const timer = setTimeout(() => { cleanup.kill('SIGKILL'); child.kill('SIGKILL'); done(); }, 15_000);
         const complete = () => { clearTimeout(timer); child.kill('SIGTERM'); done(); };
         cleanup.once('error', complete); cleanup.once('close', complete);
-      });
+        });
+      })();
       const abort = () => { void stop(); };
       const timer = setTimeout(abort, (input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000);
       signal.addEventListener('abort', abort, { once: true });
@@ -101,7 +169,7 @@ export class DockerWebRunner implements WebRunner {
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', chunk => {
         buffer += chunk;
-        if (buffer.length > 2 * 1024 * 1024) { void finish(new Error('运行输出超出限制。')); return; }
+        if (Buffer.byteLength(buffer) > 16 * 1024 * 1024) { void finish(new Error('运行输出超出限制。')); return; }
         for (;;) {
           const newline = buffer.indexOf('\n');
           if (newline < 0) break;
@@ -120,6 +188,7 @@ export class DockerWebRunner implements WebRunner {
       child.stdin.end(JSON.stringify(input) + '\n');
       if (signal.aborted) abort();
     }); } finally {
+      this.active.delete(input.id);
       await execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).catch(() => {});
     }
   }

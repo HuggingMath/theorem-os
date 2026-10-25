@@ -125,7 +125,7 @@ async function monitorItems(page: Page, expected: string[]) {
 async function openMonitored(page: Page, id: string, terminal = false) {
   await page.locator(opener(id)).click();
   await page.waitForFunction(id => document.querySelector('.detail-identifier code')?.textContent === id, id);
-  assert.equal(await page.locator(`#detail-tab-${terminal ? 'report' : 'source'}`).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator(`#detail-tab-${terminal ? 'report' : 'collaboration'}`).getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator('#return-to-draft').evaluate(button => (button as HTMLButtonElement).hidden), false);
   if (page.viewportSize()!.width > 850) assert.equal(await page.locator('#return-to-draft').isVisible(), true);
   if (page.viewportSize()!.width <= 850) assert.equal(await page.evaluate(() => document.body.dataset.mobileView), 'runs');
