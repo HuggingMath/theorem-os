@@ -14,7 +14,7 @@ for (const [source, destination] of [['index.html', 'index.html'], ['app.css', '
   fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
 const fonts = ['InterVariable.woff2', 'Inter-LICENSE.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
-  'NotoSerifSC-ui.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt'];
+  'NotoSerifSC-ui.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];
 for (const file of ['mark.svg', ...fonts.map(font => `fonts/${font}`)])
   fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
 fs.mkdirSync(path.join(output, 'assets/licenses'), { recursive: true });

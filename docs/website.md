@@ -82,7 +82,7 @@ bun run test:site
 
 ## 视觉素材
 
-`docs/assets/mark.svg` 是首页、档案与工作台共用的墨色项目标记（陶土色方块），`mark.png` 保留为位图版本。首页正文使用本地 Hanken Grotesk 字体，字面代码使用 Fira Code；标题与品牌名使用衬线字体：西文为 Lora 的拉丁子集，中文为思源宋体（Noto Serif SC）600 字重的两个子集。按 OFL 保留字体名的要求，修改后的 Lora 子集改名为 “TheoremOS Serif Latin”，中文子集为 “TheoremOS Serif SC”。中文子集按 unicode-range 拆分：`NotoSerifSC-ui` 收录工作台与官网源码中出现的汉字，`NotoSerifSC-common` 收录其余 GB2312 一级字，仅在标题用到时加载。字体及各自的 SIL Open Font License 保存在 `docs/assets/fonts/`。构建时将拉丁字体嵌入样式，确保直接打开本地文件时也能加载；中文子集体积较大，保留为外部文件，页面不依赖外部字体服务。
+`docs/assets/mark.svg` 是首页、档案与工作台共用的墨色项目标记（陶土色方块），`mark.png` 保留为位图版本。首页正文使用本地 Hanken Grotesk 字体，字面代码使用 Fira Code；档案页与工作台正文使用 Inter，工作台代码使用 JetBrains Mono。三处的中文正文都使用思源黑体（Noto Sans SC），以 “TheoremOS Sans SC” 的名称加载，覆盖 400–600 字重，同样按 `NotoSansSC-ui` 与 `NotoSansSC-common` 两个 unicode-range 子集拆分。标题与品牌名使用衬线字体：西文为 Lora 的拉丁子集，中文为思源宋体（Noto Serif SC）600 字重的两个子集。按 OFL 保留字体名的要求，修改后的 Lora 子集改名为 “TheoremOS Serif Latin”，中文子集为 “TheoremOS Serif SC”。中文子集按 unicode-range 拆分：`NotoSerifSC-ui` 收录工作台与官网源码中出现的汉字，`NotoSerifSC-common` 收录其余 GB2312 一级字，仅在标题用到时加载。字体及各自的 SIL Open Font License 保存在 `docs/assets/fonts/`。构建时将拉丁字体嵌入样式，确保直接打开本地文件时也能加载；中文子集体积较大，保留为外部文件，页面不依赖外部字体服务。
 
 `workbench-desktop.png` 和 `workbench-mobile.png` 来自真实本地工作台的新会话，分别是 1440×500 的桌面视口和 390×440 的手机视口。`workbench-full-desktop.png` 与 `workbench-full-mobile.png` 为弹窗使用的完整截图，视口分别是 1440×900 和 390×844，以 2 倍像素密度生成。桌面展示左侧对话与右侧源码，手机切到工作区，展示经过正常编辑器载入的紧凑 Mathlib 草稿；图注均标明未提交。截图脚本核对源码在手机上完整可见并阻止创建任务，不需要模型或 Key：
 

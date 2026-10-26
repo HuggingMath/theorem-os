@@ -40,9 +40,9 @@ const homepage = fs.readFileSync(path.join(root, 'docs/index.html'), 'utf8')
 fs.writeFileSync(path.join(output, 'index.html'), homepage);
 for (const file of ['archive.html', 'site.css', 'feedback.html', 'feedback.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
 // Embed the Latin fonts so the same typography works for file:// previews without font CORS errors.
-// The CJK heading subsets are too large to inline; file:// previews fall back to a system serif for them.
+// The CJK subsets are too large to inline; file:// previews fall back to system CJK fonts for them.
 const landingCss = fs.readFileSync(path.join(root, 'docs/landing.css'), 'utf8')
-  .replace(/url\("assets\/fonts\/([^"/]+\.woff2)"\)/g, (url, file: string) => file.startsWith('NotoSerifSC-') ? url
+  .replace(/url\("assets\/fonts\/([^"/]+\.woff2)"\)/g, (url, file: string) => /^Noto(Serif|Sans)SC-/.test(file) ? url
     : `url("data:font/woff2;base64,${fs.readFileSync(path.join(root, 'docs/assets/fonts', file)).toString('base64')}")`);
 fs.writeFileSync(path.join(output, 'landing.css'), landingCss);
 fs.copyFileSync(path.join(root, 'node_modules/lucide/LICENSE'), path.join(output, 'lucide-LICENSE.txt'));
