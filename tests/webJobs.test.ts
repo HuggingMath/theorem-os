@@ -421,6 +421,56 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     expect(unproved.events.at(-1)?.message).not.toContain('通过独立 Lean 验收');
   });
 
+  it('reports global queue positions without other owners\' runs and clears them once started', async () => {
+    const { jobs, runner } = setup(1, 4);
+    const first = jobs.create('alice', input(), provider);
+    const second = jobs.create('bob', input(), provider), third = jobs.create('alice', input(), provider);
+    await tick();
+    expect(first.status).toBe('running');
+    expect(first.queue).toBeUndefined();
+    expect(second.queue).toEqual({ position: 1, ahead: 0, running: 1, slots: 1 });
+    expect(third.queue).toEqual({ position: 2, ahead: 1, running: 1, slots: 1 });
+    expect(JSON.stringify(jobs.list('alice'))).not.toContain(second.id);
+    const version = jobs.version('alice');
+    jobs.cancel('bob', second.id);
+    expect(second.queue).toBeUndefined();
+    expect(third.queue).toMatchObject({ position: 1, ahead: 0 });
+    expect(jobs.version('alice')).not.toBe(version);
+    runner.calls[0].finish();
+    await tick();
+    expect(third.status).toBe('running');
+    expect(third.queue).toBeUndefined();
+    expect(() => { for (let index = 0; index < 4; index++) jobs.create('carol', input(), provider); })
+      .toThrow('运行队列已满：1 个任务正在运行，3 个在排队。');
+  });
+
+  it('keeps the worker failure category and marks runner and restart failures', async () => {
+    const { jobs, runner } = setup(2);
+    const limited = jobs.create('owner', input(), provider), broken = jobs.create('owner', input(), provider);
+    await tick();
+    runner.calls[0].finish({ status: 'incomplete', proof: '', report: { failure: { kind: 'rate_limit', reason: 'math_model_concurrency_limit' } } });
+    runner.calls[1].fail(new Error('无法创建隔离运行环境，请检查 Docker 与 worker 镜像。'));
+    await tick();
+    expect(limited.failure).toEqual({ kind: 'rate_limit', reason: 'math_model_concurrency_limit' });
+    expect(broken).toMatchObject({ status: 'error', failure: { kind: 'environment' } });
+    const forged = jobs.create('owner', input(), provider);
+    await tick();
+    runner.calls[2].finish({ status: 'incomplete', proof: '', report: { failure: { kind: 'network', reason: 'raw provider text' } } });
+    await tick();
+    expect(forged.failure).toBeUndefined();
+    const storage = jobs.storage, started = [jobs.create('owner', input(), provider), jobs.create('owner', input(), provider)];
+    const next = jobs.create('owner', input(), provider);
+    await tick();
+    expect(started.map(item => item.status)).toEqual(['running', 'running']);
+    expect(next.queue).toBeDefined();
+    // A crash never closes the old queue; only the restarted one is cleaned up.
+    queues.splice(queues.indexOf(jobs), 1);
+    const restarted = new WebJobs(new ControlledRunner(), { concurrency: 1, queueLimit: 8 }, { storage });
+    queues.push(restarted);
+    for (const id of [...started.map(item => item.id), next.id]) expect(restarted.get('owner', id)).toMatchObject({ status: 'error', phase: 'interrupted', failure: { kind: 'interrupted' } });
+    expect(restarted.get('owner', next.id)?.queue).toBeUndefined();
+  });
+
   it('forgets expired owners and shuts down without starting waiting work', async () => {
     const { jobs, runner } = setup();
     const expired = jobs.create('expired-owner', input(), provider);

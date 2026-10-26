@@ -275,6 +275,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
       { effort: 'unlimited' }, { coordination: 'unknown' }, { model: '--model-flag' }, { apiKey: 'short' },
       { environment: 'custom' }, { environment: 'https://attacker.example/mathlib' }, { environment: null },
       { environment: { id: 'mathlib', url: 'https://attacker.example' } }, { mathlibRevision: 'attacker-revision' },
+      { maxTotalTokens: 9_999 }, { maxTotalTokens: 100_000_001 }, { maxTotalTokens: 1.5e5 + 0.5 }, { maxTotalTokens: '500000' },
     ];
     for (const override of invalid) {
       const response = await request('/api/runs', alice, { body: { ...input(), ...override } });
@@ -282,8 +283,11 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
       expect(await response.text()).not.toContain(key);
     }
     expect(runner.calls).toHaveLength(0);
-    const atLimits = await request('/api/runs', alice, { body: { ...input(), maxTurns: 20, maxRunSeconds: 900, workers: 4 } });
+    const atLimits = await request('/api/runs', alice, { body: { ...input(), maxTurns: 20, maxRunSeconds: 900, workers: 4, maxTotalTokens: 100_000_000 } });
     expect(atLimits.status).toBe(201);
+    await tick();
+    expect(runner.calls[0].value.input.maxTotalTokens).toBe(100_000_000);
+    expect((await atLimits.json()).run.maxTotalTokens).toBe(100_000_000);
   });
 
   it('rejects wrong content types, invalid JSON and oversized bodies without echoing credentials', async () => {
@@ -571,6 +575,45 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const renewed = await session();
     expect(renewed.cookie).not.toBe(alice.cookie);
     expect((await request(`/api/runs/${run.id}`, renewed)).status).toBe(404);
+    // The privacy page promises that an expired session leaves nothing behind.
+    expect(service.storage.listRecords(['owners'])).toEqual([]);
+  });
+
+  it('shares an accepted run only on the owner\'s request and serves the snapshot publicly until revoked', async () => {
+    const alice = await session(), bob = await session();
+    const { run } = await (await request('/api/runs', alice, { body: input() })).json();
+    await tick();
+    const shareRoute = `/api/runs/${run.id}/share`;
+    expect((await request(shareRoute, alice, { method: 'POST' })).status).toBe(409);
+    runner.calls[0].finish({ status: 'evaluated_passed', proof: 'theorem example : True := trivial',
+      report: { turns: 1, evaluator: { status: 'passed', reason: 'private evaluator text' } } });
+    await tick();
+    expect((await (await request(shareRoute, alice)).json()).share).toBeNull();
+    expect((await request(shareRoute, bob, { method: 'POST' })).status).toBe(404);
+    expect((await request(shareRoute, alice, { method: 'POST', headers: { 'X-CSRF-Token': bob.csrf } })).status).toBe(403);
+    const created = await request(shareRoute, alice, { method: 'POST' });
+    expect(created.status).toBe(201);
+    const { share } = await created.json();
+    expect(share.url).toBe(`${baseUrl}/share.html#${share.token}`);
+    expect((await (await request(shareRoute, alice, { method: 'POST' })).json()).share.token).toBe(share.token);
+
+    const viewed = await request(`/api/share/${share.token}`);
+    expect(viewed.status).toBe(200);
+    expect(viewed.headers.get('set-cookie')).toBeNull();
+    expect(viewed.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+    const text = await viewed.text();
+    expect(JSON.parse(text).share).toMatchObject({ proof: 'theorem example : True := trivial', source: input().source, task: input().task });
+    for (const secret of [key, 'private evaluator text', run.id, 'providerId', '"events"']) expect(text).not.toContain(secret);
+    expect((await request(`/api/share/${share.token}`, undefined, { method: 'POST' })).status).toBe(405);
+    for (const token of ['A'.repeat(32), 'short', '../../owners'])
+      expect((await request(`/api/share/${encodeURIComponent(token)}`)).status).toBe(404);
+
+    expect((await request(shareRoute, alice, { method: 'DELETE' })).status).toBe(200);
+    expect((await request(`/api/share/${share.token}`)).status).toBe(404);
+    const again = (await (await request(shareRoute, alice, { method: 'POST' })).json()).share;
+    expect(again.token).not.toBe(share.token);
+    expect((await request(`/api/runs/${run.id}`, alice, { method: 'DELETE' })).status).toBe(200);
+    expect((await request(`/api/share/${again.token}`)).status).toBe(404);
   });
 
   it('serves only files within the static root and sends browser security headers', async () => {

@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { WebConfig } from './config';
 import type { WorkerInput, WorkerMessage } from './shared';
-import { webArtifactMaxBytes } from './shared';
+import { webArtifactMaxBytes, webFailureKinds, webFailureReason } from './shared';
 import { isWebEventDetails } from './moduleTelemetry';
 import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
@@ -38,7 +38,8 @@ export function isWebObservation(value: unknown): value is WebObservation {
 const workerMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('progress'), event: z.string().min(1).max(100), message: z.string().max(2_000),
     details: z.custom<WebEventDetails>(isWebEventDetails).optional() }).strict(),
-  z.object({ type: z.literal('error'), message: z.string().min(1).max(2_000) }).strict(),
+  z.object({ type: z.literal('error'), message: z.string().min(1).max(2_000),
+    failure: z.object({ kind: z.enum(webFailureKinds), reason: z.string().regex(webFailureReason).optional() }).strict().optional() }).strict(),
   z.object({ type: z.literal('artifact'), artifact: z.object({
     source: z.string().min(1).max(webArtifactMaxBytes).refine(value => Buffer.byteLength(value) <= webArtifactMaxBytes),
     workerId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),

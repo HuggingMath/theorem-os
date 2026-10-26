@@ -4,8 +4,8 @@ import { Icon } from './Icon';
 export type TopbarLive = { label: string; detail: string; tone: string; count: number };
 export type TopbarProps = {
   title: string; model: string; connection: { tone: 'ready' | 'offline'; label: string }; settingsDisabled: boolean;
-  live?: TopbarLive; mac: boolean;
-  onHistory(): void; onSettings(): void; onPalette(): void; onLive(): void;
+  live?: TopbarLive; mac: boolean; account?: string;
+  onHistory(): void; onSettings(): void; onPalette(): void; onLive(): void; onAccount(): void;
 };
 
 function Topbar(props: TopbarProps) {
@@ -27,6 +27,9 @@ function Topbar(props: TopbarProps) {
         <Icon name="sliders-horizontal" /><span id="current-model">{props.model}</span><Icon name="chevron-down" />
       </button>
       <span id="connection-status" class={`connection-status ${props.connection.tone}`} role="status"><span class="status-dot" />{props.connection.label}</span>
+      {props.account && <button type="button" id="open-account" class="account-trigger" title={props.account} aria-label={`账号：${props.account}`} aria-haspopup="dialog" onClick={props.onAccount}>
+        <Icon name="user-round" /><span>{props.account}</span>
+      </button>}
     </div>
   </>;
 }

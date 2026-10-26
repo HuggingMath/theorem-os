@@ -8,7 +8,7 @@ export type RunHeaderProps = {
   title: string; id: string; environment: string; updated: string; error: string;
   status: { key: string; label: string; tone: string; symbol: string };
   stages: HeaderStage[]; elapsed: string; tabs: readonly (readonly [string, string])[]; tab: string;
-  active: boolean; cancelling: boolean; deleting: boolean; connected: boolean; download?: string;
+  active: boolean; cancelling: boolean; deleting: boolean; connected: boolean; download?: string; shareable: boolean;
 };
 
 function StatusBadge({ status }: { status: RunHeaderProps['status'] }) {
@@ -63,6 +63,8 @@ function Tabs({ tabs, tab }: { tabs: RunHeaderProps['tabs']; tab: string }) {
 function Actions(props: RunHeaderProps) {
   return <div class="detail-actions">
     <button type="button" class="icon-button" data-action="reuse-run" aria-label="复用任务配置" title="复用任务配置"><Icon name="copy-plus" /></button>
+    {props.shareable && <button type="button" class="icon-button" data-action="share-run" aria-label="分享研究成果" title="分享研究成果"
+      disabled={!props.connected}><Icon name="share-2" /></button>}
     {props.active
       ? <button key="cancel" type="button" class="button button-danger" data-action="cancel" disabled={props.cancelling || !props.connected}>
         {props.cancelling ? <Spinner /> : <Icon name="square" />}{props.cancelling ? '正在取消' : '取消运行'}</button>

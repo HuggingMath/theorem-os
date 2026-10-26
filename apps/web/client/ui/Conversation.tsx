@@ -6,7 +6,12 @@ export type ConversationEvent = { sequence: number; at: string; time: string; me
 export type ConversationRun = {
   id: string; task: string; environment: string; model: string; working: boolean; events: ConversationEvent[];
   result: { tone: string; symbol: string; label: string; description: string; candidate: boolean };
+  /** Recovery for a run that stopped without a verdict; 'report' opens the report tab. */
+  recovery?: { id: string; label: string }[];
+  /** Desktop notification preference, offered while the run is active. */
+  notify?: 'on' | 'off' | 'blocked' | 'unsupported';
 };
+const notifyLabels = { on: '结束时通知我 · 已开启', off: '结束时通知我', blocked: '通知已被浏览器阻止', unsupported: '' };
 export type ConversationProps = { run?: ConversationRun; templates: ConversationTemplate[] };
 
 // aria-pressed on the suggestions is owned by app.ts's renderTemplateSelection, which runs after every render.
@@ -25,8 +30,11 @@ function Event({ event, active }: { event: ConversationEvent; active: boolean })
   </li>;
 }
 
+const recoveryIcons: Record<string, string> = { retry: 'refresh-cw', key: 'key-round', budget: 'clock-3', tokens: 'gauge', turns: 'list', workers: 'users', source: 'square-pen' };
+
 function Thread({ run }: { run: ConversationRun }) {
   const { result, working } = run;
+  const recovery = run.recovery?.filter(action => action.id !== 'report') ?? [];
   return <>
     <article class="chat-message user" aria-label="用户研究任务"><div class="message-body">{run.task}</div>
       <button type="button" class="message-attachment" data-chat-action="source"><Icon name="file-code-2" /><span>Submission.lean</span><span>{run.environment}</span></button></article>
@@ -39,8 +47,12 @@ function Thread({ run }: { run: ConversationRun }) {
           {result.candidate && <span class="candidate-notice">候选源码已更新 · 尚未验收</span>}
         </div>
         <div class="chat-result-actions">
+          {recovery.map(action => <button key={action.id} type="button" class="button recovery-action" data-chat-action="recover" data-recovery={action.id}>
+            <Icon name={recoveryIcons[action.id] ?? 'refresh-cw'} />{action.label}</button>)}
+          {run.notify && run.notify !== 'unsupported' && <button type="button" class="text-button" data-chat-action="notify" aria-pressed={run.notify === 'on'}>
+            <Icon name={run.notify === 'on' ? 'bell-ring' : run.notify === 'blocked' ? 'bell-off' : 'bell'} />{notifyLabels[run.notify]}</button>}
           <button type="button" class="text-button" data-chat-action={working ? 'events' : 'report'}><Icon name={working ? 'list' : 'file-json-2'} />{working ? '活动记录' : '查看报告'}</button>
-          {!working && <button type="button" class="text-button" data-chat-action="reuse"><Icon name="copy-plus" />基于此题新建研究</button>}
+          {!working && !recovery.some(action => action.id === 'retry') && <button type="button" class="text-button" data-chat-action="reuse"><Icon name="copy-plus" />基于此题新建研究</button>}
         </div>
       </div>
     </article>

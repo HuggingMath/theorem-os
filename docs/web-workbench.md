@@ -99,7 +99,27 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 
 研究配置内除浏览器本地方案库外，还提供服务端方案库和实际模块注册表。服务端方案可保存、更新、另存、载入和确认删除，最多保留 12 项；删除释放方案容量并保留当前模块草稿。其他页面修改后的方案须刷新核对再删除；删除响应丢失时先读取服务器结果，不自动重发。注册表列出实现 ID、版本、输入输出合同与适用范围；仅可选择已安装实现，不接受浏览器上传执行代码。M3 的调度实现与 M4 的上下文实现可以选择，自定义文本仍属于策略建议。运行创建时固定实际组件与 method digest，保存方案或编辑草稿只影响后续新运行。
 
-直接启动默认持久目录为 `out/web-data`；Compose 使用 `research-data` 命名卷保存到 `/var/lib/theorem-os`。同一浏览器会话可在服务重启后继续查看记录、知识和服务端方案。服务重启不会自动恢复求解：未完成运行明确标为中断；正常停止会取消运行，并在删除临时容器前尝试采集证据。默认持久会话闲置 30 天到期，可通过 `THEOREMOS_WEB_SESSION_TTL_SECONDS` 调整；Cookie 丢失或会话到期后没有账号找回或跨设备入口，请下载需要保留的归档。删除运行会删除其归档及原始运行记录，已导入的知识 catalog 保留为独立版本。
+直接启动默认持久目录为 `out/web-data`；Compose 使用 `research-data` 命名卷保存到 `/var/lib/theorem-os`。同一浏览器会话可在服务重启后继续查看记录、知识和服务端方案。服务重启不会自动恢复求解：未完成运行明确标为中断；正常停止会取消运行，并在删除临时容器前尝试采集证据。默认持久会话闲置 30 天到期，可通过 `THEOREMOS_WEB_SESSION_TTL_SECONDS` 调整。未启用登录时，Cookie 丢失或会话到期后记录随会话删除，没有找回入口；启用登录后记录归属账号，见下节。删除运行会删除其归档及原始运行记录，已导入的知识 catalog 保留为独立版本。
+
+### 账号登录
+
+`THEOREMOS_WEB_PUBLIC_URL` 不是本机回环地址时，服务默认要求邮箱验证码登录，未配置发信会拒绝启动；本机预览默认匿名。显式设置 `THEOREMOS_WEB_AUTH=none` 可关闭登录，`email` 可在本机开启。
+
+- 登录页 `login.html` 先要求输入图形验证码（5 位数字，服务端生成 SVG，5 分钟有效，每张只能用一次），再向邮箱发送 6 位验证码。验证码 10 分钟有效，输错 5 次作废；同一邮箱 60 秒内不重发、每小时最多 5 封，同一 IP 每 10 分钟最多请求 10 次。
+- 只有内测白名单中的邮箱能收到验证码。白名单来自 `THEOREMOS_WEB_ALLOWLIST`（逗号分隔）和 `allowlist.txt`（每行一个邮箱，`#` 后为注释）。`allowlist.txt` 默认放在数据目录根下，Compose 中为 `research-data` 卷内的 `/var/lib/theorem-os/allowlist.txt`，每次请求重新读取，改动无需重启。移出白名单的邮箱在下一次请求时退出登录，记录保留。
+- 登录成功后更换会话 ID 和 CSRF token。运行记录、归档、知识目录和服务端方案归属账号：同一账号的多个浏览器看到同一份记录，退出登录或会话到期不删除记录。账号菜单可以退出登录，或输入邮箱确认后删除账号；删除会取消运行中的任务并立即删除全部记录。
+- 账号文件保存在数据目录的 `accounts/` 下，只含账号 ID、邮箱和创建时间。验证码只以 HMAC 形式保存在内存中，服务重启后作废。
+- 本机调试可设 `THEOREMOS_WEB_SMTP_URL=log:`，验证码打印到服务日志，不发邮件；该值只允许用于回环地址。
+
+```bash
+THEOREMOS_WEB_PUBLIC_URL=https://workbench.example.org \
+THEOREMOS_WEB_SMTP_URL='smtps://user:password@smtp.example.org:465' \
+THEOREMOS_WEB_MAIL_FROM='TheoremOS <login@example.org>' \
+THEOREMOS_WEB_ALLOWLIST='alice@example.org' \
+docker compose -f apps/web/compose.yml up -d web
+```
+
+SMTP 密码只放在环境变量或 `.env` 中，不要写进仓库。服务在反向代理后面时，按 IP 的限流看到的是代理地址。
 
 ### 协作 HTTP 接口
 
@@ -179,6 +199,11 @@ docker compose -f apps/web/compose.yml up -d web
 | `THEOREMOS_WEB_STATIC_ROOT` | `out/web` | 直接启动时的静态文件目录 |
 | `THEOREMOS_WEB_DATA_ROOT` | `out/web-data` | 直接启动时的持久目录；Compose 固定为 `/var/lib/theorem-os` |
 | `THEOREMOS_WEB_SESSION_TTL_SECONDS` | `2592000` | 持久会话闲置有效期，60 秒至 365 天；有效请求续期 |
+| `THEOREMOS_WEB_AUTH` | 公网地址 `email`，回环地址 `none` | `email` 要求邮箱验证码登录，`none` 为匿名会话 |
+| `THEOREMOS_WEB_SMTP_URL` | 无 | 发信地址，`smtp://` 或 `smtps://`，含账号密码；回环地址可用 `log:` |
+| `THEOREMOS_WEB_MAIL_FROM` | 无 | 验证码邮件的发件人，例如 `TheoremOS <login@example.org>` |
+| `THEOREMOS_WEB_ALLOWLIST` | 空 | 逗号分隔的内测邮箱；另可写入数据目录的 `allowlist.txt` |
+| `THEOREMOS_WEB_ALLOWLIST_FILE` | 数据目录下 `allowlist.txt` | 白名单文件路径 |
 
 如本机依赖已齐备，也可只用 Docker 跑 worker、用 Bun 启动网页服务：
 
@@ -219,6 +244,7 @@ bun run web
 - 历史记录可组合关键词和状态筛选，关键词匹配题目、研究任务、模型、运行 ID、源码和证明环境；只有完成独立验收的记录会进入“验收通过”。状态刷新复用已有记录，保留焦点与未变化文字的选区；新增或移除上方记录时保留正在阅读的行，关闭抽屉再打开也可继续阅读。聚焦记录退出筛选时，焦点转到邻近记录，列表为空则返回搜索框，不自动切换当前详情。主动改变搜索或状态筛选时回到列表顶部；筛选不会清掉当前查看的详情，新任务提交成功后会清除筛选并选中新运行。
 - 活动页支持本地关键词与事件类型组合筛选，关键词按文本匹配内容和事件名，不区分大小写。最新记录在前，默认跟随顶部；向下阅读会自动暂停，新增匹配以数量提示，可点击“返回最新”继续跟随。刷新复用已有记录并保持阅读行、选区和筛选框焦点；同一运行切换标签或手机面板后可继续阅读，换运行时重置筛选。仅保留最近 200 条活动，早期记录移出时明确提示，当前选中的事件类型即使没有剩余记录也会保留。可在运行中下载当前筛选结果的活动 JSON，包含运行 ID、筛选条件与保留范围；下载在浏览器生成，不包含 API Key，也不代表完整运行档案。
 - 报告页默认展示验收摘要，分别列出候选检查与独立验收、定理级诊断、已有的研究轮次 / 耗时 / Token 统计和验收凭据。单条诊断超过 4000 字符时显示截断提示，可直接打开原始报告；原始 JSON 保留报告中收到的字段，可查看、复制和下载，不代表执行器未提供的日志也已保存。诊断按完整文本去重，相同开头、不同结尾的记录分别保留。缺失的统计不会被补成零，候选检查、单个定理或验收阶段的通过记录不会替代最终结论；最终成功同时要求任务结束和 `evaluated_passed`。
+- 通过独立验收的运行可由所有者创建分享链接 `share.html#<token>`。创建前列出公开与不公开的内容；链接打开一份创建时的只读快照，包含研究任务、原始题目、验收证明、验收结论（不含诊断原文）、Lean 工具链 / Mathlib 版本 / 源码摘要、模型名称、Agent 数量、轮次、耗时和 Token 用量，不包含 API Key、服务商、运行 ID、活动日志、协作记录或账号邮箱。查看无需登录，也不会创建会话；页面与接口带 `noindex`，token 放在 `#` 后不进入请求日志。停止分享、删除运行、删除账号或匿名会话到期都会立即使链接失效；重新分享生成新链接。快照保存在运行目录的 `share.json`，`shares/` 下只按 token 摘要记录运行位置。
 - 已完成、已取消或发生错误的历史记录可在确认后单条删除，删除前可下载包含原始题目与诊断的运行档案，即使任务尚未生成结果。排队或运行中的任务不能删除；删除不会自动取消任务。删除后释放会话的历史容量，不影响其他任务。删除请求的响应丢失时只刷新历史核对，不自动重发。
 - 网络中断或请求超过 15 秒时显示连接状态并禁用提交，已有表单仍可编辑；网络恢复、返回页面或手动重连时自动刷新会话和历史。创建任务与取消请求均不自动重发；提交响应丢失时提示结果未确认，并通过历史列表核对，避免重复创建任务。恢复连接不重置未提交的源码、任务或模型配置。
 - 取消请求等待期间，对话停止按钮、详情操作和运行状态栏同步显示正在取消，重复操作不会再次发送请求。若轮询已确认该任务取消或结束，迟到的取消响应错误不会再将结果标为未知，也不会因此断线重连；无法确认时仍保留核对提示，不自动重发取消请求。
@@ -270,6 +296,10 @@ bun run test:web-workbench-ux
 bun run test:web-live-sync
 bun run test:web-task-browser
 bun run test:web-ui
+bun run test:web-login
+bun run test:web-failures
+bun run test:web-long-run
+bun run test:web-share
 bun run test:web-preparation
 bun run test:web-recovery
 bun run test:web-results

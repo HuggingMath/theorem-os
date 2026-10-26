@@ -27,6 +27,7 @@ function ProgressSummary(props: ProgressSummaryProps) {
   </div>;
 }
 
-export function renderProgressSummary(root: HTMLElement, props?: ProgressSummaryProps) {
-  render(props ? <ProgressSummary {...props} /> : <div class="collab-empty">正在等待运行时任务计划。已有运行产物仍可从源码和报告查看。</div>, root);
+/** Without an observation the summary is the page's only status line; `empty` says why. */
+export function renderProgressSummary(root: HTMLElement, props: ProgressSummaryProps | { empty: string }) {
+  render('empty' in props ? <div class="collab-empty" data-collab-empty>{props.empty}</div> : <ProgressSummary {...props} />, root);
 }

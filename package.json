@@ -23,6 +23,10 @@
     "web": "bun apps/web/server.ts",
     "typecheck:web": "tsc --project apps/web/tsconfig.json && tsc --project apps/web/client/tsconfig.json",
     "test:web-ui": "bun scripts/test-web-ui.ts",
+    "test:web-login": "bun scripts/test-web-login.ts",
+    "test:web-failures": "bun scripts/test-web-failures.ts",
+    "test:web-long-run": "bun scripts/test-web-long-run.ts",
+    "test:web-share": "bun scripts/test-web-share.ts",
     "test:web-collaboration": "bun scripts/test-web-collaboration.ts",
     "test:web-task-source": "bun scripts/test-web-task-source.ts",
     "test:web-knowledge-context": "bun scripts/test-web-knowledge-context.ts",
@@ -61,11 +65,13 @@
   },
   "dependencies": {
     "eventsource-parser": "3.0.6",
+    "nodemailer": "7.0.13",
     "smol-toml": "1.6.1",
     "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "24.12.0",
+    "@types/nodemailer": "8.0.2",
     "diff": "9.0.0",
     "esbuild": "0.25.12",
     "gsap": "3.15.0",

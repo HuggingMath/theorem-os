@@ -4,8 +4,9 @@ import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WebEvent, WebRun } from './shared';
+import type { WebShareSnapshot } from './share';
 
-export type StoredWebSession = { id: string; csrf: string; touchedAt: number };
+export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
 export type StoredWebArchive = {
   schema: 'theorem-os.web-archive.v1';
   summary: WebArchive;
@@ -16,6 +17,9 @@ export type StoredWebArchive = {
   events: WebEvent[];
   commands: WebCommandResult[];
 };
+
+export type StoredWebShare = { token: string; createdAt: string; snapshot: WebShareSnapshot };
+type ShareIndex = { ownerDigest: string; runId: string };
 
 export class WebStorageError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -99,7 +103,8 @@ export class WebStorage {
   }
 
   saveSession(session: StoredWebSession): void {
-    this.saveRecord(['sessions', `${digestKey(session.id)}.json`], { id: session.id, csrf: session.csrf, touchedAt: session.touchedAt });
+    this.saveRecord(['sessions', `${digestKey(session.id)}.json`], { id: session.id, csrf: session.csrf, touchedAt: session.touchedAt,
+      ...(session.account ? { account: session.account } : {}) });
   }
   getSession(id: string): StoredWebSession | undefined { return this.getRecord(['sessions', `${digestKey(id)}.json`]); }
   listSessions(): StoredWebSession[] {
@@ -123,7 +128,33 @@ export class WebStorage {
       .filter((item): item is { owner: string; run: WebRun } => Boolean(item)))
       .sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
   }
-  deleteRun(owner: string, id: string): void { this.deleteRecord(this.runPath(owner, id)); }
+  deleteRun(owner: string, id: string): void { this.deleteShare(owner, id); this.deleteRecord(this.runPath(owner, id)); }
+  /** Everything a session or account owns: runs, share links, archives, knowledge catalogs and module plans. */
+  deleteOwner(owner: string): void {
+    for (const id of this.listRecords([...this.ownerPath(owner), 'runs'])) this.deleteShare(owner, id);
+    this.deleteRecord(this.ownerPath(owner));
+  }
+
+  /** The snapshot lives with the run, so deleting the run always ends the link; the index only resolves tokens. */
+  saveShare(owner: string, runId: string, share: StoredWebShare): void {
+    this.saveRecord([...this.runPath(owner, runId), 'share.json'], share, true);
+    this.saveRecord(['shares', `${digestKey(share.token)}.json`], { ownerDigest: digestKey(owner), runId } satisfies ShareIndex, true);
+  }
+  getOwnShare(owner: string, runId: string): StoredWebShare | undefined {
+    return this.getRecord([...this.runPath(owner, runId), 'share.json']);
+  }
+  getShare(token: string): StoredWebShare | undefined {
+    const index = this.getRecord<ShareIndex>(['shares', `${digestKey(token)}.json`]);
+    if (!index || !/^[a-f0-9]{64}$/u.test(index.ownerDigest)) return;
+    const share = this.getRecord<StoredWebShare>(['owners', index.ownerDigest, 'runs', safeRunId(index.runId), 'share.json']);
+    return share?.token === token ? share : undefined;
+  }
+  deleteShare(owner: string, runId: string): void {
+    const share = this.getOwnShare(owner, runId);
+    if (!share) return;
+    this.deleteRecord(['shares', `${digestKey(share.token)}.json`]);
+    this.deleteRecord([...this.runPath(owner, runId), 'share.json']);
+  }
 
   saveObservation(owner: string, observation: WebObservation): void {
     if (!Number.isSafeInteger(observation.sequence) || observation.sequence < 1) throw new Error('web_storage_invalid_observation_sequence');

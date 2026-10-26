@@ -11,6 +11,8 @@ export type TaskDraft = {
   task: string;
   maxTurns: string;
   maxRunSeconds: string;
+  /** Empty means no token cap. Older drafts omit it. */
+  maxTotalTokens?: string;
   workers: string;
   effort: WebEffort;
   environment: WebEnvironment;
@@ -67,6 +69,7 @@ function validatedDraft(value: unknown): TaskDraft {
     providerId: text(draft, 'providerId', 64), model: text(draft, 'model', 128),
     source: utf8Text(draft, 'source', 32 * 1024), task: utf8Text(draft, 'task', 8_000),
     maxTurns: budget(draft, 'maxTurns'), maxRunSeconds: budget(draft, 'maxRunSeconds'), workers: budget(draft, 'workers'),
+    ...(Object.hasOwn(draft, 'maxTotalTokens') ? { maxTotalTokens: budget(draft, 'maxTotalTokens') } : {}),
     effort: enumeration(draft, 'effort', ['low', 'medium', 'high', 'xhigh', 'max']),
     environment: enumeration(draft, 'environment', ['standard', 'mathlib']),
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
@@ -96,6 +99,7 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
     return validatedDraft({
       providerId: own(run, 'providerId'), model: own(run, 'model'), source: own(run, 'source'), task: own(run, 'task'),
       maxTurns: archiveBudget(run, 'maxTurns'), maxRunSeconds: archiveBudget(run, 'maxRunSeconds'), workers: archiveBudget(run, 'workers'),
+      ...(Object.hasOwn(run, 'maxTotalTokens') ? { maxTotalTokens: archiveBudget(run, 'maxTotalTokens') } : {}),
       effort: own(run, 'effort'), environment: own(run, 'environment'), coordination: own(run, 'coordination'), templateId: '',
       ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),
       ...(Object.hasOwn(run, 'modulePlan') ? { modulePlan: run.modulePlan } : {}),

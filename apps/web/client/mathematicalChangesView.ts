@@ -1,5 +1,5 @@
 import type { WebGoalFrontier, WebMathematicalChange, WebObservation, WebRecordedAdvisory, WebRecordedBlocker, WebRecordedObligation, WebRouteObservation } from '../collaboration';
-import { createElement, detailBlock, escapeHtml as h, factList, patchSection } from './collaborationUi';
+import { createElement, detailBlock, escapeHtml as h, factList, observedTime, patchSection, coverageStateLabel } from './collaborationUi';
 import { recordedTask } from './researchProgressView';
 
 type Reference = { taskId: string; taskDigest: string | null };
@@ -8,7 +8,7 @@ type Bag<T> = Record<string, (T | { before: T; after: T })[]>;
 const categories = [['baseline', '观察基线'], ['obligations', '证明义务'], ['frontiers', '原始目标前沿'], ['blockers', '数学阻塞'], ['routes', 'OR 路线'], ['advisory', '提示性研究'], ['environment', '环境变化']] as const;
 const statuses: Record<string, string> = { none: '尚无证明', conditional: '有条件结果', checked: '记录为已检查', stale: '旧版本证据', unverified: '未验证', open: '待解决', parked: '已停放', reopened: '已重开', superseded: '已被替代', advisory: '提示性材料' };
 const status = (value: string) => statuses[value] ?? value;
-const time = (value: number) => new Date(value).toLocaleString();
+const time = (value: number) => observedTime(value);
 export const mathematicalChangeKey = (receipt: WebMathematicalChange) => JSON.stringify([receipt.kind, receipt.at, receipt.beforeDigest ?? null, receipt.afterDigest]);
 const count = (bag: Record<string, unknown[]>) => Object.values(bag).reduce((sum, values) => sum + values.length, 0);
 function sides<T extends object>(bag: Bag<T>, titles: Record<string, string>): Side<T>[] {
@@ -139,7 +139,7 @@ export class MathematicalChangesView {
     return `<h5>${title}</h5>${rows.map((row, index) => `<article class="collab-math-delta"><strong>${h(row.title)}</strong><div class="collab-math-sides"><div><h6>变化前</h6>${row.before ? render(row.before, `${key}-${index}-before`) : '<p class="collab-help">本侧无记录</p>'}</div><div><h6>变化后</h6>${row.after ? render(row.after, `${key}-${index}-after`) : '<p class="collab-help">本侧无记录</p>'}</div></div></article>`).join('')}`;
   }
   private obligation(item: WebRecordedObligation, key: string) {
-    return `${this.taskLink(item, key)}${factList([['记录证明', status(item.recordedProof)], ['局部闭合', item.closed ? '是' : '否'], ['分组', item.groupId], ['引用覆盖', item.referenceCoverage], ['数学证据摘要', item.evidenceDigest]])}${item.conditions.length ? `<p>未完成条件</p>${this.links(item.conditions, `${key}-conditions`)}` : ''}`;
+    return `${this.taskLink(item, key)}${factList([['记录证明', status(item.recordedProof)], ['局部闭合', item.closed ? '是' : '否'], ['分组', item.groupId], ['引用覆盖', coverageStateLabel(item.referenceCoverage)], ['数学证据摘要', item.evidenceDigest]])}${item.conditions.length ? `<p>未完成条件</p>${this.links(item.conditions, `${key}-conditions`)}` : ''}`;
   }
   private frontier(item: WebGoalFrontier, key: string) {
     const refs = (values: Reference[], suffix: string) => values.length ? this.links(values, `${key}-${suffix}`) : '<p class="collab-help">未记录开放前沿</p>';
@@ -152,7 +152,7 @@ export class MathematicalChangesView {
     return `${factList([['路线', item.routeId], ['目标 ID', item.targetTaskId], ['收尾引理 ID', item.closingTaskId], ['前提 AND', item.prerequisiteTaskIds.join(', ') || '无'], ['剩余前提', item.remainingPrerequisiteTaskIds.join(', ') || '无'], ['记录就绪', item.ready ? '是' : '否'], ['收尾记录', status(item.closingStatus)], ['目标记录', status(item.targetStatus)], ['连接记录', item.connection], ['引用覆盖缺失', item.referenceCoverageMissing.join(', ') || '无'], ['停放依据', item.parkedBy.join(', ') || '无']])}<p class="collab-help">本路线记录只保存任务 ID，未据此推定历史合同版本。</p>`;
   }
   private advisory(item: WebRecordedAdvisory, key: string) {
-    return `${this.taskLink(item, key)}${factList([['类型', item.kind], ['研究记录完成', item.completed ? '是' : '否'], ['发现文字摘要', item.findingDigest]])}<p class="collab-help">本记录保存文字摘要，发现全文请另查交付材料。</p>`;
+    return `${this.taskLink(item, key)}${factList([['类型', item.kind === 'sketch' ? '草图' : item.kind === 'research' ? '研究' : item.kind], ['研究记录完成', item.completed ? '是' : '否'], ['发现文字摘要', item.findingDigest]])}<p class="collab-help">本记录保存文字摘要，发现全文请另查交付材料。</p>`;
   }
   private details(receipt: WebMathematicalChange) {
     const key = mathematicalChangeKey(receipt);

@@ -130,7 +130,7 @@ async function observed(page: Page, sequence: number) {
   await page.waitForFunction(sequence => document.querySelector('[data-collab-observation]')?.textContent?.includes(`观察 #${sequence} ·`), sequence);
 }
 async function applied(page: Page, id: string) {
-  await page.locator(receipt).getByText(new RegExp(`回执 ${id} · applied`)).waitFor();
+  await page.locator(receipt).getByText(new RegExp(`回执 ${id} · 已应用`)).waitFor();
 }
 function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440) {
   return webScenario(browser, suite, name, run, {
@@ -155,7 +155,7 @@ try {
     const { page } = h, run = await create(h); await openPlan(page);
     await page.locator('[data-plan-objective]').fill(`Original proposal for ${status}`); await preview(page);
     const original = await proposal(page); await page.locator('[data-plan-apply]').click();
-    await page.locator(`${refresh}:enabled`).waitFor(); await page.locator(receipt).getByText(/回执 .* · unknown/).waitFor();
+    await page.locator(`${refresh}:enabled`).waitFor(); await page.locator(receipt).getByText(/回执 .* · 结果尚未确认/).waitFor();
     assert.equal(reads(h, run.id).length, 1, 'unknown POST must automatically read the original receipt');
     await page.locator(refresh).click(); await page.locator(`${refresh}:enabled`).waitFor();
     assert.equal(reads(h, run.id).length, 2, 'manual refresh must read again');
@@ -173,7 +173,7 @@ try {
     await focus.focus(); await focus.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(3, 9));
     const beforeReads = reads(h, run.id).length;
     hostReceipt(run.id, original, status);
-    await page.locator(receipt).getByText(new RegExp(`回执 ${original.id} · ${status}`)).waitFor();
+    await page.locator(receipt).getByText(new RegExp(`回执 ${original.id} · ${status === 'applied' ? '已应用' : '已拒绝'}`)).waitFor();
     await page.locator('[data-plan-objective]:enabled').waitFor();
     assert.equal(await json(page), newerText, 'host receipt must preserve the newer full draft');
     assert.deepEqual(await focus.evaluate((node: HTMLTextAreaElement) => ({ focused: document.activeElement === node,
@@ -190,7 +190,7 @@ try {
       const priorEdit = control.observation.inspection.edits.find(edit => edit.id === original.id)!;
       priorEdit.recheck = { status: 'passed', tasks: [{ taskId: 'base', taskDigest: 'base-v1', status: 'passed' }] };
       control.emit(); await observed(page, control.observation.sequence);
-      await page.locator(receipt).getByText(new RegExp(`回执 ${rebased.id} · validated`)).waitFor();
+      await page.locator(receipt).getByText(new RegExp(`回执 ${rebased.id} · 已校验`)).waitFor();
       assert.equal(await page.locator('[data-plan-apply]').isEnabled(), true, 'an earlier command recheck cannot replace the new draft preview');
       assert.equal(await json(page), previewedText);
       assert.deepEqual(await focus.evaluate((node: HTMLTextAreaElement) => ({ focused: document.activeElement === node,
@@ -206,7 +206,7 @@ try {
       const original = await proposal(page), holdPost = operation.startsWith('post-');
       if (!holdPost) {
         await page.locator('[data-plan-apply]').click(); await page.locator(`${refresh}:enabled`).waitFor();
-        await page.locator(receipt).getByText(new RegExp(`回执 ${original.id} · unknown`)).waitFor();
+        await page.locator(receipt).getByText(new RegExp(`回执 ${original.id} · 结果尚未确认`)).waitFor();
         await page.locator('[data-plan-objective]').fill(`Newer draft while ${operation} is delayed`);
       }
       const newerText = await json(page), held = deferred(), release = deferred(), completed = deferred();
@@ -223,14 +223,14 @@ try {
         await page.locator(holdPost ? '[data-plan-apply]' : refresh).click(); await held.promise;
         const beforeReads = reads(h, run.id).length;
         hostReceipt(run.id, original, 'applied'); await applied(page, original.id);
-        await page.locator('[data-plan-recheck]').getByText('重新检查 · pending', { exact: true }).waitFor();
+        await page.locator('[data-plan-recheck]').getByText('待重新检查', { exact: true }).waitFor();
         await page.locator('[data-plan-recheck] summary').click();
         const edit = control.observation.inspection.edits.find(edit => edit.id === original.id)!;
         edit.recheck = { status: 'passed', tasks: [{ taskId: 'base', taskDigest: 'base-v1', status: 'passed',
           lastCheck: { commit: 'fixture-checked-commit', sourceDigest: digest('d'), environmentDigest: digest('e'),
             passed: true, conditional: false, receiptIds: ['fixture-recheck-receipt'] } }] };
         control.emit();
-        await page.locator('[data-plan-recheck]').getByText('重新检查 · passed', { exact: true }).waitFor();
+        await page.locator('[data-plan-recheck]').getByText('重新检查通过', { exact: true }).waitFor();
         assert.equal(await page.locator('[data-plan-recheck] details').evaluate((node: HTMLDetailsElement) => node.open), true, 'live recheck updates preserve the open evidence details');
         const finishedRecheck = await page.locator('[data-plan-recheck]').innerText();
         assert.match(finishedRecheck, /fixture-recheck-receipt/);
@@ -252,7 +252,7 @@ try {
     const { page } = h, runA = await create(h), runB = await create(h); await select(h, runA.id); await openPlan(page);
     await page.locator('[data-plan-objective]').fill('Run A original uncertain proposal'); await preview(page);
     const originalA = await proposal(page); await page.locator('[data-plan-apply]').click();
-    await page.locator(`${refresh}:enabled`).waitFor(); await page.locator(receipt).getByText(/回执 .* · unknown/).waitFor();
+    await page.locator(`${refresh}:enabled`).waitFor(); await page.locator(receipt).getByText(/回执 .* · 结果尚未确认/).waitFor();
     await page.locator('[data-plan-objective]').fill('Run A newer local draft'); const textA = await json(page);
     await closePlan(page); await select(h, runB.id); await openPlan(page);
     await page.locator('[data-plan-objective]').fill('Run B draft must stay isolated from A'); const textB = await json(page);
@@ -286,7 +286,7 @@ try {
       await applied(page, original.id);
     }
     finally { release.resolve(); }
-    await page.locator(receipt).getByText(new RegExp(`回执 ${original.id} · applied`)).waitFor();
+    await page.locator(receipt).getByText(new RegExp(`回执 ${original.id} · 已应用`)).waitFor();
     await page.locator('[data-plan-objective]:enabled').waitFor();
     assert.equal(edits(h, run.id).length, 1, 'lost responses must never resend an edit automatically');
     assert.equal(reads(h, run.id).length, 0, 'a matching live receipt avoids reading again after the lost response');
@@ -355,7 +355,7 @@ try {
         await page.locator('[data-plan-comparison]').getByText('当前服务器计划 · 本地草稿保留', { exact: true }).waitFor();
         await page.locator('[data-plan-versions]').getByText('run-A-newer-plan', { exact: true }).waitFor();
       } else {
-        await page.locator(receipt).getByText(new RegExp(`回执 ${idA} · ${operation === 'apply' ? 'applied' : 'validated'}`)).waitFor();
+        await page.locator(receipt).getByText(new RegExp(`回执 ${idA} · ${operation === 'apply' ? '已应用' : '已校验'}`)).waitFor();
         if (operation === 'preview') assert.equal(await page.locator('[data-plan-apply]').isDisabled(), false);
       }
       await closePlan(page); await select(h, runB.id); await openPlan(page); assert.equal(await json(page), editedB);

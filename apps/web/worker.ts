@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify as stringifyToml } from 'smol-toml';
 import { bootstrapLeanTask } from '../../src/math/leanTask';
+import { classifyWebError, classifyWebResult } from './failure';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { readMathJson, readMathText } from '../../src/math/mathRuntimeIo';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
@@ -207,6 +208,7 @@ async function main() {
       '--coordination', request.input.coordination, '--max-turns', String(request.input.maxTurns),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       '--max-run-seconds', String(request.input.maxRunSeconds), '--max-turn-seconds', '120',
+      ...(request.input.maxTotalTokens ? ['--max-total-tokens', String(request.input.maxTotalTokens)] : []),
       '--prepare-timeout-seconds', environment.id === 'mathlib' ? '600' : '120',
       '--evaluator-timeout-seconds', '120'], root, modules);
     sampleArtifact();
@@ -217,7 +219,9 @@ async function main() {
     const raw = readMathJson(output) as Record<string, unknown>;
     const report = Object.fromEntries(['schema', 'runId', 'problemId', 'status', 'solution_commit',
       'solver_ready_receipt_valid', 'completion_signal_valid', 'evaluator', 'turns', 'solveWallMs', 'usage',
-      'winningWorker', 'workers', 'reason'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
+      'winningWorker', 'workers', 'reason', 'tokenBudget'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
+    const failure = classifyWebResult(raw);
+    if (failure) report.failure = failure;
     report.environment = { id: environment.id, toolchain: environment.toolchain,
       dependencyDigest: environment.dependencyDigest,
       ...(environment.mathlibRevision ? { mathlibRevision: environment.mathlibRevision } : {}) };
@@ -234,10 +238,10 @@ async function main() {
     const proof = readWebResultProof({ directory, workspace: receipt.workspaceRoot, status: raw.status,
       winningWorker: raw.winningWorker, state, artifact: latestArtifact });
     send({ type: 'result', result: { status: String(raw.status || 'runtime_error'), proof, report } });
-  } catch {
+  } catch (error) {
     await capturePending;
     await capture(true);
-    send({ type: 'error', message: '运行未能完成。请检查 Lean 原题、模型服务配置与隔离环境。' });
+    send({ type: 'error', message: '运行未能完成。请检查 Lean 原题、模型服务配置与隔离环境。', failure: classifyWebError(error) });
     process.exitCode = 1;
   } finally {
     clearInterval(artifactTimer);

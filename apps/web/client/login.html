@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="referrer" content="same-origin">
+  <title>登录 · TheoremOS 研究工作台</title>
+  <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="login-page">
+  <main class="login-shell" id="main">
+    <a class="brand" href="https://likc1606.github.io/theorem-os/" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
+    <section class="login-card" aria-labelledby="login-heading">
+      <h1 id="login-heading">登录研究工作台</h1>
+      <p class="login-lead" id="login-lead">内测期间仅限已通过申请的邮箱。我们会发送一个 6 位验证码，无需密码。</p>
+      <div id="login-error" class="inline-error" role="alert" hidden></div>
+      <form id="email-step" class="login-form" novalidate>
+        <label for="login-email">邮箱</label>
+        <input id="login-email" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" required spellcheck="false">
+        <label for="login-captcha">图形验证码</label>
+        <div class="login-captcha-row">
+          <input id="login-captcha" name="captcha" inputmode="numeric" autocomplete="off" maxlength="5" pattern="[0-9]{5}" required aria-describedby="captcha-note">
+          <img id="captcha-image" alt="图形验证码，5 位数字" width="186" height="56">
+          <button type="button" id="refresh-captcha" class="icon-button" aria-label="换一张图形验证码" title="换一张"><i data-lucide="refresh-cw"></i></button>
+        </div>
+        <p class="field-note" id="captcha-note">输入图中的 5 位数字。看不清可以换一张。</p>
+        <button type="submit" id="send-code" class="button button-primary login-submit" disabled><i data-lucide="mail-check"></i><span>发送验证码</span></button>
+      </form>
+      <form id="code-step" class="login-form" novalidate hidden>
+        <p class="login-sent" id="code-sent" role="status"></p>
+        <label for="login-code">邮箱验证码</label>
+        <input id="login-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required class="login-code mono">
+        <button type="submit" id="verify-code" class="button button-primary login-submit"><i data-lucide="log-in"></i><span>登录</span></button>
+        <div class="login-secondary"><button type="button" id="change-email" class="text-button">换一个邮箱</button><button type="button" id="resend-code" class="text-button" disabled>重新发送</button></div>
+      </form>
+    </section>
+    <p class="login-footer">还没有内测资格？<a href="https://likc1606.github.io/theorem-os/#start">申请内测</a> · <a href="https://likc1606.github.io/theorem-os/privacy.html">隐私与条款</a></p>
+  </main>
+  <noscript><div class="no-script">需要启用 JavaScript 才能登录。</div></noscript>
+  <script src="login.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN" class="share-root">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>研究成果 · TheoremOS</title>
+  <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="share-page">
+  <main class="share-shell" id="main">
+    <header class="share-top">
+      <a class="brand" href="https://likc1606.github.io/theorem-os/" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
+      <span class="share-kind">只读分享</span>
+    </header>
+    <p id="share-loading" class="share-state" role="status">正在读取分享内容…</p>
+    <section id="share-missing" class="share-card share-state-card" hidden aria-labelledby="share-missing-heading">
+      <h1 id="share-missing-heading">分享链接不可用</h1>
+      <p id="share-missing-text">链接不存在，或分享者已经停止分享。</p>
+    </section>
+    <article id="share-content" class="share-content" hidden aria-labelledby="share-title">
+      <header class="share-card share-heading">
+        <span class="badge passed"><i data-lucide="shield-check"></i>完整原题通过独立 Lean 验收</span>
+        <h1 id="share-title"></h1>
+        <dl id="share-facts" class="facts share-facts"></dl>
+      </header>
+      <section class="share-card" aria-labelledby="share-task-heading">
+        <h2 id="share-task-heading">研究任务</h2>
+        <p id="share-task" class="task-content"></p>
+      </section>
+      <section class="share-card" aria-labelledby="share-source-heading">
+        <div class="share-source-top">
+          <h2 id="share-source-heading">Lean 源码</h2>
+          <div class="source-switch" role="group" aria-label="源码版本">
+            <button type="button" data-share-view="proof" aria-pressed="true">验收证明</button>
+            <button type="button" data-share-view="source" aria-pressed="false">原始题目</button>
+          </div>
+          <div class="source-actions">
+            <button type="button" id="share-copy" class="icon-button" aria-label="复制当前源码" title="复制当前源码"><i data-lucide="copy"></i></button>
+            <button type="button" id="share-download" class="icon-button" aria-label="下载 Lean 文件" title="下载 Lean 文件"><i data-lucide="download"></i></button>
+          </div>
+        </div>
+        <pre class="code-scroll share-code" tabindex="0" aria-labelledby="share-source-heading"><code id="share-code"></code></pre>
+      </section>
+      <section class="share-card" aria-labelledby="share-checks-heading">
+        <h2 id="share-checks-heading">验收记录</h2>
+        <ul id="share-checks" class="share-checks"></ul>
+        <dl id="share-identity" class="facts share-identity"></dl>
+      </section>
+      <p class="share-note">这是分享者创建链接时的只读快照，不包含 API Key、模型服务地址、运行日志和账号信息。分享者可以随时停止分享。</p>
+    </article>
+    <div id="share-toast" class="toast" role="status" hidden></div>
+  </main>
+  <noscript><div class="no-script">需要启用 JavaScript 才能查看分享内容。</div></noscript>
+  <script src="share.js" defer></script>
+</body>
+</html>

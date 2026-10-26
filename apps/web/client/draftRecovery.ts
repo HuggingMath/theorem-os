@@ -10,6 +10,7 @@ type RecoveryStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 function copyDraft(draft: TaskDraft): TaskDraft {
   return { providerId: draft.providerId, model: draft.model, source: draft.source, task: draft.task,
     maxTurns: draft.maxTurns, maxRunSeconds: draft.maxRunSeconds, workers: draft.workers,
+    ...(draft.maxTotalTokens !== undefined ? { maxTotalTokens: draft.maxTotalTokens } : {}),
     effort: draft.effort, environment: draft.environment, coordination: draft.coordination, templateId: draft.templateId,
     ...(draft.modulePlan ? { modulePlan: structuredClone(draft.modulePlan) } : {}) };
 }

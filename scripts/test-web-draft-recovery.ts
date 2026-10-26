@@ -100,7 +100,11 @@ async function privateStorage(page: Page) {
     return { session, local: JSON.stringify(localStorage) };
   });
   assert.equal(stored.session?.includes(credential) ?? false, false, 'neither saved draft may retain the entered API Key');
-  assert.equal(stored.local, '{}', 'draft recovery must not write to localStorage');
+  // Only the open run ID and the notification preference persist; neither holds draft text.
+  const local = JSON.parse(stored.local) as Record<string, string>;
+  delete local['theorem-os.web-resume.v1']; delete local['theorem-os.web-notify.v1'];
+  assert.deepEqual(local, {}, 'draft recovery must not write to localStorage');
+  assert.equal(stored.local.includes(credential), false);
   if (stored.session) {
     for (const key of [draftKey, recoveryKey]) {
       const item = JSON.parse(stored.session)[key];

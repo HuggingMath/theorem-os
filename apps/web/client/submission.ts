@@ -2,9 +2,15 @@ import type { WebSession } from '../shared';
 import type { TaskDraft } from './draft';
 import { researchModulePlanSchema } from '../../../src/solver/modules/policy';
 
-export const submissionFields = ['provider', 'environment', 'source', 'task', 'model', 'api-key', 'max-turns', 'max-seconds', 'workers'] as const;
+export const submissionFields = ['provider', 'environment', 'source', 'task', 'model', 'api-key', 'max-turns', 'max-seconds', 'workers', 'max-tokens'] as const;
 export type SubmissionField = typeof submissionFields[number] | 'module-plan';
 export type SubmissionIssue = { field: SubmissionField; message: string };
+
+/** The field is in units of 10,000 tokens (万), the unit providers bill in Chinese consoles. */
+export function tokenCap(raw: string, maximum: number): number | undefined {
+  const value = Number(raw.trim());
+  return raw.trim() && Number.isSafeInteger(value) && value >= 1 && value * 10_000 <= maximum ? value * 10_000 : undefined;
+}
 
 // This checks input only. Provider authentication happens when a run is submitted.
 export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebSession): SubmissionIssue[] {
@@ -36,6 +42,9 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
     const value = Number(raw);
     if (!raw.trim() || !Number.isSafeInteger(value) || value < min || value > max) add(field, `${label}须为 ${min}–${max} 的整数`);
   }
+  const tokens = draft.maxTotalTokens?.trim() ?? '';
+  if (tokens && tokenCap(tokens, session.limits.maxTotalTokens) === undefined)
+    add('max-tokens', `用量上限须为 1–${session.limits.maxTotalTokens / 10_000} 万 Token 的整数，留空表示不限`);
   if (draft.modulePlan) {
     const plan = researchModulePlanSchema.safeParse(draft.modulePlan);
     if (!plan.success) add('module-plan', '请检查自定义模块的名称、规则及替换冲突');

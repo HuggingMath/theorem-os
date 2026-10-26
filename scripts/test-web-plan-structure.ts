@@ -272,7 +272,7 @@ try {
     assert.equal(await json(page), retained); assert.equal(await page.locator(selector('objective')).evaluate(node => node === document.activeElement), true);
     await closeDialog(page, '.collab-plan-dialog', () => page.locator(selector('close')).click());
     await page.locator('[data-collab-plan]').click(); await pick(page, 'task', research); assert.equal(await json(page), retained);
-    await page.locator(selector('apply')).click(); await page.locator(selector('receipt')).getByText(/回执 .* · applied/).waitFor();
+    await page.locator(selector('apply')).click(); await page.locator(selector('receipt')).getByText(/回执 .* · 已应用/).waitFor();
     const submitted = h.submissions.filter(item => item.runId === run.id && item.type === 'apply'); assert.equal(submitted.length, 1);
     assert.deepEqual(JSON.parse(submitted[0]!.body), JSON.parse(retained)); validate(JSON.parse(submitted[0]!.body));
     assert.ok(JSON.parse(submitted[0]!.body).groups.some((item: { id: string }) => item.id === group));

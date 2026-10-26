@@ -92,7 +92,11 @@ async function saved(page: Page, expected: Draft) {
 async function assertKeyNotStored(page: Page) {
   const stored = await page.evaluate(() => ({ session: JSON.stringify(sessionStorage), local: JSON.stringify(localStorage) }));
   assert.equal(stored.session.includes(credential), false);
-  assert.equal(stored.local, '{}', 'drafts must not be written to localStorage');
+  // Only the open run ID and the notification preference persist; neither holds draft text.
+  const local = JSON.parse(stored.local) as Record<string, string>;
+  delete local['theorem-os.web-resume.v1']; delete local['theorem-os.web-notify.v1'];
+  assert.deepEqual(local, {}, 'drafts must not be written to localStorage');
+  assert.equal(stored.local.includes(credential), false);
   if (await page.evaluate(key => sessionStorage.getItem(key) !== null, storageKey)) {
     const body = await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)!), storageKey);
     assert.equal(Object.hasOwn(body.draft, 'apiKey'), false);
@@ -375,7 +379,7 @@ try {
       await h.page.locator('#export-draft').click();
       const exported = JSON.parse(await fs.readFile((await (await downloading).path())!, 'utf8'));
       assert.deepEqual(exported, draftFile(imported));
-      assert.equal(await h.page.evaluate(() => JSON.stringify(localStorage)), '{}');
+      assert.equal(await h.page.evaluate(() => Object.keys(localStorage).filter(key => key !== 'theorem-os.web-resume.v1').length), 0);
     });
   }
 

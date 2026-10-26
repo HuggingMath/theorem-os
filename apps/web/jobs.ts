@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
 import type { WebEvent, WebEventDetails, WebProvider, WebRun, WebRunInput, WorkerMessage } from './shared';
+import { parseWebFailure } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
@@ -36,8 +37,10 @@ export class WebJobs {
       if (!terminal(run)) {
         run.status = 'error'; run.phase = 'interrupted'; run.finishedAt = new Date().toISOString();
         run.error = '服务已重启；保留最后观测与已有证据。本次运行未恢复执行。';
+        run.failure = { kind: 'interrupted' };
+        delete run.queue;
         this.event(run, 'interrupted', run.error);
-      }
+      } else if (run.phase === 'interrupted' && !run.failure) run.failure = { kind: 'interrupted' };
     }
   }
 
@@ -63,9 +66,11 @@ export class WebJobs {
   }
   create(owner: string, input: WebRunInput, provider: WebProvider): WebRun {
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
-    if ([...this.jobs.values()].filter(job => !terminal(job.run)).length >= this.config.queueLimit)
-      throw new Error('运行队列已满，请稍后重试。');
-    if (this.list(owner).length >= 20) throw new Error('当前会话已达到 20 条运行记录，请删除已结束的记录后重试。');
+    const count = (status: string) => [...this.jobs.values()].filter(job => job.run.status === status).length;
+    const active = count('running'), waiting = count('queued');
+    if (active + waiting >= this.config.queueLimit)
+      throw new Error(`运行队列已满：${active} 个任务正在运行，${waiting} 个在排队。草稿已保留，请等几分钟后再提交。`);
+    if (this.list(owner).length >= 20) throw new Error('已达到 20 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。');
     const now = new Date().toISOString();
     const { apiKey, ...visible } = input;
     const environment = input.environment ?? 'standard';
@@ -78,6 +83,7 @@ export class WebJobs {
     run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
     this.jobs.set(run.id, { owner, input: { ...input, environment }, provider, run, controller: new AbortController() });
     this.event(run, 'queued', '任务已进入队列');
+    this.reindex();
     queueMicrotask(() => this.pump());
     return run;
   }
@@ -87,9 +93,10 @@ export class WebJobs {
     if (!terminal(job.run)) {
       const queued = job.run.status === 'queued';
       job.run.status = 'cancelled'; job.run.phase = 'cancelled'; job.run.finishedAt = new Date().toISOString();
+      delete job.run.queue;
       this.event(job.run, 'cancelled', '运行已取消');
       job.controller.abort();
-      if (queued) job.input.apiKey = '';
+      if (queued) { job.input.apiKey = ''; this.reindex(); }
     }
     return job.run;
   }
@@ -232,13 +239,26 @@ export class WebJobs {
     this.persist(run);
   }
   private pump() {
-    if (this.closing || this.running >= this.config.concurrency) return;
-    const job = [...this.jobs.values()].find(item => item.run.status === 'queued');
-    if (!job) return;
-    this.running++; job.run.status = 'running'; job.run.phase = 'preparing';
-    this.event(job.run, 'preparing', '正在准备独立运行环境');
-    void this.execute(job).finally(() => { this.running--; this.pump(); });
-    this.pump();
+    while (!this.closing && this.running < this.config.concurrency) {
+      const job = [...this.jobs.values()].find(item => item.run.status === 'queued');
+      if (!job) break;
+      this.running++; job.run.status = 'running'; job.run.phase = 'preparing';
+      delete job.run.queue;
+      this.event(job.run, 'preparing', '正在准备独立运行环境');
+      void this.execute(job).finally(() => { this.running--; this.pump(); });
+    }
+    this.reindex();
+  }
+  /** Queue positions are global and first-in first-out; only counts are shown, never other owners' runs. */
+  private reindex() {
+    const queued = [...this.jobs.values()].filter(job => job.run.status === 'queued');
+    queued.forEach((job, index) => {
+      const queue = { position: index + 1, ahead: index, running: this.running, slots: this.config.concurrency };
+      const previous = job.run.queue;
+      if (previous && Object.entries(queue).every(([key, value]) => previous[key as keyof typeof queue] === value)) return;
+      job.run.queue = queue;
+      this.changed(job.owner);
+    });
   }
   private async execute(job: Job) {
     const key = job.input.apiKey;
@@ -260,11 +280,14 @@ export class WebJobs {
         catch { this.event(job.run, 'archive_failed', '本次知识材料未能保存；已有证明验收状态不变。'); }
       } else if (message.type === 'result') {
         job.run.result = message.result;
+        const failure = parseWebFailure(message.result.report.failure);
+        if (failure) job.run.failure = failure;
         job.run.phase = message.result.status;
         job.run.updatedAt = new Date().toISOString();
         this.persist(job.run);
       } else if (message.type === 'error') {
         job.run.error = message.message;
+        job.run.failure = message.failure ?? { kind: 'environment' };
         job.run.updatedAt = new Date().toISOString();
         this.persist(job.run);
       }
@@ -281,6 +304,7 @@ export class WebJobs {
       if (!terminal(job.run)) {
         job.run.status = 'error'; job.run.phase = 'error';
         job.run.error = clean(error instanceof Error ? error.message : '运行失败。', key);
+        job.run.failure ??= { kind: 'environment' };
         this.event(job.run, 'error', job.run.error);
       }
     } finally {

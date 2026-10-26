@@ -1,5 +1,5 @@
 import type { WebCommandResult, WebGuidanceInput, WebGuidanceRecord, WebObservation } from '../collaboration';
-import { codeBlock, commandId, createElement, errorText, escapeHtml as h, factList, patchSection, type WebApi } from './collaborationUi';
+import { codeBlock, commandId, createElement, errorText, escapeHtml as h, factList, observedTime, patchSection, recipientLabel, roleLabel, type WebApi } from './collaborationUi';
 
 type PendingGuidance = { input: WebGuidanceInput; draftRevision: number; missing: boolean };
 const responseStatus = (error: unknown) => error && typeof error === 'object' && 'status' in error ? error.status : undefined;
@@ -87,7 +87,7 @@ export class GuidanceComposer {
 
   private renderTargets(value = this.target.value) {
     const entries = this.kind.value === 'task' ? this.observation?.inspection.tasks.map(task => [task.id, `${task.id} · 任务`]) :
-      this.kind.value === 'worker' ? this.observation?.inspection.workers.map(worker => [worker.id, `${worker.id} · ${worker.role}`]) : [['', 'Lead']];
+      this.kind.value === 'worker' ? this.observation?.inspection.workers.map(worker => [worker.id, `${worker.id} · ${roleLabel(worker.role)}`]) : [['', 'Lead']];
     const options = [...(entries ?? [])];
     if (value && !options.some(([id]) => id === value)) options.push([value, `${value} · 已移除`]);
     const markup = options.map(([id, name]) => `<option value="${h(id)}">${h(name)}</option>`).join('');
@@ -129,7 +129,7 @@ export class GuidanceComposer {
       !this.active ? '运行尚未开始或已结束，暂时无法发送指导。' :
       !this.observation ? '正在等待当前运行的观察记录，收到后即可发送。' :
       issue ?? '指导会发送给所选接收方；收到回执后可查看投递状态。';
-    patchSection(this.element.querySelector('[data-collab-guidance-records]')!, [...this.records.values()].map(record => `<article class="collab-guidance-record"><div><strong>${h(record.recipient.kind)} ${h(record.recipient.id)}</strong><span class="badge">${h(statusLabel[record.status])}</span></div><p>${h(record.text)}</p><small>${h(record.id)} · ${h(record.updatedAt)}${record.deliveredTo?.length ? ` · 接收 ${h(record.deliveredTo.join(', '))}` : ''}</small>${record.taskRef ? `<p class="collab-help">任务 ${h(record.taskRef.id)} · 版本 ${h(record.taskRef.version)}</p>` : ''}<p class="collab-help">依据观察 #${record.observationRef.sequence} · ${h(record.observationRef.stateDigest)}</p>${record.reason ? `<p class="collab-help">${h(record.reason)}</p>` : ''}</article>`).join(''));
+    patchSection(this.element.querySelector('[data-collab-guidance-records]')!, [...this.records.values()].map(record => `<article class="collab-guidance-record"><div><strong>${h(recipientLabel(record.recipient.kind))} ${h(record.recipient.id)}</strong><span class="badge">${h(statusLabel[record.status])}</span></div><p>${h(record.text)}</p><small>${h(record.id)} · ${h(observedTime(record.updatedAt))}${record.deliveredTo?.length ? ` · 接收 ${h(record.deliveredTo.join(', '))}` : ''}</small>${record.taskRef ? `<p class="collab-help">任务 ${h(record.taskRef.id)} · 版本 ${h(record.taskRef.version)}</p>` : ''}<p class="collab-help">依据观察 #${record.observationRef.sequence} · ${h(record.observationRef.stateDigest)}</p>${record.reason ? `<p class="collab-help">${h(record.reason)}</p>` : ''}</article>`).join(''));
   }
 
   private remember(record: WebGuidanceRecord) {

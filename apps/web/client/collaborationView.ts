@@ -1,7 +1,7 @@
 import type { WebRun } from '../shared';
 import type { WebObservation, WebTaskSource, WebCheckReceipt, WebArchive } from '../collaboration';
 import { isAcceptedRun } from '../presentation';
-import { createElement, errorText, escapeHtml as h, patchSection, codeBlock, detailBlock, factList, observedTime, coverageLabel, type WebApi } from './collaborationUi';
+import { createElement, errorText, escapeHtml as h, patchSection, codeBlock, detailBlock, factList, observedTime, coverageLabel, roleLabel, schedulingLabel, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
 import { TaskPlanEditor } from './taskPlanEditor';
 import { KnowledgeView } from './knowledgeView';
 import { TaskSourceComparison, taskSourceKey } from './taskSourceComparison';
@@ -24,6 +24,13 @@ type ScrollPosition = { top: number; left: number };
 const minGraphZoom = 0.3;
 type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
 const kindLabel: Record<string,string> = { research: '研究', sketch: '草图', lemma: '引理', goal: '原始目标' };
+/** One status line for a run without a collaboration observation; the sections below need one to show anything. */
+function unobservedText(run: WebRun) {
+  if (run.status === 'queued') return '任务排队中。开始运行后，这里显示 Agent 的任务计划和进展。';
+  if (run.status === 'running') return '正在等待运行时任务计划。已有运行产物仍可从 Lean 源码和报告查看。';
+  return isAcceptedRun(run) ? '这次运行没有留下协作观察记录。完整原题已通过独立 Lean 验收，证明和验收记录见 Lean 源码与报告。'
+    : '这次运行没有留下协作观察记录。已有的源码、报告和活动可在 Lean 源码、报告与活动中查看。';
+}
 const statusLabel: Record<string,string> = { pending: '待调度', running: '进行中', blocked: '受阻', conditional: '有条件结果', delivered: '已交付', integrated: '已集成', completed: '已完成', none: '尚无证明', checked: '已记录检查', stale: '旧版本证据', unverified: '未验证', active: '继续', paused: '暂停', stopped: '停止', queued: '排队中', deliveredGuidance: '已送达', deferred: '暂缓', failed: '失败' };
 const label = (value: string) => statusLabel[value] ?? value;
 const routeConnectionLabel: Record<string,string> = { 'closed-by-original-check': '已由原题检查连通', 'awaiting-original-check': '等待原题检查连通' };
@@ -269,7 +276,7 @@ export class CollaborationView {
       const { observation } = await this.api<{ observation: WebObservation | null }>(`/api/runs/${encodeURIComponent(runId)}/observation`);
       view.observationError = undefined;
       if (observation) this.receive(observation);
-      if (manual) status.textContent = observation ? `观察已刷新 · #${view.observation?.sequence ?? observation.sequence}` : '运行尚未生成协作观察；原始源码、报告与活动可在上方查看。';
+      if (manual) status.textContent = observation ? `观察已刷新 · #${view.observation?.sequence ?? observation.sequence}` : '仍没有协作观察记录。';
     } catch (error) {
       view.observationError = `观察读取失败：${errorText(error)}`;
       if (manual) status.textContent = view.observationError;
@@ -279,7 +286,8 @@ export class CollaborationView {
   private render(view: ViewState, run: WebRun) {
     const observation = view.observation;
     const summary = view.element.querySelector<HTMLElement>('[data-collab-summary]')!;
-    if (!observation) { renderProgressSummary(summary); return; }
+    view.element.dataset.observed = String(Boolean(observation));
+    if (!observation) { renderProgressSummary(summary, { empty: unobservedText(run) }); return; }
     const inspection = observation.inspection;
     // Proof tasks split by recorded proof status first, then by scheduling state; checked uses the server's count.
     const proofTasks = inspection.tasks.filter(task => task.kind === 'lemma' || task.kind === 'goal');
@@ -298,7 +306,7 @@ export class CollaborationView {
       accepted: isAcceptedRun(run), completedResearch: inspection.progress.completedResearchTasks,
     });
     this.renderTasks(view); this.renderInspector(view); this.renderAgents(view); view.progress.update(observation); view.changes.update(observation); view.reviews.update(observation, run);
-    patchSection(view.element.querySelector('[data-collab-edits]')!, inspection.edits.length ? inspection.edits.map(edit => `<article class="collab-edit"><strong>${h(edit.id)} · ${h(edit.status)}</strong>${factList([['基准版本',edit.baseVersion],['应用版本',edit.planVersion],['重新检查',edit.recheck?.status ?? '未记录'],['影响任务',edit.affectedTasks?.join(', ')]])}${edit.reason ? `<p>${h(edit.reason)}</p>` : ''}${edit.recheck ? detailBlock('各任务重新检查记录',edit.recheck,`edit-${edit.id}`) : ''}</article>`).join('') : '<p class="collab-help">尚无人工计划编辑记录</p>');
+    patchSection(view.element.querySelector('[data-collab-edits]')!, inspection.edits.length ? inspection.edits.map(edit => `<article class="collab-edit"><strong>${h(edit.id)} · ${h(editStatusLabel(edit.status))}</strong>${factList([['基准版本',edit.baseVersion],['应用版本',edit.planVersion],['重新检查',editStatusLabel(edit.recheck?.status) ?? '未记录'],['影响任务',edit.affectedTasks?.join(', ')]])}${edit.reason ? `<p>${h(edit.reason)}</p>` : ''}${edit.recheck ? detailBlock('各任务重新检查记录',edit.recheck,`edit-${edit.id}`) : ''}</article>`).join('') : '<p class="collab-help">尚无人工计划编辑记录</p>');
     this.updateKnowledge(view, run);
     this.updateCommands(view);
   }
@@ -513,10 +521,10 @@ export class CollaborationView {
   private renderAgents(view: ViewState) {
     const workers = view.observation?.inspection.workers ?? [];
     renderAgentCards(view.element.querySelector<HTMLElement>('[data-collab-agents]')!, workers.map(worker => ({
-      id: worker.id, role: `${worker.role} / ${worker.sessionRole ?? '无当前会话'}`, scheduling: worker.scheduling?.status ?? '未记录', schedulingStatus: worker.scheduling?.status ?? 'unknown',
-      phase: worker.phase, turns: String(worker.turns), task: worker.task,
+      id: worker.id, role: `${roleLabel(worker.role)} / ${roleLabel(worker.sessionRole) ?? '无当前会话'}`, scheduling: schedulingLabel(worker.scheduling?.status) ?? '未记录', schedulingStatus: worker.scheduling?.status ?? 'unknown',
+      phase: workerPhaseLabel(worker.phase) ?? '未记录', turns: String(worker.turns), task: worker.task,
       details: [
-        ...(worker.dispatchWait.status !== 'unknown' ? [{ title: `等待原因 · ${worker.dispatchWait.status}`, value: worker.dispatchWait, id: `wait-${worker.id}` }] : []),
+        ...(worker.dispatchWait.status !== 'unknown' ? [{ title: `等待原因 · ${dispatchWaitLabel(worker.dispatchWait.status)}`, value: worker.dispatchWait, id: `wait-${worker.id}` }] : []),
         ...(worker.lastFailure ? [{ title: '最近故障', value: worker.lastFailure, id: `failure-${worker.id}` }] : []),
         ...(worker.recovery ? [{ title: '恢复状态', value: worker.recovery, id: `recovery-${worker.id}` }] : []),
       ],
@@ -531,7 +539,7 @@ export class CollaborationView {
     archive.disabled=!this.connected||!view.observation||view.archiveBusy;
     archive.textContent = view.archiveBusy ? '归档中…' : '归档知识'; archive.setAttribute('aria-busy', String(view.archiveBusy));
     const observation = view.observation;
-    view.element.querySelector('[data-collab-observation]')!.textContent = view.observationError ?? (observation ? `观察 #${observation.sequence} · ${observedTime(observation.observedAt)} · 历史记录未重新运行 Lean · 源码${coverageLabel(observation.coverage.sources)} · 检查${coverageLabel(observation.coverage.checks)}` : '运行尚未生成协作观察，可从源码、报告和活动查看已有材料。');
+    view.element.querySelector('[data-collab-observation]')!.textContent = view.observationError ?? (observation ? `观察 #${observation.sequence} · ${observedTime(observation.observedAt)} · 历史记录未重新运行 Lean · 源码${coverageLabel(observation.coverage.sources)} · 检查${coverageLabel(observation.coverage.checks)}` : '');
     view.guidance.update(view.observation, view.active, this.connected);
     view.navigation.update(view.observation, this.connected, view.archives.length);
   }
@@ -562,7 +570,7 @@ export class CollaborationView {
     catch(error){if(request!==view.artifactRequest)return;patchSection(target,`<p class="collab-error">${h(errorText(error))}</p>`);}
   }
   private renderArchives(view: ViewState, runId: string) {
-    patchSection(view.element.querySelector('[data-collab-archives]')!, view.archives.length ? view.archives.map(archive => `<article class="collab-archive" data-collab-archive-id="${h(archive.id)}"><div class="collab-section-heading"><strong>${h(archive.createdAt)}</strong><a class="button" data-collab-archive-download href="/api/runs/${encodeURIComponent(runId)}/archives/${encodeURIComponent(archive.id)}" download="theoremos-${h(runId)}-archive.json">下载归档包</a></div>${factList([['归档 ID',archive.id],['摘要',archive.digest],['源码 / 检查',`${archive.sources} / ${archive.checks}`],['知识目录',archive.catalogDigest ?? '无'],['事件覆盖',archive.coverage.events],['源码 / 检查覆盖',`${archive.coverage.sources} / ${archive.coverage.checks}`]])}<p class="collab-help">历史证据已保存；再次使用需要重新检查。</p></article>`).join('') : '<p class="collab-help">尚无已保存的归档</p>');
+    patchSection(view.element.querySelector('[data-collab-archives]')!, view.archives.length ? view.archives.map(archive => `<article class="collab-archive" data-collab-archive-id="${h(archive.id)}"><div class="collab-section-heading"><strong>${h(observedTime(archive.createdAt))}</strong><a class="button" data-collab-archive-download href="/api/runs/${encodeURIComponent(runId)}/archives/${encodeURIComponent(archive.id)}" download="theoremos-${h(runId)}-archive.json">下载归档包</a></div>${factList([['归档 ID',archive.id],['摘要',archive.digest],['源码 / 检查',`${archive.sources} / ${archive.checks}`],['知识目录',archive.catalogDigest ?? '无'],['事件覆盖',archive.coverage.events],['源码 / 检查覆盖',`${archive.coverage.sources} / ${archive.coverage.checks}`]])}<p class="collab-help">历史证据已保存；再次使用需要重新检查。</p></article>`).join('') : '<p class="collab-help">尚无已保存的归档</p>');
   }
   private async archive(runId:string,view:ViewState) {
     if(view.archiveBusy)return;view.archiveBusy=true;const status=view.element.querySelector<HTMLElement>('[data-collab-status]')!;this.updateCommands(view);

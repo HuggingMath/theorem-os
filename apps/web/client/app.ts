@@ -1,10 +1,11 @@
 import {
   createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
-  Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Trash2, TriangleAlert, Undo2, Upload, X,
+  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
+  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebCoordination, WebEffort, WebEnvironment, WebRun, WebRunInput, WebSession } from '../shared';
-import { formatDuration, isAcceptedRun, resultDescription, runProgress } from '../presentation';
+import type { WebShareLink } from '../share';
+import { effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, resultDescription, runProgress, usageEstimate, type RecoveryAction } from '../presentation';
 import { summarizeReport, type ReportCheck, type ReportDiagnostic, type ReportTarget } from '../report';
 import { filterRuns, type RunFilter } from './history';
 import { readLeanFile } from './sourceFile';
@@ -15,7 +16,7 @@ import { EditorReview } from './editorReview';
 import { decodeTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftStorageKey, type TaskDraft } from './draft';
 import { compareSources, type SourceComparison } from './sourceDiff';
 import { sourceDiffRows } from './sourceDiffMarkup';
-import { submissionFields, submissionIssues, type SubmissionField, type SubmissionIssue } from './submission';
+import { submissionFields, submissionIssues, tokenCap, type SubmissionField, type SubmissionIssue } from './submission';
 import { SourceReader } from './sourceReader';
 import { ActivityReader } from './activityReader';
 import { ModuleView, type ModuleViewInput } from './moduleView';
@@ -35,10 +36,12 @@ import { renderRunHeader as drawRunHeader, unmountRunHeader } from './ui/RunHead
 import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
 import { renderRunOverview, unmountRunOverview, type RunOverviewProps } from './ui/RunOverview';
 import { renderConversation as drawConversation } from './ui/Conversation';
+import { workerPhaseLabel } from './collaborationUi';
+import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResume, saveResume } from './runAwareness';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
-  Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Trash2, TriangleAlert, Undo2, Upload, X };
+  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
+  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Trash2, TriangleAlert, Undo2, Upload, X };
 function icons(root: Element | Document | DocumentFragment = document) {
   createIcons({ icons: iconSet, root, attrs: { 'aria-hidden': 'true' } });
   root.querySelectorAll('svg[data-lucide]').forEach(svg => svg.removeAttribute('data-lucide'));
@@ -89,7 +92,36 @@ const state = {
   connected: false, refreshing: false, connectionEpoch: 0,
   composing: false, conversationSignature: '', conversationRunId: '',
   finishedRuns: new Set<string>(),
+  /** Runs that ended while the tab was hidden; shown in the tab title until the tab is visible again. */
+  unseenRuns: new Set<string>(), resumed: false,
 };
+const baseTitle = document.title;
+const notificationsSupported = () => typeof Notification === 'function';
+const notifyWanted = () => { try { return localStorage.getItem(notifyStorageKey) === 'on'; } catch { return false; } };
+function notifyState(): 'on' | 'off' | 'blocked' | 'unsupported' {
+  if (!notificationsSupported()) return 'unsupported';
+  if (Notification.permission === 'denied') return 'blocked';
+  return notifyWanted() && Notification.permission === 'granted' ? 'on' : 'off';
+}
+function announceFinished(run: WebRun) {
+  if (!document.hidden) return;
+  state.unseenRuns.add(run.id);
+  if (notifyState() !== 'on') return;
+  const notice = new Notification(`TheoremOS · ${status(run).label}`, { body: `${run.title}\n${resultDescription(run)}`, tag: run.id });
+  notice.onclick = () => { window.focus(); selectRun(run.id); setMobileView('compose'); notice.close(); };
+}
+async function toggleNotifications() {
+  const current = notifyState();
+  if (current === 'unsupported') { toast('这个浏览器不支持桌面通知'); return; }
+  if (current === 'blocked') { toast('浏览器已阻止本站通知，请在地址栏的网站设置中允许'); return; }
+  const remember = (value: string) => { try { localStorage.setItem(notifyStorageKey, value); } catch { /* Preference lasts for this page only. */ } };
+  if (current === 'on') { remember('off'); toast('已关闭完成通知'); renderConversation(); return; }
+  const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  if (permission !== 'granted') { toast('没有获得通知权限，结束时只会在标签页标题上提示'); renderConversation(); return; }
+  remember('on');
+  toast('研究结束时会发送桌面通知');
+  renderConversation();
+}
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let clockTimer: ReturnType<typeof setInterval> | undefined;
@@ -103,6 +135,7 @@ let editorInitialSource = '';
 let editorOpenedFromPreview = false;
 let editorClosePosition: { start: number; end: number; direction: 'forward' | 'backward' | 'none'; top: number; left: number } | undefined;
 let deletionTarget: { id: string; title: string; csrfToken: string } | undefined;
+let sharing: { id: string; link?: WebShareLink | null; busy: boolean } | undefined;
 let draftReady = false;
 let draftDirty = false;
 let draftRevision = 0;
@@ -280,7 +313,7 @@ function renderPreparation(issues = currentSubmissionIssues()) {
   const issue = issues[0];
   const labels: Record<SubmissionField, string> = {
     provider: '选择服务商', environment: '选择环境', source: '编辑源码', task: '填写任务', model: '填写模型',
-    'api-key': '填写 API Key', 'max-turns': '调整轮次', 'max-seconds': '调整预算', workers: '调整 Agent', 'module-plan': '检查模块方案',
+    'api-key': '填写 API Key', 'max-turns': '调整轮次', 'max-seconds': '调整预算', workers: '调整 Agent', 'max-tokens': '调整用量上限', 'module-plan': '检查模块方案',
   };
   const pending = !state.session;
   const offline = !pending && !state.connected;
@@ -301,6 +334,18 @@ function renderPreparation(issues = currentSubmissionIssues()) {
   patchMarkup(element('#readiness-icon'), state.submitting ? '<span class="spinner"></span>' : icon(phase === 'ready' ? 'circle-check' : 'circle-alert'));
   const action = element<HTMLButtonElement>('#prepare-run');
   if (action.disabled !== (pending || state.submitting)) action.disabled = pending || state.submitting;
+  renderBudgetEstimate();
+}
+/** Time and turns are hard stops; tokens are estimated from this account's finished runs on the same model. */
+function renderBudgetEstimate() {
+  const turns = Number(field('max-turns').value), seconds = Number(field('max-seconds').value), model = field('model').value.trim();
+  if (!Number.isSafeInteger(turns) || turns < 1 || !Number.isSafeInteger(seconds) || seconds < 30) { patchText(element('#budget-estimate'), ''); return; }
+  const cap = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
+  const estimate = usageEstimate(state.runs, model, turns);
+  const limits = `最长约 ${Math.ceil(seconds / 60)} 分钟，全部 Agent 合计最多 ${turns} 轮模型调用。`;
+  const usage = estimate ? `按你最近 ${estimate.samples} 次 ${model} 运行的平均每轮 ${formatTokens(estimate.perTurn)} Token，本次约 ${formatTokens(estimate.ceiling)} Token 以内。`
+    : '还没有这个模型的用量记录，费用按服务商实际计费。';
+  patchText(element('#budget-estimate'), `${limits}${usage}${cap ? `达到 ${formatTokens(cap)} Token 后停止新的调用。` : ''}`);
 }
 function focusSubmissionIssue(issue: SubmissionIssue) {
   validationShown.add(issue.field);
@@ -360,7 +405,7 @@ function restoreConversationScroll() {
 function renderConversation() {
   renderComposerSummary();
   const run = currentRun();
-  const signature = JSON.stringify(run ? [run.id, run.task, run.status, run.phase, run.events, run.result?.status, run.error, Boolean(run.artifact)]
+  const signature = JSON.stringify(run ? [run.id, run.task, run.status, run.phase, run.events, run.result?.status, run.error, run.failure, run.queue, Boolean(run.artifact), notifyState()]
     : [state.session?.templates, state.connected]);
   if (signature === state.conversationSignature) return;
   state.conversationSignature = signature;
@@ -384,7 +429,8 @@ function renderConversation() {
     templates: (state.session?.templates ?? []).map(template => ({ id: template.id, name: template.name, environment: environmentName(template.environment) })),
     ...(run && value ? { run: { id: run.id, task: run.task, environment: environmentName(run.environment), model: run.model, working,
       events: events.map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), message: event.message })),
-      result: { tone: value.tone, symbol: value.symbol, label: value.label, description: resultDescription(run), candidate: Boolean(run.artifact && working) } } } : {}),
+      result: { tone: value.tone, symbol: value.symbol, label: failureGuide(run)?.title ?? value.label, description: resultDescription(run), candidate: Boolean(run.artifact && working) },
+      ...(failureGuide(run) ? { recovery: failureGuide(run)!.actions } : {}), ...(working ? { notify: notifyState() } : {}) } } : {}),
   });
   if (freshThread) thread.querySelectorAll<HTMLElement>('.chat-message').forEach(target => entrances.push({ target, kind: 'message' }));
   if (run && !newConversation && conversationScroll.following) {
@@ -443,6 +489,7 @@ function captureDraft(): TaskDraft {
     effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
     source: field('source').value, task: field('task').value, templateId: field('template').value,
     maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: field('workers').value,
+    ...(field('max-tokens').value ? { maxTotalTokens: field('max-tokens').value } : {}),
     coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
     ...(serverModulePlans.knowledgeDigest() ? { knowledgeDigest: serverModulePlans.knowledgeDigest() } : {}),
     ...(modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full' ? { modulePlan } : {}) };
@@ -524,7 +571,7 @@ function applyTaskDraft(draft: TaskDraft) {
   field('environment').value = draft.environment;
   renderTemplates();
   for (const [id, value] of Object.entries({ model: draft.model, effort: draft.effort, source: draft.source, task: draft.task,
-    'max-turns': draft.maxTurns, 'max-seconds': draft.maxRunSeconds, workers: draft.workers })) field(id).value = value;
+    'max-turns': draft.maxTurns, 'max-seconds': draft.maxRunSeconds, workers: draft.workers, 'max-tokens': draft.maxTotalTokens ?? '' })) field(id).value = value;
   const template = state.session?.templates.find(template => template.id === draft.templateId
     && template.environment === draft.environment && template.source === field('source').value && template.task === field('task').value);
   field('template').value = template?.id ?? '';
@@ -571,7 +618,7 @@ async function importTaskFile(file: File) {
     const provider = state.session?.providers.find(provider => provider.id === draft.providerId);
     element('#import-facts').innerHTML = [fact('证明环境', environmentName(draft.environment)),
       fact('服务商', provider?.name ?? `${draft.providerId || '未选择'} · 当前不可用`), fact('模型', draft.model || '未填写', true),
-      fact('推理强度', draft.effort), fact('轮次上限', draft.maxTurns || '未填写'),
+      fact('推理强度', effortLabels[draft.effort] ?? draft.effort), fact('轮次上限', draft.maxTurns || '未填写'),
       fact('解题预算 / 秒', draft.maxRunSeconds || '未填写'), fact('Agent 数量', draft.workers || '未填写'),
       fact('协作模式', draft.coordination === 'cooperative' ? '任务协作' : '独立并行')].join('');
     element('#import-task-preview').textContent = draft.task || '未填写';
@@ -608,7 +655,7 @@ function resetForm() {
     element<HTMLInputElement>('#api-key').type = 'password';
     updateKeyToggle();
     for (const [id, value] of Object.entries({ model: session.defaults.model, effort: session.defaults.effort,
-      'max-turns': session.defaults.maxTurns, 'max-seconds': session.defaults.maxRunSeconds, workers: session.defaults.workers })) field(id).value = String(value);
+      'max-turns': session.defaults.maxTurns, 'max-seconds': session.defaults.maxRunSeconds, workers: session.defaults.workers, 'max-tokens': '' })) field(id).value = String(value);
     element<HTMLInputElement>(`input[name="coordination"][value="${session.defaults.coordination}"]`).checked = true;
     field('provider').value = session.providers[0]?.id ?? '';
     field('environment').value = session.defaults.environment;
@@ -781,10 +828,12 @@ function renderRuntime() {
 }
 function status(run: WebRun) {
   if (passed(run)) return { label: '完整原题通过', tone: 'passed', symbol: 'circle-check' };
-  if (run.status === 'queued') return { label: '排队中', tone: '', symbol: 'clock-3' };
+  if (run.status === 'queued') return { label: run.queue ? `排队中 · 第 ${run.queue.position} 位` : '排队中', tone: '', symbol: 'clock-3' };
   if (run.status === 'running') return { label: runProgress(run).phaseLabel, tone: 'running', symbol: 'refresh-cw' };
   if (run.status === 'cancelled') return { label: '已取消', tone: '', symbol: 'square' };
   if (run.status === 'error') return { label: '运行错误', tone: 'failed', symbol: 'circle-alert' };
+  // A stopped budget is an expected end; other classified failures need the user to act.
+  if (run.failure && !['budget', 'time_limit'].includes(run.failure.kind)) return { label: '运行失败', tone: 'failed', symbol: 'circle-alert' };
   if (['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '')) return { label: '验收未通过', tone: 'failed', symbol: 'circle-alert' };
   return { label: '运行结束', tone: 'warning', symbol: 'clock-3' };
 }
@@ -916,6 +965,8 @@ function clearFilters() {
 const currentRun = () => state.selectedRun?.id === state.selectedId ? state.selectedRun : state.runs.find(run => run.id === state.selectedId);
 const downloadUrl = (id: string) => `/api/runs/${encodeURIComponent(id)}/download`;
 function resultTitle(run: WebRun) {
+  const guide = failureGuide(run);
+  if (guide) return guide.title;
   return passed(run) ? '完整原题已通过独立验收'
     : activeRun(run) ? run.status === 'queued' ? '任务已排队' : '研究正在运行'
       : run.status === 'cancelled' ? '运行已取消'
@@ -945,10 +996,11 @@ function overviewProps(run: WebRun): RunOverviewProps {
     task: run.task,
     facts: [item('证明环境', environmentName(run.environment)), ...(environment ? [item('Lean 版本', environment.toolchain, true)] : []),
       ...(environment?.mathlibRevision ? [item('Mathlib 版本', environment.mathlibRevision, true)] : []), item('服务商', provider?.name ?? run.providerId),
-      item('模型', run.model, true), item('推理强度', run.effort), item('协作模式', run.coordination === 'cooperative' ? '任务协作' : '独立并行'),
-      item('Agent 数量', run.workers), item('轮次上限', run.maxTurns), item('解题预算', `${run.maxRunSeconds} 秒`), item('创建时间', timestamp(run.createdAt)),
+      item('模型', run.model, true), item('推理强度', effortLabels[run.effort] ?? run.effort), item('协作模式', run.coordination === 'cooperative' ? '任务协作' : '独立并行'),
+      item('Agent 数量', run.workers), item('轮次上限', run.maxTurns), item('解题预算', `${run.maxRunSeconds} 秒`),
+      item('用量上限', run.maxTotalTokens ? `${formatTokens(run.maxTotalTokens)} Token` : '不限'), item('创建时间', timestamp(run.createdAt)),
       ...(run.finishedAt ? [item('结束时间', timestamp(run.finishedAt))] : [])],
-    agents: (activeRun(run) ? run.observation?.inspection.workers ?? [] : []).map(worker => ({ id: worker.id, state: worker.scheduling?.status ?? 'unknown', phase: worker.phase,
+    agents: (activeRun(run) ? run.observation?.inspection.workers ?? [] : []).map(worker => ({ id: worker.id, state: worker.scheduling?.status ?? 'unknown', phase: workerPhaseLabel(worker.phase) ?? '未记录',
       ...(worker.task ? { task: worker.task } : {}) })),
     events: run.events.slice(-6).reverse().map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), type: event.type, message: event.message })),
     eventCount: run.events.length,
@@ -1236,13 +1288,14 @@ function renderRunHeader(run: WebRun) {
     stages: progress.steps.map(step => ({ label: step.label, state: step.state, clock: step.elapsed === null ? '' : formatDuration(step.elapsed) })),
     elapsed: formatDuration(progress.elapsed), tabs: detailTabs, tab: state.tab,
     active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
-    download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined,
+    download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: isAcceptedRun(run) && Boolean(run.result?.proof),
   });
 }
 function selectRun(id: string, closeHistory = true) {
   if (!state.runs.some(run => run.id === id)) return;
   state.composing = false;
   state.selectedId = id; state.selectedRun = state.runs.find(run => run.id === id);
+  saveResume(() => localStorage, { selectedId: id, seenAt: new Date().toISOString() });
   state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
   state.diffChange = 0;
   renderRunList(); renderDetail(true);
@@ -1309,15 +1362,29 @@ async function refreshRuns(epoch: number, force = false) {
   const previous = state.runs;
   const byId = new Map(previous.map(run => [run.id, run]));
   state.runs = result.runs.map(run => retainLatestObservation(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const resume = state.resumed ? undefined : readResume(() => localStorage);
+  if (!state.resumed && !state.composing && !state.selectedId && resume && state.runs.some(run => run.id === resume.selectedId)) {
+    state.selectedId = resume.selectedId;
+    state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
+  }
   if (!state.composing && (!state.selectedId || !state.runs.some(run => run.id === state.selectedId))) {
     state.selectedId = state.runs[0]?.id ?? '';
     state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
   }
   state.selectedRun = state.runs.find(run => run.id === state.selectedId);
   rememberFinishedRuns(previous);
+  for (const run of newlyFinished(previous, state.runs)) announceFinished(run);
+  if (!state.resumed) {
+    state.resumed = true;
+    const away = resume ? finishedSince(state.runs, resume.seenAt) : [];
+    for (const run of away) if (run.id !== state.selectedId) state.finishedRuns.add(run.id);
+    if (away.length) toast(away.length === 1 ? `离开期间「${away[0].title}」已结束` : `离开期间有 ${away.length} 项研究已结束`);
+  }
+  // Nothing to resume until the account has a run; an empty history leaves storage untouched.
+  if (state.runs.length) saveResume(() => localStorage, { selectedId: state.selectedId, seenAt: new Date().toISOString() });
   state.detailError = '';
   element('#runs-error').hidden = true;
-  renderRunList(); renderDetail(); renderDeleteState();
+  renderRunList(); renderDetail(); renderDeleteState(); renderBudgetEstimate();
 }
 async function poll(force = false) {
   if (!pageActive) return;
@@ -1346,10 +1413,12 @@ function requestRunsRefresh() {
 function schedulePoll() {
   clearTimeout(pollTimer);
   if (!pageActive) return;
+  // A hidden tab keeps a slow poll while runs are active, so their end still reaches the title and notifications.
+  const active = state.connected && state.runs.some(activeRun);
   pollTimer = setTimeout(async () => {
-    if (!document.hidden) await poll();
+    if (!document.hidden || active) await poll();
     if (pageActive) schedulePoll();
-  }, runUpdates.connected ? 30_000 : state.connected && state.runs.some(activeRun) ? 1800 : 5000);
+  }, document.hidden ? active ? 15_000 : 30_000 : runUpdates.connected ? 30_000 : active ? 1800 : 5000);
 }
 function initialize(): Promise<void> {
   if (connectionRequest) return connectionRequest;
@@ -1364,6 +1433,7 @@ function initialize(): Promise<void> {
       if (!navigator.onLine) throw new Error('网络已断开');
       const session = await api<WebSession>('/api/session');
       if (!currentConnection(epoch)) return;
+      if (session.auth === 'email' && !session.account) { saveDraft(); location.replace('login.html'); return; }
       const firstLoad = !state.session;
       if (state.session && state.session.csrfToken !== session.csrfToken) {
         state.runs = []; state.selectedId = ''; state.selectedRun = undefined;
@@ -1411,13 +1481,15 @@ const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 function renderShell() {
   const session = state.session, ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
   const run = currentRun(), running = state.runs.filter(activeRun);
+  const title = documentTitle(baseTitle, running.length, state.unseenRuns.size);
+  if (document.title !== title) document.title = title;
   const live = run && activeRun(run)
     ? { label: state.cancelling.has(run.id) ? '正在取消' : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }
     : running.length ? { label: `${running.length} 项研究进行中`, detail: '', tone: 'running', count: running.length } : undefined;
   renderTopbar(element('#topbar'), {
     title: run?.title ?? '新研究', model: field('model').value || '模型配置', mac, live,
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? '连接中' : '连接中断' : ready ? '环境就绪' : '环境未就绪' },
-    settingsDisabled: !session || state.submitting,
+    settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
     onHistory: openHistory, onSettings: () => openSettings(), onPalette: () => palette.open(),
     onLive: () => {
       const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
@@ -1427,6 +1499,20 @@ function renderShell() {
       element(`#detail-tab-${state.tab}`).focus({ preventScroll: true });
     },
   });
+}
+function openAccount() {
+  element('#account-email').textContent = state.session?.account?.email ?? '';
+  field('account-confirm').value = ''; element<HTMLButtonElement>('#delete-account').disabled = true;
+  element('#account-error').hidden = true;
+  showDialog(element<HTMLDialogElement>('#account-dialog'));
+}
+async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonElement) {
+  button.disabled = true; element('#account-error').hidden = true;
+  try { await request(); saveDraft(); location.replace('login.html'); }
+  catch (error) {
+    element('#account-error').textContent = message(error); element('#account-error').hidden = false;
+    button.disabled = false;
+  }
 }
 function openHistory() {
   showDialog(element<HTMLDialogElement>('#history-dialog'));
@@ -1478,6 +1564,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
       source: field('source').value, task: field('task').value,
       maxTurns: Number(field('max-turns').value), maxRunSeconds: Number(field('max-seconds').value),
+      ...(tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) ? { maxTotalTokens: tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) } : {}),
       workers: Number(field('workers').value),
       coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
       ...(captureDraft().modulePlan ? { modulePlan: captureDraft().modulePlan } : {}),
@@ -1633,6 +1720,51 @@ async function deleteRun() {
     state.deleting.delete(target.id); renderDeleteState(); renderRunList(); renderDetail();
   }
 }
+/** The share link is the owner's choice per accepted run; the dialog lists what it exposes before creating it. */
+function renderShareState(error = '') {
+  if (!sharing) return;
+  const link = sharing.link, loading = link === undefined;
+  element('#share-link-row').hidden = !link;
+  element<HTMLInputElement>('#share-url').value = link?.url ?? '';
+  const open = element<HTMLAnchorElement>('#open-share');
+  open.hidden = !link; if (link) open.href = link.url;
+  element('#stop-share').hidden = !link;
+  element('#create-share').hidden = Boolean(link);
+  element<HTMLButtonElement>('#create-share').disabled = sharing.busy || loading || !state.connected;
+  element<HTMLButtonElement>('#stop-share').disabled = sharing.busy || !state.connected;
+  const notice = loading ? '正在读取分享状态…' : link ? `已于 ${timestamp(link.createdAt)} 创建。停止分享后，这个链接立即失效。` : '';
+  element('#share-notice').textContent = notice; element('#share-notice').hidden = !notice;
+  element('#share-error').textContent = error; element('#share-error').hidden = !error;
+}
+async function openSharing(run: WebRun) {
+  if (!state.connected || !isAcceptedRun(run)) return;
+  sharing = { id: run.id, busy: false };
+  element('#share-run-title').textContent = run.title;
+  renderShareState();
+  showDialog(element<HTMLDialogElement>('#share-dialog'));
+  try {
+    const { share } = await api<{ share: WebShareLink | null }>(`/api/runs/${encodeURIComponent(run.id)}/share`);
+    if (sharing?.id !== run.id) return;
+    sharing.link = share; renderShareState();
+  } catch (error) {
+    if (sharing?.id === run.id) { sharing.link = null; renderShareState(`无法读取分享状态：${message(error)}`); }
+  }
+  (sharing?.link ? element('#copy-share') : element('#create-share')).focus();
+}
+async function changeSharing(method: 'POST' | 'DELETE') {
+  const target = sharing;
+  if (!target || target.busy) return;
+  target.busy = true; renderShareState();
+  try {
+    const { share } = await api<{ share: WebShareLink | null }>(`/api/runs/${encodeURIComponent(target.id)}/share`, { method });
+    if (sharing !== target) return;
+    target.link = share; target.busy = false; renderShareState();
+    if (share) { element<HTMLInputElement>('#share-url').select(); toast('分享链接已创建'); element('#copy-share').focus(); }
+    else { toast('已停止分享，原链接已失效'); element('#create-share').focus(); }
+  } catch (error) {
+    if (sharing === target) { target.busy = false; renderShareState(message(error)); }
+  }
+}
 function download(name: string, content: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const link = document.createElement('a'); link.href = url; link.download = name;
@@ -1645,7 +1777,9 @@ async function copyText(text: string, success: string) {
     await navigator.clipboard.writeText(text); toast(success);
   } catch { toast('无法访问剪贴板'); }
 }
-function reuseRun(run: WebRun) {
+const recoveryFields: Record<Exclude<RecoveryAction['id'], 'report'>, string> = {
+  retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'workers', source: 'source' };
+function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'> = 'retry') {
   const session = state.session;
   if (!session || state.submitting) return;
   replaceDraft('reuse', () => {
@@ -1654,7 +1788,8 @@ function reuseRun(run: WebRun) {
     field('environment').value = run.environment;
     renderTemplates();
     for (const [id, value] of Object.entries({ model: run.model, effort: run.effort, source: run.source, task: run.task,
-      'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers })) field(id).value = String(value);
+      'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers,
+      'max-tokens': run.maxTotalTokens ? run.maxTotalTokens / 10_000 : '' })) field(id).value = String(value);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(run.modulePlan);
     serverModulePlans.setKnowledgeDigest(run.knowledgeDigest);
@@ -1663,8 +1798,8 @@ function reuseRun(run: WebRun) {
     updateKeyToggle(); providerAddress(); updateEnvironment(); sourceChanged();
     element('#form-error').hidden = true;
     startDraft();
-    openSettings('api-key');
-    toast('已载入原始题目与执行配置');
+    openSettings(recoveryFields[recovery]);
+    toast(recovery === 'retry' || recovery === 'key' ? '已载入原始题目与执行配置，请输入 API Key' : '已载入原始配置，修改后请重新输入 API Key');
   });
 }
 element('#run-detail').addEventListener('change', event => {
@@ -1733,6 +1868,7 @@ element('#run-detail').addEventListener('click', event => {
   if (!run) return;
   if (target.dataset.action === 'cancel') void cancelRun();
   if (target.dataset.action === 'delete-run') openDeletion(run);
+  if (target.dataset.action === 'share-run') void openSharing(run);
   if (target.dataset.action === 'copy-id') void copyText(run.id, '运行 ID 已复制');
   if (target.dataset.action === 'copy-source') void copyText(displayedSource(run), 'Lean 源码已复制');
   if (target.dataset.action === 'copy-report' && run.result) void copyText(JSON.stringify(run.result.report, null, 2), '报告 JSON 已复制');
@@ -1895,6 +2031,14 @@ element('#source-editor').addEventListener('keydown', event => {
 document.addEventListener('selectionchange', () => {
   if (element<HTMLDialogElement>('#source-editor').open && document.activeElement === field('expanded-source')) updateEditorPosition();
 });
+element('#create-share').addEventListener('click', () => void changeSharing('POST'));
+element('#stop-share').addEventListener('click', () => void changeSharing('DELETE'));
+element('#copy-share').addEventListener('click', () => { if (sharing?.link) void copyText(sharing.link.url, '分享链接已复制'); });
+element('#close-share').addEventListener('click', () => element<HTMLDialogElement>('#share-dialog').close());
+element('#share-dialog').addEventListener('close', () => {
+  sharing = undefined;
+  if (!document.querySelector('dialog[open]')) document.querySelector<HTMLElement>('[data-action="share-run"]')?.focus({ preventScroll: true });
+});
 element('#confirm-delete').addEventListener('click', () => void deleteRun());
 for (const id of ['cancel-delete', 'close-delete']) element(`#${id}`).addEventListener('click', () => {
   if (!deletionTarget || !state.deleting.has(deletionTarget.id)) element<HTMLDialogElement>('#delete-run-dialog').close();
@@ -1997,6 +2141,12 @@ element('#conversation').addEventListener('click', event => {
     field('task').focus(); return;
   }
   if (target.dataset.chatAction === 'reuse') { const run = currentRun(); if (run) reuseRun(run); return; }
+  if (target.dataset.chatAction === 'notify') { void toggleNotifications(); return; }
+  if (target.dataset.chatAction === 'recover') {
+    const run = currentRun(), action = target.dataset.recovery as RecoveryAction['id'];
+    if (run && action in recoveryFields) reuseRun(run, action as keyof typeof recoveryFields);
+    return;
+  }
   if (['source', 'report', 'events'].includes(target.dataset.chatAction ?? '')) {
     state.tab = target.dataset.chatAction as DetailTab;
     if (state.tab === 'source') state.sourceView = 'input';
@@ -2076,7 +2226,9 @@ window.matchMedia('(max-width:850px)').addEventListener('change', () => {
   if (state.tab === 'events') renderPanel(true);
 });
 document.addEventListener('visibilitychange', () => {
+  schedulePoll();
   if (!document.hidden) {
+    state.unseenRuns.clear(); renderShell();
     if (pageActive && state.connected) runUpdates.start();
     void poll();
   } else { saveDraft(); runUpdates.stop(); }
@@ -2101,6 +2253,13 @@ window.addEventListener('pageshow', event => {
     void resumeConnection();
   }
 });
+element('#close-account').addEventListener('click', () => element<HTMLDialogElement>('#account-dialog').close());
+element('#logout').addEventListener('click', event => void leaveAccount(() => api('/api/auth/logout', { method: 'POST', body: '{}' }), event.currentTarget as HTMLButtonElement));
+field('account-confirm').addEventListener('input', () => {
+  element<HTMLButtonElement>('#delete-account').disabled = field('account-confirm').value.trim().toLowerCase() !== state.session?.account?.email;
+});
+element('#delete-account').addEventListener('click', event => void leaveAccount(() => api('/api/auth/account',
+  { method: 'DELETE', body: JSON.stringify({ email: field('account-confirm').value.trim() }) }), event.currentTarget as HTMLButtonElement));
 icons();
 document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('close', () => { if (!dialog.open) finishMotion(dialog); }));
 void initialize();

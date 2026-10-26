@@ -2,6 +2,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import type { WebEnvironment, WebEnvironmentOption, WebProvider, WebTemplate } from './shared';
+import { allowlistFile, normalizeEmail, type WebAuthConfig } from './auth';
 
 const providerSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
@@ -20,6 +21,8 @@ export type WebConfig = {
   queueLimit: number;
   sessionTtlMs: number;
   providers: WebProvider[];
+  /** Present when every workbench request needs an allowlisted email login. */
+  auth?: WebAuthConfig;
 };
 
 function integer(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -44,6 +47,21 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
       throw new Error('Provider base URLs must use HTTPS or HTTP on host.docker.internal, without credentials, queries or fragments.');
     provider.baseUrl = url.href.replace(/\/$/, '');
   }
+  // A public address requires login unless the operator opts out explicitly; loopback previews stay anonymous.
+  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(publicUrl.hostname);
+  const authMode = env.THEOREMOS_WEB_AUTH || (loopback ? 'none' : 'email');
+  if (!['none', 'email'].includes(authMode)) throw new Error('THEOREMOS_WEB_AUTH must be none or email.');
+  let auth: WebAuthConfig | undefined;
+  if (authMode === 'email') {
+    const smtpUrl = env.THEOREMOS_WEB_SMTP_URL || '';
+    if (smtpUrl === 'log:' ? !loopback : !/^smtps?:\/\//u.test(smtpUrl))
+      throw new Error('Email login needs THEOREMOS_WEB_SMTP_URL (smtp:// or smtps://); log: is only allowed on a loopback address.');
+    const from = env.THEOREMOS_WEB_MAIL_FROM || (smtpUrl === 'log:' ? 'TheoremOS <login@localhost>' : '');
+    if (!from) throw new Error('Email login needs THEOREMOS_WEB_MAIL_FROM.');
+    const dataRoot = env.THEOREMOS_WEB_DATA_ROOT ? path.resolve(env.THEOREMOS_WEB_DATA_ROOT) : undefined;
+    auth = { smtpUrl, from, allowlist: (env.THEOREMOS_WEB_ALLOWLIST || '').split(',').map(item => item.trim()).filter(Boolean).map(normalizeEmail),
+      ...(env.THEOREMOS_WEB_ALLOWLIST_FILE || dataRoot ? { allowlistFile: path.resolve(env.THEOREMOS_WEB_ALLOWLIST_FILE || allowlistFile(dataRoot)!) } : {}) };
+  }
   return {
     host: env.THEOREMOS_WEB_HOST || '127.0.0.1', port, publicUrl: publicUrl.origin,
     staticRoot: path.resolve(env.THEOREMOS_WEB_STATIC_ROOT || 'out/web'),
@@ -53,10 +71,11 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     queueLimit: integer(env.THEOREMOS_WEB_QUEUE_LIMIT, 8, 1, 32),
     sessionTtlMs: 1000 * integer(env.THEOREMOS_WEB_SESSION_TTL_SECONDS,
       env.THEOREMOS_WEB_DATA_ROOT ? 30 * 24 * 60 * 60 : 60 * 60, 60, 365 * 24 * 60 * 60), providers,
+    ...(auth ? { auth } : {}),
   };
 }
 
-export const webLimits = Object.freeze({ maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4,
+export const webLimits = Object.freeze({ maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4, maxTotalTokens: 100_000_000,
   maxSourceBytes: 32_768, maxTaskBytes: 8_000 });
 // The first provider is the host's deployed sub2api gateway, reached from isolated Docker workers.
 export const webDefaults = Object.freeze({ model: 'deepseek-flash', effort: 'max' as const,

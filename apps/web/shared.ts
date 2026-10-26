@@ -5,6 +5,21 @@ export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
 export type WebRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'error';
 export type WebEnvironment = 'standard' | 'mathlib';
+/** Why a run stopped without an accepted proof. Categories carry no provider text. */
+export const webFailureKinds = ['authentication', 'rate_limit', 'network', 'budget', 'time_limit', 'environment',
+  'source', 'protocol', 'interrupted', 'unknown'] as const;
+export type WebFailureKind = typeof webFailureKinds[number];
+export type WebFailure = { kind: WebFailureKind; reason?: string };
+export const webFailureReason = /^(?:math|lean_task)_[a-z0-9_]{1,80}$/u;
+/** Accept a failure only in the shape the worker produces. */
+export function parseWebFailure(value: unknown): WebFailure | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const { kind, reason, ...rest } = value as Record<string, unknown>;
+  if (Object.keys(rest).length || typeof kind !== 'string' || !(webFailureKinds as readonly string[]).includes(kind)) return;
+  if (reason !== undefined && (typeof reason !== 'string' || !webFailureReason.test(reason))) return;
+  return { kind: kind as WebFailureKind, ...(typeof reason === 'string' ? { reason } : {}) };
+}
+export type WebQueuePosition = { position: number; ahead: number; running: number; slots: number };
 export type WebFrozenModuleConfiguration = {
   registryVersion: 'theorem-os.web-module-registry.v1'; id: string; versions: Record<string, string>; methodDigest: string;
   coordination: WebCoordination; workers: number;
@@ -26,6 +41,8 @@ export type WebRunInput = {
   task: string;
   maxTurns: number;
   maxRunSeconds: number;
+  /** Provider-reported token cap for the whole run; absent means unlimited. */
+  maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
   modulePlan?: ResearchModulePlan;
@@ -79,6 +96,8 @@ export type WebRun = {
   task: string;
   maxTurns: number;
   maxRunSeconds: number;
+  /** Provider-reported token cap for the whole run; absent means unlimited. */
+  maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
   modulePlan?: ResearchModulePlan;
@@ -93,14 +112,20 @@ export type WebRun = {
   artifact?: WebArtifact;
   result?: WebResult;
   error?: string;
+  failure?: WebFailure;
+  /** Present while queued; recomputed by the job queue, never restored. */
+  queue?: WebQueuePosition;
 };
 export type WebSession = {
   csrfToken: string;
+  /** `email` means the workbench needs a login; `account` is set once this session has one. */
+  auth: 'none' | 'email';
+  account?: { email: string };
   providers: WebProvider[];
   environments: WebEnvironmentOption[];
   templates: WebTemplate[];
   defaults: Pick<WebRunInput, 'model' | 'effort' | 'maxTurns' | 'maxRunSeconds' | 'workers' | 'coordination'> & { environment: WebEnvironment };
-  limits: { maxTurns: number; maxRunSeconds: number; maxWorkers: number; maxSourceBytes: number; maxTaskBytes: number };
+  limits: { maxTurns: number; maxRunSeconds: number; maxWorkers: number; maxTotalTokens: number; maxSourceBytes: number; maxTaskBytes: number };
   runtime: { ready: boolean; message: string };
 };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
@@ -111,4 +136,4 @@ export type WorkerMessage =
   | { type: 'observation'; observation: WebObservation }
   | { type: 'catalog'; catalog: unknown }
   | { type: 'result'; result: WebResult }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; failure?: WebFailure };

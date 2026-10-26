@@ -1,5 +1,5 @@
 import type { WebObservation, WebPlanProposal, WebCommandResult, WebPlanTask, WebPlanGroup } from '../collaboration';
-import { commandId, createElement, errorText, escapeHtml as h, jsonText, patchSection, codeBlock, type WebApi } from './collaborationUi';
+import { commandId, createElement, errorText, escapeHtml as h, jsonText, patchSection, codeBlock, editStatusLabel, type WebApi } from './collaborationUi';
 
 type PlanDraft = { text: string; receipt?: WebCommandResult; previewText?: string; error?: string; notice?: string; submitted?: boolean;
   busy?: boolean; observation?: WebObservation; comparison?: WebObservation['plan']; pending?: { proposal: WebPlanProposal; missing?: boolean } };
@@ -78,7 +78,7 @@ export class TaskPlanEditor {
       draft.pending = undefined;
       if (pending) {
         draft.error = undefined;
-        draft.notice = '提交回执不代表证明已重新检查，请在计划记录中查看应用状态与 recheck。';
+        draft.notice = '提交回执不代表证明已重新检查，请在计划记录中查看应用状态与重新检查结果。';
       }
     }
     if (observation.webRunId === this.runId && this.dialog.open) {
@@ -294,7 +294,7 @@ export class TaskPlanEditor {
   }
   private renderStatus() {
     const draft = this.draft(), receipt = draft.receipt;
-    patchSection(this.dialog.querySelector('[data-plan-receipt]')!, `${draft.error ? `<p class="collab-error">${h(draft.error)}</p>` : ''}${draft.notice ? `<p class="collab-help">${h(draft.notice)}</p>` : ''}${draft.pending ? `<p class="collab-notice">提交 ${h(draft.pending.proposal.id)} 的结果尚未确认，请先核对原命令回执。当前草稿已保留。${draft.pending.missing ? '尚未找到回执；可重试原提交，重试会保留原命令内容和 ID。' : ''}</p><details class="collab-detail"><summary>待核对的原提交</summary>${codeBlock(draft.pending.proposal)}</details>` : ''}${receipt ? `<p class="collab-notice">回执 ${h(receipt.id)} · ${h(receipt.status)}${receipt.reason ? ` · ${h(receipt.reason)}` : ''}</p>${receipt.changes ? codeBlock(receipt.changes) : ''}${receipt.affectedTaskIds?.length ? `<p>受影响任务：${h(receipt.affectedTaskIds.join(', '))}</p>` : ''}${receipt.edit?.recheck ? `<div data-plan-recheck><p>重新检查 · ${h(receipt.edit.recheck.status)}</p><details class="collab-detail" data-detail-key="plan-recheck"><summary>各任务重新检查记录</summary>${codeBlock(receipt.edit.recheck)}</details></div>` : ''}` : ''}`);
+    patchSection(this.dialog.querySelector('[data-plan-receipt]')!, `${draft.error ? `<p class="collab-error">${h(draft.error)}</p>` : ''}${draft.notice ? `<p class="collab-help">${h(draft.notice)}</p>` : ''}${draft.pending ? `<p class="collab-notice">提交 ${h(draft.pending.proposal.id)} 的结果尚未确认，请先核对原命令回执。当前草稿已保留。${draft.pending.missing ? '尚未找到回执；可重试原提交，重试会保留原命令内容和 ID。' : ''}</p><details class="collab-detail"><summary>待核对的原提交</summary>${codeBlock(draft.pending.proposal)}</details>` : ''}${receipt ? `<p class="collab-notice">回执 ${h(receipt.id)} · ${h(editStatusLabel(receipt.status))}${receipt.reason ? ` · ${h(receipt.reason)}` : ''}</p>${receipt.changes ? codeBlock(receipt.changes) : ''}${receipt.affectedTaskIds?.length ? `<p>受影响任务：${h(receipt.affectedTaskIds.join(', '))}</p>` : ''}${receipt.edit?.recheck ? `<div data-plan-recheck><p>${h(editStatusLabel(receipt.edit.recheck.status))}</p><details class="collab-detail" data-detail-key="plan-recheck"><summary>各任务重新检查记录</summary>${codeBlock(receipt.edit.recheck)}</details></div>` : ''}` : ''}`);
     patchSection(this.dialog.querySelector('[data-plan-comparison]')!, draft.comparison ? `<details class="collab-detail" open><summary>当前服务器计划 · 本地草稿保留</summary>${codeBlock(draft.comparison)}</details>` : '');
     for (const control of this.dialog.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input,textarea,select,button:not([data-plan-close])')) control.disabled = Boolean(draft.busy);
     let plan: WebPlanProposal | undefined;
@@ -355,7 +355,7 @@ export class TaskPlanEditor {
     draft.receipt = this.observedReceipt(draft, receipt); draft.error = undefined;
     if (draft.receipt.status !== 'unknown') draft.pending = undefined;
     else if (draft.pending) draft.pending.missing = false;
-    draft.notice = '提交回执不代表证明已重新检查，请在计划记录中查看应用状态与 recheck。';
+    draft.notice = '提交回执不代表证明已重新检查，请在计划记录中查看应用状态与重新检查结果。';
   }
   private observedReceipt(draft: PlanDraft, receipt: WebCommandResult): WebCommandResult {
     const edit = draft.observation?.inspection.edits.find(edit => edit.id === receipt.id)
