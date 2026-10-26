@@ -12,7 +12,8 @@ import { resolveMathProofEnvironment, acquireMathProofEnvironmentLease } from ".
  */
 
 import crypto from 'node:crypto';
-import { assertMathConstructionSources, mathLocalModuleBuildOrder, pruneMathConstructionCheckout } from "./mathConstructionSources";
+import { assertMathConstructionSources, LAKE_CONFIGURATION_FILES, mathLocalModuleGraph, pruneMathConstructionCheckout, type MathLocalModule } from "./mathConstructionSources";
+import { createLeanModuleBuilder, leanModuleClosure } from "./leanModuleBuild";
 import { spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,7 +23,7 @@ import { assertMathProblemContractMatchesOfficialManifest, isMathFoundationalLea
 import { readMathematicsReceiptSecret } from "./receiptAttestation";
 import { resolveMathematicsRuntimeEnvironment } from "./mathRuntimeEnvironment";
 import { createMathOperationLimiter, forEachWithConcurrency } from "./concurrency";
-import { mathDigest, mathFileIdentity, readMathText } from './mathRuntimeIo';
+import { canonicalMathJson, mathDigest, mathFileIdentity, readMathFile, readMathText } from './mathRuntimeIo';
 import { repositoryRelativePath } from './paths';
 import { leanReferenceCommands, parseLeanReferences, type LeanDeclarationReferences } from './leanReferences';
 import { leanDeclarationContextCommands } from './leanSource';
@@ -941,6 +942,15 @@ const LEAN_SANDBOX_ADDRESS_SPACE_KB = 32 * 1024 * 1024;
 // old 256-process cap made Lean's pthread_create fail with EAGAIN while
 // building Mathlib dependencies; 4096 keeps a bounded fork-bomb guard.
 const LEAN_SANDBOX_PROCESS_LIMIT = 4096;
+/** Exhausting the fixed sandbox limits is a property of the checked source, not of the host. */
+export const LEAN_MEMORY_LIMIT_ERROR = 'Lean exhausted the verifier memory limit; reduce the checked computation or split it across separately compiled modules.';
+export const LEAN_STACK_LIMIT_ERROR = 'Lean exhausted the verifier stack limit; reduce the recursion depth of the checked term or split it across separately compiled modules.';
+
+/** Map Lean's runtime panic text to a resource-limit error; other crashes stay unexplained. */
+export function leanResourceLimitError(output: string): string | undefined {
+  if (/(?:^|\n)INTERNAL PANIC: out of memory/u.test(output)) return LEAN_MEMORY_LIMIT_ERROR;
+  if (/(?:^|\n)Stack overflow detected\. Aborting\./u.test(output)) return LEAN_STACK_LIMIT_ERROR;
+}
 
 // Local verification may use an explicitly supplied test/toolchain wrapper
 // (for example a Node-based Lean harness).  Keep the same sandbox boundary but
@@ -2037,6 +2047,75 @@ const isUnavailableProcess = (result: ProcessResult): boolean => {
   );
 };
 
+/** Everything other than local sources that can change a compiled module; undefined disables the host cache. */
+const leanModuleEnvironmentDigest = (input: {
+  projectRoot: string; verifierCommand: string; env: NodeJS.ProcessEnv; lakePackagesPath?: string;
+}): string | undefined => {
+  const toolIdentity = formalVerificationToolIdentity(input.projectRoot, input.env);
+  if (!toolIdentity) return undefined;
+  const executable = resolveCommandForFingerprint(input.verifierCommand, input.env);
+  return mathDigest(canonicalMathJson({
+    toolIdentity, verifierCommand: input.verifierCommand,
+    verifierExecutable: executable ? fingerprintVerifierDependency(executable) : null,
+    // The overrides file is rewritten for each sandbox; the manifest pins the packages it binds.
+    configuration: LAKE_CONFIGURATION_FILES.filter(file => file !== '.lake/package-overrides.json').map(file => {
+      const absolute = path.join(input.projectRoot, file);
+      return [file, fs.existsSync(absolute) ? mathDigest(fs.readFileSync(absolute)) : null];
+    }),
+    packages: fingerprintLakePackages(input.projectRoot, input.lakePackagesPath),
+    testAxioms: input.env.DEEPSCIENTIST_TEST_LEAN_AXIOMS ?? null,
+  }));
+};
+
+const leanModuleSucceeded = (result: ProcessResult) => result.exitCode === 0 && !result.timedOut && !result.aborted;
+
+/** Compile each project-local module of this checkout in its own sandboxed root. */
+function createVerifierModuleBuilder(input: {
+  temporaryRoot: string; checkoutRoot: string; verificationProjectRoot: string; relativeProjectRoot: string;
+  verifierCommand: string; runtimeEnvironment: NodeJS.ProcessEnv; lakePackagesPath?: string;
+  sandboxCapability: ReturnType<typeof inspectMathematicsSandboxBackends>;
+  request: MathematicsVerifierBatchRequest; options: MathematicsVerifierExecutionOptions; batchDeadlineAt: number;
+}) {
+  const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+  const relativeProjectRoot = input.relativeProjectRoot.split(path.sep).join('/');
+  return createLeanModuleBuilder<ProcessResult>({
+    sourceProjectRoot: input.verificationProjectRoot,
+    scratchRoot: path.join(input.temporaryRoot, 'modules'),
+    relativeProjectRoot,
+    prepareProject: projectRoot => {
+      for (const file of LAKE_CONFIGURATION_FILES) {
+        const source = path.join(input.verificationProjectRoot, file);
+        if (!fs.existsSync(source)) continue;
+        assertNoSymlinkTraversal(input.checkoutRoot, source, 'Lake configuration');
+        fs.mkdirSync(path.dirname(path.join(projectRoot, file)), { recursive: true });
+        fs.copyFileSync(source, path.join(projectRoot, file));
+      }
+      if (input.lakePackagesPath) fs.mkdirSync(path.join(projectRoot, '.lake', 'packages'), { recursive: true });
+    },
+    invalid: message => ({ ...unavailableProcessResult(message), errorCode: 'MODULE_BUILD_INVALID' }),
+    hostCache: () => {
+      const secret = readMathematicsReceiptSecret();
+      const environmentDigest = secret && leanModuleEnvironmentDigest({ projectRoot: input.verificationProjectRoot,
+        verifierCommand: input.verifierCommand, env: input.runtimeEnvironment, lakePackagesPath: input.lakePackagesPath });
+      return secret && environmentDigest ? { secret, environmentDigest,
+        directory: path.join(process.env.DEEPSCIENTIST_CACHE_DIR || os.tmpdir(), 'mathematics', 'lean-modules-v1') } : undefined;
+    },
+    compile: async (module: MathLocalModule, root: string) => {
+      const result = await withLeanProcessSlot(() => {
+        const availableMs = input.batchDeadlineAt - Date.now();
+        if (availableMs < MIN_TIMEOUT_MS) throw new FormalVerificationBatchDeadlineError();
+        const output = `.lake/build/lib/lean/${path.posix.relative(module.sourceRoot, module.file).replace(/\.lean$/u, '.olean')}`;
+        return runLeanSandboxed({ checkoutRoot: root, projectRelative: relativeProjectRoot, command: input.verifierCommand,
+          args: ['env', '/bin/sh', '-ceu', `mkdir -p ${quote(path.posix.dirname(output))}\nexec lean -j1 -R ${quote(module.sourceRoot)} -o ${quote(output)} ${quote(module.file)} 1>&2`],
+          env: input.runtimeEnvironment, sandboxCapability: input.sandboxCapability, signal: input.options.signal,
+          timeoutMs: Math.min(clampTimeout(input.request.timeoutMs), availableMs), outputLimit: MATH_PROCESS_OUTPUT_LIMIT,
+          lakePackagesPath: input.lakePackagesPath });
+      }, input.options.signal);
+      return leanModuleSucceeded(result) ? { ok: true as const } : { ok: false as const, failure: result };
+    },
+  });
+}
+
 function classifyLeanCheck(result: ProcessResult, context: {
   command: string; batchDeadlineAt: number; projectRoot: string; packagesPath?: string; exportError?: string;
 }): Pick<MathematicsVerifierResult, 'status' | 'verifier' | 'error'> {
@@ -2052,6 +2131,9 @@ function classifyLeanCheck(result: ProcessResult, context: {
       return blocked('Lean verification environment could not initialize; retry the same frozen candidate after restoring dependencies.');
     if (hasUnavailablePinnedLeanModule(`${result.stdout}\n${result.stderr}`, context.projectRoot, context.packagesPath))
       return blocked('Lean verification cannot load a module supplied by the pinned dependencies; restore the compiled cache or search path and retry the same frozen candidate.');
+    // Lean's own panics under the sandbox's fixed limits; an external kill has no such message.
+    const resourceLimit = leanResourceLimitError(`${result.stdout}\n${result.stderr}`);
+    if (resourceLimit) return { status: 'failed', verifier: 'lean-kernel', error: resourceLimit };
     return { status: 'failed', verifier: 'lean-kernel', error: `Lean exited with status ${result.exitCode ?? 'unknown'}.` };
   }
   return context.exportError ? blocked(context.exportError) : { status: 'kernel_verified', verifier: 'lean-kernel' };
@@ -2065,6 +2147,7 @@ type FormalFileVerificationContext = {
   verificationProjectRoot: string; relativeProjectRoot: string; checkoutRoot: string;
   runtimeEnvironment: NodeJS.ProcessEnv; lakePackagesPath?: string;
   sandboxCapability: ReturnType<typeof inspectMathematicsSandboxBackends>;
+  moduleBuilder: ReturnType<typeof createLeanModuleBuilder<ProcessResult>>;
   blobIdsByPath: ReadonlyMap<string, { committed?: string; working?: string }>;
   emit: <Kind extends MathematicsVerificationEventKind>(kind: Kind, payload: MathematicsVerificationEventPayloadMap[Kind]) => void;
   publishResults: (file: PreparedFile, status: MathematicsVerifierStatus, verifier: MathematicsVerifierResult['verifier'],
@@ -2156,7 +2239,7 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
   // so one Lean kernel run both compiles the proof and exports declaration types.
   // eslint-disable-next-line no-await-in-loop
   const localModules = (options.prepareLocalDependencies || options.collectDeclarationReferences) && lakeFile
-    ? mathLocalModuleBuildOrder(verificationProjectRoot, file.relativeProofPath) : undefined;
+    ? mathLocalModuleGraph(verificationProjectRoot, file.relativeProofPath) : undefined;
   const helperModule =
     localModules && (options.expectedDeclarationType || options.expectedDeclarationTypes || options.forbiddenImportModules || options.dependencyCandidates || options.collectDeclarationReferences)
       ? localModules!.at(-1)!.module
@@ -2184,35 +2267,40 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
   const verificationPath = declarationQuery?.relativePath || file.relativeProofPath;
   let processResult: ProcessResult;
   const requestedTimeoutMs = clampTimeout(request.timeoutMs);
+  const modulesToBuild = helperModule ? localModules : localModules?.slice(0, -1);
+  const runFinal = (root: string) => withLeanProcessSlot(async () => {
+    const availableMs = batchDeadlineAt - Date.now();
+    if (availableMs < MIN_TIMEOUT_MS) throw new FormalVerificationBatchDeadlineError();
+    return runLeanSandboxed({
+      checkoutRoot: root,
+      projectRelative: relativeProjectRoot,
+      command: verifierCommand,
+      args: lakeFile ? ['env', 'lean', '-j', '1', verificationPath] : ['-j', '1', verificationPath],
+      env: runtimeEnvironment,
+      sandboxCapability: context.sandboxCapability,
+      signal: options.signal,
+      timeoutMs: Math.min(requestedTimeoutMs, availableMs),
+      outputLimit: MATH_PROCESS_OUTPUT_LIMIT * Math.min(64, verifiableItems.length),
+      lakePackagesPath,
+    });
+  }, options.signal);
   try {
-    processResult = await withLeanProcessSlot(async () => {
-      const availableMs = batchDeadlineAt - Date.now();
-      if (availableMs < MIN_TIMEOUT_MS) throw new FormalVerificationBatchDeadlineError();
-      const modulesToBuild = helperModule ? localModules : localModules?.slice(0, -1);
-      // Keep dependency compilation and declaration queries under one sandbox
-      // invocation, so the shared compiler lock covers the entire check.
-      let args = lakeFile ? ['env', 'lean', '-j', '1', verificationPath] : ['-j', '1', verificationPath];
-      if (modulesToBuild?.length) {
-        const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
-        const commands = modulesToBuild.map(module => {
-          const output = `.lake/build/lib/lean/${path.posix.relative(module.sourceRoot, module.file).replace(/\.lean$/u, '.olean')}`;
-          return `mkdir -p ${quote(path.posix.dirname(output))}\nlean -j1 -R ${quote(module.sourceRoot)} -o ${quote(output)} ${quote(module.file)} 1>&2`;
-        }).join('\n');
-        args = ['env', '/bin/sh', '-ceu', `${commands}\nexec lean -j1 ${quote(verificationPath)}`];
+    if (!modulesToBuild?.length) processResult = await runFinal(checkoutRoot);
+    else {
+      // Local imports compile in isolated roots (shared within the batch, reused
+      // across batches); the final run sees only the query and their artifacts.
+      const startedAt = Date.now();
+      const built = await context.moduleBuilder.build(modulesToBuild);
+      if ('failure' in built) processResult = built.failure;
+      else {
+        const closure = leanModuleClosure(built.modules);
+        const compiled = closure.filter(module => module.origin === 'compiled').length;
+        diagnostic('process', 'info', `Local modules: ${compiled} compiled, ${closure.length - compiled} restored from the module cache.`);
+        const target = readMathFile(path.join(verificationProjectRoot, ...verificationPath.split('/'))).bytes;
+        processResult = await context.moduleBuilder.withProject(built.modules, new Map([[verificationPath, target]]), runFinal);
       }
-      return runLeanSandboxed({
-        checkoutRoot: checkoutRoot,
-        projectRelative: relativeProjectRoot,
-        command: verifierCommand,
-        args,
-        env: runtimeEnvironment,
-        sandboxCapability: context.sandboxCapability,
-        signal: options.signal,
-        timeoutMs: Math.min(requestedTimeoutMs, availableMs),
-        outputLimit: MATH_PROCESS_OUTPUT_LIMIT * Math.min(64, verifiableItems.length),
-        lakePackagesPath,
-      });
-    }, options.signal);
+      processResult = { ...processResult, durationMs: Date.now() - startedAt };
+    }
   } catch (error) {
     if (error instanceof FormalVerificationBatchDeadlineError) {
       diagnostic('process', 'error', error.message);
@@ -2501,7 +2589,7 @@ async function checkManyFormalVerificationsUnbounded(
     };
     const checkout = await withVerifierCheckout({ repositoryRoot: repoRoot, targetCommit,
       temporaryPrefix: 'deepscientist-lean-', env: options.env, signal: options.signal, onCleanupFailure },
-    async ({ checkoutRoot }) => {
+    async ({ checkoutRoot, temporaryRoot }) => {
       const verificationProjectRoot = path.join(checkoutRoot, relativeProjectRoot);
       if (options.prepareLocalDependencies) {
         const buildPath = path.join(verificationProjectRoot, '.lake', 'build');
@@ -2527,10 +2615,12 @@ async function checkManyFormalVerificationsUnbounded(
           requiresPackages = Array.isArray(manifest.packages) && manifest.packages.length > 0;
         } catch { /* Lake reports malformed configuration; do not infer a proof failure from startup errors. */ }
       }
+      const sandboxCapability = inspectMathematicsSandboxBackends(runtimeEnvironment);
+      const moduleBuilder = createVerifierModuleBuilder({ temporaryRoot, checkoutRoot, verificationProjectRoot,
+        relativeProjectRoot, verifierCommand, runtimeEnvironment, lakePackagesPath, sandboxCapability, request, options, batchDeadlineAt });
       const context: FormalFileVerificationContext = { request, options, command, verifierCommand, lakeFile,
         requiresPackages, toolUnavailable: false, batchDeadlineAt, verificationProjectRoot, relativeProjectRoot,
-        checkoutRoot, runtimeEnvironment, lakePackagesPath, blobIdsByPath, emit, publishResults,
-        sandboxCapability: inspectMathematicsSandboxBackends(runtimeEnvironment) };
+        checkoutRoot, runtimeEnvironment, lakePackagesPath, blobIdsByPath, emit, publishResults, sandboxCapability, moduleBuilder };
       // The outer semaphore limits batches; independent files share the host's compiler capacity.
       await forEachWithConcurrency(preparedFiles, configuredVerificationConcurrency(), file => verifyFormalFile(file, context));
     });

@@ -80,6 +80,12 @@ Lead 先根据原题、定义和已有发现判断可行的数学路线，再提
 
 配置 `DEEPSCIENTIST_MATH_TOOLS_ROOT` 后，运行开始时读取 `ROOT/manifest.json`（`theorem-os.math-tools.v1`：每个工具的 `name`、`version`、单行 `purpose` 与 `commands`），要求 `ROOT/bin` 恰好包含所列可执行文件，且命令不得占用 `lean`、`lake`、`git`、`python3` 等保留名。清单摘要写入 `DEEPSCIENTIST_MATH_TOOLS_SHA256` 并计入环境摘要，清单变化后恢复会以身份变更拒绝。`ROOT/bin` 追加在 PATH 末尾，不遮蔽固定 Lean 与系统命令；M4 在四角色指令中列出工具与用途，要求在 `$TMPDIR` 下运行、限时、限 4 线程，并把命令、输入和关键输出写入 RESEARCH.md。计算结果是 advisory，须改写成 Lean 陈述并证明，不能代替 M2 或 S3 验收。未配置时指令与 PATH 不变。
 
+有限整数计算可用 `theorem-os kernel-certificate --input FILE` 或 `--json JSON` 生成内核检查证书（`theorem-os.kernel-certificate.v1`）。`claim:"box"` 对整数区间的笛卡尔积断言单行 Bool `check`；`claim:"witnesses"` 对区间中每个值逐行给出见证。生成器按 `pointsPerChunk` / `rowsPerChunk` 切块：多模块时首模块放共享定义，中间模块放各块定理，末模块用 `decide +kernel` 拼出 `NAME.holds`，不用 `native_decide`；`kernelModule` 中的 KernelCompute 库只依赖 `propext` 与 `Quot.sound`。不带 `--workspace` 时只输出计划与 `inputDigest`；`--workspace` 写入时拒绝覆盖内容不同的非空文件，除非加 `--replace`。生成文本本身不是证据，只有 Lean 接受全部模块才算。Lean-Eval 引导加 `--certificate-slots N`（1–64）时，solver ownership 额外包含冻结的 `Submission/Certificates/Kernel.lean`（宿主库原文）和空的 `Part01.lean`…`PartNN.lean`，receipt 记录 `certificateSlots`，官方门重新核对这份 ownership。owned 模块可互相 import（无环）。拥有该槽位时，M4 指令把 PartNN 压缩成一个范围、不把 Kernel.lean 列为可编辑，加入证书说明（先用 check-lean 检查第一块、桥接引理名、在 RESEARCH.md 记录 spec 与 `inputDigest`），Lead 的 proofPath 候选排除证书模块；research `sources` 仍须包含全部 owned Lean 文件。
+
+M2 编译项目本地模块时，每个模块在只含其源码与传递依赖产物的临时根中单独编译，同一批次内按 import DAG 并行（受 `DEEPSCIENTIST_MATH_VERIFIER_CONCURRENCY` 限制），按图序报告第一个失败；目标文件最后在只含自身与依赖闭包产物的新根中检查。模块键绑定环境摘要（工具身份、verifier 可执行文件指纹、Lake 配置与包指纹）、文件、源码摘要和依赖键。有 receipt secret 时，`.olean` 等产物写入 `$DEEPSCIENTIST_CACHE_DIR`（缺省为系统临时目录）下的 `mathematics/lean-modules-v1`，manifest 用 HMAC 签名；恢复时重新哈希每个文件，拒绝链接与硬链接并删除损坏条目，按最近使用保留至多 1024 条、2 GiB。无 secret 时只在批内复用。官方门不读这个缓存。真实 bwrap 端到端检查：`DEEPSCIENTIST_TEST_LEAN_SANDBOX=1 npx vitest run tests/verifierModuleBuild.test.ts`。
+
+Lean 在 verifier 沙箱的固定上限内自己报出 `INTERNAL PANIC: out of memory`（地址空间 32 GiB）或 `Stack overflow detected. Aborting.`（栈 8 MiB）时，M2 记为 `failed`，错误为固定的 memory / stack limit 文本，而不是无诊断的退出码。这类失败只在单目标检查中归因到该目标：交付检查把它当作确定失败，写入失败记忆并交还 worker 修复，同一输入不再重检；单目标合并检查照常阻塞并唤醒 Lead。合批复检或合批集成出现这类失败时不归因到任何成员，回退为逐个检查。外部 kill、线程创建失败等没有这两行原文的崩溃仍按验证器不可用处理。此前 290 运行中一个 `decide +kernel` 冻结证明超出 32 GiB 后被当作 `math_verifier_unavailable`，每次恢复都重检同一输入并终止运行。
+
 本轮仅验证调度、作者隔离、上下文和会话恢复行为，尚无实题成功率收益证据。停止的求解任务没有部署或重启。
 
 ## 减少无效消耗
@@ -232,6 +238,14 @@ worker 交付日志按行持久保存游标；停止、验证器不可用或宿�
 已经实际失败的原题前沿缺少可派发、可继续或正在运行的支持工作时，Lead 可以在独立探索仍可运行或正在运行时发起定向恢复。恢复规划不占证明槽，独立工作填满同组并发容量也不阻止规划；任务及组的启用、回合预算和路线阻塞约束仍然生效。恢复沿用精确数学输入去重；相同输入已评估后，无关进展不会重复创建恢复请求。已有的条件连接验证、证明集成和陈述审阅继续按原规则执行；从未尝试的导入任务仍走原来的首次恢复流程。连续研究模式可在已有恢复结论上补充定向调查，独立探索不被自动取消。
 
 研究或进度成果可用 `mathematicalGap` 持续记录原题的数学缺口：精确 consumer、上一缺口、实际减少的部分、仍缺的量词和强度、证据范围及重试条件，后续报告可引用 previousDeliveryId。宿主绑定问题、环境、来源、消费者和传递依赖版本；输入变化后保留旧证据为历史，不能把弱结果或条件充分性当成核心前提已证。组私有范围同时约束历史与当前来源/消费者。必需上下文最多展示八项、每项 8 KiB、合计 32 KiB，省略内容有摘要、数量和 `COOPERATION.json.mathematicalGaps` 完整读取句柄。
+
+原题路径复查（`goalPathReview`）逐原题列出前沿输入的状态：可运行、进行中、暂停、停止、路线关闭（含组回合预算耗尽）、阻塞、停放或缺失。没有任何前沿输入可运行的活动原题记为 stalled；原题自身或其所在组被显式暂停、停止时记为 deferred，不算 stalled。对 stalled 原题，宿主按前沿状态给出候选动作：resume、reopen-route、revise、add-task、connect（已检查的离路 lemma 结论相同，可附额外前提）、assume、decompose。connect 只是语法匹配，仍需 Lean 检查；assume 只能让原题条件闭合。Lead 的规划证据带 `goalPath` 字段，最多四个原题、每题六个前沿输入及八个候选；存在 stalled 原题时追加说明，要求本次修订采用其中一个候选，或在 RESEARCH.md 写明都不适用的数学理由及何种变化会改变结论。
+
+stalled 由持久状态重新计算并记入 `goalPathStall`，不作为保存的唤醒请求。新的 stall 欠 Lead 一次派发：其他 worker 忙碌、这次暂停由 Lead 自己决定、规划输入摘要未变，都不抵消这次派发。它排在已有的阻塞重评与未尝试前沿的机械恢复之后，并等待该原题路线上已在进行的工作结束（运行或已交付的任务、就绪的条件复检、类型准备、正在进行的陈述审阅），因为这次回合要回应这些结果；路线外的工作不推迟它。派发时已展示这些 stalled 原题的 Lead 回合一经结算即视为作答，重新暂停同一原题不再追问，直到新证据改变 stall 摘要。已应用的人工编辑本身就是它所造成 stall 的规划决定，不唤醒 Lead；编辑前已欠 Lead 的原题仍然欠着。
+
+任务可附带蓝图字段 `informalProof`（不超过 2000 字符）与 `citations`（最多八条，每条不超过 300 字符），写出预期论证与文献来源。它们随任务派发进入 worker 的必需上下文，并在续跑交接和运行检查中保留展示，但不进入 taskVersion，不会让已检查任务失效，也不构成证明证据。
+
+这一机制来自 Lean-Eval 290 的保存状态。27 个保存状态中有 11 个 stalled，其中 10 个是 Lead 暂停了 `main_290_goal` 唯一的前沿 `bounded_rank_290`：前沿从此为空，既没有任务派发，也没有唤醒 Lead；Lead 后续仍有回合，但没有 stall 证据，研究者继续在路线外工作。其中 6 个运行已检查离路 lemma `truant_two_premise_glue`，它在两个额外前提下给出相同结论，却从未被接入；复查现在在这里给出 connect 候选。
 
 ## 当前任务的知识复用
 

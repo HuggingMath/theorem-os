@@ -37,7 +37,7 @@ if (args.includes('--help') || args.includes('-h')) {
     bundle: true,
     platform: 'node',
     format: 'cjs',
-    loader: { '.py': 'text' },
+    loader: { '.py': 'text', '.lean': 'text' },
     tsconfig: path.join(root, 'tsconfig.json'),
     metafile: true,
     logLevel: 'silent',

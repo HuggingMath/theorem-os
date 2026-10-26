@@ -13,7 +13,7 @@ import { readMathResponse } from '../src/solver/deliveries';
 import { recordRouteBlockers, refreshRouteBlockers } from '../src/solver/routeControl';
 import { ownedSourceDigest, type TaskProof } from '../src/solver/cooperativeProof';
 import { temporaryDirectory } from './helpers/files';
-import { cooperativeResearch } from './helpers/cooperation';
+import { answeredGoalPathStall, cooperativeResearch } from './helpers/cooperation';
 
 const node = (id: string, kind: TaskRecord['task']['kind'] = 'lemma', dependsOn: string[] = []): TaskRecord => ({
   task: { id, kind, objective: id, dependsOn, revision: 0,
@@ -237,6 +237,7 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
       else (cooperative as any).input.modules = { ...directSolverModules,
         M5: { ...directSolverModules.M5, assign: () => undefined } };
       state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
+      answeredGoalPathStall(state);
       expect(await cooperative.next(lead, budget)).toBeUndefined();
       expect(core.status).toBe('blocked'); expect(core.attempts).toBe(0);
     });
@@ -268,6 +269,7 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     state.cooperation!.tasks.push(prerequisite, node('ambient_extension', 'lemma', ['supporting_compactness']));
     state.cooperation!.planVersion = (cooperative as any).planVersion();
     state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
+    answeredGoalPathStall(state);
     const leadNext = cooperative.next(lead, budget);
     await vi.waitFor(() => expect(prerequisite.status).toBe('pending'));
     const work = await cooperative.next(researcher, budget);
@@ -446,13 +448,127 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     expect(core.status).toBe('blocked'); expect(core.routeParking).toHaveLength(1);
   });
 
-  it.each(['paused-task', 'paused-group', 'spent-group'])('does not reconsider an explicitly %s frontier', async control => {
+  // An explicit pause of a frontier input is respected once the Lead has seen what it leaves: the stalled original goal
+  // path is owed one Lead turn with its candidates, and the unchanged frontier then stays idle, also across restore.
+  it.each(['paused-task', 'spent-group'])('asks once about an explicitly %s frontier, then keeps it', async control => {
     const core = parkCore();
     if (control === 'paused-task') core.task = { ...core.task, status: 'paused' };
-    else if (control === 'paused-group') state.cooperation!.groups![0].group.status = 'paused';
     else { state.cooperation!.groups![0].group.maxTurns = 1; state.cooperation!.groups![0].turns = 1; }
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    await assessFrontier();
+    expect(emit).toHaveBeenCalledWith('goal_path_stalled', expect.objectContaining({ goalIds: ['goal'], taskIds: ['core'] }));
+    expect(emit).toHaveBeenCalledWith('goal_path_stall_dispatched', { digest: state.cooperation!.goalPathStall!.digest });
+    expect(state.cooperation!.goalPathStall).toMatchObject({ active: true, goalIds: ['goal'], answeredAt: expect.any(Number) });
     expect(await cooperative.next(lead, budget)).toBeUndefined();
     expect(core.status).toBe('blocked');
+    const resumed = resume(JSON.parse(JSON.stringify(state)));
+    vi.spyOn(resumed as any, 'seed').mockReturnValue(seed);
+    try { expect(await resumed.next(lead, budget)).toBeUndefined(); }
+    finally { await resumed.stop(); }
+  });
+
+  it.each(['paused-group', 'paused-goal'])('does not reconsider an original goal set aside by its %s', async control => {
+    const core = parkCore();
+    const goal = state.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    if (control === 'paused-group') state.cooperation!.groups![0].group.status = 'paused';
+    else goal.task = { ...goal.task, status: 'paused' };
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    expect(await cooperative.next(lead, budget)).toBeUndefined();
+    expect(core.status).toBe('blocked');
+    expect(emit).not.toHaveBeenCalledWith('goal_path_stalled', expect.anything());
+    expect(state.cooperation!.goalPathStall).toBeUndefined();
+  });
+
+  it('asks the Lead once more when its own plan pauses the only frontier of an original goal', async () => {
+    prepareFailedCore();
+    const core = state.cooperation!.tasks.find(node => node.task.id === 'core')!;
+    core.status = 'pending'; core.attempts = 0; core.feedback = undefined;
+    requestLeadWake(state.cooperation!.leadWakes!, 'progress-decision-requested');
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    const first = await getLead();
+    expect(emit).not.toHaveBeenCalledWith('goal_path_stall_dispatched', expect.anything());
+    const commit = planCommit(state.cooperation!.tasks.map(node => node.task.id === 'core' ? { ...node.task, status: 'paused' as const } : node.task));
+    await cooperative.deliver(lead, first, commit);
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'core')!.task.status).toBe('paused');
+    expect(state.cooperation!.lastLeadInputDigest).toBe((cooperative as any).planningInputDigest());
+    const stall = state.cooperation!.goalPathStall!;
+    expect(stall).toMatchObject({ active: true, goalIds: ['goal'], taskIds: ['core'] });
+    expect(stall.answeredAt).toBeUndefined();
+    // The deciding turn never saw the stall its pause produced, so the unchanged input does not absorb it.
+    const owed = await getLead();
+    expect(emit).toHaveBeenCalledWith('goal_path_stall_dispatched', { digest: stall.digest });
+    await cooperative.deliver(lead, owed, commit);
+    expect(state.cooperation!.goalPathStall).toMatchObject({ digest: stall.digest, answeredAt: expect.any(Number) });
+    expect(await cooperative.next(lead, budget)).toBeUndefined();
+  });
+
+  it('treats a re-pause of a goal the Lead was shown as answered and re-asks after a new stall', async () => {
+    prepareFailedCore();
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    const first = await getLead();
+    expect(emit).toHaveBeenCalledWith('goal_path_stall_dispatched', expect.anything());
+    const commit = planCommit(state.cooperation!.tasks.map(node => node.task.id === 'core' ? { ...node.task, status: 'paused' as const } : node.task));
+    await cooperative.deliver(lead, first, commit);
+    const repaused = state.cooperation!.goalPathStall!;
+    expect(repaused.answeredAt).toEqual(expect.any(Number));
+    expect(await cooperative.next(lead, budget)).toBeUndefined();
+    // The same goal stalling differently through peer-side evidence is new input for the Lead.
+    const core = state.cooperation!.tasks.find(node => node.task.id === 'core')!;
+    core.feedback = 'A newly recorded obstruction on the paused route.';
+    const again = await getLead();
+    expect(state.cooperation!.goalPathStall!.digest).not.toBe(repaused.digest);
+    expect(emit).toHaveBeenLastCalledWith('goal_path_stall_dispatched', { digest: state.cooperation!.goalPathStall!.digest });
+    await cooperative.deliver(lead, again, commit);
+    expect(await cooperative.next(lead, budget)).toBeUndefined();
+  });
+
+  it('takes an applied human pause of the only frontier as its decision, but keeps a stall the Lead was already owed', async () => {
+    prepareFailedCore();
+    const find = (id: string) => state.cooperation!.tasks.find(node => node.task.id === id)!;
+    Object.assign(find('core'), { status: 'pending', attempts: 0, feedback: undefined });
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    const edit = (id: string, core: Partial<TaskRecord['task']>) => {
+      const record = { id, status: 'received' as const, receivedAt: Date.now() };
+      (state.cooperation!.edits ??= []).push(record);
+      return (cooperative as any).acceptPlan(parseCooperationPlan(state.problem, {
+        tasks: state.cooperation!.tasks.map(node => node.task.id === 'core' ? { ...node.task, ...core } : node.task),
+        groups: state.cooperation!.groups!.map(route => route.group) }), record);
+    };
+    await edit('operator-pause', { status: 'paused' });
+    expect(find('core').task.status).toBe('paused');
+    expect(state.cooperation!.goalPathStall).toMatchObject({ active: true, goalIds: ['goal'], answeredAt: expect.any(Number) });
+    expect(emit).toHaveBeenCalledWith('goal_path_stalled', expect.objectContaining({ goalIds: ['goal'], answeredByEdit: 'operator-pause' }));
+    expect(await cooperative.next(lead, budget)).toBeUndefined();
+    expect(emit).not.toHaveBeenCalledWith('goal_path_stall_dispatched', expect.anything());
+    // New peer evidence makes the stall owed; a later edit that only revises the paused input does not answer it.
+    find('core').feedback = 'A newly recorded obstruction on the paused route.';
+    (cooperative as any).refreshGoalPathStall();
+    expect(state.cooperation!.goalPathStall!.answeredAt).toBeUndefined();
+    await edit('operator-revision', { objective: 'Prove the core estimate in its revised form' });
+    expect(state.cooperation!.goalPathStall).toMatchObject({ active: true, goalIds: ['goal'] });
+    expect(state.cooperation!.goalPathStall!.answeredAt).toBeUndefined();
+    await getLead();
+    expect(emit).toHaveBeenCalledWith('goal_path_stall_dispatched', { digest: state.cooperation!.goalPathStall!.digest });
+  });
+
+  it('lets work on a stalled goal\'s own route settle before asking the Lead about the stall', async () => {
+    prepareFailedCore();
+    const find = (id: string) => state.cooperation!.tasks.find(node => node.task.id === id)!;
+    const core = find('core'), goal = find('goal');
+    core.task = { ...core.task, status: 'paused' };
+    goal.status = 'running';
+    goal.assignment = { taskId: 'goal', taskDigest: taskVersion(goal.task), workerId: 'researcher', seedCommit: seed };
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    let settled = false;
+    const leadNext = cooperative.next(lead, budget).then(next => { settled = true; return next; });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(settled).toBe(false);
+    expect(state.cooperation!.goalPathStall).toMatchObject({ active: true, goalIds: ['goal'] });
+    expect(emit).not.toHaveBeenCalledWith('goal_path_stall_dispatched', expect.anything());
+    goal.status = 'pending'; goal.assignment = undefined;
+    (cooperative as any).changed();
+    expect(await leadNext).toMatchObject({ kind: 'lead' });
+    expect(emit).toHaveBeenCalledWith('goal_path_stall_dispatched', { digest: state.cooperation!.goalPathStall!.digest });
   });
 
   it('retries a dispatched but unfinished frontier decision after restoring serialized state', async () => {

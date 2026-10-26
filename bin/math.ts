@@ -21,6 +21,7 @@ const commands: Readonly<Record<string, string>> = {
   knowledge: 'scripts/mathematics/theoremKnowledge.ts',
   'check-lean': 'scripts/mathematics/checkLean.ts',
   'check-finite': 'scripts/mathematics/checkFinite.ts',
+  'kernel-certificate': 'scripts/mathematics/kernelCertificate.ts',
   continuation: 'scripts/mathematics/readContinuation.ts',
   'continuation-seed': 'scripts/mathematics/seedContinuation.ts',
   inspect: 'scripts/mathematics/inspectMathRun.ts',
@@ -49,6 +50,7 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   knowledge            Build and query previously checked theorem sources
   check-lean           Check changed Lean files with bounded diagnostics
   check-finite         Replay finite Boolean constraints and return witnesses
+  kernel-certificate   Generate chunked decide +kernel certificate modules
   continuation         Read or search frozen continuation attachments in bounded pages
   continuation-seed    Initialize a new prepared run from advisory sources and fresh helper checks
   inspect              Read a research report or export a versioned task plan

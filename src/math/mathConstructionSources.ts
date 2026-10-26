@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { isAllowedMathProofSource } from "./mathProofSourcePolicy";
+import { mathDigest } from './mathRuntimeIo';
 
 /** Lake project configuration, in the order recorded by every environment digest. */
 export const LAKE_CONFIGURATION_FILES: readonly string[] = ['lean-toolchain', 'lakefile.toml', 'lakefile.lean', 'lake-manifest.json',
@@ -157,11 +158,14 @@ export function assertMathConstructionSources(rootInput: string, files: readonly
   }
 }
 
-/** Compile only the project-local import closure, reusing frozen package artifacts. */
-export function mathLocalModuleBuildOrder(rootInput: string, input: string | readonly string[]): { file: string; sourceRoot: string; module: string }[] {
+/** A project-local module with the local files it imports and the digest of the bytes they were read from. */
+export type MathLocalModule = { file: string; sourceRoot: string; module: string; imports: string[]; sourceDigest: string };
+
+/** Dependency-first project-local import closure; package imports stay with the frozen package artifacts. */
+export function mathLocalModuleGraph(rootInput: string, input: string | readonly string[]): MathLocalModule[] {
   const root = fs.realpathSync(rootInput);
   const directories = [...localSourceDirectories(root)];
-  const ordered: { file: string; sourceRoot: string; module: string }[] = [];
+  const ordered: MathLocalModule[] = [];
   const visited = new Set<string>();
   const visiting = new Set<string>();
   const visit = (file: string, sourceRoot: string): void => {
@@ -172,13 +176,16 @@ export function mathLocalModuleBuildOrder(rootInput: string, input: string | rea
         fs.realpathSync(absolute) !== absolute || !fs.lstatSync(absolute).isFile())
       throw new Error('math_local_module_source_invalid');
     visiting.add(file);
-    for (const name of mathConstructionImports(fs.readFileSync(absolute, 'utf8'))) {
+    const bytes = fs.readFileSync(absolute), imports: string[] = [];
+    for (const name of mathConstructionImports(bytes.toString('utf8'))) {
       const candidate = localImportFiles(root, directories, localModuleFile(name))[0];
-      if (candidate) visit(candidate.file, candidate.sourceRoot);
+      if (!candidate) continue;
+      visit(candidate.file, candidate.sourceRoot);
+      if (!imports.includes(candidate.file)) imports.push(candidate.file);
     }
     visiting.delete(file);
     visited.add(file);
-    ordered.push({ file, sourceRoot: sourceRoot || '.',
+    ordered.push({ file, sourceRoot: sourceRoot || '.', imports, sourceDigest: mathDigest(bytes),
       module: path.posix.relative(sourceRoot || '.', file).replace(/\.lean$/u, '').replaceAll('/', '.') });
   };
   for (const relative of typeof input === 'string' ? [input] : input) {
@@ -187,6 +194,11 @@ export function mathLocalModuleBuildOrder(rootInput: string, input: string | rea
     visit(relative, sourceRoot);
   }
   return ordered;
+}
+
+/** Compile only the project-local import closure, reusing frozen package artifacts. */
+export function mathLocalModuleBuildOrder(rootInput: string, input: string | readonly string[]): { file: string; sourceRoot: string; module: string }[] {
+  return mathLocalModuleGraph(rootInput, input).map(({ file, sourceRoot, module }) => ({ file, sourceRoot, module }));
 }
 
 /** Called only on the disposable verifier checkout, before it is mounted for Lean. */

@@ -300,6 +300,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     proofImports: z.array(proofImportRecordSchema).optional(),
     initialPlanPublication: planPublication.optional(), planPublication: planPublication.optional(),
     lastLeadPauseInputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+    goalPathStall: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/u), active: z.boolean(), at: safeCount,
+      goalIds: z.array(z.string()), taskIds: z.array(z.string()).max(16), answeredAt: safeCount.optional() }).optional(),
     leadWakes: z.object({ requested: safeCount, consumed: safeCount, settled: safeCount,
       recent: z.array(z.object({ seq: safeCount, reason: z.string(), at: safeCount })).max(64).optional() }).optional(),
     invalidTaskTransitions: z.array(z.object({ taskId: z.string(), from: z.string(), to: z.string(), cause: z.string(),

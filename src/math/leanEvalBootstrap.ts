@@ -20,6 +20,7 @@ import { assertMathCanonicalPath, repositoryRelativePath } from "./paths";
 import { mathDigest as sha256, readMathJson, writeMathJsonDurable } from "./mathRuntimeIo";
 import { mathGitBytes, mathGitText } from './mathGit';
 import { resolveLeanEvalSubmissionName } from "./leanEvalSubmission";
+import { certificateSlotFiles, certificateSlotSource, MAX_CERTIFICATE_SLOTS } from './certificateSlots';
 import { z } from 'zod';
 
 export type LeanEvalBootstrapReceipt = Readonly<{
@@ -45,6 +46,8 @@ export type LeanEvalBootstrapReceipt = Readonly<{
   sourceProjectRoot?: string;
   trustedFiles: readonly string[];
   solverOwnedFiles: readonly string[];
+  /** Number of empty certificate part modules added to the pinned ownership (absent = none). */
+  certificateSlots?: number;
   activeProblemPath: string;
   createdAt: number;
 }>;
@@ -252,7 +255,8 @@ export async function runPersistedLeanEvalOfficialGate(options: {
     ) {
       throw new Error('Persisted Lean-Eval bootstrap official binding identity no longer matches the receipt');
     }
-    const expectedOwnership = pinnedOwnership(sourceRoot, problem, LEAN_EVAL_BENCHMARK_COMMIT);
+    const expectedOwnership = slottedOwnership(pinnedOwnership(sourceRoot, problem, LEAN_EVAL_BENCHMARK_COMMIT),
+      receipt.certificateSlots ?? 0);
     if (
       !sameStringList(receipt.trustedFiles, expectedOwnership.trustedFiles) ||
       !sameStringList(receipt.solverOwnedFiles, expectedOwnership.solverOwnedFiles)
@@ -284,6 +288,8 @@ export type LeanEvalBootstrapOptions = Readonly<{
   useOfficialCredits?: boolean;
   setId?: string;
   cleanupOnFailure?: boolean;
+  /** Add Submission/Certificates/Kernel.lean plus this many empty PartNN.lean modules. */
+  certificateSlots?: number;
 }>;
 
 export function assertLeanEvalBootstrapEligibility(
@@ -416,17 +422,24 @@ const materializeSolverWorkspace = (
   repositoryRoot: string,
   problem: LeanEvalCatalogProblem,
   baselineCommit: string,
-  workspaceRoot: string
+  workspaceRoot: string,
+  certificateSlots = 0
 ): Readonly<{ projectRoot: string; trustedFiles: readonly string[]; solverOwnedFiles: readonly string[] }> => {
   const projectRoot = path.join(workspaceRoot, problem.generatedPath);
   ensureDirectoryNoSymlink(projectRoot);
-  const ownership = pinnedOwnership(repositoryRoot, problem, baselineCommit);
-  for (const file of [...ownership.trustedFiles, ...ownership.solverOwnedFiles]) {
+  const pinned = pinnedOwnership(repositoryRoot, problem, baselineCommit);
+  for (const file of [...pinned.trustedFiles, ...pinned.solverOwnedFiles]) {
     const source = file === 'lake-manifest.json' &&
       !fs.existsSync(path.join(repositoryRoot, problem.generatedPath, file)) ? file : `${problem.generatedPath}/${file}`;
     writeGitFile(repositoryRoot, baselineCommit, source, path.join(projectRoot, file));
   }
-  if (!ownership.solverOwnedFiles.includes('Submission.lean')) throw new Error(`LeanEval ${problem.id} has no Submission.lean`);
+  if (!pinned.solverOwnedFiles.includes('Submission.lean')) throw new Error(`LeanEval ${problem.id} has no Submission.lean`);
+  const ownership = slottedOwnership(pinned, certificateSlots);
+  for (const file of certificateSlotFiles(certificateSlots)) {
+    const destination = path.join(projectRoot, file);
+    ensureDirectoryNoSymlink(path.dirname(destination));
+    fs.writeFileSync(destination, certificateSlotSource(file), { mode: 0o600, flag: 'wx' });
+  }
   const manifestPath = path.join(projectRoot, 'lake-manifest.json');
   if (fs.existsSync(manifestPath)) {
     const manifest = readMathJson(manifestPath) as LeanEvalLakeManifestRecord;
@@ -488,9 +501,23 @@ const pinnedOwnership = (
 const sameStringList = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((value, index) => value === right[index]);
 
+/** Certificate slots extend the pinned solver ownership with new files only; they never shadow benchmark files. */
+const slottedOwnership = (
+  pinned: Readonly<{ trustedFiles: readonly string[]; solverOwnedFiles: readonly string[] }>,
+  certificateSlots: number
+): Readonly<{ trustedFiles: readonly string[]; solverOwnedFiles: readonly string[] }> => {
+  const slots = certificateSlotFiles(certificateSlots);
+  if (slots.some(file => pinned.solverOwnedFiles.includes(file) || pinned.trustedFiles.includes(file)))
+    throw new Error('LeanEval certificate slots collide with pinned benchmark files');
+  return slots.length ? Object.freeze({ trustedFiles: pinned.trustedFiles,
+    solverOwnedFiles: Object.freeze([...pinned.solverOwnedFiles, ...slots].toSorted()) }) : pinned;
+};
+
 export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions): Promise<LeanEvalBootstrapResult> {
   const repositoryRoot = fs.realpathSync(path.resolve(options.repositoryRoot));
   const baselineCommit = LEAN_EVAL_BENCHMARK_COMMIT;
+  const certificateSlots = options.certificateSlots ?? 0;
+  certificateSlotFiles(certificateSlots);
   // The caller checkout may be dirty or on another branch.  Require only that
   // it contains the official object, then read every public input from a
   // detached worktree at that exact commit.
@@ -568,7 +595,8 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
     // The solver view is deliberately separate from the Git worktree.  The
     // latter retains protected evaluator files for official comparison while
     // the former never materializes Solution.lean into a solver workspace.
-    const materialized = materializeSolverWorkspace(sourceWorktree, selectedProblem, baselineCommit, workspaceRoot);
+    const materialized = materializeSolverWorkspace(sourceWorktree, selectedProblem, baselineCommit, workspaceRoot,
+      certificateSlots);
     const binding = prepareLeanEvalProblemBinding({
       projectRoot: path.join(verifierProjectRoot, selectedProblem.generatedPath),
       problemId: selectedProblem.id,
@@ -610,6 +638,7 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
       sourceProjectRoot: sourceWorktree,
       trustedFiles: materialized.trustedFiles,
       solverOwnedFiles: materialized.solverOwnedFiles,
+      ...(certificateSlots ? { certificateSlots } : {}),
       activeProblemPath: path.join(workspaceRoot, 'active-problem.json'),
       createdAt: Date.now(),
     });
@@ -650,7 +679,7 @@ const bootstrapReceiptSchema = z.object({
   leaderboardGeneratedAt: positiveTime.optional(), workspaceRoot: z.string(), projectRoot: z.string(),
   verifierProjectRoot: z.string().optional(), sourceProjectRoot: z.string().optional(), activeProblemPath: z.string(),
   contract: z.object({}).passthrough(), solverOwnedFiles: z.array(z.unknown()), trustedFiles: z.array(z.unknown()),
-  createdAt: positiveTime,
+  certificateSlots: z.number().int().min(1).max(MAX_CERTIFICATE_SLOTS).optional(), createdAt: positiveTime,
 }).passthrough().refine(receipt => receipt.leaderboardSource !== LEAN_EVAL_LEADERBOARD_URL
   || (receipt.leaderboardHash !== undefined && receipt.leaderboardGeneratedAt !== undefined));
 const publicObligationsSchema = z.array(z.object({ name: z.string().refine(nonBlank), declarationHash: z.string().regex(/^[a-f0-9]{64}$/u) }));
@@ -718,6 +747,9 @@ export function readLeanEvalBootstrapReceipt(activeProblemPath: string): LeanEva
   }
   if (!parsed.solverOwnedFiles.includes('Submission.lean')) {
     throw new Error('LeanEval bootstrap receipt has no solver-owned Submission.lean');
+  }
+  if (certificateSlotFiles(parsed.certificateSlots ?? 0).some(file => !parsed.solverOwnedFiles.includes(file))) {
+    throw new Error('LeanEval bootstrap receipt does not own its certificate slots');
   }
   for (const candidate of [parsed.verifierProjectRoot, parsed.sourceProjectRoot]) {
     if (
@@ -945,9 +977,10 @@ export async function runLeanEvalOfficialGate(
     const absolute = path.join(solverProjectRoot, relative);
     const source = fs.readFileSync(absolute, 'utf8');
     for (const declaration of inspectLeanDeclarations(source)) {
-      declarationFile.set(declaration.name, relative);
+      // Earlier files win, so a helper module cannot capture a hole that Submission.lean declares.
+      if (!declarationFile.has(declaration.name)) declarationFile.set(declaration.name, relative);
       const local = declaration.name.split('.').at(-1);
-      if (local) declarationFile.set(local, relative);
+      if (local && !declarationFile.has(local)) declarationFile.set(local, relative);
     }
   }
   const localItems = bootstrapped.binding.publicObligations.map((hole) => {

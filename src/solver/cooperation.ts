@@ -281,6 +281,7 @@ export class CooperativeResearch extends CooperationInputs {
       this.refreshResearchCheckpoints();
       if (this.refreshFailedTaskInputs()) this.changed();
       if (this.refreshInvalidTaskTypes()) this.changed();
+      if (this.refreshGoalPathStall()) this.changed();
       if (!this.liveWorkers.has(this.lead.id)) {
         this.recordDispatchWait(worker, { stage: 'lead-unavailable', candidates: [], candidateCount: 0, omittedCandidates: 0 });
         return;
@@ -334,6 +335,12 @@ export class CooperativeResearch extends CooperationInputs {
     }
     if (this.archive.lastLeadPauseInputDigest &&
         this.archive.lastLeadPauseInputDigest !== this.leadPauseInputDigest()) wake = true;
+    // An original goal whose whole frontier cannot run is owed one Lead turn, even when that Lead's own decision
+    // (a pause, say) produced it and other workers are busy elsewhere. It wakes after the existing reconsideration
+    // paths so their events still name the frontier they reopen, and after work already running on the stalled
+    // goal's own route settles, since that result is part of what the turn must answer.
+    const goalPathStall = this.unansweredGoalPathStall();
+    const owedStall = goalPathStall && !this.goalPathStallWorkRunning() ? goalPathStall : undefined;
     if (!wake && this.archive.tasks.length) {
       const support = originalGoalTaskFocus(this.archive.tasks, this.archive.groups).support;
       const supportingWork = this.archive.tasks.some(node => support.has(node.task.id) &&
@@ -356,19 +363,25 @@ export class CooperativeResearch extends CooperationInputs {
       // Parking prevents repeating an inference, not reconsidering its unfinished original goal.
       const frontier = this.activeGoalFrontier();
       const inputDigest = this.planningInputDigest();
-      if (!frontier.length || inputDigest === this.archive.lastLeadInputDigest) return this.idleFrontier(frontier, inputDigest);
-      wake = true;
-      this.input.emit('blocked_tasks_reconsidered', { taskIds: frontier.map(item => item.taskId),
-        goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], inputDigest });
+      if (!frontier.length || inputDigest === this.archive.lastLeadInputDigest) {
+        if (!owedStall) return this.idleFrontier(frontier, inputDigest);
+        // A mechanical resume of unattempted inputs comes before asking the Lead about the stall.
+        if (!this.preparingTaskTypes.size && this.resumeUnattemptedFrontier(frontier)) return RETRY_DISPATCH;
+      } else {
+        wake = true;
+        this.input.emit('blocked_tasks_reconsidered', { taskIds: frontier.map(item => item.taskId),
+          goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], inputDigest });
+      }
     }
+    if (owedStall) wake = true;
     if (wake || (!running && (!this.livePeers.length || !this.hasAssignableTask()))) {
       const inputDigest = this.planningInputDigest();
       // The previous decision (or pause) already answers these inputs; drop the wake-ups without a turn.
-      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error) {
+      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask() ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : RETRY_DISPATCH;
       }
-      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest()) {
+      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask()
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
@@ -382,9 +395,19 @@ export class CooperativeResearch extends CooperationInputs {
         ...(this.archive.tasks.length ? { planNonce: crypto.randomUUID() } : {}) };
       this.leadEvidence.set(action, this.planningEvidenceDigest());
       this.leadPauseInputs.set(action, this.leadPauseInputDigest(action.seedCommit));
+      if (this.archive.goalPathStall?.active) this.presentedGoalPathStalls.set(action, this.archive.goalPathStall.goalIds);
+      if (goalPathStall) this.input.emit('goal_path_stall_dispatched', { digest: goalPathStall });
       return action;
     }
     return this.waitForDispatch();
+  }
+  /** Work on a stalled goal's own route that settles without the Lead: a run, delivery, ready recheck, type or statement check. */
+  private goalPathStallWorkRunning() {
+    const route = this.goalPathStallTasks;
+    return this.archive.tasks.some(node => route.has(node.task.id) &&
+      (this.preparingTaskTypes.has(node) || ['running', 'delivered'].includes(node.status) ||
+        node.status === 'conditional' && taskDependenciesReady(node.task, this.archive.tasks))) ||
+      Boolean(this.archive.statementReviews?.some(review => route.has(review.taskId) && ['translating', 'reviewing'].includes(review.status)));
   }
   private taskDispatchBlock(node: TaskRecord): 'preparing-type' | 'synchronizing' | 'capacity-expired' | undefined {
     if (this.preparingTaskTypes.has(node)) return 'preparing-type';
@@ -886,6 +909,8 @@ export class CooperativeResearch extends CooperationInputs {
       }
       // The decision or pause above is durable now; a restart must not re-ask this turn's wake-ups.
       settleLeadWakes(this.archive.leadWakes!);
+      // A failed request that saved nothing has not considered the stall; a decision, rejection or pause has.
+      if (!recovering || recoveryKind !== 'request-failure' || decisionProgress) this.answerGoalPathStall(action);
       this.changed();
       return { finished: false as const, sourceChanged, savedPlan, planVersion: this.archive.planVersion };
     });

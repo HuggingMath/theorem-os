@@ -109,7 +109,8 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       ...(node.capacityExploration ? { capacityExploration: node.capacityExploration } : {}),
       owner: node.task.ownerId ?? node.assignment?.workerId,
       version: taskVersion(node.task), theorem: node.task.theoremName, type: node.task.type,
-      informalStatement: node.task.informalStatement, premises: node.task.premises ?? [],
+      informalStatement: node.task.informalStatement, informalProof: node.task.informalProof, citations: node.task.citations ?? [],
+      premises: node.task.premises ?? [],
       plannedDependencies: node.task.dependsOn, attempts: node.attempts,
       proof: proofRecord(node, state), feedback: node.feedback, feedbackCategory: researchFailureCategory(node.feedback), finding: node.finding,
       parkedBy: node.routeParking ?? [],
@@ -353,6 +354,8 @@ export function renderRunInspection(report: Inspection): string {
     if (task.theorem) text += `\nDeclaration: ${task.theorem}\n`;
     if (task.type) text += `\nLean type: ${task.type}\n`;
     if (task.informalStatement) text += `\nMathematical intent: ${task.informalStatement}\n`;
+    if (task.informalProof) text += `\nIntended argument: ${task.informalProof}\n`;
+    if (task.citations.length) text += `\nCitations: ${task.citations.join('; ')}\n`;
     if (task.premises.length) text += `\nPremises: ${task.premises.join('; ')}\n`;
     if (task.feedback) text += `\nCurrent feedback (${task.feedbackCategory}): ${task.feedback}\n`;
     if (task.parkedBy.length) text += `\nParked by local blockers: ${task.parkedBy.join(', ')}\n`;

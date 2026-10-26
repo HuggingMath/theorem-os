@@ -25,6 +25,7 @@ import { recordRouteBlockers, refreshRouteBlockers, validateBlockerProposals } f
 import { parseProofRoutes } from './proofRoutes';
 import { createProofRoutePriorityIndex } from './routePriority';
 import { captureObligationSnapshot, diffObligationProgress } from './obligationProgress';
+import { reviewGoalPaths } from './goalPathReview';
 import { bindMathematicalGap, mathematicalGapVisible } from './mathematicalGaps';
 import { taskConnectionCheckCurrent } from './taskConnections';
 import { TaskTypePreflightCache } from './taskTypePreflight';
@@ -74,6 +75,10 @@ export abstract class CooperationCore {
   protected proofDeliveryChecks = new Set<Promise<void>>();
   protected integrationQueue = Promise.resolve();
   protected leadEvidence = new WeakMap<CooperativeAction, string>();
+  /** The goal-path stall a Lead dispatch was shown; its settled turn answers exactly that stall. */
+  protected presentedGoalPathStalls = new WeakMap<CooperativeAction, readonly string[]>();
+  /** Tasks on the routes of the currently stalled goals, recomputed with the stall itself. */
+  protected goalPathStallTasks: ReadonlySet<string> = new Set();
   protected publishedPlans = new WeakMap<CooperativeAction, { plan: ReturnType<typeof parseCooperationPlan>; version: string; responseDigest: string }>();
   protected checkingTaskInputs = new Map<string, Promise<void>>();
   protected leanSourceDigests = new Map<string, string>();
@@ -140,6 +145,49 @@ export abstract class CooperationCore {
   }
   /** Ask the Lead for a decision; the request is saved with the state change that caused it. */
   protected wakeLead(reason: LeadWakeReason) { requestLeadWake(this.archive.leadWakes!, reason); }
+  /**
+   * Record whether some original goal has no frontier input that can run. The condition is recomputed from durable
+   * state, so it is not a saved wake-up: a new stall stays owed to the Lead until one settled turn has seen it, and an
+   * identical stall is not asked again. Busy workers elsewhere do not answer it. An applied human edit is itself the
+   * planning decision for a stall it creates, unless a goal of that stall was already owed a Lead turn before it.
+   */
+  protected refreshGoalPathStall(edit?: HumanEditRecord) {
+    const review = reviewGoalPaths(this.archive.tasks, { groups: this.archive.groups, proofRoutes: this.archive.proofRoutes,
+      environmentDigest: this.input.state.environmentDigest, candidates: false });
+    this.goalPathStallTasks = new Set(review.stalledPathTaskIds);
+    const previous = this.archive.goalPathStall;
+    const owed = previous?.active && previous.answeredAt === undefined ? previous.goalIds : [];
+    const decided = edit?.status === 'applied' && !review.stalledGoalIds.some(goalId => owed.includes(goalId));
+    if (!review.stallDigest) {
+      if (!previous?.active) return false;
+      previous.active = false; return true;
+    }
+    if (previous?.digest === review.stallDigest) {
+      if (previous.active) return false;
+      previous.active = true;
+      if (decided) previous.answeredAt ??= Date.now();
+      return true;
+    }
+    this.archive.goalPathStall = { digest: review.stallDigest, active: true, at: Date.now(),
+      goalIds: review.stalledGoalIds, taskIds: review.stalledTaskIds.slice(0, 16), ...(decided ? { answeredAt: Date.now() } : {}) };
+    this.input.emit('goal_path_stalled', { digest: review.stallDigest, goalIds: review.stalledGoalIds, taskIds: review.stalledTaskIds,
+      ...(decided ? { answeredByEdit: edit!.id } : {}) });
+    return true;
+  }
+  protected unansweredGoalPathStall() {
+    const stall = this.archive.goalPathStall;
+    return stall?.active && stall.answeredAt === undefined ? stall.digest : undefined;
+  }
+  /**
+   * A settled Lead turn that was shown the stalled goals answers whatever stall its own decision leaves on them, so
+   * re-pausing the same goal is not asked again; a goal that newly stalls after its dispatch stays owed.
+   */
+  protected answerGoalPathStall(action: CooperativeAction) {
+    this.refreshGoalPathStall();
+    const stall = this.archive.goalPathStall, presented = this.presentedGoalPathStalls.get(action);
+    if (stall?.active && presented && stall.answeredAt === undefined &&
+        stall.goalIds.every(goalId => presented.includes(goalId))) stall.answeredAt = Date.now();
+  }
   /** The only live task status write. Staged validation copies are checked but never recorded. */
   protected moveTask(node: TaskRecord, to: TaskStatus, cause: TaskTransitionCause) {
     const from = node.status;
@@ -261,6 +309,7 @@ export abstract class CooperationCore {
       this.input.emit('route_reopened', { blockerId: blocker.id, taskId: blocker.taskId, reason: blocker.reopenedReason });
     }
     this.refreshFailedTaskInputs();
+    this.refreshGoalPathStall(edit);
     const snapshot = captureObligationSnapshot(this.archive.tasks, { groups: this.archive.groups,
       environmentDigest: this.input.state.environmentDigest, proofRoutes: this.archive.proofRoutes, blockers: this.archive.blockers });
     const progress = diffObligationProgress(this.archive.progressSnapshot, snapshot);

@@ -93,6 +93,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   invalidTaskTransitions?: import('./taskLifecycle').InvalidTaskTransition[];
   /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
   lastLeadPauseInputDigest?: string;
+  /** Latest original-goal path stall (no runnable frontier input); `answeredAt` once a settled Lead turn saw it. */
+  goalPathStall?: { digest: string; active: boolean; at: number; goalIds: string[]; taskIds: string[]; answeredAt?: number };
   /** Durable mathematical input/method tombstones, independent of scheduling and plan revisions. */
   capacityExplorationInputs?: { inputDigest: string; focus: import('./capacityExploration').CapacityExplorationFocus;
     targetTaskId: string; taskId: string }[];

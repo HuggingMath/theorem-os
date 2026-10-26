@@ -6,7 +6,7 @@ import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnviron
 import { isMathFoundationalLeanAxiom } from '../math/contracts';
 import { LAKE_CONFIGURATION_FILES } from '../math/mathConstructionSources';
 import { parseLeanDiagnosticOutput } from '../math/leanDiagnosticMessages';
-import type { MathematicsVerifierBatchResult } from '../math/verifier';
+import { LEAN_MEMORY_LIMIT_ERROR, LEAN_STACK_LIMIT_ERROR, type MathematicsVerifierBatchResult } from '../math/verifier';
 
 /** Mutable search paths cannot establish that the same Lean input was checked. */
 export function proofReuseEnvironment(projectRoot: string, env: NodeJS.ProcessEnv): {
@@ -60,4 +60,11 @@ export function hasDeterministicLeanFailure(verification: MathematicsVerifierBat
           (sourceRejection || (!result.error || /^Lean exited with status 1\.?$/u.test(result.error.trim())) &&
             hasLeanSourceDiagnostic(output)));
     });
+}
+
+/** Lean itself reported exhausting a fixed sandbox limit; a batch failure does not identify one member. */
+export function hasLeanResourceLimitFailure(verification: MathematicsVerifierBatchResult): boolean {
+  return verification.status === 'failed' && verification.results.some(result => result.status === 'failed' &&
+    result.targetCommit === verification.targetCommit && !result.cleanupError &&
+    (result.error === LEAN_MEMORY_LIMIT_ERROR || result.error === LEAN_STACK_LIMIT_ERROR));
 }

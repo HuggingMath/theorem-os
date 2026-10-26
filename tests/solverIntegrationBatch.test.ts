@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LAKE_CONFIGURATION_FILES, mathLocalModuleBuildOrder } from '../src/math/mathConstructionSources';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
-import type { MathematicsVerifierBatchRequest, MathematicsVerifierBatchResult } from '../src/math/verifier';
+import { LEAN_MEMORY_LIMIT_ERROR, LEAN_STACK_LIMIT_ERROR, type MathematicsVerifierBatchRequest, type MathematicsVerifierBatchResult } from '../src/math/verifier';
 import type { SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
 import { captureDeliveryArtifacts } from '../src/solver/deliveryArtifacts';
@@ -592,5 +592,51 @@ describe('same-layer checked task integration batches', () => {
     expect(events).toContainEqual(expect.objectContaining({ event: 'task_repair_requested',
       details: expect.objectContaining({ taskId: 'first', workerId: 'first' }) }));
     expect(calls()).toHaveLength(1); expect(calls()[0]!.items).toHaveLength(1);
+  });
+
+  it.each([LEAN_MEMORY_LIMIT_ERROR, LEAN_STACK_LIMIT_ERROR])
+  ('returns a single-target sandbox limit failure to its worker without aborting the run: %s', async error => {
+    const record = node(), worker = workers.find(item => item.id === record.assignment!.workerId)!;
+    const commit = writeLemma(worker, 'lemma batch_first : True := by trivial');
+    host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) => {
+      const batch = verified(request);
+      batch.status = 'failed';
+      batch.results = batch.results.map(item => ({ ...item, status: 'failed', error }));
+      return batch;
+    });
+    const action = { kind: 'task' as const, task: record.task, assignment: record.assignment! };
+
+    const delivered = await cooperative.deliver(worker, action, commit);
+
+    expect(delivered.check?.passed).toBe(false); expect(record.status).toBe('pending');
+    expect(record.feedback).toContain(error);
+    expect(state.cooperation!.canonicalCommit).toBe(problem.baseCommit);
+    expect(state.cooperation!.failedTaskInputs).toHaveLength(1);
+    // The same input is not rechecked; a later run cannot reach a different verdict under the same limits.
+    await expect((cooperative as any).check(record.task, record.assignment, worker.worktree, commit, undefined, undefined, true))
+      .rejects.toThrow('math_task_repeated_failed_input');
+    expect(calls()).toHaveLength(1);
+  });
+
+  it('integrates members separately after their merged check exhausts the sandbox memory limit', async () => {
+    await preparePair();
+    host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) => {
+      const batch = verified(request);
+      if (request.items.length > 1) {
+        batch.status = 'failed';
+        batch.results = batch.results.map(item => ({ ...item, status: 'failed', error: LEAN_MEMORY_LIMIT_ERROR }));
+      }
+      return batch;
+    });
+
+    await integrate(); await drain();
+
+    expect(calls()[0]!.items).toHaveLength(2);
+    expect(calls().slice(1).every(request => request.items.length === 1)).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({ event: 'task_integration_batch_fallback',
+      details: expect.objectContaining({ reason: 'math_task_batch_resource_limit' }) }));
+    expect(node().status).toBe('integrated'); expect(node('second').status).toBe('integrated');
+    expect(canonicalSource()).toContain('lemma batch_first'); expect(canonicalSource()).toContain('lemma batch_second');
+    expectNoFailure();
   });
 });

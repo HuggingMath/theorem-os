@@ -6,7 +6,7 @@ import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import type { SolverProblem } from '../src/solver/problem';
 import { parseCooperationPlan } from '../src/solver/tasks';
-import { cooperativeResearch } from './helpers/cooperation';
+import { answeredGoalPathStall, cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 // A failed original route is an ordinary Lead planning input. Once the Lead has decided on exactly these inputs and
@@ -48,6 +48,8 @@ describe('idle original-goal frontier', () => {
     const fixture = create(continuous);
     state.cooperation!.planVersion = (fixture as any).planVersion();
     state.cooperation!.lastLeadInputDigest = (fixture as any).planningInputDigest();
+    // That decision's context showed the stalled goal path, as every live Lead turn does.
+    expect(answeredGoalPathStall(state)).toBeDefined();
 
     await expect(fixture.next(workers[0], budget)).resolves.toBeUndefined();
 

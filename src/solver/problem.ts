@@ -15,8 +15,9 @@ import { readLocalExampleReceipt } from '../math/localExample';
 import { readLeanTaskReceipt } from '../math/leanTask';
 
 export function committedSource(worktree: string, commit: string, file: string): string {
+  // Matches the Lean-Eval per-file limit so generated certificate modules remain readable.
   return mathGitBytes(worktree, ['show', `${commit}:${file}`],
-    { timeout: 30_000, maxBuffer: 1024 * 1024, errorMessage: 'math_task_source_unavailable' }).toString('utf8');
+    { timeout: 30_000, maxBuffer: 16 * 1024 * 1024, errorMessage: 'math_task_source_unavailable' }).toString('utf8');
 }
 
 export type ProofTarget = Readonly<{ proofPath: string; theoremName: string; declarationHash: string }>;
@@ -27,10 +28,10 @@ export class SolverSourceError extends Error {
   }
   get recovery(): string {
     if (this.message === 'math_local_module_import_cycle')
-      return 'Remove the added local import that creates a cycle. Shared helpers may import frozen dependencies, but cannot import a module that imports them. Preserve the saved proof work.';
+      return 'Remove the added local import that creates a cycle. Owned modules may import frozen dependencies and each other, but a module cannot import one that imports it. Preserve the saved proof work.';
     return this.message === 'math_original_context_changed'
       ? 'Restore the original imports, namespace/section placement, variables, opens, scopes and options from the seed commit. ' +
-        'Keep new helpers; move helper-specific scopes and instances inside their proofs. Added imports may use explicit Mathlib.* modules or frozen local modules already imported by the original owned sources; avoid import cycles.'
+        'Keep new helpers; move helper-specific scopes and instances inside their proofs. Added imports may use explicit Mathlib.* modules, frozen local modules already imported by the original owned sources, or other owned modules; avoid import cycles.'
       : `Restore the original name, parameters, type and any frozen proof or definition body${this.declarationName ? ` of ${this.declarationName}` : ''} from the seed commit. Preserve new proof work.`;
   }
 }
@@ -71,12 +72,16 @@ export function solverMathlibImports(source: string): string[] {
   return mathConstructionImports(source).filter(module => /^Mathlib(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/u.test(module));
 }
 
-/** Reuse public frozen modules already exposed to the original solver sources. */
+/** Reuse public frozen modules already exposed to the original solver sources, and owned modules
+ *  (certificate slots, helpers); assertSolverProjectSources rejects any resulting import cycle. */
 export function solverProofImports(problem: SolverSourceConstraints, source: string): string[] {
   const local = new Set(Object.values(problem.sourceImports ?? {}).flat().filter(module => {
     const file = module.replaceAll('.', '/') + '.lean';
     return isAllowedMathProofSource(file) && Object.hasOwn(problem.trustedFiles, file);
   }));
+  for (const file of Object.keys(problem.declarations))
+    if (isAllowedMathProofSource(file) && /^[A-Z][A-Za-z0-9_]*(?:\/[A-Z][A-Za-z0-9_]*)*\.lean$/u.test(file))
+      local.add(file.slice(0, -'.lean'.length).replaceAll('/', '.'));
   return mathConstructionImports(source).filter(module => local.has(module) ||
     /^Mathlib(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/u.test(module));
 }

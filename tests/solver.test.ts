@@ -3792,11 +3792,12 @@ describe('isolated solver and host acceptance', () => {
       } else finishAssignment(action, options);
       return 'completed';
     });
-    // Spare global turns must not be spent repeatedly asking the Lead to restart an inactive route.
+    // Spare global turns must not be spent repeatedly asking the Lead to restart an inactive route: `first`, whose
+    // remaining input sits on it, is owed exactly one stall turn, and that answer is not asked again.
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '10'], directory)).toBe(4);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(started).toBe(1);
-    expect(state.turns).toBe(3);
+    expect(state.turns).toBe(4);
     expect(state.cooperation.tasks.map(node => node.status)).toEqual(['integrated', 'pending', 'pending', 'integrated']);
     expect(state.cooperation.groups[1].turns).toBe(0);
     expect(host.officialGate).not.toHaveBeenCalled();
@@ -3818,7 +3819,8 @@ describe('isolated solver and host acceptance', () => {
     expect(await runSolver(parallelArgs, directory)).toBe(4);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(state.cooperation.groups[0].turns).toBe(1);
-    expect(state.turns).toBe(2);
+    // The spent route cap stalls both goals, so the Lead gets one turn to answer it before the run idles.
+    expect(state.turns).toBe(3);
     expect(state.cooperation.tasks[0].status).toBe('integrated');
     writePlan(state.worktree, waitingPlanTasks(), [{ ...groups[0], maxTurns: 4 }]);
     expect(await runSolver([...parallelArgs, '--resume'], directory)).toBe(0);

@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MathematicsVerifierBatchRequest, MathematicsVerifierBatchResult } from '../src/math/verifier';
+import { LEAN_MEMORY_LIMIT_ERROR, LEAN_STACK_LIMIT_ERROR, leanResourceLimitError, type MathematicsVerifierBatchRequest, type MathematicsVerifierBatchResult } from '../src/math/verifier';
 import { checkTaskProofs, isAttributedTaskProof } from '../src/solver/cooperativeProof';
 import { attributeProofEvidence, proofReceiptsMatch } from '../src/solver/modules/evidence';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
-import { hasDeterministicLeanFailure } from '../src/solver/proofReuse';
+import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure } from '../src/solver/proofReuse';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { localExample } from './helpers/solver';
 import { failedBatch, receiptBatch } from './helpers/verifier';
@@ -208,6 +208,48 @@ describe('per-target batch receipt attribution', () => {
     delete (batch.results[0] as Partial<typeof batch.results[number]>)!.sessionId;
     delete (batch.results[0] as Partial<typeof batch.results[number]>)!.checkId;
     expect(attributeProofEvidence(batch, single.targetCommit, single.items)[0]!.passed).toBe(true);
+  });
+
+  it.each([LEAN_MEMORY_LIMIT_ERROR, LEAN_STACK_LIMIT_ERROR])
+  ('binds a sandbox resource-limit failure only to a single-target run: %s', error => {
+    const exhaust = (batch: MathematicsVerifierBatchResult) => {
+      batch.status = 'failed';
+      for (const result of batch.results) {
+        result.status = 'failed'; result.error = error;
+        result.stdoutPreview = 'Submission.lean:9:2: warning: unused variable `h`';
+      }
+      return batch;
+    };
+    const single = { ...request, items: request.items.slice(0, 1) };
+    const [check] = attributeProofEvidence(exhaust(verified(single)), single.targetCommit, single.items);
+    expect([check!.passed, check!.attributable, check!.verification.status]).toEqual([false, true, 'failed']);
+    expect(hasLeanResourceLimitFailure(check!.verification)).toBe(true);
+    expect(hasDeterministicLeanFailure(check!.verification)).toBe(false);
+    // A merged run exceeding the limit does not identify which member caused it.
+    const merged = exhaust(verified(request));
+    expect(hasLeanResourceLimitFailure(merged)).toBe(true);
+    expect(attribute(merged).map(item => item.attributable)).toEqual([false, false]);
+    const wrongCommit = exhaust(verified(single));
+    wrongCommit.results[0]!.targetCommit = 'wrong-commit';
+    expect(hasLeanResourceLimitFailure(wrongCommit)).toBe(false);
+  });
+
+  it('maps only Lean\'s own limit panics to resource-limit errors', () => {
+    expect(leanResourceLimitError('\nINTERNAL PANIC: out of memory\n')).toBe(LEAN_MEMORY_LIMIT_ERROR);
+    expect(leanResourceLimitError('Stack overflow detected. Aborting.\n')).toBe(LEAN_STACK_LIMIT_ERROR);
+    // A diagnostic quoting the panic text is not the panic itself.
+    expect(leanResourceLimitError('Submission.lean:3:0: error: INTERNAL PANIC: out of memory')).toBeUndefined();
+    expect(leanResourceLimitError('failed to create thread: Resource temporarily unavailable')).toBeUndefined();
+  });
+
+  it('keeps an unexplained Lean crash unattributable', () => {
+    const single = { ...request, items: request.items.slice(0, 1) }, batch = verified(single);
+    batch.status = batch.results[0]!.status = 'failed';
+    batch.results[0]!.error = 'Lean exited with status 134.';
+    batch.results[0]!.stderrPreview = 'libc++abi: terminating due to uncaught exception of type lean::exception: failed to create thread';
+    const [check] = attributeProofEvidence(batch, single.targetCommit, single.items);
+    expect([check!.passed, check!.attributable]).toEqual([false, false]);
+    expect(hasLeanResourceLimitFailure(batch)).toBe(false);
   });
 });
 

@@ -106,7 +106,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       return { taskId, status: node.status, attempts: node.attempts, goalIds: [...focus.frontierGoals.get(taskId)!], parkedBy: node.routeParking ?? [] };
     });
   }
-  private resumeUnattemptedFrontier(frontier: ReturnType<CooperationPlanning['activeGoalFrontier']>) {
+  protected resumeUnattemptedFrontier(frontier: ReturnType<CooperationPlanning['activeGoalFrontier']>) {
     const candidates = new Set(frontier.map(item => this.node(item.taskId)));
     const seen = new Set<string>();
     const visit = (node: TaskRecord) => {

@@ -3,6 +3,7 @@ import { taskConsumerInterfaces } from './taskConsumers';
 import { isAdvisoryTask, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 import type { CooperationState } from './cooperationShared';
 import type { ProofRoute } from './proofRoutes';
+import { reviewGoalPaths } from './goalPathReview';
 
 const summaryLimit = 8, referenceLimit = 4;
 const reference = (task: CooperativeTask) => ({ taskId: task.id, taskDigest: taskVersion(task) });
@@ -87,7 +88,11 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
       omittedFailures: Math.max(0, failures.length - 2),
       requiredChange: 'For a retry of these recorded inputs, identify a changed proof step or method and its discriminating check, or the exact new premise/evidence; otherwise retain the gap and reopening condition.' };
   });
+  const { evidence: _evidence, acceptance: _acceptance, stallDigest: _stall, stalledTaskIds: _tasks, stalledPathTaskIds: _path, ...goalPath } =
+    reviewGoalPaths(state.tasks, { groups: state.groups, proofRoutes: state.proofRoutes, environmentDigest });
   return { evidence: 'recorded-not-replayed' as const, acceptance: 'not-assessed' as const,
+    // Whether each goal's frontier can run now, and host-proposed decisions for a goal that cannot.
+    goalPath,
     goals: continuation.goals.slice(0, referenceLimit).map(goal => ({ ...ref(goal.taskId), recordedProof: goal.recordedProof,
       frontier: goal.frontier.slice(0, referenceLimit).map(ref), omittedFrontier: Math.max(0, goal.frontier.length - referenceLimit),
       missingDependencies: goal.missingDependencies.slice(0, referenceLimit),
@@ -102,4 +107,13 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
     localPackages, omittedLocalPackages: Math.max(0, packages.length - localPackages.length),
     repeatedInputs, omittedRepeatedInputs: Math.max(0, repeated.length - repeatedInputs.length),
     archive: { path: 'COOPERATION.json', fields: ['tasks', 'proofRoutes', 'failedTaskInputs'] } };
+}
+
+/** The Lead's copy of the planning evidence; a stalled original goal adds the decision it is owed. */
+export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlanningEvidence>) {
+  return 'Current route applications and remaining obligations (recorded, not proof acceptance):\n' + JSON.stringify(evidence) +
+    (evidence.goalPath.stalledGoalIds.length ? '\nStalled original goals (goalPath.goals[].stalled): no frontier input of these goals can run, ' +
+      'so other workers\' progress does not advance them. For each stalled frontier input, adopt one of its goalPath candidates in this ' +
+      'plan revision, or state in RESEARCH.md the mathematical reason none applies and what would change that. Candidates are planning ' +
+      'suggestions: a connect match is syntactic and still needs its Lean check, and an assumed premise closes the goal only conditionally.' : '');
 }

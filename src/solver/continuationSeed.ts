@@ -62,6 +62,7 @@ const handoffTask = z.object({ id, kind: z.enum(['research', 'sketch', 'lemma', 
   groupId: id.optional(), sharing: z.enum(['group', 'problem']).optional(), status: z.enum(['active', 'paused', 'stopped']).optional(),
   ownerId: id.optional(), premises: z.array(z.string()).optional(), conditional: z.boolean().optional(),
   statementReview: z.boolean().optional(), informalStatement: z.string().optional(),
+  informalProof: z.string().optional(), citations: z.array(z.string()).optional(),
   reviewScope: z.enum(['final-candidate', 'feasibility']).optional(),
 }).strict().transform((value): CooperativeTask => ({ ...value, id: value.id, kind: value.kind,
   objective: value.objective, dependsOn: value.dependsOn, revision: value.revision }));

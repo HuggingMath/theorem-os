@@ -4,7 +4,7 @@ import { committedSource, commitSolverSources, withSolverWorktree } from './prob
 import { solverProofFeedback } from './feedback';
 import { taskDependenciesReady } from './modules/search';
 import { applyTaskChanges, checkTaskProof, checkTaskProofs, createTaskSourceProjector, isAttributedTaskProof, type TaskProof } from './cooperativeProof';
-import { hasDeterministicLeanFailure } from './proofReuse';
+import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure } from './proofReuse';
 import { proofReferencesUnchanged } from './proofReferences';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { hasTaskConnectionCheck } from './taskConnections';
@@ -13,9 +13,10 @@ import { digest, taskSourceRejections, integrationRejections, rejectionCode, bou
 import { CooperationTaskProofs, type ProofDeliveryAnnotation } from './cooperationTaskProofs';
 import type { ResearchWorker } from './modules/organization';
 
-const recheckBatchFallbacks = new Set([...taskSourceRejections, 'math_task_batch_projection_mismatch', 'math_task_missing_declaration']);
+const recheckBatchFallbacks = new Set([...taskSourceRejections, 'math_task_batch_projection_mismatch', 'math_task_missing_declaration',
+  'math_task_batch_resource_limit']);
 const integrationBatchFallbacks = new Set([...taskSourceRejections, 'math_task_integration_conflict', 'math_task_integration_missing_context',
-  'math_task_integration_missing_declaration', 'math_task_batch_projection_mismatch']);
+  'math_task_integration_missing_declaration', 'math_task_batch_projection_mismatch', 'math_task_batch_resource_limit']);
 /** A changed check identity leaves no usable verifier result; aborts and unlisted failures propagate. */
 function expectedRejection(error: unknown, expected: ReadonlySet<string>): Error {
   if (error instanceof Error && rejectionCode(error) === 'math_task_check_identity_changed')
@@ -280,6 +281,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
                 snapshot?.environment ?? this.input.access.get(this.lead.id)!.environment, this.input.signal, this.input.timeoutMs,
                 snapshot?.environmentDigest ?? this.input.state.environmentDigest, this.taskProofCache);
               this.input.signal.throwIfAborted();
+              if (proofs.some(proof => hasLeanResourceLimitFailure(proof.verification))) throw new Error('math_task_batch_resource_limit');
               if (proofs.some(proof => ['unavailable', 'blocked'].includes(proof.verification.status) || !isAttributedTaskProof(proof)))
                 throw new Error('math_verifier_unavailable');
               if (snapshot && !snapshot.current()) return false;
@@ -450,6 +452,10 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         const proofs = await checkTaskProofs(problem, checkout, merged, requests, environment, this.input.signal,
           this.input.timeoutMs, first.environmentDigest, this.taskProofCache);
         this.input.signal.throwIfAborted();
+        // One merged run exceeding the limit says nothing about each member; integrate them separately.
+        if (proofs.some(proof => hasLeanResourceLimitFailure(proof.verification))) {
+          fallback = 'math_task_batch_resource_limit'; return;
+        }
         if (proofs.some(proof => ['unavailable', 'blocked'].includes(proof.verification.status)))
           throw new Error('math_verifier_unavailable');
         const deterministic = proofs.every(proof => proof.passed || isAttributedTaskProof(proof) && hasDeterministicLeanFailure(proof.verification));

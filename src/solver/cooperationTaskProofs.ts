@@ -23,7 +23,7 @@ import { inspectKnowledgeUses, type KnowledgeUse } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
 import { bindMathematicalGap, mathematicalGaps } from './mathematicalGaps';
 import { taskConnectionCheckCurrent, taskInputsMissingFromSeed } from './taskConnections';
-import { hasLeanSourceDiagnostic } from './proofReuse';
+import { hasLeanResourceLimitFailure, hasLeanSourceDiagnostic } from './proofReuse';
 import { assumableLemma, taskReferenceDependencies, assignmentDeliveryFile, markTaskReferences, markTaskAcceptance, hasTaskAcceptance, type CooperativeTask,
   type TaskAssignment, type TaskRecord, type CooperativeAction } from './tasks';
 import { digest, FailedTaskInput, bounded, deliveryInputFields } from './cooperationShared';
@@ -161,6 +161,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     return record;
   }
   private deterministicTaskFailure(proof: TaskProof) {
+    if (!proof.passed && isAttributedTaskProof(proof) && proof.verification.results.length === 1 &&
+        hasLeanResourceLimitFailure(proof.verification)) return true;
     return !proof.passed && proof.verification.status === 'failed' && Boolean(proof.verification.targetCommit) &&
       proof.verification.results.length > 0 && proof.verification.results.every(result => !result.cleanupError &&
         ['failed', 'kernel_verified'].includes(result.status) &&

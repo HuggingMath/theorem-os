@@ -8,6 +8,7 @@ import { assertLeanEvalBootstrapEligibility, bootstrapLeanEvalProblem, readLeanE
   runPersistedLeanEvalOfficialGate, type LeanEvalBootstrapResult } from '../src/math/leanEvalBootstrap';
 import { LEAN_EVAL_LEADERBOARD_URL, type LeanEvalCatalogProblem } from '../src/math/leanEvalCatalogAdapter';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
+import { KERNEL_COMPUTE_LIBRARY } from '../src/math/kernelComputeLibrary';
 
 const host = vi.hoisted(() => ({ commit: '', catalog: {} as unknown, verify: vi.fn(), compare: vi.fn() }));
 vi.mock('../src/math/leanEvalCatalogAdapter', async importOriginal => ({
@@ -96,9 +97,9 @@ describe('Lean-Eval bootstrap without planning state', () => {
   });
   afterEach(() => { fs.rmSync(directory, { recursive: true, force: true }); });
 
-  function makeOfficialReceipt() {
+  function makeOfficialReceipt(base = bootstrapped.receipt) {
     const leaderboard = { credits: [], generatedAt: 1 };
-    const receipt = { ...bootstrapped.receipt, leaderboardSource: LEAN_EVAL_LEADERBOARD_URL,
+    const receipt = { ...base, leaderboardSource: LEAN_EVAL_LEADERBOARD_URL,
       leaderboardHash: crypto.createHash('sha256').update('[]').digest('hex'), leaderboardGeneratedAt: 1 };
     fs.writeFileSync(receipt.activeProblemPath, JSON.stringify(receipt));
     return { activeProblemPath: receipt.activeProblemPath, repositoryRoot, fetchLeaderboard: async () => leaderboard };
@@ -252,6 +253,44 @@ describe('Lean-Eval bootstrap without planning state', () => {
     fs.writeFileSync(options.activeProblemPath, JSON.stringify(receipt));
     await expect(runPersistedLeanEvalOfficialGate(options)).rejects.toThrow('file ownership');
     expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('owns frozen certificate slots across bootstrap, resume, commit and the official gate', async () => {
+    const slotted = await bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [], certificateSlots: 2,
+      workspaceRoot: path.join(directory, 'slotted') });
+    const slots = ['Submission/Certificates/Kernel.lean', 'Submission/Certificates/Part01.lean', 'Submission/Certificates/Part02.lean'];
+    expect(slotted.receipt).toMatchObject({ certificateSlots: 2,
+      solverOwnedFiles: ['Submission.lean', 'Submission/Certificates/Kernel.lean', 'Submission/Certificates/Part01.lean',
+        'Submission/Certificates/Part02.lean', 'Submission/Helper.lean'] });
+    const read = (file: string) => fs.readFileSync(path.join(slotted.receipt.projectRoot, file), 'utf8');
+    expect(read(slots[0]!)).toBe(KERNEL_COMPUTE_LIBRARY.trim() + '\n');
+    expect([read(slots[1]!), read(slots[2]!)]).toEqual(['', '']);
+    expect(execFileSync('git', ['-C', slotted.receipt.workspaceRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }))
+      .toContain('generated/p/Submission/Certificates/Part02.lean');
+    expect(readLeanEvalBootstrapReceipt(slotted.receipt.activeProblemPath).certificateSlots).toBe(2);
+    const proof = path.join(slotted.receipt.projectRoot, 'Submission.lean');
+    fs.writeFileSync(proof, read('Submission.lean').replace('by sorry', 'by exact 0').replace('by sorry', 'by trivial').replace('by sorry', 'by rfl'));
+    const options = makeOfficialReceipt(slotted.receipt);
+    const result = await runPersistedLeanEvalOfficialGate(options);
+    expect(result.comparison.status).toBe('official_verified');
+    expect(host.verify.mock.calls[0][0].items.map(item => item.proofPath)).toEqual(['Submission.lean', 'Submission.lean', 'Submission.lean']);
+    expect(execFileSync('git', ['-C', slotted.receipt.verifierProjectRoot!, 'diff', '--name-only', host.commit, 'HEAD'], { encoding: 'utf8' }))
+      .toContain('generated/p/Submission/Certificates/Kernel.lean');
+
+    const receipt = JSON.parse(fs.readFileSync(options.activeProblemPath, 'utf8'));
+    fs.writeFileSync(options.activeProblemPath, JSON.stringify({ ...receipt, certificateSlots: 1 }));
+    await expect(runPersistedLeanEvalOfficialGate(options)).rejects.toThrow('file ownership');
+    fs.writeFileSync(options.activeProblemPath, JSON.stringify({ ...receipt,
+      solverOwnedFiles: receipt.solverOwnedFiles.filter((file: string) => file !== slots[2]) }));
+    expect(() => readLeanEvalBootstrapReceipt(options.activeProblemPath)).toThrow('does not own its certificate slots');
+  });
+
+  it.each([65, -1, 1.5])('rejects %s certificate slots before creating any worktree', async certificateSlots => {
+    const workspaceRoot = path.join(directory, 'invalid');
+    await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [], certificateSlots, workspaceRoot }))
+      .rejects.toThrow('math_certificate_slots_invalid');
+    expect(fs.existsSync(`${workspaceRoot}.source`)).toBe(false);
+    expect(git('worktree', 'list')).not.toContain('invalid');
   });
 
   it.each(['symlink', 'hardlink'])('rejects a %s bootstrap receipt', kind => {

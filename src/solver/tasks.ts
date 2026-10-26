@@ -13,6 +13,8 @@ export type CooperativeTask = Readonly<{ id: string; kind: 'research' | 'sketch'
   dependsOn: readonly string[]; revision: number; proofPath?: string; theoremName?: string; type?: string;
   groupId?: string; sharing?: 'group' | 'problem'; status?: 'active' | 'paused' | 'stopped'; ownerId?: string; premises?: readonly string[];
   conditional?: boolean; statementReview?: boolean; informalStatement?: string;
+  /** Blueprint prose: the intended informal argument and its literature sources. Guidance only, never a premise. */
+  informalProof?: string; citations?: readonly string[];
   reviewScope?: 'final-candidate' | 'feasibility';
   /** A typed lemma task whose target is a new `def` of `type`; consumers use its body, never an assumed copy. */
   declaration?: 'definition' }>;
@@ -54,7 +56,8 @@ export type CooperativeAction = { kind: 'lead' | 'assemble'; seedCommit: string;
   { kind: 'review'; seedCommit: string; sourceDigest: string; assignmentId?: string } | { kind: 'task'; assignment: TaskAssignment; task: CooperativeTask } | StatementAction;
 
 export const taskVersion = (task: CooperativeTask) => {
-  const { status: _status, ownerId: _owner, statementReview: _review, informalStatement: _intent, ...mathematics } = task;
+  const { status: _status, ownerId: _owner, statementReview: _review, informalStatement: _intent,
+    informalProof: _proof, citations: _citations, ...mathematics } = task;
   return mathDigest(canonicalMathJson(mathematics));
 };
 /** Planning revisions still supersede assignments; checked sources can be revalidated separately. */
@@ -159,6 +162,8 @@ export function parseWaitsOn(value: unknown, deferred: boolean, task: (id: strin
 }
 
 const validId = (value: unknown) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,64}$/u.test(value);
+/** Blueprint prose travels with every plan copy, so it stays short; full sources belong in references. */
+export const MAX_INFORMAL_PROOF_CHARS = 2000, MAX_CITATIONS = 8, MAX_CITATION_CHARS = 300;
 /** Name the rejected plan element so a Lead can repair it without reading the validator. */
 export const planError = (code: string, detail: Record<string, unknown>, hint = '') =>
   new Error(`${code}: ${JSON.stringify(detail)}${hint ? '. ' + hint : ''}`);
@@ -206,6 +211,10 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
         !['final-candidate', 'feasibility'].includes(task.reviewScope)) ? 'reviewScope' :
       task.informalStatement !== undefined && (typeof task.informalStatement !== 'string' || !task.informalStatement.trim()) ||
         task.statementReview === true && !task.informalStatement ? 'informalStatement' :
+      task.informalProof !== undefined && (typeof task.informalProof !== 'string' || !task.informalProof.trim() ||
+        task.informalProof.length > MAX_INFORMAL_PROOF_CHARS) ? 'informalProof' :
+      task.citations !== undefined && (!Array.isArray(task.citations) || !task.citations.length || task.citations.length > MAX_CITATIONS ||
+        task.citations.some((item: unknown) => typeof item !== 'string' || !item.trim() || item.length > MAX_CITATION_CHARS)) ? 'citations' :
       task.ownerId !== undefined && !validId(task.ownerId) ? 'ownerId' :
       task.premises !== undefined && (!Array.isArray(task.premises) ||
         task.premises.some((premise: unknown) => typeof premise !== 'string')) ? 'premises' :
@@ -234,8 +243,8 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
     return { id: task.id, kind: task.kind, objective: task.objective, dependsOn: [...new Set<string>(task.dependsOn)],
       revision: task.revision ?? 0, ...(isAdvisoryTask(task) ? {} : { proofPath: task.proofPath, theoremName: task.theoremName }),
       ...(task.kind === 'lemma' ? { type: task.type } : {}),
-      ...optionalFields(task, ['conditional', 'statementReview', 'informalStatement', 'reviewScope', 'status', 'ownerId', 'premises', 'groupId',
-        'declaration']),
+      ...optionalFields(task, ['conditional', 'statementReview', 'informalStatement', 'informalProof', 'citations', 'reviewScope', 'status',
+        'ownerId', 'premises', 'groupId', 'declaration']),
       ...(task.sharing === undefined ? groups.length > 1 ? { sharing: 'group' } : {} : { sharing: task.sharing }) };
   });
   const duplicateId = tasks.find((task, index) => tasks.findIndex(item => item.id === task.id) !== index);

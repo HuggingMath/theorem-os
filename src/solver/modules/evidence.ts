@@ -6,7 +6,7 @@ import { canonicalMathJson, mathDigest } from '../../math/mathRuntimeIo';
 import { commitSolverSources, git, withSolverWorktree, type SolverProblem } from '../problem';
 import { bindLeanPackages } from '../../math/leanDiagnostics';
 import { hashMathFormalSourceDeclaration } from '../../math/leanSource';
-import { hasDeterministicLeanFailure, proofReuseEnvironment, proofVerificationDigest } from '../proofReuse';
+import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure, proofReuseEnvironment, proofVerificationDigest } from '../proofReuse';
 
 export type ProofCheck = Readonly<{ commit: string; sourceDigest: string; passed: boolean; verification: MathematicsVerifierBatchResult }>;
 
@@ -79,8 +79,10 @@ export function attributeProofEvidence(verification: MathematicsVerifierBatchRes
       status: unavailable ? 'unavailable' : blocked ? 'blocked' : items.length > 1 ? result!.status : verification.status,
       results: result ? [result] : [] };
     const passed = proofReceiptsMatch(view, commit, [item]);
+    // Only a single-target run binds a resource-limit failure to that target.
     return { verification: view, passed, attributable: verification.targetCommit === commit && matches(index) &&
-      (passed || unavailable || blocked || hasDeterministicLeanFailure(view)) };
+      (passed || unavailable || blocked || hasDeterministicLeanFailure(view) ||
+        items.length === 1 && hasLeanResourceLimitFailure(view)) };
   });
 }
 

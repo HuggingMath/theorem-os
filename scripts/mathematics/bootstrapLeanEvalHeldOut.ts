@@ -10,16 +10,20 @@ import { classifyLeanEvalHeldOutFamily } from "../../src/math/leanEvalHeldOutEva
 import { resolveMathematicsRuntimeEnvironment } from "../../src/math/mathRuntimeEnvironment";
 
 async function main(): Promise<void> {
-  const flags = parseFlags(process.argv.slice(2), ['repo', 'problem', 'workspace', 'receipt', 'evaluation-mode']);
+  const flags = parseFlags(process.argv.slice(2), ['repo', 'problem', 'workspace', 'receipt', 'evaluation-mode',
+    'certificate-slots']);
   if (flags.has('help')) {
     console.log(
-      'Usage: bun scripts/mathematics/bootstrapLeanEvalHeldOut.ts --repo DIR --problem ID --workspace DIR [--receipt FILE]'
+      'Usage: bun scripts/mathematics/bootstrapLeanEvalHeldOut.ts --repo DIR --problem ID --workspace DIR [--receipt FILE] [--certificate-slots N]\n' +
+      'N > 0 adds solver-owned Submission/Certificates/Kernel.lean (KernelCompute library) and N empty PartNN.lean modules for kernel-certificate.'
     );
     return;
   }
   const runtime = resolveMathematicsRuntimeEnvironment();
   const evaluationMode = flags.get('evaluation-mode') ?? 'official';
   if (!['official', 'benchmark'].includes(evaluationMode)) throw new Error('Invalid --evaluation-mode');
+  const slots = flags.get('certificate-slots') ?? '0';
+  if (!/^[0-9]{1,2}$/u.test(slots)) throw new Error('Invalid --certificate-slots');
   const repositoryValue = flags.get('repo') || runtime.DEEPSCIENTIST_LEAN_EVAL_ROOT;
   if (!repositoryValue?.trim()) throw new Error('--repo is required');
   const repositoryRoot = path.resolve(repositoryValue);
@@ -34,6 +38,7 @@ async function main(): Promise<void> {
     problemId: required(flags, 'problem'),
     evaluationMode: evaluationMode as 'official' | 'benchmark',
     workspaceRoot,
+    certificateSlots: Number(slots),
   });
   const receiptPath = path.resolve(flags.get('receipt') || path.join(workspaceRoot, 'bootstrap-result.json'));
   const descriptor = fs.openSync(receiptPath, 'wx', 0o600);

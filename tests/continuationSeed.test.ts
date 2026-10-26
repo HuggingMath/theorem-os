@@ -667,6 +667,20 @@ describe('completed advisory research continuation', () => {
     expect(readSolverRunState(f.stateFile).cooperation!.tasks.find(node => node.task.id === f.task.id)?.researchCompletion).toEqual(f.completion);
   });
 
+  it('hands off blueprint prose on completed research without changing its retained identity', async () => {
+    const f = completedResearchFixture(), prior = f.oldState.cooperation!.tasks.at(-1)!;
+    const blueprint = { informalProof: 'Reduce to the escalator tree and bound each leaf.', citations: ['Rouse 2014, §3'] };
+    prior.task = { ...prior.task, ...blueprint };
+    expect(taskVersion(prior.task)).toBe(taskVersion(f.task));
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed(); const state = readSolverRunState(f.stateFile);
+    const retained = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+    expect(retained).toMatchObject({ status: 'completed', finding: f.finding, task: blueprint });
+    expect(retained.researchCompletion).toEqual(f.completion);
+    expect(JSON.parse(readContinuationPage(path.join(f.directory, 'continuation.json'), state.continuationDigest,
+      'seed-completed-research').text)[0]).toMatchObject({ task: { id: f.task.id, ...blueprint } });
+  });
+
   it('does not bind research completed on A to canonical sources B before the first continuation', async () => {
     const f = completedResearchFixture();
     fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission/Helpers.lean'),
