@@ -12,6 +12,8 @@ export type ResearchWorker = Readonly<{ id: string; role: ResearchRole; worktree
 export type ResponsibilityContext = Readonly<{
   tasks: readonly TaskRecord[];
   groups?: readonly RouteRecord[];
+  /** Workers that stopped in this process. Their owner, engineer and saved-assignment pins no longer bind live peers. */
+  stopped?: ReadonlySet<string>;
 }>;
 export type ResponsibilityAssessment =
   | Readonly<{ kind: 'matches' }>
@@ -55,30 +57,35 @@ export function independentFeasibilityWorker(node: TaskRecord, worker: Pick<Rese
   });
 }
 
+/** A capacity exploration is the stopped worker's own overlay, so its pin is kept. */
+export const releasedPin = (node: TaskRecord, id: string | undefined, stopped?: ReadonlySet<string>) =>
+  Boolean(id && stopped?.has(id) && !node.capacityExploration);
+
 /** First responsibility mismatch only; matching does not establish readiness or proof acceptance. */
 export function assessTaskResponsibility(node: TaskRecord, worker: Pick<ResearchWorker, 'id' | 'role'>,
-  { tasks, groups }: ResponsibilityContext): ResponsibilityAssessment {
+  { tasks, groups, stopped }: ResponsibilityContext): ResponsibilityAssessment {
   if (!researchWorkerCanNode(worker, node)) return { kind: 'blocked', reason: 'role' };
   const engineerId = node.task.kind === 'goal'
     ? groups?.find(route => route.group.id === taskGroup(node.task))?.group.engineerId : undefined;
-  if (engineerId && engineerId !== worker.id) return { kind: 'blocked', reason: 'engineer' };
-  if (node.task.ownerId && node.task.ownerId !== worker.id) return { kind: 'blocked', reason: 'owner' };
-  if (node.assignment && node.assignment.workerId !== worker.id) return { kind: 'blocked', reason: 'saved-assignment' };
+  const pinned = (id: string | undefined) => id && id !== worker.id && !releasedPin(node, id, stopped);
+  if (pinned(engineerId)) return { kind: 'blocked', reason: 'engineer' };
+  if (pinned(node.task.ownerId)) return { kind: 'blocked', reason: 'owner' };
+  if (pinned(node.assignment?.workerId)) return { kind: 'blocked', reason: 'saved-assignment' };
   if (!independentFeasibilityWorker(node, worker, tasks, groups)) return { kind: 'blocked', reason: 'review-independence' };
   if (hasRunningDuplicateQuestion(node, tasks)) return { kind: 'blocked', reason: 'running-duplicate' };
   return { kind: 'matches' };
 }
 
 function eligibleResearchTasks(ready: readonly TaskRecord[], worker: ResearchWorker, groups?: readonly RouteRecord[],
-  tasks: readonly TaskRecord[] = ready): TaskRecord[] {
-  const context = { tasks, groups };
+  tasks: readonly TaskRecord[] = ready, stopped?: ReadonlySet<string>): TaskRecord[] {
+  const context = { tasks, groups, stopped };
   return ready.filter(node => assessTaskResponsibility(node, worker, context).kind === 'matches');
 }
 
 /** Share ranked work, reserving a final available slot for independent work when the main frontier is occupied. */
 export function assignSharedResearchTask(ready: readonly TaskRecord[], worker: ResearchWorker, live: readonly ResearchWorker[], groups?: readonly RouteRecord[],
-  tasks: readonly TaskRecord[] = ready): TaskRecord | undefined {
-  let eligible = eligibleResearchTasks(ready, worker, groups, tasks);
+  tasks: readonly TaskRecord[] = ready, stopped?: ReadonlySet<string>): TaskRecord | undefined {
+  let eligible = eligibleResearchTasks(ready, worker, groups, tasks, stopped);
   if (live.some(peer => peer.role === 'prover')) {
     // Preserve M3 order within each responsibility while leaving spare generalists useful.
     const preferred = (node: TaskRecord) => worker.role === 'researcher' ? isAdvisoryTask(node.task)

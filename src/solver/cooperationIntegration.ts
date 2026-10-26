@@ -8,7 +8,7 @@ import { hasDeterministicLeanFailure } from './proofReuse';
 import { proofReferencesUnchanged } from './proofReferences';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { hasTaskConnectionCheck } from './taskConnections';
-import { assignmentDeliveryFile, taskGroup, taskReferenceDependencies, hasTaskAcceptance, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
+import { assignmentDeliveryFile, assumableLemma, taskGroup, taskReferenceDependencies, hasTaskAcceptance, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { digest, taskSourceRejections, integrationRejections, rejectionCode, bounded } from './cooperationShared';
 import { CooperationTaskProofs, type ProofDeliveryAnnotation } from './cooperationTaskProofs';
 import type { ResearchWorker } from './modules/organization';
@@ -343,7 +343,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
             !saved.conditions?.length || !node.assignment) throw new Error('math_task_condition_version_invalid');
         const conditions = saved.conditions.map(condition => {
           const input = this.node(condition.taskId);
-          if (!input || input.task.kind !== 'lemma' || !input.task.type || digest(input.task) !== condition.taskDigest)
+          if (!input || !assumableLemma(input.task) || digest(input.task) !== condition.taskDigest)
             throw new Error('math_task_condition_version_invalid');
           return input.task;
         });
@@ -531,7 +531,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           if (!taskDependenciesReady(snapshot.task, snapshot.tasks)) throw new Error('math_task_dependency_invalidated');
           const resolvedConditions = (submitted.conditions ?? []).map(condition => {
             const input = snapshot.tasks.find(item => item.task.id === condition.taskId);
-            if (!input || input.task.kind !== 'lemma' || !input.task.type || input.status !== 'integrated' ||
+            if (!input || !assumableLemma(input.task) || input.status !== 'integrated' ||
                 digest(input.task) !== condition.taskDigest) throw new Error('math_task_condition_version_invalid');
             return input.task;
           });

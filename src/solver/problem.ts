@@ -242,10 +242,8 @@ function isUntrackedSolverScratch(problem: SolverProblem, worktree: string, rela
 const solverGitPaths = (worktree: string, args: string[]): string[] => mathGitBytes(worktree, args,
   { timeout: 30_000, maxBuffer: 1024 * 1024, errorMessage: `math_git_failed:${args[0]}` }).toString('utf8').split('\0').filter(Boolean);
 
-export function assertSolverSources(problem: SolverProblem, worktree: string): void {
-  const project = path.join(worktree, problem.projectRelative);
-  assertSolverProjectSources(problem, project);
-  git(worktree, ['merge-base', '--is-ancestor', problem.baseCommit, 'HEAD']);
+/** Changed paths outside the owned sources, journals and advisory scratch roots. */
+function solverPathsOutsideOwnership(problem: SolverProblem, worktree: string) {
   const untracked = new Set(solverGitPaths(worktree, ['ls-files', '--others', '--exclude-standard', '-z']));
   // Include the index separately: an added file deleted from disk must not enter the checkpoint.
   const changed = new Set([...solverGitPaths(worktree, ['diff', '--name-only', '-z', problem.baseCommit]),
@@ -254,9 +252,43 @@ export function assertSolverSources(problem: SolverProblem, worktree: string): v
     'RESEARCH.md', 'DELIVERIES.jsonl', 'COOPERATION.json', 'CONTEXT-MANIFEST.json']);
   // A worker's own redirect of a Lean or script diagnostic is not proof content and is not committed.
   const diagnosticLog = (relative: string) => !relative.includes('/') && /\.log$/u.test(relative);
-  for (const relative of changed) if (!allowed.has(relative) && !/^DELIVERIES-[a-f0-9]{64}\.jsonl$/u.test(relative) &&
-      !isUntrackedSolverScratch(problem, worktree, relative, untracked) &&
-      !(diagnosticLog(relative) && !git(worktree, ['ls-files', '--', relative]))) throw new Error('math_source_outside_ownership');
+  const outside = [...changed].filter(relative => !allowed.has(relative) && !/^DELIVERIES-[a-f0-9]{64}\.jsonl$/u.test(relative) &&
+    !isUntrackedSolverScratch(problem, worktree, relative, untracked) &&
+    !(diagnosticLog(relative) && !git(worktree, ['ls-files', '--', relative])));
+  return { outside, untracked };
+}
+
+/**
+ * A stray untracked regular file is never committed or projected into a check, so it should not stop
+ * the worker. Move it under the repository scratch root instead; staged, tracked, linked and
+ * non-regular paths are left for assertSolverSources to reject. Call only while no writer is active.
+ */
+export function quarantineSolverStrayFiles(problem: SolverProblem, worktree: string, at = Date.now()): string[] {
+  const { outside, untracked } = solverPathsOutsideOwnership(problem, worktree);
+  const moved: string[] = [];
+  const root = path.join(worktree, '.scratch', 'quarantine', String(at));
+  for (const relative of outside) {
+    if (!untracked.has(relative)) continue;
+    const file = path.join(worktree, relative), target = path.join(root, relative);
+    try {
+      assertMathCanonicalPath(file);
+      if (!fs.lstatSync(file).isFile()) continue;
+      // Check before creating directories so a linked scratch root cannot redirect them outside the worktree.
+      assertMathCanonicalPath(target);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      assertMathCanonicalPath(target);
+      if (fs.existsSync(target)) continue;
+      fs.renameSync(file, target); moved.push(relative);
+    } catch { /* Leave it in place; the ownership check reports it. */ }
+  }
+  return moved;
+}
+
+export function assertSolverSources(problem: SolverProblem, worktree: string): void {
+  const project = path.join(worktree, problem.projectRelative);
+  assertSolverProjectSources(problem, project);
+  git(worktree, ['merge-base', '--is-ancestor', problem.baseCommit, 'HEAD']);
+  if (solverPathsOutsideOwnership(problem, worktree).outside.length) throw new Error('math_source_outside_ownership');
   for (const target of problem.targets) {
     const file = path.join(project, target.proofPath);
     if (hashMathFormalSourceDeclaration(fs.readFileSync(file, 'utf8'), target.theoremName) !== target.declarationHash)

@@ -137,9 +137,11 @@ bun run math run \
 }
 ```
 
-摘要需替换为真实的 64 位十六进制值，字节数也须精确匹配。`taskDigest` 为完整任务文件的 SHA-256，`problemReceiptDigest` 为 `readSolverProblem` 返回的固定题目收据摘要；附件路径相对清单目录解析。`kind` 支持 `proof-source`、`research-notes`、`diagnostics`，`provenance` 可省略，缺省按未验证材料处理。
+摘要需替换为真实的 64 位十六进制值，字节数也须精确匹配。`taskDigest` 为完整任务文件的 SHA-256，`problemReceiptDigest` 为 `readSolverProblem` 返回的固定题目收据摘要；附件路径相对清单目录解析。`kind` 支持 `proof-source`、`research-notes`、`diagnostics`、`reference`，`provenance` 可省略，缺省按未验证材料处理。`reference` 用于论文、讲义或书籍章节等参考文本，须事先转成 UTF-8 纯文本（PDF 先用 `pdftotext` 等工具转换）；单个附件不超过 16 MB，全部附件合计不超过 64 MB。
 
 宿主验证完整 UTF-8 文件并生成只读快照，工人从各自项目的 `.lake/continuation.json` 读取；必需上下文只含附件索引和读取命令。`continuation read --snapshot FILE --sha256 DIGEST --id old-notes --offset 0 --max-bytes 16000` 返回有界 JSON 页，按 `nextOffset` 继续，逐字连接 `text`，偏移单位为 UTF-16 code unit。历史检查须重新验证，附件不改变原题假设或证明验收。
+
+`continuation search --snapshot FILE --sha256 DIGEST --query 'Sylow subgroup' [--kind reference] [--limit 8]` 按段落切分附件（约 1200 字符，单段最长 4000），用 BM25 词法排序，返回命中段落的 `startOffset`/`endOffset`、匹配词和约 400 字符摘录；用 `continuation read --id ID --offset startOffset` 读取原文。词项为小写单词、标识符分段（`Nat.add_zero`、`ContinuousOn`）和汉字二元组；`--kind` 可重复，缺省搜索全部类型。快照含 `reference` 附件时，Lead 与任务工人的上下文还会自动附上与当前任务最相关的至多 4 段参考文本（可选上下文，预算不足时省略并记入清单）；审阅与组装不附加。排序和摘录只是阅读线索，不构成证明或前提。
 
 恢复时可以省略原清单，继续读取已冻结的快照；显式再次提供清单时必须完全匹配。快照损坏或缺失会拒绝恢复。既有无附件运行不能静默添加附件；需要附加材料时应显式新建运行。盲法声明回译不接收附件。
 
@@ -363,6 +365,7 @@ Lead 的普通规划和初始规划执行 90 秒后收到保存提醒，120 秒�
 | `DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS` | 可复用的可信 Lean 依赖缓存根目录；多个路径用 `:` 分隔，内容须匹配冻结的 Lake manifest |
 | `DEEPSCIENTIST_MATH_SANDBOX_BACKEND` | 选择验证后端，例如 `bwrap`；只读依赖环境使用其文件描述符挂载能力 |
 | `DEEPSCIENTIST_LEAN_EVAL_ROOT` | 本地 Lean-Eval 仓库，供对应适配器使用 |
+| `DEEPSCIENTIST_MATH_TOOLS_ROOT` | 可选的数学计算工具目录：`manifest.json` 加 `bin/` 包装脚本（CAS、SAT/SMT、ATP、优化等）。追加到 worker PATH 末尾，清单摘要计入环境身份；结果仅作 advisory，见 [solver-modules.md](solver-modules.md) |
 
 使用外部隔离启动器时，按每个子进程的 `DEEPSCIENTIST_MATH_WORKER_ID` 和 `DEEPSCIENTIST_MATH_WORKER_WORKTREE` 绑定工作区与独立会话存储。
 

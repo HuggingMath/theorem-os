@@ -32,6 +32,8 @@ const OPTIONAL_ENV_FILE_KEYS = new Set([
   'DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT',
   'DEEPSCIENTIST_MATH_RETRIEVAL_CORPUS',
   'DEEPSCIENTIST_MATH_RETRIEVAL_CORPUS_SHA256',
+  'DEEPSCIENTIST_MATH_TOOLS_ROOT',
+  'DEEPSCIENTIST_MATH_TOOLS_SHA256',
   'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
   'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
 ]);
@@ -144,6 +146,10 @@ export function resolveMathematicsRuntimeEnvironment(
       .filter((entry, index, entries) => entries.indexOf(entry) === index)
       .join(path.delimiter);
   }
+  // Optional computation tools come last, so they never shadow pinned Lean or system commands.
+  const toolsBin = merged.DEEPSCIENTIST_MATH_TOOLS_ROOT && path.join(merged.DEEPSCIENTIST_MATH_TOOLS_ROOT, 'bin');
+  if (toolsBin && merged.PATH !== undefined && !merged.PATH.split(path.delimiter).includes(toolsBin))
+    merged.PATH = [merged.PATH, toolsBin].filter(Boolean).join(path.delimiter);
   return Object.freeze({ ...withoutSecrets(merged), [RESOLVED_ENVIRONMENT]: envFile });
 }
 

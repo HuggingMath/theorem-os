@@ -47,7 +47,9 @@ const provenance = z.object({
 }).strict();
 const theorem = z.object({
   name: z.string().min(1), file: z.string(), type: z.string().min(1),
-  typeKind: z.enum(['closed-task-type', 'source-header']), kind: z.enum(['lemma', 'goal']),
+  typeKind: z.enum(['closed-task-type', 'source-header']),
+  /** `definition` entries are checked `def` bodies of `type`: reuse copies the body, it does not apply a proposition. */
+  kind: z.enum(['lemma', 'goal', 'definition']),
   description: z.string(), premises: z.array(z.string()),
   elaboration: knowledgeElaborationSchema.optional(),
   dependencies: z.object({ statement: z.array(reference), proof: z.array(reference),

@@ -4,7 +4,7 @@ export type WebPlanTask = {
   dependsOn: readonly string[]; revision: number; proofPath?: string; theoremName?: string; type?: string;
   groupId?: string; sharing?: 'group' | 'problem'; status?: 'active' | 'paused' | 'stopped'; ownerId?: string;
   premises?: readonly string[]; conditional?: boolean; statementReview?: boolean; informalStatement?: string;
-  reviewScope?: 'final-candidate' | 'feasibility';
+  reviewScope?: 'final-candidate' | 'feasibility'; declaration?: 'definition';
 };
 export type WebPlanGroup = { id: string; objective: string; status: 'active' | 'paused' | 'stopped'; revision: number;
   engineerId?: string; maxTurns?: number; maxConcurrent?: number };

@@ -24,7 +24,7 @@ import { checkKnowledgeApplications } from './knowledgeApplications';
 import { bindMathematicalGap, mathematicalGaps } from './mathematicalGaps';
 import { taskConnectionCheckCurrent, taskInputsMissingFromSeed } from './taskConnections';
 import { hasLeanSourceDiagnostic } from './proofReuse';
-import { taskReferenceDependencies, assignmentDeliveryFile, markTaskReferences, markTaskAcceptance, hasTaskAcceptance, type CooperativeTask,
+import { assumableLemma, taskReferenceDependencies, assignmentDeliveryFile, markTaskReferences, markTaskAcceptance, hasTaskAcceptance, type CooperativeTask,
   type TaskAssignment, type TaskRecord, type CooperativeAction } from './tasks';
 import { digest, FailedTaskInput, bounded, deliveryInputFields } from './cooperationShared';
 import { CooperationStatements } from './cooperationStatements';
@@ -469,14 +469,14 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     const dependencies = this.dependencies(task, tasks);
     if (!assignment?.connectionCheck) {
       if (!task.conditional) return [];
-      if (!assignment) return dependencies.filter(node => node.task.kind === 'lemma' && node.status !== 'integrated').map(node => node.task);
+      if (!assignment) return dependencies.filter(node => assumableLemma(node.task) && node.status !== 'integrated').map(node => node.task);
       if (assignment.taskId !== task.id || assignment.taskDigest !== digest(task)) throw new Error('math_task_condition_version_invalid');
       // Explicit conditional contracts also authorize only their frozen, exact dispatch inputs.
       return (assignment.dependencies ?? []).map(reference => {
         const input = tasks.find(node => node.task.id === reference.taskId);
         if (!input || digest(input.task) !== reference.taskDigest) throw new Error('math_task_condition_version_invalid');
         return input.task;
-      }).filter(input => input.kind === 'lemma' && Boolean(input.type?.trim()));
+      }).filter(input => assumableLemma(input));
     }
     if (!taskConnectionCheckCurrent(task, assignment, tasks)) throw new Error('math_task_condition_version_invalid');
     const check = assignment.connectionCheck;

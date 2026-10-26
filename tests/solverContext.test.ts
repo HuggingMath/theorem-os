@@ -42,7 +42,8 @@ it('deduplicates repeated findings and progress while preserving exact Lean type
   expect(context.continuationMessage).toContain('replaces every previous dispatch nonce and receipt');
   expect(context.continuationMessage).toContain('RESEARCH.md');
   expect(context.continuationMessage).toContain('COOPERATION.json');
-  expect(context.continuationMessage).toContain('complete current math-plan');
+  expect(context.continuationMessage).toContain('host-synced accepted graph');
+  expect(context.continuationMessage).toContain('{"baseVersion":"current-plan","upsert":[');
   expect(context.continuationMessage).toContain('proof acceptance');
   expect(context.manifest!.usedBytes).toBeLessThanOrEqual(context.manifest!.maxBytes);
   const graph = context.message.split('Lead task graph and host feedback:\n')[1].split('\n\nRoute groups')[0];
@@ -58,14 +59,17 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
   const context = buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
     taskText: 'Prove the target', retrievalRoot: '/library', frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' },
     assignment: { kind: 'lead', seedCommit: 'fixed-commit' } });
-  expect(context.instructions).toContain('Once a complete plan has useful executable work, save the full current graph and return promptly so peers can start it.');
+  expect(context.instructions).toContain('Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it.');
   expect(context.instructions).toContain('Delegate unresolved library or mathematical searches as research tasks to eligible Researchers or the Engineer.');
   for (const message of [context.instructions, context.continuationMessage]) {
     expect(message).toContain('ready tasks reserved by ownerId to a busy worker');
-    expect(message).toContain('Explicitly reassign an unstarted, unassigned task through the complete plan');
+    expect(message).toContain('Explicitly reassign an unstarted, unassigned task through the plan');
     expect(message).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
   }
   expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
+  // Only an accepted graph can be revised; initial planning still writes a complete plan.
+  for (const message of [context.instructions, context.continuationMessage])
+    expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
 });
 
 const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => {

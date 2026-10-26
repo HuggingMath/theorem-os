@@ -1,4 +1,4 @@
-import { hasTaskAcceptance, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+import { hasTaskAcceptance, isDefinitionTask, planError, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 import type { TaskProof } from './cooperativeProof';
 
 /** Routes are alternatives; the prerequisites within one route are conjunctive. */
@@ -18,23 +18,27 @@ export function parseProofRoutes(value: unknown, tasks: readonly CooperativeTask
   if (!Array.isArray(value)) throw new Error('math_plan_invalid_proof_routes');
   const nodes = new Map(tasks.map(task => [task.id, task]));
   if (nodes.size !== tasks.length) throw new Error('math_plan_duplicate_task');
-  const routes = value.map((item: unknown): ProofRoute => {
+  const routes = value.map((item: unknown, index: number): ProofRoute => {
     if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !routeKeys.has(key)))
-      throw new Error('math_plan_invalid_proof_route');
+      throw planError('math_plan_invalid_proof_route', { index }, 'A route has exactly id, targetTaskId, prerequisiteTaskIds and closingTaskId.');
     const route = item as Record<string, unknown>;
     if (!validId(route.id) || !validId(route.targetTaskId) || !validId(route.closingTaskId) ||
         !Array.isArray(route.prerequisiteTaskIds) || !route.prerequisiteTaskIds.every(validId) ||
         new Set(route.prerequisiteTaskIds).size !== route.prerequisiteTaskIds.length)
-      throw new Error('math_plan_invalid_proof_route');
-    if (nodes.get(route.targetTaskId)?.kind !== 'goal') throw new Error('math_plan_invalid_proof_route_target');
-    if (!exactLemma(nodes.get(route.closingTaskId)) || route.prerequisiteTaskIds.some(id => !exactLemma(nodes.get(id))))
-      throw new Error('math_plan_invalid_proof_route_input');
+      throw planError('math_plan_invalid_proof_route', { index, routeId: validId(route.id) ? route.id : undefined });
+    if (nodes.get(route.targetTaskId)?.kind !== 'goal')
+      throw planError('math_plan_invalid_proof_route_target', { routeId: route.id, targetTaskId: route.targetTaskId }, 'The target must be a goal task.');
+    const input = [route.closingTaskId, ...route.prerequisiteTaskIds].find(id => !exactLemma(nodes.get(id)));
+    if (input) throw planError('math_plan_invalid_proof_route_input', { routeId: route.id, taskId: input },
+      'Route inputs must be typed lemma tasks in this plan.');
+    if (isDefinitionTask(nodes.get(route.closingTaskId)!)) throw planError('math_plan_invalid_proof_route_input',
+      { routeId: route.id, taskId: route.closingTaskId }, 'A route closes with a typed proposition, not a definition.');
     return { id: route.id, targetTaskId: route.targetTaskId,
       prerequisiteTaskIds: [...route.prerequisiteTaskIds], closingTaskId: route.closingTaskId };
   });
-  if (new Set(routes.map(route => route.id)).size !== routes.length ||
-      new Set(routes.map(route => route.targetTaskId + '\0' + route.closingTaskId)).size !== routes.length)
-    throw new Error('math_plan_duplicate_proof_route');
+  const duplicate = routes.find((route, index) => routes.findIndex(item => item.id === route.id ||
+    item.targetTaskId === route.targetTaskId && item.closingTaskId === route.closingTaskId) !== index);
+  if (duplicate) throw planError('math_plan_duplicate_proof_route', { routeId: duplicate.id });
 
   // Check ordinary inputs as well as route edges. Cross-route cycles are invalid even
   // when the original goals do not list the alternative closing lemmas in dependsOn.
@@ -42,9 +46,9 @@ export function parseProofRoutes(value: unknown, tasks: readonly CooperativeTask
   for (const route of routes) edges.get(route.targetTaskId)!.push(route.closingTaskId);
   const visiting = new Set<string>(), visited = new Set<string>();
   const visit = (id: string) => {
-    if (visiting.has(id)) throw new Error('math_plan_proof_route_cycle');
+    if (visiting.has(id)) throw planError('math_plan_proof_route_cycle', { cycle: [...[...visiting].slice([...visiting].indexOf(id)), id] });
     if (visited.has(id)) return;
-    if (!nodes.has(id)) throw new Error('math_plan_missing_dependency');
+    if (!nodes.has(id)) throw planError('math_plan_missing_dependency', { dependsOn: id });
     visiting.add(id); edges.get(id)!.forEach(visit); visiting.delete(id); visited.add(id);
   };
   tasks.forEach(task => visit(task.id));
@@ -60,13 +64,15 @@ export function parseProofRoutes(value: unknown, tasks: readonly CooperativeTask
   for (const route of routes) {
     const inputs = [route.closingTaskId, ...route.prerequisiteTaskIds], target = nodes.get(route.targetTaskId)!;
     const closingDependencies = dependencies(route.closingTaskId);
-    if (route.prerequisiteTaskIds.some(id => !closingDependencies.has(id)))
-      throw new Error('math_plan_proof_route_missing_prerequisite');
+    const missing = route.prerequisiteTaskIds.find(id => !closingDependencies.has(id));
+    if (missing) throw planError('math_plan_proof_route_missing_prerequisite', { routeId: route.id, taskId: missing },
+      'Each prerequisite must be a transitive dependency of the closing task.');
     for (const id of inputs) {
       const input = nodes.get(id)!;
-      if (id === target.id || dependencies(id).has(target.id)) throw new Error('math_plan_proof_route_cycle');
+      if (id === target.id || dependencies(id).has(target.id))
+        throw planError('math_plan_proof_route_cycle', { routeId: route.id, taskId: id });
       if (taskGroup(input) !== taskGroup(target) && input.sharing === 'group')
-        throw new Error('math_plan_proof_route_input_not_shared');
+        throw planError('math_plan_proof_route_input_not_shared', { routeId: route.id, taskId: id });
     }
   }
   return routes;

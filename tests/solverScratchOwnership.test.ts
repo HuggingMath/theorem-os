@@ -3,8 +3,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
-import { assertSolverSources, commitSolverSources, committedSource, git, withSolverWorktree,
+import { assertSolverSources, commitSolverSources, committedSource, git, quarantineSolverStrayFiles, withSolverWorktree,
   type SolverProblem } from '../src/solver/problem';
+import { solverSourceFeedback } from '../src/solver/feedback';
 import { localExample } from './helpers/solver';
 
 describe('advisory scratch source ownership', () => {
@@ -200,5 +201,56 @@ describe('advisory scratch source ownership', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('frozen protected bytes\n');
     fs.writeFileSync(file, 'tampered protected bytes\n'); unchangedFailure('math_trusted_source_changed');
     expect(fs.readFileSync(file, 'utf8')).toBe('tampered protected bytes\n');
+  });
+
+  it('moves stray untracked regular files under the repository quarantine root with their bytes', () => {
+    const stray = ['outside.txt', 'generated/.scratch_x.err', 'generated/addition/AccessProbe.lean', 'notes/scratch/experiment.py'];
+    for (const relative of stray) write(relative, `stray ${relative}\n`);
+    const kept = write('.scratch/kept.txt', 'kept advisory result\n');
+    unchangedFailure();
+    expect(quarantineSolverStrayFiles(problem, workspace, 42).sort()).toEqual([...stray].sort());
+    for (const relative of stray) {
+      expect(fs.existsSync(path.join(workspace, relative))).toBe(false);
+      expect(fs.readFileSync(path.join(workspace, '.scratch', 'quarantine', '42', relative), 'utf8')).toBe(`stray ${relative}\n`);
+    }
+    expect(fs.readFileSync(kept, 'utf8')).toBe('kept advisory result\n');
+    expect(() => assertSolverSources(problem, workspace)).not.toThrow();
+    expect(commitSolverSources(problem, workspace)).toBe(problem.baseCommit);
+    expect(quarantineSolverStrayFiles(problem, workspace, 43)).toEqual([]);
+  });
+
+  it('leaves tracked, staged and linked strays in place for the ownership check', () => {
+    const tracked = write('tracked.txt', 'tracked stray\n');
+    git(workspace, ['add', '--', 'tracked.txt']); commitFixture();
+    const staged = write('staged.txt', 'staged stray\n'); git(workspace, ['add', '--', 'staged.txt']);
+    const outside = path.join(directory, 'outside-evidence.txt'); fs.writeFileSync(outside, 'immutable external evidence\n');
+    const link = path.join(workspace, 'linked.txt'); fs.symlinkSync(outside, link);
+    expect(quarantineSolverStrayFiles(problem, workspace, 7)).toEqual([]);
+    expect(fs.readFileSync(tracked, 'utf8')).toBe('tracked stray\n');
+    expect(fs.readFileSync(staged, 'utf8')).toBe('staged stray\n');
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(path.join(workspace, '.scratch', 'quarantine'))).toBe(false);
+    unchangedFailure();
+  });
+
+  it('does not create quarantine directories through a linked repository scratch root', () => {
+    const outside = path.join(directory, 'outside-directory'); fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(workspace, '.scratch'), 'dir');
+    const stray = write('outside.txt', 'stray beside a linked root\n');
+    expect(quarantineSolverStrayFiles(problem, workspace, 9)).toEqual([]);
+    expect(fs.readdirSync(outside)).toEqual([]);
+    expect(fs.readFileSync(stray, 'utf8')).toBe('stray beside a linked root\n');
+    unchangedFailure();
+  });
+
+  it('quarantines in source feedback only when a cooperative caller asks for it', () => {
+    const stray = write('outside.txt', 'stray\n'), reports: string[][] = [];
+    expect(() => solverSourceFeedback(problem, workspace)).toThrow('math_source_outside_ownership');
+    expect(fs.existsSync(stray)).toBe(true);
+    expect(solverSourceFeedback(problem, workspace, paths => reports.push(paths))).toBeUndefined();
+    expect(reports).toEqual([['outside.txt']]);
+    expect(fs.existsSync(stray)).toBe(false);
+    expect(solverSourceFeedback(problem, workspace, paths => reports.push(paths))).toBeUndefined();
+    expect(reports).toHaveLength(1);
   });
 });

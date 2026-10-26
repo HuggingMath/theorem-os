@@ -40,8 +40,8 @@ export function isWebEventDetails(value: unknown): value is WebEventDetails {
 const moduleEvents: Record<WebModuleId, readonly string[]> = {
   M1: ['turn_started', 'worker_activity', 'turn_checkpoint', 'turn_failed', 'worker_failed',
     'worker_recovering', 'worker_recovered', 'assignment_superseded'],
-  M2: ['proof_check_started', 'proof_checked', 'candidate_selected', 'lemma_checked', 'source_rejected',
-    'task_checked', 'task_check_reused', 'task_failure_check_reused', 'task_recheck_started', 'task_recheck_finished'],
+  M2: ['proof_check_started', 'proof_checked', 'candidate_selected', 'lemma_checked', 'source_rejected', 'source_quarantined',
+    'task_checked', 'task_check_reused', 'task_failure_check_reused', 'task_recheck_started', 'task_recheck_finished', 'task_tactic_battery'],
   M3: ['research_action', 'turn_retry', 'model_budget_stopped', 'planning_budget_stopped', 'route_parked', 'route_reopened', 'routes_idle', 'plan_stalled'],
   M4: ['context_compiled', 'context_restarted'],
   M5: ['task_assigned', 'plan_updated', 'plan_rejected', 'initial_plan_fallback', 'assembly_started',

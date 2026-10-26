@@ -21,7 +21,7 @@ import { mathematicalGapSchema } from './mathematicalGaps';
 import { researchWorkerCanNode, researchWorkerCanTask } from './modules/organization';
 import { CAPACITY_EXPLORATION_FOCUSES, currentCapacityExploration, plannedTaskRecords, type CapacityExploration } from './capacityExploration';
 import { assertSolverSources, committedSource, commitSolverSources, git, readSolverProblem, withSolverWorktree, type SolverProblem } from './problem';
-import { isAdvisoryTask, isFinalCandidateReview, parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+import { assumableLemma, isAdvisoryTask, isFinalCandidateReview, parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 import { createTaskConnectionCheck } from './taskConnections';
 import { setTaskStatus } from './taskLifecycle';
 
@@ -643,7 +643,7 @@ export async function seedSolverContinuation(options: {
           });
           conditions = references(savedConditional.conditions);
           const dependencies = references(savedConditional.dependencies);
-          if (!conditions.every(task => task.kind === 'lemma' && task.type?.trim() &&
+          if (!conditions.every(task => assumableLemma(task) &&
               dependencies.some(dependency => dependency.id === task.id)) || new Set(conditions.map(task => task.id)).size !== conditions.length)
             throw new Error('math_task_condition_version_invalid');
           const frozen = await withSolverWorktree(state.worktree, state.problem.baseCommit, async checkout => {

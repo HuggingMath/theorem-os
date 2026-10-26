@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, readMathJson, readMathText, withMathRuntimeLease, writeMathJsonDurable, type MathLease } from '../math/mathRuntimeIo';
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
+import { MATH_TOOLS_ROOT_ENV, MATH_TOOLS_SHA256_ENV, readMathTools } from '../math/mathTools';
 import { checkResolvedLeanToolchainReadiness } from '../math/leanToolchainReadiness';
 import { prepareMathProofEnvironment, MATH_PROOF_ENVIRONMENT_ENV } from '../math/mathProofEnvironment';
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
@@ -155,6 +156,12 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (env.DEEPSCIENTIST_MATH_RETRIEVAL_CORPUS_SHA256 && env.DEEPSCIENTIST_MATH_RETRIEVAL_CORPUS_SHA256 !== digest)
           throw new Error('math_corpus_identity_changed');
         env = { ...env, DEEPSCIENTIST_MATH_RETRIEVAL_CORPUS_SHA256: digest };
+      }
+      // The manifest digest joins the environment identity, so resume rejects a changed tool set.
+      const mathTools = env[MATH_TOOLS_ROOT_ENV] ? readMathTools(env[MATH_TOOLS_ROOT_ENV]) : undefined;
+      if (mathTools) {
+        if (env[MATH_TOOLS_SHA256_ENV] && env[MATH_TOOLS_SHA256_ENV] !== mathTools.digest) throw new Error('math_tools_identity_changed');
+        env = { ...env, [MATH_TOOLS_SHA256_ENV]: mathTools.digest };
       }
       const profile = process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex');
       const sub2apiProfile = modules.M1.open === directSolverModules.M1.open ? selectedSub2apiProfile(profile) : undefined;
@@ -334,6 +341,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         writeMathJsonDurable(environmentFile, projectMathematicsRuntimeEnvironment(environment), 0o400);
         workerAccess.set(workerId, { environment: resolveMathematicsRuntimeEnvironment(environment), corpusFile: workerCorpus,
           retrievalRoot: corpus?.projectSubdirectory ? workerRoot : workerProject,
+          ...(mathTools ? { mathTools } : {}),
           ...(workerContinuation ? { continuation: workerContinuation } : {}),
           ...(knowledge ? { knowledgeFile, knowledgeDigest: knowledge.digest,
             knowledgeSnapshot: { digest: knowledge.digest, base: { entries: knowledge.base.entries, evidence: knowledge.base.evidence,

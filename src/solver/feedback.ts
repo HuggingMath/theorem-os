@@ -1,5 +1,5 @@
 import type { ProofCheck } from './modules/evidence';
-import { assertSolverSources, SolverSourceError, type SolverProblem } from './problem';
+import { assertSolverSources, quarantineSolverStrayFiles, SolverSourceError, type SolverProblem } from './problem';
 import { mathDigest } from '../math/mathRuntimeIo';
 import { parseLeanDiagnosticOutput, renderLeanDiagnosticMessage } from '../math/leanDiagnosticMessages';
 
@@ -47,7 +47,13 @@ export function rememberSolverFailure(check: ProofCheck, history: readonly Solve
     { signature: digest, sourceDigest: check.sourceDigest, attempts: (previous?.attempts ?? 0) + 1 }];
 }
 
-export function solverSourceFeedback(problem: SolverProblem, worktree: string): string | undefined {
+/** Cooperative workers pass `quarantined` to move stray untracked files aside first; see quarantineSolverStrayFiles. */
+export function solverSourceFeedback(problem: SolverProblem, worktree: string,
+  quarantined?: (paths: string[]) => void): string | undefined {
+  if (quarantined) {
+    const moved = quarantineSolverStrayFiles(problem, worktree);
+    if (moved.length) quarantined(moved);
+  }
   try {
     assertSolverSources(problem, worktree);
   } catch (error) {

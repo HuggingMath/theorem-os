@@ -43,7 +43,8 @@ describe('assignment-bound worker delivery identities', () => {
     const instance = cooperativeResearch({ state, workers: [lead, peer, other], retrievalRoot: directory,
       access: new Map([lead, peer, other].map(worker => [worker.id, { environment, retrievalRoot: directory }])),
       signal: controller.signal, emit: (event, details) => events.push({ event, details }),
-      modules: directSolverModules,
+      // These `True` helpers exercise worker deliveries; the host battery would close them before dispatch.
+      modules: { ...directSolverModules, M2: { ...directSolverModules.M2, closeTask: undefined } },
       exclusiveCheck: async check => {
         const previous = queue;
         let release!: () => void;

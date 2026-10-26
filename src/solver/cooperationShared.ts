@@ -18,12 +18,14 @@ import type { ProofReadyRecord } from './proofReady';
 import type { ProofImportRecord } from './proofImportRecord';
 import type { ResearchRecord } from './researchRecords';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
+import { expandPlanPatch, isPlanPatch, type PlanPatchBase } from './planPatch';
 import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
 
 export const digest = taskVersion;
 /** Derived from stored task and failure records; the marker is never a separate acceptance state. */
 export const taskSourceRejections = new Set(['math_task_source_outside_scope', 'math_task_ambiguous_declaration',
   'math_task_existing_declaration_removed', 'math_task_existing_declaration_changed', 'math_task_requires_theorem',
+  'math_task_requires_definition',
   'math_task_helper_is_original_declaration', 'math_task_conditional_header_unsupported',
   'math_original_declaration_changed', 'math_original_context_changed', 'math_local_module_import_cycle',
   'math_trusted_source_changed', 'math_source_outside_ownership']);
@@ -106,7 +108,11 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   researchDrafts?: Record<string, { taskDigest: string; workerId: string; assignmentId?: string; seedCommit: string; canonicalCommit?: string;
     commit: string; outputDigest: string; artifacts: DeliveryArtifactManifest; suspended?: boolean }>;
   recheck?: { canonicalCommit: string; total: number; completed: number; taskId?: string };
-  initialPlanFallback?: { at: number; reason: string } };
+  initialPlanFallback?: { at: number; reason: string };
+  /** What the last started Lead turn saw; the next Lead context reports changes since then. */
+  leadInboxBasis?: import('./leadInbox').LeadInboxBasis;
+  /** Context-only bounded index of changes since leadInboxBasis. */
+  leadInbox?: import('./leadInbox').LeadInbox };
 export type TaskVersions = ReadonlyMap<string, { task: CooperativeTask; version: string }>;
 export type DispatchBudget = { maxTurns: number; remainingMs: number };
 export const RETRY_DISPATCH = Symbol('retry-dispatch');
@@ -132,7 +138,14 @@ export const deliveryInputFields = (record: DeliveryRecord) => ({
   remainingObligations: record.remainingObligations, lemmaRequests: record.lemmaRequests, findingDigest: record.findingDigest,
   mathematicalGap: record.mathematicalGap, mathematicalGapScope: record.mathematicalGapScope,
 });
-/** Model proposes tasks; the host validates coverage, exact targets and an acyclic dependency graph. */
-export function readCooperationPlan(problem: SolverProblem, worktree: string): ReturnType<typeof parseCooperationPlan> {
-  return parseCooperationPlan(problem, block(worktree, 'math-plan'));
+export type LeadPlan = ReturnType<typeof parseCooperationPlan> & { fromPatch?: boolean };
+/** Model proposes tasks or a revision of the accepted graph; the host validates coverage, exact targets and an acyclic dependency graph. */
+export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase,
+  options?: Parameters<typeof expandPlanPatch>[2]): LeadPlan {
+  if (!isPlanPatch(value)) return parseCooperationPlan(problem, value);
+  return { ...parseCooperationPlan(problem, expandPlanPatch(value, base, options)), fromPatch: true };
+}
+export function readCooperationPlan(problem: SolverProblem, worktree: string, base?: PlanPatchBase,
+  options?: Parameters<typeof expandPlanPatch>[2]): LeadPlan {
+  return parseLeadPlan(problem, block(worktree, 'math-plan'), base, options);
 }

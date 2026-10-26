@@ -69,7 +69,8 @@ export class WorkerProofLifecycle {
       await close();
       // The assignment and environment may have changed while the writer was stopping.
       if (!cooperation.pendingProofReady(worker, assignment)) return true;
-      const sourceError = solverSourceFeedback(state.problem, worker.worktree);
+      const sourceError = solverSourceFeedback(state.problem, worker.worktree, paths =>
+        this.input.emit('source_quarantined', { paths: paths.slice(0, 32), count: paths.length }));
       if (sourceError) {
         cooperation.proofReadyFailedFreeze(worker, assignment, sourceError);
         cooperation.rejected(assignment, sourceError);

@@ -10,7 +10,7 @@ import { isStatementAction } from './statementReview';
 import { captureDeliveryArtifacts } from './deliveryArtifacts';
 import { bindMathematicalGap } from './mathematicalGaps';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, type TaskRecord, type CooperativeAction } from './tasks';
-import { directDeliveryRejections, rejectionCode, HumanEditRecord, TaskVersions, bounded, leadPlanPublicationFeedback,
+import { directDeliveryRejections, rejectionCode, HumanEditRecord, TaskVersions, bounded, leadPlanPublicationFeedback, parseLeadPlan,
   type PlanPublicationRejection } from './cooperationShared';
 import { CooperationPlanning } from './cooperationPlanning';
 import { ResearchAdmissionError } from './researchAdmission';
@@ -191,7 +191,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
                     throw new Error(code('superseded'));
                   if (!action.planVersion || response.baseVersion !== action.planVersion ||
                       response.baseVersion !== this.archive.planVersion) throw new Error(code('version_conflict'));
-                  const plan = parseCooperationPlan(this.input.state.problem, response);
+                  const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase());
                   await this.acceptPlan(plan, undefined, { action, receipt: { nonce, file,
                     offset: entry.offset, eventDigest, baseVersion: response.baseVersion, acceptedAt: Date.now() } });
                   this.rememberLeadDecision(action);

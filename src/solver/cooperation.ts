@@ -24,12 +24,13 @@ import { contextCheckpointRejection } from './contextCheckpoint';
 import { deliverHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
+import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { taskTypePreflightEnvironmentIdentity, type TaskTypePreflight } from './taskTypePreflight';
-import { assignmentDeliveryFile, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
+import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
 import { consumeLeadWakes, dropLeadWakes, leadWakePending, settleLeadWakes } from './leadWakes';
+import { leadInbox, leadInboxBasis, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
-import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded,
-  readCooperationPlan } from './cooperationShared';
+import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
 import { ResearchAdmissionError } from './researchAdmission';
 export { parseCooperationPlan } from './tasks';
@@ -74,7 +75,7 @@ export class CooperativeResearch extends CooperationInputs {
         .filter(node => !this.preparingTaskTypes.has(node) && !this.synchronizationBlocked(node.task) &&
           (!node.capacityExploration || currentCapacityExploration(node, this.archive.tasks, this.explorationIdentity)));
       // A peer may have published real work while this request waited for the archive transaction.
-      const newlyReady = assignSharedResearchTask(ready, worker, this.allocationPeers, this.archive.groups, this.archive.tasks);
+      const newlyReady = assignSharedResearchTask(ready, worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers);
       if (newlyReady) return !previousReady.includes(newlyReady);
       const focus = originalGoalTaskFocus(this.plannedTasks(), this.archive.groups, this.input.state.environmentDigest);
       const targets = [...focus.frontier].map(id => this.node(id)).filter(node => node &&
@@ -108,9 +109,10 @@ export class CooperativeResearch extends CooperationInputs {
       busy: Math.max(0, (route.busy ?? 0) - Number(route.group.id === taskGroup(node.task))) }));
     const ready = readyResearchTasks(this.archive.tasks, groups).filter(candidate => !candidate.capacityExploration &&
       !advisory(candidate.task) && !this.preparingTaskTypes.has(candidate) && !this.synchronizationBlocked(candidate.task));
-    return Boolean(assignSharedResearchTask(ready, worker, this.allocationPeers, groups, this.archive.tasks));
+    return Boolean(assignSharedResearchTask(ready, worker, this.allocationPeers, groups, this.archive.tasks, this.stoppedWorkers));
   }
   private leadPauseInputs = new WeakMap<CooperativeAction, string>();
+  private pendingLeadInboxBases = new WeakMap<CooperativeAction, LeadInboxBasis>();
   private leadResponsibilityDigest(): string {
     const focus = originalGoalTaskFocus(this.archive.tasks, this.archive.groups, this.input.state.environmentDigest);
     return mathDigest(canonicalMathJson({ schema: 'theorem-os.lead-responsibility.v1', ...this.explorationIdentity,
@@ -224,7 +226,7 @@ export class CooperativeResearch extends CooperationInputs {
         const rejection = this.archive.planRejection;
         if (!rejection?.stalled || rejection.proposalDigest !== this.proposedPlanDigest() ||
             rejection.inputDigest !== this.planningInputDigest()) {
-          const plan = readCooperationPlan(this.input.state.problem, this.lead.worktree);
+          const plan = this.readLeadPlan();
           const initial = !this.archive.tasks.length;
           await this.acceptPlan(plan);
           if (initial) dropLeadWakes(this.archive.leadWakes!);
@@ -392,7 +394,7 @@ export class CooperativeResearch extends CooperationInputs {
   }
   private recordTaskWait(worker: ResearchWorker, ranked: readonly TaskRecord[], ready: readonly TaskRecord[]) {
     const dependencies = !ranked.length ? this.archive.tasks.filter(node =>
-      ['pending', 'blocked'].includes(node.status) && assessTaskResponsibility(node, worker, this.archive).kind === 'matches' &&
+      ['pending', 'blocked'].includes(node.status) && assessTaskResponsibility(node, worker, this.responsibility).kind === 'matches' &&
       routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) && !this.synchronizationBlocked(node.task) &&
       !taskCanStart(node.task, this.archive.tasks, this.archive.groups)) : [];
     if (dependencies.length) {
@@ -403,7 +405,7 @@ export class CooperativeResearch extends CooperationInputs {
     }
     const candidates: DispatchWaitObservation['candidates'] = ranked.slice(0, 16).map(node => {
       const hostBlock = this.taskDispatchBlock(node);
-      const assessment = assessTaskResponsibility(node, worker, this.archive);
+      const assessment = assessTaskResponsibility(node, worker, this.responsibility);
       return { taskId: node.task.id, taskDigest: digest(node.task),
         reason: hostBlock ?? (assessment.kind === 'blocked' ? assessment.reason : 'policy-no-selection') };
     });
@@ -447,7 +449,7 @@ export class CooperativeResearch extends CooperationInputs {
     const ready = ranked.filter(node => !this.taskDispatchBlock(node));
     this.releaseStoppedAssignments(ready, worker);
     const node = this.input.modules.M5.assign(ready, worker,
-      this.allocationPeers, this.archive.groups, this.archive.tasks);
+      this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers);
     if (!node) {
       this.recordTaskWait(worker, ranked, ready);
       if (await this.requestCapacityExploration(worker, budget, ready)) return RETRY_DISPATCH;
@@ -456,7 +458,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (!ready.includes(node) || !this.archive.tasks.includes(node) || node.status !== 'pending' ||
         !taskCanStart(node.task, this.archive.tasks, this.archive.groups) ||
         !routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) ||
-        assessTaskResponsibility(node, worker, this.archive).kind !== 'matches') throw new Error('math_task_assignment_invalid');
+        assessTaskResponsibility(node, worker, this.responsibility).kind !== 'matches') throw new Error('math_task_assignment_invalid');
     this.clearDispatchWait(worker, 'selected');
     const selectedRoute = selectedTaskRoute(node, this.archive.tasks);
     if (node.assignment && node.alternativeRoutes?.length && node.assignment.routeId !== selectedRoute?.id)
@@ -468,7 +470,7 @@ export class CooperativeResearch extends CooperationInputs {
       const restored = await this.restoreResearchDraft(worker, node);
       if (this.synchronizationBlocked(node.task) || !this.archive.tasks.includes(node) || node.status !== 'pending' ||
           !restored && node.assignment !== previousAssignment ||
-          assessTaskResponsibility(node, worker, this.archive).kind !== 'matches' ||
+          assessTaskResponsibility(node, worker, this.responsibility).kind !== 'matches' ||
           !taskCanStart(node.task, this.archive.tasks, this.archive.groups) || !routeAllowsTask(node.task, this.archive.tasks, this.archive.groups)) return RETRY_DISPATCH;
       if (!restored) {
         fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '');
@@ -500,7 +502,7 @@ export class CooperativeResearch extends CooperationInputs {
         this.input.state.environmentDigest === environment && node.status === 'pending' && node.assignment === assignment &&
         !this.synchronizationBlocked(node.task) && taskCanStart(node.task, this.archive.tasks, this.archive.groups) &&
         routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) && this.liveWorkers.has(worker.id) &&
-        assessTaskResponsibility(node, worker, this.archive).kind === 'matches' &&
+        assessTaskResponsibility(node, worker, this.responsibility).kind === 'matches' &&
         canonicalMathJson(selectedTaskRoute(node, this.archive.tasks) ?? null) === routeDigest &&
         this.input.modelDispatchAllowed?.() !== false &&
         !this.dispatchBudgetExhausted(budget, true) && Date.now() - started < budget.remainingMs;
@@ -520,7 +522,7 @@ export class CooperativeResearch extends CooperationInputs {
             current: () => !this.input.signal.aborted,
           };
         if (!current() || !checked.current() || git(worker.worktree, ['rev-parse', 'HEAD']) !== head ||
-            this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks) !== node)
+            this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) !== node)
           return RETRY_DISPATCH;
         node.typePreflight = checked.result;
         this.input.emit('task_type_preflight', { taskId: node.task.id, workerId: worker.id, ...checked.result });
@@ -533,24 +535,30 @@ export class CooperativeResearch extends CooperationInputs {
             '\nRevise the closed helper type or its context before proving it. This is not proof acceptance or a mathematical refutation.';
           this.wakeLead('task-type-invalid'); this.changed(); return RETRY_DISPATCH;
         }
-        if (leadAccess && workerAccess && this.canonicalHelperCandidate(node, worker, scopedSeed)) {
+        const checker = this.input.modules.M2.checkTask ?? checkTaskProof;
+        const retainedGoals = () => this.dependencies(task).filter(item => item.task.kind === 'goal' && item.status === 'integrated')
+          .map(item => item.task.theoremName!);
+        const publishable = () => current() && checked.current() && taskDependenciesReady(task, this.archive.tasks) &&
+          git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
+          this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node;
+        const claim = () => {
+          // Publication owns cleanup from here; changing the assignment must not cancel its own preparation.
+          this.preparingTaskTypes.delete(node);
+          node.assignment = dispatchAssignment;
+        };
+        const canonicalCandidate = leadAccess && workerAccess && this.canonicalHelperCandidate(node, worker, scopedSeed);
+        if (canonicalCandidate) {
           // A failed probe is not a model delivery. Keep it outside failure memory and archive acceptance.
-          const checker = this.input.modules.M2.checkTask ?? checkTaskProof;
-          const retainedGoals = this.dependencies(task).filter(item => item.task.kind === 'goal' && item.status === 'integrated')
-            .map(item => item.task.theoremName!);
           const probeStarted = Date.now();
           let proof;
           try {
             proof = await checker(this.input.state.problem, worker.worktree, scopedSeed, task, dispatchAssignment,
-              retainedGoals, leadAccess.environment, signal, this.input.timeoutMs, [], environment,
+              retainedGoals(), leadAccess!.environment, signal, this.input.timeoutMs, [], environment,
               ...(checker === checkTaskProof ? [this.taskProofCache] : []));
           } catch (error) {
             if (!current()) return RETRY_DISPATCH;
             throw error;
           }
-          const publishable = () => current() && checked.current() && taskDependenciesReady(task, this.archive.tasks) &&
-            git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
-            this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks) === node;
           if (!publishable()) return RETRY_DISPATCH;
           const receiptIds = proof.verification.results.map(result => result.receiptId);
           const feedback = !proof.passed ? bounded(solverProofFeedback(proof), 2000) : undefined;
@@ -560,16 +568,52 @@ export class CooperativeResearch extends CooperationInputs {
           if (proof.passed) {
             await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, scopedSeed,
               'Existing canonical helper checked against this exact task before starting a model.', {}, false,
-              { proof, current: publishable, claim: () => {
-                // Publication owns cleanup from here; changing the assignment must not cancel its own preparation.
-                this.preparingTaskTypes.delete(node);
-                node.assignment = dispatchAssignment;
-              } });
+              { proof, current: publishable, claim });
             return RETRY_DISPATCH;
           }
           dispatchAssignment.canonicalProbe = { evidence: 'advisory-canonical-check', proofAcceptance: 'not-accepted',
             sourceCommit: scopedSeed, environmentDigest: environment, verificationStatus: proof.verification.status,
             receiptIds, feedback: feedback! };
+        }
+        const closeTask = this.input.modules.M2.closeTask;
+        const batteryKey = canonicalMathJson([taskDigest, dependencies, environment]);
+        if (closeTask && !canonicalCandidate && leadAccess && workerAccess && checked.result.status === 'elaborated' &&
+            checked.result.context && !isDefinitionTask(task) && this.tacticBatteryCandidate(node) && !this.tacticBatteryAttempts.has(batteryKey)) {
+          // One host attempt per exact helper contract in this process; a failure is not model feedback.
+          this.tacticBatteryAttempts.add(batteryKey);
+          const batteryStarted = Date.now();
+          const battery = await closeTask({ problem: this.input.state.problem, task, worktree: worker.worktree, seedCommit: scopedSeed,
+            context: checked.result.context, env: workerAccess.environment, signal,
+            timeoutMs: Math.min(this.input.timeoutMs ?? Infinity, TACTIC_BATTERY_TIMEOUT_MS) });
+          // A superseded preparation has not tried this contract; leave it to the next eligible dispatch.
+          if (!current()) { this.tacticBatteryAttempts.delete(batteryKey); return RETRY_DISPATCH; }
+          let proof, checkError: string | undefined;
+          if (battery.status === 'closed' && battery.commit) {
+            try {
+              proof = await checker(this.input.state.problem, worker.worktree, battery.commit, task, dispatchAssignment,
+                retainedGoals(), leadAccess.environment, signal, this.input.timeoutMs, [], environment,
+                ...(checker === checkTaskProof ? [this.taskProofCache] : []));
+            } catch (error) {
+              // Host automation never blocks the ordinary model assignment.
+              if (!current()) return RETRY_DISPATCH;
+              checkError = bounded(error instanceof Error ? error.message : String(error), 600);
+            }
+          }
+          this.input.emit('task_tactic_battery', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
+            status: battery.status, reason: battery.reason, durationMs: Date.now() - batteryStarted, ...(checkError ? { checkError } : {}),
+            ...(battery.commit ? { commit: battery.commit } : {}), ...(battery.artifact ? { artifact: battery.artifact } : {}),
+            ...(battery.vacuous ? { vacuous: true } : {}), ...(proof ? { passed: proof.passed, verificationStatus: proof.verification.status,
+              receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
+          if (proof?.passed) {
+            if (!publishable()) return RETRY_DISPATCH;
+            await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, battery.commit!,
+              'Host tactic battery closed this exact helper type before starting a model.' + (battery.vacuous
+                ? ' Host vacuity probe: its hypotheses alone derive False, so no consumer can discharge them; ' +
+                  'revise the helper unless it is an intended impossible case.' : ''), {}, false,
+              { proof, current: publishable, claim });
+            return RETRY_DISPATCH;
+          }
+          if (!publishable()) return RETRY_DISPATCH;
         }
       } finally {
         this.preparingTaskTypes.delete(node); finishPreparation(); this.changed();
@@ -613,16 +657,21 @@ export class CooperativeResearch extends CooperationInputs {
       seedCommit: node.assignment.seedCommit });
     this.changed(); return { kind: 'task', assignment: node.assignment, task: node.task };
   }
+  /** Host proof attempts start only from a fresh, unconditional typed helper whose dependencies are checked. */
+  private tacticBatteryCandidate(node: TaskRecord): boolean {
+    const task = node.task;
+    return !node.assignment && !task.conditional && Boolean(task.type?.trim()) && taskDependenciesReady(task, this.archive.tasks) &&
+      !automaticTaskConnection(task, this.archive.tasks, this.archive.groups);
+  }
   /** Declaration scanning only selects complete candidates; the checker still establishes proof and exact type. */
   private canonicalHelperCandidate(node: TaskRecord, worker: ResearchWorker, seed: string): boolean {
     const task = node.task;
-    if (node.assignment || task.conditional || !task.type?.trim() || !taskDependenciesReady(task, this.archive.tasks) ||
-        automaticTaskConnection(task, this.archive.tasks, this.archive.groups)) return false;
+    if (!this.tacticBatteryCandidate(node)) return false;
     const source = committedSource(worker.worktree, seed, `${this.input.state.problem.projectRelative}/${task.proofPath}`);
     // The current task projector also requires a unique leaf name within this file.
     const declarations = inspectScopedLeanDeclarations(source).filter(item =>
       item.name.split('.').at(-1) === task.theoremName!.split('.').at(-1));
-    if (declarations.length !== 1 || declarations[0].kind !== 'theorem' ||
+    if (declarations.length !== 1 || declarations[0].kind !== (isDefinitionTask(task) ? 'definition' : 'theorem') ||
         declarations[0].qualifiedName !== task.theoremName) return false;
     const region = inspectLeanDeclarationRegions(source).find(item => item.startOffset === declarations[0].startOffset)!;
     const inspected = inspectLeanSource(source.slice(region.bodyOffset, region.endOffset));
@@ -649,14 +698,15 @@ export class CooperativeResearch extends CooperationInputs {
   private canAdvance(taskIds?: ReadonlySet<string>) {
     return researchCanAdvance(this.archive.tasks, this.archive.groups, this.liveWorkers, node =>
       !this.preparingTaskTypes.has(node) && !this.synchronizationBlocked(node.task) &&
-      this.livePeers.some(worker => assessTaskResponsibility(node, worker, this.archive).kind === 'matches' &&
-        this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks) === node), taskIds);
+      this.livePeers.some(worker => assessTaskResponsibility(node, worker, this.responsibility).kind === 'matches' &&
+        this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node), taskIds,
+      this.stoppedWorkers);
   }
   private hasAssignableTask(taskIds?: ReadonlySet<string>) {
     return this.input.modules.M3.ready(this.archive.tasks, this.archive.groups).some(node => !this.preparingTaskTypes.has(node) && !this.synchronizationBlocked(node.task) &&
       (!taskIds || taskIds.has(node.task.id)) && this.archive.tasks.includes(node) &&
-      this.livePeers.some(worker => assessTaskResponsibility(node, worker, this.archive).kind === 'matches' &&
-        this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks) === node));
+      this.livePeers.some(worker => assessTaskResponsibility(node, worker, this.responsibility).kind === 'matches' &&
+        this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node));
   }
   reviewed(check?: ProofCheck) {
     const required = this.fixedStatementReviewTasks();
@@ -724,7 +774,14 @@ export class CooperativeResearch extends CooperationInputs {
         [route.closingTaskId, ...route.prerequisiteTaskIds].every(id => visibleIds.has(id)));
     const scopedTasks = tasks.map(node => scopedFinding(node.alternativeRoutes?.length ? { ...node,
       alternativeRoutes: proofRoutes.filter(route => route.targetTaskId === node.task.id) } : node));
-    return { ...this.archive, tasks: scopedTasks,
+    // The Lead's own context is built before its turn starts; that turn then becomes the next inbox basis.
+    const leadInboxView = action?.kind === 'lead' && !this.active.has(this.lead.id) ? leadInbox(this.archive.leadInboxBasis, {
+      tasks: this.archive.tasks, planVersion: this.archive.planVersion, deliveries: this.archive.deliveries, leadId: this.lead.id,
+      workers: this.input.state.workers, roles: new Map(this.input.workers.map(peer => [peer.id, peer.role])) }) : undefined;
+    // Keep the earliest snapshot for this dispatch: repeating a change is harmless, skipping one is not.
+    if (action?.kind === 'lead' && !this.active.has(this.lead.id) && !this.pendingLeadInboxBases.has(action))
+      this.pendingLeadInboxBases.set(action, leadInboxBasis(this.archive.tasks, this.archive.planVersion));
+    return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView,
       planPublicationRejection: (action?.kind === 'lead' || worker?.id === this.lead.id) &&
         this.archive.planPublicationRejection?.baseVersion === this.archive.planVersion ? this.archive.planPublicationRejection : undefined,
       contextCheckpointRejection: checkpointResearch ? contextCheckpointRejection(checkpointResearch) : undefined,
@@ -1080,7 +1137,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (!assignment || assignment.workerId === worker.id || this.liveWorkers.has(assignment.workerId) ||
           !this.input.workers.some(item => item.id === assignment.workerId)) continue;
       node.assignment = undefined;
-      if (assessTaskResponsibility(node, worker, this.archive).kind !== 'matches') { node.assignment = assignment; continue; }
+      if (assessTaskResponsibility(node, worker, this.responsibility).kind !== 'matches') { node.assignment = assignment; continue; }
       this.input.emit('task_assignment_released', { taskId: node.task.id, workerId: assignment.workerId,
         takenBy: worker.id, reason: 'worker-stopped' });
       this.changed();
@@ -1102,10 +1159,12 @@ export class CooperativeResearch extends CooperationInputs {
     if (!this.current(action)) return false;
     if (action.kind === 'task' && action.assignment.workerId !== worker.id) throw new Error('math_task_assignment_invalid');
     if (action.kind === 'review' && this.archive.review?.workerId !== worker.id) throw new Error('math_review_assignment_invalid');
+    const inboxBasis = action.kind === 'lead' ? this.pendingLeadInboxBases.get(action) : undefined;
+    if (inboxBasis) { this.archive.leadInboxBasis = inboxBasis; this.pendingLeadInboxBases.delete(action); }
     if (isStatementAction(action) && this.archive.statementReviews?.find(item => item.id === action.reviewId)?.workerId !== worker.id)
       throw new Error('math_statement_review_assignment_invalid');
     if (action.kind === 'task' &&
-        assessTaskResponsibility(this.node(action.task.id), worker, this.archive).kind !== 'matches') return false;
+        assessTaskResponsibility(this.node(action.task.id), worker, this.responsibility).kind !== 'matches') return false;
     const task = action.kind === 'task' ? action.task : isStatementAction(action) ? this.node(action.taskId).task : undefined;
     if (task && this.synchronizationBlocked(task) || (action.kind === 'review' || action.kind === 'assemble') &&
         this.candidateSynchronizationBlocked()) return false;

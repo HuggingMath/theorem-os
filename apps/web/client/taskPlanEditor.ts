@@ -157,6 +157,7 @@ export class TaskPlanEditor {
         next.kind = this.control(field).value as WebPlanTask['kind'];
         if (next.kind === 'research' || next.kind === 'sketch') {
           delete next.type; delete next.proofPath; delete next.theoremName; delete next.conditional; delete next.statementReview;
+          delete next.declaration;
         } else {
           delete next.reviewScope;
           next.proofPath ??= plan.tasks.find(item => item.proofPath)?.proofPath ?? this.observation?.inspection.problem.targets[0]?.proofPath;

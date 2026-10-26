@@ -69,7 +69,16 @@ Lead 先根据原题、定义和已有发现判断可行的数学路线，再提
 
 连接产物复用现有条件证明回执。宿主仅在临时投影里提供固定输入，不要求 worker 添加占位证明或新假设；输入全部获证后，再检查合并后的无条件消费者。恢复后的 JSON 不直接获得信任，必须重验；输入合同或相关路线改变使旧许可失效。条件连接成功不代表输入成立，也不等于原题验收。
 
+原题之外的新概念用定义任务表达：`kind:"lemma"` 加 `declaration:"definition"`，`type` 写该定义的 Lean 类型（如 `ℕ → ℕ → Prop`），`objective` 写其预期含义。`declaration` 改变 `taskVersion`，不能与 `conditional:true` 或 `statementReview:true` 同用，也不能作为路线的 `closingTaskId`。
+- 交付须是同名 `def`/`abbrev`，正文完整、不含 `sorry`；检查器按 `inferType` 与 `isDefEq` 核对类型，其余验收与普通任务相同。
+- 定义不是命题，不能作为假设绑定：条件连接与自动连接都不会把它当输入，消费者要等定义正文集成后才开工；引用该定义的 `statementReview` 引理，其语句审阅同样等定义集成后才开始。
+- 宿主策略组合跳过定义任务；canonical 中已有同名完整 `def` 时仍走 canonical 探针。
+- 已检查的定义任务以 `kind:"definition"` 条目导入定理知识库（类型为任务类型，`typeKind:"closed-task-type"`）。M4 提示把这类命中当作需复制改写进 owned 文件的定义正文，而非可直接套用的命题；其性质仍须在当前题目中证明。
+- 宿主不判断定义是否表达了预期含义；需要时，Lead 另立普通引理检查其基本性质。
+
 有限 Boolean 推断可先用 `theorem-os check-finite --input FILE` 或 `--json JSON` 复算。输入是 `theorem-os.finite-boolean-cnf.v1` 的变量、固定赋值和 CNF 子句；输出绑定规范数据与原始输入摘要，保留完整赋值计数、满足数及有界 witness。超过公开枚举规模限制时返回 unsupported，不能报告矛盾；没有新增墙钟截止。结果仅针对输入约束，仍是 advisory，须连同精确数据进入研究证据，不能代替 Lean 或 S3。`examples/finite/old-b1-nine-constraints.json` 重放旧九行约束，在 256 种赋值中得到 5 个满足染色；它只否定该组约束的旧矛盾推断，不否定几何构型或原题。
+
+配置 `DEEPSCIENTIST_MATH_TOOLS_ROOT` 后，运行开始时读取 `ROOT/manifest.json`（`theorem-os.math-tools.v1`：每个工具的 `name`、`version`、单行 `purpose` 与 `commands`），要求 `ROOT/bin` 恰好包含所列可执行文件，且命令不得占用 `lean`、`lake`、`git`、`python3` 等保留名。清单摘要写入 `DEEPSCIENTIST_MATH_TOOLS_SHA256` 并计入环境摘要，清单变化后恢复会以身份变更拒绝。`ROOT/bin` 追加在 PATH 末尾，不遮蔽固定 Lean 与系统命令；M4 在四角色指令中列出工具与用途，要求在 `$TMPDIR` 下运行、限时、限 4 线程，并把命令、输入和关键输出写入 RESEARCH.md。计算结果是 advisory，须改写成 Lean 陈述并证明，不能代替 M2 或 S3 验收。未配置时指令与 PATH 不变。
 
 本轮仅验证调度、作者隔离、上下文和会话恢复行为，尚无实题成功率收益证据。停止的求解任务没有部署或重启。
 
@@ -86,6 +95,14 @@ Lead 先根据原题、定义和已有发现判断可行的数学路线，再提
 探针未通过时继续正常模型派发，不新增失败交付、blocked 或修复 checkpoint。命中后使用宿主持有的证明对象和精确投影缓存，避免探针与交付重复编译；JSON 收据不获得验收身份。`task_canonical_probe` 事件记录检查耗时、receipt 和结果。原题及最终独立验收仍须完成，不能从辅助声明命中推断整题已证。
 
 未通过的探测还在当前 assignment 的 `canonicalProbe` 中保留至多 2000 字节的诊断、检查源码 commit、环境和 receipt。首条及续接输入通过现有必需 assignment 段携带，`COOPERATION.json` 只向可见任务范围展示；原有 task feedback 不被覆盖。这份记录描述派发 seed 的历史检查，提示接收方核对完整类型和额外前提，不代表当前编辑后的源码仍有同一错误，也不构成模型失败或数学反证。保存恢复保留记录，撤销未开工派发后随原 assignment 清除，新派发不会继承旧诊断。
+
+seed 中没有可复用的已证声明时，M2 的可选 `closeTask` 会在模型派发前尝试固定的策略组合（tactic battery）。目前它只在两种情况下运行：类型预检已对闭合类型完成 elaborated；任务满足与 canonical 探针相同的新任务门限。它分两段：
+- 第一段在证明擦除副本中，把 `by first | rfl | trivial | omega | (simp; done) | … | decide` 作为表达式按任务类型检查。只有 import 了完整 Mathlib 的文件才追加 `norm_num`、`linarith`、`positivity`、`ring_nf`、`tauto`、`aesop`。
+- 第一段闭合后，宿主才在一次性 checkout 中写入候选。写入方式是填补同名 `sorry` 正文，或在预检锚点前插入同命名空间的 theorem；遇到属性、修饰符或 `open … in` 等位置有歧义时跳过。随后以 seed 为父提交，按普通任务检查走 Lean、验收和集成。
+
+这两段都不消耗模型 turn、attempts 或 route turns。同一任务版本、依赖和环境在一个进程内只尝试一次。未闭合或检查不可用时照常派发模型，不写失败记忆，也不改 task feedback。`task_tactic_battery` 事件记录阶段结果、耗时、候选 commit 与 receipt；第一段的产物同样只是 advisory。
+
+候选提交后，宿主用同一上下文和 battery 剩余时限再检查一次空洞性探针：`by intros; (fail_if_success guard_target =ₛ False); exfalso; first | contradiction | omega | (simp_all; done)`；import 了完整 Mathlib 时追加 `linarith`、`norm_num at *`、`tauto`、`aesop`。探针只从引入的前提推出 `False`；引入后结论本身就是 `False` 的类型是在请求反证，因此不参与判定。探针 elaborated 且不含 `sorryAx` 时，事件带 `vacuous: true`，发布摘要提示 Lead：这条辅助引理的前提互相矛盾，任何使用者都无法满足，若不是有意的不可能分支就应修订。这只是提示，不阻止验收与集成。探针失败、超时或不可用时不给结论，也不说明前提可满足。模型证明的辅助引理目前不做这项探针。
 
 这些记录用于定位浪费来源，尚不能给出真实节省比例或难题成功率收益。原题冻结、固定源码检查、恢复复检与独立 S3 验收继续生效。
 
@@ -117,7 +134,13 @@ helper 类型在独立 section 内作为单个 Lean term 解析，不直接拼�
 
 合作模式由 Lead 在 `math-plan.tasks` 中提交完整任务图，以匹配同一精确目标与类型的任务识别采纳；匹配还保留路线、条件、前提和原有依赖要求。
 
-规划者应把采纳结果接到明确的原题消费者；当前宿主不强制存在这条连接，仅有一个同类型任务仍不能证明它会推进原题。响应可带以下拒绝或延后字段；本例只展示决策字段，Lead 仍须提交完整任务图：
+已有任务图时，Lead 也可以只提交修订 `{"baseVersion":"当前 planVersion","upsert":[...],"remove":[...]}`：已有 id 的 upsert 只替换给出的字段（`null` 删除字段，改变 kind 则整体替换），新 id 须给出完整任务，未列出的任务、groups 与 proofRoutes 保持不变。宿主把修订展开为完整任务图后按完整计划同样校验；baseVersion 不是当前版本时拒绝。接受修订后，下一次 Lead 派发前宿主把 `RESEARCH.md` 中的计划围栏改写为每行一个任务的完整已接受图，并删除其余计划围栏，旧修订不会被再次读取。
+
+计划校验错误在错误码后附上出错的任务、字段、依赖或路线，例如 `math_plan_missing_dependency: {"taskId":"goal","dependsOn":"bridge"}`、`math_plan_dependency_cycle: {"cycle":["a","b","a"]}`，让 Lead 直接修复，无需阅读校验源码。
+
+Lead 每次开工时宿主记录其所见的任务状态与时间；下一次 Lead 续接消息附带有界的变化索引：此后他人新交付（最多 16 项，摘要截断，标出 needsDecision 与 lemmaRequests 数量）、任务状态变化（最多 32 项）、正在等待可派发任务的空闲同伴及其等待阶段，以及计划版本是否变化。完整记录仍在 `COOPERATION.json`；索引只是读取入口，不构成证明验收。
+
+规划者应把采纳结果接到明确的原题消费者；当前宿主不强制存在这条连接，仅有一个同类型任务仍不能证明它会推进原题。响应可带以下拒绝或延后字段；本例只展示决策字段，Lead 仍须提交完整任务图或修订：
 
 ```json
 {
@@ -255,6 +278,8 @@ M5 在 typed helper 的当前源码投影完成后、正式分配和模型调用
 每次正常、失败或中断的诊断都会刷新 `.lake/lean-diagnostics-latest.json`，绑定完整输入与原始产物；其与相关 `.lake` 文件均为 advisory，不能当作 Lean 验收回执。发布失败不会覆盖原先的编译或文件错误。
 
 恢复资料通过显式 `run --continuation-manifest FILE` 与原始任务分开。`taskDigest` 继续绑定逐字任务文本，独立 `continuationDigest` 绑定附件索引及每份正文；宿主冻结去重的只读文件，再复制到工人的 `.lake/continuation.json` 及内容目录。四角色的必需输入只添加完整索引和有界读取命令，不重复注入历史证明正文，不覆盖已有必需合同。读取检查摘要、UTF-8、文件类型及精确身份；分页不拆 Unicode surrogate，完整 JSON 行不超过 16000 字节。
+
+`reference` 附件承载事先转成纯文本的论文与讲义。`continuation search` 每次都重新校验快照，再在按快照摘要和类型集缓存的段落索引上做 BM25 词法排序；段落是 `continuation read` 能逐字取回的 UTF-16 区间，同分按清单附件顺序再按偏移排列。快照含 `reference` 附件时，M4 以当前任务的目标、意图陈述、名称与类型（Lead 用任务文本和原题目标名）检索，把至多 4 段命中及读取命令作为可选 `continuation` 节加入上下文，总长约 6 KB；无命中、审阅和组装不加入。命中只是阅读线索，不进入依赖、前提或验收。
 
 恢复在完成结果的提前返回前也检查快照。旧无附件运行不能增加附件，有附件运行可以不再提供原始文件；仍只能读取已绑定快照。盲法声明审阅保持固定声明范围，不接收恢复附件。附件、旧检查与研究假说均为 advisory，M2 与 S3 的验收权限不变。未附加材料的四角色上下文保留逐字相同的消息、指令和编译清单。
 

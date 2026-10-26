@@ -8,7 +8,7 @@ import { deliveryDetails, reviewVerdict, readMathResponse as block } from './del
 import { assertStatementSnapshot, captureStatementContexts, createStatementSnapshotter, isStatementAction, readBacktranslation, resetStatementReview,
   writeStatementSnapshot, type StatementAction, type StatementReview } from './statementReview';
 import { captureProofReferences, proofReferencesUnchanged } from './proofReferences';
-import { taskGroup, hasTaskReferences, type CooperativeTask, type TaskRecord } from './tasks';
+import { taskGroup, hasTaskReferences, isDefinitionTask, type CooperativeTask, type TaskRecord } from './tasks';
 import { digest } from './cooperationShared';
 import { CooperationCore } from './cooperationCore';
 
@@ -48,6 +48,11 @@ export abstract class CooperationStatements extends CooperationCore {
       if (synchronized) return;
     }
   }
+  /** A lemma type naming a planned definition elaborates only after that definition's body is canonical. */
+  private statementTasks(nodes: readonly TaskRecord[]) {
+    return nodes.filter(node => node.task.statementReview && this.dependencies(node.task, nodes)
+      .every(dependency => !isDefinitionTask(dependency.task) || dependency.status === 'integrated')).map(node => node.task);
+  }
   protected supersedeStatementReview(review: StatementReview) {
     review.status = 'superseded';
     for (const record of this.archive.deliveries ?? []) if (record.statementReviewId === review.id) record.status = 'superseded';
@@ -58,7 +63,7 @@ export abstract class CooperationStatements extends CooperationCore {
     if (checkEnvironment?.current && !checkEnvironment.current()) return;
     if (this.preparingStatements) return this.preparingStatements.then(() => this.prepareStatementContexts(nodes, canonical, checkEnvironment));
     const environmentDigest = checkEnvironment?.digest ?? this.input.state.environmentDigest;
-    const tasks = nodes.filter(node => node.task.statementReview).map(node => node.task);
+    const tasks = this.statementTasks(nodes);
     const snapshot = createStatementSnapshotter(this.input.state.problem, this.lead.worktree, canonical, environmentDigest);
     const keys = new Map(tasks.map(task => [task.id, snapshot(task, this.dependencies(task, nodes).map(dependency =>
         ({ task: dependency.task, taskDigest: digest(dependency.task) }))).snapshotDigest]));
@@ -79,7 +84,7 @@ export abstract class CooperationStatements extends CooperationCore {
   protected syncStatementReviews(invalidated = new Set<string>()) {
     if (!this.archive.statementReviews?.length && !this.archive.tasks.some(node => node.task.statementReview)) return;
     const reviews = this.archive.statementReviews ??= [];
-    const tasks = this.archive.tasks.filter(node => node.task.statementReview).map(node => node.task);
+    const tasks = this.statementTasks(this.archive.tasks);
     const snapshot = createStatementSnapshotter(this.input.state.problem, this.lead.worktree, this.archive.canonicalCommit!,
       this.input.state.environmentDigest);
     const snapshots = new Map(tasks.map(task => [task.id,

@@ -14,9 +14,12 @@ const provenance = z.object({
   evidence: z.enum(['unverified', 'recorded-not-replayed']).default('unverified'),
   runId: z.string().min(1).max(128).optional(), commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u).optional(),
 }).strict().default({ evidence: 'unverified' });
+/** `reference` holds papers, books or notes already converted to plain text; it is reading material, not evidence. */
+export const continuationAttachmentKinds = ['proof-source', 'research-notes', 'diagnostics', 'reference'] as const;
+export type ContinuationAttachmentKind = typeof continuationAttachmentKinds[number];
 const attachment = z.object({
   id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u),
-  kind: z.enum(['proof-source', 'research-notes', 'diagnostics']),
+  kind: z.enum(continuationAttachmentKinds),
   path: z.string().min(1).max(4096).refine(value => !value.includes('\0')),
   bytes: z.number().int().min(0).max(maxAttachmentBytes), sha256: digest, provenance,
 }).strict();
@@ -139,11 +142,18 @@ export function readContinuationSnapshot(file: string, expectedDigest: string, e
   return { file: resolved, digest: expectedDigest, manifest };
 }
 
+const frozenContents = (current: ContinuationSnapshot) => new Map(current.manifest.attachments.map(item => [item.sha256,
+  readContent(path.join(path.dirname(current.file), item.contentPath), item, true)]));
+
+/** Verified frozen bodies keyed by content digest; identical attachments share one text. */
+export function readContinuationContents(file: string, expectedDigest: string, expected?: ContinuationIdentity) {
+  const snapshot = readContinuationSnapshot(file, expectedDigest, expected);
+  return { snapshot, contents: frozenContents(snapshot) as ReadonlyMap<string, string> };
+}
+
 export function copyContinuationSnapshot(snapshot: ContinuationSnapshot, projectRoot: string): ContinuationSnapshot {
   const current = readContinuationSnapshot(snapshot.file, snapshot.digest, snapshot.manifest);
-  const contents = new Map(current.manifest.attachments.map(item => [item.sha256,
-    readContent(path.join(path.dirname(current.file), item.contentPath), item, true)]));
-  return freezeContinuationInput({ ...current, contents }, path.join(path.resolve(projectRoot), '.lake'));
+  return freezeContinuationInput({ ...current, contents: frozenContents(current) }, path.join(path.resolve(projectRoot), '.lake'));
 }
 
 const shellArgument = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -153,10 +163,11 @@ export function continuationContextSection(snapshot: ContinuationSnapshot, comma
   const packet = { schema: 'theorem-os.continuation-index.v1', authority: 'advisory-continuation',
     proofAcceptance: 'not-assessed', taskDigest: current.manifest.taskDigest, problemReceiptDigest: current.manifest.problemReceiptDigest,
     snapshot: path.posix.join(projectRelative.replaceAll('\\', '/'), '.lake/continuation.json'), sha256: current.digest,
+    searchCommand: `${command} continuation search --snapshot ${shellArgument(current.file)} --sha256 ${shellArgument(current.digest)} --query 'KEYWORDS' --limit 8`,
     attachments: current.manifest.attachments.map(item => ({ ...item,
       readCommand: `${command} continuation read --snapshot ${shellArgument(current.file)} --sha256 ${shellArgument(current.digest)} --id ${shellArgument(item.id)} --offset 0 --max-bytes 16000` })) };
   return { id: `continuation-input:${current.digest}`, kind: 'continuation',
-    text: 'Historical continuation attachments (advisory; recorded checks require fresh verification). Read exact text pages as needed; concatenate them using nextOffset. Old hypotheses and proof drafts do not change the original statement or its assumptions.\n' + JSON.stringify(packet) };
+    text: 'Historical continuation attachments (advisory; recorded checks require fresh verification). Read exact text pages as needed; concatenate them using nextOffset. Find relevant passages with searchCommand (lexical BM25 ranking; add --kind reference to search only reference texts), then read from a hit\'s startOffset. Old hypotheses and proof drafts do not change the original statement or its assumptions.\n' + JSON.stringify(packet) };
 }
 
 export function readContinuationPage(file: string, expectedDigest: string, id: string,

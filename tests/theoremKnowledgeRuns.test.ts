@@ -204,6 +204,28 @@ describe('recorded theorem run import', () => {
     expect(imported.candidates[0]).toMatchObject({ kind: 'goal', typeKind: 'source-header', type: 'original : True' });
   });
 
+  it.each([
+    ['def double (n : Nat) : Nat := n + n', 'definition'],
+    ['abbrev double (n : Nat) : Nat := n + n', 'definition'],
+    ['theorem double : True := trivial', 'math_knowledge_run_declaration_kind_mismatch'],
+  ])('imports a checked definition task as a definition entry: %s', (declaration, expected) => {
+    const f = fixture();
+    fs.writeFileSync(path.join(f.project, 'Submission/Helpers.lean'), `namespace Submission.Helpers\n${declaration}\nend Submission.Helpers\n`);
+    const committed = f.commit();
+    const task: CooperativeTask = { id: 'double', kind: 'lemma', declaration: 'definition', objective: 'Twice a natural number',
+      dependsOn: [], revision: 0, proofPath: 'Submission/Helpers.lean', theoremName: 'Submission.Helpers.double', type: 'Nat → Nat' };
+    f.state.cooperation!.tasks = [{ task, status: 'integrated', attempts: 1, integratedCheck: f.proofFor(task, committed, committed) }];
+    const imported = importKnowledgeRuns([f.save()]);
+    if (expected !== 'definition') {
+      expect(imported.candidates).toEqual([]); expect(imported.skipped[0]!.reason).toBe(expected);
+      return;
+    }
+    expect(imported.skipped).toEqual([]);
+    expect(imported.candidates[0]).toMatchObject({ name: 'Submission.Helpers.double', kind: 'definition', type: 'Nat → Nat',
+      typeKind: 'closed-task-type', description: 'Twice a natural number', provenance: { taskId: 'double', taskDigest: taskVersion(task) } });
+    expect(buildTheoremKnowledge(imported.candidates).entries[0]).toMatchObject({ kind: 'definition', name: 'Submission.Helpers.double' });
+  });
+
   it('reports malformed explicit state files and continues with valid inputs', () => {
     const f = fixture(), other = path.join(f.root, 'invalid'); fs.mkdirSync(other);
     const invalid = path.join(other, 'state.json'); fs.writeFileSync(invalid, '{"schema":"unknown"}');

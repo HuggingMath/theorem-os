@@ -49,6 +49,8 @@ export abstract class CooperationCore {
   protected preparingTaskTypes = new Map<TaskRecord, {
     workerId: string; controller: AbortController; current: () => boolean; settled: Promise<void>;
   }>();
+  /** Exact helper contracts already tried by the host tactic battery in this process. */
+  protected readonly tacticBatteryAttempts = new Set<string>();
   protected invalidTaskTypes = new Map<TaskRecord, { canonical: string; environment: string; taskDigest: string;
     dependencies: string; project: string; workerId: string; environmentIdentity?: string }>();
   protected preparedSources?: { identity: string; project: ReturnType<typeof createTaskSourceProjector> };
@@ -147,6 +149,13 @@ export abstract class CooperationCore {
     this.input.emit('task_transition_invalid', record);
   }
   protected get livePeers() { return this.input.workers.filter(worker => worker.id !== this.lead.id && this.liveWorkers.has(worker.id)); }
+  /** A stopped worker never returns in this process; a restart restores every plan reservation. */
+  protected get stoppedWorkers(): ReadonlySet<string> {
+    return new Set(this.input.workers.filter(worker => !this.liveWorkers.has(worker.id)).map(worker => worker.id));
+  }
+  protected get responsibility() {
+    return { tasks: this.archive.tasks, groups: this.archive.groups, stopped: this.stoppedWorkers };
+  }
   protected get allocationPeers() {
     const occupied = new Set([...this.active].filter(([, active]) => active.action.kind !== 'task').map(([id]) => id));
     if (this.archive.review?.status === 'running' && this.archive.review.workerId) occupied.add(this.archive.review.workerId);

@@ -1,6 +1,6 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
-import { isAdvisoryTask, taskGroup, taskReferenceDependencies, taskVersion,
+import { assumableLemma, isAdvisoryTask, isDefinitionTask, taskGroup, taskReferenceDependencies, taskVersion,
   type CooperativeTask, type RouteRecord, type TaskAssignment, type TaskConnectionCheck, type TaskRecord } from './tasks';
 
 type ConnectionIdentity = Pick<TaskConnectionCheck, 'environmentDigest' | 'problemReceiptDigest'>;
@@ -15,7 +15,7 @@ export function taskInputsMissingFromSeed(inputs: TaskConnectionCheck['inputs'],
   readSource: (task: CooperativeTask) => string): TaskConnectionCheck['inputs'] {
   return inputs.filter(reference => {
     const dependency = tasks.find(node => node.task.id === reference.taskId)?.task;
-    if (!dependency || dependency.kind !== 'lemma' || !dependency.type?.trim() || taskVersion(dependency) !== reference.taskDigest)
+    if (!dependency || !assumableLemma(dependency) || taskVersion(dependency) !== reference.taskDigest)
       throw new Error('math_task_condition_version_invalid');
     const source = readSource(dependency), declarations = inspectScopedLeanDeclarations(source).filter(declaration =>
       declaration.qualifiedName === dependency.theoremName || !dependency.theoremName!.includes('.') && declaration.name === dependency.theoremName);
@@ -31,7 +31,8 @@ export function taskInputsMissingFromSeed(inputs: TaskConnectionCheck['inputs'],
 /** A declared dependency is a proposed application; its inputs need not already have proofs. */
 export function automaticTaskConnection(task: CooperativeTask, tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]): boolean {
   const nodes = new Map(tasks.map(node => [node.task.id, node])), node = nodes.get(task.id);
-  if (isAdvisoryTask(task) || task.conditional === false || node?.alternativeRoutes?.length || node?.pendingValidation ||
+  // A definition binds no assumed inputs; it starts once its dependencies are integrated.
+  if (isAdvisoryTask(task) || isDefinitionTask(task) || task.conditional === false || node?.alternativeRoutes?.length || node?.pendingValidation ||
       !task.dependsOn.length || task.kind !== 'goal' && !tasks.some(consumer => {
         if (isAdvisoryTask(consumer.task) || ['integrated', 'completed'].includes(consumer.status) ||
             consumer.routeParking?.length || (consumer.task.status ?? 'active') !== 'active') return false;
@@ -48,7 +49,7 @@ export function automaticTaskConnection(task: CooperativeTask, tasks: readonly T
     const input = nodes.get(id);
     if (!input || input.pendingValidation || input.routeParking?.length || input.status === 'blocked') return false;
     const checked = ['integrated', 'completed'].includes(input.status);
-    if (!checked && (input.task.kind !== 'lemma' || !input.task.type?.trim() ||
+    if (!checked && (!assumableLemma(input.task) ||
         (input.task.status ?? 'active') !== 'active' || taskGroup(input.task) !== taskGroup(task) && input.task.sharing === 'group')) return false;
     const group = groups?.find(record => record.group.id === taskGroup(input.task));
     if (!checked && groups && (!group || group.group.status !== 'active' || group.turns >= (group.group.maxTurns ?? Infinity))) return false;
@@ -68,7 +69,7 @@ export function createTaskConnectionCheck(task: CooperativeTask, assignment: Tas
   const nodes = new Map(tasks.map(node => [node.task.id, node]));
   const inputs = (assignment.dependencies ?? []).filter(reference => {
     const input = nodes.get(reference.taskId);
-    return input?.task.kind === 'lemma' && Boolean(input.task.type?.trim()) && taskVersion(input.task) === reference.taskDigest;
+    return assumableLemma(input?.task) && taskVersion(input!.task) === reference.taskDigest;
   }).map(reference => ({ ...reference }));
   const missing = new Set(readSeedSource ? taskInputsMissingFromSeed(inputs, tasks, readSeedSource).map(input => input.taskId) : []);
   const check: TaskConnectionCheck = { schema: 'theorem-os.consumer-connection.v1',
@@ -109,7 +110,7 @@ export function taskConnectionCheckCurrent(task: CooperativeTask, assignment: Ta
     check.problemReceiptDigest === identity.problemReceiptDigest) && check.routesDigest === routesDigest(task.id, tasks) &&
     check.inputs.every(reference => {
       const input = nodes.get(reference.taskId);
-      return input?.task.kind === 'lemma' && Boolean(input.task.type?.trim()) && taskVersion(input.task) === reference.taskDigest;
+      return assumableLemma(input?.task) && taskVersion(input!.task) === reference.taskDigest;
     }) && (assignment.dependencies ?? []).every(reference => {
       const input = nodes.get(reference.taskId);
       return Boolean(input && taskVersion(input.task) === reference.taskDigest);

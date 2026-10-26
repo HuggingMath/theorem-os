@@ -50,6 +50,18 @@ function researchResponse(text: string, textField?: string): unknown {
   return textField && text ? { [textField]: text } : undefined;
 }
 
+const planKeys = /"(?:tasks|groups|proofRoutes|dispatchNonce|baseVersion|upsert|remove)"\s*:/u;
+/** A fence carries Lead control JSON, not illustrative mathematical JSON. */
+export function isPlanFence(label: string, body: string): boolean {
+  if (label === 'math-plan') return true;
+  if (!['math', 'json'].includes(label) || !body.trimStart().startsWith('{')) return false;
+  try {
+    const value = JSON.parse(body);
+    return value && typeof value === 'object' && !Array.isArray(value) &&
+      (Object.keys(value).some(key => planKeys.test(JSON.stringify(key) + ':')) || value.kind === 'plan');
+  } catch { return planKeys.test(body); }
+}
+
 /** Select the Lead control object without counting illustrative mathematical JSON as a plan. */
 function planResponse(text: string): unknown {
   const blocks = [...text.matchAll(/```([a-z-]+)\s*\n([\s\S]*?)\n```/gu)];
@@ -58,16 +70,7 @@ function planResponse(text: string): unknown {
   if (explicit.length) return JSON.parse(explicit[0][2]);
   if (/```math-[a-z-]+\s*\n/u.test(text)) throw new Error('math_math-plan_requires_one_block');
   if (text.startsWith('{')) return JSON.parse(text);
-  const planKeys = /"(?:tasks|groups|proofRoutes|dispatchNonce|baseVersion)"\s*:/u;
-  const legacy = blocks.filter(block => {
-    if (!['math', 'json'].includes(block[1]) || !block[2].trimStart().startsWith('{')) return false;
-    try {
-      const value = JSON.parse(block[2]);
-      return value && typeof value === 'object' && !Array.isArray(value) &&
-        (Object.keys(value).some(key => planKeys.test(JSON.stringify(key) + ':')) ||
-          value.kind === 'plan');
-    } catch { return planKeys.test(block[2]); }
-  });
+  const legacy = blocks.filter(block => isPlanFence(block[1], block[2]));
   if (legacy.length > 1) throw new Error('math_math-plan_requires_one_block');
   return legacy.length ? JSON.parse(legacy[0][2]) : undefined;
 }

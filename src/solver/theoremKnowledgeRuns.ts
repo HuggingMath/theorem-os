@@ -4,7 +4,7 @@ import { canonicalMathJson, mathDigest, readMathText } from '../math/mathRuntime
 import { assertMathCanonicalPath } from '../math/paths';
 import { readSolverRunState, type SolverRunState } from './archive';
 import { recordedTaskProofStatus } from './progress';
-import { isAdvisoryTask, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+import { isAdvisoryTask, isDefinitionTask, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 import { allowedKnowledgeFile, locateKnowledgeDeclaration, type KnowledgeCandidate, type KnowledgeImportResult } from './theoremKnowledge';
 import type { DeliveryRecord } from './deliveries';
 import { prepareResearchDelivery, type ResearchAdmissionScope } from './researchAdmission';
@@ -82,14 +82,16 @@ function runCandidate(state: SolverRunState, node: TaskRecord, stateFile: string
   if (receipts.some(receipt => receipt.sourceDeclarationHash !== undefined &&
       receipt.sourceDeclarationHash !== declarationHash) || (target && target.declarationHash !== declarationHash))
     return error('declaration_receipt_mismatch');
-  if (task.kind === 'lemma' && root.kind !== 'theorem') return error('declaration_kind_mismatch');
+  if (isDefinitionTask(task) ? root.kind !== 'definition' : task.kind === 'lemma' && root.kind !== 'theorem')
+    return error('declaration_kind_mismatch');
   const references = proof.references;
   if (references && (references.sourceCommit !== proof.commit || references.root.file !== task.proofPath ||
       references.root.name !== task.theoremName || [...references.statement, ...references.proof].some(reference =>
         !allowedKnowledgeFile(reference.file) || !Object.hasOwn(snapshot.files, reference.file)))) return error('reference_mismatch');
   return {
     name: task.theoremName, file: task.proofPath, type: task.kind === 'lemma' ? task.type! : root.declarationType,
-    typeKind: task.kind === 'lemma' ? 'closed-task-type' : 'source-header', kind: task.kind as 'lemma' | 'goal',
+    typeKind: task.kind === 'lemma' ? 'closed-task-type' : 'source-header',
+    kind: isDefinitionTask(task) ? 'definition' : task.kind as 'lemma' | 'goal',
     description: task.informalStatement ?? task.objective, premises: [...(task.premises ?? [])],
     dependencies: { statement: references?.statement ?? [], proof: references?.proof ?? [], tasks: references?.tasks ?? [],
       coverage: references?.tasks && !references.scope ? 'recorded' : 'unavailable' },

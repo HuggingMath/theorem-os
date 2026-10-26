@@ -10,6 +10,7 @@ import { hashMathFormalSourceDeclaration, type MathematicsVerifierBatchRequest, 
 import * as verifier from '../src/math/verifier';
 import { readSolverProblem, assertSolverSources, assertSolverProjectSources, commitSolverSources, git, withSolverWorktree, SolverSourceError, type SolverProblem } from '../src/solver/problem';
 import { checkSolverProof } from '../src/solver/modules/evidence';
+import { assessTaskResponsibility } from '../src/solver/modules/organization';
 import { directSolverModules } from '../src/solver/modules';
 import { configurableSolverModules } from '../src/solver/modules/custom';
 import { runSolver } from '../src/solver/run';
@@ -1113,6 +1114,45 @@ describe('isolated solver and host acceptance', () => {
     expect(host.verify).not.toHaveBeenCalled();
   });
 
+  it('checks a planned definition task as a complete def of its exact type and keeps its body for consumers', async () => {
+    const task: CooperativeTask = { id: 'double', kind: 'lemma', declaration: 'definition', objective: 'Twice a natural number',
+      type: 'Nat → Nat', theoremName: 'Submission.double', proofPath: 'Submission.lean', dependsOn: [], revision: 0 };
+    const candidate = original.replace('theorem first', 'def double (n : Nat) : Nat := n + n\ntheorem first');
+    fs.writeFileSync(path.join(project, 'Submission.lean'), candidate);
+    const commit = commitSolverSources(problem, workspace);
+    host.verify.mockImplementation(async (request, options) => {
+      const projected = fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8');
+      expect(projected).toContain('def double (n : Nat) : Nat := n + n');
+      expect(request.items.map(item => item.theoremName)).toEqual(['Submission.double']);
+      expect(options.expectedDeclarationType).toBe('Nat → Nat');
+      return verified(request);
+    });
+    const proof = await checkTaskProof(problem, workspace, commit, task,
+      { taskId: task.id, taskDigest: taskVersion(task), workerId: 'engineer', seedCommit: problem.baseCommit },
+      [], {}, new AbortController().signal);
+    expect(proof.passed).toBe(true);
+    expect(proof.changes).toEqual([expect.objectContaining({ name: 'double', after: 'def double (n : Nat) : Nat := n + n\n' })]);
+    const consumer: CooperativeTask = { id: 'double_eq', kind: 'lemma', objective: 'Unfold double', type: 'double 2 = 4',
+      theoremName: 'Submission.double_eq', proofPath: 'Submission.lean', dependsOn: [task.id], revision: 0 };
+    fs.writeFileSync(path.join(project, 'Submission.lean'),
+      candidate.replace('theorem first', 'theorem double_eq : double 2 = 4 := by decide\ntheorem first'));
+    const projected = createTaskSourceProjector(problem, workspace, commitSolverSources(problem, workspace))(consumer, [])
+      .get('Submission.lean')!;
+    expect(projected).toContain('def double (n : Nat) : Nat := n + n');
+  });
+
+  it.each([
+    ['theorem double : True := by trivial\n', 'math_task_requires_definition'],
+    ['', 'math_task_missing_declaration'],
+  ])('rejects a definition task delivered as %j before Lean', (helper, code) => {
+    const task: CooperativeTask = { id: 'double', kind: 'lemma', declaration: 'definition', objective: 'Twice a natural number',
+      type: 'Nat → Nat', theoremName: 'Submission.double', proofPath: 'Submission.lean', dependsOn: [], revision: 0 };
+    fs.writeFileSync(path.join(project, 'Submission.lean'), original.replace('theorem first', helper + 'theorem first'));
+    const commit = commitSolverSources(problem, workspace);
+    expect(() => createTaskSourceProjector(problem, workspace, commit)(task, [])).toThrow(code);
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
   it('allows explicit Mathlib imports while preserving original imports and trusted inputs', () => {
     const file = path.join(project, 'Submission.lean');
     const baseline = 'import Mathlib.Data.Nat.Basic\n' + original;
@@ -1747,7 +1787,7 @@ describe('isolated solver and host acceptance', () => {
     expect(unadoptedProposals(restored.cooperation)).toHaveLength(18);
   });
 
-  it('replans a ready original goal after its pinned engineer exits instead of waiting for an impossible assignment', async () => {
+  it('gives a ready original goal to a live peer after its pinned engineer exits instead of waiting for an impossible assignment', async () => {
     const tasks = planTasks().slice(2).map(task => ({ ...task, dependsOn: task.id === 'first' ? [] : ['first'] }));
     const plan = parseCooperationPlan(problem, { tasks, groups: [{ id: 'main', objective: 'Original goals', engineerId: 'engineer' }] });
     const lead = { id: 'solver', role: 'lead', worktree: workspace, ownedFiles: problem.ownedFiles } as const;
@@ -1758,13 +1798,11 @@ describe('isolated solver and host acceptance', () => {
         groups: plan.groups.map(group => ({ group, turns: 0 })) } } as any;
     const cooperative = new CooperativeResearch({ state, workers: [lead, peer, engineer], access: new Map(), signal: new AbortController().signal,
       modules: directSolverModules, save: vi.fn(), emit: vi.fn(), exclusiveCheck: check => check() });
+    expect(assessTaskResponsibility(state.cooperation.tasks[0], peer, state.cooperation)).toEqual({ kind: 'blocked', reason: 'engineer' });
     cooperative.stopped(engineer, 'math_model_request_failed');
-    const action = await cooperative.next(lead, { maxTurns: Infinity, remainingMs: Infinity });
-    expect(action?.kind).toBe('lead');
-    if (action?.kind !== 'lead') throw new Error('missing_owner_replan');
-    writePlan(workspace, tasks);
-    await cooperative.deliver(lead, action, commitSolverSources(problem, workspace));
+    // A stopped engineer's route pin no longer binds live peers, so no replanning turn is needed.
     expect(await cooperative.next(peer, { maxTurns: Infinity, remainingMs: Infinity })).toMatchObject({ kind: 'task', task: { id: 'first' } });
+    expect(state.cooperation.groups[0].group.engineerId).toBe('engineer');
     expect(host.createSession).not.toHaveBeenCalled();
   });
 
@@ -1854,7 +1892,7 @@ describe('isolated solver and host acceptance', () => {
       await cooperative.deliver(lead, action, commit);
     }
     expect(commits[0]).not.toBe(commits[1]);
-    expect(state.cooperation.planRejection).toMatchObject({ stalled: true, error: 'math_plan_changed_original_target' });
+    expect(state.cooperation.planRejection).toMatchObject({ stalled: true, error: expect.stringMatching(/^math_plan_changed_original_target: /u) });
     expect(await cooperative.next(lead, budget)).toBeUndefined();
     expect(events).toContain('plan_stalled');
     await cooperative.stop();
@@ -5769,7 +5807,7 @@ describe('isolated solver and host acceptance', () => {
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '6'], directory)).toBe(0);
     expect(cooperationState().edits).toMatchObject([
       { id: 'stale', status: 'rejected', reason: 'math_edit_version_conflict' },
-      { id: 'cycle', status: 'rejected', reason: 'math_plan_dependency_cycle' },
+      { id: 'cycle', status: 'rejected', reason: expect.stringMatching(/^math_plan_dependency_cycle: /u) },
     ]);
     for (const edit of cooperationState().edits) {
       expect(edit.receivedAt).toEqual(expect.any(Number)); expect(edit.recheck).toBeUndefined();

@@ -7,7 +7,7 @@ import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspect
   leanDeclarationContextCommands } from '../math/leanSource';
 import { assertSolverSources, committedSource, commitSolverProjection, git, solverProofImports, withSolverWorktree, type SolverProblem } from './problem';
 import { attributeProofEvidence, checkProjectedDeclarations, type ProofCheck } from './modules/evidence';
-import { taskVersion, type CooperativeTask, type TaskAssignment } from './tasks';
+import { assumableLemma, isDefinitionTask, taskVersion, type CooperativeTask, type TaskAssignment } from './tasks';
 import { captureProofReferences, type ProofReferences } from './proofReferences';
 import { hasDeterministicLeanFailure, proofReuseEnvironment } from './proofReuse';
 import { TaskProofCache, type TaskVerificationArtifact } from './taskProofCache';
@@ -172,14 +172,16 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       .find(item => item.qualifiedName === task.theoremName) : undefined;
     const originalDefinition = Boolean(originalSource && originalDeclaration && /^def\s/u.test(originalSource.slice(originalDeclaration.startOffset)));
     const header = declaration.slice(matches[0].startOffset, matches[0].bodyOffset);
-    // Only an exact frozen original goal may deliver a definition body; helper targets remain propositions.
+    // Only an exact frozen original goal may deliver a definition body; helper targets remain propositions
+    // unless the plan explicitly marks the helper as a new definition.
     const definitionMatches = originalTarget && originalDeclaration && originalDefinition && /^def\s/u.test(header) &&
       inspectScopedLeanDeclarations(declaration).some(item => item.startOffset === matches[0].startOffset &&
         item.qualifiedName === task.theoremName && item.declarationType === originalDeclaration.declarationType) &&
       hashMathFormalSourceDeclaration(declaration, task.theoremName!) === originalTarget.declarationHash;
-    if (originalDefinition ? !definitionMatches : !/^(?:theorem|lemma)\s/u.test(header))
-      throw new Error('math_task_requires_theorem' + location +
-        'Helper targets must be theorems or lemmas. A goal may fill its exact frozen original def, preserving its declaration kind, name, parameters and type.');
+    if (isDefinitionTask(task) ? !/^(?:def|abbrev)\s/u.test(header) : originalDefinition ? !definitionMatches : !/^(?:theorem|lemma)\s/u.test(header))
+      throw new Error((isDefinitionTask(task) ? 'math_task_requires_definition' : 'math_task_requires_theorem') + location +
+        (isDefinitionTask(task) ? 'This task introduces a definition. Save one def with the requested name and type and a complete body, without sorry.' :
+          'Helper targets must be theorems or lemmas. A goal may fill its exact frozen original def, preserving its declaration kind, name, parameters and type.'));
     if (task.kind === 'lemma' && Object.values(problem.declarations).some(items => items.some(item => local(item.name) === local(task.theoremName!))))
       throw new Error('math_task_helper_is_original_declaration');
     const sources = new Map(sourceSnapshot);
@@ -295,7 +297,7 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
       if (assignment.connectionCheck && (!connection || assignment.connectionCheck.environmentDigest !== environmentDigest ||
           assignment.connectionCheck.problemReceiptDigest !== problem.receiptDigest))
         throw new Error('math_task_condition_version_invalid');
-      if (conditions.some(dependency => !(task.conditional || connection) || dependency.kind !== 'lemma' || !dependency.type ||
+      if (conditions.some(dependency => !(task.conditional || connection) || !assumableLemma(dependency) ||
           (connection && !(assignment.connectionCheck!.assumedInputs ?? assignment.connectionCheck!.inputs).some(input => input.taskId === dependency.id &&
             input.taskDigest === taskVersion(dependency))) ||
           !assignment.dependencies?.some(version => version.taskId === dependency.id && version.taskDigest === taskVersion(dependency))))
@@ -411,7 +413,7 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
 }
 
 /** Move an attached document comment with its declaration without changing archived patch text. */
-function declarationStartWithDoc(source: string, startOffset: number): number {
+export function declarationStartWithDoc(source: string, startOffset: number): number {
   const lineStart = source.lastIndexOf('\n', startOffset - 1) + 1;
   let cursor = lineStart;
   while (cursor > 0 && /\s/u.test(source[cursor - 1])) cursor--;

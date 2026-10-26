@@ -4,7 +4,7 @@ import path from 'node:path';
 import { canonicalMathJson, mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { commitSolverSources, committedSource, git, solverProofImports, withSolverWorktree } from './problem';
 import { originalGoalTaskFocus, routeAllowsTask, taskCanStart, plannedTaskDependencyIds } from './modules/search';
-import { readMathResponse as block, parseMathResponse, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
+import { readMathResponse as block, parseMathResponse, isPlanFence as planFence, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
 import { applyTaskChanges, ownedSourceDigest, taskChanges } from './cooperativeProof';
 import { statementSnapshot } from './statementReview';
 import { proofReferencesUnchanged } from './proofReferences';
@@ -12,7 +12,9 @@ import { captureObligationSnapshot } from './obligationProgress';
 import { taskConnectionCheckCurrent } from './taskConnections';
 import { taskGroup, taskVersion, taskProofContractVersion, taskReferenceDependencies, invalidatedTaskIds, type TaskRecord,
   type CooperativeAction } from './tasks';
-import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan } from './cooperationShared';
+import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan,
+  type LeadPlan } from './cooperationShared';
+import { formatPlanJson, type PlanPatchBase } from './planPatch';
 import { dropLeadWakes } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
@@ -24,11 +26,32 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     if (!this.archive.planEdited) return;
     const file = path.join(this.lead.worktree, 'RESEARCH.md');
     const source = fs.existsSync(file) ? readMathText(file, MAX_RESEARCH_NOTES_BYTES) : '';
-    const plan = '```math\n' + JSON.stringify({ tasks: this.plannedTasks().map(node => node.task), groups: this.archive.groups?.map(route => route.group),
+    const plan = '```math\n' + formatPlanJson({ tasks: this.plannedTasks().map(node => node.task), groups: this.archive.groups?.map(route => route.group),
       ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}) }) + '\n```';
-    fs.writeFileSync(file, /```(?:math|math-plan)\s*\n[\s\S]*?\n```/u.test(source)
-      ? source.replace(/```(?:math|math-plan)\s*\n[\s\S]*?\n```/u, () => plan) : plan + '\n' + bounded(source, 8000));
+    // Replace the first plan fence and drop the rest, so an applied revision cannot be read again.
+    let replaced = false;
+    const synced = source.replace(/```([a-z-]+)\s*\n([\s\S]*?)\n```/gu, (fence, label: string, body: string) => {
+      if (!planFence(label, body)) return fence;
+      if (replaced) return '';
+      replaced = true; return plan;
+    });
+    fs.writeFileSync(file, replaced ? synced : plan + '\n' + bounded(source, 8000));
     this.archive.planEdited = false;
+  }
+  /** The accepted Lead graph that a plan revision is written against. */
+  protected planPatchBase(): PlanPatchBase | undefined {
+    const tasks = this.plannedTasks().map(node => node.task);
+    return tasks.length ? { version: this.archive.planVersion ?? this.planVersion(), tasks,
+      groups: this.archive.groups?.map(route => route.group) ?? [], proofRoutes: this.archive.proofRoutes } : undefined;
+  }
+  /** A dispatch's own live publication already applied its revision; the final notes may repeat it against the dispatch base. */
+  protected readLeadPlan(action?: CooperativeAction): LeadPlan {
+    const base = this.planPatchBase();
+    const rebased = Boolean(action?.kind === 'lead' && this.current(action) && this.publishedPlans.has(action) &&
+      action.planVersion && action.planVersion !== base?.version);
+    return readCooperationPlan(this.input.state.problem, this.lead.worktree, base, {
+      acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [(action as { planVersion: string }).planVersion] : [])],
+      rebased });
   }
   protected planningInputDigest(omitLeadDrafts = false) {
     const versions = new Map(this.archive.tasks.map(node => [node.task.id, digest(node.task)]));
@@ -104,7 +127,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       !node.feedback?.startsWith('math_task_repeated_failed_input\n') &&
       !this.archive.blockers?.some(blocker => blocker.taskId === node.task.id && blocker.status === 'parked') &&
       routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) && taskCanStart(node.task, this.archive.tasks, this.archive.groups) &&
-      this.livePeers.some(worker => this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks) === node));
+      this.livePeers.some(worker => this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node));
     if (!resumed.length) return false;
     // A planning assessment is not an execution attempt at an imported unresolved obligation.
     for (const node of resumed) this.moveTask(node, 'pending', 'reopened');
@@ -115,9 +138,10 @@ export abstract class CooperationPlanning extends CooperationIntegration {
   }
   protected proposedPlanDigest(source?: string) {
     try {
-      const { tasks, groups, proofRoutes } = source === undefined
+      const { tasks, groups, proofRoutes, upsert, remove, baseVersion } = source === undefined
         ? block(this.lead.worktree, 'math-plan') : parseMathResponse(source, 'math-plan');
-      return mathDigest(canonicalMathJson({ tasks, groups, proofRoutes }));
+      const revision = upsert !== undefined || remove !== undefined;
+      return mathDigest(canonicalMathJson({ tasks, groups, proofRoutes, ...(revision ? { upsert, remove, baseVersion } : {}) }));
     } catch {
       if (source !== undefined) return mathDigest(source);
       // A notes-only commit must not make an identical malformed response new input.
@@ -209,10 +233,11 @@ export abstract class CooperationPlanning extends CooperationIntegration {
         currentCapacityExploration(node, view, this.explorationIdentity)) invalidated.delete(node.task.id);
     return invalidated;
   }
-  protected async acceptPlan(plan = readCooperationPlan(this.input.state.problem, this.lead.worktree), edit?: HumanEditRecord,
+  protected async acceptPlan(planInput?: LeadPlan, edit?: HumanEditRecord,
     publication?: { action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>;
       receipt: Omit<InitialPlanPublication, 'planVersion'> },
     leadAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
+    const plan = planInput ?? this.readLeadPlan(leadAction);
     this.includeCapacityExplorations(plan);
     const { tasks, groups, proofRoutes } = plan;
     const publicationResponseDigest = publication ? this.proposedPlanDigest(
@@ -292,6 +317,8 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.planEdited = true;
     }
     this.archive.planVersion = this.planVersion();
+    // A revision is not a graph: the next dispatch's notes show the complete accepted result.
+    if (plan.fromPatch) this.archive.planEdited = true;
     // Replaying unchanged saved notes during restore does not correct a rejected live event.
     if (edit || publication || leadAction || this.archive.planPublicationRejection?.baseVersion !== this.archive.planVersion)
       this.archive.planPublicationRejection = undefined;

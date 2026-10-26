@@ -13,7 +13,9 @@ export type CooperativeTask = Readonly<{ id: string; kind: 'research' | 'sketch'
   dependsOn: readonly string[]; revision: number; proofPath?: string; theoremName?: string; type?: string;
   groupId?: string; sharing?: 'group' | 'problem'; status?: 'active' | 'paused' | 'stopped'; ownerId?: string; premises?: readonly string[];
   conditional?: boolean; statementReview?: boolean; informalStatement?: string;
-  reviewScope?: 'final-candidate' | 'feasibility' }>;
+  reviewScope?: 'final-candidate' | 'feasibility';
+  /** A typed lemma task whose target is a new `def` of `type`; consumers use its body, never an assumed copy. */
+  declaration?: 'definition' }>;
 export type RouteGroup = Readonly<{ id: string; objective: string; status: 'active' | 'paused' | 'stopped'; revision: number;
   engineerId?: string; maxTurns?: number; maxConcurrent?: number }>;
 export type RouteRecord = { group: RouteGroup; turns: number; busy?: number };
@@ -132,6 +134,11 @@ export const leadPlanDeliveryFile = (action: CooperativeAction) => initialPlanDe
     : undefined);
 
 export const isAdvisoryTask = (task: CooperativeTask) => task.kind === 'research' || task.kind === 'sketch';
+export const isDefinitionTask = (task: CooperativeTask) => task.kind === 'lemma' && task.declaration === 'definition';
+/** A typed proposition whose fixed statement a conditional consumer may bind before it is proved. Definitions are not
+ * propositions: a consumer needs their actual body, so they must be integrated first. */
+export const assumableLemma = (task: CooperativeTask | undefined): boolean =>
+  Boolean(task && task.kind === 'lemma' && task.type?.trim() && !isDefinitionTask(task));
 export const isFinalCandidateReview = (task: CooperativeTask) => isAdvisoryTask(task) &&
   (task.reviewScope === 'final-candidate' || task.id === 'independent_candidate_review');
 export const isFeasibilityReview = (task: CooperativeTask) => isAdvisoryTask(task) &&
@@ -152,6 +159,9 @@ export function parseWaitsOn(value: unknown, deferred: boolean, task: (id: strin
 }
 
 const validId = (value: unknown) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,64}$/u.test(value);
+/** Name the rejected plan element so a Lead can repair it without reading the validator. */
+export const planError = (code: string, detail: Record<string, unknown>, hint = '') =>
+  new Error(`${code}: ${JSON.stringify(detail)}${hint ? '. ' + hint : ''}`);
 const optionalFields = (value: any, keys: readonly string[]) =>
   Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
 
@@ -161,19 +171,20 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
   // Leads routinely serialize an empty explicit list; it carries the same meaning as omitting it.
   const rawGroups = !Array.isArray(value.groups) || !value.groups.length
     ? [{ id: 'main', objective: 'Prove the original problem' }] : value.groups;
-  const groups: RouteGroup[] = rawGroups.map((group: any) => {
-    if (!group || !validId(group.id) ||
-        typeof group.objective !== 'string' || !group.objective.trim() ||
-        !['active', 'paused', 'stopped'].includes(group.status ?? 'active') ||
-        !Number.isSafeInteger(group.revision ?? 0) || (group.revision ?? 0) < 0 ||
-        (group.engineerId !== undefined && (!validId(group.engineerId))) ||
-        (group.maxTurns !== undefined && (!Number.isSafeInteger(group.maxTurns) || group.maxTurns < 0)) ||
-        (group.maxConcurrent !== undefined && (!Number.isSafeInteger(group.maxConcurrent) || group.maxConcurrent < 1)))
-      throw new Error('math_plan_invalid_group');
+  const groups: RouteGroup[] = rawGroups.map((group: any, index: number) => {
+    const field = !group || typeof group !== 'object' ? 'group' : !validId(group.id) ? 'id' :
+      typeof group.objective !== 'string' || !group.objective.trim() ? 'objective' :
+      !['active', 'paused', 'stopped'].includes(group.status ?? 'active') ? 'status' :
+      !Number.isSafeInteger(group.revision ?? 0) || (group.revision ?? 0) < 0 ? 'revision' :
+      group.engineerId !== undefined && !validId(group.engineerId) ? 'engineerId' :
+      group.maxTurns !== undefined && (!Number.isSafeInteger(group.maxTurns) || group.maxTurns < 0) ? 'maxTurns' :
+      group.maxConcurrent !== undefined && (!Number.isSafeInteger(group.maxConcurrent) || group.maxConcurrent < 1) ? 'maxConcurrent' : undefined;
+    if (field) throw planError('math_plan_invalid_group', { index, groupId: validId(group?.id) ? group.id : undefined, field });
     return { id: group.id, objective: group.objective, status: group.status ?? 'active', revision: group.revision ?? 0,
       ...optionalFields(group, ['engineerId', 'maxTurns', 'maxConcurrent']) };
   });
-  if (new Set(groups.map(group => group.id)).size !== groups.length) throw new Error('math_plan_duplicate_group');
+  const duplicateGroup = groups.find((group, index) => groups.findIndex(item => item.id === group.id) !== index);
+  if (duplicateGroup) throw planError('math_plan_duplicate_group', { groupId: duplicateGroup.id });
   const tasks: CooperativeTask[] = value.tasks.map((value: any) => {
     // A research request with an exact proof target is proof work, regardless of its label.
     if (value && ['research', 'sketch'].includes(value.kind) && value.theoremName &&
@@ -182,59 +193,76 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
     const task = value && { ...value, dependsOn: value.dependsOn ?? [], proofPath: value.proofPath ??
       (value.kind === 'goal' ? problem.targets.find(target => target.theoremName === value.theoremName)?.proofPath :
         problem.ownedFiles.filter(file => file.endsWith('.lean')).length === 1 ? problem.ownedFiles.find(file => file.endsWith('.lean')) : undefined) };
-    if (!task || !validId(task.id) ||
-        !['research', 'sketch', 'lemma', 'goal'].includes(task.kind) || typeof task.objective !== 'string' ||
-        !task.objective.trim() || !Array.isArray(task.dependsOn) ||
-        task.dependsOn.some((id: unknown) => typeof id !== 'string') ||
-        !Number.isSafeInteger(task.revision ?? 0) || (task.revision ?? 0) < 0)
-      throw new Error('math_plan_invalid_task');
-    if ((task.status !== undefined && !['active', 'paused', 'stopped'].includes(task.status)) ||
-        (task.conditional !== undefined && (typeof task.conditional !== 'boolean' || isAdvisoryTask(task))) ||
-        (task.statementReview !== undefined && (typeof task.statementReview !== 'boolean' || isAdvisoryTask(task))) ||
-        (task.reviewScope !== undefined && (!isAdvisoryTask(task) ||
-          !['final-candidate', 'feasibility'].includes(task.reviewScope))) ||
-        (task.informalStatement !== undefined && (typeof task.informalStatement !== 'string' || !task.informalStatement.trim())) ||
-        (task.statementReview === true && !task.informalStatement) ||
-        (task.ownerId !== undefined && (!validId(task.ownerId))) ||
-        (task.premises !== undefined && (!Array.isArray(task.premises) ||
-          task.premises.some((premise: unknown) => typeof premise !== 'string')))) throw new Error('math_plan_invalid_task');
+    const taskId = validId(task?.id) ? task.id : undefined;
+    const field = !task || typeof task !== 'object' ? 'task' : !taskId ? 'id' :
+      !['research', 'sketch', 'lemma', 'goal'].includes(task.kind) ? 'kind' :
+      typeof task.objective !== 'string' || !task.objective.trim() ? 'objective' :
+      !Array.isArray(task.dependsOn) || task.dependsOn.some((id: unknown) => typeof id !== 'string') ? 'dependsOn' :
+      !Number.isSafeInteger(task.revision ?? 0) || (task.revision ?? 0) < 0 ? 'revision' :
+      task.status !== undefined && !['active', 'paused', 'stopped'].includes(task.status) ? 'status' :
+      task.conditional !== undefined && (typeof task.conditional !== 'boolean' || isAdvisoryTask(task)) ? 'conditional' :
+      task.statementReview !== undefined && (typeof task.statementReview !== 'boolean' || isAdvisoryTask(task)) ? 'statementReview' :
+      task.reviewScope !== undefined && (!isAdvisoryTask(task) ||
+        !['final-candidate', 'feasibility'].includes(task.reviewScope)) ? 'reviewScope' :
+      task.informalStatement !== undefined && (typeof task.informalStatement !== 'string' || !task.informalStatement.trim()) ||
+        task.statementReview === true && !task.informalStatement ? 'informalStatement' :
+      task.ownerId !== undefined && !validId(task.ownerId) ? 'ownerId' :
+      task.premises !== undefined && (!Array.isArray(task.premises) ||
+        task.premises.some((premise: unknown) => typeof premise !== 'string')) ? 'premises' :
+      task.declaration !== undefined && (task.declaration !== 'definition' || task.kind !== 'lemma' ||
+        task.conditional === true || task.statementReview === true) ? 'declaration' : undefined;
+    if (field) throw planError('math_plan_invalid_task', { taskId, field });
     if (!groups.some(group => group.id === (task.groupId ?? 'main')) ||
-        (task.sharing !== undefined && !['group', 'problem'].includes(task.sharing))) throw new Error('math_plan_invalid_task_group');
+        (task.sharing !== undefined && !['group', 'problem'].includes(task.sharing)))
+      throw planError('math_plan_invalid_task_group', { taskId, groupId: task.groupId ?? 'main', sharing: task.sharing },
+        'Use a declared group id and sharing "group" or "problem".');
     if (!isAdvisoryTask(task) && (!problem.ownedFiles.includes(task.proofPath) ||
         !isSimpleLeanName(task.theoremName)))
       throw new Error('math_plan_invalid_proof_target: ' + JSON.stringify({ taskId: task.id,
         proofPath: task.proofPath, theoremName: task.theoremName }) + '. Use an owned proofPath and an ordinary qualified Lean name.');
     if (task.kind === 'goal' && !problem.targets.some(target => target.proofPath === task.proofPath && target.theoremName === task.theoremName))
-      throw new Error('math_plan_changed_original_target');
+      throw planError('math_plan_changed_original_target', { taskId, proofPath: task.proofPath, theoremName: task.theoremName },
+        'A goal task must name an original target exactly; use a lemma task for a helper statement.');
     if (task.kind === 'lemma' && typeof task.type === 'string' && task.type.trim() === 'FULL_CLOSED_LEAN_TYPE')
       throw new Error('math_plan_placeholder_helper_type: supply the actual closed Lean type, or use an untyped research/sketch task for advisory findings.');
-    if (task.kind === 'lemma' && (typeof task.type !== 'string' || !task.type.trim() ||
-        Object.values(problem.declarations).some(items => items.some(item => item.name.split('.').at(-1) === task.theoremName.split('.').at(-1)))))
-      throw new Error('math_plan_invalid_helper_type');
+    if (task.kind === 'lemma' && (typeof task.type !== 'string' || !task.type.trim()))
+      throw planError('math_plan_invalid_helper_type', { taskId, field: 'type' }, 'Supply the closed Lean type of the helper.');
+    if (task.kind === 'lemma' && Object.values(problem.declarations).some(items =>
+        items.some(item => item.name.split('.').at(-1) === task.theoremName.split('.').at(-1))))
+      throw planError('math_plan_invalid_helper_type', { taskId, field: 'theoremName', theoremName: task.theoremName },
+        'A helper must not reuse the final name component of a frozen declaration.');
     return { id: task.id, kind: task.kind, objective: task.objective, dependsOn: [...new Set<string>(task.dependsOn)],
       revision: task.revision ?? 0, ...(isAdvisoryTask(task) ? {} : { proofPath: task.proofPath, theoremName: task.theoremName }),
       ...(task.kind === 'lemma' ? { type: task.type } : {}),
-      ...optionalFields(task, ['conditional', 'statementReview', 'informalStatement', 'reviewScope', 'status', 'ownerId', 'premises', 'groupId']),
+      ...optionalFields(task, ['conditional', 'statementReview', 'informalStatement', 'reviewScope', 'status', 'ownerId', 'premises', 'groupId',
+        'declaration']),
       ...(task.sharing === undefined ? groups.length > 1 ? { sharing: 'group' } : {} : { sharing: task.sharing }) };
   });
-  if (new Set(tasks.map(task => task.id)).size !== tasks.length ||
-      new Set(tasks.filter(task => !isAdvisoryTask(task)).map(task => task.theoremName!.split('.').at(-1))).size !== tasks.filter(task => !isAdvisoryTask(task)).length)
-    throw new Error('math_plan_duplicate_task');
-  if (problem.targets.some(target => tasks.filter(task => task.kind === 'goal' && task.proofPath === target.proofPath && task.theoremName === target.theoremName).length !== 1))
-    throw new Error('math_plan_incomplete_original_coverage');
+  const duplicateId = tasks.find((task, index) => tasks.findIndex(item => item.id === task.id) !== index);
+  if (duplicateId) throw planError('math_plan_duplicate_task', { taskId: duplicateId.id });
+  const shortName = (task: CooperativeTask) => task.theoremName!.split('.').at(-1);
+  const typed = tasks.filter(task => !isAdvisoryTask(task));
+  const duplicateName = typed.find((task, index) => typed.findIndex(item => shortName(item) === shortName(task)) !== index);
+  if (duplicateName) throw planError('math_plan_duplicate_task', { taskId: duplicateName.id, theoremName: duplicateName.theoremName },
+    'Typed tasks need distinct final theorem name components.');
+  const uncovered = problem.targets.find(target => tasks.filter(task => task.kind === 'goal' && task.proofPath === target.proofPath && task.theoremName === target.theoremName).length !== 1);
+  if (uncovered) throw planError('math_plan_incomplete_original_coverage', { proofPath: uncovered.proofPath, theoremName: uncovered.theoremName },
+    'Each original target needs exactly one goal task.');
   const byId = new Map(tasks.map(task => [task.id, task]));
-  const visiting = new Set<string>(), visited = new Set<string>();
-  const visit = (id: string) => {
-    if (visiting.has(id)) throw new Error('math_plan_dependency_cycle');
+  const visiting: string[] = [], visited = new Set<string>();
+  const visit = (id: string, consumer?: string) => {
+    if (visiting.includes(id)) throw planError('math_plan_dependency_cycle', { cycle: [...visiting.slice(visiting.indexOf(id)), id] });
     if (visited.has(id)) return;
     const task = byId.get(id);
-    if (!task) throw new Error('math_plan_missing_dependency');
-    visiting.add(id); task.dependsOn.forEach(visit); visiting.delete(id); visited.add(id);
+    if (!task) throw planError('math_plan_missing_dependency', { taskId: consumer, dependsOn: id });
+    visiting.push(id); task.dependsOn.forEach(input => visit(input, id)); visiting.pop(); visited.add(id);
   };
   tasks.forEach(task => visit(task.id));
   for (const task of tasks) for (const id of task.dependsOn) {
     const dependency = byId.get(id)!;
-    if (taskGroup(task) !== taskGroup(dependency) && dependency.sharing === 'group') throw new Error('math_plan_dependency_not_shared');
+    if (taskGroup(task) !== taskGroup(dependency) && dependency.sharing === 'group')
+      throw planError('math_plan_dependency_not_shared', { taskId: task.id, dependsOn: id },
+        'A cross-group dependency needs sharing "problem" on its input.');
     if (task.kind === 'goal' && dependency.kind === 'goal' && task.proofPath === dependency.proofPath) {
       const declarations = problem.declarations[task.proofPath!]!;
       const position = (name: string) => declarations.findIndex(item => item.name.split('.').at(-1) === name.split('.').at(-1));

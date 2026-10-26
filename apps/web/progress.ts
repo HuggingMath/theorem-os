@@ -20,6 +20,7 @@ const descriptions: Record<string, string> = {
   task_checked: '局部任务检查完成', task_check_reused: '已复用当前任务检查',
   task_failure_check_reused: '已复用当前任务的失败检查', task_recheck_started: '正在重新检查任务',
   task_recheck_finished: '任务重新检查结束', task_integrated: '任务成果已集成',
+  task_tactic_battery: '宿主策略组合已尝试辅助引理', source_quarantined: '已移开工作区外的未跟踪文件',
   plan_updated: '研究计划已更新', plan_rejected: '研究计划未通过约束检查',
   initial_plan_fallback: '已建立初始研究任务', review_requested: '候选已提交审阅',
   review_assigned: '候选审阅已分配', review_completed: '候选审阅结束',

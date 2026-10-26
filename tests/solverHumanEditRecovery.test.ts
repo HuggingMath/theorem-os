@@ -238,7 +238,7 @@ describe('human edit recovery', () => {
       tasks: [{ ...route(1), dependsOn: ['route'] }] }) + '\n');
     append('valid-after-invalid', 1);
     await cooperative.pulse(); await cooperative.pulse();
-    expect(record('invalid-cycle')).toMatchObject({ status: 'rejected', reason: 'math_plan_dependency_cycle' });
+    expect(record('invalid-cycle')).toMatchObject({ status: 'rejected', reason: expect.stringMatching(/^math_plan_dependency_cycle: /u) });
     expect(record('valid-after-invalid')).toMatchObject({ status: 'applied', planVersion: version(1) });
     expect(events.filter(event => event.event === 'edit_rejected')).toHaveLength(2);
     expect(state.cooperation!.cursors?.edits).toBe(fs.statSync(editsFile()).size);

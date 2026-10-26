@@ -28,6 +28,7 @@ import { parseMathResponse } from './deliveries';
 import { readCheckpointNotesDigest, savedContextCheckpoint } from './contextCheckpoint';
 import { committedSource } from './problem';
 import type { ContinuationSnapshot } from './continuationInput';
+import type { MathTools } from '../math/mathTools';
 import { setWorkerResearchPhase, WorkerProofLifecycle } from './workerProofLifecycle';
 import { importAssignedProof, syncProofImports } from './proofImport';
 import type { TaskProof } from './cooperativeProof';
@@ -62,7 +63,7 @@ export function advisoryCheckpointScope(assignment: CooperativeAction | undefine
 }
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
-  continuation?: ContinuationSnapshot;
+  continuation?: ContinuationSnapshot; mathTools?: MathTools;
   knowledgeFile?: string; knowledgeDigest?: string; knowledgeSnapshot?: KnowledgeContextSnapshot };
 
 /** Lead and isolated task workers share one budget; only a full canonical check grants acceptance. */
@@ -139,6 +140,9 @@ export async function runResearchWorkers(input: {
       const access = input.access.get(worker.id)!;
       const view = (): SolverRunState => ({ ...state, ...research, turns: state.turns });
       const emit = (event: string, details = {}) => input.emit(event, { workerId: worker.id, ...details });
+      // A stray untracked file must not stop a cooperative peer; the single solver keeps its strict stop.
+      const sourceFeedback = () => solverSourceFeedback(state.problem, worker.worktree,
+        cooperation ? paths => emit('source_quarantined', { paths: paths.slice(0, 32), count: paths.length }) : undefined);
       const recovered = () => {
         const recovery = research.recovery;
         if (!recovery || recovery.phase === 'recovered') return;
@@ -866,7 +870,7 @@ export async function runResearchWorkers(input: {
             }
             continue;
           }
-          const repair = solverSourceFeedback(state.problem, worker.worktree);
+          const repair = sourceFeedback();
           if (repair) research.check = undefined;
           const currentContext = context(repair, feedbackCheck, feedbackFailures, assignment);
           const responsibility = assignment?.kind === 'lead' ? canonicalMathJson({ planVersion: assignment.planVersion,
@@ -939,7 +943,7 @@ export async function runResearchWorkers(input: {
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
           if (candidate.status === 'failed' || planningCheckpoint) await close();
           if (assignment && cooperation && !cooperation.current(assignment)) {
-            const commit = solverSourceFeedback(state.problem, worker.worktree) ? git(worker.worktree, ['rev-parse', 'HEAD']) : commitSolverSources(state.problem, worker.worktree);
+            const commit = sourceFeedback() ? git(worker.worktree, ['rev-parse', 'HEAD']) : commitSolverSources(state.problem, worker.worktree);
             if (assignment.kind === 'task' || assignment.kind === 'lead') await cooperation.deliver(worker, assignment, commit);
             else await exclusiveCheck(() => cooperation.deliver(worker, assignment, commit));
             emit('assignment_superseded', { commit });
@@ -959,7 +963,7 @@ export async function runResearchWorkers(input: {
               contextSchedulingCheckpoint ? { reason: 'math_context_scheduling_checkpoint' } :
                 cooperativeCheckpoint ? { reason: 'math_cooperative_scheduling_checkpoint' } : {}) });
           if (turn === 'failed') emit('turn_failed', { reason: researchFailureReason(turnError), ...(diagnostic ? { diagnostic } : {}) });
-          const sourceError = solverSourceFeedback(state.problem, worker.worktree);
+          const sourceError = sourceFeedback();
           if (sourceError) {
             research.check = undefined;
             if (assignment) cooperation!.rejected(assignment, sourceError, undefined, turn !== 'completed');

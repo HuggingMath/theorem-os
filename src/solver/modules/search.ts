@@ -7,7 +7,7 @@ import { proofRouteReady, type ProofRoute } from '../proofRoutes';
 import { createRecordedTaskSettlement } from '../progress';
 import { createProofRoutePriority } from '../routePriority';
 import { automaticTaskConnection, freshTaskConnection } from '../taskConnections';
-import { allRoutesParked, checkedUnconditionally, freshlyAccepted, groupOpen, isAdvisoryTask, isFeasibilityReview, isFinalCandidateReview,
+import { allRoutesParked, assumableLemma, checkedUnconditionally, freshlyAccepted, groupOpen, isAdvisoryTask, isFeasibilityReview, isFinalCandidateReview,
   openRoutes, taskGroup, taskReferenceDependencies, taskVersion, type TaskRecord, type RouteRecord, type CooperativeAction } from '../tasks';
 
 export type ResearchBudget = Readonly<{ maxTurns: number; remainingMs: number; aborted: boolean }>;
@@ -95,7 +95,7 @@ function taskReadiness(tasks: readonly TaskRecord[], groups?: readonly RouteReco
     available.set(id, false);
     const dependency = nodes.get(id);
     const ready = Boolean(dependency && !dependency.pendingValidation && (['integrated', 'completed'].includes(dependency.status) ||
-      (dependency.task.kind === 'lemma' && dependency.task.type)) && dependency.task.dependsOn.every(dependencyAvailable));
+      assumableLemma(dependency.task)) && dependency.task.dependsOn.every(dependencyAvailable));
     available.set(id, ready);
     return ready;
   };
@@ -311,7 +311,8 @@ export function continuationResearchTasks(tasks: readonly TaskRecord[], groups?:
 
 /** Candidate roots may be scoped; their prerequisites still use the complete task graph. */
 export function researchCanAdvance(tasks: readonly TaskRecord[], groups: readonly RouteRecord[] | undefined,
-  liveWorkers: ReadonlySet<string>, canAssign?: (node: TaskRecord) => boolean, candidateIds?: ReadonlySet<string>): boolean {
+  liveWorkers: ReadonlySet<string>, canAssign?: (node: TaskRecord) => boolean, candidateIds?: ReadonlySet<string>,
+  stopped?: ReadonlySet<string>): boolean {
   const nodes = new Map(tasks.map(node => [node.task.id, node]));
   const memo = new Map<string, boolean>();
   const readiness = taskReadiness(tasks, groups);
@@ -331,7 +332,9 @@ export function researchCanAdvance(tasks: readonly TaskRecord[], groups: readonl
     if (node.status !== 'conditional') {
       const engineerId = node.task.kind === 'goal'
         ? groups?.find(route => route.group.id === taskGroup(node.task))?.group.engineerId : undefined;
-      const owners = [node.task.ownerId, node.assignment?.workerId, engineerId].filter((id): id is string => Boolean(id));
+      // Pins of a worker stopped in this process are released, except its own capacity exploration.
+      const owners = [node.task.ownerId, node.assignment?.workerId, engineerId].filter((id): id is string =>
+        Boolean(id) && !(stopped?.has(id!) && !node.capacityExploration));
       if (owners.some(id => !liveWorkers.has(id) || id !== owners[0]) || !routeAllowsTask(node.task, tasks, groups) ||
           (canAssign && !canAssign(node))) return false;
     }

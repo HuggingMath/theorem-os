@@ -49,7 +49,7 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   knowledge            Build and query previously checked theorem sources
   check-lean           Check changed Lean files with bounded diagnostics
   check-finite         Replay finite Boolean constraints and return witnesses
-  continuation         Read frozen continuation attachments in bounded pages
+  continuation         Read or search frozen continuation attachments in bounded pages
   continuation-seed    Initialize a new prepared run from advisory sources and fresh helper checks
   inspect              Read a research report or export a versioned task plan
   recover              Restore a research snapshot and recheck saved helpers
