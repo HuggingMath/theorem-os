@@ -1008,6 +1008,10 @@ export class CooperativeResearch extends CooperationInputs {
         await this.publishResearchFinding(worker, action, commit,
           { kind: 'notes', text: committedSource(worker.worktree, commit, 'RESEARCH.md') }, { artifacts });
       } else {
+        // The same assignment resumes; the next real turn of this draft is still checked.
+        if (recovering && recoveryKind === 'request-failure' && this.untouchedTaskSeed(worker, action, commit)) {
+          this.interrupted(worker, action); return { checkWhole: false };
+        }
         const proof = await this.publishTaskProof(worker, action, commit,
           'Fixed declaration checked; unresolved lemma assumptions remain obligations.', { artifacts }, recovering);
         return { check: proof, checkWhole: false };

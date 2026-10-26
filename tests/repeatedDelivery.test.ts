@@ -236,6 +236,28 @@ describe('persistent typed delivery failure guards', () => {
     expect(await cooperative.next(lead, budget)).toMatchObject({ kind: 'lead' });
   });
 
+  it('records no failed input for a request failure on the untouched seed, so the first real checkpoint continues', async () => {
+    missingCandidate();
+    const resume = async () => {
+      const work = await cooperative.next(researcher, budget);
+      expect(work).toMatchObject({ kind: 'task', task: { id: candidate.task.id } });
+      if (work?.kind !== 'task') throw new Error('expected_resumed_assignment');
+      expect(cooperative.started(researcher, work)).toBe(true); return work;
+    };
+    for (let index = 0; index < 3; index++) {
+      await cooperative.deliver(researcher, index ? await resume() : action, seed, true, 'request-failure');
+      expect(candidate.status).toBe('pending'); expect(state.cooperation!.failedTaskInputs ?? []).toEqual([]);
+    }
+    expect(checker).not.toHaveBeenCalled();
+    expect(emit.mock.calls.some(([event]) => event === 'task_failed_input_recorded')).toBe(false);
+    const notesOnly = commit('Planned the bridge; no Lean edit yet.');
+    await cooperative.deliver(researcher, await resume(), notesOnly, true, 'scheduling-checkpoint');
+    expect(candidate.status).toBe('pending');
+    expect(state.cooperation!.failedTaskInputs).toMatchObject([{ feedback: missing, repair: { pending: true } }]);
+    await cooperative.deliver(researcher, await resume(), notesOnly, true, 'scheduling-checkpoint');
+    expect(candidate.status).toBe('blocked'); expect(candidate.feedback).toMatch(/^math_task_repeated_failed_input\n/u);
+  });
+
   it.each(['no-decision', 'historical-consumer', 'changed-source', 'different-assignment'] as const)(
     'keeps missing declaration repair for a %s gap report', async scenario => {
       missingCandidate(); await publishGap(scenario === 'no-decision' ? { needsDecision: false } : {});

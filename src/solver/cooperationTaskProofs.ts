@@ -711,6 +711,14 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       taskDigest: node.assignment.taskDigest });
     return true;
   }
+  /** A failed request that left the seed's Lean sources untouched is no attempt, so it must not record a failed input. */
+  protected untouchedTaskSeed(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string) {
+    const node = this.node(action.task.id);
+    if (this.leanSourceDigest(worker.worktree, commit) !== this.leanSourceDigest(worker.worktree, action.assignment.seedCommit)) return false;
+    const candidate = this.failedTaskInput(action.task, action.assignment, worker.worktree, commit);
+    return !this.archive.failedTaskInputs?.some(record => record.id === candidate.id) &&
+      !(node.assignment === action.assignment && this.reportedTaskMathematicalBlocker(node, candidate));
+  }
   protected restoreInterruptedRepair(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string) {
     const node = this.node(action.task.id), candidate = this.failedTaskInput(action.task, action.assignment, worker.worktree, commit);
     const failed = this.archive.failedTaskInputs?.find(record => record.id === candidate.id), repair = failed?.repair;
