@@ -13,6 +13,8 @@ export interface ArchiveRecord {
   subtitle: string;
   area: string;
   summary: string;
+  /** English display text; the default fields are Chinese. */
+  en?: { subtitle: string; area: string; summary: string };
   status: 'official_accepted' | 'in_progress_not_officially_accepted';
   model: string;
   updatedAt: string;

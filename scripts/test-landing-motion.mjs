@@ -279,6 +279,8 @@ try {
       // Resize one live document through both responsive grid breakpoints.
       for (const width of [768, 390, 1440]) {
         await page.setViewportSize({ width, height: 900 });
+        // ResizeObserver also runs on the browser's rendering loop, outside the mocked clock.
+        await page.waitForTimeout(150);
         await tick(page, 500);
         for (const selector of ['.component-tabs', '.replay-tabs']) {
           await assertSelectionIndicator(page, selector);

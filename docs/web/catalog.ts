@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { ArchiveCatalog, ArchiveRecord, ArchiveSource } from './types';
+import { siteRepository } from './site';
 
 const identifier = z.string().regex(/^[a-z0-9_]+$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -115,47 +116,62 @@ const submissionProvenanceSchema = z.object({
 const localSchema = z.union([legacyLocalSchema, publishedEvidenceSchema, submissionProvenanceSchema])
   .pipe(legacyLocalSchema);
 
-const descriptions: Record<string, Pick<ArchiveRecord, 'title' | 'subtitle' | 'area' | 'summary' | 'declaration'>> = {
+const descriptions: Record<string, Pick<ArchiveRecord, 'title' | 'subtitle' | 'area' | 'summary' | 'declaration' | 'en'>> = {
   annals_equiangular_lines_fixed_angle: {
     title: 'Equiangular lines', subtitle: '固定夹角等角线', area: '离散几何',
     summary: '关于固定夹角下等角线数量与谱半径阶的渐近关系。档案保留原始提交包及其官方验收结果。',
     declaration: 'theorem theorem_1_2',
+    en: { subtitle: 'Equiangular lines with a fixed angle', area: 'Discrete geometry',
+      summary: 'The asymptotic relation between the number of equiangular lines with a fixed angle and the order of the spectral radius. The archive keeps the original submission package and its official result.' },
   },
   annals_rademacher_enflo_type: {
     title: 'Rademacher & Enflo type', subtitle: 'Rademacher 型与 Enflo 型的一致性', area: '泛函分析',
     summary: '在 1 ≤ p ≤ 2 时，比较 Banach 空间的 Rademacher 型与 Enflo 型常数，同时证明两侧常数界。对应原题 theorem_1_1。',
     declaration: 'theorem theorem_1_1',
+    en: { subtitle: 'Rademacher type and Enflo type coincide', area: 'Functional analysis',
+      summary: 'For 1 ≤ p ≤ 2, compares the Rademacher type and Enflo type constants of Banach spaces and proves the bounds in both directions. Corresponds to theorem_1_1.' },
   },
   annals_unit_conjecture: {
     title: 'Unit conjecture', subtitle: '群环单位猜想', area: '代数',
     summary: '构造无挠群中的群环非平凡单位，对应原题 theorem_A。原始结果归属于 DeepScientist + GPT-5.6。',
     declaration: 'theorem theorem_A',
+    en: { subtitle: 'A nontrivial unit in a group ring', area: 'Algebra',
+      summary: 'Constructs a nontrivial unit in the group ring of a torsion-free group, theorem_A of the statement. The original result is credited to DeepScientist + GPT-5.6.' },
   },
   annals_fractional_expectation_thresholds: {
     title: 'Fractional expectation thresholds', subtitle: '分数期望阈值', area: '概率组合',
     summary: '证明上闭集合族的分数期望阈值界，包括通用常数 K 和原题 theorem_1_1。档案保留完整提交包及官方验收记录。',
     declaration: 'theorem theorem_1_1',
+    en: { subtitle: 'Threshold bounds for up-closed families', area: 'Probabilistic combinatorics',
+      summary: 'Proves the fractional expectation threshold bound for up-closed families, including the universal constant K and theorem_1_1. The archive keeps the full submission package and its official result.' },
   },
   dimitrov: {
     title: 'Dimitrov', subtitle: '代数整数的 house 下界', area: '数论',
     summary: '证明非零且非单位根代数整数的 house 下界。档案保留最终提交包及官方验收记录。',
     declaration: 'theorem dimitrov',
+    en: { subtitle: 'A lower bound for the house of algebraic integers', area: 'Number theory',
+      summary: 'Proves the lower bound for the house of an algebraic integer that is nonzero and not a root of unity. The archive keeps the final submission package and its official result.' },
   },
   hopf_rinow: {
     title: 'Hopf–Rinow', subtitle: '测地完备与度量完备', area: '微分几何',
     summary: '在原题的黎曼流形条件下，证明测地完备与度量完备的等价性。档案保留最终提交包及官方验收记录。',
     declaration: 'theorem hopf_rinow',
+    en: { subtitle: 'Geodesic and metric completeness', area: 'Riemannian geometry',
+      summary: 'Under the Riemannian manifold hypotheses of the statement, proves that geodesic completeness and metric completeness are equivalent. The archive keeps the final submission package and its official result.' },
   },
   szemeredi: {
     title: 'Szemerédi', subtitle: '正上密度集合中的等差数列', area: '组合数学',
     summary: '正上密度的自然数集合包含任意长等差数列。当前档案记录研究过程，尚未获得官方验收。',
     declaration: 'theorem szemeredi',
+    en: { subtitle: 'Arithmetic progressions in sets of positive upper density', area: 'Combinatorics',
+      summary: 'A set of natural numbers with positive upper density contains arbitrarily long arithmetic progressions. This archive records the research process; it has no official acceptance yet.' },
   },
 };
 
 function description(id: string) {
   return descriptions[id] ?? {
     title: id.replaceAll('_', ' '), subtitle: id, area: '数学', summary: 'Lean-Eval 证明档案。',
+    en: { subtitle: id, area: 'Mathematics', summary: 'A Lean-Eval proof archive.' },
   };
 }
 
@@ -176,7 +192,7 @@ function checkedFile(root: string, relative: string, expected: string): Buffer {
 export function buildSiteCatalog(root: string, archiveRevision: string): ArchiveCatalog {
   commit.parse(archiveRevision);
   // Sources link to the public site repository, which mirrors accepted/ and the referenced in-progress files.
-  const repository = 'https://github.com/LikC1606/theorem-os-site';
+  const repository = siteRepository;
   const sourceUrl = (relative: string) => `${repository}/blob/main/${relative}`;
   const source = (relative: string, name: string, expected: string): ArchiveSource => {
     const code = checkedFile(root, relative, expected).toString('utf8');

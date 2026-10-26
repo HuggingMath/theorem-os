@@ -56,7 +56,7 @@ describe('GitHub Pages archive catalog', () => {
     expect(accepted.model).toBe('Original project + original model');
     expect(accepted.official?.resultUrl).toBe('https://example.com/result');
     expect(accepted.local).toBeUndefined();
-    expect(accepted.sources[0].url).toContain(`/blob/${revision}/accepted/`);
+    expect(accepted.sources[0].url).toBe('https://github.com/LikC1606/theorem-os-site/blob/main/accepted/example/Submission.lean');
     expect(research).toMatchObject({
       status: 'in_progress_not_officially_accepted', snapshot: { taskStatuses: { completed: 3 } },
     });

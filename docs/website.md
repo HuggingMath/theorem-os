@@ -4,11 +4,19 @@
 
 静态网站包含三个入口：
 
-- `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍与“在线工作台即将开放”的开始区。
+- `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍与“申请内测”的开始区。
 - `archive.html`：证明档案，支持搜索、筛选、源码查看、验收证据、JSON 下载和本地回放记录。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。
 
+三个入口都有英文版，位于 `en/` 下，与中文页共用样式、脚本和素材。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。工作台截图仍是中文界面，英文页的说明里注明了这一点。
+
 网站独立于 CLI，不启动 Agent 或 Lean，不需要服务端或模型认证。
+
+## 内测申请
+
+开始区、导航和常见问题提供“申请内测”入口，打开公开仓库的 Issue 表单 `.github/ISSUE_TEMPLATE/early-access.yml`（源文件在 `docs/site-repo/`）。表单是中英双语，提醒申请会公开，不收集 API Key 和联系方式。开放时在同一条 Issue 里回复。
+
+不想用 GitHub 或希望私下申请的人可以使用第三方表单。把 https 表单地址填入 `docs/web/site.ts` 的 `earlyAccessForm` 并重新构建，首页开始区会多出“没有 GitHub？填写表单”链接；地址为空时不显示，非 https 地址会使构建失败。
 
 ## 本地预览
 
@@ -33,18 +41,21 @@ bun run build:site
 
 构建时校验已验收提交包全部登记文件，以及页面收录的研究源码的 SHA-256。页面仅提取这些记录的明确字段，以及 solver 的 `Challenge.lean`、`Submission.lean`、`Submission/Helpers.lean`；不复制 `state.json`、会话、环境文件或完整实验目录。档案的源码行数仅统计页面收录的文件。
 
-生成的 `out/site/data/catalog.json` 与档案使用同一份数据。源码链接固定到构建时的仓库提交，避免后续 `main` 变化使证据链接漂移。
+生成的 `out/site/data/catalog.json` 与档案使用同一份数据。源码链接指向公开仓库 `main` 分支的同一路径；证明包按提交包逐字节保存，文件 SHA-256 写在档案里，可据此核对。
 
 ## 修改页面
 
 - `docs/index.html`、`docs/landing.css`：宣传首页内容和响应式样式。
-- `docs/web/landing.ts`：回放步骤与组件切换、三种开始方式、命令复制和手机导航。
+- `docs/en/*.html`：三个页面的英文版。改中文页时同步修改英文页。
+- `docs/web/site.ts`：公开仓库地址、内测入口、语言判断与切换。
+- `docs/web/landing.ts`：回放步骤与组件切换、截图预览和手机导航。
 - `docs/web/presentation.ts`：预设回放展示和从真实档案生成的成果表格。
 - `docs/archive.html`、`docs/site.css`、`docs/web/app.ts`：证明档案界面。
 - `docs/feedback.html`、`docs/feedback.css`、`docs/web/feedback.ts`：反馈表单、全文预览和 GitHub Issues 跳转。
-- `scripts/build-site.ts`：构建三个页面、浏览器脚本和公开数据，并复制素材与许可证。
+- `scripts/build-site.ts`：构建中英文页面、浏览器脚本和公开数据，并复制素材与许可证。
+- `docs/site-repo/`：公开仓库独有的文件（README、Issue 表单）。
 
-首页按 taste-skill 的大字排版方向组织内容，以白色品牌声明、浅青色回放与薄荷色组件区形成章节变化。首屏使用本地工作台真实的 Mathlib 草稿截图，明确标为未提交；手机和平板通过 `picture` 加载独立视口，平板采用画面与说明并排的构图。截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明在线工作台即将开放，提供反馈入口与免模型的验收回放，不提供部署命令。
+首页按 taste-skill 的大字排版方向组织内容，以白色品牌声明、浅青色回放与薄荷色组件区形成章节变化。首屏使用本地工作台真实的 Mathlib 草稿截图，明确标为未提交；手机和平板通过 `picture` 加载独立视口，平板采用画面与说明并排的构图。截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明在线工作台即将开放，提供内测申请、反馈入口与免模型的验收回放，不提供部署命令。
 
 四步回放的候选源码读取自 `src/math/localExample.ts`，回执读取自 `docs/assets/replay.json`；切换演示不会启动模型或 Lean。默认停在最终验收，点击播放后从候选开始，可暂停续播、手动选步和重新播放；离屏或页面隐藏会暂停，返回后由用户继续播放。反馈步骤是对预设示例的检查说明，并非原始诊断日志。手机端先展示已归档的最终回执，再展示选中步骤的源码。源码与回放记录改动后需要重新构建。
 
@@ -74,6 +85,8 @@ bun run test:site
 
 `test-feedback.mjs` 检查表单校验、分类切换、Markdown 编码、超长内容的复制与下载、弹窗焦点、桌面与手机排版、本地文件、Pages 子路径和无 JavaScript 入口。测试不会创建真实 Issue。
 
+`test-i18n.mjs` 在 1440、390、320 像素宽度打开三个英文页面，切换组件、回放、档案视图和反馈预览，检查可见文字与无障碍名称中没有中文界面文案、英文搜索与 Markdown 正确、页面不横向滚动；并检查两种语言互相链接、hreflang、切换时保留锚点，以及 Pages 子路径下没有缺失文件和控制台错误。截图输出到 `out/i18n-checks/`。
+
 ## 发布到公开仓库
 
 公开仓库只放构建产物和公开成果：
@@ -83,7 +96,17 @@ bun run test:site
 - `in-progress/` 中被档案引用的源码，即 `data/catalog.json` 里 `sources[].path` 列出的 `.lean` 文件；`state.json`、`history.fast-export.gz`、任务说明等运行状态不发布；
 - 公开仓库自己的 `README.md`。
 
-不要发布 `src/`、`apps/`、`scripts/`、内部设计文档、镜像或 `in-progress/` 的其余文件。档案中的源码链接指向公开仓库的 `main` 分支，路径与本仓库一致。发布前在本仓库运行 `bun run build:site` 与 `bun run test:site`，复制后在公开目录检查没有本机路径、密钥和指向私有仓库的链接，再提交推送。公开仓库的 Pages 选择 **Deploy from a branch → main → / (root)**。
+不要发布 `src/`、`apps/`、`scripts/`、内部设计文档、镜像或 `in-progress/` 的其余文件。档案中的源码链接指向公开仓库的 `main` 分支，路径与本仓库一致。
+
+发布步骤：
+
+```bash
+bun run build:site
+bun run test:site
+bun run export:site /home/lzh/theorem-os-site
+```
+
+`export:site` 要求目标是 origin 为 `LikC1606/theorem-os-site` 且没有未提交改动的克隆。它清空除 `.git` 以外的内容，按上面的清单复制，再扫描本机路径、私有仓库链接、API Key 与内网地址；发现问题即停止并提示恢复方法。脚本不提交，检查 `git status` 后再手动提交推送。公开仓库的 Pages 选择 **Deploy from a branch → main → / (root)**。
 
 ## 视觉素材
 

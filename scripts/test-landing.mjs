@@ -59,7 +59,11 @@ const checkStart = async page => {
   const start = page.locator('#start');
   assert.match(await start.innerText(), /即将开放/);
   assert.equal(await start.locator('[data-command], .copy-command, pre').count(), 0, 'The start section must not offer deployment commands');
-  assert.equal(await page.locator('.nav-start').innerText(), '即将开放');
+  assert.equal(await page.locator('.nav-start').innerText(), '申请内测');
+  const apply = start.locator('.start-links a.button');
+  assert.equal(await apply.innerText(), '用 GitHub 申请内测');
+  assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
+  assert.match(await start.locator('.start-note').innerText(), /公开显示/);
 };
 const checkScreenshotPreview = async (page, width) => {
   const link = page.locator('.workbench-image-link');

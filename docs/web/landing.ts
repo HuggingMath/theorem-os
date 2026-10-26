@@ -5,6 +5,7 @@ import {
 } from 'lucide';
 import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
+import { keepHashOnLanguageSwitch, localeOf, rootOf } from './site';
 
 const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
   Download, ExternalLink, FileCode2, FileJson2, Files, FolderOpen, GitFork, Globe, History, Info, KeyRound, Maximize2, Menu, Network, Pause, Play, Plus,
@@ -15,6 +16,24 @@ const element = <T extends HTMLElement = HTMLElement>(selector: string): T => {
   if (!result) throw new Error(`Missing landing page element: ${selector}`);
   return result;
 };
+const locale = localeOf(document.documentElement.lang);
+const root = rootOf(locale);
+const text = {
+  zh: {
+    previewLabel: (label: string) => `查看${label}原始截图`,
+    replay: ['候选证明', 'Lean 反馈', '修复候选', '完整原题验收'],
+    pause: '暂停回放', resume: '继续播放', play: '播放预设回放', playing: '播放中', ended: '回放结束', paused: '已暂停',
+    step: (step: number, label: string) => `第 ${step} 步，共 4 步：${label}`,
+    fit: '适应窗口', zoom: '放大截图', closeMenu: '关闭导航', openMenu: '打开导航',
+  },
+  en: {
+    previewLabel: (label: string) => `View the full-size ${label.toLowerCase()} screenshot`,
+    replay: ['Candidate', 'Lean feedback', 'Repair', 'Full verification'],
+    pause: 'Pause replay', resume: 'Resume replay', play: 'Play the recorded replay', playing: 'Playing', ended: 'Replay finished', paused: 'Paused',
+    step: (step: number, label: string) => `Step ${step} of 4: ${label}`,
+    fit: 'Fit to window', zoom: 'Zoom in', closeMenu: 'Close navigation', openMenu: 'Open navigation',
+  },
+}[locale];
 icons();
 document.documentElement.classList.add('js');
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -86,6 +105,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
 });
 
 const components = {
+  zh: {
   m1: { contract: 'M1 · 证明构造接口', title: '把想法，写成候选证明。',
     description: '调用模型会话，在隔离工作区中构造和修复 Lean 候选。研究你的生成方式、提示和修复策略。',
     input: '题目 · 上下文 · 操作 · 模型会话', output: '候选记录 · 工作区中的证明' },
@@ -101,7 +121,25 @@ const components = {
   m5: { contract: 'M5 · 协作复用接口', title: '让分工与交接，可以研究。',
     description: '组织隔离工作区、任务分配与独立审阅。比较单 Agent、独立并行与任务协作的研究方法。',
     input: '就绪任务 · Worker · 路线约束', output: '工作区配置 · 任务与审阅分配' },
-};
+  },
+  en: {
+  m1: { contract: 'M1 · Proof construction', title: 'Turn ideas into candidate proofs.',
+    description: 'Calls a model session to build and repair Lean candidates in an isolated workspace. Study your generation method, prompts and repair strategy.',
+    input: 'Statement · context · operation · model session', output: 'Candidate record · proof in the workspace' },
+  m2: { contract: 'M2 · Check feedback', title: 'Make diagnostics a research signal.',
+    description: 'Checks candidates and helper proofs and returns Lean diagnostics to the research process. After local checks, the integrated result still has to pass independent verification of the full original statement.',
+    input: 'Fixed statement · candidate source · check environment', output: 'Checks and diagnostics bound to a source digest' },
+  m3: { contract: 'M3 · Search', title: 'Give the next step a rule.',
+    description: 'Picks ready tasks and decides whether to continue, retry or stop. Study task ordering together with route and budget constraints.',
+    input: 'Research state · candidate operations · shared budget', output: 'Next operation · ordered ready tasks' },
+  m4: { contract: 'M4 · Context', title: 'Bring the relevant evidence into reasoning.',
+    description: 'Assembles context from the statement, earlier results and failure records. Compare information selection, context compression and retrieval strategies.',
+    input: 'Statement · current task · visible evidence', output: 'Context bundle with source identities' },
+  m5: { contract: 'M5 · Collaboration and reuse', title: 'Make division of labor and handoff researchable.',
+    description: 'Organizes isolated workspaces, task assignment and independent review. Compare single-agent, independent parallel and task-collaboration methods.',
+    input: 'Ready tasks · workers · route constraints', output: 'Workspace configuration · task and review assignment' },
+  },
+}[locale];
 type Component = keyof typeof components;
 const narrow = matchMedia('(max-width: 600px)');
 const componentTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-component]'));
@@ -140,6 +178,7 @@ function handleTabKeys(event: KeyboardEvent, tabs: HTMLButtonElement[], select: 
 }
 
 const modulePreviews = {
+  zh: {
   modules: {
     label: '模块图谱', caption: '研究模块与独立验收',
     alt: '新版工作台的真实模块图谱：M1–M5 研究决策连接到固定的 S3 独立验收，当前配置尚未提交运行。',
@@ -148,7 +187,18 @@ const modulePreviews = {
     label: '方案库', caption: 'Mathlib 代数研究 · 2 项自定义策略',
     alt: '新版工作台的真实模块方案库：已保存 Mathlib 代数研究方案，启用两项自定义策略，配置尚未提交运行。',
   },
-};
+  },
+  en: {
+  modules: {
+    label: 'Module map', caption: 'Research modules and independent verification',
+    alt: 'The module map of the current workbench: the M1–M5 research decisions connect to the fixed S3 independent verification. The configuration has not been submitted yet.',
+  },
+  library: {
+    label: 'Strategy library', caption: 'Mathlib algebra study · 2 custom strategies',
+    alt: 'The strategy library of the current workbench: a saved Mathlib algebra study with two custom strategies enabled. The configuration has not been submitted yet.',
+  },
+  },
+}[locale];
 type ModulePreview = keyof typeof modulePreviews;
 const modulePreviewTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-module-preview]'));
 const modulePreviewPanel = element('#module-preview-panel');
@@ -166,11 +216,11 @@ function selectModulePreview(id: ModulePreview, focus = false) {
   }
   modulePreviewPanel.setAttribute('aria-labelledby', `module-preview-tab-${id}`);
   const image = modulePreviewLink.querySelector('img')!;
-  image.src = `assets/workbench-${id}-desktop.png`;
+  image.src = `${root}assets/workbench-${id}-desktop.png`;
   image.alt = content.alt;
-  modulePreviewLink.querySelector('source')!.srcset = `assets/workbench-${id}-mobile.png`;
-  modulePreviewLink.href = `assets/workbench-${id}-${narrow.matches ? 'mobile' : 'desktop'}.png`;
-  modulePreviewLink.setAttribute('aria-label', `查看${content.label}原始截图`);
+  modulePreviewLink.querySelector('source')!.srcset = `${root}assets/workbench-${id}-mobile.png`;
+  modulePreviewLink.href = `${root}assets/workbench-${id}-${narrow.matches ? 'mobile' : 'desktop'}.png`;
+  modulePreviewLink.setAttribute('aria-label', text.previewLabel(content.label));
   element('#module-preview-caption').textContent = content.caption;
   if (changed) animateSelection([image, element('#module-preview-caption')], 6);
 }
@@ -188,7 +238,7 @@ const replayPanels = replayTabs.map(tab => element(`#stage-${tab.dataset.replayS
 const replayPlay = element<HTMLButtonElement>('#replay-play');
 const replayProgress = element('#replay-progress');
 const replayFill = element('.replay-progress-fill');
-const replayLabels = ['候选证明', 'Lean 反馈', '修复候选', '完整原题验收'];
+const replayLabels = text.replay;
 const replayDurations = [3.2, 4.4, 3.6, 4];
 let replayIndex = replayTabs.length - 1;
 let replayPlaying = false;
@@ -202,7 +252,7 @@ function updateReplayControls() {
   replayWindow.dataset.replayPlaying = String(replayPlaying);
   replayWindow.dataset.replayCurrent = replayTabs[replayIndex].dataset.replayStage;
   replayWindow.dataset.replayState = replayPlaying ? 'playing' : replayComplete ? 'complete' : 'paused';
-  const label = replayPlaying ? '暂停回放' : replayStarted ? '继续播放' : '播放预设回放';
+  const label = replayPlaying ? text.pause : replayStarted ? text.resume : text.play;
   replayPlay.setAttribute('aria-label', label);
   replayPlay.title = label;
   replayPlay.setAttribute('aria-pressed', String(replayPlaying));
@@ -210,10 +260,10 @@ function updateReplayControls() {
   element<HTMLButtonElement>('#replay-next').disabled = replayIndex === replayTabs.length - 1;
   element('#replay-step-number').textContent = `0${replayIndex + 1} / 04`;
   element('#replay-step-label').textContent = replayLabels[replayIndex];
-  const status = replayPlaying ? '播放中' : replayComplete ? '回放结束' : '已暂停';
+  const status = replayPlaying ? text.playing : replayComplete ? text.ended : text.paused;
   if (element('#replay-status').textContent !== status) element('#replay-status').textContent = status;
   replayProgress.setAttribute('aria-valuenow', String(replayIndex + 1));
-  replayProgress.setAttribute('aria-valuetext', `第 ${replayIndex + 1} 步，共 4 步：${replayLabels[replayIndex]}`);
+  replayProgress.setAttribute('aria-valuetext', text.step(replayIndex + 1, replayLabels[replayIndex]));
 }
 function renderReplayStage(index: number, focus = false) {
   const changed = replayIndex !== index;
@@ -316,7 +366,7 @@ const previewDialog = element<HTMLDialogElement>('#workbench-dialog');
 const previewMedia = element('.preview-dialog-media');
 const previewZoom = element<HTMLButtonElement>('.preview-zoom');
 const updatePreviewSource = () => {
-  const source = `assets/workbench-full-${narrow.matches ? 'mobile' : 'desktop'}.png`;
+  const source = `${root}assets/workbench-full-${narrow.matches ? 'mobile' : 'desktop'}.png`;
   previewLink.href = source;
   element<HTMLAnchorElement>('.preview-original').href = source;
 };
@@ -328,8 +378,8 @@ function zoomPreview(zoomed: boolean) {
   const top = (previewMedia.scrollTop + previewMedia.clientHeight / 2) * factor - previewMedia.clientHeight / 2;
   previewMedia.classList.toggle('is-zoomed', zoomed);
   previewZoom.setAttribute('aria-pressed', String(zoomed));
-  previewZoom.setAttribute('aria-label', zoomed ? '适应窗口' : '放大截图');
-  previewZoom.title = zoomed ? '适应窗口' : '放大截图';
+  previewZoom.setAttribute('aria-label', zoomed ? text.fit : text.zoom);
+  previewZoom.title = zoomed ? text.fit : text.zoom;
   previewMedia.scrollTo({ left: zoomed ? left : 0, top: zoomed ? top : 0 });
 }
 previewLink.addEventListener('click', event => {
@@ -374,7 +424,7 @@ const menuButton = element<HTMLButtonElement>('.menu-toggle');
 const mobileNav = element('#mobile-nav');
 function setMenu(open: boolean, restoreFocus = false) {
   menuButton.setAttribute('aria-expanded', String(open));
-  menuButton.setAttribute('aria-label', open ? '关闭导航' : '打开导航');
+  menuButton.setAttribute('aria-label', open ? text.closeMenu : text.openMenu);
   mobileNav.hidden = !open;
   if (restoreFocus) menuButton.focus();
 }
@@ -393,4 +443,5 @@ window.addEventListener('pagehide', event => indicators.forEach(indicator => {
   else indicator.destroy();
 }));
 window.addEventListener('pageshow', () => indicators.forEach(indicator => indicator.update(false)));
+keepHashOnLanguageSwitch();
 document.documentElement.dataset.landingReady = 'true';

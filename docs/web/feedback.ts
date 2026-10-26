@@ -1,4 +1,5 @@
 import { createIcons, ArrowRight, ArrowUpRight, Bug, Copy, Download, GitFork, Lightbulb, MessageCircle, X } from 'lucide';
+import { issueDestination, keepHashOnLanguageSwitch, localeOf } from './site';
 
 createIcons({ icons: { ArrowRight, ArrowUpRight, Bug, Copy, Download, GitFork, Lightbulb, MessageCircle, X }, attrs: { 'aria-hidden': 'true' } });
 
@@ -7,12 +8,36 @@ const element = <T extends HTMLElement = HTMLElement>(id: string): T => {
   if (!result) throw new Error(`Missing feedback element: ${id}`);
   return result as T;
 };
-const issueDestination = 'https://github.com/LikC1606/theorem-os-site/issues/new';
-const kinds = {
+const locale = localeOf(document.documentElement.lang);
+const text = {
+  zh: {
+    kinds: {
   bug: { name: '问题反馈', prefix: '[Bug]', hint: '可附上复现步骤、错误信息与预期结果。', placeholder: '发生了什么？如何复现？你期望的结果是什么？' },
   feature: { name: '功能建议', prefix: '[Feature]', hint: '描述使用场景、希望的改进与它能解决的问题。', placeholder: '你希望增加或改进什么？会在什么场景下使用？' },
   question: { name: '使用咨询', prefix: '[Question]', hint: '描述疑问，以及已经尝试过的方法。', placeholder: '你想了解什么？已经查阅或尝试了哪些方法？' },
-};
+    },
+    missingSubject: '请填写反馈标题。', missingDescription: '请填写详细描述。',
+    headings: { kind: '反馈类型', area: '相关位置', description: '详细描述', environment: '环境与版本' },
+    footer: '来自 TheoremOS 反馈页。',
+    longNote: '内容较长，请先复制或下载全文，再到 GitHub 粘贴发布。',
+    note: '将在 GitHub 打开草稿，确认后才会公开发布。截图和附件可在 GitHub 补充。',
+    copied: '已复制反馈全文。', copyFailed: '未能自动复制，已选中全文，可手动复制。', downloaded: '已准备反馈 Markdown 下载。',
+  },
+  en: {
+    kinds: {
+      bug: { name: 'Bug report', prefix: '[Bug]', hint: 'Include the steps to reproduce, any error message and what you expected.', placeholder: 'What happened? How can we reproduce it? What did you expect?' },
+      feature: { name: 'Feature request', prefix: '[Feature]', hint: 'Describe the use case, the change you want and the problem it solves.', placeholder: 'What would you like added or improved? When would you use it?' },
+      question: { name: 'Question', prefix: '[Question]', hint: 'Describe your question and what you have already tried.', placeholder: 'What would you like to know? What have you read or tried so far?' },
+    },
+    missingSubject: 'Enter a title for your feedback.', missingDescription: 'Enter a description.',
+    headings: { kind: 'Type', area: 'Area', description: 'Description', environment: 'Environment' },
+    footer: 'Sent from the TheoremOS feedback page.',
+    longNote: 'This is too long for a link. Copy or download the full text, then paste it on GitHub.',
+    note: 'A draft opens on GitHub. Nothing is public until you submit it there. Add screenshots and attachments on GitHub.',
+    copied: 'Copied the full text.', copyFailed: 'Could not copy automatically. The full text is selected so you can copy it.', downloaded: 'The Markdown download is ready.',
+  },
+}[locale];
+const kinds = text.kinds;
 type Kind = keyof typeof kinds;
 const form = element<HTMLFormElement>('feedback-form');
 const area = element<HTMLSelectElement>('feedback-area');
@@ -33,8 +58,8 @@ function updateFields() {
   const kind = kinds[selectedKind()];
   element('feedback-description-hint').textContent = kind.hint;
   description.placeholder = kind.placeholder;
-  subject.setCustomValidity(subject.value.trim() ? '' : '请填写反馈标题。');
-  description.setCustomValidity(description.value.trim() ? '' : '请填写详细描述。');
+  subject.setCustomValidity(subject.value.trim() ? '' : text.missingSubject);
+  description.setCustomValidity(description.value.trim() ? '' : text.missingDescription);
   element('feedback-count').textContent = `${description.value.length} / ${description.maxLength}`;
 }
 form.addEventListener('input', updateFields);
@@ -47,11 +72,11 @@ form.addEventListener('submit', event => {
   const kind = kinds[selectedKind()];
   const title = `${kind.prefix} ${subject.value.trim()}`;
   const body = [
-    `### 反馈类型\n${kind.name}`,
-    `### 相关位置\n${area.selectedOptions[0]?.textContent ?? area.value}`,
-    `### 详细描述\n${description.value.trim()}`,
-    ...(environment.value.trim() ? [`### 环境与版本\n${environment.value.trim()}`] : []),
-    '---\n来自 TheoremOS 反馈页。',
+    `### ${text.headings.kind}\n${kind.name}`,
+    `### ${text.headings.area}\n${area.selectedOptions[0]?.textContent ?? area.value}`,
+    `### ${text.headings.description}\n${description.value.trim()}`,
+    ...(environment.value.trim() ? [`### ${text.headings.environment}\n${environment.value.trim()}`] : []),
+    `---\n${text.footer}`,
   ].join('\n\n');
   const destination = new URL(issueDestination);
   destination.searchParams.set('title', title);
@@ -62,8 +87,8 @@ form.addEventListener('submit', event => {
   markdown.value = `# ${title}\n\n${body}\n`;
   element('feedback-review-summary').textContent = title;
   element('feedback-review-note').textContent = needsPaste
-    ? '内容较长，请先复制或下载全文，再到 GitHub 粘贴发布。'
-    : '将在 GitHub 打开草稿，确认后才会公开发布。截图和附件可在 GitHub 补充。';
+    ? text.longNote
+    : text.note;
   github.href = destination.href;
   status.textContent = '';
   review.showModal();
@@ -77,11 +102,11 @@ element('feedback-review-close').addEventListener('click', () => review.close())
 element('feedback-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(markdown.value);
-    status.textContent = '已复制反馈全文。';
+    status.textContent = text.copied;
   } catch {
     markdown.focus();
     markdown.select();
-    status.textContent = '未能自动复制，已选中全文，可手动复制。';
+    status.textContent = text.copyFailed;
   }
 });
 element('feedback-download').addEventListener('click', () => {
@@ -91,10 +116,11 @@ element('feedback-download').addEventListener('click', () => {
   link.download = 'theoremos-feedback.md';
   link.click();
   setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-  status.textContent = '已准备反馈 Markdown 下载。';
+  status.textContent = text.downloaded;
 });
 
 updateFields();
 form.hidden = false;
 element('feedback-fallback').hidden = true;
+keepHashOnLanguageSwitch();
 document.documentElement.dataset.feedbackReady = 'true';

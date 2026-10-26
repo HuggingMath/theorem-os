@@ -6,6 +6,7 @@ import {
 } from 'lucide';
 import catalog from 'virtual:archive';
 import type { ArchiveRecord, ArchiveSource } from './types';
+import { keepHashOnLanguageSwitch, localeOf, localizeRecord } from './site';
 
 const iconSet = {
   ArrowDownWideNarrow, ArrowUpRight, BadgeCheck, CalendarDays, Check,
@@ -13,6 +14,56 @@ const iconSet = {
   GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2, ListStart, MessageCircle, Search,
   SearchX, ShieldCheck,
 };
+const locale = localeOf(document.documentElement.lang);
+const strings = {
+  zh: {
+    accepted: '官方已验收', snapshot: '研究快照', notAccepted: '尚未官方验收',
+    binding: { matches: '与归档文件的源码哈希一致', differs: '检查投影与归档文件的哈希不同', unrecorded: '未记录源码哈希绑定' },
+    results: (count: number, query: string) => `${count} 条记录${query ? ` · “${query}”` : ''}`,
+    tasks: { completed: '完成', integrated: '集成', pending: '待处理', blocked: '受阻', running: '进行中' } as Record<string, string>,
+    taskTitle: '任务状态（快照）', taskNote: '非整题验收进度',
+    draft: '尚未官方验收。快照可能包含 sorry、失败方案或未检查的修改。',
+    attribution: '原始归属', officialAt: '官方验收', snapshotAt: '快照记录', revision: '题目版本', sourceCommit: '原始提交',
+    phase: '快照阶段', research: '研究记录', turns: (turns: number, workers: number) => `${turns} 轮 · ${workers} 个 worker`,
+    leanSource: 'Lean 源码', files: (files: number, lines: string) => `${files} 个文件 · ${lines} 行`, localRecord: '本地记录',
+    excerptAccepted: '目标声明 / 证明节选', excerptSnapshot: '原题声明节选', officialResult: '官方验收', archive: '原始档案',
+    leanFile: 'Lean 文件', jump: '定位目标声明', copySource: '复制 Lean 源码', downloadSource: '下载 Lean 文件',
+    sourceLabel: (name: string) => `${name} 源码`, githubFile: 'GitHub 原文件', copyHash: '复制文件 SHA-256',
+    noOfficial: '尚无官方验收通过记录。局部任务或引理检查不代表完整题目已解出。', snapshotFiles: '查看快照与 manifest',
+    leanEval: 'Lean-Eval 官方验收', viewOfficial: '查看官方结果', localEvidence: '归档本地验证记录', unrecorded: '未记录',
+    differs: '此记录的源码哈希与当前归档不同。官方验收以官方结果链接为准。',
+    submission: '原始提交来源', submissionLink: '原始提交', discussion: '提交讨论', production: '来源与人工参与',
+    resumed: '此结果包含已保存候选的恢复或续跑。', checksums: '归档文件校验', copyChecksum: (file: string) => `复制 ${file} 校验值`,
+    empty: '没有可显示的记录', details: '档案详情', copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
+    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据' },
+    copied: '已复制', copyFailed: '复制失败，请检查浏览器剪贴板权限',
+    row: (title: string, accepted: boolean) => `${title}，${accepted ? '官方已验收' : '尚未官方验收'}`,
+  },
+  en: {
+    accepted: 'Officially accepted', snapshot: 'Research snapshot', notAccepted: 'Not yet officially accepted',
+    binding: { matches: 'Source hashes match the archived files', differs: 'The checked projection differs from the archived files', unrecorded: 'No source hash binding recorded' },
+    results: (count: number, query: string) => `${count} ${count === 1 ? 'record' : 'records'}${query ? ` · “${query}”` : ''}`,
+    tasks: { completed: 'Completed', integrated: 'Integrated', pending: 'Pending', blocked: 'Blocked', running: 'Running' } as Record<string, string>,
+    taskTitle: 'Task status (snapshot)', taskNote: 'Not whole-statement progress',
+    draft: 'Not yet officially accepted. The snapshot may contain sorry, failed attempts or unchecked edits.',
+    attribution: 'Attribution', officialAt: 'Accepted', snapshotAt: 'Snapshot', revision: 'Revision', sourceCommit: 'Original commit',
+    phase: 'Snapshot phase', research: 'Research record', turns: (turns: number, workers: number) => `${turns} turns · ${workers} ${workers === 1 ? 'worker' : 'workers'}`,
+    leanSource: 'Lean source', files: (files: number, lines: string) => `${files} ${files === 1 ? 'file' : 'files'} · ${lines} lines`, localRecord: 'Local record',
+    excerptAccepted: 'Target statement / proof excerpt', excerptSnapshot: 'Statement excerpt', officialResult: 'Official result', archive: 'Archive files',
+    leanFile: 'Lean file', jump: 'Jump to the target statement', copySource: 'Copy Lean source', downloadSource: 'Download Lean file',
+    sourceLabel: (name: string) => `${name} source`, githubFile: 'File on GitHub', copyHash: 'Copy file SHA-256',
+    noOfficial: 'No official pass yet. Checks of individual tasks or lemmas do not mean the full statement is solved.', snapshotFiles: 'Snapshot and manifest',
+    leanEval: 'Lean-Eval official result', viewOfficial: 'View official result', localEvidence: 'Archived local verification', unrecorded: 'not recorded',
+    differs: 'The source hashes of this record differ from the current archive. The official result link is authoritative.',
+    submission: 'Original submission', submissionLink: 'Original commit', discussion: 'Submission discussion', production: 'Provenance and human involvement',
+    resumed: 'This result includes resuming or continuing from saved candidates.', checksums: 'Archived file checksums', copyChecksum: (file: string) => `Copy the ${file} checksum`,
+    empty: 'No records to show', details: 'Record details', copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
+    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence' },
+    copied: 'Copied', copyFailed: 'Copy failed. Check the clipboard permission of your browser.',
+    row: (title: string, accepted: boolean) => `${title}, ${accepted ? 'officially accepted' : 'not yet officially accepted'}`,
+  },
+}[locale];
+const records = catalog.records.map(record => localizeRecord(record, locale));
 const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({
@@ -28,10 +79,8 @@ const timestamp = (value: string) => `${new Date(value).toISOString().slice(0, 1
 const external = (url: string, label: string, className = 'inline-link') =>
   `<a class="${className}" href="${html(url)}" target="_blank" rel="noreferrer">${html(label)}${icon('arrow-up-right')}</a>`;
 const accepted = (record: ArchiveRecord) => record.status === 'official_accepted';
-const statusBadge = (record: ArchiveRecord) => `<span class="status-badge ${accepted(record) ? 'accepted' : 'progress'}">${icon(accepted(record) ? 'circle-check' : 'flask-conical')}${accepted(record) ? '官方已验收' : '研究快照'}</span>`;
-const sourceBindingLabels = {
-  matches: '与归档文件的源码哈希一致', differs: '检查投影与归档文件的哈希不同', unrecorded: '未记录源码哈希绑定',
-};
+const statusBadge = (record: ArchiveRecord) => `<span class="status-badge ${accepted(record) ? 'accepted' : 'progress'}">${icon(accepted(record) ? 'circle-check' : 'flask-conical')}${accepted(record) ? strings.accepted : strings.snapshot}</span>`;
+const sourceBindingLabels = strings.binding;
 const iconButton = (action: string, label: string, name: string, value?: string) =>
   `<button type="button" class="icon-button" data-action="${action}" ${value ? `data-value="${html(value)}"` : ''} aria-label="${label}" title="${label}">${icon(name)}</button>`;
 
@@ -40,10 +89,10 @@ type Sort = 'verified' | 'recent' | 'title';
 type Tab = 'overview' | 'source' | 'evidence';
 const state = {
   view: 'archive', filter: 'all' as Filter, query: '', sort: 'verified' as Sort,
-  selected: catalog.records.find(accepted)?.id ?? catalog.records[0]?.id ?? '',
+  selected: records.find(accepted)?.id ?? records[0]?.id ?? '',
   tab: 'overview' as Tab, sourceName: '',
 };
-const selectedRecord = () => catalog.records.find(record => record.id === state.selected);
+const selectedRecord = () => records.find(record => record.id === state.selected);
 
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -53,7 +102,7 @@ function readLocation() {
   state.sort = ['title', 'recent'].includes(params.get('sort') ?? '') ? params.get('sort') as Sort : 'verified';
   state.tab = ['source', 'evidence'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
   const id = params.get('proof');
-  state.selected = catalog.records.find(record => record.id === id)?.id ?? catalog.records.find(accepted)?.id ?? '';
+  state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
   state.sourceName = '';
 }
 
@@ -74,7 +123,7 @@ function writeLocation(push = false) {
 
 function filteredRecords() {
   const query = state.query.trim().toLocaleLowerCase().replaceAll('_', ' ');
-  return catalog.records.filter(record => {
+  return records.filter(record => {
     const matchesStatus = state.filter === 'all' || (state.filter === 'accepted' ? accepted(record) : !accepted(record));
     const text = `${record.title} ${record.subtitle} ${record.area} ${record.id} ${record.model}`.toLocaleLowerCase().replaceAll('_', ' ');
     return matchesStatus && (!query || text.includes(query));
@@ -85,17 +134,17 @@ function filteredRecords() {
   });
 }
 
-function renderList(records: ArchiveRecord[]) {
-  element('#proof-list').innerHTML = records.map(record => `
+function renderList(shown: ArchiveRecord[]) {
+  element('#proof-list').innerHTML = shown.map(record => `
     <li><button type="button" class="proof-row ${state.selected === record.id ? 'is-selected' : ''}"
       data-proof-id="${record.id}" aria-pressed="${state.selected === record.id}"
-      aria-label="${html(record.title)}，${accepted(record) ? '官方已验收' : '尚未官方验收'}">
+      aria-label="${html(strings.row(record.title, accepted(record)))}">
       <span class="row-symbol ${accepted(record) ? '' : 'progress'}">${icon(accepted(record) ? 'file-check-2' : 'file-clock')}</span>
       <span><span class="row-title">${html(record.title)}</span><span class="row-subtitle">${html(record.subtitle)}<span class="area-label">${html(record.area)}</span></span></span>
       <span class="row-end">${statusBadge(record)}<span class="row-date">${date(record.updatedAt)}</span></span>
     </button></li>`).join('');
-  element('#empty-state').hidden = records.length > 0;
-  element('#result-count').textContent = `${records.length} 条记录${state.query ? ` · “${state.query}”` : ''}`;
+  element('#empty-state').hidden = shown.length > 0;
+  element('#result-count').textContent = strings.results(shown.length, state.query);
 }
 
 function declaration(record: ArchiveRecord) {
@@ -106,15 +155,15 @@ function declaration(record: ArchiveRecord) {
 }
 
 const taskColors: Record<string, { label: string; color: string }> = {
-  completed: { label: '完成', color: '#72a38d' }, integrated: { label: '集成', color: '#438564' },
-  pending: { label: '待处理', color: '#d6dfda' }, blocked: { label: '受阻', color: '#c6a36a' },
-  running: { label: '进行中', color: '#8898bd' },
+  completed: { label: strings.tasks.completed, color: '#72a38d' }, integrated: { label: strings.tasks.integrated, color: '#438564' },
+  pending: { label: strings.tasks.pending, color: '#d6dfda' }, blocked: { label: strings.tasks.blocked, color: '#c6a36a' },
+  running: { label: strings.tasks.running, color: '#8898bd' },
 };
 function taskChart(record: ArchiveRecord) {
   if (!record.snapshot) return '';
   const tasks = Object.entries(record.snapshot.taskStatuses).filter(([, count]) => count > 0);
-  return `<div class="detail-section"><div class="section-title"><h3>任务状态（快照）</h3><span>非整题验收进度</span></div>
-    <div class="task-chart" role="img" aria-label="${html(tasks.map(([key, count]) => `${taskColors[key]?.label ?? key} ${count}`).join('，'))}">
+  return `<div class="detail-section"><div class="section-title"><h3>${strings.taskTitle}</h3><span>${strings.taskNote}</span></div>
+    <div class="task-chart" role="img" aria-label="${html(tasks.map(([key, count]) => `${taskColors[key]?.label ?? key} ${count}`).join(locale === 'en' ? ', ' : '，'))}">
       ${tasks.map(([key, count]) => `<span style="flex:${count};background:${taskColors[key]?.color ?? '#d6dfda'}"></span>`).join('')}
     </div><div class="task-legend">${tasks.map(([key, count]) => `<span><i style="background:${taskColors[key]?.color ?? '#d6dfda'}"></i>${html(taskColors[key]?.label ?? key)} ${count}</span>`).join('')}</div></div>`;
 }
@@ -122,20 +171,20 @@ function taskChart(record: ArchiveRecord) {
 function overview(record: ArchiveRecord) {
   const local = record.local;
   return `<p class="detail-summary">${html(record.summary)}</p>
-    ${!accepted(record) ? `<div class="draft-note">${icon('info')}<span>尚未官方验收。快照可能包含 sorry、失败方案或未检查的修改。</span></div>` : ''}
+    ${!accepted(record) ? `<div class="draft-note">${icon('info')}<span>${strings.draft}</span></div>` : ''}
     <dl class="record-facts">
-      <div><dt>原始归属</dt><dd>${html(record.model)}</dd></div>
-      <div><dt>${accepted(record) ? '官方验收' : '快照记录'}</dt><dd class="mono">${timestamp(record.updatedAt)}</dd></div>
-      ${record.official ? `<div><dt>题目版本</dt><dd>Statement revision ${record.official.statementRevision}</dd></div>
-        <div><dt>原始提交</dt><dd>${external(record.official.sourceUrl, record.official.sourceCommit.slice(0, 12), 'inline-link mono')}</dd></div>` : ''}
-      ${record.snapshot ? `<div><dt>快照阶段</dt><dd class="mono">${html(record.snapshot.phase)}</dd></div>
-        <div><dt>研究记录</dt><dd>${record.snapshot.turns} 轮 · ${record.snapshot.workers} 个 worker</dd></div>` : ''}
-      <div><dt>Lean 源码</dt><dd>${record.sources.length} 个文件 · ${record.sources.reduce((sum, source) => sum + source.lines, 0).toLocaleString('en')} 行</dd></div>
-      ${local ? `<div><dt>本地记录</dt><dd>${html(local.status)}<span class="subfact">${sourceBindingLabels[local.sourceBinding]}</span></dd></div>` : ''}
+      <div><dt>${strings.attribution}</dt><dd>${html(record.model)}</dd></div>
+      <div><dt>${accepted(record) ? strings.officialAt : strings.snapshotAt}</dt><dd class="mono">${timestamp(record.updatedAt)}</dd></div>
+      ${record.official ? `<div><dt>${strings.revision}</dt><dd>Statement revision ${record.official.statementRevision}</dd></div>
+        <div><dt>${strings.sourceCommit}</dt><dd>${external(record.official.sourceUrl, record.official.sourceCommit.slice(0, 12), 'inline-link mono')}</dd></div>` : ''}
+      ${record.snapshot ? `<div><dt>${strings.phase}</dt><dd class="mono">${html(record.snapshot.phase)}</dd></div>
+        <div><dt>${strings.research}</dt><dd>${strings.turns(record.snapshot.turns, record.snapshot.workers)}</dd></div>` : ''}
+      <div><dt>${strings.leanSource}</dt><dd>${strings.files(record.sources.length, record.sources.reduce((sum, source) => sum + source.lines, 0).toLocaleString('en'))}</dd></div>
+      ${local ? `<div><dt>${strings.localRecord}</dt><dd>${html(local.status)}<span class="subfact">${sourceBindingLabels[local.sourceBinding]}</span></dd></div>` : ''}
     </dl>
     ${taskChart(record)}
-    <div class="detail-section"><div class="section-title"><h3>${accepted(record) ? '目标声明 / 证明节选' : '原题声明节选'}</h3><span>Lean</span></div><pre class="declaration-preview">${html(declaration(record))}</pre></div>
-    <div class="detail-links">${record.official ? external(record.official.resultUrl, '官方验收', 'button') : ''}${external(record.archiveUrl, '原始档案', 'button')}</div>`;
+    <div class="detail-section"><div class="section-title"><h3>${accepted(record) ? strings.excerptAccepted : strings.excerptSnapshot}</h3><span>Lean</span></div><pre class="declaration-preview">${html(declaration(record))}</pre></div>
+    <div class="detail-links">${record.official ? external(record.official.resultUrl, strings.officialResult, 'button') : ''}${external(record.archiveUrl, strings.archive, 'button')}</div>`;
 }
 
 function currentSource(record: ArchiveRecord): ArchiveSource {
@@ -148,46 +197,46 @@ function sourceView(record: ArchiveRecord) {
   state.sourceName = source.name;
   const lines = source.code.split('\n');
   if (lines.at(-1) === '') lines.pop();
-  return `<div class="source-toolbar"><label class="sr-only" for="source-file">Lean 文件</label>
+  return `<div class="source-toolbar"><label class="sr-only" for="source-file">${strings.leanFile}</label>
       <select id="source-file">${record.sources.map(file => `<option value="${html(file.name)}" ${file.name === source.name ? 'selected' : ''}>${html(file.name)}</option>`).join('')}</select>
-      ${iconButton('jump-declaration', '定位目标声明', 'list-start')}${iconButton('copy-source', '复制 Lean 源码', 'copy')}${iconButton('download-source', '下载 Lean 文件', 'download')}
+      ${iconButton('jump-declaration', strings.jump, 'list-start')}${iconButton('copy-source', strings.copySource, 'copy')}${iconButton('download-source', strings.downloadSource, 'download')}
     </div>
-    <pre class="source-code" tabindex="0" aria-label="${html(source.name)} 源码"><code>${lines.map((line, index) => `<span class="code-line ${record.declaration && line.startsWith(record.declaration) ? 'is-declaration' : ''}"><span class="line-number" aria-hidden="true">${index + 1}</span><span>${html(line) || ' '}</span></span>`).join('')}</code></pre>
+    <pre class="source-code" tabindex="0" aria-label="${html(strings.sourceLabel(source.name))}"><code>${lines.map((line, index) => `<span class="code-line ${record.declaration && line.startsWith(record.declaration) ? 'is-declaration' : ''}"><span class="line-number" aria-hidden="true">${index + 1}</span><span>${html(line) || ' '}</span></span>`).join('')}</code></pre>
     <p class="source-facts"><strong>${source.lines.toLocaleString('en')} lines · SHA-256</strong><br>${source.sha256}</p>
-    <div class="detail-links">${external(source.url, 'GitHub 原文件', 'button')}${iconButton('copy-hash', '复制文件 SHA-256', 'hash', source.sha256)}</div>`;
+    <div class="detail-links">${external(source.url, strings.githubFile, 'button')}${iconButton('copy-hash', strings.copyHash, 'hash', source.sha256)}</div>`;
 }
 
 function evidence(record: ArchiveRecord) {
   if (!record.official) {
-    return `<div class="evidence-entry"><h3>研究快照</h3><p>${timestamp(record.updatedAt)}</p><p>尚无官方验收通过记录。局部任务或引理检查不代表完整题目已解出。</p>${external(record.archiveUrl, '查看快照与 manifest')}</div>
+    return `<div class="evidence-entry"><h3>${strings.snapshot}</h3><p>${timestamp(record.updatedAt)}</p><p>${strings.noOfficial}</p>${external(record.archiveUrl, strings.snapshotFiles)}</div>
       <dl class="record-facts"><div><dt>Run ID</dt><dd class="mono">${html(record.snapshot?.runId ?? '')}</dd></div></dl>${taskChart(record)}`;
   }
   const official = record.official;
   const local = record.local;
-  return `<div class="evidence-entry"><h3>Lean-Eval 官方验收</h3><p>${timestamp(record.updatedAt)}</p>${external(official.resultUrl, '查看官方结果', 'inline-link official-result-link')}
+  return `<div class="evidence-entry"><h3>${strings.leanEval}</h3><p>${timestamp(record.updatedAt)}</p>${external(official.resultUrl, strings.viewOfficial, 'inline-link official-result-link')}
     <pre class="evidence-body">${html(official.resultBody)}</pre></div>
-    ${local ? `<div class="evidence-entry"><h3>归档本地验证记录</h3><p class="mono">${html(local.status)}<br>kernel_verified: ${local.kernelVerified}<br>comparator: ${html(local.comparator ?? '未记录')}</p>
-      ${local.receipt ? `<p class="mono">receipt: ${html(local.receipt)}</p>` : ''}<p>Axioms: ${html(local.axioms.join(', ') || '未记录')}</p>
+    ${local ? `<div class="evidence-entry"><h3>${strings.localEvidence}</h3><p class="mono">${html(local.status)}<br>kernel_verified: ${local.kernelVerified}<br>comparator: ${html(local.comparator ?? strings.unrecorded)}</p>
+      ${local.receipt ? `<p class="mono">receipt: ${html(local.receipt)}</p>` : ''}<p>Axioms: ${html(local.axioms.join(', ') || strings.unrecorded)}</p>
       ${local.sourceProofCommit ? `<p class="mono">proof commit: ${html(local.sourceProofCommit)}</p>` : ''}
-      ${local.sourceBinding === 'differs' ? '<p class="binding-note">此记录的源码哈希与当前归档不同。官方验收以官方结果链接为准。</p>' : `<p>${sourceBindingLabels[local.sourceBinding]}</p>`}
+      ${local.sourceBinding === 'differs' ? `<p class="binding-note">${strings.differs}</p>` : `<p>${sourceBindingLabels[local.sourceBinding]}</p>`}
       ${external(local.url, 'verification.json')}</div>` : ''}
-    <div class="evidence-entry"><h3>原始提交来源</h3><p class="mono">${html(official.sourceCommit)}</p>${external(official.sourceUrl, '原始提交')}${external(official.submissionUrl, '提交讨论')}</div>
-    ${local?.production ? `<details class="production-note"><summary>来源与人工参与</summary><p><span class="note-label">Production</span>${html(local.production.mode)}</p>
-      ${local.production.freshFromZero === false ? '<p>此结果包含已保存候选的恢复或续跑。</p>' : ''}
+    <div class="evidence-entry"><h3>${strings.submission}</h3><p class="mono">${html(official.sourceCommit)}</p>${external(official.sourceUrl, strings.submissionLink)}${external(official.submissionUrl, strings.discussion)}</div>
+    ${local?.production ? `<details class="production-note"><summary>${strings.production}</summary><p><span class="note-label">Production</span>${html(local.production.mode)}</p>
+      ${local.production.freshFromZero === false ? `<p>${strings.resumed}</p>` : ''}
       ${local.production.humanDirection ? `<p><span class="note-label">Human direction</span>${html(local.production.humanDirection)}</p>` : ''}</details>` : ''}
-    <div class="detail-section"><div class="section-title"><h3>归档文件校验</h3><span>SHA-256</span></div><dl class="checksum-list">${Object.entries(official.checksums).map(([file, digest]) => `<dt>${html(file)}${iconButton('copy-hash', `复制 ${file} 校验值`, 'copy', digest)}</dt><dd>${digest}</dd>`).join('')}</dl></div>`;
+    <div class="detail-section"><div class="section-title"><h3>${strings.checksums}</h3><span>SHA-256</span></div><dl class="checksum-list">${Object.entries(official.checksums).map(([file, digest]) => `<dt>${html(file)}${iconButton('copy-hash', strings.copyChecksum(file), 'copy', digest)}</dt><dd>${digest}</dd>`).join('')}</dl></div>`;
 }
 
 function renderInspector(record?: ArchiveRecord) {
   if (!record) {
-    element('#inspector').innerHTML = `<div class="inspector-empty">${icon('files')}<span>没有可显示的记录</span></div>`;
+    element('#inspector').innerHTML = `<div class="inspector-empty">${icon('files')}<span>${strings.empty}</span></div>`;
     return;
   }
-  element('#inspector').innerHTML = `<div class="detail-topline"><span class="detail-topline-label">${icon('files')}档案详情</span><div class="detail-actions">${iconButton('copy-link', '复制题目链接', 'link-2')}${iconButton('download-record', '下载此题档案 JSON', 'download')}</div></div>
+  element('#inspector').innerHTML = `<div class="detail-topline"><span class="detail-topline-label">${icon('files')}${strings.details}</span><div class="detail-actions">${iconButton('copy-link', strings.copyLink, 'link-2')}${iconButton('download-record', strings.downloadRecord, 'download')}</div></div>
     <h2 class="detail-title">${html(record.title)}</h2><p class="detail-subtitle">${html(record.subtitle)}</p><p class="detail-id">${record.id}</p>
     <div class="detail-statusline">${statusBadge(record)}<span>Lean-Eval · ${html(record.area)}</span></div>
-    <div class="detail-tabs" role="tablist" aria-label="档案详情视图">${([
-      ['overview', '概览'], ['source', 'Lean 源码'], ['evidence', '验证证据'],
+    <div class="detail-tabs" role="tablist" aria-label="${strings.detailTabs}">${([
+      ['overview', strings.tabs.overview], ['source', strings.tabs.source], ['evidence', strings.tabs.evidence],
     ] as const).map(([tab, label]) => `<button type="button" role="tab" id="tab-${tab}" aria-controls="detail-panel" aria-selected="${state.tab === tab}" tabindex="${state.tab === tab ? 0 : -1}" data-tab="${tab}">${label}</button>`).join('')}</div>
     <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : evidence(record)}</div>`;
   if (state.tab === 'source') requestAnimationFrame(() => jumpToDeclaration(record));
@@ -201,9 +250,9 @@ function jumpToDeclaration(record: ArchiveRecord) {
 }
 
 function render() {
-  const records = filteredRecords();
-  if (!records.some(record => record.id === state.selected)) {
-    state.selected = records[0]?.id ?? '';
+  const shown = filteredRecords();
+  if (!shown.some(record => record.id === state.selected)) {
+    state.selected = shown[0]?.id ?? '';
     state.sourceName = '';
   }
   element('#archive-view').hidden = state.view !== 'archive';
@@ -216,7 +265,7 @@ function render() {
   element<HTMLInputElement>('#search').value = state.query;
   element<HTMLSelectElement>('#sort').value = state.sort;
   document.querySelectorAll<HTMLInputElement>('input[name="status"]').forEach(input => input.checked = input.value === state.filter);
-  renderList(records);
+  renderList(shown);
   renderInspector(selectedRecord());
   icons();
   writeLocation();
@@ -245,9 +294,9 @@ async function copy(value: string) {
       field.remove();
       if (!copied) throw new Error('Clipboard unavailable');
     }
-    toast('已复制');
+    toast(strings.copied);
   } catch {
-    toast('复制失败，请检查浏览器剪贴板权限');
+    toast(strings.copyFailed);
   }
 }
 
@@ -334,11 +383,11 @@ document.addEventListener('keydown', event => {
   }
   if (target.matches('[data-proof-id]') && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
     event.preventDefault();
-    const records = filteredRecords();
-    const current = records.findIndex(record => record.id === state.selected);
-    const index = event.key === 'Home' ? 0 : event.key === 'End' ? records.length - 1 :
-      (current + (event.key === 'ArrowDown' ? 1 : records.length - 1)) % records.length;
-    state.selected = records[index].id;
+    const shown = filteredRecords();
+    const current = shown.findIndex(record => record.id === state.selected);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? shown.length - 1 :
+      (current + (event.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length;
+    state.selected = shown[index].id;
     state.sourceName = '';
     render();
     element(`[data-proof-id="${state.selected}"]`).focus();
@@ -362,3 +411,4 @@ const counts: Record<string, string> = {
 for (const [selector, value] of Object.entries(counts)) element(selector).textContent = value;
 readLocation();
 render();
+keepHashOnLanguageSwitch();

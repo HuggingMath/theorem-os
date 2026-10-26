@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { buildSiteCatalog } from '../docs/web/catalog';
 import { acceptedProofRows, researchReplay } from '../docs/web/presentation';
+import { earlyAccessForm, type Locale } from '../docs/web/site';
 import { LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,13 +33,23 @@ await build({
   bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true,
   legalComments: 'eof',
 });
-const homepage = fs.readFileSync(path.join(root, 'docs/index.html'), 'utf8')
-  .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF,
-    JSON.parse(fs.readFileSync(path.join(root, 'docs/assets/replay.json'), 'utf8'))))
-  .replace('<!-- accepted-count -->', String(catalog.records.filter(record => record.status === 'official_accepted').length))
-  .replace('<!-- accepted-proofs -->', acceptedProofRows(catalog));
-fs.writeFileSync(path.join(output, 'index.html'), homepage);
-for (const file of ['archive.html', 'site.css', 'feedback.html', 'feedback.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
+// The optional sign-up form only appears once a real https address is configured.
+if (earlyAccessForm && new URL(earlyAccessForm).protocol !== 'https:') throw new Error('earlyAccessForm must be an https URL');
+const formLink = (locale: Locale) => earlyAccessForm
+  ? `<a class="text-link" href="${earlyAccessForm.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" target="_blank" rel="noreferrer">${locale === 'en' ? 'No GitHub? Use the form' : '没有 GitHub？填写表单'}<i data-lucide="arrow-up-right"></i></a>`
+  : '';
+const replay = JSON.parse(fs.readFileSync(path.join(root, 'docs/assets/replay.json'), 'utf8'));
+for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
+  fs.mkdirSync(path.join(output, directory), { recursive: true });
+  const homepage = fs.readFileSync(path.join(root, 'docs', directory, 'index.html'), 'utf8')
+    .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale))
+    .replace('<!-- accepted-count -->', String(catalog.records.filter(record => record.status === 'official_accepted').length))
+    .replace('<!-- accepted-proofs -->', acceptedProofRows(catalog, locale))
+    .replace('<!-- early-access-form -->', formLink(locale));
+  fs.writeFileSync(path.join(output, directory, 'index.html'), homepage);
+  for (const file of ['archive.html', 'feedback.html']) fs.copyFileSync(path.join(root, 'docs', directory, file), path.join(output, directory, file));
+}
+for (const file of ['site.css', 'feedback.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
 // Embed the Latin fonts so the same typography works for file:// previews without font CORS errors.
 // The CJK subsets are too large to inline; file:// previews fall back to system CJK fonts for them.
 const landingCss = fs.readFileSync(path.join(root, 'docs/landing.css'), 'utf8')
