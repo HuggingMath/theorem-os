@@ -2,14 +2,20 @@ import type { MathAgentOptions, MathAgentSession } from '../runtime/codexSession
 import type { ModelRequestAdmission, ModelRequestStopReason } from '../runtime/modelRequest';
 import type { SolverRunState, SolverWorkerState } from './archive';
 import type { CooperativeAction } from './tasks';
-import { beginRequestUsage, initializeRequestUsageAccounting, modelDispatchAllowed,
+import { attributeTaskUsage, beginRequestUsage, initializeRequestUsageAccounting, modelDispatchAllowed,
   recordThreadUsage, reportedTotalTokens } from './usageBudget';
 
 type UsageCallbacks = Pick<MathAgentOptions, 'onUsage' | 'onUsageIncomplete' | 'requestGate'>;
 
+const assignmentTask = (assignment?: CooperativeAction) =>
+  assignment?.kind === 'task' ? assignment.task.id :
+    assignment?.kind === 'backtranslate' || assignment?.kind === 'statement-review' ? assignment.taskId : undefined;
+
 /** Owns session-scoped usage and request admission; proof and scheduling decisions stay in research. */
 export class ResearchUsage {
   private active?: { reported: boolean; incomplete: boolean; initialPlanning: boolean };
+  /** Thread totals can arrive after the turn settles; they still belong to the task that ran it. */
+  private taskId?: string;
   sessionId?: string;
   stopReason?: ModelRequestStopReason;
 
@@ -27,6 +33,7 @@ export class ResearchUsage {
     research.usageAccounting!.pending = true;
     this.active = { reported: false, incomplete: false,
       initialPlanning: assignment?.kind === 'lead' && state.cooperation?.tasks.length === 0 && maxTotalTokens > 0 };
+    this.taskId = assignmentTask(assignment);
     this.resetTurn();
     this.input.changed();
   }
@@ -71,7 +78,9 @@ export class ResearchUsage {
           changed(); return;
         }
         research.lastInputTokens = inputTokens() ?? research.lastInputTokens;
+        const before = research.usage;
         const reported = recordThreadUsage(research, usage);
+        if (this.taskId) attributeTaskUsage(this.input.state, this.taskId, before, research.usage);
         if (this.active && reported) this.active.reported = true;
         changed();
       },
@@ -108,13 +117,15 @@ export class ResearchUsage {
         (reportedTotalTokens(research.usage) ?? 0) >= Math.max(1, Math.floor(maxTotalTokens / 4))))
       // Only settled requests can yield a checkpoint with complete accounting.
       return this.rejectRequest(sessionId, requests.pendingRequests ? 'math_model_request_stopped' : 'math_initial_planning_limit');
-    const settle = beginRequestUsage(research);
+    const settle = beginRequestUsage(research), taskId = this.taskId;
     let settled = false;
     changed();
     return { allowed: true, settle: receipt => {
       if (settled) return;
       settled = true;
+      const before = research.usage;
       settle(receipt);
+      if (taskId) attributeTaskUsage(state, taskId, before, research.usage);
       if (this.active && !receipt.complete) this.active.incomplete = true;
       changed();
     } };

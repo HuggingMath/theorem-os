@@ -196,6 +196,7 @@ describe('research usage at the real research worker boundary', () => {
     expect(draft).toMatchObject({ workerId: 'peer' });
     expect(draft.assignmentId).toBeTypeOf('string');
     expect(state.workers!.find(worker => worker.id === 'peer')!.usage!.totalTokens).toBe(20);
+    expect(state.taskUsage).toEqual({ investigation: { totalTokens: 20 } });
     expect(state.cooperation!.tasks.find(node => node.task.id === 'investigation')!.status).toBe('pending');
     expect(state.cooperation!.tasks.filter(node => node.task.kind === 'goal').every(node => !node.integratedCheck)).toBe(true);
   });

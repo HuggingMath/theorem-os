@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateUsage, beginRequestUsage, buildTokenBudget, initializeRequestUsageAccounting, initializeUsageAccounting,
+import { aggregateUsage, attributeTaskUsage, beginRequestUsage, buildTokenBudget, initializeRequestUsageAccounting, initializeUsageAccounting,
   modelDispatchAllowed, recordThreadUsage, reportedTotalTokens, type RequestUsageAccounting, type UsageAccounting } from '../src/solver/usageBudget';
+import type { SolverRunState } from '../src/solver/archive';
+import { ResearchUsage } from '../src/solver/researchUsage';
+import type { CooperativeAction } from '../src/solver/tasks';
 
 const accounting = (overrides: Partial<UsageAccounting> = {}): UsageAccounting =>
   ({ startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false, ...overrides });
@@ -13,6 +16,14 @@ describe('provider observed token dispatch budget', () => {
       expect(reportedTotalTokens({ totalTokens })).toBeNull();
     expect(reportedTotalTokens({ inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1 })).toBeNull();
     expect(reportedTotalTokens({ totalTokens: 0 })).toBe(0);
+  });
+
+  it('attributes only the growth of worker usage to a task and ignores regressions', () => {
+    const state: { taskUsage?: Record<string, Record<string, number>> } = {};
+    attributeTaskUsage(state, 'lemma_a', undefined, { totalTokens: 30, inputTokens: 25, outputTokens: 5, reasoningOutputTokens: 0 });
+    attributeTaskUsage(state, 'lemma_a', { totalTokens: 30, inputTokens: 25 }, { totalTokens: 50, inputTokens: 40, cachedInputTokens: 12 });
+    attributeTaskUsage(state, 'goal_1', { totalTokens: 50 }, { totalTokens: 45, outputTokens: -1, inputTokens: '3' });
+    expect(state.taskUsage).toEqual({ lemma_a: { totalTokens: 50, inputTokens: 40, outputTokens: 5, cachedInputTokens: 12 } });
   });
 
   it('does not re-add repeated cumulative updates and retains prior-thread usage on context rotation', () => {
@@ -176,5 +187,29 @@ describe('direct upstream request accounting', () => {
     beginRequestUsage(value)(receipt(10));
     expect(buildTokenBudget(100, [value])).toMatchObject({ status: 'usage-unavailable',
       reportedTotalTokens: Number.MAX_SAFE_INTEGER, usageComplete: false });
+  });
+});
+
+describe('task usage attribution in research sessions', () => {
+  it('credits a request settled after its turn to the task that admitted it, not to a later lead turn', () => {
+    const state = { turns: 0, tokenBudget: buildTokenBudget(0, []) } as unknown as SolverRunState;
+    initializeUsageAccounting(state);
+    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0, signal: new AbortController().signal,
+      remainingMs: () => Infinity, changed: () => {}, emit: () => {} });
+    const callbacks = usage.bindSession('session', () => undefined);
+    usage.sessionOpened({ threadId: 'thread', usageSource: 'upstream-requests', run: async () => 'completed',
+      close: async () => {}, interrupt: async () => {} });
+    usage.begin({ kind: 'task', task: { id: 'lemma_a' }, assignment: {} } as unknown as CooperativeAction);
+    const late = callbacks.requestGate!();
+    if (!late.allowed) throw new Error('fixture_request_not_admitted');
+    usage.finish(true);
+    usage.begin({ kind: 'lead', seedCommit: 'seed' });
+    const lead = callbacks.requestGate!();
+    if (!lead.allowed) throw new Error('fixture_request_not_admitted');
+    late.settle({ usage: { totalTokens: 40, inputTokens: 30, outputTokens: 10 }, complete: true });
+    lead.settle({ usage: { totalTokens: 7, inputTokens: 5, outputTokens: 2 }, complete: true });
+    usage.finish(true);
+    expect(state.usage).toEqual({ totalTokens: 47, inputTokens: 35, outputTokens: 12 });
+    expect(state.taskUsage).toEqual({ lemma_a: { totalTokens: 40, inputTokens: 30, outputTokens: 10 } });
   });
 });

@@ -38,13 +38,19 @@ const routes: WebProofRoute[] = [
   { id: 'A', targetTaskId: 'original', prerequisiteTaskIds: ['a1'], closingTaskId: 'a8' },
   { id: 'B', targetTaskId: 'original', prerequisiteTaskIds: ['b1'], closingTaskId: 'b8' },
 ];
+// Provider-reported tokens for the running tasks; the rest have none recorded.
+const taskUsage: Record<string, Record<string, number>> = {
+  a2: { totalTokens: 1_234_567, inputTokens: 1_200_000, cachedInputTokens: 900_000, outputTokens: 34_567 },
+  a6: { totalTokens: 300_000, inputTokens: 290_000, outputTokens: 10_000 }, b2: { inputTokens: 48_000, outputTokens: 2_000 }, b6: { totalTokens: 800 },
+};
 function inspected(task: WebPlanTask): WebInspectedTask {
   const index = /^[ab](\d)$/.exec(task.id)?.[1];
   const state = index && [2, 6].includes(Number(index)) ? 'running' : index && [3, 7].includes(Number(index)) ? 'blocked' : 'pending';
   return { id: task.id, kind: task.kind, objective: task.objective, group: 'main', status: state,
     control: task.status ?? 'active', owner: state === 'running' ? 'researcher' : undefined, version: taskVersion(task),
     theorem: task.theoremName, type: task.type, premises: [], plannedDependencies: task.dependsOn,
-    attempts: state === 'pending' ? 0 : 1, proof: { status: 'none' }, parkedBy: [], parkedRoutes: {} };
+    attempts: state === 'pending' ? 0 : 1, proof: { status: 'none' }, parkedBy: [], parkedRoutes: {},
+    ...(taskUsage[task.id] ? { usage: taskUsage[task.id] } : {}) };
 }
 const oldA5: WebPlanTask = { ...allTasks.find(task => task.id === 'a5')!, revision: 0, type: 'True',
   objective: '历史目标_a5：保存的旧声明，与当前连续映射目标不同' };
@@ -63,7 +69,7 @@ function observation(id: string, empty: boolean): WebObservation {
       problem: { id: 'task-browser-fixture', statement: 'Prove the frozen original theorem', formalStatement: 'True', assumptions: [],
         targets: [{ proofPath: 'Submission.lean', theoremName: 'original' }] },
       configuration: { model: 'fixture', effort: 'low', workers: 2, coordination: 'cooperative', buildDigest: mathDigest('task-browser-build'), environmentDigest },
-      turns: 1, planVersion: 'plan-v1', scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: 2, working: 1,
+      turns: 1, usage: empty ? undefined : { totalTokens: 2_000_000 }, planVersion: 'plan-v1', scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: 2, working: 1,
         proofAssignments: 1, preparing: 0, stopping: 0, idle: 1, stopped: 0 },
       knowledge: { status: 'disabled', evidence: 'recorded-not-replayed', attribution: 'model-reported-origin', retrievalCoverage: 'recorded',
         droppedRetrievals: 0, retrievals: [], originalUses: [], uses: [] }, tokenBudget: {}, continuation: {},
@@ -301,9 +307,34 @@ try {
     await page.locator('[data-collab-task-inspect-selected]').click(); await expectSelected(page, 'a5'); await visibleInspector(page);
   }, width);
 
+  await scenario('graph cards show recorded task tokens against the largest task, and the inspector breaks them down', async h => {
+    const { page } = h; await create(h); await view(page, 'graph');
+    const tokens = (id: string) => page.locator(`${graphCard(id)} .collab-task-tokens`);
+    const share = (id: string) => page.locator(`${graphCard(id)} .collab-task-usage>span`).evaluate(node =>
+      node.getBoundingClientRect().width / node.parentElement!.getBoundingClientRect().width);
+    assert.deepEqual(await Promise.all(['a2', 'a6', 'b2', 'b6'].map(id => tokens(id).innerText())), ['1.23M', '300K', '50K', '800']);
+    assert.ok(Math.abs(await share('a2') - 1) < 0.01, 'the task with the most tokens fills its meter');
+    assert.ok(Math.abs(await share('a6') - 300_000 / 1_234_567) < 0.01, 'meters are proportional to the largest task');
+    assert.equal(await page.locator(`${graphCard('a1')} .collab-task-tokens, ${graphCard('a1')} .collab-task-usage`).count(), 0, 'no usage is drawn without a record');
+    for (const id of ['a2', 'b6']) {
+      const [cardBox, labelBox, ownerBox] = await Promise.all([page.locator(graphCard(id)), tokens(id), page.locator(`${graphCard(id)} small`)].map(item => item.boundingBox()));
+      assert.ok(cardBox && labelBox && ownerBox && labelBox.x + labelBox.width <= cardBox.x + cardBox.width && labelBox.y + labelBox.height <= cardBox.y + cardBox.height,
+        `${id} token count stays inside its card`);
+      assert.ok(await page.locator(`${graphCard(id)} small`).evaluate(node => {
+        const label = node.parentElement!.querySelector('.collab-task-tokens')!.getBoundingClientRect(), range = document.createRange();
+        range.selectNodeContents(node); return range.getBoundingClientRect().right <= label.left;
+      }), `${id} owner text ends before the token count`);
+    }
+    assert.deepEqual(await page.locator('[data-collab-usage-legend]>span').allInnerTexts(), ['Token 色条：相对用量最多的任务', '任务 1.59M / 运行 2.00M']);
+    await page.locator(graphCard('a2')).click(); await expectSelected(page, 'a2');
+    assert.match(await page.locator(inspector).innerText(), /Token 用量\s*1\.23M · 输入 1\.20M（缓存命中 900K） · 输出 35K/);
+    await page.screenshot({ path: path.join(output, 'desktop-usage.png') });
+    await create(h, emptyTask); assert.equal(await page.locator('[data-collab-usage-legend]').isHidden(), true, 'runs without task usage hide the legend');
+  });
+
   await writeScenarioReport(path.join(output, 'report.json'), suite, 'passed', null, 'local-real-http-task-browser', {
     checks: suite.checks, taskCount: allTasks.length, proofReceipts: 0, leanProcesses: 0,
-    screenshots: ['desktop.png', 'desktop-inspector.png', 'mobile-375.png', 'inspector-375.png', 'mobile-320.png', 'inspector-320.png'],
+    screenshots: ['desktop.png', 'desktop-inspector.png', 'desktop-usage.png', 'mobile-375.png', 'inspector-375.png', 'mobile-320.png', 'inspector-320.png'],
   }, { credential: input.apiKey });
   console.log(`Task browser: ${suite.checks.length}/${suite.checks.length} passed`);
 } catch (error) {

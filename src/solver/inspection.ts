@@ -114,6 +114,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       proof: proofRecord(node, state), feedback: node.feedback, feedbackCategory: researchFailureCategory(node.feedback), finding: node.finding,
       parkedBy: node.routeParking ?? [],
       parkedRoutes: node.parkedRoutes ?? {},
+      ...(state.taskUsage?.[node.task.id] ? { usage: state.taskUsage[node.task.id] } : {}),
     })),
     workers: (state.workers ?? [{ id: 'solver', role: 'lead', ...state }]).map(worker => ({
       id: worker.id, role: worker.role, sessionRole: 'sessionRole' in worker ? worker.sessionRole : undefined,

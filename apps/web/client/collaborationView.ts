@@ -28,6 +28,17 @@ const statusLabel: Record<string,string> = { pending: '待调度', running: '进
 const label = (value: string) => statusLabel[value] ?? value;
 const routeConnectionLabel: Record<string,string> = { 'closed-by-original-check': '已由原题检查连通', 'awaiting-original-check': '等待原题检查连通' };
 const taskState = (task: Task) => task.control === 'active' ? task.status : task.control;
+const usageCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+// Same rule as the runtime budget: cached input and reasoning output are subsets of input and output.
+const totalTokens = (usage?: Record<string, number>) => usageCount(usage?.totalTokens) ??
+  (usageCount(usage?.inputTokens) !== undefined && usageCount(usage?.outputTokens) !== undefined ? usage!.inputTokens + usage!.outputTokens : undefined);
+const tokenText = (value: number) => value >= 1e6 ? `${(value / 1e6).toFixed(value >= 1e8 ? 0 : value >= 1e7 ? 1 : 2)}M` :
+  value >= 1e3 ? `${Math.round(value / 1e3)}K` : String(value);
+const usageDetail = (usage: Record<string, number>) => {
+  const input = usageCount(usage.inputTokens), cached = usageCount(usage.cachedInputTokens), output = usageCount(usage.outputTokens);
+  return [input !== undefined && `输入 ${tokenText(input)}${cached ? `（缓存命中 ${tokenText(cached)}）` : ''}`,
+    output !== undefined && `输出 ${tokenText(output)}`].filter(Boolean).join(' · ');
+};
 const taskStates = ['pending', 'running', 'blocked', 'conditional', 'delivered', 'integrated', 'completed', 'paused', 'stopped'];
 const dependencyClosure = (ids: readonly string[], tasks: readonly Task[]) => {
   const byId = new Map(tasks.map(task => [task.id, task]));
@@ -92,7 +103,7 @@ export class CollaborationView {
     const element = createElement('div', 'collab-surface');
     const taskView: TaskView = matchMedia('(max-width:850px)').matches ? 'list' : 'graph';
     element.innerHTML = `<div class="collab-heading"><h2 class="sr-only">研究协作</h2><p data-collab-observation class="collab-help"></p><div class="collab-heading-actions"><button type="button" class="button" data-collab-refresh>刷新观察</button><button type="button" class="button" data-collab-plan disabled>编辑计划</button><button type="button" class="button" data-collab-archive disabled>归档知识</button></div></div><div data-collab-navigation></div><div data-collab-summary></div><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
-      <div data-collab-progress></div><div class="collab-layout"><section class="collab-map" data-task-view="graph"><div class="collab-section-heading"><h3>数学任务</h3><div class="collab-task-view" role="group" aria-label="任务显示方式"><button type="button" data-collab-task-view="graph" aria-pressed="true">依赖图</button><button type="button" data-collab-task-view="list" aria-pressed="false">任务列表</button></div></div><div class="collab-map-tools"><label class="sr-only" for="task-search-${h(runId)}">搜索任务、类型或负责人</label><input id="task-search-${h(runId)}" data-collab-task-search type="search" placeholder="搜索任务、类型或负责人"><label class="sr-only" for="route-${h(runId)}">筛选证明路线</label><select id="route-${h(runId)}" data-collab-route><option value="">全部路线</option></select><label class="sr-only" for="task-state-${h(runId)}">筛选任务状态</label><select id="task-state-${h(runId)}" data-collab-task-state><option value="">全部状态</option>${taskStates.map(state => `<option value="${state}">${h(label(state))}</option>`).join('')}</select></div><div class="collab-task-result"><span data-collab-task-count role="status"></span><button type="button" class="text-button" data-collab-task-reset hidden>清除筛选</button></div><div data-collab-task-selection class="collab-task-selection" hidden></div><div data-collab-routes class="collab-route-summary"></div><div data-collab-task-empty class="collab-task-empty" hidden></div><div class="collab-graph-frame"><div class="collab-graph-scroll" tabindex="0" data-focus-key="task-graph-scroll" aria-label="任务依赖图，可滚动、拖动平移和缩放"><div data-collab-graph class="collab-graph"></div></div><div class="collab-graph-legend"><p class="collab-help"><span class="collab-legend-and">AND 前置</span><span class="collab-legend-or">OR 路线</span><span>悬停查看上下游 · 拖动平移 · Ctrl 或 ⌘ 加滚轮缩放</span></p><div class="collab-graph-zoom" role="group" aria-label="依赖图缩放"><button type="button" data-collab-graph-zoom="out" aria-label="缩小">−</button><button type="button" data-collab-graph-zoom="reset" aria-label="恢复 100%" data-collab-graph-zoom-level>100%</button><button type="button" data-collab-graph-zoom="in" aria-label="放大">+</button><button type="button" data-collab-graph-zoom="fit">适应</button></div></div></div><div data-collab-task-list class="collab-task-list" data-focus-key="task-list-scroll" tabindex="0" aria-label="任务列表"></div></section>
+      <div data-collab-progress></div><div class="collab-layout"><section class="collab-map" data-task-view="graph"><div class="collab-section-heading"><h3>数学任务</h3><div class="collab-task-view" role="group" aria-label="任务显示方式"><button type="button" data-collab-task-view="graph" aria-pressed="true">依赖图</button><button type="button" data-collab-task-view="list" aria-pressed="false">任务列表</button></div></div><div class="collab-map-tools"><label class="sr-only" for="task-search-${h(runId)}">搜索任务、类型或负责人</label><input id="task-search-${h(runId)}" data-collab-task-search type="search" placeholder="搜索任务、类型或负责人"><label class="sr-only" for="route-${h(runId)}">筛选证明路线</label><select id="route-${h(runId)}" data-collab-route><option value="">全部路线</option></select><label class="sr-only" for="task-state-${h(runId)}">筛选任务状态</label><select id="task-state-${h(runId)}" data-collab-task-state><option value="">全部状态</option>${taskStates.map(state => `<option value="${state}">${h(label(state))}</option>`).join('')}</select></div><div class="collab-task-result"><span data-collab-task-count role="status"></span><button type="button" class="text-button" data-collab-task-reset hidden>清除筛选</button></div><div data-collab-task-selection class="collab-task-selection" hidden></div><div data-collab-routes class="collab-route-summary"></div><div data-collab-task-empty class="collab-task-empty" hidden></div><div class="collab-graph-frame"><div class="collab-graph-scroll" tabindex="0" data-focus-key="task-graph-scroll" aria-label="任务依赖图，可滚动、拖动平移和缩放"><div data-collab-graph class="collab-graph"></div></div><div class="collab-graph-legend"><p class="collab-help"><span class="collab-legend-and">AND 前置</span><span class="collab-legend-or">OR 路线</span><span class="collab-legend-usage" data-collab-usage-legend hidden></span><span>悬停查看上下游 · 拖动平移 · Ctrl 或 ⌘ 加滚轮缩放</span></p><div class="collab-graph-zoom" role="group" aria-label="依赖图缩放"><button type="button" data-collab-graph-zoom="out" aria-label="缩小">−</button><button type="button" data-collab-graph-zoom="reset" aria-label="恢复 100%" data-collab-graph-zoom-level>100%</button><button type="button" data-collab-graph-zoom="in" aria-label="放大">+</button><button type="button" data-collab-graph-zoom="fit">适应</button></div></div></div><div data-collab-task-list class="collab-task-list" data-focus-key="task-list-scroll" tabindex="0" aria-label="任务列表"></div></section>
       <section class="collab-inspector"><div class="collab-section-heading"><h3>任务检查器</h3><div class="collab-inspector-actions"><button type="button" class="text-button" data-collab-back-to-list hidden>返回任务列表</button><button type="button" class="text-button" data-collab-guide-task data-focus-key="guide-task">指导此任务</button></div></div><div data-collab-inspector></div><div data-collab-artifact class="collab-artifact" aria-live="polite"></div></section></div>
       <div data-collab-reviews></div><div data-collab-math-changes></div><section class="collab-agents"><div class="collab-section-heading"><h3>Agent 分工</h3><span class="collab-help">固定角色 / 当前会话角色</span></div><div data-collab-agents class="collab-agent-list"></div></section>
       <div data-collab-deliveries></div><div data-collab-guidance></div>
@@ -346,7 +357,7 @@ export class CollaborationView {
     const observation = view.observation!;
     if (mode === 'list') {
       renderTaskList(view.element.querySelector<HTMLElement>('[data-collab-task-list]')!,
-        tasks.map(task => ({ ...this.taskCard(view, task), dependencies: `AND 前置：${task.plannedDependencies.join(', ') || '无'}` })));
+        tasks.map(task => ({ ...this.taskCard(view, task, this.peakTokens(observation)), dependencies: `AND 前置：${task.plannedDependencies.join(', ') || '无'}` })));
       return;
     }
     const allTasks = observation.inspection.tasks;
@@ -366,7 +377,9 @@ export class CollaborationView {
     if (graph.style.height !== `${height}px`) graph.style.height = `${height}px`;
     graph.dataset.density = compact ? 'compact' : 'comfortable';
     this.applyGraphZoom(view);
-    renderTaskGraph(graph, { cards: tasks.map(task => this.taskCard(view, task)), edges, positions, width, height, selected: view.selectedTask, compact, independentTop });
+    const peak = this.peakTokens(observation);
+    this.renderUsageLegend(view, observation);
+    renderTaskGraph(graph, { cards: tasks.map(task => this.taskCard(view, task, peak)), edges, positions, width, height, selected: view.selectedTask, compact, independentTop });
     // Grow the graph once per mounted view, the first time it shows cards.
     if (!graph.dataset.revealed && tasks.length && graph.getClientRects().length) { graph.dataset.revealed = 'true'; revealGraph(graph); }
   }
@@ -422,11 +435,24 @@ export class CollaborationView {
     for (const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-graph-zoom="in"],[data-collab-graph-zoom="out"]'))
       button.disabled = button.dataset.collabGraphZoom === 'in' ? view.graphZoom >= 1.6 : view.graphZoom <= minGraphZoom;
   }
-  private taskCard(view: ViewState, task: Task): TaskCard {
-    const state = taskState(task);
+  private taskCard(view: ViewState, task: Task, peak: number): TaskCard {
+    const state = taskState(task), tokens = totalTokens(task.usage);
     return { id: task.id, version: task.version, kind: task.kind, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), objective: task.objective,
       owner: task.owner ?? '待分配', proof: task.proof.status, proofLabel: label(task.proof.status),
+      ...(tokens !== undefined ? { tokens: { label: tokenText(tokens), share: peak ? tokens / peak : 0, detail: usageDetail(task.usage!) } } : {}),
       selected: view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version) };
+  }
+  private peakTokens(observation: WebObservation) {
+    return Math.max(0, ...observation.inspection.tasks.map(task => totalTokens(task.usage) ?? 0));
+  }
+  /** Task totals leave out lead, assembly and review turns, so the legend states both sums. */
+  private renderUsageLegend(view: ViewState, observation: WebObservation) {
+    const legend = view.element.querySelector<HTMLElement>('[data-collab-usage-legend]')!;
+    const tasks = observation.inspection.tasks.map(task => totalTokens(task.usage)).filter((value): value is number => value !== undefined);
+    const run = totalTokens(observation.inspection.usage as Record<string, number> | undefined);
+    legend.hidden = !tasks.length;
+    const totals = tasks.length ? `任务 ${tokenText(tasks.reduce((sum, value) => sum + value, 0))}${run !== undefined ? ` / 运行 ${tokenText(run)}` : ''}` : '';
+    patchSection(legend, totals ? `<span>Token 色条：相对用量最多的任务</span><span>${h(totals)}</span>` : '');
   }
   private updateTaskSelection(view: ViewState) {
     // Graph and list cards are component-rendered; other task links (agents, frontier, deliveries) are toggled here.
@@ -459,6 +485,7 @@ export class CollaborationView {
     const actualConsumers = observation.inspection.tasks.filter(consumer=>consumer.proof.actualReferences?.tasks?.some(reference => reference.taskId === task.id && reference.taskDigest === task.version)).map(consumer=>({taskId:consumer.id,taskVersion:consumer.version,references:consumer.proof.actualReferences}));
     const facts: [string, unknown][] = [
       ...(!historical ? [['负责人',task.owner],['任务状态',`${label(task.status)} / ${label(task.control)}`],['尝试次数',task.attempts]] as [string, unknown][] : []),
+      ...(!historical && totalTokens(task.usage) !== undefined ? [['Token 用量',[tokenText(totalTokens(task.usage)!), usageDetail(task.usage!)].filter(Boolean).join(' · ')]] as [string, unknown][] : []),
       ['记录的证明状态',label(task.proof.status)],['本版本计划依赖 AND',task.plannedDependencies.join(', ')||'无'],
       ...(!historical ? [['计划消费者',plannedConsumers.join(', ')||'无']] as [string, unknown][] : []),
     ];

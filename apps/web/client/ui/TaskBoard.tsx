@@ -3,7 +3,9 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { compactGraphMetrics, graphMetrics } from '../taskGraphLayout';
 
 export type TaskCard = { id: string; version: string; kind: string; kindLabel: string; state: string; stateLabel: string;
-  objective: string; owner: string; proof: string; proofLabel: string; selected: boolean };
+  objective: string; owner: string; proof: string; proofLabel: string; selected: boolean;
+  /** Provider-reported tokens of this task's turns; share is relative to the task with the most. */
+  tokens?: { label: string; share: number; detail: string } };
 export type TaskEdgePath = { from: string; to: string; kind: 'and' | 'or'; d: string };
 
 const settledStates = new Set(['integrated', 'completed']);
@@ -23,11 +25,15 @@ function Card({ card, graph, compact, x, y, dimmed, onHover }: { card: TaskCard;
   }, [card.state]);
   return <button ref={node} type="button" class={`collab-task${card.selected ? ' selected' : ''}${dimmed ? ' dimmed' : ''}`} data-collab-task={card.id} data-focus-key={`${graph ? 'graph' : 'list'}-${card.id}`}
     data-task-state={card.state} data-task-kind={card.kind} data-task-proof={card.proof} aria-pressed={card.selected}
-    title={compact ? `${card.id}\n${card.objective}\n${card.owner} · ${card.proofLabel}` : undefined}
+    title={compact ? `${card.id}\n${card.objective}\n${card.owner} · ${card.proofLabel}${card.tokens ? `\nToken ${card.tokens.label}` : ''}` : undefined}
     style={graph ? { left: `${x}px`, top: `${y}px` } : undefined}
     onPointerEnter={onHover && (() => onHover(card.id))} onPointerLeave={leave} onFocus={onHover && (() => onHover(card.id))} onBlur={leave}>
     <span class="collab-task-top"><span>{card.kindLabel}</span><span class="collab-task-state">{card.stateLabel}</span></span>
     <strong>{card.id}</strong><span class="collab-task-objective">{card.objective}</span><small>{card.owner} · {card.proofLabel}</small>
+    {card.tokens && <>
+      <span class="collab-task-tokens" title={card.tokens.detail ? `Token ${card.tokens.label}：${card.tokens.detail}` : undefined}>{card.tokens.label}</span>
+      <span class="collab-task-usage" aria-hidden="true"><span style={{ width: `${Math.max(card.tokens.share * 100, card.tokens.share ? 2 : 0)}%` }} /></span>
+    </>}
   </button>;
 }
 

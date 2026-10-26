@@ -2173,3 +2173,14 @@ code,pre,.mono{font-variant-ligatures:none;font-feature-settings:"zero" 0}
 .chat-message.assistant .timeline-text time{font-size:var(--text-xs)}
 .overview-workspace .step-label,.overview-agents strong{font-weight:500}
 h1,h2,h3,h4{text-wrap:balance}
+
+/* Task token usage: a hairline meter along the card's bottom edge, relative to the task with the most tokens, and the count beside owner and proof. */
+.collab-task-tokens{position:absolute;right:12px;bottom:9px;color:var(--gray-600);font-size:var(--text-xs);font-weight:500;font-variant-numeric:tabular-nums}
+.collab-task:has(.collab-task-tokens) small{display:block;padding-right:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.collab-task-usage{position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--gray-100)}
+.collab-task-usage>span{display:block;height:100%;background:color-mix(in srgb,var(--blue-500) 70%,var(--gray-300));border-radius:0 2px 2px 0}
+.collab-graph[data-density=compact] .collab-task-tokens{display:none}
+.collab-legend-usage:not([hidden]){display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 6px}
+.collab-legend-usage>span{white-space:nowrap}
+.collab-legend-usage>span+span::before{content:"·";margin-right:6px}
+.collab-legend-usage::before{content:"";display:inline-block;width:16px;height:3px;margin-right:5px;vertical-align:middle;border-radius:2px;background:color-mix(in srgb,var(--blue-500) 70%,var(--gray-300))}

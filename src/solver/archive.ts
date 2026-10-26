@@ -103,6 +103,8 @@ export type SolverRunState = {
   usageAccounting?: UsageAccounting;
   requestUsageAccounting?: RequestUsageAccounting;
   tokenBudget?: TokenBudget;
+  /** Provider-reported tokens by the task whose turn consumed them; lead and review turns have no task. */
+  taskUsage?: Record<string, Record<string, number>>;
   check?: ProofCheck;
   candidate?: ResearchCandidate;
   failures?: SolverFailure[];
@@ -265,6 +267,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   continuationDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   providerProfile: z.string().optional(), providerProfileDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   model: z.string(), effort: z.string(), workerCount: z.number().int().positive().optional(),
+  taskUsage: z.record(z.record(safeCount)).optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   knowledgeRetrievals: z.object({ dropped: safeCount, observations: z.array(z.object({
     sectionId: z.string(), catalogDigest: z.string(), searchInputDigest: z.string(),

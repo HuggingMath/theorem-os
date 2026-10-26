@@ -30,6 +30,8 @@ export type WebInspectedTask = {
   proof: { status: string; failureCategory?: string; commit?: string; sourceDigest?: string;
     conditions?: WebTaskReference[]; receiptIds?: string[]; actualReferences?: WebProofReferences };
   feedback?: string; feedbackCategory?: string; finding?: string; parkedBy: string[]; parkedRoutes: Record<string, string[]>;
+  /** Provider-reported tokens of turns assigned to this task, summed over its revisions. */
+  usage?: Record<string, number>;
 };
 export type WebHumanEdit = {
   id: string; status: 'received' | 'applied' | 'rejected'; reason?: string; receivedAt?: number; appliedAt?: number;

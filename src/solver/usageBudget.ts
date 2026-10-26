@@ -116,6 +116,20 @@ export function recordThreadUsage(record: UsageRecord, reported: Record<string, 
   return reportedTotal !== null;
 }
 
+/** Add the growth of a worker's reported usage to one task; regressions are accounting gaps, not refunds. */
+export function attributeTaskUsage(state: { taskUsage?: Record<string, Record<string, number>> }, taskId: string,
+  before: Record<string, unknown> | undefined, after: Record<string, unknown> | undefined): void {
+  for (const [key, value] of Object.entries(after ?? {})) {
+    const previous = before?.[key] ?? 0;
+    if (!count(value) || !count(previous)) continue;
+    const delta = value - previous;
+    if (delta <= 0) continue;
+    const usage = (state.taskUsage ??= {})[taskId] ??= {};
+    const total = (usage[key] ?? 0) + delta;
+    if (count(total)) usage[key] = total;
+  }
+}
+
 export function aggregateUsage(records: readonly UsageRecord[]): Record<string, unknown> {
   const usage: Record<string, unknown> = {};
   for (const record of records) for (const [key, value] of Object.entries(record.usage ?? {})) {
