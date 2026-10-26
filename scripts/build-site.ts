@@ -46,7 +46,6 @@ const landingCss = fs.readFileSync(path.join(root, 'docs/landing.css'), 'utf8')
     : `url("data:font/woff2;base64,${fs.readFileSync(path.join(root, 'docs/assets/fonts', file)).toString('base64')}")`);
 fs.writeFileSync(path.join(output, 'landing.css'), landingCss);
 fs.copyFileSync(path.join(root, 'node_modules/lucide/LICENSE'), path.join(output, 'lucide-LICENSE.txt'));
-fs.copyFileSync(path.join(root, 'LICENSE'), path.join(output, 'LICENSE.txt'));
 if (fs.existsSync(path.join(root, 'docs/assets'))) {
   fs.cpSync(path.join(root, 'docs/assets'), path.join(output, 'assets'), { recursive: true });
 }

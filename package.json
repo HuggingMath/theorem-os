@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Composable mathematical research agents with Lean-verified proof acceptance and replaceable research components.",
-  "license": "AGPL-3.0-only",
+  "license": "UNLICENSED",
   "engines": {
     "node": ">=22",
     "bun": ">=1.2"

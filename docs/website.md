@@ -1,10 +1,10 @@
 # 产品宣传网站与证明档案
 
-线上地址：<https://likc1606.github.io/theorem-os/>。网站由本仓库的 GitHub Actions 构建并发布到 GitHub Pages。
+线上地址：<https://likc1606.github.io/theorem-os-site/>。网站在本仓库（私有）构建，产物与公开成果发布到公开仓库 [LikC1606/theorem-os-site](https://github.com/LikC1606/theorem-os-site)，由它的 GitHub Pages 提供服务。公开仓库不包含运行时源码。
 
 静态网站包含三个入口：
 
-- `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍与可展开的源码示例、Docker 部署和 CLI 体验命令。
+- `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍与“在线工作台即将开放”的开始区。
 - `archive.html`：证明档案，支持搜索、筛选、源码查看、验收证据、JSON 下载和本地回放记录。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。
 
@@ -17,9 +17,9 @@ bun install --frozen-lockfile
 bun run build:site
 ```
 
-打开 `out/site/index.html`。使用相对资源路径，档案数据打包进脚本，支持直接打开本地文件，也支持 GitHub Pages 的 `/theorem-os/` 子路径。
+打开 `out/site/index.html`。使用相对资源路径，档案数据打包进脚本，支持直接打开本地文件，也支持 GitHub Pages 的 `/theorem-os-site/` 子路径。
 
-首页的成果数量、归属和官方结果链接由档案生成，构建时写入 HTML；浏览器不支持 JavaScript 时也能查看真实工作台截图、首页正文、默认部署命令和成果入口。组件切换、手机导航及命令复制使用独立的小型脚本，档案源码在进入 `archive.html` 时加载。静态站点构建不依赖工作台服务。
+首页的成果数量、归属和官方结果链接由档案生成，构建时写入 HTML；浏览器不支持 JavaScript 时也能查看真实工作台截图、首页正文和成果入口。组件切换、回放与手机导航使用独立的小型脚本，档案源码在进入 `archive.html` 时加载。静态站点构建不依赖工作台服务。
 
 ## 数据来源
 
@@ -44,13 +44,13 @@ bun run build:site
 - `docs/feedback.html`、`docs/feedback.css`、`docs/web/feedback.ts`：反馈表单、全文预览和 GitHub Issues 跳转。
 - `scripts/build-site.ts`：构建三个页面、浏览器脚本和公开数据，并复制素材与许可证。
 
-首页按 taste-skill 的大字排版方向组织内容，以白色品牌声明、浅青色回放与薄荷色组件区形成章节变化。首屏使用本地工作台真实的 Mathlib 草稿截图，明确标为未提交；手机和平板通过 `picture` 加载独立视口，平板采用画面与说明并排的构图。截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区默认展示完整 Docker 部署命令，也可切换 CLI 安装和免模型回放。GitHub Pages 仅提供静态展示；用户需在 Linux 本地或服务器部署工作台，再输入自己的 API Key。
+首页按 taste-skill 的大字排版方向组织内容，以白色品牌声明、浅青色回放与薄荷色组件区形成章节变化。首屏使用本地工作台真实的 Mathlib 草稿截图，明确标为未提交；手机和平板通过 `picture` 加载独立视口，平板采用画面与说明并排的构图。截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明在线工作台即将开放，提供反馈入口与免模型的验收回放，不提供部署命令。
 
 四步回放的候选源码读取自 `src/math/localExample.ts`，回执读取自 `docs/assets/replay.json`；切换演示不会启动模型或 Lean。默认停在最终验收，点击播放后从候选开始，可暂停续播、手动选步和重新播放；离屏或页面隐藏会暂停，返回后由用户继续播放。反馈步骤是对预设示例的检查说明，并非原始诊断日志。手机端先展示已归档的最终回执，再展示选中步骤的源码。源码与回放记录改动后需要重新构建。
 
 首屏名称使用 GSAP 遮罩入场，成果按行出现，组件选项依次进入，产品图轻微缩放落定；组件和命令切换采用短过渡。系统启用减少动态效果时，内容即时切换，回放仍可按步骤阅读。GSAP 固定版本与锁文件一起管理，版权和许可链接随静态产物保留在 `assets/licenses/gsap-NOTICE.txt`。
 
-完整原题验收独立于五类研究决策。组件用大字号索引展示，手机端五个标签完整排列为网格，支持键盘选择；源码示例默认收起，可在没有 JavaScript 的情况下展开。产品区补充实际 Lean 源码与模型配置截图，API Key 保持为空。档案区展示完整的真实界面，手机端使用单独的题目详情截图，避免放大裁切桌面图。网页工作台的临时历史与 CLI 的持久运行和恢复分开说明。参考官网与应用取舍记录在 [design-references.md](design-references.md)，本轮方向、素材来源与审查记录见 [design-taste.md](design-taste.md)。
+完整原题验收独立于五类研究决策。组件用大字号索引展示，手机端五个标签完整排列为网格，支持键盘选择。产品区补充实际 Lean 源码与模型配置截图，API Key 保持为空。档案区展示完整的真实界面，手机端使用单独的题目详情截图，避免放大裁切桌面图。参考官网与应用取舍记录在 [design-references.md](design-references.md)，本轮方向、素材来源与审查记录见 [design-taste.md](design-taste.md)。
 
 ## 用户反馈
 
@@ -68,17 +68,22 @@ bunx playwright install chromium --only-shell
 bun run test:site
 ```
 
-浏览器检查覆盖响应式截图、首屏可见、原图预览的缩放与拖动、弹窗关闭和焦点恢复、档案图片无裁切、源码示例展开、手机组件标签的键盘可见性、三种开始方式与部署命令复制、预设回放与记录的一致性、移动端回执顺序、首页成果的真实归属、复制失败反馈、手机导航、本地文件预览、无 JavaScript 内容与 GitHub Pages 子路径，以及证明档案的搜索、筛选、源码、来源、下载和链接恢复。检查 320、390、768、1440、1920 像素宽度，截图输出到 `out/site-checks/`。这些检查不调用模型。
+浏览器检查覆盖响应式截图、首屏可见、原图预览的缩放与拖动、弹窗关闭和焦点恢复、档案图片无裁切、手机组件标签的键盘可见性、即将开放的开始区与仅链接公开仓库、预设回放与记录的一致性、移动端回执顺序、首页成果的真实归属、手机导航、本地文件预览、无 JavaScript 内容与 GitHub Pages 子路径，以及证明档案的搜索、筛选、源码、来源、下载和链接恢复。检查 320、390、768、1440、1920 像素宽度，截图输出到 `out/site-checks/`。这些检查不调用模型。
 
 `test:site` 还运行 `test-landing-motion.mjs`，检查首屏入场、回放的暂停续播与结束、手动选步、键盘焦点，以及离屏、页面隐藏和减少动态效果设置；报告与截图输出到 `out/site-motion-checks/`。
 
 `test-feedback.mjs` 检查表单校验、分类切换、Markdown 编码、超长内容的复制与下载、弹窗焦点、桌面与手机排版、本地文件、Pages 子路径和无 JavaScript 入口。测试不会创建真实 Issue。
 
-## GitHub Pages 部署
+## 发布到公开仓库
 
-工作流位于 `.github/workflows/pages.yml`。在 GitHub 仓库的 **Settings → Pages → Build and deployment** 中选择 **GitHub Actions**，再在 **Settings → Secrets and variables → Actions → Variables** 中添加仓库变量 `PAGES_ENABLED`，值为 `true`。配置好 Pages 后，推送页面或档案变化到 `main` 会运行检查并部署 `out/site`；也可以手动触发。未开启该变量时仍会执行构建与浏览器检查，并跳过发布，适用于尚未配置 Pages 或当前套餐不支持私有仓库 Pages 的情况。
+公开仓库只放构建产物和公开成果：
 
-预期地址为 `https://likc1606.github.io/theorem-os/`。私有源仓库需要账号支持该仓库的 Pages 功能；源仓库是否私有与站点是否公开是两个设置。工作流不改变仓库可见性，也不自动创建 Pages 配置。
+- `out/site/` 的全部内容（含 `.nojekyll`）；
+- `accepted/`、`submitted/`；
+- `in-progress/` 中被档案引用的源码，即 `data/catalog.json` 里 `sources[].path` 列出的 `.lean` 文件；`state.json`、`history.fast-export.gz`、任务说明等运行状态不发布；
+- 公开仓库自己的 `README.md`。
+
+不要发布 `src/`、`apps/`、`scripts/`、内部设计文档、镜像或 `in-progress/` 的其余文件。档案中的源码链接指向公开仓库的 `main` 分支，路径与本仓库一致。发布前在本仓库运行 `bun run build:site` 与 `bun run test:site`，复制后在公开目录检查没有本机路径、密钥和指向私有仓库的链接，再提交推送。公开仓库的 Pages 选择 **Deploy from a branch → main → / (root)**。
 
 ## 视觉素材
 

@@ -87,10 +87,10 @@ try {
 
   await page.locator('[data-view-link="quickstart"]').click();
   assert.equal(await page.locator('#quickstart-view').isVisible(), true);
-  assert.match(await page.locator('#replay-command').innerText(), /elan toolchain install leanprover\/lean4:v4.33.0/);
-  await page.getByRole('button', { name: '复制回放命令' }).click();
-  assert.match(await page.evaluate(() => window.testClipboard), /example replay/);
-  assert.ok(await page.locator('.replay-evidence img').evaluate(image => image.complete && image.naturalWidth > 0));
+  assert.match(await page.locator('#quickstart-view').innerText(), /不调用模型/);
+  assert.equal(await page.locator('#quickstart-view pre, [data-action^="copy-install"], [data-action^="copy-replay"]').count(), 0);
+  await page.locator('.replay-evidence img').scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => { const image = document.querySelector('.replay-evidence img'); return image.complete && image.naturalWidth > 0; });
   await page.screenshot({ path: path.join(output, 'quickstart.png'), fullPage: true });
   await page.goBack();
   assert.equal(await page.locator('#archive-view').isVisible(), true);

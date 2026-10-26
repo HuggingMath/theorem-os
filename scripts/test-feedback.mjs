@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const site = path.join(root, 'out/site');
 const url = pathToFileURL(path.join(site, 'feedback.html')).href;
 const output = path.join(root, 'out/feedback-checks');
-const issueDestination = 'https://github.com/LikC1606/theorem-os/issues/new';
+const issueDestination = 'https://github.com/LikC1606/theorem-os-site/issues/new';
 fs.mkdirSync(output, { recursive: true });
 const errors = [];
 const unexpectedExternalRequests = [];

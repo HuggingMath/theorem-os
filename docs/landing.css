@@ -276,8 +276,6 @@ tr.proof-row { border-top: 1px solid var(--surface); }
 .module-details .module-contract { font-size: var(--step-small); margin-top: 28px; }
 .independent-check { display: flex; align-items: flex-start; gap: 10px; margin-top: 32px; font-size: 16px; }
 .independent-check svg { margin-top: 3px; }
-.component-bottom { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-top: 36px; }
-.component-bottom p { font-size: 16px; }
 .module-showcase { margin-top: 48px; }
 .module-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
 .module-preview-toolbar h3 { font-size: var(--step-body); }
@@ -289,19 +287,6 @@ tr.proof-row { border-top: 1px solid var(--surface); }
 .module-preview-link { position: relative; display: block; }
 .module-preview-link img { width: 100%; aspect-ratio: 1440 / 900; background: var(--bg); }
 .module-showcase figcaption { display: flex; justify-content: space-between; gap: 8px 24px; padding-top: 16px; font-size: var(--step-small); }
-.extension-example { margin-top: 28px; }
-.extension-example:not([open]) .extension-content { display: none; }
-.extension-example > summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 88px; padding: 20px 24px; background: var(--bg); cursor: pointer; list-style: none; }
-.extension-example > summary::-webkit-details-marker { display: none; }
-.extension-summary-title strong { display: block; font-size: var(--step-body); font-weight: 400; }
-.extension-summary-title > span { display: block; font-size: var(--step-small); margin-top: 4px; }
-.extension-example > summary > svg { transition: transform 180ms var(--ease-out); }
-.extension-example[open] > summary > svg { transform: rotate(45deg); }
-.extension-content { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 48px; align-items: start; padding-top: 40px; }
-.extension-copy p { margin: 16px 0; }
-.extension-code { min-width: 0; background: var(--tool); color: var(--tool-ink); }
-.code-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; background: var(--tool-surface); font-size: var(--step-small); }
-.extension-code pre { margin: 0; padding: 24px; overflow: auto; font-size: var(--step-small); line-height: 1.9; }
 .no-script-note { margin-top: 24px; font-size: 16px; }
 
 /* Unequal, complete views of the product; no invented dashboard art. */
@@ -333,30 +318,22 @@ tr.proof-row { border-top: 1px solid var(--surface); }
 .button-lime:hover { background: var(--bg); }
 .start-terminal { min-width: 0; background: var(--tool-surface); }
 .terminal-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px 8px; font-size: var(--step-small); color: var(--tool-muted); }
-.command-tabs { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
-.command-tabs > button { min-height: 44px; padding: 10px 12px; font-size: var(--step-small); }
-.command-tabs > button[aria-selected="true"] { background: var(--tool-active); color: var(--tool-green); }
-.command-tabs > button:hover { background: var(--tool-line); }
-.command-tabs .copy-command { display: grid; place-items: center; width: 44px; margin-left: auto; padding: 0; }
 /* Text keeps its contrast while the active surface travels between targets. */
-.component-tabs, .replay-tabs, .command-tabs { position: relative; isolation: isolate; }
+.component-tabs, .replay-tabs { position: relative; isolation: isolate; }
 .selection-indicator { position: absolute; inset: 0 auto auto 0; width: 1px; height: 1px; /* taste-skill-ignore: GSAP scales this surface to the selected button's full bounds. */ pointer-events: none; background: var(--selection-color, var(--tool-active)); transform-origin: left top; z-index: -1; }
 .has-selection-indicator > [role="tab"][aria-selected="true"] { background: transparent; }
 .component-tabs.has-selection-indicator > [role="tab"][aria-selected="true"]:hover { background: transparent; }
 .command-panel { padding: 12px 24px 24px; }
-.terminal-comment { font-size: var(--step-small); color: var(--tool-muted); }
-.command-panel pre { margin: 20px 0; font-size: var(--step-small); line-height: 2; overflow: auto; }
-.terminal-address { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--step-small); }
-.terminal-address svg { width: 16px; height: 16px; }
-.terminal-prerequisites { margin-top: 18px; font-size: var(--step-small); color: var(--tool-muted); }
-.terminal-next { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--step-small); }
-.terminal-next button, .terminal-evidence { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--tool-green); }
+.soon-status { display: flex; align-items: center; gap: 10px; font-size: var(--step-body); color: var(--tool-green); }
+.soon-list { display: grid; gap: 14px; margin: 24px 0; padding: 0; list-style: none; font-size: var(--step-small); }
+.soon-list li { display: flex; align-items: flex-start; gap: 12px; }
+.soon-list svg { flex-shrink: 0; width: 18px; height: 18px; margin-top: 3px; color: var(--tool-muted); }
+.terminal-evidence { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--tool-green); }
 .terminal-evidence { font-size: var(--step-small); }
 .terminal-bottom { display: flex; align-items: center; gap: 10px; padding: 0 24px 24px; font-size: var(--step-small); }
 .terminal-bottom svg { color: var(--tool-green); }
 .terminal-bottom code { overflow-wrap: anywhere; }
 .requirements { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 16px 32px; font-size: var(--step-small); }
-.requirements p { margin-left: auto; max-width: 60ch; }
 
 /* Questions indent from the wide title; the name closes the page. */
 .faq-section { padding-block: 88px; }
@@ -398,7 +375,6 @@ tr.proof-row { border-top: 1px solid var(--surface); }
 .preview-dialog-media.is-zoomed picture { width: 200%; }
 .preview-dialog-media.is-zoomed { cursor: grab; }
 .preview-dialog-media.is-panning { cursor: grabbing; user-select: none; }
-.toast { position: fixed; z-index: 80; left: 50%; bottom: 24px; transform: translateX(-50%); padding: 12px 20px; max-width: calc(100% - 32px); background: var(--field-mint); color: var(--ink); font-size: var(--step-small); }
 
 @media (min-width: 1800px) {
   :root { --step-display: 168px; }
@@ -461,15 +437,12 @@ tr.proof-row { border-top: 1px solid var(--surface); }
   .component-panel { padding-block: 12px; }
   .module-details dl { margin-top: 24px; }
   .module-details h3 { margin-bottom: 16px; }
-  .component-bottom { align-items: flex-start; }
-  .extension-content { grid-template-columns: 1fr; gap: 24px; }
   .product-gallery { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 32px; }
   .settings-fragment { margin-top: 64px; }
   .record-notes { grid-template-columns: 1fr; margin-top: 32px; gap: 24px; }
   .start-section { padding-block: 64px 40px; }
   .start-layout { grid-template-columns: 1fr; gap: 40px; }
   .start-copy > p { max-width: 44ch; }
-  .requirements p { margin-left: 0; }
   .faq-list { width: 78%; margin-top: 40px; }
   .footer-top p { font-size: var(--step-body); }
   .footer-top, .footer-top nav { gap: 20px; }
@@ -554,20 +527,12 @@ tr.proof-row { border-top: 1px solid var(--surface); }
   .module-details h3 { font-size: var(--step-lead); }
   .module-details dl { grid-template-columns: 1fr; gap: 22px; }
   .independent-check { margin-top: 24px; }
-  .component-bottom { display: block; padding-top: 28px; }
-  .component-bottom .text-link { margin-top: 12px; }
   .module-showcase { margin-top: 32px; }
   .module-preview-toolbar { align-items: flex-start; flex-direction: column; gap: 12px; margin-bottom: 16px; }
   .module-preview-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .module-preview-tabs button { padding-inline: 10px; }
   .module-preview-link img { aspect-ratio: 390 / 844; }
   .module-showcase figcaption { flex-direction: column; font-size: 13px; }
-  .extension-example > summary { padding: 18px; }
-  .extension-summary-title strong { font-size: 16px; }
-  .extension-summary-title > span { font-size: 13px; }
-  .extension-content { padding-top: 28px; }
-  .code-heading { padding-inline: 18px; font-size: 13px; }
-  .extension-code pre { padding: 18px; font-size: 13px; }
   .product-gallery { display: block; }
   .product-fragment figcaption { padding-top: 20px; }
   .product-fragment h3 { font-size: var(--step-lead); }
@@ -588,18 +553,11 @@ tr.proof-row { border-top: 1px solid var(--surface); }
   .start-links .button { font-size: 16px; }
   .start-links .text-link { font-size: 14px; }
   .terminal-heading { padding-inline: 16px; }
-  .command-tabs { gap: 0; padding-inline: 8px; }
-  .command-tabs > button { padding: 10px 8px; font-size: 13px; }
-  .command-tabs .copy-command { width: 40px; flex-shrink: 0; }
   .command-panel { padding-inline: 16px; }
-  .command-panel pre, .terminal-comment, .terminal-address, .terminal-prerequisites { font-size: 13px; }
-  .terminal-next { align-items: flex-start; font-size: 13px; }
-  .terminal-next > span { flex: 1; }
-  .terminal-next > button { flex-shrink: 0; }
+  .soon-list { font-size: 13px; }
   .terminal-bottom { padding-inline: 16px; font-size: 13px; align-items: flex-start; }
   .terminal-bottom svg { margin-top: 3px; }
   .requirements { gap: 12px 24px; font-size: 14px; }
-  .requirements p { font-size: 14px; }
   .faq-list { width: 100%; margin-top: 32px; }
   .faq-list summary { font-size: 20px; gap: 16px; }
   .faq-list details + details { margin-top: 20px; }
@@ -636,8 +594,6 @@ tr.proof-row { border-top: 1px solid var(--surface); }
   .component-tab { gap: 8px; }
   .component-tab strong { font-size: 14px; }
   .component-number { min-width: 22px; }
-  .command-tabs > button { padding-inline: 6px; }
-  .command-tabs .copy-command { width: 32px; }
 }
 /* App framing: the real workbench screenshot sits in a rounded window with a soft lift; buttons are rounded. */
 .workbench-image-link { border: 1px solid #e3e0d5; border-radius: 16px; overflow: hidden; box-shadow: 0 2px 4px rgb(41 40 36 / 4%), 0 24px 48px -24px rgb(41 40 36 / 22%); transition: box-shadow 220ms var(--ease-out), transform 220ms var(--ease-out); }

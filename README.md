@@ -7,7 +7,7 @@
 <p><strong>让数学 Agent 构造证明，由 Lean 独立验收完整原题。</strong></p>
 <p>面向数学 Agent 研究者与 Lean 开发者的可组合运行时。</p>
 
-[![Research Preview](https://img.shields.io/badge/status-research%20preview-0f766e.svg)](docs/releases/v0.1.0.md) [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](docs/web-workbench.md) [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Research Preview](https://img.shields.io/badge/status-research%20preview-0f766e.svg)](docs/releases/v0.1.0.md) [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](docs/web-workbench.md) [![License: proprietary](https://img.shields.io/badge/license-proprietary-555.svg)](LICENSE)
 
 <p>
   <a href="https://likc1606.github.io/theorem-os/"><strong>产品官网</strong></a> ·
@@ -267,7 +267,7 @@ bun run build
 
 Copyright 2026 TheoremOS contributors。
 
-本项目从 DeepScientist 的数学证明运行时抽取，使用 [AGPL-3.0-only](LICENSE)；来源与第三方声明见 [NOTICE](NOTICE)。保留独立许可证声明的文件遵循其各自条款。
+本项目从 DeepScientist 的数学证明运行时抽取，闭源，保留所有权利（见 [LICENSE](LICENSE)）；来源与第三方声明见 [NOTICE](NOTICE)。带 `SPDX-License-Identifier: Apache-2.0` 的文件仍按 [Apache-2.0](LICENSES/Apache-2.0.txt) 授权，其他保留独立许可证声明的文件遵循各自条款。
 
 项目原名 DeepScientist Math，保留 `deepscientist-math` CLI 别名、`bun run math` 以及已有环境变量和配置路径，方便继续使用已有实验。
 

@@ -244,13 +244,6 @@ try {
     });
     await tick(page, 500);
     await assertSelectionIndicator(page, '.component-tabs');
-    await page.locator('#command-workbench').evaluate(node => node.scrollIntoView({ behavior: 'instant', block: 'center' }));
-    await tick(page);
-    await page.locator('#command-workbench').focus();
-    await page.keyboard.press('End');
-    await tick(page, 500);
-    await assertSelectionIndicator(page, '.command-tabs');
-    assert.equal(await page.locator('#replay-panel').isVisible(), true);
     await assertWidth(page);
 
     if (viewport.width === 1440 && reducedMotion === 'no-preference') {
@@ -287,7 +280,7 @@ try {
       for (const width of [768, 390, 1440]) {
         await page.setViewportSize({ width, height: 900 });
         await tick(page, 500);
-        for (const selector of ['.component-tabs', '.replay-tabs', '.command-tabs']) {
+        for (const selector of ['.component-tabs', '.replay-tabs']) {
           await assertSelectionIndicator(page, selector);
         }
         await assertWidth(page);

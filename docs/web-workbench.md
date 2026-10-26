@@ -398,4 +398,4 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/client/activityReader.ts` | 活动筛选、跟随、阅读位置与本地导出 |
 | `src/math/leanTask.ts` | 将输入源码固定为独立 Lean 题目 |
 
-工作台遵循仓库的 AGPL-3.0-only 许可证；打包的第三方库适用各自许可。GSAP 的版权与许可链接随官网和工作台保存在 `assets/licenses/gsap-NOTICE.txt`。
+工作台遵循仓库的专有许可证（见 LICENSE）；打包的第三方库适用各自许可。GSAP 的版权与许可链接随官网和工作台保存在 `assets/licenses/gsap-NOTICE.txt`。

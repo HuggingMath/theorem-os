@@ -175,8 +175,9 @@ function checkedFile(root: string, relative: string, expected: string): Buffer {
 
 export function buildSiteCatalog(root: string, archiveRevision: string): ArchiveCatalog {
   commit.parse(archiveRevision);
-  const repository = 'https://github.com/LikC1606/theorem-os';
-  const sourceUrl = (relative: string) => `${repository}/blob/${archiveRevision}/${relative}`;
+  // Sources link to the public site repository, which mirrors accepted/ and the referenced in-progress files.
+  const repository = 'https://github.com/LikC1606/theorem-os-site';
+  const sourceUrl = (relative: string) => `${repository}/blob/main/${relative}`;
   const source = (relative: string, name: string, expected: string): ArchiveSource => {
     const code = checkedFile(root, relative, expected).toString('utf8');
     return { name, path: relative, url: sourceUrl(relative), sha256: expected,
@@ -194,7 +195,7 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
     if (!sources.some(file => file.name === 'Submission.lean')) throw new Error(`Missing proof source: ${entry.problem_id}`);
     const record: ArchiveRecord = {
       id: entry.problem_id, ...description(entry.problem_id), status: entry.status, model: entry.model,
-      updatedAt: entry.result_reported_at, archiveUrl: `${repository}/tree/${archiveRevision}/${base}`, sources,
+      updatedAt: entry.result_reported_at, archiveUrl: `${repository}/tree/main/${base}`, sources,
       official: {
         statementRevision: entry.statement_revision, submissionUrl: entry.submission_url,
         resultUrl: entry.result_url, resultBody: entry.result_body,
@@ -238,7 +239,7 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
     if (!sources.length) throw new Error(`Missing snapshot source: ${entry.problemId}`);
     records.push({
       id: entry.problemId, ...description(entry.problemId), status: snapshot.status, model: manifest.model,
-      updatedAt: manifest.capturedAt, archiveUrl: `${repository}/tree/${archiveRevision}/${base}`, sources,
+      updatedAt: manifest.capturedAt, archiveUrl: `${repository}/tree/main/${base}`, sources,
       snapshot: {
         runId: entry.runId, phase: entry.phase, turns: entry.turns, workers: entry.workers,
         taskStatuses: manifest.taskStatuses,

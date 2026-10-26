@@ -7,7 +7,7 @@ const element = <T extends HTMLElement = HTMLElement>(id: string): T => {
   if (!result) throw new Error(`Missing feedback element: ${id}`);
   return result as T;
 };
-const issueDestination = 'https://github.com/LikC1606/theorem-os/issues/new';
+const issueDestination = 'https://github.com/LikC1606/theorem-os-site/issues/new';
 const kinds = {
   bug: { name: '问题反馈', prefix: '[Bug]', hint: '可附上复现步骤、错误信息与预期结果。', placeholder: '发生了什么？如何复现？你期望的结果是什么？' },
   feature: { name: '功能建议', prefix: '[Feature]', hint: '描述使用场景、希望的改进与它能解决的问题。', placeholder: '你希望增加或改进什么？会在什么场景下使用？' },

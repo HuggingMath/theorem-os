@@ -1,14 +1,14 @@
 import {
-  createIcons, ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Code2,
-  Copy, Download, ExternalLink, FileCode2, FileJson2, Files, FolderOpen, GitFork, Globe, History, Info,
-  Maximize2, Menu, Network, Pause, Play, Plus, RotateCcw, ScanLine, ShieldCheck, Terminal, X, ZoomIn, ZoomOut,
+  createIcons, ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
+  Download, ExternalLink, FileCode2, FileJson2, Files, FolderOpen, GitFork, Globe, History, Info,
+  KeyRound, Maximize2, Menu, Network, Pause, Play, Plus, RotateCcw, ScanLine, ShieldCheck, X, ZoomIn, ZoomOut,
 } from 'lucide';
 import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
 
-const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Code2, Copy,
-  Download, ExternalLink, FileCode2, FileJson2, Files, FolderOpen, GitFork, Globe, History, Info, Maximize2, Menu, Network, Pause, Play, Plus,
-  RotateCcw, ScanLine, ShieldCheck, Terminal, X, ZoomIn, ZoomOut };
+const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
+  Download, ExternalLink, FileCode2, FileJson2, Files, FolderOpen, GitFork, Globe, History, Info, KeyRound, Maximize2, Menu, Network, Pause, Play, Plus,
+  RotateCcw, ScanLine, ShieldCheck, X, ZoomIn, ZoomOut };
 const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
 const element = <T extends HTMLElement = HTMLElement>(selector: string): T => {
   const result = document.querySelector<T>(selector);
@@ -369,59 +369,6 @@ previewMedia.addEventListener('lostpointercapture', () => {
   previewMedia.classList.remove('is-panning');
 });
 
-const commandTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-command]'));
-const commandIndicator = createSelectionIndicator(element('.command-tabs'), reducedMotion);
-type Command = 'workbench' | 'install' | 'replay';
-const commandLabels: Record<Command, string> = {
-  workbench: '复制部署工作台命令', install: '复制获取项目命令', replay: '复制本地回放命令',
-};
-let command: Command = 'workbench';
-function selectCommand(id: Command, focus = false) {
-  const changed = command !== id;
-  command = id;
-  for (const tab of commandTabs) {
-    const selected = tab.dataset.command === id;
-    tab.setAttribute('aria-selected', String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-    if (selected && focus) tab.focus();
-    element(`#${tab.dataset.command}-panel`).hidden = !selected;
-  }
-  element('.copy-command').setAttribute('aria-label', commandLabels[id]);
-  commandIndicator.update();
-  if (changed) animateSelection([element(`#${id}-panel`)], 5);
-}
-commandTabs.forEach(tab => tab.addEventListener('click', () => selectCommand(tab.dataset.command as typeof command)));
-element('.command-tabs').addEventListener('keydown', event => handleTabKeys(event, commandTabs, tab => selectCommand(tab.dataset.command as typeof command, true)));
-element('[data-next-command]').addEventListener('click', () => selectCommand('replay', true));
-
-let toastTimer: ReturnType<typeof setTimeout>;
-function toast(message: string) {
-  const target = element('#toast');
-  target.textContent = message;
-  target.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { target.hidden = true; }, 2600);
-}
-async function copy(text: string) {
-  try {
-    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-    else {
-      const field = document.createElement('textarea');
-      field.value = text;
-      field.style.cssText = 'position:fixed;left:-9999px;top:0';
-      document.body.append(field);
-      field.select();
-      const copied = document.execCommand('copy');
-      field.remove();
-      if (!copied) throw new Error('Clipboard unavailable');
-      element<HTMLButtonElement>('.copy-command').focus({ preventScroll: true });
-    }
-    toast('命令已复制');
-  } catch {
-    toast('未能复制，请在代码区选中命令后复制');
-  }
-}
-element('.copy-command').addEventListener('click', () => void copy(element(`#${command}-panel code`).textContent ?? ''));
 
 const menuButton = element<HTMLButtonElement>('.menu-toggle');
 const mobileNav = element('#mobile-nav');
@@ -437,7 +384,7 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape' && !m
 document.addEventListener('click', event => { if (!(event.target as HTMLElement).closest('.site-header') && !mobileNav.hidden) setMenu(false); });
 const desktop = matchMedia('(min-width: 901px)');
 desktop.addEventListener('change', () => { if (desktop.matches) setMenu(false); });
-const indicators = [componentIndicator, replayIndicator, commandIndicator];
+const indicators = [componentIndicator, replayIndicator];
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) indicators.forEach(indicator => indicator.update(false));
 });

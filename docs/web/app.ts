@@ -1,17 +1,17 @@
 import {
-  createIcons, ArrowDownWideNarrow, ArrowUpRight, BadgeCheck, Blocks, BookOpen,
-  CalendarDays, Check, ChevronRight, CircleCheck, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
+  createIcons, ArrowDownWideNarrow, ArrowUpRight, BadgeCheck,
+  CalendarDays, Check, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
   Files, FlaskConical, GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2,
-  ListStart, MessageCircle, Search, SearchX, ShieldCheck, Tag, Terminal,
+  ListStart, MessageCircle, Search, SearchX, ShieldCheck,
 } from 'lucide';
 import catalog from 'virtual:archive';
 import type { ArchiveRecord, ArchiveSource } from './types';
 
 const iconSet = {
-  ArrowDownWideNarrow, ArrowUpRight, BadgeCheck, Blocks, BookOpen, CalendarDays, Check,
-  ChevronRight, CircleCheck, Code, Copy, Download, FileCheck2, FileClock, FileCode2, Files, FlaskConical,
+  ArrowDownWideNarrow, ArrowUpRight, BadgeCheck, CalendarDays, Check,
+  ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2, Files, FlaskConical,
   GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2, ListStart, MessageCircle, Search,
-  SearchX, ShieldCheck, Tag, Terminal,
+  SearchX, ShieldCheck,
 };
 const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
@@ -34,19 +34,6 @@ const sourceBindingLabels = {
 };
 const iconButton = (action: string, label: string, name: string, value?: string) =>
   `<button type="button" class="icon-button" data-action="${action}" ${value ? `data-value="${html(value)}"` : ''} aria-label="${label}" title="${label}">${icon(name)}</button>`;
-const installCommand = [
-  'git clone https://github.com/LikC1606/theorem-os.git',
-  'cd theorem-os',
-  'bun install --frozen-lockfile',
-].join('\n');
-const replayCommand = [
-  'elan toolchain install leanprover/lean4:v4.33.0',
-  'bun run math doctor --lean-only',
-  '',
-  'export THEOREMOS_CASE="$PWD/../theorem-os-runs/first-replay"',
-  'bun run math example replay --dir "$THEOREMOS_CASE"',
-  'bun run math inspect --run "$THEOREMOS_CASE/result.json"',
-].join('\n');
 
 type Filter = 'all' | 'accepted' | 'progress';
 type Sort = 'verified' | 'recent' | 'title';
@@ -306,8 +293,6 @@ document.addEventListener('click', event => {
     case 'quickstart': state.view = 'quickstart'; writeLocation(true); render(); break;
     case 'reset': state.query = ''; state.filter = 'all'; render(); element('#search').focus(); break;
     case 'copy-link': void copy(location.href); break;
-    case 'copy-install': void copy(installCommand); break;
-    case 'copy-replay': void copy(replayCommand); break;
     case 'copy-hash': void copy(target.dataset.value ?? ''); break;
     case 'jump-declaration': if (record) jumpToDeclaration(record); break;
     case 'copy-source': if (record) void copy(currentSource(record).code); break;
@@ -375,9 +360,5 @@ const counts: Record<string, string> = {
   '#snapshot-date': date(catalog.snapshotAt),
 };
 for (const [selector, value] of Object.entries(counts)) element(selector).textContent = value;
-element('#archive-revision').textContent = catalog.archiveRevision.slice(0, 7);
-element<HTMLAnchorElement>('#archive-revision').href = `${catalog.repository}/commit/${catalog.archiveRevision}`;
-element('#install-command').textContent = installCommand;
-element('#replay-command').textContent = replayCommand;
 readLocation();
 render();
