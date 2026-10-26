@@ -6,10 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mathLocalModuleGraph, type MathLocalModule } from '../src/math/mathConstructionSources';
 import { createLeanModuleBuilder, leanModuleClosure, type LeanModuleHostCache } from '../src/math/leanModuleBuild';
 import { mathDigest } from '../src/math/mathRuntimeIo';
+import { newestLeanBinary } from './helpers/lean';
 
-const toolchains = path.join(os.homedir(), '.elan', 'toolchains');
-const lean = fs.existsSync(toolchains) ? fs.readdirSync(toolchains).toSorted().reverse()
-  .map(name => path.join(toolchains, name, 'bin', 'lean')).find(file => fs.existsSync(file)) : undefined;
+const lean = newestLeanBinary();
 
 const roots: string[] = [];
 const temporary = (prefix: string) => {

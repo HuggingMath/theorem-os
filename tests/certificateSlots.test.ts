@@ -18,10 +18,9 @@ import { assertSolverSources, commitSolverSources, committedSource, git, readSol
   type SolverProblem } from '../src/solver/problem';
 import type { CooperativeTask } from '../src/solver/cooperation';
 import { temporaryDirectory } from './helpers/files';
+import { newestLeanBinary } from './helpers/lean';
 
-const toolchains = path.join(os.homedir(), '.elan', 'toolchains');
-const lean = fs.existsSync(toolchains) ? fs.readdirSync(toolchains).toSorted().reverse()
-  .map(name => path.join(toolchains, name, 'bin', 'lean')).find(file => fs.existsSync(file)) : undefined;
+const lean = newestLeanBinary();
 const original = 'namespace Submission\ntheorem bound : ∀ x : Int, -3 ≤ x → x ≤ 3 → 0 ≤ x * x := by sorry\nend Submission\n';
 const proof = 'by\n  intro x h h\'\n  exact KernelCompute.intLe_eq_true.mp (Submission.Cert.Sq.holds x h h\')';
 const slots = certificateSlotFiles(2);

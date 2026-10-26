@@ -5,11 +5,10 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { planKernelCertificate, writeKernelCertificate } from '../src/math/kernelCertificate';
 import { inspectLeanDeclarationRegions } from '../src/math/leanSource';
+import { newestLeanBinary } from './helpers/lean';
 
 const library = fs.readFileSync(path.join(__dirname, '../resources/lean/KernelCompute.lean'), 'utf8');
-const toolchains = path.join(os.homedir(), '.elan', 'toolchains');
-const lean = fs.existsSync(toolchains) ? fs.readdirSync(toolchains).toSorted().reverse()
-  .map(name => path.join(toolchains, name, 'bin', 'lean')).find(file => fs.existsSync(file)) : undefined;
+const lean = newestLeanBinary();
 const schema = 'theorem-os.kernel-certificate.v1';
 const box = (extra: Record<string, unknown> = {}) => ({ schema, claim: 'box', name: 'Cert.Box',
   check: 'KernelCompute.intLe 0 (x*x - 2*x*y + 2*y*y)', pointsPerChunk: 400, kernelModule: 'Cert/Kernel.lean',

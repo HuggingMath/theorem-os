@@ -9,13 +9,12 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
 import type { SolverProblem } from '../src/solver/problem';
 import type { CooperativeTask } from '../src/solver/tasks';
+import { newestLeanBinary } from './helpers/lean';
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock('../src/math/verifier', () => ({ runMathematicsSandboxedCommand: run,
   formalVerificationToolIdentity: () => 'a'.repeat(64) }));
-const toolchains = path.join(os.homedir(), '.elan', 'toolchains');
-const lean = fs.existsSync(toolchains) ? fs.readdirSync(toolchains).toSorted().reverse()
-  .map(name => path.join(toolchains, name, 'bin', 'lean')).find(file => fs.existsSync(file)) : undefined;
+const lean = newestLeanBinary();
 
 describe('type query payloads', () => {
   it('passes the requested type only as a string to Lean term parsing', () => {
