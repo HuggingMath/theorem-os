@@ -1,12 +1,13 @@
 import type { WebObservation } from '../collaboration';
 import { createElement, escapeHtml as h, observedTime } from './collaborationUi';
+import { t } from '../i18n';
 
 const sections = [
-  ['overview', '进展', '.collab-research-overview'], ['tasks', '任务', '.collab-layout'],
-  ['reviews', '审阅', '.collab-reviews'], ['changes', '变化', '.collab-math-changes'],
-  ['agents', 'Agent', '.collab-agents'], ['deliveries', '交付', '.collab-deliveries'],
-  ['guidance', '指导', '.collab-guidance'], ['records', '记录', '[data-collab-records]'],
-  ['knowledge', '知识', '.collab-knowledge'],
+  ['overview', t('进展'), '.collab-research-overview'], ['tasks', t('任务'), '.collab-layout'],
+  ['reviews', t('审阅'), '.collab-reviews'], ['changes', t('变化'), '.collab-math-changes'],
+  ['agents', 'Agent', '.collab-agents'], ['deliveries', t('交付'), '.collab-deliveries'],
+  ['guidance', t('指导'), '.collab-guidance'], ['records', t('记录'), '[data-collab-records]'],
+  ['knowledge', t('知识'), '.collab-knowledge'],
 ] as const;
 export type CollaborationSection = typeof sections[number][0];
 type Position = { node: HTMLElement; top: number; left: number; key?: string };
@@ -25,10 +26,10 @@ export class CollaborationNavigation {
   };
 
   constructor(private surface: HTMLElement, runId: string, guide: () => void) {
-    this.element.setAttribute('aria-label', '协作区导航');
+    this.element.setAttribute('aria-label', t('协作区导航'));
     this.element.innerHTML = `<div class="collab-nav-links">${sections.map(([id, title]) => `<button type="button" data-collab-jump="${id}" aria-controls="collab-${id}-${h(runId)}"><span>${title}</span><small data-collab-nav-count="${id}"></small></button>`).join('')}</div>
-      <label class="collab-nav-picker"><span class="sr-only">跳转协作区域</span><select data-collab-section-picker>${sections.map(([id, title]) => `<option value="${id}">${title}</option>`).join('')}</select></label>
-      <span class="collab-sync" data-collab-sync></span><button type="button" class="button" data-collab-nav-guide>提供指导</button>`;
+      <label class="collab-nav-picker"><span class="sr-only">${t('跳转协作区域')}</span><select data-collab-section-picker>${sections.map(([id, title]) => `<option value="${id}">${title}</option>`).join('')}</select></label>
+      <span class="collab-sync" data-collab-sync></span><button type="button" class="button" data-collab-nav-guide>${t('提供指导')}</button>`;
     for (const [id, , selector] of sections) {
       const section = surface.querySelector<HTMLElement>(selector)!;
       section.id = `collab-${id}-${runId}`; section.dataset.collabSection = id;
@@ -74,9 +75,9 @@ export class CollaborationNavigation {
       picker.querySelector(`option[value="${id}"]`)!.textContent = `${title}${count === undefined ? '' : ` · ${count}`}`;
     }
     const sync = this.element.querySelector<HTMLElement>('[data-collab-sync]')!;
-    sync.textContent = connected ? observation ? `观察 #${observation.sequence}` : '等待观察' : '连接中断';
+    sync.textContent = connected ? observation ? t('观察 #{0}', observation.sequence) : t('等待观察') : t('连接中断');
     sync.dataset.connected = String(connected);
-    sync.title = connected ? observation ? observedTime(observation.observedAt) : '等待运行时观察' : '已保留最近观察和当前草稿';
+    sync.title = connected ? observation ? observedTime(observation.observedAt) : t('等待运行时观察') : t('已保留最近观察和当前草稿');
   }
 
   go(id: CollaborationSection) {
@@ -110,7 +111,7 @@ export class CollaborationNavigation {
     const positions = [...target.querySelectorAll<HTMLElement>('*')].filter(node => node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)
       .map(node => ({ node, top: node.scrollTop, left: node.scrollLeft, key: node.dataset.focusKey }));
     this.origin = { section, top: this.viewport!.scrollTop, left: this.viewport!.scrollLeft, positions, focus, focusKey: focus?.dataset.focusKey };
-    this.returnButton.textContent = `返回${sections.find(([id]) => id === section)![1]}`;
+    this.returnButton.textContent = t('返回{0}', sections.find(([id]) => id === section)![1]);
     this.returnButton.hidden = false;
     return true;
   }

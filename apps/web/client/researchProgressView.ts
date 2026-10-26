@@ -2,6 +2,7 @@ import type { WebCheckReceipt, WebDelivery, WebObservation } from '../collaborat
 import { codeBlock, createElement, detailBlock, escapeHtml as h, factList, observedTime, patchSection } from './collaborationUi';
 import { taskSourceKey } from './taskSourceComparison';
 import { termHint } from './glossary';
+import { t } from '../i18n';
 
 export function recordedTask(observation: WebObservation, id: string, version?: string) {
   const task = observation.inspection.tasks.find(task => task.id === id && (!version || task.version === version));
@@ -11,11 +12,11 @@ export function recordedTask(observation: WebObservation, id: string, version?: 
 }
 
 export const taskCheckKey = (check: WebCheckReceipt) => JSON.stringify([check.id, check.taskId, check.taskVersion, check.commit, check.sourceDigest, check.environmentDigest]);
-const kindLabels: Record<string, string> = { progress: '研究进展', research: '研究发现', proof: '证明交付', review: '审阅', backtranslation: '声明回译', 'statement-review': '声明审阅', failure: '失败报告' };
-const statusLabels: Record<string, string> = { active: '生效中', advisory: '提示性材料', conditional: '有条件结果', verified: '记录为已验证', failed: '失败', superseded: '已被替代', accepted: '审阅接受', changes_requested: '请求修改', open: '待解决', parked: '已停放', reopened: '已重开' };
+const kindLabels: Record<string, string> = { progress: t('研究进展'), research: t('研究发现'), proof: t('证明交付'), review: t('审阅'), backtranslation: t('声明回译'), 'statement-review': t('声明审阅'), failure: t('失败报告') };
+const statusLabels: Record<string, string> = { active: t('生效中'), advisory: t('提示性材料'), conditional: t('有条件结果'), verified: t('记录为已验证'), failed: t('失败'), superseded: t('已被替代'), accepted: t('审阅接受'), changes_requested: t('请求修改'), open: t('待解决'), parked: t('已停放'), reopened: t('已重开') };
 const label = (value: string) => statusLabels[value] ?? value;
-const proofLabels: Record<string, string> = { none: '尚无证明', conditional: '有条件结果', checked: '已记录检查', stale: '旧版本证据', unverified: '未验证' };
-const scopeLabels: Record<string, string> = { 'assigned-local-inference': '当前任务的局部推理' };
+const proofLabels: Record<string, string> = { none: t('尚无证明'), conditional: t('有条件结果'), checked: t('已记录检查'), stale: t('旧版本证据'), unverified: t('未验证') };
+const scopeLabels: Record<string, string> = { 'assigned-local-inference': t('当前任务的局部推理') };
 
 /** Browse recorded mathematical frontiers and immutable Agent publications without inferring acceptance. */
 export class ResearchProgressView {
@@ -28,11 +29,11 @@ export class ResearchProgressView {
   private query: HTMLInputElement;
 
   constructor(runId: string) {
-    this.overview.innerHTML = `<div class="collab-section-heading"><span class="term-heading"><h3>证明前沿</h3>${termHint('frontier')}</span><span class="collab-help">记录的局部闭合不代表原题通过 S3 验收</span></div><div data-research-frontier class="collab-frontier-list"></div><div data-research-waiting></div><div class="collab-section-heading collab-research-blocker-heading"><span class="term-heading"><h3>数学阻塞</h3>${termHint('blocker')}</span><span class="collab-help">作用范围与重开条件</span></div><div data-research-blockers class="collab-blocker-list"></div>`;
+    this.overview.innerHTML = `<div class="collab-section-heading"><span class="term-heading"><h3>${t('证明前沿')}</h3>${termHint('frontier')}</span><span class="collab-help">${t('记录的局部闭合不代表原题通过 S3 验收')}</span></div><div data-research-frontier class="collab-frontier-list"></div><div data-research-waiting></div><div class="collab-section-heading collab-research-blocker-heading"><span class="term-heading"><h3>${t('数学阻塞')}</h3>${termHint('blocker')}</span><span class="collab-help">${t('作用范围与重开条件')}</span></div><div data-research-blockers class="collab-blocker-list"></div>`;
     this.element.setAttribute('data-research-deliveries', '');
-    this.element.innerHTML = `<div class="collab-section-heading"><h3 tabindex="-1" data-delivery-heading>研究交付</h3><span class="collab-help" data-delivery-count></span></div><p class="collab-help collab-delivery-intro">Agent 的交付内容、所用前提与未完成义务；检查状态以对应材料的回执为准。</p>
-      <div class="collab-delivery-filters"><label for="delivery-producer-${h(runId)}">Agent<select id="delivery-producer-${h(runId)}" data-delivery-producer><option value="">全部 Agent</option></select></label><label for="delivery-task-${h(runId)}">任务<select id="delivery-task-${h(runId)}" data-delivery-task><option value="">全部任务</option></select></label><label for="delivery-query-${h(runId)}">检索<input type="search" id="delivery-query-${h(runId)}" data-delivery-query placeholder="搜索声明、发现或交付 ID"></label><button type="button" class="button" data-delivery-clear>清除筛选</button></div>
-      <div class="collab-delivery-layout"><div class="collab-delivery-list" data-delivery-list tabindex="0" aria-label="本次观察中的研究交付"></div><div class="collab-delivery-detail" data-delivery-detail></div></div>`;
+    this.element.innerHTML = `<div class="collab-section-heading"><h3 tabindex="-1" data-delivery-heading>${t('研究交付')}</h3><span class="collab-help" data-delivery-count></span></div><p class="collab-help collab-delivery-intro">${t('Agent 的交付内容、所用前提与未完成义务；检查状态以对应材料的回执为准。')}</p>
+      <div class="collab-delivery-filters"><label for="delivery-producer-${h(runId)}">Agent<select id="delivery-producer-${h(runId)}" data-delivery-producer><option value="">${t('全部 Agent')}</option></select></label><label for="delivery-task-${h(runId)}">${t('任务')}<select id="delivery-task-${h(runId)}" data-delivery-task><option value="">${t('全部任务')}</option></select></label><label for="delivery-query-${h(runId)}">${t('检索')}<input type="search" id="delivery-query-${h(runId)}" data-delivery-query placeholder="${t('搜索声明、发现或交付 ID')}"></label><button type="button" class="button" data-delivery-clear>${t('清除筛选')}</button></div>
+      <div class="collab-delivery-layout"><div class="collab-delivery-list" data-delivery-list tabindex="0" aria-label="${t('本次观察中的研究交付')}"></div><div class="collab-delivery-detail" data-delivery-detail></div></div>`;
     this.producer = this.element.querySelector('[data-delivery-producer]')!;
     this.task = this.element.querySelector('[data-delivery-task]')!;
     this.query = this.element.querySelector('[data-delivery-query]')!;
@@ -49,8 +50,8 @@ export class ResearchProgressView {
   update(observation: WebObservation) {
     if (this.observation && observation.sequence < this.observation.sequence) return;
     this.observation = observation;
-    this.options(this.producer, [...new Set([...(observation.deliveries ?? []).map(item => item.producer), ...observation.inspection.workers.map(worker => worker.id)])], '全部 Agent');
-    this.options(this.task, [...new Set([...(observation.deliveries ?? []).flatMap(item => item.taskId ? [item.taskId] : []), ...observation.inspection.tasks.map(task => task.id)])], '全部任务');
+    this.options(this.producer, [...new Set([...(observation.deliveries ?? []).map(item => item.producer), ...observation.inspection.workers.map(worker => worker.id)])], t('全部 Agent'));
+    this.options(this.task, [...new Set([...(observation.deliveries ?? []).flatMap(item => item.taskId ? [item.taskId] : []), ...observation.inspection.tasks.map(task => task.id)])], t('全部任务'));
     if (!this.selected) this.selected = this.filtered()[0]?.id ?? '';
     this.renderOverview(); this.renderDeliveries();
   }
@@ -68,7 +69,7 @@ export class ResearchProgressView {
 
   private taskLink(id: string, version: string | null | undefined, key: string) {
     const record = version && this.observation ? recordedTask(this.observation, id, version) : undefined;
-    return record ? `<button type="button" class="text-button collab-reference" data-collab-task="${h(id)}" data-task-version="${h(version)}" data-focus-key="${h(key)}" aria-label="查看任务 ${h(id)} 的版本 ${h(version)}">${h(id)}${record.historical ? ' · 历史版本' : ''}</button>` : `<span class="collab-reference">${h(id)} · ${version ? '合同未保留' : '版本未记录'}</span>`;
+    return record ? `<button type="button" class="text-button collab-reference" data-collab-task="${h(id)}" data-task-version="${h(version)}" data-focus-key="${h(key)}" aria-label="${t('查看任务 {0} 的版本 {1}', h(id), h(version))}">${h(id)}${record.historical ? t(' · 历史版本') : ''}</button>` : `<span class="collab-reference">${h(id)} · ${version ? t('合同未保留') : t('版本未记录')}</span>`;
   }
 
   private routeSteps(routeId: string) {
@@ -77,24 +78,24 @@ export class ResearchProgressView {
     const total = route.prerequisiteTaskIds.length, remaining = route.remainingPrerequisiteTaskIds.length;
     const closing = route.closingStatus === 'checked' ? 'done' : route.closingStatus === 'conditional' ? 'partial' : 'waiting';
     const steps: [string, string, string][] = [
-      [total ? remaining ? 'partial' : 'done' : 'done', '前置', total ? `${total - remaining} / ${total} 已就绪${remaining ? ` · 等待 ${route.remainingPrerequisiteTaskIds.join(', ')}` : ''}` : '无额外前置'],
-      [closing, `收束 ${route.closingTaskId}`, proofLabels[route.closingStatus] ?? route.closingStatus],
-      [route.connection === 'closed-by-original-check' ? 'done' : 'waiting', `连通 ${route.targetTaskId}`, route.connection === 'closed-by-original-check' ? '已由原题检查连通' : '等待原题检查'],
+      [total ? remaining ? 'partial' : 'done' : 'done', t('前置'), total ? t('{0} / {1} 已就绪{2}', total - remaining, total, remaining ? t(' · 等待 {0}', route.remainingPrerequisiteTaskIds.join(', ')) : '') : t('无额外前置')],
+      [closing, t('收束 {0}', route.closingTaskId), proofLabels[route.closingStatus] ?? route.closingStatus],
+      [route.connection === 'closed-by-original-check' ? 'done' : 'waiting', t('连通 {0}', route.targetTaskId), route.connection === 'closed-by-original-check' ? t('已由原题检查连通') : t('等待原题检查')],
     ];
-    return `<ol class="collab-route-steps" aria-label="路线 ${h(routeId)} 的记录进度">${steps.map(([state, title, detail]) => `<li data-step-state="${state}"><strong>${h(title)}</strong><span>${h(detail)}</span></li>`).join('')}</ol>`;
+    return `<ol class="collab-route-steps" aria-label="${t('路线 {0} 的记录进度', h(routeId))}">${steps.map(([state, title, detail]) => `<li data-step-state="${state}"><strong>${h(title)}</strong><span>${h(detail)}</span></li>`).join('')}</ol>`;
   }
 
   private renderOverview() {
     const observation = this.observation!, snapshot = observation.inspection.mathematics.snapshot;
-    const refs = (items: { taskId: string; taskDigest: string | null }[], key: string) => items.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `${key}-${index}`)).join('') || '<span class="collab-help">未记录开放前沿</span>';
-    patchSection(this.overview.querySelector('[data-research-frontier]')!, snapshot.goals.map(goal => `<article class="collab-frontier-goal" data-frontier-goal="${h(goal.taskId)}"><div class="collab-section-heading">${this.taskLink(goal.taskId, goal.taskDigest, `goal-${goal.taskId}`)}<span class="badge">${goal.closed ? '记录中局部闭合' : '待推进'}</span></div>${goal.routeCombination === 'any' && goal.alternatives?.length ? `<p class="collab-help">OR：以下路线择一</p>${goal.alternatives.map(route => `<div class="collab-frontier-route"><strong>${h(route.routeId)}</strong>${this.routeSteps(route.routeId)}<div class="collab-reference-list"><span class="collab-reference-caption">当前前沿</span>${refs(route.frontier, `frontier-${goal.taskId}-${route.routeId}`)}</div>${route.missingDependencies.length ? `<p>缺失依赖：${h(route.missingDependencies.join(', '))}</p>` : ''}${route.parkedBy.length ? `<p>停放依据：${h(route.parkedBy.join(', '))}</p>` : ''}</div>`).join('')}` : `<div class="collab-reference-list">${refs(goal.frontier, `frontier-${goal.taskId}`)}</div>`}${goal.missingDependencies.length ? `<p class="collab-help">缺失依赖：${h(goal.missingDependencies.join(', '))}</p>` : ''}</article>`).join('') || `<p class="collab-help">${snapshot.blockers.length ? '本次观察尚无原始目标的证明前沿' : '本次观察尚无原始目标的证明前沿，也没有已记录的数学阻塞'}</p>`);
+    const refs = (items: { taskId: string; taskDigest: string | null }[], key: string) => items.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `${key}-${index}`)).join('') || `<span class="collab-help">${t('未记录开放前沿')}</span>`;
+    patchSection(this.overview.querySelector('[data-research-frontier]')!, snapshot.goals.map(goal => `<article class="collab-frontier-goal" data-frontier-goal="${h(goal.taskId)}"><div class="collab-section-heading">${this.taskLink(goal.taskId, goal.taskDigest, `goal-${goal.taskId}`)}<span class="badge">${goal.closed ? t('记录中局部闭合') : t('待推进')}</span></div>${goal.routeCombination === 'any' && goal.alternatives?.length ? `<p class="collab-help">${t('OR：以下路线择一')}</p>${goal.alternatives.map(route => `<div class="collab-frontier-route"><strong>${h(route.routeId)}</strong>${this.routeSteps(route.routeId)}<div class="collab-reference-list"><span class="collab-reference-caption">${t('当前前沿')}</span>${refs(route.frontier, `frontier-${goal.taskId}-${route.routeId}`)}</div>${route.missingDependencies.length ? `<p>${t('缺失依赖：{0}', h(route.missingDependencies.join(', ')))}</p>` : ''}${route.parkedBy.length ? `<p>${t('停放依据：{0}', h(route.parkedBy.join(', ')))}</p>` : ''}</div>`).join('')}` : `<div class="collab-reference-list">${refs(goal.frontier, `frontier-${goal.taskId}`)}</div>`}${goal.missingDependencies.length ? `<p class="collab-help">${t('缺失依赖：{0}', h(goal.missingDependencies.join(', ')))}</p>` : ''}</article>`).join('') || `<p class="collab-help">${snapshot.blockers.length ? t('本次观察尚无原始目标的证明前沿') : t('本次观察尚无原始目标的证明前沿，也没有已记录的数学阻塞')}</p>`);
     this.overview.dataset.empty = String(!snapshot.goals.length && !snapshot.blockers.length);
     const blockerCount = this.overview.querySelector<HTMLElement>('.collab-research-blocker-heading>.collab-help')!;
     const openBlockers = snapshot.blockers.filter(blocker => !['parked', 'superseded'].includes(blocker.status)).length;
-    const blockerText = snapshot.blockers.length ? `${openBlockers} 项生效 · 共 ${snapshot.blockers.length} 项记录` : '作用范围与重开条件';
+    const blockerText = snapshot.blockers.length ? t('{0} 项生效 · 共 {1} 项记录', openBlockers, snapshot.blockers.length) : t('作用范围与重开条件');
     if (blockerCount.textContent !== blockerText) blockerCount.textContent = blockerText;
-    patchSection(this.overview.querySelector('[data-research-waiting]')!, observation.inspection.waiting ? `<div class="collab-research-waiting"><strong>研究正在等待新的数学输入</strong><p>${h(observation.inspection.waiting.reason)}</p>${factList([['等待任务', observation.inspection.waiting.taskIds.join(', ') || '未记录'], ['关联目标', observation.inspection.waiting.goalIds.join(', ') || '未记录']])}</div>` : '');
-    patchSection(this.overview.querySelector('[data-research-blockers]')!, snapshot.blockers.map(blocker => `<article class="collab-research-blocker" data-research-blocker="${h(blocker.id)}"><div class="collab-section-heading">${this.taskLink(blocker.taskId, blocker.taskDigest, `blocker-${blocker.id}`)}<span class="badge">${h(label(blocker.status))}</span></div><p><code class="collab-blocker-mechanism">${h(blocker.mechanism)}</code></p>${factList([['阻塞 ID', blocker.id], ['作用范围', scopeLabels[blocker.scope] ?? blocker.scope], ['路线', blocker.routeId ?? '未限定路线'], ['证据性质', label(blocker.evidenceStatus)]])}${detailBlock('重开条件', blocker.reopenOn, `reopen-${blocker.id}`)}${blocker.evidenceRefs?.length ? detailBlock('原始提示引用', blocker.evidenceRefs, `blocker-refs-${blocker.id}`) : ''}</article>`).join('') || '<p class="collab-help">本次观察没有已记录的数学阻塞</p>');
+    patchSection(this.overview.querySelector('[data-research-waiting]')!, observation.inspection.waiting ? `<div class="collab-research-waiting"><strong>${t('研究正在等待新的数学输入')}</strong><p>${h(observation.inspection.waiting.reason)}</p>${factList([[t('等待任务'), observation.inspection.waiting.taskIds.join(', ') || t('未记录')], [t('关联目标'), observation.inspection.waiting.goalIds.join(', ') || t('未记录')]])}</div>` : '');
+    patchSection(this.overview.querySelector('[data-research-blockers]')!, snapshot.blockers.map(blocker => `<article class="collab-research-blocker" data-research-blocker="${h(blocker.id)}"><div class="collab-section-heading">${this.taskLink(blocker.taskId, blocker.taskDigest, `blocker-${blocker.id}`)}<span class="badge">${h(label(blocker.status))}</span></div><p><code class="collab-blocker-mechanism">${h(blocker.mechanism)}</code></p>${factList([[t('阻塞 ID'), blocker.id], [t('作用范围'), scopeLabels[blocker.scope] ?? blocker.scope], [t('路线'), blocker.routeId ?? t('未限定路线')], [t('证据性质'), label(blocker.evidenceStatus)]])}${detailBlock(t('重开条件'), blocker.reopenOn, `reopen-${blocker.id}`)}${blocker.evidenceRefs?.length ? detailBlock(t('原始提示引用'), blocker.evidenceRefs, `blocker-refs-${blocker.id}`) : ''}</article>`).join('') || `<p class="collab-help">${t('本次观察没有已记录的数学阻塞')}</p>`);
   }
 
   private filtered() {
@@ -110,14 +111,14 @@ export class ResearchProgressView {
   }
 
   private relationship(delivery: WebDelivery) {
-    if (!delivery.taskId || !delivery.taskDigest) return '任务版本未记录';
+    if (!delivery.taskId || !delivery.taskDigest) return t('任务版本未记录');
     const task = this.observation && recordedTask(this.observation, delivery.taskId, delivery.taskDigest);
-    return task ? task.historical ? '历史任务版本' : '当前任务版本' : '任务合同未保留';
+    return task ? task.historical ? t('历史任务版本') : t('当前任务版本') : t('任务合同未保留');
   }
 
   private renderDeliveries() {
     const items = this.filtered(), observation = this.observation;
-    this.element.querySelector('[data-delivery-count]')!.textContent = `${items.length} / ${observation?.deliveries?.length ?? 0} 条记录`;
+    this.element.querySelector('[data-delivery-count]')!.textContent = t('{0} / {1} 条记录', items.length, observation?.deliveries?.length ?? 0);
     const list = this.element.querySelector<HTMLElement>('[data-delivery-list]')!;
     const top = list.scrollTop, left = list.scrollLeft;
     const anchor = [...list.children].find(node => node.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
@@ -128,19 +129,19 @@ export class ResearchProgressView {
       const item = items[index];
       let row = [...list.children].find(child => (child as HTMLElement).dataset.deliveryRow === item.id) as HTMLElement | undefined;
       if (!row) { row = createElement('article', 'collab-delivery-row'); row.dataset.deliveryRow = item.id; }
-      patchSection(row, `<button type="button" class="collab-delivery-choice${item.id === this.selected ? ' selected' : ''}" data-delivery-id="${h(item.id)}" data-focus-key="delivery-${h(item.id)}" aria-pressed="${item.id === this.selected}"><span class="collab-delivery-meta"><strong>${h(item.producer)}</strong><span>${h(kindLabels[item.kind] ?? item.kind)} · ${h(label(item.status))}</span></span><span class="collab-delivery-summary">${h(item.summary || item.statement || item.id)}</span><small>${h(item.taskId ?? '未绑定任务')} · ${h(this.relationship(item))}</small></button>`);
+      patchSection(row, `<button type="button" class="collab-delivery-choice${item.id === this.selected ? ' selected' : ''}" data-delivery-id="${h(item.id)}" data-focus-key="delivery-${h(item.id)}" aria-pressed="${item.id === this.selected}"><span class="collab-delivery-meta"><strong>${h(item.producer)}</strong><span>${h(kindLabels[item.kind] ?? item.kind)} · ${h(label(item.status))}</span></span><span class="collab-delivery-summary">${h(item.summary || item.statement || item.id)}</span><small>${h(item.taskId ?? t('未绑定任务'))} · ${h(this.relationship(item))}</small></button>`);
       if (list.children[index] !== row) list.insertBefore(row, list.children[index] ?? null);
     }
     if (!items.length) {
       const message = createElement('p', 'collab-help');
-      message.textContent = observation?.deliveries === undefined ? '此运行未提供交付记录' : observation.deliveries.length ? '没有匹配的交付记录' : '本次观察尚无 Agent 交付';
+      message.textContent = observation?.deliveries === undefined ? t('此运行未提供交付记录') : observation.deliveries.length ? t('没有匹配的交付记录') : t('本次观察尚无 Agent 交付');
       list.append(message);
     }
     list.scrollTop = top; list.scrollLeft = left;
     const movedAnchor = anchorId && [...list.children].find(child => (child as HTMLElement).dataset.deliveryRow === anchorId);
     if (top > 0 && movedAnchor && anchorTop !== undefined) list.scrollTop += movedAnchor.getBoundingClientRect().top - anchorTop;
     const delivery = observation?.deliveries?.find(item => item.id === this.selected);
-    patchSection(this.element.querySelector('[data-delivery-detail]')!, delivery ? this.deliveryDetails(delivery) : `<p class="collab-help">${this.selected ? '原选择不在本次观察中，未切换到其他交付。' : '选择一条交付查看声明与证据。'}</p>`);
+    patchSection(this.element.querySelector('[data-delivery-detail]')!, delivery ? this.deliveryDetails(delivery) : `<p class="collab-help">${this.selected ? t('原选择不在本次观察中，未切换到其他交付。') : t('选择一条交付查看声明与证据。')}</p>`);
   }
 
   private deliveryDetails(delivery: WebDelivery) {
@@ -152,9 +153,9 @@ export class ResearchProgressView {
     const verification = delivery.evidence?.verification;
     const checkIds = new Set(verification && verification.targetCommit === delivery.commit ? verification.results.map(item => item.receiptId) : []);
     const checks = observation.checks.filter(check => same(check) && checkIds.has(check.id));
-    return `<h4 tabindex="-1">${h(kindLabels[delivery.kind] ?? delivery.kind)} · ${h(delivery.producer)}</h4><p class="collab-help">交付状态：${h(label(delivery.status))} · ${h(this.relationship(delivery))}。局部交付与审阅不代表完整原题验收。</p>${factList([['交付 ID', delivery.id], ['任务', delivery.taskId], ['任务版本', delivery.taskDigest], ['创建时间', observedTime(delivery.createdAt)], ['commit', delivery.commit], [mathematicalSource ? '记录摘要' : '声明快照摘要', delivery.sourceDigest]])}
-      <div class="collab-reference-list">${delivery.taskId ? this.taskLink(delivery.taskId, delivery.taskDigest, `delivery-task-${delivery.id}`) : '<span class="collab-help">本交付未绑定任务合同</span>'}</div><h5>摘要</h5><p class="collab-delivery-text">${h(delivery.summary || '未记录摘要')}</p><h5>声明</h5>${codeBlock(delivery.statement)}${detailBlock('前提', delivery.premises, `delivery-premises-${delivery.id}`)}<h5>版本固定的依赖</h5><div class="collab-reference-list">${delivery.dependencies.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `delivery-dependency-${delivery.id}-${index}`)).join('') || '<span class="collab-help">未记录任务依赖</span>'}</div>${delivery.dependencies.length ? detailBlock('依赖版本', delivery.dependencies, `delivery-dependencies-${delivery.id}`) : ''}${detailBlock('未完成义务', delivery.remainingObligations, `delivery-obligations-${delivery.id}`)}${delivery.finding ? detailBlock('完整研究发现', delivery.finding, `delivery-finding-${delivery.id}`) : ''}
-      <h5>对应材料</h5><div class="collab-artifact-links">${sources.map(source => `<button type="button" class="button" data-collab-source="${h(source.taskId)}" data-source-version="${h(source.taskVersion)}" data-source-snapshot="${h(taskSourceKey(source))}" data-focus-key="delivery-source-${h(taskSourceKey(source))}">已保存源码 · ${h(source.file)} · ${h(source.commit.slice(0, 8))}</button>`).join('')}${checks.map(check => `<button type="button" class="button" data-collab-check="${h(check.id)}" data-check-identity="${h(taskCheckKey(check))}" data-focus-key="delivery-check-${h(taskCheckKey(check))}">关联检查 · ${h(check.id)}</button>`).join('')}</div>${!sources.length ? '<p class="collab-help">本次观察中未关联到身份一致的已保存源码。</p>' : ''}${!checks.length ? '<p class="collab-help">本次观察中未关联到交付明确引用且身份一致的检查回执。</p>' : ''}${sources.length || checks.length ? factList([['材料环境', [...new Set([...sources, ...checks].map(item => item.environmentDigest))].join(', ')]]) : ''}
-      <h5>原始提示引用</h5><p class="collab-help">由 Agent 提供的文字引用，未自动解释为检查回执或可访问路径。</p>${codeBlock(delivery.evidenceRefs)}${delivery.evidence ? detailBlock('交付附带的检查记录', delivery.evidence, `delivery-evidence-${delivery.id}`) : ''}`;
+    return `<h4 tabindex="-1">${h(kindLabels[delivery.kind] ?? delivery.kind)} · ${h(delivery.producer)}</h4><p class="collab-help">${t('交付状态：{0} · {1}。局部交付与审阅不代表完整原题验收。', h(label(delivery.status)), h(this.relationship(delivery)))}</p>${factList([[t('交付 ID'), delivery.id], [t('任务'), delivery.taskId], [t('任务版本'), delivery.taskDigest], [t('创建时间'), observedTime(delivery.createdAt)], ['commit', delivery.commit], [mathematicalSource ? t('记录摘要') : t('声明快照摘要'), delivery.sourceDigest]])}
+      <div class="collab-reference-list">${delivery.taskId ? this.taskLink(delivery.taskId, delivery.taskDigest, `delivery-task-${delivery.id}`) : `<span class="collab-help">${t('本交付未绑定任务合同')}</span>`}</div><h5>${t('摘要')}</h5><p class="collab-delivery-text">${h(delivery.summary || t('未记录摘要'))}</p><h5>${t('声明')}</h5>${codeBlock(delivery.statement)}${detailBlock(t('前提'), delivery.premises, `delivery-premises-${delivery.id}`)}<h5>${t('版本固定的依赖')}</h5><div class="collab-reference-list">${delivery.dependencies.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `delivery-dependency-${delivery.id}-${index}`)).join('') || `<span class="collab-help">${t('未记录任务依赖')}</span>`}</div>${delivery.dependencies.length ? detailBlock(t('依赖版本'), delivery.dependencies, `delivery-dependencies-${delivery.id}`) : ''}${detailBlock(t('未完成义务'), delivery.remainingObligations, `delivery-obligations-${delivery.id}`)}${delivery.finding ? detailBlock(t('完整研究发现'), delivery.finding, `delivery-finding-${delivery.id}`) : ''}
+      <h5>${t('对应材料')}</h5><div class="collab-artifact-links">${sources.map(source => `<button type="button" class="button" data-collab-source="${h(source.taskId)}" data-source-version="${h(source.taskVersion)}" data-source-snapshot="${h(taskSourceKey(source))}" data-focus-key="delivery-source-${h(taskSourceKey(source))}">${t('已保存源码 · {0} · {1}', h(source.file), h(source.commit.slice(0, 8)))}</button>`).join('')}${checks.map(check => `<button type="button" class="button" data-collab-check="${h(check.id)}" data-check-identity="${h(taskCheckKey(check))}" data-focus-key="delivery-check-${h(taskCheckKey(check))}">${t('关联检查 · {0}', h(check.id))}</button>`).join('')}</div>${!sources.length ? `<p class="collab-help">${t('本次观察中未关联到身份一致的已保存源码。')}</p>` : ''}${!checks.length ? `<p class="collab-help">${t('本次观察中未关联到交付明确引用且身份一致的检查回执。')}</p>` : ''}${sources.length || checks.length ? factList([[t('材料环境'), [...new Set([...sources, ...checks].map(item => item.environmentDigest))].join(', ')]]) : ''}
+      <h5>${t('原始提示引用')}</h5><p class="collab-help">${t('由 Agent 提供的文字引用，未自动解释为检查回执或可访问路径。')}</p>${codeBlock(delivery.evidenceRefs)}${delivery.evidence ? detailBlock(t('交付附带的检查记录'), delivery.evidence, `delivery-evidence-${delivery.id}`) : ''}`;
   }
 }

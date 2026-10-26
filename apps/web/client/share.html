@@ -14,7 +14,7 @@
   <main class="share-shell" id="main">
     <header class="share-top">
       <a class="brand" href="https://likc1606.github.io/theorem-os/" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
-      <span class="share-kind">只读分享</span>
+      <div class="share-top-actions"><button type="button" id="locale-switch" class="text-button locale-switch" hidden></button><span class="share-kind">只读分享</span></div>
     </header>
     <p id="share-loading" class="share-state" role="status">正在读取分享内容…</p>
     <section id="share-missing" class="share-card share-state-card" hidden aria-labelledby="share-missing-heading">
@@ -24,12 +24,12 @@
     <article id="share-content" class="share-content" hidden aria-labelledby="share-title">
       <header class="share-card share-heading">
         <span class="badge passed"><i data-lucide="shield-check"></i>完整原题通过独立 Lean 验收</span>
-        <h1 id="share-title"></h1>
+        <h1 id="share-title" translate="no"></h1>
         <dl id="share-facts" class="facts share-facts"></dl>
       </header>
       <section class="share-card" aria-labelledby="share-task-heading">
         <h2 id="share-task-heading">研究任务</h2>
-        <p id="share-task" class="task-content"></p>
+        <p id="share-task" class="task-content" translate="no"></p>
       </section>
       <section class="share-card" aria-labelledby="share-source-heading">
         <div class="share-source-top">

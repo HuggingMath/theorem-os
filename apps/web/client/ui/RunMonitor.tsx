@@ -1,5 +1,6 @@
 import { render } from 'preact';
 import { Icon, Spinner } from './Icon';
+import { t } from '../../i18n';
 
 export type MonitorStage = 'done' | 'active' | 'stopped' | 'error' | 'pending' | 'skipped';
 export type MonitorItem = {
@@ -17,7 +18,7 @@ function MonitorRow({ item }: { item: MonitorItem }) {
       <Icon name="arrow-up-right" />
     </button>
     <button type="button" class="icon-button run-monitor-dismiss" data-dismiss-run-notice={item.id} hidden={item.active}
-      title={`忽略结束提醒：${item.title}`} aria-label={`忽略结束提醒：${item.title}`}><Icon name="x" /></button>
+      title={t('忽略结束提醒：{0}', item.title)} aria-label={t('忽略结束提醒：{0}', item.title)}><Icon name="x" /></button>
   </div>;
 }
 

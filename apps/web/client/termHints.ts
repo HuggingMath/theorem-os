@@ -1,4 +1,5 @@
 import { termGroups, terms, type TermId } from './glossary';
+import { t } from '../i18n';
 
 /**
  * One delegated toggletip for every [data-term] button, whether Preact or a string renderer drew it.
@@ -11,7 +12,7 @@ export function installTermHints(openGlossary: (id?: TermId) => void) {
   const popover = typeof tip.showPopover === 'function';
   if (popover) tip.popover = 'manual'; else tip.hidden = true;
   const name = document.createElement('strong'), text = document.createElement('p'), more = document.createElement('button');
-  more.type = 'button'; more.className = 'text-button'; more.textContent = '全部术语';
+  more.type = 'button'; more.className = 'text-button'; more.textContent = t('全部术语');
   tip.append(name, text, more);
   const live = document.createElement('p');
   live.className = 'sr-only'; live.setAttribute('role', 'status'); live.setAttribute('aria-live', 'polite');
@@ -44,7 +45,7 @@ export function installTermHints(openGlossary: (id?: TermId) => void) {
     owner = button; button.setAttribute('aria-expanded', 'true'); button.setAttribute('aria-controls', tip.id);
     name.textContent = term.name; text.textContent = term.short; more.dataset.glossaryTerm = id;
     place(button);
-    live.textContent = `${term.name}：${term.short}`;
+    live.textContent = t('{0}：{1}', term.name, term.short);
   };
 
   document.addEventListener('click', event => {

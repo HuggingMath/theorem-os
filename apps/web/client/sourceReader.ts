@@ -1,17 +1,18 @@
 import { findSourceMatches, leanTokens, type SourceMatch, type SourceSelection } from './sourceText';
+import { t } from '../i18n';
 
 type Surface = { id: string; code: HTMLElement; scroll: HTMLElement; toolbar: HTMLElement; scope?: string;
   edit?: { source: string; open: (position: SourceSelection) => void } };
 const tokenKinds = ['comment', 'keyword', 'tactic', 'placeholder', 'string', 'number'] as const;
 const canHighlight = () => typeof CSS !== 'undefined' && Boolean(CSS.highlights) && typeof Highlight !== 'undefined';
-const markup = `<div class="source-reader-tools"><span id="source-find-location" class="mono" role="status"></span><button type="button" id="open-source-line" class="icon-button source-line-toggle" aria-label="跳转行号" aria-expanded="false" aria-controls="source-line-controls" title="跳转行号（Ctrl / ⌘ G）"><i data-lucide="list-ordered"></i></button><button type="button" id="open-source-find" class="source-find-toggle" aria-expanded="false" aria-controls="source-find-controls" title="在源码中查找（Ctrl / ⌘ F）"><i data-lucide="search"></i>查找源码</button><button type="button" id="edit-source-location" class="source-find-toggle" hidden><i data-lucide="square-pen"></i>编辑此处</button></div>
+const markup = `<div class="source-reader-tools"><span id="source-find-location" class="mono" role="status"></span><button type="button" id="open-source-line" class="icon-button source-line-toggle" aria-label="${t('跳转行号')}" aria-expanded="false" aria-controls="source-line-controls" title="${t('跳转行号（Ctrl / ⌘ G）')}"><i data-lucide="list-ordered"></i></button><button type="button" id="open-source-find" class="source-find-toggle" aria-expanded="false" aria-controls="source-find-controls" title="${t('在源码中查找（Ctrl / ⌘ F）')}"><i data-lucide="search"></i>${t('查找源码')}</button><button type="button" id="edit-source-location" class="source-find-toggle" hidden><i data-lucide="square-pen"></i>${t('编辑此处')}</button></div>
   <div class="source-find" id="source-find-controls" hidden>
-    <div class="source-find-entry"><label for="source-find-input" class="sr-only">查找源码文本</label><input type="search" id="source-find-input" placeholder="查找文本…" maxlength="256" autocomplete="off" spellcheck="false" aria-describedby="source-find-position source-find-location source-find-scope"><span id="source-find-position" class="mono" role="status" aria-atomic="true">0/0</span></div>
-    <div class="source-find-actions"><button type="button" id="source-find-case" class="icon-button source-find-case" aria-label="区分大小写" title="区分大小写" aria-pressed="false">Aa</button><button type="button" id="source-find-prev" class="icon-button" aria-label="上一个匹配" title="上一个匹配（Shift+Enter）"><i data-lucide="chevron-up"></i></button><button type="button" id="source-find-next" class="icon-button" aria-label="下一个匹配" title="下一个匹配（Enter）"><i data-lucide="chevron-down"></i></button><button type="button" id="close-source-find" class="icon-button" aria-label="关闭源码查找" title="关闭源码查找（Esc）"><i data-lucide="x"></i></button></div>
+    <div class="source-find-entry"><label for="source-find-input" class="sr-only">${t('查找源码文本')}</label><input type="search" id="source-find-input" placeholder="${t('查找文本…')}" maxlength="256" autocomplete="off" spellcheck="false" aria-describedby="source-find-position source-find-location source-find-scope"><span id="source-find-position" class="mono" role="status" aria-atomic="true">0/0</span></div>
+    <div class="source-find-actions"><button type="button" id="source-find-case" class="icon-button source-find-case" aria-label="${t('区分大小写')}" title="${t('区分大小写')}" aria-pressed="false">Aa</button><button type="button" id="source-find-prev" class="icon-button" aria-label="${t('上一个匹配')}" title="${t('上一个匹配（Shift+Enter）')}"><i data-lucide="chevron-up"></i></button><button type="button" id="source-find-next" class="icon-button" aria-label="${t('下一个匹配')}" title="${t('下一个匹配（Enter）')}"><i data-lucide="chevron-down"></i></button><button type="button" id="close-source-find" class="icon-button" aria-label="${t('关闭源码查找')}" title="${t('关闭源码查找（Esc）')}"><i data-lucide="x"></i></button></div>
   </div>
   <div class="source-line" id="source-line-controls" hidden>
-    <div class="source-line-entry"><label for="source-line-input">行号</label><input type="number" id="source-line-input" min="1" step="1" inputmode="numeric" autocomplete="off" aria-describedby="source-line-range source-line-error source-find-scope"><span id="source-line-range" class="mono"></span></div>
-    <div class="source-find-actions"><button type="button" id="source-line-go" class="icon-button" aria-label="跳转至行" title="跳转至行（Enter）"><i data-lucide="corner-down-left"></i></button><button type="button" id="close-source-line" class="icon-button" aria-label="关闭行号定位" title="关闭行号定位（Esc）"><i data-lucide="x"></i></button></div>
+    <div class="source-line-entry"><label for="source-line-input">${t('行号')}</label><input type="number" id="source-line-input" min="1" step="1" inputmode="numeric" autocomplete="off" aria-describedby="source-line-range source-line-error source-find-scope"><span id="source-line-range" class="mono"></span></div>
+    <div class="source-find-actions"><button type="button" id="source-line-go" class="icon-button" aria-label="${t('跳转至行')}" title="${t('跳转至行（Enter）')}"><i data-lucide="corner-down-left"></i></button><button type="button" id="close-source-line" class="icon-button" aria-label="${t('关闭行号定位')}" title="${t('关闭行号定位（Esc）')}"><i data-lucide="x"></i></button></div>
   </div><p id="source-line-error" class="source-line-error" role="status" hidden></p><p id="source-find-scope" class="source-find-scope" hidden></p>`;
 
 export class SourceReader {
@@ -159,7 +160,7 @@ export class SourceReader {
     const line = Number(this.lineInput), surface = this.surface;
     if (!surface) return;
     if (!/^\d+$/.test(this.lineInput) || !Number.isSafeInteger(line) || line < 1 || line > this.lineStarts.length) {
-      this.lineError = `请输入 1 至 ${this.lineStarts.length} 之间的整数行号`;
+      this.lineError = t('请输入 1 至 {0} 之间的整数行号', this.lineStarts.length);
       this.renderControls();
       surface.toolbar.querySelector<HTMLInputElement>('#source-line-input')?.focus({ preventScroll: true });
       return;
@@ -212,8 +213,8 @@ export class SourceReader {
     }
     text('#source-find-position', `${this.matches.length ? this.index + 1 : 0}/${this.matches.length}${this.truncated ? '+' : ''}`);
     const match = this.matches[this.index];
-    text('#source-find-location', this.opened && match ? `第 ${match.line} 行 · 第 ${match.column} 列`
-      : this.targetLine ? `第 ${this.targetLine} 行 · 共 ${this.lineStarts.length} 行` : '');
+    text('#source-find-location', this.opened && match ? t('第 {0} 行 · 第 {1} 列', match.line, match.column)
+      : this.targetLine ? t('第 {0} 行 · 共 {1} 行', this.targetLine, this.lineStarts.length) : '');
     const lineControls = toolbar.querySelector<HTMLElement>('#source-line-controls')!;
     if (lineControls.hidden === this.lineOpened) lineControls.hidden = !this.lineOpened;
     const lineToggle = toolbar.querySelector('#open-source-line')!;
@@ -222,7 +223,7 @@ export class SourceReader {
     if (lineInput.value !== this.lineInput) lineInput.value = this.lineInput;
     if (lineInput.max !== String(this.lineStarts.length)) lineInput.max = String(this.lineStarts.length);
     if (lineInput.getAttribute('aria-invalid') !== String(Boolean(this.lineError))) lineInput.setAttribute('aria-invalid', String(Boolean(this.lineError)));
-    text('#source-line-range', `/ ${this.lineStarts.length} 行`);
+    text('#source-line-range', t('/ {0} 行', this.lineStarts.length));
     text('#source-line-error', this.lineError);
     const lineError = toolbar.querySelector<HTMLElement>('#source-line-error')!;
     const showLineError = this.lineOpened && Boolean(this.lineError);
@@ -236,7 +237,7 @@ export class SourceReader {
     if (edit.hidden === Boolean(position)) edit.hidden = !position;
     if (position) {
       const line = this.text.slice(0, position.start).split('\n').length;
-      const label = `编辑此处（第 ${line} 行）`;
+      const label = t('编辑此处（第 {0} 行）', line);
       if (edit.title !== label) { edit.title = label; edit.setAttribute('aria-label', label); }
     }
   }

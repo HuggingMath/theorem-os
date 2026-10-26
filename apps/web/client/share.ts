@@ -1,9 +1,11 @@
 import { createIcons, Copy, Download, ShieldCheck } from 'lucide';
 import { effortLabels, formatDateTime } from '../presentation';
 import { webShareToken, type WebShareSnapshot } from '../share';
+import { localizeText, mountLocaleSwitch, t } from '../i18n';
 
 createIcons({ icons: { Copy, Download, ShieldCheck }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
+mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
 let view: 'proof' | 'source' = 'proof', snapshot: WebShareSnapshot | undefined, toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 function toast(text: string) {
@@ -21,6 +23,8 @@ function facts(target: HTMLElement, items: [string, string, boolean?][]) {
     return row;
   }));
 }
+// Snapshots store the report labels in Chinese; the page shows them in the reader's language.
+const metricValue = (value: string) => { const seconds = /^([\d.]+) 秒$/u.exec(value); return seconds ? t('{0} 秒', seconds[1]) : value; };
 function missing(text?: string) {
   $('#share-loading').hidden = true;
   if (text) $('#share-missing-text').textContent = text;
@@ -37,22 +41,22 @@ function show(share: WebShareSnapshot) {
   document.title = `${share.title} · TheoremOS`;
   $('#share-title').textContent = share.title;
   facts($('#share-facts'), [
-    ['证明环境', share.environment === 'mathlib' ? 'Mathlib' : 'Lean 标准库'],
-    ['模型', share.model, true], ['推理强度', effortLabels[share.effort] ?? share.effort], ['Agent 数量', String(share.workers)],
-    ...share.metrics.map(item => [item.label, item.value] as [string, string]),
-    ['完成时间', formatDateTime(share.finishedAt ?? share.createdAt)], ['分享时间', formatDateTime(share.sharedAt)],
+    [t('证明环境'), share.environment === 'mathlib' ? 'Mathlib' : t('Lean 标准库')],
+    [t('模型'), share.model, true], [t('推理强度'), effortLabels[share.effort] ?? share.effort], [t('Agent 数量'), String(share.workers)],
+    ...share.metrics.map(item => [localizeText(item.label), metricValue(item.value)] as [string, string]),
+    [t('完成时间'), formatDateTime(share.finishedAt ?? share.createdAt)], [t('分享时间'), formatDateTime(share.sharedAt)],
   ]);
   $('#share-task').textContent = share.task;
   $('#share-checks').replaceChildren(...share.checks.map(check => {
     const item = document.createElement('li'), heading = document.createElement('div'), label = document.createElement('strong');
     const badge = document.createElement('span');
-    heading.className = 'share-check-heading'; label.textContent = check.label;
-    badge.className = `badge ${check.tone}`; badge.textContent = check.status;
+    heading.className = 'share-check-heading'; label.textContent = localizeText(check.label);
+    badge.className = `badge ${check.tone}`; badge.textContent = localizeText(check.status);
     heading.append(label, badge);
     item.append(heading);
     if (check.method) {
       const method = document.createElement('p');
-      method.className = 'share-check-method'; method.textContent = `方式：${check.method}`;
+      method.className = 'share-check-method'; method.textContent = t('方式：{0}', localizeText(check.method));
       item.append(method);
     }
     if (check.targets.length) {
@@ -60,7 +64,7 @@ function show(share: WebShareSnapshot) {
       list.className = 'share-targets';
       list.append(...check.targets.map(target => {
         const row = document.createElement('li'), name = document.createElement('code'), state = document.createElement('span');
-        name.textContent = target.name; state.className = `share-target-status ${target.tone}`; state.textContent = target.status;
+        name.textContent = target.name; state.className = `share-target-status ${target.tone}`; state.textContent = localizeText(target.status);
         row.append(name, state);
         return row;
       }));
@@ -68,7 +72,7 @@ function show(share: WebShareSnapshot) {
     }
     return item;
   }));
-  facts($('#share-identity'), share.identity.map(item => [item.label, item.value, true]));
+  facts($('#share-identity'), share.identity.map(item => [localizeText(item.label), item.value, true]));
   $('#share-identity').hidden = !share.identity.length;
   showCode();
   $('#share-loading').hidden = true;
@@ -76,14 +80,14 @@ function show(share: WebShareSnapshot) {
 }
 async function load() {
   const token = location.hash.slice(1);
-  if (!webShareToken.test(token)) { missing('链接不完整，请向分享者重新获取。'); return; }
+  if (!webShareToken.test(token)) { missing(t('链接不完整，请向分享者重新获取。')); return; }
   try {
     // No credentials: a share reads the same for everyone, signed in or not.
     const response = await fetch(`/api/share/${token}`, { credentials: 'omit', cache: 'no-store', headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => undefined) as { share?: WebShareSnapshot; error?: string } | undefined;
-    if (!response.ok || !payload?.share) { missing(response.status === 404 ? undefined : payload?.error ?? '暂时无法读取分享内容，请稍后重试。'); return; }
+    if (!response.ok || !payload?.share) { missing(response.status === 404 ? undefined : payload?.error ?? t('暂时无法读取分享内容，请稍后重试。')); return; }
     show(payload.share);
-  } catch { missing('暂时无法连接服务，请稍后重试。'); }
+  } catch { missing(t('暂时无法连接服务，请稍后重试。')); }
 }
 
 document.addEventListener('click', event => {
@@ -93,7 +97,7 @@ document.addEventListener('click', event => {
   if (target.id === 'share-copy') {
     const text = view === 'proof' ? snapshot.proof : snapshot.source;
     void (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error('clipboard')))
-      .then(() => toast('Lean 源码已复制'), () => toast('无法访问剪贴板'));
+      .then(() => toast(t('Lean 源码已复制')), () => toast(t('无法访问剪贴板')));
   }
   if (target.id === 'share-download') {
     const url = URL.createObjectURL(new Blob([view === 'proof' ? snapshot.proof : snapshot.source], { type: 'text/plain;charset=utf-8' }));

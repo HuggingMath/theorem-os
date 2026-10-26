@@ -1,5 +1,6 @@
 import type { WebRun } from '../shared';
 import { isAcceptedRun } from '../presentation';
+import { t } from '../i18n';
 
 export type RunFilter = 'all' | 'active' | 'passed' | 'unproved' | 'cancelled' | 'error';
 
@@ -15,7 +16,7 @@ export function filterRuns(runs: readonly WebRun[], query: string, filter: RunFi
       || filter === 'error' && run.status === 'error';
     if (!matchesStatus) return false;
     const searchable = [run.title, run.task, run.model, run.id, run.source,
-      run.environment === 'mathlib' ? 'Mathlib 数学库' : 'Lean 标准库'].join('\n').normalize('NFKC').toLowerCase();
+      run.environment === 'mathlib' ? t('Mathlib 数学库') : t('Lean 标准库')].join('\n').normalize('NFKC').toLowerCase();
     return terms.every(term => searchable.includes(term));
   });
 }

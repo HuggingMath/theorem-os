@@ -28,6 +28,7 @@
     "test:web-long-run": "bun scripts/test-web-long-run.ts",
     "test:web-share": "bun scripts/test-web-share.ts",
     "test:web-onboarding": "bun scripts/test-web-onboarding.ts",
+    "test:web-i18n": "bun scripts/test-web-i18n.ts",
     "test:web-collaboration": "bun scripts/test-web-collaboration.ts",
     "test:web-task-source": "bun scripts/test-web-task-source.ts",
     "test:web-knowledge-context": "bun scripts/test-web-knowledge-context.ts",

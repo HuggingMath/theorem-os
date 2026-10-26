@@ -1,6 +1,7 @@
 import { Fragment, render } from 'preact';
 import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { compactGraphMetrics, graphMetrics } from '../taskGraphLayout';
+import { t } from '../../i18n';
 
 export type TaskCard = { id: string; version: string; kind: string; kindLabel: string; state: string; stateLabel: string;
   objective: string; owner: string; proof: string; proofLabel: string; selected: boolean;
@@ -31,7 +32,7 @@ function Card({ card, graph, compact, x, y, dimmed, onHover }: { card: TaskCard;
     <span class="collab-task-top"><span>{card.kindLabel}</span><span class="collab-task-state">{card.stateLabel}</span></span>
     <strong>{card.id}</strong><span class="collab-task-objective">{card.objective}</span><small>{card.owner} · {card.proofLabel}</small>
     {card.tokens && <>
-      <span class="collab-task-tokens" title={card.tokens.detail ? `Token ${card.tokens.label}：${card.tokens.detail}` : undefined}>{card.tokens.label}</span>
+      <span class="collab-task-tokens" title={card.tokens.detail ? t('Token {0}：{1}', card.tokens.label, card.tokens.detail) : undefined}>{card.tokens.label}</span>
       <span class="collab-task-usage" aria-hidden="true"><span style={{ width: `${Math.max(card.tokens.share * 100, card.tokens.share ? 2 : 0)}%` }} /></span>
     </>}
   </button>;
@@ -62,7 +63,7 @@ function TaskGraph({ cards, edges, positions, width, height, selected, compact, 
       {edges.map(edge => <path key={`${edge.kind}:${edge.from}>${edge.to}`} class={`${edge.kind === 'or' ? 'collab-or-edge' : 'collab-and-edge'}${related(edge) ? ' related' : ''}`}
         data-from={edge.from} data-to={edge.to} d={edge.d} />)}
     </svg>
-    {independentTop !== undefined && <p class="collab-graph-caption" style={{ top: `${independentTop}px`, left: `${(compact ? compactGraphMetrics : graphMetrics).margin}px` }}>独立任务 · 没有前置或后续依赖</p>}
+    {independentTop !== undefined && <p class="collab-graph-caption" style={{ top: `${independentTop}px`, left: `${(compact ? compactGraphMetrics : graphMetrics).margin}px` }}>{t('独立任务 · 没有前置或后续依赖')}</p>}
     {cards.map(card => {
       const position = positions.get(card.id)!;
       return <Card key={card.id} card={card} graph compact={compact} x={position.x} y={position.y} dimmed={Boolean(chain && !chain.has(card.id))} onHover={setHovered} />;

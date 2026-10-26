@@ -2,6 +2,7 @@ import { render } from 'preact';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { animateEntrance } from '../motion';
 import { Icon, Spinner } from './Icon';
+import { t } from '../../i18n';
 
 export type HeaderStage = { label: string; state: 'done' | 'active' | 'stopped' | 'error' | 'pending' | 'skipped'; clock: string };
 export type RunHeaderProps = {
@@ -24,12 +25,12 @@ function StatusBadge({ status }: { status: RunHeaderProps['status'] }) {
 
 const stageSymbol = { done: 'check', error: 'x', active: '', stopped: 'square', pending: '', skipped: '' } as const;
 function StageTrack({ stages, elapsed }: { stages: HeaderStage[]; elapsed: string }) {
-  return <section class="artifact-progress" aria-label="实时运行进度">
+  return <section class="artifact-progress" aria-label={t('实时运行进度')}>
     <ol class="artifact-stages">{stages.map(stage => <li key={stage.label} class={stage.state} data-stage={stage.state} aria-current={stage.state === 'active' ? 'step' : undefined}>
       <span class="stage-marker" aria-hidden="true">{stageSymbol[stage.state] && <Icon name={stageSymbol[stage.state]} />}</span>
       <span class="stage-copy"><span class="stage-label">{stage.label}</span><span class="stage-clock mono">{stage.clock}</span></span>
     </li>)}</ol>
-    <span class="artifact-elapsed"><span>总用时</span><span class="mono" data-header-clock title="总用时">{elapsed}</span></span>
+    <span class="artifact-elapsed"><span>{t('总用时')}</span><span class="mono" data-header-clock title={t('总用时')}>{elapsed}</span></span>
   </section>;
 }
 
@@ -54,7 +55,7 @@ function Tabs({ tabs, tab }: { tabs: RunHeaderProps['tabs']; tab: string }) {
     observer.observe(root);
     return () => observer.disconnect();
   }, [tab]);
-  return <div ref={list} class="detail-tabs" role="tablist" aria-label="运行详情视图">
+  return <div ref={list} class="detail-tabs" role="tablist" aria-label={t('运行详情视图')}>
     {tabs.map(([id, label]) => <button key={id} type="button" role="tab" id={`detail-tab-${id}`} data-detail-tab={id} aria-controls="detail-panel"
       aria-selected={id === tab} tabIndex={id === tab ? 0 : -1}>{label}</button>)}
     <span ref={bar} class="detail-tab-indicator" aria-hidden="true" />
@@ -64,16 +65,16 @@ function Tabs({ tabs, tab }: { tabs: RunHeaderProps['tabs']; tab: string }) {
 function Actions(props: RunHeaderProps) {
   return <div class="detail-actions">
     {props.sample
-      ? <button type="button" class="button button-primary" data-action="reuse-run"><Icon name="copy-plus" />用这道题开始研究</button>
-      : <button type="button" class="icon-button" data-action="reuse-run" aria-label="复用任务配置" title="复用任务配置"><Icon name="copy-plus" /></button>}
-    {props.shareable && <button type="button" class="icon-button" data-action="share-run" aria-label="分享研究成果" title="分享研究成果"
+      ? <button type="button" class="button button-primary" data-action="reuse-run"><Icon name="copy-plus" />{t('用这道题开始研究')}</button>
+      : <button type="button" class="icon-button" data-action="reuse-run" aria-label={t('复用任务配置')} title={t('复用任务配置')}><Icon name="copy-plus" /></button>}
+    {props.shareable && <button type="button" class="icon-button" data-action="share-run" aria-label={t('分享研究成果')} title={t('分享研究成果')}
       disabled={!props.connected}><Icon name="share-2" /></button>}
     {props.sample ? null : props.active
       ? <button key="cancel" type="button" class="button button-danger" data-action="cancel" disabled={props.cancelling || !props.connected}>
-        {props.cancelling ? <Spinner /> : <Icon name="square" />}{props.cancelling ? '正在取消' : '取消运行'}</button>
-      : <button key="delete" type="button" class="icon-button danger" data-action="delete-run" aria-label="删除运行记录" title="删除运行记录"
+        {props.cancelling ? <Spinner /> : <Icon name="square" />}{props.cancelling ? t('正在取消') : t('取消运行')}</button>
+      : <button key="delete" type="button" class="icon-button danger" data-action="delete-run" aria-label={t('删除运行记录')} title={t('删除运行记录')}
         disabled={!props.connected || props.deleting}><Icon name="trash-2" /></button>}
-    {props.download && <a class="icon-button" href={props.download} download title="下载运行档案 JSON" aria-label="下载运行档案 JSON"><Icon name="download" /></a>}
+    {props.download && <a class="icon-button" href={props.download} download title={t('下载运行档案 JSON')} aria-label={t('下载运行档案 JSON')}><Icon name="download" /></a>}
   </div>;
 }
 
@@ -81,18 +82,18 @@ function RunHeader(props: RunHeaderProps) {
   return <>
     <header class="detail-heading">
       <div class="detail-heading-text">
-        <h2>{props.title}</h2>
+        <h2 translate={false}>{props.title}</h2>
         <div class="detail-statusline">
           <StatusBadge status={props.status} />
-          {props.sample && <span class="badge sample-badge" data-sample-badge><Icon name="eye" />示例 · 只读</span>}
+          {props.sample && <span class="badge sample-badge" data-sample-badge><Icon name="eye" />{t('示例 · 只读')}</span>}
           <span class="detail-identifier"><code>{props.id}</code>
-            <button type="button" class="icon-button" data-action="copy-id" aria-label="复制运行 ID" title="复制运行 ID"><Icon name="copy" /></button></span>
+            <button type="button" class="icon-button" data-action="copy-id" aria-label={t('复制运行 ID')} title={t('复制运行 ID')}><Icon name="copy" /></button></span>
           <span class="run-environment">{props.environment}</span><span class="updated-at">{props.updated}</span>
         </div>
       </div>
       <Actions {...props} />
     </header>
-    {props.sample && <p class="sample-note" data-sample-note>这是一次录制好的运行：Agent 由离线脚本代替模型，环境、任务协作、Lean 检查和独立验收都是真实执行的。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。</p>}
+    {props.sample && <p class="sample-note" data-sample-note>{t('这是一次录制好的运行：Agent 由离线脚本代替模型，环境、任务协作、Lean 检查和独立验收都是真实执行的。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。')}</p>}
     <StageTrack stages={props.stages} elapsed={props.elapsed} />
     <div class="inline-error" data-detail-error role="alert" hidden={!props.error}>{props.error}</div>
     <Tabs tabs={props.tabs} tab={props.tab} />

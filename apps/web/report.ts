@@ -1,4 +1,5 @@
 import type { WebRun } from './shared';
+import { t } from './i18n';
 
 export type ReportTone = 'passed' | 'failed' | 'warning' | 'muted';
 export type ReportDiagnostic = { label: string; text: string; truncated: boolean };
@@ -31,21 +32,21 @@ const maximumText = 4_000;
 const maximumTargets = 64;
 type Status = Pick<ReportTarget, 'status' | 'tone'>;
 const targetStatuses = new Map<string, Status>([
-  ['kernel_verified', { status: 'Lean 内核通过', tone: 'passed' }],
-  ['failed', { status: '检查未通过', tone: 'failed' }],
-  ['blocked', { status: '检查受阻', tone: 'warning' }],
-  ['unavailable', { status: '检查不可用', tone: 'warning' }],
+  ['kernel_verified', { status: t('Lean 内核通过'), tone: 'passed' }],
+  ['failed', { status: t('检查未通过'), tone: 'failed' }],
+  ['blocked', { status: t('检查受阻'), tone: 'warning' }],
+  ['unavailable', { status: t('检查不可用'), tone: 'warning' }],
 ]);
 const evaluationStatuses = new Map<string, Status>([
-  ['passed', { status: '验收阶段通过', tone: 'passed' }],
-  ['failed', { status: '验收阶段未通过', tone: 'failed' }],
-  ['error', { status: '验收阶段错误', tone: 'failed' }],
-  ['skipped', { status: '已跳过', tone: 'muted' }],
+  ['passed', { status: t('验收阶段通过'), tone: 'passed' }],
+  ['failed', { status: t('验收阶段未通过'), tone: 'failed' }],
+  ['error', { status: t('验收阶段错误'), tone: 'failed' }],
+  ['skipped', { status: t('已跳过'), tone: 'muted' }],
 ]);
 const evaluationMethods = new Map<string, string>([
-  ['host-lean-kernel-all-targets', 'Lean 内核 · 全部目标'],
-  ['external-command', '外部命令'],
-  ['official-comparator', '官方比较器'],
+  ['host-lean-kernel-all-targets', t('Lean 内核 · 全部目标')],
+  ['external-command', t('外部命令')],
+  ['official-comparator', t('官方比较器')],
 ]);
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -67,13 +68,13 @@ function nonnegativeInteger(value: unknown): number | undefined {
 
 function status(value: string | undefined, labels: ReadonlyMap<string, Status>): Status {
   return value ? labels.get(value) ?? { status: value, tone: 'muted' }
-    : { status: '未提供状态', tone: 'muted' };
+    : { status: t('未提供状态'), tone: 'muted' };
 }
 
 function diagnostics(row: Record<string, unknown>): ReportDiagnostic[] {
   const result: ReportDiagnostic[] = [];
   const seen = new Set<string>();
-  for (const [key, label] of [['error', '错误'], ['stdoutPreview', '标准输出'], ['stderrPreview', '标准错误']]) {
+  for (const [key, label] of [['error', t('错误')], ['stdoutPreview', t('标准输出')], ['stderrPreview', t('标准错误')]]) {
     const raw = row[key];
     const value = typeof raw === 'string' ? raw.trim() : '';
     if (!value || seen.has(value)) continue;
@@ -95,7 +96,7 @@ function targets(value: unknown): Pick<ReportCheck, 'targets' | 'omittedTargets'
     const messages = diagnostics(row);
     if (!name && !rawStatus && sorryCount === undefined && admitCount === undefined && !messages.length) continue;
     if (result.length === maximumTargets) { omittedTargets++; continue; }
-    result.push({ name: name ?? '未命名目标', ...status(rawStatus, targetStatuses),
+    result.push({ name: name ?? t('未命名目标'), ...status(rawStatus, targetStatuses),
       ...(sorryCount !== undefined ? { sorryCount } : {}),
       ...(admitCount !== undefined ? { admitCount } : {}), diagnostics: messages });
   }
@@ -114,31 +115,31 @@ export function summarizeReport(run: WebRun): ReportSummary {
   const evaluationTimedOut = evaluator?.timedOut === true;
   const checks: ReportCheck[] = [];
   if (candidatePassed !== undefined || candidateStatus || candidateTargets.targets.length) {
-    checks.push({ id: 'candidate', label: '候选检查',
+    checks.push({ id: 'candidate', label: t('候选检查'),
       ...(candidatePassed === undefined ? status(candidateStatus, targetStatuses)
-        : { status: candidatePassed ? '候选检查通过' : '候选检查未通过', tone: candidatePassed ? 'passed' : 'failed' }),
+        : { status: candidatePassed ? t('候选检查通过') : t('候选检查未通过'), tone: candidatePassed ? 'passed' : 'failed' }),
       ...candidateTargets });
   }
   if (evaluationStatus || method || evaluationReason || evaluationTimedOut || evaluationTargets.targets.length) {
-    const evaluationState: Status = evaluationTimedOut ? { status: '验收超时', tone: 'failed' }
+    const evaluationState: Status = evaluationTimedOut ? { status: t('验收超时'), tone: 'failed' }
       : status(evaluationStatus, evaluationStatuses);
-    checks.push({ id: 'evaluation', label: '独立验收', ...evaluationState,
+    checks.push({ id: 'evaluation', label: t('独立验收'), ...evaluationState,
       ...(method ? { method: evaluationMethods.get(method) ?? method } : {}),
       ...(evaluationReason ? { reason: evaluationReason } : {}), ...evaluationTargets });
   }
   const metrics: ReportSummary['metrics'] = [];
   const turns = nonnegativeInteger(report?.turns), solveWallMs = nonnegative(report?.solveWallMs);
   const totalTokens = nonnegativeInteger(object(report?.usage)?.totalTokens);
-  if (turns !== undefined) metrics.push({ label: '研究轮次', value: String(turns) });
-  if (solveWallMs !== undefined) metrics.push({ label: '求解耗时', value: `${solveWallMs / 1_000} 秒` });
-  if (totalTokens !== undefined) metrics.push({ label: '总 Token', value: String(totalTokens) });
+  if (turns !== undefined) metrics.push({ label: t('研究轮次'), value: String(turns) });
+  if (solveWallMs !== undefined) metrics.push({ label: t('求解耗时'), value: t('{0} 秒', solveWallMs / 1_000) });
+  if (totalTokens !== undefined) metrics.push({ label: t('总 Token'), value: String(totalTokens) });
   const environment = object(report?.environment);
   const identity: ReportSummary['identity'] = [];
   for (const [label, value] of [
-    ['求解运行 ID', report?.runId], ['题目 ID', report?.problemId], ['候选提交', report?.solution_commit],
-    ['验收提交', finalCheck?.commit], ['验收源码摘要', finalCheck?.sourceDigest],
-    ['Lean 工具链', environment?.toolchain], ['依赖摘要', environment?.dependencyDigest],
-    ['Mathlib 版本', environment?.mathlibRevision],
+    [t('求解运行 ID'), report?.runId], [t('题目 ID'), report?.problemId], [t('候选提交'), report?.solution_commit],
+    [t('验收提交'), finalCheck?.commit], [t('验收源码摘要'), finalCheck?.sourceDigest],
+    [t('Lean 工具链'), environment?.toolchain], [t('依赖摘要'), environment?.dependencyDigest],
+    [t('Mathlib 版本'), environment?.mathlibRevision],
   ]) {
     const content = text(value);
     if (content) identity.push({ label: String(label), value: content });

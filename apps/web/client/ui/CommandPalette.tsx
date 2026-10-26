@@ -2,8 +2,11 @@ import { render } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { animateEntrance } from '../motion';
 import { Icon } from './Icon';
+import { t } from '../../i18n';
 
-export type PaletteCommand = { id: string; group: string; label: string; hint?: string; icon: string; keywords?: string; run(): void };
+export type PaletteCommand = { id: string; group: string; label: string; hint?: string; icon: string; keywords?: string;
+  /** Language of a label not written in the interface language, such as the language switch naming Chinese in Chinese. */
+  lang?: string; run(): void };
 
 const matches = (command: PaletteCommand, query: string) => {
   const text = `${command.label} ${command.hint ?? ''} ${command.keywords ?? ''}`.toLowerCase();
@@ -36,26 +39,26 @@ function Palette({ commands, session }: { commands: readonly PaletteCommand[]; s
     } else if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); choose(shown[selected]); }
   };
   let group = '';
-  return <dialog ref={dialog} id="command-palette" class="command-palette" aria-label="命令面板"
+  return <dialog ref={dialog} id="command-palette" class="command-palette" aria-label={t('命令面板')}
     onClick={event => { if (event.target === dialog.current) dialog.current!.close(); }}>
     <div class="palette-search"><Icon name="search" />
-      <input ref={input} type="text" value={query} placeholder="搜索命令、研究记录或视图…" aria-label="搜索命令" role="combobox" aria-expanded="true"
+      <input ref={input} type="text" value={query} placeholder={t('搜索命令、研究记录或视图…')} aria-label={t('搜索命令')} role="combobox" aria-expanded="true"
         aria-controls="palette-options" aria-activedescendant={shown[selected] ? `palette-${shown[selected]!.id}` : undefined} autocomplete="off" spellcheck={false}
         onInput={event => { setQuery((event.target as HTMLInputElement).value); setIndex(0); }} onKeyDown={keydown} />
       <kbd>Esc</kbd></div>
-    <ul ref={list} id="palette-options" class="palette-options" role="listbox" aria-label="可用命令">
+    <ul ref={list} id="palette-options" class="palette-options" role="listbox" aria-label={t('可用命令')}>
       {shown.map((command, position) => {
         const heading = command.group !== group ? (group = command.group) : '';
         return <li key={command.id} role="presentation">
           {heading && <p class="palette-group" aria-hidden="true">{heading}</p>}
           <button type="button" id={`palette-${command.id}`} role="option" tabIndex={-1} aria-selected={position === selected}
             onMouseMove={() => { if (position !== selected) setIndex(position); }} onClick={() => choose(command)}>
-            <Icon name={command.icon} /><span class="palette-label">{command.label}</span>{command.hint && <span class="palette-hint">{command.hint}</span>}
+            <Icon name={command.icon} /><span class="palette-label" lang={command.lang}>{command.label}</span>{command.hint && <span class="palette-hint">{command.hint}</span>}
             {position === selected && <Icon name="corner-down-left" />}
           </button>
         </li>;
       })}
-      {!shown.length && <li class="palette-empty" role="presentation">没有匹配的命令</li>}
+      {!shown.length && <li class="palette-empty" role="presentation">{t('没有匹配的命令')}</li>}
     </ul>
   </dialog>;
 }

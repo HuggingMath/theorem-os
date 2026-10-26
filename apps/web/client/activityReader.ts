@@ -1,13 +1,14 @@
 import type { WebEvent, WebRun } from '../shared';
+import { localizeText, t } from '../i18n';
 
 type ActivityRun = Pick<WebRun, 'id' | 'events'>;
 type ReadingAnchor = { sequence: number; offset: number };
-const markup = `<div class="activity-heading"><div><h3>活动记录</h3><span id="activity-count" class="field-count" role="status" aria-atomic="true"></span></div><div class="activity-actions"><button type="button" id="activity-follow" class="text-button" aria-pressed="true" title="跟随最新活动；向下阅读时自动暂停"><i data-lucide="refresh-cw"></i>跟随最新</button><button type="button" id="download-activity" class="text-button" title="下载当前筛选的活动 JSON"><i data-lucide="download"></i>下载活动</button></div></div>
-  <div class="activity-filters"><div class="activity-search"><i data-lucide="search"></i><label for="activity-search" class="sr-only">搜索活动内容或事件</label><input type="search" id="activity-search" maxlength="256" placeholder="搜索活动内容或事件…" autocomplete="off" spellcheck="false" aria-describedby="activity-count activity-retention"><button type="button" id="clear-activity-search" class="icon-button" aria-label="清除活动搜索" title="清除活动搜索" hidden><i data-lucide="x"></i></button></div><label for="activity-type" class="sr-only">筛选事件类型</label><select id="activity-type" aria-label="筛选事件类型"></select></div>
+const markup = `<div class="activity-heading"><div><h3>${t('活动记录')}</h3><span id="activity-count" class="field-count" role="status" aria-atomic="true"></span></div><div class="activity-actions"><button type="button" id="activity-follow" class="text-button" aria-pressed="true" title="${t('跟随最新活动；向下阅读时自动暂停')}"><i data-lucide="refresh-cw"></i>${t('跟随最新')}</button><button type="button" id="download-activity" class="text-button" title="${t('下载当前筛选的活动 JSON')}"><i data-lucide="download"></i>${t('下载活动')}</button></div></div>
+  <div class="activity-filters"><div class="activity-search"><i data-lucide="search"></i><label for="activity-search" class="sr-only">${t('搜索活动内容或事件')}</label><input type="search" id="activity-search" maxlength="256" placeholder="${t('搜索活动内容或事件…')}" autocomplete="off" spellcheck="false" aria-describedby="activity-count activity-retention"><button type="button" id="clear-activity-search" class="icon-button" aria-label="${t('清除活动搜索')}" title="${t('清除活动搜索')}" hidden><i data-lucide="x"></i></button></div><label for="activity-type" class="sr-only">${t('筛选事件类型')}</label><select id="activity-type" aria-label="${t('筛选事件类型')}"></select></div>
   <div class="activity-context"><p id="activity-retention"></p><button type="button" id="activity-latest" class="text-button" hidden></button></div>
-  <p id="activity-reading-notice" class="activity-reading-notice" role="status" hidden>正在阅读的活动已超出保留范围，已定位到仍可查看的记录。</p>
-  <div class="activity-scroll" tabindex="0" aria-label="活动记录表"><table class="activity-table"><caption class="sr-only">活动记录，最新在前</caption><thead><tr><th scope="col">时间</th><th scope="col">事件</th><th scope="col">记录</th></tr></thead><tbody></tbody></table></div>
-  <div class="empty-state activity-empty" role="status" hidden><i data-lucide="search"></i><p></p><button type="button" id="clear-activity-filters" class="text-button">清除筛选</button></div>`;
+  <p id="activity-reading-notice" class="activity-reading-notice" role="status" hidden>${t('正在阅读的活动已超出保留范围，已定位到仍可查看的记录。')}</p>
+  <div class="activity-scroll" tabindex="0" aria-label="${t('活动记录表')}"><table class="activity-table"><caption class="sr-only">${t('活动记录，最新在前')}</caption><thead><tr><th scope="col">${t('时间')}</th><th scope="col">${t('事件')}</th><th scope="col">${t('记录')}</th></tr></thead><tbody></tbody></table></div>
+  <div class="empty-state activity-empty" role="status" hidden><i data-lucide="search"></i><p></p><button type="button" id="clear-activity-filters" class="text-button">${t('清除筛选')}</button></div>`;
 
 // One run's local reading state. Event content never becomes markup or leaves the browser.
 export class ActivityReader {
@@ -131,7 +132,7 @@ export class ActivityReader {
     const anchor = this.anchor;
     const query = this.query.trim().toLowerCase();
     this.shown = this.events.filter(event => (!this.type || event.type === this.type)
-      && (!query || `${event.type}\n${event.message}`.toLowerCase().includes(query))).reverse();
+      && (!query || `${event.type}\n${event.message}\n${localizeText(event.message)}`.toLowerCase().includes(query))).reverse();
     const retained = new Set(this.events.map(event => event.sequence));
     for (const [sequence, row] of this.rows) {
       if (!retained.has(sequence)) { row.remove(); this.rows.delete(sequence); }
@@ -150,7 +151,7 @@ export class ActivityReader {
       const time = row.querySelector('time')!;
       time.dateTime = event.at; row.cells[0]!.title = event.at;
       this.text(time, this.timestamp(event.at));
-      this.text(row.cells[1]!, event.type); this.text(row.cells[2]!, event.message);
+      this.text(row.cells[1]!, event.type); this.text(row.cells[2]!, localizeText(event.message));
       if (row.cells[1]!.title !== event.type) row.cells[1]!.title = event.type;
       if (row === cursor) cursor = cursor.nextElementSibling;
       else body.insertBefore(row, cursor);
@@ -185,7 +186,7 @@ export class ActivityReader {
     for (const event of this.events) types.set(event.type, (types.get(event.type) ?? 0) + 1);
     if (this.type && !types.has(this.type)) types.set(this.type, 0);
     const select = this.get<HTMLSelectElement>('#activity-type');
-    const options = [['', '全部事件'], ...Array.from(types).sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => [type, `${type} (${count})`])];
+    const options = [['', t('全部事件')], ...Array.from(types).sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => [type, `${type} (${count})`])];
     for (const option of Array.from(select.options)) if (!options.some(([value]) => value === option.value)) option.remove();
     for (const [value, label] of options) {
       let option = Array.from(select.options).find(option => option.value === value);
@@ -194,23 +195,23 @@ export class ActivityReader {
     }
     if (select.value !== this.type) select.value = this.type;
     const filtered = Boolean(this.query.trim() || this.type);
-    this.text(this.get('#activity-count'), filtered ? `${this.shown.length} / ${this.events.length} 条` : `${this.events.length} 条`);
+    this.text(this.get('#activity-count'), filtered ? t('{0} / {1} 条', this.shown.length, this.events.length) : t('{0} 条', this.events.length));
     this.get('#activity-follow').setAttribute('aria-pressed', String(this.following));
-    this.get('#activity-follow').title = this.following ? '正在跟随最新活动；向下阅读时自动暂停' : '跟随已暂停，点击返回最新活动';
+    this.get('#activity-follow').title = this.following ? t('正在跟随最新活动；向下阅读时自动暂停') : t('跟随已暂停，点击返回最新活动');
     const unread = this.shown.filter(event => event.sequence > this.seenSequence).length;
     const latest = this.get('#activity-latest');
     latest.hidden = this.following || !this.shown.length;
-    this.text(latest, unread ? `返回最新 · ${unread} 条新活动` : '返回最新');
+    this.text(latest, unread ? t('返回最新 · {0} 条新活动', unread) : t('返回最新'));
     this.text(this.get('#activity-retention'), (this.events[0]?.sequence ?? 1) > 1
-      ? '最新在前 · 仅保留最近 200 条，更早活动已移出' : '最新在前 · 最多保留 200 条活动');
+      ? t('最新在前 · 仅保留最近 200 条，更早活动已移出') : t('最新在前 · 最多保留 200 条活动'));
     const notice = this.get('#activity-reading-notice');
     notice.hidden = !this.readingLost;
-    this.text(notice, this.shown.length ? '正在阅读的活动已超出保留范围，已定位到仍可查看的记录。'
-      : '正在阅读的活动已超出保留范围；可清除筛选查看仍保留的记录。');
+    this.text(notice, this.shown.length ? t('正在阅读的活动已超出保留范围，已定位到仍可查看的记录。')
+      : t('正在阅读的活动已超出保留范围；可清除筛选查看仍保留的记录。'));
     this.get<HTMLButtonElement>('#download-activity').disabled = !this.shown.length;
     const empty = this.get('.activity-empty');
     empty.hidden = Boolean(this.shown.length);
-    this.text(empty.querySelector('p')!, filtered ? '没有匹配的活动' : '暂无活动记录');
+    this.text(empty.querySelector('p')!, filtered ? t('没有匹配的活动') : t('暂无活动记录'));
     this.get('#clear-activity-filters').hidden = !filtered;
   }
 

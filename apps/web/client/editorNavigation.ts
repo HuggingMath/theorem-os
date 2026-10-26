@@ -1,5 +1,6 @@
 import { findSourceMatches, type SourceMatch, type SourceSelection } from './sourceText';
 import { sourceReplaceEdit } from './sourceReplace';
+import { localeTag, t } from '../i18n';
 
 // Measure the native textarea's wrapping without changing its value or undo stack.
 function measureRange(editor: HTMLTextAreaElement, start: number, end = start) {
@@ -192,7 +193,7 @@ export class EditorNavigation {
     this.replaceError = false;
     if (!all && this.selectedIndex() < 0) {
       this.nearest();
-      this.replaceMessage = '已定位匹配，再次点击替换';
+      this.replaceMessage = t('已定位匹配，再次点击替换');
     } else {
       const editor = this.editor;
       const before = { value: editor.value, start: editor.selectionStart, end: editor.selectionEnd,
@@ -202,10 +203,10 @@ export class EditorNavigation {
         ...(all ? {} : { selection: { start: before.start, end: before.end } }),
       });
       if (edit === 'too-large') {
-        this.replaceMessage = '替换后源码超过允许大小，请减少替换内容'; this.replaceError = true;
+        this.replaceMessage = t('替换后源码超过允许大小，请减少替换内容'); this.replaceError = true;
       } else if (!edit) {
         if (!all) this.navigate(1);
-        this.replaceMessage = '文本相同，未修改源码';
+        this.replaceMessage = t('文本相同，未修改源码');
       } else {
         const expected = before.value.slice(0, edit.from) + edit.text + before.value.slice(edit.to);
         editor.focus({ preventScroll: true }); editor.setSelectionRange(edit.from, edit.to);
@@ -216,8 +217,8 @@ export class EditorNavigation {
           if (editor.value === before.value) {
             editor.setSelectionRange(before.start, before.end, before.direction);
             editor.scrollTop = before.top; editor.scrollLeft = before.left;
-            this.replaceMessage = '未能替换，请直接编辑源码';
-          } else this.replaceMessage = '未能完整替换，请撤销后重试';
+            this.replaceMessage = t('未能替换，请直接编辑源码');
+          } else this.replaceMessage = t('未能完整替换，请撤销后重试');
           this.replaceError = true;
         } else {
           this.onEdit();
@@ -225,7 +226,7 @@ export class EditorNavigation {
           editor.setSelectionRange(end, end);
           if (!all && this.matches.length) this.nearest();
           else { revealOffset(editor, edit.from); this.onPosition(); }
-          this.replaceMessage = `已替换 ${edit.count.toLocaleString('zh-CN')} 处`;
+          this.replaceMessage = t('已替换 {0} 处', edit.count.toLocaleString(localeTag));
         }
       }
     }
@@ -273,7 +274,7 @@ export class EditorNavigation {
   private jump() {
     const line = Number(this.line.value);
     if (!/^\d+$/.test(this.line.value) || !Number.isSafeInteger(line) || line < 1 || line > this.lineStarts.length) {
-      this.lineError = `请输入 1 至 ${this.lineStarts.length} 之间的整数行号`;
+      this.lineError = t('请输入 1 至 {0} 之间的整数行号', this.lineStarts.length);
       this.render(); this.line.focus({ preventScroll: true }); return;
     }
     const offset = this.lineStarts[line - 1];
@@ -314,7 +315,7 @@ export class EditorNavigation {
     this.control('editor-replace-controls').hidden = !replacing;
     const replaceToggle = this.control('editor-replace-toggle');
     replaceToggle.setAttribute('aria-expanded', String(replacing));
-    replaceToggle.setAttribute('aria-label', replacing ? '隐藏源码替换' : '显示源码替换');
+    replaceToggle.setAttribute('aria-label', replacing ? t('隐藏源码替换') : t('显示源码替换'));
     for (const kind of ['one', 'all']) this.control<HTMLButtonElement>(`editor-replace-${kind}`).disabled = !replacing || this.composing || !this.matches.length;
     const replaceStatus = this.control('editor-replace-status');
     replaceStatus.hidden = !replacing || !this.replaceMessage;
@@ -328,7 +329,7 @@ export class EditorNavigation {
     for (const direction of ['prev', 'next']) this.control<HTMLButtonElement>(`editor-find-${direction}`).disabled = !this.matches.length;
     this.line.max = String(this.lineStarts.length);
     this.line.setAttribute('aria-invalid', String(Boolean(this.lineError)));
-    this.control('editor-line-range').textContent = `/ ${this.lineStarts.length} 行`;
+    this.control('editor-line-range').textContent = t('/ {0} 行', this.lineStarts.length);
     const error = this.control('editor-line-error');
     error.hidden = this.mode !== 'line' || !this.lineError;
     error.textContent = this.lineError;

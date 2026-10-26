@@ -40,6 +40,7 @@ import { workerPhaseLabel } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResume, saveResume } from './runAwareness';
 import { installTermHints, renderGlossary } from './termHints';
 import type { TermId } from './glossary';
+import { localeTag, localizeText, otherLocale, switchLocale, t } from '../i18n';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
@@ -73,14 +74,14 @@ const passed = isAcceptedRun;
 const timestamp = (value: string, timeOnly = false) => {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value;
-  return new Intl.DateTimeFormat('zh-CN', timeOnly
+  return new Intl.DateTimeFormat(localeTag, timeOnly
     ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }
     : { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 };
 const byteSize = (text: string) => new TextEncoder().encode(text).length;
 const byteLabel = (bytes: number) => bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
 type DetailTab = 'collaboration' | 'overview' | 'source' | 'modules' | 'report' | 'events';
-const detailTabs = [['collaboration', '研究协作'], ['source', 'Lean 源码'], ['modules', '模块'], ['overview', '概览'], ['report', '报告'], ['events', '活动']] as const;
+const detailTabs = [['collaboration', t('研究协作')], ['source', t('Lean 源码')], ['modules', t('模块')], ['overview', t('概览')], ['report', t('报告')], ['events', t('活动')]] as const;
 const state = {
   session: undefined as WebSession | undefined,
   runs: [] as WebRun[], selectedId: '', selectedRun: undefined as WebRun | undefined,
@@ -116,14 +117,14 @@ function announceFinished(run: WebRun) {
 }
 async function toggleNotifications() {
   const current = notifyState();
-  if (current === 'unsupported') { toast('这个浏览器不支持桌面通知'); return; }
-  if (current === 'blocked') { toast('浏览器已阻止本站通知，请在地址栏的网站设置中允许'); return; }
+  if (current === 'unsupported') { toast(t('这个浏览器不支持桌面通知')); return; }
+  if (current === 'blocked') { toast(t('浏览器已阻止本站通知，请在地址栏的网站设置中允许')); return; }
   const remember = (value: string) => { try { localStorage.setItem(notifyStorageKey, value); } catch { /* Preference lasts for this page only. */ } };
-  if (current === 'on') { remember('off'); toast('已关闭完成通知'); renderConversation(); return; }
+  if (current === 'on') { remember('off'); toast(t('已关闭完成通知')); renderConversation(); return; }
   const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
-  if (permission !== 'granted') { toast('没有获得通知权限，结束时只会在标签页标题上提示'); renderConversation(); return; }
+  if (permission !== 'granted') { toast(t('没有获得通知权限，结束时只会在标签页标题上提示')); renderConversation(); return; }
   remember('on');
-  toast('研究结束时会发送桌面通知');
+  toast(t('研究结束时会发送桌面通知'));
   renderConversation();
 }
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -186,7 +187,7 @@ function api<T>(url: string, init?: RequestInit): Promise<T>;
 function api<T>(url: string, init: RequestInit, etag: (value: string | null) => void): Promise<T | undefined>;
 async function api<T>(url: string, init: RequestInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(new Error('请求超时，请重新连接')), 15_000);
+  const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), 15_000);
   const signals = [timeout.signal];
   if (!init.method || init.method === 'GET') signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
@@ -202,10 +203,10 @@ async function api<T>(url: string, init: RequestInit = {}, etag?: (value: string
     });
     if (!response.ok) {
       const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
-        ? payload.error : `请求失败 (${response.status})`;
+        ? payload.error : t('请求失败 ({0})', response.status);
       throw new ApiError(message, response.status);
     }
-    if (payload === undefined) throw new Error('服务器返回了无法读取的响应');
+    if (payload === undefined) throw new Error(t('服务器返回了无法读取的响应'));
     etag?.(response.headers.get('ETag'));
     return payload as T;
   } catch (error) {
@@ -215,7 +216,7 @@ async function api<T>(url: string, init: RequestInit = {}, etag?: (value: string
     clearTimeout(timer);
   }
 }
-const message = (error: unknown) => error instanceof Error ? error.message : '请求失败，请重试';
+const message = (error: unknown) => error instanceof Error ? error.message : t('请求失败，请重试');
 function toast(text: string) {
   const target = element('#toast');
   target.textContent = text; target.hidden = false;
@@ -316,8 +317,8 @@ function renderPreparation(issues = currentSubmissionIssues()) {
   modulePlanEditor.showError(validationShown.has('module-plan') ? moduleIssue?.message : undefined);
   const issue = issues[0];
   const labels: Record<SubmissionField, string> = {
-    provider: '选择服务商', environment: '选择环境', source: '编辑源码', task: '填写任务', model: '填写模型',
-    'api-key': '填写 API Key', 'max-turns': '调整轮次', 'max-seconds': '调整预算', workers: '调整 Agent', 'max-tokens': '调整用量上限', 'module-plan': '检查模块方案',
+    provider: t('选择服务商'), environment: t('选择环境'), source: t('编辑源码'), task: t('填写任务'), model: t('填写模型'),
+    'api-key': t('填写 API Key'), 'max-turns': t('调整轮次'), 'max-seconds': t('调整预算'), workers: t('调整 Agent'), 'max-tokens': t('调整用量上限'), 'module-plan': t('检查模块方案'),
   };
   const pending = !state.session;
   const offline = !pending && !state.connected;
@@ -325,16 +326,16 @@ function renderPreparation(issues = currentSubmissionIssues()) {
   const phase = state.submitting ? 'submitting' : pending ? 'pending' : offline || !environmentReady ? 'offline' : issue ? 'missing' : 'ready';
   const target = element('#submission-readiness');
   if (target.dataset.state !== phase) target.dataset.state = phase;
-  patchText(element('#readiness-title'), state.submitting ? '正在提交研究' : pending ? '正在读取提交配置'
-    : offline ? '连接中断，草稿可继续编辑' : !environmentReady ? '运行环境未就绪'
-      : issue?.message ?? '提交配置已填写');
-  patchText(element('#readiness-detail'), state.submitting ? '请稍候，提交结果将在对话中显示。' : pending ? '连接后可编辑研究任务。'
-    : offline || !environmentReady ? '环境恢复后可提交，当前草稿会保留。'
-      : issue?.field === 'api-key' ? '每次提交后清空，不随草稿保存。'
-        : issue?.field === 'task' ? '说明要证明的目标与约束。'
-          : issue?.field === 'source' ? '添加原始 Lean 题目，右侧可预览。'
-            : issue ? '补全配置后即可提交当前题目。' : 'Key 与模型可用性将在提交时确认。');
-  patchText(element('#readiness-action'), issue ? labels[issue.field] : '查看配置');
+  patchText(element('#readiness-title'), state.submitting ? t('正在提交研究') : pending ? t('正在读取提交配置')
+    : offline ? t('连接中断，草稿可继续编辑') : !environmentReady ? t('运行环境未就绪')
+      : issue?.message ?? t('提交配置已填写'));
+  patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? t('连接后可编辑研究任务。')
+    : offline || !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
+      : issue?.field === 'api-key' ? t('每次提交后清空，不随草稿保存。')
+        : issue?.field === 'task' ? t('说明要证明的目标与约束。')
+          : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
+            : issue ? t('补全配置后即可提交当前题目。') : t('Key 与模型可用性将在提交时确认。'));
+  patchText(element('#readiness-action'), issue ? labels[issue.field] : t('查看配置'));
   patchMarkup(element('#readiness-icon'), state.submitting ? '<span class="spinner"></span>' : icon(phase === 'ready' ? 'circle-check' : 'circle-alert'));
   const action = element<HTMLButtonElement>('#prepare-run');
   if (action.disabled !== (pending || state.submitting)) action.disabled = pending || state.submitting;
@@ -346,10 +347,10 @@ function renderBudgetEstimate() {
   if (!Number.isSafeInteger(turns) || turns < 1 || !Number.isSafeInteger(seconds) || seconds < 30) { patchText(element('#budget-estimate'), ''); return; }
   const cap = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
   const estimate = usageEstimate(state.runs, model, turns);
-  const limits = `最长约 ${Math.ceil(seconds / 60)} 分钟，全部 Agent 合计最多 ${turns} 轮模型调用。`;
-  const usage = estimate ? `按你最近 ${estimate.samples} 次 ${model} 运行的平均每轮 ${formatTokens(estimate.perTurn)} Token，本次约 ${formatTokens(estimate.ceiling)} Token 以内。`
-    : '还没有这个模型的用量记录，费用按服务商实际计费。';
-  patchText(element('#budget-estimate'), `${limits}${usage}${cap ? `达到 ${formatTokens(cap)} Token 后停止新的调用。` : ''}`);
+  const limits = t('最长约 {0} 分钟，全部 Agent 合计最多 {1} 轮模型调用。', Math.ceil(seconds / 60), turns);
+  const usage = estimate ? t('按你最近 {0} 次 {1} 运行的平均每轮 {2} Token，本次约 {3} Token 以内。', estimate.samples, model, formatTokens(estimate.perTurn), formatTokens(estimate.ceiling))
+    : t('还没有这个模型的用量记录，费用按服务商实际计费。');
+  patchText(element('#budget-estimate'), `${limits}${usage}${cap ? t('达到 {0} Token 后停止新的调用。', formatTokens(cap)) : ''}`);
 }
 function focusSubmissionIssue(issue: SubmissionIssue) {
   validationShown.add(issue.field);
@@ -373,13 +374,13 @@ function renderTemplateSelection() {
 }
 function renderComposerSummary() {
   patchText(element('#composer-environment'), environmentName(field('environment').value));
-  patchText(element('#attached-lines'), `${field('source').value.split(/\r\n|\r|\n/).length} 行`);
+  patchText(element('#attached-lines'), t('{0} 行', field('source').value.split(/\r\n|\r|\n/).length));
   const stop = element<HTMLButtonElement>('#stop-research');
   const run = currentRun();
   const cancelling = Boolean(run && state.cancelling.has(run.id));
   stop.hidden = !run || !activeRun(run);
   stop.disabled = !state.connected || cancelling;
-  stop.title = cancelling ? '正在取消' : '取消运行';
+  stop.title = cancelling ? t('正在取消') : t('取消运行');
   stop.setAttribute('aria-label', stop.title);
   stop.setAttribute('aria-busy', String(cancelling));
   patchMarkup(stop, cancelling ? '<span class="spinner"></span>' : icon('square'));
@@ -435,7 +436,7 @@ function renderConversation() {
     ...(state.session?.sample ? { sample: { title: state.session.sample.title } } : {}),
     firstRun: Boolean(state.session) && !state.runs.length,
     ...(run && value ? { run: { id: run.id, task: run.task, environment: environmentName(run.environment), model: run.model, working,
-      events: events.map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), message: event.message })),
+      events: events.map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), message: localizeText(event.message) })),
       result: { tone: value.tone, symbol: value.symbol, label: failureGuide(run)?.title ?? value.label, description: resultDescription(run), candidate: Boolean(run.artifact && working) },
       ...(failureGuide(run) ? { recovery: failureGuide(run)!.actions } : {}), ...(working ? { notify: notifyState() } : {}) } } : {}),
   });
@@ -444,7 +445,7 @@ function renderConversation() {
     const recent = new Set(events.slice(-3).map(event => String(event.sequence)));
     for (const row of rendered()) if (recent.has(row.dataset.sequence!) && !previous.has(row.dataset.sequence)) entrances.push({ target: row, kind: 'event' });
   }
-  const announcement = run ? `${status(run).label}。${activeRun(run) ? run.events.at(-1)?.message ?? '' : resultDescription(run)}` : '';
+  const announcement = run ? t('{0}。{1}', status(run).label, activeRun(run) ? localizeText(run.events.at(-1)?.message ?? '') : resultDescription(run)) : '';
   const live = element('#conversation-announcement');
   if (live.textContent !== announcement) live.textContent = announcement;
   renderTemplateSelection();
@@ -455,23 +456,23 @@ function providerAddress() {
   element('#provider-address').textContent = state.session?.providers.find(provider => provider.id === field('provider').value)?.baseUrl ?? '';
 }
 const environmentInfo = (id: WebEnvironment | string) => state.session?.environments.find(environment => environment.id === id);
-const environmentName = (id: WebEnvironment | string) => environmentInfo(id)?.name ?? (id === 'mathlib' ? 'Mathlib' : 'Lean 标准库');
+const environmentName = (id: WebEnvironment | string) => environmentInfo(id)?.name ?? (id === 'mathlib' ? 'Mathlib' : t('Lean 标准库'));
 const leanVersion = (toolchain: string) => toolchain.replace(/^leanprover\/lean4:/, '');
 function updateEnvironment() {
   const environment = environmentInfo(field('environment').value);
   element('#lean-scope').textContent = environment ? leanVersion(environment.toolchain) : '';
   const details = element('#environment-details');
   details.textContent = environment
-    ? `Lean ${leanVersion(environment.toolchain)}${environment.mathlibRevision ? ` · Mathlib ${environment.mathlibRevision.slice(0, 8)}` : ' · 标准库'}`
-    : '请选择证明环境';
+    ? `Lean ${leanVersion(environment.toolchain)}${environment.mathlibRevision ? ` · Mathlib ${environment.mathlibRevision.slice(0, 8)}` : t(' · 标准库')}`
+    : t('请选择证明环境');
   details.title = environment
     ? `${environment.description} · Lean ${leanVersion(environment.toolchain)}${environment.mathlibRevision ? ` · Mathlib ${environment.mathlibRevision}` : ''}`
-    : '请选择证明环境';
+    : t('请选择证明环境');
   details.setAttribute('aria-label', details.title);
 }
 function renderTemplates(preferred = '', useFirst = false) {
   const templates = state.session?.templates.filter(template => template.environment === field('environment').value) ?? [];
-  field('template').innerHTML = templates.map(template => `<option value="${html(template.id)}">${html(template.name)}</option>`).join('') + '<option value="">自定义 Lean</option>';
+  field('template').innerHTML = templates.map(template => `<option value="${html(template.id)}">${html(template.name)}</option>`).join('') + `<option value="">${t('自定义 Lean')}</option>`;
   field('template').value = templates.some(template => template.id === preferred) ? preferred : useFirst ? templates[0]?.id ?? '' : '';
 }
 function updateCounts() {
@@ -481,7 +482,7 @@ function updateCounts() {
     target.textContent = limit ? `${byteLabel(count)} / ${byteLabel(limit)}` : byteLabel(count);
     target.classList.toggle('over-limit', Boolean(limit && count > limit));
   }
-  element('#source-lines').textContent = `${field('source').value.split(/\r\n|\r|\n/).length} 行`;
+  element('#source-lines').textContent = t('{0} 行', field('source').value.split(/\r\n|\r|\n/).length);
 }
 function sourceChanged() {
   sourceRevision++;
@@ -513,8 +514,8 @@ function renderDraftRecovery() {
   button.disabled = state.submitting;
   if (!recovery) return;
   const labels: Record<ReplacementReason, string> = {
-    template: '已切换示例', reset: '已重置草稿', reuse: '已复用任务', import: '已载入任务文件',
-    source: '已导入 Lean 文件', edit: '已应用源码编辑',
+    template: t('已切换示例'), reset: t('已重置草稿'), reuse: t('已复用任务'), import: t('已载入任务文件'),
+    source: t('已导入 Lean 文件'), edit: t('已应用源码编辑'),
   };
   patchText(element('#draft-recovery-text'), labels[recovery.reason]);
   element('#draft-recovery-local').hidden = recovery.persisted;
@@ -542,7 +543,7 @@ function recoverDraft() {
     field('source').scrollIntoView({ block: 'nearest', behavior: 'instant' });
   }
   else field('task').focus({ preventScroll: true });
-  toast('已恢复替换前的草稿，请重新填写 API Key');
+  toast(t('已恢复替换前的草稿，请重新填写 API Key'));
 }
 function draftChanged(persist = true) {
   latestDraft = captureDraft();
@@ -553,7 +554,7 @@ function draftChanged(persist = true) {
   renderDraftPreview();
   if (!draftReady || !persist) return;
   draftDirty = true;
-  setDraftStatus('草稿待保存');
+  setDraftStatus(t('草稿待保存'));
   clearTimeout(draftTimer);
   draftTimer = setTimeout(saveDraft, 250);
 }
@@ -563,11 +564,11 @@ function saveDraft() {
   try {
     sessionStorage.setItem(taskDraftStorageKey, encodeTaskDraft(captureDraft()));
     draftDirty = false;
-    setDraftStatus('草稿已保存');
+    setDraftStatus(t('草稿已保存'));
   } catch {
     // Avoid restoring an older draft after the latest edits could not be saved.
     try { sessionStorage.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
-    setDraftStatus('草稿未保存', true);
+    setDraftStatus(t('草稿未保存'), true);
   }
 }
 function applyTaskDraft(draft: TaskDraft) {
@@ -594,20 +595,20 @@ function applyTaskDraft(draft: TaskDraft) {
 function restoreDraft() {
   let stored: string | null;
   try { stored = sessionStorage.getItem(taskDraftStorageKey); }
-  catch { setDraftStatus('草稿保存不可用', true); return; }
+  catch { setDraftStatus(t('草稿保存不可用'), true); return; }
   if (!stored) return;
   try {
     applyTaskDraft(decodeTaskDraft(JSON.parse(stored)));
-    setDraftStatus('已恢复草稿');
+    setDraftStatus(t('已恢复草稿'));
   } catch {
     try { sessionStorage.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
-    setDraftStatus('草稿未恢复', true);
+    setDraftStatus(t('草稿未恢复'), true);
   }
 }
 function renderImportState() {
   if (!pendingImport) return;
-  const notice = pendingImport.revision !== draftRevision ? '草稿已变化，请重新选择文件。'
-    : state.submitting ? '正在提交任务，请稍后再载入。' : '';
+  const notice = pendingImport.revision !== draftRevision ? t('草稿已变化，请重新选择文件。')
+    : state.submitting ? t('正在提交任务，请稍后再载入。') : '';
   element('#import-notice').textContent = notice;
   element('#import-notice').hidden = !notice;
   element<HTMLButtonElement>('#confirm-import').disabled = Boolean(notice) || !state.session;
@@ -619,17 +620,17 @@ async function importTaskFile(file: File) {
   try {
     const draft = await readTaskDraftFile(file);
     if (sequence !== taskImportSequence) return;
-    if (revision !== draftRevision || state.submitting) { toast('草稿已变化，未导入文件'); return; }
+    if (revision !== draftRevision || state.submitting) { toast(t('草稿已变化，未导入文件')); return; }
     pendingImport = { draft, revision };
     element('#import-filename').textContent = file.name;
     const provider = state.session?.providers.find(provider => provider.id === draft.providerId);
-    element('#import-facts').innerHTML = [fact('证明环境', environmentName(draft.environment)),
-      fact('服务商', provider?.name ?? `${draft.providerId || '未选择'} · 当前不可用`), fact('模型', draft.model || '未填写', true),
-      fact('推理强度', effortLabels[draft.effort] ?? draft.effort), fact('轮次上限', draft.maxTurns || '未填写'),
-      fact('解题预算 / 秒', draft.maxRunSeconds || '未填写'), fact('Agent 数量', draft.workers || '未填写'),
-      fact('协作模式', draft.coordination === 'cooperative' ? '任务协作' : '独立并行')].join('');
-    element('#import-task-preview').textContent = draft.task || '未填写';
-    element('#import-source-preview').textContent = draft.source || '未填写';
+    element('#import-facts').innerHTML = [fact(t('证明环境'), environmentName(draft.environment)),
+      fact(t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))), fact(t('模型'), draft.model || t('未填写'), true),
+      fact(t('推理强度'), effortLabels[draft.effort] ?? draft.effort), fact(t('轮次上限'), draft.maxTurns || t('未填写')),
+      fact(t('解题预算 / 秒'), draft.maxRunSeconds || t('未填写')), fact(t('Agent 数量'), draft.workers || t('未填写')),
+      fact(t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行'))].join('');
+    element('#import-task-preview').textContent = draft.task || t('未填写');
+    element('#import-source-preview').textContent = draft.source || t('未填写');
     renderImportState();
     const dialog = element<HTMLDialogElement>('#import-task-dialog');
     showDialog(dialog);
@@ -673,13 +674,13 @@ function resetForm() {
     element('#draft-error').hidden = true;
     draftReady = wasReady;
     if (wasReady) {
-      try { sessionStorage.removeItem(taskDraftStorageKey); setDraftStatus('草稿已重置'); }
-      catch { setDraftStatus('草稿保存不可用', true); }
+      try { sessionStorage.removeItem(taskDraftStorageKey); setDraftStatus(t('草稿已重置')); }
+      catch { setDraftStatus(t('草稿保存不可用'), true); }
     }
   });
 }
 function setCustomSource(source: string) {
-  if (field('template').value) field('task').value = '保留原题声明，补全 Lean 证明并通过独立验收。';
+  if (field('template').value) field('task').value = t('保留原题声明，补全 Lean 证明并通过独立验收。');
   field('template').value = '';
   field('source').value = source;
   sourceChanged();
@@ -688,11 +689,11 @@ function updateEditorCount() {
   const source = field('expanded-source').value;
   const size = byteSize(source), limit = state.session?.limits.maxSourceBytes;
   const target = element('#editor-count');
-  target.textContent = `${source.split(/\r\n|\r|\n/).length} 行 · ${byteLabel(size)}${limit ? ` / ${byteLabel(limit)}` : ''}`;
+  target.textContent = t('{0} 行 · {1}{2}', source.split(/\r\n|\r|\n/).length, byteLabel(size), limit ? ` / ${byteLabel(limit)}` : '');
   target.classList.toggle('over-limit', Boolean(limit && size > limit));
   const modified = source !== editorInitialSource;
   const changeStatus = element('#editor-change-status');
-  patchText(changeStatus, modified ? '修改尚未应用' : '未修改');
+  patchText(changeStatus, modified ? t('修改尚未应用') : t('未修改'));
   changeStatus.classList.toggle('modified', modified);
   editorNavigation.updateSource();
   editorReview.updateSource();
@@ -704,7 +705,7 @@ function updateEditorPosition() {
   const prefix = editor.value.slice(0, caret);
   const line = prefix.split('\n').length;
   const column = Array.from(prefix.slice(prefix.lastIndexOf('\n') + 1)).length + 1;
-  const position = `第 ${line} 行 · 第 ${column} 列`, target = element('#editor-position');
+  const position = t('第 {0} 行 · 第 {1} 列', line, column), target = element('#editor-position');
   patchText(target, position);
   if (target.title !== position) target.title = position;
   editorNavigation.updateSelection();
@@ -723,7 +724,7 @@ function indentEditor(direction: IndentDirection) {
     editor.setSelectionRange(applied ? edit.selectionStart : selectionStart, applied ? edit.selectionEnd : selectionEnd, selectionDirection);
     const error = element('#editor-error');
     error.hidden = applied;
-    if (!applied) error.textContent = '未能调整缩进，请直接编辑源码';
+    if (!applied) error.textContent = t('未能调整缩进，请直接编辑源码');
     updateEditorCount();
   }
   editor.scrollTop = scrollTop; editor.scrollLeft = scrollLeft;
@@ -790,10 +791,10 @@ function discardEditorChanges() {
 }
 function applyEditor() {
   const source = field('expanded-source').value;
-  const error = !source.trim() ? 'Lean 源码不能为空'
-    : source.includes('\0') ? '源码包含无效字符'
-      : byteSize(source) > (state.session?.limits.maxSourceBytes ?? 0) ? 'Lean 源码超出允许大小'
-        : editorRevision !== sourceRevision ? '原始草稿已变化，请重新打开编辑器后修改' : '';
+  const error = !source.trim() ? t('Lean 源码不能为空')
+    : source.includes('\0') ? t('源码包含无效字符')
+      : byteSize(source) > (state.session?.limits.maxSourceBytes ?? 0) ? t('Lean 源码超出允许大小')
+        : editorRevision !== sourceRevision ? t('原始草稿已变化，请重新打开编辑器后修改') : '';
   element('#editor-error').textContent = error;
   element('#editor-error').hidden = !error;
   if (error) { editorReview.close(); return; }
@@ -804,8 +805,8 @@ function applyEditor() {
 function updateKeyToggle() {
   const visible = element<HTMLInputElement>('#api-key').type === 'text';
   const button = element('#toggle-key');
-  button.setAttribute('aria-label', visible ? '隐藏 API Key' : '显示 API Key');
-  button.setAttribute('title', visible ? '隐藏 API Key' : '显示 API Key');
+  button.setAttribute('aria-label', visible ? t('隐藏 API Key') : t('显示 API Key'));
+  button.setAttribute('title', visible ? t('隐藏 API Key') : t('显示 API Key'));
   button.setAttribute('aria-pressed', String(visible));
   button.innerHTML = icon(visible ? 'eye-off' : 'eye');
   icons();
@@ -813,12 +814,12 @@ function updateKeyToggle() {
 function renderRuntime() {
   const session = state.session;
   const ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
-  element('#runtime-note').textContent = !state.connected ? '连接恢复后可提交' : session
-    ? !session.providers.length ? '未配置可用服务商' : session.runtime.message || (ready ? '环境就绪' : '环境未就绪')
-    : '等待连接';
+  element('#runtime-note').textContent = !state.connected ? t('连接恢复后可提交') : session
+    ? !session.providers.length ? t('未配置可用服务商') : localizeText(session.runtime.message) || (ready ? t('环境就绪') : t('环境未就绪'))
+    : t('等待连接');
   element<HTMLButtonElement>('#submit-run').disabled = !ready || state.submitting;
   element<HTMLButtonElement>('#submit-run').innerHTML = state.submitting ? '<span class="spinner"></span>' : icon('arrow-up');
-  element('#submit-run').setAttribute('aria-label', state.submitting ? '正在提交' : '发送研究任务');
+  element('#submit-run').setAttribute('aria-label', state.submitting ? t('正在提交') : t('发送研究任务'));
   element<HTMLButtonElement>('#settings-submit').disabled = !ready || state.submitting;
   element<HTMLFieldSetElement>('#form-fields').disabled = !session || state.submitting;
   element<HTMLButtonElement>('#reset-form').disabled = !session || state.submitting;
@@ -834,15 +835,15 @@ function renderRuntime() {
   icons();
 }
 function status(run: WebRun) {
-  if (passed(run)) return { label: '完整原题通过', tone: 'passed', symbol: 'circle-check' };
-  if (run.status === 'queued') return { label: run.queue ? `排队中 · 第 ${run.queue.position} 位` : '排队中', tone: '', symbol: 'clock-3' };
+  if (passed(run)) return { label: t('完整原题通过'), tone: 'passed', symbol: 'circle-check' };
+  if (run.status === 'queued') return { label: run.queue ? t('排队中 · 第 {0} 位', run.queue.position) : t('排队中'), tone: '', symbol: 'clock-3' };
   if (run.status === 'running') return { label: runProgress(run).phaseLabel, tone: 'running', symbol: 'refresh-cw' };
-  if (run.status === 'cancelled') return { label: '已取消', tone: '', symbol: 'square' };
-  if (run.status === 'error') return { label: '运行错误', tone: 'failed', symbol: 'circle-alert' };
+  if (run.status === 'cancelled') return { label: t('已取消'), tone: '', symbol: 'square' };
+  if (run.status === 'error') return { label: t('运行错误'), tone: 'failed', symbol: 'circle-alert' };
   // A stopped budget is an expected end; other classified failures need the user to act.
-  if (run.failure && !['budget', 'time_limit'].includes(run.failure.kind)) return { label: '运行失败', tone: 'failed', symbol: 'circle-alert' };
-  if (['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '')) return { label: '验收未通过', tone: 'failed', symbol: 'circle-alert' };
-  return { label: '运行结束', tone: 'warning', symbol: 'clock-3' };
+  if (run.failure && !['budget', 'time_limit'].includes(run.failure.kind)) return { label: t('运行失败'), tone: 'failed', symbol: 'circle-alert' };
+  if (['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '')) return { label: t('验收未通过'), tone: 'failed', symbol: 'circle-alert' };
+  return { label: t('运行结束'), tone: 'warning', symbol: 'clock-3' };
 }
 function rememberFinishedRuns(previous: readonly WebRun[]) {
   const active = new Set(previous.filter(activeRun).map(run => run.id));
@@ -858,13 +859,13 @@ function renderRunMonitor() {
   const active = runs.filter(activeRun).length, finished = runs.length - active;
   root.hidden = !runs.length;
   root.dataset.stale = String(!state.connected);
-  patchText(element('#run-monitor-summary'), [active ? `${active} 项进行中` : '', finished ? `${finished} 项已结束` : ''].filter(Boolean).join('\n'));
+  patchText(element('#run-monitor-summary'), [active ? t('{0} 项进行中', active) : '', finished ? t('{0} 项已结束', finished) : ''].filter(Boolean).join('\n'));
   const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : undefined;
   const left = list.scrollLeft;
   drawRunMonitor(list, runs.map((run): MonitorItem => {
     const value = status(run), cancelling = activeRun(run) && state.cancelling.has(run.id);
-    const label = cancelling ? '正在取消' : value.label;
-    return { id: run.id, title: run.title, description: state.connected ? label : `待同步 · ${label}`, tone: value.tone, symbol: value.symbol,
+    const label = cancelling ? t('正在取消') : value.label;
+    return { id: run.id, title: run.title, description: state.connected ? label : t('待同步 · {0}', label), tone: value.tone, symbol: value.symbol,
       current: run.id === state.selectedId, cancelling, active: activeRun(run), stages: runProgress(run).steps.map(step => step.state) };
   }));
   list.scrollLeft = left;
@@ -927,7 +928,7 @@ function renderRunList(force = false) {
     let row = rows.get(run.id);
     if (!row) {
       row = document.createElement('div'); row.setAttribute('role', 'listitem'); row.dataset.historyId = run.id;
-      row.innerHTML = '<button type="button" class="run-row"><span class="run-row-title"></span><span class="run-row-meta"><span class="run-row-model"></span><span class="run-environment"></span></span><span class="run-row-bottom"><span class="badge"></span><time></time></span></button>';
+      row.innerHTML = '<button type="button" class="run-row"><span class="run-row-title" translate="no"></span><span class="run-row-meta"><span class="run-row-model"></span><span class="run-environment"></span></span><span class="run-row-bottom"><span class="badge"></span><time></time></span></button>';
       row.querySelector<HTMLButtonElement>('button')!.dataset.runId = run.id;
       rows.set(run.id, row);
     }
@@ -955,7 +956,7 @@ function renderRunList(force = false) {
       empty = document.createElement('div'); empty.className = 'empty-state compact';
       empty.dataset.historyEmpty = ''; empty.setAttribute('role', 'status'); list.append(empty);
     }
-    patchMarkup(empty, `${icon(filtered ? 'search' : 'clock-3')}<p>${filtered ? '没有匹配的运行' : '暂无运行记录'}</p>${filtered ? '<button type="button" class="text-button" data-clear-filters>清除筛选</button>' : ''}`);
+    patchMarkup(empty, `${icon(filtered ? 'search' : 'clock-3')}<p>${filtered ? t('没有匹配的运行') : t('暂无运行记录')}</p>${filtered ? `<button type="button" class="text-button" data-clear-filters>${t('清除筛选')}</button>` : ''}`);
   }
   restoreHistoryScroll();
   if (focused && document.activeElement !== focused && list.getClientRects().length) {
@@ -977,18 +978,18 @@ const downloadUrl = (id: string) => `/api/runs/${encodeURIComponent(id)}/downloa
 function resultTitle(run: WebRun) {
   const guide = failureGuide(run);
   if (guide) return guide.title;
-  return passed(run) ? '完整原题已通过独立验收'
-    : activeRun(run) ? run.status === 'queued' ? '任务已排队' : '研究正在运行'
-      : run.status === 'cancelled' ? '运行已取消'
-        : run.status === 'error' ? '运行发生错误'
-          : ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '') ? '完整原题验收未通过' : '运行已结束，完整原题尚未验收通过';
+  return passed(run) ? t('完整原题已通过独立验收')
+    : activeRun(run) ? run.status === 'queued' ? t('任务已排队') : t('研究正在运行')
+      : run.status === 'cancelled' ? t('运行已取消')
+        : run.status === 'error' ? t('运行发生错误')
+          : ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '') ? t('完整原题验收未通过') : t('运行已结束，完整原题尚未验收通过');
 }
 function resultBanner(run: WebRun) {
   const value = status(run);
   return `<div class="result-banner ${value.tone}">${icon(value.symbol)}<div><h3>${resultTitle(run)}</h3><p>${html(resultDescription(run))}</p></div></div>`;
 }
 const fact = (label: string, value: unknown, mono = false) => `<div><dt>${label}</dt><dd${mono ? ' class="mono"' : ''}>${html(value)}</dd></div>`;
-const stepLabels = { done: '已完成', active: '进行中', stopped: '已停止', error: '未通过', pending: '等待中', skipped: '未执行' };
+const stepLabels = { done: t('已完成'), active: t('进行中'), stopped: t('已停止'), error: t('未通过'), pending: t('等待中'), skipped: t('未执行') };
 function overviewProps(run: WebRun): RunOverviewProps {
   const progress = runProgress(run), value = status(run);
   const provider = state.session?.providers.find(item => item.id === run.providerId);
@@ -998,21 +999,21 @@ function overviewProps(run: WebRun): RunOverviewProps {
   return {
     runId: run.id, active: activeRun(run), tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: resultDescription(run),
     phaseLabel: progress.phaseLabel, elapsed: formatDuration(progress.elapsed),
-    solving: progress.solvingElapsed === null ? '尚未开始' : formatDuration(progress.solvingElapsed),
+    solving: progress.solvingElapsed === null ? t('尚未开始') : formatDuration(progress.solvingElapsed),
     budget: formatDuration(run.maxRunSeconds * 1000), budgetUsed: (progress.solvingElapsed ?? 0) / (run.maxRunSeconds * 1000),
     steps: progress.steps.map(step => ({ label: step.label, state: step.state, stateLabel: stepLabels[step.state], clock: formatDuration(step.elapsed),
       share: step.elapsed === null ? 0 : Math.min(1, step.elapsed / total) })),
     downloads: { proof: Boolean(run.result?.proof), report: Boolean(run.result) },
     task: run.task,
-    facts: [item('证明环境', environmentName(run.environment)), ...(environment ? [item('Lean 版本', environment.toolchain, true)] : []),
-      ...(environment?.mathlibRevision ? [item('Mathlib 版本', environment.mathlibRevision, true)] : []), item('服务商', provider?.name ?? (isSample(run) ? '离线示例' : run.providerId)),
-      item('模型', run.model, true), item('推理强度', effortLabels[run.effort] ?? run.effort), item('协作模式', run.coordination === 'cooperative' ? '任务协作' : '独立并行'),
-      item('Agent 数量', run.workers), item('轮次上限', run.maxTurns), item('解题预算', `${run.maxRunSeconds} 秒`),
-      item('用量上限', run.maxTotalTokens ? `${formatTokens(run.maxTotalTokens)} Token` : '不限'), item('创建时间', timestamp(run.createdAt)),
-      ...(run.finishedAt ? [item('结束时间', timestamp(run.finishedAt))] : [])],
-    agents: (activeRun(run) ? run.observation?.inspection.workers ?? [] : []).map(worker => ({ id: worker.id, state: worker.scheduling?.status ?? 'unknown', phase: workerPhaseLabel(worker.phase) ?? '未记录',
+    facts: [item(t('证明环境'), environmentName(run.environment)), ...(environment ? [item(t('Lean 版本'), environment.toolchain, true)] : []),
+      ...(environment?.mathlibRevision ? [item(t('Mathlib 版本'), environment.mathlibRevision, true)] : []), item(t('服务商'), provider?.name ?? (isSample(run) ? t('离线示例') : run.providerId)),
+      item(t('模型'), run.model, true), item(t('推理强度'), effortLabels[run.effort] ?? run.effort), item(t('协作模式'), run.coordination === 'cooperative' ? t('任务协作') : t('独立并行')),
+      item(t('Agent 数量'), run.workers), item(t('轮次上限'), run.maxTurns), item(t('解题预算'), t('{0} 秒', run.maxRunSeconds)),
+      item(t('用量上限'), run.maxTotalTokens ? `${formatTokens(run.maxTotalTokens)} Token` : t('不限')), item(t('创建时间'), timestamp(run.createdAt)),
+      ...(run.finishedAt ? [item(t('结束时间'), timestamp(run.finishedAt))] : [])],
+    agents: (activeRun(run) ? run.observation?.inspection.workers ?? [] : []).map(worker => ({ id: worker.id, state: worker.scheduling?.status ?? 'unknown', phase: workerPhaseLabel(worker.phase) ?? t('未记录'),
       ...(worker.task ? { task: worker.task } : {}) })),
-    events: run.events.slice(-6).reverse().map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), type: event.type, message: event.message })),
+    events: run.events.slice(-6).reverse().map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), type: event.type, message: localizeText(event.message) })),
     eventCount: run.events.length,
   };
 }
@@ -1032,18 +1033,18 @@ function sourceContent(run: WebRun) {
   const hasProof = Boolean(candidateSource(run));
   const showingProof = hasProof && state.sourceView !== 'input';
   const verifiedSource = Boolean(run.result?.proof && passed(run));
-  const proofLabel = verifiedSource ? '验收证明' : '候选源码';
+  const proofLabel = verifiedSource ? t('验收证明') : t('候选源码');
   const source = displayedSource(run);
-  const sourceStatus = showingProof ? verifiedSource ? '完整原题已通过验收' : '候选 · 尚未验收通过' : activeRun(run) && !hasProof ? '原始题目 · 等待候选' : '原始题目';
+  const sourceStatus = showingProof ? verifiedSource ? t('完整原题已通过验收') : t('候选 · 尚未验收通过') : activeRun(run) && !hasProof ? t('原始题目 · 等待候选') : t('原始题目');
   const lineCount = source.split(/\r\n|\r|\n/).length;
-  const controls = `${hasProof ? `<div class="source-switch" role="group" aria-label="源码版本"><button type="button" data-source-view="proof" aria-pressed="${state.sourceView === 'proof'}">${proofLabel}</button><button type="button" data-source-view="input" aria-pressed="${state.sourceView === 'input'}">原始题目</button><button type="button" data-source-view="diff" aria-pressed="${state.sourceView === 'diff'}">差异对比</button></div>` : '<h3>Submission.lean</h3>'}<div class="source-actions"><button type="button" class="icon-button" data-action="copy-source" aria-label="复制${showingProof ? proofLabel : '原始题目'}" title="复制${showingProof ? proofLabel : '原始题目'}">${icon('copy')}</button>${showingProof ? `<button type="button" class="icon-button" data-action="download-proof" aria-label="下载 Lean" title="下载 Lean">${icon('download')}</button>` : ''}</div>`;
-  const status = `<span>${icon(verifiedSource && showingProof ? 'circle-check' : showingProof ? 'file-code-2' : 'clock-3')}${sourceStatus}</span>${showingProof && !run.result?.proof && run.artifact ? `<span class="mono">${html(run.artifact.workerId)} · ${html(timestamp(run.artifact.capturedAt, true))}</span>` : `<span class="mono">${lineCount} 行 · ${byteLabel(byteSize(source))}</span>`}`;
+  const controls = `${hasProof ? `<div class="source-switch" role="group" aria-label="${t('源码版本')}"><button type="button" data-source-view="proof" aria-pressed="${state.sourceView === 'proof'}">${proofLabel}</button><button type="button" data-source-view="input" aria-pressed="${state.sourceView === 'input'}">${t('原始题目')}</button><button type="button" data-source-view="diff" aria-pressed="${state.sourceView === 'diff'}">${t('差异对比')}</button></div>` : '<h3>Submission.lean</h3>'}<div class="source-actions"><button type="button" class="icon-button" data-action="copy-source" aria-label="${t('复制{0}', showingProof ? proofLabel : t('原始题目'))}" title="${t('复制{0}', showingProof ? proofLabel : t('原始题目'))}">${icon('copy')}</button>${showingProof ? `<button type="button" class="icon-button" data-action="download-proof" aria-label="${t('下载 Lean')}" title="${t('下载 Lean')}">${icon('download')}</button>` : ''}</div>`;
+  const status = `<span>${icon(verifiedSource && showingProof ? 'circle-check' : showingProof ? 'file-code-2' : 'clock-3')}${sourceStatus}</span>${showingProof && !run.result?.proof && run.artifact ? `<span class="mono">${html(run.artifact.workerId)} · ${html(timestamp(run.artifact.capturedAt, true))}</span>` : `<span class="mono">${t('{0} 行 · {1}', lineCount, byteLabel(byteSize(source)))}</span>`}`;
   return { hasProof, proofLabel, source: source.replace(/\r\n?/g, '\n'), controls, status, tone: showingProof ? verifiedSource ? 'verified' : 'candidate' : '',
     numbers: Array.from({ length: lineCount }, (_, index) => index + 1).join('\n') };
 }
 function sourceView(run: WebRun, content: ReturnType<typeof sourceContent>) {
   return `<div class="panel-topline source-topline"></div><div class="source-status"></div>
-    ${content.hasProof && state.sourceView === 'diff' ? sourceDiffView(run, content.proofLabel) : '<div class="source-reader"></div><div class="code-scroll source-code-grid" tabindex="0" aria-label="Lean 源码"><pre class="source-line-numbers" aria-hidden="true"></pre><pre class="source-code"><code></code></pre></div>'}`;
+    ${content.hasProof && state.sourceView === 'diff' ? sourceDiffView(run, content.proofLabel) : `<div class="source-reader"></div><div class="code-scroll source-code-grid" tabindex="0" aria-label="${t('Lean 源码')}"><pre class="source-line-numbers" aria-hidden="true"></pre><pre class="source-code"><code></code></pre></div>`}`;
 }
 function updateSourceReader() {
   const run = currentRun();
@@ -1055,8 +1056,8 @@ function updateSourceReader() {
   sourceReader.update(code && scroll && toolbar ? { id: run?.id ?? 'draft', code, scroll, toolbar,
     ...(editableSource === undefined ? {} : { edit: { source: editableSource,
       open: (position: SourceSelection) => openEditor({ source: editableSource, position }) } }),
-    ...(!run && document.querySelector('.preview-source-heading>span')?.textContent?.startsWith('前 ')
-      ? { scope: '仅查看当前预览的前 160 行；缩小源码至允许大小后可查看完整文件。' } : {}) } : undefined);
+    ...(!run && document.querySelector('.preview-source-heading>span[data-truncated]')
+      ? { scope: t('仅查看当前预览的前 160 行；缩小源码至允许大小后可查看完整文件。') } : {}) } : undefined);
 }
 function sourceDiffView(run: WebRun, proofLabel: string) {
   const before = run.source, after = candidateSource(run);
@@ -1066,13 +1067,13 @@ function sourceDiffView(run: WebRun, proofLabel: string) {
     if (sourceChanged) state.diffChange = 0;
   }
   const comparison = sourceComparison!.result;
-  const heading = `<div class="diff-heading"><span>原始题目</span>${icon('arrow-right')}<span>${proofLabel}</span></div>`;
-  if (comparison.status === 'identical') return `${heading}<div class="empty-state diff-identical" role="status">${icon('check-check')}<p>${comparison.lineEndingsChanged ? '仅换行格式不同' : '源码内容相同'}</p></div>`;
-  if (comparison.status === 'unavailable') return `${heading}<div class="empty-state diff-unavailable" role="status">${icon('file-code-2')}<p>差异过多，无法生成对比</p></div>`;
+  const heading = `<div class="diff-heading"><span>${t('原始题目')}</span>${icon('arrow-right')}<span>${proofLabel}</span></div>`;
+  if (comparison.status === 'identical') return `${heading}<div class="empty-state diff-identical" role="status">${icon('check-check')}<p>${comparison.lineEndingsChanged ? t('仅换行格式不同') : t('源码内容相同')}</p></div>`;
+  if (comparison.status === 'unavailable') return `${heading}<div class="empty-state diff-unavailable" role="status">${icon('file-code-2')}<p>${t('差异过多，无法生成对比')}</p></div>`;
   const { markup: rows, changeCount } = sourceDiffRows(comparison.rows);
   state.diffChange = Math.max(0, Math.min(state.diffChange, changeCount - 1));
-  return `${heading}<div class="diff-toolbar"><div class="diff-counts"><span class="diff-count-added" aria-label="新增 ${comparison.added} 行">+${comparison.added}</span><span class="diff-count-removed" aria-label="删除 ${comparison.removed} 行">-${comparison.removed}</span></div><label class="diff-toggle"><input type="checkbox" id="diff-changes-only" ${state.foldUnchanged ? 'checked' : ''}><span>折叠未改动</span></label><div class="diff-navigation"><button type="button" class="icon-button" data-action="diff-prev" title="上一处更改" aria-label="上一处更改" ${state.diffChange === 0 || !changeCount ? 'disabled' : ''}>${icon('chevron-up')}</button><span id="diff-position" class="mono" aria-live="polite">${changeCount ? state.diffChange + 1 : 0}/${changeCount}</span><button type="button" class="icon-button" data-action="diff-next" title="下一处更改" aria-label="下一处更改" ${state.diffChange >= changeCount - 1 ? 'disabled' : ''}>${icon('chevron-down')}</button></div><span class="diff-scroll-hint" role="note">${icon('arrow-left-right')}<span>长行可左右滑动查看</span></span></div>
-    <div class="diff-scroll" tabindex="0" aria-label="源码差异对比"><table class="diff-table"><caption class="sr-only">原始题目与${proofLabel}的逐行差异</caption><thead><tr><th scope="col">原始</th><th scope="col">${passed(run) ? '验收' : '候选'}</th><th scope="col">源码</th></tr></thead><tbody>${rows}</tbody></table></div>${comparison.omittedLines ? `<p class="diff-truncated" role="status">另有 ${comparison.omittedLines} 行未展示</p>` : ''}`;
+  return `${heading}<div class="diff-toolbar"><div class="diff-counts"><span class="diff-count-added" aria-label="${t('新增 {0} 行', comparison.added)}">+${comparison.added}</span><span class="diff-count-removed" aria-label="${t('删除 {0} 行', comparison.removed)}">-${comparison.removed}</span></div><label class="diff-toggle"><input type="checkbox" id="diff-changes-only" ${state.foldUnchanged ? 'checked' : ''}><span>${t('折叠未改动')}</span></label><div class="diff-navigation"><button type="button" class="icon-button" data-action="diff-prev" title="${t('上一处更改')}" aria-label="${t('上一处更改')}" ${state.diffChange === 0 || !changeCount ? 'disabled' : ''}>${icon('chevron-up')}</button><span id="diff-position" class="mono" aria-live="polite">${changeCount ? state.diffChange + 1 : 0}/${changeCount}</span><button type="button" class="icon-button" data-action="diff-next" title="${t('下一处更改')}" aria-label="${t('下一处更改')}" ${state.diffChange >= changeCount - 1 ? 'disabled' : ''}>${icon('chevron-down')}</button></div><span class="diff-scroll-hint" role="note">${icon('arrow-left-right')}<span>${t('长行可左右滑动查看')}</span></span></div>
+    <div class="diff-scroll" tabindex="0" aria-label="${t('源码差异对比')}"><table class="diff-table"><caption class="sr-only">${t('原始题目与{0}的逐行差异', proofLabel)}</caption><thead><tr><th scope="col">${t('原始')}</th><th scope="col">${passed(run) ? t('验收') : t('候选')}</th><th scope="col">${t('源码')}</th></tr></thead><tbody>${rows}</tbody></table></div>${comparison.omittedLines ? `<p class="diff-truncated" role="status">${t('另有 {0} 行未展示', comparison.omittedLines)}</p>` : ''}`;
 }
 function updateDiffNavigation(move = 0, align = false) {
   const scroll = document.querySelector<HTMLElement>('#detail-panel .diff-scroll');
@@ -1090,32 +1091,32 @@ function updateDiffNavigation(move = 0, align = false) {
 }
 function reportView(run: WebRun) {
   if (!run.result) return run.error
-    ? `${resultBanner(run)}<section class="report-section"><h3>运行诊断</h3><pre class="diagnostic-output" tabindex="0">${html(run.error)}</pre></section>`
-    : `<div class="empty-state">${icon('file-json-2')}<p>${activeRun(run) ? '结果报告尚未生成' : '暂无结果报告'}</p></div>`;
-  const toolbar = `<div class="panel-topline report-topline"><div class="source-switch" role="group" aria-label="报告视图"><button type="button" data-report-view="summary" aria-pressed="${state.reportMode === 'summary'}">验收摘要</button><button type="button" data-report-view="json" aria-pressed="${state.reportMode === 'json'}">JSON</button></div><div class="report-actions"><button type="button" class="icon-button" data-action="copy-report" aria-label="复制报告 JSON" title="复制报告 JSON">${icon('copy')}</button><button type="button" class="button" data-action="download-report">${icon('download')}下载报告</button></div></div>`;
-  if (state.reportMode === 'json') return `${toolbar}<pre class="code-scroll report" tabindex="0" aria-label="结果报告 JSON"><code>${html(JSON.stringify(run.result.report, null, 2))}</code></pre>`;
+    ? `${resultBanner(run)}<section class="report-section"><h3>${t('运行诊断')}</h3><pre class="diagnostic-output" tabindex="0">${html(run.error)}</pre></section>`
+    : `<div class="empty-state">${icon('file-json-2')}<p>${activeRun(run) ? t('结果报告尚未生成') : t('暂无结果报告')}</p></div>`;
+  const toolbar = `<div class="panel-topline report-topline"><div class="source-switch" role="group" aria-label="${t('报告视图')}"><button type="button" data-report-view="summary" aria-pressed="${state.reportMode === 'summary'}">${t('验收摘要')}</button><button type="button" data-report-view="json" aria-pressed="${state.reportMode === 'json'}">JSON</button></div><div class="report-actions"><button type="button" class="icon-button" data-action="copy-report" aria-label="${t('复制报告 JSON')}" title="${t('复制报告 JSON')}">${icon('copy')}</button><button type="button" class="button" data-action="download-report">${t('{0}下载报告', icon('download'))}</button></div></div>`;
+  if (state.reportMode === 'json') return `${toolbar}<pre class="code-scroll report" tabindex="0" aria-label="${t('结果报告 JSON')}"><code>${html(JSON.stringify(run.result.report, null, 2))}</code></pre>`;
   const report = summarizeReport(run);
   return `${toolbar}<div class="report-summary">${resultBanner(run)}
-    ${report.reason ? `<section class="report-section report-reason"><h3>运行说明</h3><p>${html(report.reason)}</p></section>` : ''}
+    ${report.reason ? `<section class="report-section report-reason"><h3>${t('运行说明')}</h3><p>${html(report.reason)}</p></section>` : ''}
     ${report.metrics.length ? `<dl class="report-metrics">${report.metrics.map(item => fact(item.label, item.value, true)).join('')}</dl>` : ''}
-    ${report.checks.length ? report.checks.map(reportCheck).join('') : '<div class="empty-state compact"><p>暂无结构化验收记录</p></div>'}
-    ${report.identity.length ? `<section class="report-section"><h3>验收凭据</h3><dl class="facts report-identity">${report.identity.map(item => fact(item.label, item.value, true)).join('')}</dl></section>` : ''}</div>`;
+    ${report.checks.length ? report.checks.map(reportCheck).join('') : `<div class="empty-state compact"><p>${t('暂无结构化验收记录')}</p></div>`}
+    ${report.identity.length ? `<section class="report-section"><h3>${t('验收凭据')}</h3><dl class="facts report-identity">${report.identity.map(item => fact(item.label, item.value, true)).join('')}</dl></section>` : ''}</div>`;
 }
 function reportCheck(check: ReportCheck) {
   return `<section class="report-section" data-check-stage="${check.id}"><div class="report-check-heading"><h3>${html(check.label)}</h3><span class="badge ${check.tone}">${html(check.status)}</span></div>
     ${check.method ? `<p class="report-method">${html(check.method)}</p>` : ''}${check.reason ? `<p class="report-reason-text">${html(check.reason)}</p>` : ''}
     ${check.targets.length ? `<ul class="verification-targets">${check.targets.map(reportTarget).join('')}</ul>` : ''}
-    ${check.omittedTargets ? `<p class="report-method">另有 ${check.omittedTargets} 个目标，详见原始报告</p>` : ''}</section>`;
+    ${check.omittedTargets ? `<p class="report-method">${t('另有 {0} 个目标，详见原始报告', check.omittedTargets)}</p>` : ''}</section>`;
 }
 function reportTarget(target: ReportTarget) {
   const counts = [target.sorryCount === undefined ? '' : `sorry ${target.sorryCount}`, target.admitCount === undefined ? '' : `admit ${target.admitCount}`].filter(Boolean).join(' · ');
   return `<li class="verification-target"><div class="target-heading"><code>${html(target.name)}</code><span class="badge ${target.tone}">${html(target.status)}</span></div>
     ${counts ? `<p class="target-counts mono">${html(counts)}</p>` : ''}
-    ${target.diagnostics.length ? `<details class="target-diagnostics" ${target.tone === 'failed' ? 'open' : ''}><summary>诊断记录 <span class="field-count">${target.diagnostics.length}</span></summary>${target.diagnostics.map(reportDiagnostic).join('')}</details>` : ''}</li>`;
+    ${target.diagnostics.length ? `<details class="target-diagnostics" ${target.tone === 'failed' ? 'open' : ''}><summary>${t('诊断记录')} <span class="field-count">${target.diagnostics.length}</span></summary>${target.diagnostics.map(reportDiagnostic).join('')}</details>` : ''}</li>`;
 }
 function reportDiagnostic(diagnostic: ReportDiagnostic) {
   return `<div class="diagnostic-entry"><h4>${html(diagnostic.label)}</h4><pre class="diagnostic-output" tabindex="0">${html(diagnostic.text)}</pre>
-    ${diagnostic.truncated ? `<p class="diagnostic-limit"><span>仅显示前 4000 字符</span><button type="button" class="report-detail-link" data-report-view="json">${icon('file-json-2')}查看原始报告</button></p>` : ''}</div>`;
+    ${diagnostic.truncated ? `<p class="diagnostic-limit"><span>${t('仅显示前 4000 字符')}</span><button type="button" class="report-detail-link" data-report-view="json">${t('{0}查看原始报告', icon('file-json-2'))}</button></p>` : ''}</div>`;
 }
 function renderPanel(force = false) {
   const run = currentRun();
@@ -1204,17 +1205,17 @@ function renderDraftPreview(force = false) {
   const source = field('source').value, task = field('task').value;
   const template = state.session.templates.find(item => item.id === field('template').value && item.environment === field('environment').value);
   const environment = environmentInfo(field('environment').value);
-  const numericLabel = (id: string, suffix: string) => {
+  const numericLabel = (id: string, label: (value: number) => string) => {
     const value = Number(field(id).value);
-    return field(id).value && Number.isSafeInteger(value) && value > 0 ? `${value} ${suffix}` : '未设置';
+    return field(id).value && Number.isSafeInteger(value) && value > 0 ? label(value) : t('未设置');
   };
   const facts = [
-    ['environment', '证明环境', environment?.name ?? '未选择', false],
-    ['model', '模型', field('model').value || '未设置', true],
-    ['budget', '解题预算', numericLabel('max-seconds', '秒'), true],
-    ['workers', 'Agent 数量', numericLabel('workers', '个'), true],
+    ['environment', t('证明环境'), environment?.name ?? t('未选择'), false],
+    ['model', t('模型'), field('model').value || t('未设置'), true],
+    ['budget', t('解题预算'), numericLabel('max-seconds', value => t('{0} 秒', value)), true],
+    ['workers', t('Agent 数量'), numericLabel('workers', value => t('{0} 个 Agent', value)), true],
   ] as const;
-  const title = template?.name ?? '自定义研究';
+  const title = template?.name ?? t('自定义研究');
   const signature = JSON.stringify([title, source, task, facts, draftSourceExpanded, state.draftView, state.connected,
     element<HTMLInputElement>('input[name="coordination"]:checked').value, captureDraft().modulePlan, state.submitting]);
   if (!force && signature === draftPreviewSignature && document.querySelector('#draft-preview')) return;
@@ -1226,21 +1227,23 @@ function renderDraftPreview(force = false) {
     finishMotion(detail);
     unmountRunOverview(detail); unmountRunHeader(detail);
     detail.innerHTML = `<div class="detail-empty draft-preview" id="draft-preview">
-      <header class="preview-heading"><div><span class="preview-eyebrow">Lean 工作区</span><h2></h2></div><div class="detail-actions"><span class="badge preview-status">${icon('file-code-2')}未提交</span><button type="button" class="icon-button" data-draft-action="edit" aria-label="编辑原始题目" title="编辑原始题目">${icon('square-pen')}</button><button type="button" class="icon-button" data-draft-action="settings" aria-label="配置证明环境" title="配置证明环境">${icon('sliders-horizontal')}</button></div></header>
+      <header class="preview-heading"><div><span class="preview-eyebrow">${t('Lean 工作区')}</span><h2></h2></div><div class="detail-actions"><span class="badge preview-status">${t('{0}未提交', icon('file-code-2'))}</span><button type="button" class="icon-button" data-draft-action="edit" aria-label="${t('编辑原始题目')}" title="${t('编辑原始题目')}">${icon('square-pen')}</button><button type="button" class="icon-button" data-draft-action="settings" aria-label="${t('配置证明环境')}" title="${t('配置证明环境')}">${icon('sliders-horizontal')}</button></div></header>
       <dl class="preview-facts">${facts.map(([id, label, , mono]) => `<div><dt>${label}</dt><dd data-preview-value="${id}"${mono ? ' class="mono"' : ''}></dd></div>`).join('')}</dl>
-      <div class="preview-view-tabs" role="tablist" aria-label="草稿工作区视图"><button type="button" role="tab" id="draft-tab-source" data-draft-view="source" aria-selected="true" aria-controls="draft-source-panel">${icon('file-code-2')}Lean 源码</button><button type="button" role="tab" id="draft-tab-modules" data-draft-view="modules" aria-selected="false" aria-controls="draft-module-panel" tabindex="-1">${icon('network')}模块</button></div>
+      <div class="preview-view-tabs" role="tablist" aria-label="${t('草稿工作区视图')}"><button type="button" role="tab" id="draft-tab-source" data-draft-view="source" aria-selected="true" aria-controls="draft-source-panel">${t('{0}Lean 源码', icon('file-code-2'))}</button><button type="button" role="tab" id="draft-tab-modules" data-draft-view="modules" aria-selected="false" aria-controls="draft-module-panel" tabindex="-1">${t('{0}模块', icon('network'))}</button></div>
       <section class="preview-source" id="draft-source-panel" role="tabpanel" aria-labelledby="draft-tab-source"><div class="preview-source-heading"><h3 id="preview-source-heading">${icon('file-code-2')}Submission.lean</h3><span></span></div>
         <div class="source-reader"></div>
-        <div class="draft-source-scroll" tabindex="0" aria-label="原始题目草稿"><pre class="preview-line-numbers" aria-hidden="true"></pre><pre id="draft-preview-code"><code></code></pre></div>
-      </section><div class="draft-module-panel" id="draft-module-panel" role="tabpanel" aria-labelledby="draft-tab-modules" hidden><div class="module-workspace"></div></div><details class="preview-task"><summary>研究任务</summary><p class="task-content" id="draft-preview-task"></p></details></div>`;
+        <div class="draft-source-scroll" tabindex="0" aria-label="${t('原始题目草稿')}"><pre class="preview-line-numbers" aria-hidden="true"></pre><pre id="draft-preview-code"><code></code></pre></div>
+      </section><div class="draft-module-panel" id="draft-module-panel" role="tabpanel" aria-labelledby="draft-tab-modules" hidden><div class="module-workspace"></div></div><details class="preview-task"><summary>${t('研究任务')}</summary><p class="task-content" id="draft-preview-task"></p></details></div>`;
     icons(detail);
   }
   patchText(detail.querySelector('.preview-heading h2')!, title);
   for (const [id, , value] of facts) patchText(detail.querySelector(`[data-preview-value="${id}"]`)!, value);
-  patchText(detail.querySelector('.preview-source-heading>span')!, `${lines.length > shown.length ? `前 ${shown.length} / ${lines.length}` : lines.length} 行 · ${byteLabel(byteSize(source))}`);
+  const sourceSize = detail.querySelector<HTMLElement>('.preview-source-heading>span')!;
+  sourceSize.toggleAttribute('data-truncated', lines.length > shown.length);
+  patchText(sourceSize, t('{0} 行 · {1}', lines.length > shown.length ? t('前 {0} / {1}', shown.length, lines.length) : lines.length, byteLabel(byteSize(source))));
   patchText(detail.querySelector('.preview-line-numbers')!, shown.map((_, index) => index + 1).join('\n'));
   patchText(detail.querySelector('#draft-preview-code code')!, shown.join('\n'));
-  patchText(detail.querySelector('#draft-preview-task')!, task || '未填写');
+  patchText(detail.querySelector('#draft-preview-task')!, task || t('未填写'));
   const showingModules = state.draftView === 'modules';
   if (!showingModules) moduleView.update(undefined, moduleInput());
   detail.querySelector<HTMLElement>('#draft-source-panel')!.hidden = showingModules;
@@ -1262,7 +1265,7 @@ function renderDetail(force = false) {
     activityReader.update();
     state.panelSignature = '';
     if (state.session) renderDraftPreview();
-    else { unmountRunOverview(element('#run-detail')); unmountRunHeader(element('#run-detail')); element('#run-detail').innerHTML = `<div class="empty-state detail-empty"><span class="spinner"></span><h2>正在连接工作台</h2></div>`; sourceReader.update(); }
+    else { unmountRunOverview(element('#run-detail')); unmountRunHeader(element('#run-detail')); element('#run-detail').innerHTML = `<div class="empty-state detail-empty"><span class="spinner"></span><h2>${t('正在连接工作台')}</h2></div>`; sourceReader.update(); }
     return;
   }
   const detail = element('#run-detail');
@@ -1293,7 +1296,7 @@ function renderDetail(force = false) {
 function renderRunHeader(run: WebRun) {
   const value = status(run), progress = runProgress(run), cancelling = state.cancelling.has(run.id);
   drawRunHeader(element('#run-detail'), {
-    title: run.title, id: run.id, environment: environmentName(run.environment), updated: `更新 ${timestamp(run.updatedAt)}`, error: state.detailError,
+    title: run.title, id: run.id, environment: environmentName(run.environment), updated: t('更新 {0}', timestamp(run.updatedAt)), error: state.detailError,
     status: { key: `${run.status}:${run.phase}:${value.label}`, ...value },
     stages: progress.steps.map(step => ({ label: step.label, state: step.state, clock: step.elapsed === null ? '' : formatDuration(step.elapsed) })),
     elapsed: formatDuration(progress.elapsed), tabs: detailTabs, tab: state.tab,
@@ -1312,13 +1315,23 @@ function selectRun(id: string, closeHistory = true) {
   renderRunList(); renderDetail(true);
   if (closeHistory) closeHistoryDialog();
 }
+/** The server names templates, environments and the sample in Chinese; known names are shown in the interface language. */
+function localizeSession(session: WebSession): WebSession {
+  return { ...session,
+    environments: session.environments.map(environment => ({ ...environment, name: localizeText(environment.name), description: localizeText(environment.description) })),
+    templates: session.templates.map(template => ({ ...template, name: localizeText(template.name), task: localizeText(template.task) })),
+    ...(session.sample ? { sample: { ...session.sample, title: localizeText(session.sample.title) } } : {}) };
+}
 /** Opens the recorded sample run; it needs no API key and does not change the saved position in the user's own runs. */
 async function openSample() {
   const sample = state.session?.sample;
   if (!sample) return;
   if (!state.sample) {
-    try { state.sample = (await api<{ run: WebRun }>(`/api/runs/${encodeURIComponent(sample.id)}`))?.run; }
-    catch (error) { toast(`无法打开示例运行：${message(error)}`); return; }
+    try {
+      const run = (await api<{ run: WebRun }>(`/api/runs/${encodeURIComponent(sample.id)}`))?.run;
+      state.sample = run && { ...run, title: localizeText(run.title), task: localizeText(run.task), model: localizeText(run.model) };
+    }
+    catch (error) { toast(t('无法打开示例运行：{0}', message(error))); return; }
     if (!state.sample) return;
   }
   state.composing = false;
@@ -1356,7 +1369,7 @@ function disconnected(text: string) {
   runUpdates.stop();
   liveRefreshPending = false;
   setGlobalNotice(text);
-  element('#runs-error').textContent = '连接中断，记录可能不是最新状态';
+  element('#runs-error').textContent = t('连接中断，记录可能不是最新状态');
   element('#runs-error').hidden = false;
   renderRuntime(); renderDetail();
 }
@@ -1405,7 +1418,7 @@ async function refreshRuns(epoch: number, force = false) {
     state.resumed = true;
     const away = resume ? finishedSince(state.runs, resume.seenAt) : [];
     for (const run of away) if (run.id !== state.selectedId) state.finishedRuns.add(run.id);
-    if (away.length) toast(away.length === 1 ? `离开期间「${away[0].title}」已结束` : `离开期间有 ${away.length} 项研究已结束`);
+    if (away.length) toast(away.length === 1 ? t('离开期间「{0}」已结束', away[0].title) : t('离开期间有 {0} 项研究已结束', away.length));
   }
   // Nothing to resume until the account has a run; an empty history leaves storage untouched.
   // The sample is not a run to come back to; keep the last real selection but still record when the user was here.
@@ -1426,7 +1439,7 @@ async function poll(force = false) {
   try { await refreshRuns(epoch, force); }
   catch (error) {
     if (!currentConnection(epoch)) return;
-    disconnected(`${message(error)}。未提交内容已保留。`);
+    disconnected(t('{0}。未提交内容已保留。', message(error)));
     if (sessionFailure(error)) await initialize();
   } finally {
     if (currentConnection(epoch)) state.refreshing = false;
@@ -1458,8 +1471,8 @@ function initialize(): Promise<void> {
   element<HTMLButtonElement>('#refresh-runs').disabled = true;
   connectionRequest = (async () => {
     try {
-      if (!navigator.onLine) throw new Error('网络已断开');
-      const session = await api<WebSession>('/api/session');
+      if (!navigator.onLine) throw new Error(t('网络已断开'));
+      const session = localizeSession(await api<WebSession>('/api/session'));
       if (!currentConnection(epoch)) return;
       if (session.auth === 'email' && !session.account) { saveDraft(); location.replace('login.html'); return; }
       const firstLoad = !state.session;
@@ -1468,11 +1481,11 @@ function initialize(): Promise<void> {
         state.finishedRuns.clear(); state.cancelling.clear();
         state.detailError = ''; state.panelSignature = '';
         renderRunList(); renderDetail();
-        toast('会话已更新，未提交内容已保留');
+        toast(t('会话已更新，未提交内容已保留'));
       }
       state.session = session;
       const previousProvider = field('provider').value;
-      field('provider').innerHTML = session.providers.map(provider => `<option value="${html(provider.id)}">${html(provider.name)}</option>`).join('') || '<option value="">无可用服务商</option>';
+      field('provider').innerHTML = session.providers.map(provider => `<option value="${html(provider.id)}">${html(provider.name)}</option>`).join('') || `<option value="">${t('无可用服务商')}</option>`;
       if (!firstLoad) field('provider').value = session.providers.some(provider => provider.id === previousProvider) ? previousProvider : '';
       const previousEnvironment = field('environment').value;
       field('environment').innerHTML = session.environments.map(environment => `<option value="${html(environment.id)}">${html(environment.name)}</option>`).join('');
@@ -1486,10 +1499,10 @@ function initialize(): Promise<void> {
       await refreshRuns(epoch);
       if (!currentConnection(epoch)) return;
       state.connected = true;
-      setGlobalNotice(session.runtime.ready && session.providers.length ? '' : session.runtime.message || '运行环境未就绪');
+      setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
       if (currentConnection(epoch)) {
-        disconnected(`${message(error)}。未提交内容已保留。`);
+        disconnected(t('{0}。未提交内容已保留。', message(error)));
         if (!state.session) renderRunList(true);
       }
     }
@@ -1512,13 +1525,13 @@ function renderShell() {
   const title = documentTitle(baseTitle, running.length, state.unseenRuns.size);
   if (document.title !== title) document.title = title;
   const live = run && activeRun(run)
-    ? { label: state.cancelling.has(run.id) ? '正在取消' : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }
-    : running.length ? { label: `${running.length} 项研究进行中`, detail: '', tone: 'running', count: running.length } : undefined;
+    ? { label: state.cancelling.has(run.id) ? t('正在取消') : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }
+    : running.length ? { label: t('{0} 项研究进行中', running.length), detail: '', tone: 'running', count: running.length } : undefined;
   renderTopbar(element('#topbar'), {
-    title: run?.title ?? '新研究', model: field('model').value || '模型配置', mac, live,
-    connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? '连接中' : '连接中断' : ready ? '环境就绪' : '环境未就绪' },
+    title: run?.title ?? t('新研究'), model: field('model').value || t('模型配置'), mac, live,
+    connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
-    onHistory: openHistory, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(),
+    onHistory: openHistory, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
     onLive: () => {
       const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
       if (!target) return;
@@ -1528,6 +1541,8 @@ function renderShell() {
     },
   });
 }
+/** Switching reloads the page; the draft is saved first, as on any page exit. The API key is never kept. */
+function changeLocale() { saveDraft(); switchLocale(otherLocale.locale); }
 function openAccount() {
   element('#account-email').textContent = state.session?.account?.email ?? '';
   field('account-confirm').value = ''; element<HTMLButtonElement>('#delete-account').disabled = true;
@@ -1557,19 +1572,20 @@ function paletteCommands(): PaletteCommand[] {
   const run = currentRun(), click = (selector: string) => () => element(selector).click();
   const usable = (selector: string) => !element<HTMLButtonElement>(selector).disabled && !element(selector).hidden;
   const commands: PaletteCommand[] = [
-    { id: 'new-research', group: '操作', label: '新研究', icon: 'square-pen', keywords: 'new draft 草稿', run: click('#new-research') },
-    { id: 'open-history', group: '操作', label: '打开研究记录', icon: 'panel-left', keywords: 'history runs', run: openHistory },
-    { id: 'open-settings', group: '操作', label: '研究配置', hint: field('model').value, icon: 'sliders-horizontal', keywords: 'settings model 模型', run: click('#open-settings') },
-    { id: 'return-to-draft', group: '操作', label: '返回未提交草稿', icon: 'arrow-left', keywords: 'draft back', run: click('#return-to-draft') },
+    { id: 'new-research', group: t('操作'), label: t('新研究'), icon: 'square-pen', keywords: t('new draft 草稿'), run: click('#new-research') },
+    { id: 'open-history', group: t('操作'), label: t('打开研究记录'), icon: 'panel-left', keywords: 'history runs', run: openHistory },
+    { id: 'open-settings', group: t('操作'), label: t('研究配置'), hint: field('model').value, icon: 'sliders-horizontal', keywords: t('settings model 模型'), run: click('#open-settings') },
+    { id: 'return-to-draft', group: t('操作'), label: t('返回未提交草稿'), icon: 'arrow-left', keywords: 'draft back', run: click('#return-to-draft') },
   ].filter(command => usable(`#${command.id}`));
-  commands.push({ id: 'open-glossary', group: '帮助', label: '术语说明', icon: 'book-open', keywords: 'glossary help 术语 帮助', run: () => openGlossary() });
-  if (state.session?.sample && !sampleSelected()) commands.push({ id: 'open-sample', group: '帮助', label: '查看示例运行', hint: '无需 API Key', icon: 'eye', keywords: 'sample demo example 示例', run: () => void openSample() });
+  commands.push({ id: 'switch-locale', group: t('帮助'), label: otherLocale.label, lang: otherLocale.lang, hint: otherLocale.title, icon: 'languages', keywords: 'language locale english chinese 语言 中文 英文', run: changeLocale });
+  commands.push({ id: 'open-glossary', group: t('帮助'), label: t('术语说明'), icon: 'book-open', keywords: t('glossary help 术语 帮助'), run: () => openGlossary() });
+  if (state.session?.sample && !sampleSelected()) commands.push({ id: 'open-sample', group: t('帮助'), label: t('查看示例运行'), hint: t('无需 API Key'), icon: 'eye', keywords: t('sample demo example 示例'), run: () => void openSample() });
   const tabIcons: Record<DetailTab, string> = { collaboration: 'network', source: 'file-code-2', modules: 'blocks', overview: 'gauge', report: 'file-json-2', events: 'activity' };
-  if (run) for (const [tab, label] of detailTabs) commands.push({ id: `tab-${tab}`, group: '当前研究', label, hint: tab === state.tab ? '当前视图' : undefined, icon: tabIcons[tab],
+  if (run) for (const [tab, label] of detailTabs) commands.push({ id: `tab-${tab}`, group: t('当前研究'), label, hint: tab === state.tab ? t('当前视图') : undefined, icon: tabIcons[tab],
     keywords: tab, run: () => { state.tab = tab; setMobileView('runs'); renderDetail(true); element(`#detail-tab-${tab}`).focus({ preventScroll: true }); } });
   for (const item of state.runs.toReversed().slice(0, 30)) {
     const value = status(item);
-    commands.push({ id: `run-${item.id}`, group: '研究记录', label: item.title, hint: value.label, icon: value.symbol, keywords: `${item.id} ${item.model}`,
+    commands.push({ id: `run-${item.id}`, group: t('研究记录'), label: item.title, hint: value.label, icon: value.symbol, keywords: `${item.id} ${item.model}`,
       run: () => { selectRun(item.id); setMobileView('runs'); } });
   }
   return commands;
@@ -1618,7 +1634,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     clearValidation();
     element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle();
     if (!currentConnection(epoch)) {
-      toast('研究已提交，连接已变化，请核对运行记录');
+      toast(t('研究已提交，连接已变化，请核对运行记录'));
       void poll(); return;
     }
     state.listGeneration++;
@@ -1630,15 +1646,15 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('compose');
     schedulePoll();
     requestRunsRefresh();
-    toast('研究已提交');
+    toast(t('研究已提交'));
   } catch (error) {
     const key = field('api-key').value.trim();
     const uncertain = sent && (!(error instanceof ApiError) || error.status >= 500);
-    const text = uncertain ? '提交结果尚未确认，请先核对运行记录后再决定是否重新提交。' : message(error);
-    errorBox.textContent = key ? text.split(key).join('[已隐藏]') : text;
+    const text = uncertain ? t('提交结果尚未确认，请先核对运行记录后再决定是否重新提交。') : message(error);
+    errorBox.textContent = key ? text.split(key).join(t('[已隐藏]')) : text;
     errorBox.hidden = false;
     if (sent && currentConnection(epoch) && (uncertain || sessionFailure(error))) {
-      disconnected('连接需要恢复，未提交内容已保留。');
+      disconnected(t('连接需要恢复，未提交内容已保留。'));
       void initialize();
     }
   } finally { state.submitting = false; renderRuntime(); }
@@ -1650,13 +1666,13 @@ async function cancelRun() {
   const sessionToken = state.session?.csrfToken;
   const confirmed = () => state.session?.csrfToken === sessionToken
     ? state.runs.find(item => item.id === run.id && !activeRun(item)) : undefined;
-  const showConfirmed = (latest: WebRun) => toast(latest.status === 'cancelled' ? '运行已取消' : '研究已结束');
+  const showConfirmed = (latest: WebRun) => toast(latest.status === 'cancelled' ? t('运行已取消') : t('研究已结束'));
   state.cancelling.add(run.id); renderRunMonitor(); renderDetail();
   try {
     const result = await api<{ run: WebRun }>(`/api/runs/${encodeURIComponent(run.id)}/cancel`, { method: 'POST' });
     const latest = confirmed();
     if (latest) { showConfirmed(latest); return; }
-    if (!currentConnection(epoch)) { toast('取消请求已送达，请核对运行记录'); void poll(); return; }
+    if (!currentConnection(epoch)) { toast(t('取消请求已送达，请核对运行记录')); void poll(); return; }
     state.listGeneration++;
     const previous = state.runs.slice();
     const index = state.runs.findIndex(item => item.id === run.id);
@@ -1665,7 +1681,7 @@ async function cancelRun() {
     if (state.selectedId === run.id) state.selectedRun = updated;
     rememberFinishedRuns(previous);
     requestRunsRefresh();
-    toast('已请求取消运行');
+    toast(t('已请求取消运行'));
   } catch (error) {
     if (state.session?.csrfToken !== sessionToken) return;
     // A newer GET may already have confirmed the terminal state while the POST response was delayed.
@@ -1673,12 +1689,12 @@ async function cancelRun() {
     if (latest) { showConfirmed(latest); return; }
     const uncertain = !(error instanceof ApiError) || error.status >= 500;
     if (currentConnection(epoch)) {
-      if (state.selectedId === run.id) state.detailError = uncertain ? '取消结果尚未确认，请核对最新运行状态。' : message(error);
+      if (state.selectedId === run.id) state.detailError = uncertain ? t('取消结果尚未确认，请核对最新运行状态。') : message(error);
       if (uncertain || sessionFailure(error)) {
-        disconnected('连接需要恢复，请核对取消结果。'); void initialize();
+        disconnected(t('连接需要恢复，请核对取消结果。')); void initialize();
       }
     }
-    toast(uncertain ? '取消结果尚未确认' : `取消失败：${message(error)}`);
+    toast(uncertain ? t('取消结果尚未确认') : t('取消失败：{0}', message(error)));
   } finally { state.cancelling.delete(run.id); renderRunList(); renderDetail(); }
 }
 function renderDeleteState() {
@@ -1686,15 +1702,15 @@ function renderDeleteState() {
   const busy = state.deleting.has(deletionTarget.id);
   const run = state.runs.find(run => run.id === deletionTarget!.id);
   const sameSession = deletionTarget.csrfToken === state.session?.csrfToken;
-  const notice = !sameSession ? '会话已变化，请关闭对话框。'
-    : !state.connected ? '连接中断，恢复后可删除。'
-      : !run ? '记录已不存在。' : activeRun(run) ? '任务尚未结束，不能删除。' : '';
+  const notice = !sameSession ? t('会话已变化，请关闭对话框。')
+    : !state.connected ? t('连接中断，恢复后可删除。')
+      : !run ? t('记录已不存在。') : activeRun(run) ? t('任务尚未结束，不能删除。') : '';
   element('#delete-notice').textContent = notice;
   element('#delete-notice').hidden = !notice;
   element<HTMLButtonElement>('#confirm-delete').disabled = busy || Boolean(notice);
   element<HTMLButtonElement>('#cancel-delete').disabled = busy;
   element<HTMLButtonElement>('#close-delete').disabled = busy;
-  element('#confirm-delete').innerHTML = `${busy ? '<span class="spinner"></span>' : icon('trash-2')}<span>${busy ? '正在删除' : '删除记录'}</span>`;
+  element('#confirm-delete').innerHTML = `${busy ? '<span class="spinner"></span>' : icon('trash-2')}<span>${busy ? t('正在删除') : t('删除记录')}</span>`;
   icons();
 }
 function openDeletion(run: WebRun) {
@@ -1736,19 +1752,19 @@ async function deleteRun() {
     if (currentConnection(epoch)) removeLocalRun(target.id);
     else void poll();
     element<HTMLDialogElement>('#delete-run-dialog').close();
-    toast('运行记录已删除');
+    toast(t('运行记录已删除'));
   } catch (error) {
     if (error instanceof ApiError && error.status === 404 && currentConnection(epoch)) {
       removeLocalRun(target.id);
       element<HTMLDialogElement>('#delete-run-dialog').close();
-      toast('记录已不存在');
+      toast(t('记录已不存在'));
     } else {
       const uncertain = !(error instanceof ApiError) || error.status >= 500;
-      element('#delete-error').textContent = uncertain ? '删除结果尚未确认，请核对历史记录。' : message(error);
+      element('#delete-error').textContent = uncertain ? t('删除结果尚未确认，请核对历史记录。') : message(error);
       element('#delete-error').hidden = false;
       if (currentConnection(epoch)) {
         if (uncertain || sessionFailure(error)) {
-          disconnected('连接需要恢复，请核对删除结果。'); void initialize();
+          disconnected(t('连接需要恢复，请核对删除结果。')); void initialize();
         } else void poll();
       }
     }
@@ -1768,7 +1784,7 @@ function renderShareState(error = '') {
   element('#create-share').hidden = Boolean(link);
   element<HTMLButtonElement>('#create-share').disabled = sharing.busy || loading || !state.connected;
   element<HTMLButtonElement>('#stop-share').disabled = sharing.busy || !state.connected;
-  const notice = loading ? '正在读取分享状态…' : link ? `已于 ${timestamp(link.createdAt)} 创建。停止分享后，这个链接立即失效。` : '';
+  const notice = loading ? t('正在读取分享状态…') : link ? t('已于 {0} 创建。停止分享后，这个链接立即失效。', timestamp(link.createdAt)) : '';
   element('#share-notice').textContent = notice; element('#share-notice').hidden = !notice;
   element('#share-error').textContent = error; element('#share-error').hidden = !error;
 }
@@ -1783,7 +1799,7 @@ async function openSharing(run: WebRun) {
     if (sharing?.id !== run.id) return;
     sharing.link = share; renderShareState();
   } catch (error) {
-    if (sharing?.id === run.id) { sharing.link = null; renderShareState(`无法读取分享状态：${message(error)}`); }
+    if (sharing?.id === run.id) { sharing.link = null; renderShareState(t('无法读取分享状态：{0}', message(error))); }
   }
   (sharing?.link ? element('#copy-share') : element('#create-share')).focus();
 }
@@ -1795,8 +1811,8 @@ async function changeSharing(method: 'POST' | 'DELETE') {
     const { share } = await api<{ share: WebShareLink | null }>(`/api/runs/${encodeURIComponent(target.id)}/share`, { method });
     if (sharing !== target) return;
     target.link = share; target.busy = false; renderShareState();
-    if (share) { element<HTMLInputElement>('#share-url').select(); toast('分享链接已创建'); element('#copy-share').focus(); }
-    else { toast('已停止分享，原链接已失效'); element('#create-share').focus(); }
+    if (share) { element<HTMLInputElement>('#share-url').select(); toast(t('分享链接已创建')); element('#copy-share').focus(); }
+    else { toast(t('已停止分享，原链接已失效')); element('#create-share').focus(); }
   } catch (error) {
     if (sharing === target) { target.busy = false; renderShareState(message(error)); }
   }
@@ -1809,9 +1825,9 @@ function download(name: string, content: string, type: string) {
 }
 async function copyText(text: string, success: string) {
   try {
-    if (!navigator.clipboard?.writeText) throw new Error('剪贴板不可用');
+    if (!navigator.clipboard?.writeText) throw new Error(t('剪贴板不可用'));
     await navigator.clipboard.writeText(text); toast(success);
-  } catch { toast('无法访问剪贴板'); }
+  } catch { toast(t('无法访问剪贴板')); }
 }
 const recoveryFields: Record<Exclude<RecoveryAction['id'], 'report'>, string> = {
   retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'workers', source: 'source' };
@@ -1837,7 +1853,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
     element('#form-error').hidden = true;
     startDraft();
     openSettings(recoveryFields[recovery]);
-    toast(recovery === 'retry' || recovery === 'key' ? '已载入原始题目与执行配置，请输入 API Key' : '已载入原始配置，修改后请重新输入 API Key');
+    toast(recovery === 'retry' || recovery === 'key' ? t('已载入原始题目与执行配置，请输入 API Key') : t('已载入原始配置，修改后请重新输入 API Key'));
   });
 }
 element('#run-detail').addEventListener('change', event => {
@@ -1907,9 +1923,9 @@ element('#run-detail').addEventListener('click', event => {
   if (target.dataset.action === 'cancel') void cancelRun();
   if (target.dataset.action === 'delete-run') openDeletion(run);
   if (target.dataset.action === 'share-run') void openSharing(run);
-  if (target.dataset.action === 'copy-id') void copyText(run.id, '运行 ID 已复制');
-  if (target.dataset.action === 'copy-source') void copyText(displayedSource(run), 'Lean 源码已复制');
-  if (target.dataset.action === 'copy-report' && run.result) void copyText(JSON.stringify(run.result.report, null, 2), '报告 JSON 已复制');
+  if (target.dataset.action === 'copy-id') void copyText(run.id, t('运行 ID 已复制'));
+  if (target.dataset.action === 'copy-source') void copyText(displayedSource(run), t('Lean 源码已复制'));
+  if (target.dataset.action === 'copy-report' && run.result) void copyText(JSON.stringify(run.result.report, null, 2), t('报告 JSON 已复制'));
   if (target.dataset.action === 'reuse-run') reuseRun(run);
   if (target.dataset.action === 'show-events' || target.dataset.action === 'show-agents') {
     state.tab = target.dataset.action === 'show-events' ? 'events' : 'collaboration';
@@ -2001,9 +2017,9 @@ element<HTMLInputElement>('#source-file').addEventListener('change', async event
   element('#source-error').hidden = true;
   try {
     const source = await readLeanFile(file, state.session.limits.maxSourceBytes);
-    if (revision !== sourceRevision || state.submitting) { toast('草稿已变化，未导入文件'); return; }
+    if (revision !== sourceRevision || state.submitting) { toast(t('草稿已变化，未导入文件')); return; }
     replaceDraft('source', () => setCustomSource(source));
-    toast('Lean 文件已载入');
+    toast(t('Lean 文件已载入'));
   } catch (error) {
     if (revision !== sourceRevision) return;
     element('#source-error').textContent = message(error); element('#source-error').hidden = false;
@@ -2034,7 +2050,7 @@ element('#confirm-import').addEventListener('click', () => {
   replaceDraft('import', () => { applyTaskDraft(target.draft); saveDraft(); });
   element<HTMLDialogElement>('#import-task-dialog').close();
   startDraft(); openSettings('api-key');
-  toast('研究任务已载入');
+  toast(t('研究任务已载入'));
 });
 for (const id of ['close-editor', 'cancel-editor']) element(`#${id}`).addEventListener('click', requestEditorClose);
 element('#source-editor').addEventListener('cancel', event => {
@@ -2071,7 +2087,7 @@ document.addEventListener('selectionchange', () => {
 });
 element('#create-share').addEventListener('click', () => void changeSharing('POST'));
 element('#stop-share').addEventListener('click', () => void changeSharing('DELETE'));
-element('#copy-share').addEventListener('click', () => { if (sharing?.link) void copyText(sharing.link.url, '分享链接已复制'); });
+element('#copy-share').addEventListener('click', () => { if (sharing?.link) void copyText(sharing.link.url, t('分享链接已复制')); });
 element('#close-share').addEventListener('click', () => element<HTMLDialogElement>('#share-dialog').close());
 element('#share-dialog').addEventListener('close', () => {
   sharing = undefined;
@@ -2274,7 +2290,7 @@ document.addEventListener('visibilitychange', () => {
   } else { saveDraft(); runUpdates.stop(); }
 });
 window.addEventListener('offline', () => {
-  invalidateReads(); disconnected('网络已断开，未提交内容已保留。'); schedulePoll();
+  invalidateReads(); disconnected(t('网络已断开，未提交内容已保留。')); schedulePoll();
 });
 async function resumeConnection() {
   await connectionRequest;

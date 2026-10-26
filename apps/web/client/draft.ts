@@ -1,5 +1,6 @@
 import type { WebCoordination, WebEffort, WebEnvironment } from '../shared';
 import { researchModulePlanDraftSchema, type ResearchModulePlan } from '../../../src/solver/modules/policy';
+import { t } from '../i18n';
 
 export const taskDraftSchema = 'theorem-os.web-draft.v1';
 export const taskDraftStorageKey = 'theorem-os.web-draft.v1';
@@ -27,7 +28,7 @@ const maximumFileBytes = 16 * 1024 * 1024;
 const encoder = new TextEncoder();
 const editableNumber = /^[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d*)?|\.)?$/;
 
-function invalid(): never { throw new Error('任务草稿格式无效'); }
+function invalid(): never { throw new Error(t('任务草稿格式无效')); }
 
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) invalid();
@@ -110,20 +111,20 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
 export async function readTaskDraftFile(file: Pick<File, 'name' | 'size' | 'arrayBuffer'>): Promise<TaskDraft> {
   let name: string, size: number;
   try { name = file.name; size = file.size; }
-  catch { throw new Error('无法读取任务文件'); }
-  if (typeof name !== 'string' || !/\.json$/i.test(name)) throw new Error('请选择 .json 任务文件');
-  if (!Number.isSafeInteger(size) || size < 0 || size > maximumFileBytes) throw new Error('任务文件超过 16 MiB 上限或大小无效');
+  catch { throw new Error(t('无法读取任务文件')); }
+  if (typeof name !== 'string' || !/\.json$/i.test(name)) throw new Error(t('请选择 .json 任务文件'));
+  if (!Number.isSafeInteger(size) || size < 0 || size > maximumFileBytes) throw new Error(t('任务文件超过 16 MiB 上限或大小无效'));
   let buffer: ArrayBuffer;
   try { buffer = await file.arrayBuffer(); }
-  catch { throw new Error('无法读取任务文件'); }
-  if (!(buffer instanceof ArrayBuffer)) throw new Error('无法读取任务文件');
-  if (buffer.byteLength > maximumFileBytes) throw new Error('任务文件超过 16 MiB 上限');
+  catch { throw new Error(t('无法读取任务文件')); }
+  if (!(buffer instanceof ArrayBuffer)) throw new Error(t('无法读取任务文件'));
+  if (buffer.byteLength > maximumFileBytes) throw new Error(t('任务文件超过 16 MiB 上限'));
   let content: string;
   try { content = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
-  catch { throw new Error('任务文件需使用 UTF-8 编码'); }
-  if (content.includes('\0')) throw new Error('任务文件包含无效字符');
+  catch { throw new Error(t('任务文件需使用 UTF-8 编码')); }
+  if (content.includes('\0')) throw new Error(t('任务文件包含无效字符'));
   let value: unknown;
   try { value = JSON.parse(content); }
-  catch { throw new Error('任务文件不是有效 JSON'); }
+  catch { throw new Error(t('任务文件不是有效 JSON')); }
   return decodeTaskDraft(value);
 }

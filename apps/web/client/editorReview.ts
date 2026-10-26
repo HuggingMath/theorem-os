@@ -1,6 +1,7 @@
 import { compareSources, sourceChangeLocations, type SourceChangeLocation, type SourceComparison } from './sourceDiff';
 import { sourceDiffRows } from './sourceDiffMarkup';
 import type { SourceSelection } from './sourceText';
+import { localeTag, t } from '../i18n';
 
 type EditorPosition = {
   start: number; end: number; direction: 'forward' | 'backward' | 'none'; top: number; left: number;
@@ -86,7 +87,7 @@ export class EditorReview {
     this.control('editor-source-surface').hidden = this.active;
     this.toggle.hidden = !this.active && this.editor.value === this.baseline;
     this.toggle.setAttribute('aria-expanded', String(this.active));
-    this.toggle.textContent = this.active ? '返回编辑' : '查看改动';
+    this.toggle.textContent = this.active ? t('返回编辑') : t('查看改动');
   }
 
   private open() {
@@ -129,15 +130,15 @@ export class EditorReview {
     this.control('editor-review-navigation').hidden = !ready;
     this.scroll.hidden = !ready; empty.hidden = ready;
     const added = this.control('editor-review-added'), removed = this.control('editor-review-removed');
-    added.textContent = `+${comparison.added}`; added.setAttribute('aria-label', `新增 ${comparison.added} 行`);
-    removed.textContent = `-${comparison.removed}`; removed.setAttribute('aria-label', `删除 ${comparison.removed} 行`);
+    added.textContent = `+${comparison.added}`; added.setAttribute('aria-label', t('新增 {0} 行', comparison.added));
+    removed.textContent = `-${comparison.removed}`; removed.setAttribute('aria-label', t('删除 {0} 行', comparison.removed));
     empty.textContent = comparison.status === 'unavailable'
-      ? '源码较大或差异过多，无法生成对比。返回编辑可查看完整源码。'
-      : comparison.lineEndingsChanged ? '仅换行格式不同。' : '源码内容相同。';
+      ? t('源码较大或差异过多，无法生成对比。返回编辑可查看完整源码。')
+      : comparison.lineEndingsChanged ? t('仅换行格式不同。') : t('源码内容相同。');
     const notice = this.control('editor-review-notice');
     notice.hidden = !comparison.omittedLines;
     notice.textContent = comparison.omittedLines
-      ? `另有 ${comparison.omittedLines.toLocaleString('zh-CN')} 行未展示；导航仅覆盖已展示的更改。返回编辑可查看完整源码。` : '';
+      ? t('另有 {0} 行未展示；导航仅覆盖已展示的更改。返回编辑可查看完整源码。', comparison.omittedLines.toLocaleString(localeTag)) : '';
     this.control('editor-review-body').innerHTML = ready ? sourceDiffRows(comparison.rows).markup : '';
     this.locations = ready ? sourceChangeLocations(this.source, comparison.rows) : new Map();
     this.navigate();
@@ -171,7 +172,7 @@ export class EditorReview {
     const location = this.currentLocation();
     this.control('editor-review-target').hidden = !location;
     this.control<HTMLButtonElement>('editor-review-edit').disabled = !location;
-    this.control('editor-review-location').textContent = location ? `当前源码 · 第 ${location.line} 行` : '';
+    this.control('editor-review-location').textContent = location ? t('当前源码 · 第 {0} 行', location.line) : '';
     changes.forEach((row, index) => row.classList.toggle('diff-change-current', index === this.change));
     if (align && changes[this.change]) {
       const headerHeight = this.scroll.querySelector('thead')?.getBoundingClientRect().height ?? 0;

@@ -1,4 +1,5 @@
 import { render } from 'preact';
+import { t } from '../../i18n';
 
 export type Meter = { name: string; segments: { key: string; label: string; count: number }[] };
 export type ProgressSummaryProps = {
@@ -20,10 +21,10 @@ function MeterBar({ meter }: { meter: Meter }) {
 
 function ProgressSummary(props: ProgressSummaryProps) {
   return <div class="collab-metrics">
-    <div><span>证明任务</span><strong>{props.proof.checked} / {props.proof.total}</strong><small>已记录检查</small><MeterBar meter={props.proof.meter} /></div>
-    <div><span>Agent</span><strong>{props.agents.working} / {props.agents.total}</strong><small>实际工作中</small><MeterBar meter={props.agents.meter} /></div>
-    <div><span>最终验收 S3</span><strong class={props.accepted ? 'collab-accepted' : ''}>{props.accepted ? '验收通过' : '尚未验收通过'}</strong>
-      <small>以完整报告独立判断</small>{props.completedResearch > 0 && <small>研究任务已完成 {props.completedResearch} 项</small>}</div>
+    <div><span>{t('证明任务')}</span><strong>{props.proof.checked} / {props.proof.total}</strong><small>{t('已记录检查')}</small><MeterBar meter={props.proof.meter} /></div>
+    <div><span>Agent</span><strong>{props.agents.working} / {props.agents.total}</strong><small>{t('实际工作中')}</small><MeterBar meter={props.agents.meter} /></div>
+    <div><span>{t('最终验收 S3')}</span><strong class={props.accepted ? 'collab-accepted' : ''}>{props.accepted ? t('验收通过') : t('尚未验收通过')}</strong>
+      <small>{t('以完整报告独立判断')}</small>{props.completedResearch > 0 && <small>{t('研究任务已完成 {0} 项', props.completedResearch)}</small>}</div>
   </div>;
 }
 

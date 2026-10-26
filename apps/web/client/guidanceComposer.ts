@@ -1,10 +1,11 @@
 import type { WebCommandResult, WebGuidanceInput, WebGuidanceRecord, WebObservation } from '../collaboration';
 import { codeBlock, commandId, createElement, errorText, escapeHtml as h, factList, observedTime, patchSection, recipientLabel, roleLabel, type WebApi } from './collaborationUi';
 import { termHint } from './glossary';
+import { t } from '../i18n';
 
 type PendingGuidance = { input: WebGuidanceInput; draftRevision: number; missing: boolean };
 const responseStatus = (error: unknown) => error && typeof error === 'object' && 'status' in error ? error.status : undefined;
-const statusLabel: Record<string, string> = { queued: '排队中', deferred: '暂缓', delivered: '已送达', failed: '失败', rejected: '已拒绝', unknown: '结果尚未确认' };
+const statusLabel: Record<string, string> = { queued: t('排队中'), deferred: t('暂缓'), delivered: t('已送达'), failed: t('失败'), rejected: t('已拒绝'), unknown: t('结果尚未确认') };
 
 /** Each research keeps its editable draft separate from the exact command awaiting a receipt. */
 export class GuidanceComposer {
@@ -25,12 +26,12 @@ export class GuidanceComposer {
   private availability: HTMLElement;
 
   constructor(private api: WebApi, private runId: string, private observed: (observation: WebObservation) => void) {
-    this.element.innerHTML = `<div class="collab-section-heading"><span class="term-heading"><h3>提供指导</h3>${termHint('guidance')}</span></div><form data-collab-guidance-form>
-      <div class="collab-guidance-target"><label>接收方<select data-guidance-kind><option value="lead">Lead</option><option value="task">任务</option><option value="worker">Agent</option></select></label><label>目标<select data-guidance-target disabled><option value="">Lead</option></select></label></div>
-      <div data-guidance-context></div><label class="sr-only" for="guidance-${h(runId)}">指导内容</label><textarea id="guidance-${h(runId)}" data-guidance-text rows="3" maxlength="4000" aria-describedby="guidance-count-${h(runId)} guidance-availability-${h(runId)}" placeholder="补充思路、指出问题或引用知识；修改任务合同请使用计划编辑器。"></textarea>
+    this.element.innerHTML = `<div class="collab-section-heading"><span class="term-heading"><h3>${t('提供指导')}</h3>${termHint('guidance')}</span></div><form data-collab-guidance-form>
+      <div class="collab-guidance-target"><label>${t('接收方')}<select data-guidance-kind><option value="lead">Lead</option><option value="task">${t('任务')}</option><option value="worker">Agent</option></select></label><label>${t('目标')}<select data-guidance-target disabled><option value="">Lead</option></select></label></div>
+      <div data-guidance-context></div><label class="sr-only" for="guidance-${h(runId)}">${t('指导内容')}</label><textarea id="guidance-${h(runId)}" data-guidance-text rows="3" maxlength="4000" aria-describedby="guidance-count-${h(runId)} guidance-availability-${h(runId)}" placeholder="${t('补充思路、指出问题或引用知识；修改任务合同请使用计划编辑器。')}"></textarea>
       <div class="collab-guidance-meta"><p id="guidance-count-${h(runId)}" data-guidance-count class="collab-help">0 / 4000</p><p id="guidance-availability-${h(runId)}" data-guidance-availability class="collab-help"></p></div>
-      <div class="collab-form-footer"><p data-guidance-notice class="collab-help" role="status"></p><button type="submit" class="button button-primary">发送指导</button></div>
-      <div data-guidance-pending></div><div class="collab-guidance-recovery"><button type="button" class="button" data-guidance-receipt-refresh hidden>核对指导回执</button><button type="button" class="button" data-guidance-retry hidden>重试原提交</button></div>
+      <div class="collab-form-footer"><p data-guidance-notice class="collab-help" role="status"></p><button type="submit" class="button button-primary">${t('发送指导')}</button></div>
+      <div data-guidance-pending></div><div class="collab-guidance-recovery"><button type="button" class="button" data-guidance-receipt-refresh hidden>${t('核对指导回执')}</button><button type="button" class="button" data-guidance-retry hidden>${t('重试原提交')}</button></div>
       </form><div data-collab-guidance-records></div>`;
     this.text = this.element.querySelector('[data-guidance-text]')!;
     this.kind = this.element.querySelector('[data-guidance-kind]')!;
@@ -66,10 +67,10 @@ export class GuidanceComposer {
 
   focus() { this.text.focus({ preventScroll: true }); }
 
-  appendReference(text: string, notice = '知识引用已加入本地指导草稿，尚未发送') {
+  appendReference(text: string, notice = t('知识引用已加入本地指导草稿，尚未发送')) {
     const next = `${this.text.value}${this.text.value ? '\n\n' : ''}${text}`;
     if (next.length > this.text.maxLength) {
-      this.notice.textContent = `指导最多 ${this.text.maxLength} 字符，引用未加入；请缩短草稿后重试。`;
+      this.notice.textContent = t('指导最多 {0} 字符，引用未加入；请缩短草稿后重试。', this.text.maxLength);
       this.focus(); return false;
     }
     this.text.value = next;
@@ -87,10 +88,10 @@ export class GuidanceComposer {
   }
 
   private renderTargets(value = this.target.value) {
-    const entries = this.kind.value === 'task' ? this.observation?.inspection.tasks.map(task => [task.id, `${task.id} · 任务`]) :
+    const entries = this.kind.value === 'task' ? this.observation?.inspection.tasks.map(task => [task.id, t('{0} · 任务', task.id)]) :
       this.kind.value === 'worker' ? this.observation?.inspection.workers.map(worker => [worker.id, `${worker.id} · ${roleLabel(worker.role)}`]) : [['', 'Lead']];
     const options = [...(entries ?? [])];
-    if (value && !options.some(([id]) => id === value)) options.push([value, `${value} · 已移除`]);
+    if (value && !options.some(([id]) => id === value)) options.push([value, t('{0} · 已移除', value)]);
     const markup = options.map(([id, name]) => `<option value="${h(id)}">${h(name)}</option>`).join('');
     if (this.target.dataset.options !== markup) { this.target.innerHTML = markup; this.target.dataset.options = markup; }
     this.target.value = options.some(([id]) => id === value) ? value : options[0]?.[0] ?? '';
@@ -100,37 +101,37 @@ export class GuidanceComposer {
   private targetIssue() {
     if (this.kind.value === 'task') {
       const task = this.observation?.inspection.tasks.find(task => task.id === this.target.value);
-      if (!task) return '原任务已移除，请明确选择接收指导的任务。';
-      if (this.taskRef?.id !== task.id || this.taskRef.version !== task.version) return '任务版本已变化，请核对指导内容，再确认当前任务版本。';
+      if (!task) return t('原任务已移除，请明确选择接收指导的任务。');
+      if (this.taskRef?.id !== task.id || this.taskRef.version !== task.version) return t('任务版本已变化，请核对指导内容，再确认当前任务版本。');
     }
-    if (this.kind.value === 'worker' && !this.observation?.inspection.workers.some(worker => worker.id === this.target.value)) return '原 Agent 已移除，请明确选择接收方。';
+    if (this.kind.value === 'worker' && !this.observation?.inspection.workers.some(worker => worker.id === this.target.value)) return t('原 Agent 已移除，请明确选择接收方。');
     return undefined;
   }
 
   private render() {
     const issue = this.targetIssue(), task = this.kind.value === 'task' ? this.observation?.inspection.tasks.find(task => task.id === this.target.value) : undefined;
     patchSection(this.element.querySelector('[data-guidance-context]')!, this.kind.value === 'task' ? `${factList([
-      ['任务', this.target.value], ['草稿任务版本', this.taskRef?.version], ['当前任务版本', task?.version],
-    ])}${issue ? `<p class="collab-notice">${h(issue)}</p>${task ? '<button type="button" class="button" data-guidance-confirm-version data-focus-key="guidance-version">确认当前任务版本</button>' : ''}` : ''}` :
+      [t('任务'), this.target.value], [t('草稿任务版本'), this.taskRef?.version], [t('当前任务版本'), task?.version],
+    ])}${issue ? `<p class="collab-notice">${h(issue)}</p>${task ? `<button type="button" class="button" data-guidance-confirm-version data-focus-key="guidance-version">${t('确认当前任务版本')}</button>` : ''}` : ''}` :
       issue ? `<p class="collab-notice">${h(issue)}</p>` : '');
     const pending = this.pending;
-    patchSection(this.element.querySelector('[data-guidance-pending]')!, pending ? `<p class="collab-notice">指导 ${h(pending.input.id)} 的结果尚未确认，请先核对原提交。继续编辑的草稿会保留。${pending.missing ? '尚未找到回执；重试将保留原 ID、目标版本与内容。' : ''}</p><details class="collab-detail" data-detail-key="pending-guidance"><summary>待核对的原指导</summary>${codeBlock(pending.input)}</details>` : '');
+    patchSection(this.element.querySelector('[data-guidance-pending]')!, pending ? `<p class="collab-notice">${t('指导 {0} 的结果尚未确认，请先核对原提交。继续编辑的草稿会保留。{1}', h(pending.input.id), pending.missing ? t('尚未找到回执；重试将保留原 ID、目标版本与内容。') : '')}</p><details class="collab-detail" data-detail-key="pending-guidance"><summary>${t('待核对的原指导')}</summary>${codeBlock(pending.input)}</details>` : '');
     const check = this.element.querySelector<HTMLButtonElement>('[data-guidance-receipt-refresh]')!;
     const retry = this.element.querySelector<HTMLButtonElement>('[data-guidance-retry]')!;
     check.hidden = !pending; check.disabled = !this.connected || this.busy;
     retry.hidden = !pending?.missing; retry.disabled = !this.connected || !this.active || this.busy;
     const submit = this.element.querySelector<HTMLButtonElement>('[type="submit"]')!;
     submit.disabled = !this.connected || !this.active || !this.observation || this.busy || Boolean(pending || issue);
-    submit.textContent = this.busy ? '发送中…' : '发送指导';
+    submit.textContent = this.busy ? t('发送中…') : t('发送指导');
     submit.setAttribute('aria-busy', String(this.busy));
     this.updateCount();
-    this.availability.textContent = this.busy ? '正在处理本次提交，请稍候。' :
-      pending ? '请先核对原提交的回执；当前草稿会保留。' :
-      !this.connected ? '连接恢复后才能发送指导；草稿会保留。' :
-      !this.active ? '运行尚未开始或已结束，暂时无法发送指导。' :
-      !this.observation ? '正在等待当前运行的观察记录，收到后即可发送。' :
-      issue ?? '指导会发送给所选接收方；收到回执后可查看投递状态。';
-    patchSection(this.element.querySelector('[data-collab-guidance-records]')!, [...this.records.values()].map(record => `<article class="collab-guidance-record"><div><strong>${h(recipientLabel(record.recipient.kind))} ${h(record.recipient.id)}</strong><span class="badge">${h(statusLabel[record.status])}</span></div><p>${h(record.text)}</p><small>${h(record.id)} · ${h(observedTime(record.updatedAt))}${record.deliveredTo?.length ? ` · 接收 ${h(record.deliveredTo.join(', '))}` : ''}</small>${record.taskRef ? `<p class="collab-help">任务 ${h(record.taskRef.id)} · 版本 ${h(record.taskRef.version)}</p>` : ''}<p class="collab-help">依据观察 #${record.observationRef.sequence} · ${h(record.observationRef.stateDigest)}</p>${record.reason ? `<p class="collab-help">${h(record.reason)}</p>` : ''}</article>`).join(''));
+    this.availability.textContent = this.busy ? t('正在处理本次提交，请稍候。') :
+      pending ? t('请先核对原提交的回执；当前草稿会保留。') :
+      !this.connected ? t('连接恢复后才能发送指导；草稿会保留。') :
+      !this.active ? t('运行尚未开始或已结束，暂时无法发送指导。') :
+      !this.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') :
+      issue ?? t('指导会发送给所选接收方；收到回执后可查看投递状态。');
+    patchSection(this.element.querySelector('[data-collab-guidance-records]')!, [...this.records.values()].map(record => `<article class="collab-guidance-record"><div><strong>${h(recipientLabel(record.recipient.kind))} ${h(record.recipient.id)}</strong><span class="badge">${h(statusLabel[record.status])}</span></div><p>${h(record.text)}</p><small>${h(record.id)} · ${h(observedTime(record.updatedAt))}${record.deliveredTo?.length ? t(' · 接收 {0}', h(record.deliveredTo.join(', '))) : ''}</small>${record.taskRef ? `<p class="collab-help">${t('任务 {0} · 版本 {1}', h(record.taskRef.id), h(record.taskRef.version))}</p>` : ''}<p class="collab-help">${t('依据观察 #{0} · {1}', record.observationRef.sequence, h(record.observationRef.stateDigest))}</p>${record.reason ? `<p class="collab-help">${h(record.reason)}</p>` : ''}</article>`).join(''));
   }
 
   private remember(record: WebGuidanceRecord) {
@@ -141,14 +142,14 @@ export class GuidanceComposer {
 
   private resolve(receipt: WebCommandResult) {
     const pending = this.pending;
-    if (!pending || receipt.id !== pending.input.id || receipt.guidance && receipt.guidance.id !== pending.input.id) throw new Error('指导回执身份不匹配');
+    if (!pending || receipt.id !== pending.input.id || receipt.guidance && receipt.guidance.id !== pending.input.id) throw new Error(t('指导回执身份不匹配'));
     if (receipt.guidance) this.remember(receipt.guidance);
     const record = this.records.get(receipt.id), status = record?.status ?? receipt.status, reason = record?.reason ?? receipt.reason;
-    this.notice.textContent = `回执 ${receipt.id} · ${statusLabel[status] ?? status}${reason ? ` · ${reason}` : ''}`;
+    this.notice.textContent = t('回执 {0} · {1}{2}', receipt.id, statusLabel[status] ?? status, reason ? ` · ${reason}` : '');
     if (['queued', 'delivered', 'deferred', 'failed', 'rejected'].includes(status)) {
       this.pending = undefined;
       if (['queued', 'delivered', 'deferred'].includes(status) && this.draftRevision === pending.draftRevision) { this.text.value = ''; this.draftRevision++; this.updateCount(); }
-    } else { pending.missing = false; this.notice.textContent += '；指导草稿已保留'; }
+    } else { pending.missing = false; this.notice.textContent += t('；指导草稿已保留'); }
     if (receipt.observation?.webRunId === this.runId) this.observed(receipt.observation);
   }
 
@@ -162,7 +163,7 @@ export class GuidanceComposer {
     } catch (error) {
       if (this.pending !== pending) return;
       pending.missing = responseStatus(error) === 404;
-      this.notice.textContent = pending.missing ? '尚未找到原指导回执，草稿已保留。' : `回执核对失败：${errorText(error)}；原提交与草稿已保留`;
+      this.notice.textContent = pending.missing ? t('尚未找到原指导回执，草稿已保留。') : t('回执核对失败：{0}；原提交与草稿已保留', errorText(error));
     }
   }
 
@@ -175,21 +176,21 @@ export class GuidanceComposer {
       if (this.pending !== pending) return;
       const status = responseStatus(error);
       if (typeof status === 'number' && status >= 400 && status < 500) {
-        this.pending = undefined; this.notice.textContent = `${errorText(error)}；指导未提交，草稿已保留`;
+        this.pending = undefined; this.notice.textContent = t('{0}；指导未提交，草稿已保留', errorText(error));
       } else { this.notice.textContent = errorText(error); await this.readReceipt(pending); }
     }
   }
 
   private async send() {
     if (this.busy || this.pending || !this.active || !this.connected || !this.observation || this.targetIssue()) return;
-    if (!this.text.value.trim()) { this.notice.textContent = '请填写指导内容'; return; }
+    if (!this.text.value.trim()) { this.notice.textContent = t('请填写指导内容'); return; }
     const kind = this.kind.value as WebGuidanceInput['recipient']['kind'];
     const pending: PendingGuidance = { input: {
       id: commandId(), recipient: { kind, ...(kind === 'lead' ? {} : { id: this.target.value }) },
       ...(kind === 'task' && this.taskRef ? { taskRef: { ...this.taskRef } } : {}), text: this.text.value,
       observationRef: { sequence: this.observation.sequence, stateDigest: this.observation.snapshot.stateDigest },
     }, draftRevision: this.draftRevision, missing: false };
-    this.pending = pending; this.busy = true; this.notice.textContent = '正在提交指导'; this.render();
+    this.pending = pending; this.busy = true; this.notice.textContent = t('正在提交指导'); this.render();
     try { await this.post(pending); }
     finally { this.busy = false; this.render(); }
   }

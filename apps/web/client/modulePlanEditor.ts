@@ -2,6 +2,7 @@ import {
   defaultResearchModulePlan, researchModulePlanSchema,
   type CustomResearchModule, type ResearchModulePlan, type ResearchModuleSlot,
 } from '../../../src/solver/modules/policy';
+import { localizeText, t } from '../i18n';
 
 type ModuleField = 'enabled' | 'name' | 'slot' | 'mode' | 'instructions';
 type ModuleControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
@@ -17,7 +18,7 @@ const clonePlan = (plan: ResearchModulePlan): ResearchModulePlan => ({ ...plan, 
 const customId = () => `custom-${typeof crypto.randomUUID === 'function' ? crypto.randomUUID().replaceAll('-', '').slice(0, 24)
   : Array.from(crypto.getRandomValues(new Uint32Array(3)), value => value.toString(16).padStart(8, '0')).join('')}`;
 const slots: Array<[ResearchModuleSlot, string]> = [
-  ['M1', 'M1 · 证明构造'], ['M3', 'M3 · 搜索决策'], ['M4', 'M4 · 上下文选择'], ['M5', 'M5 · 协作与复用'],
+  ['M1', t('M1 · 证明构造')], ['M3', t('M3 · 搜索决策')], ['M4', t('M4 · 上下文选择')], ['M5', t('M5 · 协作与复用')],
 ];
 
 function create<T extends keyof HTMLElementTagNameMap>(tag: T, className?: string, content?: string) {
@@ -110,10 +111,10 @@ export class ModulePlanEditor {
       }
       if (button.hasAttribute('data-module-plan-duplicate')) {
         if (this.plan.custom.length >= maxModules) return;
-        const sourceName = module.name.trim() || `自定义策略 ${index + 1}`;
+        const sourceName = module.name.trim() || t('自定义策略 {0}', index + 1);
         let name: string, number = 1;
         do {
-          const suffix = number === 1 ? ' 副本' : ` 副本 ${number}`;
+          const suffix = number === 1 ? t(' 副本') : t(' 副本 {0}', number);
           let prefix = '';
           for (const character of sourceName) {
             if (prefix.length + character.length + suffix.length > 40) break;
@@ -160,10 +161,10 @@ export class ModulePlanEditor {
   addRule(slot: ResearchModuleSlot = 'M1'): string | undefined {
     if (this.plan.custom.length >= maxModules || !slots.some(([value]) => value === slot)) return;
     let number = this.plan.custom.length + 1;
-    while (this.plan.custom.some(module => module.name === `自定义策略 ${number}`)) number++;
+    while (this.plan.custom.some(module => module.name === t('自定义策略 {0}', number))) number++;
     let id: string;
     do { id = customId(); } while (this.rows.has(id));
-    const module: CustomResearchModule = { id, name: `自定义策略 ${number}`, slot, mode: 'append', enabled: false, instructions: '' };
+    const module: CustomResearchModule = { id, name: t('自定义策略 {0}', number), slot, mode: 'append', enabled: false, instructions: '' };
     this.plan.custom.push(module);
     this.reconcile(); this.changed();
     const name = this.rows.get(id)!.controls.name as HTMLInputElement;
@@ -219,10 +220,10 @@ export class ModulePlanEditor {
   private updateDeletionNotice() {
     this.deletionNotice.hidden = !this.deleted;
     this.control('[data-module-plan-deleted-name]').textContent = this.deleted
-      ? `已删除 ${this.deleted.module.name || '未命名策略'}` : '';
+      ? t('已删除 {0}', this.deleted.module.name || t('未命名策略')) : '';
     this.undoDelete.disabled = !this.deleted || this.plan.custom.length >= maxModules;
     this.undoDelete.title = this.plan.custom.length >= maxModules
-      ? '已达 8 项上限，无法恢复此策略' : `撤销删除${this.deleted?.module.name || '策略'}`;
+      ? t('已达 8 项上限，无法恢复此策略') : t('撤销删除{0}', this.deleted?.module.name || t('策略'));
     this.undoDelete.setAttribute('aria-label', this.undoDelete.title);
   }
 
@@ -237,7 +238,7 @@ export class ModulePlanEditor {
     const heading = create('div', 'module-plan-row-heading');
     const toggle = create('label', 'module-plan-toggle');
     const enabled = create('input'); enabled.type = 'checkbox'; enabled.dataset.modulePlanField = 'enabled';
-    toggle.append(enabled, create('span', undefined, '启用'));
+    toggle.append(enabled, create('span', undefined, t('启用')));
     const index = create('span', 'module-plan-row-index');
     const disclosure = create('button', 'module-plan-disclosure');
     disclosure.type = 'button'; disclosure.dataset.modulePlanDisclosure = '';
@@ -264,10 +265,10 @@ export class ModulePlanEditor {
     const fields = create('div', 'module-plan-fields');
     const name = create('input'); name.type = 'text'; name.maxLength = 40; name.autocomplete = 'off'; name.spellcheck = false;
     const slot = selectOptions(slots);
-    const mode = selectOptions([['append', '补充默认建议'], ['replace', '替换默认建议']]);
+    const mode = selectOptions([['append', t('补充默认建议')], ['replace', t('替换默认建议')]]);
     const instructions = create('textarea'); instructions.rows = 3; instructions.spellcheck = false;
     const controls = { enabled, name, slot, mode, instructions };
-    for (const [field, label] of [['name', '名称'], ['slot', '所属模块'], ['mode', '策略方式']] as const) {
+    for (const [field, label] of [['name', t('名称')], ['slot', t('所属模块')], ['mode', t('策略方式')]] as const) {
       const wrapper = create('div', `module-plan-${field}-field`), control = controls[field];
       control.id = `${prefix}-${field}`; control.dataset.modulePlanField = field;
       control.setAttribute('aria-describedby', 'module-plan-error');
@@ -278,7 +279,7 @@ export class ModulePlanEditor {
     instructions.id = `${prefix}-instructions`; instructions.dataset.modulePlanField = 'instructions';
     instructions.setAttribute('aria-describedby', `${prefix}-bytes module-plan-error`);
     const ruleHeading = create('div', 'module-plan-rule-heading');
-    const label = create('label', undefined, '规则'); label.htmlFor = instructions.id;
+    const label = create('label', undefined, t('规则')); label.htmlFor = instructions.id;
     const bytes = create('span', 'module-plan-rule-bytes mono'); bytes.id = `${prefix}-bytes`; bytes.dataset.modulePlanRuleBytes = '';
     ruleHeading.append(label, bytes); rule.append(ruleHeading, instructions);
     const body = create('div', 'module-plan-row-body'); body.id = `${prefix}-body`;
@@ -294,8 +295,8 @@ export class ModulePlanEditor {
     for (const [index, module] of this.plan.custom.entries()) {
       let row = this.rows.get(module.id);
       if (!row) { row = this.createRow(); this.rows.set(module.id, row); row.element.dataset.modulePlanId = module.id; }
-      row.index.textContent = `策略 ${index + 1}`;
-      row.element.setAttribute('aria-label', `自定义策略 ${index + 1}`);
+      row.index.textContent = t('策略 {0}', index + 1);
+      row.element.setAttribute('aria-label', t('自定义策略 {0}', index + 1));
       const enabled = row.controls.enabled as HTMLInputElement;
       if (enabled.checked !== module.enabled) enabled.checked = module.enabled;
       for (const field of ['name', 'slot', 'mode', 'instructions'] as const)
@@ -312,27 +313,27 @@ export class ModulePlanEditor {
       total += count; row.element.dataset.enabled = String(module.enabled);
       row.bytes.textContent = `${count} / ${maxRuleBytes} B`;
       row.bytes.dataset.overLimit = String(count > maxRuleBytes);
-      const name = module.name || `策略 ${index + 1}`;
+      const name = module.name || t('策略 {0}', index + 1);
       row.name.textContent = name;
-      row.meta.textContent = `${slots.find(([slot]) => slot === module.slot)?.[1] ?? module.slot} · ${module.mode === 'replace' ? '替换建议' : '补充建议'}`;
+      row.meta.textContent = `${slots.find(([slot]) => slot === module.slot)?.[1] ?? module.slot} · ${module.mode === 'replace' ? t('替换建议') : t('补充建议')}`;
       this.setExpanded(row, !row.body.hidden);
-      row.controls.enabled.setAttribute('aria-label', `启用${name}`);
+      row.controls.enabled.setAttribute('aria-label', t('启用{0}', name));
       row.up.disabled = index === 0; row.down.disabled = index === this.plan.custom.length - 1;
-      row.up.title = row.up.disabled ? '已是第一项策略' : `上移${name}`;
-      row.down.title = row.down.disabled ? '已是最后一项策略' : `下移${name}`;
+      row.up.title = row.up.disabled ? t('已是第一项策略') : t('上移{0}', name);
+      row.down.title = row.down.disabled ? t('已是最后一项策略') : t('下移{0}', name);
       row.up.setAttribute('aria-label', row.up.title); row.down.setAttribute('aria-label', row.down.title);
-      row.remove.title = `删除${module.name || `策略 ${index + 1}`}`;
+      row.remove.title = t('删除{0}', module.name || t('策略 {0}', index + 1));
       row.remove.setAttribute('aria-label', row.remove.title);
       row.duplicate.disabled = this.plan.custom.length >= maxModules;
-      row.duplicate.title = row.duplicate.disabled ? '最多保存 8 个自定义策略，删除后可继续复制'
-        : `复制${module.name || `策略 ${index + 1}`}（副本默认停用）`;
+      row.duplicate.title = row.duplicate.disabled ? t('最多保存 8 个自定义策略，删除后可继续复制')
+        : t('复制{0}（副本默认停用）', module.name || t('策略 {0}', index + 1));
       row.duplicate.setAttribute('aria-label', row.duplicate.title);
     }
     this.control('[data-module-plan-count]').textContent = `${this.plan.custom.length} / ${maxModules}`;
     const bytes = this.control('[data-module-plan-bytes]');
     bytes.textContent = `${total} / ${maxTotalBytes} B`; bytes.dataset.overLimit = String(total > maxTotalBytes);
     this.add.disabled = this.plan.custom.length >= maxModules;
-    this.add.title = this.add.disabled ? '最多添加 8 个自定义策略' : '新增自定义策略';
+    this.add.title = this.add.disabled ? t('最多添加 8 个自定义策略') : t('新增自定义策略');
     this.expandAll.disabled = !this.plan.custom.length; this.collapseAll.disabled = !this.plan.custom.length;
     this.updateDeletionNotice();
   }
@@ -340,7 +341,7 @@ export class ModulePlanEditor {
   private setExpanded(row: ModuleRow, expanded: boolean) {
     row.body.hidden = !expanded; row.element.dataset.expanded = String(expanded);
     row.disclosure.setAttribute('aria-expanded', String(expanded));
-    row.disclosure.title = `${expanded ? '收起' : '展开'}${row.name.textContent}`;
+    row.disclosure.title = `${expanded ? t('收起') : t('展开')}${row.name.textContent}`;
     row.disclosure.setAttribute('aria-label', `${row.disclosure.title} · ${row.meta.textContent}`);
   }
 
@@ -381,23 +382,23 @@ export class ModulePlanEditor {
   }
 
   private issueMessage(issue: PlanIssue): string {
-    if (issue.path[0] === 'scheduler') return '请选择有效的搜索策略。';
-    if (issue.path[0] === 'context') return '请选择有效的上下文策略。';
+    if (issue.path[0] === 'scheduler') return t('请选择有效的搜索策略。');
+    if (issue.path[0] === 'context') return t('请选择有效的上下文策略。');
     const index = typeof issue.path[1] === 'number' ? issue.path[1] : undefined;
     const module = index === undefined ? undefined : this.plan.custom[index];
-    const prefix = index === undefined ? '' : `策略 ${index + 1}：`;
-    if (module && issue.path[2] === 'name') return `${prefix}${module.name.includes('\0') ? '名称不能包含空字符。'
-      : module.name.trim() ? '名称最多 40 个字符。' : '请填写名称。'}`;
-    if (module && issue.path[2] === 'instructions') return `${prefix}${module.instructions.includes('\0') ? '规则不能包含空字符。'
-      : module.instructions.trim() ? '规则最多 4000 字节。' : '启用前请填写规则。'}`;
-    if (module && issue.path[2] === 'slot') return `${prefix}请选择 M1、M3、M4 或 M5。`;
-    if (module && issue.path[2] === 'id') return `${prefix}策略 ID 无效，请删除此项后重新添加。`;
+    const prefix = index === undefined ? '' : t('策略 {0}：', index + 1);
+    if (module && issue.path[2] === 'name') return `${prefix}${module.name.includes('\0') ? t('名称不能包含空字符。')
+      : module.name.trim() ? t('名称最多 40 个字符。') : t('请填写名称。')}`;
+    if (module && issue.path[2] === 'instructions') return `${prefix}${module.instructions.includes('\0') ? t('规则不能包含空字符。')
+      : module.instructions.trim() ? t('规则最多 4000 字节。') : t('启用前请填写规则。')}`;
+    if (module && issue.path[2] === 'slot') return t('{0}请选择 M1、M3、M4 或 M5。', prefix);
+    if (module && issue.path[2] === 'id') return t('{0}策略 ID 无效，请删除此项后重新添加。', prefix);
     if (module && issue.path[2] === 'mode') return module.enabled && module.mode === 'replace'
-      ? `${module.slot} 只能启用一个「替换默认建议」策略。` : `${prefix}请选择有效的策略方式。`;
-    if (this.plan.custom.length > maxModules) return '最多添加 8 个自定义策略。';
+      ? t('{0} 只能启用一个「替换默认建议」策略。', module.slot) : t('{0}请选择有效的策略方式。', prefix);
+    if (this.plan.custom.length > maxModules) return t('最多添加 8 个自定义策略。');
     if (this.plan.custom.reduce((total, module) => total + byteSize(module.instructions), 0) > maxTotalBytes)
-      return '全部规则合计最多 16000 字节。';
-    return `${prefix}${issue.message || '请检查模块方案。'}`;
+      return t('全部规则合计最多 16000 字节。');
+    return `${prefix}${localizeText(issue.message) || t('请检查模块方案。')}`;
   }
 
   private displayError(message?: string, control?: ModuleControl | HTMLButtonElement) {

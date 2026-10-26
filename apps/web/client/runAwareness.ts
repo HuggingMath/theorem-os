@@ -1,4 +1,5 @@
 import type { WebRun } from '../shared';
+import { t } from '../i18n';
 
 /**
  * Per-browser memory of the open run and of when the history was last seen. It holds no draft text or account
@@ -39,5 +40,5 @@ export function newlyFinished(previous: readonly WebRun[], current: readonly Web
 }
 
 export function documentTitle(base: string, active: number, unseen: number): string {
-  return unseen ? `(${unseen}) 研究已结束 · ${base}` : active ? `${active} 项进行中 · ${base}` : base;
+  return unseen ? t('({0}) 研究已结束 · {1}', unseen, base) : active ? t('{0} 项进行中 · {1}', active, base) : base;
 }
