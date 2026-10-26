@@ -16,7 +16,7 @@
 
 开始区、导航和常见问题提供“申请内测”入口，打开公开仓库的 Issue 表单 `.github/ISSUE_TEMPLATE/early-access.yml`（源文件在 `docs/site-repo/`）。表单是中英双语，提醒申请会公开，不收集 API Key 和联系方式。开放时在同一条 Issue 里回复。
 
-不想用 GitHub 或希望私下申请的人可以使用第三方表单。把 https 表单地址填入 `docs/web/site.ts` 的 `earlyAccessForm` 并重新构建，首页开始区会多出“没有 GitHub？填写表单”链接；地址为空时不显示，非 https 地址会使构建失败。
+不使用 GitHub 或希望私下申请的人可以发邮件至 liuzhenhao@westlake.edu.cn。地址写在开始区的提示、常见问题、Issue 表单说明和公开仓库 README 里，链接预填邮件主题。
 
 ## 本地预览
 
@@ -41,13 +41,14 @@ bun run build:site
 
 构建时校验已验收提交包全部登记文件，以及页面收录的研究源码的 SHA-256。页面仅提取这些记录的明确字段，以及 solver 的 `Challenge.lean`、`Submission.lean`、`Submission/Helpers.lean`；不复制 `state.json`、会话、环境文件或完整实验目录。档案的源码行数仅统计页面收录的文件。
 
-生成的 `out/site/data/catalog.json` 与档案使用同一份数据。源码链接指向公开仓库 `main` 分支的同一路径；证明包按提交包逐字节保存，文件 SHA-256 写在档案里，可据此核对。
+生成的 `out/site/data/catalog.json` 与档案使用同一份数据。档案脚本 `site.js` 只打包不含源码的索引和目标声明节选；每道题的 Lean 源码写在 `data/sources/<id>.js`，打开“Lean 源码”或下载档案 JSON 时才加载。用脚本标签而不用 `fetch`，是为了 `file://` 预览也能读取源码。源码链接指向公开仓库 `main` 分支的同一路径；证明包按提交包逐字节保存，文件 SHA-256 写在档案里，可据此核对。
 
 ## 修改页面
 
 - `docs/index.html`、`docs/landing.css`：宣传首页内容和响应式样式。
 - `docs/en/*.html`：三个页面的英文版。改中文页时同步修改英文页。
-- `docs/web/site.ts`：公开仓库地址、内测入口、语言判断与切换。
+- `docs/web/site.ts`：公开仓库地址、内测入口、站点域名与访问统计开关、语言判断与切换。
+- `docs/privacy.html`、`docs/legal.css`、`docs/web/legal.ts`：隐私与条款页。页面内容描述 `apps/web` 的实际行为（Key 经 stdin 传入容器、运行记录 30 天会话过期后整目录删除），改动这些行为时同步修改页面。
 - `docs/web/landing.ts`：回放步骤与组件切换、截图预览和手机导航。
 - `docs/web/presentation.ts`：预设回放展示和从真实档案生成的成果表格。
 - `docs/archive.html`、`docs/site.css`、`docs/web/app.ts`：证明档案界面。
@@ -68,6 +69,19 @@ bun run build:site
 首页桌面导航、手机导航、页脚以及证明档案都链接到 `feedback.html`。反馈分为问题反馈、功能建议、使用咨询，可填写相关位置、标题、描述及可选环境。表单在本地整理 Markdown，预览确认后由用户进入固定仓库的 GitHub Issue 编辑页；最终发布需要用户登录 GitHub 并确认，静态网站不持有 GitHub Token，也不显示虚假的提交成功状态。
 
 反馈将公开，页面提示不要填写 API Key 或个人敏感信息。不会自动读取工作台、浏览器查询参数、源码或认证信息，也不把表单写入浏览器存储。完整编码 URL 超过 7500 字符时不附带正文，页面明确提示先复制或下载全文，再到 GitHub 粘贴；全文始终保留在预览里，复制失败时会选中正文供手动复制。无 JavaScript 或脚本不可用时保留直接提交到 GitHub 的入口。此方案可直接部署到 GitHub Pages，不需要额外服务器；若后续需要匿名或私密反馈，应另接支持这些能力的接收服务。
+
+## 访问统计
+
+统计使用 [Umami Cloud](https://cloud.umami.is) 免费版，不使用 Cookie。在 Umami 添加网站后，把 Website ID 填入 `docs/web/site.ts` 的 `analyticsWebsiteId` 并重新构建：构建会给每个页面加上统计脚本（只在正式域名上计数，本地预览不计），并保留隐私页中带 `<!-- analytics -->` 标记的说明段落。ID 为空时不加脚本，也删除这段说明。首页的申请按钮、邮件链接和反馈页的发布按钮带 `data-umami-event`，在 Umami 的 Events 页可以看到点击次数。
+
+## 独立域名
+
+页面里的绝对地址统一写成 `https://likc1606.github.io/theorem-os-site`。启用独立域名时：
+
+1. 在 DNS 添加记录。子域名（如 `www.example.org`）加 CNAME 指向 `likc1606.github.io`；根域名加 A 记录 `185.199.108.153`、`185.199.109.153`、`185.199.110.153`、`185.199.111.153`。
+2. 把域名填入 `docs/web/site.ts` 的 `customDomain`，重新构建并发布。构建会把所有页面的绝对地址（`og:image`、`hreflang`）换成新域名，并写出 `CNAME` 文件。
+3. 在公开仓库 Settings → Pages 确认域名，等证书签发后勾选 **Enforce HTTPS**。
+4. 重新运行 `node scripts/capture-promo.mjs` 更新分享卡片上的网址。旧地址会由 GitHub 自动跳转到新域名。
 
 ## 验证
 
@@ -120,7 +134,7 @@ node scripts/capture-workbench.mjs http://127.0.0.1:8787
 
 `workbench-source-detail.png` 是右侧 Lean 工作区的完整片段，保留未提交状态与 `sorry`；`workbench-settings-detail.png` 是原生研究配置弹窗正常滚动后的可见区域，展示服务商、模型、空 Key 与预算。二者均以 2 倍像素密度导出，同一截图脚本生成并验证零 API POST。
 
-`social-preview.png` 是分享卡片，由上述工作台截图和首页排版生成。修改设计后运行：
+`social-preview.png` 是中文分享卡片，由上述工作台截图和首页排版生成；`social-preview-en.png` 是英文卡片，因为工作台界面只有中文，它截取英文首页的验收回放窗口。修改设计后运行：
 
 ```bash
 bun run build:site

@@ -64,6 +64,7 @@ const checkStart = async page => {
   assert.equal(await apply.innerText(), '用 GitHub 申请内测');
   assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
   assert.match(await start.locator('.start-note').innerText(), /公开显示/);
+  assert.equal(await start.locator('.start-note a').getAttribute('href'), 'mailto:liuzhenhao@westlake.edu.cn?subject=TheoremOS%20%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7');
 };
 const checkScreenshotPreview = async (page, width) => {
   const link = page.locator('.workbench-image-link');

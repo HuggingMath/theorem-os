@@ -61,3 +61,14 @@ export interface ArchiveCatalog {
   snapshotAt: string;
   records: ArchiveRecord[];
 }
+
+/** The archive page bundles this index; full Lean sources load per record from data/sources/<id>.js. */
+export type ArchiveIndexSource = Omit<ArchiveSource, 'code'>;
+export interface ArchiveIndexRecord extends Omit<ArchiveRecord, 'sources'> {
+  sources: ArchiveIndexSource[];
+  /** The first lines of the target statement, shown in the overview without loading the full source. */
+  excerpt: string;
+}
+export interface ArchiveIndex extends Omit<ArchiveCatalog, 'records'> {
+  records: ArchiveIndexRecord[];
+}

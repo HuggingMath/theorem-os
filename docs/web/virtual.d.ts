@@ -1,4 +1,4 @@
 declare module 'virtual:archive' {
-  const catalog: import('./types').ArchiveCatalog;
+  const catalog: import('./types').ArchiveIndex;
   export default catalog;
 }

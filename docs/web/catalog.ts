@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import type { ArchiveCatalog, ArchiveRecord, ArchiveSource } from './types';
+import type { ArchiveCatalog, ArchiveIndex, ArchiveRecord, ArchiveSource } from './types';
 import { siteRepository } from './site';
 
 const identifier = z.string().regex(/^[a-z0-9_]+$/);
@@ -267,4 +267,18 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
     schema: 'theoremos.public-archive.v1', repository, archiveRevision,
     snapshotAt: snapshot.captureFinishedAt, records: records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   };
+}
+
+/** Drop the Lean source text from the bundled index and keep a short statement excerpt for the overview. */
+export function archiveIndex(catalog: ArchiveCatalog): ArchiveIndex {
+  return { ...catalog, records: catalog.records.map(record => {
+    const main = record.sources.find(file => file.name === (record.status === 'official_accepted' ? 'Submission.lean' : 'Challenge.lean')) ?? record.sources[0];
+    const lines = main.code.split('\n');
+    const start = Math.max(0, lines.findIndex(line => record.declaration && line.startsWith(record.declaration)));
+    return { ...record, excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
+  }) };
+}
+/** One script per record, so the archive also loads sources from file:// previews where fetch is unavailable. */
+export function archiveSourceScript(record: ArchiveRecord): string {
+  return `(window.theoremosSources??={})[${JSON.stringify(record.id)}]=${JSON.stringify(Object.fromEntries(record.sources.map(source => [source.name, source.code])))};\n`;
 }

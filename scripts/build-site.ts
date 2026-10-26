@@ -4,10 +4,10 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { buildSiteCatalog } from '../docs/web/catalog';
+import { archiveIndex, archiveSourceScript, buildSiteCatalog } from '../docs/web/catalog';
 import { acceptedProofRows, researchReplay } from '../docs/web/presentation';
-import { earlyAccessForm, type Locale } from '../docs/web/site';
 import { LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
+import { analyticsWebsiteId, customDomain, pagesOrigin } from '../docs/web/site';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
@@ -20,7 +20,7 @@ await build({
   legalComments: 'eof',
   plugins: [{ name: 'public-archive', setup(builder) {
     builder.onResolve({ filter: /^virtual:archive$/ }, () => ({ path: 'archive', namespace: 'public-archive' }));
-    builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, () => ({ contents: JSON.stringify(catalog), loader: 'json' }));
+    builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, () => ({ contents: JSON.stringify(archiveIndex(catalog)), loader: 'json' }));
   } }],
 });
 await build({
@@ -28,28 +28,22 @@ await build({
   bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true,
   legalComments: 'eof',
 });
-await build({
-  entryPoints: [path.join(root, 'docs/web/feedback.ts')], outfile: path.join(output, 'feedback.js'),
+for (const page of ['feedback', 'legal']) await build({
+  entryPoints: [path.join(root, `docs/web/${page}.ts`)], outfile: path.join(output, `${page}.js`),
   bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true,
   legalComments: 'eof',
 });
-// The optional sign-up form only appears once a real https address is configured.
-if (earlyAccessForm && new URL(earlyAccessForm).protocol !== 'https:') throw new Error('earlyAccessForm must be an https URL');
-const formLink = (locale: Locale) => earlyAccessForm
-  ? `<a class="text-link" href="${earlyAccessForm.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" target="_blank" rel="noreferrer">${locale === 'en' ? 'No GitHub? Use the form' : '没有 GitHub？填写表单'}<i data-lucide="arrow-up-right"></i></a>`
-  : '';
 const replay = JSON.parse(fs.readFileSync(path.join(root, 'docs/assets/replay.json'), 'utf8'));
 for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
   fs.mkdirSync(path.join(output, directory), { recursive: true });
   const homepage = fs.readFileSync(path.join(root, 'docs', directory, 'index.html'), 'utf8')
     .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale))
     .replace('<!-- accepted-count -->', String(catalog.records.filter(record => record.status === 'official_accepted').length))
-    .replace('<!-- accepted-proofs -->', acceptedProofRows(catalog, locale))
-    .replace('<!-- early-access-form -->', formLink(locale));
+    .replace('<!-- accepted-proofs -->', acceptedProofRows(catalog, locale));
   fs.writeFileSync(path.join(output, directory, 'index.html'), homepage);
-  for (const file of ['archive.html', 'feedback.html']) fs.copyFileSync(path.join(root, 'docs', directory, file), path.join(output, directory, file));
+  for (const file of ['archive.html', 'feedback.html', 'privacy.html']) fs.copyFileSync(path.join(root, 'docs', directory, file), path.join(output, directory, file));
 }
-for (const file of ['site.css', 'feedback.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
+for (const file of ['site.css', 'feedback.css', 'legal.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
 // Embed the Latin fonts so the same typography works for file:// previews without font CORS errors.
 // The CJK subsets are too large to inline; file:// previews fall back to system CJK fonts for them.
 const landingCss = fs.readFileSync(path.join(root, 'docs/landing.css'), 'utf8')
@@ -62,5 +56,18 @@ if (fs.existsSync(path.join(root, 'docs/assets'))) {
 }
 fs.mkdirSync(path.join(output, 'data'), { recursive: true });
 fs.writeFileSync(path.join(output, 'data/catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
+fs.rmSync(path.join(output, 'data/sources'), { recursive: true, force: true });
+fs.mkdirSync(path.join(output, 'data/sources'));
+for (const record of catalog.records) fs.writeFileSync(path.join(output, 'data/sources', `${record.id}.js`), archiveSourceScript(record));
 fs.writeFileSync(path.join(output, '.nojekyll'), '');
+// Site address and analytics are set in docs/web/site.ts and applied to every page here.
+const origin = customDomain ? `https://${customDomain}` : pagesOrigin;
+const analytics = analyticsWebsiteId ? `  <script defer src="https://cloud.umami.is/script.js" data-website-id="${analyticsWebsiteId}" data-domains="${new URL(origin).hostname}"></script>\n</head>` : '';
+for (const file of fs.readdirSync(output, { recursive: true, encoding: 'utf8' }).filter(name => name.endsWith('.html'))) {
+  let page = fs.readFileSync(path.join(output, file), 'utf8').replaceAll(pagesOrigin, origin);
+  page = analytics ? page.replace('</head>', analytics).replace(/<!-- \/?analytics -->/g, '') : page.replace(/<!-- analytics -->[\s\S]*?<!-- \/analytics -->/g, '');
+  fs.writeFileSync(path.join(output, file), page);
+}
+if (customDomain) fs.writeFileSync(path.join(output, 'CNAME'), `${customDomain}\n`);
+else fs.rmSync(path.join(output, 'CNAME'), { force: true });
 console.log(`Built ${catalog.records.length} archive records in ${path.relative(root, output)} (${revision.slice(0, 7)})`);

@@ -5,8 +5,8 @@ import {
   ListStart, MessageCircle, Search, SearchX, ShieldCheck,
 } from 'lucide';
 import catalog from 'virtual:archive';
-import type { ArchiveRecord, ArchiveSource } from './types';
-import { keepHashOnLanguageSwitch, localeOf, localizeRecord } from './site';
+import type { ArchiveIndexRecord, ArchiveIndexSource } from './types';
+import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './site';
 
 const iconSet = {
   ArrowDownWideNarrow, ArrowUpRight, BadgeCheck, CalendarDays, Check,
@@ -37,6 +37,7 @@ const strings = {
     empty: '没有可显示的记录', details: '档案详情', copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
     detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据' },
     copied: '已复制', copyFailed: '复制失败，请检查浏览器剪贴板权限',
+    loadingSource: '正在载入 Lean 源码…', sourceUnavailable: '源码载入失败。可以在 GitHub 查看原文件。',
     row: (title: string, accepted: boolean) => `${title}，${accepted ? '官方已验收' : '尚未官方验收'}`,
   },
   en: {
@@ -60,10 +61,30 @@ const strings = {
     empty: 'No records to show', details: 'Record details', copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
     detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence' },
     copied: 'Copied', copyFailed: 'Copy failed. Check the clipboard permission of your browser.',
+    loadingSource: 'Loading the Lean source…', sourceUnavailable: 'The source could not be loaded. You can read the file on GitHub.',
     row: (title: string, accepted: boolean) => `${title}, ${accepted ? 'officially accepted' : 'not yet officially accepted'}`,
   },
 }[locale];
 const records = catalog.records.map(record => localizeRecord(record, locale));
+type ArchiveRecord = ArchiveIndexRecord;
+type ArchiveSource = ArchiveIndexSource & { code: string };
+
+declare global { interface Window { theoremosSources?: Record<string, Record<string, string>> } }
+// Lean sources are most of the archive's weight, so each record's files load on first use.
+const sourceRequests = new Map<string, Promise<Record<string, string>>>();
+const loadedSources = (id: string) => window.theoremosSources?.[id];
+function loadSources(id: string) {
+  let request = sourceRequests.get(id);
+  if (!request) sourceRequests.set(id, request = new Promise<Record<string, string>>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = `${rootOf(locale)}data/sources/${id}.js`;
+    script.onload = () => { script.remove(); const files = loadedSources(id); if (files) resolve(files); else reject(new Error(`Missing sources: ${id}`)); };
+    script.onerror = () => { script.remove(); sourceRequests.delete(id); reject(new Error(`Missing sources: ${id}`)); };
+    document.head.append(script);
+  }));
+  return request;
+}
+const withCode = (record: ArchiveRecord, source: ArchiveIndexSource): ArchiveSource => ({ ...source, code: loadedSources(record.id)?.[source.name] ?? '' });
 const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({
@@ -147,13 +168,6 @@ function renderList(shown: ArchiveRecord[]) {
   element('#result-count').textContent = strings.results(shown.length, state.query);
 }
 
-function declaration(record: ArchiveRecord) {
-  const source = record.sources.find(file => file.name === (accepted(record) ? 'Submission.lean' : 'Challenge.lean')) ?? record.sources[0];
-  const lines = source.code.split('\n');
-  const start = Math.max(0, lines.findIndex(line => record.declaration && line.startsWith(record.declaration)));
-  return lines.slice(start, start + 7).join('\n');
-}
-
 const taskColors: Record<string, { label: string; color: string }> = {
   completed: { label: strings.tasks.completed, color: '#72a38d' }, integrated: { label: strings.tasks.integrated, color: '#438564' },
   pending: { label: strings.tasks.pending, color: '#d6dfda' }, blocked: { label: strings.tasks.blocked, color: '#c6a36a' },
@@ -183,18 +197,22 @@ function overview(record: ArchiveRecord) {
       ${local ? `<div><dt>${strings.localRecord}</dt><dd>${html(local.status)}<span class="subfact">${sourceBindingLabels[local.sourceBinding]}</span></dd></div>` : ''}
     </dl>
     ${taskChart(record)}
-    <div class="detail-section"><div class="section-title"><h3>${accepted(record) ? strings.excerptAccepted : strings.excerptSnapshot}</h3><span>Lean</span></div><pre class="declaration-preview">${html(declaration(record))}</pre></div>
+    <div class="detail-section"><div class="section-title"><h3>${accepted(record) ? strings.excerptAccepted : strings.excerptSnapshot}</h3><span>Lean</span></div><pre class="declaration-preview">${html(record.excerpt)}</pre></div>
     <div class="detail-links">${record.official ? external(record.official.resultUrl, strings.officialResult, 'button') : ''}${external(record.archiveUrl, strings.archive, 'button')}</div>`;
 }
 
 function currentSource(record: ArchiveRecord): ArchiveSource {
-  return record.sources.find(source => source.name === state.sourceName) ??
-    record.sources.find(source => source.name === (accepted(record) ? 'Submission.lean' : 'Challenge.lean')) ?? record.sources[0];
+  return withCode(record, record.sources.find(source => source.name === state.sourceName) ??
+    record.sources.find(source => source.name === (accepted(record) ? 'Submission.lean' : 'Challenge.lean')) ?? record.sources[0]);
 }
 
 function sourceView(record: ArchiveRecord) {
   const source = currentSource(record);
   state.sourceName = source.name;
+  if (!loadedSources(record.id)) {
+    loadSources(record.id).then(() => showLoadedSource(record), () => showLoadedSource(record, true));
+    return `<p class="source-loading" role="status">${strings.loadingSource}</p>`;
+  }
   const lines = source.code.split('\n');
   if (lines.at(-1) === '') lines.pop();
   return `<div class="source-toolbar"><label class="sr-only" for="source-file">${strings.leanFile}</label>
@@ -239,7 +257,15 @@ function renderInspector(record?: ArchiveRecord) {
       ['overview', strings.tabs.overview], ['source', strings.tabs.source], ['evidence', strings.tabs.evidence],
     ] as const).map(([tab, label]) => `<button type="button" role="tab" id="tab-${tab}" aria-controls="detail-panel" aria-selected="${state.tab === tab}" tabindex="${state.tab === tab ? 0 : -1}" data-tab="${tab}">${label}</button>`).join('')}</div>
     <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : evidence(record)}</div>`;
-  if (state.tab === 'source') requestAnimationFrame(() => jumpToDeclaration(record));
+  if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => jumpToDeclaration(record));
+}
+
+function showLoadedSource(record: ArchiveRecord, failed = false) {
+  const panel = document.querySelector<HTMLElement>('#detail-panel');
+  if (!panel || state.tab !== 'source' || selectedRecord() !== record) return;
+  panel.innerHTML = failed ? `<p class="source-loading" role="status">${strings.sourceUnavailable}</p><div class="detail-links">${external(currentSource(record).url, strings.githubFile, 'button')}</div>` : sourceView(record);
+  icons();
+  if (!failed) jumpToDeclaration(record);
 }
 
 function jumpToDeclaration(record: ArchiveRecord) {
@@ -346,7 +372,10 @@ document.addEventListener('click', event => {
     case 'jump-declaration': if (record) jumpToDeclaration(record); break;
     case 'copy-source': if (record) void copy(currentSource(record).code); break;
     case 'download-source': if (record) download(`${record.id}-${currentSource(record).name.replaceAll('/', '-')}`, currentSource(record).code, 'text/plain;charset=utf-8'); break;
-    case 'download-record': if (record) download(`${record.id}.json`, JSON.stringify(record, null, 2), 'application/json'); break;
+    case 'download-record': if (record) void loadSources(record.id).then(() => {
+      const { excerpt: _excerpt, ...full } = record;
+      download(`${record.id}.json`, JSON.stringify({ ...full, sources: record.sources.map(source => withCode(record, source)) }, null, 2), 'application/json');
+    }, () => toast(strings.sourceUnavailable)); break;
   }
 });
 

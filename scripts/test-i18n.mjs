@@ -85,6 +85,7 @@ try {
     assert.equal(await page.locator('#module-preview-panel img').getAttribute('src'), '../assets/workbench-library-desktop.png');
     const apply = page.locator('#start .start-links a.button');
     assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
+    assert.equal(await page.locator('#start .start-note a').getAttribute('href'), 'mailto:liuzhenhao@westlake.edu.cn?subject=TheoremOS%20early%20access');
     assert.equal(await page.locator('[data-accepted-proof]').count(), 6);
     assert.match(await page.locator('.proof-table').innerText(), /Discrete geometry/);
     await checkOverflow(page, `English homepage at ${width}px`);
@@ -123,17 +124,29 @@ try {
     await page.locator('#feedback-review-close').click();
     await checkOverflow(page, `English feedback at ${width}px`);
     await page.screenshot({ path: path.join(output, `en-feedback-${width}.png`), fullPage: true });
+
+    for (const [prefix, lang] of [['en/', 'en'], ['', 'zh-CN']]) {
+      await open(page, `${hosted}${prefix}privacy.html#terms`, 'legalReady');
+      assert.equal(await page.getAttribute('html', 'lang'), lang);
+      if (lang === 'en') assert.deepEqual(await cjkIn(page), [], `English privacy page at ${width}px`);
+      assert.equal(await page.locator('h1').count(), 1);
+      await checkOverflow(page, `${lang} privacy page at ${width}px`);
+      await page.screenshot({ path: path.join(output, `${lang}-privacy-${width}.png`), fullPage: true });
+    }
     await page.close();
   }
 
   // Language links point at each other, and switching keeps the section or record in view.
   const page = await newPage(1440);
-  for (const [zh, en] of [['', 'en/'], ['archive.html', 'en/archive.html'], ['feedback.html', 'en/feedback.html']]) {
+  for (const [zh, en] of [['', 'en/'], ['archive.html', 'en/archive.html'], ['feedback.html', 'en/feedback.html'], ['privacy.html', 'en/privacy.html']]) {
     await page.goto(hosted + zh);
+    // Every page links to the privacy and terms page in both languages.
+    if (zh !== 'privacy.html') assert.ok(await page.locator('a[href="privacy.html"]').count() > 0, `${zh || 'index'} must link to privacy.html`);
     const toEnglish = new URL(await page.locator('a.lang-link').getAttribute('href'), page.url()).pathname;
     assert.equal(toEnglish.replace(/index\.html$/, ''), base + en);
     assert.equal(await page.locator(`link[rel="alternate"][hreflang="en"]`).getAttribute('href'), `https://likc1606.github.io/theorem-os-site/${en}`);
     await page.goto(hosted + en);
+    if (zh !== 'privacy.html') assert.ok(await page.locator('a[href="privacy.html"]').count() > 0, `${en} must link to privacy.html`);
     const toChinese = new URL(await page.locator('a.lang-link').getAttribute('href'), page.url()).pathname;
     assert.equal(toChinese.replace(/index\.html$/, ''), base + zh);
   }
@@ -150,7 +163,7 @@ try {
   await page.close();
 
   assert.deepEqual(problems, [], 'Pages must load without errors or missing files');
-  console.log('i18n checks passed: English homepage, archive (overview, source, evidence, snapshot, replay) and feedback at 3 widths, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
+  console.log('i18n checks passed: English homepage, archive (overview, source, evidence, snapshot, replay), feedback and privacy at 3 widths, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
   console.log(`Screenshots: ${path.relative(root, output)}`);
 } finally {
   await browser.close();

@@ -1,15 +1,15 @@
 import {
   createIcons, ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
-  Download, ExternalLink, FileCode2, FileJson2, Files, FolderOpen, GitFork, Globe, History, Info,
-  KeyRound, Maximize2, Menu, Network, Pause, Play, Plus, RotateCcw, ScanLine, ShieldCheck, X, ZoomIn, ZoomOut,
+  Download, ExternalLink, FileCheck2, FileCode2, FileJson2, Files, FlaskConical, FolderOpen, GitFork, Globe, History, Info,
+  KeyRound, Maximize2, Menu, Network, Pause, Play, Plus, RotateCcw, ScanLine, ShieldCheck, Wallet, X, ZoomIn, ZoomOut,
 } from 'lucide';
 import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
 import { keepHashOnLanguageSwitch, localeOf, rootOf } from './site';
 
 const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
-  Download, ExternalLink, FileCode2, FileJson2, Files, FolderOpen, GitFork, Globe, History, Info, KeyRound, Maximize2, Menu, Network, Pause, Play, Plus,
-  RotateCcw, ScanLine, ShieldCheck, X, ZoomIn, ZoomOut };
+  Download, ExternalLink, FileCheck2, FileCode2, FileJson2, Files, FlaskConical, FolderOpen, GitFork, Globe, History, Info, KeyRound, Maximize2, Menu, Network, Pause, Play, Plus,
+  RotateCcw, ScanLine, ShieldCheck, Wallet, X, ZoomIn, ZoomOut };
 const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
 const element = <T extends HTMLElement = HTMLElement>(selector: string): T => {
   const result = document.querySelector<T>(selector);
@@ -90,7 +90,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
         } else if (target.matches('.faq-list')) {
           gsap.fromTo(target.children, { opacity: .4, x: 20 },
             { ...settle, opacity: 1, x: 0, stagger: .08 });
-        } else if (target.matches('.section-heading, .record-notes, .start-copy')) {
+        } else if (target.matches('.section-heading, .record-notes, .start-copy, .audience-grid')) {
           gsap.fromTo(target.children, { opacity: .4, y: 18 },
             { ...settle, opacity: 1, y: 0, stagger: .08 });
         } else {
@@ -99,7 +99,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
       });
     }
   }, { rootMargin: '0px 0px -35px 0px', threshold: .08 });
-  document.querySelectorAll('.section-heading, .replay-window, .proof-row, .component-explorer, .product-fragment, .archive-showcase, .record-notes, .start-copy, .start-terminal, .faq-list')
+  document.querySelectorAll('.section-heading, .audience-grid, .replay-window, .proof-row, .component-explorer, .product-fragment, .archive-showcase, .record-notes, .start-copy, .start-terminal, .faq-list')
     .forEach(target => observer.observe(target));
   return () => observer.disconnect();
 });

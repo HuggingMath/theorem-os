@@ -11,6 +11,8 @@ fs.mkdirSync(output, { recursive: true });
 const catalog = JSON.parse(fs.readFileSync(path.join(root, 'out/site/data/catalog.json'), 'utf8'));
 const official = catalog.records.filter(record => record.status === 'official_accepted');
 const ongoing = catalog.records.filter(record => record.status !== 'official_accepted');
+// Lean sources load per record from data/sources; the archive script must not bundle them again.
+assert.ok(fs.statSync(path.join(root, 'out/site/site.js')).size < 200_000, 'site.js must not bundle the archive sources');
 const errors = [];
 const browser = await chromium.launch();
 try {
@@ -77,6 +79,8 @@ try {
   const record = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
   assert.equal(record.status, 'official_accepted');
   assert.ok(record.official.resultUrl.includes('/issues/2135'));
+  assert.deepEqual(record.sources.map(source => source.code), official.find(item => item.id === record.id).sources.map(source => source.code), 'The record download must include the lazily loaded Lean sources');
+  assert.equal(record.excerpt, undefined);
   const deepLink = page.url();
   await page.reload();
   assert.equal(page.url(), deepLink);
