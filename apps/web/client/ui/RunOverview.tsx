@@ -1,6 +1,7 @@
 import { render } from 'preact';
 import { useRef } from 'preact/hooks';
 import { Icon, Spinner } from './Icon';
+import { TermHint } from './TermHint';
 
 export type OverviewStep = { label: string; state: string; stateLabel: string; clock: string; share: number };
 export type OverviewEvent = { sequence: number; at: string; time: string; type: string; message: string };
@@ -42,7 +43,7 @@ function RunOverview(props: RunOverviewProps) {
         <div class="elapsed-summary"><span>总用时</span><strong class="mono" data-total-clock>{props.elapsed}</strong></div></div>
       <ol class="progress-steps">{props.steps.map((step, index) =>
         <li key={step.label} class={`progress-step ${step.state}`} aria-current={step.state === 'active' ? 'step' : undefined}>
-          <Marker step={step} index={index} /><span class="step-label">{step.label}</span><span class="step-state">{step.stateLabel}</span>
+          <Marker step={step} index={index} /><span class="step-label">{step.label}{step.label === '独立验收' && <TermHint id="acceptance" />}</span><span class="step-state">{step.stateLabel}</span>
           <span class="step-duration mono" data-stage-clock={index}>{step.clock}</span>
           <span class="step-share" aria-hidden="true"><i style={{ width: `${Math.round(step.share * 100)}%` }} /></span>
         </li>)}</ol>
@@ -74,7 +75,7 @@ function RunOverview(props: RunOverviewProps) {
       </section>}
     </div>
     <div class="overview-section"><h3>研究任务</h3><p class="task-content">{props.task}</p></div>
-    <div class="overview-section"><h3>执行配置</h3><dl class="facts">{props.facts.map(fact =>
+    <div class="overview-section"><div class="term-heading"><h3>执行配置</h3><TermHint id="budget" /></div><dl class="facts">{props.facts.map(fact =>
       <div key={fact.label}><dt>{fact.label}</dt><dd class={fact.mono ? 'mono' : undefined}>{fact.value}</dd></div>)}</dl></div>
   </>;
 }

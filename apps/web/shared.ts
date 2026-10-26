@@ -127,6 +127,8 @@ export type WebSession = {
   defaults: Pick<WebRunInput, 'model' | 'effort' | 'maxTurns' | 'maxRunSeconds' | 'workers' | 'coordination'> & { environment: WebEnvironment };
   limits: { maxTurns: number; maxRunSeconds: number; maxWorkers: number; maxTotalTokens: number; maxSourceBytes: number; maxTaskBytes: number };
   runtime: { ready: boolean; message: string };
+  /** A recorded read-only run that needs no API key; absent when the image ships without one. */
+  sample?: { id: string; title: string };
 };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
 export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown };
@@ -137,3 +139,5 @@ export type WorkerMessage =
   | { type: 'catalog'; catalog: unknown }
   | { type: 'result'; result: WebResult }
   | { type: 'error'; message: string; failure?: WebFailure };
+/** The id of the read-only sample run (apps/web/sample.ts); fixed so links and saved positions never collide with real runs. */
+export const webSampleRunId = '00000000-0000-4000-8000-00000000a001';

@@ -7,7 +7,8 @@ import { createWebService } from '../apps/web/server';
 import { readWebConfig, type WebConfig } from '../apps/web/config';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import type { WebRunner } from '../apps/web/runner';
-import type { WebResult, WebRunInput, WebSession, WorkerInput, WorkerMessage } from '../apps/web/shared';
+import { webSampleRunId, type WebResult, type WebRun, type WebRunInput, type WebSession, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
+import type { WebObservation } from '../apps/web/collaboration';
 
 const key = 'sk-http-test-never-publish';
 const input = (): WebRunInput => ({ providerId: 'openai', apiKey: key, model: 'gpt-6.1-sol', effort: 'xhigh',
@@ -614,6 +615,46 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(again.token).not.toBe(share.token);
     expect((await request(`/api/runs/${run.id}`, alice, { method: 'DELETE' })).status).toBe(200);
     expect((await request(`/api/share/${again.token}`)).status).toBe(404);
+  });
+
+  it('serves the read-only sample run to every session without listing it or accepting writes', async () => {
+    const alice = await session();
+    expect(alice.session.sample).toEqual({ id: webSampleRunId, title: '示例运行：自然数加法' });
+    const route = `/api/runs/${webSampleRunId}`;
+    const { run } = await (await request(route, alice)).json() as { run: WebRun };
+    expect(run).toMatchObject({ id: webSampleRunId, status: 'completed', result: { status: 'evaluated_passed' } });
+    expect((await (await request('/api/runs', alice)).json()).runs).toEqual([]);
+    const observation = (await (await request(`${route}/observation`, alice)).json()).observation as WebObservation;
+    expect(observation.webRunId).toBe(webSampleRunId);
+    const source = observation.sources[0];
+    const read = await request(`${route}/tasks/${encodeURIComponent(source.taskId)}/source?version=${encodeURIComponent(source.taskVersion)}`, alice);
+    expect((await read.json()).source.taskId).toBe(source.taskId);
+    const check = observation.checks[0];
+    expect((await (await request(`${route}/checks/${encodeURIComponent(check.id)}`, alice)).json()).check.id).toBe(check.id);
+    expect((await (await request(`${route}/events?after=0`, alice)).json()).events.length).toBeGreaterThan(0);
+    expect((await (await request(`${route}/share`, alice)).json())).toEqual({ share: null });
+    const download = await request(`${route}/download`, alice);
+    expect(download.headers.get('content-disposition')).toContain(`theoremos-${webSampleRunId}.json`);
+    expect((await request(`${route}/unknown`, alice)).status).toBe(404);
+    for (const [operation, method] of [['cancel', 'POST'], ['', 'DELETE'], ['share', 'POST'], ['guidance', 'POST'], ['plan-edits', 'POST'], ['archive', 'POST']]) {
+      const refused = await request(operation ? `${route}/${operation}` : route, alice, { method, body: method === 'DELETE' ? undefined : {} });
+      expect(refused.status).toBe(403);
+      expect((await refused.json()).error).toContain('示例运行只读');
+    }
+    // Writes still need the session's CSRF token before the sample answers.
+    const forged = await request(`${route}/cancel`, { ...alice, csrf: 'wrong' }, { method: 'POST', body: {} });
+    expect(forged.status).toBe(403);
+    expect((await forged.json()).error).not.toContain('示例运行');
+    expect((await (await request(route, alice)).json()).run).toEqual(run);
+  });
+
+  it('hides the sample when the service is started without one', async () => {
+    await service.close();
+    service = createWebService(config, runner, { sample: null });
+    await new Promise<void>((resolve, reject) => { service.server.once('error', reject); service.server.listen(new URL(baseUrl).port, '127.0.0.1', resolve); });
+    const alice = await session();
+    expect(alice.session.sample).toBeUndefined();
+    expect((await request(`/api/runs/${webSampleRunId}`, alice)).status).toBe(404);
   });
 
   it('serves only files within the static root and sends browser security headers', async () => {

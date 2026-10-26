@@ -281,7 +281,8 @@ try {
     screenshots.push(name);
   }
   async function stage(label: string) {
-    await page.waitForFunction(label => document.querySelector('.progress-step.active .step-label')?.textContent === label, label);
+    // The label's first text node; the acceptance step also carries a term hint button.
+    await page.waitForFunction(label => document.querySelector('.progress-step.active .step-label')?.firstChild?.textContent === label, label);
   }
   await page.setViewportSize({ width: 375, height: 812 });
   await fillConfig(page, 'api-key', credential);

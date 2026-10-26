@@ -15,6 +15,7 @@ import { WebModuleRegistry } from './moduleRegistry';
 import { webGuidanceSchema, webPlanProposalSchema } from './collaborationValidation';
 import { WebAuth, WebAuthError, type WebMailer } from './auth';
 import { shareSnapshot, webShareToken, type WebShareLink } from './share';
+import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
 
 const inputSchema = z.object({
   providerId: z.string().min(1).max(40), apiKey: z.string().min(8).max(4096).regex(/^[\x21-\x7e]+$/),
@@ -65,8 +66,10 @@ function readJson(request: IncomingMessage): Promise<unknown> {
 type Session = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
 const objectBody = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
 export function createWebService(config: WebConfig, runner: WebRunner = new DockerWebRunner(config),
-  options: { mailer?: WebMailer; captchaAnswer?: () => string } = {}) {
+  options: { mailer?: WebMailer; captchaAnswer?: () => string; sample?: WebSampleFile | null } = {}) {
   const storage = new WebStorage(config.dataRoot);
+  // null disables the sample; omitted loads the one shipped with the image.
+  const sample = options.sample === undefined ? loadWebSample() : options.sample ?? undefined;
   const knowledge = new WebKnowledgeService(storage);
   const registry = new WebModuleRegistry(storage);
   const sessions = new Map<string, Session>(storage.listSessions().map(session => [session.id, session]));
@@ -155,7 +158,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           storage.saveSession(session);
           const body: WebSession = { csrfToken: session.csrf, auth: auth ? 'email' : 'none',
             ...(session.account ? { account: { email: session.account.email } } : {}), providers: config.providers, environments: getWebEnvironments(),
-            templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness() };
+            templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
+            ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}) };
           json(response, 200, body); return;
         }
         if (!session) throw new HttpError(401, '会话已过期，请刷新页面。');
@@ -296,6 +300,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(.*))?$/.exec(url.pathname);
         if (!match) throw new HttpError(404, '页面或运行不存在。');
+        if (sample && match[1] === webSampleRunId) {
+          const answer = webSampleResponse(sample, match[2], request.method || 'GET', url.searchParams);
+          if (answer.filename) response.setHeader('Content-Disposition', `attachment; filename="${answer.filename}"`);
+          json(response, answer.status, answer.body); return;
+        }
         const run = jobs.get(owner, match[1]);
         if (!run) throw new HttpError(404, '运行不存在或不属于当前会话。');
         const operation = match[2];

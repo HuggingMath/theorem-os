@@ -1,5 +1,6 @@
 import type { WebCommandResult, WebGuidanceInput, WebGuidanceRecord, WebObservation } from '../collaboration';
 import { codeBlock, commandId, createElement, errorText, escapeHtml as h, factList, observedTime, patchSection, recipientLabel, roleLabel, type WebApi } from './collaborationUi';
+import { termHint } from './glossary';
 
 type PendingGuidance = { input: WebGuidanceInput; draftRevision: number; missing: boolean };
 const responseStatus = (error: unknown) => error && typeof error === 'object' && 'status' in error ? error.status : undefined;
@@ -24,7 +25,7 @@ export class GuidanceComposer {
   private availability: HTMLElement;
 
   constructor(private api: WebApi, private runId: string, private observed: (observation: WebObservation) => void) {
-    this.element.innerHTML = `<div class="collab-section-heading"><h3>提供指导</h3></div><form data-collab-guidance-form>
+    this.element.innerHTML = `<div class="collab-section-heading"><span class="term-heading"><h3>提供指导</h3>${termHint('guidance')}</span></div><form data-collab-guidance-form>
       <div class="collab-guidance-target"><label>接收方<select data-guidance-kind><option value="lead">Lead</option><option value="task">任务</option><option value="worker">Agent</option></select></label><label>目标<select data-guidance-target disabled><option value="">Lead</option></select></label></div>
       <div data-guidance-context></div><label class="sr-only" for="guidance-${h(runId)}">指导内容</label><textarea id="guidance-${h(runId)}" data-guidance-text rows="3" maxlength="4000" aria-describedby="guidance-count-${h(runId)} guidance-availability-${h(runId)}" placeholder="补充思路、指出问题或引用知识；修改任务合同请使用计划编辑器。"></textarea>
       <div class="collab-guidance-meta"><p id="guidance-count-${h(runId)}" data-guidance-count class="collab-help">0 / 4000</p><p id="guidance-availability-${h(runId)}" data-guidance-availability class="collab-help"></p></div>

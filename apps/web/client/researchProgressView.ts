@@ -1,6 +1,7 @@
 import type { WebCheckReceipt, WebDelivery, WebObservation } from '../collaboration';
 import { codeBlock, createElement, detailBlock, escapeHtml as h, factList, observedTime, patchSection } from './collaborationUi';
 import { taskSourceKey } from './taskSourceComparison';
+import { termHint } from './glossary';
 
 export function recordedTask(observation: WebObservation, id: string, version?: string) {
   const task = observation.inspection.tasks.find(task => task.id === id && (!version || task.version === version));
@@ -27,7 +28,7 @@ export class ResearchProgressView {
   private query: HTMLInputElement;
 
   constructor(runId: string) {
-    this.overview.innerHTML = `<div class="collab-section-heading"><h3>证明前沿</h3><span class="collab-help">记录的局部闭合不代表原题通过 S3 验收</span></div><div data-research-frontier class="collab-frontier-list"></div><div data-research-waiting></div><div class="collab-section-heading collab-research-blocker-heading"><h3>数学阻塞</h3><span class="collab-help">作用范围与重开条件</span></div><div data-research-blockers class="collab-blocker-list"></div>`;
+    this.overview.innerHTML = `<div class="collab-section-heading"><span class="term-heading"><h3>证明前沿</h3>${termHint('frontier')}</span><span class="collab-help">记录的局部闭合不代表原题通过 S3 验收</span></div><div data-research-frontier class="collab-frontier-list"></div><div data-research-waiting></div><div class="collab-section-heading collab-research-blocker-heading"><span class="term-heading"><h3>数学阻塞</h3>${termHint('blocker')}</span><span class="collab-help">作用范围与重开条件</span></div><div data-research-blockers class="collab-blocker-list"></div>`;
     this.element.setAttribute('data-research-deliveries', '');
     this.element.innerHTML = `<div class="collab-section-heading"><h3 tabindex="-1" data-delivery-heading>研究交付</h3><span class="collab-help" data-delivery-count></span></div><p class="collab-help collab-delivery-intro">Agent 的交付内容、所用前提与未完成义务；检查状态以对应材料的回执为准。</p>
       <div class="collab-delivery-filters"><label for="delivery-producer-${h(runId)}">Agent<select id="delivery-producer-${h(runId)}" data-delivery-producer><option value="">全部 Agent</option></select></label><label for="delivery-task-${h(runId)}">任务<select id="delivery-task-${h(runId)}" data-delivery-task><option value="">全部任务</option></select></label><label for="delivery-query-${h(runId)}">检索<input type="search" id="delivery-query-${h(runId)}" data-delivery-query placeholder="搜索声明、发现或交付 ID"></label><button type="button" class="button" data-delivery-clear>清除筛选</button></div>

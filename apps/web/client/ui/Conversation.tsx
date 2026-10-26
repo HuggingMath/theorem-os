@@ -12,15 +12,29 @@ export type ConversationRun = {
   notify?: 'on' | 'off' | 'blocked' | 'unsupported';
 };
 const notifyLabels = { on: '结束时通知我 · 已开启', off: '结束时通知我', blocked: '通知已被浏览器阻止', unsupported: '' };
-export type ConversationProps = { run?: ConversationRun; templates: ConversationTemplate[] };
+export type ConversationProps = { run?: ConversationRun; templates: ConversationTemplate[];
+  /** The read-only sample run, when the server ships one. */ sample?: { title: string };
+  /** No run yet in this account or session: the welcome explains the steps. */ firstRun: boolean };
+
+const steps = [
+  { title: '写下原题', detail: 'Lean 文件里用 sorry 留出要证明的定理，或者从下面的示例题目开始。' },
+  { title: '连接模型', detail: '在研究配置里选择服务商，填入自己的 API Key。Key 只在运行期间使用，不会保存。' },
+  { title: '等待验收', detail: 'Agent 拆分任务、写证明，最后由隔离的 Lean 环境检查完整原题。' },
+];
 
 // aria-pressed on the suggestions is owned by app.ts's renderTemplateSelection, which runs after every render.
-function Welcome({ templates }: { templates: ConversationTemplate[] }) {
-  return <div class="chat-welcome"><img src="assets/mark.svg" alt="" width={40} height={40} /><h2>从一道定理开始</h2>
+function Welcome({ templates, sample, firstRun }: Omit<ConversationProps, 'run'>) {
+  return <div class="chat-welcome" data-first-run={firstRun}><img src="assets/mark.svg" alt="" width={40} height={40} /><h2>从一道定理开始</h2>
+    {/* The sample comes first: a visitor without a key can see the whole flow before reading how to start one. */}
+    {sample && <button type="button" class="welcome-sample" data-chat-action="sample">
+      <Icon name="play" /><span><strong>先看一次完整运行</strong><span>{sample.title} · 无需 API Key</span></span><Icon name="arrow-right" /></button>}
+    {firstRun && <ol class="welcome-steps" aria-label="使用步骤">{steps.map((step, index) =>
+      <li key={step.title}><span class="welcome-step-index mono" aria-hidden="true">{index + 1}</span><div><strong>{step.title}</strong><p>{step.detail}</p></div></li>)}</ol>}
     <div class="chat-suggestions" aria-label="示例题目"><span class="suggestions-label">示例题目</span>
       {templates.map(template => <button key={template.id} type="button" class="template-suggestion" data-chat-template={template.id}>
         <Icon name="file-code-2" /><span>{template.name}</span><span class="suggestion-environment">{template.environment}</span><Icon name="arrow-up-right" />
-      </button>)}</div></div>;
+      </button>)}</div>
+    <button type="button" class="text-button welcome-glossary" data-chat-action="glossary"><Icon name="book-open" />术语说明</button></div>;
 }
 
 function Event({ event, active }: { event: ConversationEvent; active: boolean }) {
@@ -63,5 +77,5 @@ const mounted = new WeakSet<HTMLElement>();
 // Keyed by run id: a different run remounts the thread, while polling keeps message and row nodes.
 export function renderConversation(root: HTMLElement, props: ConversationProps) {
   if (!mounted.has(root)) { root.textContent = ''; mounted.add(root); }
-  render(props.run ? <Thread key={props.run.id} run={props.run} /> : <Welcome key="welcome" templates={props.templates} />, root);
+  render(props.run ? <Thread key={props.run.id} run={props.run} /> : <Welcome key="welcome" templates={props.templates} sample={props.sample} firstRun={props.firstRun} />, root);
 }

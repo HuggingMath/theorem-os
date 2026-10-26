@@ -38,6 +38,8 @@ import { renderRunOverview, unmountRunOverview, type RunOverviewProps } from './
 import { renderConversation as drawConversation } from './ui/Conversation';
 import { workerPhaseLabel } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResume, saveResume } from './runAwareness';
+import { installTermHints, renderGlossary } from './termHints';
+import type { TermId } from './glossary';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
@@ -94,6 +96,8 @@ const state = {
   finishedRuns: new Set<string>(),
   /** Runs that ended while the tab was hidden; shown in the tab title until the tab is visible again. */
   unseenRuns: new Set<string>(), resumed: false,
+  /** The read-only sample run, fetched when first opened; it is never part of runs. */
+  sample: undefined as WebRun | undefined,
 };
 const baseTitle = document.title;
 const notificationsSupported = () => typeof Notification === 'function';
@@ -399,14 +403,15 @@ function updateLatestMessage() {
 }
 function restoreConversationScroll() {
   const scroll = element('#conversation-scroll');
-  if (scroll.clientHeight) scroll.scrollTop = conversationScroll.following ? scroll.scrollHeight : conversationScroll.top;
+  // Only a run follows its newest event; the welcome is read from the top.
+  if (scroll.clientHeight) scroll.scrollTop = conversationScroll.following && currentRun() ? scroll.scrollHeight : conversationScroll.top;
   updateLatestMessage();
 }
 function renderConversation() {
   renderComposerSummary();
   const run = currentRun();
   const signature = JSON.stringify(run ? [run.id, run.task, run.status, run.phase, run.events, run.result?.status, run.error, run.failure, run.queue, Boolean(run.artifact), notifyState()]
-    : [state.session?.templates, state.connected]);
+    : [state.session?.templates, state.session?.sample, state.connected, state.runs.length > 0]);
   if (signature === state.conversationSignature) return;
   state.conversationSignature = signature;
   rememberConversationScroll();
@@ -427,6 +432,8 @@ function renderConversation() {
   const working = Boolean(run && activeRun(run)), value = run ? status(run) : undefined;
   drawConversation(thread, {
     templates: (state.session?.templates ?? []).map(template => ({ id: template.id, name: template.name, environment: environmentName(template.environment) })),
+    ...(state.session?.sample ? { sample: { title: state.session.sample.title } } : {}),
+    firstRun: Boolean(state.session) && !state.runs.length,
     ...(run && value ? { run: { id: run.id, task: run.task, environment: environmentName(run.environment), model: run.model, working,
       events: events.map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), message: event.message })),
       result: { tone: value.tone, symbol: value.symbol, label: failureGuide(run)?.title ?? value.label, description: resultDescription(run), candidate: Boolean(run.artifact && working) },
@@ -962,7 +969,10 @@ function clearFilters() {
   field('run-search').value = ''; field('run-filter').value = 'all';
   renderRunList();
 }
-const currentRun = () => state.selectedRun?.id === state.selectedId ? state.selectedRun : state.runs.find(run => run.id === state.selectedId);
+const isSample = (run?: WebRun) => Boolean(run && run.id === state.session?.sample?.id);
+const sampleSelected = () => Boolean(state.selectedId && state.selectedId === state.session?.sample?.id);
+const currentRun = () => state.selectedRun?.id === state.selectedId ? state.selectedRun
+  : sampleSelected() ? state.sample : state.runs.find(run => run.id === state.selectedId);
 const downloadUrl = (id: string) => `/api/runs/${encodeURIComponent(id)}/download`;
 function resultTitle(run: WebRun) {
   const guide = failureGuide(run);
@@ -995,7 +1005,7 @@ function overviewProps(run: WebRun): RunOverviewProps {
     downloads: { proof: Boolean(run.result?.proof), report: Boolean(run.result) },
     task: run.task,
     facts: [item('证明环境', environmentName(run.environment)), ...(environment ? [item('Lean 版本', environment.toolchain, true)] : []),
-      ...(environment?.mathlibRevision ? [item('Mathlib 版本', environment.mathlibRevision, true)] : []), item('服务商', provider?.name ?? run.providerId),
+      ...(environment?.mathlibRevision ? [item('Mathlib 版本', environment.mathlibRevision, true)] : []), item('服务商', provider?.name ?? (isSample(run) ? '离线示例' : run.providerId)),
       item('模型', run.model, true), item('推理强度', effortLabels[run.effort] ?? run.effort), item('协作模式', run.coordination === 'cooperative' ? '任务协作' : '独立并行'),
       item('Agent 数量', run.workers), item('轮次上限', run.maxTurns), item('解题预算', `${run.maxRunSeconds} 秒`),
       item('用量上限', run.maxTotalTokens ? `${formatTokens(run.maxTotalTokens)} Token` : '不限'), item('创建时间', timestamp(run.createdAt)),
@@ -1115,7 +1125,7 @@ function renderPanel(force = false) {
     : state.tab === 'report' ? [state.reportMode, run.status, run.error, run.result] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
   if (!force && signature === state.panelSignature) {
-    if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected);
+    if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected, isSample(run));
     return;
   }
   state.panelSignature = signature;
@@ -1170,7 +1180,7 @@ function renderPanel(force = false) {
   else if (sameView && focused === previousScroll) scroll?.focus({ preventScroll: true });
   else if (samePanel && focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
   icons(panel);
-  if (state.tab === 'collaboration') collaborationView.update(panel.querySelector<HTMLElement>('.collaboration-workspace')!, run, state.connected);
+  if (state.tab === 'collaboration') collaborationView.update(panel.querySelector<HTMLElement>('.collaboration-workspace')!, run, state.connected, isSample(run));
   if (state.tab === 'events') activityReader.update(panel.querySelector<HTMLElement>('.activity-workspace')!, run);
   if (state.tab === 'modules') moduleView.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
   if (state.tab === 'overview') renderOverview(run);
@@ -1288,7 +1298,8 @@ function renderRunHeader(run: WebRun) {
     stages: progress.steps.map(step => ({ label: step.label, state: step.state, clock: step.elapsed === null ? '' : formatDuration(step.elapsed) })),
     elapsed: formatDuration(progress.elapsed), tabs: detailTabs, tab: state.tab,
     active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
-    download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: isAcceptedRun(run) && Boolean(run.result?.proof),
+    download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && Boolean(run.result?.proof),
+    sample: isSample(run),
   });
 }
 function selectRun(id: string, closeHistory = true) {
@@ -1300,6 +1311,22 @@ function selectRun(id: string, closeHistory = true) {
   state.diffChange = 0;
   renderRunList(); renderDetail(true);
   if (closeHistory) closeHistoryDialog();
+}
+/** Opens the recorded sample run; it needs no API key and does not change the saved position in the user's own runs. */
+async function openSample() {
+  const sample = state.session?.sample;
+  if (!sample) return;
+  if (!state.sample) {
+    try { state.sample = (await api<{ run: WebRun }>(`/api/runs/${encodeURIComponent(sample.id)}`))?.run; }
+    catch (error) { toast(`无法打开示例运行：${message(error)}`); return; }
+    if (!state.sample) return;
+  }
+  state.composing = false;
+  state.selectedId = sample.id; state.selectedRun = state.sample;
+  state.tab = 'overview'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
+  state.diffChange = 0;
+  renderRunList(); renderDetail(true); renderShell();
+  closeHistoryDialog(); setMobileView('runs');
 }
 function startDraft(reset = false) {
   state.composing = true;
@@ -1367,11 +1394,11 @@ async function refreshRuns(epoch: number, force = false) {
     state.selectedId = resume.selectedId;
     state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
   }
-  if (!state.composing && (!state.selectedId || !state.runs.some(run => run.id === state.selectedId))) {
+  if (!state.composing && !sampleSelected() && (!state.selectedId || !state.runs.some(run => run.id === state.selectedId))) {
     state.selectedId = state.runs[0]?.id ?? '';
     state.tab = 'collaboration'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
   }
-  state.selectedRun = state.runs.find(run => run.id === state.selectedId);
+  state.selectedRun = sampleSelected() ? state.sample : state.runs.find(run => run.id === state.selectedId);
   rememberFinishedRuns(previous);
   for (const run of newlyFinished(previous, state.runs)) announceFinished(run);
   if (!state.resumed) {
@@ -1381,7 +1408,8 @@ async function refreshRuns(epoch: number, force = false) {
     if (away.length) toast(away.length === 1 ? `离开期间「${away[0].title}」已结束` : `离开期间有 ${away.length} 项研究已结束`);
   }
   // Nothing to resume until the account has a run; an empty history leaves storage untouched.
-  if (state.runs.length) saveResume(() => localStorage, { selectedId: state.selectedId, seenAt: new Date().toISOString() });
+  // The sample is not a run to come back to; keep the last real selection but still record when the user was here.
+  if (state.runs.length) saveResume(() => localStorage, { selectedId: sampleSelected() ? readResume(() => localStorage)?.selectedId ?? state.runs[0].id : state.selectedId, seenAt: new Date().toISOString() });
   state.detailError = '';
   element('#runs-error').hidden = true;
   renderRunList(); renderDetail(); renderDeleteState(); renderBudgetEstimate();
@@ -1490,7 +1518,7 @@ function renderShell() {
     title: run?.title ?? '新研究', model: field('model').value || '模型配置', mac, live,
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? '连接中' : '连接中断' : ready ? '环境就绪' : '环境未就绪' },
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
-    onHistory: openHistory, onSettings: () => openSettings(), onPalette: () => palette.open(),
+    onHistory: openHistory, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(),
     onLive: () => {
       const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
       if (!target) return;
@@ -1514,6 +1542,12 @@ async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonE
     button.disabled = false;
   }
 }
+function openGlossary(id?: TermId) {
+  const dialog = element<HTMLDialogElement>('#glossary-dialog');
+  renderGlossary(dialog, id);
+  showDialog(dialog);
+}
+installTermHints(openGlossary);
 function openHistory() {
   showDialog(element<HTMLDialogElement>('#history-dialog'));
   restoreHistoryScroll();
@@ -1528,6 +1562,8 @@ function paletteCommands(): PaletteCommand[] {
     { id: 'open-settings', group: '操作', label: '研究配置', hint: field('model').value, icon: 'sliders-horizontal', keywords: 'settings model 模型', run: click('#open-settings') },
     { id: 'return-to-draft', group: '操作', label: '返回未提交草稿', icon: 'arrow-left', keywords: 'draft back', run: click('#return-to-draft') },
   ].filter(command => usable(`#${command.id}`));
+  commands.push({ id: 'open-glossary', group: '帮助', label: '术语说明', icon: 'book-open', keywords: 'glossary help 术语 帮助', run: () => openGlossary() });
+  if (state.session?.sample && !sampleSelected()) commands.push({ id: 'open-sample', group: '帮助', label: '查看示例运行', hint: '无需 API Key', icon: 'eye', keywords: 'sample demo example 示例', run: () => void openSample() });
   const tabIcons: Record<DetailTab, string> = { collaboration: 'network', source: 'file-code-2', modules: 'blocks', overview: 'gauge', report: 'file-json-2', events: 'activity' };
   if (run) for (const [tab, label] of detailTabs) commands.push({ id: `tab-${tab}`, group: '当前研究', label, hint: tab === state.tab ? '当前视图' : undefined, icon: tabIcons[tab],
     keywords: tab, run: () => { state.tab = tab; setMobileView('runs'); renderDetail(true); element(`#detail-tab-${tab}`).focus({ preventScroll: true }); } });
@@ -1784,10 +1820,12 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
   if (!session || state.submitting) return;
   replaceDraft('reuse', () => {
     clearValidation();
-    field('provider').value = session.providers.some(provider => provider.id === run.providerId) ? run.providerId : '';
+    // The sample's agent was a script, so its provider and model are no choice to copy; the visitor keeps their own.
+    const connection = isSample(run) ? {} : { model: run.model, effort: run.effort };
+    if (!isSample(run)) field('provider').value = session.providers.some(provider => provider.id === run.providerId) ? run.providerId : '';
     field('environment').value = run.environment;
     renderTemplates();
-    for (const [id, value] of Object.entries({ model: run.model, effort: run.effort, source: run.source, task: run.task,
+    for (const [id, value] of Object.entries({ ...connection, source: run.source, task: run.task,
       'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers,
       'max-tokens': run.maxTotalTokens ? run.maxTotalTokens / 10_000 : '' })) field(id).value = String(value);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
@@ -2142,6 +2180,8 @@ element('#conversation').addEventListener('click', event => {
   }
   if (target.dataset.chatAction === 'reuse') { const run = currentRun(); if (run) reuseRun(run); return; }
   if (target.dataset.chatAction === 'notify') { void toggleNotifications(); return; }
+  if (target.dataset.chatAction === 'sample') { void openSample(); return; }
+  if (target.dataset.chatAction === 'glossary') { openGlossary(); return; }
   if (target.dataset.chatAction === 'recover') {
     const run = currentRun(), action = target.dataset.recovery as RecoveryAction['id'];
     if (run && action in recoveryFields) reuseRun(run, action as keyof typeof recoveryFields);
@@ -2254,6 +2294,7 @@ window.addEventListener('pageshow', event => {
   }
 });
 element('#close-account').addEventListener('click', () => element<HTMLDialogElement>('#account-dialog').close());
+element('#close-glossary').addEventListener('click', () => element<HTMLDialogElement>('#glossary-dialog').close());
 element('#logout').addEventListener('click', event => void leaveAccount(() => api('/api/auth/logout', { method: 'POST', body: '{}' }), event.currentTarget as HTMLButtonElement));
 field('account-confirm').addEventListener('input', () => {
   element<HTMLButtonElement>('#delete-account').disabled = field('account-confirm').value.trim().toLowerCase() !== state.session?.account?.email;

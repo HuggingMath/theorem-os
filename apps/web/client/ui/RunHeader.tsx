@@ -9,6 +9,7 @@ export type RunHeaderProps = {
   status: { key: string; label: string; tone: string; symbol: string };
   stages: HeaderStage[]; elapsed: string; tabs: readonly (readonly [string, string])[]; tab: string;
   active: boolean; cancelling: boolean; deleting: boolean; connected: boolean; download?: string; shareable: boolean;
+  /** The read-only sample: it can be reused and downloaded, not deleted or shared. */ sample: boolean;
 };
 
 function StatusBadge({ status }: { status: RunHeaderProps['status'] }) {
@@ -62,10 +63,12 @@ function Tabs({ tabs, tab }: { tabs: RunHeaderProps['tabs']; tab: string }) {
 
 function Actions(props: RunHeaderProps) {
   return <div class="detail-actions">
-    <button type="button" class="icon-button" data-action="reuse-run" aria-label="复用任务配置" title="复用任务配置"><Icon name="copy-plus" /></button>
+    {props.sample
+      ? <button type="button" class="button button-primary" data-action="reuse-run"><Icon name="copy-plus" />用这道题开始研究</button>
+      : <button type="button" class="icon-button" data-action="reuse-run" aria-label="复用任务配置" title="复用任务配置"><Icon name="copy-plus" /></button>}
     {props.shareable && <button type="button" class="icon-button" data-action="share-run" aria-label="分享研究成果" title="分享研究成果"
       disabled={!props.connected}><Icon name="share-2" /></button>}
-    {props.active
+    {props.sample ? null : props.active
       ? <button key="cancel" type="button" class="button button-danger" data-action="cancel" disabled={props.cancelling || !props.connected}>
         {props.cancelling ? <Spinner /> : <Icon name="square" />}{props.cancelling ? '正在取消' : '取消运行'}</button>
       : <button key="delete" type="button" class="icon-button danger" data-action="delete-run" aria-label="删除运行记录" title="删除运行记录"
@@ -81,6 +84,7 @@ function RunHeader(props: RunHeaderProps) {
         <h2>{props.title}</h2>
         <div class="detail-statusline">
           <StatusBadge status={props.status} />
+          {props.sample && <span class="badge sample-badge" data-sample-badge><Icon name="eye" />示例 · 只读</span>}
           <span class="detail-identifier"><code>{props.id}</code>
             <button type="button" class="icon-button" data-action="copy-id" aria-label="复制运行 ID" title="复制运行 ID"><Icon name="copy" /></button></span>
           <span class="run-environment">{props.environment}</span><span class="updated-at">{props.updated}</span>
@@ -88,6 +92,7 @@ function RunHeader(props: RunHeaderProps) {
       </div>
       <Actions {...props} />
     </header>
+    {props.sample && <p class="sample-note" data-sample-note>这是一次录制好的运行：Agent 由离线脚本代替模型，环境、任务协作、Lean 检查和独立验收都是真实执行的。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。</p>}
     <StageTrack stages={props.stages} elapsed={props.elapsed} />
     <div class="inline-error" data-detail-error role="alert" hidden={!props.error}>{props.error}</div>
     <Tabs tabs={props.tabs} tab={props.tab} />
