@@ -348,6 +348,24 @@ describe('explicit prepared-run continuation initialization', () => {
     expect(fs.statSync(path.join(f.directory, 'continuation-seed-source.json')).mode & 0o777).toBe(0o400);
   });
 
+  it('releases only task owners that a smaller destination team cannot staff', async () => {
+    const f = fixture();
+    f.oldState.cooperation!.tasks[0]!.task = { ...f.oldState.cooperation!.tasks[0]!.task, ownerId: 'engineer' };
+    f.oldState.workers[1].sessionTaskId = 'second';
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const engineer = { ...f.newState.workers![1]!, id: 'engineer', role: 'engineer' as const };
+    writeSolverRunState(f.stateFile, { ...f.newState, workers: [f.newState.workers![0]!, engineer] });
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report.stage).toBe('complete'); expect(report.failed).toEqual([]);
+    expect(state.cooperation.tasks.map(node => taskVersion(node.task)))
+      .toEqual(f.oldState.cooperation!.tasks.map(node => taskVersion(node.task)));
+    expect(state.cooperation.tasks.map(node => node.task.ownerId)).toEqual(['engineer', undefined, undefined]);
+    expect(state.cooperation.tasks.map(node => node.status)).toEqual(['integrated', 'integrated', 'pending']);
+    const draft = JSON.parse(readContinuationPage(path.join(f.directory, 'continuation.json'), state.continuationDigest, 'draft-prover-1').text);
+    expect(draft.assignment.taskId).toBe('second');
+    await expect(f.seed()).resolves.toMatchObject({ stage: 'complete', failed: [] });
+  });
+
   it('rechecks a conditional declaration absent from canonical source with its exact typed obligation', async () => {
     const f = conditionalFixture(), oldState = fs.readFileSync(f.sourceStateFile);
     expect(fs.readFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission/Helpers.lean'), 'utf8'))

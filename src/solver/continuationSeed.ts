@@ -320,7 +320,15 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
   if (!archived.cooperation?.canonicalCommit || !archived.workers?.length)
     throw new Error('math_continuation_seed_source_incomplete');
   const planned = plannedTaskRecords(archived.cooperation.tasks);
-  const plan = validatePlan(state, { tasks: planned.map(node => node.task),
+  // A smaller destination team cannot staff every historical owner. Ownership is
+  // scheduling metadata outside taskVersion, so release only those assignments.
+  const staffed = (task: CooperativeTask) => !task.ownerId || state.workers!.some(worker =>
+    worker.id === task.ownerId && researchWorkerCanTask(worker, task));
+  const plan = validatePlan(state, { tasks: planned.map(({ task }) => {
+    if (staffed(task)) return task;
+    const { ownerId: _released, ...unowned } = task;
+    return unowned;
+  }),
     groups: archived.cooperation.groups?.map(record => record.group), proofRoutes: archived.cooperation.proofRoutes });
   if (plan.tasks.some((task, index) => taskVersion(task) !== taskVersion(planned[index].task)))
     throw new Error('math_continuation_seed_task_identity_changed');
