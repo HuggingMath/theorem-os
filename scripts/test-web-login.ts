@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
+import { audit } from './web-a11y';
 import { freePort, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,7 +35,12 @@ try {
   await page.waitForURL(/\/login\.html$/u);
   await page.locator('#send-code:enabled').waitFor();
   assert.ok(await page.locator('#captcha-image').evaluate((image: HTMLImageElement) => image.decode().then(() => image.naturalWidth > 0)));
-  mark('the workbench sends a visitor without an account to the login page, which shows a captcha image');
+  const footer = await page.locator('.login-footer a').evaluateAll(links => links.map(link => (link as HTMLAnchorElement).href));
+  assert.equal(footer.length, 3);
+  assert.ok(footer.every(href => href.startsWith('https://likc1606.github.io/theorem-os-site/')), `Login footer links leave the site: ${footer}`);
+  assert.ok(footer.some(href => href.includes('feedback.html?') && href.includes('area=workbench')), 'Login footer lacks the prefilled feedback link');
+  assert.deepEqual(await audit(page), [], 'Login page accessibility');
+  mark('the workbench sends a visitor without an account to the login page, which shows a captcha image and site links and passes the accessibility audit');
 
   await page.fill('#login-email', 'mallory@example.org');
   await page.fill('#login-captcha', '24680');
@@ -67,6 +73,17 @@ try {
   await page.locator('#submit-run:enabled').waitFor();
   mark('a wrong code is reported, the right code opens the workbench with the account in the top bar');
 
+  // Signed in, the account button joins the top bar; on phones the model name truncates so the button stays on screen.
+  for (const width of [375, 320]) {
+    await page.setViewportSize({ width, height: 760 });
+    await settled(page);
+    const bar = await page.locator('#topbar').evaluate(topbar => ({ scroll: topbar.scrollWidth, client: topbar.clientWidth,
+      account: document.querySelector('#open-account')!.getBoundingClientRect().right }));
+    assert.ok(bar.scroll <= bar.client && bar.account <= width, `The signed-in top bar overflows at ${width}px: ${JSON.stringify(bar)}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  mark('the signed-in top bar keeps the account button on 375 and 320 pixel screens');
+
   await page.click('#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   await settled(page);
@@ -74,6 +91,7 @@ try {
   await page.fill('#account-confirm', 'ALICE@example.org');
   assert.equal(await page.locator('#delete-account').isDisabled(), false);
   await page.fill('#account-confirm', '');
+  assert.deepEqual(await audit(page, { scope: '#account-dialog' }), [], 'Account dialog accessibility');
   await page.screenshot({ path: path.join(output, 'login-account-1440.png') });
   await page.click('#logout');
   await page.waitForURL(/\/login\.html$/u);

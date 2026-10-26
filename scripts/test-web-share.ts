@@ -9,6 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
 import { selectHistoryRun } from './web-ui-controls';
+import { audit } from './web-a11y';
 import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -73,6 +74,7 @@ try {
   await page.locator('#create-share:enabled').waitFor();
   assert.match(await page.locator('#share-dialog').innerText(), /不会公开[\s\S]*API Key/u);
   await settled(page);
+  assert.deepEqual(await audit(page, { scope: '#share-dialog' }), [], 'Share dialog accessibility');
   await page.screenshot({ path: path.join(output, 'share-dialog-1440.png') });
   await page.locator('#create-share').click();
   await page.locator('#share-link-row:not([hidden])').waitFor();
@@ -97,6 +99,7 @@ try {
   assert.equal(await reader.locator('meta[name="robots"]').getAttribute('content'), 'noindex, nofollow');
   await reader.locator('[data-share-view="source"]').click();
   assert.match(await reader.locator('#share-code').innerText(), /sorry/u);
+  assert.deepEqual(await audit(reader), [], 'Share page accessibility');
   await reader.screenshot({ path: path.join(output, 'share-page-1440.png'), fullPage: true });
   for (const width of [375, 320]) {
     await reader.setViewportSize({ width, height: 760 });

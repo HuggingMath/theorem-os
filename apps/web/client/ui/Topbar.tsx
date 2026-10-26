@@ -1,6 +1,7 @@
 import { render } from 'preact';
 import { Icon } from './Icon';
 import { otherLocale, t } from '../../i18n';
+import { siteHome } from '../feedback';
 
 export type TopbarLive = { label: string; detail: string; tone: string; count: number };
 export type TopbarProps = {
@@ -13,7 +14,7 @@ function Topbar(props: TopbarProps) {
   const { live } = props;
   return <>
     <button type="button" id="open-history" class="icon-button" aria-label={t('打开研究记录')} title={t('研究记录')} onClick={props.onHistory}><Icon name="panel-left" /></button>
-    <a class="brand" href="https://likc1606.github.io/theorem-os-site/" aria-label={t('TheoremOS 官网')}><img src="assets/mark.svg" alt="" width="26" height="26" /><span>Theorem<span class="brand-os">OS</span></span></a>
+    <a class="brand" href={siteHome} aria-label={t('TheoremOS 官网')}><img src="assets/mark.svg" alt="" width="26" height="26" /><span>Theorem<span class="brand-os">OS</span></span></a>
     <span class="topbar-divider" aria-hidden="true" />
     <span id="workspace-title" class="workspace-name" translate={false}>{props.title}</span>
     {live && <button type="button" class="live-pill" data-tone={live.tone} onClick={props.onLive} title={`${live.label} · ${live.detail}`} aria-label={t('查看进行中的研究：{0}', live.label)}>

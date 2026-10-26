@@ -5,7 +5,12 @@ import nodemailer from 'nodemailer';
 import type { WebStorage } from './storage';
 
 export type WebAuthConfig = { smtpUrl: string; from: string; allowlist: string[]; allowlistFile?: string };
-export type WebAccount = { id: string; email: string; createdAt: string };
+/**
+ * `createdAt` is the first login. The two milestones record when the account first submitted a run and first had one pass
+ * acceptance; scripts/web-funnel.ts reports them only as totals, and they go with the account when it is deleted.
+ */
+export type WebAccount = { id: string; email: string; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string };
+export type WebMilestone = 'firstRunAt' | 'firstAcceptedAt';
 export type WebMailer = (message: { to: string; subject: string; text: string }) => Promise<void>;
 export class WebAuthError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -73,11 +78,13 @@ export class WebAuth {
     for (const [key, limit] of this.limits) if (limit.times.every(time => now - time > 60 * 60_000)) this.limits.delete(key);
   }
 
-  allowed(email: string): boolean {
+  /** Allowlisted addresses from the environment and the allowlist file, which is read on every call. */
+  allowlist(): Set<string> {
     const file = this.config.allowlistFile && fs.existsSync(this.config.allowlistFile)
       ? fs.readFileSync(this.config.allowlistFile, 'utf8').split('\n') : [];
-    return [...this.config.allowlist, ...file].map(line => line.replace(/#.*/u, '').trim().toLowerCase()).includes(email);
+    return new Set([...this.config.allowlist, ...file].map(line => line.replace(/#.*/u, '').trim().toLowerCase()).filter(Boolean));
   }
+  allowed(email: string): boolean { return this.allowlist().has(email); }
 
   captcha(ip: string): { id: string; image: string } {
     if (!this.allow(`captcha:${ip}`, 30, 10 * 60_000) || this.captchas.size >= 5_000) throw new WebAuthError(429, '请求过于频繁，请稍后重试。');
@@ -129,6 +136,16 @@ export class WebAuth {
     return account;
   }
   getAccount(email: string): WebAccount | undefined { return this.storage.getRecord(this.accountPath(email)); }
+  /** Every account record; the funnel report and run milestones read these (a closed beta keeps the list short). */
+  listAccounts(): WebAccount[] {
+    return this.storage.listRecords(['accounts']).filter(file => /^[a-f0-9]{64}\.json$/u.test(file))
+      .flatMap(file => this.storage.getRecord<WebAccount>(['accounts', file]) ?? []);
+  }
+  /** Stamps a milestone the first time it happens; later runs leave the first time unchanged. */
+  markMilestone(accountId: string, milestone: WebMilestone, at = new Date().toISOString()) {
+    const account = this.listAccounts().find(item => item.id === accountId);
+    if (account && !account[milestone]) this.storage.saveRecord(this.accountPath(account.email), { ...account, [milestone]: at });
+  }
   deleteAccount(email: string) { this.storage.deleteRecord(this.accountPath(email)); this.codes.delete(email); }
 }
 

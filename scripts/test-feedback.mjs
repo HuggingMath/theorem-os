@@ -287,6 +287,19 @@ try {
   await ready(page);
   await checkWidth(page, 'GitHub Pages feedback subpath');
 
+  // The workbench opens the form prefilled; unknown values are ignored and the environment stays editable.
+  const workbenchEnvironment = 'TheoremOS workbench · Linux · Chrome 130 · 1440×900 · zh · failure: environment';
+  await page.goto(`${hosted}feedback.html?${new URLSearchParams({ area: 'workbench', kind: 'question', environment: workbenchEnvironment })}`);
+  await ready(page);
+  assert.equal(await page.locator('#feedback-area').inputValue(), 'workbench');
+  assert.equal(await page.locator('input[name="feedback-kind"][value="question"]').isChecked(), true);
+  assert.equal(await page.locator('#feedback-environment').inputValue(), workbenchEnvironment);
+  await page.goto(`${hosted}feedback.html?${new URLSearchParams({ area: 'nowhere', kind: 'exploit', environment: 'x'.repeat(500) })}`);
+  await ready(page);
+  assert.equal(await page.locator('#feedback-area').inputValue(), '');
+  assert.equal(await page.locator('input[name="feedback-kind"][value="bug"]').isChecked(), true);
+  assert.equal((await page.locator('#feedback-environment').inputValue()).length, 240);
+
   const noJSContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   await guardContext(noJSContext);
   const noJS = await noJSContext.newPage();

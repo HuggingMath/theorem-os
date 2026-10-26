@@ -2,10 +2,12 @@ import { createIcons, Copy, Download, ShieldCheck } from 'lucide';
 import { effortLabels, formatDateTime } from '../presentation';
 import { webShareToken, type WebShareSnapshot } from '../share';
 import { localizeText, mountLocaleSwitch, t } from '../i18n';
+import { localizeSiteLinks } from './feedback';
 
 createIcons({ icons: { Copy, Download, ShieldCheck }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
+localizeSiteLinks();
 let view: 'proof' | 'source' = 'proof', snapshot: WebShareSnapshot | undefined, toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 function toast(text: string) {

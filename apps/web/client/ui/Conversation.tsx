@@ -9,6 +9,8 @@ export type ConversationRun = {
   result: { tone: string; symbol: string; label: string; description: string; candidate: boolean };
   /** Recovery for a run that stopped without a verdict; 'report' opens the report tab. */
   recovery?: { id: string; label: string }[];
+  /** Prefilled feedback form for failures on our side, which the visitor cannot fix by changing the run. */
+  feedback?: string;
   /** Desktop notification preference, offered while the run is active. */
   notify?: 'on' | 'off' | 'blocked' | 'unsupported';
 };
@@ -66,6 +68,7 @@ function Thread({ run }: { run: ConversationRun }) {
             <Icon name={recoveryIcons[action.id] ?? 'refresh-cw'} />{action.label}</button>)}
           {run.notify && run.notify !== 'unsupported' && <button type="button" class="text-button" data-chat-action="notify" aria-pressed={run.notify === 'on'}>
             <Icon name={run.notify === 'on' ? 'bell-ring' : run.notify === 'blocked' ? 'bell-off' : 'bell'} />{notifyLabels[run.notify]}</button>}
+          {run.feedback && <a class="text-button" href={run.feedback} target="_blank" rel="noopener noreferrer" data-feedback-link><Icon name="message-square" />{t('反馈问题')}</a>}
           <button type="button" class="text-button" data-chat-action={working ? 'events' : 'report'}><Icon name={working ? 'list' : 'file-json-2'} />{working ? t('活动记录') : t('查看报告')}</button>
           {!working && !recovery.some(action => action.id === 'retry') && <button type="button" class="text-button" data-chat-action="reuse"><Icon name="copy-plus" />{t('基于此题新建研究')}</button>}
         </div>

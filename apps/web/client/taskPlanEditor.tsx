@@ -1,10 +1,63 @@
 import type { WebObservation, WebPlanProposal, WebCommandResult, WebPlanTask, WebPlanGroup } from '../collaboration';
-import { commandId, createElement, errorText, escapeHtml as h, jsonText, patchSection, codeBlock, editStatusLabel, type WebApi } from './collaborationUi';
+import { render } from 'preact';
+import { commandId, createElement, errorText, jsonText, editStatusLabel, type WebApi } from './collaborationUi';
+import { Code, renderOptions, renderSection } from './ui/Section';
 import { t } from '../i18n';
 
 type PlanDraft = { text: string; receipt?: WebCommandResult; previewText?: string; error?: string; notice?: string; submitted?: boolean;
   busy?: boolean; observation?: WebObservation; comparison?: WebObservation['plan']; pending?: { proposal: WebPlanProposal; missing?: boolean } };
 const responseStatus = (error: unknown) => error && typeof error === 'object' && 'status' in error ? error.status : undefined;
+const scheduling = () => <><option value="active">{t('继续')}</option><option value="paused">{t('暂停')}</option><option value="stopped">{t('停止')}</option></>;
+
+/** The dialog skeleton; form fields stay uncontrolled because partially typed lists must survive re-parsing the plan. */
+function PlanDialog() {
+  return <>
+    <header class="collab-dialog-heading"><div><span class="collab-eyebrow">{t('研究计划')}</span><h2>{t('调整下一步工作')}</h2></div><button type="button" class="icon-button" data-plan-close aria-label={t('关闭计划编辑器')}>×</button></header>
+    <div class="collab-plan-content"><p class="collab-help">{t('计划包含全部任务与路线。提交应用后，受影响证明的重新检查会单独报告。')}</p><div data-plan-versions></div>
+      <div class="collab-plan-common">
+        <label class="collab-span-all">{t('任务')}<select data-plan-task aria-label={t('编辑的任务')}></select></label>
+        <label>{t('任务类型')}<select data-plan-kind aria-label={t('任务类型')}><option value="research">{t('研究')}</option><option value="sketch">{t('证明草图')}</option><option value="lemma">{t('引理')}</option><option value="goal" disabled>{t('原始目标')}</option></select></label>
+        <label>{t('负责人')}<select data-plan-owner aria-label={t('任务负责人')}></select></label>
+        <label>{t('调度状态')}<select data-plan-status aria-label={t('任务调度状态')}>{scheduling()}</select></label>
+        <label class="collab-span-all">{t('目标')}<textarea data-plan-objective rows={2} aria-label={t('任务目标')}></textarea></label>
+        <label class="collab-span-all">{t('AND 前置任务（逗号分隔）')}<input data-plan-dependencies aria-label={t('任务前置依赖')} /></label>
+        <label class="collab-span-all" data-plan-formal-type>{t('精确 Lean 类型')}<textarea data-plan-type rows={3} class="mono" spellcheck={false} aria-label={t('任务精确类型')} placeholder={t('填写闭合的 Lean 类型')}></textarea></label>
+      </div>
+      <p class="collab-help" data-plan-task-note></p>
+      <details class="collab-detail" data-plan-contract><summary>{t('前提、证明位置与共享范围')}</summary><div class="collab-plan-fields">
+        <label class="collab-span-all">{t('前提（每行一条）')}<textarea data-plan-premises rows={3} aria-label={t('任务前提')}></textarea></label>
+        <label>{t('任务分组')}<select data-plan-task-group aria-label={t('任务分组')}></select></label>
+        <label>{t('共享范围')}<select data-plan-sharing aria-label={t('任务共享范围')}><option value="">{t('运行时默认')}</option><option value="group">{t('本组')}</option><option value="problem">{t('整个问题')}</option></select></label>
+        <label data-plan-proof-location>{t('Lean 文件')}<input data-plan-proof-path aria-label={t('任务 Lean 文件')} placeholder="Submission.lean" /></label>
+        <label data-plan-proof-location>{t('声明名称')}<input data-plan-theorem aria-label={t('任务声明名称')} spellcheck={false} /></label>
+        <label class="collab-plan-check" data-plan-formal-option><input type="checkbox" data-plan-conditional />{t('允许记录有条件结果')}</label>
+      </div></details>
+      <div class="collab-plan-actions"><label>{t('新任务类型')}<select data-plan-new-kind aria-label={t('新任务类型')}><option value="lemma">{t('引理')}</option><option value="research">{t('研究')}</option><option value="sketch">{t('证明草图')}</option></select></label>
+        <button type="button" class="button" data-plan-add>{t('新增任务')}</button><button type="button" class="button" data-plan-remove-task>{t('删除所选任务')}</button></div>
+      <details class="collab-detail" data-plan-routes open><summary>{t('OR 证明路线')}</summary><p class="collab-help">{t('同一目标的多条路线择一；单条路线内的前提全部满足。前提须已在收尾引理的 AND 依赖中，原题仍需独立检查。')}</p>
+        <label class="collab-plan-picker">{t('路线')}<select data-plan-route aria-label={t('编辑的证明路线')}></select></label>
+        <div class="collab-plan-fields" data-plan-route-fields>
+          <label>{t('原始目标')}<select data-plan-route-target aria-label={t('路线原始目标')}></select></label><label>{t('收尾引理')}<select data-plan-route-closing aria-label={t('路线收尾引理')}></select></label>
+          <label class="collab-span-all">{t('路线前提 AND（逗号分隔）')}<input data-plan-route-prerequisites aria-label={t('路线前提引理')} /></label></div>
+        <div class="collab-plan-actions"><button type="button" class="button" data-plan-add-route>{t('新增路线')}</button><button type="button" class="button" data-plan-remove-route>{t('删除所选路线')}</button></div></details>
+      <details class="collab-detail" data-plan-groups><summary>{t('任务分组与 Engineer')}</summary>
+        <label class="collab-plan-picker">{t('分组')}<select data-plan-group aria-label={t('编辑的任务分组')}></select></label>
+        <div class="collab-plan-fields" data-plan-group-fields>
+          <label class="collab-span-all">{t('组目标')}<textarea data-plan-group-objective rows={2} aria-label={t('分组目标')}></textarea></label>
+          <label>Engineer<select data-plan-group-engineer aria-label={t('分组 Engineer')}></select></label>
+          <label>{t('组调度状态')}<select data-plan-group-status aria-label={t('分组调度状态')}>{scheduling()}</select></label>
+          <label>{t('轮次上限')}<input type="number" min="0" step="1" data-plan-group-max-turns aria-label={t('分组轮次上限')} placeholder={t('运行时默认')} /></label>
+          <label>{t('并发上限')}<input type="number" min="1" step="1" data-plan-group-max-concurrent aria-label={t('分组并发上限')} placeholder={t('运行时默认')} /></label></div>
+        <p class="collab-help" data-plan-group-members></p><p class="collab-help" data-plan-responsibility-note></p>
+        <div class="collab-plan-actions"><button type="button" class="button" data-plan-add-group>{t('新增分组')}</button><button type="button" class="button" data-plan-remove-group>{t('删除所选分组')}</button></div></details>
+      <details class="collab-detail" data-plan-advanced><summary>{t('高级：完整计划 JSON')}</summary><label class="sr-only" htmlFor="collab-plan-json">{t('完整计划 JSON')}</label><textarea id="collab-plan-json" class="collab-plan-json mono" spellcheck={false}></textarea></details>
+      <div data-plan-comparison></div><div data-plan-receipt role="status" aria-live="polite"></div></div>
+    <footer class="collab-dialog-footer"><button type="button" class="button" data-plan-receipt-refresh hidden>{t('核对提交回执')}</button><button type="button" class="button" data-plan-retry hidden>{t('重试原提交')}</button>
+      <button type="button" class="button" data-plan-current>{t('读取最新计划')}</button><button type="button" class="button" data-plan-rebase>{t('以最新版本重新预览')}</button>
+      <button type="button" class="button" data-plan-preview>{t('预览影响')}</button><button type="button" class="button button-primary" data-plan-apply disabled>{t('提交计划')}</button></footer>
+  </>;
+}
+
 
 /** A local full-plan proposal survives polling, tab switches, and version conflicts. */
 export class TaskPlanEditor {
@@ -18,29 +71,7 @@ export class TaskPlanEditor {
   private advanced: HTMLTextAreaElement;
   constructor(private api: WebApi, private observed: (observation: WebObservation) => void) {
     this.dialog.setAttribute('aria-label', t('编辑完整研究计划'));
-    this.dialog.innerHTML = `<header class="collab-dialog-heading"><div><span class="collab-eyebrow">${t('研究计划')}</span><h2>${t('调整下一步工作')}</h2></div><button type="button" class="icon-button" data-plan-close aria-label="${t('关闭计划编辑器')}">×</button></header>
-      <div class="collab-plan-content"><p class="collab-help">${t('计划包含全部任务与路线。提交应用后，受影响证明的重新检查会单独报告。')}</p><div data-plan-versions></div>
-      <div class="collab-plan-common"><label class="collab-span-all">${t('任务')}<select data-plan-task aria-label="${t('编辑的任务')}"></select></label><label>${t('任务类型')}<select data-plan-kind aria-label="${t('任务类型')}"><option value="research">${t('研究')}</option><option value="sketch">${t('证明草图')}</option><option value="lemma">${t('引理')}</option><option value="goal" disabled>${t('原始目标')}</option></select></label><label>${t('负责人')}<select data-plan-owner aria-label="${t('任务负责人')}"></select></label><label>${t('调度状态')}<select data-plan-status aria-label="${t('任务调度状态')}"><option value="active">${t('继续')}</option><option value="paused">${t('暂停')}</option><option value="stopped">${t('停止')}</option></select></label>
-      <label class="collab-span-all">${t('目标')}<textarea data-plan-objective rows="2" aria-label="${t('任务目标')}"></textarea></label><label class="collab-span-all">${t('AND 前置任务（逗号分隔）')}<input data-plan-dependencies aria-label="${t('任务前置依赖')}"></label>
-      <label class="collab-span-all" data-plan-formal-type>${t('精确 Lean 类型')}<textarea data-plan-type rows="3" class="mono" spellcheck="false" aria-label="${t('任务精确类型')}" placeholder="${t('填写闭合的 Lean 类型')}"></textarea></label></div>
-      <p class="collab-help" data-plan-task-note></p>
-      <details class="collab-detail" data-plan-contract><summary>${t('前提、证明位置与共享范围')}</summary><div class="collab-plan-fields">
-        <label class="collab-span-all">${t('前提（每行一条）')}<textarea data-plan-premises rows="3" aria-label="${t('任务前提')}"></textarea></label>
-        <label>${t('任务分组')}<select data-plan-task-group aria-label="${t('任务分组')}"></select></label><label>${t('共享范围')}<select data-plan-sharing aria-label="${t('任务共享范围')}"><option value="">${t('运行时默认')}</option><option value="group">${t('本组')}</option><option value="problem">${t('整个问题')}</option></select></label>
-        <label data-plan-proof-location>${t('Lean 文件')}<input data-plan-proof-path aria-label="${t('任务 Lean 文件')}" placeholder="Submission.lean"></label><label data-plan-proof-location>${t('声明名称')}<input data-plan-theorem aria-label="${t('任务声明名称')}" spellcheck="false"></label>
-        <label class="collab-plan-check" data-plan-formal-option><input type="checkbox" data-plan-conditional>${t('允许记录有条件结果')}</label>
-      </div></details>
-      <div class="collab-plan-actions"><label>${t('新任务类型')}<select data-plan-new-kind aria-label="${t('新任务类型')}"><option value="lemma">${t('引理')}</option><option value="research">${t('研究')}</option><option value="sketch">${t('证明草图')}</option></select></label><button type="button" class="button" data-plan-add>${t('新增任务')}</button><button type="button" class="button" data-plan-remove-task>${t('删除所选任务')}</button></div>
-      <details class="collab-detail" data-plan-routes open><summary>${t('OR 证明路线')}</summary><p class="collab-help">${t('同一目标的多条路线择一；单条路线内的前提全部满足。前提须已在收尾引理的 AND 依赖中，原题仍需独立检查。')}</p><label class="collab-plan-picker">${t('路线')}<select data-plan-route aria-label="${t('编辑的证明路线')}"></select></label><div class="collab-plan-fields" data-plan-route-fields>
-        <label>${t('原始目标')}<select data-plan-route-target aria-label="${t('路线原始目标')}"></select></label><label>${t('收尾引理')}<select data-plan-route-closing aria-label="${t('路线收尾引理')}"></select></label>
-        <label class="collab-span-all">${t('路线前提 AND（逗号分隔）')}<input data-plan-route-prerequisites aria-label="${t('路线前提引理')}"></label></div><div class="collab-plan-actions"><button type="button" class="button" data-plan-add-route>${t('新增路线')}</button><button type="button" class="button" data-plan-remove-route>${t('删除所选路线')}</button></div></details>
-      <details class="collab-detail" data-plan-groups><summary>${t('任务分组与 Engineer')}</summary><label class="collab-plan-picker">${t('分组')}<select data-plan-group aria-label="${t('编辑的任务分组')}"></select></label><div class="collab-plan-fields" data-plan-group-fields>
-        <label class="collab-span-all">${t('组目标')}<textarea data-plan-group-objective rows="2" aria-label="${t('分组目标')}"></textarea></label><label>Engineer<select data-plan-group-engineer aria-label="${t('分组 Engineer')}"></select></label>
-        <label>${t('组调度状态')}<select data-plan-group-status aria-label="${t('分组调度状态')}"><option value="active">${t('继续')}</option><option value="paused">${t('暂停')}</option><option value="stopped">${t('停止')}</option></select></label>
-        <label>${t('轮次上限')}<input type="number" min="0" step="1" data-plan-group-max-turns aria-label="${t('分组轮次上限')}" placeholder="${t('运行时默认')}"></label><label>${t('并发上限')}<input type="number" min="1" step="1" data-plan-group-max-concurrent aria-label="${t('分组并发上限')}" placeholder="${t('运行时默认')}"></label></div><p class="collab-help" data-plan-group-members></p><p class="collab-help" data-plan-responsibility-note></p><div class="collab-plan-actions"><button type="button" class="button" data-plan-add-group>${t('新增分组')}</button><button type="button" class="button" data-plan-remove-group>${t('删除所选分组')}</button></div></details>
-      <details class="collab-detail" data-plan-advanced><summary>${t('高级：完整计划 JSON')}</summary><label class="sr-only" for="collab-plan-json">${t('完整计划 JSON')}</label><textarea id="collab-plan-json" class="collab-plan-json mono" spellcheck="false"></textarea></details>
-      <div data-plan-comparison></div><div data-plan-receipt role="status" aria-live="polite"></div></div>
-      <footer class="collab-dialog-footer"><button type="button" class="button" data-plan-receipt-refresh hidden>${t('核对提交回执')}</button><button type="button" class="button" data-plan-retry hidden>${t('重试原提交')}</button><button type="button" class="button" data-plan-current>${t('读取最新计划')}</button><button type="button" class="button" data-plan-rebase>${t('以最新版本重新预览')}</button><button type="button" class="button" data-plan-preview>${t('预览影响')}</button><button type="button" class="button button-primary" data-plan-apply disabled>${t('提交计划')}</button></footer>`;
+    render(<PlanDialog />, this.dialog);
     this.advanced = this.dialog.querySelector<HTMLTextAreaElement>('#collab-plan-json')!;
     document.body.append(this.dialog);
     this.dialog.querySelector('[data-plan-close]')!.addEventListener('click', () => this.dialog.close());
@@ -113,11 +144,9 @@ export class TaskPlanEditor {
   }
   private setPlan(plan: WebPlanProposal) { this.advanced.value = jsonText(plan); this.saveText(); }
   private options(field: string, entries: readonly { id: string; label?: string }[], value: string, empty?: string) {
-    const picker = this.control(field) as HTMLSelectElement;
-    const retained = value && !entries.some(entry => entry.id === value) ? `<option value="${h(value)}">${t('{0} · 当前保留', h(value))}</option>` : '';
-    const markup = (empty === undefined ? '' : `<option value="">${h(empty)}</option>`) + entries.map(entry => `<option value="${h(entry.id)}">${h(entry.label ?? entry.id)}</option>`).join('') + retained;
-    if (picker.dataset.options !== markup) { picker.innerHTML = markup; picker.dataset.options = markup; }
-    picker.value = value;
+    // A value the plan no longer lists stays selected and visible rather than silently switching.
+    const retained = value && !entries.some(entry => entry.id === value) ? [[value, t('{0} · 当前保留', value)] as const] : [];
+    renderOptions(this.control(field) as HTMLSelectElement, [...(empty === undefined ? [] : [['', empty] as const]), ...entries.map(entry => [entry.id, entry.label ?? entry.id] as const), ...retained], value);
   }
   private groups(plan: WebPlanProposal): WebPlanGroup[] {
     return plan.groups?.length ? plan.groups : [{ id: 'main', objective: 'Prove the original problem', status: 'active', revision: 0 }];
@@ -291,12 +320,22 @@ export class TaskPlanEditor {
   private renderVersions() {
     let base = t('JSON 待修正'); try { base = this.parse().baseVersion; } catch { /* Shown beside the editor. */ }
     const latest = this.observation?.plan?.baseVersion;
-    patchSection(this.dialog.querySelector('[data-plan-versions]')!, `<div class="collab-plan-version"><span>${t('草稿基于')} <code>${h(base)}</code></span><span>${t('当前')} <code>${h(latest ?? t('未记录'))}</code></span>${latest && latest !== base ? `<strong>${t('版本已变化 · 本地修改已保留')}</strong>` : ''}</div>`);
+    renderSection(this.dialog.querySelector('[data-plan-versions]')!, <div class="collab-plan-version"><span>{t('草稿基于')} <code>{base}</code></span><span>{t('当前')} <code>{latest ?? t('未记录')}</code></span>
+      {latest && latest !== base && <strong>{t('版本已变化 · 本地修改已保留')}</strong>}</div>);
   }
   private renderStatus() {
     const draft = this.draft(), receipt = draft.receipt;
-    patchSection(this.dialog.querySelector('[data-plan-receipt]')!, `${draft.error ? `<p class="collab-error">${h(draft.error)}</p>` : ''}${draft.notice ? `<p class="collab-help">${h(draft.notice)}</p>` : ''}${draft.pending ? `<p class="collab-notice">${t('提交 {0} 的结果尚未确认，请先核对原命令回执。当前草稿已保留。{1}', h(draft.pending.proposal.id), draft.pending.missing ? t('尚未找到回执；可重试原提交，重试会保留原命令内容和 ID。') : '')}</p><details class="collab-detail"><summary>${t('待核对的原提交')}</summary>${codeBlock(draft.pending.proposal)}</details>` : ''}${receipt ? `<p class="collab-notice">${t('回执 {0} · {1}{2}', h(receipt.id), h(editStatusLabel(receipt.status)), receipt.reason ? ` · ${h(receipt.reason)}` : '')}</p>${receipt.changes ? codeBlock(receipt.changes) : ''}${receipt.affectedTaskIds?.length ? `<p>${t('受影响任务：{0}', h(receipt.affectedTaskIds.join(', ')))}</p>` : ''}${receipt.edit?.recheck ? `<div data-plan-recheck><p>${h(editStatusLabel(receipt.edit.recheck.status))}</p><details class="collab-detail" data-detail-key="plan-recheck"><summary>${t('各任务重新检查记录')}</summary>${codeBlock(receipt.edit.recheck)}</details></div>` : ''}` : ''}`);
-    patchSection(this.dialog.querySelector('[data-plan-comparison]')!, draft.comparison ? `<details class="collab-detail" open><summary>${t('当前服务器计划 · 本地草稿保留')}</summary>${codeBlock(draft.comparison)}</details>` : '');
+    renderSection(this.dialog.querySelector('[data-plan-receipt]')!, <>
+      {draft.error && <p class="collab-error">{draft.error}</p>}
+      {draft.notice && <p class="collab-help">{draft.notice}</p>}
+      {draft.pending && <><p class="collab-notice">{t('提交 {0} 的结果尚未确认，请先核对原命令回执。当前草稿已保留。{1}', draft.pending.proposal.id, draft.pending.missing ? t('尚未找到回执；可重试原提交，重试会保留原命令内容和 ID。') : '')}</p>
+        <details key={`pending-${draft.pending.proposal.id}`} class="collab-detail"><summary>{t('待核对的原提交')}</summary><Code value={draft.pending.proposal} /></details></>}
+      {receipt && <><p class="collab-notice">{t('回执 {0} · {1}{2}', receipt.id, editStatusLabel(receipt.status) ?? '', receipt.reason ? ` · ${receipt.reason}` : '')}</p>
+        {receipt.changes ? <Code value={receipt.changes} /> : null}
+        {receipt.affectedTaskIds?.length ? <p>{t('受影响任务：{0}', receipt.affectedTaskIds.join(', '))}</p> : null}
+        {receipt.edit?.recheck && <div data-plan-recheck><p>{editStatusLabel(receipt.edit.recheck.status)}</p><details class="collab-detail" data-detail-key="plan-recheck"><summary>{t('各任务重新检查记录')}</summary><Code value={receipt.edit.recheck} /></details></div>}</>}
+    </>);
+    renderSection(this.dialog.querySelector('[data-plan-comparison]')!, draft.comparison ? <details key={draft.comparison.baseVersion} class="collab-detail" open><summary>{t('当前服务器计划 · 本地草稿保留')}</summary><Code value={draft.comparison} /></details> : null);
     for (const control of this.dialog.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input,textarea,select,button:not([data-plan-close])')) control.disabled = Boolean(draft.busy);
     let plan: WebPlanProposal | undefined;
     try { plan = this.parse(); } catch { /* Invalid JSON stays editable; stale form controls must not overwrite it. */ }

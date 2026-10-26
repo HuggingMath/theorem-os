@@ -1,13 +1,12 @@
 import { render } from 'preact';
-import { jsonText } from '../collaborationUi';
+import { Detail as DetailBlock } from './Section';
 import { t } from '../../i18n';
 
 export type AgentCard = { id: string; role: string; scheduling: string; schedulingStatus: string; phase: string; turns: string; task?: string;
   details: { title: string; value: unknown; id: string }[] };
 
-// Same markup as collaborationUi.detailBlock; Preact leaves the user's open/closed state alone.
-const Detail = ({ title, value, id }: AgentCard['details'][number]) => <details class="collab-detail" data-detail-key={id}>
-  <summary>{title}</summary><pre class="collab-code" tabIndex={0}>{typeof value === 'string' ? value : jsonText(value)}</pre></details>;
+// Preact never touches `open`, so the reader's choice survives updates.
+const Detail = ({ title, value, id }: AgentCard['details'][number]) => <DetailBlock title={title} value={value} detailKey={id} />;
 
 function Agent({ agent }: { agent: AgentCard }) {
   return <article class="collab-agent" data-worker-id={agent.id} data-agent-state={agent.schedulingStatus}>

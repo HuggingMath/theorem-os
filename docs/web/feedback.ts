@@ -119,6 +119,19 @@ element('feedback-download').addEventListener('click', () => {
   status.textContent = text.downloaded;
 });
 
+/**
+ * The workbench links here with ?kind=…&area=…&environment=… so a report starts with where it happened. Only known
+ * kinds and areas are taken; the environment fills an empty field and stays editable before anything is published.
+ */
+function prefill(params: URLSearchParams) {
+  const kind = params.get('kind'), where = params.get('area'), env = params.get('environment');
+  const input = kindInputs.find(item => item.value === kind);
+  if (input) input.checked = true;
+  if (where && [...area.options].some(option => option.value === where && !option.disabled)) area.value = where;
+  if (env && !environment.value) environment.value = env.replace(/\s+/gu, ' ').trim().slice(0, environment.maxLength);
+}
+prefill(new URLSearchParams(location.search));
+
 updateFields();
 form.hidden = false;
 element('feedback-fallback').hidden = true;

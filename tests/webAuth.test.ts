@@ -5,9 +5,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig, type WebConfig } from '../apps/web/config';
-import { captchaImage } from '../apps/web/auth';
+import { captchaImage, type WebAccount } from '../apps/web/auth';
 import type { WebRunner } from '../apps/web/runner';
-import type { WebRunInput, WebSession, WorkerInput } from '../apps/web/shared';
+import type { WebRunInput, WebSession, WorkerInput, WorkerMessage } from '../apps/web/shared';
 
 const input = (): WebRunInput => ({ providerId: 'openai', apiKey: 'sk-auth-test-never-publish', model: 'gpt-6.1-sol', effort: 'xhigh',
   source: 'theorem example : True := by sorry', task: 'Prove the theorem', maxTurns: 2,
@@ -15,9 +15,14 @@ const input = (): WebRunInput => ({ providerId: 'openai', apiKey: 'sk-auth-test-
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 class HeldRunner implements WebRunner {
   calls: { value: WorkerInput; signal: AbortSignal }[] = [];
+  /** Tasks that finish at once with an accepted proof instead of waiting for cancellation. */
+  passing = new Set<string>();
   async readiness() { return { ready: true, message: 'Test worker ready' }; }
-  async run(value: WorkerInput, _send: unknown, signal: AbortSignal) {
+  async run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     this.calls.push({ value, signal });
+    if (this.passing.has(value.input.task)) {
+      send({ type: 'result', result: { status: 'evaluated_passed', proof: 'theorem example : True := trivial', report: {} } }); return;
+    }
     await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true }));
   }
 }
@@ -152,6 +157,31 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     fs.writeFileSync(file, '# approved\n');
     expect((await request('/api/runs', bob)).status).toBe(401);
     expect((await (await request('/api/session', bob)).json()).account).toBeUndefined();
+  });
+
+  it('stamps the first submitted and first accepted run on the account, once', async () => {
+    const alice = await login('alice@example.org');
+    const account = () => service.storage.listRecords(['accounts']).map(file => service.storage.getRecord<WebAccount>(['accounts', file])!)[0]!;
+    expect(account()).toEqual({ id: expect.any(String), email: 'alice@example.org', createdAt: expect.any(String) });
+    const held = await (await request('/api/runs', alice, input())).json();
+    const { firstRunAt } = account();
+    expect(Date.parse(firstRunAt!)).toBeGreaterThanOrEqual(Date.parse(account().createdAt));
+    expect(account().firstAcceptedAt).toBeUndefined();
+    // The held run occupies the only worker slot; cancelling it is not an acceptance.
+    await request(`/api/runs/${held.run.id}/cancel`, alice, {});
+    await tick();
+    expect(account().firstAcceptedAt).toBeUndefined();
+
+    runner.passing.add('Prove it at once');
+    const passed = await (await request('/api/runs', alice, { ...input(), task: 'Prove it at once' })).json();
+    for (let attempt = 0; attempt < 50 && account().firstAcceptedAt === undefined; attempt++) await tick();
+    const { firstAcceptedAt } = account();
+    expect(firstAcceptedAt).toEqual(expect.any(String));
+    expect((await (await request(`/api/runs/${passed.run.id}`, alice)).json()).run.result.status).toBe('evaluated_passed');
+
+    await request('/api/runs', alice, { ...input(), task: 'Prove it at once' });
+    for (let attempt = 0; attempt < 10; attempt++) await tick();
+    expect(account()).toMatchObject({ firstRunAt, firstAcceptedAt });
   });
 
   it('deletes an account with its records, cancels its runs and ends every session', async () => {

@@ -115,6 +115,8 @@ export const pages: Record<string, string> = {
   "打开分享页": "Open share page",
   "创建分享链接": "Create share link",
   "术语说明": "Glossary",
+  "还有不清楚的地方？": "Still unclear?",
+  "告诉我们": "Tell us",
   "工作台里带": "Terms marked",
   "的词都能点开查看。只有「独立验收」通过才算证明完成。": "in the workbench open an explanation. A proof only counts as done once it passes “Independent acceptance”.",
   "账号": "Account",

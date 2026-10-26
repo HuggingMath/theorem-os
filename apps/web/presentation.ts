@@ -62,7 +62,7 @@ export function runProgress(run: WebRun, now = Date.now()) {
 
 /** Recovery opens a copy of the run's settings at the field to change; the API key is always re-entered. */
 export type RecoveryAction = { id: 'retry' | 'key' | 'budget' | 'tokens' | 'turns' | 'workers' | 'source' | 'report'; label: string };
-export type FailureGuide = { title: string; detail: string; actions: RecoveryAction[] };
+export type FailureGuide = { title: string; detail: string; actions: RecoveryAction[]; kind?: WebFailureKind };
 const retry: RecoveryAction = { id: 'retry', label: t('重新运行') };
 const report: RecoveryAction = { id: 'report', label: t('查看报告') };
 const guides: Record<WebFailureKind, FailureGuide> = {
@@ -76,7 +76,7 @@ const guides: Record<WebFailureKind, FailureGuide> = {
     actions: [{ id: 'tokens', label: t('调整用量上限') }, report] },
   time_limit: { title: t('已达到解题时间预算'), detail: t('运行在解题预算内没有完成，已检查的成果保存在报告中。可以提高解题预算后重新运行。'),
     actions: [{ id: 'budget', label: t('提高解题预算') }, report] },
-  environment: { title: t('运行环境出错'), detail: t('隔离运行环境没有正常完成，与题目和 API Key 无关。请重新运行；如果再次出现，请联系我们并附上运行档案。'),
+  environment: { title: t('运行环境出错'), detail: t('隔离运行环境没有正常完成，与题目和 API Key 无关。请重新运行；如果再次出现，请点「反馈问题」告诉我们，并附上运行档案。'),
     actions: [retry, report] },
   source: { title: t('Lean 原题无法载入'), detail: t('原题没有通过载入检查。请确认源码能在所选证明环境中编译，且每个目标定理都保留了原始声明。'),
     actions: [{ id: 'source', label: t('修改原题') }] },
@@ -99,7 +99,7 @@ export function failureGuide(run: WebRun): FailureGuide | undefined {
     : run.result?.status === 'limit_reached' ? 'time_limit' : undefined);
   if (kind) {
     const guide = guides[kind], detail = run.failure?.reason && reasonDetails[run.failure.reason];
-    return detail ? { ...guide, detail } : guide;
+    return { ...guide, kind, ...(detail ? { detail } : {}) };
   }
   if (run.result?.status === 'incomplete') return { title: t('没有得到完整证明'), detail: t('Agent 用完了轮次，或没有可以继续的研究路线。已检查的成果保存在报告中。可以提高轮次上限、增加 Agent，或在任务说明里补充思路。'),
     actions: [{ id: 'turns', label: t('提高轮次上限') }, report] };

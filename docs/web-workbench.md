@@ -108,7 +108,8 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 - 登录页 `login.html` 先要求输入图形验证码（5 位数字，服务端生成 SVG，5 分钟有效，每张只能用一次），再向邮箱发送 6 位验证码。验证码 10 分钟有效，输错 5 次作废；同一邮箱 60 秒内不重发、每小时最多 5 封，同一 IP 每 10 分钟最多请求 10 次。
 - 只有内测白名单中的邮箱能收到验证码。白名单来自 `THEOREMOS_WEB_ALLOWLIST`（逗号分隔）和 `allowlist.txt`（每行一个邮箱，`#` 后为注释）。`allowlist.txt` 默认放在数据目录根下，Compose 中为 `research-data` 卷内的 `/var/lib/theorem-os/allowlist.txt`，每次请求重新读取，改动无需重启。移出白名单的邮箱在下一次请求时退出登录，记录保留。
 - 登录成功后更换会话 ID 和 CSRF token。运行记录、归档、知识目录和服务端方案归属账号：同一账号的多个浏览器看到同一份记录，退出登录或会话到期不删除记录。账号菜单可以退出登录，或输入邮箱确认后删除账号；删除会取消运行中的任务并立即删除全部记录。
-- 账号文件保存在数据目录的 `accounts/` 下，只含账号 ID、邮箱和创建时间。验证码只以 HMAC 形式保存在内存中，服务重启后作废。
+- 账号文件保存在数据目录的 `accounts/` 下，含账号 ID、邮箱、创建时间（即首次登录），以及首次提交运行 `firstRunAt` 和首次通过验收 `firstAcceptedAt` 两个时间，只在第一次发生时写入，删除账号时一起删除。验证码只以 HMAC 形式保存在内存中，服务重启后作废。
+- 内测漏斗只输出汇总人数，不输出邮箱：`bun scripts/web-funnel.ts --data /var/lib/theorem-os [--applications N] [--github] [--json]`。步骤为申请 → 白名单 → 首次登录 → 首次提交 → 首次通过验收，每步给出占上一步的比例，以及登录到首次提交、首次提交到首次通过的中位小时数。`--applications` 填邮件申请数，`--github` 用 `gh` 读取公开仓库 `early-access` 标签的 Issue 数，两者相加；都不给时从白名单开始。移出白名单但登录过的账号仍计入白名单。这两个时间字段上线前创建的账号只计入首次登录。
 - 本机调试可设 `THEOREMOS_WEB_SMTP_URL=log:`，验证码打印到服务日志，不发邮件；该值只允许用于回环地址。
 
 ```bash
@@ -247,6 +248,7 @@ bun run web
 - 首次进入（账号或会话还没有运行记录）时，欢迎页依次给出示例运行入口和三步说明：写下原题、连接模型、等待验收。示例运行 `00000000-0000-4000-8000-00000000a001` 无需 API Key，打开后停在概览页，标为「示例 · 只读」。它不在 `/api/runs` 中、不计入运行数量，也不会成为恢复位置；读取接口与普通运行相同（详情、观察、任务源码、检查回执、活动、下载），写入一律返回 403。页面写明其中的 Agent 是离线脚本，环境、任务协作、Lean 检查和独立验收是真实执行的。「用这道题开始研究」会把题目、环境和执行配置填进新草稿，保留访问者自己的服务商、模型和推理强度。示例文件是 `apps/web/sample/run.json`，由 `test:web-cooperative-runtime` 的档案生成：`bun scripts/build-web-sample.ts [archive.json]`。脚本会替换运行 ID 和容器路径，并检查文件里没有宿主路径、镜像摘要或 Key；文件缺失或格式不符时入口自动隐藏。
 - 运行时术语（原题、独立验收、任务计划、观察、回执、模块方案等）在 `apps/web/client/glossary.ts` 统一用白话解释。界面上的 `?` 按钮打开一条说明：焦点留在按钮上，Esc 或点击别处关闭；在设置对话框里也能显示在最上层。顶栏的帮助按钮、命令面板「术语说明」和欢迎页都能打开完整术语表；从某条说明进入时，术语表直接定位到这一项。
 - 工作台、登录页和分享页有中文与英文两种界面。首次访问按浏览器语言选择（`zh*` 用中文，其余用英文）；顶栏、登录页底部、分享页右上角和命令面板都能切换，选择保存在 `localStorage` 的 `theorem-os.web-locale.v1`，切换前先保存草稿。中文原文就是翻译键：`t('中文', …)` 查 `apps/web/i18n/` 下的英文词典，`{0}` 依次替换参数，数量为 1 时英文名词取单数。服务端仍只存中文：事件消息、运行状态、模板名、分享标签和模块方案校验在浏览器里经 `localizeText` 按原文对照翻译，服务端错误信息保持中文。研究任务、标题、Lean 源码和 Agent 产出不翻译，相应元素带 `translate="no"`。`bun scripts/web-i18n.ts` 列出缺少英文的界面文字和写在 `t()` 之外的中文，`tests/webI18n.test.ts` 要求两者都为空、英文里没有中文、占位符一致且没有多余词条。
+- 反馈入口：命令面板「反馈问题或建议」、账号对话框、术语表底部、登录页底部，以及运行环境出错、服务重启中断和原因不明的失败卡片。它们打开官网反馈页（英文界面打开 `en/feedback.html`），通过 `?area=workbench&kind=bug&environment=…` 预填位置、浏览器、系统、窗口尺寸、界面语言和失败类型，不带运行 ID、邮箱、题目或 Key；反馈页只接受已知的类型和位置，环境只填进空白字段，确认后才在 GitHub 公开发布。链接地址在 `apps/web/client/feedback.ts`。
 - 通过独立验收的运行可由所有者创建分享链接 `share.html#<token>`。创建前列出公开与不公开的内容；链接打开一份创建时的只读快照，包含研究任务、原始题目、验收证明、验收结论（不含诊断原文）、Lean 工具链 / Mathlib 版本 / 源码摘要、模型名称、Agent 数量、轮次、耗时和 Token 用量，不包含 API Key、服务商、运行 ID、活动日志、协作记录或账号邮箱。查看无需登录，也不会创建会话；页面与接口带 `noindex`，token 放在 `#` 后不进入请求日志。停止分享、删除运行、删除账号或匿名会话到期都会立即使链接失效；重新分享生成新链接。快照保存在运行目录的 `share.json`，`shares/` 下只按 token 摘要记录运行位置。
 - 已完成、已取消或发生错误的历史记录可在确认后单条删除，删除前可下载包含原始题目与诊断的运行档案，即使任务尚未生成结果。排队或运行中的任务不能删除；删除不会自动取消任务。删除后释放会话的历史容量，不影响其他任务。删除请求的响应丢失时只刷新历史核对，不自动重发。
 - 网络中断或请求超过 15 秒时显示连接状态并禁用提交，已有表单仍可编辑；网络恢复、返回页面或手动重连时自动刷新会话和历史。创建任务与取消请求均不自动重发；提交响应丢失时提示结果未确认，并通过历史列表核对，避免重复创建任务。恢复连接不重置未提交的源码、任务或模型配置。
@@ -305,6 +307,9 @@ bun run test:web-long-run
 bun run test:web-share
 bun run test:web-onboarding
 bun run test:web-i18n
+bun run test:web-a11y
+bun run build:web-preview
+bun run test:web-preview
 bun run test:web-preparation
 bun run test:web-recovery
 bun run test:web-results
@@ -329,6 +334,10 @@ bun scripts/test-web-runtime.ts
 ```
 
 `test:web-ui` 使用 Playwright Chromium 与真实本地 HTTP 服务，通过可控 worker fixture 检查进度计时、日志轮转、刷新、取消、配置复用、源码切换、复制下载、本地文件导入、展开编辑、历史筛选，以及 320–1440 像素布局。`test:web-recovery` 检查离线、401 / CSRF 403、请求超时、POST 响应丢失、过时响应和页面恢复。`test:web-results` 检查可读报告、候选与最终验收的区别、诊断转义、JSON 导出，以及删除确认、失败和响应丢失。`test:web-drafts` 检查刷新恢复、草稿与档案导入导出、密钥排除、存储异常和导入预览布局。`test:web-source-diff` 检查逐行差异、上下文与更改导航、换行、原文复制下载和大输入边界。这些浏览器验证均不调用 Docker、Lean 或模型，报告和截图写入 `out/web-ui-smoke/`。首次使用需安装 Playwright Chromium：`bunx playwright install chromium`。
+
+`test:web-a11y` 以中英文界面检查欢迎页、示例运行的每个标签页、研究配置 / 术语 / 研究记录对话框、命令面板和 375 像素布局：控件都有可读名称，label 与 ARIA 引用指向真实元素，id 不重复，无正 tabindex、嵌套控件或 aria-hidden 内的可聚焦元素；第一个 Tab 落在跳转链接，后续焦点都有可见焦点环；详情标签页支持方向键、Home 和 End；对话框按 Esc 关闭并把焦点还给打开它的按钮。同一套规则（`scripts/web-a11y.ts`）也用于 `test:web-login` 的登录页与账号对话框和 `test:web-share` 的分享对话框与分享页。
+
+组件预览 `bun run build:web-preview` 把 `apps/web/preview/` 构建到 `out/web-preview/`，用固定数据展示每个工作台组件（基础控件、Section 辅助组件、顶栏、对话、运行监视、运行头部、概览、研究协作）；在页面上可切换中英文。它只用于开发，不进入 `out/web` 或镜像。`test:web-preview` 在中英文、1440 与 375 像素下检查每个组件渲染无报错、英文界面无未翻译文字、页面不溢出并通过上述无障碍规则，截图写入 `out/web-preview-check/`。
 
 `test:web-collaboration` 使用真实本地 HTTP 服务、可控 runner 和实际知识目录检查任务/路线筛选、Agent 分工、版本化源码与检查、指导投递、计划冲突/预览/应用、重新检查、知识引用、服务端方案和归档下载，同时检查轮询中的焦点/选区和 320 / 375 / 1440 像素布局。报告及截图写入 `out/web-collaboration/`。运行桥接、指导 host、持久化和模块身份分别由 `webWorkerBridge`、`humanGuidance`、`webCollaboration`、`webKnowledgeApi`、`webPersistence` 和 `webModuleIdentity` 测试覆盖；这些 fixture 不调用模型，模拟回执不作为真实 Lean 验收证据。
 

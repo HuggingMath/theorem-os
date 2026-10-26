@@ -1,7 +1,8 @@
 import type { WebRun } from '../shared';
 import type { WebObservation, WebTaskSource, WebCheckReceipt, WebArchive } from '../collaboration';
 import { isAcceptedRun } from '../presentation';
-import { createElement, errorText, escapeHtml as h, patchSection, codeBlock, detailBlock, factList, observedTime, coverageLabel, roleLabel, schedulingLabel, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
+import { Fragment, render, type ComponentChildren, type VNode } from 'preact';
+import { createElement, errorText, observedTime, coverageLabel, roleLabel, schedulingLabel, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
 import { TaskPlanEditor } from './taskPlanEditor';
 import { KnowledgeView } from './knowledgeView';
 import { TaskSourceComparison, taskSourceKey } from './taskSourceComparison';
@@ -10,13 +11,14 @@ import { recordedTask, ResearchProgressView, taskCheckKey } from './researchProg
 import { MathematicalChangesView } from './mathematicalChangesView';
 import { ReviewView } from './reviewView';
 import { CollaborationNavigation } from './collaborationNavigation';
-import { termHint } from './glossary';
 import { compactGraphMetrics, compactGraphTasks, graphMetrics, layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
 import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
 import { revealGraph } from './motion';
 import { renderAgentCards } from './ui/AgentCards';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 import { renderTaskInspector } from './ui/TaskInspector';
+import { CollaborationSurface } from './ui/CollaborationSurface';
+import { Code, Detail, Facts, Host, renderOptions, renderSection } from './ui/Section';
 import { t } from '../i18n';
 
 type Task = WebObservation['inspection']['tasks'][number];
@@ -113,12 +115,8 @@ export class CollaborationView {
   private create(runId: string): ViewState {
     const element = createElement('div', 'collab-surface');
     const taskView: TaskView = matchMedia('(max-width:850px)').matches ? 'list' : 'graph';
-    element.innerHTML = `<div class="collab-heading"><h2 class="sr-only">${t('研究协作')}</h2><p class="collab-help collab-observation-line"><span data-collab-observation></span>${termHint('observation')}</p><div class="collab-heading-actions"><button type="button" class="button" data-collab-refresh>${t('刷新观察')}</button><button type="button" class="button" data-collab-plan disabled>${t('编辑计划')}</button><button type="button" class="button" data-collab-archive disabled>${t('归档知识')}</button></div></div><div data-collab-navigation></div><div data-collab-summary></div><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
-      <div data-collab-progress></div><div class="collab-layout"><section class="collab-map" data-task-view="graph"><div class="collab-section-heading"><span class="term-heading"><h3>${t('数学任务')}</h3>${termHint('plan')}</span><div class="collab-task-view" role="group" aria-label="${t('任务显示方式')}"><button type="button" data-collab-task-view="graph" aria-pressed="true">${t('依赖图')}</button><button type="button" data-collab-task-view="list" aria-pressed="false">${t('任务列表')}</button></div></div><div class="collab-map-tools"><label class="sr-only" for="task-search-${h(runId)}">${t('搜索任务、类型或负责人')}</label><input id="task-search-${h(runId)}" data-collab-task-search type="search" placeholder="${t('搜索任务、类型或负责人')}"><label class="sr-only" for="route-${h(runId)}">${t('筛选证明路线')}</label><select id="route-${h(runId)}" data-collab-route><option value="">${t('全部路线')}</option></select><label class="sr-only" for="task-state-${h(runId)}">${t('筛选任务状态')}</label><select id="task-state-${h(runId)}" data-collab-task-state><option value="">${t('全部状态')}</option>${taskStates.map(state => `<option value="${state}">${h(label(state))}</option>`).join('')}</select></div><div class="collab-task-result"><span data-collab-task-count role="status"></span><button type="button" class="text-button" data-collab-task-reset hidden>${t('清除筛选')}</button></div><div data-collab-task-selection class="collab-task-selection" hidden></div><div data-collab-routes class="collab-route-summary"></div><div data-collab-task-empty class="collab-task-empty" hidden></div><div class="collab-graph-frame"><div class="collab-graph-scroll" tabindex="0" data-focus-key="task-graph-scroll" aria-label="${t('任务依赖图，可滚动、拖动平移和缩放')}"><div data-collab-graph class="collab-graph"></div></div><div class="collab-graph-legend"><p class="collab-help"><span class="collab-legend-and">${t('AND 前置')}</span><span class="collab-legend-or">${t('OR 路线')}</span>${termHint('graph')}<span class="collab-legend-usage" data-collab-usage-legend hidden></span><span>${t('悬停查看上下游 · 拖动平移 · Ctrl 或 ⌘ 加滚轮缩放')}</span></p><div class="collab-graph-zoom" role="group" aria-label="${t('依赖图缩放')}"><button type="button" data-collab-graph-zoom="out" aria-label="${t('缩小')}">−</button><button type="button" data-collab-graph-zoom="reset" aria-label="${t('恢复 100%')}" data-collab-graph-zoom-level>100%</button><button type="button" data-collab-graph-zoom="in" aria-label="${t('放大')}">+</button><button type="button" data-collab-graph-zoom="fit">${t('适应')}</button></div></div></div><div data-collab-task-list class="collab-task-list" data-focus-key="task-list-scroll" tabindex="0" aria-label="${t('任务列表')}"></div></section>
-      <section class="collab-inspector"><div class="collab-section-heading"><h3>${t('任务检查器')}</h3><div class="collab-inspector-actions"><button type="button" class="text-button" data-collab-back-to-list hidden>${t('返回任务列表')}</button><button type="button" class="text-button" data-collab-guide-task data-focus-key="guide-task">${t('指导此任务')}</button></div></div><div data-collab-inspector></div><div data-collab-artifact class="collab-artifact" aria-live="polite"></div></section></div>
-      <div data-collab-reviews></div><div data-collab-math-changes></div><section class="collab-agents"><div class="collab-section-heading"><span class="term-heading"><h3>${t('Agent 分工')}</h3>${termHint('roles')}</span><span class="collab-help">${t('固定角色 / 当前会话角色')}</span></div><div data-collab-agents class="collab-agent-list"></div></section>
-      <div data-collab-deliveries></div><div data-collab-guidance></div>
-      <div data-collab-records><section class="collab-edit-records"><div class="collab-section-heading"><span class="term-heading"><h3>${t('计划应用与重新检查')}</h3>${termHint('recheck')}</span></div><div data-collab-edits></div></section><section class="collab-archives"><div class="collab-section-heading"><span class="term-heading"><h3 tabindex="-1" data-collab-archives-heading>${t('归档与知识目录')}</h3>${termHint('archive')}</span></div><div data-collab-archives></div></section></div>`;
+    // Rendered once: the placeholders below are replaced by section elements or owned by their own renderers.
+    render(<CollaborationSurface runId={runId} taskView={taskView} taskStates={taskStates.map(state => [state, label(state)] as const)} />, element);
     const components = {
       guidance: new GuidanceComposer(this.api, runId, observation => this.receive(observation)),
       progress: new ResearchProgressView(runId),
@@ -136,8 +134,6 @@ export class CollaborationView {
       navigation: new CollaborationNavigation(element, runId, () => this.provideGuidance(view, () => view.guidance.focus())),
       taskPositions: { graph: { top: 0, left: 0 }, list: { top: 0, left: 0 } },
       archiveBusy: false, active: false, artifactRequest: 0, scrollTop: 0, scrollLeft: 0, archives: [] };
-    element.querySelector<HTMLElement>('.collab-map')!.dataset.taskView = taskView;
-    for (const button of element.querySelectorAll<HTMLButtonElement>('[data-collab-task-view]')) button.setAttribute('aria-pressed', String(button.dataset.collabTaskView === taskView));
     element.querySelector('[data-collab-navigation]')!.replaceWith(view.navigation.element);
     element.querySelector('[data-collab-refresh]')!.addEventListener('click', () => void this.refresh(runId, view, true));
     element.querySelector('[data-collab-plan]')!.addEventListener('click', () => { if (view.observation) this.planEditor.open(runId, view.observation, view.selectedTask); });
@@ -205,7 +201,7 @@ export class CollaborationView {
     if (!view.selectedTask || !view.selectedVersion && !observation.inspection.tasks.some(task => task.id === view.selectedTask)) {
       view.selectedTask = observation.inspection.tasks.find(task => task.kind === 'goal')?.id ?? observation.inspection.tasks[0]?.id ?? '';
       view.selectedVersion = undefined;
-      view.artifactRequest++; view.sourceComparison = undefined; patchSection(view.element.querySelector('[data-collab-artifact]')!, '');
+      view.artifactRequest++; view.sourceComparison = undefined; this.renderArtifact(view, null);
     }
     if (view.sourceComparison) view.sourceComparison.update(observation.sources, observation.inspection.tasks.find(task => task.id === view.selectedTask)?.version ?? t('当前计划已无此任务'));
     if (this.run?.id === observation.webRunId) {
@@ -217,7 +213,7 @@ export class CollaborationView {
   private selectTask(view: ViewState, id: string, version?: string, reveal = false) {
     const changed = view.selectedTask !== id || view.selectedVersion !== version;
     if (changed) {
-      view.artifactRequest++; view.sourceComparison = undefined; patchSection(view.element.querySelector('[data-collab-artifact]')!, '');
+      view.artifactRequest++; view.sourceComparison = undefined; this.renderArtifact(view, null);
     }
     view.selectedTask = id; view.selectedVersion = version;
     this.updateTaskSelection(view); this.renderInspector(view);
@@ -273,17 +269,16 @@ export class CollaborationView {
   }
   private async refresh(runId: string, view: ViewState, manual = false) {
     if (view.loading) return; view.loading = true;
-    const status = view.element.querySelector('[data-collab-status]')!;
-    if (manual) status.textContent = t('正在刷新观察…');
+    if (manual) this.setStatus(view, t('正在刷新观察…'));
     this.updateCommands(view);
     try {
       const { observation } = await this.api<{ observation: WebObservation | null }>(`/api/runs/${encodeURIComponent(runId)}/observation`);
       view.observationError = undefined;
       if (observation) this.receive(observation);
-      if (manual) status.textContent = observation ? t('观察已刷新 · #{0}', view.observation?.sequence ?? observation.sequence) : t('仍没有协作观察记录。');
+      if (manual) this.setStatus(view, observation ? t('观察已刷新 · #{0}', view.observation?.sequence ?? observation.sequence) : t('仍没有协作观察记录。'));
     } catch (error) {
       view.observationError = t('观察读取失败：{0}', errorText(error));
-      if (manual) status.textContent = view.observationError;
+      if (manual) this.setStatus(view, view.observationError);
     }
     finally { view.loading = false; this.updateCommands(view); }
   }
@@ -310,7 +305,11 @@ export class CollaborationView {
       accepted: isAcceptedRun(run), completedResearch: inspection.progress.completedResearchTasks,
     });
     this.renderTasks(view); this.renderInspector(view); this.renderAgents(view); view.progress.update(observation); view.changes.update(observation); view.reviews.update(observation, run);
-    patchSection(view.element.querySelector('[data-collab-edits]')!, inspection.edits.length ? inspection.edits.map(edit => `<article class="collab-edit"><strong>${h(edit.id)} · ${h(editStatusLabel(edit.status))}</strong>${factList([[t('基准版本'),edit.baseVersion],[t('应用版本'),edit.planVersion],[t('重新检查'),editStatusLabel(edit.recheck?.status) ?? t('未记录')],[t('影响任务'),edit.affectedTasks?.join(', ')]])}${edit.reason ? `<p>${h(edit.reason)}</p>` : ''}${edit.recheck ? detailBlock(t('各任务重新检查记录'),edit.recheck,`edit-${edit.id}`) : ''}</article>`).join('') : `<p class="collab-help">${t('尚无人工计划编辑记录')}</p>`);
+    renderSection(view.element.querySelector('[data-collab-edits]')!, inspection.edits.length ? <>{inspection.edits.map(edit => <article key={edit.id} class="collab-edit">
+      <strong>{edit.id} · {editStatusLabel(edit.status)}</strong>
+      <Facts facts={[[t('基准版本'), edit.baseVersion], [t('应用版本'), edit.planVersion], [t('重新检查'), editStatusLabel(edit.recheck?.status) ?? t('未记录')], [t('影响任务'), edit.affectedTasks?.join(', ')]]} />
+      {edit.reason && <p>{edit.reason}</p>}{edit.recheck && <Detail title={t('各任务重新检查记录')} value={edit.recheck} detailKey={`edit-${edit.id}`} />}
+    </article>)}</> : <p class="collab-help">{t('尚无人工计划编辑记录')}</p>);
     this.updateKnowledge(view, run);
     this.updateCommands(view);
   }
@@ -344,18 +343,24 @@ export class CollaborationView {
     const routes = (observation.plan?.proofRoutes ?? []).filter(route => !view.route || route.id === view.route);
     const routeSelect = view.element.querySelector<HTMLSelectElement>('[data-collab-route]')!;
     const missingRoute = Boolean(view.route && !routes.length);
-    const options = `<option value="">${t('全部路线')}</option>` + (observation.plan?.proofRoutes ?? []).map(route => `<option value="${h(route.id)}">${h(route.id)} → ${h(route.targetTaskId)}</option>`).join('') + (missingRoute ? `<option value="${h(view.route)}">${t('{0} · 已移除', h(view.route))}</option>` : '');
-    if (routeSelect.dataset.options !== options) { routeSelect.innerHTML = options; routeSelect.dataset.options = options; routeSelect.value = view.route; }
+    renderOptions(routeSelect, [['', t('全部路线')], ...(observation.plan?.proofRoutes ?? []).map(route => [route.id, `${route.id} → ${route.targetTaskId}`] as const),
+      ...(missingRoute ? [[view.route, t('{0} · 已移除', view.route)] as const] : [])], view.route);
     const count = view.element.querySelector('[data-collab-task-count]')!, countText = t('显示 {0} / {1} 个任务', tasks.length, observation.inspection.tasks.length);
     if (count.textContent !== countText) count.textContent = countText;
     const filtered = Boolean(view.route || view.element.querySelector<HTMLSelectElement>('[data-collab-task-state]')!.value || view.element.querySelector<HTMLInputElement>('[data-collab-task-search]')!.value.trim());
     view.element.querySelector<HTMLButtonElement>('[data-collab-task-reset]')!.hidden = !filtered;
     const empty = view.element.querySelector<HTMLElement>('[data-collab-task-empty]')!;
     empty.hidden = tasks.length > 0;
-    patchSection(empty, observation.inspection.tasks.length ? `<strong>${t('没有匹配的任务')}</strong><p>${t('可以调整关键词、路线或状态，或清除筛选查看全部任务。')}</p>` : `<strong>${t('尚无数学任务')}</strong><p>${t('运行生成任务计划后会显示在这里。')}</p>`);
+    renderSection(empty, observation.inspection.tasks.length ? <><strong>{t('没有匹配的任务')}</strong><p>{t('可以调整关键词、路线或状态，或清除筛选查看全部任务。')}</p></>
+      : <><strong>{t('尚无数学任务')}</strong><p>{t('运行生成任务计划后会显示在这里。')}</p></>);
     view.element.querySelector<HTMLElement>('.collab-map')!.dataset.taskEmpty = String(!tasks.length);
     this.renderTaskSelection(view, tasks, observation.inspection.tasks);
-    patchSection(view.element.querySelector('[data-collab-routes]')!, missingRoute ? `<span>${t('所选路线 {0} 已从当前计划移除，请选择其他路线或清除筛选。', h(view.route))}</span>` : routes.map(route => `<span><strong>OR ${h(route.id)}</strong>${t('：({0}) → {1} → {2}{3}', h(route.prerequisiteTaskIds.join(' AND ') || t('无额外前置')), h(route.closingTaskId), h(route.targetTaskId), (() => { const recorded = observation.inspection.mathematics.snapshot.routes.find(item => item.routeId === route.id); return recorded ? ` · ${recorded.ready ? t('前置已就绪') : t('等待 {0}', h(recorded.remainingPrerequisiteTaskIds.join(', ') || label(recorded.closingStatus)))} · ${h(routeConnectionLabel[recorded.connection] ?? t('连接 {0}', recorded.connection))}` : ''; })())}</span>`).join('') || `<span>${t('当前计划按任务的 AND 前置依赖推进')}</span>`);
+    renderSection(view.element.querySelector('[data-collab-routes]')!, missingRoute ? <span>{t('所选路线 {0} 已从当前计划移除，请选择其他路线或清除筛选。', view.route)}</span>
+      : routes.length ? <>{routes.map(route => {
+        const recorded = observation.inspection.mathematics.snapshot.routes.find(item => item.routeId === route.id);
+        const progress = recorded ? ` · ${recorded.ready ? t('前置已就绪') : t('等待 {0}', recorded.remainingPrerequisiteTaskIds.join(', ') || label(recorded.closingStatus))} · ${routeConnectionLabel[recorded.connection] ?? t('连接 {0}', recorded.connection)}` : '';
+        return <span key={route.id}><strong>OR {route.id}</strong>{t('：({0}) → {1} → {2}{3}', route.prerequisiteTaskIds.join(' AND ') || t('无额外前置'), route.closingTaskId, route.targetTaskId, progress)}</span>;
+      })}</> : <span>{t('当前计划按任务的 AND 前置依赖推进')}</span>);
     this.renderTaskCards(view, tasks, mode);
   }
   private renderTaskSelection(view: ViewState, tasks: readonly Task[], currentTasks: readonly Task[]) {
@@ -363,7 +368,11 @@ export class CollaborationView {
     const historical = Boolean(view.selectedVersion && selectedCurrent?.version !== view.selectedVersion);
     const selection = view.element.querySelector<HTMLElement>('[data-collab-task-selection]')!;
     selection.hidden = !view.selectedTask || tasks.some(task => task.id === view.selectedTask && (!view.selectedVersion || task.version === view.selectedVersion));
-    patchSection(selection, selection.hidden ? '' : `<p>${t('检查器仍在查看')} <strong>${h(view.selectedTask)}</strong>${t('{0}。', historical ? ` ${t('的历史合同')} <code>${h(view.selectedVersion)}</code>` : t('，该任务不在当前筛选结果中'))}</p><div><button type="button" class="text-button" data-collab-task-inspect-selected data-focus-key="task-inspect-selected">${t('查看所选合同')}</button>${selectedCurrent && !historical ? `<button type="button" class="text-button" data-collab-task-show-selected data-focus-key="task-show-selected">${t('显示所选任务')}</button>` : ''}</div>`);
+    renderSection(selection, selection.hidden ? null : <>
+      <p>{t('检查器仍在查看')} <strong>{view.selectedTask}</strong>{historical ? <> {t('的历史合同')} <code>{view.selectedVersion}</code>{t('{0}。', '')}</> : t('{0}。', t('，该任务不在当前筛选结果中'))}</p>
+      <div><button type="button" class="text-button" data-collab-task-inspect-selected data-focus-key="task-inspect-selected">{t('查看所选合同')}</button>
+        {selectedCurrent && !historical && <button type="button" class="text-button" data-collab-task-show-selected data-focus-key="task-show-selected">{t('显示所选任务')}</button>}</div>
+    </>);
   }
   private renderTaskCards(view: ViewState, tasks: readonly Task[], mode: TaskView) {
     const observation = view.observation!;
@@ -464,7 +473,7 @@ export class CollaborationView {
     const run = totalTokens(observation.inspection.usage as Record<string, number> | undefined);
     legend.hidden = !tasks.length;
     const totals = tasks.length ? t('任务 {0}{1}', tokenText(tasks.reduce((sum, value) => sum + value, 0)), run !== undefined ? t(' / 运行 {0}', tokenText(run)) : '') : '';
-    patchSection(legend, totals ? `<span>${t('Token 色条：相对用量最多的任务')}</span><span>${h(totals)}</span>` : '');
+    renderSection(legend, totals ? <><span>{t('Token 色条：相对用量最多的任务')}</span><span>{totals}</span></> : null);
   }
   private updateTaskSelection(view: ViewState) {
     // Graph and list cards are component-rendered; other task links (agents, frontier, deliveries) are toggled here.
@@ -549,39 +558,60 @@ export class CollaborationView {
     view.guidance.update(view.observation, view.active, this.connected);
     view.navigation.update(view.observation, this.connected, view.archives.length);
   }
+  /** One artifact at a time; keyed by request, so a new read remounts the heading for focus. */
+  private renderArtifact(view: ViewState, artifact: { title: string; body: VNode } | null) {
+    renderSection(view.element.querySelector<HTMLElement>('[data-collab-artifact]')!, artifact && <Fragment key={view.artifactRequest}>
+      <h4 data-collab-artifact-heading tabIndex={-1}>{artifact.title}</h4><div data-collab-artifact-body>{artifact.body}</div></Fragment>);
+  }
   private beginArtifact(view: ViewState, title: string, loading: string) {
-    const target = view.element.querySelector<HTMLElement>('[data-collab-artifact]')!;
-    patchSection(target, `<h4 data-collab-artifact-heading tabindex="-1">${h(title)}</h4><div data-collab-artifact-body><p class="collab-help">${h(loading)}</p></div>`);
-    const heading = target.querySelector<HTMLElement>('[data-collab-artifact-heading]')!;
+    this.renderArtifact(view, { title, body: <p class="collab-help">{loading}</p> });
+    const heading = view.element.querySelector<HTMLElement>('[data-collab-artifact-heading]')!;
     if (this.current === view) { view.navigation.reveal(heading); heading.focus({ preventScroll: true }); }
-    return target.querySelector<HTMLElement>('[data-collab-artifact-body]')!;
+    return (body: VNode) => this.renderArtifact(view, { title, body });
   }
   private async readSource(runId:string,view:ViewState,taskId:string,version:string,snapshotKey?:string) {
     const request=++view.artifactRequest; view.sourceComparison = undefined;
-    const target = this.beginArtifact(view, t('源码 · {0}', taskId), t('正在读取版本固定的源码'));
+    const show = this.beginArtifact(view, t('源码 · {0}', taskId), t('正在读取版本固定的源码'));
     try {
       const recorded = snapshotKey ? view.observation?.sources.find(source => source.taskId === taskId && source.taskVersion === version && taskSourceKey(source) === snapshotKey) : undefined;
       const source = recorded ?? (await this.api<{source:WebTaskSource}>(`/api/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/source?version=${encodeURIComponent(version)}`)).source;
       if(request!==view.artifactRequest)return;
       if (source.taskId !== taskId || source.taskVersion !== version || snapshotKey && taskSourceKey(source) !== snapshotKey) throw new Error(t('读取结果与所选源码快照身份不同，未展示替代材料。'));
       view.sourceComparison = new TaskSourceComparison(source, view.observation?.sources ?? [], view.observation?.inspection.tasks.find(task => task.id === taskId)?.version ?? t('当前计划已无此任务'));
-      patchSection(target, '<div data-task-source-host></div>'); target.querySelector('[data-task-source-host]')!.replaceChildren(view.sourceComparison.element);
+      show(<Host node={view.sourceComparison.element} data-task-source-host />);
     }
-    catch(error){if(request!==view.artifactRequest)return;patchSection(target,`<p class="collab-error">${h(errorText(error))}</p>`);}
+    catch(error){if(request!==view.artifactRequest)return;show(<p class="collab-error">{errorText(error)}</p>);}
   }
   private async readCheck(runId:string,view:ViewState,id:string,identity?:string) {
     const request=++view.artifactRequest; view.sourceComparison = undefined;
-    const target = this.beginArtifact(view, t('检查回执 · {0}', id), t('正在读取检查回执'));
-    try {const {check}=await this.api<{check:WebCheckReceipt}>(`/api/runs/${encodeURIComponent(runId)}/checks/${encodeURIComponent(id)}`);if(request!==view.artifactRequest)return;if(check.id!==id||identity&&taskCheckKey(check)!==identity)throw new Error(t('读取结果与所选检查回执身份不同，未展示替代材料。'));patchSection(target,`${factList([[t('任务'),check.taskId],[t('任务版本'),check.taskVersion],['commit',check.commit],[t('源码摘要'),check.sourceDigest],[t('环境摘要'),check.environmentDigest]])}${codeBlock(check.record)}`);}
-    catch(error){if(request!==view.artifactRequest)return;patchSection(target,`<p class="collab-error">${h(errorText(error))}</p>`);}
+    const show = this.beginArtifact(view, t('检查回执 · {0}', id), t('正在读取检查回执'));
+    try {
+      const {check}=await this.api<{check:WebCheckReceipt}>(`/api/runs/${encodeURIComponent(runId)}/checks/${encodeURIComponent(id)}`);
+      if(request!==view.artifactRequest)return;
+      if(check.id!==id||identity&&taskCheckKey(check)!==identity)throw new Error(t('读取结果与所选检查回执身份不同，未展示替代材料。'));
+      show(<><Facts facts={[[t('任务'),check.taskId],[t('任务版本'),check.taskVersion],['commit',check.commit],[t('源码摘要'),check.sourceDigest],[t('环境摘要'),check.environmentDigest]]} /><Code value={check.record} /></>);
+    }
+    catch(error){if(request!==view.artifactRequest)return;show(<p class="collab-error">{errorText(error)}</p>);}
+  }
+  private setStatus(view: ViewState, status: ComponentChildren) {
+    renderSection(view.element.querySelector<HTMLElement>('[data-collab-status]')!, <>{status}</>);
   }
   private renderArchives(view: ViewState, runId: string) {
-    patchSection(view.element.querySelector('[data-collab-archives]')!, view.archives.length ? view.archives.map(archive => `<article class="collab-archive" data-collab-archive-id="${h(archive.id)}"><div class="collab-section-heading"><strong>${h(observedTime(archive.createdAt))}</strong><a class="button" data-collab-archive-download href="/api/runs/${encodeURIComponent(runId)}/archives/${encodeURIComponent(archive.id)}" download="theoremos-${h(runId)}-archive.json">${t('下载归档包')}</a></div>${factList([[t('归档 ID'),archive.id],[t('摘要'),archive.digest],[t('源码 / 检查'),`${archive.sources} / ${archive.checks}`],[t('知识目录'),archive.catalogDigest ?? t('无')],[t('事件覆盖'),archive.coverage.events],[t('源码 / 检查覆盖'),`${archive.coverage.sources} / ${archive.coverage.checks}`]])}<p class="collab-help">${t('历史证据已保存；再次使用需要重新检查。')}</p></article>`).join('') : `<p class="collab-help">${t('尚无已保存的归档')}</p>`);
+    renderSection(view.element.querySelector('[data-collab-archives]')!, view.archives.length ? <>{view.archives.map(archive => <article key={archive.id} class="collab-archive" data-collab-archive-id={archive.id}>
+      <div class="collab-section-heading"><strong>{observedTime(archive.createdAt)}</strong>
+        <a class="button" data-collab-archive-download href={`/api/runs/${encodeURIComponent(runId)}/archives/${encodeURIComponent(archive.id)}`} download={`theoremos-${runId}-archive.json`}>{t('下载归档包')}</a></div>
+      <Facts facts={[[t('归档 ID'),archive.id],[t('摘要'),archive.digest],[t('源码 / 检查'),`${archive.sources} / ${archive.checks}`],[t('知识目录'),archive.catalogDigest ?? t('无')],[t('事件覆盖'),archive.coverage.events],[t('源码 / 检查覆盖'),`${archive.coverage.sources} / ${archive.coverage.checks}`]]} />
+      <p class="collab-help">{t('历史证据已保存；再次使用需要重新检查。')}</p></article>)}</> : <p class="collab-help">{t('尚无已保存的归档')}</p>);
   }
   private async archive(runId:string,view:ViewState) {
-    if(view.archiveBusy)return;view.archiveBusy=true;const status=view.element.querySelector<HTMLElement>('[data-collab-status]')!;this.updateCommands(view);
-    status.textContent = t('正在保存归档与知识目录…');
-    try{const {archive}=await this.api<{archive:WebArchive}>(`/api/runs/${encodeURIComponent(runId)}/archive`,{method:'POST',body:'{}'});view.archives = [...view.archives.filter(item => item.id !== archive.id), archive];this.renderArchives(view, runId);patchSection(status,`${t('已归档 {0} · {1}{2}；再次使用时需要重新检查', h(archive.id), h(archive.digest), archive.catalogDigest?t(' · 知识目录 {0}', h(archive.catalogDigest)):'')} <button type="button" class="text-button" data-collab-show-archive>${t('查看归档')}</button>`);await view.knowledge.refreshCatalogs();}
-    catch(error){status.textContent=errorText(error);}finally{view.archiveBusy=false;this.updateCommands(view);}
+    if(view.archiveBusy)return;view.archiveBusy=true;this.updateCommands(view);
+    this.setStatus(view, t('正在保存归档与知识目录…'));
+    try {
+      const {archive}=await this.api<{archive:WebArchive}>(`/api/runs/${encodeURIComponent(runId)}/archive`,{method:'POST',body:'{}'});
+      view.archives = [...view.archives.filter(item => item.id !== archive.id), archive];this.renderArchives(view, runId);
+      this.setStatus(view, <>{t('已归档 {0} · {1}{2}；再次使用时需要重新检查', archive.id, archive.digest, archive.catalogDigest?t(' · 知识目录 {0}', archive.catalogDigest):'')} <button type="button" class="text-button" data-collab-show-archive>{t('查看归档')}</button></>);
+      await view.knowledge.refreshCatalogs();
+    }
+    catch(error){this.setStatus(view, errorText(error));}finally{view.archiveBusy=false;this.updateCommands(view);}
   }
 }

@@ -118,12 +118,20 @@ try {
   assert.doesNotMatch(await result(page).innerText(), /未返回验收结果/u, 'The guide replaces the operator message');
   assert.equal(await page.locator('[data-recovery="retry"]').count(), 1);
   assert.equal(await page.locator('[data-chat-action="reuse"]').count(), 0, 'Retry replaces the duplicate reuse link');
-  mark('a runner crash is shown as an environment error with a retry');
+  // A failure on our side links to the prefilled public feedback form, which never carries the run or the task.
+  const feedback = new URL((await page.locator('#conversation [data-feedback-link]').getAttribute('href'))!);
+  assert.equal(`${feedback.origin}${feedback.pathname}`, 'https://likc1606.github.io/theorem-os-site/feedback.html');
+  assert.equal(feedback.searchParams.get('area'), 'workbench');
+  assert.equal(feedback.searchParams.get('kind'), 'bug');
+  assert.match(feedback.searchParams.get('environment')!, /^TheoremOS workbench · .+ · failure: environment$/u);
+  assert.ok(!feedback.href.includes(crash.id) && !feedback.href.includes('crash'), 'Feedback link leaks the run');
+  mark('a runner crash is shown as an environment error with a retry and a prefilled feedback link');
 
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 760 });
     await open(page, auth.id);
     await result(page).locator('h3', { hasText: 'API Key 未通过认证' }).waitFor();
+    assert.equal(await page.locator('[data-feedback-link]').count(), 0, 'A failure the visitor can fix offers no feedback link');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Failure card overflows at ${width}px`);
     await page.screenshot({ path: path.join(output, `failure-auth-${width}.png`) });
   }

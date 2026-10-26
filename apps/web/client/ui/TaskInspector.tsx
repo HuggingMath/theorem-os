@@ -1,6 +1,6 @@
 import { render } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { jsonText } from '../collaborationUi';
+import { Detail as DetailBlock } from './Section';
 import { t } from '../../i18n';
 
 export type InspectorDetail = { title: string; value: unknown; id: string };
@@ -15,9 +15,8 @@ export type TaskInspectorProps =
   | { mode: 'missing'; id: string; version: string; hasCurrent: boolean }
   | { mode: 'task'; task: InspectedTask };
 
-// Detail blocks match collaborationUi.detailBlock. Preact never touches `open`, so the reader's choice survives updates.
-const Detail = ({ title, value, id }: InspectorDetail) => <details class="collab-detail" data-detail-key={id}>
-  <summary>{title}</summary><pre class="collab-code" tabIndex={0}>{typeof value === 'string' ? value : jsonText(value)}</pre></details>;
+// Preact never touches `open`, so the reader's choice survives updates.
+const Detail = ({ title, value, id }: InspectorDetail) => <DetailBlock title={title} value={value} detailKey={id} />;
 
 // Long objectives start clamped so the type, facts and evidence stay within reach; remounts per task version.
 function Objective({ text }: { text: string }) {

@@ -1064,7 +1064,9 @@ textarea.expanded-source{display:block;width:100%;height:100%;min-height:0;resiz
   .model-menu>svg:first-child{display:none}
   .connection-status{padding-left:2px;gap:5px;font-size:var(--text-xs)}
   .status-dot{width:5px;height:5px}
-  .topbar-actions{gap:1px}
+  /* Signed in, the account button joins the actions; the model name gives way (it truncates) so nothing leaves the screen. */
+  .topbar-actions{gap:1px;flex-shrink:1}
+  .topbar .model-menu{min-width:0}
   .mobile-switch{padding-inline:18px;gap:26px}
   .composer-heading{padding-inline:17px}
   .composer-heading h1{font-size:var(--text-sm)}
@@ -2212,6 +2214,8 @@ body.login-page{overflow:auto}
 .account-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .account-trigger:hover{background:var(--gray-50)}
 .account-email{font-weight:500;overflow-wrap:anywhere;margin-bottom:14px}
+.account-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 16px}
+.glossary-feedback{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);font-size:var(--text-xs);color:var(--gray-600)}
 .account-danger{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}
 .account-danger h3{font-size:var(--text-sm);margin-bottom:6px}
 .account-danger p{font-size:var(--text-xs);color:var(--gray-600);margin-bottom:12px}

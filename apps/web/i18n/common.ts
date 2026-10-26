@@ -158,7 +158,7 @@ export const common: Record<string, string> = {
   "运行在解题预算内没有完成，已检查的成果保存在报告中。可以提高解题预算后重新运行。": "The run did not finish within the solve budget. Checked results are saved in the report. You can raise the solve budget and run again.",
   "提高解题预算": "Raise solve budget",
   "运行环境出错": "Run environment error",
-  "隔离运行环境没有正常完成，与题目和 API Key 无关。请重新运行；如果再次出现，请联系我们并附上运行档案。": "The isolated run environment did not finish normally; this is unrelated to your problem or API key. Run again, and if it happens again, contact us with the run archive.",
+  "隔离运行环境没有正常完成，与题目和 API Key 无关。请重新运行；如果再次出现，请点「反馈问题」告诉我们，并附上运行档案。": "The isolated run environment did not finish normally; this is unrelated to your problem or API key. Run again, and if it happens again, tell us through Report a problem and attach the run archive.",
   "Lean 原题无法载入": "The Lean problem could not be loaded",
   "原题没有通过载入检查。请确认源码能在所选证明环境中编译，且每个目标定理都保留了原始声明。": "The problem failed the load check. Make sure the source compiles in the selected proof environment and every goal theorem keeps its original statement.",
   "修改原题": "Edit the problem",

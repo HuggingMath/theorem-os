@@ -39,6 +39,7 @@ import { renderConversation as drawConversation } from './ui/Conversation';
 import { workerPhaseLabel } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResume, saveResume } from './runAwareness';
 import { installTermHints, renderGlossary } from './termHints';
+import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
 import { localeTag, localizeText, otherLocale, switchLocale, t } from '../i18n';
 
@@ -438,7 +439,8 @@ function renderConversation() {
     ...(run && value ? { run: { id: run.id, task: run.task, environment: environmentName(run.environment), model: run.model, working,
       events: events.map(event => ({ sequence: event.sequence, at: event.at, time: timestamp(event.at, true), message: localizeText(event.message) })),
       result: { tone: value.tone, symbol: value.symbol, label: failureGuide(run)?.title ?? value.label, description: resultDescription(run), candidate: Boolean(run.artifact && working) },
-      ...(failureGuide(run) ? { recovery: failureGuide(run)!.actions } : {}), ...(working ? { notify: notifyState() } : {}) } } : {}),
+      ...(failureGuide(run) ? { recovery: failureGuide(run)!.actions } : {}), ...(working ? { notify: notifyState() } : {}),
+      ...(['environment', 'unknown', 'interrupted'].includes(failureGuide(run)?.kind ?? '') ? { feedback: feedbackUrl({ failure: failureGuide(run)!.kind }) } : {}) } } : {}),
   });
   if (freshThread) thread.querySelectorAll<HTMLElement>('.chat-message').forEach(target => entrances.push({ target, kind: 'message' }));
   if (run && !newConversation && conversationScroll.following) {
@@ -1579,6 +1581,8 @@ function paletteCommands(): PaletteCommand[] {
   ].filter(command => usable(`#${command.id}`));
   commands.push({ id: 'switch-locale', group: t('帮助'), label: otherLocale.label, lang: otherLocale.lang, hint: otherLocale.title, icon: 'languages', keywords: 'language locale english chinese 语言 中文 英文', run: changeLocale });
   commands.push({ id: 'open-glossary', group: t('帮助'), label: t('术语说明'), icon: 'book-open', keywords: t('glossary help 术语 帮助'), run: () => openGlossary() });
+  commands.push({ id: 'send-feedback', group: t('帮助'), label: t('反馈问题或建议'), hint: t('在官网填写，确认后发布到 GitHub'), icon: 'message-square',
+    keywords: t('feedback bug report issue 反馈 问题 建议'), run: () => { window.open(feedbackUrl(), '_blank', 'noopener'); } });
   if (state.session?.sample && !sampleSelected()) commands.push({ id: 'open-sample', group: t('帮助'), label: t('查看示例运行'), hint: t('无需 API Key'), icon: 'eye', keywords: t('sample demo example 示例'), run: () => void openSample() });
   const tabIcons: Record<DetailTab, string> = { collaboration: 'network', source: 'file-code-2', modules: 'blocks', overview: 'gauge', report: 'file-json-2', events: 'activity' };
   if (run) for (const [tab, label] of detailTabs) commands.push({ id: `tab-${tab}`, group: t('当前研究'), label, hint: tab === state.tab ? t('当前视图') : undefined, icon: tabIcons[tab],
@@ -2318,5 +2322,6 @@ field('account-confirm').addEventListener('input', () => {
 element('#delete-account').addEventListener('click', event => void leaveAccount(() => api('/api/auth/account',
   { method: 'DELETE', body: JSON.stringify({ email: field('account-confirm').value.trim() }) }), event.currentTarget as HTMLButtonElement));
 icons();
+localizeSiteLinks();
 document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('close', () => { if (!dialog.open) finishMotion(dialog); }));
 void initialize();

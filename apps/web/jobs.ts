@@ -27,8 +27,10 @@ export class WebJobs {
   private pendingNotifications = new Set<string>();
   readonly storage: WebStorage;
   readonly knowledge: WebKnowledgeService;
+  private readonly onAccepted?: (owner: string) => void;
   constructor(private readonly runner: WebRunner, private readonly config: Pick<WebConfig, 'concurrency' | 'queueLimit'>,
-    options: { storage?: WebStorage; knowledge?: WebKnowledgeService } = {}) {
+    options: { storage?: WebStorage; knowledge?: WebKnowledgeService; onAccepted?: (owner: string) => void } = {}) {
+    this.onAccepted = options.onAccepted;
     this.storage = options.storage ?? new WebStorage();
     this.knowledge = options.knowledge ?? new WebKnowledgeService(this.storage);
     for (const { owner, run } of this.storage.loadRuns()) {
@@ -298,7 +300,9 @@ export class WebJobs {
       if (!terminal(job.run)) {
         if (!job.run.result) throw new Error(job.run.error || '没有收到运行结果。');
         job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
-        this.event(job.run, 'finished', job.run.result.status === 'evaluated_passed' ? '完整原题通过独立 Lean 验收' : '运行结束，请查看验收状态');
+        const accepted = job.run.result.status === 'evaluated_passed';
+        this.event(job.run, 'finished', accepted ? '完整原题通过独立 Lean 验收' : '运行结束，请查看验收状态');
+        if (accepted) this.onAccepted?.(job.owner);
       }
     } catch (error) {
       if (!terminal(job.run)) {

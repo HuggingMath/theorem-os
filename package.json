@@ -21,7 +21,8 @@
     "typecheck:site": "tsc --noEmit --project docs/web/tsconfig.json",
     "build:web": "bun scripts/build-web.ts",
     "web": "bun apps/web/server.ts",
-    "typecheck:web": "tsc --project apps/web/tsconfig.json && tsc --project apps/web/client/tsconfig.json",
+    "typecheck:web": "tsc --project apps/web/tsconfig.json && tsc --project apps/web/client/tsconfig.json && tsc --project apps/web/preview/tsconfig.json",
+    "build:web-preview": "bun scripts/build-web-preview.ts",
     "test:web-ui": "bun scripts/test-web-ui.ts",
     "test:web-login": "bun scripts/test-web-login.ts",
     "test:web-failures": "bun scripts/test-web-failures.ts",
@@ -62,6 +63,8 @@
     "test:web-server-plans": "bun scripts/test-web-server-plans.ts",
     "test:web-performance": "bun scripts/test-web-performance.ts",
     "test:web-motion": "bun scripts/test-web-motion.ts",
+    "test:web-preview": "bun scripts/test-web-preview.ts",
+    "test:web-a11y": "bun scripts/test-web-a11y.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

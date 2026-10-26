@@ -13,7 +13,7 @@ import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
 import { WebModuleRegistry } from './moduleRegistry';
 import { webGuidanceSchema, webPlanProposalSchema } from './collaborationValidation';
-import { WebAuth, WebAuthError, type WebMailer } from './auth';
+import { WebAuth, WebAuthError, type WebMailer, type WebMilestone } from './auth';
 import { shareSnapshot, webShareToken, type WebShareLink } from './share';
 import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
 
@@ -73,10 +73,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const knowledge = new WebKnowledgeService(storage);
   const registry = new WebModuleRegistry(storage);
   const sessions = new Map<string, Session>(storage.listSessions().map(session => [session.id, session]));
-  const jobs = new WebJobs(runner, config, { storage, knowledge });
   const auth = config.auth ? new WebAuth(config.auth, storage, options.mailer, options.captchaAnswer) : undefined;
   // With login enabled, records belong to the account; otherwise to the anonymous browser session.
   const ownerOf = (session: Session) => auth ? session.account && `account:${session.account.id}` : session.id;
+  // Beta funnel milestones exist only for accounts; anonymous loopback previews record nothing.
+  const milestone = (owner: string, name: WebMilestone) => {
+    if (auth && owner.startsWith('account:')) try { auth.markMilestone(owner.slice(8), name); } catch { /* A milestone never fails a run. */ }
+  };
+  const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt') });
   const rates = new Map<string, { count: number; expiresAt: number }>();
   const runStreams = new Map<string, Set<() => void>>();
   const origin = new URL(config.publicUrl);
@@ -291,7 +295,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
           if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
-          try { json(response, 201, { run: jobs.create(owner, parsed.data as WebRunInput, provider) }); }
+          try {
+            const run = jobs.create(owner, parsed.data as WebRunInput, provider);
+            milestone(owner, 'firstRunAt');
+            json(response, 201, { run });
+          }
           catch (error) {
             if (error instanceof WebStorageError) throw error;
             throw new HttpError(429, error instanceof Error ? error.message : '运行队列已满。');
