@@ -2,7 +2,7 @@ import type { WebRun } from '../shared';
 import type { WebObservation, WebTaskSource, WebCheckReceipt, WebArchive } from '../collaboration';
 import { isAcceptedRun } from '../presentation';
 import { Fragment, render, type ComponentChildren, type VNode } from 'preact';
-import { createElement, errorText, observedTime, coverageLabel, roleLabel, schedulingLabel, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
+import { clockTime, createElement, errorText, observedTime, coverageLabel, roleLabel, schedulingLabel, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
 import { TaskPlanEditor } from './taskPlanEditor';
 import { KnowledgeView } from './knowledgeView';
 import { TaskSourceComparison, taskSourceKey } from './taskSourceComparison';
@@ -17,6 +17,8 @@ import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
 import { revealGraph } from './motion';
 import { renderAgentCards } from './ui/AgentCards';
 import { renderCollaborationNow } from './ui/CollaborationNow';
+import { agentRoutes } from './agentRoute';
+import { renderAgentRoute } from './ui/AgentRoute';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 import { renderTaskInspector } from './ui/TaskInspector';
 import { CollaborationSurface } from './ui/CollaborationSurface';
@@ -31,7 +33,7 @@ type TaskView = 'graph' | 'list';
 type ScrollPosition = { top: number; left: number };
 // Low enough for "fit" to show a large compact plan whole; card text is then a status overview.
 const minGraphZoom = 0.3;
-type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
+type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; routeKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
 const kindLabel: Record<string,string> = { research: t('研究'), sketch: t('草图'), lemma: t('引理'), goal: t('原始目标') };
 /** One status line for a run without a collaboration observation; the sections below need one to show anything. */
 function unobservedText(run: WebRun) {
@@ -87,6 +89,7 @@ export class CollaborationView {
       this.current?.navigation.disconnect();
     }
     this.run = run; this.current = view; view.active = run.status === 'running';
+    view.element.dataset.ended = String(run.status !== 'queued' && run.status !== 'running');
     view.archives = [...new Map([...view.archives, ...(run.archives ?? [])].map(archive => [archive.id, archive])).values()];
     this.renderArchives(view, run.id);
     const mounting = !container.contains(view.element);
@@ -107,6 +110,7 @@ export class CollaborationView {
       this.render(view, run); rendered = true;
     }
     view.renderKey = renderKey;
+    this.renderRoute(view, run);
     if (mounting && view.viewport) {
       const pane = this.taskPane(view, this.taskMode(view)), position = view.taskPositions[this.taskMode(view)];
       pane.scrollTop = position.top; pane.scrollLeft = position.left;
@@ -158,7 +162,9 @@ export class CollaborationView {
       if (button.dataset.collabTask) {
         const list = button.closest<HTMLElement>('[data-collab-task-list]');
         if (list && view.viewport) view.taskListReturn = { taskId: button.dataset.collabTask, viewport: { top: view.viewport.scrollTop, left: view.viewport.scrollLeft }, list: { top: list.scrollTop, left: list.scrollLeft } };
-        const reveal = Boolean(list || button.closest('.collab-now,.collab-agent,.collab-research-overview,.collab-deliveries,.collab-math-changes,.collab-reviews') || button.closest('.collab-graph') && matchMedia('(max-width:1150px)').matches);
+        // The simple layer shows the graph without its inspector, so opening a card there switches to the full layer.
+        const reveal = Boolean(list || button.closest('.collab-now,.collab-agent,.collab-research-overview,.collab-deliveries,.collab-math-changes,.collab-reviews')
+          || button.closest('.collab-graph') && (matchMedia('(max-width:1150px)').matches || this.detail === 'simple'));
         this.selectTask(view, button.dataset.collabTask, button.dataset.taskVersion, reveal);
       }
       else if (button.dataset.collabDetail) this.setDetail(button.dataset.collabDetail as DetailLevel, button);
@@ -321,6 +327,8 @@ export class CollaborationView {
     const observation = view.observation;
     const summary = view.element.querySelector<HTMLElement>('[data-collab-summary]')!;
     view.element.dataset.observed = String(Boolean(observation));
+    view.element.dataset.tasks = String(Boolean(observation?.inspection.tasks.length));
+    this.renderRoute(view, run);
     if (!observation) { renderProgressSummary(summary, { empty: unobservedText(run) }); return; }
     const inspection = observation.inspection;
     // Proof tasks split by recorded proof status first, then by scheduling state; checked uses the server's count.
@@ -337,7 +345,7 @@ export class CollaborationView {
       agents: { working: scheduling.working, total: inspection.workers.length, meter: meter('agents', [['working', t('工作中'), scheduling.working], ['preparing', t('准备中'), scheduling.preparing],
         ['idle', t('空闲'), scheduling.idle], ['stopping', t('停止中'), scheduling.stopping], ['stopped', t('已停止'), scheduling.stopped],
         ['unscheduled', t('未记录调度'), Math.max(0, inspection.workers.length - scheduling.observedWorkers)]]) },
-      accepted: isAcceptedRun(run), completedResearch: inspection.progress.completedResearchTasks,
+      accepted: isAcceptedRun(run), completedResearch: inspection.progress.completedResearchTasks, ended: run.status !== 'queued' && run.status !== 'running',
     });
     this.renderNow(view, run);
     this.renderTasks(view); this.renderInspector(view); this.renderAgents(view); view.progress.update(observation); view.changes.update(observation); view.reviews.update(observation, run);
@@ -566,6 +574,18 @@ export class CollaborationView {
       ],
       hasChecks: checks.length > 0,
     } });
+  }
+  /** Re-rendered on new events as well as new observations; the key skips polls that changed neither. */
+  private renderRoute(view: ViewState, run: WebRun) {
+    const observation = view.observation, ended = run.status !== 'queued' && run.status !== 'running';
+    const key = [run.events.length, run.events.at(-1)?.sequence, run.status, isAcceptedRun(run), observation?.sequence].join('|');
+    if (view.routeKey === key) return;
+    view.routeKey = key;
+    const roles = new Map(observation?.inspection.workers.map(worker => [worker.id, roleLabel(worker.role) ?? worker.role]) ?? []);
+    renderAgentRoute(view.element.querySelector<HTMLElement>('[data-agent-route]')!, {
+      routes: agentRoutes(run.events).map(route => ({ ...route, role: roles.get(route.workerId) })), running: run.status === 'running',
+      ...(ended ? { ended: { accepted: isAcceptedRun(run) } } : {}), planned: observation?.inspection.tasks.length ?? 0, time: clockTime,
+    });
   }
   private renderNow(view: ViewState, run: WebRun) {
     const inspection = view.observation!.inspection, tasks = new Map(inspection.tasks.map(task => [task.id, task]));

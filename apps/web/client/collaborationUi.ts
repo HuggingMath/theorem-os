@@ -9,6 +9,10 @@ export function observedTime(value: string | number) {
   return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(localeTag, { month: '2-digit', day: '2-digit', hour: '2-digit',
     minute: '2-digit', second: '2-digit', hour12: false }).format(date) : String(value);
 }
+export function clockTime(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(localeTag, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date) : value;
+}
 export const coverageLabel = (value: 'recorded' | 'partial') => value === 'recorded' ? t('已完整记录') : t('仅部分记录');
 /** Runtime codes shown to readers; an unknown code is shown as is rather than guessed. */
 const labels = (table: Record<string, string>) => (value: string | undefined) => value === undefined ? undefined : table[value] ?? value;

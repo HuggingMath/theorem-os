@@ -1,4 +1,5 @@
 import { render } from 'preact';
+import { useState } from 'preact/hooks';
 import { Icon, Spinner } from './Icon';
 import { t } from '../../i18n';
 
@@ -42,25 +43,31 @@ function Welcome({ templates, sample, firstRun }: Omit<ConversationProps, 'run'>
       <button type="button" class="text-button welcome-glossary" data-chat-action="glossary"><Icon name="book-open" />{t('术语说明')}</button></div></div>;
 }
 
-function Event({ event, active }: { event: ConversationEvent; active: boolean }) {
-  return <li class="timeline-event" data-sequence={event.sequence} data-tone={active ? 'active' : 'done'}>
+function Event({ event, active, folded }: { event: ConversationEvent; active: boolean; folded: boolean }) {
+  return <li class="timeline-event" data-sequence={event.sequence} data-tone={active ? 'active' : 'done'} hidden={folded}>
     <span class="timeline-marker" aria-hidden="true">{active && <Spinner />}</span>
     <div class="timeline-text"><span>{event.message}</span><time dateTime={event.at}>{event.time}</time></div>
   </li>;
 }
 
+// The thread shows the newest steps; older rows stay mounted but folded, so expanding keeps reading state and motion.
+const recentSteps = 3, foldAbove = 5;
 const recoveryIcons: Record<string, string> = { retry: 'refresh-cw', key: 'key-round', budget: 'clock-3', tokens: 'gauge', turns: 'list', workers: 'users', source: 'square-pen' };
 
 function Thread({ run }: { run: ConversationRun }) {
   const { result, working } = run;
   const recovery = run.recovery?.filter(action => action.id !== 'report') ?? [];
+  const [expanded, setExpanded] = useState(false);
+  const foldable = run.events.length > foldAbove, folded = foldable && !expanded ? run.events.length - recentSteps : 0;
   return <>
     <article class="chat-message user" aria-label={t('用户研究任务')}><div class="message-body" translate={false}>{run.task}</div>
       <button type="button" class="message-attachment" data-chat-action="source"><Icon name="file-code-2" /><span>Submission.lean</span><span>{run.environment}</span></button></article>
     <article class="chat-message assistant" aria-label={t('TheoremOS 研究反馈')}>
       <div class="assistant-identity"><img src="assets/mark.svg" alt="" width={24} height={24} /><span>TheoremOS</span><span class="assistant-model mono">{run.model}</span></div>
       <div class="message-body">
-        <ol class="research-timeline">{run.events.map((event, index) => <Event key={event.sequence} event={event} active={working && index === run.events.length - 1} />)}</ol>
+        {foldable && <button type="button" class="text-button timeline-fold" data-timeline-fold aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+          <Icon name={expanded ? 'chevron-up' : 'chevron-down'} />{expanded ? t('收起步骤') : t('展开全部 {0} 步', run.events.length)}</button>}
+        <ol class="research-timeline">{run.events.map((event, index) => <Event key={event.sequence} event={event} active={working && index === run.events.length - 1} folded={index < folded} />)}</ol>
         <div class={`chat-result ${result.tone}`}>
           <h3>{working ? <Spinner /> : <Icon name={result.symbol} />}{result.label}</h3><p>{result.description}</p>
           {result.candidate && <span class="candidate-notice">{t('候选源码已更新 · 尚未验收')}</span>}

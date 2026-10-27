@@ -102,7 +102,7 @@ function drawCollaboration(root: HTMLElement) {
   renderProgressSummary(part('[data-collab-summary]'), {
     proof: { checked: 1, total: 3, meter: { name: 'proof', segments: [{ key: 'checked', label: t('已检查'), count: 1 }, { key: 'running', label: t('进行中'), count: 1 }, { key: 'pending', label: t('待调度'), count: 1 }] } },
     agents: { working: 1, total: 3, meter: { name: 'agents', segments: [{ key: 'working', label: t('工作中'), count: 1 }, { key: 'idle', label: t('空闲'), count: 2 }] } },
-    accepted: false, completedResearch: 0,
+    accepted: false, completedResearch: 0, ended: false,
   });
   const graph = part('[data-collab-graph]');
   graph.style.width = `${layout.width}px`; graph.style.height = `${layout.height}px`; graph.dataset.density = 'comfortable';

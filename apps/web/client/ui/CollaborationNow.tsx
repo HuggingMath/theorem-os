@@ -4,11 +4,9 @@ import { t } from '../../i18n';
 export type NowWorker = { id: string; role: string; phase: string; task?: string; objective?: string };
 export type NowState = { ended?: { accepted: boolean }; waiting?: string; working: readonly NowWorker[]; others: number };
 
-/** The simple layer's answer to "what is happening": working Agents and their tasks, a research wait, or where the result is. */
+/** The simple layer's answer to "what is happening": working Agents and their tasks, or a research wait. An ended run says its result in the route map instead. */
 export function renderCollaborationNow(root: HTMLElement, state: NowState) {
   render(<>
-    {state.ended && <p class="collab-now-ended">{state.ended.accepted ? t('研究已结束，原题已通过验收。') : t('研究已结束，原题没有通过验收。')}
-      <button type="button" class="text-button" data-collab-open-report>{t('查看报告')}</button></p>}
     {state.waiting !== undefined && <div class="collab-now-waiting"><strong>{t('研究正在等待新的数学输入')}</strong>
       {state.waiting && <p>{state.waiting}</p>}<p class="collab-help">{t('可以在下方提供指导，补充思路或换一条路线。')}</p></div>}
     {state.working.length ? <ul class="collab-now-list">{state.working.map(worker => <li key={worker.id} class="collab-now-worker">
@@ -17,6 +15,6 @@ export function renderCollaborationNow(root: HTMLElement, state: NowState) {
         aria-label={t('查看任务 {0}', worker.task)}>{worker.task} →</button>{worker.objective && <span class="collab-now-objective">{worker.objective}</span>}</span>
         : <span class="collab-agent-idle">{t('未分配')}</span>}
     </li>)}</ul> : !state.ended && <p class="collab-help">{t('现在没有 Agent 在工作。')}</p>}
-    {state.others > 0 && <p class="collab-help">{t('另有 {0} 个 Agent 空闲、准备中或已停止。', state.others)}</p>}
+    {!state.ended && state.others > 0 && <p class="collab-help">{t('另有 {0} 个 Agent 空闲、准备中或已停止。', state.others)}</p>}
   </>, root);
 }

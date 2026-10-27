@@ -99,6 +99,9 @@ async function screenshot(page: Page, name: string) {
 }
 
 async function rememberReading(page: Page) {
+  // Reading history starts by expanding the folded older steps.
+  const fold = page.locator('#conversation [data-timeline-fold][aria-expanded="false"]');
+  if (await fold.count()) { await fold.click(); await settled(page); }
   await page.locator('#conversation [data-chat-action="source"]').focus();
   await page.evaluate(() => {
     const conversation = document.querySelector('#conversation-scroll')!;

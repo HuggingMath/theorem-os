@@ -70,7 +70,9 @@ try {
   // A first visit sees the simple layer: the outcome with a way to the report, and none of the expert sections.
   await page.locator('#detail-tab-collaboration').click();
   await page.locator('.collab-now-ended [data-collab-open-report]').waitFor();
-  assert.equal(await page.locator('.collab-layout').isHidden(), true, 'The simple layer shows the task graph');
+  assert.equal(await page.locator('.collab-agent-route .agent-route-lane').count(), 3, 'The simple layer draws one route lane per sample Agent');
+  assert.equal(await page.locator('.collab-graph').isVisible(), true, 'The simple layer keeps the task graph of a planned run');
+  assert.equal(await page.locator('.collab-inspector').isHidden(), true, 'The simple layer shows the task inspector');
   assert.equal(await page.locator('.collab-navigation').isHidden(), true, 'The simple layer shows the section navigation');
   await page.locator('.collab-detail-toggle [data-collab-detail="full"]').click();
   await page.locator('.collab-surface [data-collab-task]').first().waitFor();

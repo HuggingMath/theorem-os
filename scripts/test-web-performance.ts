@@ -230,6 +230,9 @@ try {
   await screenshot(page, 'candidate.png');
 
   await page.waitForFunction(() => document.querySelectorAll('#conversation .timeline-event').length >= 24);
+  // Older steps are folded; reading them starts by expanding the thread.
+  await page.locator('#conversation [data-timeline-fold]').click();
+  await nextPaint(page);
   await page.locator('#conversation [data-chat-action="source"]').focus();
   await page.locator('#conversation-scroll').evaluate(scroll => { scroll.scrollTop = 120; });
   await page.waitForFunction(() => Math.abs(document.querySelector('#conversation-scroll')!.scrollTop - 120) < 1);

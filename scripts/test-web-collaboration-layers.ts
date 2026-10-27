@@ -102,7 +102,7 @@ const hidden = (page: Page, selector: string) => page.locator(`${surface} ${sele
 const focused = (page: Page) => page.evaluate(() => { const node = document.activeElement as HTMLElement | null;
   return node?.dataset.collabDetail ?? (node?.hasAttribute('data-inspected-task-heading') ? 'inspected-task' : node?.tagName ?? null); });
 const noXss = (page: Page) => page.evaluate(() => (globalThis as { __layersXss?: number }).__layersXss).then(value => assert.equal(value, undefined));
-const expert = ['.collab-navigation', '.collab-layout', '.collab-research-overview', '.collab-agents', '.collab-deliveries', '[data-collab-records]', '[data-collab-plan]'];
+const expert = ['.collab-navigation', '.collab-inspector', '.collab-map-tools', '.collab-observation-line', '.collab-research-overview', '.collab-agents', '.collab-deliveries', '[data-collab-records]', '[data-collab-plan]'];
 
 try {
   await scenario('a first visit sees progress, the working Agents and guidance, and nothing expert', async h => {
@@ -114,7 +114,7 @@ try {
       `Need a new idea for the bridge ${raw}`, '可以在下方提供指导', '另有 2 个 Agent 空闲、准备中或已停止。']) assert.ok(now.includes(value), `now shows ${value}`);
     assert.ok(!now.includes('researcher-1'), 'idle Agents are counted, not listed');
     for (const selector of expert) assert.equal(await hidden(page, selector), true, `${selector} is hidden in the simple layer`);
-    for (const selector of ['[data-collab-summary]', '.collab-guidance', '.collab-expand', '[data-collab-refresh]'])
+    for (const selector of ['[data-collab-summary]', '.collab-agent-route', '.collab-graph', '.collab-guidance', '.collab-expand', '[data-collab-refresh]'])
       assert.equal(await hidden(page, selector), false, `${selector} stays in the simple layer`);
     assert.equal(await page.locator(`${surface} .collab-detail-toggle [data-collab-detail="simple"]`).getAttribute('aria-pressed'), 'true');
     assert.equal(await page.locator(`${surface} img`).count(), 0); await noXss(page);
@@ -160,7 +160,10 @@ try {
     const ended = page.locator(`${surface} .collab-now-ended`);
     await ended.waitFor();
     assert.ok((await ended.innerText()).includes('研究已结束，原题没有通过验收。'));
-    assert.equal(await page.locator(`${surface} .collab-now`).innerText().then(text => text.includes('现在没有 Agent 在工作')), false, 'an ended run does not report idle Agents');
+    for (const selector of ['.collab-now', '.collab-guidance', '[data-collab-refresh]'])
+      assert.equal(await hidden(page, selector), true, `${selector} leaves the simple layer once the run ends`);
+    const summary = await page.locator(`${surface} [data-collab-summary]`).innerText();
+    assert.ok(summary.includes('参与了这次研究') && !summary.includes('实际工作中') && !summary.includes('S3'), 'an ended run counts who took part, without module codes');
     await ended.getByRole('button', { name: '查看报告' }).click();
     await page.locator('#detail-panel[data-tab="report"] .report-stuck').waitFor();
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'detail-tab-report');

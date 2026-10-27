@@ -2161,6 +2161,8 @@ code,pre,.mono{font-variant-ligatures:none;font-feature-settings:"zero" 0}
 .budget-meter,.step-share{background:var(--gray-150)}
 /* Conversation: research steps as one bordered list with checked rows, like a tool-call card. */
 .chat-message.assistant .research-timeline{border:1px solid var(--gray-150);border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm);overflow:hidden}
+.timeline-fold{display:inline-flex;align-items:center;gap:4px;margin:0 0 8px;font-size:var(--text-xs)}
+.timeline-fold svg{width:14px;height:14px}
 .chat-message.assistant .timeline-event{padding:0 12px;gap:10px}
 .chat-message.assistant .timeline-event+.timeline-event{border-top:1px solid var(--gray-100)}
 .chat-message.assistant .timeline-event:not(:last-child)::before{content:none}
@@ -2444,7 +2446,7 @@ body.share-page{height:auto;min-height:100dvh;overflow:visible}
 .local-check .report-method{margin-top:0}
 .local-check-steps{margin:8px 0 0;padding-left:20px;display:grid;gap:5px;font-size:var(--text-xs);line-height:1.8;color:var(--gray-600)}
 .local-check-steps code{font-size:var(--text-xs);color:var(--gray-800);overflow-wrap:anywhere}
-/* Collaboration layers: the simple layer keeps progress, what is happening now and guidance; the rest waits behind "完整". */
+/* Collaboration layers: the simple layer keeps progress, the Agent route map, what is happening now and guidance; the rest waits behind "完整". */
 .collab-detail-toggle{display:flex;gap:2px;padding:2px;border:1px solid var(--gray-200);border-radius:var(--radius-md);background:var(--gray-50)}
 .collab-detail-toggle button{border:0;border-radius:var(--radius-sm);background:transparent;padding:4px 10px;min-height:28px;font-size:var(--text-xs);color:var(--gray-500);white-space:nowrap}
 .collab-detail-toggle button[aria-pressed=true]{background:var(--card);color:var(--gray-800);box-shadow:0 1px 3px color-mix(in srgb,var(--shade) 7%,transparent)}
@@ -2466,6 +2468,35 @@ body.share-page{height:auto;min-height:100dvh;overflow:visible}
 .collab-now-objective{color:var(--gray-600);font-size:var(--text-xs);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .collab-expand{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin:16px 0 0}
 @media (max-width:560px){.collab-now-worker{grid-template-columns:minmax(0,1fr)}}
+/* The simple layer: the route map, the dependency graph without its tools when there is a plan, and nothing that only matters while running once the run ends. */
+.collab-surface[data-detail=simple][data-tasks=true] .collab-layout{display:grid;grid-template-columns:minmax(0,1fr)}
+.collab-surface[data-detail=simple] :is(.collab-inspector,.collab-map-tools,.collab-task-result,.collab-task-view,.collab-task-selection,.collab-route-summary,.collab-observation-line,.collab-expert-term){display:none}
+.collab-surface[data-detail=simple][data-ended=true] :is(.collab-now,.collab-guidance,[data-collab-refresh]){display:none}
+.collab-agent-route{border:1px solid var(--border,var(--gray-200));border-radius:var(--radius-lg);margin-top:16px;overflow:hidden;min-width:0}
+.collab-agent-route [data-agent-route]{padding:12px 14px;display:grid;gap:12px}
+.collab-agent-route [data-agent-route]>p{margin:0}
+.agent-route-lanes{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.agent-route-lane{--agent-tone:var(--gray-400);display:grid;grid-template-columns:minmax(110px,160px) minmax(0,1fr);gap:6px 12px;align-items:start;min-width:0}
+.agent-route-who{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:600;font-size:var(--text-sm);min-width:0;padding-top:2px;overflow-wrap:anywhere}
+.agent-route-who small{font-weight:400;color:var(--gray-500);font-size:var(--text-xs)}
+.agent-route-steps{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px 0;min-width:0}
+.agent-route-step{position:relative;display:grid;gap:2px;align-content:start;font-size:var(--text-xs);color:var(--gray-700);min-width:0}
+.agent-route-step+.agent-route-step{padding-left:22px}
+.agent-route-step+.agent-route-step::before{content:'';position:absolute;left:4px;top:12px;width:14px;height:1px;background:var(--gray-300)}
+.agent-route-label{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;padding:3px 8px;border:1px solid var(--gray-200);border-radius:999px;background:var(--card)}
+.agent-route-label .spinner{width:10px;height:10px;border-width:1.5px}
+.agent-route-mark{width:6px;height:6px;border-radius:50%;background:var(--gray-400);flex-shrink:0}
+.agent-route-step[data-outcome=passed] .agent-route-mark{background:var(--green-500)}
+.agent-route-step[data-outcome=failed] .agent-route-mark{background:var(--red-500)}
+.agent-route-step[data-kind=accept][data-outcome=passed] .agent-route-label{border-color:var(--green-200);background:var(--green-50)}
+.agent-route-step[data-kind=stop] .agent-route-label,.agent-route-step[data-kind=accept][data-outcome=failed] .agent-route-label{border-color:var(--red-200);background:var(--red-50)}
+.agent-route-step[data-current] .agent-route-label{border-color:var(--gray-400)}
+.agent-route-outcome{color:var(--gray-500)}
+.agent-route-step[data-outcome=passed] .agent-route-outcome{color:var(--green-700)}
+.agent-route-step[data-outcome=failed] .agent-route-outcome{color:var(--red-700)}
+.agent-route-step time{color:var(--gray-500);font-variant-numeric:tabular-nums;padding-left:9px}
+.agent-route-more{color:var(--gray-500);padding-top:4px}
+@media (max-width:560px){.agent-route-lane{grid-template-columns:minmax(0,1fr)}}
 /* Opt-in, tab-only API Key memory. */
 .key-memory{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px;margin-top:8px}
 .key-memory-option,.checkbox-option{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:var(--text-sm);color:var(--gray-700);cursor:pointer}

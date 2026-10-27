@@ -346,6 +346,10 @@ try {
   mark('live worker snapshots update candidate Lean code without implying acceptance or changing the frozen original source');
   for (let index = 0; index < 30; index++) control.progress('worker_activity', `Research step ${index + 1}: inspect the current candidate`);
   await page.waitForFunction(() => (document.querySelectorAll('#conversation .timeline-event').length >= 30));
+  // The thread folds older steps; reading earlier activity starts by expanding them.
+  assert.equal(await page.locator('#conversation .timeline-event:visible').count(), 3, 'the thread shows only the newest steps');
+  await page.locator('#conversation [data-timeline-fold]').click();
+  assert.equal(await page.locator('#conversation [data-timeline-fold]').getAttribute('aria-expanded'), 'true');
   const conversation = page.locator('#conversation-scroll');
   assert.equal(await conversation.evaluate(scroll => scroll.scrollHeight > scroll.clientHeight + 240), true);
   await conversation.evaluate(scroll => { scroll.scrollTop = 120; });

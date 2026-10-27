@@ -102,7 +102,6 @@ export const common: Record<string, string> = {
   "基于此题新建研究": "New research from this problem",
   "证明任务": "Proof tasks",
   "实际工作中": "Actually working",
-  "最终验收 S3": "Final acceptance S3",
   "以完整报告独立判断": "Judged independently from the full report",
   "研究任务已完成 {0} 项": "{0} research tasks completed",
   "实时运行进度": "Live run progress",

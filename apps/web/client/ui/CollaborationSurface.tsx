@@ -17,6 +17,7 @@ export function CollaborationSurface(props: { runId: string; taskView: TaskView;
         <div class="collab-detail-toggle" role="group" aria-label={t('协作信息详略')}><button type="button" data-collab-detail="simple">{t('简洁')}</button><button type="button" data-collab-detail="full">{t('完整')}</button></div>
         <button type="button" class="button" data-collab-refresh>{t('刷新观察')}</button><button type="button" class="button" data-collab-plan disabled>{t('编辑计划')}</button><button type="button" class="button" data-collab-archive disabled>{t('归档知识')}</button></div></div>
     <div data-collab-navigation></div><div data-collab-summary></div><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
+    <section class="collab-agent-route"><div class="collab-section-heading"><h3>{t('Agent 路线图')}</h3></div><div data-agent-route></div></section>
     <section class="collab-now"><div class="collab-section-heading"><h3>{t('现在在做什么')}</h3></div><div data-collab-now></div></section>
     <div data-collab-progress></div>
     <div class="collab-layout">
