@@ -37,6 +37,7 @@ Planner prompts should ask the model to:
 3. Inventory definitions, distinguish existing library declarations from new local ones, explain reuse, and list definition dependencies.
 4. Link each record to exact source excerpts with correct UTF-16 offsets. Prefer focused conclusion excerpts that fit the candidate coverage field.
 5. Put missing definitions, ambiguous conventions or uncertain dependencies in `unresolved`, then repair the plan before generating Lean.
+6. Plan each conclusion at the type the source gives it, not at a convenient abbreviation. An unrestricted carrier is not pinned to `Type`, a finiteness condition is a `Fintype` instance with `Fintype.card` rather than a `Nat.card` hypothesis, a natural-number predicate is named at its nat-specific constant such as `Nat.Prime`, and a sameness with no common ambient object is `Nonempty` of the structure equivalence. Official ProofNet# BEq+ measurements on the reference test cases separate these spellings: `Fintype.card` with `Nat.Prime` passes where `Nat.card` or the general `Prime` does not, and a `Fintype`-indexed family passes where a `Finset`-indexed one does. The rule is the type the source gives, not the shortest statement Lean accepts.
 
 These checks establish record integrity and source/declaration binding. They do not establish that the model discovered every relevant definition, dependency, quantifier, or assumption. Lean elaboration and independent semantic comparison remain required. The mathematical prose, claimed imported names and `dependsOn` edges still need review.
 

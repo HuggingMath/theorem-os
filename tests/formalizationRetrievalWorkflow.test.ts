@@ -198,7 +198,9 @@ describe('frozen plan retrieval in formalization generation', () => {
     const generated = agent.seen.find(item => item.role === 'generate')!;
     expect(generated.input).not.toHaveProperty('retrieval');
     // Frozen from the previous kernel-context replay, before retrieval integration.
-    expect(mathDigest(generated.config.instructions)).toBe('07254466c8314ec42eddbc5f896763f31d6f34017d1670cb7b79268878876994');
+    // Re-pinned when generation learned to state conclusions at the source's own type
+    // (Type* carriers, Fintype/first-class finite families, Nat.Prime).
+    expect(mathDigest(generated.config.instructions)).toBe('fa099bdc3f8921cce69e1c83510d09be876ef9f2d9b24f0278fffe01a48c27cc');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
     expect(evidence.generation.input).not.toHaveProperty('retrieval');
     expect(readFormalizationRequest(f.directory)).toEqual(f.request);

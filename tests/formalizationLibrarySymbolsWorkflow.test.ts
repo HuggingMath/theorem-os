@@ -317,7 +317,7 @@ describe('Lean exact-name metadata in formalization generation', () => {
       expect(generated.input.retrieval).not.toHaveProperty('librarySymbolQueries');
     } else {
       expect(f.request).not.toHaveProperty('retrieval'); expect(generated.input).not.toHaveProperty('retrieval');
-      expect(mathDigest(generated.config.instructions)).toBe('07254466c8314ec42eddbc5f896763f31d6f34017d1670cb7b79268878876994');
+      expect(mathDigest(generated.config.instructions)).toBe('fa099bdc3f8921cce69e1c83510d09be876ef9f2d9b24f0278fffe01a48c27cc');
     }
   });
 });

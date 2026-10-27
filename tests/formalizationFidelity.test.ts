@@ -139,5 +139,10 @@ describe('task-preserving fidelity linkage', () => {
     expect(FIDELITY_REVIEW_INSTRUCTIONS).toContain('A stronger local theorem');
     expect(FIDELITY_REVIEW_INSTRUCTIONS).toContain('additional necessary condition');
     expect(FIDELITY_REVIEW_INSTRUCTIONS).toContain('reviewer-authored');
+    // An environment-decidable class-strength question must be reported, not
+    // left as unknown round after round: the source's own operations force the class.
+    expect(FIDELITY_REVIEW_INSTRUCTIONS).toContain('the environment forces the additional structure');
+    expect(FIDELITY_REVIEW_INSTRUCTIONS).toContain('reserve unknown for questions that inspection of the pinned environment cannot decide');
+    expect(FIDELITY_REVIEW_INSTRUCTIONS).toContain('do not adopt a strength because it makes the source claim true');
   });
 });

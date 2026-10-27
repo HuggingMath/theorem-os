@@ -10,6 +10,16 @@ dependencies. The host checks target coverage, exact source quotations and the
 binder/dependency lists against its Lean observation. The source interpretation
 and mathematical explanations remain model judgments.
 
+A class-strength question is an environment question, not an open reading. If the
+source's own operations have no instance at the strength the source words give, the
+pinned environment forces the additional structure, and the reviewer reports the
+failing instance synthesis together with the reading it selects and the alternative
+it excludes. The prohibition on adopting a strength because it makes the claim true
+still applies outside that case. Leaving such a question as `unknown` costs a full
+review round without resolving it; the reference ProofNet# run spent three unknown
+rounds on whether a ring is commutative while `Ring` could not state the source's
+own `I * J` at all.
+
 An approval also supplies a complete `sourceContract`: the reviewer's Lean
 restatement of the original, with complete definitions, erased theorem proofs and
 a bijection covering every candidate and contract target. The reviewer has seen
