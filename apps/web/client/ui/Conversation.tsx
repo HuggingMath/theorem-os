@@ -21,7 +21,7 @@ export type ConversationProps = { run?: ConversationRun; templates: Conversation
 
 const steps = [
   { title: t('写下原题'), detail: t('Lean 文件里用 sorry 留出要证明的定理，或者从下面的示例题目开始。') },
-  { title: t('连接模型'), detail: t('在研究配置里选择服务商，填入自己的 API Key。Key 只在运行期间使用，不会保存。') },
+  { title: t('连接模型'), detail: t('在研究配置里选择服务商，填入自己的 API Key。Key 只用于调用服务商，默认不保存。') },
   { title: t('等待验收'), detail: t('Agent 拆分任务、写证明，最后由隔离的 Lean 环境检查完整原题。') },
 ];
 
@@ -37,7 +37,9 @@ function Welcome({ templates, sample, firstRun }: Omit<ConversationProps, 'run'>
       {templates.map(template => <button key={template.id} type="button" class="template-suggestion" data-chat-template={template.id}>
         <Icon name="file-code-2" /><span>{template.name}</span><span class="suggestion-environment">{template.environment}</span><Icon name="arrow-up-right" />
       </button>)}</div>
-    <button type="button" class="text-button welcome-glossary" data-chat-action="glossary"><Icon name="book-open" />{t('术语说明')}</button></div>;
+    <div class="welcome-help">
+      <a class="text-button" href="guide.html" target="_blank" rel="noopener" data-guide><Icon name="circle-help" />{t('使用说明')}</a>
+      <button type="button" class="text-button welcome-glossary" data-chat-action="glossary"><Icon name="book-open" />{t('术语说明')}</button></div></div>;
 }
 
 function Event({ event, active }: { event: ConversationEvent; active: boolean }) {

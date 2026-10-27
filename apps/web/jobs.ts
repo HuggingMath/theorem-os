@@ -28,9 +28,12 @@ export class WebJobs {
   readonly storage: WebStorage;
   readonly knowledge: WebKnowledgeService;
   private readonly onAccepted?: (owner: string) => void;
+  private readonly onFinished?: (owner: string, run: WebRun) => void;
   constructor(private readonly runner: WebRunner, private readonly config: Pick<WebConfig, 'concurrency' | 'queueLimit'>,
-    options: { storage?: WebStorage; knowledge?: WebKnowledgeService; onAccepted?: (owner: string) => void } = {}) {
+    options: { storage?: WebStorage; knowledge?: WebKnowledgeService; onAccepted?: (owner: string) => void;
+      onFinished?: (owner: string, run: WebRun) => void } = {}) {
     this.onAccepted = options.onAccepted;
+    this.onFinished = options.onFinished;
     this.storage = options.storage ?? new WebStorage();
     this.knowledge = options.knowledge ?? new WebKnowledgeService(this.storage);
     for (const { owner, run } of this.storage.loadRuns()) {
@@ -315,6 +318,7 @@ export class WebJobs {
       job.input.apiKey = '';
       job.run.finishedAt ??= new Date().toISOString();
       this.persist(job.run);
+      try { this.onFinished?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }
     }
   }
 }

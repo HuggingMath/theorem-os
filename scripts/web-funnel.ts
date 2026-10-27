@@ -2,8 +2,11 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { allowlistFile, WebAuth, type WebAccount } from '../apps/web/auth';
+import { allowlistFile, WebAuth } from '../apps/web/auth';
+import { webFunnel, type WebFunnel } from '../apps/web/funnel';
 import { WebStorage } from '../apps/web/storage';
+
+export { webFunnel, type WebFunnel, type WebFunnelStep } from '../apps/web/funnel';
 
 /**
  * Closed-beta funnel: applications → allowlisted → first login → first submitted run → first accepted run.
@@ -15,35 +18,6 @@ import { WebStorage } from '../apps/web/storage';
  * --applications adds requests that arrived by email; --github adds early-access issues on the public site repository
  * (read with the gh CLI). Without either, the funnel starts at the allowlist.
  */
-export type WebFunnelStep = { step: string; count: number; ofPrevious?: number };
-export type WebFunnel = { steps: WebFunnelStep[]; medianHours: { loginToRun?: number; runToAccepted?: number } };
-
-const hours = (from: string, to: string) => (Date.parse(to) - Date.parse(from)) / 3_600_000;
-const median = (values: number[]) => {
-  if (!values.length) return undefined;
-  const sorted = [...values].sort((a, b) => a - b), middle = sorted.length >> 1;
-  const value = sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-  return Math.round(value * 10) / 10;
-};
-
-export function webFunnel(accounts: WebAccount[], allowlist: Set<string>, applications?: number): WebFunnel {
-  // Accounts whose address left the allowlist still count: they were admitted and logged in.
-  const admitted = new Set([...allowlist, ...accounts.map(account => account.email)]);
-  const ran = accounts.filter(account => account.firstRunAt), accepted = ran.filter(account => account.firstAcceptedAt);
-  const counts: [string, number][] = [
-    ...(applications === undefined ? [] : [['applied', applications] as [string, number]]),
-    ['allowlisted', admitted.size], ['logged_in', accounts.length], ['submitted', ran.length], ['accepted', accepted.length],
-  ];
-  const steps = counts.map(([step, count], index) => {
-    const previous = index ? counts[index - 1]![1] : undefined;
-    return { step, count, ...(previous ? { ofPrevious: Math.round(count / previous * 1000) / 10 } : {}) };
-  });
-  return { steps, medianHours: {
-    loginToRun: median(ran.map(account => hours(account.createdAt, account.firstRunAt!))),
-    runToAccepted: median(accepted.map(account => hours(account.firstRunAt!, account.firstAcceptedAt!))),
-  } };
-}
-
 const labels: Record<string, string> = { applied: '申请内测', allowlisted: '加入白名单', logged_in: '首次登录', submitted: '首次提交运行', accepted: '首次通过验收' };
 export function formatWebFunnel(funnel: WebFunnel): string {
   const lines = funnel.steps.map(step => `${labels[step.step]!.padEnd(8, '　')} ${String(step.count).padStart(5)}${step.ofPrevious === undefined ? '' : `  ${step.ofPrevious}%`}`);
@@ -68,7 +42,8 @@ if (import.meta.main) {
   const root = path.resolve(dataRoot);
   // WebStorage creates a missing root; a mistyped path would otherwise report an empty beta.
   if (!fs.existsSync(path.join(root, 'accounts')) && !fs.existsSync(allowlistFile(root)!)) throw new Error(`No workbench accounts or allowlist under ${root}.`);
-  const auth = new WebAuth({ smtpUrl: 'log:', from: '', allowlist: (process.env.THEOREMOS_WEB_ALLOWLIST ?? '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean),
+  const list = (value?: string) => (value ?? '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean);
+  const auth = new WebAuth({ smtpUrl: 'log:', from: '', allowlist: list(process.env.THEOREMOS_WEB_ALLOWLIST), admins: list(process.env.THEOREMOS_WEB_ADMINS),
     allowlistFile: process.env.THEOREMOS_WEB_ALLOWLIST_FILE ?? allowlistFile(root) }, new WebStorage(root), async () => undefined);
   const funnel = webFunnel(auth.listAccounts(), auth.allowlist(), applications);
   console.log(args.includes('--json') ? JSON.stringify(funnel, null, 2) : formatWebFunnel(funnel));

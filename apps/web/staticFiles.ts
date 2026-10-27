@@ -42,7 +42,8 @@ export function sendStatic(request: http.IncomingMessage, response: http.ServerR
   const encoding = item.br ? acceptedEncoding(request.headers['accept-encoding']) : undefined;
   // Each encoding is its own representation, so it gets its own validator.
   const etag = encoding ? `${item.etag.slice(0, -1)}-${encoding}"` : item.etag;
-  const headers: http.OutgoingHttpHeaders = { 'Content-Type': contentType, ETag: etag, 'Cache-Control': 'no-cache' };
+  // no-transform keeps proxies from rewriting pages; Cloudflare would otherwise inject an analytics script the CSP blocks.
+  const headers: http.OutgoingHttpHeaders = { 'Content-Type': contentType, ETag: etag, 'Cache-Control': 'no-cache, no-transform' };
   if (item.br) headers.Vary = 'Accept-Encoding';
   // Proxies that re-encode weaken the tag; the bytes it names are still the same file.
   const matches = String(request.headers['if-none-match'] ?? '').split(',').some(tag => tag.trim().replace(/^W\//u, '') === etag);

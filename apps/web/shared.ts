@@ -120,7 +120,9 @@ export type WebSession = {
   csrfToken: string;
   /** `email` means the workbench needs a login; `account` is set once this session has one. */
   auth: 'none' | 'email';
-  account?: { email: string };
+  /** `admin` accounts may manage the allowlist; they see no other account's runs. */
+  /** `completionEmail: false` means the account turned off the mail sent when one of its runs ends; absent means on. */
+  account?: { email: string; admin?: boolean; completionEmail?: boolean };
   providers: WebProvider[];
   environments: WebEnvironmentOption[];
   templates: WebTemplate[];
@@ -164,3 +166,12 @@ export type WorkerMessage =
   | { type: 'error'; message: string; failure?: WebFailure };
 /** The id of the read-only sample run (apps/web/sample.ts); fixed so links and saved positions never collide with real runs. */
 export const webSampleRunId = '00000000-0000-4000-8000-00000000a001';
+
+/** The admin dialog: who may sign in, which accounts exist with their beta milestones, and the funnel totals. */
+export type WebAdminOverview = {
+  allowlist: { email: string; source: 'admin' | 'config' | 'file'; account: boolean }[];
+  accounts: { email: string; admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean }[];
+  funnel: { step: string; count: number; ofPrevious?: number }[];
+  /** False when the service has no allowlist file, so only the deployment configuration can change who signs in. */
+  editable: boolean;
+};

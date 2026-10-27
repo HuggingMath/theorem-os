@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { admin } from '../apps/web/i18n/admin';
 import { app } from '../apps/web/i18n/app';
 import { collaboration } from '../apps/web/i18n/collaboration';
 import { common } from '../apps/web/i18n/common';
 import { editor } from '../apps/web/i18n/editor';
 import { en } from '../apps/web/i18n/en';
+import { guide } from '../apps/web/i18n/guide';
 import { modules } from '../apps/web/i18n/modules';
 import { pages } from '../apps/web/i18n/pages';
 import { server } from '../apps/web/i18n/server';
@@ -11,7 +13,7 @@ import { localizeText, t } from '../apps/web/i18n';
 import { han, requiredKeys } from '../scripts/web-i18n';
 
 describe('workbench English dictionary', () => {
-  const parts = { server, pages, common, app, collaboration, modules, editor };
+  const parts = { server, pages, common, app, collaboration, modules, editor, guide, admin };
   const { keys, stray } = requiredKeys();
   const placeholders = (text: string) => [...text.matchAll(/\{(\d+)\}/gu)].map(match => match[1]).sort().join(',');
 

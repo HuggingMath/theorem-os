@@ -1,7 +1,7 @@
 import { locale } from '../i18n';
 
 /** The public product site: home page, early-access request, privacy page and feedback form. */
-export const siteUrl = 'https://likc1606.github.io/theorem-os-site/';
+export const siteUrl = 'https://theoremos.top/';
 const sitePage = (page: string) => new URL(locale === 'en' ? `en/${page}` : page, siteUrl).href;
 export const siteHome = sitePage('');
 

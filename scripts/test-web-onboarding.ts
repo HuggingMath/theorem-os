@@ -98,7 +98,7 @@ try {
   assert.equal(await page.locator('#term-plan').getAttribute('data-current'), 'true');
   assert.match(await page.locator('#glossary-dialog').innerText(), /独立验收[\s\S]*S3/u);
   const glossaryFeedback = new URL((await page.locator('#glossary-dialog a[data-feedback]').getAttribute('href'))!);
-  assert.equal(glossaryFeedback.pathname, '/theorem-os-site/feedback.html');
+  assert.equal(glossaryFeedback.pathname, '/feedback.html');
   assert.equal(glossaryFeedback.searchParams.get('area'), 'workbench');
   await settled(page);
   assert.ok(await page.locator('#close-glossary').isVisible() && (await page.locator('#close-glossary').boundingBox())!.y >= 0, 'Glossary scrolled its close button away');
@@ -151,10 +151,10 @@ try {
   // The palette's feedback command opens the prefilled site form in a new tab.
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
   await page.locator('#command-palette[open] input').fill('反馈');
-  await context.route('https://likc1606.github.io/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>feedback</title>' }));
+  await context.route('https://theoremos.top/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>feedback</title>' }));
   const [feedbackTab] = await Promise.all([context.waitForEvent('page'), page.locator('#palette-send-feedback').click()]);
   const opened = new URL(feedbackTab.url());
-  assert.equal(opened.pathname, '/theorem-os-site/feedback.html');
+  assert.equal(opened.pathname, '/feedback.html');
   assert.match(opened.searchParams.get('environment')!, /^TheoremOS workbench · .+ · zh$/u);
   await feedbackTab.close();
   mark('the top bar opens the glossary, and the palette opens the sample and the feedback form');

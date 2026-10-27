@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN" class="share-root">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ee">
+  <meta name="referrer" content="same-origin">
+  <title>使用说明 · TheoremOS</title>
+  <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="share-page guide-page">
+  <a class="skip-link" href="#main">跳到正文</a>
+  <div class="share-shell">
+    <header class="share-top">
+      <a class="brand" href="https://theoremos.top/" data-site="" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
+      <div class="share-top-actions"><button type="button" id="locale-switch" class="text-button locale-switch" hidden></button><a class="button" href="./">打开工作台</a></div>
+    </header>
+    <main id="main" class="guide-content" tabindex="-1">
+      <header class="share-card guide-heading">
+        <h1>使用说明</h1>
+        <p>TheoremOS 帮你证明 Lean 定理：你提交一个用 sorry 留出待证定理的 Lean 文件，用自己的模型 API 运行，Agent 分工写证明，最后由隔离的 Lean 环境检查完整原题。只有这一步「独立验收」通过，才算证明完成。</p>
+        <nav aria-label="本页目录"><ol class="guide-toc">
+          <li><a href="#start">五步开始</a></li>
+          <li><a href="#watch">运行时看什么</a></li>
+          <li><a href="#results">看懂结果</a></li>
+          <li><a href="#after">运行结束以后</a></li>
+          <li><a href="#keys">快捷键</a></li>
+          <li><a href="#data">数据与费用</a></li>
+        </ol></nav>
+      </header>
+
+      <section class="share-card" id="start" aria-labelledby="start-heading">
+        <h2 id="start-heading">五步开始</h2>
+        <ol class="guide-steps">
+          <li><strong>先看示例</strong><p>首页的「先看一次完整运行」是一次录制好的运行，不需要 API Key。可以逐个标签页浏览，了解一次研究从拆分任务到验收的全过程。</p></li>
+          <li><strong>写下原题</strong><p>点输入框上方的 Submission.lean 打开源码编辑器，或用回形针附加 .lean 文件，也可以直接选一道示例题目。要证明的定理用 sorry 留空；定理的声明在研究过程中不会被改动。</p></li>
+          <li><strong>确认原题能提交</strong><p>修改源码后，工作台会自动用 Lean 检查一遍原题，输入框上方显示结果。语法错误或缺少待证定理时会标出位置，改好之后才能提交。</p></li>
+          <li><strong>连接模型</strong><p>点滑杆图标打开研究配置，在「模型连接」里选服务商、填模型名和 API Key。默认不保存 Key；勾选「在此标签页记住」后，关闭标签页即清除。</p></li>
+          <li><strong>设定预算并发送</strong><p>「执行配置」里的轮次上限、解题预算和用量上限，到达任一项运行就会停止。不确定时保持默认，在输入框写下研究任务后点发送。</p></li>
+        </ol>
+      </section>
+
+      <section class="share-card" id="watch" aria-labelledby="watch-heading">
+        <h2 id="watch-heading">运行时看什么</h2>
+        <p class="guide-lead">左侧对话显示进展时间线，右侧工作区有六个标签页。运行中随时可以点输入框右下角的停止按钮取消。</p>
+        <dl class="guide-terms">
+          <div><dt>研究协作</dt><dd>谁在做哪个子任务、在等什么。默认是简洁视图；点「完整」可以看任务图、合同和阻塞，并给 Lead、任务或 Agent 写指导。</dd></div>
+          <div><dt>Lean 源码</dt><dd>原始题目和当前证明，可以切换查看与原题的差异。</dd></div>
+          <div><dt>模块</dt><dd>本次运行使用的搜索策略和上下文策略。</dd></div>
+          <div><dt>概览</dt><dd>阶段进度、轮次、耗时和 Token 用量。</dd></div>
+          <div><dt>报告</dt><dd>结论、每个目标定理的检查记录、卡住的地方，以及证明结构。</dd></div>
+          <div><dt>活动</dt><dd>按时间排列的完整事件记录。</dd></div>
+        </dl>
+        <p class="guide-note">运行时间较长时，可以开启「结束时通知我」，研究结束时浏览器会提醒你。手机上用顶部的「对话 / 工作区」切换两栏。</p>
+      </section>
+      <section class="share-card" id="results" aria-labelledby="results-heading">
+        <h2 id="results-heading">看懂结果</h2>
+        <dl class="guide-terms guide-status">
+          <div><dt><span class="badge passed">完整原题通过</span></dt><dd>所有目标定理都通过了独立验收。这是唯一算数的结论。</dd></div>
+          <div><dt><span class="badge failed">验收未通过</span></dt><dd>Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。</dd></div>
+          <div><dt><span class="badge warning">运行结束</span></dt><dd>到达轮次、时间或用量上限时还没有完成证明。已检查的成果保留在报告里，可以提高预算后重新运行。</dd></div>
+          <div><dt><span class="badge failed">运行失败</span></dt><dd>Key 无效、服务商限流或环境故障等原因让运行无法继续。对话里会给出对应的处理按钮，例如「更换 API Key」或「减少 Agent 数量」。</dd></div>
+          <div><dt><span class="badge">已取消</span></dt><dd>你主动停止了这次运行。</dd></div>
+        </dl>
+        <p class="guide-note">「候选证明」和「有条件结果」都不算完成：前者还没经过验收，后者依赖一条尚未证明的引理。</p>
+      </section>
+
+      <section class="share-card" id="after" aria-labelledby="after-heading">
+        <h2 id="after-heading">运行结束以后</h2>
+        <dl class="guide-terms">
+          <div><dt>本地复核</dt><dd>在「报告」标签下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。</dd></div>
+          <div><dt>分享</dt><dd>验收通过的运行可以创建只读分享链接。链接不包含 API Key、服务地址、运行日志和 Agent 对话，可以随时停止分享。</dd></div>
+          <div><dt>继续研究</dt><dd>用运行详情右上角的「复用任务配置」把题目和配置填进新草稿，调整后再提交。</dd></div>
+          <div><dt>保存与搬运</dt><dd>对话区右上角可以导出任务草稿，或导入草稿和运行档案 JSON。导入后需要重新填写 API Key。</dd></div>
+          <div><dt>研究记录</dt><dd>左上角打开全部运行，可以搜索、按状态筛选，也可以删除不需要的记录。</dd></div>
+        </dl>
+      </section>
+
+      <section class="share-card" id="keys" aria-labelledby="keys-heading">
+        <h2 id="keys-heading">快捷键</h2>
+        <p class="guide-lead">Mac 上用 ⌘ 代替 Ctrl。编辑器快捷键在源码编辑器里使用。</p>
+        <dl class="guide-terms guide-keys">
+          <div><dt><kbd>Ctrl K</kbd></dt><dd>打开命令面板：跳转到运行或标签页，切换语言和外观。</dd></div>
+          <div><dt><kbd>Ctrl F</kbd></dt><dd>在源码编辑器里查找；Enter / Shift+Enter 切换下一个 / 上一个匹配。</dd></div>
+          <div><dt><kbd>Ctrl H</kbd></dt><dd>在源码编辑器里替换。</dd></div>
+          <div><dt><kbd>Ctrl G</kbd></dt><dd>跳转到指定行号。</dd></div>
+          <div><dt><kbd>Ctrl [</kbd> <kbd>Ctrl ]</kbd></dt><dd>减少 / 增加缩进。</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>关闭当前弹窗或查找栏。</dd></div>
+        </dl>
+      </section>
+
+      <section class="share-card" id="data" aria-labelledby="data-heading">
+        <h2 id="data-heading">数据与费用</h2>
+        <dl class="guide-terms">
+          <div><dt>API Key</dt><dd>服务器只用它调用你选择的服务商，费用计入你自己的 API 账户。Key 不会写进草稿、运行档案或分享链接。</dd></div>
+          <div><dt>运行记录</dt><dd>登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。</dd></div>
+        </dl>
+        <p class="guide-note">工作台里带 ? 的词都可以点开查看解释，顶栏的问号按钮打开完整的术语说明。还有不清楚的地方？<a href="https://theoremos.top/feedback.html" data-feedback target="_blank" rel="noopener noreferrer">告诉我们</a></p>
+      </section>
+    </main>
+  </div>
+  <noscript><div class="no-script">需要启用 JavaScript 才能切换语言。</div></noscript>
+  <script src="guide.js" defer></script>
+</body>
+</html>

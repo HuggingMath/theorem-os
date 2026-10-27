@@ -20,6 +20,8 @@ services:
       THEOREMOS_WEB_SMTP_URL: ${THEOREMOS_WEB_SMTP_URL:-}
       THEOREMOS_WEB_MAIL_FROM: ${THEOREMOS_WEB_MAIL_FROM:-}
       THEOREMOS_WEB_ALLOWLIST: ${THEOREMOS_WEB_ALLOWLIST:-}
+      THEOREMOS_WEB_ADMINS: ${THEOREMOS_WEB_ADMINS:-}
+      THEOREMOS_WEB_CLIENT_IP_HEADER: ${THEOREMOS_WEB_CLIENT_IP_HEADER:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - research-data:/var/lib/theorem-os

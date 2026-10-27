@@ -35,12 +35,18 @@ try {
   await page.waitForURL(/\/login\.html$/u);
   await page.locator('#send-code:enabled').waitFor();
   assert.ok(await page.locator('#captcha-image').evaluate((image: HTMLImageElement) => image.decode().then(() => image.naturalWidth > 0)));
-  const footer = await page.locator('.login-footer a').evaluateAll(links => links.map(link => (link as HTMLAnchorElement).href));
+  // The usage guide is a page of this service and needs no account; the other footer links go to the site.
+  const guide = await page.locator('.login-footer a[data-guide]').evaluate(link => (link as HTMLAnchorElement).href);
+  assert.equal(guide, `${origin}/guide.html`);
+  const guidePage = await page.request.get(guide);
+  assert.equal(guidePage.status(), 200);
+  assert.match(await guidePage.text(), /<h1>使用说明<\/h1>/u);
+  const footer = await page.locator('.login-footer a:not([data-guide])').evaluateAll(links => links.map(link => (link as HTMLAnchorElement).href));
   assert.equal(footer.length, 3);
-  assert.ok(footer.every(href => href.startsWith('https://likc1606.github.io/theorem-os-site/')), `Login footer links leave the site: ${footer}`);
+  assert.ok(footer.every(href => href.startsWith('https://theoremos.top/')), `Login footer links leave the site: ${footer}`);
   assert.ok(footer.some(href => href.includes('feedback.html?') && href.includes('area=workbench')), 'Login footer lacks the prefilled feedback link');
   assert.deepEqual(await audit(page), [], 'Login page accessibility');
-  mark('the workbench sends a visitor without an account to the login page, which shows a captcha image and site links and passes the accessibility audit');
+  mark('the workbench sends a visitor without an account to the login page, which shows a captcha image, the usage guide and site links and passes the accessibility audit');
 
   await page.fill('#login-email', 'mallory@example.org');
   await page.fill('#login-captcha', '24680');
@@ -84,6 +90,42 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   mark('the signed-in top bar keeps the account button on 375 and 320 pixel screens');
 
+  // The runner here ends every run without a result, so each one ends with an error and mails its link.
+  const csrf = (await (await page.request.get(`${origin}/api/session`)).json()).csrfToken as string;
+  const submit = async (task: string) => (await (await page.request.post(`${origin}/api/runs`, { headers: { 'X-CSRF-Token': csrf },
+    data: { providerId: 'openai', apiKey: 'sk-login-test-never-publish', model: 'gpt-6.1-sol', effort: 'xhigh', source: 'theorem example : True := by sorry',
+      task, maxTurns: 2, maxRunSeconds: 30, workers: 1, coordination: 'cooperative' } })).json()).run.id as string;
+  const older = await submit('Older run'), newer = await submit('Newer run');
+  for (let attempt = 0; attempt < 100 && mail.filter(item => /\?run=/u.test(item.text)).length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+  const link = mail.find(item => item.text.includes(`?run=${older}`))?.text.match(/https?:\/\/\S+\?run=\S+/u)?.[0];
+  assert.ok(link && mail.some(item => item.text.includes(`?run=${newer}`)), 'Each finished run mails its link');
+  assert.ok(mail.every(item => !item.text.includes('sk-login-test')), 'A completion mail carries the API key');
+  const cookies = await page.context().cookies();
+  await page.context().clearCookies();
+  await page.goto(link);
+  await page.waitForURL(/\/login\.html$/u);
+  await page.context().addCookies(cookies);
+  await page.goto(`${origin}/login.html`);
+  await page.waitForURL(`${origin}/`);
+  await page.locator(`#run-list [data-run-id="${older}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+  assert.equal(new URL(page.url()).search, '', 'The run link stays in the address bar');
+  mark('a completion mail links to its run, and the link still opens that run after the login page');
+
+  await page.click('#open-account');
+  await page.locator('#account-dialog[open]').waitFor();
+  assert.equal(await page.locator('#completion-email').isChecked(), true, 'Completion mail starts off');
+  await page.locator('#completion-email').uncheck();
+  await page.locator('#toast').filter({ hasText: '已关闭结束邮件' }).waitFor();
+  assert.equal((await (await page.request.get(`${origin}/api/session`)).json()).account.completionEmail, false);
+  await page.reload();
+  await page.click('#open-account');
+  await page.locator('#account-dialog[open]').waitFor();
+  assert.equal(await page.locator('#completion-email').isChecked(), false, 'The completion mail choice is lost on reload');
+  await page.locator('#completion-email').check();
+  await page.locator('#toast').filter({ hasText: '研究结束时会发邮件到登录邮箱' }).waitFor();
+  await page.keyboard.press('Escape');
+  mark('the account dialog turns the completion mail off and on, and the choice is kept by the server');
+
   await page.click('#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   await settled(page);
@@ -108,7 +150,7 @@ try {
   }
   mark('the login page fits 375 and 320 pixel screens');
   assert.deepEqual(errors, []);
-  console.log('Login checks passed: redirect, captcha, allowlist refusal, code entry and errors, account menu, logout and narrow layouts.');
+  console.log('Login checks passed: redirect, captcha, allowlist refusal, code entry and errors, run links from completion mail, completion mail setting, account menu, logout and narrow layouts.');
 } finally {
   await browser?.close();
   await service.close();

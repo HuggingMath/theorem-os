@@ -7,11 +7,11 @@ import { build } from 'esbuild';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web');
 fs.mkdirSync(output, { recursive: true });
-for (const entry of ['theme', 'app', 'login', 'share'])
+for (const entry of ['theme', 'app', 'login', 'share', 'guide'])
   await build({ entryPoints: [path.join(root, `apps/web/client/${entry}.ts`)], outfile: path.join(output, `${entry}.js`),
     bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
     jsx: 'automatic', jsxImportSource: 'preact' });
-for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['app.css', 'app.css']])
+for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['app.css', 'app.css']])
   fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
 const fonts = ['InterVariable-latin.woff2', 'Inter-LICENSE.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',

@@ -42,7 +42,7 @@ describe('static workbench files', () => {
     const br = await get('app.js', { 'Accept-Encoding': 'br, gzip' });
     expect(br.status).toBe(200);
     expect(br.headers['content-encoding']).toBe('br'); expect(br.headers.vary).toBe('Accept-Encoding');
-    expect(br.headers['cache-control']).toBe('no-cache');
+    expect(br.headers['cache-control']).toBe('no-cache, no-transform');
     expect(zlib.brotliDecompressSync(br.body).toString()).toBe(script);
     expect(Number(br.headers['content-length'])).toBe(br.body.length);
     const gzip = await get('app.js', { 'Accept-Encoding': 'gzip' });

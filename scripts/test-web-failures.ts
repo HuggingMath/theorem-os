@@ -120,7 +120,7 @@ try {
   assert.equal(await page.locator('[data-chat-action="reuse"]').count(), 0, 'Retry replaces the duplicate reuse link');
   // A failure on our side links to the prefilled public feedback form, which never carries the run or the task.
   const feedback = new URL((await page.locator('#conversation [data-feedback-link]').getAttribute('href'))!);
-  assert.equal(`${feedback.origin}${feedback.pathname}`, 'https://likc1606.github.io/theorem-os-site/feedback.html');
+  assert.equal(`${feedback.origin}${feedback.pathname}`, 'https://theoremos.top/feedback.html');
   assert.equal(feedback.searchParams.get('area'), 'workbench');
   assert.equal(feedback.searchParams.get('kind'), 'bug');
   assert.match(feedback.searchParams.get('environment')!, /^TheoremOS workbench · .+ · failure: environment$/u);

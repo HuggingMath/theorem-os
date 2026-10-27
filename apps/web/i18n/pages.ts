@@ -1,4 +1,4 @@
-/** Static markup of index.html, login.html and share.html, translated in place by localizeDocument. */
+/** Static markup of index.html, login.html, share.html and guide.html, translated in place by localizeDocument. */
 export const pages: Record<string, string> = {
   "TheoremOS · 研究工作台": "TheoremOS · Research workbench",
   "跳到工作区": "Skip to workspace",
@@ -229,7 +229,7 @@ export const pages: Record<string, string> = {
   "登录": "Sign in",
   "换一个邮箱": "Use another email",
   "重新发送": "Resend",
-  "还没有内测资格？": "No beta access yet?",
+  "还没有内测资格？": "No beta access yet? ",
   "申请内测": "Apply for the beta",
   "隐私与条款": "Privacy and terms",
   "需要启用 JavaScript 才能登录。": "Signing in needs JavaScript.",

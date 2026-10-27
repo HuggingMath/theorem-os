@@ -88,7 +88,7 @@ export const common: Record<string, string> = {
   "写下原题": "Write the problem",
   "Lean 文件里用 sorry 留出要证明的定理，或者从下面的示例题目开始。": "Leave the theorems to prove as sorry in a Lean file, or start from one of the sample problems below.",
   "连接模型": "Connect a model",
-  "在研究配置里选择服务商，填入自己的 API Key。Key 只在运行期间使用，不会保存。": "Choose a provider in the research settings and enter your own API key. The key is only used during the run and is never stored.",
+  "在研究配置里选择服务商，填入自己的 API Key。Key 只用于调用服务商，默认不保存。": "Choose a provider in the research settings and enter your own API key. The key is only used to call the provider and is not kept unless you ask.",
   "等待验收": "Wait for acceptance",
   "Agent 拆分任务、写证明，最后由隔离的 Lean 环境检查完整原题。": "Agents split the work and write proofs; an isolated Lean environment then checks the complete original problem.",
   "先看一次完整运行": "See a complete run first",

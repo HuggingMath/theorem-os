@@ -71,6 +71,8 @@
     "test:web-key-memory": "bun scripts/test-web-key-memory.ts",
     "test:web-load": "bun scripts/test-web-load.ts",
     "test:web-theme": "bun scripts/test-web-theme.ts",
+    "test:web-guide": "bun scripts/test-web-guide.ts",
+    "test:web-admin": "bun scripts/test-web-admin.ts",
     "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

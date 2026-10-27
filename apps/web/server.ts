@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import type { WebEnvironment, WebRunInput, WebSession } from './shared';
+import type { WebAdminOverview, WebEnvironment, WebRun, WebRunInput, WebSession } from './shared';
 import { researchModulePlanSchema } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
@@ -19,6 +19,8 @@ import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } 
 import { PrecheckSuperseded, WebPrechecker } from './precheck';
 import { proofOutline, verificationKit } from './verificationKit';
 import { sendStatic } from './staticFiles';
+import { webFunnel } from './funnel';
+import { completionMail, mailsCompletion } from './completionMail';
 
 const inputSchema = z.object({
   providerId: z.string().min(1).max(40), apiKey: z.string().min(8).max(4096).regex(/^[\x21-\x7e]+$/),
@@ -70,6 +72,19 @@ function readJson(request: IncomingMessage): Promise<unknown> {
   });
 }
 
+/** Addresses, accounts and milestones for the admin dialog; never a run, a key or anything an account wrote. */
+function adminOverview(auth: WebAuth): WebAdminOverview {
+  const accounts = auth.listAccounts(), allowed = auth.allowlist(), signedUp = new Set(accounts.map(account => account.email));
+  return {
+    allowlist: auth.allowlistEntries().map(entry => ({ ...entry, account: signedUp.has(entry.email) })),
+    accounts: accounts.map(({ email, createdAt, firstRunAt, firstAcceptedAt }) => ({ email, admin: auth.isAdmin(email), createdAt,
+      ...(firstRunAt ? { firstRunAt } : {}), ...(firstAcceptedAt ? { firstAcceptedAt } : {}), allowed: allowed.has(email) }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    funnel: webFunnel(accounts, allowed).steps,
+    editable: auth.allowlistWritable(),
+  };
+}
+
 type Session = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
 const objectBody = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
 export function createWebService(config: WebConfig, runner: WebRunner = new DockerWebRunner(config),
@@ -87,7 +102,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const milestone = (owner: string, name: WebMilestone) => {
     if (auth && owner.startsWith('account:')) try { auth.markMilestone(owner.slice(8), name); } catch { /* A milestone never fails a run. */ }
   };
-  const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt') });
+  // The owner's mail goes out after the run is saved; a failed delivery is logged by run and never changes the run.
+  const tellOwner = (owner: string, run: WebRun) => {
+    if (!auth || !owner.startsWith('account:') || !mailsCompletion(run)) return;
+    const to = auth.completionRecipient(owner.slice(8));
+    if (to) auth.sendCompletion(to, completionMail(run, config.publicUrl)).catch(() => console.error(`[completion mail] run ${run.id}: delivery failed`));
+  };
+  const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt'), onFinished: tellOwner });
   const prechecker = runner.check ? new WebPrechecker(runner.check.bind(runner)) : undefined;
   const rates = new Map<string, { count: number; expiresAt: number }>();
   const runStreams = new Map<string, Set<() => void>>();
@@ -123,7 +144,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   };
   const maintenance = setInterval(prune, 60_000).unref();
   const server = http.createServer(async (request, response) => {
-    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('Cache-Control', 'no-store, no-transform');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Frame-Options', 'DENY');
@@ -139,7 +160,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       if (url.origin !== origin.origin) throw new HttpError(403, '访问地址无效。');
       if (url.pathname.startsWith('/api/')) {
         prune();
-        const ip = request.socket.remoteAddress || '';
+        // Behind a tunnel every request comes from the proxy, so the configured proxy header names the visitor.
+        const forwarded = config.clientIpHeader ? request.headers[config.clientIpHeader] : undefined;
+        const ip = (typeof forwarded === 'string' && forwarded.trim().slice(0, 64)) || request.socket.remoteAddress || '';
         let rate = rates.get(ip);
         if (!rate) {
           if (rates.size >= 2_000) throw new HttpError(429, '请求较多，请稍后重试。');
@@ -170,7 +193,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           session.touchedAt = Date.now();
           storage.saveSession(session);
           const body: WebSession = { csrfToken: session.csrf, auth: auth ? 'email' : 'none',
-            ...(session.account ? { account: { email: session.account.email } } : {}), providers: config.providers, environments: getWebEnvironments(),
+            ...(session.account ? { account: { email: session.account.email, ...(auth?.isAdmin(session.account.email) ? { admin: true } : {}),
+              ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers, environments: getWebEnvironments(),
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
             ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
           json(response, 200, body); return;
@@ -198,6 +222,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
             endSession(session.id); clearSessionCookie(response); json(response, 200, { ok: true }); return;
           }
+          if (url.pathname === '/api/auth/account' && request.method === 'PATCH') {
+            if (!session.account) throw new HttpError(401, '请先登录。');
+            const completionEmail = objectBody(await readJson(request)).completionEmail;
+            if (typeof completionEmail !== 'boolean') throw new HttpError(400, '设置格式不正确。');
+            auth.setCompletionEmail(session.account.email, completionEmail);
+            json(response, 200, { completionEmail }); return;
+          }
           if (url.pathname === '/api/auth/account' && request.method === 'DELETE') {
             const account = session.account;
             if (!account) throw new HttpError(401, '请先登录。');
@@ -208,6 +239,22 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             jobs.forget(owner); storage.deleteOwner(owner); auth.deleteAccount(account.email);
             for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
+          }
+          throw new HttpError(405, '请求方法不受支持。');
+        }
+        if (url.pathname.startsWith('/api/admin/')) {
+          // Checked on every request, so removing an address from THEOREMOS_WEB_ADMINS takes effect at the next restart.
+          if (!auth || !session.account || !auth.isAdmin(session.account.email)) throw new HttpError(403, '需要管理员账号。');
+          if (url.pathname === '/api/admin/overview' && request.method === 'GET') { json(response, 200, adminOverview(auth)); return; }
+          if (url.pathname === '/api/admin/allowlist' && ['POST', 'DELETE'].includes(request.method ?? '')) {
+            const email = objectBody(await readJson(request)).email;
+            if (request.method === 'POST') auth.addToAllowlist(email);
+            else {
+              auth.removeFromAllowlist(email);
+              // The removed address is signed out now, not at its next request.
+              for (const [id, other] of sessions) if (other.account && !auth.allowed(other.account.email)) endSession(id);
+            }
+            json(response, 200, adminOverview(auth)); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }

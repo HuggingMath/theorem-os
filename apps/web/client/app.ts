@@ -3,7 +3,7 @@ import {
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
-import type { WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunInput, WebSession } from '../shared';
+import type { WebAdminOverview, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunInput, WebSession } from '../shared';
 import type { WebShareLink } from '../share';
 import { effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, resultDescription, runProgress, usageEstimate, type RecoveryAction } from '../presentation';
 import { summarizeReport, summarizeStuck } from '../report';
@@ -45,6 +45,7 @@ import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResu
 import { forgetKey, hasRememberedKey, rememberKey, rememberedKey } from './keyMemory';
 import { applyTheme, followThemeChanges, readThemePreference, saveThemePreference, type ThemePreference } from './themePreference';
 import { installTermHints, renderGlossary } from './termHints';
+import { renderAdminPanel } from './ui/AdminPanel';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
 import { localeTag, localizeText, otherLocale, switchLocale, t } from '../i18n';
@@ -97,6 +98,12 @@ const state = {
   sample: undefined as WebRun | undefined,
 };
 const baseTitle = document.title;
+// A link from the completion mail (/?run=<id>) opens that run, also after the login page sends the reader back.
+const linkedRun = new URLSearchParams(location.search).get('run');
+if (linkedRun !== null) {
+  if (/^[a-f0-9-]{1,36}$/u.test(linkedRun)) saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
+  history.replaceState(null, '', location.pathname + location.hash);
+}
 const notificationsSupported = () => typeof Notification === 'function';
 const notifyWanted = () => { try { return localStorage.getItem(notifyStorageKey) === 'on'; } catch { return false; } };
 function notifyState(): 'on' | 'off' | 'blocked' | 'unsupported' {
@@ -1568,9 +1575,44 @@ function renderShell() {
 function changeLocale() { saveDraft(); switchLocale(otherLocale.locale); }
 function openAccount() {
   element('#account-email').textContent = state.session?.account?.email ?? '';
+  element<HTMLInputElement>('#completion-email').checked = state.session?.account?.completionEmail !== false;
+  element('#open-admin').hidden = !state.session?.account?.admin;
   field('account-confirm').value = ''; element<HTMLButtonElement>('#delete-account').disabled = true;
   element('#account-error').hidden = true;
   showDialog(element<HTMLDialogElement>('#account-dialog'));
+}
+/** The allowlist and beta totals; the server refuses every admin route to other accounts. */
+const admin: { overview?: WebAdminOverview; error?: string; busy?: string } = {};
+function renderAdmin() {
+  renderAdminPanel(element('#admin-content'), { ...admin, onAdd: email => changeAllowlist('POST', email), onRemove: email => void changeAllowlist('DELETE', email) });
+}
+async function openAdmin() {
+  const dialog = element<HTMLDialogElement>('#account-dialog');
+  if (dialog.open) dialog.close();
+  admin.error = undefined; renderAdmin();
+  showDialog(element<HTMLDialogElement>('#admin-dialog'));
+  try { admin.overview = await api<WebAdminOverview>('/api/admin/overview'); }
+  catch (error) { admin.error = message(error); }
+  renderAdmin();
+}
+async function changeCompletionEmail(input: HTMLInputElement) {
+  const wanted = input.checked;
+  input.disabled = true;
+  try {
+    await api('/api/auth/account', { method: 'PATCH', body: JSON.stringify({ completionEmail: wanted }) });
+    if (state.session?.account) state.session.account.completionEmail = wanted;
+    toast(wanted ? t('研究结束时会发邮件到登录邮箱') : t('已关闭结束邮件'));
+  } catch (error) { input.checked = !wanted; toast(message(error)); }
+  finally { input.disabled = false; }
+}
+async function changeAllowlist(method: 'POST' | 'DELETE', email: string): Promise<boolean> {
+  admin.busy = email; admin.error = undefined; renderAdmin();
+  try {
+    admin.overview = await api<WebAdminOverview>('/api/admin/allowlist', { method, body: JSON.stringify({ email }) });
+    toast(method === 'POST' ? t('已加入白名单') : t('已移出白名单'));
+    return true;
+  } catch (error) { admin.error = message(error); return false; }
+  finally { admin.busy = undefined; renderAdmin(); }
 }
 async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonElement) {
   button.disabled = true; element('#account-error').hidden = true;
@@ -1593,6 +1635,7 @@ function chooseTheme(preference: ThemePreference) {
 followThemeChanges(showThemeChoice);
 showThemeChoice();
 document.querySelectorAll<HTMLInputElement>('input[name="theme"]').forEach(input => input.addEventListener('change', () => chooseTheme(input.value as ThemePreference)));
+element('#completion-email').addEventListener('change', event => void changeCompletionEmail(event.currentTarget as HTMLInputElement));
 function openGlossary(id?: TermId) {
   const dialog = element<HTMLDialogElement>('#glossary-dialog');
   renderGlossary(dialog, id);
@@ -1619,6 +1662,10 @@ function paletteCommands(): PaletteCommand[] {
     commands.push({ id: `theme-${option}`, group: t('外观'), label: t('外观：{0}', themeLabels[option]), icon: themeIcons[option],
       keywords: t('theme appearance dark light 外观 主题 深色 浅色 夜间'), run: () => chooseTheme(option) });
   commands.push({ id: 'open-glossary', group: t('帮助'), label: t('术语说明'), icon: 'book-open', keywords: t('glossary help 术语 帮助'), run: () => openGlossary() });
+  if (state.session?.account?.admin) commands.push({ id: 'open-admin', group: t('操作'), label: t('管理'), hint: t('白名单与内测漏斗'), icon: 'shield-check',
+    keywords: t('admin allowlist manage 管理 白名单 账号'), run: () => void openAdmin() });
+  commands.push({ id: 'open-guide', group: t('帮助'), label: t('使用说明'), icon: 'circle-help', keywords: t('guide help manual how 使用 说明 教程 帮助'),
+    run: () => { window.open('guide.html', '_blank', 'noopener'); } });
   commands.push({ id: 'send-feedback', group: t('帮助'), label: t('反馈问题或建议'), hint: t('在官网填写，确认后发布到 GitHub'), icon: 'message-square',
     keywords: t('feedback bug report issue 反馈 问题 建议'), run: () => { window.open(feedbackUrl(), '_blank', 'noopener'); } });
   if (state.session?.sample && !sampleSelected()) commands.push({ id: 'open-sample', group: t('帮助'), label: t('查看示例运行'), hint: t('无需 API Key'), icon: 'eye', keywords: t('sample demo example 示例'), run: () => void openSample() });
@@ -2362,6 +2409,8 @@ window.addEventListener('pageshow', event => {
   }
 });
 element('#close-account').addEventListener('click', () => element<HTMLDialogElement>('#account-dialog').close());
+element('#open-admin').addEventListener('click', () => void openAdmin());
+element('#close-admin').addEventListener('click', () => element<HTMLDialogElement>('#admin-dialog').close());
 element('#close-glossary').addEventListener('click', () => element<HTMLDialogElement>('#glossary-dialog').close());
 element('#logout').addEventListener('click', event => void leaveAccount(() => api('/api/auth/logout', { method: 'POST', body: '{}' }), event.currentTarget as HTMLButtonElement));
 field('account-confirm').addEventListener('input', () => {

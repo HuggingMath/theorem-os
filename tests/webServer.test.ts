@@ -661,10 +661,10 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const home = await request('/');
     expect(home.status).toBe(200);
     // Static files revalidate on every use; API answers are never stored.
-    expect(home.headers.get('cache-control')).toBe('no-cache');
+    expect(home.headers.get('cache-control')).toBe('no-cache, no-transform');
     expect(home.headers.get('etag')).toMatch(/^"[\w-]+"$/u);
     expect((await request('/', undefined, { headers: { 'If-None-Match': home.headers.get('etag')! } })).status).toBe(304);
-    expect((await request('/api/session')).headers.get('cache-control')).toBe('no-store');
+    expect((await request('/api/session')).headers.get('cache-control')).toBe('no-store, no-transform');
     expect(home.headers.get('x-content-type-options')).toBe('nosniff');
     expect(home.headers.get('x-frame-options')).toBe('DENY');
     expect(home.headers.get('content-security-policy')).toContain("connect-src 'self'");

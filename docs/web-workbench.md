@@ -108,8 +108,10 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 - 登录页 `login.html` 先要求输入图形验证码（5 位数字，服务端生成 SVG，5 分钟有效，每张只能用一次），再向邮箱发送 6 位验证码。验证码 10 分钟有效，输错 5 次作废；同一邮箱 60 秒内不重发、每小时最多 5 封，同一 IP 每 10 分钟最多请求 10 次。
 - 只有内测白名单中的邮箱能收到验证码。白名单来自 `THEOREMOS_WEB_ALLOWLIST`（逗号分隔）和 `allowlist.txt`（每行一个邮箱，`#` 后为注释）。`allowlist.txt` 默认放在数据目录根下，Compose 中为 `research-data` 卷内的 `/var/lib/theorem-os/allowlist.txt`，每次请求重新读取，改动无需重启。移出白名单的邮箱在下一次请求时退出登录，记录保留。
 - 登录成功后更换会话 ID 和 CSRF token。运行记录、归档、知识目录和服务端方案归属账号：同一账号的多个浏览器看到同一份记录，退出登录或会话到期不删除记录。账号菜单可以退出登录，或输入邮箱确认后删除账号；删除会取消运行中的任务并立即删除全部记录。
+- 运行自行结束（完成或出错）时，服务给所有者的登录邮箱发一封结束邮件：题目标题、结论（通过验收、未通过、出错）、用时和回到该运行的链接 `/?run=<id>`，不含源码、证明、报告或 API Key。所有者停止的运行和服务重启中断的运行不发。账号对话框的「研究结束时发邮件」默认打开，关闭后账号文件记 `completionEmail: false`（`PATCH /api/auth/account`）；移出白名单的账号也不再收到。链接在未登录时先到登录页，登录后仍打开该运行。发信失败只在服务日志记一行运行 ID，不影响运行。内容由 `apps/web/completionMail.ts` 生成。
 - 账号文件保存在数据目录的 `accounts/` 下，含账号 ID、邮箱、创建时间（即首次登录），以及首次提交运行 `firstRunAt` 和首次通过验收 `firstAcceptedAt` 两个时间，只在第一次发生时写入，删除账号时一起删除。验证码只以 HMAC 形式保存在内存中，服务重启后作废。
 - 内测漏斗只输出汇总人数，不输出邮箱：`bun scripts/web-funnel.ts --data /var/lib/theorem-os [--applications N] [--github] [--json]`。步骤为申请 → 白名单 → 首次登录 → 首次提交 → 首次通过验收，每步给出占上一步的比例，以及登录到首次提交、首次提交到首次通过的中位小时数。`--applications` 填邮件申请数，`--github` 用 `gh` 读取公开仓库 `early-access` 标签的 Issue 数，两者相加；都不给时从白名单开始。移出白名单但登录过的账号仍计入白名单。这两个时间字段上线前创建的账号只计入首次登录。
+- 管理员由 `THEOREMOS_WEB_ADMINS`（逗号分隔，需要 `THEOREMOS_WEB_AUTH=email`）指定，不必另写进白名单。管理员的账号菜单和命令面板多一项「管理」：查看上面的漏斗人数、白名单（标出来自管理员配置、部署配置还是白名单文件，以及是否登录过）和账号列表（邮箱、首次登录、首次提交、首次通过验收的时间）。白名单文件里的邮箱可以在线加入和移除：加入时追加一行，移除时删掉该邮箱所在的行，注释保留，写入经临时文件改名完成；移除后该账号的会话立即结束，账号和记录保留。环境变量里的邮箱只能改部署配置。管理接口 `/api/admin/*` 对其他账号一律返回 403，也不返回账号 ID、运行或题目内容，管理员看不到其他账号的记录。
 - 本机调试可设 `THEOREMOS_WEB_SMTP_URL=log:`，验证码打印到服务日志，不发邮件；该值只允许用于回环地址。
 
 ```bash
@@ -117,10 +119,11 @@ THEOREMOS_WEB_PUBLIC_URL=https://workbench.example.org \
 THEOREMOS_WEB_SMTP_URL='smtps://user:password@smtp.example.org:465' \
 THEOREMOS_WEB_MAIL_FROM='TheoremOS <login@example.org>' \
 THEOREMOS_WEB_ALLOWLIST='alice@example.org' \
+THEOREMOS_WEB_ADMINS='admin@example.org' \
 docker compose -f apps/web/compose.yml up -d web
 ```
 
-SMTP 密码只放在环境变量或 `.env` 中，不要写进仓库。服务在反向代理后面时，按 IP 的限流看到的是代理地址。
+SMTP 密码只放在环境变量或 `.env` 中，不要写进仓库。服务在反向代理或 Cloudflare Tunnel 后面时，所有请求都来自代理，按 IP 的限流会把访客算成同一个人；设 `THEOREMOS_WEB_CLIENT_IP_HEADER=cf-connecting-ip`（或代理写入的其他请求头）改按访客地址计数。只在端口仅对代理开放时设置，否则直连的客户端可以自己填这个请求头。
 
 ### 协作 HTTP 接口
 
@@ -205,9 +208,11 @@ docker compose -f apps/web/compose.yml up -d web
 | `THEOREMOS_WEB_SESSION_TTL_SECONDS` | `2592000` | 持久会话闲置有效期，60 秒至 365 天；有效请求续期 |
 | `THEOREMOS_WEB_AUTH` | 公网地址 `email`，回环地址 `none` | `email` 要求邮箱验证码登录，`none` 为匿名会话 |
 | `THEOREMOS_WEB_SMTP_URL` | 无 | 发信地址，`smtp://` 或 `smtps://`，含账号密码；回环地址可用 `log:` |
-| `THEOREMOS_WEB_MAIL_FROM` | 无 | 验证码邮件的发件人，例如 `TheoremOS <login@example.org>` |
+| `THEOREMOS_WEB_MAIL_FROM` | 无 | 验证码邮件和结束邮件的发件人，例如 `TheoremOS <login@example.org>` |
 | `THEOREMOS_WEB_ALLOWLIST` | 空 | 逗号分隔的内测邮箱；另可写入数据目录的 `allowlist.txt` |
 | `THEOREMOS_WEB_ALLOWLIST_FILE` | 数据目录下 `allowlist.txt` | 白名单文件路径 |
+| `THEOREMOS_WEB_ADMINS` | 空 | 逗号分隔的管理员邮箱，可登录并管理白名单；需要邮箱登录 |
+| `THEOREMOS_WEB_CLIENT_IP_HEADER` | 空 | 代理写入的访客地址请求头（如 `cf-connecting-ip`），用于按访客限流 |
 
 如本机依赖已齐备，也可只用 Docker 跑 worker、用 Bun 启动网页服务：
 
@@ -256,6 +261,7 @@ bun run web
 - 报告页默认展示验收摘要，分别列出候选检查与独立验收、定理级诊断、已有的研究轮次 / 耗时 / Token 统计和验收凭据。单条诊断超过 4000 字符时显示截断提示，可直接打开原始报告；原始 JSON 保留报告中收到的字段，可查看、复制和下载，不代表执行器未提供的日志也已保存。诊断按完整文本去重，相同开头、不同结尾的记录分别保留。缺失的统计不会被补成零，候选检查、单个定理或验收阶段的通过记录不会替代最终结论；最终成功同时要求任务结束和 `evaluated_passed`。
 - 首次进入（账号或会话还没有运行记录）时，欢迎页依次给出示例运行入口和三步说明：写下原题、连接模型、等待验收。示例运行 `00000000-0000-4000-8000-00000000a001` 无需 API Key，打开后停在概览页，标为「示例 · 只读」。它不在 `/api/runs` 中、不计入运行数量，也不会成为恢复位置；读取接口与普通运行相同（详情、观察、任务源码、检查回执、活动、下载），写入一律返回 403。页面写明其中的 Agent 是离线脚本，环境、任务协作、Lean 检查和独立验收是真实执行的。「用这道题开始研究」会把题目、环境和执行配置填进新草稿，保留访问者自己的服务商、模型和推理强度。示例文件是 `apps/web/sample/run.json`，由 `test:web-cooperative-runtime` 的档案生成：`bun scripts/build-web-sample.ts [archive.json]`。脚本会替换运行 ID 和容器路径，并检查文件里没有宿主路径、镜像摘要或 Key；文件缺失或格式不符时入口自动隐藏。
 - 运行时术语（原题、独立验收、任务计划、观察、回执、模块方案等）在 `apps/web/client/glossary.ts` 统一用白话解释。界面上的 `?` 按钮打开一条说明：焦点留在按钮上，Esc 或点击别处关闭；在设置对话框里也能显示在最上层。顶栏的帮助按钮、命令面板「术语说明」和欢迎页都能打开完整术语表；从某条说明进入时，术语表直接定位到这一项。
+- 使用说明页 `guide.html` 是一份静态页面：五步开始、运行时的六个标签页、各种结果的含义、运行结束后的复核 / 分享 / 复用 / 导入导出、快捷键、Key 与记录的归属。欢迎页、术语表顶部和命令面板「使用说明」在新标签页打开它，正在编辑的草稿不受影响。页面不需要登录，跟随外观与界面语言（英文在 `apps/web/i18n/guide.ts`），右上角可回到工作台。界面文案改动时要同步这页的描述。
 - 工作台、登录页和分享页有中文与英文两种界面。首次访问按浏览器语言选择（`zh*` 用中文，其余用英文）；顶栏、登录页底部、分享页右上角和命令面板都能切换，选择保存在 `localStorage` 的 `theorem-os.web-locale.v1`，切换前先保存草稿。中文原文就是翻译键：`t('中文', …)` 查 `apps/web/i18n/` 下的英文词典，`{0}` 依次替换参数，数量为 1 时英文名词取单数。服务端仍只存中文：事件消息、运行状态、模板名、分享标签和模块方案校验在浏览器里经 `localizeText` 按原文对照翻译，服务端错误信息保持中文。研究任务、标题、Lean 源码和 Agent 产出不翻译，相应元素带 `translate="no"`。`bun scripts/web-i18n.ts` 列出缺少英文的界面文字和写在 `t()` 之外的中文，`tests/webI18n.test.ts` 要求两者都为空、英文里没有中文、占位符一致且没有多余词条。
 - 反馈入口：命令面板「反馈问题或建议」、账号对话框、术语表底部、登录页底部，以及运行环境出错、服务重启中断和原因不明的失败卡片。它们打开官网反馈页（英文界面打开 `en/feedback.html`），通过 `?area=workbench&kind=bug&environment=…` 预填位置、浏览器、系统、窗口尺寸、界面语言和失败类型，不带运行 ID、邮箱、题目或 Key；反馈页只接受已知的类型和位置，环境只填进空白字段，确认后才在 GitHub 公开发布。链接地址在 `apps/web/client/feedback.ts`。
 - 通过独立验收的运行可由所有者创建分享链接 `share.html#<token>`。创建前列出公开与不公开的内容；链接打开一份创建时的只读快照，包含研究任务、原始题目、验收证明、验收结论（不含诊断原文）、Lean 工具链 / Mathlib 版本 / 源码摘要、模型名称、Agent 数量、轮次、耗时和 Token 用量，不包含 API Key、服务商、运行 ID、活动日志、协作记录或账号邮箱。查看无需登录，也不会创建会话；页面与接口带 `noindex`，token 放在 `#` 后不进入请求日志。停止分享、删除运行、删除账号或匿名会话到期都会立即使链接失效；重新分享生成新链接。快照保存在运行目录的 `share.json`，`shares/` 下只按 token 摘要记录运行位置。
@@ -323,6 +329,8 @@ bun run test:web-collaboration-layers
 bun run test:web-key-memory
 bun run test:web-load
 bun run test:web-theme
+bun run test:web-guide
+bun run test:web-admin
 bun run build:web-preview
 bun run test:web-preview
 bun run test:web-preparation
@@ -358,6 +366,10 @@ bun scripts/test-web-runtime.ts
 `test:web-key-memory` 检查记住 Key：默认不记住且不落任何存储；勾选后后续提交与同标签页刷新沿用、另一个标签页拿不到、只有记忆条目含 Key；换服务商地址不带 Key、用户自己填的 Key 不被覆盖；取消勾选、清除按钮、认证失败后更换 Key 都会立即清除；英文与 375/320 宽度。
 `test:web-load` 在约 Fast 3G（150 ms 往返、1.6 Mbit/s 下行）下打开工作台两次并执行预算：文本资源必须压缩；首次访问 HTML+JS+CSS ≤ 300 KB、总传输 ≤ 1800 KB、首次内容绘制 ≤ 1.5 s、可提交 ≤ 5 s；重复访问传输 ≤ 50 KB、可提交 ≤ 2 s。`--report` 只打印各资源字节数与编码，报告写到 `out/web-load/report.json`。
 `test:web-theme` 检查外观：未选择时首帧即为系统主题、不写存储并跟随系统变化；命令面板与账号对话框的选择优先于系统、刷新后保留、同步到其他标签页，“跟随系统”会清除选择；两种主题下欢迎页、各对话框、命令面板、示例运行全部标签页（中英文）、手机宽度、登录页与分享页的可见文字都满足 WCAG AA 对比度（`scripts/web-contrast.ts`），截图写到 `out/web-theme/`。
+
+`test:web-guide` 检查使用说明：欢迎页、术语表和命令面板都在新标签页打开 `guide.html`；目录链接与各节对应，有回到工作台的入口；页面通过可访问性规则和两种主题下的 WCAG AA 对比度；英文界面没有残留中文，375/320 宽度不横向溢出，切换语言后留在本页。截图写到 `out/web-guide/`。
+
+`test:web-admin` 检查管理角色：普通账号看不到「管理」按钮和命令，管理接口返回 403；管理员看到白名单来源、漏斗人数和账号列表；在线加入写入白名单文件且不重复，移除需要二次确认、可取消，移除后对方立即退出登录；命令面板可打开管理窗口；英文与深色主题下没有残留中文、通过对比度，375/320 宽度不溢出。截图写到 `out/web-admin/`。
 
 组件预览 `bun run build:web-preview` 把 `apps/web/preview/` 构建到 `out/web-preview/`，用固定数据展示每个工作台组件（基础控件、Section 辅助组件、顶栏、对话、运行监视、运行头部、概览、研究协作）；在页面上可切换中英文。它只用于开发，不进入 `out/web` 或镜像。`test:web-preview` 在中英文、1440 与 375 像素下检查每个组件渲染无报错、英文界面无未翻译文字、页面不溢出并通过上述无障碍规则，截图写入 `out/web-preview-check/`。
 
@@ -437,6 +449,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | --- | --- |
 | `apps/web/server.ts` | 同源静态服务、会话、CSRF、运行 API |
 | `apps/web/jobs.ts` | 队列、并发、归属检查、取消、脱敏与观测/命令协调 |
+| `apps/web/completionMail.ts` | 运行结束邮件的内容与发送条件 |
 | `apps/web/runner.ts` | Docker 生命周期、预算、私有 stdin 协议；提交前检查的一次性编译容器 |
 | `apps/web/precheck.ts`、`apps/web/client/sourceCheck.tsx` | 提交前检查：结构检查、Lean 诊断解析、并发/缓存/限流；编辑器内的状态与定位 |
 | `apps/web/verificationKit.ts`、`apps/web/report.ts` | 证明结构与本地复核包（ZIP 写入）；报告摘要与“卡在哪里”的前沿子目标 |
@@ -470,6 +483,8 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/client/sourceReader.tsx` | 源码着色、文本查找与定位，保留源码文本节点 |
 | `apps/web/sample.ts`、`scripts/build-web-sample.ts` | 只读示例运行的读取接口与生成 |
 | `apps/web/client/glossary.ts`、`apps/web/client/termHints.ts` | 术语白话解释、`?` 说明与术语表 |
+| `apps/web/client/guide.html`、`apps/web/client/guide.ts` | 使用说明页（静态，语言切换与官网链接） |
+| `apps/web/client/ui/AdminPanel.tsx`、`apps/web/funnel.ts` | 管理窗口（漏斗、白名单、账号）与漏斗统计 |
 | `apps/web/i18n.ts`、`apps/web/i18n/`、`scripts/web-i18n.ts` | 界面语言选择与切换、英文词典、词典覆盖扫描 |
 | `apps/web/client/activityReader.tsx` | 活动筛选、跟随、阅读位置与本地导出 |
 | `src/math/leanTask.ts` | 将输入源码固定为独立 Lean 题目 |

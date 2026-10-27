@@ -23,6 +23,8 @@ export type WebConfig = {
   providers: WebProvider[];
   /** Present when every workbench request needs an allowlisted email login. */
   auth?: WebAuthConfig;
+  /** A header set by the reverse proxy in front (e.g. cf-connecting-ip) that names the visitor for rate limits. */
+  clientIpHeader?: string;
 };
 
 function integer(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -52,6 +54,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   const authMode = env.THEOREMOS_WEB_AUTH || (loopback ? 'none' : 'email');
   if (!['none', 'email'].includes(authMode)) throw new Error('THEOREMOS_WEB_AUTH must be none or email.');
   let auth: WebAuthConfig | undefined;
+  if (env.THEOREMOS_WEB_ADMINS && authMode !== 'email') throw new Error('THEOREMOS_WEB_ADMINS needs email login (THEOREMOS_WEB_AUTH=email).');
   if (authMode === 'email') {
     const smtpUrl = env.THEOREMOS_WEB_SMTP_URL || '';
     if (smtpUrl === 'log:' ? !loopback : !/^smtps?:\/\//u.test(smtpUrl))
@@ -59,9 +62,12 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     const from = env.THEOREMOS_WEB_MAIL_FROM || (smtpUrl === 'log:' ? 'TheoremOS <login@localhost>' : '');
     if (!from) throw new Error('Email login needs THEOREMOS_WEB_MAIL_FROM.');
     const dataRoot = env.THEOREMOS_WEB_DATA_ROOT ? path.resolve(env.THEOREMOS_WEB_DATA_ROOT) : undefined;
-    auth = { smtpUrl, from, allowlist: (env.THEOREMOS_WEB_ALLOWLIST || '').split(',').map(item => item.trim()).filter(Boolean).map(normalizeEmail),
+    const list = (value?: string) => (value || '').split(',').map(item => item.trim()).filter(Boolean).map(normalizeEmail);
+    auth = { smtpUrl, from, allowlist: list(env.THEOREMOS_WEB_ALLOWLIST), admins: list(env.THEOREMOS_WEB_ADMINS),
       ...(env.THEOREMOS_WEB_ALLOWLIST_FILE || dataRoot ? { allowlistFile: path.resolve(env.THEOREMOS_WEB_ALLOWLIST_FILE || allowlistFile(dataRoot)!) } : {}) };
   }
+  const clientIpHeader = env.THEOREMOS_WEB_CLIENT_IP_HEADER?.trim().toLowerCase();
+  if (clientIpHeader && !/^[a-z0-9-]{1,64}$/u.test(clientIpHeader)) throw new Error('THEOREMOS_WEB_CLIENT_IP_HEADER must be a header name.');
   return {
     host: env.THEOREMOS_WEB_HOST || '127.0.0.1', port, publicUrl: publicUrl.origin,
     staticRoot: path.resolve(env.THEOREMOS_WEB_STATIC_ROOT || 'out/web'),
@@ -72,6 +78,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     sessionTtlMs: 1000 * integer(env.THEOREMOS_WEB_SESSION_TTL_SECONDS,
       env.THEOREMOS_WEB_DATA_ROOT ? 30 * 24 * 60 * 60 : 60 * 60, 60, 365 * 24 * 60 * 60), providers,
     ...(auth ? { auth } : {}),
+    ...(clientIpHeader ? { clientIpHeader } : {}),
   };
 }
 

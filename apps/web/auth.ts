@@ -4,12 +4,16 @@ import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 import type { WebStorage } from './storage';
 
-export type WebAuthConfig = { smtpUrl: string; from: string; allowlist: string[]; allowlistFile?: string };
+/** `admins` may always sign in and manage the allowlist file; they see no other account's runs. */
+export type WebAuthConfig = { smtpUrl: string; from: string; allowlist: string[]; allowlistFile?: string; admins?: string[] };
+/** Where an address is admitted from: only `file` entries can be removed in the workbench. */
+export type WebAllowlistEntry = { email: string; source: 'admin' | 'config' | 'file' };
 /**
  * `createdAt` is the first login. The two milestones record when the account first submitted a run and first had one pass
  * acceptance; scripts/web-funnel.ts reports them only as totals, and they go with the account when it is deleted.
+ * `completionEmail: false` turns off the mail sent when a run ends; absent means on.
  */
-export type WebAccount = { id: string; email: string; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string };
+export type WebAccount = { id: string; email: string; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; completionEmail?: boolean };
 export type WebMilestone = 'firstRunAt' | 'firstAcceptedAt';
 export type WebMailer = (message: { to: string; subject: string; text: string }) => Promise<void>;
 export class WebAuthError extends Error {
@@ -80,11 +84,55 @@ export class WebAuth {
 
   /** Allowlisted addresses from the environment and the allowlist file, which is read on every call. */
   allowlist(): Set<string> {
-    const file = this.config.allowlistFile && fs.existsSync(this.config.allowlistFile)
-      ? fs.readFileSync(this.config.allowlistFile, 'utf8').split('\n') : [];
-    return new Set([...this.config.allowlist, ...file].map(line => line.replace(/#.*/u, '').trim().toLowerCase()).filter(Boolean));
+    return new Set([...this.admins(), ...this.config.allowlist, ...this.fileEntries()]);
   }
   allowed(email: string): boolean { return this.allowlist().has(email); }
+  admins(): Set<string> { return new Set(this.config.admins ?? []); }
+  isAdmin(email: string): boolean { return this.admins().has(email); }
+  private fileLines(): string[] {
+    const file = this.config.allowlistFile;
+    const lines = file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : [];
+    while (lines.length && !lines.at(-1)!.trim()) lines.pop();
+    return lines;
+  }
+  private fileEntries(): string[] { return this.fileLines().map(line => line.replace(/#.*/u, '').trim().toLowerCase()).filter(Boolean); }
+  /** Each admitted address once, with the most fixed source: an admin, then the environment, then the file. */
+  allowlistEntries(): WebAllowlistEntry[] {
+    const entries = new Map<string, WebAllowlistEntry['source']>();
+    for (const email of this.fileEntries()) entries.set(email, 'file');
+    for (const email of this.config.allowlist) entries.set(email, 'config');
+    for (const email of this.admins()) entries.set(email, 'admin');
+    return [...entries].map(([email, source]) => ({ email, source })).sort((a, b) => a.email.localeCompare(b.email));
+  }
+  /** Appends an address to the allowlist file; comments and other lines are kept as written. */
+  addToAllowlist(value: unknown): WebAllowlistEntry {
+    const email = normalizeEmail(value), file = this.writableFile();
+    const existing = this.allowlistEntries().find(entry => entry.email === email);
+    if (existing) return existing;
+    this.writeFile(file, [...this.fileLines(), email]);
+    return { email, source: 'file' };
+  }
+  /** Removes every file line for the address; an admin or environment entry cannot be removed here. */
+  removeFromAllowlist(value: unknown) {
+    const email = normalizeEmail(value), file = this.writableFile();
+    const source = this.allowlistEntries().find(entry => entry.email === email)?.source;
+    if (!source) throw new WebAuthError(404, '这个邮箱不在白名单中。');
+    if (source !== 'file') throw new WebAuthError(409, '这个邮箱由服务配置加入，需要在部署配置中移除。');
+    this.writeFile(file, this.fileLines().filter(line => line.replace(/#.*/u, '').trim().toLowerCase() !== email));
+    this.codes.delete(email);
+  }
+  allowlistWritable(): boolean { return Boolean(this.config.allowlistFile); }
+  private writableFile(): string {
+    if (!this.config.allowlistFile) throw new WebAuthError(409, '服务没有配置白名单文件，无法在线修改。');
+    return this.config.allowlistFile;
+  }
+  /** Written beside the target and renamed, so a concurrent login never reads half a file. */
+  private writeFile(file: string, lines: string[]) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temporary = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    fs.writeFileSync(temporary, lines.length ? `${lines.join('\n')}\n` : '', { mode: 0o600 });
+    fs.renameSync(temporary, file);
+  }
 
   captcha(ip: string): { id: string; image: string } {
     if (!this.allow(`captcha:${ip}`, 30, 10 * 60_000) || this.captchas.size >= 5_000) throw new WebAuthError(429, '请求过于频繁，请稍后重试。');
@@ -146,6 +194,18 @@ export class WebAuth {
     const account = this.listAccounts().find(item => item.id === accountId);
     if (account && !account[milestone]) this.storage.saveRecord(this.accountPath(account.email), { ...account, [milestone]: at });
   }
+  /** The address to tell when a run ends, unless the account turned the mail off or lost its allowlist entry. */
+  completionRecipient(accountId: string): string | undefined {
+    const account = this.listAccounts().find(item => item.id === accountId);
+    return account && account.completionEmail !== false && this.allowed(account.email) ? account.email : undefined;
+  }
+  setCompletionEmail(email: string, enabled: boolean) {
+    const account = this.getAccount(email);
+    if (!account) throw new WebAuthError(404, '账号不存在。');
+    const { completionEmail: _previous, ...rest } = account;
+    this.storage.saveRecord(this.accountPath(email), enabled ? rest : { ...rest, completionEmail: false });
+  }
+  async sendCompletion(to: string, message: { subject: string; text: string }) { await this.mailer({ to, ...message }); }
   deleteAccount(email: string) { this.storage.deleteRecord(this.accountPath(email)); this.codes.delete(email); }
 }
 
