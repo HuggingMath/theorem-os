@@ -72,7 +72,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   if (clientIpHeader && !/^[a-z0-9-]{1,64}$/u.test(clientIpHeader)) throw new Error('THEOREMOS_WEB_CLIENT_IP_HEADER must be a header name.');
   let adminKeys: Record<string, string> | undefined;
   if (env.THEOREMOS_WEB_ADMIN_KEYS) {
-    if (!auth?.admins.length) throw new Error('THEOREMOS_WEB_ADMIN_KEYS needs THEOREMOS_WEB_ADMINS.');
+    if (!auth?.admins?.length) throw new Error('THEOREMOS_WEB_ADMIN_KEYS needs THEOREMOS_WEB_ADMINS.');
     let parsed: unknown;
     try { parsed = JSON.parse(env.THEOREMOS_WEB_ADMIN_KEYS); } catch { throw new Error('THEOREMOS_WEB_ADMIN_KEYS must be a JSON object of provider ID to key.'); }
     // The messages name provider IDs only, never a key.
