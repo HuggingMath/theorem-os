@@ -69,13 +69,13 @@ try {
   print('first visit', first); print('repeat visit', repeat);
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ checkedAt: new Date().toISOString(), network: slow, first, repeat }, null, 2));
   if (!reportOnly) {
-    // Measured 2026-10-27 on this profile: first 239 KB code, 1795 KB total, FCP 0.8 s, ready 3.5 s; repeat 6 KB, ready 1.0 s.
+    // Measured 2026-10-27 on this profile: first 239 KB code, 1608 KB total, FCP 0.8 s, ready 3.5 s; repeat 6 KB, ready 1.0 s.
     // The margins absorb machine noise; growing past them is a decision, not drift.
     const code = (visit: Visit) => visit.resources.filter(item => /\.(?:js|css)$|\/$/u.test(item.path)).reduce((sum, item) => sum + item.bytes, 0);
     for (const item of first.resources.filter(item => /\.(?:js|css|html)$|\/$/u.test(item.path)))
       assert.ok(['br', 'gzip'].includes(item.encoding), `${item.path} must be sent compressed, got ${item.encoding}`);
     assert.ok(code(first) <= 300 * 1024, `first visit HTML, JS and CSS ${kb(code(first))} exceed 300 KB`);
-    assert.ok(first.transferred <= 2000 * 1024, `first visit ${kb(first.transferred)} exceeds 2000 KB`);
+    assert.ok(first.transferred <= 1800 * 1024, `first visit ${kb(first.transferred)} exceeds 1800 KB`);
     assert.ok(first.firstContentfulPaintMs > 0 && first.firstContentfulPaintMs <= 1500, `first contentful paint ${first.firstContentfulPaintMs} ms exceeds 1500 ms`);
     assert.ok(first.readyMs <= 5000, `first visit ready after ${first.readyMs} ms, budget 5000 ms`);
     assert.ok(repeat.transferred <= 50 * 1024, `repeat visit ${kb(repeat.transferred)} exceeds 50 KB; files must revalidate`);

@@ -354,7 +354,7 @@ bun scripts/test-web-runtime.ts
 `test:web-readable-results` 用不调用模型和 Lean 的运行夹具检查：通过的运行列出目标、辅助声明、引用与公理（只标出含非标准公理的目标），下载的复核包可解压且证明逐字一致，结构只读取一次；结构读取失败后可重试，未记录引用时不推断用法；卡住的运行列出前沿子目标、转义模型文本，并在研究协作中聚焦该任务；英文界面；375 / 320 像素下不溢出。
 `test:web-collaboration-layers` 检查协作页两层：首次进入只显示简洁层且不写入选择，切换就地生效、刷新后保留、焦点留在切换按钮上，从简洁层或报告页打开任务会切到完整层并把焦点放到任务上，已结束的运行指向报告，英文与 375/320 宽度不溢出，截图写到 `out/web-collaboration-layers`。
 `test:web-key-memory` 检查记住 Key：默认不记住且不落任何存储；勾选后后续提交与同标签页刷新沿用、另一个标签页拿不到、只有记忆条目含 Key；换服务商地址不带 Key、用户自己填的 Key 不被覆盖；取消勾选、清除按钮、认证失败后更换 Key 都会立即清除；英文与 375/320 宽度。
-`test:web-load` 在约 Fast 3G（150 ms 往返、1.6 Mbit/s 下行）下打开工作台两次并执行预算：文本资源必须压缩；首次访问 HTML+JS+CSS ≤ 300 KB、总传输 ≤ 2000 KB、首次内容绘制 ≤ 1.5 s、可提交 ≤ 5 s；重复访问传输 ≤ 50 KB、可提交 ≤ 2 s。`--report` 只打印各资源字节数与编码，报告写到 `out/web-load/report.json`。
+`test:web-load` 在约 Fast 3G（150 ms 往返、1.6 Mbit/s 下行）下打开工作台两次并执行预算：文本资源必须压缩；首次访问 HTML+JS+CSS ≤ 300 KB、总传输 ≤ 1800 KB、首次内容绘制 ≤ 1.5 s、可提交 ≤ 5 s；重复访问传输 ≤ 50 KB、可提交 ≤ 2 s。`--report` 只打印各资源字节数与编码，报告写到 `out/web-load/report.json`。
 
 组件预览 `bun run build:web-preview` 把 `apps/web/preview/` 构建到 `out/web-preview/`，用固定数据展示每个工作台组件（基础控件、Section 辅助组件、顶栏、对话、运行监视、运行头部、概览、研究协作）；在页面上可切换中英文。它只用于开发，不进入 `out/web` 或镜像。`test:web-preview` 在中英文、1440 与 375 像素下检查每个组件渲染无报错、英文界面无未翻译文字、页面不溢出并通过上述无障碍规则，截图写入 `out/web-preview-check/`。
 
