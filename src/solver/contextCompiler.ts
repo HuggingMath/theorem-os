@@ -260,14 +260,20 @@ function sourceReferences(input: TaskContextInput) {
   const problem = input.problem;
   if (!present(problem.baseCommit)) return missing('frozen-source-commit');
   if (!problem.declarations || !Array.isArray(problem.ownedFiles)) return missing('frozen-declarations');
-  for (const file of problem.ownedFiles.filter(file => file.endsWith('.lean')))
+  const frozen = problem.frozenFiles ?? {};
+  const files = problem.ownedFiles.filter(file => file.endsWith('.lean') && !Object.hasOwn(frozen, file));
+  for (const file of files)
     if (typeof input.frozenContexts?.[file] !== 'string') return missing(`frozen-context:${file}`);
   return { baseCommit: problem.baseCommit,
     retrieval: 'Read full proofs and namespace/section/instance context with git show COMMIT:PATH in this isolated worktree. Source references identify immutable content; they grant no proof acceptance.',
-    files: problem.ownedFiles.filter(file => file.endsWith('.lean')).map(file => ({
+    files: files.map(file => ({
       commit: problem.baseCommit, path: sourcePath(problem, file),
       contextDigest: problem.sourceStructure?.[file], imports: problem.sourceImports?.[file],
       declarations: problem.declarations[file] ?? [], context: input.frozenContexts![file] })),
+    // Library declarations are listed by the declaration index, not inline.
+    ...(Object.keys(frozen).length ? { libraryFiles: Object.keys(frozen).sort().map(file => ({ commit: problem.baseCommit,
+      path: sourcePath(problem, file), digest: frozen[file], frozenLibrary: true,
+      declarationCount: problem.declarations[file]?.length ?? 0 })) } : {}),
     trustedFiles: Object.entries(problem.trustedFiles ?? {}).map(([file, digest]) =>
       ({ commit: problem.baseCommit, path: sourcePath(problem, file), digest })) };
 }
@@ -528,7 +534,8 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
       }));
   }
   mandatory.push(section('declaration-order', 'sources', 'Frozen declaration order by file:', Object.fromEntries(
-    Object.entries(problem.declarations).map(([file, declarations]) => [file, declarations.map(declaration => declaration.name)]))),
+    Object.entries(problem.declarations).filter(([file]) => !Object.hasOwn(problem.frozenFiles ?? {}, file))
+      .map(([file, declarations]) => [file, declarations.map(declaration => declaration.name)]))),
   section('original-targets', 'problem', 'Original targets:', problem.targets));
   mandatory.push(...(input.mandatory ?? []));
   const { sections: deliveries, findingSources } = optionalDeliveries(input, required, byId, omitted);

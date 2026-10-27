@@ -10,7 +10,12 @@ export const LAKE_CONFIGURATION_FILES: readonly string[] = ['lean-toolchain', 'l
 
 /** Read the Lean header only: comments nest and quoted identifiers are single tokens. */
 export function mathConstructionImports(source: string): string[] {
-  let offset = 0;
+  return mathConstructionImportSpans(source).map(span => span.name);
+}
+
+/** Header import module names with their source offsets, for exact rewrites. */
+export function mathConstructionImportSpans(source: string): { name: string; start: number; end: number }[] {
+  let offset = 0, tokenStart = 0;
   const next = (): string | undefined => {
     for (;;) {
       while (/\s/u.test(source[offset] ?? '') && offset < source.length) offset++;
@@ -35,10 +40,11 @@ export function mathConstructionImports(source: string): string[] {
     const token = source
       .slice(offset)
       .match(/^(?:[\p{L}_][\p{L}\p{M}\p{N}_']*|«[^»\n]+»)(?:\.(?:[\p{L}_][\p{L}\p{M}\p{N}_']*|«[^»\n]+»))*/u)?.[0];
+    tokenStart = offset;
     if (token) offset += token.length;
     return token;
   };
-  const imports: string[] = [];
+  const imports: { name: string; start: number; end: number }[] = [];
   const boundaries = new Set([
     'import',
     'public',
@@ -87,7 +93,7 @@ export function mathConstructionImports(source: string): string[] {
     token = next();
     if (!token || boundaries.has(token)) throw new Error('math_construction_invalid_import');
     while (token && !boundaries.has(token)) {
-      imports.push(token);
+      imports.push({ name: token, start: tokenStart, end: tokenStart + token.length });
       token = next();
     }
   }
@@ -125,7 +131,7 @@ function localSourceDirectories(root: string): Set<string> {
   return directories;
 }
 
-const localModuleFile = (name: string): string => {
+export const localModuleFile = (name: string): string => {
   const parts = (name.match(/«[^»]+»|[^.]+/gu) ?? []).map(part => part.replaceAll('«', '').replaceAll('»', ''));
   if (parts.some(part => !part || part === '.' || part === '..' || /[/\\\0]/u.test(part)))
     throw new Error('math_local_module_import_invalid');

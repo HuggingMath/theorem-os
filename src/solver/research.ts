@@ -33,6 +33,7 @@ import { setWorkerResearchPhase, WorkerProofLifecycle } from './workerProofLifec
 import { importAssignedProof, syncProofImports } from './proofImport';
 import type { TaskProof } from './cooperativeProof';
 import { captureResearchBasis, researchSourceDigest, type ResearchBasis } from './researchRecords';
+import { writeOwnedDeclarationIndex } from './declarationIndex';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -543,6 +544,8 @@ export async function runResearchWorkers(input: {
         })), fresh: !research.threadId };
         if (turnContext.fresh && research.contextOverflow?.failedFreshContextDigests.includes(turnContext.digest))
           throw new Error('math_model_context_capacity_blocked');
+        // Statement reviews work in their own fixed-statement workspace; proof turns get a current owned-declaration index.
+        if (!(assignment && isStatementAction(assignment))) writeOwnedDeclarationIndex(state.problem, worker.worktree);
         if (currentContext.manifest) {
           research.lastContextManifest = currentContext.manifest;
           writeMathJsonDurable(path.join(worker.worktree, 'CONTEXT-MANIFEST.json'), currentContext.manifest);

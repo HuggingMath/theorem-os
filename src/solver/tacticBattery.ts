@@ -7,6 +7,7 @@ import { checkLeanType } from '../math/leanTypeDiagnostics';
 import { declarationStartWithDoc } from './cooperativeProof';
 import { commitSolverSources, committedSource, withSolverWorktree, type SolverProblem } from './problem';
 import { isDefinitionTask, type CooperativeTask } from './tasks';
+import { familyAssemblyProof } from './taskFamilies';
 
 /** Bounds the advisory stage, including environment import; the ordinary task check keeps its own timeout. */
 export const TACTIC_BATTERY_TIMEOUT_MS = 120_000;
@@ -123,6 +124,33 @@ export async function closeTaskByTactics(input: { problem: SolverProblem; task: 
   const vacuous = await contradictoryHypotheses(project, task, input, mathlib, input.timeoutMs - (Date.now() - started));
   return { ...base, status: 'closed', reason: 'battery-closed-erased-type', commit, artifact: checked.artifact,
     ...(vacuous ? { vacuous } : {}) };
+}
+
+export type FamilyAssemblyResult = { status: 'committed' | 'skipped' | 'unavailable'; reason: string; commit?: string;
+  evidence: 'host-family-assembly'; proofAcceptance: 'not-accepted' };
+
+/**
+ * Write the family task's case-split proof over its member lemmas as a commit for the ordinary task check. No Lean
+ * runs here: the members it names may not exist yet, and the check binds unproved members as explicit hypotheses.
+ */
+export async function assembleFamilyTask(input: { problem: SolverProblem; task: CooperativeTask; worktree: string;
+  seedCommit: string; context: string }): Promise<FamilyAssemblyResult> {
+  const base = { evidence: 'host-family-assembly' as const, proofAcceptance: 'not-accepted' as const };
+  const { problem, task } = input;
+  if (task.kind !== 'lemma' || !task.family || !task.proofPath || !task.theoremName) return { ...base, status: 'skipped', reason: 'not-family' };
+  let edited: string | undefined;
+  try {
+    edited = tacticBatterySource(problem, committedSource(input.worktree, input.seedCommit,
+      `${problem.projectRelative}/${task.proofPath}`), task, input.context, familyAssemblyProof(task.theoremName, task.family));
+  } catch { /* An unreadable seed source has no placement. */ }
+  if (!edited) return { ...base, status: 'skipped', reason: 'placement-unavailable' };
+  try {
+    const commit = await withSolverWorktree(input.worktree, input.seedCommit, async checkout => {
+      fs.writeFileSync(path.join(checkout, problem.projectRelative, task.proofPath!), edited);
+      return commitSolverSources(problem, checkout);
+    });
+    return { ...base, status: 'committed', reason: 'family-assembled', commit };
+  } catch { return { ...base, status: 'unavailable', reason: 'candidate-commit-unavailable' }; }
 }
 
 /** Advisory only: a failed, timed-out or unavailable probe reports nothing rather than non-vacuity. */

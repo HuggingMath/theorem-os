@@ -14,6 +14,7 @@ import { recordRouteBlockers, refreshRouteBlockers } from '../src/solver/routeCo
 import { ownedSourceDigest, type TaskProof } from '../src/solver/cooperativeProof';
 import { temporaryDirectory } from './helpers/files';
 import { answeredGoalPathStall, cooperativeResearch } from './helpers/cooperation';
+import { leadPlanningEvidence, leadPlanningEvidenceText } from '../src/solver/planningEvidence';
 
 const node = (id: string, kind: TaskRecord['task']['kind'] = 'lemma', dependsOn: string[] = []): TaskRecord => ({
   task: { id, kind, objective: id, dependsOn, revision: 0,
@@ -169,10 +170,17 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     vi.spyOn(cooperative as any, 'acceptPlan').mockResolvedValue(undefined);
     return core;
   };
-  const assessFrontier = async () => {
+  // These fixtures mock acceptPlan, so a Lead's goalPath answer is recorded as acceptPlan would record it.
+  const declineGoalPath = (action: CooperativeAction, instance = cooperative) => {
+    const presented = (instance as any).presentedGoalPathStalls.get(action) as { taskIds: string[] } | undefined;
+    if (presented) (instance as any).recordGoalPathDecisions(action, { adopted: [],
+      declined: presented.taskIds.map(taskId => ({ taskId, reason: 'The recorded estimate is still missing; keep this input parked.' })) });
+  };
+  const assessFrontier = async (answer: 'decline' | 'none' = 'decline') => {
     const action = await cooperative.next(lead, budget);
     expect(action).toMatchObject({ kind: 'lead' });
     if (action?.kind !== 'lead') throw new Error('expected_frontier_assessment');
+    if (answer === 'decline') declineGoalPath(action);
     await cooperative.deliver(lead, action, action.seedCommit);
     return action;
   };
@@ -211,6 +219,7 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     const reassessment = await waitingLead;
     expect(reassessment).toMatchObject({ kind: 'lead' });
     if (reassessment?.kind !== 'lead') throw new Error('expected_failed_frontier_assessment');
+    declineGoalPath(reassessment);
     await cooperative.deliver(lead, reassessment, seed);
     expect(await cooperative.next(lead, budget)).toBeUndefined();
     expect(core.status).toBe('blocked'); expect(core.integratedCheck).toBeUndefined();
@@ -262,6 +271,9 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     if (next?.kind !== 'lead') throw new Error('expected_failed_core_plan');
     return next;
   };
+  /** A Lead revision that only answers the stalled goal path, read by the real acceptPlan. */
+  const goalPathCommit = (goalPath: Record<string, unknown>, upsert: unknown[] = []) => checkpoint('```math-plan\n' +
+    JSON.stringify({ baseVersion: state.cooperation!.planVersion, upsert, goalPath }) + '\n```');
 
   it('wakes a blocked unattempted prerequisite of explicitly pending supporting work outside the goal cone', async () => {
     parkCore();
@@ -448,8 +460,8 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     expect(core.status).toBe('blocked'); expect(core.routeParking).toHaveLength(1);
   });
 
-  // An explicit pause of a frontier input is respected once the Lead has seen what it leaves: the stalled original goal
-  // path is owed one Lead turn with its candidates, and the unchanged frontier then stays idle, also across restore.
+  // An explicit pause of a frontier input is respected once the Lead has answered what it leaves: the stalled original
+  // goal path is owed a Lead turn with its candidates, and the declined frontier then stays idle, also across restore.
   it.each(['paused-task', 'spent-group'])('asks once about an explicitly %s frontier, then keeps it', async control => {
     const core = parkCore();
     if (control === 'paused-task') core.task = { ...core.task, status: 'paused' };
@@ -458,13 +470,43 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     await assessFrontier();
     expect(emit).toHaveBeenCalledWith('goal_path_stalled', expect.objectContaining({ goalIds: ['goal'], taskIds: ['core'] }));
     expect(emit).toHaveBeenCalledWith('goal_path_stall_dispatched', { digest: state.cooperation!.goalPathStall!.digest });
-    expect(state.cooperation!.goalPathStall).toMatchObject({ active: true, goalIds: ['goal'], answeredAt: expect.any(Number) });
+    expect(emit).toHaveBeenCalledWith('goal_path_decided', { adopted: [], declined: ['core'] });
+    expect(state.cooperation!.goalPathStall).toMatchObject({ active: true, goalIds: ['goal'], answeredAt: expect.any(Number),
+      declined: [expect.objectContaining({ taskId: 'core', reason: expect.stringContaining('estimate') })] });
+    expect(state.cooperation!.goalPathStall!.unanswered).toBeUndefined();
     expect(await cooperative.next(lead, budget)).toBeUndefined();
     expect(core.status).toBe('blocked');
     const resumed = resume(JSON.parse(JSON.stringify(state)));
     vi.spyOn(resumed as any, 'seed').mockReturnValue(seed);
     try { expect(await resumed.next(lead, budget)).toBeUndefined(); }
     finally { await resumed.stop(); }
+  });
+
+  // A settled turn that neither adopts nor declines is asked once more with that feedback, then recorded as ignored.
+  it('re-asks an unanswered stall once, shows the miss to the Lead, then records it as ignored', async () => {
+    const core = parkCore();
+    core.task = { ...core.task, status: 'paused' };
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    await assessFrontier('none');
+    const digest = state.cooperation!.goalPathStall!.digest;
+    expect(emit).toHaveBeenCalledWith('goal_path_stall_unanswered', { digest, taskIds: ['core'], unanswered: 1 });
+    expect(state.cooperation!.goalPathStall).toMatchObject({ active: true, unanswered: 1 });
+    expect(state.cooperation!.goalPathStall!.answeredAt).toBeUndefined();
+    const evidence = leadPlanningEvidence(state.cooperation!, state.environmentDigest);
+    expect(evidence.goalPath).toMatchObject({ unansweredTurns: 1, goals: [expect.objectContaining({ taskId: 'goal', stalled: true })] });
+    expect(leadPlanningEvidenceText(evidence)).toContain('1 earlier turn(s) shown this stall answered none of it');
+    // The unanswered stall keeps its wake across restore.
+    const resumed = resume(JSON.parse(JSON.stringify(state)));
+    vi.spyOn(resumed as any, 'seed').mockReturnValue(seed);
+    try { expect(await resumed.next(lead, budget)).toMatchObject({ kind: 'lead' }); }
+    finally { await resumed.stop(); }
+    await assessFrontier('none');
+    expect(emit).toHaveBeenCalledWith('goal_path_stall_ignored', { digest, goalIds: ['goal'], taskIds: ['core'], unanswered: 2 });
+    expect(state.cooperation!.goalPathStall).toMatchObject({ digest, active: true, unanswered: 2,
+      answeredAt: expect.any(Number), ignoredAt: expect.any(Number) });
+    expect(leadPlanningEvidence(state.cooperation!, state.environmentDigest).goalPath).toMatchObject({ ignored: true });
+    expect(await cooperative.next(lead, budget)).toBeUndefined();
+    expect(core.status).toBe('blocked');
   });
 
   it.each(['paused-group', 'paused-goal'])('does not reconsider an original goal set aside by its %s', async control => {
@@ -479,7 +521,7 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     expect(state.cooperation!.goalPathStall).toBeUndefined();
   });
 
-  it('asks the Lead once more when its own plan pauses the only frontier of an original goal', async () => {
+  it.each(['decline', 'adopt-resume'] as const)('asks the Lead once more when its own plan pauses the only frontier of an original goal (%s)', async answer => {
     prepareFailedCore();
     const core = state.cooperation!.tasks.find(node => node.task.id === 'core')!;
     core.status = 'pending'; core.attempts = 0; core.feedback = undefined;
@@ -497,9 +539,22 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     // The deciding turn never saw the stall its pause produced, so the unchanged input does not absorb it.
     const owed = await getLead();
     expect(emit).toHaveBeenCalledWith('goal_path_stall_dispatched', { digest: stall.digest });
-    await cooperative.deliver(lead, owed, commit);
-    expect(state.cooperation!.goalPathStall).toMatchObject({ digest: stall.digest, answeredAt: expect.any(Number) });
-    expect(await cooperative.next(lead, budget)).toBeUndefined();
+    if (answer === 'decline') {
+      await cooperative.deliver(lead, owed, goalPathCommit({ decline: [{ taskId: 'core', reason: 'Deferred until the compact seed is restated.' }] }));
+      expect(emit).toHaveBeenCalledWith('goal_path_decided', { adopted: [], declined: ['core'] });
+      expect(state.cooperation!.goalPathStall).toMatchObject({ digest: stall.digest, answeredAt: expect.any(Number),
+        declined: [expect.objectContaining({ taskId: 'core' })] });
+      expect(state.cooperation!.tasks.find(node => node.task.id === 'core')!.task.status).toBe('paused');
+      expect(await cooperative.next(lead, budget)).toBeUndefined();
+    } else {
+      // A mechanical candidate is applied from its id alone; the goal path is runnable again.
+      await cooperative.deliver(lead, owed, goalPathCommit({ adopt: ['resume:core'] }));
+      expect(emit).toHaveBeenCalledWith('goal_path_decided', { adopted: ['resume:core'], declined: [] });
+      expect(state.cooperation!.tasks.find(node => node.task.id === 'core')!.task.status).toBe('active');
+      expect(state.cooperation!.goalPathStall).toMatchObject({ active: false });
+      expect(state.cooperation!.tasks.find(node => node.task.id === 'core')!.status).toBe('pending');
+      expect(await cooperative.next(researcher, budget)).toMatchObject({ kind: 'task' });
+    }
   });
 
   it('treats a re-pause of a goal the Lead was shown as answered and re-asks after a new stall', async () => {
@@ -518,7 +573,8 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     const again = await getLead();
     expect(state.cooperation!.goalPathStall!.digest).not.toBe(repaused.digest);
     expect(emit).toHaveBeenLastCalledWith('goal_path_stall_dispatched', { digest: state.cooperation!.goalPathStall!.digest });
-    await cooperative.deliver(lead, again, commit);
+    await cooperative.deliver(lead, again, goalPathCommit({ decline: [{ taskId: 'core', reason: 'The new obstruction confirms the pause.' }] }));
+    expect(state.cooperation!.goalPathStall!.answeredAt).toEqual(expect.any(Number));
     expect(await cooperative.next(lead, budget)).toBeUndefined();
   });
 

@@ -13,7 +13,7 @@ import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvi
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { bindLeanPackages, prepareLeanDiagnosticOverrides, runLeanDiagnostics } from '../math/leanDiagnostics';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
-import { git, readSolverProblem, assertSolverSources } from './problem';
+import { git, readSolverProblem, assertSolverSources, solverSourceConstraints } from './problem';
 import { solverSourceFeedback } from './feedback';
 import { assertMathRetrievalCorpus, createMathRetrievalCorpus, type MathRetrievalCorpus } from '../math/mathRetrievalCorpus';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from './archive';
@@ -239,10 +239,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const prepareProject = (worktree: string) => {
         const project = path.join(worktree, state.problem.projectRelative);
         fs.mkdirSync(path.join(project, '.lake'), { recursive: true });
-        writeMathJsonDurable(path.join(project, '.lake/source-constraints.json'), {
-          trustedFiles: state.problem.trustedFiles, declarations: state.problem.declarations,
-          sourceStructure: state.problem.sourceStructure, sourceImports: state.problem.sourceImports,
-        }, 0o400);
+        writeMathJsonDurable(path.join(project, '.lake/source-constraints.json'), solverSourceConstraints(state.problem), 0o400);
         if (sourcePackages) bindLeanPackages(project, sourcePackages);
         return project;
       };
@@ -301,6 +298,19 @@ export async function runSolver(args: string[], root: string, customModules?: So
         return diagnostics;
       };
       const diagnostics = await checkDependencies('solver', project);
+      // Library-pack modules are only advisory until Lean accepts them in this environment, without sorry.
+      if (problem.frozenFiles && Object.keys(problem.frozenFiles).length) {
+        emit('library_pack_check', { files: Object.keys(problem.frozenFiles).length });
+        const library = await runLeanDiagnostics({ projectRoot: project, files: Object.keys(problem.frozenFiles), env, signal,
+          timeoutMs: preparationMs - (Date.now() - preparationStarted), onProgress: file => emit('library_pack_check', { file }) });
+        writeMathJsonDurable(path.join(directory, 'library-pack-diagnostics.json'), library);
+        const sorry = 'messages' in library && library.messages?.find(message => /declaration uses '?sorry'?/u.test(message.message));
+        if (library.exitCode !== 0 || library.timedOut || sorry) {
+          emit('preparation_failed', { workerId: 'solver', timedOut: library.timedOut, diagnostics: (sorry ? `${sorry.file ?? ''} ${sorry.message}`
+            : library.stderr || library.stdout || 'Library-pack check did not finish.').slice(0, 2000) });
+          throw new Error('math_library_pack_failed');
+        }
+      }
       let corpusCreated = false;
       if (!corpusFile && sourcePackages && fs.existsSync(path.join(sourcePackages, 'mathlib', 'Mathlib'))) {
         corpusFile = path.join(project, '.lake', 'retrieval-corpus.json');

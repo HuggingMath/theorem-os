@@ -191,7 +191,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
                     throw new Error(code('superseded'));
                   if (!action.planVersion || response.baseVersion !== action.planVersion ||
                       response.baseVersion !== this.archive.planVersion) throw new Error(code('version_conflict'));
-                  const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase());
+                  const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
                   await this.acceptPlan(plan, undefined, { action, receipt: { nonce, file,
                     offset: entry.offset, eventDigest, baseVersion: response.baseVersion, acceptedAt: Date.now() } });
                   this.rememberLeadDecision(action);

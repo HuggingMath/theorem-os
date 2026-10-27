@@ -124,6 +124,8 @@ const sourceSchema = z.object({
   capacityExplorations: capacitySource.optional(),
   completedResearch: z.array(completedResearchRecord).optional(),
   researchContext: researchContext.optional(),
+  ownershipExtension: z.object({ sourceReceiptDigest: hash, sourcePolicyDigest: hash,
+    addedFiles: z.array(z.string()) }).strict().optional(),
 }).strict();
 type SeedSource = z.infer<typeof sourceSchema>;
 
@@ -138,8 +140,25 @@ export type ContinuationSeedReport = {
 const sourcePolicy = (problem: SolverProblem) => ({ workspace: problem.workspace, projectRelative: problem.projectRelative,
   baseCommit: problem.baseCommit, receiptDigest: problem.receiptDigest, contract: problem.contract, targets: problem.targets,
   ownedFiles: problem.ownedFiles, trustedFiles: problem.trustedFiles, declarations: problem.declarations,
-  sourceStructure: problem.sourceStructure, sourceImports: problem.sourceImports });
+  sourceStructure: problem.sourceStructure, sourceImports: problem.sourceImports, frozenFiles: problem.frozenFiles });
 const policyDigest = (problem: SolverProblem) => mathDigest(canonicalMathJson(sourcePolicy(problem)));
+
+/**
+ * Owned files that a re-bootstrapped destination adds to the source problem, e.g. certificate or theory slots.
+ * Undefined unless both are the same mathematical problem: equal contract, targets and trusted files, and every
+ * source-owned file keeps its frozen declarations, context, imports and library bytes. Added files start at the destination baseline.
+ */
+function ownershipExtension(source: SolverProblem, destination: SolverProblem): string[] | undefined {
+  const frozen = (problem: SolverProblem, file: string) => canonicalMathJson([problem.declarations[file] ?? null,
+    problem.sourceStructure[file] ?? null, problem.sourceImports?.[file] ?? null, problem.frozenFiles?.[file] ?? null]);
+  if (source.kind !== destination.kind || source.projectRelative !== destination.projectRelative ||
+      canonicalMathJson([source.contract, source.targets, source.trustedFiles]) !==
+        canonicalMathJson([destination.contract, destination.targets, destination.trustedFiles]) ||
+      source.ownedFiles.some(file => !destination.ownedFiles.includes(file) || frozen(source, file) !== frozen(destination, file)))
+    return undefined;
+  const added = destination.ownedFiles.filter(file => !source.ownedFiles.includes(file));
+  return added.length ? added : undefined;
+}
 const commonDirectory = (worktree: string) => git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
 
 function textFile(file: string) {
@@ -315,8 +334,10 @@ function restoredResearchDeliveries(source: SeedSource, state: SolverRunState): 
 
 function captureSource(sourceStateFile: string, stateFile: string, state: SolverRunState): SeedSource {
   const archived = readSolverRunState(sourceStateFile);
-  if (archived.runId === state.runId || archived.taskDigest !== state.taskDigest ||
-      archived.problem.receiptDigest !== state.problem.receiptDigest || policyDigest(archived.problem) !== policyDigest(state.problem))
+  const sameProblem = archived.problem.receiptDigest === state.problem.receiptDigest &&
+    policyDigest(archived.problem) === policyDigest(state.problem);
+  const added = sameProblem ? undefined : ownershipExtension(archived.problem, state.problem);
+  if (archived.runId === state.runId || archived.taskDigest !== state.taskDigest || (!sameProblem && !added))
     throw new Error('math_continuation_seed_identity_changed');
   if (!archived.cooperation?.canonicalCommit || !archived.workers?.length)
     throw new Error('math_continuation_seed_source_incomplete');
@@ -333,21 +354,25 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     groups: archived.cooperation.groups?.map(record => record.group), proofRoutes: archived.cooperation.proofRoutes });
   if (plan.tasks.some((task, index) => taskVersion(task) !== taskVersion(planned[index].task)))
     throw new Error('math_continuation_seed_task_identity_changed');
-  const common = commonDirectory(state.worktree), sourceDirectory = path.dirname(sourceStateFile);
-  if (archived.worktree !== path.join(sourceDirectory, 'worktree') || commonDirectory(archived.worktree) !== common)
-    throw new Error('math_continuation_seed_repository_changed');
+  // An extended destination is a new bootstrap workspace, so source commits are read from their own repository.
+  const sourceDirectory = path.dirname(sourceStateFile);
+  if (archived.worktree !== path.join(sourceDirectory, 'worktree')) throw new Error('math_continuation_seed_repository_changed');
+  const common = commonDirectory(archived.worktree);
+  if (!added && common !== commonDirectory(state.worktree)) throw new Error('math_continuation_seed_repository_changed');
   for (const [file, expected] of Object.entries(state.problem.trustedFiles))
     if (mathDigest(committedSource(archived.worktree, archived.cooperation.canonicalCommit,
       `${state.problem.projectRelative}/${file}`)) !== expected) throw new Error('math_continuation_seed_source_policy_changed');
-  const canonicalSources = Object.fromEntries(state.problem.ownedFiles.map(file => [file,
-    committedSource(archived.worktree, archived.cooperation!.canonicalCommit!, `${state.problem.projectRelative}/${file}`)]));
+  const historicalSources = (commit: string) => Object.fromEntries(state.problem.ownedFiles.map(file => [file,
+    added?.includes(file) ? committedSource(state.worktree, state.problem.baseCommit, `${state.problem.projectRelative}/${file}`)
+      : committedSource(archived.worktree, commit, `${state.problem.projectRelative}/${file}`)]));
+  const canonicalSources = historicalSources(archived.cooperation.canonicalCommit);
   const workers = archived.workers.map((worker, index) => {
     if (!id.safeParse(worker.id).success || worker.worktree !== path.join(sourceDirectory, index ? `worktree-${index + 1}` : 'worktree'))
       throw new Error('math_continuation_seed_worker_path_changed');
     assertMathCanonicalPath(worker.worktree);
     if (commonDirectory(worker.worktree) !== common) throw new Error('math_continuation_seed_repository_changed');
     const headBefore = git(worker.worktree, ['rev-parse', 'HEAD']);
-    const sources = Object.fromEntries(state.problem.ownedFiles.map(file => [file,
+    const sources = Object.fromEntries(archived.problem.ownedFiles.map(file => [file,
       textFile(path.join(worker.worktree, state.problem.projectRelative, file))]));
     const notesFile = path.join(worker.worktree, 'RESEARCH.md');
     const notes = fs.lstatSync(notesFile, { throwIfNoEntry: false }) ? textFile(notesFile) : null;
@@ -409,9 +434,7 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
       try {
         if (!oid.safeParse(proof.commit).success || !oid.safeParse(proof.seedCommit).success)
           throw new Error('math_continuation_seed_conditional_commit_invalid');
-        const read = (commit: string) => Object.fromEntries(state.problem.ownedFiles.map(file => [file,
-          committedSource(archived.worktree, commit, `${state.problem.projectRelative}/${file}`)]));
-        return { ...evidence, sources: read(proof.commit), seedSources: read(proof.seedCommit) };
+        return { ...evidence, sources: historicalSources(proof.commit), seedSources: historicalSources(proof.seedCommit) };
       } catch (error) {
         return { ...evidence, captureError: error instanceof Error ? error.message : 'math_task_source_unavailable' };
       }
@@ -431,6 +454,8 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
       records: capacities, inputs: archived.cooperation.capacityExplorationInputs, notes: [...notes.values()] } } : {}),
     ...(completedResearch.length ? { completedResearch } : {}),
     ...(completedResearch.length || context.deliveries.length ? { researchContext: context } : {}),
+    ...(added ? { ownershipExtension: { sourceReceiptDigest: archived.problem.receiptDigest,
+      sourcePolicyDigest: policyDigest(archived.problem), addedFiles: added } } : {}),
     history: { evidence: 'recorded-not-replayed', sourcePhase: archived.phase,
       tasks: archived.cooperation.tasks.map(node => ({ taskId: node.task.id, taskDigest: taskVersion(node.task), status: node.status,
         attempts: node.attempts, assignment: node.assignment, finding: node.finding,
@@ -451,7 +476,9 @@ function freezeSource(source: SeedSource, directory: string) {
     { id: 'seed-recovery-guide', kind: 'research-notes' as const, text:
       'The canonical owned sources and exact task graph were explicitly initialized in this new run. Historical proof flags, threads and assignments do not authorize work or acceptance. Only freshly checked helpers are integrated; conditional proofs retain their typed obligations.\n' +
       'For an unfinished task, inspect draft-WORKER_ID for its complete source strings and RESEARCH.md notes. Match the captured task id and digest to your current assignment before recovering useful code. Preserve the current canonical proofs; recovered drafts still require ordinary typed host checks.\n' +
-      'The original run may still be progressing. Its canonical sources are pinned to the recorded commit; worker files are individually stable captured bytes, not a globally atomic observation. Repeated initialization uses this same frozen capture.\n' },
+      'The original run may still be progressing. Its canonical sources are pinned to the recorded commit; worker files are individually stable captured bytes, not a globally atomic observation. Repeated initialization uses this same frozen capture.\n' +
+      (source.ownershipExtension ? `This run re-bootstraps the same problem with added owned files ${JSON.stringify(source.ownershipExtension.addedFiles)}; ` +
+        'they start at their baseline and worker drafts hold only the former owned files. Research findings bound to the former problem receipt are history and their tasks reopen.\n' : '') },
     { id: 'seed-canonical', kind: 'proof-source' as const, text: canonicalMathJson({ sources: source.canonicalSources }) },
     { id: 'seed-task-graph', kind: 'diagnostics' as const, text: canonicalMathJson(source.plan) },
     { id: 'seed-history', kind: 'diagnostics' as const, text: canonicalMathJson({ source: source.source, history: source.history,

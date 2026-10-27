@@ -74,13 +74,54 @@ Lead 先根据原题、定义和已有发现判断可行的数学路线，再提
 - 定义不是命题，不能作为假设绑定：条件连接与自动连接都不会把它当输入，消费者要等定义正文集成后才开工；引用该定义的 `statementReview` 引理，其语句审阅同样等定义集成后才开始。
 - 宿主策略组合跳过定义任务；canonical 中已有同名完整 `def` 时仍走 canonical 探针。
 - 已检查的定义任务以 `kind:"definition"` 条目导入定理知识库（类型为任务类型，`typeKind:"closed-task-type"`）。M4 提示把这类命中当作需复制改写进 owned 文件的定义正文，而非可直接套用的命题；其性质仍须在当前题目中证明。
-- 宿主不判断定义是否表达了预期含义；需要时，Lead 另立普通引理检查其基本性质。
+- 宿主不判断定义是否表达了预期含义。M4 要求 Lead 为每个定义在同一 proofPath 中配一个 typed sanity 引理，在刻画性情形或小例子上钉住预期含义，让空洞或写错的正文在消费者依赖它之前就失败。
+
+有限情形表用族任务（family）表达：在 `kind:"lemma"` 任务上写 `family:{"lo":0,"hi":N,"chunk":K,"predicate":"Namespace.P"}`，其中 `P : Nat → Prop` 是已有声明或依赖里的定义任务。解析时宿主改写这个任务：
+- `type` 固定为 `∀ i : Nat, lo ≤ i → i < hi → P i`，Lead 写的 type 被覆盖；`conditional` 缺省为 `true`。
+- 派生成员 `ID_c0`、`ID_c1`…，每个覆盖连续 K 个下标（最后一个可以更短），最多 256 个。成员类型是同一谓词在自己区间上的命题，`theoremName` 为 `NAME_cK`，继承族任务除成员外的 `dependsOn`、proofPath、group、sharing 和 status；不继承 ownerId、informalProof 与 citations。族任务的 `dependsOn` 末尾追加全部成员。
+- 每次解析都从族任务重新派生成员：带 `familyMember` 标记的旧成员被丢弃，区间缩小时族任务里失效的成员 id 被移除。`ID_cN` 形式的 id 全部保留给成员，Lead 用这种 id 写任务报 `math_plan_family_member_edited`；改区间、状态或依赖只能改族任务。成员目标文字不含成员总数，扩大 `hi` 时未变区间的成员版本不变。
+- RESEARCH.md 中同步的已接受图和计划补丁基都折叠掉成员，Lead 只看到族任务；`COOPERATION.json` 仍列出全部成员。goal-path 复核里，恢复暂停成员的答案改写为恢复族任务；成员不产生机械 connect，也不作为 assume 的消费者。
+
+族任务派发时，类型预检不等待它自己的成员在源码中出现（族类型不提及成员）。预检 elaborated 后，M2 的可选 `assembleFamily` 在模型派发前写出族证明：`fun i hlo hhi => …`，按 `i < bound` 平衡二分，每个叶子是 `NAME_cK i 下界 上界`，下界用 `Nat.not_lt.mp`。写入方式同 tactic battery（填补 sorry 或插在预检锚点前，在一次性 checkout 中提交），这一步不运行 Lean。候选随后走普通任务检查：条件族把派发时的全部 lemma 输入（含已证成员）绑定为显式假设，通过即以 `conditional` 发布；成员全部集成后，宿主按现有条件证明流程复用并无条件复检合并版本。检查失败或候选无法放置时照常派发模型。同一族版本、依赖和环境在一个进程内只装配一次，不消耗模型 turn 或 attempts；`task_family_assembly` 事件记录结果、`assumedInputs`、commit 与 receipt。显式 `conditional:false` 的族要等全部成员集成后才开工。成员上下文提示只证自己的区间。用 `familyAssemblyProof` 生成的 256 个成员加族证明，在 Lean 4.35.0-rc3（仅 core，成员为项证明）中单文件编译约 0.5 秒、峰值约 512 MiB，`#print axioms` 报告不依赖任何公理。
 
 有限 Boolean 推断可先用 `theorem-os check-finite --input FILE` 或 `--json JSON` 复算。输入是 `theorem-os.finite-boolean-cnf.v1` 的变量、固定赋值和 CNF 子句；输出绑定规范数据与原始输入摘要，保留完整赋值计数、满足数及有界 witness。超过公开枚举规模限制时返回 unsupported，不能报告矛盾；没有新增墙钟截止。结果仅针对输入约束，仍是 advisory，须连同精确数据进入研究证据，不能代替 Lean 或 S3。`examples/finite/old-b1-nine-constraints.json` 重放旧九行约束，在 256 种赋值中得到 5 个满足染色；它只否定该组约束的旧矛盾推断，不否定几何构型或原题。
 
 配置 `DEEPSCIENTIST_MATH_TOOLS_ROOT` 后，运行开始时读取 `ROOT/manifest.json`（`theorem-os.math-tools.v1`：每个工具的 `name`、`version`、单行 `purpose` 与 `commands`），要求 `ROOT/bin` 恰好包含所列可执行文件，且命令不得占用 `lean`、`lake`、`git`、`python3` 等保留名。清单摘要写入 `DEEPSCIENTIST_MATH_TOOLS_SHA256` 并计入环境摘要，清单变化后恢复会以身份变更拒绝。`ROOT/bin` 追加在 PATH 末尾，不遮蔽固定 Lean 与系统命令；M4 在四角色指令中列出工具与用途，要求在 `$TMPDIR` 下运行、限时、限 4 线程，并把命令、输入和关键输出写入 RESEARCH.md。计算结果是 advisory，须改写成 Lean 陈述并证明，不能代替 M2 或 S3 验收。未配置时指令与 PATH 不变。
 
 有限整数计算可用 `theorem-os kernel-certificate --input FILE` 或 `--json JSON` 生成内核检查证书（`theorem-os.kernel-certificate.v1`）。`claim:"box"` 对整数区间的笛卡尔积断言单行 Bool `check`；`claim:"witnesses"` 对区间中每个值逐行给出见证。生成器按 `pointsPerChunk` / `rowsPerChunk` 切块：多模块时首模块放共享定义，中间模块放各块定理，末模块用 `decide +kernel` 拼出 `NAME.holds`，不用 `native_decide`；`kernelModule` 中的 KernelCompute 库只依赖 `propext` 与 `Quot.sound`。不带 `--workspace` 时只输出计划与 `inputDigest`；`--workspace` 写入时拒绝覆盖内容不同的非空文件，除非加 `--replace`。生成文本本身不是证据，只有 Lean 接受全部模块才算。Lean-Eval 引导加 `--certificate-slots N`（1–64）时，solver ownership 额外包含冻结的 `Submission/Certificates/Kernel.lean`（宿主库原文）和空的 `Part01.lean`…`PartNN.lean`，receipt 记录 `certificateSlots`，官方门重新核对这份 ownership。owned 模块可互相 import（无环）。拥有该槽位时，M4 指令把 PartNN 压缩成一个范围、不把 Kernel.lean 列为可编辑，加入证书说明（先用 check-lean 检查第一块、桥接引理名、在 RESEARCH.md 记录 spec 与 `inputDigest`），Lead 的 proofPath 候选排除证书模块；research `sources` 仍须包含全部 owned Lean 文件。
+
+Lean-Eval 引导加 `--theory-modules M`（1–64）时，solver ownership 额外包含 `Submission/Theory/T01.lean`…`TMM.lean`，每个模块初始只有空的 `namespace Submission.Theory … end Submission.Theory`；receipt 记录 `theoryModules`，官方门重新核对这份 ownership，receipt 缺少任一理论模块即拒绝。冻结的源码结构只允许在该 namespace 内增加声明，并允许增加 import，因此模块里不能加顶层 `open`、`variable`、`section` 或嵌套 namespace；`open … in` 与 `set_option … in` 只能写在证明内。每个模块单独编译并缓存（见下段）。M4 指令把 TNN 压缩成一个范围，要求一个数学主题一个模块：先写定义，再写其基本 API 与 sanity 引理，最后写建立在其上的定理；显式 import 所需的 `Mathlib.*`、更早的理论模块或原文件已 import 的冻结模块，由消费者 import 理论模块且不得成环，并在 RESEARCH.md 记录各模块所含主题。Lead 的 proofPath 候选包含理论模块，proofPath 写明承载该主题的模块。
+
+库包（`theorem-os.library-pack.v1`）把已检查的 Lean 模块装进新运行。生成方式有两种：
+- `theorem-os library-pack extract --state RUN/state.json --file Submission/Helpers.lean … --output PACK`：取保存运行某个 commit（缺省为其 canonical commit）的 owned 文件，删除原题声明；加 `--drop-unproved` 时同时删除含 sorry 或 admit 的证明。凡提到被删名字的声明（按名字末段词法匹配，跨文件迭代到不动点）也一并删除，删除记录写入 `origin.dropped`。选中文件之间的 import 改名；原 trusted 本地 import 的闭包记为 `requires`（文件与摘要）；未选中的 owned import 直接拒绝。
+- `theorem-os library-pack upstream --repo DIR --commit REV --file Mathlib/X/Y.lean …`：从本地 Lean 仓库的某个 revision 原样复制文件（含许可证头），只改选中文件之间的 import。用于把比固定 Mathlib 更新的上游文件回移进来。
+
+两种方式的模块都落在 `Submission/Library/NAME/…`。`--base PACK` 合并更早的库包，供引用了已冻结库模块的后续运行使用。`inspect PACK` 输出摘要，包括声明数和需要在包外解析的 import。
+
+`bootstrap-lean-eval --library-pack PACK` 安装库包：
+- 模块作为新的 solver-owned 文件写入。与已有文件冲突、`requires` 字节不符，或本地 import 闭包里出现包外且未声明的文件，都会拒绝。
+- receipt 记录 `libraryPack {digest, files}`，官方门把这些文件计入 ownership。
+- 求解器把它们记为 `frozenFiles`。保存、交付和任务变更里，库文件只要改了一个字节就报 `math_library_module_changed`；owned 文件重新声明库里已有的限定名，报 `math_library_declaration_redeclared`；receipt 读取时，磁盘内容与摘要不符报 `math_library_pack_changed`。
+
+每次运行在依赖检查之后，用 Lean 重新检查全部库模块（`library-pack-diagnostics.json`）。检查失败、超时或出现 `declaration uses sorry`，都在模型启动前报 `math_library_pack_failed`。
+
+M4 指令和 Lead 的 proofPath 候选都不含库文件，research `sources` 也不要求它们。指令只说明库模块已冻结、只能 import 使用。库声明通过 `DECLARATIONS.jsonl` 中路径以 `Submission/Library/` 开头的行查找，上下文只放文件引用和声明数，不内联源码。计划里的 lemma 名字末段与库声明相同时，错误会指出所在的库文件。
+
+词法门在屏蔽注释和字符串后拒绝 sorry、axiom、native_decide、unsafe、implemented_by、extern、`#eval`、run_cmd 等，但最终的权威仍是内核和公理检查。限制：
+- `isAllowedMathProofSource` 排除路径段 challenge(s)，所以 `Challenge.lean` 不能作为库输入或 `requires`；`ChallengeDeps.lean` 可以。
+- 回移的上游文件若与固定 Mathlib 有同名声明，会在启动复检时失败。只能回移固定版本中还没有的文件，或改名后放入。
+
+对已停止的 290 运行只读试抽：canonical commit `d2203c48` 的 `Submission/Helpers.lean` 得到一个 402 KB、529 个声明的模块，没有被删的声明，只依赖 `ChallengeDeps.lean`；尚未在 Lean 中编译。
+
+除声明审阅外，每个回合开始时宿主都从已保存的 owned 源码重建 worktree 根目录的 `DECLARATIONS.jsonl`。每个 owned theorem、lemma、def、abbrev、opaque 或 instance 占一行 `{name,kind,file,line,sorry,type}`：
+- `name` 是完整限定名；
+- `file` 是相对 Lean 项目的路径；
+- `type` 是声明头，超过 4000 字符会截断并标 `truncated`；
+- `sorry` 表示证明体里有词法上的 sorry 或 admit，注释和字符串里的不算。
+
+不能安全读取的 owned 文件（链接、硬链接、缺失、超过 16 MiB）以及超出 8 MiB 总量的声明，记在末行 `{"omitted":…}`。这个文件和 `COOPERATION.json` 一样是宿主日志：不进 checkpoint 提交，不算越权文件，也没有经过 Lean 检查。它不列 structure / inductive，也不反映本回合内的编辑。
+
+M4 指令要求先用 rg 查这个文件找已有 helper，再按 file:line 读源码；库声明的检索不变，仍用 search-lean。依据来自已停止的 290 运行：13 个 worker 会话共 1282 次命令，其中 188 次 grep/rg/find 扫的是自己的 `Submission/Helpers.lean`（402 KB，输出累计 536 KB），search-lean 只用了 2 次。而且 search-lean 只索引已安装的包，查不到 owned 文件。
 
 M2 编译项目本地模块时，每个模块在只含其源码与传递依赖产物的临时根中单独编译，同一批次内按 import DAG 并行（受 `DEEPSCIENTIST_MATH_VERIFIER_CONCURRENCY` 限制），按图序报告第一个失败；目标文件最后在只含自身与依赖闭包产物的新根中检查。模块键绑定环境摘要（工具身份、verifier 可执行文件指纹、Lake 配置与包指纹）、文件、源码摘要和依赖键。有 receipt secret 时，`.olean` 等产物写入 `$DEEPSCIENTIST_CACHE_DIR`（缺省为系统临时目录）下的 `mathematics/lean-modules-v1`，manifest 用 HMAC 签名；恢复时重新哈希每个文件，拒绝链接与硬链接并删除损坏条目，按最近使用保留至多 1024 条、2 GiB。无 secret 时只在批内复用。官方门不读这个缓存。真实 bwrap 端到端检查：`DEEPSCIENTIST_TEST_LEAN_SANDBOX=1 npx vitest run tests/verifierModuleBuild.test.ts`。
 
@@ -239,13 +280,27 @@ worker 交付日志按行持久保存游标；停止、验证器不可用或宿�
 
 研究或进度成果可用 `mathematicalGap` 持续记录原题的数学缺口：精确 consumer、上一缺口、实际减少的部分、仍缺的量词和强度、证据范围及重试条件，后续报告可引用 previousDeliveryId。宿主绑定问题、环境、来源、消费者和传递依赖版本；输入变化后保留旧证据为历史，不能把弱结果或条件充分性当成核心前提已证。组私有范围同时约束历史与当前来源/消费者。必需上下文最多展示八项、每项 8 KiB、合计 32 KiB，省略内容有摘要、数量和 `COOPERATION.json.mathematicalGaps` 完整读取句柄。
 
-原题路径复查（`goalPathReview`）逐原题列出前沿输入的状态：可运行、进行中、暂停、停止、路线关闭（含组回合预算耗尽）、阻塞、停放或缺失。没有任何前沿输入可运行的活动原题记为 stalled；原题自身或其所在组被显式暂停、停止时记为 deferred，不算 stalled。对 stalled 原题，宿主按前沿状态给出候选动作：resume、reopen-route、revise、add-task、connect（已检查的离路 lemma 结论相同，可附额外前提）、assume、decompose。connect 只是语法匹配，仍需 Lean 检查；assume 只能让原题条件闭合。Lead 的规划证据带 `goalPath` 字段，最多四个原题、每题六个前沿输入及八个候选；存在 stalled 原题时追加说明，要求本次修订采用其中一个候选，或在 RESEARCH.md 写明都不适用的数学理由及何种变化会改变结论。
+原题路径复查（`goalPathReview`）逐原题列出前沿输入的状态：可运行、进行中、暂停、停止、路线关闭（含组回合预算耗尽）、阻塞、停放或缺失。没有任何前沿输入可运行的活动原题记为 stalled；原题自身或其所在组被显式暂停、停止时记为 deferred，不算 stalled。对 stalled 原题，宿主按前沿状态给出候选动作：resume、reopen-route、revise、add-task、connect（已检查的离路 lemma 结论相同，可附额外前提）、assume、decompose。connect 只是语法匹配，仍需 Lean 检查；assume 只能让原题条件闭合。Lead 的规划证据带 `goalPath` 字段，最多四个原题、每题六个前沿输入及八个候选。每个候选有在本次复查内稳定的 `id`（`动作:任务id`，connect 再接 `:离路lemma`）和 `mechanical` 标记。
 
-stalled 由持久状态重新计算并记入 `goalPathStall`，不作为保存的唤醒请求。新的 stall 欠 Lead 一次派发：其他 worker 忙碌、这次暂停由 Lead 自己决定、规划输入摘要未变，都不抵消这次派发。它排在已有的阻塞重评与未尝试前沿的机械恢复之后，并等待该原题路线上已在进行的工作结束（运行或已交付的任务、就绪的条件复检、类型准备、正在进行的陈述审阅），因为这次回合要回应这些结果；路线外的工作不推迟它。派发时已展示这些 stalled 原题的 Lead 回合一经结算即视为作答，重新暂停同一原题不再追问，直到新证据改变 stall 摘要。已应用的人工编辑本身就是它所造成 stall 的规划决定，不唤醒 Lead；编辑前已欠 Lead 的原题仍然欠着。
+存在 stalled 原题时，Lead 须在修订中逐个回应 stalled 前沿输入：`{"baseVersion":"...","goalPath":{"adopt":["resume:core"],"decline":[{"taskId":"core","reason":"..."}]}}`。`goalPath` 只能出现在修订里；完整 `tasks` 列表带它会被拒绝（`math_plan_goal_path_requires_revision`），只含 `goalPath` 的修订按空 `upsert` 处理。mechanical 候选由宿主按 id 展开成普通修订（`goalPathDecisions.ts`）：
+
+- resume：把该输入设为 `active`；
+- reopen-route：重新启用已暂停或停止、回合预算未耗尽的组；
+- connect：无额外前提时把离路 lemma 并入 `dependsOn`；
+- assume：把列出的消费者设为 `conditional:true`。
+
+修订自身给出相反字段，或删除了该输入，报 `math_plan_goal_path_conflict`。其余候选（revise、add-task、decompose、带额外前提的 connect、预算耗尽的 reopen-route）只登记采用，修订本身须改动该输入或其消费者，reopen-route 须提供 `groups`，否则报 `math_plan_goal_path_unapplied`。未知 id 属于仍 stalled 的输入时报 `math_plan_goal_path_unknown_candidate`，并列出该输入的候选；已不 stalled 的输入的 id 与 decline 视为过时，直接忽略。decline 理由去除首尾空白后不超过 500 字符，同一输入不能既采用又拒绝。展开后的修订仍走普通补丁与计划校验；这些回应只记录 Lead 如何答复复查，从不验收证明。
+
+stalled 由持久状态重新计算并记入 `goalPathStall`，不作为保存的唤醒请求。新的 stall 欠 Lead 一次派发：其他 worker 忙碌、这次暂停由 Lead 自己决定、规划输入摘要未变，都不抵消这次派发。它排在已有的阻塞重评与未尝试前沿的机械恢复之后，并等待该原题路线上已在进行的工作结束（运行或已交付的任务、就绪的条件复检、类型准备、正在进行的陈述审阅），因为这次回合要回应这些结果；路线外的工作不推迟它。派发时已展示这些 stalled 原题的 Lead 回合结算后，满足以下任一条件即视为作答：
+
+- 回合结束时 stall 摘要与展示时不同，例如重新暂停、修订或重开路线；
+- `goalPath` 对展示出的每个 stalled 输入都采用了候选或给出 decline。
+
+否则记一次未作答（`goal_path_stall_unanswered`），下一回合的证据带 `unansweredTurns` 并明示再不作答就记为忽略；第 `MAX_UNANSWERED_GOAL_PATH_TURNS`（2）次未作答记 `ignoredAt`（`goal_path_stall_ignored`），不再唤醒 Lead，直到新证据改变 stall 摘要。decline 理由保存在 `goalPathStall.declined`，同一 stall 的后续证据会展示；摘要变化后清空。未完成而保存检查点的 Lead 回合仍按旧规则以“已看过”作答，何时继续由其保存的暂停决定。已应用的人工编辑本身就是它所造成 stall 的规划决定，不唤醒 Lead；编辑前已欠 Lead 的原题仍然欠着。
 
 任务可附带蓝图字段 `informalProof`（不超过 2000 字符）与 `citations`（最多八条，每条不超过 300 字符），写出预期论证与文献来源。它们随任务派发进入 worker 的必需上下文，并在续跑交接和运行检查中保留展示，但不进入 taskVersion，不会让已检查任务失效，也不构成证明证据。
 
-这一机制来自 Lean-Eval 290 的保存状态。27 个保存状态中有 11 个 stalled，其中 10 个是 Lead 暂停了 `main_290_goal` 唯一的前沿 `bounded_rank_290`：前沿从此为空，既没有任务派发，也没有唤醒 Lead；Lead 后续仍有回合，但没有 stall 证据，研究者继续在路线外工作。其中 6 个运行已检查离路 lemma `truant_two_premise_glue`，它在两个额外前提下给出相同结论，却从未被接入；复查现在在这里给出 connect 候选。
+这一机制来自 Lean-Eval 290 的保存状态。27 个保存状态中有 11 个 stalled，其中 10 个是 Lead 暂停了 `main_290_goal` 唯一的前沿 `bounded_rank_290`：前沿从此为空，既没有任务派发，也没有唤醒 Lead；Lead 后续仍有回合，但没有 stall 证据，研究者继续在路线外工作。其中 6 个运行已检查离路 lemma `truant_two_premise_glue`，它在两个额外前提下给出相同结论，却从未被接入；复查现在在这里给出 connect 候选。Lead 看到 stall 后仍可能原样提交控制回复；现在这种回合不算作答，会再问一次，并允许只写一个候选 id 作答。
 
 ## 当前任务的知识复用
 
@@ -298,6 +353,8 @@ M5 在 typed helper 的当前源码投影完成后、正式分配和模型调用
 恢复在完成结果的提前返回前也检查快照。旧无附件运行不能增加附件，有附件运行可以不再提供原始文件；仍只能读取已绑定快照。盲法声明审阅保持固定声明范围，不接收恢复附件。附件、旧检查与研究假说均为 advisory，M2 与 S3 的验收权限不变。未附加材料的四角色上下文保留逐字相同的消息、指令和编译清单。
 
 `run --continuation-source-run` 在同一运行锁和已准备的证明环境下完成新运行初始化与求解。新取得的无条件回执通过同一对象交给合作运行；合同、环境和源码投影仍匹配时，启动复检复用该回执。JSON 重载不保留进程内归属，独立 `continuation-seed` 后的恢复仍会重新检查。条件证明从其固定 proof 和 seed 源码恢复，保留精确前提版本并在新环境重新检查；声明尚未进入 canonical 时也能接续，前提仍需正式证明和无条件合并验收。
+
+续跑种子原先要求新旧运行的问题 receipt 与源码策略摘要完全相同，所以为同一题重新引导、加上证书槽或理论模块后，就无法接续旧运行。现在允许一种所有权扩展：类型、项目路径、合同、目标和 trusted 文件都不变；旧 owned 文件全部保留，且各自的冻结声明、源码结构与 import 约束不变；只新增 owned 文件。此时新运行可以在另一个 Git 仓库中，不再要求共享 git common dir。新增文件取新运行基线提交中的内容，其余 owned 文件取旧运行在对应 commit 的源码，canonical、条件证明 seed 与 helper 都照此组合后在新仓库重新检查，生成新收据。worker 草稿只含旧 owned 文件。种子来源记录 `ownershipExtension`（旧 receipt 与策略摘要及新增文件列表），恢复指南说明新增文件从基线开始。绑定旧 receipt 摘要的研究交付与完成记录转为 superseded / 历史，对应研究任务重新开放。其他任何身份差异仍报 `math_continuation_seed_identity_changed`，且不写入种子。
 
 初始化 helper 按来源 commit、完整源码投影及前提和环境身份分组，每批最多 32 项，批次顺序执行。相同投影共享编译，每个目标仍独立验收收据、固定证据提交并持久保存进度；投影预检失败只阻塞该候选，批量源码校验拒绝则回退逐项检查。取消时等待在途检查清理后才释放环境与运行锁。开始求解前，快照读取、worker 附件分发或启动结果发布失败仍保留 `prepared`，原参数加 `--resume` 可重试；跨进程重试继续使用首次冻结材料并重新验收。
 

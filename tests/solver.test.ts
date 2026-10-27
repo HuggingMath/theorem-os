@@ -9,6 +9,7 @@ import { readSolverRunState } from '../src/solver/archive';
 import { hashMathFormalSourceDeclaration, type MathematicsVerifierBatchRequest, type MathematicsVerifierBatchResult } from '../src/math/verifier';
 import * as verifier from '../src/math/verifier';
 import { readSolverProblem, assertSolverSources, assertSolverProjectSources, commitSolverSources, git, withSolverWorktree, SolverSourceError, type SolverProblem } from '../src/solver/problem';
+import { ownedSourceDeclarations } from '../src/solver/declarationIndex';
 import { checkSolverProof } from '../src/solver/modules/evidence';
 import { assessTaskResponsibility } from '../src/solver/modules/organization';
 import { directSolverModules } from '../src/solver/modules';
@@ -1414,7 +1415,7 @@ describe('isolated solver and host acceptance', () => {
   });
 
   it('keeps changing host journals outside the strict clean-checkout boundary', async () => {
-    const journals = ['COOPERATION.json', 'CONTEXT-MANIFEST.json', 'DELIVERIES.jsonl', `DELIVERIES-${'a'.repeat(64)}.jsonl`];
+    const journals = ['COOPERATION.json', 'CONTEXT-MANIFEST.json', 'DECLARATIONS.jsonl', 'DELIVERIES.jsonl', `DELIVERIES-${'a'.repeat(64)}.jsonl`];
     for (const file of journals) fs.writeFileSync(path.join(workspace, file), '{}\n');
     fs.writeFileSync(path.join(project, 'Submission.lean'), original.replaceAll('by sorry', 'by trivial'));
     fs.writeFileSync(path.join(workspace, 'RESEARCH.md'), 'Checked both original targets.');
@@ -3753,6 +3754,25 @@ describe('isolated solver and host acceptance', () => {
   const groupedTasks = () => planTasks().map(task => ({ ...task, groupId: task.id === 'b' ? 'alternative' : 'main',
     sharing: task.id === 'b' ? 'problem' as const : 'group' as const }));
 
+  it('gives every proof turn a fresh index of the saved owned declarations', async () => {
+    const turns: { key: string; index: unknown[]; source: string }[] = [];
+    configureCooperation(async (action, options) => {
+      expect(options.instructions).toContain(path.join(options.workspace, 'DECLARATIONS.jsonl'));
+      turns.push({ key: action.kind === 'task' ? action.task.id : action.kind,
+        index: fs.readFileSync(path.join(options.workspace, 'DECLARATIONS.jsonl'), 'utf8').trimEnd().split('\n').map(line => JSON.parse(line)),
+        source: fs.readFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), 'utf8') });
+      finishAssignment(action, options);
+      return 'completed';
+    });
+    expect(await runSolver([...args, '--workers', '4', '--max-turns', '8'], directory)).toBe(0);
+    for (const turn of turns) expect(turn.index, turn.key).toEqual(ownedSourceDeclarations('Submission.lean', turn.source));
+    // The second goal starts from a seed with the checked helpers and first goal, so only its own target has sorry.
+    expect(turns.find(turn => turn.key === 'second')!.index.map((entry: any) => [entry.name, entry.sorry])).toEqual([
+      ['Submission.fixed', false], ['Submission.a', false], ['Submission.b', false], ['Submission.first', false], ['Submission.second', true]]);
+    const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
+    expect(git(state.worktree, ['ls-files', '--', 'DECLARATIONS.jsonl'])).toBe('');
+  });
+
   it('reuses a checked cross-route lemma with its explicit sharing, producer and version', async () => {
     configureCooperation(async (action, options, message) => {
       if (action.kind === 'lead') writePlan(options.workspace, groupedTasks().map(task =>
@@ -3793,11 +3813,13 @@ describe('isolated solver and host acceptance', () => {
       return 'completed';
     });
     // Spare global turns must not be spent repeatedly asking the Lead to restart an inactive route: `first`, whose
-    // remaining input sits on it, is owed exactly one stall turn, and that answer is not asked again.
+    // remaining input sits on it, stalls once. This Lead restates its plan without answering, so the stall is asked
+    // once more and then recorded as ignored, never asked again.
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '10'], directory)).toBe(4);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(started).toBe(1);
-    expect(state.turns).toBe(4);
+    expect(state.turns).toBe(5);
+    expect(state.cooperation.goalPathStall).toMatchObject({ unanswered: 2, ignoredAt: expect.any(Number) });
     expect(state.cooperation.tasks.map(node => node.status)).toEqual(['integrated', 'pending', 'pending', 'integrated']);
     expect(state.cooperation.groups[1].turns).toBe(0);
     expect(host.officialGate).not.toHaveBeenCalled();
@@ -3819,8 +3841,10 @@ describe('isolated solver and host acceptance', () => {
     expect(await runSolver(parallelArgs, directory)).toBe(4);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(state.cooperation.groups[0].turns).toBe(1);
-    // The spent route cap stalls both goals, so the Lead gets one turn to answer it before the run idles.
-    expect(state.turns).toBe(3);
+    // The spent route cap stalls both goals. The Lead restates its plan without answering, so it is asked once more
+    // and the stall is then recorded as ignored before the run idles.
+    expect(state.turns).toBe(4);
+    expect(state.cooperation.goalPathStall).toMatchObject({ unanswered: 2, ignoredAt: expect.any(Number) });
     expect(state.cooperation.tasks[0].status).toBe('integrated');
     writePlan(state.worktree, waitingPlanTasks(), [{ ...groups[0], maxTurns: 4 }]);
     expect(await runSolver([...parallelArgs, '--resume'], directory)).toBe(0);
@@ -6391,6 +6415,32 @@ describe('isolated solver and host acceptance', () => {
     expect(host.createSession).toHaveBeenCalledTimes(1);
     expect(JSON.parse(fs.readFileSync(`${rejected}.runtime/state.json`, 'utf8')).phase).toBe('finished');
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('error: unknown module prefix Mathlib'));
+  });
+
+  it('rechecks frozen library-pack modules at startup and stops before the model when one uses sorry', async () => {
+    const lib = 'Submission/Library/Fixture/Lemmas.lean', source = 'namespace Submission\ntheorem library_true : True := trivial\nend Submission\n';
+    fs.mkdirSync(path.join(project, path.dirname(lib)), { recursive: true });
+    fs.writeFileSync(path.join(project, lib), source);
+    const receipt = JSON.parse(fs.readFileSync(problem.activeProblemPath, 'utf8'));
+    fs.writeFileSync(problem.activeProblemPath, JSON.stringify({ ...receipt, solverOwnedFiles: ['Submission.lean', lib],
+      libraryPack: { digest: 'c'.repeat(64), files: { [lib]: mathDigest(source) } } }));
+    git(workspace, ['add', 'generated']);
+    commitFixture(workspace, 'Install library pack');
+    expect(await runSolver(args, directory)).toBe(0);
+    const libraryCheck = host.prepare.mock.calls.find(([input]) => input.files.includes(lib));
+    expect(libraryCheck?.[0]).toMatchObject({ files: [lib] });
+    expect(libraryCheck?.[0]).not.toHaveProperty('dependenciesOnly');
+    expect(JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).problem.frozenFiles).toEqual({ [lib]: mathDigest(source) });
+    expect(fs.existsSync(`${output}.runtime/library-pack-diagnostics.json`)).toBe(true);
+
+    host.createSession.mockClear();
+    const rejected = path.join(directory, 'rejected.json');
+    host.prepare.mockResolvedValueOnce({ exitCode: 0, timedOut: false, phases: [] }).mockResolvedValueOnce({ exitCode: 0, timedOut: false,
+      phases: [], messages: [{ format: 'lean-json', severity: 'warning', file: lib, message: "declaration uses 'sorry'" }] });
+    expect(await runSolver([...args, '--output', rejected], directory)).toBe(1);
+    expect(host.createSession).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(`${rejected}.runtime/library-pack-diagnostics.json`, 'utf8')).messages).toHaveLength(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`${lib} declaration uses 'sorry'`));
   });
 
   it('reports the pinned compiler mismatch before starting dependencies or a model', async () => {

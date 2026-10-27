@@ -5,7 +5,7 @@ import { buildResearchContext, buildStatementReviewContext } from './context';
 import { selectResearchAction, planResearchRetry, readyResearchTasks, criticalPathResearchTasks, continuationResearchTasks } from './search';
 import { assignSharedResearchTask, researchWorkers, assignResearchReviewer } from './organization';
 import { checkTaskProof } from '../cooperativeProof';
-import { closeTaskByTactics } from '../tacticBattery';
+import { assembleFamilyTask, closeTaskByTactics } from '../tacticBattery';
 import { directSolverModuleIdentity, configuredSolverModuleIdentity } from './moduleIdentity';
 export { solverModuleConfiguration, solverMethodDigest } from './moduleIdentity';
 
@@ -13,16 +13,19 @@ export { solverModuleConfiguration, solverMethodDigest } from './moduleIdentity'
 export const directSolverModules = {
   id: directSolverModuleIdentity.id,
   M1: { version: directSolverModuleIdentity.versions.M1!, open: createCodexMathSession, execute: executeResearch },
-  M2: { version: directSolverModuleIdentity.versions.M2!, check: checkSolverProof, checkTask: checkTaskProof, closeTask: closeTaskByTactics },
+  M2: { version: directSolverModuleIdentity.versions.M2!, check: checkSolverProof, checkTask: checkTaskProof, closeTask: closeTaskByTactics,
+    assembleFamily: assembleFamilyTask },
   M3: { version: directSolverModuleIdentity.versions.M3!, select: selectResearchAction, retry: planResearchRetry, ready: readyResearchTasks },
   M4: { version: directSolverModuleIdentity.versions.M4!, build: buildResearchContext, statement: buildStatementReviewContext },
   M5: { version: directSolverModuleIdentity.versions.M5!, workers: researchWorkers, reviewer: assignResearchReviewer, assign: assignSharedResearchTask },
 };
 
 export type SolverModules = Omit<typeof directSolverModules, 'M2' | 'M5'> & {
-  M2: Omit<typeof directSolverModules.M2, 'checkTask' | 'closeTask'> & { checkTask?: typeof checkTaskProof;
+  M2: Omit<typeof directSolverModules.M2, 'checkTask' | 'closeTask' | 'assembleFamily'> & { checkTask?: typeof checkTaskProof;
     /** Host automation that may close a typed helper before a model turn; omit it to dispatch every helper to a model. */
-    closeTask?: typeof closeTaskByTactics };
+    closeTask?: typeof closeTaskByTactics;
+    /** Host case split of a family task over its members; omit it to dispatch family tasks to a model. */
+    assembleFamily?: typeof assembleFamilyTask };
   M5: typeof directSolverModules.M5;
 };
 

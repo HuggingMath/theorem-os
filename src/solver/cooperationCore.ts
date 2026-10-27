@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import type { LeanStatementContext } from '../math/leanStatementContext';
-import { commitSolverSources, committedSource, git } from './problem';
+import { commitSolverSources, committedSource, git, solverSourceConstraints } from './problem';
 import type { DispatchWaitObservation, SolverRunState } from './archive';
 import { independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
 import type { WorkerAccess } from './research';
@@ -26,6 +26,7 @@ import { parseProofRoutes } from './proofRoutes';
 import { createProofRoutePriorityIndex } from './routePriority';
 import { captureObligationSnapshot, diffObligationProgress } from './obligationProgress';
 import { reviewGoalPaths } from './goalPathReview';
+import type { GoalPathDecisions } from './goalPathDecisions';
 import { bindMathematicalGap, mathematicalGapVisible } from './mathematicalGaps';
 import { taskConnectionCheckCurrent } from './taskConnections';
 import { TaskTypePreflightCache } from './taskTypePreflight';
@@ -36,6 +37,9 @@ import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type
 import { MAX_INVALID_TASK_TRANSITIONS, setTaskStatus, type TaskStatus, type TaskTransitionCause } from './taskLifecycle';
 
 /** Shared cooperation state, scheduling primitives and the per-worker context projection. */
+/** Lead turns that may leave a presented stall unanswered before it is recorded as ignored. */
+export const MAX_UNANSWERED_GOAL_PATH_TURNS = 2;
+
 export abstract class CooperationCore {
   protected readonly lead: ResearchWorker;
   protected readonly archive: CooperationState;
@@ -52,6 +56,8 @@ export abstract class CooperationCore {
   }>();
   /** Exact helper contracts already tried by the host tactic battery in this process. */
   protected readonly tacticBatteryAttempts = new Set<string>();
+  /** Exact family contracts whose host assembly was already checked in this process. */
+  protected readonly familyAssemblyAttempts = new Set<string>();
   protected invalidTaskTypes = new Map<TaskRecord, { canonical: string; environment: string; taskDigest: string;
     dependencies: string; project: string; workerId: string; environmentIdentity?: string }>();
   protected preparedSources?: { identity: string; project: ReturnType<typeof createTaskSourceProjector> };
@@ -75,8 +81,10 @@ export abstract class CooperationCore {
   protected proofDeliveryChecks = new Set<Promise<void>>();
   protected integrationQueue = Promise.resolve();
   protected leadEvidence = new WeakMap<CooperativeAction, string>();
-  /** The goal-path stall a Lead dispatch was shown; its settled turn answers exactly that stall. */
-  protected presentedGoalPathStalls = new WeakMap<CooperativeAction, readonly string[]>();
+  /** The goal-path stall a Lead dispatch was shown: its digest, goals and the stalled inputs its review listed. */
+  protected presentedGoalPathStalls = new WeakMap<CooperativeAction, { digest: string; goalIds: readonly string[]; taskIds: readonly string[] }>();
+  /** goalPath answers accepted from a Lead dispatch's publications, in order. */
+  protected goalPathDecisions = new WeakMap<CooperativeAction, GoalPathDecisions>();
   /** Tasks on the routes of the currently stalled goals, recomputed with the stall itself. */
   protected goalPathStallTasks: ReadonlySet<string> = new Set();
   protected publishedPlans = new WeakMap<CooperativeAction, { plan: ReturnType<typeof parseCooperationPlan>; version: string; responseDigest: string }>();
@@ -147,8 +155,8 @@ export abstract class CooperationCore {
   protected wakeLead(reason: LeadWakeReason) { requestLeadWake(this.archive.leadWakes!, reason); }
   /**
    * Record whether some original goal has no frontier input that can run. The condition is recomputed from durable
-   * state, so it is not a saved wake-up: a new stall stays owed to the Lead until one settled turn has seen it, and an
-   * identical stall is not asked again. Busy workers elsewhere do not answer it. An applied human edit is itself the
+   * state, so it is not a saved wake-up: a new stall stays owed to the Lead until a turn answers it (answerGoalPathStall)
+   * or it is recorded as ignored, and an identical stall is not asked again. Busy workers elsewhere do not answer it. An applied human edit is itself the
    * planning decision for a stall it creates, unless a goal of that stall was already owed a Lead turn before it.
    */
   protected refreshGoalPathStall(edit?: HumanEditRecord) {
@@ -178,15 +186,57 @@ export abstract class CooperationCore {
     const stall = this.archive.goalPathStall;
     return stall?.active && stall.answeredAt === undefined ? stall.digest : undefined;
   }
+  /** The review a Lead is shown, with candidate ids: the basis for its goalPath answer. */
+  protected goalPathReview(candidates = true) {
+    return reviewGoalPaths(this.archive.tasks, { groups: this.archive.groups, proofRoutes: this.archive.proofRoutes,
+      environmentDigest: this.input.state.environmentDigest, candidates });
+  }
+  /** What a Lead dispatch is shown of the current stall: the stalled inputs listed in its bounded review. */
+  protected presentedGoalPathStall() {
+    const stall = this.archive.goalPathStall;
+    if (!stall?.active) return;
+    const review = this.goalPathReview(false);
+    return { digest: stall.digest, goalIds: stall.goalIds,
+      taskIds: [...new Set(review.goals.filter(goal => goal.stalled).flatMap(goal => goal.frontier.map(item => item.taskId)))] };
+  }
   /**
-   * A settled Lead turn that was shown the stalled goals answers whatever stall its own decision leaves on them, so
-   * re-pausing the same goal is not asked again; a goal that newly stalls after its dispatch stays owed.
+   * A Lead turn that was shown the stalled goals answers the stall its decision leaves on them when that stall differs
+   * from the one it was shown (a re-pause, a revision, a reopened route), or when its goalPath adopted or declined every
+   * presented input. A settled turn that did neither leaves it owed; after MAX_UNANSWERED_GOAL_PATH_TURNS such turns it
+   * is recorded as ignored and no longer wakes the Lead. An unfinished (checkpointed) turn answers it by having seen it,
+   * as before: its saved pause, not the stall, decides when the Lead continues. A goal that newly stalls stays owed.
    */
-  protected answerGoalPathStall(action: CooperativeAction) {
+  protected answerGoalPathStall(action: CooperativeAction, settled = true) {
     this.refreshGoalPathStall();
     const stall = this.archive.goalPathStall, presented = this.presentedGoalPathStalls.get(action);
-    if (stall?.active && presented && stall.answeredAt === undefined &&
-        stall.goalIds.every(goalId => presented.includes(goalId))) stall.answeredAt = Date.now();
+    if (!stall?.active || !presented || stall.answeredAt !== undefined || !stall.goalIds.every(goalId => presented.goalIds.includes(goalId)))
+      return;
+    const decisions = this.goalPathDecisions.get(action), now = Date.now();
+    if (decisions?.declined.length) stall.declined = [...(stall.declined ?? []).filter(item =>
+      !decisions.declined.some(entry => entry.taskId === item.taskId)),
+      ...decisions.declined.map(item => ({ ...item, at: now }))].slice(-16);
+    const covered = new Set([...decisions?.adopted.map(item => item.taskId) ?? [], ...stall.declined?.map(item => item.taskId) ?? []]);
+    if (!settled || stall.digest !== presented.digest || presented.taskIds.every(taskId => covered.has(taskId))) {
+      stall.answeredAt = now; return;
+    }
+    stall.unanswered = (stall.unanswered ?? 0) + 1;
+    const missing = presented.taskIds.filter(taskId => !covered.has(taskId));
+    if (stall.unanswered < MAX_UNANSWERED_GOAL_PATH_TURNS) {
+      this.input.emit('goal_path_stall_unanswered', { digest: stall.digest, taskIds: missing, unanswered: stall.unanswered });
+      return;
+    }
+    stall.answeredAt = stall.ignoredAt = now;
+    this.input.emit('goal_path_stall_ignored', { digest: stall.digest, goalIds: stall.goalIds, taskIds: missing, unanswered: stall.unanswered });
+  }
+  /** Keep a Lead dispatch's accepted goalPath answers until its turn settles. */
+  protected recordGoalPathDecisions(action: CooperativeAction, decisions: GoalPathDecisions) {
+    const previous = this.goalPathDecisions.get(action);
+    this.goalPathDecisions.set(action, { adopted: [...previous?.adopted ?? [], ...decisions.adopted],
+      declined: [...(previous?.declined ?? []).filter(item => !decisions.declined.some(entry => entry.taskId === item.taskId)),
+        ...decisions.declined] });
+    if (decisions.adopted.length || decisions.declined.length)
+      this.input.emit('goal_path_decided', { adopted: decisions.adopted.map(item => item.id),
+        declined: decisions.declined.map(item => item.taskId) });
   }
   /** The only live task status write. Staged validation copies are checked but never recorded. */
   protected moveTask(node: TaskRecord, to: TaskStatus, cause: TaskTransitionCause) {
@@ -722,8 +772,7 @@ export abstract class CooperationCore {
     const problem = this.input.state.problem;
     if (fs.existsSync(path.join(worker.worktree, problem.projectRelative, '.lake/source-constraints.json'))) {
       writeMathJsonDurable(path.join(worker.worktree, problem.projectRelative, '.lake/source-constraints.json'),
-        { trustedFiles: problem.trustedFiles, declarations: problem.declarations,
-          sourceStructure: problem.sourceStructure, sourceImports: problem.sourceImports }, 0o400);
+        solverSourceConstraints(problem), 0o400);
     }
     const seed = commitSolverSources(this.input.state.problem, worker.worktree);
     if (worker.id === this.lead.id) {

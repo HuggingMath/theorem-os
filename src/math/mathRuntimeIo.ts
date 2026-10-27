@@ -50,7 +50,12 @@ export function syncMathDirectory(directory: string): void {
 
 /** Directory must already be a validated runtime-owned directory. */
 export function writeMathJsonDurable(file: string, value: unknown, mode: 0o600 | 0o400 = 0o600): void {
-  const contents = canonicalMathJson(value), digest = mathDigest(contents);
+  writeMathTextDurable(file, canonicalMathJson(value), mode);
+}
+
+/** Atomically replace `file` with `contents`; an unchanged, unreplaced output is not rewritten. */
+export function writeMathTextDurable(file: string, contents: string, mode: 0o600 | 0o400 = 0o600): void {
+  const digest = mathDigest(contents);
   const previous = durableWrites.get(file);
   if (previous?.digest === digest && previous.mode === mode) {
     try {

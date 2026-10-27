@@ -7,15 +7,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bootstrapLeanEvalProblem } from "../../src/math/leanEvalBootstrap";
 import { classifyLeanEvalHeldOutFamily } from "../../src/math/leanEvalHeldOutEvaluation";
+import { readLibraryPack } from '../../src/math/libraryPacks';
 import { resolveMathematicsRuntimeEnvironment } from "../../src/math/mathRuntimeEnvironment";
 
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2), ['repo', 'problem', 'workspace', 'receipt', 'evaluation-mode',
-    'certificate-slots']);
+    'certificate-slots', 'theory-modules', 'library-pack']);
   if (flags.has('help')) {
     console.log(
-      'Usage: bun scripts/mathematics/bootstrapLeanEvalHeldOut.ts --repo DIR --problem ID --workspace DIR [--receipt FILE] [--certificate-slots N]\n' +
-      'N > 0 adds solver-owned Submission/Certificates/Kernel.lean (KernelCompute library) and N empty PartNN.lean modules for kernel-certificate.'
+      'Usage: bun scripts/mathematics/bootstrapLeanEvalHeldOut.ts --repo DIR --problem ID --workspace DIR [--receipt FILE] [--certificate-slots N] [--theory-modules M] [--library-pack FILE]\n' +
+      'N > 0 adds solver-owned Submission/Certificates/Kernel.lean (KernelCompute library) and N empty PartNN.lean modules for kernel-certificate.\n' +
+      'M > 0 adds M solver-owned Submission/Theory/TNN.lean modules (empty namespace Submission.Theory) for a reusable theory library.\n' +
+      'FILE is a theorem-os library-pack JSON: its Submission/Library modules are installed byte-frozen and rechecked in Lean before each run.'
     );
     return;
   }
@@ -24,9 +27,12 @@ async function main(): Promise<void> {
   if (!['official', 'benchmark'].includes(evaluationMode)) throw new Error('Invalid --evaluation-mode');
   const slots = flags.get('certificate-slots') ?? '0';
   if (!/^[0-9]{1,2}$/u.test(slots)) throw new Error('Invalid --certificate-slots');
+  const theoryModules = flags.get('theory-modules') ?? '0';
+  if (!/^[0-9]{1,2}$/u.test(theoryModules)) throw new Error('Invalid --theory-modules');
   const repositoryValue = flags.get('repo') || runtime.DEEPSCIENTIST_LEAN_EVAL_ROOT;
   if (!repositoryValue?.trim()) throw new Error('--repo is required');
   const repositoryRoot = path.resolve(repositoryValue);
+  const libraryPack = flags.get('library-pack') ? readLibraryPack(flags.get('library-pack')!) : undefined;
   const workspaceRoot = path.resolve(required(flags, 'workspace'));
   if (fs.existsSync(workspaceRoot)) {
     if (!fs.statSync(workspaceRoot).isDirectory() || fs.readdirSync(workspaceRoot).length > 0) {
@@ -39,6 +45,8 @@ async function main(): Promise<void> {
     evaluationMode: evaluationMode as 'official' | 'benchmark',
     workspaceRoot,
     certificateSlots: Number(slots),
+    theoryModules: Number(theoryModules),
+    ...(libraryPack ? { libraryPack } : {}),
   });
   const receiptPath = path.resolve(flags.get('receipt') || path.join(workspaceRoot, 'bootstrap-result.json'));
   const descriptor = fs.openSync(receiptPath, 'wx', 0o600);

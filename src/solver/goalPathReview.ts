@@ -12,7 +12,11 @@ import { allRoutesParked, assumableLemma, groupOpen, isAdvisoryTask, isDefinitio
  */
 export type GoalPathState = 'runnable' | 'in-progress' | 'paused' | 'stopped' | 'route-closed' | 'blocked' | 'parked' | 'missing';
 export type GoalPathCandidateAction = 'resume' | 'reopen-route' | 'revise' | 'add-task' | 'connect' | 'assume' | 'decompose';
-export type GoalPathCandidate = { action: GoalPathCandidateAction; taskId: string; detail: string;
+export type GoalPathCandidate = {
+  /** Stable within one review: action:taskId, plus :relatedTaskId for connect. Task ids never contain a colon. */
+  id: string; action: GoalPathCandidateAction; taskId: string; detail: string;
+  /** The host can apply it from its id alone (goalPathDecisions.ts); otherwise the adopting revision writes the change. */
+  mechanical: boolean;
   /** connect: an off-path checked lemma with the same conclusion; assume: the consumers to mark conditional:true. */
   relatedTaskIds?: string[]; extraPremises?: string[] };
 export type GoalPathNode = { taskId: string; taskDigest: string | null; kind?: TaskRecord['task']['kind'];
@@ -102,36 +106,44 @@ export function reviewGoalPaths(tasks: readonly TaskRecord[], options: {
   });
   const candidatesFor = (frontier: readonly GoalPathNode[], pathIds: ReadonlySet<string>) => {
     const result: GoalPathCandidate[] = [];
+    const add = (candidate: Omit<GoalPathCandidate, 'id' | 'mechanical'>, mechanical = false) => result.push({
+      id: [candidate.action, candidate.taskId, ...(candidate.action === 'connect' ? candidate.relatedTaskIds! : [])].join(':'),
+      ...candidate, mechanical });
     for (const item of frontier) {
       const node = nodes.get(item.taskId);
       if (item.state === 'paused' || item.state === 'stopped')
-        result.push({ action: 'resume', taskId: item.taskId, detail: `Set status "active" in a plan revision if this ${item.state} input is still intended; otherwise replace it on the route.` });
-      else if (item.state === 'route-closed')
-        result.push({ action: 'reopen-route', taskId: item.taskId, detail: `Route group "${taskGroup(node!.task)}" is not active or has spent its turn cap; reactivate or raise its budget, or move this input to an open group.` });
-      else if (item.state === 'parked')
-        result.push({ action: 'revise', taskId: item.taskId, detail: 'A recorded blocker parks this input; change a relevant mathematical input or assign a discriminating check.' });
+        add({ action: 'resume', taskId: item.taskId, detail: `Set status "active" in a plan revision if this ${item.state} input is still intended; otherwise replace it on the route.` }, true);
+      else if (item.state === 'route-closed') {
+        // Reactivating a paused or stopped group is mechanical; a spent turn cap needs a new budget.
+        const record = group(node!);
+        add({ action: 'reopen-route', taskId: item.taskId, detail: `Route group "${taskGroup(node!.task)}" is not active or has spent its turn cap; reactivate or raise its budget, or move this input to an open group.` },
+          Boolean(record && record.group.status !== 'active' && record.turns < (record.group.maxTurns ?? Infinity)));
+      } else if (item.state === 'parked')
+        add({ action: 'revise', taskId: item.taskId, detail: 'A recorded blocker parks this input; change a relevant mathematical input or assign a discriminating check.' });
       else if (item.state === 'blocked')
-        result.push({ action: 'revise', taskId: item.taskId, detail: 'Its current attempt or type check is blocked; revise its contract from the feedback, or split it.' });
+        add({ action: 'revise', taskId: item.taskId, detail: 'Its current attempt or type check is blocked; revise its contract from the feedback, or split it.' });
       else if (item.state === 'missing')
-        result.push({ action: 'add-task', taskId: item.taskId, detail: 'A planned input names no task; add it or remove the reference.' });
+        add({ action: 'add-task', taskId: item.taskId, detail: 'A planned input names no task; add it or remove the reference.' });
       if (!node || node.task.kind !== 'lemma' || isDefinitionTask(node.task)) continue;
       const target = statement(node);
       if (target) for (const match of offPath.map(candidate => ({ candidate, cover: statementCover(target, statement(candidate)) }))
         .filter(entry => entry.cover).slice(0, connectLimit)) {
         const extra = match.cover!;
-        result.push({ action: 'connect', taskId: item.taskId, relatedTaskIds: [match.candidate.task.id],
+        // A family member's inputs belong to its family task, so connecting one is the Lead's edit there.
+        add({ action: 'connect', taskId: item.taskId, relatedTaskIds: [match.candidate.task.id],
           ...(extra.length ? { extraPremises: extra.slice(0, 2).map(preview) } : {}),
           detail: extra.length
             ? `Checked off-path lemma ${match.candidate.task.id} has this conclusion under ${extra.length} extra premise(s); add it and typed tasks for those premises to dependsOn, with conditional:true for an early check.`
-            : `Checked off-path lemma ${match.candidate.task.id} states the same proposition; prove this input from it or route through it.` });
+            : `Checked off-path lemma ${match.candidate.task.id} states the same proposition; prove this input from it or route through it.` },
+          !extra.length && !node.task.familyMember);
       }
       if (assumableLemma(node.task)) {
         const open = (consumers.get(item.taskId) ?? []).filter(id => pathIds.has(id) && nodes.get(id)?.task.kind === 'lemma' &&
-          !nodes.get(id)!.task.conditional && !settled(nodes.get(id)));
-        if (open.length) result.push({ action: 'assume', taskId: item.taskId, relatedTaskIds: open.slice(0, 4),
-          detail: 'Mark these consumers conditional:true to check the rest of the route with this statement as a fixed premise; the goal then closes only conditionally.' });
+          !nodes.get(id)!.task.conditional && !nodes.get(id)!.task.familyMember && !settled(nodes.get(id)));
+        if (open.length) add({ action: 'assume', taskId: item.taskId, relatedTaskIds: open.slice(0, 4),
+          detail: 'Mark these consumers conditional:true to check the rest of the route with this statement as a fixed premise; the goal then closes only conditionally.' }, true);
       }
-      result.push({ action: 'decompose', taskId: item.taskId, detail: 'Split it into weaker typed lemmas, each with a recorded consumer.' });
+      add({ action: 'decompose', taskId: item.taskId, detail: 'Split it into weaker typed lemmas, each with a recorded consumer.' });
     }
     return result.map((candidate, index) => ({ candidate, index }))
       .sort((a, b) => actionOrder[a.candidate.action] - actionOrder[b.candidate.action] || a.index - b.index).map(entry => entry.candidate);

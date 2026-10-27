@@ -382,7 +382,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     // source files or index while publishing advisory support.
     let sourceSnapshot: [string, string][] | undefined;
     if (sources !== undefined) {
-      const owned = this.input.state.problem.ownedFiles.filter(file => file.endsWith('.lean'));
+      const owned = this.input.state.problem.ownedFiles.filter(file => file.endsWith('.lean') &&
+        !Object.hasOwn(this.input.state.problem.frozenFiles ?? {}, file));
       const invalid = (message: string) => new ResearchAdmissionError({ status: 'rejected', code: 'math_delivery_invalid',
         issues: [{ path: 'sources', message }], recovery: 'correct-and-resubmit' });
       if (submission.kind !== 'event' || !sources || typeof sources !== 'object' || Array.isArray(sources))
@@ -466,7 +467,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       project: createTaskSourceProjector(this.input.state.problem, worktree, commit, { compact, preserved }) };
     return this.preparedSources.project;
   }
-  private assignmentConditions(task: CooperativeTask, assignment?: TaskAssignment,
+  protected assignmentConditions(task: CooperativeTask, assignment?: TaskAssignment,
     tasks: readonly TaskRecord[] = this.archive.tasks, worktree = this.lead.worktree): readonly CooperativeTask[] {
     const dependencies = this.dependencies(task, tasks);
     if (!assignment?.connectionCheck) {

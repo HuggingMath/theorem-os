@@ -3,6 +3,7 @@ import { leadPlanningEvidence, leadPlanningEvidenceText, createTaskApplicationEv
 import type { FailedTaskInput } from '../src/solver/cooperationShared';
 import { taskVersion, type TaskRecord } from '../src/solver/tasks';
 import { integratedProof } from './helpers/taskProof';
+import { reviewGoalPaths } from '../src/solver/goalPathReview';
 
 const node = (id: string, dependsOn: string[] = [], kind: TaskRecord['task']['kind'] = 'lemma'): TaskRecord => ({
   task: { id, kind, objective: 'Prove ' + id, dependsOn, revision: 0, type: '∀ n : Nat, n = n',
@@ -110,10 +111,30 @@ it('shows the goal path to the Lead and asks for a decision only when an origina
   const stalled = leadPlanningEvidence({ tasks: [goal, core] }, 'environment');
   expect(stalled.goalPath).toMatchObject({ stalledGoalIds: ['main'], goals: [{ taskId: 'main', stalled: true,
     frontier: [{ taskId: 'core', state: 'paused' }], candidates: expect.arrayContaining([
-      expect.objectContaining({ action: 'resume', taskId: 'core' })]) }] });
+      expect.objectContaining({ id: 'resume:core', action: 'resume', taskId: 'core', mechanical: true })]) }] });
   const text = leadPlanningEvidenceText(stalled);
-  expect(text).toContain('Stalled original goals'); expect(text).toContain('goalPath candidates');
+  expect(text).toContain('Stalled original goals'); expect(text).toContain('"goalPath":{"adopt":["CANDIDATE_ID"]');
+  expect(text).toContain('mechanical:true'); expect(text).not.toContain('recorded as ignored');
   expect(core.task.status).toBe('paused'); expect(core.status).toBe('pending');
+});
+
+it('shows the Lead its earlier answers to the same stall only', () => {
+  const goal = node('main', ['core'], 'goal'), core = node('core');
+  core.task = { ...core.task, status: 'paused' };
+  const digest = reviewGoalPaths([goal, core], { environmentDigest: 'environment', candidates: false }).stallDigest!;
+  const stall = { digest, active: true, at: 0, goalIds: ['main'], taskIds: ['core'], unanswered: 1,
+    declined: [{ taskId: 'core', reason: 'Waiting for the compact seed.', at: 1 }] };
+  const owed = leadPlanningEvidence({ tasks: [goal, core], goalPathStall: stall }, 'environment');
+  expect(owed.goalPath).toMatchObject({ declined: [{ taskId: 'core', reason: 'Waiting for the compact seed.' }], unansweredTurns: 1 });
+  expect(owed.goalPath.declined![0]).not.toHaveProperty('at');
+  expect(leadPlanningEvidenceText(owed)).toContain('1 earlier turn(s) shown this stall answered none of it');
+  const ignored = leadPlanningEvidence({ tasks: [goal, core], goalPathStall: { ...stall, unanswered: 2, answeredAt: 2, ignoredAt: 2 } }, 'environment');
+  expect(ignored.goalPath).toMatchObject({ ignored: true, unansweredTurns: 2 });
+  expect(leadPlanningEvidenceText(ignored)).not.toContain('earlier turn(s)');
+  for (const other of [{ ...stall, digest: 'an-older-stall' }, { ...stall, active: false }]) {
+    const fresh = leadPlanningEvidence({ tasks: [goal, core], goalPathStall: other }, 'environment').goalPath;
+    expect(fresh).not.toHaveProperty('declined'); expect(fresh).not.toHaveProperty('unansweredTurns');
+  }
 });
 
 it('bounds the goal path of many stalled goals and frontier inputs', () => {

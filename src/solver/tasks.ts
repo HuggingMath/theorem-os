@@ -8,6 +8,7 @@ import type { TaskTypePreflight } from './taskTypePreflight';
 import { parseProofRoutes, type ProofRoute } from './proofRoutes';
 import type { CapacityExploration } from './capacityExploration';
 import type { ResearchBasis, ResearchRecord } from './researchRecords';
+import { expandTaskFamilies, type TaskFamily } from './taskFamilies';
 
 export type CooperativeTask = Readonly<{ id: string; kind: 'research' | 'sketch' | 'lemma' | 'goal'; objective: string;
   dependsOn: readonly string[]; revision: number; proofPath?: string; theoremName?: string; type?: string;
@@ -17,7 +18,11 @@ export type CooperativeTask = Readonly<{ id: string; kind: 'research' | 'sketch'
   informalProof?: string; citations?: readonly string[];
   reviewScope?: 'final-candidate' | 'feasibility';
   /** A typed lemma task whose target is a new `def` of `type`; consumers use its body, never an assumed copy. */
-  declaration?: 'definition' }>;
+  declaration?: 'definition';
+  /** A range lemma the host splits into member tasks and assembles; see taskFamilies.ts. */
+  family?: TaskFamily;
+  /** Host-derived member of this family task id; never supplied by a model plan. */
+  familyMember?: string }>;
 export type RouteGroup = Readonly<{ id: string; objective: string; status: 'active' | 'paused' | 'stopped'; revision: number;
   engineerId?: string; maxTurns?: number; maxConcurrent?: number }>;
 export type RouteRecord = { group: RouteGroup; turns: number; busy?: number };
@@ -190,14 +195,15 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
   });
   const duplicateGroup = groups.find((group, index) => groups.findIndex(item => item.id === group.id) !== index);
   if (duplicateGroup) throw planError('math_plan_duplicate_group', { groupId: duplicateGroup.id });
-  const tasks: CooperativeTask[] = value.tasks.map((value: any) => {
+  const tasks: CooperativeTask[] = expandTaskFamilies(value.tasks, planError).map((value: any) => {
     // A research request with an exact proof target is proof work, regardless of its label.
     if (value && ['research', 'sketch'].includes(value.kind) && value.theoremName &&
         typeof value.type === 'string' && value.type.trim())
       value = { ...value, kind: 'lemma' };
+    const editable = problem.ownedFiles.filter(file => file.endsWith('.lean') && !Object.hasOwn(problem.frozenFiles ?? {}, file));
     const task = value && { ...value, dependsOn: value.dependsOn ?? [], proofPath: value.proofPath ??
       (value.kind === 'goal' ? problem.targets.find(target => target.theoremName === value.theoremName)?.proofPath :
-        problem.ownedFiles.filter(file => file.endsWith('.lean')).length === 1 ? problem.ownedFiles.find(file => file.endsWith('.lean')) : undefined) };
+        editable.length === 1 ? editable[0] : undefined) };
     const taskId = validId(task?.id) ? task.id : undefined;
     const field = !task || typeof task !== 'object' ? 'task' : !taskId ? 'id' :
       !['research', 'sketch', 'lemma', 'goal'].includes(task.kind) ? 'kind' :
@@ -229,6 +235,9 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
         !isSimpleLeanName(task.theoremName)))
       throw new Error('math_plan_invalid_proof_target: ' + JSON.stringify({ taskId: task.id,
         proofPath: task.proofPath, theoremName: task.theoremName }) + '. Use an owned proofPath and an ordinary qualified Lean name.');
+    if (!isAdvisoryTask(task) && Object.hasOwn(problem.frozenFiles ?? {}, task.proofPath))
+      throw planError('math_plan_frozen_proof_path', { taskId, proofPath: task.proofPath },
+        'Submission/Library modules are frozen host libraries; put the task in another owned file that imports the module.');
     if (task.kind === 'goal' && !problem.targets.some(target => target.proofPath === task.proofPath && target.theoremName === task.theoremName))
       throw planError('math_plan_changed_original_target', { taskId, proofPath: task.proofPath, theoremName: task.theoremName },
         'A goal task must name an original target exactly; use a lemma task for a helper statement.');
@@ -236,15 +245,20 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
       throw new Error('math_plan_placeholder_helper_type: supply the actual closed Lean type, or use an untyped research/sketch task for advisory findings.');
     if (task.kind === 'lemma' && (typeof task.type !== 'string' || !task.type.trim()))
       throw planError('math_plan_invalid_helper_type', { taskId, field: 'type' }, 'Supply the closed Lean type of the helper.');
-    if (task.kind === 'lemma' && Object.values(problem.declarations).some(items =>
-        items.some(item => item.name.split('.').at(-1) === task.theoremName.split('.').at(-1))))
-      throw planError('math_plan_invalid_helper_type', { taskId, field: 'theoremName', theoremName: task.theoremName },
-        'A helper must not reuse the final name component of a frozen declaration.');
+    if (task.kind === 'lemma') {
+      const leaf = task.theoremName.split('.').at(-1);
+      const file = Object.keys(problem.declarations).find(file => problem.declarations[file]!.some(item => item.name.split('.').at(-1) === leaf));
+      if (file) throw planError('math_plan_invalid_helper_type', { taskId, field: 'theoremName', theoremName: task.theoremName,
+        ...(Object.hasOwn(problem.frozenFiles ?? {}, file) ? { libraryFile: file } : {}) },
+        Object.hasOwn(problem.frozenFiles ?? {}, file)
+          ? 'This name is already proved in a frozen Submission/Library module; import that module and use it instead of a new task, or choose a distinct helper name.'
+          : 'A helper must not reuse the final name component of a frozen declaration.');
+    }
     return { id: task.id, kind: task.kind, objective: task.objective, dependsOn: [...new Set<string>(task.dependsOn)],
       revision: task.revision ?? 0, ...(isAdvisoryTask(task) ? {} : { proofPath: task.proofPath, theoremName: task.theoremName }),
       ...(task.kind === 'lemma' ? { type: task.type } : {}),
       ...optionalFields(task, ['conditional', 'statementReview', 'informalStatement', 'informalProof', 'citations', 'reviewScope', 'status',
-        'ownerId', 'premises', 'groupId', 'declaration']),
+        'ownerId', 'premises', 'groupId', 'declaration', 'family', 'familyMember']),
       ...(task.sharing === undefined ? groups.length > 1 ? { sharing: 'group' } : {} : { sharing: task.sharing }) };
   });
   const duplicateId = tasks.find((task, index) => tasks.findIndex(item => item.id === task.id) !== index);

@@ -9,6 +9,7 @@ import { assertLeanEvalBootstrapEligibility, bootstrapLeanEvalProblem, readLeanE
 import { LEAN_EVAL_LEADERBOARD_URL, type LeanEvalCatalogProblem } from '../src/math/leanEvalCatalogAdapter';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import { KERNEL_COMPUTE_LIBRARY } from '../src/math/kernelComputeLibrary';
+import type { LibraryPack } from '../src/math/libraryPacks';
 
 const host = vi.hoisted(() => ({ commit: '', catalog: {} as unknown, verify: vi.fn(), compare: vi.fn() }));
 vi.mock('../src/math/leanEvalCatalogAdapter', async importOriginal => ({
@@ -283,6 +284,75 @@ describe('Lean-Eval bootstrap without planning state', () => {
     fs.writeFileSync(options.activeProblemPath, JSON.stringify({ ...receipt,
       solverOwnedFiles: receipt.solverOwnedFiles.filter((file: string) => file !== slots[2]) }));
     expect(() => readLeanEvalBootstrapReceipt(options.activeProblemPath)).toThrow('does not own its certificate slots');
+  });
+
+  it('owns theory modules next to certificate slots across bootstrap, resume and the official gate', async () => {
+    const slotted = await bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [], certificateSlots: 1, theoryModules: 2,
+      workspaceRoot: path.join(directory, 'theory') });
+    const modules = ['Submission/Theory/T01.lean', 'Submission/Theory/T02.lean'];
+    expect(slotted.receipt).toMatchObject({ certificateSlots: 1, theoryModules: 2,
+      solverOwnedFiles: ['Submission.lean', 'Submission/Certificates/Kernel.lean', 'Submission/Certificates/Part01.lean',
+        'Submission/Helper.lean', ...modules] });
+    for (const file of modules)
+      expect(fs.readFileSync(path.join(slotted.receipt.projectRoot, file), 'utf8')).toBe('namespace Submission.Theory\n\nend Submission.Theory\n');
+    expect(execFileSync('git', ['-C', slotted.receipt.workspaceRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }))
+      .toContain('generated/p/Submission/Theory/T02.lean');
+    expect(readLeanEvalBootstrapReceipt(slotted.receipt.activeProblemPath).theoryModules).toBe(2);
+    const proof = path.join(slotted.receipt.projectRoot, 'Submission.lean');
+    fs.writeFileSync(proof, fs.readFileSync(proof, 'utf8').replace('by sorry', 'by exact 0').replace('by sorry', 'by trivial').replace('by sorry', 'by rfl'));
+    const options = makeOfficialReceipt(slotted.receipt);
+    expect((await runPersistedLeanEvalOfficialGate(options)).comparison.status).toBe('official_verified');
+    expect(execFileSync('git', ['-C', slotted.receipt.verifierProjectRoot!, 'diff', '--name-only', host.commit, 'HEAD'], { encoding: 'utf8' }))
+      .toContain('generated/p/Submission/Theory/T01.lean');
+
+    const receipt = JSON.parse(fs.readFileSync(options.activeProblemPath, 'utf8'));
+    fs.writeFileSync(options.activeProblemPath, JSON.stringify({ ...receipt, theoryModules: 1 }));
+    await expect(runPersistedLeanEvalOfficialGate(options)).rejects.toThrow('file ownership');
+    fs.writeFileSync(options.activeProblemPath, JSON.stringify({ ...receipt,
+      solverOwnedFiles: receipt.solverOwnedFiles.filter((file: string) => file !== modules[1]) }));
+    expect(() => readLeanEvalBootstrapReceipt(options.activeProblemPath)).toThrow('does not own its theory modules');
+    await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [], theoryModules: 65,
+      workspaceRoot: path.join(directory, 'invalid-theory') })).rejects.toThrow('math_theory_modules_invalid');
+    expect(fs.existsSync(path.join(directory, 'invalid-theory.source'))).toBe(false);
+  });
+
+  it('installs a frozen library pack as owned files across bootstrap, resume and the official gate', async () => {
+    const lib = 'Submission/Library/Fixture/Lemmas.lean';
+    const source = 'import Public.Support\nnamespace Submission\ntheorem library_true : True := trivial\nend Submission\n';
+    const libraryPack: LibraryPack = { schema: 'theorem-os.library-pack.v1', modules: [{ file: lib, source,
+      origin: { kind: 'run', runId: 'earlier', commit: 'a'.repeat(40), file: 'Submission/Helper.lean' } }],
+      requires: [{ file: 'Public/Support.lean', digest: crypto.createHash('sha256').update('-- public support').digest('hex') }] };
+    const packed = await bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [], libraryPack,
+      workspaceRoot: path.join(directory, 'library') });
+    const digest = crypto.createHash('sha256').update(source).digest('hex');
+    expect(packed.receipt.solverOwnedFiles).toEqual(['Submission.lean', 'Submission/Helper.lean', lib]);
+    expect(packed.receipt.libraryPack).toEqual({ digest: expect.stringMatching(/^[a-f0-9]{64}$/u), files: { [lib]: digest } });
+    expect(readLeanEvalBootstrapReceipt(packed.receipt.activeProblemPath).libraryPack).toEqual(packed.receipt.libraryPack);
+    expect(execFileSync('git', ['-C', packed.receipt.workspaceRoot, 'show', `HEAD:generated/p/${lib}`], { encoding: 'utf8' })).toBe(source);
+    const proof = path.join(packed.receipt.projectRoot, 'Submission.lean');
+    fs.writeFileSync(proof, fs.readFileSync(proof, 'utf8').replace('by sorry', 'by exact 0').replace('by sorry', 'by trivial').replace('by sorry', 'by rfl'));
+    const options = makeOfficialReceipt(packed.receipt);
+    expect((await runPersistedLeanEvalOfficialGate(options)).comparison.status).toBe('official_verified');
+    expect(execFileSync('git', ['-C', packed.receipt.verifierProjectRoot!, 'diff', '--name-only', host.commit, 'HEAD'], { encoding: 'utf8' }))
+      .toContain(`generated/p/${lib}`);
+    // Library files never capture a public obligation, even when they come later in the file list.
+    expect(host.verify.mock.calls[0][0].items.map(item => item.proofPath)).toEqual(['Submission.lean', 'Submission.lean', 'Submission.lean']);
+
+    const receipt = JSON.parse(fs.readFileSync(options.activeProblemPath, 'utf8'));
+    const { libraryPack: _recorded, ...unpacked } = receipt;
+    fs.writeFileSync(options.activeProblemPath, JSON.stringify(unpacked));
+    await expect(runPersistedLeanEvalOfficialGate(options)).rejects.toThrow('file ownership');
+    fs.writeFileSync(options.activeProblemPath, JSON.stringify({ ...receipt,
+      solverOwnedFiles: receipt.solverOwnedFiles.filter((file: string) => file !== lib) }));
+    expect(() => readLeanEvalBootstrapReceipt(options.activeProblemPath)).toThrow('does not own its library modules');
+
+    const tampered = { ...libraryPack, requires: [{ file: 'Public/Support.lean', digest: 'f'.repeat(64) }] };
+    await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [], libraryPack: tampered,
+      workspaceRoot: path.join(directory, 'library-changed') })).rejects.toThrow('math_library_pack_requirement_changed: Public/Support.lean');
+    const unsafe = { ...libraryPack, modules: [{ ...libraryPack.modules[0]!, source: source.replace('trivial', 'by sorry') }] };
+    await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [], libraryPack: unsafe,
+      workspaceRoot: path.join(directory, 'library-unsafe') })).rejects.toThrow('math_library_pack_forbidden_token');
+    expect(fs.existsSync(path.join(directory, 'library-unsafe.source'))).toBe(false);
   });
 
   it.each([65, -1, 1.5])('rejects %s certificate slots before creating any worktree', async certificateSlots => {

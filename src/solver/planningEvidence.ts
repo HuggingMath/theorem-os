@@ -39,7 +39,7 @@ export function createTaskApplicationEvidence(tasks: readonly TaskRecord[], opti
 }
 
 /** Make local proof packages and the original frontier visible even when optional history is omitted. */
-export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'groups' | 'proofRoutes' | 'failedTaskInputs'>,
+export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'groups' | 'proofRoutes' | 'failedTaskInputs' | 'goalPathStall'>,
   environmentDigest?: string) {
   const continuation = buildProofContinuation(state.tasks, { groups: state.groups, proofRoutes: state.proofRoutes, environmentDigest });
   const byId = new Map(state.tasks.map(node => [node.task.id, node]));
@@ -88,8 +88,14 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
       omittedFailures: Math.max(0, failures.length - 2),
       requiredChange: 'For a retry of these recorded inputs, identify a changed proof step or method and its discriminating check, or the exact new premise/evidence; otherwise retain the gap and reopening condition.' };
   });
-  const { evidence: _evidence, acceptance: _acceptance, stallDigest: _stall, stalledTaskIds: _tasks, stalledPathTaskIds: _path, ...goalPath } =
+  const { evidence: _evidence, acceptance: _acceptance, stallDigest, stalledTaskIds: _tasks, stalledPathTaskIds: _path, ...review } =
     reviewGoalPaths(state.tasks, { groups: state.groups, proofRoutes: state.proofRoutes, environmentDigest });
+  // The Lead's earlier answers to this same stall: decline reasons, and turns that left it unanswered.
+  const stall = stallDigest && state.goalPathStall?.active && state.goalPathStall.digest === stallDigest ? state.goalPathStall : undefined;
+  const goalPath = { ...review,
+    ...(stall?.declined?.length ? { declined: stall.declined.map(({ taskId, reason }) => ({ taskId, reason })) } : {}),
+    ...(stall?.unanswered ? { unansweredTurns: stall.unanswered } : {}),
+    ...(stall?.ignoredAt ? { ignored: true } : {}) };
   return { evidence: 'recorded-not-replayed' as const, acceptance: 'not-assessed' as const,
     // Whether each goal's frontier can run now, and host-proposed decisions for a goal that cannot.
     goalPath,
@@ -111,9 +117,15 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
 
 /** The Lead's copy of the planning evidence; a stalled original goal adds the decision it is owed. */
 export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlanningEvidence>) {
+  const goalPath = evidence.goalPath;
   return 'Current route applications and remaining obligations (recorded, not proof acceptance):\n' + JSON.stringify(evidence) +
-    (evidence.goalPath.stalledGoalIds.length ? '\nStalled original goals (goalPath.goals[].stalled): no frontier input of these goals can run, ' +
-      'so other workers\' progress does not advance them. For each stalled frontier input, adopt one of its goalPath candidates in this ' +
-      'plan revision, or state in RESEARCH.md the mathematical reason none applies and what would change that. Candidates are planning ' +
-      'suggestions: a connect match is syntactic and still needs its Lean check, and an assumed premise closes the goal only conditionally.' : '');
+    (goalPath.stalledGoalIds.length ? '\nStalled original goals (goalPath.goals[].stalled): no frontier input of these goals can run, ' +
+      'so other workers\' progress does not advance them. Answer every stalled frontier input in this revision with ' +
+      '"goalPath":{"adopt":["CANDIDATE_ID"],"decline":[{"taskId":"INPUT_ID","reason":"..."}]} beside baseVersion. ' +
+      'The host applies a candidate with mechanical:true from its id alone, so {"baseVersion":"...","goalPath":{"adopt":["resume:INPUT_ID"]}} is a complete revision; ' +
+      'any other adopted candidate needs its change in the same revision (upsert or remove the input or a consumer, or supply groups). ' +
+      'Decline only with the mathematical reason no candidate applies and what would change that. Candidates are planning ' +
+      'suggestions: a connect match is syntactic and still needs its Lean check, and an assumed premise closes the goal only conditionally.' +
+      (goalPath.unansweredTurns && !goalPath.ignored ? ` ${goalPath.unansweredTurns} earlier turn(s) shown this stall answered none of it; ` +
+        'an unanswered stall is recorded as ignored after this turn.' : '') : '');
 }

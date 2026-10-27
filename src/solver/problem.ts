@@ -13,6 +13,8 @@ import { isAllowedMathProofSource } from '../math/mathProofSourcePolicy';
 import type { MathProblemContract } from '../math/contracts';
 import { readLocalExampleReceipt } from '../math/localExample';
 import { readLeanTaskReceipt } from '../math/leanTask';
+import { DECLARATION_INDEX_FILE } from './declarationIndex';
+import { libraryDeclarationConflict } from '../math/libraryPacks';
 
 export function committedSource(worktree: string, commit: string, file: string): string {
   // Matches the Lean-Eval per-file limit so generated certificate modules remain readable.
@@ -22,13 +24,17 @@ export function committedSource(worktree: string, commit: string, file: string):
 
 export type ProofTarget = Readonly<{ proofPath: string; theoremName: string; declarationHash: string }>;
 export class SolverSourceError extends Error {
-  constructor(readonly proofPath: string, reason: 'math_original_declaration_changed' | 'math_original_context_changed' | 'math_local_module_import_cycle',
-    readonly declarationName?: string) {
+  constructor(readonly proofPath: string, reason: 'math_original_declaration_changed' | 'math_original_context_changed' | 'math_local_module_import_cycle' |
+    'math_library_module_changed' | 'math_library_declaration_redeclared', readonly declarationName?: string) {
     super(reason);
   }
   get recovery(): string {
     if (this.message === 'math_local_module_import_cycle')
       return 'Remove the added local import that creates a cycle. Owned modules may import frozen dependencies and each other, but a module cannot import one that imports it. Preserve the saved proof work.';
+    if (this.message === 'math_library_module_changed')
+      return 'This Submission/Library module is a frozen host library: restore its exact bytes from the seed commit with git show. Import it and add new helpers in another owned file.';
+    if (this.message === 'math_library_declaration_redeclared')
+      return `${this.declarationName ?? 'This declaration'} is already declared by a frozen Submission/Library module. Remove or rename the copy and use the library declaration by importing its module.`;
     return this.message === 'math_original_context_changed'
       ? 'Restore the original imports, namespace/section placement, variables, opens, scopes and options from the seed commit. ' +
         'Keep new helpers; move helper-specific scopes and instances inside their proofs. Added imports may use explicit Mathlib.* modules, frozen local modules already imported by the original owned sources, or other owned modules; avoid import cycles.'
@@ -50,6 +56,8 @@ export type SolverProblem = Readonly<{
   declarations: Readonly<Record<string, readonly { name: string; header: string; body?: string }[]>>;
   sourceStructure: Readonly<Record<string, string>>;
   sourceImports?: Readonly<Record<string, readonly string[]>>;
+  /** Owned library-pack modules whose bytes are frozen (file → digest); proofs import them and never edit them. */
+  frozenFiles?: Readonly<Record<string, string>>;
 }>;
 
 export function git(root: string, args: string[]): string {
@@ -65,7 +73,12 @@ export function commitSolverProjection(problem: SolverProblem, worktree: string,
   return git(worktree, ['rev-parse', 'HEAD']);
 }
 
-export type SolverSourceConstraints = Pick<SolverProblem, 'trustedFiles' | 'declarations' | 'sourceStructure' | 'sourceImports'>;
+export type SolverSourceConstraints = Pick<SolverProblem, 'trustedFiles' | 'declarations' | 'sourceStructure' | 'sourceImports' | 'frozenFiles'>;
+
+/** The fields every host writer copies into .lake/source-constraints.json for check-lean. */
+export const solverSourceConstraints = (problem: SolverSourceConstraints, declarations = problem.declarations): SolverSourceConstraints => ({
+  trustedFiles: problem.trustedFiles, declarations, sourceStructure: problem.sourceStructure, sourceImports: problem.sourceImports,
+  ...(problem.frozenFiles ? { frozenFiles: problem.frozenFiles } : {}) });
 
 /** Only explicit modules from the pinned Mathlib package may extend proof imports. */
 export function solverMathlibImports(source: string): string[] {
@@ -177,12 +190,21 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
     [file, sourceStructure(originalSource(file), new Set(originals.map(item => item.name)))]));
   const sourceImports = Object.fromEntries(Object.keys(declarations).map(file =>
     [file, mathConstructionImports(originalSource(file))]));
+  // Library-pack modules keep the exact bytes the bootstrap recorded.
+  const libraryPack = 'libraryPack' in receipt ? receipt.libraryPack : undefined;
+  const frozenFiles = libraryPack && Object.fromEntries(Object.entries(libraryPack.files).map(([file, digest]) => {
+    const target = path.join(receipt.projectRoot, file);
+    assertMathCanonicalPath(target);
+    if (!receipt.solverOwnedFiles.includes(file) || mathDigest(fs.readFileSync(target)) !== digest) throw new Error('math_library_pack_changed');
+    return [file, digest];
+  }));
   const problem: SolverProblem = { kind: receipt.schema === 'theorem-os.local-example.v1' ? 'example' : receipt.schema === 'theorem-os.lean-task.v1'
     ? 'lean-task' : receipt.schema.includes('imo2026') ? 'imo2026' : 'lean-eval', workspace, projectRelative,
     baseCommit: receipt.schema === 'theorem-os.lean-task.v1' ? receipt.baseCommit : git(workspace, ['rev-parse', 'HEAD']),
     receiptDigest: mathDigest(canonicalMathJson(receipt)),
     contract: receipt.contract, targets, trustedFiles, ownedFiles: receipt.solverOwnedFiles,
     declarations, sourceStructure: structures, sourceImports, activeProblemPath: receipt.activeProblemPath,
+    ...(frozenFiles ? { frozenFiles } : {}),
     ...('sourceProjectRoot' in receipt ? { sourceRepository: receipt.sourceProjectRoot } : {}) };
   if (receipt.schema === 'theorem-os.lean-task.v1') assertSolverProjectSources(problem, receipt.projectRoot);
   return problem;
@@ -196,10 +218,20 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
     assertMathCanonicalPath(target);
     if (mathDigest(fs.readFileSync(target)) !== digest) throw new Error('math_trusted_source_changed');
   }
+  const frozen = problem.frozenFiles ?? {}, frozenSources: Record<string, string> = {}, ownedSources: Record<string, string> = {};
+  for (const [relative, digest] of Object.entries(frozen)) {
+    const file = path.join(project, relative);
+    assertMathCanonicalPath(file);
+    const bytes = fs.existsSync(file) && fs.lstatSync(file).isFile() ? fs.readFileSync(file) : undefined;
+    if (!bytes || mathDigest(bytes) !== digest) throw new SolverSourceError(relative, 'math_library_module_changed');
+    frozenSources[relative] = bytes.toString('utf8');
+  }
   for (const [relative, originals] of Object.entries(problem.declarations)) {
+    if (Object.hasOwn(frozen, relative)) continue;
     const file = path.join(project, relative);
     assertMathCanonicalPath(file);
     const source = fs.readFileSync(file, 'utf8');
+    ownedSources[relative] = source;
     const regions = inspectLeanDeclarationRegions(source);
     for (const original of originals) {
       const matches = regions.filter(item => item.name === original.name);
@@ -214,6 +246,8 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
     if (sourceStructure(source, new Set(originals.map(item => item.name)), problem.sourceImports?.[relative], allowedImports) !== problem.sourceStructure[relative])
       throw new SolverSourceError(relative, 'math_original_context_changed');
   }
+  const conflict = Object.keys(frozenSources).length ? libraryDeclarationConflict(frozenSources, ownedSources) : undefined;
+  if (conflict) throw new SolverSourceError(conflict.file, 'math_library_declaration_redeclared', conflict.name);
   if (addedLocalImportFile) {
     try { mathLocalModuleBuildOrder(project, Object.keys(problem.declarations)); }
     catch (error) {
@@ -254,7 +288,7 @@ function solverPathsOutsideOwnership(problem: SolverProblem, worktree: string) {
   const changed = new Set([...solverGitPaths(worktree, ['diff', '--name-only', '-z', problem.baseCommit]),
     ...solverGitPaths(worktree, ['diff', '--cached', '--name-only', '-z', problem.baseCommit]), ...untracked]);
   const allowed = new Set([...problem.ownedFiles.map(relative => path.join(problem.projectRelative, relative)),
-    'RESEARCH.md', 'DELIVERIES.jsonl', 'COOPERATION.json', 'CONTEXT-MANIFEST.json']);
+    'RESEARCH.md', 'DELIVERIES.jsonl', 'COOPERATION.json', 'CONTEXT-MANIFEST.json', DECLARATION_INDEX_FILE]);
   // A worker's own redirect of a Lean or script diagnostic is not proof content and is not committed.
   const diagnosticLog = (relative: string) => !relative.includes('/') && /\.log$/u.test(relative);
   const outside = [...changed].filter(relative => !allowed.has(relative) && !/^DELIVERIES-[a-f0-9]{64}\.jsonl$/u.test(relative) &&
@@ -306,7 +340,8 @@ export function commitSolverSources(problem: SolverProblem, worktree: string): s
   // Host journals change independently of frozen proof commits. Ignore only their allowed root paths.
   const exclude = path.resolve(worktree, git(worktree, ['rev-parse', '--git-path', 'info/exclude']));
   const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8').split('\n') : [];
-  const missing = ['/COOPERATION.json', '/CONTEXT-MANIFEST.json', '/DELIVERIES.jsonl', `/DELIVERIES-${'[a-f0-9]'.repeat(64)}.jsonl`]
+  const missing = ['/COOPERATION.json', '/CONTEXT-MANIFEST.json', `/${DECLARATION_INDEX_FILE}`, '/DELIVERIES.jsonl',
+    `/DELIVERIES-${'[a-f0-9]'.repeat(64)}.jsonl`]
     .filter(rule => !existing.includes(rule));
   if (missing.length) {
     fs.mkdirSync(path.dirname(exclude), { recursive: true });

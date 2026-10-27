@@ -15,6 +15,7 @@ import { readSolverRunState, writeSolverRunState, type SolverRunState } from '..
 import { seedSolverContinuation } from '../src/solver/continuationSeed';
 import { readContinuationPage, readContinuationSnapshot } from '../src/solver/continuationInput';
 import { committedSource, git, readSolverProblem } from '../src/solver/problem';
+import { theoryModuleSource } from '../src/math/theoryModules';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import * as taskProofs from '../src/solver/cooperativeProof';
@@ -218,6 +219,37 @@ function nextContinuation(f: ReturnType<typeof fixture>, sourceStateFile: string
   fs.writeFileSync(environmentFile, canonicalMathJson(projectMathematicsRuntimeEnvironment({ PATH: '/usr/bin:/bin',
     DEEPSCIENTIST_MATH_ENV_FILE: environmentFile, DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages })), { mode: 0o400 });
   return { stateFile, directory, seed: () => seedSolverContinuation({ ...f.options, sourceRun: sourceStateFile, run: stateFile }) };
+}
+
+/** A new bootstrap workspace (its own repository) for the same problem, adding an owned theory module unless `change` alters it. */
+function rebootstrapped(f: ReturnType<typeof fixture>, change?: 'trusted' | 'frozen' | 'dropped' | 'unchanged') {
+  const workspace = path.join(f.root, 'workspace-extended'), project = path.join(workspace, f.projectRelative);
+  const added = change === 'unchanged' ? [] : ['Submission/Theory/T01.lean'];
+  fs.mkdirSync(path.join(project, 'Submission', 'Theory'), { recursive: true });
+  for (const file of [...Object.keys(f.newState.problem.trustedFiles), ...f.newState.problem.ownedFiles])
+    fs.writeFileSync(path.join(project, file), committedSource(f.workspace, f.base, `${f.projectRelative}/${file}`));
+  for (const file of added) fs.writeFileSync(path.join(project, file), theoryModuleSource());
+  if (change === 'trusted') fs.writeFileSync(path.join(project, 'Challenge.lean'), 'theorem challenge : 1 = 1 := rfl\n');
+  if (change === 'frozen') fs.writeFileSync(path.join(project, 'Submission/Helpers.lean'),
+    'namespace Submission.Helpers\nlemma frozen_seed : True := by trivial\nend Submission.Helpers\n');
+  git(workspace, ['init', '--quiet']); const base = commit(workspace, 'Public solver baseline with theory modules');
+  fs.appendFileSync(path.join(workspace, '.git/info/exclude'), `\n/${f.projectRelative}/.lake/\n/active-problem.json\n`);
+  const receipt = JSON.parse(fs.readFileSync(path.join(f.workspace, 'active-problem.json'), 'utf8'));
+  const receiptFile = path.join(workspace, 'active-problem.json');
+  fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, workspaceRoot: workspace, projectRoot: project, activeProblemPath: receiptFile,
+    createdAt: 2, solverOwnedFiles: [...receipt.solverOwnedFiles.filter((file: string) => change !== 'dropped' || file !== 'Submission/Helpers.lean'),
+      ...added], ...(added.length ? { theoryModules: added.length } : {}) }));
+  const problem = readSolverProblem(workspace, receiptFile);
+  const directory = path.join(f.root, 'extended.json.runtime'); fs.mkdirSync(directory, { mode: 0o700 });
+  for (const part of ['worktree', 'worktree-2']) git(workspace, ['worktree', 'add', '--quiet', '--detach', path.join(directory, part), base]);
+  const stateFile = path.join(directory, 'state.json'), worktree = path.join(directory, 'worktree');
+  writeSolverRunState(stateFile, { ...f.newState, runId: 'extended-run', problem, worktree,
+    workers: f.newState.workers!.map((worker, index) => ({ ...worker, worktree: path.join(directory, index ? 'worktree-2' : 'worktree') })) });
+  const environmentFile = path.join(directory, 'environment-solver.json');
+  fs.writeFileSync(environmentFile, canonicalMathJson(projectMathematicsRuntimeEnvironment({ PATH: '/usr/bin:/bin',
+    DEEPSCIENTIST_MATH_ENV_FILE: environmentFile, DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages })), { mode: 0o400 });
+  return { workspace, project, base, problem, directory, stateFile, worktree,
+    seed: () => seedSolverContinuation({ ...f.options, run: stateFile }) };
 }
 
 beforeEach(() => {
@@ -554,6 +586,50 @@ describe('explicit prepared-run continuation initialization', () => {
     writeSolverRunState(f.sourceStateFile, f.oldState); writeSolverRunState(f.stateFile, f.newState);
     await expect(f.seed()).rejects.toThrow(changed === 'build' ? 'math_continuation_seed_build_changed' : 'math_continuation_seed_identity_changed');
     expect(host.verify).not.toHaveBeenCalled(); expect(git(f.worktree, ['rev-parse', 'HEAD'])).toBe(f.base);
+  });
+
+  it('seeds a re-bootstrapped workspace that only adds owned modules, with fresh receipts in its own repository', async () => {
+    const f = conditionalFixture(), e = rebootstrapped(f), oldState = fs.readFileSync(f.sourceStateFile);
+    const report = await e.seed(), state = readSolverRunState(e.stateFile);
+    expect(report).toMatchObject({ stage: 'complete', failed: [], candidates: ['first', 'second', 'bridge'], evidence: 'fresh-helper-receipts' });
+    expect(state.problem.ownedFiles).toEqual(['Submission.lean', 'Submission/Helpers.lean', 'Submission/Theory/T01.lean']);
+    expect(state.cooperation.tasks.map(node => [node.task.id, node.status])).toEqual([['first', 'integrated'], ['second', 'integrated'],
+      ['goal', 'pending'], ['bridge', 'conditional']]);
+    for (const node of state.cooperation.tasks.slice(0, 2)) {
+      expect(node.integratedCheck!.verification.results[0]!.receiptId).toContain('fresh-seed');
+      expect(git(e.worktree, ['rev-parse', `refs/math/${state.runId}/evidence/${node.integratedCheck!.verification.targetCommit}`]))
+        .toBe(node.integratedCheck!.verification.targetCommit);
+    }
+    expect(fs.readFileSync(path.join(e.worktree, f.projectRelative, 'Submission/Helpers.lean'), 'utf8')).toBe(helpers);
+    expect(fs.readFileSync(path.join(e.worktree, f.projectRelative, 'Submission/Theory/T01.lean'), 'utf8')).toBe(theoryModuleSource());
+    const source = JSON.parse(fs.readFileSync(path.join(e.directory, 'continuation-seed-source.json'), 'utf8'));
+    expect(source.ownershipExtension).toEqual({ sourceReceiptDigest: f.oldState.problem.receiptDigest,
+      sourcePolicyDigest: expect.stringMatching(/^[a-f0-9]{64}$/u), addedFiles: ['Submission/Theory/T01.lean'] });
+    expect(Object.keys(source.canonicalSources)).toEqual(state.problem.ownedFiles);
+    expect(source.conditionalCandidates[0].seedSources['Submission/Theory/T01.lean']).toBe(theoryModuleSource());
+    const snapshot = path.join(e.directory, 'continuation.json');
+    const draft = JSON.parse(readContinuationPage(snapshot, state.continuationDigest, 'draft-prover-1').text);
+    expect(Object.keys(draft.sources)).toEqual(['Submission.lean', 'Submission/Helpers.lean']);
+    expect(readContinuationPage(snapshot, state.continuationDigest, 'seed-recovery-guide').text)
+      .toContain('added owned files ["Submission/Theory/T01.lean"]');
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(oldState);
+    await expect(e.seed()).resolves.toMatchObject({ stage: 'complete', failed: [] });
+  });
+
+  it('reopens completed research bound to the former problem receipt after an ownership extension', async () => {
+    const f = completedResearchFixture(), e = rebootstrapped(f);
+    expect(await e.seed()).toMatchObject({ stage: 'complete', failed: [] });
+    const state = readSolverRunState(e.stateFile), research = state.cooperation.tasks.find(node => node.task.id === f.task.id)!;
+    expect(research.status).toBe('pending');
+    expect(state.cooperation.history!.some(record => record.task.id === f.task.id && record.finding === f.finding)).toBe(true);
+    expect(state.cooperation.deliveries!.map(delivery => [delivery.id, delivery.status])).toEqual([['old-research-completion', 'superseded']]);
+  });
+
+  it.each(['trusted', 'frozen', 'dropped', 'unchanged'] as const)('rejects a re-bootstrapped workspace with %s ownership', async change => {
+    const f = fixture(), e = rebootstrapped(f, change);
+    await expect(e.seed()).rejects.toThrow('math_continuation_seed_identity_changed');
+    expect(host.verify).not.toHaveBeenCalled(); expect(git(e.worktree, ['rev-parse', 'HEAD'])).toBe(e.base);
+    expect(fs.existsSync(path.join(e.directory, 'continuation-seed-source.json'))).toBe(false);
   });
 
   it('does not promote historical acceptance when the fresh helper check fails', async () => {

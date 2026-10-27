@@ -177,6 +177,8 @@ bun run math continuation-seed \
 
 初始化成功后，以新预备运行的原参数加 `--resume` 开始求解。中断的初始化可以用相同命令重试，重试复用首次冻结的快照；源运行后来产生的成果不会自动加入该快照。正式切换前应让源运行保存退出，再捕获最终快照。更换构建后直接 `--resume` 旧 checkpoint 仍会被身份校验拒绝。
 
+同一题重新引导、只增加 owned 文件（如 Lean-Eval 的 `--certificate-slots N`、`--theory-modules M`）时，也可以用旧运行作种子：旧 owned 文件及其冻结约束、合同、目标与 trusted 文件必须不变，新仓库可以与旧运行不同。新增文件从新基线开始，旧研究完成记录转为历史并重新开放；规则见 [solver-modules.md](solver-modules.md)。
+
 ### 5. 查看研究状态与修改计划
 
 ```bash
@@ -305,6 +307,8 @@ Lead 的普通规划和初始规划执行 90 秒后收到保存提醒，120 秒�
 
 条件性检查在临时源码投影中将待证引理转换为显式参数，保留未完成义务；依赖闭合后再组合并检查普通证明。局部引理、研究笔记和审阅意见分别记录，最终验收检查全部原题目标。
 
+有限情形表可写成族任务（`family:{lo,hi,chunk,predicate}`）：宿主把区间拆成可并行派发的成员引理，自己写出按区间二分的族证明，未证成员作为条件检查的显式假设（[规则](solver-modules.md)）。
+
 ## 验证与结果
 
 **模型的完成消息是交付信号；证明通过由宿主验证与独立评测决定。**
@@ -384,7 +388,8 @@ bun run math bootstrap-lean-eval --help
 | `example` | 准备、回放或求解不依赖 Mathlib 的小型 Lean 题目 |
 | `component` | 生成 M3 排序组件模板，检查基本任务约束 |
 | `bootstrap-imo` | 从固定公开提交准备 IMO2026 题目 |
-| `bootstrap-lean-eval` | 准备 Lean-Eval 题目与评测绑定 |
+| `bootstrap-lean-eval` | 准备 Lean-Eval 题目与评测绑定；`--library-pack PACK` 安装冻结库模块 |
+| `library-pack` | 从保存运行抽取已检查的 owned 模块，或从本地上游仓库原样回移文件，生成库包（[规则](solver-modules.md)） |
 | `run` | 启动、预检或恢复运行 |
 | `inspect` | 查看存档研究报告，导出 JSON 或带版本的可编辑计划 |
 | `edit` | 校验并提交人工计划修改，支持 `--dry-run` |

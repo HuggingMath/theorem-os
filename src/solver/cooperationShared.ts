@@ -19,6 +19,8 @@ import type { ProofImportRecord } from './proofImportRecord';
 import type { ResearchRecord } from './researchRecords';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
 import { expandPlanPatch, isPlanPatch, type PlanPatchBase } from './planPatch';
+import { applyGoalPathDecisions, type GoalPathDecisions } from './goalPathDecisions';
+import type { GoalPathReview } from './goalPathReview';
 import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
 
 export const digest = taskVersion;
@@ -93,8 +95,13 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   invalidTaskTransitions?: import('./taskLifecycle').InvalidTaskTransition[];
   /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
   lastLeadPauseInputDigest?: string;
-  /** Latest original-goal path stall (no runnable frontier input); `answeredAt` once a settled Lead turn saw it. */
-  goalPathStall?: { digest: string; active: boolean; at: number; goalIds: string[]; taskIds: string[]; answeredAt?: number };
+  /**
+   * Latest original-goal path stall (no runnable frontier input). `answeredAt` once a Lead turn shown it adopted or declined
+   * every presented input, or the stall changed; after MAX_UNANSWERED_GOAL_PATH_TURNS turns that did neither, it is
+   * recorded as `ignoredAt` instead. `declined` keeps the Lead's reasons for this stall.
+   */
+  goalPathStall?: { digest: string; active: boolean; at: number; goalIds: string[]; taskIds: string[]; answeredAt?: number;
+    unanswered?: number; ignoredAt?: number; declined?: { taskId: string; reason: string; at: number }[] };
   /** Durable mathematical input/method tombstones, independent of scheduling and plan revisions. */
   capacityExplorationInputs?: { inputDigest: string; focus: import('./capacityExploration').CapacityExplorationFocus;
     targetTaskId: string; taskId: string }[];
@@ -140,14 +147,19 @@ export const deliveryInputFields = (record: DeliveryRecord) => ({
   remainingObligations: record.remainingObligations, lemmaRequests: record.lemmaRequests, findingDigest: record.findingDigest,
   mathematicalGap: record.mathematicalGap, mathematicalGapScope: record.mathematicalGapScope,
 });
-export type LeadPlan = ReturnType<typeof parseCooperationPlan> & { fromPatch?: boolean };
-/** Model proposes tasks or a revision of the accepted graph; the host validates coverage, exact targets and an acyclic dependency graph. */
-export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase,
-  options?: Parameters<typeof expandPlanPatch>[2]): LeadPlan {
-  if (!isPlanPatch(value)) return parseCooperationPlan(problem, value);
-  return { ...parseCooperationPlan(problem, expandPlanPatch(value, base, options)), fromPatch: true };
+export type LeadPlan = ReturnType<typeof parseCooperationPlan> & { fromPatch?: boolean; goalPathDecisions?: GoalPathDecisions };
+type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: GoalPathReview };
+/**
+ * Model proposes tasks or a revision of the accepted graph; the host validates coverage, exact targets and an acyclic
+ * dependency graph. A revision may answer the current goal-path review, whose mechanical candidates expand first.
+ */
+export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
+  const { goalPath, ...patchOptions } = options;
+  const answered = applyGoalPathDecisions(value, goalPath, base);
+  const decisions = answered.decisions ? { goalPathDecisions: answered.decisions } : {};
+  if (!isPlanPatch(answered.value)) return { ...parseCooperationPlan(problem, answered.value), ...decisions };
+  return { ...parseCooperationPlan(problem, expandPlanPatch(answered.value, base, patchOptions)), fromPatch: true, ...decisions };
 }
-export function readCooperationPlan(problem: SolverProblem, worktree: string, base?: PlanPatchBase,
-  options?: Parameters<typeof expandPlanPatch>[2]): LeadPlan {
+export function readCooperationPlan(problem: SolverProblem, worktree: string, base?: PlanPatchBase, options?: LeadPlanOptions): LeadPlan {
   return parseLeadPlan(problem, block(worktree, 'math-plan'), base, options);
 }

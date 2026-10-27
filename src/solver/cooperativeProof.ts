@@ -74,6 +74,9 @@ export function taskChanges(problem: SolverProblem, worktree: string, sourceComm
     const before = read(assignment.seedCommit), after = read(sourceCommit);
     if (before === after) continue;
     if (task && (['research', 'sketch'].includes(task.kind) || !file.endsWith('.lean'))) throw new Error('math_task_source_outside_scope');
+    if (Object.hasOwn(problem.frozenFiles ?? {}, file))
+      throw new Error(`math_library_module_changed\nFile: ${problem.projectRelative}/${file}\n` +
+        `This Submission/Library module is a frozen host library. Restore it with git show ${assignment.seedCommit}:${problem.projectRelative}/${file}, import it and add new helpers in another owned file.`);
     const originals = inspectLeanDeclarationRegions(before), updated = inspectLeanDeclarationRegions(after);
     if (new Set(updated.map(region => local(region.name))).size !== updated.length)
       throw new Error('math_task_ambiguous_declaration');

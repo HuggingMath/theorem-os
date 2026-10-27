@@ -15,6 +15,7 @@ import { taskGroup, taskVersion, taskProofContractVersion, taskReferenceDependen
 import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan,
   type LeadPlan } from './cooperationShared';
 import { formatPlanJson, type PlanPatchBase } from './planPatch';
+import { collapseTaskFamilies } from './taskFamilies';
 import { dropLeadWakes } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
@@ -26,7 +27,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     if (!this.archive.planEdited) return;
     const file = path.join(this.lead.worktree, 'RESEARCH.md');
     const source = fs.existsSync(file) ? readMathText(file, MAX_RESEARCH_NOTES_BYTES) : '';
-    const plan = '```math\n' + formatPlanJson({ tasks: this.plannedTasks().map(node => node.task), groups: this.archive.groups?.map(route => route.group),
+    const plan = '```math\n' + formatPlanJson({ tasks: collapseTaskFamilies(this.plannedTasks().map(node => node.task)), groups: this.archive.groups?.map(route => route.group),
       ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}) }) + '\n```';
     // Replace the first plan fence and drop the rest, so an applied revision cannot be read again.
     let replaced = false;
@@ -38,9 +39,9 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     fs.writeFileSync(file, replaced ? synced : plan + '\n' + bounded(source, 8000));
     this.archive.planEdited = false;
   }
-  /** The accepted Lead graph that a plan revision is written against. */
+  /** The accepted Lead graph that a plan revision is written against; family members are rederived on parse. */
   protected planPatchBase(): PlanPatchBase | undefined {
-    const tasks = this.plannedTasks().map(node => node.task);
+    const tasks = collapseTaskFamilies(this.plannedTasks().map(node => node.task));
     return tasks.length ? { version: this.archive.planVersion ?? this.planVersion(), tasks,
       groups: this.archive.groups?.map(route => route.group) ?? [], proofRoutes: this.archive.proofRoutes } : undefined;
   }
@@ -49,9 +50,10 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const base = this.planPatchBase();
     const rebased = Boolean(action?.kind === 'lead' && this.current(action) && this.publishedPlans.has(action) &&
       action.planVersion && action.planVersion !== base?.version);
+    // A rebased repeat of an applied publication already answered the review it was written against.
     return readCooperationPlan(this.input.state.problem, this.lead.worktree, base, {
       acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [(action as { planVersion: string }).planVersion] : [])],
-      rebased });
+      rebased, ...(rebased ? {} : { goalPath: this.goalPathReview() }) });
   }
   protected planningInputDigest(omitLeadDrafts = false) {
     const versions = new Map(this.archive.tasks.map(node => [node.task.id, digest(node.task)]));
@@ -317,6 +319,8 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.planEdited = true;
     }
     this.archive.planVersion = this.planVersion();
+    const decidingAction = publication?.action ?? leadAction;
+    if (plan.goalPathDecisions && decidingAction) this.recordGoalPathDecisions(decidingAction, plan.goalPathDecisions);
     // A revision is not a graph: the next dispatch's notes show the complete accepted result.
     if (plan.fromPatch) this.archive.planEdited = true;
     // Replaying unchanged saved notes during restore does not correct a rejected live event.

@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, readMathText, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
-import { committedSource, git } from './problem';
+import { committedSource, git, solverSourceConstraints } from './problem';
 import { solverProofFeedback, solverSourceFeedback } from './feedback';
 import { assessTaskResponsibility, assignSharedResearchTask, independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
 import type { DispatchWaitObservation } from './archive';
@@ -395,7 +395,8 @@ export class CooperativeResearch extends CooperationInputs {
         ...(this.archive.tasks.length ? { planNonce: crypto.randomUUID() } : {}) };
       this.leadEvidence.set(action, this.planningEvidenceDigest());
       this.leadPauseInputs.set(action, this.leadPauseInputDigest(action.seedCommit));
-      if (this.archive.goalPathStall?.active) this.presentedGoalPathStalls.set(action, this.archive.goalPathStall.goalIds);
+      const presented = this.presentedGoalPathStall();
+      if (presented) this.presentedGoalPathStalls.set(action, presented);
       if (goalPathStall) this.input.emit('goal_path_stall_dispatched', { digest: goalPathStall });
       return action;
     }
@@ -537,7 +538,8 @@ export class CooperativeResearch extends CooperationInputs {
       try {
         const checked: { result: TaskTypePreflight; current: () => boolean } = workerAccess ? await this.taskTypePreflight.check({ problem: this.input.state.problem, task,
           projectRoot: project,
-          dependencies: this.dependencies(task).map(item => item.task), environmentDigest: environment,
+          // A family type never names its own members, which do not exist in source until they are proved.
+          dependencies: this.dependencies(task).map(item => item.task).filter(input => input.familyMember !== task.id), environmentDigest: environment,
           env: workerAccess.environment, signal,
           timeoutMs: this.input.timeoutMs ?? Infinity }) : {
             result: { status: 'unavailable', inputDigest: mathDigest(canonicalMathJson([taskDigest, environment, 'worker-environment-unavailable'])),
@@ -569,6 +571,47 @@ export class CooperativeResearch extends CooperationInputs {
           this.preparingTaskTypes.delete(node);
           node.assignment = dispatchAssignment;
         };
+        const assembleFamily = this.input.modules.M2.assembleFamily;
+        const familyKey = canonicalMathJson([taskDigest, dependencies, environment]);
+        if (assembleFamily && task.family && !node.assignment && leadAccess && workerAccess && checked.result.status === 'elaborated' &&
+            checked.result.context && !this.familyAssemblyAttempts.has(familyKey)) {
+          // One host assembly per exact family contract in this process; a failure falls through to a model.
+          this.familyAssemblyAttempts.add(familyKey);
+          const assemblyStarted = Date.now();
+          const assembly = await assembleFamily({ problem: this.input.state.problem, task, worktree: worker.worktree,
+            seedCommit: scopedSeed, context: checked.result.context });
+          if (!current()) { this.familyAssemblyAttempts.delete(familyKey); return RETRY_DISPATCH; }
+          // Unproved members (and other fixed lemma inputs) are bound exactly as in the ordinary conditional check.
+          const conditions = this.assignmentConditions(task, dispatchAssignment);
+          let proof, checkError: string | undefined;
+          if (assembly.commit) {
+            try {
+              proof = await checker(this.input.state.problem, worker.worktree, assembly.commit, task, dispatchAssignment,
+                retainedGoals(), leadAccess.environment, signal, this.input.timeoutMs, conditions, environment,
+                ...(checker === checkTaskProof ? [this.taskProofCache] : []));
+            } catch (error) {
+              if (!current()) return RETRY_DISPATCH;
+              checkError = bounded(error instanceof Error ? error.message : String(error), 600);
+            }
+          }
+          this.input.emit('task_family_assembly', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
+            status: assembly.status, reason: assembly.reason, durationMs: Date.now() - assemblyStarted,
+            assumedInputs: conditions.map(input => input.id), ...(checkError ? { checkError } : {}),
+            ...(assembly.commit ? { commit: assembly.commit } : {}), ...(proof ? { passed: proof.passed,
+              verificationStatus: proof.verification.status, receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
+          // A conditional family starts before its members are checked, so this omits the dependency-readiness gate.
+          const assembled = () => current() && checked.current() && git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
+            this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node;
+          if (proof?.passed) {
+            if (!assembled()) return RETRY_DISPATCH;
+            await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, assembly.commit!,
+              'Host assembled this family lemma from its member lemmas before starting a model.' + (conditions.length
+                ? ` Its check binds its ${conditions.length} lemma input(s) as explicit hypotheses; the host rechecks it unconditionally once they integrate.` : ''),
+              {}, false, { proof, current: assembled, claim });
+            return RETRY_DISPATCH;
+          }
+          if (!assembled()) return RETRY_DISPATCH;
+        }
         const canonicalCandidate = leadAccess && workerAccess && this.canonicalHelperCandidate(node, worker, scopedSeed);
         if (canonicalCandidate) {
           // A failed probe is not a model delivery. Keep it outside failure memory and archive acceptance.
@@ -659,6 +702,8 @@ export class CooperativeResearch extends CooperationInputs {
       // Local diagnostics should reject the same unrelated goal edits as task delivery,
       // before the worker spends time compiling a candidate it cannot submit.
       const declarations = Object.fromEntries(Object.entries(problem.declarations).map(([file, originals]) => {
+        // Library modules are byte-frozen as a whole; their declarations need no per-task bodies.
+        if (problem.frozenFiles && Object.hasOwn(problem.frozenFiles, file)) return [file, originals];
         const source = committedSource(worker.worktree, node.assignment!.seedCommit, `${problem.projectRelative}/${file}`);
         const regions = inspectLeanDeclarationRegions(source);
         return [file, originals.map(original => {
@@ -669,8 +714,7 @@ export class CooperativeResearch extends CooperationInputs {
         })];
       }));
       writeMathJsonDurable(path.join(worker.worktree, problem.projectRelative, '.lake/source-constraints.json'),
-        { trustedFiles: problem.trustedFiles, declarations, sourceStructure: problem.sourceStructure,
-          sourceImports: problem.sourceImports }, 0o400);
+        solverSourceConstraints(problem, declarations), 0o400);
     }
     this.moveTask(node, 'running', 'dispatched');
     const route = this.archive.groups?.find(record => record.group.id === taskGroup(node.task));
@@ -910,7 +954,7 @@ export class CooperativeResearch extends CooperationInputs {
       // The decision or pause above is durable now; a restart must not re-ask this turn's wake-ups.
       settleLeadWakes(this.archive.leadWakes!);
       // A failed request that saved nothing has not considered the stall; a decision, rejection or pause has.
-      if (!recovering || recoveryKind !== 'request-failure' || decisionProgress) this.answerGoalPathStall(action);
+      if (!recovering || recoveryKind !== 'request-failure' || decisionProgress) this.answerGoalPathStall(action, !recovering);
       this.changed();
       return { finished: false as const, sourceChanged, savedPlan, planVersion: this.archive.planVersion };
     });
