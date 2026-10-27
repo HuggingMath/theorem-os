@@ -64,6 +64,8 @@ export type WebEventDetails = {
   moduleId?: string;
   slot?: ResearchModuleSlot;
   mode?: 'append' | 'replace';
+  /** A runtime reason code such as math_delivery_invalid or no-durable-progress, never provider or Lean text. */
+  reason?: string;
 };
 export type WebEvent = { sequence: number; at: string; type: string; message: string; details?: WebEventDetails };
 export type WebModuleSnapshot = { eventCount: number; firstAt: string; lastEvent: WebEvent; activeWorkers: string[] };

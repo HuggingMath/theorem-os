@@ -15,7 +15,8 @@ import { solverModuleConfiguration } from '../../src/solver/modules/moduleIdenti
 import { researchWorkers } from '../../src/solver/modules/organization';
 import { runSolver } from '../../src/solver/run';
 import { readKnowledgeCatalog } from '../../src/solver/theoremKnowledgeStore';
-import { translateWebProgress } from './progress';
+import { createWebProgressForwarder } from './progress';
+import { withoutCheckMarkers } from './report';
 import { webArtifactMaxBytes, type WebArtifact, type WorkerInput, type WorkerMessage } from './shared';
 import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './workerBridge';
 import { webByokModuleIdentity } from './webModuleIdentity';
@@ -104,6 +105,17 @@ export function readWebResultProof(options: {
   return '';
 }
 
+/**
+ * Why a run ended `incomplete` without a failure: its shared turn allowance ran out, its solving budget ran out
+ * before the abort fired, or no research route was left to run. Settings come from the request the worker ran.
+ */
+export function webIncompleteReason(raw: Record<string, unknown>, input: Pick<WorkerInput['input'], 'maxTurns' | 'maxRunSeconds'>) {
+  if (raw.status !== 'incomplete' || raw.reason) return;
+  if (typeof raw.turns === 'number' && raw.turns >= input.maxTurns) return 'math_turn_limit_reached';
+  if (typeof raw.solveWallMs === 'number' && raw.solveWallMs >= input.maxRunSeconds * 1_000) return 'math_run_stopped';
+  return 'math_research_routes_exhausted';
+}
+
 export function webProviderConfig(input: WorkerInput, modelCatalog?: string): string {
   return stringifyToml({
     model: input.input.model, model_provider: 'web_provider', model_reasoning_effort: input.input.effort,
@@ -170,12 +182,12 @@ async function main() {
         send({ type: 'progress', event: 'observation_unavailable', message: `研究观察暂不可用：${error.message}。` });
     }).finally(() => { capturePending = undefined; });
   let latestArtifact: WebArtifact | undefined;
+  const forwardProgress = createWebProgressForwarder(send);
   console.log = (...args: unknown[]) => {
     for (const value of args) if (typeof value === 'string') {
       try {
         const event = JSON.parse(value);
-        const progress = translateWebProgress(event);
-        if (progress) send(progress);
+        forwardProgress(event);
         if (['turn_checkpoint', 'proof_check_started', 'candidate_selected', 'evaluation_started'].includes(event.event)) sampleArtifact?.();
       } catch { /* Unstructured runtime output stays private to this disposable container. */ }
     }
@@ -222,6 +234,8 @@ async function main() {
       'winningWorker', 'workers', 'reason', 'tokenBudget'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
     const failure = classifyWebResult(raw);
     if (failure) report.failure = failure;
+    const stopReason = webIncompleteReason(raw, request.input);
+    if (stopReason) report.stopReason = stopReason;
     report.environment = { id: environment.id, toolchain: environment.toolchain,
       dependencyDigest: environment.dependencyDigest,
       ...(environment.mathlibRevision ? { mathlibRevision: environment.mathlibRevision } : {}) };
@@ -232,8 +246,9 @@ async function main() {
         status: state.check.verification?.status,
         results: state.check.verification?.results?.slice(0, 64).map(result => Object.fromEntries(
           ['theoremName', 'status', 'sorryCount', 'admitCount', 'error', 'stdoutPreview', 'stderrPreview']
-            .filter(field => Object.hasOwn(result, field)).map(field => [field,
-              typeof result[field] === 'string' ? result[field].slice(0, 2_000) : result[field]]))) };
+            .filter(field => Object.hasOwn(result, field)).map(field => [field, typeof result[field] !== 'string' ? result[field]
+              : (field.endsWith('Preview') ? withoutCheckMarkers(result[field]) : result[field]).slice(0, 2_000)])
+            .filter(([, value]) => value !== ''))) };
     }
     const proof = readWebResultProof({ directory, workspace: receipt.workspaceRoot, status: raw.status,
       winningWorker: raw.winningWorker, state, artifact: latestArtifact });

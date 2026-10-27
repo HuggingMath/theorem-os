@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isWebEventDetails, recordWebModuleEvent, sanitizeWebEventDetails, webEventModule, webModuleSnapshots } from '../apps/web/moduleTelemetry';
-import { translateWebProgress } from '../apps/web/progress';
+import { createWebProgressForwarder, translateWebProgress, webProgressHeartbeatMs } from '../apps/web/progress';
 import { parseWorkerMessage } from '../apps/web/runner';
 import type { WebEvent, WebEventDetails, WebRun } from '../apps/web/shared';
 
@@ -30,6 +30,10 @@ describe('bounded web module observations', () => {
     ['research_action', 'M3'], ['turn_retry', 'M3'], ['context_compiled', 'M4'],
     ['context_restarted', 'M4'], ['task_assigned', 'M5'], ['review_completed', 'M5'],
     ['evaluation_started', 'S3'], ['evaluation_finished', 'S3'],
+    ['task_canonical_probe', 'M2'], ['proof_ready_checked', 'M2'], ['task_conditional_recheck_finished', 'M2'],
+    ['goal_path_stalled', 'M3'], ['route_blocker_recorded', 'M3'], ['task_repeated_input_blocked', 'M3'],
+    ['context_compaction_started', 'M4'], ['worker_context_recovering', 'M4'], ['knowledge_retrieval_observed', 'M4'],
+    ['plan_published', 'M5'], ['edit_applied', 'M5'], ['delivery_rejected', 'M5'], ['statement_review_reused', 'M5'],
   ])('maps the actual %s event to %s', (type, module) => {
     expect(webEventModule(type)).toBe(module);
   });
@@ -222,5 +226,106 @@ describe('allowlisted web progress translation', () => {
       { workerId: 'solver', nested: { apiKey: 'sk-private' } }]) expect(isWebEventDetails(invalid)).toBe(false);
     expect(isWebEventDetails({})).toBe(true);
     expect(sanitizeWebEventDetails(Object.create({ workerId: 'private-inherited' }))).toBeUndefined();
+  });
+
+  it('forwards the runtime reason code but never the text after it', () => {
+    const rejected = translateWebProgress({ event: 'delivery_rejected', workerId: 'engineer',
+      reason: 'math_research_lemma_requests_invalid: math_plan_invalid_task', error: 'private' });
+    expect(rejected).toEqual({ type: 'progress', event: 'delivery_rejected', message: 'Agent 交付未通过宿主校验 · engineer',
+      details: { workerId: 'engineer', reason: 'math_research_lemma_requests_invalid' } });
+    // The service drops a progress line whose details it does not fully recognise, so it must accept the reason.
+    expect(parseWorkerMessage(JSON.stringify(rejected))).toEqual(rejected);
+    expect(parseWorkerMessage(JSON.stringify({ ...rejected, details: { workerId: 'engineer', reason: 'Lean said: no' } }))).toBeUndefined();
+    expect(translateWebProgress({ event: 'route_reopened', taskId: 'goal-1', reason: 'contract-changed' })?.details)
+      .toEqual({ taskId: 'goal-1', reason: 'contract-changed' });
+    expect(translateWebProgress({ event: 'task_tactic_battery', taskId: 'lemma-2', reason: 'battery-did-not-close' })?.details)
+      .toEqual({ taskId: 'lemma-2', reason: 'battery-did-not-close' });
+    for (const reason of ['Lean said: unsolved goals', '/work/run-1/worktree', 'sk-live-123', 'MATH_DELIVERY_INVALID',
+      'a'.repeat(40), 'deadbeef00112233', 'math_' + 'x'.repeat(80), 'two words', 7, null])
+      expect(translateWebProgress({ event: 'route_reopened', taskId: 'goal-1', reason })?.details).toEqual({ taskId: 'goal-1' });
+    for (const reason of ['math_delivery_invalid', 'lean_task_seed_invalid', 'no-durable-progress', 'unchanged-mathematical-input'])
+      expect(isWebEventDetails({ reason })).toBe(true);
+  });
+
+  it('names a known stop by its fixed description and keeps the code for the module record', () => {
+    expect(translateWebProgress({ event: 'worker_failed', workerId: 'prover-1',
+      reason: 'math_context_mandatory_overflow:767016>524288' }))
+      .toEqual({ type: 'progress', event: 'worker_failed', message: '必需上下文超出容量，会话已停止 · prover-1',
+        details: { workerId: 'prover-1', reason: 'math_context_mandatory_overflow' } });
+    expect(translateWebProgress({ event: 'worker_failed', workerId: 'engineer', reason: 'math_source_outside_ownership' })?.message)
+      .toBe('Agent 修改了不属于本任务的源码，会话已停止 · engineer');
+    expect(translateWebProgress({ event: 'cooperation_poll_failed', reason: 'math_delivery_line_too_large' })?.message)
+      .toBe('Agent 交付记录过大，未能读取');
+  });
+
+  it('reports a recovery as a recovery even when it names the provider failure it recovered from', () => {
+    expect(translateWebProgress({ event: 'worker_recovered', workerId: 'solver', reason: 'math_model_request_timeout' }))
+      .toEqual({ type: 'progress', event: 'worker_recovered', message: 'Agent 已恢复，保留已检查成果 · solver',
+        details: { workerId: 'solver', reason: 'math_model_request_timeout' } });
+  });
+
+  it('translates lead, goal-path and human-input events that the workbench shows', () => {
+    expect(translateWebProgress({ event: 'goal_path_stalled', workerId: 'lead', candidates: ['private-id'] }))
+      .toEqual({ type: 'progress', event: 'goal_path_stalled', message: '原题目标路径停滞，等待 Lead 决定 · lead',
+        details: { workerId: 'lead' } });
+    expect(translateWebProgress({ event: 'edit_rejected', reason: 'math_plan_invalid_task', plan: { private: true } }))
+      .toEqual({ type: 'progress', event: 'edit_rejected', message: '计划修改未通过校验，计划未改变',
+        details: { reason: 'math_plan_invalid_task' } });
+    expect(translateWebProgress({ event: 'human_guidance_delivered', workerId: 'prover-1', text: 'private guidance' }))
+      .toEqual({ type: 'progress', event: 'human_guidance_delivered', message: '数学指导已送达 Agent · prover-1',
+        details: { workerId: 'prover-1' } });
+    expect(translateWebProgress({ event: 'task_conditional_recheck_finished', taskId: 'goal-1', passed: true, conditional: true })?.details)
+      .toEqual({ taskId: 'goal-1', passed: true });
+  });
+});
+
+describe('bounded web progress forwarding', () => {
+  const forwarder = () => {
+    let clock = 0;
+    const sent: { event: string; message: string }[] = [];
+    const forward = createWebProgressForwarder(message => sent.push(message), () => clock);
+    return { sent, forward, at: (value: number) => { clock = value; } };
+  };
+
+  it('keeps one activity heartbeat per worker per interval and drops the rest', () => {
+    const { sent, forward, at } = forwarder();
+    for (let index = 0; index < 50; index++) forward({ event: 'worker_activity', workerId: 'solver' });
+    forward({ event: 'worker_activity', workerId: 'researcher-1' });
+    at(webProgressHeartbeatMs - 1);
+    forward({ event: 'worker_activity', workerId: 'solver' });
+    at(webProgressHeartbeatMs);
+    forward({ event: 'worker_activity', workerId: 'solver' });
+    expect(sent.map(message => message.message)).toEqual(['Agent 正在运行 · solver', 'Agent 正在运行 · researcher-1', 'Agent 正在运行 · solver']);
+  });
+
+  it('forwards activity at once after any other event from that worker, so module intervals reopen', () => {
+    const { sent, forward, at } = forwarder();
+    forward({ event: 'worker_activity', workerId: 'solver' });
+    forward({ event: 'worker_activity', workerId: 'engineer' });
+    at(1_000);
+    forward({ event: 'proof_check_started', workerId: 'solver', turn: 1 });
+    forward({ event: 'worker_activity', workerId: 'solver' });
+    forward({ event: 'worker_activity', workerId: 'engineer' });
+    forward({ event: 'unknown_event', workerId: 'engineer' });
+    forward({ event: 'worker_activity', workerId: 'engineer' });
+    expect(sent.map(message => message.event + '/' + message.message.split(' · ')[1]))
+      .toEqual(['worker_activity/solver', 'worker_activity/engineer', 'proof_check_started/solver', 'worker_activity/solver']);
+  });
+
+  it('keeps one repeat of the same poll failure per interval but forwards a different one', () => {
+    const { sent, forward, at } = forwarder();
+    for (let index = 0; index < 20; index++) forward({ event: 'cooperation_poll_failed', reason: 'math_delivery_line_too_large' });
+    forward({ event: 'cooperation_poll_failed', reason: 'math_delivery_log_invalid' });
+    at(webProgressHeartbeatMs);
+    forward({ event: 'cooperation_poll_failed', reason: 'math_delivery_line_too_large' });
+    expect(sent.map(message => message.message)).toEqual(['Agent 交付记录过大，未能读取', '读取 Agent 交付记录失败',
+      'Agent 交付记录过大，未能读取']);
+  });
+
+  it('never throttles ordinary events', () => {
+    const { sent, forward } = forwarder();
+    for (let index = 0; index < 5; index++) forward({ event: 'task_checked', taskId: 'goal-1', passed: false });
+    forward('private log');
+    expect(sent).toHaveLength(5);
   });
 });

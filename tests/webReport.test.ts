@@ -52,6 +52,26 @@ describe('web report summaries from structured worker fields', () => {
     expect(summary).not.toHaveProperty('accepted');
   });
 
+  it('shows Lean output without the checker delimiters in candidate and acceptance diagnostics', () => {
+    // Shape of the cooperative smoke run's previews: reference rows, then #check and #print axioms between markers.
+    const preview = ['DS_DECL_REFERENCES_' + '6a'.repeat(16) + ':[[],[]]', 'DEEPSCIENTIST_DECL_BEGIN_b83c3e8a10763bb7',
+      'Tutorial.add_zero (n : Nat) : n + 0 = n', 'DEEPSCIENTIST_DECL_END_b83c3e8a10763bb7',
+      'DEEPSCIENTIST_AXIOMS_BEGIN_b83c3e8a10763bb7', "'Tutorial.add_zero' does not depend on any axioms",
+      'DEEPSCIENTIST_AXIOMS_END_b83c3e8a10763bb7', 'DS_PROOF_DEPENDENCIES_' + '0f'.repeat(16) + ':["Nat.add_zero"]'].join('\n');
+    const report = fixture();
+    report.candidateCheck.results[0].stdoutPreview = preview;
+    report.evaluator.verification.verification.results[0].stdoutPreview = preview;
+    const summary = summarizeReport(run(report));
+    for (const check of summary.checks) expect(check.targets[0].diagnostics).toEqual([{ label: '标准输出',
+      text: "Tutorial.add_zero (n : Nat) : n + 0 = n\n'Tutorial.add_zero' does not depend on any axioms", truncated: false }]);
+    // Only exact checker markers are removed; Lean text that merely mentions them stays.
+    report.candidateCheck.results[0].stdoutPreview = 'DEEPSCIENTIST_DECL_BEGIN_short\nDS_DECL_REFERENCES_' + 'ab'.repeat(16);
+    expect(summarizeReport(run(report)).checks[0].targets[0].diagnostics[0].text)
+      .toBe('DEEPSCIENTIST_DECL_BEGIN_short\nDS_DECL_REFERENCES_' + 'ab'.repeat(16));
+    report.candidateCheck.results[0].stdoutPreview = 'DEEPSCIENTIST_AXIOMS_BEGIN_b83c3e8a10763bb7\nDEEPSCIENTIST_AXIOMS_END_b83c3e8a10763bb7';
+    expect(summarizeReport(run(report)).checks[0].targets[0].diagnostics).toEqual([]);
+  });
+
   it('never promotes candidate rows over a failed candidate receipt', () => {
     const report = fixture();
     report.candidateCheck.passed = false;

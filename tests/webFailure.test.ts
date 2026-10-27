@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { classifyWebError, classifyWebResult } from '../apps/web/failure';
 import { failureGuide, queueDescription, resultDescription } from '../apps/web/presentation';
 import { parseWebFailure, type WebRun } from '../apps/web/shared';
+import { webIncompleteReason } from '../apps/web/worker';
 
 const run = (changes: Partial<WebRun> = {}): WebRun => ({
   id: 'run', title: 'Example', status: 'completed', phase: 'finished', createdAt: '2026-10-26T00:00:00.000Z',
@@ -44,6 +45,18 @@ describe('web failure classification from solver results', () => {
     for (const value of [undefined, 'network', { kind: 'billing' }, { kind: 'network', reason: 'sk-live-123' }, { kind: 'network', extra: 1 }])
       expect(parseWebFailure(value)).toBeUndefined();
   });
+
+  it('names why an unfinished search stopped from the solver counters and the request limits', () => {
+    const input = { maxTurns: 5, maxRunSeconds: 30 };
+    expect(webIncompleteReason({ status: 'incomplete', turns: 5, solveWallMs: 12_000 }, input)).toBe('math_turn_limit_reached');
+    expect(webIncompleteReason({ status: 'incomplete', turns: 6, solveWallMs: 31_000 }, input)).toBe('math_turn_limit_reached');
+    expect(webIncompleteReason({ status: 'incomplete', turns: 3, solveWallMs: 30_000 }, input)).toBe('math_run_stopped');
+    expect(webIncompleteReason({ status: 'incomplete', turns: 3, solveWallMs: 9_000 }, input)).toBe('math_research_routes_exhausted');
+    expect(webIncompleteReason({ status: 'incomplete' }, input)).toBe('math_research_routes_exhausted');
+    for (const raw of [{ status: 'incomplete', reason: 'math_total_token_limit', turns: 5 }, { status: 'limit_reached', turns: 5 },
+      { status: 'evaluated_failed', turns: 5 }, { status: 'evaluated_passed', turns: 1 }, { status: 'runtime_error' }])
+      expect(webIncompleteReason(raw, input)).toBeUndefined();
+  });
 });
 
 describe('web failure and queue presentation', () => {
@@ -55,6 +68,21 @@ describe('web failure and queue presentation', () => {
     expect(failureGuide(run({ result: { status: 'limit_reached', proof: '', report: {} }, failure: { kind: 'time_limit', reason: 'math_preparation_stopped' } }))!.detail)
       .toContain('准备证明环境');
     expect(failureGuide(run({ result: { status: 'incomplete', proof: '', report: {} } }))!.actions[0].id).toBe('turns');
+  });
+
+  it('explains an unfinished search by the stop reason the worker recorded', () => {
+    const incomplete = (stopReason?: string) => failureGuide(run({ result: { status: 'incomplete', proof: '',
+      report: stopReason ? { stopReason } : {} } }))!;
+    expect(incomplete('math_turn_limit_reached')).toMatchObject({ title: '研究轮次已用完' });
+    expect(incomplete('math_turn_limit_reached').actions.map(action => action.id)).toEqual(['turns', 'report']);
+    expect(incomplete('math_research_routes_exhausted')).toMatchObject({ title: '没有可以继续的研究路线' });
+    expect(incomplete('math_research_routes_exhausted').actions.map(action => action.id)).toEqual(['retry', 'report']);
+    expect(incomplete('math_run_stopped')).toMatchObject({ kind: 'time_limit', title: '已达到解题时间预算' });
+    expect(incomplete('math_run_stopped').actions.map(action => action.id)).toEqual(['budget', 'report']);
+    for (const legacy of [undefined, 'math_unknown_stop']) {
+      expect(incomplete(legacy).title).toBe('没有得到完整证明');
+      expect(incomplete(legacy).kind).toBeUndefined();
+    }
   });
 
   it('keeps legacy and non-failure runs on their existing wording', () => {

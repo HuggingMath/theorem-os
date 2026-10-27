@@ -101,8 +101,16 @@ export function failureGuide(run: WebRun): FailureGuide | undefined {
     const guide = guides[kind], detail = run.failure?.reason && reasonDetails[run.failure.reason];
     return { ...guide, kind, ...(detail ? { detail } : {}) };
   }
-  if (run.result?.status === 'incomplete') return { title: t('没有得到完整证明'), detail: t('Agent 用完了轮次，或没有可以继续的研究路线。已检查的成果保存在报告中。可以提高轮次上限、增加 Agent，或在任务说明里补充思路。'),
-    actions: [{ id: 'turns', label: t('提高轮次上限') }, report] };
+  if (run.result?.status === 'incomplete') {
+    const stop = run.result.report.stopReason;
+    if (stop === 'math_turn_limit_reached') return { title: t('研究轮次已用完'), detail: t('Agent 用完了全部研究轮次，还没有得到完整证明。已检查的成果保存在报告中。可以提高轮次上限、增加 Agent，或在任务说明里补充思路。'),
+      actions: [{ id: 'turns', label: t('提高轮次上限') }, report] };
+    if (stop === 'math_research_routes_exhausted') return { title: t('没有可以继续的研究路线'), detail: t('轮次还有剩余，但计划中的研究路线都已停滞或用尽。已检查的成果保存在报告中。可以在任务说明里补充思路，或换一个模型后重新运行。'),
+      actions: [retry, report] };
+    if (stop === 'math_run_stopped') return { ...guides.time_limit, kind: 'time_limit' };
+    return { title: t('没有得到完整证明'), detail: t('Agent 用完了轮次，或没有可以继续的研究路线。已检查的成果保存在报告中。可以提高轮次上限、增加 Agent，或在任务说明里补充思路。'),
+      actions: [{ id: 'turns', label: t('提高轮次上限') }, report] };
+  }
 }
 
 const reportedTokens = (usage: unknown) => {

@@ -72,12 +72,19 @@ function status(value: string | undefined, labels: ReadonlyMap<string, Status>):
     : { status: t('未提供状态'), tone: 'muted' };
 }
 
+// Delimiters the Lean checker prints around its own #check, #print axioms and reference queries.
+const checkMarker = /^(?:DEEPSCIENTIST_(?:DECL|AXIOMS)_(?:BEGIN|END)_[0-9a-f]{16}|DS_(?:DECL_REFERENCES|PROOF_DEPENDENCIES)_[0-9a-f]{32}:.*)$/u;
+/** Lean output as a reader sees it: the checker's own delimiter lines removed, declarations and axioms kept. */
+export function withoutCheckMarkers(output: string): string {
+  return output.split('\n').filter(line => !checkMarker.test(line.trim())).join('\n').trim();
+}
+
 function diagnostics(row: Record<string, unknown>): ReportDiagnostic[] {
   const result: ReportDiagnostic[] = [];
   const seen = new Set<string>();
   for (const [key, label] of [['error', t('错误')], ['stdoutPreview', t('标准输出')], ['stderrPreview', t('标准错误')]]) {
     const raw = row[key];
-    const value = typeof raw === 'string' ? raw.trim() : '';
+    const value = typeof raw !== 'string' ? '' : key === 'error' ? raw.trim() : withoutCheckMarkers(raw);
     if (!value || seen.has(value)) continue;
     seen.add(value);
     result.push({ label, text: value.slice(0, maximumText), truncated: value.length > maximumText });

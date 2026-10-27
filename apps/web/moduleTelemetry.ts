@@ -2,6 +2,8 @@ import type { WebEvent, WebEventDetails, WebModuleId, WebModuleSnapshot, WebRun 
 
 const ids = /^[A-Za-z0-9_-]{1,64}$/u;
 const statuses = /^[a-z][a-z0-9_-]{0,63}$/u;
+// Runtime codes: math_/lean_task_ codes, or short kebab words. Digits only after the prefix, so keys and digests fail.
+const reasons = /^(?:(?:math|lean_task)_[a-z0-9_-]{1,72}|[a-z]{2,24}(?:-[a-z]{2,24}){0,5})$/u;
 const operations = ['direct', 'decompose', 'bridge', 'prove-lemma', 'integrate-lemma'] as const;
 const roles = ['lead', 'researcher', 'prover', 'engineer', 'reviewer'] as const;
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -27,6 +29,7 @@ export function sanitizeWebEventDetails(value: unknown): WebEventDetails | undef
     details.slot = value.slot as WebEventDetails['slot'];
   if (Object.hasOwn(value, 'mode') && ['append', 'replace'].includes(value.mode as string))
     details.mode = value.mode as WebEventDetails['mode'];
+  if (Object.hasOwn(value, 'reason') && typeof value.reason === 'string' && reasons.test(value.reason)) details.reason = value.reason;
   return Object.keys(details).length ? details : undefined;
 }
 
@@ -41,12 +44,19 @@ const moduleEvents: Record<WebModuleId, readonly string[]> = {
   M1: ['turn_started', 'worker_activity', 'turn_checkpoint', 'turn_failed', 'worker_failed',
     'worker_recovering', 'worker_recovered', 'assignment_superseded'],
   M2: ['proof_check_started', 'proof_checked', 'candidate_selected', 'lemma_checked', 'source_rejected', 'source_quarantined',
-    'task_checked', 'task_check_reused', 'task_failure_check_reused', 'task_recheck_started', 'task_recheck_finished', 'task_tactic_battery'],
-  M3: ['research_action', 'turn_retry', 'model_budget_stopped', 'planning_budget_stopped', 'route_parked', 'route_reopened', 'routes_idle', 'plan_stalled'],
-  M4: ['context_compiled', 'context_restarted'],
+    'task_checked', 'task_check_reused', 'task_failure_check_reused', 'task_recheck_started', 'task_recheck_finished', 'task_tactic_battery',
+    'task_canonical_probe', 'task_family_assembly', 'task_type_preflight', 'proof_ready_checked',
+    'task_conditional_recheck_started', 'task_conditional_recheck_finished', 'task_recheck_batch_started'],
+  M3: ['research_action', 'turn_retry', 'model_budget_stopped', 'planning_budget_stopped', 'route_parked', 'route_reopened', 'routes_idle', 'plan_stalled',
+    'route_blocker_recorded', 'goal_path_stalled', 'goal_path_decided', 'blocked_tasks_reconsidered', 'unattempted_frontier_resumed',
+    'task_mathematical_gap_blocked', 'task_repeated_input_blocked', 'task_failed_input_reopened'],
+  M4: ['context_compiled', 'context_restarted', 'context_compaction_started', 'context_compaction_completed', 'worker_context_recovering',
+    'knowledge_retrieval_observed'],
   M5: ['task_assigned', 'plan_updated', 'plan_rejected', 'initial_plan_fallback', 'assembly_started',
     'review_requested', 'review_assigned', 'review_completed', 'statement_review_requested',
-    'statement_review_assigned', 'statement_review_completed', 'task_integrated', 'delivery_published', 'research_delivered'],
+    'statement_review_assigned', 'statement_review_completed', 'task_integrated', 'delivery_published', 'research_delivered',
+    'initial_plan_published', 'plan_published', 'initial_plan_rejected', 'plan_publication_rejected', 'edit_applied', 'edit_rejected',
+    'delivery_rejected', 'task_repair_requested', 'task_integration_batch_started', 'statement_review_reused', 'feasibility_review_reassigned'],
   S3: ['evaluation_started', 'evaluation_finished'],
 };
 const eventModules = new Map<string, WebModuleId>(Object.entries(moduleEvents)
