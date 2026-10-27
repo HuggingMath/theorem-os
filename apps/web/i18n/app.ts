@@ -32,7 +32,6 @@ export const app: Record<string, string> = {
   "提交配置已填写": "Submission settings complete",
   "请稍候，提交结果将在对话中显示。": "Please wait; the result will appear in the conversation.",
   "环境恢复后可提交，当前草稿会保留。": "You can submit once the environment recovers; the draft is kept.",
-  "每次提交后清空，不随草稿保存。": "Cleared after each submission and never saved with the draft.",
   "说明要证明的目标与约束。": "Describe the goal to prove and its constraints.",
   "添加原始 Lean 题目，右侧可预览。": "Add the original Lean problem; it previews on the right.",
   "补全配置后即可提交当前题目。": "Complete the settings to submit this problem.",
@@ -350,4 +349,7 @@ export const app: Record<string, string> = {
   "现在在做什么": "What is happening now",
   "显示完整协作视图": "Show the full collaboration view",
   "依赖图、任务检查器、审阅、数学变化、Agent 分工、交付、记录与知识目录": "Dependency graph, task inspector, reviews, mathematical changes, Agent roles, deliveries, records and the knowledge catalog",
+  "每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。": "Cleared after each submission and never saved with drafts; settings can remember it in this tab.",
+  "浏览器不允许保存，Key 只保留到这次提交": "The browser does not allow saving; the key lasts until this submission",
+  "已清除此标签页记住的 API Key": "Forgot the API Key remembered in this tab",
 };

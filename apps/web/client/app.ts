@@ -39,6 +39,7 @@ import { renderRunOverview, unmountRunOverview, type RunOverviewProps } from './
 import { renderConversation as drawConversation } from './ui/Conversation';
 import { workerPhaseLabel } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResume, saveResume } from './runAwareness';
+import { forgetKey, hasRememberedKey, rememberKey, rememberedKey } from './keyMemory';
 import { installTermHints, renderGlossary } from './termHints';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
@@ -379,7 +380,7 @@ function renderPreparation(issues = currentSubmissionIssues()) {
       : issue?.message ?? t('提交配置已填写'));
   patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? t('连接后可编辑研究任务。')
     : offline || !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
-      : issue?.field === 'api-key' ? t('每次提交后清空，不随草稿保存。')
+      : issue?.field === 'api-key' ? t('每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。')
         : issue?.field === 'task' ? t('说明要证明的目标与约束。')
           : issue?.check ? t('原题需要先能编译；点击右侧定位到出错位置。')
           : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
@@ -506,6 +507,34 @@ function renderConversation() {
 }
 function providerAddress() {
   element('#provider-address').textContent = state.session?.providers.find(provider => provider.id === field('provider').value)?.baseUrl ?? '';
+  restoreKey();
+}
+// The key is cleared after every submission and on leaving; with "remember" on, this tab hands it back for the same provider address.
+const keyStorage = () => sessionStorage;
+const keyTarget = () => ({ providerId: field('provider').value, baseUrl: state.session?.providers.find(provider => provider.id === field('provider').value)?.baseUrl ?? '' });
+let restoredKey = '';
+function restoreKey() {
+  const target = keyTarget(), key = rememberedKey(keyStorage, target.providerId, target.baseUrl) ?? '';
+  // A key the reader typed stays, with their choice of the box; only an empty field or one we filled is replaced.
+  if (!field('api-key').value || field('api-key').value === restoredKey) {
+    field('api-key').value = key; restoredKey = key;
+    element<HTMLInputElement>('#remember-key').checked = Boolean(key);
+  } else restoredKey = '';
+  element('#forget-key').hidden = !hasRememberedKey(keyStorage);
+}
+// While "remember" is on, the stored key follows the field; an emptied field or an unticked box forgets it.
+function syncKeyMemory() {
+  const key = field('api-key').value.trim(), remember = element<HTMLInputElement>('#remember-key');
+  if (remember.checked && key && !rememberKey(keyStorage, { ...keyTarget(), apiKey: key })) {
+    remember.checked = false; toast(t('浏览器不允许保存，Key 只保留到这次提交'));
+  }
+  if (remember.checked && key) restoredKey = key; else { forgetKey(keyStorage); restoredKey = ''; }
+  element('#forget-key').hidden = !hasRememberedKey(keyStorage);
+}
+function forgetRememberedKey() {
+  forgetKey(keyStorage);
+  if (field('api-key').value === restoredKey) field('api-key').value = '';
+  restoredKey = ''; element<HTMLInputElement>('#remember-key').checked = false; element('#forget-key').hidden = true;
 }
 const environmentInfo = (id: WebEnvironment | string) => state.session?.environments.find(environment => environment.id === id);
 const environmentName = (id: WebEnvironment | string) => environmentInfo(id)?.name ?? (id === 'mathlib' ? 'Mathlib' : t('Lean 标准库'));
@@ -1597,8 +1626,9 @@ function initialize(): Promise<void> {
       if (!navigator.onLine) throw new Error(t('网络已断开'));
       const session = localizeSession(await api<WebSession>('/api/session'));
       if (!currentConnection(epoch)) return;
-      if (session.auth === 'email' && !session.account) { saveDraft(); location.replace('login.html'); return; }
+      if (session.auth === 'email' && !session.account) { saveDraft(); forgetKey(keyStorage); location.replace('login.html'); return; }
       const firstLoad = !state.session;
+      if (state.session && state.session.account?.email !== session.account?.email) forgetRememberedKey();
       if (state.session && state.session.csrfToken !== session.csrfToken) {
         state.runs = []; state.selectedId = ''; state.selectedRun = undefined;
         state.finishedRuns.clear(); state.cancelling.clear();
@@ -1674,7 +1704,7 @@ function openAccount() {
 }
 async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonElement) {
   button.disabled = true; element('#account-error').hidden = true;
-  try { await request(); saveDraft(); location.replace('login.html'); }
+  try { await request(); saveDraft(); forgetKey(keyStorage); location.replace('login.html'); }
   catch (error) {
     element('#account-error').textContent = message(error); element('#account-error').hidden = false;
     button.disabled = false;
@@ -1747,6 +1777,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(captureDraft().modulePlan ? { modulePlan: captureDraft().modulePlan } : {}),
       ...(captureDraft().knowledgeDigest ? { knowledgeDigest: captureDraft().knowledgeDigest } : {}),
     };
+    syncKeyMemory();
     closeSettings(false);
     state.submitting = true; renderRuntime();
     sent = true;
@@ -1757,7 +1788,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     const run = state.runs.find(item => item.id === result.run.id) ?? result.run;
     field('api-key').value = '';
     clearValidation();
-    element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle();
+    element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle(); restoreKey();
     if (!currentConnection(epoch)) {
       toast(t('研究已提交，连接已变化，请核对运行记录'));
       void poll(); return;
@@ -1959,6 +1990,7 @@ const recoveryFields: Record<Exclude<RecoveryAction['id'], 'report'>, string> = 
 function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'> = 'retry') {
   const session = state.session;
   if (!session || state.submitting) return;
+  if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
     clearValidation();
     // The sample's agent was a script, so its provider and model are no choice to copy; the visitor keeps their own.
@@ -2117,6 +2149,9 @@ document.addEventListener('keydown', event => {
   }
 });
 field('provider').addEventListener('change', providerAddress);
+element('#remember-key').addEventListener('change', syncKeyMemory);
+field('api-key').addEventListener('input', () => { if (element<HTMLInputElement>('#remember-key').checked) syncKeyMemory(); });
+element('#forget-key').addEventListener('click', () => { forgetRememberedKey(); field('api-key').focus(); toast(t('已清除此标签页记住的 API Key')); });
 field('environment').addEventListener('change', () => {
   sourceRevision++;
   const usingTemplate = Boolean(field('template').value);
@@ -2436,7 +2471,7 @@ window.addEventListener('pagehide', () => {
 });
 window.addEventListener('pageshow', event => {
   if (event.persisted) {
-    pageActive = true; field('api-key').value = '';
+    pageActive = true; field('api-key').value = ''; restoredKey = ''; restoreKey();
     void resumeConnection();
   }
 });

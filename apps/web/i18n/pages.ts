@@ -245,4 +245,7 @@ export const pages: Record<string, string> = {
   "源码版本": "Source version",
   "复制当前源码": "Copy current source",
   "下载 Lean 文件": "Download Lean file",
+  "在此标签页记住": "Remember in this tab",
+  "清除已记住的 Key": "Forget the remembered key",
+  "只存在这个标签页里，关闭标签页即清除；不会写入草稿，也不会带给其他服务商或地址。": "Kept only in this tab and cleared when the tab closes; never saved with drafts or offered to another provider or address.",
 };

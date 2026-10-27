@@ -71,6 +71,9 @@
                   <div class="field-grid model-grid"><div><label for="model">模型</label><input id="model" name="model" type="text" required autocomplete="off" spellcheck="false" aria-describedby="model-validation"><p id="model-validation" class="field-validation" role="alert" hidden></p></div><div><label for="effort">推理强度</label><select id="effort" name="effort"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">很高</option><option value="max">最高</option></select></div></div>
                   <label for="api-key" class="credential-label">API Key</label><div class="password-field"><input id="api-key" name="apiKey" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="API Key" aria-describedby="credential-note api-key-validation"><button type="button" id="toggle-key" class="icon-button" title="显示 API Key" aria-label="显示 API Key" aria-pressed="false"><i data-lucide="eye"></i></button></div>
                   <p id="api-key-validation" class="field-validation" role="alert" hidden></p>
+                  <div class="key-memory"><label class="key-memory-option"><input type="checkbox" id="remember-key" aria-describedby="key-memory-note"><span>在此标签页记住</span></label>
+                    <button type="button" class="text-button" id="forget-key" hidden>清除已记住的 Key</button></div>
+                  <p class="field-note" id="key-memory-note">只存在这个标签页里，关闭标签页即清除；不会写入草稿，也不会带给其他服务商或地址。</p>
                   <p class="field-note" id="credential-note">密钥经服务器调用所选服务商，费用计入对应 API 账户。</p>
                 </div>
                 <div class="form-section execution-section" id="settings-execution" tabindex="-1">
