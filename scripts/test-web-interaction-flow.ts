@@ -12,7 +12,7 @@ import type { WebRunInput } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { taskVersion } from '../src/solver/tasks';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
-import { freePort, postRun, startBrowser } from './web-scenario';
+import { freePort, postRun, preferFullCollaboration, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const staticRoot = path.resolve(process.env.THEOREMOS_WEB_STATIC_ROOT || path.join(root, 'out/web'));
@@ -162,6 +162,7 @@ try {
     THEOREMOS_WEB_STATIC_ROOT: staticRoot, THEOREMOS_WEB_CONCURRENCY: '2' }), runner);
   browser = await startBrowser(service.server, port);
   const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, reducedMotion: 'reduce' });
+  await preferFullCollaboration(context);
   await context.addInitScript(() => {
     const fetcher = window.fetch.bind(window);
     window.fetch = async (input, init) => {

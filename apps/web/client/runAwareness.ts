@@ -7,6 +7,8 @@ import { t } from '../i18n';
  */
 export const resumeStorageKey = 'theorem-os.web-resume.v1';
 export const notifyStorageKey = 'theorem-os.web-notify.v1';
+/** 'full' once the reader opens the expert collaboration layer; anything else means the simple layer. */
+export const collaborationDetailStorageKey = 'theorem-os.web-collaboration-detail.v1';
 export type Resume = { selectedId: string; seenAt: string };
 type ResumeStorage = Pick<Storage, 'getItem' | 'setItem'>;
 // Reading window.localStorage itself throws where storage is blocked.

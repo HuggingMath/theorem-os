@@ -94,7 +94,8 @@ const comparison = compareSources(before, after);
 const layout = layoutTaskGraph(cards.map(item => item.id), graphEdges);
 
 function drawCollaboration(root: HTMLElement) {
-  root.className = 'collab-surface';
+  // The specimen shows the full layer; the simple layer is covered by test:web-collaboration-layers.
+  root.className = 'collab-surface'; root.dataset.detail = 'full';
   render(<CollaborationSurface runId="preview" taskView="graph" taskStates={[['running', t('进行中')], ['integrated', t('已集成')]]} />, root);
   const part = (selector: string) => root.querySelector<HTMLElement>(selector)!;
   part('[data-collab-observation]').textContent = '09:41:07';

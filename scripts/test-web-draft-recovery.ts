@@ -58,6 +58,8 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
     context: { viewport: { width, height: width > 850 ? 900 : 812 }, reducedMotion: 'reduce' },
     harness: (page, context) => ({ page, context, requests: [], releases: [] }),
     routes: { local: 'recovery must remain local' }, timeout: { label: 'Draft recovery', seconds: 50 },
+    // Storage must stay empty here, so collaboration keeps its unstored default.
+    collaborationDetail: 'simple',
     verify: async ({ page, requests }, elapsedMs) => {
       const writes = requests.filter(request => request.method !== 'GET');
       assert.equal(writes.length, expectedPosts, 'only explicit local fixture creation or valid submission may write to the API');

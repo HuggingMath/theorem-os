@@ -5,6 +5,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page, type Route } from 'playwright';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
+import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 
 export type RequestRecord = { method: string; pathname: string };
 export type ScenarioHarness = { page: Page; context: BrowserContext; requests: RequestRecord[]; intercept?: (route: Route) => Promise<boolean> };
@@ -45,6 +46,8 @@ export async function writeScenarioReport(file: string, suite: ScenarioSuite, st
 
 export type ScenarioOptions<H extends ScenarioHarness> = {
   context: BrowserContextOptions; init?: (context: BrowserContext) => Promise<unknown> | undefined;
+  /** Collaboration starts in the full layer so suites can reach every section; `simple` keeps the first-visit default. */
+  collaborationDetail?: 'simple';
   harness: (page: Page, context: BrowserContext) => H;
   /** `local` aborts and later asserts non-origin requests (`local` is the message), records `/api/` requests, then lets
    * `blockWrites` abort non-GET ones or `h.intercept` answer them; `api` routes only `/api/**`; `observe` records without routing. */
@@ -65,6 +68,7 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
   suite.failedScenario = name;
   const started = performance.now();
   const context = await browser.newContext(options.context);
+  if (!options.collaborationDetail) await preferFullCollaboration(context);
   await options.init?.(context);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
@@ -115,6 +119,10 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
   }
 }
 
+/** Only an unset preference is filled, so a suite that switches layers keeps its choice across reloads. */
+export const preferFullCollaboration = (context: BrowserContext) => context.addInitScript(key => {
+  try { if (localStorage.getItem(key) === null) localStorage.setItem(key, 'full'); } catch { /* Storage is blocked; the page uses its default. */ }
+}, collaborationDetailStorageKey);
 export const normalize = (source: string) => source.replace(/\r\n?/g, '\n');
 export const ready = (page: Page) => page.locator('#submit-run:enabled').waitFor();
 export function deferred() {

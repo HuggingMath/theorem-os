@@ -13,8 +13,11 @@ export function CollaborationSurface(props: { runId: string; taskView: TaskView;
   return <>
     <div class="collab-heading"><h2 class="sr-only">{t('研究协作')}</h2>
       <p class="collab-help collab-observation-line"><span data-collab-observation></span><TermHint id="observation" /></p>
-      <div class="collab-heading-actions"><button type="button" class="button" data-collab-refresh>{t('刷新观察')}</button><button type="button" class="button" data-collab-plan disabled>{t('编辑计划')}</button><button type="button" class="button" data-collab-archive disabled>{t('归档知识')}</button></div></div>
+      <div class="collab-heading-actions">
+        <div class="collab-detail-toggle" role="group" aria-label={t('协作信息详略')}><button type="button" data-collab-detail="simple">{t('简洁')}</button><button type="button" data-collab-detail="full">{t('完整')}</button></div>
+        <button type="button" class="button" data-collab-refresh>{t('刷新观察')}</button><button type="button" class="button" data-collab-plan disabled>{t('编辑计划')}</button><button type="button" class="button" data-collab-archive disabled>{t('归档知识')}</button></div></div>
     <div data-collab-navigation></div><div data-collab-summary></div><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
+    <section class="collab-now"><div class="collab-section-heading"><h3>{t('现在在做什么')}</h3></div><div data-collab-now></div></section>
     <div data-collab-progress></div>
     <div class="collab-layout">
       <section class="collab-map" data-task-view={taskView}>
@@ -46,6 +49,8 @@ export function CollaborationSurface(props: { runId: string; taskView: TaskView;
     <div data-collab-reviews></div><div data-collab-math-changes></div>
     <section class="collab-agents"><div class="collab-section-heading"><span class="term-heading"><h3>{t('Agent 分工')}</h3><TermHint id="roles" /></span><span class="collab-help">{t('固定角色 / 当前会话角色')}</span></div><div data-collab-agents class="collab-agent-list"></div></section>
     <div data-collab-deliveries></div><div data-collab-guidance></div>
+    <p class="collab-expand"><button type="button" class="text-button" data-collab-detail="full">{t('显示完整协作视图')}</button>
+      <span class="collab-help">{t('依赖图、任务检查器、审阅、数学变化、Agent 分工、交付、记录与知识目录')}</span></p>
     <div data-collab-records>
       <section class="collab-edit-records"><div class="collab-section-heading"><span class="term-heading"><h3>{t('计划应用与重新检查')}</h3><TermHint id="recheck" /></span></div><div data-collab-edits></div></section>
       <section class="collab-archives"><div class="collab-section-heading"><span class="term-heading"><h3 tabIndex={-1} data-collab-archives-heading>{t('归档与知识目录')}</h3><TermHint id="archive" /></span></div><div data-collab-archives></div></section>

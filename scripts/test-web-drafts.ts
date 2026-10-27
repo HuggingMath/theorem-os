@@ -54,6 +54,8 @@ const dialog = (page: Page) => page.locator('#import-task-dialog[open]');
 const scenario = (name: string, run: (h: Harness) => Promise<void>) => webScenario<Harness>(browser!, suite, name, run, {
   context: { viewport: { width: 1440, height: 900 } }, harness: (page, context) => ({ page, context, requests: [], releases: [] }),
   routes: 'api', timeout: { label: 'Draft', seconds: 35 },
+  // Storage must stay empty here, so collaboration keeps its unstored default.
+  collaborationDetail: 'simple',
   verify: async ({ page, requests }, elapsedMs) => {
     assert.equal(requests.filter(request => request.method !== 'GET').length, 0, 'draft workflow must only read API endpoints');
     assert.equal(await page.locator('#run-count').innerText(), '0', 'import must not populate run history');

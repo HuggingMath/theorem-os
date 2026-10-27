@@ -164,7 +164,9 @@ const activityReader = new ActivityReader(icons, at => timestamp(at, true),
   (filename, text) => download(filename, text, 'application/json'));
 const moduleView = new ModuleView(icons);
 const modulePlanEditor = new ModulePlanEditor(element('#module-plan'), icons, () => draftChanged());
-const collaborationView = new CollaborationView(api, receiveRunObservation);
+const collaborationView = new CollaborationView(api, receiveRunObservation, () => {
+  state.tab = 'report'; renderDetail(true); document.getElementById('detail-tab-report')?.focus({ preventScroll: true });
+});
 const runUpdates = new RunUpdates(version => {
   if (pageActive && state.connected && !document.hidden && version !== state.runsEtag) requestRunsRefresh();
 }, schedulePoll);

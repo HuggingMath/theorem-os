@@ -11,10 +11,12 @@ import { recordedTask, ResearchProgressView, taskCheckKey } from './researchProg
 import { MathematicalChangesView } from './mathematicalChangesView';
 import { ReviewView } from './reviewView';
 import { CollaborationNavigation } from './collaborationNavigation';
+import { collaborationDetailStorageKey } from './runAwareness';
 import { compactGraphMetrics, compactGraphTasks, graphMetrics, layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
 import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
 import { revealGraph } from './motion';
 import { renderAgentCards } from './ui/AgentCards';
+import { renderCollaborationNow } from './ui/CollaborationNow';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 import { renderTaskInspector } from './ui/TaskInspector';
 import { CollaborationSurface } from './ui/CollaborationSurface';
@@ -22,6 +24,9 @@ import { Code, Detail, Facts, Host, renderOptions, renderSection } from './ui/Se
 import { t } from '../i18n';
 
 type Task = WebObservation['inspection']['tasks'][number];
+type DetailLevel = 'simple' | 'full';
+// One choice per browser: new readers start with the simple layer, and opening any expert section keeps it full.
+const storedDetail = (): DetailLevel => { try { return localStorage.getItem(collaborationDetailStorageKey) === 'full' ? 'full' : 'simple'; } catch { return 'simple'; } };
 type TaskView = 'graph' | 'list';
 type ScrollPosition = { top: number; left: number };
 // Low enough for "fit" to show a large compact plan whole; card text is then a status overview.
@@ -65,7 +70,8 @@ export class CollaborationView {
   private connected = false;
   private readOnly = false;
   private planEditor: TaskPlanEditor;
-  constructor(private api: WebApi, private observed: (observation: WebObservation) => void) { this.planEditor = new TaskPlanEditor(api, observation => this.receive(observation)); }
+  private detail = storedDetail();
+  constructor(private api: WebApi, private observed: (observation: WebObservation) => void, private openReport: () => void = () => undefined) { this.planEditor = new TaskPlanEditor(api, observation => this.receive(observation)); }
   /** readOnly (the sample run) keeps every read but hides archiving; plan and guidance already stay off because it is finished. */
   update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false) {
     this.connected = connected; this.readOnly = readOnly;
@@ -131,10 +137,12 @@ export class CollaborationView {
     element.querySelector('[data-collab-reviews]')!.replaceWith(components.reviews.element);
     element.append(components.knowledge.element);
     const view: ViewState = { element, ...components, selectedTask: '', route: '', loading: false, taskSearchComposing: false, graphZoom: 1,
-      navigation: new CollaborationNavigation(element, runId, () => this.provideGuidance(view, () => view.guidance.focus())),
+      navigation: new CollaborationNavigation(element, runId, () => this.provideGuidance(view, () => view.guidance.focus()),
+        target => { if (this.detail === 'simple' && !target.getClientRects().length) this.setDetail('full'); }),
       taskPositions: { graph: { top: 0, left: 0 }, list: { top: 0, left: 0 } },
       archiveBusy: false, active: false, artifactRequest: 0, scrollTop: 0, scrollLeft: 0, archives: [] };
     element.querySelector('[data-collab-navigation]')!.replaceWith(view.navigation.element);
+    this.applyDetail(element);
     element.querySelector('[data-collab-refresh]')!.addEventListener('click', () => void this.refresh(runId, view, true));
     element.querySelector('[data-collab-plan]')!.addEventListener('click', () => { if (view.observation) this.planEditor.open(runId, view.observation, view.selectedTask); });
     element.querySelector('[data-collab-archive]')!.addEventListener('click', () => void this.archive(runId, view));
@@ -150,9 +158,11 @@ export class CollaborationView {
       if (button.dataset.collabTask) {
         const list = button.closest<HTMLElement>('[data-collab-task-list]');
         if (list && view.viewport) view.taskListReturn = { taskId: button.dataset.collabTask, viewport: { top: view.viewport.scrollTop, left: view.viewport.scrollLeft }, list: { top: list.scrollTop, left: list.scrollLeft } };
-        const reveal = Boolean(list || button.closest('.collab-agent,.collab-research-overview,.collab-deliveries,.collab-math-changes,.collab-reviews') || button.closest('.collab-graph') && matchMedia('(max-width:1150px)').matches);
+        const reveal = Boolean(list || button.closest('.collab-now,.collab-agent,.collab-research-overview,.collab-deliveries,.collab-math-changes,.collab-reviews') || button.closest('.collab-graph') && matchMedia('(max-width:1150px)').matches);
         this.selectTask(view, button.dataset.collabTask, button.dataset.taskVersion, reveal);
       }
+      else if (button.dataset.collabDetail) this.setDetail(button.dataset.collabDetail as DetailLevel, button);
+      else if (button.hasAttribute('data-collab-open-report')) this.openReport();
       else if (button.dataset.collabTaskView) this.switchTaskView(view, button.dataset.collabTaskView as TaskView);
       else if (button.dataset.collabGraphZoom) this.zoomGraph(view, button.dataset.collabGraphZoom as 'in' | 'out' | 'reset' | 'fit');
       else if (button.hasAttribute('data-collab-task-reset')) { this.resetTaskFilters(view); element.querySelector<HTMLInputElement>('[data-collab-task-search]')!.focus({ preventScroll: true }); }
@@ -209,6 +219,24 @@ export class CollaborationView {
       view.renderKey = this.runRenderKey(this.run, this.connected, view.archives.length);
     }
     if (notify) this.observed(observation);
+  }
+  /** Switch every run's surface; a toggle keeps focus on its own button, the footer link hands it to the first expert heading. */
+  private setDetail(detail: DetailLevel, origin?: HTMLButtonElement) {
+    if (this.detail !== detail) {
+      this.detail = detail;
+      try { localStorage.setItem(collaborationDetailStorageKey, detail); } catch { /* The choice lasts for this page only. */ }
+      for (const view of this.views.values()) this.applyDetail(view.element);
+      const view = this.current;
+      if (view?.viewport) view.navigation.connect(view.viewport);
+    }
+    if (origin?.closest('.collab-expand')) {
+      const heading = this.current?.element.querySelector<HTMLElement>('.collab-map h3');
+      if (heading) { heading.tabIndex = -1; this.current!.navigation.reveal(heading); heading.focus({ preventScroll: true }); }
+    }
+  }
+  private applyDetail(element: HTMLElement) {
+    element.dataset.detail = this.detail;
+    for (const button of element.querySelectorAll<HTMLButtonElement>('.collab-detail-toggle [data-collab-detail]')) button.setAttribute('aria-pressed', String(button.dataset.collabDetail === this.detail));
   }
   /** Open one task in the inspector, as a click on it in the graph would; false when this run has no such task yet. */
   showTask(runId: string, taskId: string): boolean {
@@ -311,6 +339,7 @@ export class CollaborationView {
         ['unscheduled', t('未记录调度'), Math.max(0, inspection.workers.length - scheduling.observedWorkers)]]) },
       accepted: isAcceptedRun(run), completedResearch: inspection.progress.completedResearchTasks,
     });
+    this.renderNow(view, run);
     this.renderTasks(view); this.renderInspector(view); this.renderAgents(view); view.progress.update(observation); view.changes.update(observation); view.reviews.update(observation, run);
     renderSection(view.element.querySelector('[data-collab-edits]')!, inspection.edits.length ? <>{inspection.edits.map(edit => <article key={edit.id} class="collab-edit">
       <strong>{edit.id} · {editStatusLabel(edit.status)}</strong>
@@ -537,6 +566,17 @@ export class CollaborationView {
       ],
       hasChecks: checks.length > 0,
     } });
+  }
+  private renderNow(view: ViewState, run: WebRun) {
+    const inspection = view.observation!.inspection, tasks = new Map(inspection.tasks.map(task => [task.id, task]));
+    const working = inspection.workers.filter(worker => worker.scheduling?.status === 'working');
+    renderCollaborationNow(view.element.querySelector<HTMLElement>('[data-collab-now]')!, {
+      ended: run.status === 'queued' || run.status === 'running' ? undefined : { accepted: isAcceptedRun(run) },
+      waiting: inspection.waiting ? inspection.waiting.reason : undefined,
+      working: working.map(worker => ({ id: worker.id, role: roleLabel(worker.role) ?? worker.role, phase: workerPhaseLabel(worker.phase) ?? t('未记录'),
+        task: worker.task, objective: worker.task ? tasks.get(worker.task)?.objective : undefined })),
+      others: inspection.workers.length - working.length,
+    });
   }
   private renderAgents(view: ViewState) {
     const workers = view.observation?.inspection.workers ?? [];

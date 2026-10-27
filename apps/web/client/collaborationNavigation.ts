@@ -25,7 +25,8 @@ export class CollaborationNavigation {
     if (this.frame === undefined) this.frame = requestAnimationFrame(() => { this.frame = undefined; this.track(); });
   };
 
-  constructor(private surface: HTMLElement, runId: string, guide: () => void) {
+  /** `expand` runs before every reveal so a target hidden by the simple layer is laid out before it is measured. */
+  constructor(private surface: HTMLElement, runId: string, guide: () => void, private expand: (target: HTMLElement) => void = () => undefined) {
     this.element.setAttribute('aria-label', t('协作区导航'));
     this.element.innerHTML = `<div class="collab-nav-links">${sections.map(([id, title]) => `<button type="button" data-collab-jump="${id}" aria-controls="collab-${id}-${h(runId)}"><span>${title}</span><small data-collab-nav-count="${id}"></small></button>`).join('')}</div>
       <label class="collab-nav-picker"><span class="sr-only">${t('跳转协作区域')}</span><select data-collab-section-picker>${sections.map(([id, title]) => `<option value="${id}">${title}</option>`).join('')}</select></label>
@@ -88,6 +89,7 @@ export class CollaborationNavigation {
   }
   reveal(target: HTMLElement) {
     if (!this.mounted()) return;
+    this.expand(target);
     // Move an inspector's own scroll first, then position its heading below the sticky navigation.
     for (let parent = target.parentElement; parent && parent !== this.viewport; parent = parent.parentElement) {
       if (parent.scrollHeight > parent.clientHeight && /(auto|scroll)/.test(getComputedStyle(parent).overflowY)) {
@@ -106,8 +108,9 @@ export class CollaborationNavigation {
     const focus = document.activeElement instanceof HTMLElement && this.surface.contains(document.activeElement) ? document.activeElement : undefined;
     const id = focus?.closest<HTMLElement>('[data-collab-section]')?.dataset.collabSection as CollaborationSection | undefined;
     const section = id ?? this.current;
-    if (section === 'guidance') return false;
     const target = this.section(section);
+    // A section hidden by the simple layer has no place to return to.
+    if (section === 'guidance' || !target.getClientRects().length) return false;
     const positions = [...target.querySelectorAll<HTMLElement>('*')].filter(node => node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)
       .map(node => ({ node, top: node.scrollTop, left: node.scrollLeft, key: node.dataset.focusKey }));
     this.origin = { section, top: this.viewport!.scrollTop, left: this.viewport!.scrollLeft, positions, focus, focusKey: focus?.dataset.focusKey };
@@ -140,7 +143,10 @@ export class CollaborationNavigation {
     if (!this.mounted()) return;
     const top = this.viewport!.getBoundingClientRect().top + this.element.getBoundingClientRect().height + 20;
     let id: CollaborationSection = 'overview';
-    for (const [section] of sections) if (this.section(section).getBoundingClientRect().top <= top) id = section;
+    for (const [section] of sections) {
+      const node = this.section(section);
+      if (node.getClientRects().length && node.getBoundingClientRect().top <= top) id = section;
+    }
     if (this.viewport!.scrollTop > 0 && this.viewport!.scrollTop + this.viewport!.clientHeight >= this.viewport!.scrollHeight - 2) id = 'knowledge';
     this.activate(id);
   }

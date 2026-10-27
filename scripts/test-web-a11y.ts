@@ -88,7 +88,17 @@ try {
     for (let step = 0; step < order.length; step++) {
       const tab = await page.evaluate(() => (document.activeElement as HTMLElement).dataset.detailTab!);
       await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor();
-      if (tab === 'collaboration') await page.locator('.collab-surface [data-collab-task]').first().waitFor();
+      if (tab === 'collaboration') {
+        // Audit the full layer too, then return to the simple default and put focus back on the tab.
+        await page.locator('.collab-now-ended').waitFor();
+        await page.locator('.collab-detail-toggle [data-collab-detail="full"]').click();
+        await page.locator('.collab-surface [data-collab-task]').first().waitFor();
+        await settled(page);
+        await clean(page, `sample collaboration full layer (${locale})`);
+        await page.locator('.collab-detail-toggle [data-collab-detail="simple"]').click();
+        await page.locator('.collab-now-ended').waitFor();
+        await page.locator('#detail-tab-collaboration').focus();
+      }
       await settled(page);
       assert.equal(await page.locator(`#detail-tab-${tab}`).getAttribute('aria-selected'), 'true');
       await clean(page, `sample ${tab} tab (${locale})`);

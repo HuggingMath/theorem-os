@@ -67,7 +67,12 @@ try {
     await page.locator(`#detail-tab-${tab}`).click();
     await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor();
   }
+  // A first visit sees the simple layer: the outcome with a way to the report, and none of the expert sections.
   await page.locator('#detail-tab-collaboration').click();
+  await page.locator('.collab-now-ended [data-collab-open-report]').waitFor();
+  assert.equal(await page.locator('.collab-layout').isHidden(), true, 'The simple layer shows the task graph');
+  assert.equal(await page.locator('.collab-navigation').isHidden(), true, 'The simple layer shows the section navigation');
+  await page.locator('.collab-detail-toggle [data-collab-detail="full"]').click();
   await page.locator('.collab-surface [data-collab-task]').first().waitFor();
   assert.equal(await page.locator('[data-collab-archive]').isHidden(), true);
   assert.equal(await page.locator('[data-collab-plan]').isDisabled(), true);
