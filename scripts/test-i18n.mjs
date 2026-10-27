@@ -83,7 +83,8 @@ try {
     if (width < 900) await page.locator('.menu-toggle').click();
     assert.deepEqual(await cjkIn(page), [], `English homepage at ${width}px`);
     assert.equal(await page.locator('#module-preview-panel img').getAttribute('src'), '../assets/workbench-library-desktop.png');
-    const apply = page.locator('#start .start-links a.button');
+    assert.equal(await page.locator('#start .start-links a.button').getAttribute('href'), 'https://app.theoremos.top/');
+    const apply = page.locator('#start .start-links a[data-umami-event="apply-github"]');
     assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
     assert.equal(await page.locator('#start .start-note a').getAttribute('href'), 'mailto:liuzhenhao@westlake.edu.cn?subject=TheoremOS%20early%20access');
     assert.equal(await page.locator('[data-accepted-proof]').count(), 6);
@@ -144,7 +145,7 @@ try {
     if (zh !== 'privacy.html') assert.ok(await page.locator('a[href="privacy.html"]').count() > 0, `${zh || 'index'} must link to privacy.html`);
     const toEnglish = new URL(await page.locator('a.lang-link').getAttribute('href'), page.url()).pathname;
     assert.equal(toEnglish.replace(/index\.html$/, ''), base + en);
-    assert.equal(await page.locator(`link[rel="alternate"][hreflang="en"]`).getAttribute('href'), `https://likc1606.github.io/theorem-os-site/${en}`);
+    assert.equal(await page.locator(`link[rel="alternate"][hreflang="en"]`).getAttribute('href'), `https://theoremos.top/${en}`);
     await page.goto(hosted + en);
     if (zh !== 'privacy.html') assert.ok(await page.locator('a[href="privacy.html"]').count() > 0, `${en} must link to privacy.html`);
     const toChinese = new URL(await page.locator('a.lang-link').getAttribute('href'), page.url()).pathname;

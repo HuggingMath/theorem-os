@@ -7,10 +7,10 @@ export const siteRepository = 'https://github.com/LikC1606/theorem-os-site';
 export const issueDestination = `${siteRepository}/issues/new`;
 export const earlyAccessIssue = `${issueDestination}?template=early-access.yml`;
 
-/** Where the site is served. The pages are written for the Pages default; the build rewrites them for a custom domain. */
+/** The GitHub Pages address of the public repository. The pages are written for it; the build rewrites them for the custom domain. */
 export const pagesOrigin = 'https://likc1606.github.io/theorem-os-site';
-/** A custom domain such as 'theoremos.org'. Empty keeps GitHub Pages; set it together with the DNS records in docs/website.md. */
-export const customDomain = '';
+/** The domain the site is served from (Cloudflare Workers, see docs/website.md). Empty writes the pages for GitHub Pages. */
+export const customDomain = 'theoremos.top';
 /** Umami Cloud website ID. Empty means the build adds no analytics script and drops the analytics note from the privacy page. */
 export const analyticsWebsiteId = '';
 

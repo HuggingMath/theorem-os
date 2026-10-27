@@ -9,9 +9,9 @@ try {
   // The workbench interface is Chinese, so the English card shows the English verification replay instead.
   const cards = [
     { locale: 'zh', lang: 'zh-CN', page: 'out/site/index.html', output: 'social-preview.png', tagline: '数学研究运行时',
-      footer: '在线工作台即将开放 · Lean 4 + Mathlib · 自备模型 Key', alt: '工作台草稿预览' },
+      footer: '在线工作台内测中 · Lean 4 + Mathlib · 自备模型 Key', alt: '工作台草稿预览' },
     { locale: 'en', lang: 'en', page: 'out/site/en/index.html', output: 'social-preview-en.png', tagline: 'Research runtime for mathematics',
-      footer: 'Online workbench opening soon · Lean 4 + Mathlib · Bring your own key', alt: 'Verification replay' },
+      footer: 'Online workbench in beta · Lean 4 + Mathlib · Bring your own key', alt: 'Verification replay' },
   ];
   const mark = fs.readFileSync(path.join(root, 'docs/assets/mark.svg')).toString('base64');
   const css = fs.readFileSync(path.join(root, 'out/site/landing.css'), 'utf8');
@@ -43,7 +43,7 @@ try {
     .social-product{position:absolute;left:70px;right:70px;top:225px}
     .social-product img{width:100%;height:auto}
     .social-bottom{position:absolute;left:70px;right:70px;bottom:10px;display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
-  </style><body><div class="social"><div class="social-top"><div class="brand"><img src="data:image/svg+xml;base64,${mark}" alt=""><span>${card.tagline}</span></div><span class="preview">v0.1.0 · Research Preview</span></div><h1>${title}</h1><p class="social-category">${category}</p><p class="social-description">${description}</p><div class="social-product"><img src="data:image/png;base64,${product.toString('base64')}" alt="${card.alt}"></div><div class="social-bottom"><span>${card.footer}</span><span>likc1606.github.io/theorem-os-site</span></div></div></body></html>`);
+  </style><body><div class="social"><div class="social-top"><div class="brand"><img src="data:image/svg+xml;base64,${mark}" alt=""><span>${card.tagline}</span></div><span class="preview">v0.1.0 · Research Preview</span></div><h1>${title}</h1><p class="social-category">${category}</p><p class="social-description">${description}</p><div class="social-product"><img src="data:image/png;base64,${product.toString('base64')}" alt="${card.alt}"></div><div class="social-bottom"><span>${card.footer}</span><span>theoremos.top</span></div></div></body></html>`);
     await page.evaluate(() => document.fonts.ready);
     await page.locator('.social-product img').evaluate(image => image.decode());
     await page.screenshot({ path: path.join(root, 'docs/assets', card.output) });

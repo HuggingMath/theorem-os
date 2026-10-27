@@ -10,11 +10,11 @@
 [![Research Preview](https://img.shields.io/badge/status-research%20preview-0f766e.svg)](docs/releases/v0.1.0.md) [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](docs/web-workbench.md) [![License: proprietary](https://img.shields.io/badge/license-proprietary-555.svg)](LICENSE)
 
 <p>
-  <a href="https://likc1606.github.io/theorem-os/"><strong>产品官网</strong></a> ·
-  <a href="https://likc1606.github.io/theorem-os/archive.html">证明档案</a> ·
+  <a href="https://theoremos.top/"><strong>产品官网</strong></a> ·
+  <a href="https://theoremos.top/archive.html">证明档案</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="docs/usage.md">使用文档</a> ·
-  <a href="https://likc1606.github.io/theorem-os/feedback.html">反馈与建议</a>
+  <a href="https://theoremos.top/feedback.html">反馈与建议</a>
 </p>
 
 </div>
@@ -34,7 +34,7 @@
 
 | 你想做什么 | 从这里开始 | 需要准备 |
 | --- | --- | --- |
-| 先了解产品与成果 | [产品官网](https://likc1606.github.io/theorem-os/) · [证明档案](https://likc1606.github.io/theorem-os/archive.html) | 浏览器即可 |
+| 先了解产品与成果 | [产品官网](https://theoremos.top/) · [证明档案](https://theoremos.top/archive.html) | 浏览器即可 |
 | 输入自己的 Key，提交 Lean 原题 | [部署网页工作台](#网页工作台) | Linux、Docker、API Key |
 | 看一次失败、修复与验收 | [预设 Lean 回放](#快速体验) | 本机 Lean 环境，无需 API Key |
 | 研究自己的 Agent 策略 | [替换研究组件](#五个可替换组件) · [CLI 指南](docs/usage.md) | 本地开发环境；模型运行需认证 |
@@ -70,14 +70,14 @@
 <details>
 <summary>预览证明档案与历史研究快照</summary>
 
-<a href="https://likc1606.github.io/theorem-os/archive.html">
+<a href="https://theoremos.top/archive.html">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/assets/archive-preview-mobile.png">
     <img src="docs/assets/archive-preview.png" alt="证明档案：已验收题目、研究中快照、Lean 源码与验证证据" width="1440">
   </picture>
 </a>
 
-[在线档案](https://likc1606.github.io/theorem-os/archive.html)可搜索、筛选题目，查看 Lean 源码和验收证据，并下载公开记录；当前展示早期 6 道已验收题目。#2144 的 4 道证明见上表和[提交归档](submitted/README.md)。
+[在线档案](https://theoremos.top/archive.html)可搜索、筛选题目，查看 Lean 源码和验收证据，并下载公开记录；当前展示早期 6 道已验收题目。#2144 的 4 道证明见上表和[提交归档](submitted/README.md)。
 
 [历史研究快照](in-progress/README.md)保留 Dimitrov、Hopf–Rinow 与 Szemerédi 的 Agent 工作区、研究记录与历史。其中前两题已有上述最终验收包，Szemerédi 尚未获官方验收；历史草稿可能包含 `sorry` 和未完成路线。
 

@@ -1,10 +1,10 @@
 # 产品宣传网站与证明档案
 
-线上地址：<https://likc1606.github.io/theorem-os-site/>。网站在本仓库（私有）构建，产物与公开成果发布到公开仓库 [LikC1606/theorem-os-site](https://github.com/LikC1606/theorem-os-site)，由它的 GitHub Pages 提供服务。公开仓库不包含运行时源码。
+线上地址：<https://theoremos.top/>（英文 `/en/`）。网站在本仓库（私有）构建，产物与公开成果发布到公开仓库 [LikC1606/theorem-os-site](https://github.com/LikC1606/theorem-os-site)，再把同一份产物上传到 Cloudflare Workers 提供服务。公开仓库的 GitHub Pages 地址 <https://likc1606.github.io/theorem-os-site/> 保留，由仓库里的 `CNAME` 跳转到正式域名。公开仓库不包含运行时源码。
 
 静态网站包含三个入口：
 
-- `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍与“申请内测”的开始区。
+- `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍，以及打开工作台（https://app.theoremos.top/）和“申请内测”的开始区。
 - `archive.html`：证明档案，支持搜索、筛选、源码查看、验收证据、JSON 下载和本地回放记录。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。工作台用 `?kind=&area=&environment=` 预填类型、位置和环境，未知值忽略，环境可在发布前修改。
 
@@ -14,7 +14,7 @@
 
 ## 内测申请
 
-开始区、导航和常见问题提供“申请内测”入口，打开公开仓库的 Issue 表单 `.github/ISSUE_TEMPLATE/early-access.yml`（源文件在 `docs/site-repo/`）。表单是中英双语，提醒申请会公开，不收集 API Key 和联系方式。开放时在同一条 Issue 里回复。
+开始区、导航和常见问题提供“申请内测”入口，打开公开仓库的 Issue 表单 `.github/ISSUE_TEMPLATE/early-access.yml`（源文件在 `docs/site-repo/`）。表单是中英双语，提醒申请会公开，不收集 API Key 和联系方式。通过后在同一条 Issue 里回复，请申请人把登录邮箱私下发来，加入白名单后在 app.theoremos.top 登录。开始区的主按钮直接打开工作台，常见问题也链接到工作台。
 
 不使用 GitHub 或希望私下申请的人可以发邮件至 liuzhenhao@westlake.edu.cn。地址写在开始区的提示、常见问题、Issue 表单说明和公开仓库 README 里，链接预填邮件主题。
 
@@ -25,7 +25,7 @@ bun install --frozen-lockfile
 bun run build:site
 ```
 
-打开 `out/site/index.html`。使用相对资源路径，档案数据打包进脚本，支持直接打开本地文件，也支持 GitHub Pages 的 `/theorem-os-site/` 子路径。
+打开 `out/site/index.html`。使用相对资源路径，档案数据打包进脚本，支持直接打开本地文件，也支持 GitHub Pages 的 `/theorem-os-site/` 子路径（检查仍按子路径运行，保证旧地址可用）。
 
 首页的成果数量、归属和官方结果链接由档案生成，构建时写入 HTML；浏览器不支持 JavaScript 时也能查看真实工作台截图、首页正文和成果入口。组件切换、回放与手机导航使用独立的小型脚本，档案源码在进入 `archive.html` 时加载。静态站点构建不依赖工作台服务。
 
@@ -74,14 +74,11 @@ bun run build:site
 
 统计使用 [Umami Cloud](https://cloud.umami.is) 免费版，不使用 Cookie。在 Umami 添加网站后，把 Website ID 填入 `docs/web/site.ts` 的 `analyticsWebsiteId` 并重新构建：构建会给每个页面加上统计脚本（只在正式域名上计数，本地预览不计），并保留隐私页中带 `<!-- analytics -->` 标记的说明段落。ID 为空时不加脚本，也删除这段说明。首页的申请按钮、邮件链接和反馈页的发布按钮带 `data-umami-event`，在 Umami 的 Events 页可以看到点击次数。
 
-## 独立域名
+## 域名
 
-页面里的绝对地址统一写成 `https://likc1606.github.io/theorem-os-site`。启用独立域名时：
+正式域名 `theoremos.top` 在阿里云注册，DNS 托管在 Cloudflare（NS 为 `fay` / `houston.ns.cloudflare.com`）。站点是 Worker `theorem-os` 的静态资源，路由 `theoremos.top/*` 指向它；根域名的 AAAA `100::`（代理）只是让路由生效的占位记录，`www` 跳转到根域名。HTTP 一律 301 到 HTTPS，证书由 Cloudflare 自动签发。静态资源设置 `html_handling: auto-trailing-slash`（`/x.html` 307 到 `/x`，保留查询参数）和 `not_found_handling: 404-page`。
 
-1. 在 DNS 添加记录。子域名（如 `www.example.org`）加 CNAME 指向 `likc1606.github.io`；根域名加 A 记录 `185.199.108.153`、`185.199.109.153`、`185.199.110.153`、`185.199.111.153`。
-2. 把域名填入 `docs/web/site.ts` 的 `customDomain`，重新构建并发布。构建会把所有页面的绝对地址（`og:image`、`hreflang`）换成新域名，并写出 `CNAME` 文件。
-3. 在公开仓库 Settings → Pages 确认域名，等证书签发后勾选 **Enforce HTTPS**。
-4. 重新运行 `node scripts/capture-promo.mjs` 更新分享卡片上的网址。旧地址会由 GitHub 自动跳转到新域名。
+页面源文件里的绝对地址统一写成 `https://likc1606.github.io/theorem-os-site`。`docs/web/site.ts` 的 `customDomain` 为 `theoremos.top`，构建时把所有页面的绝对地址（`og:image`、`hreflang`）换成正式域名，并写出 `CNAME`。换域名时改这一项、重新构建发布，再运行 `node scripts/capture-promo.mjs` 更新分享卡片上的网址。工作台里的官网链接在 `apps/web/client/feedback.ts` 的 `siteUrl` 和各页面的 `data-site` 链接里，需要一起改。
 
 ## 验证
 
@@ -93,7 +90,7 @@ bunx playwright install chromium --only-shell
 bun run test:site
 ```
 
-浏览器检查覆盖响应式截图、首屏可见、原图预览的缩放与拖动、弹窗关闭和焦点恢复、档案图片无裁切、手机组件标签的键盘可见性、即将开放的开始区与仅链接公开仓库、预设回放与记录的一致性、移动端回执顺序、首页成果的真实归属、手机导航、本地文件预览、无 JavaScript 内容与 GitHub Pages 子路径，以及证明档案的搜索、筛选、源码、来源、下载和链接恢复。检查 320、390、768、1440、1920 像素宽度，截图输出到 `out/site-checks/`。这些检查不调用模型。
+浏览器检查覆盖响应式截图、首屏可见、原图预览的缩放与拖动、弹窗关闭和焦点恢复、档案图片无裁切、手机组件标签的键盘可见性、开始区的工作台入口与仅链接公开仓库、预设回放与记录的一致性、移动端回执顺序、首页成果的真实归属、手机导航、本地文件预览、无 JavaScript 内容与 GitHub Pages 子路径，以及证明档案的搜索、筛选、源码、来源、下载和链接恢复。检查 320、390、768、1440、1920 像素宽度，截图输出到 `out/site-checks/`。这些检查不调用模型。
 
 `test:site` 还运行 `test-landing-motion.mjs`，检查首屏入场、回放的暂停续播与结束、手动选步、键盘焦点，以及离屏、页面隐藏和减少动态效果设置；报告与截图输出到 `out/site-motion-checks/`。
 
@@ -120,7 +117,7 @@ bun run test:site
 bun run export:site /home/lzh/theorem-os-site
 ```
 
-`export:site` 要求目标是 origin 为 `LikC1606/theorem-os-site` 且没有未提交改动的克隆。它清空除 `.git` 以外的内容，按上面的清单复制，再扫描本机路径、私有仓库链接、API Key 与内网地址；发现问题即停止并提示恢复方法。脚本不提交，检查 `git status` 后再手动提交推送。公开仓库的 Pages 选择 **Deploy from a branch → main → / (root)**。
+`export:site` 要求目标是 origin 为 `LikC1606/theorem-os-site` 且没有未提交改动的克隆。它清空除 `.git` 以外的内容，按上面的清单复制，再扫描本机路径、私有仓库链接、API Key 与内网地址；发现问题即停止并提示恢复方法。脚本不提交，检查 `git status` 后再手动提交推送。推送后把同一份目录上传到 Worker `theorem-os` 的静态资源（Cloudflare 的 assets upload session → upload → 更新脚本三步，API token 只需 Workers Scripts Write，用完撤回），并确认 `https://theoremos.top/` 已更新。公开仓库的 Pages 保持 **Deploy from a branch → main → / (root)**，用于旧地址跳转。
 
 ## 视觉素材
 
