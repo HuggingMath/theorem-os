@@ -1,7 +1,7 @@
 import {
   createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
-  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Trash2, TriangleAlert, Undo2, Upload, X,
+  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Monitor, Moon, Network, PanelLeft, PanelRight, Paperclip,
+  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebProofOutlineDeclaration, WebRun, WebRunInput, WebSession } from '../shared';
 import type { WebShareLink } from '../share';
@@ -40,14 +40,15 @@ import { renderConversation as drawConversation } from './ui/Conversation';
 import { workerPhaseLabel } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResume, saveResume } from './runAwareness';
 import { forgetKey, hasRememberedKey, rememberKey, rememberedKey } from './keyMemory';
+import { applyTheme, followThemeChanges, readThemePreference, saveThemePreference, type ThemePreference } from './themePreference';
 import { installTermHints, renderGlossary } from './termHints';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
 import { localeTag, localizeText, otherLocale, switchLocale, t } from '../i18n';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
-  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Trash2, TriangleAlert, Undo2, Upload, X };
+  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Monitor, Moon, Network, PanelLeft, PanelRight, Paperclip,
+  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X };
 function icons(root: Element | Document | DocumentFragment = document) {
   createIcons({ icons: iconSet, root, attrs: { 'aria-hidden': 'true' } });
   root.querySelectorAll('svg[data-lucide]').forEach(svg => svg.removeAttribute('data-lucide'));
@@ -1710,6 +1711,19 @@ async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonE
     button.disabled = false;
   }
 }
+/** The theme itself is applied by theme.js before the first paint; this page only offers the choice. */
+const themeLabels: Record<ThemePreference, string> = { system: t('跟随系统'), light: t('浅色'), dark: t('深色') };
+function showThemeChoice() {
+  const preference = readThemePreference(localStorage);
+  document.querySelectorAll<HTMLInputElement>('input[name="theme"]').forEach(input => { input.checked = input.value === preference; });
+}
+function chooseTheme(preference: ThemePreference) {
+  if (!saveThemePreference(localStorage, preference)) toast(t('浏览器不允许保存，外观只在此页面生效'));
+  applyTheme(preference); showThemeChoice();
+}
+followThemeChanges(showThemeChoice);
+showThemeChoice();
+document.querySelectorAll<HTMLInputElement>('input[name="theme"]').forEach(input => input.addEventListener('change', () => chooseTheme(input.value as ThemePreference)));
 function openGlossary(id?: TermId) {
   const dialog = element<HTMLDialogElement>('#glossary-dialog');
   renderGlossary(dialog, id);
@@ -1731,6 +1745,10 @@ function paletteCommands(): PaletteCommand[] {
     { id: 'return-to-draft', group: t('操作'), label: t('返回未提交草稿'), icon: 'arrow-left', keywords: 'draft back', run: click('#return-to-draft') },
   ].filter(command => usable(`#${command.id}`));
   commands.push({ id: 'switch-locale', group: t('帮助'), label: otherLocale.label, lang: otherLocale.lang, hint: otherLocale.title, icon: 'languages', keywords: 'language locale english chinese 语言 中文 英文', run: changeLocale });
+  const preference = readThemePreference(localStorage), themeIcons: Record<ThemePreference, string> = { system: 'sun-moon', light: 'sun', dark: 'moon' };
+  for (const option of ['system', 'light', 'dark'] as const) if (option !== preference)
+    commands.push({ id: `theme-${option}`, group: t('外观'), label: t('外观：{0}', themeLabels[option]), icon: themeIcons[option],
+      keywords: t('theme appearance dark light 外观 主题 深色 浅色 夜间'), run: () => chooseTheme(option) });
   commands.push({ id: 'open-glossary', group: t('帮助'), label: t('术语说明'), icon: 'book-open', keywords: t('glossary help 术语 帮助'), run: () => openGlossary() });
   commands.push({ id: 'send-feedback', group: t('帮助'), label: t('反馈问题或建议'), hint: t('在官网填写，确认后发布到 GitHub'), icon: 'message-square',
     keywords: t('feedback bug report issue 反馈 问题 建议'), run: () => { window.open(feedbackUrl(), '_blank', 'noopener'); } });

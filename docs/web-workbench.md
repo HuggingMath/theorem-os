@@ -226,6 +226,7 @@ bun run web
 - 协作页分两层：首次打开是“简洁”层，只显示进展计数、“现在在做什么”（工作中的 Agent 与其任务、研究等待原因、结束后去报告的入口）和指导；依赖图、任务检查器、审阅、数学变化、Agent 分工、交付、记录与知识目录在“完整”层。选择按浏览器记在 `theorem-os.web-collaboration-detail.v1`；从简洁层或报告页打开任何任务会切到完整层并记住。浏览器测试默认以完整层启动（`web-scenario` 的 `collaborationDetail`）。
 - API Key 默认每次提交后清空。设置里勾选“在此标签页记住”后，Key 存在 sessionStorage 的 `theorem-os.web-api-key.v1`（关闭标签页即清除，其他标签页拿不到），只对填写时的服务商与地址生效，从不写入 localStorage 或草稿；取消勾选、点“清除已记住的 Key”、因认证失败去更换 Key、登出或切换账户时立即清除。
 - 静态文件由 `apps/web/staticFiles.ts` 发送：HTML、JS、CSS 按浏览器支持用 Brotli 或 gzip 压缩（内存缓存，文件重建后下次请求生效），全部带 ETag 和 `Cache-Control: no-cache`，重复访问只需 304 重新验证；API 仍是 `no-store`。加载预算见 `test:web-load`。
+- 外观：默认跟随系统浅色/深色；账号对话框的“外观”或命令面板可固定为浅色或深色，选择存在 localStorage `theorem-os.web-theme.v1`，同浏览器其他标签页同步。三个页面在 `<head>` 里同步加载 `theme.js`，首帧前就在 `<html data-theme>` 上定好主题；样式只读这个属性，深色只替换 `:root` 里的颜色、阴影与代码配色变量。阴影与遮罩统一用 `--shade`，两种主题下都保持暗色。
 - 环境选择随任务保存，运行列表和详情显示实际提交环境；详情显示对应工具链和 Mathlib revision。CLI 的既有行为不受网页默认值影响。
 - 概览分别显示排队、环境准备、证明研究、独立验收四个阶段及用时。总用时包含等待与准备，研究用时从真正开始研究时计算，进入独立验收后停止。阶段开始时间独立保存在后端，不受最近 200 条活动日志上限影响；刷新页面后可继续查看。取消或提前结束的任务会标明尚未执行的阶段。
 - 桌面使用左右双栏：左侧对话显示已提交任务、真实阶段事件和研究结果，底部保留输入框；右侧提交前预览 Lean 源码，运行中默认进入研究协作，并保留模块、概览、报告和活动视图。栏宽可拖动或用分隔条的方向键调整；手机通过“对话 / 工作区”切换。模型连接与执行预算集中在研究配置弹窗，历史记录通过左上角抽屉查看。
@@ -321,6 +322,7 @@ bun run test:web-readable-results
 bun run test:web-collaboration-layers
 bun run test:web-key-memory
 bun run test:web-load
+bun run test:web-theme
 bun run build:web-preview
 bun run test:web-preview
 bun run test:web-preparation
@@ -355,6 +357,7 @@ bun scripts/test-web-runtime.ts
 `test:web-collaboration-layers` 检查协作页两层：首次进入只显示简洁层且不写入选择，切换就地生效、刷新后保留、焦点留在切换按钮上，从简洁层或报告页打开任务会切到完整层并把焦点放到任务上，已结束的运行指向报告，英文与 375/320 宽度不溢出，截图写到 `out/web-collaboration-layers`。
 `test:web-key-memory` 检查记住 Key：默认不记住且不落任何存储；勾选后后续提交与同标签页刷新沿用、另一个标签页拿不到、只有记忆条目含 Key；换服务商地址不带 Key、用户自己填的 Key 不被覆盖；取消勾选、清除按钮、认证失败后更换 Key 都会立即清除；英文与 375/320 宽度。
 `test:web-load` 在约 Fast 3G（150 ms 往返、1.6 Mbit/s 下行）下打开工作台两次并执行预算：文本资源必须压缩；首次访问 HTML+JS+CSS ≤ 300 KB、总传输 ≤ 1800 KB、首次内容绘制 ≤ 1.5 s、可提交 ≤ 5 s；重复访问传输 ≤ 50 KB、可提交 ≤ 2 s。`--report` 只打印各资源字节数与编码，报告写到 `out/web-load/report.json`。
+`test:web-theme` 检查外观：未选择时首帧即为系统主题、不写存储并跟随系统变化；命令面板与账号对话框的选择优先于系统、刷新后保留、同步到其他标签页，“跟随系统”会清除选择；两种主题下欢迎页、各对话框、命令面板、示例运行全部标签页（中英文）、手机宽度、登录页与分享页的可见文字都满足 WCAG AA 对比度（`scripts/web-contrast.ts`），截图写到 `out/web-theme/`。
 
 组件预览 `bun run build:web-preview` 把 `apps/web/preview/` 构建到 `out/web-preview/`，用固定数据展示每个工作台组件（基础控件、Section 辅助组件、顶栏、对话、运行监视、运行头部、概览、研究协作）；在页面上可切换中英文。它只用于开发，不进入 `out/web` 或镜像。`test:web-preview` 在中英文、1440 与 375 像素下检查每个组件渲染无报错、英文界面无未翻译文字、页面不溢出并通过上述无障碍规则，截图写入 `out/web-preview-check/`。
 
@@ -440,6 +443,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/client/ui/CollaborationNow.tsx` | 协作页简洁层的“现在在做什么” |
 | `apps/web/client/keyMemory.ts` | 标签页内记住 API Key（按服务商与地址） |
 | `apps/web/staticFiles.ts` | 静态文件压缩、ETag 与重新验证 |
+| `apps/web/client/theme.ts`、`apps/web/client/themePreference.ts` | 首帧前应用浅色/深色主题，读写外观选择 |
 | `apps/web/worker.ts` | 单次 BYOK profile、真实求解与验收 |
 | `apps/web/workerBridge.ts`、`apps/web/worker-command.ts` | 容器观测采集、结构化人工命令与销毁前知识导出 |
 | `apps/web/storage.ts`、`apps/web/knowledgeService.ts` | 持久运行索引、归档、不可变知识版本与检索 |

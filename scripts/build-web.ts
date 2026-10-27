@@ -7,7 +7,7 @@ import { build } from 'esbuild';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web');
 fs.mkdirSync(output, { recursive: true });
-for (const entry of ['app', 'login', 'share'])
+for (const entry of ['theme', 'app', 'login', 'share'])
   await build({ entryPoints: [path.join(root, `apps/web/client/${entry}.ts`)], outfile: path.join(output, `${entry}.js`),
     bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
     jsx: 'automatic', jsxImportSource: 'preact' });

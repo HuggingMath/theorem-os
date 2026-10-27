@@ -352,4 +352,7 @@ export const app: Record<string, string> = {
   "每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。": "Cleared after each submission and never saved with drafts; settings can remember it in this tab.",
   "浏览器不允许保存，Key 只保留到这次提交": "The browser does not allow saving; the key lasts until this submission",
   "已清除此标签页记住的 API Key": "Forgot the API Key remembered in this tab",
+  "浏览器不允许保存，外观只在此页面生效": "The browser does not allow saving; the appearance applies to this page only",
+  "外观：{0}": "Appearance: {0}",
+  "theme appearance dark light 外观 主题 深色 浅色 夜间": "theme appearance dark light night mode",
 };
