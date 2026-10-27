@@ -441,6 +441,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/precheck.ts`、`apps/web/client/sourceCheck.tsx` | 提交前检查：结构检查、Lean 诊断解析、并发/缓存/限流；编辑器内的状态与定位 |
 | `apps/web/verificationKit.ts`、`apps/web/report.ts` | 证明结构与本地复核包（ZIP 写入）；报告摘要与“卡在哪里”的前沿子目标 |
 | `apps/web/client/ui/CollaborationNow.tsx` | 协作页简洁层的“现在在做什么” |
+| `apps/web/client/ui/DetailPanel.tsx`、`apps/web/client/ui/DraftPreview.tsx`、`apps/web/client/ui/Controls.tsx` | 运行详情的源码/差异/报告页、草稿工作区与连接状态、历史行和图标按钮；界面一律由 Preact 渲染，客户端不写 innerHTML |
 | `apps/web/client/keyMemory.ts` | 标签页内记住 API Key（按服务商与地址） |
 | `apps/web/staticFiles.ts` | 静态文件压缩、ETag 与重新验证 |
 | `apps/web/client/theme.ts`、`apps/web/client/themePreference.ts` | 首帧前应用浅色/深色主题，读写外观选择 |
@@ -449,7 +450,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/storage.ts`、`apps/web/knowledgeService.ts` | 持久运行索引、归档、不可变知识版本与检索 |
 | `apps/web/moduleRegistry.ts` | 实际模块注册表、冻结身份与服务端方案 |
 | `apps/web/client/collaborationView.ts`、`apps/web/client/taskPlanEditor.ts` | 数学任务图、Agent/证据检查器、指导与版本化计划编辑 |
-| `apps/web/client/collaborationNavigation.ts`、`apps/web/client/guidanceComposer.ts` | 分区跳转、指导往返、草稿与投递状态 |
+| `apps/web/client/collaborationNavigation.tsx`、`apps/web/client/guidanceComposer.ts` | 分区跳转、指导往返、草稿与投递状态 |
 | `apps/web/client/researchProgressView.ts` | 证明前沿、数学阻塞、Agent 交付与精确历史合同入口 |
 | `apps/web/client/mathematicalChangesView.ts` | 保留窗口内的数学变化、前后版本对照、指导引用与原始记录导出 |
 | `apps/web/client/knowledgeView.ts`、`apps/web/client/serverModulePlans.ts` | 知识复核和服务端方案交互 |
@@ -457,7 +458,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/client/` | 浏览器工作台 |
 | `apps/web/presentation.ts` | 运行阶段、用时与结果展示 |
 | `apps/web/moduleTelemetry.ts` | 安全模块事件与不受日志轮转影响的运行摘要 |
-| `apps/web/client/moduleView.ts` | M1–M5 研究循环、模块详情和 S3 验收视图 |
+| `apps/web/client/moduleView.tsx` | M1–M5 研究循环、模块详情和 S3 验收视图 |
 | `apps/web/client/modulePlanEditor.ts` | 自定义策略编辑、启停、排序、折叠与字段校验 |
 | `apps/web/client/modulePlanLibrary.ts` | 浏览器本地模块方案库、互斥写入与版本冲突检查 |
 | `apps/web/client/modulePlanLibraryView.ts` | 方案保存、载入、删除及撤销交互 |
@@ -466,11 +467,11 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/report.ts` | 已知报告字段的验收摘要、诊断与统计 |
 | `apps/web/client/sourceDiff.ts` | 有预算限制的逐行差异和折叠上下文 |
 | `apps/web/client/editorReview.ts` | 应用编辑前的源码对比，保留编辑与对比阅读状态 |
-| `apps/web/client/sourceReader.ts` | 源码着色、文本查找与定位，保留源码文本节点 |
+| `apps/web/client/sourceReader.tsx` | 源码着色、文本查找与定位，保留源码文本节点 |
 | `apps/web/sample.ts`、`scripts/build-web-sample.ts` | 只读示例运行的读取接口与生成 |
 | `apps/web/client/glossary.ts`、`apps/web/client/termHints.ts` | 术语白话解释、`?` 说明与术语表 |
 | `apps/web/i18n.ts`、`apps/web/i18n/`、`scripts/web-i18n.ts` | 界面语言选择与切换、英文词典、词典覆盖扫描 |
-| `apps/web/client/activityReader.ts` | 活动筛选、跟随、阅读位置与本地导出 |
+| `apps/web/client/activityReader.tsx` | 活动筛选、跟随、阅读位置与本地导出 |
 | `src/math/leanTask.ts` | 将输入源码固定为独立 Lean 题目 |
 
 工作台遵循仓库的专有许可证（见 LICENSE）；打包的第三方库适用各自许可。GSAP 的版权与许可链接随官网和工作台保存在 `assets/licenses/gsap-NOTICE.txt`。

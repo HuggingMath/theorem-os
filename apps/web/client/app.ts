@@ -1,12 +1,12 @@
 import {
-  createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Monitor, Moon, Network, PanelLeft, PanelRight, Paperclip,
-  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
+  createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
+  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
+  LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
-import type { WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebProofOutlineDeclaration, WebRun, WebRunInput, WebSession } from '../shared';
+import type { WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunInput, WebSession } from '../shared';
 import type { WebShareLink } from '../share';
 import { effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, resultDescription, runProgress, usageEstimate, type RecoveryAction } from '../presentation';
-import { summarizeReport, summarizeStuck, type ReportCheck, type ReportDiagnostic, type ReportTarget, type StuckSummary, type StuckTask } from '../report';
+import { summarizeReport, summarizeStuck } from '../report';
 import { filterRuns, type RunFilter } from './history';
 import { readLeanFile } from './sourceFile';
 import { sourceIndentEdit, type IndentDirection } from './sourceIndent';
@@ -16,7 +16,6 @@ import { diagnosticText, renderSourceCheck, SourceCheck, sourceOffset } from './
 import { EditorReview } from './editorReview';
 import { decodeTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftStorageKey, type TaskDraft } from './draft';
 import { compareSources, type SourceComparison } from './sourceDiff';
-import { sourceDiffRows } from './sourceDiffMarkup';
 import { submissionFields, submissionIssues, tokenCap, type SubmissionField, type SubmissionIssue } from './submission';
 import { SourceReader } from './sourceReader';
 import { ActivityReader } from './activityReader';
@@ -36,6 +35,10 @@ import { renderRunMonitor as drawRunMonitor, type MonitorItem } from './ui/RunMo
 import { renderRunHeader as drawRunHeader, unmountRunHeader } from './ui/RunHeader';
 import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
 import { renderRunOverview, unmountRunOverview, type RunOverviewProps } from './ui/RunOverview';
+import { renderFacts, renderGlyph, renderGlyphLabel, renderHistoryEmpty, renderHistoryRow } from './ui/Controls';
+import { renderConnecting, renderDraftPreview as drawDraftPreview } from './ui/DraftPreview';
+import { renderOptions } from './ui/Section';
+import { renderDetailPanel, type Banner, type OutlineState, type ReportPanelProps, type SourcePanelProps } from './ui/DetailPanel';
 import { renderConversation as drawConversation } from './ui/Conversation';
 import { workerPhaseLabel } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, notifyStorageKey, readResume, saveResume } from './runAwareness';
@@ -46,28 +49,17 @@ import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
 import { localeTag, localizeText, otherLocale, switchLocale, t } from '../i18n';
 
-const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Monitor, Moon, Network, PanelLeft, PanelRight, Paperclip,
-  LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X };
+const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
+  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
+  LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X };
 function icons(root: Element | Document | DocumentFragment = document) {
   createIcons({ icons: iconSet, root, attrs: { 'aria-hidden': 'true' } });
   root.querySelectorAll('svg[data-lucide]').forEach(svg => svg.removeAttribute('data-lucide'));
 }
-const icon = (name: string) => `<i data-lucide="${name}"></i>`;
-const html = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-}[character]!));
 function element<T extends HTMLElement = HTMLElement>(selector: string): T {
   const result = document.querySelector<T>(selector);
   if (!result) throw new Error(`Missing workbench element: ${selector}`);
   return result;
-}
-const renderedMarkup = new WeakMap<HTMLElement, string>();
-function patchMarkup(target: HTMLElement, markup: string) {
-  if (renderedMarkup.get(target) === markup) return;
-  target.innerHTML = markup;
-  renderedMarkup.set(target, markup);
-  icons(target);
 }
 function patchText(target: Element, value: string) {
   if (target.textContent !== value) target.textContent = value;
@@ -159,12 +151,12 @@ let draftPreviewSignature = '';
 let draftSourceExpanded = false;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement } | undefined;
-const sourceReader = new SourceReader(icons, () => {
+const sourceReader = new SourceReader(() => {
   if (!currentRun() && !draftSourceExpanded) { draftSourceExpanded = true; renderDraftPreview(); }
 });
-const activityReader = new ActivityReader(icons, at => timestamp(at, true),
+const activityReader = new ActivityReader(at => timestamp(at, true),
   (filename, text) => download(filename, text, 'application/json'));
-const moduleView = new ModuleView(icons);
+const moduleView = new ModuleView();
 const modulePlanEditor = new ModulePlanEditor(element('#module-plan'), icons, () => draftChanged());
 const collaborationView = new CollaborationView(api, receiveRunObservation, () => {
   state.tab = 'report'; renderDetail(true); document.getElementById('detail-tab-report')?.focus({ preventScroll: true });
@@ -387,7 +379,7 @@ function renderPreparation(issues = currentSubmissionIssues()) {
           : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
             : issue ? t('补全配置后即可提交当前题目。') : t('Key 与模型可用性将在提交时确认。'));
   patchText(element('#readiness-action'), issue?.check ? t('查看错误') : issue ? labels[issue.field] : t('查看配置'));
-  patchMarkup(element('#readiness-icon'), state.submitting ? '<span class="spinner"></span>' : icon(phase === 'ready' ? 'circle-check' : 'circle-alert'));
+  renderGlyph(element('#readiness-icon'), state.submitting ? 'spinner' : phase === 'ready' ? 'circle-check' : 'circle-alert');
   const action = element<HTMLButtonElement>('#prepare-run');
   if (action.disabled !== (pending || state.submitting)) action.disabled = pending || state.submitting;
   renderBudgetEstimate();
@@ -436,7 +428,7 @@ function renderComposerSummary() {
   stop.title = cancelling ? t('正在取消') : t('取消运行');
   stop.setAttribute('aria-label', stop.title);
   stop.setAttribute('aria-busy', String(cancelling));
-  patchMarkup(stop, cancelling ? '<span class="spinner"></span>' : icon('square'));
+  renderGlyph(stop, cancelling ? 'spinner' : 'square');
   const back = element<HTMLButtonElement>('#return-to-draft');
   back.hidden = !run;
   back.disabled = state.submitting;
@@ -554,8 +546,8 @@ function updateEnvironment() {
 }
 function renderTemplates(preferred = '', useFirst = false) {
   const templates = state.session?.templates.filter(template => template.environment === field('environment').value) ?? [];
-  field('template').innerHTML = templates.map(template => `<option value="${html(template.id)}">${html(template.name)}</option>`).join('') + `<option value="">${t('自定义 Lean')}</option>`;
-  field('template').value = templates.some(template => template.id === preferred) ? preferred : useFirst ? templates[0]?.id ?? '' : '';
+  renderOptions(element<HTMLSelectElement>('#template'), [...templates.map(template => [template.id, template.name] as const), ['', t('自定义 Lean')]],
+    templates.some(template => template.id === preferred) ? preferred : useFirst ? templates[0]?.id ?? '' : '');
 }
 function updateCounts() {
   for (const [id, limit] of [['source', state.session?.limits.maxSourceBytes], ['task', state.session?.limits.maxTaskBytes]] as const) {
@@ -708,11 +700,11 @@ async function importTaskFile(file: File) {
     pendingImport = { draft, revision };
     element('#import-filename').textContent = file.name;
     const provider = state.session?.providers.find(provider => provider.id === draft.providerId);
-    element('#import-facts').innerHTML = [fact(t('证明环境'), environmentName(draft.environment)),
-      fact(t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))), fact(t('模型'), draft.model || t('未填写'), true),
-      fact(t('推理强度'), effortLabels[draft.effort] ?? draft.effort), fact(t('轮次上限'), draft.maxTurns || t('未填写')),
-      fact(t('解题预算 / 秒'), draft.maxRunSeconds || t('未填写')), fact(t('Agent 数量'), draft.workers || t('未填写')),
-      fact(t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行'))].join('');
+    renderFacts(element('#import-facts'), [[t('证明环境'), environmentName(draft.environment)],
+      [t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))], [t('模型'), draft.model || t('未填写'), true],
+      [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), draft.maxTurns || t('未填写')],
+      [t('解题预算 / 秒'), draft.maxRunSeconds || t('未填写')], [t('Agent 数量'), draft.workers || t('未填写')],
+      [t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')]]);
     element('#import-task-preview').textContent = draft.task || t('未填写');
     element('#import-source-preview').textContent = draft.source || t('未填写');
     renderImportState();
@@ -892,8 +884,7 @@ function updateKeyToggle() {
   button.setAttribute('aria-label', visible ? t('隐藏 API Key') : t('显示 API Key'));
   button.setAttribute('title', visible ? t('隐藏 API Key') : t('显示 API Key'));
   button.setAttribute('aria-pressed', String(visible));
-  button.innerHTML = icon(visible ? 'eye-off' : 'eye');
-  icons();
+  renderGlyph(button, visible ? 'eye-off' : 'eye');
 }
 function renderRuntime() {
   const session = state.session;
@@ -902,7 +893,7 @@ function renderRuntime() {
     ? !session.providers.length ? t('未配置可用服务商') : localizeText(session.runtime.message) || (ready ? t('环境就绪') : t('环境未就绪'))
     : t('等待连接');
   element<HTMLButtonElement>('#submit-run').disabled = !ready || state.submitting;
-  element<HTMLButtonElement>('#submit-run').innerHTML = state.submitting ? '<span class="spinner"></span>' : icon('arrow-up');
+  renderGlyph(element('#submit-run'), state.submitting ? 'spinner' : 'arrow-up');
   element('#submit-run').setAttribute('aria-label', state.submitting ? t('正在提交') : t('发送研究任务'));
   element<HTMLButtonElement>('#settings-submit').disabled = !ready || state.submitting;
   element<HTMLFieldSetElement>('#form-fields').disabled = !session || state.submitting;
@@ -918,7 +909,6 @@ function renderRuntime() {
   if (state.draftView === 'modules') renderDraftPreview();
   // Connecting (or losing the connection) starts or stops the statement check.
   sourceCheck.schedule();
-  icons();
 }
 function status(run: WebRun) {
   if (passed(run)) return { label: t('完整原题通过'), tone: 'passed', symbol: 'circle-check' };
@@ -1014,25 +1004,11 @@ function renderRunList(force = false) {
     let row = rows.get(run.id);
     if (!row) {
       row = document.createElement('div'); row.setAttribute('role', 'listitem'); row.dataset.historyId = run.id;
-      row.innerHTML = '<button type="button" class="run-row"><span class="run-row-title" translate="no"></span><span class="run-row-meta"><span class="run-row-model"></span><span class="run-environment"></span></span><span class="run-row-bottom"><span class="badge"></span><time></time></span></button>';
-      row.querySelector<HTMLButtonElement>('button')!.dataset.runId = run.id;
       rows.set(run.id, row);
     }
-    const button = row.querySelector<HTMLButtonElement>('button')!;
-    const selected = run.id === state.selectedId, value = status(run);
-    button.classList.toggle('selected', selected);
-    if (button.getAttribute('aria-pressed') !== String(selected)) button.setAttribute('aria-pressed', String(selected));
-    if (button.title !== run.title) button.title = run.title;
-    patchText(row.querySelector('.run-row-title')!, run.title);
-    patchText(row.querySelector('.run-row-model')!, run.model);
-    patchText(row.querySelector('.run-environment')!, environmentName(run.environment));
-    const badge = row.querySelector<HTMLElement>('.badge')!;
-    const className = `badge ${value.tone}`;
-    if (badge.className !== className) badge.className = className;
-    patchMarkup(badge, `${icon(value.symbol)}${html(value.label)}`);
-    const time = row.querySelector('time')!;
-    if (time.dateTime !== run.createdAt) time.dateTime = run.createdAt;
-    patchText(time, timestamp(run.createdAt));
+    const value = status(run);
+    renderHistoryRow(row, { id: run.id, title: run.title, model: run.model, environment: environmentName(run.environment), selected: run.id === state.selectedId,
+      tone: value.tone, symbol: value.symbol, label: value.label, createdAt: run.createdAt, time: timestamp(run.createdAt) });
     if (row !== cursor) list.insertBefore(row, cursor);
     cursor = row.nextElementSibling;
   }
@@ -1042,7 +1018,7 @@ function renderRunList(force = false) {
       empty = document.createElement('div'); empty.className = 'empty-state compact';
       empty.dataset.historyEmpty = ''; empty.setAttribute('role', 'status'); list.append(empty);
     }
-    patchMarkup(empty, `${icon(filtered ? 'search' : 'clock-3')}<p>${filtered ? t('没有匹配的运行') : t('暂无运行记录')}</p>${filtered ? `<button type="button" class="text-button" data-clear-filters>${t('清除筛选')}</button>` : ''}`);
+    renderHistoryEmpty(empty, filtered);
   }
   restoreHistoryScroll();
   if (focused && document.activeElement !== focused && list.getClientRects().length) {
@@ -1070,11 +1046,10 @@ function resultTitle(run: WebRun) {
         : run.status === 'error' ? t('运行发生错误')
           : ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '') ? t('完整原题验收未通过') : t('运行已结束，完整原题尚未验收通过');
 }
-function resultBanner(run: WebRun) {
+function banner(run: WebRun): Banner {
   const value = status(run);
-  return `<div class="result-banner ${value.tone}">${icon(value.symbol)}<div><h3>${resultTitle(run)}</h3><p>${html(resultDescription(run))}</p></div></div>`;
+  return { tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: resultDescription(run) };
 }
-const fact = (label: string, value: unknown, mono = false) => `<div><dt>${label}</dt><dd${mono ? ' class="mono"' : ''}>${html(value)}</dd></div>`;
 const stepLabels = { done: t('已完成'), active: t('进行中'), stopped: t('已停止'), error: t('未通过'), pending: t('等待中'), skipped: t('未执行') };
 function overviewProps(run: WebRun): RunOverviewProps {
   const progress = runProgress(run), value = status(run);
@@ -1118,19 +1093,16 @@ const displayedSource = (run: WebRun) => state.sourceView !== 'input' && candida
 function sourceContent(run: WebRun) {
   const hasProof = Boolean(candidateSource(run));
   const showingProof = hasProof && state.sourceView !== 'input';
-  const verifiedSource = Boolean(run.result?.proof && passed(run));
-  const proofLabel = verifiedSource ? t('验收证明') : t('候选源码');
+  const verified = Boolean(run.result?.proof && passed(run));
+  const proofLabel = verified ? t('验收证明') : t('候选源码');
   const source = displayedSource(run);
-  const sourceStatus = showingProof ? verifiedSource ? t('完整原题已通过验收') : t('候选 · 尚未验收通过') : activeRun(run) && !hasProof ? t('原始题目 · 等待候选') : t('原始题目');
   const lineCount = source.split(/\r\n|\r|\n/).length;
-  const controls = `${hasProof ? `<div class="source-switch" role="group" aria-label="${t('源码版本')}"><button type="button" data-source-view="proof" aria-pressed="${state.sourceView === 'proof'}">${proofLabel}</button><button type="button" data-source-view="input" aria-pressed="${state.sourceView === 'input'}">${t('原始题目')}</button><button type="button" data-source-view="diff" aria-pressed="${state.sourceView === 'diff'}">${t('差异对比')}</button></div>` : '<h3>Submission.lean</h3>'}<div class="source-actions"><button type="button" class="icon-button" data-action="copy-source" aria-label="${t('复制{0}', showingProof ? proofLabel : t('原始题目'))}" title="${t('复制{0}', showingProof ? proofLabel : t('原始题目'))}">${icon('copy')}</button>${showingProof ? `<button type="button" class="icon-button" data-action="download-proof" aria-label="${t('下载 Lean')}" title="${t('下载 Lean')}">${icon('download')}</button>` : ''}</div>`;
-  const status = `<span>${icon(verifiedSource && showingProof ? 'circle-check' : showingProof ? 'file-code-2' : 'clock-3')}${sourceStatus}</span>${showingProof && !run.result?.proof && run.artifact ? `<span class="mono">${html(run.artifact.workerId)} · ${html(timestamp(run.artifact.capturedAt, true))}</span>` : `<span class="mono">${t('{0} 行 · {1}', lineCount, byteLabel(byteSize(source)))}</span>`}`;
-  return { hasProof, proofLabel, source: source.replace(/\r\n?/g, '\n'), controls, status, tone: showingProof ? verifiedSource ? 'verified' : 'candidate' : '',
+  const props: SourcePanelProps = { hasProof, proofLabel, view: state.sourceView, showingProof, verified,
+    status: showingProof ? verified ? t('完整原题已通过验收') : t('候选 · 尚未验收通过') : activeRun(run) && !hasProof ? t('原始题目 · 等待候选') : t('原始题目'),
+    tone: showingProof ? verified ? 'verified' : 'candidate' : '',
+    origin: showingProof && !run.result?.proof && run.artifact ? `${run.artifact.workerId} · ${timestamp(run.artifact.capturedAt, true)}` : t('{0} 行 · {1}', lineCount, byteLabel(byteSize(source))) };
+  return { props, diff: hasProof && state.sourceView === 'diff', source: source.replace(/\r\n?/g, '\n'),
     numbers: Array.from({ length: lineCount }, (_, index) => index + 1).join('\n') };
-}
-function sourceView(run: WebRun, content: ReturnType<typeof sourceContent>) {
-  return `<div class="panel-topline source-topline"></div><div class="source-status"></div>
-    ${content.hasProof && state.sourceView === 'diff' ? sourceDiffView(run, content.proofLabel) : `<div class="source-reader"></div><div class="code-scroll source-code-grid" tabindex="0" aria-label="${t('Lean 源码')}"><pre class="source-line-numbers" aria-hidden="true"></pre><pre class="source-code"><code></code></pre></div>`}`;
 }
 function updateSourceReader() {
   const run = currentRun();
@@ -1145,21 +1117,14 @@ function updateSourceReader() {
     ...(!run && document.querySelector('.preview-source-heading>span[data-truncated]')
       ? { scope: t('仅查看当前预览的前 160 行；缩小源码至允许大小后可查看完整文件。') } : {}) } : undefined);
 }
-function sourceDiffView(run: WebRun, proofLabel: string) {
+function sourceDiff(run: WebRun): SourcePanelProps['diff'] {
   const before = run.source, after = candidateSource(run);
   const sourceChanged = sourceComparison?.runId !== run.id || sourceComparison.before !== before || sourceComparison.after !== after;
   if (sourceChanged || sourceComparison?.folded !== state.foldUnchanged) {
     sourceComparison = { runId: run.id, before, after, folded: state.foldUnchanged, result: compareSources(before, after, state.foldUnchanged) };
     if (sourceChanged) state.diffChange = 0;
   }
-  const comparison = sourceComparison!.result;
-  const heading = `<div class="diff-heading"><span>${t('原始题目')}</span>${icon('arrow-right')}<span>${proofLabel}</span></div>`;
-  if (comparison.status === 'identical') return `${heading}<div class="empty-state diff-identical" role="status">${icon('check-check')}<p>${comparison.lineEndingsChanged ? t('仅换行格式不同') : t('源码内容相同')}</p></div>`;
-  if (comparison.status === 'unavailable') return `${heading}<div class="empty-state diff-unavailable" role="status">${icon('file-code-2')}<p>${t('差异过多，无法生成对比')}</p></div>`;
-  const { markup: rows, changeCount } = sourceDiffRows(comparison.rows);
-  state.diffChange = Math.max(0, Math.min(state.diffChange, changeCount - 1));
-  return `${heading}<div class="diff-toolbar"><div class="diff-counts"><span class="diff-count-added" aria-label="${t('新增 {0} 行', comparison.added)}">+${comparison.added}</span><span class="diff-count-removed" aria-label="${t('删除 {0} 行', comparison.removed)}">-${comparison.removed}</span></div><label class="diff-toggle"><input type="checkbox" id="diff-changes-only" ${state.foldUnchanged ? 'checked' : ''}><span>${t('折叠未改动')}</span></label><div class="diff-navigation"><button type="button" class="icon-button" data-action="diff-prev" title="${t('上一处更改')}" aria-label="${t('上一处更改')}" ${state.diffChange === 0 || !changeCount ? 'disabled' : ''}>${icon('chevron-up')}</button><span id="diff-position" class="mono" aria-live="polite">${changeCount ? state.diffChange + 1 : 0}/${changeCount}</span><button type="button" class="icon-button" data-action="diff-next" title="${t('下一处更改')}" aria-label="${t('下一处更改')}" ${state.diffChange >= changeCount - 1 ? 'disabled' : ''}>${icon('chevron-down')}</button></div><span class="diff-scroll-hint" role="note">${icon('arrow-left-right')}<span>${t('长行可左右滑动查看')}</span></span></div>
-    <div class="diff-scroll" tabindex="0" aria-label="${t('源码差异对比')}"><table class="diff-table"><caption class="sr-only">${t('原始题目与{0}的逐行差异', proofLabel)}</caption><thead><tr><th scope="col">${t('原始')}</th><th scope="col">${passed(run) ? t('验收') : t('候选')}</th><th scope="col">${t('源码')}</th></tr></thead><tbody>${rows}</tbody></table></div>${comparison.omittedLines ? `<p class="diff-truncated" role="status">${t('另有 {0} 行未展示', comparison.omittedLines)}</p>` : ''}`;
+  return { comparison: sourceComparison!.result, folded: state.foldUnchanged, accepted: passed(run) };
 }
 function updateDiffNavigation(move = 0, align = false) {
   const scroll = document.querySelector<HTMLElement>('#detail-panel .diff-scroll');
@@ -1175,107 +1140,32 @@ function updateDiffNavigation(move = 0, align = false) {
     scroll.scrollTop += changes[state.diffChange].getBoundingClientRect().top - scroll.getBoundingClientRect().top - headerHeight;
   }
 }
-function reportView(run: WebRun) {
-  if (!run.result) return run.error
-    ? `${resultBanner(run)}<section class="report-section"><h3>${t('运行诊断')}</h3><pre class="diagnostic-output" tabindex="0">${html(run.error)}</pre></section>`
-    : `<div class="empty-state">${icon('file-json-2')}<p>${activeRun(run) ? t('结果报告尚未生成') : t('暂无结果报告')}</p></div>`;
-  const toolbar = `<div class="panel-topline report-topline"><div class="source-switch" role="group" aria-label="${t('报告视图')}"><button type="button" data-report-view="summary" aria-pressed="${state.reportMode === 'summary'}">${t('验收摘要')}</button><button type="button" data-report-view="json" aria-pressed="${state.reportMode === 'json'}">JSON</button></div><div class="report-actions"><button type="button" class="icon-button" data-action="copy-report" aria-label="${t('复制报告 JSON')}" title="${t('复制报告 JSON')}">${icon('copy')}</button><button type="button" class="button" data-action="download-report">${t('{0}下载报告', icon('download'))}</button></div></div>`;
-  if (state.reportMode === 'json') return `${toolbar}<pre class="code-scroll report" tabindex="0" aria-label="${t('结果报告 JSON')}"><code>${html(JSON.stringify(run.result.report, null, 2))}</code></pre>`;
-  const report = summarizeReport(run), stuck = summarizeStuck(run);
-  return `${toolbar}<div class="report-summary">${resultBanner(run)}
-    ${report.reason ? `<section class="report-section report-reason"><h3>${t('运行说明')}</h3><p>${html(report.reason)}</p></section>` : ''}
-    ${stuck ? stuckView(stuck) : ''}
-    ${report.metrics.length ? `<dl class="report-metrics">${report.metrics.map(item => fact(item.label, item.value, true)).join('')}</dl>` : ''}
-    ${run.result.proof ? outlineSection(run) : ''}
-    ${report.checks.length ? report.checks.map(reportCheck).join('') : `<div class="empty-state compact"><p>${t('暂无结构化验收记录')}</p></div>`}
-    ${report.identity.length ? `<section class="report-section"><h3>${t('验收凭据')}</h3><dl class="facts report-identity">${report.identity.map(item => fact(item.label, item.value, true)).join('')}</dl></section>` : ''}</div>`;
+function reportProps(run: WebRun): ReportPanelProps {
+  if (!run.result) return run.error ? { kind: 'error', banner: banner(run), error: run.error } : { kind: 'empty', active: activeRun(run) };
+  if (state.reportMode === 'json') return { kind: 'json', report: run.result.report };
+  const stuck = summarizeStuck(run);
+  return { kind: 'summary', banner: banner(run), summary: summarizeReport(run), accepted: passed(run), ...(stuck ? { stuck } : {}),
+    ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`,
+      mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib') } } : {}) };
 }
-function reportCheck(check: ReportCheck) {
-  return `<section class="report-section" data-check-stage="${check.id}"><div class="report-check-heading"><h3>${html(check.label)}</h3><span class="badge ${check.tone}">${html(check.status)}</span></div>
-    ${check.method ? `<p class="report-method">${html(check.method)}</p>` : ''}${check.reason ? `<p class="report-reason-text">${html(check.reason)}</p>` : ''}
-    ${check.targets.length ? `<ul class="verification-targets">${check.targets.map(reportTarget).join('')}</ul>` : ''}
-    ${check.omittedTargets ? `<p class="report-method">${t('另有 {0} 个目标，详见原始报告', check.omittedTargets)}</p>` : ''}</section>`;
-}
-function reportTarget(target: ReportTarget) {
-  const counts = [target.sorryCount === undefined ? '' : `sorry ${target.sorryCount}`, target.admitCount === undefined ? '' : `admit ${target.admitCount}`].filter(Boolean).join(' · ');
-  return `<li class="verification-target"><div class="target-heading"><code>${html(target.name)}</code><span class="badge ${target.tone}">${html(target.status)}</span></div>
-    ${counts ? `<p class="target-counts mono">${html(counts)}</p>` : ''}
-    ${target.diagnostics.length ? `<details class="target-diagnostics" ${target.tone === 'failed' ? 'open' : ''}><summary>${t('诊断记录')} <span class="field-count">${target.diagnostics.length}</span></summary>${target.diagnostics.map(reportDiagnostic).join('')}</details>` : ''}</li>`;
-}
-function reportDiagnostic(diagnostic: ReportDiagnostic) {
-  return `<div class="diagnostic-entry"><h4>${html(diagnostic.label)}</h4><pre class="diagnostic-output" tabindex="0">${html(diagnostic.text)}</pre>
-    ${diagnostic.truncated ? `<p class="diagnostic-limit"><span>${t('仅显示前 4000 字符')}</span><button type="button" class="report-detail-link" data-report-view="json">${t('{0}查看原始报告', icon('file-json-2'))}</button></p>` : ''}</div>`;
-}
-function stuckView(stuck: StuckSummary) {
-  const progress = [t('已检查 {0} 个', stuck.checked), stuck.conditional ? t('有条件 {0} 个', stuck.conditional) : '', t('未完成 {0} 个', stuck.open)].filter(Boolean).join(' · ');
-  const item = (task: StuckTask) => `<li class="stuck-task"><div class="item-heading"><span class="stuck-name">${task.goal ? `<span class="stuck-kind">${t('原题目标')}</span>` : ''}<code translate="no">${html(task.theorem ?? task.id)}</code></span><span class="badge ${task.tone}">${html(task.status)}</span></div>
-    ${task.type ? `<pre class="stuck-type" translate="no">${html(task.type)}</pre>` : ''}
-    <p class="stuck-facts">${html([t('已尝试 {0} 次', task.attempts), task.failure].filter(Boolean).join(' · '))}</p>
-    ${task.blockers.length ? `<ul class="stuck-blockers">${task.blockers.map(text => `<li>${icon('triangle-alert')}<span>${html(text)}</span></li>`).join('')}</ul>` : ''}
-    ${task.feedback ? `<details class="target-diagnostics"><summary>${t('最近反馈')}</summary><pre class="diagnostic-output" tabindex="0">${html(task.feedback)}</pre></details>` : ''}
-    <button type="button" class="report-detail-link" data-action="inspect-task" data-task-id="${html(task.id)}">${t('{0}在协作中查看', icon('network'))}</button></li>`;
-  return `<section class="report-section report-stuck" aria-labelledby="report-stuck-heading"><div class="report-check-heading"><h3 id="report-stuck-heading">${t('卡在哪里')}</h3><span class="report-method">${html(progress)}</span></div>
-    <p class="report-method">${stuck.openGoals ? t('原题目标尚未闭合；下面是它当前依赖的、还没有通过检查的子目标。') : t('下面这些子目标还没有通过 Lean 检查。')}</p>
-    <ul class="stuck-tasks">${stuck.tasks.map(item).join('')}</ul>
-    ${stuck.omitted ? `<p class="report-method">${t('另有 {0} 个未完成子目标，见协作页任务图', stuck.omitted)}</p>` : ''}</section>`;
-}
-type OutlineState = { status: 'loading' } | { status: 'ready'; outline: WebProofOutline } | { status: 'failed'; error: string };
 const outlines = new Map<string, OutlineState>();
-function outlineSection(run: WebRun) {
-  const heading = passed(run) ? t('证明结构') : t('候选证明结构');
-  return `<section class="report-section report-outline" aria-labelledby="report-outline-heading"><div class="report-check-heading"><h3 id="report-outline-heading">${heading}</h3></div>
-    <div class="outline-body" aria-live="polite">${outlineBody(run)}</div></section>`;
-}
-function outlineBody(run: WebRun) {
-  const state = outlines.get(run.id);
-  if (!state || state.status === 'loading') return `<p class="report-method"><span class="spinner"></span>${t('正在整理证明结构…')}</p>`;
-  if (state.status === 'failed') return `<p class="report-reason-text">${html(state.error)}</p><button type="button" class="report-detail-link" data-action="retry-outline">${t('{0}重新整理', icon('rotate-ccw'))}</button>`;
-  const { outline } = state, targets = outline.declarations.filter(item => item.role === 'target'), helpers = outline.declarations.filter(item => item.role === 'helper');
-  const kind = (item: WebProofOutlineDeclaration) => item.kind === 'definition' ? t('定义') : item.kind === 'instance' ? t('实例') : t('引理');
-  const names = (list: string[]) => list.map(name => `<code translate="no">${html(name)}</code>`).join(t('、'));
-  const target = (item: WebProofOutlineDeclaration) => `<li class="outline-item"><div class="item-heading"><code translate="no">${html(item.name)}</code>${item.nonstandardAxioms?.length ? `<span class="badge warning">${t('含非标准公理')}</span>` : ''}</div>
-    <pre class="stuck-type" translate="no">${html(item.type)}${item.typeTruncated ? '\n…' : ''}</pre>
-    ${item.uses ? `<p class="outline-uses">${item.uses.length ? t('用到：{0}', names(item.uses)) : t('直接证明，没有用到新增的辅助声明')}</p>` : ''}
-    ${item.axioms ? `<p class="outline-uses">${item.axioms.length ? t('依赖公理：{0}', names(item.axioms)) : t('不依赖任何公理')}${item.nonstandardAxioms?.length ? ` <span class="outline-warning">${t('{0} 不在 Lean 的三个标准公理之内，请逐一核对', names(item.nonstandardAxioms))}</span>` : ''}</p>` : ''}</li>`;
-  const helper = (item: WebProofOutlineDeclaration) => `<li class="outline-item"><div class="item-heading"><code translate="no">${html(item.name)}</code><span class="badge muted">${kind(item)}</span></div>
-    <pre class="stuck-type" translate="no">${html(item.type)}${item.typeTruncated ? '\n…' : ''}</pre>
-    ${item.usedBy ? `<p class="outline-uses">${item.usedBy.length ? t('被 {0} 用到', names(item.usedBy)) : t('没有被任何目标用到')}</p>` : ''}</li>`;
-  if (!targets.length) return `<p class="report-method">${t('候选证明中没有找到原题的目标定理，无法整理结构或生成复核包。')}</p>`;
-  return `<p class="report-method">${helpers.length ? t('{0} 个原题目标，求解过程新增了 {1} 个辅助声明。', targets.length, helpers.length) : t('{0} 个原题目标，没有新增辅助声明。', targets.length)}${outline.references === 'unrecorded' && helpers.length ? ` ${t('这次运行没有记录引用关系，未标出各目标用到哪些辅助声明。')}` : ''}</p>
-    <h4 class="outline-heading">${t('原题目标')}</h4><ul class="verification-targets">${targets.map(target).join('')}</ul>
-    ${helpers.length ? `<h4 class="outline-heading">${t('新增辅助声明')}</h4><ul class="verification-targets">${helpers.map(helper).join('')}</ul>` : ''}
-    ${outline.omitted ? `<p class="report-method">${t('另有 {0} 个声明未列出', outline.omitted)}</p>` : ''}
-    <div class="local-check"><a class="button" href="/api/runs/${encodeURIComponent(run.id)}/verification-kit" download>${t('{0}下载本地复核包', icon('download'))}</a>
-    <span class="report-method">${t('包含原题、证明、固定版本的 Lean 工程文件和公理检查脚本。')}</span></div>${localCheckGuide(run)}`;
-}
-function localCheckGuide(run: WebRun) {
-  const mathlib = Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib');
-  const steps = [t('安装 Lean 版本管理器 elan；压缩包里的 lean-toolchain 会自动选用同一 Lean 版本。'),
-    mathlib ? t('在解压目录运行 {0}，下载预编译的 Mathlib。', '<code translate="no">lake exe cache get</code>') : t('标准库环境不需要下载依赖。'),
-    t('运行 {0}：没有 error 即 Lean 内核接受了全部证明。', '<code translate="no">lake build Submission</code>'),
-    t('运行 {0}：每个目标只应依赖 propext、Classical.choice、Quot.sound；出现 sorryAx 说明证明不完整。', '<code translate="no">lake env lean Check.lean</code>'),
-    t('比较 Original.lean 与 Submission.lean：目标定理的陈述应保持不变。')];
-  return `<details class="target-diagnostics local-check-guide"><summary>${t('如何在自己的电脑上复核')}</summary><ol class="local-check-steps">${steps.map(step => `<li>${step}</li>`).join('')}</ol></details>`;
-}
+/** Starts loading the proof outline; the report re-renders when it arrives. Returns whether a request started. */
 function loadOutline(run: WebRun, retry = false) {
-  if (!run.result?.proof || outlines.has(run.id) && !retry) return;
+  if (!run.result?.proof || outlines.has(run.id) && !retry) return false;
   outlines.set(run.id, { status: 'loading' });
-  const show = () => {
-    const body = currentRun()?.id === run.id && state.tab === 'report' ? document.querySelector<HTMLElement>('#detail-panel .outline-body') : null;
-    if (body) patchMarkup(body, outlineBody(run));
-  };
-  show();
   void api<{ outline: WebProofOutline }>(`/api/runs/${encodeURIComponent(run.id)}/outline`)
     .then(({ outline }) => { outlines.set(run.id, { status: 'ready', outline }); })
     .catch(error => { outlines.set(run.id, { status: 'failed', error: t('证明结构整理失败：{0}', message(error)) }); })
-    .finally(show);
+    .finally(() => { if (currentRun()?.id === run.id && state.tab === 'report') renderPanel(true); });
+  return true;
 }
 function renderPanel(force = false) {
   const run = currentRun();
   if (!run || !document.querySelector('#detail-panel')) return;
+  if (state.tab === 'report' && state.reportMode === 'summary') loadOutline(run);
   const content = state.tab === 'source' ? sourceContent(run) : undefined;
-  const signature = JSON.stringify([run.id, state.tab, content ? [state.sourceView, state.foldUnchanged, content.source, content.controls, content.status, content.tone]
-    : state.tab === 'report' ? [state.reportMode, run.status, run.error, run.result, run.observation?.sequence] : state.tab === 'events' ? run.events
+  const signature = JSON.stringify([run.id, state.tab, content ? [state.foldUnchanged, content.source, content.props]
+    : state.tab === 'report' ? [state.reportMode, run.status, run.error, run.result, run.observation?.sequence, outlines.get(run.id)] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
   if (!force && signature === state.panelSignature) {
     if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected, isSample(run));
@@ -1301,25 +1191,17 @@ function renderPanel(force = false) {
   const sourceMode = focused?.dataset.sourceView;
   const reportMode = focused?.dataset.reportView;
   const focusId = focused?.id;
-  const reuseSource = content && samePanel && !(content.hasProof && state.sourceView === 'diff') && panel.querySelector('.source-code-grid');
-  const reuseEvents = state.tab === 'events' && samePanel && panel.querySelector('.activity-workspace');
-  const reuseModules = state.tab === 'modules' && samePanel && panel.querySelector('.module-workspace');
-  const reuseCollaboration = state.tab === 'collaboration' && samePanel && panel.querySelector('.collaboration-workspace');
-  const reuseOverview = state.tab === 'overview' && samePanel && panel.querySelector('.overview-workspace');
-  if (!reuseEvents) activityReader.update(undefined, run);
-  if (!reuseModules) moduleView.update(undefined, moduleInput(run));
-  if (!reuseCollaboration) collaborationView.update();
-  if (!reuseOverview) unmountRunOverview(panel);
-  if (!reuseSource && !reuseEvents && !reuseModules && !reuseCollaboration && !reuseOverview) panel.innerHTML = content ? sourceView(run, content) : state.tab === 'report' ? reportView(run) : state.tab === 'events' ? '<div class="activity-workspace"></div>' : state.tab === 'modules' ? '<div class="module-workspace"></div>' : state.tab === 'collaboration' ? '<div class="collaboration-workspace"></div>' : '<div class="overview-workspace"></div>';
-  if (content) {
-    patchMarkup(panel.querySelector<HTMLElement>('.source-topline')!, content.controls);
-    const sourceStatus = panel.querySelector<HTMLElement>('.source-status')!;
-    sourceStatus.className = `source-status ${content.tone}`;
-    patchMarkup(sourceStatus, content.status);
-    if (!(content.hasProof && state.sourceView === 'diff')) {
-      patchText(panel.querySelector('.source-line-numbers')!, content.numbers);
-      patchText(panel.querySelector('.source-code code')!, content.source);
-    }
+  // Each tab mounts its own tree, so a workspace host is only reused within the same tab of the same run.
+  if (!samePanel || state.tab !== 'events') activityReader.update(undefined, run);
+  if (!samePanel || state.tab !== 'modules') moduleView.update(undefined, moduleInput(run));
+  if (!samePanel || state.tab !== 'collaboration') collaborationView.update();
+  if (!samePanel || state.tab !== 'overview') unmountRunOverview(panel);
+  const tab = state.tab;
+  renderDetailPanel(panel, content ? { tab: 'source', source: content.diff ? { ...content.props, diff: sourceDiff(run) } : content.props }
+    : tab === 'report' ? { tab, report: reportProps(run) } : { tab: tab as Exclude<DetailTab, 'source' | 'report'> });
+  if (content && !content.diff) {
+    patchText(panel.querySelector('.source-line-numbers')!, content.numbers);
+    patchText(panel.querySelector('.source-code code')!, content.source);
   }
   panel.dataset.renderRunId = run.id; panel.dataset.tab = state.tab;
   panel.dataset.renderSourceView = state.sourceView;
@@ -1332,12 +1214,10 @@ function renderPanel(force = false) {
   else if (sameView && reportMode) panel.querySelector<HTMLElement>(`[data-report-view="${reportMode}"]`)?.focus({ preventScroll: true });
   else if (sameView && focused === previousScroll) scroll?.focus({ preventScroll: true });
   else if (samePanel && focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
-  icons(panel);
   if (state.tab === 'collaboration') collaborationView.update(panel.querySelector<HTMLElement>('.collaboration-workspace')!, run, state.connected, isSample(run));
   if (state.tab === 'events') activityReader.update(panel.querySelector<HTMLElement>('.activity-workspace')!, run);
   if (state.tab === 'modules') moduleView.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
   if (state.tab === 'overview') renderOverview(run);
-  if (state.tab === 'report' && state.reportMode === 'summary') loadOutline(run);
   updateDiffNavigation(0, !sameView);
   if (navigating) animateEntrance(panel, 'panel');
   updateSourceReader();
@@ -1379,33 +1259,15 @@ function renderDraftPreview(force = false) {
     moduleView.update();
     finishMotion(detail);
     unmountRunOverview(detail); unmountRunHeader(detail);
-    detail.innerHTML = `<div class="detail-empty draft-preview" id="draft-preview">
-      <header class="preview-heading"><div><span class="preview-eyebrow">${t('Lean 工作区')}</span><h2></h2></div><div class="detail-actions"><span class="badge preview-status">${t('{0}未提交', icon('file-code-2'))}</span><button type="button" class="icon-button" data-draft-action="edit" aria-label="${t('编辑原始题目')}" title="${t('编辑原始题目')}">${icon('square-pen')}</button><button type="button" class="icon-button" data-draft-action="settings" aria-label="${t('配置证明环境')}" title="${t('配置证明环境')}">${icon('sliders-horizontal')}</button></div></header>
-      <dl class="preview-facts">${facts.map(([id, label, , mono]) => `<div><dt>${label}</dt><dd data-preview-value="${id}"${mono ? ' class="mono"' : ''}></dd></div>`).join('')}</dl>
-      <div class="preview-view-tabs" role="tablist" aria-label="${t('草稿工作区视图')}"><button type="button" role="tab" id="draft-tab-source" data-draft-view="source" aria-selected="true" aria-controls="draft-source-panel">${t('{0}Lean 源码', icon('file-code-2'))}</button><button type="button" role="tab" id="draft-tab-modules" data-draft-view="modules" aria-selected="false" aria-controls="draft-module-panel" tabindex="-1">${t('{0}模块', icon('network'))}</button></div>
-      <section class="preview-source" id="draft-source-panel" role="tabpanel" aria-labelledby="draft-tab-source"><div class="preview-source-heading"><h3 id="preview-source-heading">${icon('file-code-2')}Submission.lean</h3><span></span></div>
-        <div class="source-reader"></div>
-        <div class="draft-source-scroll" tabindex="0" aria-label="${t('原始题目草稿')}"><pre class="preview-line-numbers" aria-hidden="true"></pre><pre id="draft-preview-code"><code></code></pre></div>
-      </section><div class="draft-module-panel" id="draft-module-panel" role="tabpanel" aria-labelledby="draft-tab-modules" hidden><div class="module-workspace"></div></div><details class="preview-task"><summary>${t('研究任务')}</summary><p class="task-content" id="draft-preview-task"></p></details></div>`;
-    icons(detail);
+    detail.textContent = '';
   }
-  patchText(detail.querySelector('.preview-heading h2')!, title);
-  for (const [id, , value] of facts) patchText(detail.querySelector(`[data-preview-value="${id}"]`)!, value);
-  const sourceSize = detail.querySelector<HTMLElement>('.preview-source-heading>span')!;
-  sourceSize.toggleAttribute('data-truncated', lines.length > shown.length);
-  patchText(sourceSize, t('{0} 行 · {1}', lines.length > shown.length ? t('前 {0} / {1}', shown.length, lines.length) : lines.length, byteLabel(byteSize(source))));
+  const truncated = lines.length > shown.length;
+  drawDraftPreview(detail, { title, facts, truncated, task: task || t('未填写'), view: state.draftView,
+    size: t('{0} 行 · {1}', truncated ? t('前 {0} / {1}', shown.length, lines.length) : lines.length, byteLabel(byteSize(source))) });
   patchText(detail.querySelector('.preview-line-numbers')!, shown.map((_, index) => index + 1).join('\n'));
   patchText(detail.querySelector('#draft-preview-code code')!, shown.join('\n'));
-  patchText(detail.querySelector('#draft-preview-task')!, task || t('未填写'));
   const showingModules = state.draftView === 'modules';
   if (!showingModules) moduleView.update(undefined, moduleInput());
-  detail.querySelector<HTMLElement>('#draft-source-panel')!.hidden = showingModules;
-  detail.querySelector<HTMLElement>('.preview-task')!.hidden = showingModules;
-  detail.querySelector<HTMLElement>('#draft-module-panel')!.hidden = !showingModules;
-  detail.querySelectorAll<HTMLButtonElement>('[data-draft-view]').forEach(button => {
-    const selected = button.dataset.draftView === state.draftView;
-    button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
-  });
   if (showingModules) moduleView.update(detail.querySelector<HTMLElement>('.module-workspace')!, moduleInput());
   updateSourceReader();
 }
@@ -1418,7 +1280,11 @@ function renderDetail(force = false) {
     activityReader.update();
     state.panelSignature = '';
     if (state.session) renderDraftPreview();
-    else { unmountRunOverview(element('#run-detail')); unmountRunHeader(element('#run-detail')); element('#run-detail').innerHTML = `<div class="empty-state detail-empty"><span class="spinner"></span><h2>${t('正在连接工作台')}</h2></div>`; sourceReader.update(); }
+    else {
+      const detail = element('#run-detail');
+      unmountRunOverview(detail); unmountRunHeader(detail); detail.textContent = '';
+      renderConnecting(detail); sourceReader.update();
+    }
     return;
   }
   const detail = element('#run-detail');
@@ -1639,11 +1505,14 @@ function initialize(): Promise<void> {
       }
       state.session = session;
       const previousProvider = field('provider').value;
-      field('provider').innerHTML = session.providers.map(provider => `<option value="${html(provider.id)}">${html(provider.name)}</option>`).join('') || `<option value="">${t('无可用服务商')}</option>`;
-      if (!firstLoad) field('provider').value = session.providers.some(provider => provider.id === previousProvider) ? previousProvider : '';
+      const providers = session.providers.map(provider => [provider.id, provider.name] as const);
+      const keepProvider = session.providers.some(provider => provider.id === previousProvider);
+      // The first load starts on the first provider, as the browser would for fresh options.
+      renderOptions(element<HTMLSelectElement>('#provider'), providers.length ? providers : [['', t('无可用服务商')]],
+        firstLoad ? providers[0]?.[0] ?? '' : keepProvider ? previousProvider : '');
       const previousEnvironment = field('environment').value;
-      field('environment').innerHTML = session.environments.map(environment => `<option value="${html(environment.id)}">${html(environment.name)}</option>`).join('');
-      field('environment').value = session.environments.some(environment => environment.id === previousEnvironment) ? previousEnvironment : session.defaults.environment;
+      renderOptions(element<HTMLSelectElement>('#environment'), session.environments.map(environment => [environment.id, environment.name] as const),
+        session.environments.some(environment => environment.id === previousEnvironment) ? previousEnvironment : session.defaults.environment);
       renderTemplates(field('template').value);
       element<HTMLInputElement>('#max-turns').max = String(session.limits.maxTurns);
       element<HTMLInputElement>('#max-seconds').max = String(session.limits.maxRunSeconds);
@@ -1884,8 +1753,7 @@ function renderDeleteState() {
   element<HTMLButtonElement>('#confirm-delete').disabled = busy || Boolean(notice);
   element<HTMLButtonElement>('#cancel-delete').disabled = busy;
   element<HTMLButtonElement>('#close-delete').disabled = busy;
-  element('#confirm-delete').innerHTML = `${busy ? '<span class="spinner"></span>' : icon('trash-2')}<span>${busy ? t('正在删除') : t('删除记录')}</span>`;
-  icons();
+  renderGlyphLabel(element('#confirm-delete'), busy ? 'spinner' : 'trash-2', busy ? t('正在删除') : t('删除记录'));
 }
 function openDeletion(run: WebRun) {
   if (!state.connected || !state.session || activeRun(run) || state.deleting.has(run.id)) return;
@@ -2106,7 +1974,7 @@ element('#run-detail').addEventListener('click', event => {
     state.tab = target.dataset.action === 'show-events' ? 'events' : 'collaboration';
     renderDetail(true); element(`#detail-tab-${state.tab}`).focus({ preventScroll: true }); return;
   }
-  if (target.dataset.action === 'retry-outline') loadOutline(run, true);
+  if (target.dataset.action === 'retry-outline' && loadOutline(run, true)) renderPanel(true);
   if (target.dataset.action === 'inspect-task' && target.dataset.taskId) {
     state.tab = 'collaboration'; renderDetail(true);
     if (!collaborationView.showTask(run.id, target.dataset.taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });

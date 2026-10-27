@@ -1,5 +1,5 @@
 import { compareSources, sourceChangeLocations, type SourceChangeLocation, type SourceComparison } from './sourceDiff';
-import { sourceDiffRows } from './sourceDiffMarkup';
+import { renderDiffRows } from './ui/Section';
 import type { SourceSelection } from './sourceText';
 import { localeTag, t } from '../i18n';
 
@@ -67,7 +67,7 @@ export class EditorReview {
     this.locations.clear();
     this.control('editor-review-target').hidden = true;
     this.control<HTMLButtonElement>('editor-review-edit').disabled = true;
-    this.control('editor-review-body').replaceChildren();
+    renderDiffRows(this.control('editor-review-body'), []);
     this.control<HTMLInputElement>('editor-review-fold').checked = true;
     this.showView();
   }
@@ -139,7 +139,7 @@ export class EditorReview {
     notice.hidden = !comparison.omittedLines;
     notice.textContent = comparison.omittedLines
       ? t('另有 {0} 行未展示；导航仅覆盖已展示的更改。返回编辑可查看完整源码。', comparison.omittedLines.toLocaleString(localeTag)) : '';
-    this.control('editor-review-body').innerHTML = ready ? sourceDiffRows(comparison.rows).markup : '';
+    renderDiffRows(this.control('editor-review-body'), ready ? comparison.rows : []);
     this.locations = ready ? sourceChangeLocations(this.source, comparison.rows) : new Map();
     this.navigate();
   }

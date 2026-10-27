@@ -1,19 +1,36 @@
 import { findSourceMatches, leanTokens, type SourceMatch, type SourceSelection } from './sourceText';
+import { render } from 'preact';
+import { Icon } from './ui/Icon';
 import { t } from '../i18n';
 
 type Surface = { id: string; code: HTMLElement; scroll: HTMLElement; toolbar: HTMLElement; scope?: string;
   edit?: { source: string; open: (position: SourceSelection) => void } };
 const tokenKinds = ['comment', 'keyword', 'tactic', 'placeholder', 'string', 'number'] as const;
 const canHighlight = () => typeof CSS !== 'undefined' && Boolean(CSS.highlights) && typeof Highlight !== 'undefined';
-const markup = `<div class="source-reader-tools"><span id="source-find-location" class="mono" role="status"></span><button type="button" id="open-source-line" class="icon-button source-line-toggle" aria-label="${t('跳转行号')}" aria-expanded="false" aria-controls="source-line-controls" title="${t('跳转行号（Ctrl / ⌘ G）')}"><i data-lucide="list-ordered"></i></button><button type="button" id="open-source-find" class="source-find-toggle" aria-expanded="false" aria-controls="source-find-controls" title="${t('在源码中查找（Ctrl / ⌘ F）')}"><i data-lucide="search"></i>${t('查找源码')}</button><button type="button" id="edit-source-location" class="source-find-toggle" hidden><i data-lucide="square-pen"></i>${t('编辑此处')}</button></div>
-  <div class="source-find" id="source-find-controls" hidden>
-    <div class="source-find-entry"><label for="source-find-input" class="sr-only">${t('查找源码文本')}</label><input type="search" id="source-find-input" placeholder="${t('查找文本…')}" maxlength="256" autocomplete="off" spellcheck="false" aria-describedby="source-find-position source-find-location source-find-scope"><span id="source-find-position" class="mono" role="status" aria-atomic="true">0/0</span></div>
-    <div class="source-find-actions"><button type="button" id="source-find-case" class="icon-button source-find-case" aria-label="${t('区分大小写')}" title="${t('区分大小写')}" aria-pressed="false">Aa</button><button type="button" id="source-find-prev" class="icon-button" aria-label="${t('上一个匹配')}" title="${t('上一个匹配（Shift+Enter）')}"><i data-lucide="chevron-up"></i></button><button type="button" id="source-find-next" class="icon-button" aria-label="${t('下一个匹配')}" title="${t('下一个匹配（Enter）')}"><i data-lucide="chevron-down"></i></button><button type="button" id="close-source-find" class="icon-button" aria-label="${t('关闭源码查找')}" title="${t('关闭源码查找（Esc）')}"><i data-lucide="x"></i></button></div>
-  </div>
-  <div class="source-line" id="source-line-controls" hidden>
-    <div class="source-line-entry"><label for="source-line-input">${t('行号')}</label><input type="number" id="source-line-input" min="1" step="1" inputmode="numeric" autocomplete="off" aria-describedby="source-line-range source-line-error source-find-scope"><span id="source-line-range" class="mono"></span></div>
-    <div class="source-find-actions"><button type="button" id="source-line-go" class="icon-button" aria-label="${t('跳转至行')}" title="${t('跳转至行（Enter）')}"><i data-lucide="corner-down-left"></i></button><button type="button" id="close-source-line" class="icon-button" aria-label="${t('关闭行号定位')}" title="${t('关闭行号定位（Esc）')}"><i data-lucide="x"></i></button></div>
-  </div><p id="source-line-error" class="source-line-error" role="status" hidden></p><p id="source-find-scope" class="source-find-scope" hidden></p>`;
+function Toolbar() {
+  const button = (id: string, label: string, title: string, icon: string) =>
+    <button type="button" id={id} class="icon-button" aria-label={label} title={title}><Icon name={icon} /></button>;
+  return <>
+    <div class="source-reader-tools"><span id="source-find-location" class="mono" role="status" />
+      <button type="button" id="open-source-line" class="icon-button source-line-toggle" aria-label={t('跳转行号')} aria-expanded="false" aria-controls="source-line-controls" title={t('跳转行号（Ctrl / ⌘ G）')}><Icon name="list-ordered" /></button>
+      <button type="button" id="open-source-find" class="source-find-toggle" aria-expanded="false" aria-controls="source-find-controls" title={t('在源码中查找（Ctrl / ⌘ F）')}><Icon name="search" />{t('查找源码')}</button>
+      <button type="button" id="edit-source-location" class="source-find-toggle" hidden><Icon name="square-pen" />{t('编辑此处')}</button></div>
+    <div class="source-find" id="source-find-controls" hidden>
+      <div class="source-find-entry"><label for="source-find-input" class="sr-only">{t('查找源码文本')}</label>
+        <input type="search" id="source-find-input" placeholder={t('查找文本…')} maxLength={256} autoComplete="off" spellcheck={false} aria-describedby="source-find-position source-find-location source-find-scope" />
+        <span id="source-find-position" class="mono" role="status" aria-atomic="true">0/0</span></div>
+      <div class="source-find-actions"><button type="button" id="source-find-case" class="icon-button source-find-case" aria-label={t('区分大小写')} title={t('区分大小写')} aria-pressed="false">Aa</button>
+        {button('source-find-prev', t('上一个匹配'), t('上一个匹配（Shift+Enter）'), 'chevron-up')}{button('source-find-next', t('下一个匹配'), t('下一个匹配（Enter）'), 'chevron-down')}
+        {button('close-source-find', t('关闭源码查找'), t('关闭源码查找（Esc）'), 'x')}</div>
+    </div>
+    <div class="source-line" id="source-line-controls" hidden>
+      <div class="source-line-entry"><label for="source-line-input">{t('行号')}</label>
+        <input type="number" id="source-line-input" min="1" step="1" inputMode="numeric" autoComplete="off" aria-describedby="source-line-range source-line-error source-find-scope" /><span id="source-line-range" class="mono" /></div>
+      <div class="source-find-actions">{button('source-line-go', t('跳转至行'), t('跳转至行（Enter）'), 'corner-down-left')}{button('close-source-line', t('关闭行号定位'), t('关闭行号定位（Esc）'), 'x')}</div>
+    </div>
+    <p id="source-line-error" class="source-line-error" role="status" hidden /><p id="source-find-scope" class="source-find-scope" hidden />
+  </>;
+}
 
 export class SourceReader {
   private surface?: Surface;
@@ -34,7 +51,7 @@ export class SourceReader {
   private searchSignature = '';
   private editLocation?: SourceSelection;
 
-  constructor(private readonly hydrate: (root: HTMLElement) => void, private readonly expandDraft: () => void) {}
+  constructor(private readonly expandDraft: () => void) {}
 
   update(surface?: Surface) {
     if (!surface) {
@@ -78,8 +95,8 @@ export class SourceReader {
   }
 
   private mount(toolbar: HTMLElement) {
-    toolbar.innerHTML = markup;
-    this.hydrate(toolbar);
+    // Rendered once into the empty host; the reader then updates these controls in place.
+    render(<Toolbar />, toolbar);
     toolbar.addEventListener('input', event => {
       if ((event.target as HTMLElement).id === 'source-line-input') {
         this.lineInput = (event.target as HTMLInputElement).value;

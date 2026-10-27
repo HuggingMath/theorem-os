@@ -26,6 +26,11 @@ export const Code = (props: { value: unknown; label?: string; [attribute: `data-
 export const Detail = (props: { title: string; value: unknown; detailKey?: string }) =>
   <details class="collab-detail" data-detail-key={props.detailKey ?? props.title}><summary>{props.title}</summary><Code value={props.value} /></details>;
 
+/** Places elements into translated text: fill(t('{0}下载报告'), <Icon name="download" />). */
+export function fill(text: string, ...values: ComponentChildren[]) {
+  return <>{text.split(/(\{\d+\})/u).map(part => /^\{\d+\}$/u.test(part) ? values[Number(part.slice(1, -1))] : part)}</>;
+}
+
 const factValue = (value: unknown) => value === undefined || value === null ? t('未记录') : String(value);
 export const Facts = (props: { facts: ReadonlyArray<readonly [string, unknown]> }) =>
   <dl class="collab-facts">{props.facts.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{factValue(value)}</dd></div>)}</dl>;
@@ -51,6 +56,9 @@ export function renderOptions(picker: HTMLSelectElement, options: ReadonlyArray<
 
 const marker = (kind: string) => kind === 'added' ? '+' : kind === 'removed' ? '-' : ' ';
 const eofSide = (kind: string) => kind === 'removed' ? 'old' : kind === 'added' ? 'new' : 'both';
+
+/** Fills a table body owned by an imperative view, such as the editor's review step, with comparison rows. */
+export function renderDiffRows(body: HTMLElement, rows: readonly SourceDiffRow[]) { render(<DiffRows rows={rows} />, body); }
 
 /** Table rows for both source comparisons; original text and line identities stay intact, including blank lines. */
 export function DiffRows(props: { rows: readonly SourceDiffRow[] }) {

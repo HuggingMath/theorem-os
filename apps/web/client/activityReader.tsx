@@ -1,14 +1,26 @@
 import type { WebEvent, WebRun } from '../shared';
+import { render } from 'preact';
+import { Icon } from './ui/Icon';
 import { localizeText, t } from '../i18n';
 
 type ActivityRun = Pick<WebRun, 'id' | 'events'>;
 type ReadingAnchor = { sequence: number; offset: number };
-const markup = `<div class="activity-heading"><div><h3>${t('活动记录')}</h3><span id="activity-count" class="field-count" role="status" aria-atomic="true"></span></div><div class="activity-actions"><button type="button" id="activity-follow" class="text-button" aria-pressed="true" title="${t('跟随最新活动；向下阅读时自动暂停')}"><i data-lucide="refresh-cw"></i>${t('跟随最新')}</button><button type="button" id="download-activity" class="text-button" title="${t('下载当前筛选的活动 JSON')}"><i data-lucide="download"></i>${t('下载活动')}</button></div></div>
-  <div class="activity-filters"><div class="activity-search"><i data-lucide="search"></i><label for="activity-search" class="sr-only">${t('搜索活动内容或事件')}</label><input type="search" id="activity-search" maxlength="256" placeholder="${t('搜索活动内容或事件…')}" autocomplete="off" spellcheck="false" aria-describedby="activity-count activity-retention"><button type="button" id="clear-activity-search" class="icon-button" aria-label="${t('清除活动搜索')}" title="${t('清除活动搜索')}" hidden><i data-lucide="x"></i></button></div><label for="activity-type" class="sr-only">${t('筛选事件类型')}</label><select id="activity-type" aria-label="${t('筛选事件类型')}"></select></div>
-  <div class="activity-context"><p id="activity-retention"></p><button type="button" id="activity-latest" class="text-button" hidden></button></div>
-  <p id="activity-reading-notice" class="activity-reading-notice" role="status" hidden>${t('正在阅读的活动已超出保留范围，已定位到仍可查看的记录。')}</p>
-  <div class="activity-scroll" tabindex="0" aria-label="${t('活动记录表')}"><table class="activity-table"><caption class="sr-only">${t('活动记录，最新在前')}</caption><thead><tr><th scope="col">${t('时间')}</th><th scope="col">${t('事件')}</th><th scope="col">${t('记录')}</th></tr></thead><tbody></tbody></table></div>
-  <div class="empty-state activity-empty" role="status" hidden><i data-lucide="search"></i><p></p><button type="button" id="clear-activity-filters" class="text-button">${t('清除筛选')}</button></div>`;
+function Scaffold() {
+  return <>
+    <div class="activity-heading"><div><h3>{t('活动记录')}</h3><span id="activity-count" class="field-count" role="status" aria-atomic="true" /></div>
+      <div class="activity-actions"><button type="button" id="activity-follow" class="text-button" aria-pressed="true" title={t('跟随最新活动；向下阅读时自动暂停')}><Icon name="refresh-cw" />{t('跟随最新')}</button>
+        <button type="button" id="download-activity" class="text-button" title={t('下载当前筛选的活动 JSON')}><Icon name="download" />{t('下载活动')}</button></div></div>
+    <div class="activity-filters"><div class="activity-search"><Icon name="search" /><label for="activity-search" class="sr-only">{t('搜索活动内容或事件')}</label>
+      <input type="search" id="activity-search" maxLength={256} placeholder={t('搜索活动内容或事件…')} autoComplete="off" spellcheck={false} aria-describedby="activity-count activity-retention" />
+      <button type="button" id="clear-activity-search" class="icon-button" aria-label={t('清除活动搜索')} title={t('清除活动搜索')} hidden><Icon name="x" /></button></div>
+      <label for="activity-type" class="sr-only">{t('筛选事件类型')}</label><select id="activity-type" aria-label={t('筛选事件类型')} /></div>
+    <div class="activity-context"><p id="activity-retention" /><button type="button" id="activity-latest" class="text-button" hidden /></div>
+    <p id="activity-reading-notice" class="activity-reading-notice" role="status" hidden>{t('正在阅读的活动已超出保留范围，已定位到仍可查看的记录。')}</p>
+    <div class="activity-scroll" tabIndex={0} aria-label={t('活动记录表')}><table class="activity-table"><caption class="sr-only">{t('活动记录，最新在前')}</caption>
+      <thead><tr><th scope="col">{t('时间')}</th><th scope="col">{t('事件')}</th><th scope="col">{t('记录')}</th></tr></thead><tbody /></table></div>
+    <div class="empty-state activity-empty" role="status" hidden><Icon name="search" /><p /><button type="button" id="clear-activity-filters" class="text-button">{t('清除筛选')}</button></div>
+  </>;
+}
 
 // One run's local reading state. Event content never becomes markup or leaves the browser.
 export class ActivityReader {
@@ -28,8 +40,7 @@ export class ActivityReader {
   private rows = new Map<number, HTMLTableRowElement>();
   private mounted = new WeakSet<HTMLElement>();
 
-  constructor(private readonly hydrate: (root: HTMLElement) => void,
-    private readonly timestamp: (at: string) => string,
+  constructor(private readonly timestamp: (at: string) => string,
     private readonly download: (filename: string, text: string) => void) {}
 
   update(root?: HTMLElement, run?: ActivityRun) {
@@ -62,8 +73,9 @@ export class ActivityReader {
   }
 
   private mount(root: HTMLElement) {
-    root.innerHTML = markup;
-    this.hydrate(root);
+    // The scaffold is rendered once; the reader then updates its nodes and keyed rows in place.
+    root.textContent = '';
+    render(<Scaffold />, root);
     root.addEventListener('input', event => {
       if ((event.target as HTMLElement).id !== 'activity-search') return;
       this.query = (event.target as HTMLInputElement).value;
@@ -145,7 +157,9 @@ export class ActivityReader {
       let row = this.rows.get(event.sequence);
       if (!row) {
         row = document.createElement('tr'); row.dataset.sequence = String(event.sequence);
-        row.innerHTML = '<td><time></time></td><td class="mono"></td><td></td>';
+        const time = document.createElement('td'), type = document.createElement('td');
+        time.append(document.createElement('time')); type.className = 'mono';
+        row.append(time, type, document.createElement('td'));
         this.rows.set(event.sequence, row);
       }
       const time = row.querySelector('time')!;

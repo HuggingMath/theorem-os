@@ -1,8 +1,5 @@
 import { localeTag, t } from '../i18n';
 export type WebApi = <T>(url: string, init?: RequestInit) => Promise<T>;
-export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-}[character]!));
 export const jsonText = (value: unknown) => JSON.stringify(value, null, 2) ?? '—';
 export const errorText = (error: unknown) => error instanceof Error ? error.message : t('请求失败，请重试');
 export const commandId = () => crypto.randomUUID();
@@ -24,8 +21,7 @@ export const recipientLabel = labels({ lead: 'Lead', task: t('任务'), worker: 
 export const editStatusLabel = labels({ received: t('已接收'), validated: t('已校验'), applied: t('已应用'), rejected: t('已拒绝'), already_queued: t('已在队列中'),
   pending: t('待重新检查'), passed: t('重新检查通过'), failed: t('重新检查未通过'), 'not-required': t('无需重新检查'), superseded: t('已被替代'), unknown: t('结果尚未确认') });
 export const coverageStateLabel = labels({ available: t('引用齐全'), missing: t('引用缺失') });
-export function createElement<T extends keyof HTMLElementTagNameMap>(tag: T, className = '', markup?: string) {
+export function createElement<T extends keyof HTMLElementTagNameMap>(tag: T, className = '') {
   const node = document.createElement(tag); node.className = className;
-  if (markup !== undefined) node.innerHTML = markup;
   return node;
 }

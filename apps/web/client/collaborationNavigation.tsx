@@ -1,5 +1,6 @@
 import type { WebObservation } from '../collaboration';
-import { createElement, escapeHtml as h, observedTime } from './collaborationUi';
+import { render } from 'preact';
+import { createElement, observedTime } from './collaborationUi';
 import { t } from '../i18n';
 
 const sections = [
@@ -28,9 +29,12 @@ export class CollaborationNavigation {
   /** `expand` runs before every reveal so a target hidden by the simple layer is laid out before it is measured. */
   constructor(private surface: HTMLElement, runId: string, guide: () => void, private expand: (target: HTMLElement) => void = () => undefined) {
     this.element.setAttribute('aria-label', t('协作区导航'));
-    this.element.innerHTML = `<div class="collab-nav-links">${sections.map(([id, title]) => `<button type="button" data-collab-jump="${id}" aria-controls="collab-${id}-${h(runId)}"><span>${title}</span><small data-collab-nav-count="${id}"></small></button>`).join('')}</div>
-      <label class="collab-nav-picker"><span class="sr-only">${t('跳转协作区域')}</span><select data-collab-section-picker>${sections.map(([id, title]) => `<option value="${id}">${title}</option>`).join('')}</select></label>
-      <span class="collab-sync" data-collab-sync></span><button type="button" class="button" data-collab-nav-guide>${t('提供指导')}</button>`;
+    // Rendered once; the navigation then updates counts, the current section and the sync state in place.
+    render(<>
+      <div class="collab-nav-links">{sections.map(([id, title]) => <button key={id} type="button" data-collab-jump={id} aria-controls={`collab-${id}-${runId}`}><span>{title}</span><small data-collab-nav-count={id} /></button>)}</div>
+      <label class="collab-nav-picker"><span class="sr-only">{t('跳转协作区域')}</span><select data-collab-section-picker>{sections.map(([id, title]) => <option key={id} value={id}>{title}</option>)}</select></label>
+      <span class="collab-sync" data-collab-sync /><button type="button" class="button" data-collab-nav-guide>{t('提供指导')}</button>
+    </>, this.element);
     for (const [id, , selector] of sections) {
       const section = surface.querySelector<HTMLElement>(selector)!;
       section.id = `collab-${id}-${runId}`; section.dataset.collabSection = id;

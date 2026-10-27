@@ -2,6 +2,8 @@ import type { WebCoordination, WebEvent, WebModuleId, WebModuleSnapshot, WebRun 
 import { webCustomModuleSnapshots, webEventModule, webModuleSnapshots } from '../moduleTelemetry';
 import { isAcceptedRun, runProgress } from '../presentation';
 import { defaultResearchModulePlan, type CustomResearchModule, type ResearchModulePlan } from '../../../src/solver/modules/policy';
+import { render, type ComponentChildren } from 'preact';
+import { Icon } from './ui/Icon';
 import { localeTag, localizeText, t } from '../i18n';
 
 const modules = [
@@ -93,15 +95,60 @@ const timestamp = (value: string) => Number.isFinite(Date.parse(value))
   ? new Intl.DateTimeFormat(localeTag, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value)) : value;
 const bytes = (value: number) => value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KB`;
 const operations = { direct: t('直接证明'), decompose: t('分解任务'), bridge: t('检查引理连接'), 'prove-lemma': t('证明辅助引理'), 'integrate-lemma': t('集成辅助引理') };
-const node = (id: WebModuleId) => {
+function Node({ id }: { id: WebModuleId }) {
   const module = modules.find(module => module.id === id)!;
-  return `<button type="button" class="module-node" data-module-id="${id}" data-tone="pending" aria-pressed="false" aria-controls="module-inspector">
-    <span class="module-node-top"><span class="module-code mono">${id}</span><i data-lucide="${module.icon}"></i><span class="module-node-selected" aria-hidden="true"><i data-lucide="eye"></i>${t('查看中')}</span><span class="module-node-state"><span class="module-state-dot" aria-hidden="true"></span><span data-module-state>${t('未运行')}</span></span></span>
-    <span class="module-node-name">${module.name}</span><span class="module-node-subject">${module.subject}</span>
-  </button>`;
-};
-const edge = (from: WebModuleId, to: WebModuleId | 'research', direction: 'up' | 'down' | 'left' | 'right', className: string) =>
-  `<span class="module-edge ${className}" data-from="${from}" data-to="${to}" data-direction="${direction}" aria-hidden="true"></span>`;
+  return <button type="button" class="module-node" data-module-id={id} data-tone="pending" aria-pressed="false" aria-controls="module-inspector">
+    <span class="module-node-top"><span class="module-code mono">{id}</span><Icon name={module.icon} /><span class="module-node-selected" aria-hidden="true"><Icon name="eye" />{t('查看中')}</span>
+      <span class="module-node-state"><span class="module-state-dot" aria-hidden="true" /><span data-module-state>{t('未运行')}</span></span></span>
+    <span class="module-node-name">{module.name}</span><span class="module-node-subject">{module.subject}</span>
+  </button>;
+}
+const Edge = (props: { from: WebModuleId; to: WebModuleId | 'research'; direction: 'up' | 'down' | 'left' | 'right'; class: string }) =>
+  <span class={`module-edge ${props.class}`} data-from={props.from} data-to={props.to} data-direction={props.direction} aria-hidden="true" />;
+/** A keyed row's fixed structure; the view fills and reorders the row itself. */
+function skeleton<K extends keyof HTMLElementTagNameMap>(tag: K, view: ComponentChildren) {
+  const row = document.createElement(tag);
+  render(<>{view}</>, row);
+  return row;
+}
+
+/** The module graph and inspector. Rendered once per host; ModuleView then updates the nodes in place. */
+function Scaffold() {
+  return <>
+    <header class="module-view-heading"><div><h3><span>{t('研究模块')}</span><button type="button" class="icon-button module-configure" data-module-configure title={t('编辑模块方案')} aria-label={t('编辑模块方案')}><Icon name="sliders-horizontal" /></button></h3><p data-module-configuration /></div>
+      <span class="module-observation" role="status" aria-atomic="true" /></header>
+    <section class="module-live" aria-label={t('最近模块活动')} hidden>
+      <div class="module-live-heading"><span>{t('最近活动')}</span><time class="mono" /></div>
+      <div class="module-live-controls"><label class="module-follow"><input type="checkbox" data-module-follow aria-controls="module-inspector" /><span>{t('实时跟随')}</span></label>
+        <button type="button" class="icon-button" data-module-latest title={t('定位最近活动')} aria-label={t('定位最近活动')} aria-controls="module-inspector"><Icon name="locate-fixed" /></button></div>
+      <p class="module-live-event"><strong data-module-live-name /><span data-module-live-message /></p>
+    </section>
+    <div class="module-layout">
+      <div class="module-graph" role="group" aria-label={t('M3 搜索、M4 上下文、M1 构造、M2 检查组成研究循环，M5 协调，S3 独立验收')} aria-describedby="module-graph-note">
+        <Node id="M5" /><Edge from="M5" to="research" direction="down" class="module-coordination-edge" />
+        <div class="module-research"><div class="module-cycle"><Node id="M3" /><Edge from="M3" to="M4" direction="right" class="module-edge-context" /><Node id="M4" /><Edge from="M2" to="M3" direction="up" class="module-edge-retry" />
+          <span class="module-cycle-label"><Icon name="refresh-cw" /><span>{t('研究循环')}</span></span><Edge from="M4" to="M1" direction="down" class="module-edge-construction" /><Node id="M2" />
+          <Edge from="M1" to="M2" direction="left" class="module-edge-feedback" /><Node id="M1" /></div></div>
+        <div class="module-acceptance-edge"><Edge from="M2" to="S3" direction="down" class="" /><span>{t('候选检查通过后')}</span></div><Node id="S3" />
+        <div class="module-legend"><span><i class="module-selected-key" />{t('查看中')}</span><span><i class="module-recent-key" />{t('最新记录')}</span><span><i data-tone="active" />{t('进行中')}</span>
+          <span><i data-tone="observed" />{t('已有记录')}</span><span><i data-tone="pending" />{t('尚无记录')}</span></div>
+        <p class="module-graph-note" id="module-graph-note">{t('点击模块查看记录 · 连线表示结构关系')}</p>
+        <section class="module-customizations" aria-labelledby="module-customizations-title" hidden><header><h4 id="module-customizations-title">{t('自定义策略')}</h4><span data-module-custom-count /></header><ol /></section>
+      </div>
+      <section class="module-inspector" id="module-inspector" aria-labelledby="module-inspector-title" tabIndex={-1}>
+        <header><span class="module-inspector-code mono" /><h4 id="module-inspector-title" /><span class="module-inspector-state" role="status" aria-atomic="true" />
+          <button type="button" class="icon-button module-policy-add" data-module-policy-add aria-haspopup="dialog" aria-controls="run-settings" hidden><Icon name="plus" /></button>
+          <button type="button" class="icon-button module-graph-return" data-module-return title={t('返回模块图')} aria-label={t('返回模块图')}><Icon name="arrow-up" /></button></header>
+        <p class="module-output" /><section class="module-policies" aria-label={t('当前模块的自定义策略')} hidden><div /></section><dl class="module-facts" />
+        <section class="module-workers" hidden aria-labelledby="module-workers-title"><header><h4 id="module-workers-title" title={t('依据已收到的开始和结束事件，不代表实时请求占用')}>{t('未结束的 Agent 记录')}</h4><span data-module-worker-count /></header><ul /></section>
+        <p class="module-verification-note" hidden />
+        <div class="module-history-heading"><h4>{t('最近活动')}</h4><button type="button" class="icon-button" data-module-destination="events" title={t('打开活动记录')} aria-label={t('打开活动记录')}><Icon name="list" /></button></div>
+        <p class="module-retention" /><ol class="module-events" /><p class="module-events-empty" />
+        <button type="button" class="text-button module-destination" data-module-destination="source"><Icon name="file-code-2" /><span>{t('Lean 源码')}</span></button>
+      </section>
+    </div>
+  </>;
+}
 
 export class ModuleView {
   private root?: HTMLElement;
@@ -111,8 +158,6 @@ export class ModuleView {
   private selectedPolicy?: string;
   private following = false;
   private scrollTop = 0;
-
-  constructor(private readonly icons: (root: HTMLElement) => void) {}
 
   update(root?: HTMLElement, input?: ModuleViewInput) {
     if (this.root?.getClientRects().length) this.scrollTop = this.scroller()?.scrollTop ?? 0;
@@ -140,31 +185,8 @@ export class ModuleView {
 
   private mount() {
     const root = this.root!;
-    root.innerHTML = `<header class="module-view-heading"><div><h3><span>${t('研究模块')}</span><button type="button" class="icon-button module-configure" data-module-configure title="${t('编辑模块方案')}" aria-label="${t('编辑模块方案')}"><i data-lucide="sliders-horizontal"></i></button></h3><p data-module-configuration></p></div><span class="module-observation" role="status" aria-atomic="true"></span></header>
-      <section class="module-live" aria-label="${t('最近模块活动')}" hidden>
-        <div class="module-live-heading"><span>${t('最近活动')}</span><time class="mono"></time></div>
-        <div class="module-live-controls"><label class="module-follow"><input type="checkbox" data-module-follow aria-controls="module-inspector"><span>${t('实时跟随')}</span></label><button type="button" class="icon-button" data-module-latest title="${t('定位最近活动')}" aria-label="${t('定位最近活动')}" aria-controls="module-inspector"><i data-lucide="locate-fixed"></i></button></div>
-        <p class="module-live-event"><strong data-module-live-name></strong><span data-module-live-message></span></p>
-      </section>
-      <div class="module-layout">
-        <div class="module-graph" role="group" aria-label="${t('M3 搜索、M4 上下文、M1 构造、M2 检查组成研究循环，M5 协调，S3 独立验收')}" aria-describedby="module-graph-note">
-          ${node('M5')}${edge('M5', 'research', 'down', 'module-coordination-edge')}
-          <div class="module-research"><div class="module-cycle">${node('M3')}${edge('M3', 'M4', 'right', 'module-edge-context')}${node('M4')}${edge('M2', 'M3', 'up', 'module-edge-retry')}<span class="module-cycle-label"><i data-lucide="refresh-cw"></i><span>${t('研究循环')}</span></span>${edge('M4', 'M1', 'down', 'module-edge-construction')}${node('M2')}${edge('M1', 'M2', 'left', 'module-edge-feedback')}${node('M1')}</div></div>
-          <div class="module-acceptance-edge">${edge('M2', 'S3', 'down', '')}<span>${t('候选检查通过后')}</span></div>${node('S3')}
-          <div class="module-legend"><span><i class="module-selected-key"></i>${t('查看中')}</span><span><i class="module-recent-key"></i>${t('最新记录')}</span><span><i data-tone="active"></i>${t('进行中')}</span><span><i data-tone="observed"></i>${t('已有记录')}</span><span><i data-tone="pending"></i>${t('尚无记录')}</span></div>
-          <p class="module-graph-note" id="module-graph-note">${t('点击模块查看记录 · 连线表示结构关系')}</p>
-          <section class="module-customizations" aria-labelledby="module-customizations-title" hidden><header><h4 id="module-customizations-title">${t('自定义策略')}</h4><span data-module-custom-count></span></header><ol></ol></section>
-        </div>
-        <section class="module-inspector" id="module-inspector" aria-labelledby="module-inspector-title" tabindex="-1">
-          <header><span class="module-inspector-code mono"></span><h4 id="module-inspector-title"></h4><span class="module-inspector-state" role="status" aria-atomic="true"></span><button type="button" class="icon-button module-policy-add" data-module-policy-add aria-haspopup="dialog" aria-controls="run-settings" hidden><i data-lucide="plus"></i></button><button type="button" class="icon-button module-graph-return" data-module-return title="${t('返回模块图')}" aria-label="${t('返回模块图')}"><i data-lucide="arrow-up"></i></button></header>
-          <p class="module-output"></p><section class="module-policies" aria-label="${t('当前模块的自定义策略')}" hidden><div></div></section><dl class="module-facts"></dl>
-          <section class="module-workers" hidden aria-labelledby="module-workers-title"><header><h4 id="module-workers-title" title="${t('依据已收到的开始和结束事件，不代表实时请求占用')}">${t('未结束的 Agent 记录')}</h4><span data-module-worker-count></span></header><ul></ul></section>
-          <p class="module-verification-note" hidden></p>
-          <div class="module-history-heading"><h4>${t('最近活动')}</h4><button type="button" class="icon-button" data-module-destination="events" title="${t('打开活动记录')}" aria-label="${t('打开活动记录')}"><i data-lucide="list"></i></button></div>
-          <p class="module-retention"></p><ol class="module-events"></ol><p class="module-events-empty"></p>
-          <button type="button" class="text-button module-destination" data-module-destination="source"><i data-lucide="file-code-2"></i><span>${t('Lean 源码')}</span></button>
-        </section>
-      </div>`;
+    root.textContent = '';
+    render(<Scaffold />, root);
     root.addEventListener('change', event => {
       const follow = (event.target as Element).closest<HTMLInputElement>('[data-module-follow]');
       if (!follow) return;
@@ -189,7 +211,6 @@ export class ModuleView {
       const policy = (event.target as Element).closest<HTMLElement>('[data-module-custom-id]')?.dataset.moduleCustomId;
       this.select(slot as WebModuleId, policy);
     });
-    this.icons(root);
   }
 
   private select(id: WebModuleId, policy?: string) {
@@ -316,11 +337,10 @@ export class ModuleView {
     for (const rule of rules) {
       let button = rows.get(rule.id);
       if (!button) {
-        const row = document.createElement('li');
+        const row = skeleton('li', <><label class="module-custom-toggle"><input type="checkbox" data-module-custom-enabled /></label>
+          <button type="button" class="module-customization" aria-controls="module-inspector"><span class="module-custom-slot mono" /><span class="module-custom-name" /><span class="module-custom-mode" /><span data-module-custom-state /><Icon name="arrow-up-right" /></button></>);
         row.className = 'module-customization-row';
-        row.innerHTML = '<label class="module-custom-toggle"><input type="checkbox" data-module-custom-enabled></label><button type="button" class="module-customization" aria-controls="module-inspector"><span class="module-custom-slot mono"></span><span class="module-custom-name"></span><span class="module-custom-mode"></span><span data-module-custom-state></span><i data-lucide="arrow-up-right"></i></button>';
         button = row.querySelector('button')!; button.dataset.moduleCustomId = rule.id;
-        this.icons(row);
       }
       const row = button.closest('li')!;
       row.dataset.selected = String(this.selectedPolicy === rule.id);
@@ -360,9 +380,10 @@ export class ModuleView {
     for (const rule of rules) {
       let row = rows.get(rule.id);
       if (!row) {
-        row = document.createElement('details'); row.dataset.modulePolicyId = rule.id;
-        row.innerHTML = '<summary><span class="module-policy-name"></span><span class="module-policy-state"></span><i data-lucide="chevron-down"></i></summary><div class="module-policy-tools"><p class="module-policy-mode"></p><button type="button" class="icon-button module-policy-edit" aria-haspopup="dialog" aria-controls="run-settings" hidden><i data-lucide="square-pen"></i></button></div><p class="module-policy-instructions"></p>';
-        this.icons(row);
+        row = skeleton('details', <><summary><span class="module-policy-name" /><span class="module-policy-state" /><Icon name="chevron-down" /></summary>
+          <div class="module-policy-tools"><p class="module-policy-mode" /><button type="button" class="icon-button module-policy-edit" aria-haspopup="dialog" aria-controls="run-settings" hidden><Icon name="square-pen" /></button></div>
+          <p class="module-policy-instructions" /></>);
+        row.dataset.modulePolicyId = rule.id;
       }
       row.dataset.enabled = String(rule.enabled);
       row.dataset.selected = String(this.selectedPolicy === rule.id);
@@ -388,7 +409,7 @@ export class ModuleView {
     let cursor = target.firstElementChild;
     for (const id of workers) {
       let row = rows.get(id);
-      if (!row) { row = document.createElement('li'); row.dataset.workerId = id; row.innerHTML = '<span aria-hidden="true"></span><code></code>'; }
+      if (!row) { row = skeleton('li', <><span aria-hidden="true" /><code /></>); row.dataset.workerId = id; }
       text(row.querySelector('code')!, id);
       if (row !== cursor) target.insertBefore(row, cursor);
       cursor = row.nextElementSibling;
@@ -402,7 +423,7 @@ export class ModuleView {
     let cursor = target.firstElementChild;
     for (const [label, value] of facts) {
       let row = rows.get(label);
-      if (!row) { row = document.createElement('div'); row.innerHTML = '<dt></dt><dd></dd>'; }
+      if (!row) row = skeleton('div', <><dt /><dd /></>);
       text(row.querySelector('dt')!, label); text(row.querySelector('dd')!, value);
       if (row !== cursor) target.insertBefore(row, cursor);
       cursor = row.nextElementSibling;
@@ -417,8 +438,7 @@ export class ModuleView {
     for (const event of events) {
       let row = rows.get(event.sequence);
       if (!row) {
-        row = document.createElement('li'); row.dataset.sequence = String(event.sequence);
-        row.innerHTML = '<time class="mono"></time><p></p>';
+        row = skeleton('li', <><time class="mono" /><p /></>); row.dataset.sequence = String(event.sequence);
       }
       const time = row.querySelector('time')!;
       time.dateTime = event.at; text(time, timestamp(event.at));

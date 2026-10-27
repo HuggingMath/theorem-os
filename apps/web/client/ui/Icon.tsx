@@ -1,14 +1,15 @@
 import {
-  Activity, ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, CircleHelp, Eye, Play, Bell, BellOff, BellRing, Blocks, Check, ChevronDown, CircleAlert, Languages, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Download, FileCode2, FileJson2, Gauge, KeyRound, List, MessageSquare, Network, Share2,
-  Moon, PanelLeft, RefreshCw, Search, SlidersHorizontal, Square, SquarePen, Sun, SunMoon, Trash2, UserRound, Users, X, type IconNode,
+  Activity, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, BookOpen, CircleHelp, Eye, Play, Bell, BellOff, BellRing, Blocks, Check, CheckCheck, ChevronDown, ChevronUp, CircleAlert, Languages, CircleCheck, Clock3, Copy, CopyPlus, CornerDownLeft, Download, EyeOff, FileCode2, FileJson2, Gauge, KeyRound, List, MessageSquare, Network, Share2,
+  Moon, PanelLeft, RefreshCw, RotateCcw, Search, SlidersHorizontal, Square, SquarePen, Sun, SunMoon, Trash2, TriangleAlert, UserRound, Users, X, Cpu, GitBranch, ListOrdered, LocateFixed, Plus, ShieldCheck, type IconNode,
 } from 'lucide';
 
 // Rendered as Preact elements so createIcons() never replaces nodes that Preact owns.
 const named: Record<string, IconNode> = {
-  activity: Activity, 'arrow-left': ArrowLeft, 'arrow-right': ArrowRight, 'arrow-up-right': ArrowUpRight, 'book-open': BookOpen, 'circle-help': CircleHelp, eye: Eye, play: Play, bell: Bell, 'bell-off': BellOff, 'bell-ring': BellRing, blocks: Blocks, check: Check, 'chevron-down': ChevronDown, 'circle-alert': CircleAlert, 'circle-check': CircleCheck, 'clock-3': Clock3,
-  copy: Copy, 'copy-plus': CopyPlus, 'corner-down-left': CornerDownLeft, download: Download, 'file-code-2': FileCode2, 'file-json-2': FileJson2,
-  gauge: Gauge, 'key-round': KeyRound, languages: Languages, list: List, 'message-square': MessageSquare, moon: Moon, network: Network, 'panel-left': PanelLeft, 'refresh-cw': RefreshCw, search: Search, 'share-2': Share2, 'sliders-horizontal': SlidersHorizontal,
-  square: Square, 'square-pen': SquarePen, sun: Sun, 'sun-moon': SunMoon, 'trash-2': Trash2, 'user-round': UserRound, users: Users, x: X,
+  activity: Activity, 'arrow-left': ArrowLeft, 'arrow-left-right': ArrowLeftRight, 'arrow-right': ArrowRight, 'arrow-up': ArrowUp, 'arrow-up-right': ArrowUpRight, 'book-open': BookOpen, 'circle-help': CircleHelp, eye: Eye, play: Play, bell: Bell, 'bell-off': BellOff, 'bell-ring': BellRing, blocks: Blocks, check: Check, 'check-check': CheckCheck, 'chevron-down': ChevronDown, 'chevron-up': ChevronUp, 'circle-alert': CircleAlert, 'circle-check': CircleCheck, 'clock-3': Clock3,
+  copy: Copy, 'copy-plus': CopyPlus, 'corner-down-left': CornerDownLeft, download: Download, 'eye-off': EyeOff, 'file-code-2': FileCode2, 'file-json-2': FileJson2,
+  gauge: Gauge, 'key-round': KeyRound, languages: Languages, list: List, 'message-square': MessageSquare, moon: Moon, network: Network, 'panel-left': PanelLeft, 'refresh-cw': RefreshCw, 'rotate-ccw': RotateCcw, search: Search, 'share-2': Share2, 'sliders-horizontal': SlidersHorizontal,
+  cpu: Cpu, 'git-branch': GitBranch, 'list-ordered': ListOrdered, 'locate-fixed': LocateFixed, plus: Plus, 'shield-check': ShieldCheck,
+  square: Square, 'square-pen': SquarePen, sun: Sun, 'sun-moon': SunMoon, 'trash-2': Trash2, 'triangle-alert': TriangleAlert, 'user-round': UserRound, users: Users, x: X,
 };
 
 /** Every name Icon accepts; the component preview lists them. */
