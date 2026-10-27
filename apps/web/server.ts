@@ -21,10 +21,11 @@ import { proofOutline, verificationKit } from './verificationKit';
 import { sendStatic } from './staticFiles';
 import { webFunnel } from './funnel';
 import { completionMail, mailsCompletion } from './completionMail';
+import { WebKeyVault } from './keyVault';
 
 const inputSchema = z.object({
-  // Empty asks for the key the server holds for admins (THEOREMOS_WEB_ADMIN_KEYS).
-  providerId: z.string().min(1).max(40), apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/),
+  // Empty asks for the key this account saved, then the one the server holds for admins (THEOREMOS_WEB_ADMIN_KEYS).
+  providerId: z.string().min(1).max(40), apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/), saveKey: z.boolean().optional(),
   model: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']),
   environment: z.enum(['standard', 'mathlib']).default('standard'),
@@ -103,6 +104,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     const ids = config.adminKeys && session.account && auth?.isAdmin(session.account.email) ? Object.keys(config.adminKeys) : [];
     return ids.length ? ids : undefined;
   };
+  // Each account reads and replaces only its own saved keys.
+  const vault = auth && config.keySecret ? new WebKeyVault(config.keySecret, storage) : undefined;
+  const savedKeysFor = (session: Session) => vault && session.account ? vault.list(session.account.id, config.providers) : [];
   const ownerOf = (session: Session) => auth ? session.account && `account:${session.account.id}` : session.id;
   // Beta funnel milestones exist only for accounts; anonymous loopback previews record nothing.
   const milestone = (owner: string, name: WebMilestone) => {
@@ -201,6 +205,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const body: WebSession = { csrfToken: session.csrf, auth: auth ? 'email' : 'none',
             ...(session.account ? { account: { email: session.account.email, ...(auth?.isAdmin(session.account.email) ? { admin: true } : {}),
               ...(serverKeysFor(session) ? { serverKeys: serverKeysFor(session) } : {}),
+              ...(vault ? { keyVault: true, ...(savedKeysFor(session).length ? { savedKeys: savedKeysFor(session) } : {}) } : {}),
               ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers, environments: getWebEnvironments(),
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
             ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
@@ -243,9 +248,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
-            jobs.forget(owner); storage.deleteOwner(owner); auth.deleteAccount(account.email);
+            jobs.forget(owner); storage.deleteOwner(owner); vault?.forgetAccount(account.id); auth.deleteAccount(account.email);
             for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
+          }
+          const savedKey = /^\/api\/auth\/keys\/([a-z][a-z0-9-]{0,39})$/u.exec(url.pathname);
+          if (savedKey && request.method === 'DELETE') {
+            if (!session.account) throw new HttpError(401, '请先登录。');
+            if (!vault) throw new HttpError(404, '当前服务未启用保存 Key。');
+            vault.forget(session.account.id, savedKey[1]);
+            json(response, 200, { savedKeys: savedKeysFor(session) }); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
@@ -371,17 +383,21 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
-          // A typed key wins; an empty one uses the server's key for this provider, for admins only.
-          if (!parsed.data.apiKey) {
-            const held = serverKeysFor(session)?.includes(provider.id) ? config.adminKeys![provider.id] : undefined;
+          const { saveKey, ...input } = parsed.data;
+          // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
+          const typed = input.apiKey;
+          if (!typed) {
+            const saved = vault && session.account ? vault.get(session.account.id, provider.id, provider.baseUrl) : undefined;
+            const held = saved ?? (serverKeysFor(session)?.includes(provider.id) ? config.adminKeys![provider.id] : undefined);
             if (!held) throw new HttpError(400, '请填写 API Key。');
-            parsed.data.apiKey = held;
+            input.apiKey = held;
           }
           if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
           try {
-            const run = jobs.create(owner, parsed.data as WebRunInput, provider);
+            const run = jobs.create(owner, input as WebRunInput, provider);
             milestone(owner, 'firstRunAt');
-            json(response, 201, { run });
+            if (saveKey && typed && vault && session.account) vault.save(session.account.id, provider.id, provider.baseUrl, typed);
+            json(response, 201, { run, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) });
           }
           catch (error) {
             if (error instanceof WebStorageError) throw error;

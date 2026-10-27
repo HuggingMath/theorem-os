@@ -3,7 +3,7 @@ import {
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
-import type { WebAdminOverview, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunInput, WebSession } from '../shared';
+import type { WebAdminOverview, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import type { WebShareLink } from '../share';
 import { effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, resultDescription, runProgress, usageEstimate, type RecoveryAction } from '../presentation';
 import { summarizeReport, summarizeStuck } from '../report';
@@ -380,7 +380,7 @@ function renderPreparation(issues = currentSubmissionIssues()) {
       : issue?.message ?? t('提交配置已填写'));
   patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? t('连接后可编辑研究任务。')
     : offline || !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
-      : issue?.field === 'api-key' ? t('每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。')
+      : issue?.field === 'api-key' ? (state.session?.account?.keyVault ? t('勾选「保存到我的账号」后，下次不用再填。') : t('每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。'))
         : issue?.field === 'task' ? t('说明要证明的目标与约束。')
           : issue?.check ? t('原题需要先能编译；点击右侧定位到出错位置。')
           : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
@@ -508,12 +508,20 @@ function renderConversation() {
 function providerAddress() {
   element('#provider-address').textContent = state.session?.providers.find(provider => provider.id === field('provider').value)?.baseUrl ?? '';
   restoreKey();
-  // For an admin, the server fills in its own key for some providers; the field may then stay empty.
-  const held = Boolean(state.session?.account?.serverKeys?.includes(field('provider').value)), key = element<HTMLInputElement>('#api-key');
-  key.required = !held;
-  key.placeholder = held ? t('留空使用服务器保存的 Key') : '';
+  // A key this account saved, or for an admin one the server holds, lets the field stay empty.
+  const account = state.session?.account, providerId = field('provider').value, key = element<HTMLInputElement>('#api-key');
+  const saved = account?.savedKeys?.find(item => item.providerId === providerId), held = !saved && Boolean(account?.serverKeys?.includes(providerId));
+  key.required = !saved && !held;
+  key.placeholder = saved ? t('已保存 ····{0}，留空即使用', saved.ending) : held ? t('留空使用服务器保存的 Key') : '';
   element('#server-key-note').hidden = !held;
-  key.setAttribute('aria-describedby', held ? 'credential-note server-key-note api-key-validation' : 'credential-note api-key-validation');
+  const savedNote = element('#saved-key-note');
+  savedNote.hidden = !saved; savedNote.textContent = saved ? t('这个服务商已保存 Key（末四位 {0}）。留空即使用它；填写新 Key 并保存会替换它。', saved.ending) : '';
+  // With an account that can save keys, the tab-only memory gives way to saving on the server.
+  const vault = Boolean(account?.keyVault);
+  element('#key-save-row').hidden = !vault; element('#key-save-note').hidden = !vault; element('#delete-saved-key').hidden = !saved;
+  element('#key-memory-row').hidden = vault; element('#key-memory-note').hidden = vault;
+  key.setAttribute('aria-describedby', ['credential-note', ...(saved ? ['saved-key-note'] : []), ...(held ? ['server-key-note'] : []),
+    ...(vault ? ['key-save-note'] : []), 'api-key-validation'].join(' '));
 }
 // The key is cleared after every submission and on leaving; with "remember" on, this tab hands it back for the same provider address.
 const keyStorage = () => sessionStorage;
@@ -531,6 +539,7 @@ function restoreKey() {
 // While "remember" is on, the stored key follows the field; an emptied field or an unticked box forgets it.
 function syncKeyMemory() {
   const key = field('api-key').value.trim(), remember = element<HTMLInputElement>('#remember-key');
+  if (state.session?.account?.keyVault) remember.checked = false;
   if (remember.checked && key && !rememberKey(keyStorage, { ...keyTarget(), apiKey: key })) {
     remember.checked = false; toast(t('浏览器不允许保存，Key 只保留到这次提交'));
   }
@@ -1706,7 +1715,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     return;
   }
   try {
-    const input: WebRunInput = {
+    const input: WebRunRequest = {
       providerId: field('provider').value, apiKey: field('api-key').value.trim(), model: field('model').value.trim(),
       effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
       source: field('source').value, task: field('task').value,
@@ -1717,6 +1726,8 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(captureDraft().modulePlan ? { modulePlan: captureDraft().modulePlan } : {}),
       ...(captureDraft().knowledgeDigest ? { knowledgeDigest: captureDraft().knowledgeDigest } : {}),
     };
+    const saveKey = Boolean(session.account?.keyVault && input.apiKey && element<HTMLInputElement>('#save-key').checked);
+    if (saveKey) input.saveKey = true;
     syncKeyMemory();
     closeSettings(false);
     state.submitting = true; renderRuntime();
@@ -1724,11 +1735,12 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     modulePlanEditor.clearDeleted();
     modulePlanLibrary.clearUndo();
     draftRecovery.clear(); renderDraftRecovery();
-    const result = await api<{ run: WebRun }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    const result = await api<{ run: WebRun; savedKeys?: WebSavedKey[] }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
     const run = state.runs.find(item => item.id === result.run.id) ?? result.run;
+    if (result.savedKeys && currentConnection(epoch) && state.session?.account) state.session.account.savedKeys = result.savedKeys;
     field('api-key').value = '';
     clearValidation();
-    element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle(); restoreKey();
+    element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle(); providerAddress();
     if (!currentConnection(epoch)) {
       toast(t('研究已提交，连接已变化，请核对运行记录'));
       void poll(); return;
@@ -1742,7 +1754,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('compose');
     schedulePoll();
     requestRunsRefresh();
-    toast(t('研究已提交'));
+    toast(saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
   } catch (error) {
     const key = field('api-key').value.trim();
     const uncertain = sent && (!(error instanceof ApiError) || error.status >= 500);
@@ -2091,6 +2103,14 @@ field('provider').addEventListener('change', providerAddress);
 element('#remember-key').addEventListener('change', syncKeyMemory);
 field('api-key').addEventListener('input', () => { if (element<HTMLInputElement>('#remember-key').checked) syncKeyMemory(); });
 element('#forget-key').addEventListener('click', () => { forgetRememberedKey(); field('api-key').focus(); toast(t('已清除此标签页记住的 API Key')); });
+element('#delete-saved-key').addEventListener('click', async () => {
+  const providerId = field('provider').value;
+  try {
+    const result = await api<{ savedKeys: WebSavedKey[] }>(`/api/auth/keys/${encodeURIComponent(providerId)}`, { method: 'DELETE' });
+    if (state.session?.account) state.session.account.savedKeys = result.savedKeys;
+    providerAddress(); field('api-key').focus(); toast(t('已删除保存的 API Key'));
+  } catch (error) { toast(message(error)); }
+});
 field('environment').addEventListener('change', () => {
   sourceRevision++;
   const usingTemplate = Boolean(field('template').value);

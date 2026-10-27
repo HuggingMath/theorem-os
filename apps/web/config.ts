@@ -27,6 +27,8 @@ export type WebConfig = {
   clientIpHeader?: string;
   /** Provider keys the server holds for admin accounts, by provider ID; never sent to a browser. */
   adminKeys?: Record<string, string>;
+  /** 32 bytes that seal the API keys accounts choose to save (THEOREMOS_WEB_KEY_SECRET, 64 hex digits); absent turns saving off. */
+  keySecret?: Buffer;
 };
 
 function integer(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -84,6 +86,9 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
       adminKeys[id] = key;
     }
   }
+  const keySecretText = env.THEOREMOS_WEB_KEY_SECRET?.trim();
+  if (keySecretText && !auth) throw new Error('THEOREMOS_WEB_KEY_SECRET needs THEOREMOS_WEB_AUTH=email.');
+  if (keySecretText && !/^[0-9a-f]{64}$/iu.test(keySecretText)) throw new Error('THEOREMOS_WEB_KEY_SECRET must be 64 hex digits.');
   return {
     host: env.THEOREMOS_WEB_HOST || '127.0.0.1', port, publicUrl: publicUrl.origin,
     staticRoot: path.resolve(env.THEOREMOS_WEB_STATIC_ROOT || 'out/web'),
@@ -96,6 +101,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     ...(auth ? { auth } : {}),
     ...(clientIpHeader ? { clientIpHeader } : {}),
     ...(adminKeys ? { adminKeys } : {}),
+    ...(keySecretText ? { keySecret: Buffer.from(keySecretText, 'hex') } : {}),
   };
 }
 

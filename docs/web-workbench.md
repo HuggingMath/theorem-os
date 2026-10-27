@@ -113,6 +113,7 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 - 内测漏斗只输出汇总人数，不输出邮箱：`bun scripts/web-funnel.ts --data /var/lib/theorem-os [--applications N] [--github] [--json]`。步骤为申请 → 白名单 → 首次登录 → 首次提交 → 首次通过验收，每步给出占上一步的比例，以及登录到首次提交、首次提交到首次通过的中位小时数。`--applications` 填邮件申请数，`--github` 用 `gh` 读取公开仓库 `early-access` 标签的 Issue 数，两者相加；都不给时从白名单开始。移出白名单但登录过的账号仍计入白名单。这两个时间字段上线前创建的账号只计入首次登录。
 - 管理员由 `THEOREMOS_WEB_ADMINS`（逗号分隔，需要 `THEOREMOS_WEB_AUTH=email`）指定，不必另写进白名单。管理员的账号菜单和命令面板多一项「管理」：查看上面的漏斗人数、白名单（标出来自管理员配置、部署配置还是白名单文件，以及是否登录过）和账号列表（邮箱、首次登录、首次提交、首次通过验收的时间）。白名单文件里的邮箱可以在线加入和移除：加入时追加一行，移除时删掉该邮箱所在的行，注释保留，写入经临时文件改名完成；移除后该账号的会话立即结束，账号和记录保留。环境变量里的邮箱只能改部署配置。管理接口 `/api/admin/*` 对其他账号一律返回 403，也不返回账号 ID、运行或题目内容，管理员看不到其他账号的记录。
 - `THEOREMOS_WEB_ADMIN_KEYS` 可以让服务器替管理员保存服务商 Key，值是 JSON 对象 `{"<服务商 ID>": "<Key>"}`，只认已配置的服务商，需要 `THEOREMOS_WEB_ADMINS`。管理员提交时 Key 留空，服务器就用这里的 Key；手填的 Key 优先。会话只告诉管理员哪些服务商有保存的 Key（`account.serverKeys`），Key 本身不会发给浏览器，也和手填的 Key 一样不写入运行记录、出现在输出里时替换为 `[REDACTED]`。其他账号留空仍返回 400。启动时格式错误的报错只写服务商 ID，不写 Key。改 Key 后要重建容器。
+- 设了 `THEOREMOS_WEB_KEY_SECRET`（64 位十六进制，需要 `THEOREMOS_WEB_AUTH=email`，生成：`openssl rand -hex 32`）后，每个账号可以把自己的 Key 保存到服务器（`apps/web/keyVault.ts`）。模型连接里的「保存到我的账号」默认勾选，提交时请求带 `saveKey: true`，运行创建成功后服务器用 AES-256-GCM 加密，存到数据目录 `keys/<sha256(账号 ID)>.json`（0600），每份密文绑定账号 ID、服务商 ID 和服务商地址，拷给别的账号、换了地址或换了密钥都解不开，按没有保存处理。密钥只在服务环境里，不进数据目录。会话的 `account.keyVault` 表示可以保存，`account.savedKeys` 只给服务商 ID 和末四位；Key 留空时依次用本账号保存的 Key、管理员的服务器 Key，都没有返回 400；手填的 Key 优先，只有勾选时才替换保存的 Key。`DELETE /api/auth/keys/<服务商 ID>` 删除一个，删除账号时一起删除。其他账号看不到、也用不到。开启后不再显示「在此标签页记住」。换密钥会让已保存的 Key 全部失效，用户需要重新填写。
 - 本机调试可设 `THEOREMOS_WEB_SMTP_URL=log:`，验证码打印到服务日志，不发邮件；该值只允许用于回环地址。
 
 ```bash
@@ -214,6 +215,7 @@ docker compose -f apps/web/compose.yml up -d web
 | `THEOREMOS_WEB_ALLOWLIST_FILE` | 数据目录下 `allowlist.txt` | 白名单文件路径 |
 | `THEOREMOS_WEB_ADMINS` | 空 | 逗号分隔的管理员邮箱，可登录并管理白名单；需要邮箱登录 |
 | `THEOREMOS_WEB_ADMIN_KEYS` | 空 | JSON `{"服务商 ID": "Key"}`，管理员 Key 留空时由服务器填入；Key 只放在 `.env` 或密钥管理里 |
+| `THEOREMOS_WEB_KEY_SECRET` | 空 | 64 位十六进制，加密账号保存的 API Key；空表示不能保存。只放在 `.env` 或密钥管理里，丢失或更换后已保存的 Key 失效 |
 | `THEOREMOS_WEB_CLIENT_IP_HEADER` | 空 | 代理写入的访客地址请求头（如 `cf-connecting-ip`），用于按访客限流 |
 
 如本机依赖已齐备，也可只用 Docker 跑 worker、用 Bun 启动网页服务：
@@ -231,7 +233,7 @@ bun run web
 - 提交前检查原题：源码或环境停止变化约 1 秒后，服务在一次性容器（无网络、只读镜像、2 CPU、标准库 30 秒 / Mathlib 90 秒）里用固定 Lean 单独编译 `Submission.lean`，不启动模型、不创建工作区。先做与运行时相同的结构检查（控制字符、声明数量、同名声明、缺少 theorem / lemma、无法识别的定理声明），不通过时不启动 Lean。输入框上方显示状态，研究配置的源码下方列出错误与警告，点击即在编辑器中选中对应范围（行从 1 计、列按 Unicode 字符计，与 Lean 一致）。当前文本有 Lean 错误时，提交会停在第一个错误处；用户可选择“忽略检查结果，仍然提交”，仅对这份文本有效。结构检查不通过无法忽略，因为运行时同样会拒绝。超时、服务繁忙或检查不可用时不阻止提交。服务端每个会话同时只保留一个检查（新的取代旧的），全局同时 2 个、排队 6 个，每会话每分钟最多 20 次编译；相同环境与源码的已完成结果缓存 200 条。没有 Docker 检查能力的部署不提供此功能（`session.precheck` 缺省）。
 - 结果可读：报告页的“证明结构”列出原题目标（阐释后的类型、依赖的公理，Lean 三个标准公理之外的公理会被标出）和求解过程新增的辅助声明，并按独立验收记录的引用关系标出每个目标用到哪些辅助声明、每个辅助声明被谁用到（引用含间接依赖）；没有引用记录的旧运行只列声明，不从文本猜测用法。结构由服务端解析候选源码得出，因此也适用于未通过验收的候选。同一节提供“下载本地复核包”和逐步说明：`lake build Submission` 复现内核检查，`lake env lean Check.lean` 核对公理，比较 `Original.lean` 与 `Submission.lean` 确认陈述未改。未通过的运行在“卡在哪里”中列出仍未闭合的原题目标所依赖的前沿子目标（其余未完成的证明任务排在后面，最多 8 个）：Lean 类型、状态、尝试次数、最近一次检查的失败类别、仍开放的阻碍与最近反馈，并可一键在研究协作中打开该任务。
 - 协作页分两层：首次打开是“简洁”层，只显示进展计数、“现在在做什么”（工作中的 Agent 与其任务、研究等待原因、结束后去报告的入口）和指导；依赖图、任务检查器、审阅、数学变化、Agent 分工、交付、记录与知识目录在“完整”层。选择按浏览器记在 `theorem-os.web-collaboration-detail.v1`；从简洁层或报告页打开任何任务会切到完整层并记住。浏览器测试默认以完整层启动（`web-scenario` 的 `collaborationDetail`）。
-- API Key 默认每次提交后清空。设置里勾选“在此标签页记住”后，Key 存在 sessionStorage 的 `theorem-os.web-api-key.v1`（关闭标签页即清除，其他标签页拿不到），只对填写时的服务商与地址生效，从不写入 localStorage 或草稿；取消勾选、点“清除已记住的 Key”、因认证失败去更换 Key、登出或切换账户时立即清除。
+- 未开启账号保存 Key（见 `THEOREMOS_WEB_KEY_SECRET`）时，API Key 默认每次提交后清空。设置里勾选“在此标签页记住”后，Key 存在 sessionStorage 的 `theorem-os.web-api-key.v1`（关闭标签页即清除，其他标签页拿不到），只对填写时的服务商与地址生效，从不写入 localStorage 或草稿；取消勾选、点“清除已记住的 Key”、因认证失败去更换 Key、登出或切换账户时立即清除。
 - 静态文件由 `apps/web/staticFiles.ts` 发送：HTML、JS、CSS 按浏览器支持用 Brotli 或 gzip 压缩（内存缓存，文件重建后下次请求生效），全部带 ETag 和 `Cache-Control: no-cache`，重复访问只需 304 重新验证；API 仍是 `no-store`。加载预算见 `test:web-load`。
 - 外观：默认跟随系统浅色/深色；账号对话框的“外观”或命令面板可固定为浅色或深色，选择存在 localStorage `theorem-os.web-theme.v1`，同浏览器其他标签页同步。三个页面在 `<head>` 里同步加载 `theme.js`，首帧前就在 `<html data-theme>` 上定好主题；样式只读这个属性，深色只替换 `:root` 里的颜色、阴影与代码配色变量。阴影与遮罩统一用 `--shade`，两种主题下都保持暗色。
 - 环境选择随任务保存，运行列表和详情显示实际提交环境；详情显示对应工具链和 Mathlib revision。CLI 的既有行为不受网页默认值影响。
@@ -272,7 +274,7 @@ bun run web
 - 取消请求等待期间，对话停止按钮、详情操作和运行状态栏同步显示正在取消，重复操作不会再次发送请求。若轮询已确认该任务取消或结束，迟到的取消响应错误不会再将结果标为未知，也不会因此断线重连；无法确认时仍保留核对提示，不自动重发取消请求。
 - 可配置 1–4 个 Agent、任务协作 / 独立并行、1–20 轮和 30–900 秒解题预算。Mathlib 冷准备最长 600 秒，标准库准备和最终验收各有独立时限，均不计入解题预算；轮次和时间不等于 API 费用上限，服务商按自己的计费规则收费。
 - 模型结束和网页显示“运行结束”都不代表证明成立。只有 `evaluated_passed` 才显示“验收通过”；这是本地独立 Lean 验收，不是 Lean-Eval 官方成绩。
-- 浏览器不把 Key 写入 localStorage / sessionStorage；提交成功后清空输入框。Key 经同源后端内存、Docker stdin 与 Codex 子进程环境传递，不写入 Docker 参数、容器环境配置、Codex 配置文件、任务档案或服务日志。每个任务使用新的 Codex profile，不读取部署者的认证文件；工具 shell 环境排除该 Key。
+- 浏览器不把 Key 写入 localStorage / sessionStorage；提交成功后清空输入框。保存到账号的 Key 只以密文存在服务器上，浏览器只拿到末四位。Key 经同源后端内存、Docker stdin 与 Codex 子进程环境传递，不写入 Docker 参数、容器环境配置、Codex 配置文件、任务档案或服务日志。每个任务使用新的 Codex profile，不读取部署者的认证文件；工具 shell 环境排除该 Key。
 - 默认将运行记录、完整事件、观测、源码、回执、知识和服务端方案保存到私有持久目录。每个会话最多保留 20 条运行记录，可删除已结束的记录以释放容量。有效 API 请求会延长同一会话 Cookie；同一会话在有效期内可跨服务重启读取历史。没有账号、跨设备历史或自动恢复执行。测试中不设置持久目录的嵌入式服务仍仅使用内存。
 
 当前固定环境如下。Mathlib 的工具链、commit 和传递依赖 manifest 记录在 [`resources/mathlib/environment.json`](../resources/mathlib/environment.json)；页面版本信息由后端读取这份配置。
@@ -366,6 +368,8 @@ bun scripts/test-web-runtime.ts
 `test:web-readable-results` 用不调用模型和 Lean 的运行夹具检查：通过的运行列出目标、辅助声明、引用与公理（只标出含非标准公理的目标），下载的复核包可解压且证明逐字一致，结构只读取一次；结构读取失败后可重试，未记录引用时不推断用法；卡住的运行列出前沿子目标、转义模型文本，并在研究协作中聚焦该任务；英文界面；375 / 320 像素下不溢出。
 `test:web-collaboration-layers` 检查协作页两层：首次进入只显示简洁层且不写入选择，切换就地生效、刷新后保留、焦点留在切换按钮上，从简洁层或报告页打开任务会切到完整层并把焦点放到任务上，已结束的运行指向报告，英文与 375/320 宽度不溢出，截图写到 `out/web-collaboration-layers`。
 `test:web-key-memory` 检查记住 Key：默认不记住且不落任何存储；勾选后后续提交与同标签页刷新沿用、另一个标签页拿不到、只有记忆条目含 Key；换服务商地址不带 Key、用户自己填的 Key 不被覆盖；取消勾选、清除按钮、认证失败后更换 Key 都会立即清除；英文与 375/320 宽度。
+
+`test:web-saved-key` 检查保存到账号：「保存到我的账号」默认勾选、标签页记住隐藏；提交后输入框清空、只显示末四位、浏览器存储和页面都不含 Key；刷新和另一台设备留空即可提交并用上保存的 Key；另一个账号看不到且仍须填写；删除后恢复必填、服务器上的文件删除；英文和深色主题下无中文、对比度达标。
 `test:web-load` 在约 Fast 3G（150 ms 往返、1.6 Mbit/s 下行）下打开工作台两次并执行预算：文本资源必须压缩；首次访问 HTML+JS+CSS ≤ 300 KB、总传输 ≤ 1800 KB、首次内容绘制 ≤ 1.5 s、可提交 ≤ 5 s；重复访问传输 ≤ 50 KB、可提交 ≤ 2 s。`--report` 只打印各资源字节数与编码，报告写到 `out/web-load/report.json`。
 `test:web-theme` 检查外观：未选择时首帧即为系统主题、不写存储并跟随系统变化；命令面板与账号对话框的选择优先于系统、刷新后保留、同步到其他标签页，“跟随系统”会清除选择；两种主题下欢迎页、各对话框、命令面板、示例运行全部标签页（中英文）、手机宽度、登录页与分享页的可见文字都满足 WCAG AA 对比度（`scripts/web-contrast.ts`），截图写到 `out/web-theme/`。
 
@@ -458,6 +462,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | `apps/web/client/ui/CollaborationNow.tsx` | 协作页简洁层的“现在在做什么” |
 | `apps/web/client/ui/DetailPanel.tsx`、`apps/web/client/ui/DraftPreview.tsx`、`apps/web/client/ui/Controls.tsx` | 运行详情的源码/差异/报告页、草稿工作区与连接状态、历史行和图标按钮；界面一律由 Preact 渲染，客户端不写 innerHTML |
 | `apps/web/client/keyMemory.ts` | 标签页内记住 API Key（按服务商与地址） |
+| `apps/web/keyVault.ts` | 账号保存的 API Key：AES-256-GCM 密文，绑定账号、服务商与地址 |
 | `apps/web/staticFiles.ts` | 静态文件压缩、ETag 与重新验证 |
 | `apps/web/client/theme.ts`、`apps/web/client/themePreference.ts` | 首帧前应用浅色/深色主题，读写外观选择 |
 | `apps/web/worker.ts` | 单次 BYOK profile、真实求解与验收 |

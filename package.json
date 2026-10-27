@@ -69,6 +69,7 @@
     "test:web-readable-results": "bun scripts/test-web-readable-results.ts",
     "test:web-collaboration-layers": "bun scripts/test-web-collaboration-layers.ts",
     "test:web-key-memory": "bun scripts/test-web-key-memory.ts",
+    "test:web-saved-key": "bun scripts/test-web-saved-key.ts",
     "test:web-load": "bun scripts/test-web-load.ts",
     "test:web-theme": "bun scripts/test-web-theme.ts",
     "test:web-guide": "bun scripts/test-web-guide.ts",

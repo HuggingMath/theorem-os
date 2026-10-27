@@ -85,7 +85,7 @@ try {
     const [fromPalette] = await Promise.all([context.waitForEvent('page'), page.locator('#palette-open-guide').click()]);
     await fromPalette.locator('#start-heading').waitFor();
     await fromPalette.close();
-    assert.match(await page.locator('.welcome-steps').innerText(), /默认不保存/u, 'The welcome still says the key is never kept');
+    assert.match(await page.locator('.welcome-steps').innerText(), /是否保存由你决定/u, 'The welcome no longer says the reader decides whether the key is kept');
     assert.deepEqual(errors, []);
     await context.close();
   }

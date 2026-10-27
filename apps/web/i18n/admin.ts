@@ -36,4 +36,12 @@ export const admin: Record<string, string> = {
   "已关闭结束邮件": "Research-end emails are off",
   "留空即使用服务器为管理员保存的 Key；服务器不会把它发给浏览器。": "Leave it empty to use the key the server keeps for admins; the server never sends it to the browser.",
   "留空使用服务器保存的 Key": "Empty uses the server's key",
+  "保存到我的账号": "Save to my account",
+  "删除已保存的 Key": "Delete saved key",
+  "加密保存在服务器，只有你的账号能使用；浏览器只显示末四位，换设备或重新登录也不用再填。": "Stored encrypted on the server and usable only by your account. The browser sees only the last four characters, and you won't need to enter it again on another device or after signing in again.",
+  "勾选「保存到我的账号」后，下次不用再填。": "Tick \"Save to my account\" and you won't need to enter it next time.",
+  "已保存 ····{0}，留空即使用": "Saved ····{0}, leave empty to use it",
+  "这个服务商已保存 Key（末四位 {0}）。留空即使用它；填写新 Key 并保存会替换它。": "A key is saved for this provider (ending {0}). Leave the field empty to use it; saving a new key replaces it.",
+  "研究已提交，Key 已保存到你的账号": "Research submitted; key saved to your account",
+  "已删除保存的 API Key": "Saved API key deleted",
 }

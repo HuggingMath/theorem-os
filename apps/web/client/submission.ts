@@ -33,8 +33,11 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
   else if (model.length > 128) add('model', t('模型名称最多 128 个字符'));
   else if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(model)) add('model', t('模型名称须以字母或数字开头，只能包含字母、数字及 . _ : / -'));
   const key = apiKey.trim();
-  // An admin may leave the key empty for a provider whose key the server holds.
-  if (!key) { if (!session.account?.serverKeys?.includes(draft.providerId)) add('api-key', t('请填写 API Key')); }
+  // The key may stay empty for a provider this account saved one for, or, for an admin, one the server holds.
+  if (!key) {
+    if (!session.account?.savedKeys?.some(item => item.providerId === draft.providerId) && !session.account?.serverKeys?.includes(draft.providerId))
+      add('api-key', t('请填写 API Key'));
+  }
   else if (key.length < 8 || key.length > 4096) add('api-key', t('API Key 长度须为 8–4096 个字符'));
   else if (!/^[\x21-\x7e]+$/.test(key)) add('api-key', t('API Key 只能包含英文可见字符，不能包含空格或换行'));
   for (const [field, raw, label, min, max] of [

@@ -21,7 +21,7 @@ export type ConversationProps = { run?: ConversationRun; templates: Conversation
 
 const steps = [
   { title: t('写下原题'), detail: t('Lean 文件里用 sorry 留出要证明的定理，或者从下面的示例题目开始。') },
-  { title: t('连接模型'), detail: t('在研究配置里选择服务商，填入自己的 API Key。Key 只用于调用服务商，默认不保存。') },
+  { title: t('连接模型'), detail: t('在研究配置里选择服务商，填入自己的 API Key。Key 只用于调用服务商，是否保存由你决定。') },
   { title: t('等待验收'), detail: t('Agent 拆分任务、写证明，最后由隔离的 Lean 环境检查完整原题。') },
 ];
 

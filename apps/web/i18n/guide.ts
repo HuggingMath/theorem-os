@@ -23,8 +23,8 @@ export const guide: Record<string, string> = {
   "确认原题能提交": "Make sure the problem can be submitted",
   "修改源码后，工作台会自动用 Lean 检查一遍原题，输入框上方显示结果。语法错误或缺少待证定理时会标出位置，改好之后才能提交。":
     "After you edit the source, the workbench checks the problem with Lean and shows the result above the input. Syntax errors or a missing theorem to prove are marked in place and must be fixed before you can submit.",
-  "点滑杆图标打开研究配置，在「模型连接」里选服务商、填模型名和 API Key。默认不保存 Key；勾选「在此标签页记住」后，关闭标签页即清除。":
-    "Open the research settings with the slider icon and, under Model connection, choose a provider and enter the model name and API key. The key is not kept by default; with \"Remember in this tab\" it is cleared when the tab closes.",
+  "点滑杆图标打开研究配置，在「模型连接」里选服务商、填模型名和 API Key。「保存到我的账号」默认勾选：Key 加密保存在服务器，只有你的账号能用，下次不用再填；不想保存就取消勾选。":
+    "Open the research settings with the slider icon and, under Model connection, choose a provider and enter the model name and API key. \"Save to my account\" is ticked by default: the key is stored encrypted on the server, only your account can use it, and you won't need to enter it again. Untick it to keep nothing.",
   "设定预算并发送": "Set a budget and send",
   "「执行配置」里的轮次上限、解题预算和用量上限，到达任一项运行就会停止。不确定时保持默认，在输入框写下研究任务后点发送。":
     "Under Execution, the run stops at whichever comes first: the turn limit, the solving budget or the usage cap. If unsure, keep the defaults, write the research task in the input and send it.",
@@ -66,8 +66,8 @@ export const guide: Record<string, string> = {
   "跳转到指定行号。": "Go to a line number.",
   "减少 / 增加缩进。": "Decrease / increase indentation.",
   "关闭当前弹窗或查找栏。": "Close the current dialog or find bar.",
-  "服务器只用它调用你选择的服务商，费用计入你自己的 API 账户。Key 不会写进草稿、运行档案或分享链接。":
-    "The server only uses it to call the provider you chose, and the cost goes to your own API account. The key is never written into drafts, run archives or share links.",
+  "服务器只用它调用你选择的服务商，费用计入你自己的 API 账户。Key 不会写进草稿、运行档案或分享链接。保存到账号的 Key 加密存放，只有你的账号能用，可以在「模型连接」里随时删除。":
+    "The server only uses it to call the provider you chose, and the cost goes to your own API account. The key is never written into drafts, run archives or share links. A key saved to your account is stored encrypted, only your account can use it, and you can delete it any time under Model connection.",
   "登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。":
     "When you sign in, records belong to your email account, and the account page can delete the account with all its records. Without sign-in, records belong only to the current browser session.",
   "工作台里带 ? 的词都可以点开查看解释，顶栏的问号按钮打开完整的术语说明。还有不清楚的地方？":

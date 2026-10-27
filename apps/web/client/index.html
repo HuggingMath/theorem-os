@@ -73,7 +73,11 @@
                   <label for="api-key" class="credential-label">API Key</label><div class="password-field"><input id="api-key" name="apiKey" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="API Key" aria-describedby="credential-note api-key-validation"><button type="button" id="toggle-key" class="icon-button" title="显示 API Key" aria-label="显示 API Key" aria-pressed="false"><i data-lucide="eye"></i></button></div>
                   <p id="api-key-validation" class="field-validation" role="alert" hidden></p>
                   <p class="field-note server-key-note" id="server-key-note" hidden>留空即使用服务器为管理员保存的 Key；服务器不会把它发给浏览器。</p>
-                  <div class="key-memory"><label class="key-memory-option"><input type="checkbox" id="remember-key" aria-describedby="key-memory-note"><span>在此标签页记住</span></label>
+                  <p class="field-note saved-key-note" id="saved-key-note" hidden></p>
+                  <div class="key-memory" id="key-save-row" hidden><label class="checkbox-option"><input type="checkbox" id="save-key" checked aria-describedby="key-save-note"><span>保存到我的账号</span></label>
+                    <button type="button" class="text-button" id="delete-saved-key" hidden>删除已保存的 Key</button></div>
+                  <p class="field-note" id="key-save-note" hidden>加密保存在服务器，只有你的账号能使用；浏览器只显示末四位，换设备或重新登录也不用再填。</p>
+                  <div class="key-memory" id="key-memory-row"><label class="key-memory-option"><input type="checkbox" id="remember-key" aria-describedby="key-memory-note"><span>在此标签页记住</span></label>
                     <button type="button" class="text-button" id="forget-key" hidden>清除已记住的 Key</button></div>
                   <p class="field-note" id="key-memory-note">只存在这个标签页里，关闭标签页即清除；不会写入草稿，也不会带给其他服务商或地址。</p>
                   <p class="field-note" id="credential-note">密钥经服务器调用所选服务商，费用计入对应 API 账户。</p>
