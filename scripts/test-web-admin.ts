@@ -13,6 +13,7 @@ import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, settled, startBrowser } from './web-scenario';
+import { openSettings } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-admin');
@@ -29,7 +30,8 @@ const runner: WebRunner = {
 const mail: { to: string; text: string }[] = [];
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_AUTH: 'email', THEOREMOS_WEB_SMTP_URL: 'log:',
-  THEOREMOS_WEB_ALLOWLIST: 'carol@example.org', THEOREMOS_WEB_ADMINS: 'admin@example.org', THEOREMOS_WEB_DATA_ROOT: data }), runner,
+  THEOREMOS_WEB_ALLOWLIST: 'carol@example.org', THEOREMOS_WEB_ADMINS: 'admin@example.org', THEOREMOS_WEB_DATA_ROOT: data,
+  THEOREMOS_WEB_ADMIN_KEYS: JSON.stringify({ sub2api: 'sk-admin-browser-check-never-publish' }) }), runner,
 { mailer: async message => { mail.push(message); }, captchaAnswer: () => '24680' });
 const mark = (check: string) => console.log(`PASS ${check}`);
 
@@ -96,9 +98,25 @@ try {
   await bob.page.locator('#command-palette[open] input').fill('admin');
   assert.equal(await bob.page.locator('#palette-open-admin').count(), 0, 'A tester finds the admin command');
   await bob.page.keyboard.press('Escape');
-  mark('a tester gets neither the admin button nor the admin command, and the server refuses the admin routes');
+  await openSettings(bob.page);
+  assert.equal(await bob.page.locator('#api-key').evaluate(input => (input as HTMLInputElement).required), true, 'A tester may skip the key');
+  assert.equal(await bob.page.locator('#server-key-note').isVisible(), false);
+  mark('a tester gets neither the admin button nor the admin command, and the server refuses the admin routes; the key stays required');
 
   const { context, page, errors } = await signedIn(browser, 'admin@example.org');
+  await openSettings(page);
+  await page.selectOption('#provider', 'sub2api');
+  assert.equal(await page.locator('#server-key-note').isVisible(), true, 'The admin is not told the server holds a key');
+  assert.equal(await page.locator('#api-key').evaluate(input => (input as HTMLInputElement).required), false);
+  assert.equal(await page.locator('#api-key').inputValue(), '', 'The held key reached the browser');
+  assert.ok(!(await page.content()).includes('sk-admin-browser-check'), 'The held key is in the page');
+  await page.selectOption('#provider', 'openai');
+  assert.equal(await page.locator('#server-key-note').isVisible(), false);
+  assert.equal(await page.locator('#api-key').evaluate(input => (input as HTMLInputElement).required), true);
+  await page.selectOption('#provider', 'sub2api');
+  await page.reload();
+  await page.locator('#open-account').waitFor();
+  mark('for the admin, the Sub2API key may stay empty because the server holds it, and the key never reaches the page; OpenAI still needs one');
   await openAdmin(page);
   assert.deepEqual(await listed(page), ['admin@example.org', 'bob@example.org', 'carol@example.org']);
   assert.deepEqual(await page.locator('.admin-list .badge').allInnerTexts(), ['管理员', '白名单文件', '部署配置']);

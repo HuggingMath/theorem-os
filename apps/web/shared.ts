@@ -122,7 +122,8 @@ export type WebSession = {
   auth: 'none' | 'email';
   /** `admin` accounts may manage the allowlist; they see no other account's runs. */
   /** `completionEmail: false` means the account turned off the mail sent when one of its runs ends; absent means on. */
-  account?: { email: string; admin?: boolean; completionEmail?: boolean };
+  /** `serverKeys` lists the providers whose key the server fills in for this admin account when the field is left empty. */
+  account?: { email: string; admin?: boolean; completionEmail?: boolean; serverKeys?: string[] };
   providers: WebProvider[];
   environments: WebEnvironmentOption[];
   templates: WebTemplate[];

@@ -25,6 +25,8 @@ export type WebConfig = {
   auth?: WebAuthConfig;
   /** A header set by the reverse proxy in front (e.g. cf-connecting-ip) that names the visitor for rate limits. */
   clientIpHeader?: string;
+  /** Provider keys the server holds for admin accounts, by provider ID; never sent to a browser. */
+  adminKeys?: Record<string, string>;
 };
 
 function integer(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -68,6 +70,20 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   }
   const clientIpHeader = env.THEOREMOS_WEB_CLIENT_IP_HEADER?.trim().toLowerCase();
   if (clientIpHeader && !/^[a-z0-9-]{1,64}$/u.test(clientIpHeader)) throw new Error('THEOREMOS_WEB_CLIENT_IP_HEADER must be a header name.');
+  let adminKeys: Record<string, string> | undefined;
+  if (env.THEOREMOS_WEB_ADMIN_KEYS) {
+    if (!auth?.admins.length) throw new Error('THEOREMOS_WEB_ADMIN_KEYS needs THEOREMOS_WEB_ADMINS.');
+    let parsed: unknown;
+    try { parsed = JSON.parse(env.THEOREMOS_WEB_ADMIN_KEYS); } catch { throw new Error('THEOREMOS_WEB_ADMIN_KEYS must be a JSON object of provider ID to key.'); }
+    // The messages name provider IDs only, never a key.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('THEOREMOS_WEB_ADMIN_KEYS must be a JSON object of provider ID to key.');
+    adminKeys = {};
+    for (const [id, key] of Object.entries(parsed)) {
+      if (!providers.some(provider => provider.id === id)) throw new Error(`THEOREMOS_WEB_ADMIN_KEYS names an unknown provider: ${id.slice(0, 40)}`);
+      if (typeof key !== 'string' || !/^[\x21-\x7e]{8,4096}$/u.test(key)) throw new Error(`THEOREMOS_WEB_ADMIN_KEYS has an invalid key for ${id}.`);
+      adminKeys[id] = key;
+    }
+  }
   return {
     host: env.THEOREMOS_WEB_HOST || '127.0.0.1', port, publicUrl: publicUrl.origin,
     staticRoot: path.resolve(env.THEOREMOS_WEB_STATIC_ROOT || 'out/web'),
@@ -79,6 +95,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
       env.THEOREMOS_WEB_DATA_ROOT ? 30 * 24 * 60 * 60 : 60 * 60, 60, 365 * 24 * 60 * 60), providers,
     ...(auth ? { auth } : {}),
     ...(clientIpHeader ? { clientIpHeader } : {}),
+    ...(adminKeys ? { adminKeys } : {}),
   };
 }
 

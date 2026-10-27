@@ -34,4 +34,6 @@ export const admin: Record<string, string> = {
   "把结果和链接发到登录邮箱；邮件里不含源码、证明或 API Key。停止的研究不发。": "Sends the outcome and a link to your login email. The mail has no source, proof or API key. Stopped runs send nothing.",
   "研究结束时会发邮件到登录邮箱": "You will get an email when research ends",
   "已关闭结束邮件": "Research-end emails are off",
+  "留空即使用服务器为管理员保存的 Key；服务器不会把它发给浏览器。": "Leave it empty to use the key the server keeps for admins; the server never sends it to the browser.",
+  "留空使用服务器保存的 Key": "Empty uses the server's key",
 }

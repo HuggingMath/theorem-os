@@ -508,6 +508,12 @@ function renderConversation() {
 function providerAddress() {
   element('#provider-address').textContent = state.session?.providers.find(provider => provider.id === field('provider').value)?.baseUrl ?? '';
   restoreKey();
+  // For an admin, the server fills in its own key for some providers; the field may then stay empty.
+  const held = Boolean(state.session?.account?.serverKeys?.includes(field('provider').value)), key = element<HTMLInputElement>('#api-key');
+  key.required = !held;
+  key.placeholder = held ? t('留空使用服务器保存的 Key') : '';
+  element('#server-key-note').hidden = !held;
+  key.setAttribute('aria-describedby', held ? 'credential-note server-key-note api-key-validation' : 'credential-note api-key-validation');
 }
 // The key is cleared after every submission and on leaving; with "remember" on, this tab hands it back for the same provider address.
 const keyStorage = () => sessionStorage;

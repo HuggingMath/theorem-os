@@ -23,7 +23,8 @@ import { webFunnel } from './funnel';
 import { completionMail, mailsCompletion } from './completionMail';
 
 const inputSchema = z.object({
-  providerId: z.string().min(1).max(40), apiKey: z.string().min(8).max(4096).regex(/^[\x21-\x7e]+$/),
+  // Empty asks for the key the server holds for admins (THEOREMOS_WEB_ADMIN_KEYS).
+  providerId: z.string().min(1).max(40), apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/),
   model: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']),
   environment: z.enum(['standard', 'mathlib']).default('standard'),
@@ -97,6 +98,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const sessions = new Map<string, Session>(storage.listSessions().map(session => [session.id, session]));
   const auth = config.auth ? new WebAuth(config.auth, storage, options.mailer, options.captchaAnswer) : undefined;
   // With login enabled, records belong to the account; otherwise to the anonymous browser session.
+  // Provider IDs, never keys, that the server can fill in for this session's admin account.
+  const serverKeysFor = (session: Session) => {
+    const ids = config.adminKeys && session.account && auth?.isAdmin(session.account.email) ? Object.keys(config.adminKeys) : [];
+    return ids.length ? ids : undefined;
+  };
   const ownerOf = (session: Session) => auth ? session.account && `account:${session.account.id}` : session.id;
   // Beta funnel milestones exist only for accounts; anonymous loopback previews record nothing.
   const milestone = (owner: string, name: WebMilestone) => {
@@ -194,6 +200,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           storage.saveSession(session);
           const body: WebSession = { csrfToken: session.csrf, auth: auth ? 'email' : 'none',
             ...(session.account ? { account: { email: session.account.email, ...(auth?.isAdmin(session.account.email) ? { admin: true } : {}),
+              ...(serverKeysFor(session) ? { serverKeys: serverKeysFor(session) } : {}),
               ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers, environments: getWebEnvironments(),
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
             ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
@@ -364,6 +371,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
+          // A typed key wins; an empty one uses the server's key for this provider, for admins only.
+          if (!parsed.data.apiKey) {
+            const held = serverKeysFor(session)?.includes(provider.id) ? config.adminKeys![provider.id] : undefined;
+            if (!held) throw new HttpError(400, '请填写 API Key。');
+            parsed.data.apiKey = held;
+          }
           if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
           try {
             const run = jobs.create(owner, parsed.data as WebRunInput, provider);

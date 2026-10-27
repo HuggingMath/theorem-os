@@ -112,6 +112,7 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 - 账号文件保存在数据目录的 `accounts/` 下，含账号 ID、邮箱、创建时间（即首次登录），以及首次提交运行 `firstRunAt` 和首次通过验收 `firstAcceptedAt` 两个时间，只在第一次发生时写入，删除账号时一起删除。验证码只以 HMAC 形式保存在内存中，服务重启后作废。
 - 内测漏斗只输出汇总人数，不输出邮箱：`bun scripts/web-funnel.ts --data /var/lib/theorem-os [--applications N] [--github] [--json]`。步骤为申请 → 白名单 → 首次登录 → 首次提交 → 首次通过验收，每步给出占上一步的比例，以及登录到首次提交、首次提交到首次通过的中位小时数。`--applications` 填邮件申请数，`--github` 用 `gh` 读取公开仓库 `early-access` 标签的 Issue 数，两者相加；都不给时从白名单开始。移出白名单但登录过的账号仍计入白名单。这两个时间字段上线前创建的账号只计入首次登录。
 - 管理员由 `THEOREMOS_WEB_ADMINS`（逗号分隔，需要 `THEOREMOS_WEB_AUTH=email`）指定，不必另写进白名单。管理员的账号菜单和命令面板多一项「管理」：查看上面的漏斗人数、白名单（标出来自管理员配置、部署配置还是白名单文件，以及是否登录过）和账号列表（邮箱、首次登录、首次提交、首次通过验收的时间）。白名单文件里的邮箱可以在线加入和移除：加入时追加一行，移除时删掉该邮箱所在的行，注释保留，写入经临时文件改名完成；移除后该账号的会话立即结束，账号和记录保留。环境变量里的邮箱只能改部署配置。管理接口 `/api/admin/*` 对其他账号一律返回 403，也不返回账号 ID、运行或题目内容，管理员看不到其他账号的记录。
+- `THEOREMOS_WEB_ADMIN_KEYS` 可以让服务器替管理员保存服务商 Key，值是 JSON 对象 `{"<服务商 ID>": "<Key>"}`，只认已配置的服务商，需要 `THEOREMOS_WEB_ADMINS`。管理员提交时 Key 留空，服务器就用这里的 Key；手填的 Key 优先。会话只告诉管理员哪些服务商有保存的 Key（`account.serverKeys`），Key 本身不会发给浏览器，也和手填的 Key 一样不写入运行记录、出现在输出里时替换为 `[REDACTED]`。其他账号留空仍返回 400。启动时格式错误的报错只写服务商 ID，不写 Key。改 Key 后要重建容器。
 - 本机调试可设 `THEOREMOS_WEB_SMTP_URL=log:`，验证码打印到服务日志，不发邮件；该值只允许用于回环地址。
 
 ```bash
@@ -212,6 +213,7 @@ docker compose -f apps/web/compose.yml up -d web
 | `THEOREMOS_WEB_ALLOWLIST` | 空 | 逗号分隔的内测邮箱；另可写入数据目录的 `allowlist.txt` |
 | `THEOREMOS_WEB_ALLOWLIST_FILE` | 数据目录下 `allowlist.txt` | 白名单文件路径 |
 | `THEOREMOS_WEB_ADMINS` | 空 | 逗号分隔的管理员邮箱，可登录并管理白名单；需要邮箱登录 |
+| `THEOREMOS_WEB_ADMIN_KEYS` | 空 | JSON `{"服务商 ID": "Key"}`，管理员 Key 留空时由服务器填入；Key 只放在 `.env` 或密钥管理里 |
 | `THEOREMOS_WEB_CLIENT_IP_HEADER` | 空 | 代理写入的访客地址请求头（如 `cf-connecting-ip`），用于按访客限流 |
 
 如本机依赖已齐备，也可只用 Docker 跑 worker、用 Bun 启动网页服务：
@@ -369,7 +371,7 @@ bun scripts/test-web-runtime.ts
 
 `test:web-guide` 检查使用说明：欢迎页、术语表和命令面板都在新标签页打开 `guide.html`；目录链接与各节对应，有回到工作台的入口；页面通过可访问性规则和两种主题下的 WCAG AA 对比度；英文界面没有残留中文，375/320 宽度不横向溢出，切换语言后留在本页。截图写到 `out/web-guide/`。
 
-`test:web-admin` 检查管理角色：普通账号看不到「管理」按钮和命令，管理接口返回 403；管理员看到白名单来源、漏斗人数和账号列表；在线加入写入白名单文件且不重复，移除需要二次确认、可取消，移除后对方立即退出登录；命令面板可打开管理窗口；英文与深色主题下没有残留中文、通过对比度，375/320 宽度不溢出。截图写到 `out/web-admin/`。
+`test:web-admin` 检查管理角色：普通账号看不到「管理」按钮和命令，管理接口返回 403，Key 仍必填；管理员在有保存 Key 的服务商下可留空 Key，页面里没有这个 Key；管理员看到白名单来源、漏斗人数和账号列表；在线加入写入白名单文件且不重复，移除需要二次确认、可取消，移除后对方立即退出登录；命令面板可打开管理窗口；英文与深色主题下没有残留中文、通过对比度，375/320 宽度不溢出。截图写到 `out/web-admin/`。
 
 组件预览 `bun run build:web-preview` 把 `apps/web/preview/` 构建到 `out/web-preview/`，用固定数据展示每个工作台组件（基础控件、Section 辅助组件、顶栏、对话、运行监视、运行头部、概览、研究协作）；在页面上可切换中英文。它只用于开发，不进入 `out/web` 或镜像。`test:web-preview` 在中英文、1440 与 375 像素下检查每个组件渲染无报错、英文界面无未翻译文字、页面不溢出并通过上述无障碍规则，截图写入 `out/web-preview-check/`。
 
