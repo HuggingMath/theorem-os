@@ -2254,6 +2254,37 @@ describe('isolated solver and host acceptance', () => {
     expect(host.verify).not.toHaveBeenCalled();
   });
 
+  it.each(['never written', 'deleted'])('rejects research deliveries whose RESEARCH.md is %s without stopping the worker', async mode => {
+    const tasks: CooperativeTask[] = [
+      { id: 'question', kind: 'research', objective: 'Find a current proof route', dependsOn: [], revision: 0 },
+      ...planTasks().slice(2).map(task => ({ ...task, dependsOn: task.id === 'first' ? ['question'] : ['first'] })),
+    ];
+    let attempts = 0;
+    configureCooperation(async (action, options, message) => {
+      if (action.kind === 'lead') {
+        writePlan(options.workspace, tasks);
+        if (mode === 'deleted') for (const worker of JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).workers.slice(1)) {
+          fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'An old route that has not been checked.');
+          commitSolverSources(problem, worker.worktree);
+        }
+      } else {
+        expect(action.kind === 'task' && action.task.id).toBe('question');
+        if (++attempts > 1) expect(message).toContain('math_research_delivery_unchanged');
+        fs.rmSync(path.join(options.workspace, 'RESEARCH.md'), { force: true });
+      }
+      return 'completed';
+    });
+    expect(await runSolver([...args, '--workers', '2', '--max-turns', '3'], directory)).toBe(4);
+    expect(attempts).toBe(2);
+    // An absent file is never staged, so a deletion leaves the inherited notes in the delivery commit.
+    const notes = mode === 'deleted' ? 'An old route that has not been checked.' : '';
+    expect(cooperationState().tasks[0]).toMatchObject({ status: 'blocked', attempts: 2,
+      feedback: expect.stringContaining(mode === 'deleted' ? 'Replace inherited RESEARCH.md' : 'Write RESEARCH.md') });
+    expect(cooperationState().deliveryReceipts).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: 'question',
+      code: 'math_research_delivery_unchanged', submissionDigest: mathDigest(notes) })]));
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
   it('resumes a proof review checkpoint without accepting its saved verdict prematurely', async () => {
     let reviews = 0;
     configureCooperation(async (action, options) => {

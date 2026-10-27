@@ -1072,7 +1072,8 @@ export class CooperativeResearch extends CooperationInputs {
         const inherited = notesBlob(action.assignment.seedCommit);
         if (inherited === notesBlob(commit)) {
           unchangedNotesBlob = inherited;
-          throw new Error('math_research_delivery_unchanged: Replace inherited RESEARCH.md with findings for the current task.');
+          throw new Error(inherited ? 'math_research_delivery_unchanged: Replace inherited RESEARCH.md with findings for the current task.'
+            : 'math_research_delivery_unchanged: Write RESEARCH.md with findings for the current task.');
         }
         await this.publishResearchFinding(worker, action, commit,
           { kind: 'notes', text: committedSource(worker.worktree, commit, 'RESEARCH.md') }, { artifacts });
@@ -1093,7 +1094,10 @@ export class CooperativeResearch extends CooperationInputs {
       if (!this.current(action)) return { checkWhole: false };
       const feedback = error instanceof Error ? error.message : 'math_task_delivery_failed';
       if (advisory(node.task)) {
-        this.rejectWorkerDelivery(worker, action, committedSource(worker.worktree, commit, 'RESEARCH.md'), error);
+        // A turn that never wrote RESEARCH.md is rejected with an empty submission instead of stopping the worker.
+        const submission = git(worker.worktree, ['ls-tree', '--name-only', commit, '--', 'RESEARCH.md'])
+          ? committedSource(worker.worktree, commit, 'RESEARCH.md') : '';
+        this.rejectWorkerDelivery(worker, action, submission, error);
         this.input.save();
       }
       if (artifacts?.artifacts.length) this.record(worker, node.task, 'progress', 'advisory',
