@@ -1,5 +1,6 @@
 import type { WebRun } from './shared';
 import { t } from './i18n';
+import { isAcceptedRun } from './presentation';
 
 export type ReportTone = 'passed' | 'failed' | 'warning' | 'muted';
 export type ReportDiagnostic = { label: string; text: string; truncated: boolean };
@@ -146,4 +147,50 @@ export function summarizeReport(run: WebRun): ReportSummary {
   }
   const reason = text(report?.reason) ?? text(record?.error);
   return { ...(reason ? { reason } : {}), checks, metrics, identity };
+}
+
+export type StuckTask = {
+  id: string; kind: string; status: string; tone: ReportTone; theorem?: string; type?: string; attempts: number;
+  failure?: string; feedback?: string; blockers: string[]; goal: boolean;
+};
+export type StuckSummary = { tasks: StuckTask[]; omitted: number; openGoals: number; checked: number; conditional: number; open: number };
+
+const maximumStuck = 8;
+const taskStatuses = new Map<string, Status>([
+  ['pending', { status: t('待调度'), tone: 'muted' }], ['running', { status: t('进行中'), tone: 'warning' }],
+  ['blocked', { status: t('受阻'), tone: 'failed' }], ['conditional', { status: t('有条件结果'), tone: 'warning' }],
+  ['delivered', { status: t('已交付'), tone: 'warning' }], ['paused', { status: t('暂停'), tone: 'muted' }],
+  ['stopped', { status: t('停止'), tone: 'muted' }],
+]);
+const failureCategories = new Map([['proof', t('最近一次证明未通过 Lean 检查')], ['environment', t('最近一次检查因环境原因未能完成')]]);
+
+/** Where an unaccepted run stopped: the open goals' frontier first, then any other open proof task. */
+export function summarizeStuck(run: WebRun): StuckSummary | undefined {
+  const inspection = run.observation?.inspection;
+  if (!inspection || isAcceptedRun(run) || !['completed', 'cancelled', 'error'].includes(run.status)) return;
+  const byId = new Map(inspection.tasks.map(task => [task.id, task]));
+  const order: string[] = [], goals = new Set<string>();
+  const add = (id: string) => { if (byId.has(id) && !order.includes(id)) order.push(id); };
+  for (const goal of inspection.mathematics?.snapshot.goals ?? []) {
+    if (goal.closed) continue;
+    goals.add(goal.taskId);
+    for (const item of goal.frontier) add(item.taskId);
+    if (!goal.frontier.length) add(goal.taskId);
+  }
+  for (const id of inspection.progress.openProofTasks) if (byId.get(id)?.kind !== 'goal') add(id);
+  if (!order.length) return;
+  const blockers = new Map<string, string[]>();
+  for (const blocker of inspection.mathematics?.snapshot.blockers ?? [])
+    if (['open', 'reopened'].includes(blocker.status) && blocker.mechanism)
+      blockers.set(blocker.taskId, [...new Set([...blockers.get(blocker.taskId) ?? [], blocker.mechanism.slice(0, 400)])]);
+  const tasks = order.slice(0, maximumStuck).map(id => {
+    const task = byId.get(id)!, state = task.control === 'active' ? task.status : task.control;
+    const feedback = text(task.feedback)?.slice(0, 600);
+    return { id, kind: task.kind, ...status(state, taskStatuses), attempts: task.attempts, goal: goals.has(id) || task.kind === 'goal',
+      ...(task.theorem ? { theorem: task.theorem } : {}), ...(task.type ? { type: task.type.slice(0, maximumText) } : {}),
+      ...(task.proof.failureCategory ? { failure: failureCategories.get(task.proof.failureCategory) ?? task.proof.failureCategory } : {}),
+      ...(feedback ? { feedback } : {}), blockers: (blockers.get(id) ?? []).slice(0, 3) };
+  });
+  return { tasks, omitted: order.length - tasks.length, openGoals: goals.size, checked: inspection.progress.checkedProofTasks,
+    conditional: inspection.progress.conditionalProofTasks, open: inspection.progress.openProofTasks.length };
 }

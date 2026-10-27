@@ -140,6 +140,9 @@ SMTP 密码只放在环境变量或 `.env` 中，不要写进仓库。服务在�
 | `GET /api/knowledge/catalogs`、`GET /api/knowledge/search` | 不可变目录版本和检索 |
 | `GET /api/knowledge/:entryId` | metadata/source/dependencies/consumers/finding 视图，保留分页范围 |
 | `GET /api/modules` | 实际可用模块注册表 |
+| `POST /api/precheck` | 提交前编译原题：`{ environment, source }` → 状态、待证 sorry 数与诊断；被同一会话的新检查取代时返回 409 |
+| `GET /api/runs/:id/outline` | 候选证明的结构：原题目标与求解新增的辅助声明、各目标的阐释后类型与公理、已记录的引用关系；没有候选证明时 409 |
+| `GET /api/runs/:id/verification-kit` | 本地复核压缩包（ZIP）：固定版本的 `lean-toolchain` / `lakefile.toml` / `lake-manifest.json`、`Submission.lean`、`Original.lean`、逐目标 `#print axioms` 的 `Check.lean`、中英文 README 与 `report.json`；找不到原题目标时 409 |
 | `GET/POST /api/module-plans`、`DELETE /api/module-plans/:id` | 持久方案库与版本冲突检查 |
 
 ### 配置研究模块
@@ -218,6 +221,8 @@ bun run web
 ## 功能范围与数据
 
 - 提供 Mathlib 和 Lean 标准库两种固定环境。新网页任务默认 Mathlib，可使用 `import Mathlib` 和对应版本提供的 tactic；标准库环境不提供 Mathlib。单份源码最多 32 KiB，至少包含一个命名 theorem / lemma；保留原题声明，模型修改证明。暂不支持上传仓库或自定义 Lake 依赖。
+- 提交前检查原题：源码或环境停止变化约 1 秒后，服务在一次性容器（无网络、只读镜像、2 CPU、标准库 30 秒 / Mathlib 90 秒）里用固定 Lean 单独编译 `Submission.lean`，不启动模型、不创建工作区。先做与运行时相同的结构检查（控制字符、声明数量、同名声明、缺少 theorem / lemma、无法识别的定理声明），不通过时不启动 Lean。输入框上方显示状态，研究配置的源码下方列出错误与警告，点击即在编辑器中选中对应范围（行从 1 计、列按 Unicode 字符计，与 Lean 一致）。当前文本有 Lean 错误时，提交会停在第一个错误处；用户可选择“忽略检查结果，仍然提交”，仅对这份文本有效。结构检查不通过无法忽略，因为运行时同样会拒绝。超时、服务繁忙或检查不可用时不阻止提交。服务端每个会话同时只保留一个检查（新的取代旧的），全局同时 2 个、排队 6 个，每会话每分钟最多 20 次编译；相同环境与源码的已完成结果缓存 200 条。没有 Docker 检查能力的部署不提供此功能（`session.precheck` 缺省）。
+- 结果可读：报告页的“证明结构”列出原题目标（阐释后的类型、依赖的公理，Lean 三个标准公理之外的公理会被标出）和求解过程新增的辅助声明，并按独立验收记录的引用关系标出每个目标用到哪些辅助声明、每个辅助声明被谁用到（引用含间接依赖）；没有引用记录的旧运行只列声明，不从文本猜测用法。结构由服务端解析候选源码得出，因此也适用于未通过验收的候选。同一节提供“下载本地复核包”和逐步说明：`lake build Submission` 复现内核检查，`lake env lean Check.lean` 核对公理，比较 `Original.lean` 与 `Submission.lean` 确认陈述未改。未通过的运行在“卡在哪里”中列出仍未闭合的原题目标所依赖的前沿子目标（其余未完成的证明任务排在后面，最多 8 个）：Lean 类型、状态、尝试次数、最近一次检查的失败类别、仍开放的阻碍与最近反馈，并可一键在研究协作中打开该任务。
 - 环境选择随任务保存，运行列表和详情显示实际提交环境；详情显示对应工具链和 Mathlib revision。CLI 的既有行为不受网页默认值影响。
 - 概览分别显示排队、环境准备、证明研究、独立验收四个阶段及用时。总用时包含等待与准备，研究用时从真正开始研究时计算，进入独立验收后停止。阶段开始时间独立保存在后端，不受最近 200 条活动日志上限影响；刷新页面后可继续查看。取消或提前结束的任务会标明尚未执行的阶段。
 - 桌面使用左右双栏：左侧对话显示已提交任务、真实阶段事件和研究结果，底部保留输入框；右侧提交前预览 Lean 源码，运行中默认进入研究协作，并保留模块、概览、报告和活动视图。栏宽可拖动或用分隔条的方向键调整；手机通过“对话 / 工作区”切换。模型连接与执行预算集中在研究配置弹窗，历史记录通过左上角抽屉查看。
@@ -308,6 +313,8 @@ bun run test:web-share
 bun run test:web-onboarding
 bun run test:web-i18n
 bun run test:web-a11y
+bun run test:web-precheck
+bun run test:web-readable-results
 bun run build:web-preview
 bun run test:web-preview
 bun run test:web-preparation
@@ -336,6 +343,9 @@ bun scripts/test-web-runtime.ts
 `test:web-ui` 使用 Playwright Chromium 与真实本地 HTTP 服务，通过可控 worker fixture 检查进度计时、日志轮转、刷新、取消、配置复用、源码切换、复制下载、本地文件导入、展开编辑、历史筛选，以及 320–1440 像素布局。`test:web-recovery` 检查离线、401 / CSRF 403、请求超时、POST 响应丢失、过时响应和页面恢复。`test:web-results` 检查可读报告、候选与最终验收的区别、诊断转义、JSON 导出，以及删除确认、失败和响应丢失。`test:web-drafts` 检查刷新恢复、草稿与档案导入导出、密钥排除、存储异常和导入预览布局。`test:web-source-diff` 检查逐行差异、上下文与更改导航、换行、原文复制下载和大输入边界。这些浏览器验证均不调用 Docker、Lean 或模型，报告和截图写入 `out/web-ui-smoke/`。首次使用需安装 Playwright Chromium：`bunx playwright install chromium`。
 
 `test:web-a11y` 以中英文界面检查欢迎页、示例运行的每个标签页、研究配置 / 术语 / 研究记录对话框、命令面板和 375 像素布局：控件都有可读名称，label 与 ARIA 引用指向真实元素，id 不重复，无正 tabindex、嵌套控件或 aria-hidden 内的可聚焦元素；第一个 Tab 落在跳转链接，后续焦点都有可见焦点环；详情标签页支持方向键、Home 和 End；对话框按 Esc 关闭并把焦点还给打开它的按钮。同一套规则（`scripts/web-a11y.ts`）也用于 `test:web-login` 的登录页与账号对话框和 `test:web-share` 的分享对话框与分享页。
+
+`test:web-precheck` 使用不启动 Docker 的编译夹具，在中英文下检查：编辑后自动检查；Lean 错误按行列出、点击及提交时在编辑器中选中原范围（含宽字符前的列）；有错误时不创建运行，忽略后可提交；结构检查不调用编译且不可忽略；新编辑取代并停止慢检查；检查不可用时不阻止提交；375 / 320 像素下不溢出并通过无障碍规则。`bun run smoke:web-precheck` 需本机 Docker 和 `theorem-os-worker:local`，用真实 Lean 编译几道标准库与 Mathlib 题目，并验证取消后容器被删除。
+`test:web-readable-results` 用不调用模型和 Lean 的运行夹具检查：通过的运行列出目标、辅助声明、引用与公理（只标出含非标准公理的目标），下载的复核包可解压且证明逐字一致，结构只读取一次；结构读取失败后可重试，未记录引用时不推断用法；卡住的运行列出前沿子目标、转义模型文本，并在研究协作中聚焦该任务；英文界面；375 / 320 像素下不溢出。
 
 组件预览 `bun run build:web-preview` 把 `apps/web/preview/` 构建到 `out/web-preview/`，用固定数据展示每个工作台组件（基础控件、Section 辅助组件、顶栏、对话、运行监视、运行头部、概览、研究协作）；在页面上可切换中英文。它只用于开发，不进入 `out/web` 或镜像。`test:web-preview` 在中英文、1440 与 375 像素下检查每个组件渲染无报错、英文界面无未翻译文字、页面不溢出并通过上述无障碍规则，截图写入 `out/web-preview-check/`。
 
@@ -415,7 +425,9 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | --- | --- |
 | `apps/web/server.ts` | 同源静态服务、会话、CSRF、运行 API |
 | `apps/web/jobs.ts` | 队列、并发、归属检查、取消、脱敏与观测/命令协调 |
-| `apps/web/runner.ts` | Docker 生命周期、预算、私有 stdin 协议 |
+| `apps/web/runner.ts` | Docker 生命周期、预算、私有 stdin 协议；提交前检查的一次性编译容器 |
+| `apps/web/precheck.ts`、`apps/web/client/sourceCheck.tsx` | 提交前检查：结构检查、Lean 诊断解析、并发/缓存/限流；编辑器内的状态与定位 |
+| `apps/web/verificationKit.ts`、`apps/web/report.ts` | 证明结构与本地复核包（ZIP 写入）；报告摘要与“卡在哪里”的前沿子目标 |
 | `apps/web/worker.ts` | 单次 BYOK profile、真实求解与验收 |
 | `apps/web/workerBridge.ts`、`apps/web/worker-command.ts` | 容器观测采集、结构化人工命令与销毁前知识导出 |
 | `apps/web/storage.ts`、`apps/web/knowledgeService.ts` | 持久运行索引、归档、不可变知识版本与检索 |

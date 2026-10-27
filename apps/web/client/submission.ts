@@ -5,7 +5,8 @@ import { localeTag, t } from '../i18n';
 
 export const submissionFields = ['provider', 'environment', 'source', 'task', 'model', 'api-key', 'max-turns', 'max-seconds', 'workers', 'max-tokens'] as const;
 export type SubmissionField = typeof submissionFields[number] | 'module-plan';
-export type SubmissionIssue = { field: SubmissionField; message: string };
+/** `check` marks the source issue that comes from compiling the statement, not from the field's own rules. */
+export type SubmissionIssue = { field: SubmissionField; message: string; check?: boolean };
 
 /** The field is in units of 10,000 tokens (万), the unit providers bill in Chinese consoles. */
 export function tokenCap(raw: string, maximum: number): number | undefined {

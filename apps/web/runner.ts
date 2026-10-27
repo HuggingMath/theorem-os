@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { WebConfig } from './config';
@@ -8,12 +9,15 @@ import { webArtifactMaxBytes, webFailureKinds, webFailureReason } from './shared
 import { isWebEventDetails } from './moduleTelemetry';
 import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
+import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
 import { validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string }>;
   run(input: WorkerInput, onMessage: (message: WorkerMessage) => void, signal: AbortSignal): Promise<void>;
   command?(id: string, command: WebCommand): Promise<WebCommandResult>;
+  /** Compiles a statement on its own, without a model or a workspace; absent when the service cannot. */
+  check?: WebPrecheckRunner;
 };
 const execute = promisify(execFile);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -96,6 +100,51 @@ export class DockerWebRunner implements WebRunner {
       child.stdin.end(JSON.stringify(command) + '\n');
     });
   }
+
+  /**
+   * Compiles the statement as one file in a throwaway container: no network, no workspace, read-only image, a few
+   * seconds of CPU. The source travels over stdin. Mathlib checks read the image's prebuilt packages directly.
+   */
+  check: WebPrecheckRunner = async ({ environment, source }, signal) => {
+    signal.throwIfAborted();
+    const name = `theoremos-check-${crypto.randomUUID()}`;
+    const mathlib = environment === 'mathlib';
+    const memory = mathlib ? '6g' : '2g';
+    const script = 'cat > /tmp/Submission.lean && ' + (mathlib
+      ? 'LP=; for d in /opt/theoremos-mathlib/.lake/packages/*/.lake/build/lib/lean; do LP="$LP:$d"; done; LEAN_PATH="${LP#:}" '
+      : '') + 'exec lean --json /tmp/Submission.lean';
+    const remove = () => execute('docker', ['rm', '--force', name], { timeout: 15_000 }).then(() => {}, () => {});
+    try {
+      await execute('docker', ['create', '--interactive', '--pull=never', '--name', name, '--network=none', '--log-driver=none',
+        '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--cpus=2', `--memory=${memory}`, `--memory-swap=${memory}`,
+        '--pids-limit=128', '--ulimit', 'nofile=1024:1024', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777',
+        '--entrypoint', 'sh', this.config.workerImage, '-c', script], { timeout: 30_000, maxBuffer: 8_192 });
+    } catch (error) { await remove(); throw error; }
+    try {
+      return await new Promise<WebPrecheckOutput>((resolve, reject) => {
+        const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
+        let output = '', timedOut = false, settled = false;
+        const finish = (result?: WebPrecheckOutput, error?: unknown) => {
+          if (settled) return;
+          settled = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+          if (result) resolve(result); else reject(error);
+        };
+        const abort = () => { child.kill('SIGKILL'); finish(undefined, signal.reason); };
+        const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, (mathlib ? 90 : 30) * 1_000);
+        signal.addEventListener('abort', abort, { once: true });
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', chunk => {
+          output += chunk;
+          // `#eval` can print without bound; what came before the limit still describes the statement.
+          if (output.length > 1024 * 1024) child.kill('SIGKILL');
+        });
+        child.stdin.on('error', () => {});
+        child.once('error', error => finish(undefined, error));
+        child.once('close', code => finish({ output, exitCode: code, timedOut }));
+        child.stdin.end(source);
+      });
+    } finally { await remove(); }
+  };
 
   async readiness() {
     if (this.cached && Date.now() - this.cached.at < 10_000) return this.cached.result;

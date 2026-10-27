@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import type { WebRunInput, WebSession } from './shared';
+import type { WebEnvironment, WebRunInput, WebSession } from './shared';
 import { researchModulePlanSchema } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
@@ -16,6 +16,8 @@ import { webGuidanceSchema, webPlanProposalSchema } from './collaborationValidat
 import { WebAuth, WebAuthError, type WebMailer, type WebMilestone } from './auth';
 import { shareSnapshot, webShareToken, type WebShareLink } from './share';
 import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
+import { PrecheckSuperseded, WebPrechecker } from './precheck';
+import { proofOutline, verificationKit } from './verificationKit';
 
 const inputSchema = z.object({
   providerId: z.string().min(1).max(40), apiKey: z.string().min(8).max(4096).regex(/^[\x21-\x7e]+$/),
@@ -31,6 +33,10 @@ const inputSchema = z.object({
   coordination: z.enum(['cooperative', 'independent']),
   modulePlan: researchModulePlanSchema.optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+}).strict();
+const precheckSchema = z.object({
+  environment: z.enum(['standard', 'mathlib']),
+  source: z.string().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
 }).strict();
 
 class HttpError extends Error {
@@ -81,6 +87,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     if (auth && owner.startsWith('account:')) try { auth.markMilestone(owner.slice(8), name); } catch { /* A milestone never fails a run. */ }
   };
   const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt') });
+  const prechecker = runner.check ? new WebPrechecker(runner.check.bind(runner)) : undefined;
   const rates = new Map<string, { count: number; expiresAt: number }>();
   const runStreams = new Map<string, Set<() => void>>();
   const origin = new URL(config.publicUrl);
@@ -110,6 +117,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       if (Date.now() - session.touchedAt > ttl) endSession(id);
     }
     for (const [ip, rate] of rates) if (rate.expiresAt <= Date.now()) rates.delete(ip);
+    prechecker?.prune();
     auth?.prune();
   };
   const maintenance = setInterval(prune, 60_000).unref();
@@ -163,7 +171,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const body: WebSession = { csrfToken: session.csrf, auth: auth ? 'email' : 'none',
             ...(session.account ? { account: { email: session.account.email } } : {}), providers: config.providers, environments: getWebEnvironments(),
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
-            ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}) };
+            ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
           json(response, 200, body); return;
         }
         if (!session) throw new HttpError(401, '会话已过期，请刷新页面。');
@@ -289,6 +297,20 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           else json(response, 200, { runs: jobs.list(owner) });
           return;
         }
+        if (url.pathname === '/api/precheck' && request.method === 'POST') {
+          if (!prechecker) throw new HttpError(503, '当前服务不提供提交前检查。');
+          const parsed = precheckSchema.safeParse(await readJson(request));
+          if (!parsed.success) throw new HttpError(400, '请检查证明环境与 Lean 源码。');
+          // A closed tab or a newer edit stops the compile; a superseded check has no reader left to answer.
+          const gone = new AbortController();
+          response.once('close', () => { if (!response.writableFinished) gone.abort(new PrecheckSuperseded()); });
+          try { json(response, 200, { precheck: await prechecker.check(owner, parsed.data as { environment: WebEnvironment; source: string }, gone.signal) }); }
+          catch (error) {
+            if (error instanceof PrecheckSuperseded) { if (!response.destroyed) json(response, 409, { error: '检查已被更新的版本取代。' }); return; }
+            throw error;
+          }
+          return;
+        }
         if (url.pathname === '/api/runs' && request.method === 'POST') {
           const parsed = inputSchema.safeParse(await readJson(request));
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
@@ -308,6 +330,19 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(.*))?$/.exec(url.pathname);
         if (!match) throw new HttpError(404, '页面或运行不存在。');
+        // Derived from the finished proof alone, so the sample answers the same way as an owned run.
+        if (['outline', 'verification-kit'].includes(match[2] ?? '')) {
+          if (request.method !== 'GET') throw new HttpError(405, '请求方法不受支持。');
+          const run = sample && match[1] === webSampleRunId ? sample.run : jobs.get(owner, match[1]);
+          if (!run) throw new HttpError(404, '运行不存在或不属于当前会话。');
+          if (!run.result?.proof) throw new HttpError(409, '这次运行没有可检查的候选证明。');
+          if (match[2] === 'outline') { json(response, 200, { outline: proofOutline(run) }); return; }
+          const kit = verificationKit(run);
+          if (!kit) throw new HttpError(409, '候选证明中没有找到原题的目标定理。');
+          response.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': kit.content.length,
+            'Content-Disposition': `attachment; filename="${kit.filename}"`, 'Cache-Control': 'no-store' });
+          response.end(kit.content); return;
+        }
         if (sample && match[1] === webSampleRunId) {
           const answer = webSampleResponse(sample, match[2], request.method || 'GET', url.searchParams);
           if (answer.filename) response.setHeader('Content-Disposition', `attachment; filename="${answer.filename}"`);
@@ -437,6 +472,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   server.requestTimeout = 15_000; server.headersTimeout = 10_000;
   const close = async () => {
     clearInterval(maintenance);
+    prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
     await Promise.all([jobs.close(), new Promise<void>(resolve => server.close(() => resolve()))]);

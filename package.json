@@ -65,6 +65,9 @@
     "test:web-motion": "bun scripts/test-web-motion.ts",
     "test:web-preview": "bun scripts/test-web-preview.ts",
     "test:web-a11y": "bun scripts/test-web-a11y.ts",
+    "test:web-precheck": "bun scripts/test-web-precheck.ts",
+    "test:web-readable-results": "bun scripts/test-web-readable-results.ts",
+    "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

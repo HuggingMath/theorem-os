@@ -129,7 +129,30 @@ export type WebSession = {
   runtime: { ready: boolean; message: string };
   /** A recorded read-only run that needs no API key; absent when the image ships without one. */
   sample?: { id: string; title: string };
+  /** Set when the service can compile a statement before submission (POST /api/precheck). */
+  precheck?: boolean;
 };
+/**
+ * One finding from the statement check. `code` marks a structural check (shown in the interface language); otherwise
+ * `message` is Lean's own text. Lines count from 1, columns are code points from 0, as Lean reports them.
+ */
+export type WebPrecheckDiagnostic = { severity: 'error' | 'warning'; line: number; column: number; endLine?: number; endColumn?: number;
+  code?: string; name?: string; message?: string };
+/**
+ * `invalid`: a structural check failed, Lean was not started. `errors`: Lean rejected the statement. `ready`: it compiles
+ * and leaves `sorries` to prove. `complete`: it compiles with nothing left to prove. The rest say nothing about the
+ * statement and never block a submission.
+ */
+export type WebPrecheckStatus = 'invalid' | 'errors' | 'ready' | 'complete' | 'timeout' | 'busy' | 'unavailable';
+export type WebPrecheck = { status: WebPrecheckStatus; environment: WebEnvironment; targets: number; sorries: number;
+  diagnostics: WebPrecheckDiagnostic[]; cached?: boolean };
+/** A finished proof's declarations: the original targets and what the solver added. `uses` are kernel-recorded,
+ * project-local and transitive; without that record (`unrecorded`) nothing is inferred from the text. */
+export type WebProofOutlineDeclaration = {
+  name: string; kind: 'theorem' | 'definition' | 'instance'; role: 'target' | 'helper'; type: string; typeTruncated?: boolean;
+  uses?: string[]; usedBy?: string[]; axioms?: string[]; nonstandardAxioms?: string[];
+};
+export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
 export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown };
 export type WorkerMessage =

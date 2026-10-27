@@ -3,15 +3,16 @@ import {
   Download, ExternalLink, Eye, EyeOff, FileCode2, FileJson2, FlaskConical, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, List, ListOrdered, Link2, Link2Off, LocateFixed, Maximize2, MessageSquare, Network, PanelLeft, PanelRight, Paperclip,
   LogOut, Play, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
-import type { WebCoordination, WebEffort, WebEnvironment, WebRun, WebRunInput, WebSession } from '../shared';
+import type { WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebProofOutlineDeclaration, WebRun, WebRunInput, WebSession } from '../shared';
 import type { WebShareLink } from '../share';
 import { effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, resultDescription, runProgress, usageEstimate, type RecoveryAction } from '../presentation';
-import { summarizeReport, type ReportCheck, type ReportDiagnostic, type ReportTarget } from '../report';
+import { summarizeReport, summarizeStuck, type ReportCheck, type ReportDiagnostic, type ReportTarget, type StuckSummary, type StuckTask } from '../report';
 import { filterRuns, type RunFilter } from './history';
 import { readLeanFile } from './sourceFile';
 import { sourceIndentEdit, type IndentDirection } from './sourceIndent';
 import type { SourceSelection } from './sourceText';
-import { EditorNavigation } from './editorNavigation';
+import { EditorNavigation, revealOffset } from './editorNavigation';
+import { diagnosticText, renderSourceCheck, SourceCheck, sourceOffset } from './sourceCheck';
 import { EditorReview } from './editorReview';
 import { decodeTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftStorageKey, type TaskDraft } from './draft';
 import { compareSources, type SourceComparison } from './sourceDiff';
@@ -176,6 +177,39 @@ const editorNavigation = new EditorNavigation(element<HTMLDialogElement>('#sourc
 const editorReview = new EditorReview(element<HTMLDialogElement>('#source-editor'), () => editorNavigation.close(),
   updateEditorPosition, position => editorNavigation.locate(position));
 const validationShown = new Set<SubmissionField>();
+const sourceCheck = new SourceCheck({
+  input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value }),
+  enabled: () => Boolean(state.session?.precheck && state.connected && state.session.runtime.ready
+    && new TextEncoder().encode(field('source').value).length <= state.session.limits.maxSourceBytes),
+  post: async (input, signal) => (await api<{ precheck: WebPrecheck }>('/api/precheck',
+    { method: 'POST', body: JSON.stringify(input), signal, timeoutMs: 120_000 })).precheck,
+  superseded: error => error instanceof ApiError && error.status === 409,
+  message: error => message(error),
+  render: () => { renderSourceCheckView(); renderPreparation(); },
+});
+function renderSourceCheckView() {
+  renderSourceCheck(element('#source-check'), element('#source-check-status'), {
+    check: sourceCheck, onJump: jumpToSourceDiagnostic, onRecheck: () => { void sourceCheck.run(); },
+    onOpen: () => {
+      const first = sourceCheck.blocking();
+      if (first) { jumpToSourceDiagnostic(first); return; }
+      openSettings('source');
+      element('#source-check').scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    },
+  });
+}
+/** Opens the statement in settings with the reported range selected and in view. */
+function jumpToSourceDiagnostic(diagnostic: WebPrecheckDiagnostic) {
+  openSettings('source');
+  const editor = element<HTMLTextAreaElement>('#source');
+  if (!editor.matches(':focus')) return;
+  const start = sourceOffset(editor.value, diagnostic.line, diagnostic.column);
+  const end = diagnostic.endLine === undefined ? start
+    : Math.max(start, sourceOffset(editor.value, diagnostic.endLine, diagnostic.endColumn ?? 0));
+  editor.setSelectionRange(start, end);
+  revealOffset(editor, start);
+  editor.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+}
 let chatWidth = 40;
 const conversationScroll = { top: 0, following: true };
 let historyCriteria = '';
@@ -184,11 +218,12 @@ let historyReading: { top: number; anchors: Array<{ id: string; offset: number }
 class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-function api<T>(url: string, init?: RequestInit): Promise<T>;
-function api<T>(url: string, init: RequestInit, etag: (value: string | null) => void): Promise<T | undefined>;
-async function api<T>(url: string, init: RequestInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
+type ApiInit = RequestInit & { timeoutMs?: number };
+function api<T>(url: string, init?: ApiInit): Promise<T>;
+function api<T>(url: string, init: ApiInit, etag: (value: string | null) => void): Promise<T | undefined>;
+async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), 15_000);
+  const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
   const signals = [timeout.signal];
   if (!init.method || init.method === 'GET') signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
@@ -300,8 +335,18 @@ function clearValidation() {
     element(`#${id}-validation`).hidden = true;
   }
 }
-function currentSubmissionIssues() {
-  return state.session ? submissionIssues(captureDraft(), field('api-key').value, state.session) : [];
+function currentSubmissionIssues(): SubmissionIssue[] {
+  if (!state.session) return [];
+  const issues = submissionIssues(captureDraft(), field('api-key').value, state.session);
+  const blocking = sourceCheck.blocking();
+  // A failed compile is the source field's issue, in the source field's place, unless the field already has one.
+  if (!blocking || issues.some(issue => issue.field === 'source')) return issues;
+  const after = submissionFields.indexOf('source');
+  const index = issues.findIndex(issue => issue.field !== 'module-plan' && submissionFields.indexOf(issue.field) > after);
+  const issue: SubmissionIssue = { field: 'source', check: true,
+    message: t('原题第 {0} 行：{1}', blocking.line, diagnosticText(blocking).split('\n')[0].slice(0, 160)) };
+  issues.splice(index < 0 ? issues.length : index, 0, issue);
+  return issues;
 }
 function renderPreparation(issues = currentSubmissionIssues()) {
   for (const id of submissionFields) {
@@ -334,9 +379,10 @@ function renderPreparation(issues = currentSubmissionIssues()) {
     : offline || !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
       : issue?.field === 'api-key' ? t('每次提交后清空，不随草稿保存。')
         : issue?.field === 'task' ? t('说明要证明的目标与约束。')
+          : issue?.check ? t('原题需要先能编译；点击右侧定位到出错位置。')
           : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
             : issue ? t('补全配置后即可提交当前题目。') : t('Key 与模型可用性将在提交时确认。'));
-  patchText(element('#readiness-action'), issue ? labels[issue.field] : t('查看配置'));
+  patchText(element('#readiness-action'), issue?.check ? t('查看错误') : issue ? labels[issue.field] : t('查看配置'));
   patchMarkup(element('#readiness-icon'), state.submitting ? '<span class="spinner"></span>' : icon(phase === 'ready' ? 'circle-check' : 'circle-alert'));
   const action = element<HTMLButtonElement>('#prepare-run');
   if (action.disabled !== (pending || state.submitting)) action.disabled = pending || state.submitting;
@@ -356,6 +402,8 @@ function renderBudgetEstimate() {
 function focusSubmissionIssue(issue: SubmissionIssue) {
   validationShown.add(issue.field);
   renderPreparation();
+  const diagnostic = issue.check && sourceCheck.blocking();
+  if (diagnostic) { jumpToSourceDiagnostic(diagnostic); return; }
   if (issue.field === 'module-plan') {
     openSettings('module-plan'); modulePlanEditor.validate();
     element('#module-plan-error').scrollIntoView({ block: 'nearest', behavior: 'instant' });
@@ -552,6 +600,8 @@ function draftChanged(persist = true) {
   modulePlanLibrary.sync();
   draftRevision++;
   renderImportState();
+  sourceCheck.schedule();
+  renderSourceCheckView();
   renderComposerSummary();
   renderDraftPreview();
   if (!draftReady || !persist) return;
@@ -834,6 +884,8 @@ function renderRuntime() {
   renderDeleteState();
   renderConversation();
   if (state.draftView === 'modules') renderDraftPreview();
+  // Connecting (or losing the connection) starts or stops the statement check.
+  sourceCheck.schedule();
   icons();
 }
 function status(run: WebRun) {
@@ -1097,10 +1149,12 @@ function reportView(run: WebRun) {
     : `<div class="empty-state">${icon('file-json-2')}<p>${activeRun(run) ? t('结果报告尚未生成') : t('暂无结果报告')}</p></div>`;
   const toolbar = `<div class="panel-topline report-topline"><div class="source-switch" role="group" aria-label="${t('报告视图')}"><button type="button" data-report-view="summary" aria-pressed="${state.reportMode === 'summary'}">${t('验收摘要')}</button><button type="button" data-report-view="json" aria-pressed="${state.reportMode === 'json'}">JSON</button></div><div class="report-actions"><button type="button" class="icon-button" data-action="copy-report" aria-label="${t('复制报告 JSON')}" title="${t('复制报告 JSON')}">${icon('copy')}</button><button type="button" class="button" data-action="download-report">${t('{0}下载报告', icon('download'))}</button></div></div>`;
   if (state.reportMode === 'json') return `${toolbar}<pre class="code-scroll report" tabindex="0" aria-label="${t('结果报告 JSON')}"><code>${html(JSON.stringify(run.result.report, null, 2))}</code></pre>`;
-  const report = summarizeReport(run);
+  const report = summarizeReport(run), stuck = summarizeStuck(run);
   return `${toolbar}<div class="report-summary">${resultBanner(run)}
     ${report.reason ? `<section class="report-section report-reason"><h3>${t('运行说明')}</h3><p>${html(report.reason)}</p></section>` : ''}
+    ${stuck ? stuckView(stuck) : ''}
     ${report.metrics.length ? `<dl class="report-metrics">${report.metrics.map(item => fact(item.label, item.value, true)).join('')}</dl>` : ''}
+    ${run.result.proof ? outlineSection(run) : ''}
     ${report.checks.length ? report.checks.map(reportCheck).join('') : `<div class="empty-state compact"><p>${t('暂无结构化验收记录')}</p></div>`}
     ${report.identity.length ? `<section class="report-section"><h3>${t('验收凭据')}</h3><dl class="facts report-identity">${report.identity.map(item => fact(item.label, item.value, true)).join('')}</dl></section>` : ''}</div>`;
 }
@@ -1120,12 +1174,76 @@ function reportDiagnostic(diagnostic: ReportDiagnostic) {
   return `<div class="diagnostic-entry"><h4>${html(diagnostic.label)}</h4><pre class="diagnostic-output" tabindex="0">${html(diagnostic.text)}</pre>
     ${diagnostic.truncated ? `<p class="diagnostic-limit"><span>${t('仅显示前 4000 字符')}</span><button type="button" class="report-detail-link" data-report-view="json">${t('{0}查看原始报告', icon('file-json-2'))}</button></p>` : ''}</div>`;
 }
+function stuckView(stuck: StuckSummary) {
+  const progress = [t('已检查 {0} 个', stuck.checked), stuck.conditional ? t('有条件 {0} 个', stuck.conditional) : '', t('未完成 {0} 个', stuck.open)].filter(Boolean).join(' · ');
+  const item = (task: StuckTask) => `<li class="stuck-task"><div class="item-heading"><span class="stuck-name">${task.goal ? `<span class="stuck-kind">${t('原题目标')}</span>` : ''}<code translate="no">${html(task.theorem ?? task.id)}</code></span><span class="badge ${task.tone}">${html(task.status)}</span></div>
+    ${task.type ? `<pre class="stuck-type" translate="no">${html(task.type)}</pre>` : ''}
+    <p class="stuck-facts">${html([t('已尝试 {0} 次', task.attempts), task.failure].filter(Boolean).join(' · '))}</p>
+    ${task.blockers.length ? `<ul class="stuck-blockers">${task.blockers.map(text => `<li>${icon('triangle-alert')}<span>${html(text)}</span></li>`).join('')}</ul>` : ''}
+    ${task.feedback ? `<details class="target-diagnostics"><summary>${t('最近反馈')}</summary><pre class="diagnostic-output" tabindex="0">${html(task.feedback)}</pre></details>` : ''}
+    <button type="button" class="report-detail-link" data-action="inspect-task" data-task-id="${html(task.id)}">${t('{0}在协作中查看', icon('network'))}</button></li>`;
+  return `<section class="report-section report-stuck" aria-labelledby="report-stuck-heading"><div class="report-check-heading"><h3 id="report-stuck-heading">${t('卡在哪里')}</h3><span class="report-method">${html(progress)}</span></div>
+    <p class="report-method">${stuck.openGoals ? t('原题目标尚未闭合；下面是它当前依赖的、还没有通过检查的子目标。') : t('下面这些子目标还没有通过 Lean 检查。')}</p>
+    <ul class="stuck-tasks">${stuck.tasks.map(item).join('')}</ul>
+    ${stuck.omitted ? `<p class="report-method">${t('另有 {0} 个未完成子目标，见协作页任务图', stuck.omitted)}</p>` : ''}</section>`;
+}
+type OutlineState = { status: 'loading' } | { status: 'ready'; outline: WebProofOutline } | { status: 'failed'; error: string };
+const outlines = new Map<string, OutlineState>();
+function outlineSection(run: WebRun) {
+  const heading = passed(run) ? t('证明结构') : t('候选证明结构');
+  return `<section class="report-section report-outline" aria-labelledby="report-outline-heading"><div class="report-check-heading"><h3 id="report-outline-heading">${heading}</h3></div>
+    <div class="outline-body" aria-live="polite">${outlineBody(run)}</div></section>`;
+}
+function outlineBody(run: WebRun) {
+  const state = outlines.get(run.id);
+  if (!state || state.status === 'loading') return `<p class="report-method"><span class="spinner"></span>${t('正在整理证明结构…')}</p>`;
+  if (state.status === 'failed') return `<p class="report-reason-text">${html(state.error)}</p><button type="button" class="report-detail-link" data-action="retry-outline">${t('{0}重新整理', icon('rotate-ccw'))}</button>`;
+  const { outline } = state, targets = outline.declarations.filter(item => item.role === 'target'), helpers = outline.declarations.filter(item => item.role === 'helper');
+  const kind = (item: WebProofOutlineDeclaration) => item.kind === 'definition' ? t('定义') : item.kind === 'instance' ? t('实例') : t('引理');
+  const names = (list: string[]) => list.map(name => `<code translate="no">${html(name)}</code>`).join(t('、'));
+  const target = (item: WebProofOutlineDeclaration) => `<li class="outline-item"><div class="item-heading"><code translate="no">${html(item.name)}</code>${item.nonstandardAxioms?.length ? `<span class="badge warning">${t('含非标准公理')}</span>` : ''}</div>
+    <pre class="stuck-type" translate="no">${html(item.type)}${item.typeTruncated ? '\n…' : ''}</pre>
+    ${item.uses ? `<p class="outline-uses">${item.uses.length ? t('用到：{0}', names(item.uses)) : t('直接证明，没有用到新增的辅助声明')}</p>` : ''}
+    ${item.axioms ? `<p class="outline-uses">${item.axioms.length ? t('依赖公理：{0}', names(item.axioms)) : t('不依赖任何公理')}${item.nonstandardAxioms?.length ? ` <span class="outline-warning">${t('{0} 不在 Lean 的三个标准公理之内，请逐一核对', names(item.nonstandardAxioms))}</span>` : ''}</p>` : ''}</li>`;
+  const helper = (item: WebProofOutlineDeclaration) => `<li class="outline-item"><div class="item-heading"><code translate="no">${html(item.name)}</code><span class="badge muted">${kind(item)}</span></div>
+    <pre class="stuck-type" translate="no">${html(item.type)}${item.typeTruncated ? '\n…' : ''}</pre>
+    ${item.usedBy ? `<p class="outline-uses">${item.usedBy.length ? t('被 {0} 用到', names(item.usedBy)) : t('没有被任何目标用到')}</p>` : ''}</li>`;
+  if (!targets.length) return `<p class="report-method">${t('候选证明中没有找到原题的目标定理，无法整理结构或生成复核包。')}</p>`;
+  return `<p class="report-method">${helpers.length ? t('{0} 个原题目标，求解过程新增了 {1} 个辅助声明。', targets.length, helpers.length) : t('{0} 个原题目标，没有新增辅助声明。', targets.length)}${outline.references === 'unrecorded' && helpers.length ? ` ${t('这次运行没有记录引用关系，未标出各目标用到哪些辅助声明。')}` : ''}</p>
+    <h4 class="outline-heading">${t('原题目标')}</h4><ul class="verification-targets">${targets.map(target).join('')}</ul>
+    ${helpers.length ? `<h4 class="outline-heading">${t('新增辅助声明')}</h4><ul class="verification-targets">${helpers.map(helper).join('')}</ul>` : ''}
+    ${outline.omitted ? `<p class="report-method">${t('另有 {0} 个声明未列出', outline.omitted)}</p>` : ''}
+    <div class="local-check"><a class="button" href="/api/runs/${encodeURIComponent(run.id)}/verification-kit" download>${t('{0}下载本地复核包', icon('download'))}</a>
+    <span class="report-method">${t('包含原题、证明、固定版本的 Lean 工程文件和公理检查脚本。')}</span></div>${localCheckGuide(run)}`;
+}
+function localCheckGuide(run: WebRun) {
+  const mathlib = Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib');
+  const steps = [t('安装 Lean 版本管理器 elan；压缩包里的 lean-toolchain 会自动选用同一 Lean 版本。'),
+    mathlib ? t('在解压目录运行 {0}，下载预编译的 Mathlib。', '<code translate="no">lake exe cache get</code>') : t('标准库环境不需要下载依赖。'),
+    t('运行 {0}：没有 error 即 Lean 内核接受了全部证明。', '<code translate="no">lake build Submission</code>'),
+    t('运行 {0}：每个目标只应依赖 propext、Classical.choice、Quot.sound；出现 sorryAx 说明证明不完整。', '<code translate="no">lake env lean Check.lean</code>'),
+    t('比较 Original.lean 与 Submission.lean：目标定理的陈述应保持不变。')];
+  return `<details class="target-diagnostics local-check-guide"><summary>${t('如何在自己的电脑上复核')}</summary><ol class="local-check-steps">${steps.map(step => `<li>${step}</li>`).join('')}</ol></details>`;
+}
+function loadOutline(run: WebRun, retry = false) {
+  if (!run.result?.proof || outlines.has(run.id) && !retry) return;
+  outlines.set(run.id, { status: 'loading' });
+  const show = () => {
+    const body = currentRun()?.id === run.id && state.tab === 'report' ? document.querySelector<HTMLElement>('#detail-panel .outline-body') : null;
+    if (body) patchMarkup(body, outlineBody(run));
+  };
+  show();
+  void api<{ outline: WebProofOutline }>(`/api/runs/${encodeURIComponent(run.id)}/outline`)
+    .then(({ outline }) => { outlines.set(run.id, { status: 'ready', outline }); })
+    .catch(error => { outlines.set(run.id, { status: 'failed', error: t('证明结构整理失败：{0}', message(error)) }); })
+    .finally(show);
+}
 function renderPanel(force = false) {
   const run = currentRun();
   if (!run || !document.querySelector('#detail-panel')) return;
   const content = state.tab === 'source' ? sourceContent(run) : undefined;
   const signature = JSON.stringify([run.id, state.tab, content ? [state.sourceView, state.foldUnchanged, content.source, content.controls, content.status, content.tone]
-    : state.tab === 'report' ? [state.reportMode, run.status, run.error, run.result] : state.tab === 'events' ? run.events
+    : state.tab === 'report' ? [state.reportMode, run.status, run.error, run.result, run.observation?.sequence] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
   if (!force && signature === state.panelSignature) {
     if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected, isSample(run));
@@ -1187,6 +1305,7 @@ function renderPanel(force = false) {
   if (state.tab === 'events') activityReader.update(panel.querySelector<HTMLElement>('.activity-workspace')!, run);
   if (state.tab === 'modules') moduleView.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
   if (state.tab === 'overview') renderOverview(run);
+  if (state.tab === 'report' && state.reportMode === 'summary') loadOutline(run);
   updateDiffNavigation(0, !sameView);
   if (navigating) animateEntrance(panel, 'panel');
   updateSourceReader();
@@ -1934,6 +2053,12 @@ element('#run-detail').addEventListener('click', event => {
   if (target.dataset.action === 'show-events' || target.dataset.action === 'show-agents') {
     state.tab = target.dataset.action === 'show-events' ? 'events' : 'collaboration';
     renderDetail(true); element(`#detail-tab-${state.tab}`).focus({ preventScroll: true }); return;
+  }
+  if (target.dataset.action === 'retry-outline') loadOutline(run, true);
+  if (target.dataset.action === 'inspect-task' && target.dataset.taskId) {
+    state.tab = 'collaboration'; renderDetail(true);
+    if (!collaborationView.showTask(run.id, target.dataset.taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
+    return;
   }
   if (target.dataset.action === 'diff-prev') updateDiffNavigation(-1);
   if (target.dataset.action === 'diff-next') updateDiffNavigation(1);

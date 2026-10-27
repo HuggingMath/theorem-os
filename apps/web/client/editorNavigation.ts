@@ -33,7 +33,8 @@ function measureRange(editor: HTMLTextAreaElement, start: number, end = start) {
   } finally { mirror.remove(); }
 }
 
-function revealOffset(editor: HTMLTextAreaElement, offset: number) {
+/** Scrolls the textarea so the offset sits mid-height, wrapping included. */
+export function revealOffset(editor: HTMLTextAreaElement, offset: number) {
   const caret = measureRange(editor, offset)[0];
   if (!caret) return;
   editor.scrollTo({ top: caret.top - Math.max(0, (editor.clientHeight - caret.height) / 2),

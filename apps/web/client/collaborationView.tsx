@@ -210,6 +210,13 @@ export class CollaborationView {
     }
     if (notify) this.observed(observation);
   }
+  /** Open one task in the inspector, as a click on it in the graph would; false when this run has no such task yet. */
+  showTask(runId: string, taskId: string): boolean {
+    const view = this.views.get(runId);
+    if (!view || this.current !== view || !view.observation?.inspection.tasks.some(task => task.id === taskId)) return false;
+    this.selectTask(view, taskId, undefined, true);
+    return true;
+  }
   private selectTask(view: ViewState, id: string, version?: string, reveal = false) {
     const changed = view.selectedTask !== id || view.selectedVersion !== version;
     if (changed) {
