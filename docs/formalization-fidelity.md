@@ -39,6 +39,7 @@ checked again when approved artifacts or completed reviews are read.
 | Existing fixed conjugacy, finite-family, cardinality and Boolean representation rules | Supported in current Mathlib, with their existing side conditions |
 | Whole-structure hypothesis replaced by a hypothesis on the current pair | Separate provability does not justify the replacement |
 | Universal/existential order or dependency changed | Separate provability does not justify the replacement |
+| Relation replaced by a bundled library predicate, or a sameness of two structures restated as an equality of subobjects | The claim's shape changed; separate provability does not justify the substitution |
 | Merely proving both complete claims, or only a stronger-to-weaker implication | Does not establish fidelity |
 | Valid conversion outside the implemented structural rules | `not-established`; no inequivalence is claimed |
 

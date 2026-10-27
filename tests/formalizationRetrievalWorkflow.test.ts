@@ -200,7 +200,9 @@ describe('frozen plan retrieval in formalization generation', () => {
     // Frozen from the previous kernel-context replay, before retrieval integration.
     // Re-pinned when generation learned to state conclusions at the source's own type
     // (Type* carriers, Fintype/first-class finite families, Nat.Prime).
-    expect(mathDigest(generated.config.instructions)).toBe('fa099bdc3f8921cce69e1c83510d09be876ef9f2d9b24f0278fffe01a48c27cc');
+    // Re-pinned when generation learned to keep the source's own claim shape
+    // (explicit equation with its witness, no bundled library relation).
+    expect(mathDigest(generated.config.instructions)).toBe('0b47d9c571654b78f9009d810546e3abd7c0275a0f9f1a3f755022725b879ac8');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
     expect(evidence.generation.input).not.toHaveProperty('retrieval');
     expect(readFormalizationRequest(f.directory)).toEqual(f.request);

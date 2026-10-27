@@ -346,11 +346,11 @@ describe('structured fragment evidence', () => {
 describe('version-selected statement context instructions', () => {
   it('keeps frozen legacy instruction hashes and selects additional guidance only when opted in', () => {
     expect(mathDigest(formalizationReviewInstructions('review', false)))
-      .toBe('650b48501365383dab0222cc1583be5f6f4a48e2607e73d037d5891e7d34dd8e');
+      .toBe('d95647989931ef7083aa0f9ce2477bcf19e4713727a36b8c9e4d52445e8e05f4')
     expect(mathDigest(formalizationReviewInstructions('backtranslate', false)))
       .toBe('0e37c09a8560bceaa63159ad1eb91f17c63114436917dde2a7e4562e1d6385d2');
     expect(mathDigest(formalizationReviewInstructions('review', true)))
-      .toBe('adbb7c7e2ad55418c9df3bfeb8fd217378d6f284404b5a6e31c3eb44b98f7d53');
+      .toBe('192911b38ab460f2cfd6b8e20de3d2d909ed447da71a4c14dcbdbe697583103d')
     expect(mathDigest(formalizationReviewInstructions('backtranslate', true)))
       .toBe('347fe405332e12f49a0241f78111f41e64c7e802eb027e2cda7352c9dad56fa2');
     for (const role of ['review', 'backtranslate'] as const) {
