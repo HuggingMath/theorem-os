@@ -44,4 +44,5 @@ export const admin: Record<string, string> = {
   "这个服务商已保存 Key（末四位 {0}）。留空即使用它；填写新 Key 并保存会替换它。": "A key is saved for this provider (ending {0}). Leave the field empty to use it; saving a new key replaces it.",
   "研究已提交，Key 已保存到你的账号": "Research submitted; key saved to your account",
   "已删除保存的 API Key": "Saved API key deleted",
+  "写下研究任务": "Write the research task",
 }

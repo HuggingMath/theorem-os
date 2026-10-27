@@ -692,7 +692,12 @@ try {
     release();
     assert.equal((await response).status(), 201);
     await page.waitForFunction(() => (document.querySelector('#api-key') as HTMLInputElement).value === '');
+    // The emptied task is shown as the next step, not as a fault; the Key is still required once a task is written.
+    await readiness(page, 'compose');
+    assert.equal(await page.locator('#readiness-title').innerText(), '写下研究任务');
+    await page.locator('#task').fill('The next research task');
     await readiness(page, 'missing');
+    assert.equal(await page.locator('#readiness-title').innerText(), '请填写 API Key');
     assert.equal(await page.locator('#api-key').getAttribute('type'), 'password');
     assert.equal(workerStarts, 1, 'only the explicit valid submission may start the local fixture');
     assert.equal((await page.locator('#submission-readiness').innerText()).includes(credential), false);

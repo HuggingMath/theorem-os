@@ -372,12 +372,15 @@ function renderPreparation(issues = currentSubmissionIssues()) {
   const pending = !state.session;
   const offline = !pending && !state.connected;
   const environmentReady = Boolean(state.session?.runtime.ready && state.session.providers.length);
-  const phase = state.submitting ? 'submitting' : pending ? 'pending' : offline || !environmentReady ? 'offline' : issue ? 'missing' : 'ready';
+  // An empty task nobody has tried to submit yet (a fresh page, or right after a submission) is the next step, not a fault.
+  const composing = issue?.field === 'task' && !validationShown.has('task') && !field('task').value.trim();
+  const phase = state.submitting ? 'submitting' : pending ? 'pending' : offline || !environmentReady ? 'offline'
+    : composing ? 'compose' : issue ? 'missing' : 'ready';
   const target = element('#submission-readiness');
   if (target.dataset.state !== phase) target.dataset.state = phase;
   patchText(element('#readiness-title'), state.submitting ? t('正在提交研究') : pending ? t('正在读取提交配置')
     : offline ? t('连接中断，草稿可继续编辑') : !environmentReady ? t('运行环境未就绪')
-      : issue?.message ?? t('提交配置已填写'));
+      : composing ? t('写下研究任务') : issue?.message ?? t('提交配置已填写'));
   patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? t('连接后可编辑研究任务。')
     : offline || !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
       : issue?.field === 'api-key' ? (state.session?.account?.keyVault ? t('勾选「保存到我的账号」后，下次不用再填。') : t('每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。'))
@@ -386,7 +389,7 @@ function renderPreparation(issues = currentSubmissionIssues()) {
           : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
             : issue ? t('补全配置后即可提交当前题目。') : t('Key 与模型可用性将在提交时确认。'));
   patchText(element('#readiness-action'), issue?.check ? t('查看错误') : issue ? labels[issue.field] : t('查看配置'));
-  renderGlyph(element('#readiness-icon'), state.submitting ? 'spinner' : phase === 'ready' ? 'circle-check' : 'circle-alert');
+  renderGlyph(element('#readiness-icon'), state.submitting ? 'spinner' : phase === 'ready' ? 'circle-check' : phase === 'compose' ? 'square-pen' : 'circle-alert');
   const action = element<HTMLButtonElement>('#prepare-run');
   if (action.disabled !== (pending || state.submitting)) action.disabled = pending || state.submitting;
   renderBudgetEstimate();
