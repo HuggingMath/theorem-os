@@ -18,6 +18,7 @@ import { shareSnapshot, webShareToken, type WebShareLink } from './share';
 import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
 import { PrecheckSuperseded, WebPrechecker } from './precheck';
 import { proofOutline, verificationKit } from './verificationKit';
+import { sendStatic } from './staticFiles';
 
 const inputSchema = z.object({
   providerId: z.string().min(1).max(40), apiKey: z.string().min(8).max(4096).regex(/^[\x21-\x7e]+$/),
@@ -458,9 +459,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' };
       const contentType = allowed[path.extname(file)];
       if (!contentType) throw new HttpError(404, '文件不存在。');
-      response.writeHead(200, { 'Content-Type': contentType });
-      if (request.method === 'HEAD') response.end();
-      else fs.createReadStream(file).on('error', () => response.destroy()).pipe(response);
+      sendStatic(request, response, file, path.extname(file), contentType);
     } catch (error) {
       const invalidKnowledgeInput = error instanceof Error && /^math_knowledge_(?:invalid_query|invalid_dependency_options|(?:source|metadata|consumers|finding)_(?:options_invalid|position_invalid|budget_too_small))$/u.test(error.message);
       const known = error instanceof HttpError || error instanceof WebStorageError || error instanceof WebAuthError;

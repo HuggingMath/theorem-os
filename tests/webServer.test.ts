@@ -660,7 +660,11 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
   it('serves only files within the static root and sends browser security headers', async () => {
     const home = await request('/');
     expect(home.status).toBe(200);
-    expect(home.headers.get('cache-control')).toBe('no-store');
+    // Static files revalidate on every use; API answers are never stored.
+    expect(home.headers.get('cache-control')).toBe('no-cache');
+    expect(home.headers.get('etag')).toMatch(/^"[\w-]+"$/u);
+    expect((await request('/', undefined, { headers: { 'If-None-Match': home.headers.get('etag')! } })).status).toBe(304);
+    expect((await request('/api/session')).headers.get('cache-control')).toBe('no-store');
     expect(home.headers.get('x-content-type-options')).toBe('nosniff');
     expect(home.headers.get('x-frame-options')).toBe('DENY');
     expect(home.headers.get('content-security-policy')).toContain("connect-src 'self'");

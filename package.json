@@ -69,6 +69,7 @@
     "test:web-readable-results": "bun scripts/test-web-readable-results.ts",
     "test:web-collaboration-layers": "bun scripts/test-web-collaboration-layers.ts",
     "test:web-key-memory": "bun scripts/test-web-key-memory.ts",
+    "test:web-load": "bun scripts/test-web-load.ts",
     "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
