@@ -18,7 +18,7 @@ import type { ProofReadyRecord } from './proofReady';
 import type { ProofImportRecord } from './proofImportRecord';
 import type { ResearchRecord } from './researchRecords';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
-import { expandPlanPatch, isPlanPatch, type PlanPatchBase } from './planPatch';
+import { expandPlanPatch, isPlanPatch, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
 import { applyGoalPathDecisions, type GoalPathDecisions } from './goalPathDecisions';
 import type { GoalPathReview } from './goalPathReview';
 import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
@@ -157,7 +157,7 @@ type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: Goal
  */
 export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
   const { goalPath, ...patchOptions } = options;
-  const answered = applyGoalPathDecisions(value, goalPath, base);
+  const answered = applyGoalPathDecisions(liftNestedPlanPatch(value), goalPath, base);
   const decisions = answered.decisions ? { goalPathDecisions: answered.decisions } : {};
   if (!isPlanPatch(answered.value)) return { ...parseCooperationPlan(problem, answered.value), ...decisions };
   return { ...parseCooperationPlan(problem, expandPlanPatch(answered.value, base, patchOptions)), fromPatch: true, ...decisions };

@@ -218,6 +218,9 @@ describe('host-owned proof readiness intake', () => {
     append({ kind: 'ready', commit: problem.baseCommit }); append({ kind: 'ready', targets: ['other'] });
     await cooperative.pulse(workers[1].id);
     expect(state.cooperation!.deliveryReceipts).toHaveLength(2);
+    expect(state.cooperation!.deliveryReceipts!.map(receipt => [receipt.code, receipt.issues.map(issue => issue.path)]))
+      .toEqual([['math_delivery_invalid', ['commit']], ['math_delivery_invalid', ['targets']]]);
+    expect(state.cooperation!.deliveryReceipts![1].issues[0].message).toMatch(/^Omit targets from a ready event/u);
     expect(state.cooperation!.proofReadyRecords ?? []).toEqual([]); expect(callback).not.toHaveBeenCalled();
   });
 

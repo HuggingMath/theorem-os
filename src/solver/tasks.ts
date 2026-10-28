@@ -176,6 +176,9 @@ const optionalFields = (value: any, keys: readonly string[]) =>
   Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
 
 export function parseCooperationPlan(problem: SolverProblem, value: any): { tasks: CooperativeTask[]; groups: RouteGroup[]; proofRoutes?: ProofRoute[] } {
+  if (value?.tasks && typeof value.tasks === 'object' && !Array.isArray(value.tasks))
+    throw planError('math_plan_invalid', { field: 'tasks' },
+      'tasks must be the complete array of task objects; a revision omits tasks and puts baseVersion, upsert and remove at the top level');
   if (!value || !Array.isArray(value.tasks) || value.tasks.length < 1)
     throw new Error('math_plan_invalid');
   // Leads routinely serialize an empty explicit list; it carries the same meaning as omitting it.

@@ -8,6 +8,19 @@ export type PlanPatchBase = { version: string; tasks: readonly CooperativeTask[]
 const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
+/**
+ * Leads sometimes nest a revision under `tasks` (`{"baseVersion":"v","tasks":{"baseVersion":"v","upsert":[...]}}`).
+ * It names the same change, so lift it to the top level instead of rejecting the whole decision.
+ */
+export function liftNestedPlanPatch(value: unknown): unknown {
+  if (!record(value) || !record(value.tasks) || (value.tasks.upsert === undefined && value.tasks.remove === undefined)) return value;
+  const { tasks: nested, ...rest } = value;
+  const clash = Object.keys(nested).find(key => rest[key] !== undefined && rest[key] !== nested[key]);
+  if (clash) throw new Error(`math_plan_patch_invalid: ${clash} appears both at the top level and inside tasks; ` +
+    'put baseVersion, upsert and remove at the top level and omit tasks.');
+  return { ...rest, ...nested };
+}
+
 /** A revision names only changed tasks; a complete `tasks` list remains the full-graph form. */
 export function isPlanPatch(value: unknown): value is Record<string, unknown> {
   if (!record(value) || (value.upsert === undefined && value.remove === undefined)) return false;

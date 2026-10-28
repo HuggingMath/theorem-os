@@ -24,6 +24,18 @@ describe('Lead plan revisions', () => {
     expect(() => isPlanPatch({ tasks: [], upsert: [] })).toThrow('math_plan_patch_invalid');
   });
 
+  it('lifts a revision nested under tasks and rejects a conflicting or non-revision tasks object', () => {
+    const nested = parseLeadPlan(problem, { baseVersion: 'v1', summary: 'Pause side.',
+      tasks: { baseVersion: 'v1', upsert: [{ id: 'side', status: 'paused' }] } }, base);
+    expect(nested.fromPatch).toBe(true);
+    expect(nested.tasks[1]).toMatchObject({ id: 'side', status: 'paused' });
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', tasks: { baseVersion: 'v0', remove: ['side'] } }, base))
+      .toThrow(/^math_plan_patch_invalid: baseVersion appears both at the top level and inside tasks/u);
+    expect(() => parseLeadPlan(problem, { tasks: { goal: lemma('goal') } }))
+      .toThrow(/^math_plan_invalid: \{"field":"tasks"\}\. tasks must be the complete array/u);
+    expect(() => parseLeadPlan(problem, { tasks: [] })).toThrow(/^math_plan_invalid$/u);
+  });
+
   it('merges supplied fields into an existing task, deletes null fields and appends new tasks', () => {
     const plan = parseLeadPlan(problem, { baseVersion: 'v1', upsert: [
       { id: 'core', status: 'paused' }, { id: 'side', ownerId: 'researcher-1' }, lemma('bridge', ['side']),

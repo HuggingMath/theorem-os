@@ -329,8 +329,12 @@ export abstract class CooperationInputs extends CooperationPlanning {
       return;
     }
     if (value.kind === 'ready') {
-      if (!scoped || advisory(action.task) || value.commit !== undefined || value.targets !== undefined)
-        throw new Error('math_delivery_invalid');
+      if (!scoped || advisory(action.task)) throw new Error('math_delivery_invalid');
+      // The host freezes the saved sources itself, so a ready event cannot name what to check.
+      const named = ['commit', 'targets'].filter(field => value[field] !== undefined);
+      if (named.length) throw new ResearchAdmissionError({ status: 'rejected', code: 'math_delivery_invalid',
+        issues: named.map(field => ({ path: field, message: `Omit ${field} from a ready event; the host checks the saved sources of the assigned declaration.` })),
+        recovery: 'correct-and-resubmit' });
       this.receiveProofReady(worker, action, value.id);
       return;
     }

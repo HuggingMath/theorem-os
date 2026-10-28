@@ -76,6 +76,15 @@ describe('Lead plan revisions in a cooperative run', () => {
     expect(text).toContain('A notes-only final response.');
   });
 
+  it('accepts a live revision nested under tasks as the same top-level revision', async () => {
+    // 2026-10-28 HoneycombFreeEnergy: two Lead decisions were rejected as a bare math_plan_invalid for this shape.
+    const action = await start(), goals = ids();
+    await publish(action, { tasks: { baseVersion: action.planVersion, upsert: [helper('nested_bridge')] } });
+    expect(ids()).toEqual([...goals, 'nested_bridge']);
+    expect(events.filter(event => event.event === 'plan_published')).toHaveLength(1);
+    expect(state.cooperation!.planPublicationRejection).toBeUndefined();
+  });
+
   it('rejects a live revision against a stale base without changing the graph', async () => {
     const action = await start(), before = ids();
     await publish(action, { baseVersion: 'stale-version', upsert: [helper('stale_bridge')] });
