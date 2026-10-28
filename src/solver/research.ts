@@ -47,6 +47,9 @@ const advisoryFirstActivityMs = 15 * 60_000;
 // A goal turn is the only work that can close the problem, so it is never yielded. It still owes a
 // durable handoff: this is the long cadence of the save-only reminder, which never interrupts it.
 const advisoryGoalNoticeMs = 15 * 60_000;
+// The initial plan is the whole blueprint (Goedel-Architect, arXiv 2606.06468): peers have nothing to
+// run until it exists, and a 2-minute slice ended every observed first plan before it was written.
+const advisoryInitialPlanMs = 20 * 60_000;
 // Compaction is maintenance, not a mathematical attempt. A stalled operation restarts from saved work.
 const compactionRecoveryMs = 10 * 60_000;
 
@@ -442,9 +445,11 @@ export async function runResearchWorkers(input: {
           research.advisoryCheckpoint = { scope: advisoryScope, contentDigest, noProgressStreak };
           advisoryTurn = { scope: advisoryScope, contentDigest };
           save();
-          // Lead planning retains its cadence; advisory research backs off after unchanged checkpoints.
-          const backoff = !noticeOnly && assignment?.kind !== 'lead';
-          const checkpointAfterMs = noticeOnly ? advisoryGoalNoticeMs :
+          // The initial plan gets one long slice; revisions and advisory research back off after
+          // unchanged checkpoints, so a Lead that keeps returning the same response gets more time.
+          const initialPlan = assignment?.kind === 'lead' && Boolean(assignment.initialPlanNonce);
+          const backoff = !noticeOnly && !initialPlan;
+          const checkpointAfterMs = noticeOnly ? advisoryGoalNoticeMs : initialPlan ? advisoryInitialPlanMs :
             advisoryCheckpointMs * (backoff ? 2 ** Math.min(noProgressStreak, advisoryMaxBackoff) : 1);
           const noticeAfterMs = checkpointAfterMs * advisoryCheckpointNoticeMs / advisoryCheckpointMs;
           emit('cooperative_checkpoint_scheduled', { turnId, checkpointAfterMs, noticeAfterMs, noProgressStreak,

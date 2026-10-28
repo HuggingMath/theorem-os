@@ -636,7 +636,12 @@ describe('cooperative advisory scheduling checkpoints', () => {
     });
     const completion = run(open); void completion.catch(() => {});
     await leadStarted.promise;
+    // The initial plan is one long slice: two minutes no longer takes the Lead away.
     await vi.advanceTimersByTimeAsync(120_000);
+    expect(sessions.get('solver')!.interrupt).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({ event: 'cooperative_checkpoint_scheduled',
+      details: expect.objectContaining({ workerId: 'solver', checkpointAfterMs: 20 * 60_000 }) }));
+    await vi.advanceTimersByTimeAsync(20 * 60_000 - 120_000);
     await proofStarted.promise;
     expect(sessions.get('solver')!.notify).toHaveBeenCalledOnce();
     expect(sessions.get('solver')!.interrupt).toHaveBeenCalledOnce();
