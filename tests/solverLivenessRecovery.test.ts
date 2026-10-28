@@ -5,6 +5,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { CooperativeResearch } from '../src/solver/cooperation';
+import { IDLE_PEER_WAKE_MS } from '../src/solver/leadInbox';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { runResearchWorkers } from '../src/solver/research';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction } from '../src/solver/tasks';
@@ -251,6 +252,33 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
     expect(fixtureState.state.cooperation!.tasks.every(node => !['integrated', 'conditional'].includes(node.status))).toBe(true);
     await run.stop();
+  });
+
+  it('wakes a paused Lead once for a peer left idle without startable work while another peer runs', async () => {
+    const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
+    const lead = fixtureState.state.workers![0], cooperation = () => fixtureState.state.cooperation!;
+    // Let the unchanged Lead slices settle into a pause while the researcher keeps working.
+    for (let minute = 0; minute < 60 && !(lead.scheduling?.status === 'idle' && cooperation().lastLeadPauseInputDigest); minute++)
+      await vi.advanceTimersByTimeAsync(60_000);
+    expect(cooperation().lastLeadPauseInputDigest).toBeTruthy();
+    // The prover has had nothing ready since before the Lead's first turn, so that turn already saw it idle.
+    const prover = fixtureState.state.workers!.find(worker => worker.id === 'idle-prover')!;
+    expect(prover.scheduling).toMatchObject({ status: 'idle', wait: { stage: 'm3-no-ready' } });
+    expect(run.events.some(item => item.event === 'lead_woken_for_idle_peers')).toBe(false);
+    // Model it going idle after the Lead's last turn instead: the Lead has not seen this idle episode.
+    prover.scheduling!.since = cooperation().leadInboxBasis!.at + 1;
+    const oldNonce = run.latestLead().assignment.planNonce;
+    await vi.advanceTimersByTimeAsync(IDLE_PEER_WAKE_MS + 60_000);
+    expect(run.events.filter(item => item.event === 'lead_woken_for_idle_peers').map(item => item.details?.workerIds))
+      .toEqual([['idle-prover']]);
+    expect(run.latestLead().assignment.planNonce).not.toBe(oldNonce);
+    expect(run.current(run.latestLead().assignment)).toBe(true);
+    await run.answer();
+    const answeredTurns = run.leads().length;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(run.leads()).toHaveLength(answeredTurns);
+    expect(run.events.filter(item => item.event === 'lead_woken_for_idle_peers')).toHaveLength(1);
+    expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   });
 
   it('routes a needs-decision finding arriving during a Lead plan to the next Lead slice instead of letting that plan swallow it', async () => {

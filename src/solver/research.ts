@@ -59,6 +59,14 @@ const advisoryInitialPlanNoticeMs = 5 * 60_000;
 // A revision gets one fixed slice that a returned decision normally ends, and an early decide-now reminder.
 const advisoryRevisionMs = 10 * 60_000;
 const advisoryRevisionNoticeMs = 4 * 60_000;
+// A revision slice that ends while the model is streaming waits for that request to settle, up to this long.
+const advisoryRevisionRequestWaitMs = 10 * 60_000;
+// Codex reports streamed output at most every 30 s and the provider stream idles out at 60 s, so output
+// newer than this means a model request is still producing.
+const advisoryModelStreamingMs = 90_000;
+// Items the model itself produces; userMessage and contextCompaction are neither model output nor tools.
+const modelOutputItems = new Set(['reasoning', 'agentMessage']);
+const nonToolItems = new Set(['reasoning', 'agentMessage', 'userMessage', 'contextCompaction']);
 // Compaction is maintenance, not a mathematical attempt. A stalled operation restarts from saved work.
 const compactionRecoveryMs = 10 * 60_000;
 
@@ -345,6 +353,9 @@ export async function runResearchWorkers(input: {
         let scheduleSlice: (() => void) | undefined;
         let clockArmed = false;
         let firstActivityTimer: ReturnType<typeof setTimeout> | undefined;
+        let lastModelOutputAt: number | undefined, toolsRunning = 0, requestWaited = false;
+        let requestWaitTimer: ReturnType<typeof setTimeout> | undefined;
+        let cutAtRequestBoundary: (() => void) | undefined;
         turnAssignment = assignment;
         const live = () => !finished && !signal.aborted && session === activeSession;
         const current = () => live() && Boolean(assignment && cooperation?.current(assignment));
@@ -388,6 +399,16 @@ export async function runResearchWorkers(input: {
             clearTimeout(firstActivityTimer); firstActivityTimer = undefined;
             if (advisoryScope) emit('cooperative_checkpoint_clock_started', { itemType: activity.itemType });
             scheduleSlice?.();
+          }
+          if (activity.event === 'reasoning' || activity.event === 'message' || modelOutputItems.has(activity.itemType ?? ''))
+            lastModelOutputAt = Date.now();
+          else if (activity.itemType && !nonToolItems.has(activity.itemType)) {
+            if (activity.event === 'item_started') toolsRunning++;
+            else if (activity.event === 'item_completed') {
+              toolsRunning = Math.max(0, toolsRunning - 1);
+              // The request that was streaming has returned and its tool results are recorded: cut here.
+              if (!toolsRunning) cutAtRequestBoundary?.();
+            }
           }
           if (!current() || activity.itemType !== 'contextCompaction') return;
           if (activity.event === 'item_started') {
@@ -506,6 +527,28 @@ export async function runResearchWorkers(input: {
               { turnId, checkpointAfterMs, noProgressStreak, protected: false }) && yieldForProof)
               emit('capacity_exploration_yielded', { turnId, reason: 'typed-work-ready' });
           };
+          // Interrupting a streaming request discards its unfinished reasoning and tool call; a Lead revision cut
+          // lets that one request return (its tool results recorded) first, bounded by advisoryRevisionRequestWaitMs.
+          const endRevisionSlice = () => {
+            if (compactionStartedAt !== undefined || cutAtRequestBoundary) return;
+            // One wait per turn: a slice re-armed after compaction or the wait limit cuts at once.
+            if (requestWaited || toolsRunning || lastModelOutputAt === undefined ||
+                Date.now() - lastModelOutputAt > advisoryModelStreamingMs) { checkpoint(); return; }
+            requestWaited = true;
+            const waitStartedAt = Date.now();
+            const cut = (boundary: 'request-returned' | 'wait-limit') => {
+              if (!cutAtRequestBoundary) return;
+              cutAtRequestBoundary = undefined; clearTimeout(requestWaitTimer);
+              if (!current() || checkpointRequested || readyRequested) return;
+              emit('cooperative_checkpoint_request_settled', { turnId, boundary, waitedMs: Date.now() - waitStartedAt });
+              checkpoint();
+            };
+            cutAtRequestBoundary = () => cut('request-returned');
+            requestWaitTimer = setTimeout(() => cut('wait-limit'), advisoryRevisionRequestWaitMs);
+            requestWaitTimer.unref();
+            emit('cooperative_checkpoint_awaiting_request', { turnId, checkpointAfterMs,
+              maxWaitMs: advisoryRevisionRequestWaitMs, outputAgeMs: Date.now() - lastModelOutputAt });
+          };
           scheduleSlice = () => {
             if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
             // The advisory clock measures mathematical work, not provider latency. Until the model
@@ -528,7 +571,7 @@ export async function runResearchWorkers(input: {
             }
             // A goal writer keeps its turn; only the reminder above is scheduled for it.
             if (noticeOnly) return;
-            checkpointTimer = setTimeout(() => checkpoint(), Math.max(0, checkpointAfterMs - activeSliceMs));
+            checkpointTimer = setTimeout(() => revision ? endRevisionSlice() : checkpoint(), Math.max(0, checkpointAfterMs - activeSliceMs));
             checkpointTimer.unref();
           };
           scheduleSlice(); watchCompaction();
@@ -562,7 +605,8 @@ export async function runResearchWorkers(input: {
         }
         finally {
           finished = true;
-          clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(interruptTimer);
+          clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(interruptTimer); clearTimeout(requestWaitTimer);
+          cutAtRequestBoundary = undefined;
           clearTimeout(compactionTimer); clearTimeout(firstActivityTimer); turnActivity = undefined; turnAssignment = undefined;
           clearInterval(capacityTimer); clearInterval(contextTimer);
           // A transport failure may settle run() before process-group teardown finishes.

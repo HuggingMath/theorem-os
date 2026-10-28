@@ -19,6 +19,31 @@ export type LeadInbox = {
 };
 
 const MAX_DELIVERIES = 16, MAX_STATUS_CHANGES = 32, SUMMARY_BYTES = 600;
+/** A peer idle this long with no startable work, while others run, is owed one Lead turn. */
+export const IDLE_PEER_WAKE_MS = 10 * 60_000;
+// Wait stages meaning the accepted plan has nothing this peer can start; host gates and budgets are excluded.
+const NO_WORK_STAGES = new Set(['m3-no-ready', 'dependency-blocked', 'm5-no-selection']);
+
+/**
+ * Peers that went idle after `seenAt` (the last Lead turn's inbox basis or idle wake) and have had no startable
+ * work for IDLE_PEER_WAKE_MS, counted from the later of their idle start and the Lead's own. `dueAt` is the
+ * earliest time a not-yet-due peer qualifies.
+ */
+export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], leadId: string, seenAt: number, now = Date.now()) {
+  const lead = workers.find(worker => worker.id === leadId)?.scheduling;
+  const leadIdleSince = lead?.status === 'idle' ? lead.since : now;
+  const due: string[] = [];
+  let dueAt: number | undefined;
+  for (const worker of workers) {
+    const scheduling = worker.scheduling, wait = scheduling?.wait;
+    if (worker.id === leadId || scheduling?.status !== 'idle' || scheduling.since <= seenAt ||
+        !wait || wait.endedAt !== undefined || !NO_WORK_STAGES.has(wait.stage)) continue;
+    const at = Math.max(scheduling.since, leadIdleSince) + IDLE_PEER_WAKE_MS;
+    if (at <= now) due.push(worker.id);
+    else dueAt = Math.min(dueAt ?? at, at);
+  }
+  return { due, dueAt };
+}
 const needsDecision = (record: DeliveryRecord) => {
   try { const finding = JSON.parse(deliveryFinding(record) ?? 'null'); return finding?.needsDecision === true || finding?.conclusion === 'refuted'; }
   catch { return false; }

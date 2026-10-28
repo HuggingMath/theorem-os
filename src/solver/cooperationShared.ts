@@ -95,6 +95,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   invalidTaskTransitions?: import('./taskLifecycle').InvalidTaskTransition[];
   /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
   lastLeadPauseInputDigest?: string;
+  /** Last one-shot wake for peers left without work while others run; a peer idle since then can wake the Lead again. */
+  idlePeerWake?: { at: number; workerIds: string[] };
   /**
    * Latest original-goal path stall (no runnable frontier input). `answeredAt` once a Lead turn shown it adopted or declined
    * every presented input, or the stall changed; after MAX_UNANSWERED_GOAL_PATH_TURNS turns that did neither, it is

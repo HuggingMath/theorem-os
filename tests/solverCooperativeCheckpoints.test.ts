@@ -219,6 +219,39 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each(['request-returned', 'wait-limit'] as const)(
+    'lets a Lead revision slice that ends mid-request wait for that request (%s)', async boundary => {
+      const { events, controller, run } = fixture(false, undefined, 'lead');
+      const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
+      await held.wait(0, completion);
+      const activity = held.open.mock.calls[0][0].onActivity!;
+      // The model is still streaming one long request when the slice ends.
+      await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS - 30_000);
+      activity({ event: 'reasoning' });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(held.interrupt).not.toHaveBeenCalled();
+      expect(events).toContainEqual({ event: 'cooperative_checkpoint_awaiting_request',
+        details: expect.objectContaining({ workerId: 'solver', maxWaitMs: 10 * 60_000, outputAgeMs: 30_000 }) });
+      if (boundary === 'request-returned') {
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
+        // A tool the request called is part of it: the cut waits until its result is recorded.
+        activity({ event: 'item_started', itemType: 'commandExecution' });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(held.interrupt).not.toHaveBeenCalled();
+        activity({ event: 'item_completed', itemType: 'commandExecution' });
+      } else {
+        await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+        expect(held.interrupt).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await held.wait(1, completion);
+      expect(held.interrupt).toHaveBeenCalledOnce();
+      expect(events).toContainEqual({ event: 'cooperative_checkpoint_request_settled', details: expect.objectContaining({
+        workerId: 'solver', boundary, waitedMs: boundary === 'request-returned' ? 4 * 60_000 : 10 * 60_000 }) });
+      controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
   it('recovers a stalled compaction into a fresh thread while preserving the same assignment and draft', async () => {
     const { state, workers, events, controller, run } = fixture(false, undefined, 'lead');
     const held = heldContinuationTurns({ saveNotes: true }), completion = run(held.open, Infinity); void completion.catch(() => {});

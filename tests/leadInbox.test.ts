@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { leadInbox, leadInboxBasis } from '../src/solver/leadInbox';
+import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis } from '../src/solver/leadInbox';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildResearchContext } from '../src/solver/modules/context';
 import type { SolverProblem } from '../src/solver/problem';
@@ -104,5 +104,28 @@ describe('Lead inbox', () => {
       releasedTaskIds: ['owned', 'saved'] }]);
     expect(leadInbox(leadInboxBasis(tasks, 'v1', 3_000), { tasks, planVersion: 'v1', leadId: 'solver', workers, roles })!.stoppedWorkers)
       .toBeUndefined();
+  });
+
+  it('owes the Lead one turn for a peer that went idle without startable work after the Lead last looked', () => {
+    const wait = (stage: string, endedAt?: number) => ({ observedAt: 0, stage, candidateCount: 0, omittedCandidates: 0, candidates: [],
+      ...(endedAt === undefined ? {} : { endedAt }) });
+    const workers = [{ id: 'solver', scheduling: { status: 'idle', since: 2_000 } },
+      { id: 'blocked', scheduling: { status: 'idle', since: 1_500, wait: wait('dependency-blocked') } },
+      { id: 'later', scheduling: { status: 'idle', since: 4_000, wait: wait('m3-no-ready') } },
+      { id: 'seen', scheduling: { status: 'idle', since: 1_000, wait: wait('m3-no-ready') } },
+      { id: 'gated', scheduling: { status: 'idle', since: 1_500, wait: wait('budget-gated') } },
+      { id: 'ended', scheduling: { status: 'idle', since: 1_500, wait: wait('m3-no-ready', 1_600) } },
+      { id: 'busy', scheduling: { status: 'working', since: 1_500 } },
+    ] as unknown as SolverWorkerState[];
+    // Each peer's clock starts at the later of its own idle start and the Lead's; 'seen' predates the basis.
+    expect(idlePeersAwaitingLead(workers, 'solver', 1_000, 2_000 + IDLE_PEER_WAKE_MS - 1))
+      .toEqual({ due: [], dueAt: 2_000 + IDLE_PEER_WAKE_MS });
+    expect(idlePeersAwaitingLead(workers, 'solver', 1_000, 4_000 + IDLE_PEER_WAKE_MS))
+      .toEqual({ due: ['blocked', 'later'], dueAt: undefined });
+    // A wake (or Lead turn) at 3 000 has seen 'blocked'.
+    expect(idlePeersAwaitingLead(workers, 'solver', 3_000, 4_000 + IDLE_PEER_WAKE_MS)).toEqual({ due: ['later'], dueAt: undefined });
+    // A running Lead is not idle: no peer is due until the Lead itself has waited too.
+    const leadWorking = workers.map(worker => worker.id === 'solver' ? { ...worker, scheduling: { status: 'working', since: 0 } } : worker);
+    expect(idlePeersAwaitingLead(leadWorking, 'solver', 1_000, 5_000)).toEqual({ due: [], dueAt: 5_000 + IDLE_PEER_WAKE_MS });
   });
 });

@@ -28,7 +28,7 @@ import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { taskTypePreflightEnvironmentIdentity, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
 import { consumeLeadWakes, dropLeadWakes, leadWakePending, settleLeadWakes } from './leadWakes';
-import { leadInbox, leadInboxBasis, type LeadInboxBasis } from './leadInbox';
+import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
@@ -113,6 +113,28 @@ export class CooperativeResearch extends CooperationInputs {
   }
   private leadPauseInputs = new WeakMap<CooperativeAction, string>();
   private pendingLeadInboxBases = new WeakMap<CooperativeAction, LeadInboxBasis>();
+  private idlePeerTimer?: NodeJS.Timeout;
+  /**
+   * Busy peers never return the Lead's turn, so a peer left without startable work would wait for them. One wake per
+   * idle peer the Lead has not seen idle: the inbox already lists idle workers, and the turn (or this wake) moves
+   * the basis past them. Nothing running is the ordinary idle-Lead path, not this one.
+   */
+  private wakeForIdlePeers() {
+    clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
+    if (this.stopping || !this.active.size || this.active.has(this.lead.id) || !this.archive.tasks.length) return;
+    const seenAt = Math.max(this.archive.leadInboxBasis?.at ?? 0, this.archive.idlePeerWake?.at ?? 0);
+    const { due, dueAt } = idlePeersAwaitingLead(this.input.state.workers ?? [], this.lead.id, seenAt);
+    if (due.length) {
+      this.archive.idlePeerWake = { at: Date.now(), workerIds: due };
+      this.wakeLead('peers-idle');
+      this.input.emit('lead_woken_for_idle_peers', { workerIds: due, idleWakeMs: IDLE_PEER_WAKE_MS });
+      this.input.save();
+    } else if (dueAt !== undefined) {
+      this.idlePeerTimer = setTimeout(() => { this.idlePeerTimer = undefined; if (!this.stopping) this.wake(); },
+        Math.max(0, dueAt - Date.now()));
+      this.idlePeerTimer.unref();
+    }
+  }
   private leadResponsibilityDigest(): string {
     const focus = originalGoalTaskFocus(this.archive.tasks, this.archive.groups, this.input.state.environmentDigest);
     return mathDigest(canonicalMathJson({ schema: 'theorem-os.lead-responsibility.v1', ...this.explorationIdentity,
@@ -156,6 +178,7 @@ export class CooperativeResearch extends CooperationInputs {
   }
   async stop() {
     this.stopping = true;
+    clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
     for (const worker of this.input.workers) this.clearDispatchWait(worker, 'stopped');
     this.wake();
     clearInterval(this.timer);
@@ -318,9 +341,12 @@ export class CooperativeResearch extends CooperationInputs {
     if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, running);
     if (!running && !this.livePeers.length) return;
     if (this.archive.review && ['pending', 'running'].includes(this.archive.review.status)) return this.waitForDispatch();
+    this.wakeForIdlePeers();
     const wakes = this.archive.leadWakes!, through = wakes.requested;
     // Conditions recomputed from durable state; only one-shot events are saved wake-ups.
     let wake = leadWakePending(wakes);
+    // Idle peers are not in the planning digests, so their unconsumed wake must not be deduplicated away.
+    const owedIdle = (wakes.recent ?? []).some(item => item.reason === 'peers-idle' && item.seq > wakes.consumed && item.seq <= through);
     const rejection = this.archive.planRejection;
     if (rejection?.stalled) {
       if (rejection.inputDigest === this.planningInputDigest() && rejection.proposalDigest === this.proposedPlanDigest()) {
@@ -377,11 +403,11 @@ export class CooperativeResearch extends CooperationInputs {
     if (wake || (!running && (!this.livePeers.length || !this.hasAssignableTask()))) {
       const inputDigest = this.planningInputDigest();
       // The previous decision (or pause) already answers these inputs; drop the wake-ups without a turn.
-      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall) {
+      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall && !owedIdle) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask() ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : RETRY_DISPATCH;
       }
-      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall) {
+      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall && !owedIdle) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask()
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
