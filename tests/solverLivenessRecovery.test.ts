@@ -15,6 +15,8 @@ import { leadWorker, localExample, peerWorker, solverState } from './helpers/sol
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 
 const SEEDED_DECISION = 'The exact route choice needs a Lead decision.';
+// A Lead revision turn has one fixed decision slice.
+const LEAD_REVISION_MS = 10 * 60_000;
 
 describe('Lead planning liveness across checkpoints and restore', () => {
   let directory: string;
@@ -187,7 +189,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(lead.previousThreadIds).toContain('legacy-mathematical-coordination');
     expect(lead.sessionLeadMode).toBe('planning');
     expect(fs.readFileSync(draft, 'utf8')).toContain('Saved mathematical construction');
-    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    await vi.advanceTimersByTimeAsync(3.5 * LEAD_REVISION_MS);
     expect(run.leads().length).toBeGreaterThanOrEqual(4);
     expect(new Set(run.leads().map(item => item.threadId))).toEqual(new Set([first]));
     expect(new Set(run.leads().map(item => (item.assignment as Extract<CooperativeAction, { kind: 'lead' }>).planNonce)).size)
@@ -207,23 +209,23 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     await resumed.stop();
   });
 
-  it('keeps ordinary Lead planning with new saved inferences on its two-minute cadence and reuses a legacy planning thread', async () => {
+  it('keeps ordinary Lead planning with new saved inferences on its fixed decision slice and reuses a legacy planning thread', async () => {
     const fixtureState = fixture(), lead = fixtureState.state.workers![0];
     lead.threadId = 'legacy-planning'; lead.sessionRole = 'lead';
     const run = fixtureState.start({ saveLeadProgress: true }); await run.ready();
-    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    await vi.advanceTimersByTimeAsync(3 * LEAD_REVISION_MS);
     expect(run.leads()).toHaveLength(4);
     expect(new Set(run.leads().map(item => item.threadId))).toEqual(new Set(['legacy-planning']));
     expect(lead.previousThreadIds ?? []).toEqual([]); expect(lead.sessionLeadMode).toBe('planning');
     const slices = run.events.filter(item => item.event === 'cooperative_checkpoint_scheduled' &&
       item.details?.workerId === lead.id).map(item => item.details!.checkpointAfterMs);
-    expect(slices).toEqual([120_000, 120_000, 120_000, 120_000]);
+    expect(slices).toEqual(Array(4).fill(LEAD_REVISION_MS));
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   });
 
   it('waits for hours after an unchanged checkpoint, then wakes for new evidence until a plan answers it', async () => {
     const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
-    await vi.advanceTimersByTimeAsync(8 * 60_000);
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS + 60_000);
     const pausedTurns = run.leads().length;
     expect(fixtureState.state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBeUndefined();
@@ -261,8 +263,8 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     await run.answer(running);
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(running.planningInputDigest);
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).not.toBe(run.planningInputDigest());
-    // The next slice starts when the answered turn reaches its ordinary two-minute checkpoint.
-    await vi.advanceTimersByTimeAsync(120_000);
+    // The next slice starts when the answered turn reaches its fixed decision checkpoint.
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS);
     await run.waitForLead(running.planNonce);
     expect(run.latestLead().inbox).toContain(summary);
     await run.answer();

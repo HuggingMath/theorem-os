@@ -67,6 +67,28 @@ describe('Lead inbox', () => {
     expect(continuation(changed)).not.toContain('stoppedWorkers will not return');
   });
 
+  it('lists every task on one line in the Lead continuation, unfinished first, without host-owned exploration', () => {
+    const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
+      baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
+    const action: CooperativeAction = { kind: 'lead', seedCommit: 'fixed-commit', planVersion: 'v1', planNonce: 'nonce', planningInputDigest: 'input' };
+    const checked = node('checked_helper', 'integrated');
+    const paused = { ...node('paused_lemma', 'pending'), attempts: 2,
+      task: { ...task('paused_lemma'), status: 'paused', dependsOn: ['checked_helper', 'open_bridge'] } } as TaskRecord;
+    const running = { ...node('open_bridge', 'running'), assignment: { workerId: 'researcher-1' } } as TaskRecord;
+    const exploration = { ...node('overlay', 'pending'), capacityExploration: { workerId: 'researcher-1' } } as TaskRecord;
+    const message = buildResearchContext(problem,
+      { cooperation: { tasks: [checked, paused, running, exploration] } } as unknown as SolverRunState,
+      { root: '/runtime', worktree: '/proof', environment: {}, taskText: 'Prove the target', retrievalRoot: '/library',
+        frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' }, assignment: action }).continuationMessage!;
+    const table = message.slice(message.indexOf('Current tasks ('));
+    expect(table.split('\n').slice(1, 4)).toEqual([
+      'paused_lemma research pending/paused owner=- attempts=2 waitsOn=open_bridge',
+      'open_bridge research running owner=researcher-1 attempts=0 waitsOn=-',
+      'checked_helper research integrated owner=- attempts=0 waitsOn=-']);
+    expect(table).not.toContain('overlay');
+    expect(message.indexOf('This turn is one planning decision')).toBeLessThan(message.indexOf('Current tasks ('));
+  });
+
   it('reports peers stopped since the basis with the unfinished tasks they reserved', () => {
     const owned = { ...node('owned', 'pending'), task: { ...task('owned'), ownerId: 'researcher-1' } };
     const saved = { ...node('saved', 'running'), assignment: { workerId: 'researcher-1' } } as TaskRecord;

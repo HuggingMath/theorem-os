@@ -260,6 +260,26 @@ function readFrozenContexts(problem: SolverProblem, access: ContextAccess): Read
   return contexts;
 }
 
+// The Lead's one-line-per-task view, so a revision decision does not start by parsing COOPERATION.json.
+// One observed Lead spent 26 of its 80 commands parsing COOPERATION.json with ad hoc scripts.
+const LEAD_TASK_TABLE_ROWS = 60;
+function leadTaskTable(cooperation: CooperationState): string {
+  const nodes = cooperation.tasks.filter(node => !node.capacityExploration);
+  if (!nodes.length) return '';
+  const done = (status: string) => ['integrated', 'completed'].includes(status);
+  const statusById = new Map(nodes.map(node => [node.task.id, node.status]));
+  const open = nodes.filter(node => !done(node.status)), checked = nodes.filter(node => done(node.status));
+  const rows = [...open, ...checked].slice(0, LEAD_TASK_TABLE_ROWS).map(node => {
+    const unmet = node.task.dependsOn.filter(id => !done(statusById.get(id) ?? ''));
+    return [node.task.id, node.task.kind, node.status + (node.task.status && node.task.status !== 'active' ? '/' + node.task.status : ''),
+      'owner=' + (node.assignment?.workerId ?? node.task.ownerId ?? '-'), 'attempts=' + node.attempts,
+      'waitsOn=' + (unmet.length ? unmet.join(',') : '-')].join(' ');
+  });
+  const omitted = nodes.length - rows.length;
+  return 'Current tasks (id kind status[/planStatus] owner attempts unmet dependencies; host status, not proof acceptance):\n' +
+    rows.join('\n') + (omitted ? `\n${omitted} more tasks (unfinished tasks are listed first) are in COOPERATION.json.` : '');
+}
+
 /** Add role rules; the compiler selects a scoped, versioned mathematical context for dispatch. */
 function buildCooperativeContext(problem: SolverProblem, cooperation: CooperationState, context: ContextBundle,
   action: CooperativeAction, compilation: Omit<TaskContextInput, 'instructions'>,
@@ -445,9 +465,10 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     : 'No new deliveries, task status changes or idle peers since your previous Lead turn.';
   const continuationMessage = action.kind === 'lead' ? [
     'Continue the current Lead responsibility in this saved thread. The original problem and unchanged task graph are already in its history.',
-    'Before further investigation, update worktree-root RESEARCH.md with the current argument and precise unresolved inference. Read the latest COOPERATION.json for new findings, lemma proposals, blockers and active peers; read their referenced saved evidence as needed. Keep the host-synced accepted graph in RESEARCH.md and write changes as a math-plan revision.',
+    'This turn is one planning decision: from the changes and task table below, revise the accepted graph or return it unchanged. Read COOPERATION.json only for the specific records you need, and delegate open searches as research tasks. Record the current argument and precise unresolved inference in worktree-root RESEARCH.md together with the decision.',
     'Current cooperative assignment (replaces every previous dispatch nonce and receipt):\n' + JSON.stringify(action),
     leadInboxText,
+    leadTaskTable(cooperation),
     'Current host work contract:\n' + JSON.stringify(workContract),
     planningEvidence ? leadPlanningEvidenceText(planningEvidence) : '',
     compilation.feedback ? 'Current host feedback:\n' + compilation.feedback : '',

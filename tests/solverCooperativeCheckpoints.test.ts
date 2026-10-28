@@ -15,6 +15,9 @@ import { leadWorker, localExample, peerWorker, solverState } from './helpers/sol
 
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 
+// A Lead revision turn has one fixed decision slice.
+const LEAD_REVISION_MS = 10 * 60_000;
+
 describe('cooperative advisory scheduling checkpoints', () => {
   let directory: string;
   let controllers: AbortController[], running: Promise<unknown>[];
@@ -150,9 +153,10 @@ describe('cooperative advisory scheduling checkpoints', () => {
     let turns = 0, newThreads = 0, active: ReturnType<typeof deferred<string>> | undefined;
     const interrupt = vi.fn(async () => { active?.resolve('interrupted'); });
     const close = vi.fn(async () => { active?.resolve('interrupted'); });
+    const notify = vi.fn(async (_message: string) => {});
     const open = vi.fn(async (access: MathAgentOptions): Promise<MathAgentSession> => {
       const threadId = access.threadId ?? `continuation-thread-${++newThreads}`;
-      return { threadId, close, interrupt, notify: async () => {},
+      return { threadId, close, interrupt, notify,
         ...(options.highContext ? { lastInputTokens: 100_000 } : {}),
         run: async (message, _messageId, _workspace, onStarted) => {
           const turn = turns++;
@@ -169,7 +173,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     });
     const wait = (turn: number, completion: Promise<unknown>) => Promise.race([started[turn].promise,
       completion.then(() => { throw new Error('fixture_finished_before_continuation:' + turn); })]);
-    return { open, close, interrupt, messages, threads, wait };
+    return { open, close, interrupt, notify, messages, threads, wait };
   }
 
   it('pauses the Lead scheduling clock during compaction and resumes its remaining work slice', async () => {
@@ -183,12 +187,34 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(held.interrupt).not.toHaveBeenCalled();
     expect(held.open).toHaveBeenCalledOnce();
     activity({ event: 'item_completed', itemType: 'contextCompaction' });
-    await vi.advanceTimersByTimeAsync(89_999);
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS - 30_001);
     expect(held.interrupt).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1); await held.wait(1, completion);
     expect(held.interrupt).toHaveBeenCalledOnce();
     expect(held.threads).toEqual(['continuation-thread-1', 'continuation-thread-1']);
     expect(events.some(item => item.event === 'context_compaction_completed')).toBe(true);
+    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('gives each Lead revision one fixed decision slice with an early decide-now reminder', async () => {
+    const { events, controller, run } = fixture(false, undefined, 'lead');
+    const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
+    await held.wait(0, completion);
+    await vi.advanceTimersByTimeAsync(4 * 60_000 - 1);
+    expect(held.notify).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(held.notify).toHaveBeenCalledOnce();
+    expect(held.notify.mock.calls[0]![0]).toMatch(/^Decide now, before further searches/u);
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS - 4 * 60_000 - 1);
+    expect(held.interrupt).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1); await held.wait(1, completion);
+    expect(held.interrupt).toHaveBeenCalledOnce();
+    // An unchanged cut does not stretch the next decision slice.
+    const slices = events.filter(item => item.event === 'cooperative_checkpoint_scheduled').map(item => item.details);
+    expect(slices).toEqual([expect.objectContaining({ checkpointAfterMs: LEAD_REVISION_MS, noticeAfterMs: 4 * 60_000 }),
+      expect.objectContaining({ checkpointAfterMs: LEAD_REVISION_MS, noticeAfterMs: 4 * 60_000, noProgressStreak: 1, backoffCapped: false })]);
+    expect(events.some(item => item.event === 'cooperative_checkpoint_deferred')).toBe(false);
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -220,7 +246,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(held.messages[0].assignment.kind).toBe('lead');
       expect(held.messages[0].mode).toBe('full');
       expect(held.messages[0].sentinel).toContain('full-context-exact-types');
-      await vi.advanceTimersByTimeAsync(120_000); await held.wait(1, completion);
+      await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS); await held.wait(1, completion);
       const [first, latest] = held.messages;
       expect(latest.assignment.kind).toBe('lead');
       if (first.assignment.kind !== 'lead' || latest.assignment.kind !== 'lead') throw new Error('fixture_not_lead');
@@ -253,6 +279,11 @@ describe('cooperative advisory scheduling checkpoints', () => {
     await held.wait(0, completion);
     held.open.mock.calls[0][0].onActivity!({ event: 'reasoning' });
     const request = state.workers![0].contextCheckpoint!;
+    // The Lead's checkpoint request names only its own protocol and defines the digest it must append.
+    const instruction = held.notify.mock.calls.map(([message]) => message).find(message => message.includes(request.requestId!))!;
+    expect(instruction).toContain('a Lead publishes no findings');
+    expect(instruction).toContain('as printed by sha256sum RESEARCH.md');
+    expect(instruction).not.toContain('needsDecision');
     const log = held.messages[0].receipt!;
     fs.appendFileSync(path.join(workers[0].worktree, log), JSON.stringify({ kind: 'checkpoint', requestId: request.requestId,
       notesDigest: mathDigest(fs.readFileSync(path.join(workers[0].worktree, 'RESEARCH.md'))) }) + '\n');
@@ -286,7 +317,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     });
     const held = heldContinuationTurns({ saveNotes: true }), completion = run(held.open, Infinity); void completion.catch(() => {});
     await held.wait(0, completion);
-    await vi.advanceTimersByTimeAsync(120_000); await held.wait(1, completion);
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS); await held.wait(1, completion);
     const [first, revised] = held.messages;
     expect(first.assignment.kind).toBe('lead'); expect(revised.assignment.kind).toBe('lead');
     if (first.assignment.kind !== 'lead' || revised.assignment.kind !== 'lead') throw new Error('fixture_not_lead');

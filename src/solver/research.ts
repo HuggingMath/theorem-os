@@ -54,6 +54,11 @@ const advisoryInitialPlanMs = 20 * 60_000;
 // Its reminder comes early: observed Leads spent the whole slice on probes and never published,
 // although a direct goal task plus research questions is already a valid first graph.
 const advisoryInitialPlanNoticeMs = 5 * 60_000;
+// A plan revision is one decision on new peer evidence, not a search. Observed Lead slices of two to sixteen
+// minutes ended at a checkpoint in 1095 of 1210 turns, and only 22 of those changed the plan.
+// A revision gets one fixed slice that a returned decision normally ends, and an early decide-now reminder.
+const advisoryRevisionMs = 10 * 60_000;
+const advisoryRevisionNoticeMs = 4 * 60_000;
 // Compaction is maintenance, not a mathematical attempt. A stalled operation restarts from saved work.
 const compactionRecoveryMs = 10 * 60_000;
 
@@ -272,15 +277,18 @@ export async function runResearchWorkers(input: {
         const file = assignment?.kind === 'task' ? assignmentDeliveryFile(assignment.assignment) :
           assignment && leadPlanDeliveryFile(assignment);
         const request = research.contextCheckpoint;
+        const lead = assignment?.kind === 'lead';
         return 'Before further searches or experiments, save the exact current argument, ' +
         'attempted methods and negative search scope, useful declaration/file references, and the precise unresolved inference in RESEARCH.md. ' +
-        'Use the current assignment delivery protocol to publish an honest needsDecision finding and a mathematicalGap when blocked. ' +
+        (lead ? 'Save or publish any planning decision as the math-plan revision your instructions describe; a Lead publishes no findings. '
+          : 'Use the current assignment delivery protocol to publish an honest needsDecision finding and a mathematicalGap when blocked. ') +
         'Propose independently checkable, strictly smaller typed obligations when possible; do not rename the original hard theorem or ' +
         'assume it in a wrapper. Scratch experiments and an activity report alone are not a durable handoff or an accepted proof. ' +
         (file && request?.requestId ? 'After saving all notes and source drafts and publishing any findings or planning decisions, ' +
           'finish this checkpoint by appending one complete JSON line to ' + JSON.stringify(path.join(worker.worktree, file)) +
           ': ' + JSON.stringify({ kind: 'checkpoint', requestId: request.requestId, notesDigest: 'SHA256_OF_SAVED_RESEARCH_MD' }) +
-          '. Compute notesDigest from the exact saved RESEARCH.md bytes in a local script. Append this control event last, then stop editing and return. ' +
+          '. notesDigest is the lowercase hex SHA-256 of the exact saved RESEARCH.md bytes, as printed by sha256sum RESEARCH.md. ' +
+          'Append this control event last, then stop editing and return. ' +
           'Unchanged but accurate notes and an unfinished argument are allowed; this event yields writing and never claims a proof. ' +
           'A notes save alone is not checkpoint completion.' : '');
       };
@@ -449,18 +457,20 @@ export async function runResearchWorkers(input: {
           research.advisoryCheckpoint = { scope: advisoryScope, contentDigest, noProgressStreak };
           advisoryTurn = { scope: advisoryScope, contentDigest };
           save();
-          // The initial plan gets one long slice; revisions and advisory research back off after
-          // unchanged checkpoints, so a Lead that keeps returning the same response gets more time.
+          // The initial plan gets one long slice and a revision one fixed decision slice; advisory research backs
+          // off after unchanged checkpoints, so a worker that keeps returning the same response gets more time.
           const initialPlan = assignment?.kind === 'lead' && Boolean(assignment.initialPlanNonce);
-          const backoff = !noticeOnly && !initialPlan;
+          const revision = assignment?.kind === 'lead' && !initialPlan;
+          const backoff = !noticeOnly && !initialPlan && !revision;
           const checkpointAfterMs = noticeOnly ? advisoryGoalNoticeMs : initialPlan ? advisoryInitialPlanMs :
+            revision ? advisoryRevisionMs :
             advisoryCheckpointMs * (backoff ? 2 ** Math.min(noProgressStreak, advisoryMaxBackoff) : 1);
-          const noticeAfterMs = initialPlan ? advisoryInitialPlanNoticeMs :
+          const noticeAfterMs = initialPlan ? advisoryInitialPlanNoticeMs : revision ? advisoryRevisionNoticeMs :
             checkpointAfterMs * advisoryCheckpointNoticeMs / advisoryCheckpointMs;
           emit('cooperative_checkpoint_scheduled', { turnId, checkpointAfterMs, noticeAfterMs, noProgressStreak,
             protected: false, ...(noticeOnly ? { noticeOnly: true } : {}),
             backoffCapped: Boolean(backoff) && noProgressStreak >= advisoryMaxBackoff });
-          if (noProgressStreak) emit('cooperative_checkpoint_deferred', { turnId, checkpointAfterMs,
+          if (noProgressStreak && backoff) emit('cooperative_checkpoint_deferred', { turnId, checkpointAfterMs,
             noProgressStreak, protected: false, reason: 'no-durable-progress' });
           const sendNotice = () => {
             if (!current() || noticeSent) return;
@@ -478,6 +488,12 @@ export async function runResearchWorkers(input: {
                   'assignment\'s delivery log as described in your instructions. Peers cannot start until it exists. A direct goal task ' +
                   'for each original target plus research tasks for the open questions is a valid first plan; later Lead turns revise it. ' +
                   'Save the current argument in RESEARCH.md as well.'
+                : revision
+                ? 'Decide now, before further searches or experiments. If the new deliveries, failures or idle peers call for a change, ' +
+                  'save or publish the math-plan revision as your instructions describe and return. If the accepted graph already ' +
+                  'gives each live peer its useful work, return without a revision. Delegate any open search as a research task instead of ' +
+                  'running it in this turn. This turn yields a scheduling checkpoint at ' + Math.round(checkpointAfterMs / 60_000) +
+                  ' minutes; the same thread and saved work remain available.'
                 : 'Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +
                   'For planning, save or publish the smallest valid complete task graph using this assignment\'s delivery protocol. ' +
                   'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
