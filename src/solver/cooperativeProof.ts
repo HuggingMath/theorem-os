@@ -59,8 +59,9 @@ export function ownedSourceDigest(problem: SolverProblem, worktree: string, comm
 export function omitTaskHelpers(problem: SolverProblem, file: string, source: string, names: readonly string[]): string {
   const originals = new Set((problem.declarations[file] ?? []).map(item => item.name));
   const hidden = new Set(names.map(local));
-  for (const region of inspectLeanDeclarationRegions(source).reverse()) if (hidden.has(local(region.name)) && !originals.has(region.name)) {
-    const start = source.lastIndexOf('\n', region.startOffset - 1) + 1;
+  const regions = inspectLeanDeclarationRegions(source);
+  for (const [index, region] of [...regions.entries()].reverse()) if (hidden.has(local(region.name)) && !originals.has(region.name)) {
+    const start = declarationStartWithDoc(source, region.startOffset, index ? regions[index - 1]!.endOffset : 0);
     source = source.slice(0, start) + source.slice(region.endOffset);
   }
   return source;
@@ -238,7 +239,8 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       if (!file.endsWith('.lean')) continue;
       // Doc comments require a following declaration, which this projection may remove.
       source = masked.get(file)!.text;
-      for (const region of [...masked.get(file)!.regions].reverse()) {
+      const fileRegions = masked.get(file)!.regions;
+      for (const [index, region] of [...fileRegions.entries()].reverse()) {
         const declaration = byOffset.get(`${file}\0${region.startOffset}`)!;
         if (conditions.length && declaration.id === target) {
           const header = source.slice(region.startOffset, region.bodyOffset - 2);
@@ -254,7 +256,8 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           }
           source = source.slice(0, region.startOffset) + name[0] + ' ' + binders + header.slice(name[0].length) + ':=' + body + source.slice(region.endOffset);
         } else if (removed.has(declaration.id)) {
-          const start = source.lastIndexOf('\n', region.startOffset - 1) + 1;
+          // A prefix left behind would bind to the following command, often the closing `end`.
+          const start = declarationStartWithDoc(source, region.startOffset, index ? fileRegions[index - 1]!.endOffset : 0);
           source = source.slice(0, start) + source.slice(region.endOffset);
         }
       }
@@ -423,9 +426,46 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
   });
 }
 
-/** Move an attached document comment with its declaration without changing archived patch text. */
-export function declarationStartWithDoc(source: string, startOffset: number): number {
+// Attribute lines and `omit/include/open/... in` commands bind to the next command, which is `end NS` once their declaration is removed.
+const modifiers = /^(?:private|protected|public|noncomputable|nonrec|unsafe|partial|meta)(?:\s+(?:private|protected|public|noncomputable|nonrec|unsafe|partial|meta))*$/u;
+const inPrefix = /^(?:(?:local|scoped|private|public)\s+)*(?:omit|include|open|set_option|variable|attribute|unseal|notation|macro|syntax)\b[\s\S]*\sin$/u;
+function attributes(command: string): boolean {
+  let depth = 0;
+  for (let index = 0; index < command.length; index++) {
+    if (depth) depth += command[index] === '[' ? 1 : command[index] === ']' ? -1 : 0;
+    else if (command.startsWith('@[', index)) { depth = 1; index++; }
+    else if (!/\s/u.test(command[index])) return false;
+  }
+  return !depth;
+}
+
+/** Move an attached document comment, attribute lines and `... in` prefix commands with their declaration
+ * without changing archived patch text. The result never precedes `floor`, the previous declaration's end. */
+export function declarationStartWithDoc(source: string, startOffset: number, floor?: number): number {
   const lineStart = source.lastIndexOf('\n', startOffset - 1) + 1;
+  const low = Math.min(lineStart, floor ?? Math.max(0, ...inspectLeanDeclarationRegions(source)
+    .filter(region => region.endOffset <= lineStart).map(region => region.endOffset)));
+  const masked = maskLeanComments(source.slice(low)), at = (offset: number) => offset - low;
+  const indentation = startOffset - lineStart - source.slice(lineStart, startOffset).trimStart().length;
+  let start = lineStart;
+  for (;;) {
+    const doc = docCommentStart(source, start);
+    if (doc >= low && doc < start) { start = doc; continue; }
+    // Walk over blank, comment and continuation lines to the head of the previous command.
+    let head = start;
+    while (head > low) {
+      const line = at(head) < 2 ? low : masked.lastIndexOf('\n', at(head) - 2) + 1 + low;
+      const text = masked.slice(at(line), at(head)).replace(/\r?\n$/u, '');
+      head = line;
+      if (text.trim() && text.length - text.trimStart().length <= indentation) break;
+    }
+    const command = masked.slice(at(head), at(start)).trim();
+    if (head >= start || !command || !attributes(command) && !modifiers.test(command) && !inPrefix.test(command)) return start;
+    start = head;
+  }
+}
+
+function docCommentStart(source: string, lineStart: number): number {
   let cursor = lineStart;
   while (cursor > 0 && /\s/u.test(source[cursor - 1])) cursor--;
   if (source.slice(cursor - 2, cursor) !== '-/') return lineStart;
@@ -472,7 +512,7 @@ function orderConditionalChanges(source: string, file: string, changes: readonly
     // and comments; other context changes require an explicit source repair from the worker.
     let between = source.slice(region.endOffset, anchorRegion.endOffset);
     for (const crossed of regions.filter(item => item.startOffset >= region.endOffset && item.endOffset <= anchorRegion.endOffset).reverse()) {
-      const start = crossed.startOffset - region.endOffset, end = crossed.endOffset - region.endOffset;
+      const start = declarationStartWithDoc(source, crossed.startOffset) - region.endOffset, end = crossed.endOffset - region.endOffset;
       between = between.slice(0, start) + between.slice(end);
     }
     if (canonicalMathJson(leanDeclarationContextCommands(source, anchor.qualifiedName)) !== context || maskLeanComments(between).trim())

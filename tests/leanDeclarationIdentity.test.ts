@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
 import { inspectLeanDeclarationRegions } from '../src/math/leanSource';
-import { applyTaskChanges, createTaskSourceProjector, taskChanges } from '../src/solver/cooperativeProof';
+import { applyTaskChanges, createTaskSourceProjector, declarationStartWithDoc, omitTaskHelpers, taskChanges } from '../src/solver/cooperativeProof';
 import { commitSolverSources, readSolverProblem, type SolverProblem } from '../src/solver/problem';
 import { captureProofReferences, proofReferencesUnchanged } from '../src/solver/proofReferences';
 import type { CooperativeTask } from '../src/solver/tasks';
@@ -98,5 +98,63 @@ describe('punctuation in cooperative declaration identities', () => {
     expect(proofReferencesUnchanged(problem, workspace, commitSolverSources(problem, workspace), references, 'environment')).toBe(true);
     fs.writeFileSync(file, source.replace(`lemma ${input} : True := by trivial`, `lemma ${input} : True := by exact True.intro`));
     expect(proofReferencesUnchanged(problem, workspace, commitSolverSources(problem, workspace), references, 'environment')).toBe(false);
+  });
+});
+
+describe('attribute and in-command prefixes of cooperative declarations', () => {
+  let directory: string, workspace: string, file: string, problem: SolverProblem;
+  const original = 'namespace Submission\nvariable {p : Prop} [Decidable p]\n' +
+    'theorem goal : True := by sorry\nomit [Decidable p] in\ntheorem side : True := by sorry\nend Submission\n';
+  const helper = (name: string): CooperativeTask => ({ id: name, kind: 'lemma', revision: 0,
+    objective: 'Prove the helper', proofPath: 'Submission.lean', theoremName: `Submission.${name}`,
+    type: 'True', dependsOn: [] });
+
+  beforeEach(() => {
+    directory = temporaryDirectory('lean-declaration-prefix-');
+    workspace = path.join(directory, 'workspace');
+    const receipt = bootstrapLeanTask(workspace, { source: original, task: 'Prove the goals.' });
+    problem = readSolverProblem(workspace, receipt.activeProblemPath);
+    file = path.join(receipt.projectRoot, 'Submission.lean');
+  });
+  afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  it('replays a helper inserted before a prefixed declaration without taking its prefix', () => {
+    const source = original.replace('omit [Decidable p] in', 'lemma probe : True := by trivial\nomit [Decidable p] in');
+    fs.writeFileSync(file, source);
+    const commit = commitSolverSources(problem, workspace);
+    const changes = taskChanges(problem, workspace, commit, helper('probe'), { seedCommit: problem.baseCommit });
+    expect(changes).toMatchObject([{ name: 'probe', beforeName: 'side' }]);
+    fs.writeFileSync(file, original);
+    applyTaskChanges(problem, workspace, changes);
+    expect(fs.readFileSync(file, 'utf8')).toBe(source);
+  });
+
+  it('hides a helper together with its attribute and in-command lines', () => {
+    const hidden = 'omit [Decidable p] in\n@[simp]\nlemma hidden : True := by trivial\n';
+    const source = original.replace('end Submission', `${hidden}end Submission`);
+    expect(omitTaskHelpers(problem, 'Submission.lean', source, ['Submission.hidden'])).toBe(original);
+  });
+
+  it('moves a conditional consumer past a prefixed declaration without stranding its prefix', () => {
+    fs.writeFileSync(file, original.replace('theorem goal', 'lemma consumer : True := by sorry\ntheorem goal')
+      .replace('end Submission', 'lemma premise : True := by trivial\nend Submission'));
+    applyTaskChanges(problem, workspace, [{ file: 'Submission.lean', name: 'consumer',
+      before: 'lemma consumer : True := by sorry\n', after: 'lemma consumer : True := premise\n' }], [], [helper('premise')]);
+    expect(fs.readFileSync(file, 'utf8')).toBe(original.replace('end Submission',
+      'lemma premise : True := by trivial\nlemma consumer : True := premise\nend Submission'));
+  });
+
+  it('stops at the previous declaration and at commands that do not bind the next one', () => {
+    const source = 'theorem a : True := by\n  open Nat in\n  trivial\n' +
+      '/-- Documented. -/\n@[simp, norm_cast]\ntheorem b : True := trivial\n' +
+      'omit [Decidable p]\n  [DecidableEq Nat] in\n-- Lean comments do not end the command.\ntheorem c : True := trivial\n' +
+      'open Nat\ntheorem d : True := trivial\n';
+    const start = (name: string) => declarationStartWithDoc(source, source.indexOf(`theorem ${name}`));
+    expect(start('a')).toBe(0);
+    expect(start('b')).toBe(source.indexOf('/-- Documented.'));
+    expect(start('c')).toBe(source.indexOf('omit'));
+    expect(start('d')).toBe(source.indexOf('theorem d'));
+    expect(declarationStartWithDoc(source, source.indexOf('theorem c'), source.indexOf('[DecidableEq')))
+      .toBe(source.indexOf('theorem c'));
   });
 });

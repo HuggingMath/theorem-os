@@ -1007,6 +1007,25 @@ describe('isolated solver and host acceptance', () => {
   });
 
   it.each([
+    ['an omitted instance', 'variable {p : Prop} [Decidable p]\n', 'omit [Decidable p] in\n'],
+    ['an attribute line', '', '@[simp]\n'],
+    ['stacked in-commands', '', 'open Nat in\nset_option maxHeartbeats 400000 in\n'],
+    ['a documented local attribute', '', 'attribute [local simp] Nat.add_comm in\n/-- Second documentation. -/\n'],
+  ])('removes an unfinished goal with %s instead of binding it to the closing end', (_, context, prefix) => {
+    const source = original.replace('def fixed', `${context}def fixed`).replace('theorem second', `${prefix}theorem second`)
+      .replace('first : True := by sorry', 'first : True := by trivial');
+    fs.writeFileSync(path.join(project, 'Submission.lean'), source);
+    git(workspace, ['add', 'generated/p/Submission.lean']);
+    commitFixture(workspace, 'Prefixed baseline');
+    problem = readSolverProblem(workspace, problem.activeProblemPath);
+    const commit = commitSolverSources(problem, workspace);
+    const task: CooperativeTask = { id: 'first', kind: 'goal', objective: 'Prove the target', dependsOn: [], revision: 0,
+      proofPath: 'Submission.lean', theoremName: 'Submission.first' };
+    const projected = createTaskSourceProjector(problem, workspace, commit)(task, []).get('Submission.lean')!;
+    expect(projected).toBe(source.replace(`${prefix}theorem second : True := by sorry\n`, ''));
+  });
+
+  it.each([
     ['', 'math_task_missing_declaration'],
     ['lemma BranchA.helper : True := by trivial\nlemma BranchB.helper : True := by trivial\n', 'math_task_ambiguous_declaration'],
     ['def helper : True := by trivial\n', 'math_task_requires_theorem'],
