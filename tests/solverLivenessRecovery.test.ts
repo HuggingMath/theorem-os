@@ -66,7 +66,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     };
     const start = (behavior: { saveResearchProgress?: boolean; saveLeadProgress?: boolean } = {}) => {
       const controller = new AbortController(); controllers.push(controller);
-      const events: { event: string; details?: Record<string, unknown> }[] = [];
+      const events: { event: string; details?: Record<string, unknown>; at: number }[] = [];
       const messages: { assignment: CooperativeAction; inbox: string[]; threadId: string }[] = [];
       const notifications: { workerId: string; message: string }[] = [];
       const sessionInterrupts: { workerId: string; threadId: string }[] = [], sessionCloses: typeof sessionInterrupts = [];
@@ -127,7 +127,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         access: workerAccess(workers, directory), root: directory, buildFile: path.join(directory, 'unused-build.json'),
         taskText: 'Prove the frozen original targets.', executable: 'offline-fixture', profile: 'offline-fixture',
         signal: controller.signal, deadline: Infinity, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0,
-        save: () => {}, emit: (event, details) => events.push({ event, details }) });
+        save: () => {}, emit: (event, details) => events.push({ event, details, at: Date.now() }) });
       running.push(completion); void completion.catch(() => {});
       const leads = () => messages.filter(message => message.assignment.kind === 'lead');
       const latestLead = () => {
@@ -231,7 +231,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(fixtureState.state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBeUndefined();
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
-    expect(run.leads()).toHaveLength(pausedTurns);
+    // The only further turns answer the idle prover, on the Lead's backoff schedule; the pause itself wakes nothing.
+    const idleWakes = run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
+    expect(idleWakes.length).toBeLessThanOrEqual(4);
+    expect(run.leads()).toHaveLength(pausedTurns + idleWakes.length);
     const nonces = run.leads().map(message => (message.assignment as Extract<CooperativeAction, { kind: 'lead' }>).planNonce);
     expect(new Set(nonces).size).toBe(nonces.length);
     expect(fixtureState.state.cooperation!.tasks.find(node => node.task.id === 'investigate')!.status).toBe('running');
@@ -254,30 +257,39 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     await run.stop();
   });
 
-  it('wakes a paused Lead once for a peer left idle without startable work while another peer runs', async () => {
+  it('re-owes a paused Lead idle peers on its backoff schedule until a deciding turn answers them', async () => {
     const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
     const lead = fixtureState.state.workers![0], cooperation = () => fixtureState.state.cooperation!;
+    const idleWakes = () => run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
     // Let the unchanged Lead slices settle into a pause while the researcher keeps working.
     for (let minute = 0; minute < 60 && !(lead.scheduling?.status === 'idle' && cooperation().lastLeadPauseInputDigest); minute++)
       await vi.advanceTimersByTimeAsync(60_000);
     expect(cooperation().lastLeadPauseInputDigest).toBeTruthy();
-    // The prover has had nothing ready since before the Lead's first turn, so that turn already saw it idle.
+    // The prover has had nothing ready since before the Lead's first turn, but that turn was cut without a decision,
+    // so it has not answered the idle peer: the paused Lead is owed one turn once the peer has waited.
     const prover = fixtureState.state.workers!.find(worker => worker.id === 'idle-prover')!;
     expect(prover.scheduling).toMatchObject({ status: 'idle', wait: { stage: 'm3-no-ready' } });
-    expect(run.events.some(item => item.event === 'lead_woken_for_idle_peers')).toBe(false);
-    // Model it going idle after the Lead's last turn instead: the Lead has not seen this idle episode.
-    prover.scheduling!.since = cooperation().leadInboxBasis!.at + 1;
+    expect(cooperation().leadDecisionBasisAt).toBeUndefined();
+    expect(idleWakes()).toHaveLength(0);
     const oldNonce = run.latestLead().assignment.planNonce;
     await vi.advanceTimersByTimeAsync(IDLE_PEER_WAKE_MS + 60_000);
-    expect(run.events.filter(item => item.event === 'lead_woken_for_idle_peers').map(item => item.details?.workerIds))
-      .toEqual([['idle-prover']]);
+    expect(idleWakes().map(item => item.details?.workerIds)).toEqual([['idle-prover']]);
     expect(run.latestLead().assignment.planNonce).not.toBe(oldNonce);
+    // Each woken turn is cut unchanged again; the same peer is re-owed after a doubling delay, never sooner.
+    for (let minute = 0; minute < 120 && idleWakes().length < 3; minute++) await vi.advanceTimersByTimeAsync(60_000);
+    const at = idleWakes().map(item => item.at);
+    expect(at).toHaveLength(3);
+    expect(at[1] - at[0]).toBeGreaterThanOrEqual(2 * IDLE_PEER_WAKE_MS);
+    expect(at[2] - at[1]).toBeGreaterThanOrEqual(4 * IDLE_PEER_WAKE_MS);
+    expect(cooperation().idlePeerWake).toMatchObject({ workerIds: ['idle-prover'], count: 3 });
     expect(run.current(run.latestLead().assignment)).toBe(true);
+    // A deciding turn answers the peer it was shown: no further wakes while its idle episode lasts.
     await run.answer();
+    expect(cooperation().leadDecisionBasisAt).toBeGreaterThanOrEqual(at[2]);
     const answeredTurns = run.leads().length;
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
     expect(run.leads()).toHaveLength(answeredTurns);
-    expect(run.events.filter(item => item.event === 'lead_woken_for_idle_peers')).toHaveLength(1);
+    expect(idleWakes()).toHaveLength(3);
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   });
 

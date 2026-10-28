@@ -127,5 +127,11 @@ describe('Lead inbox', () => {
     // A running Lead is not idle: no peer is due until the Lead itself has waited too.
     const leadWorking = workers.map(worker => worker.id === 'solver' ? { ...worker, scheduling: { status: 'working', since: 0 } } : worker);
     expect(idlePeersAwaitingLead(leadWorking, 'solver', 1_000, 5_000)).toEqual({ due: [], dueAt: 5_000 + IDLE_PEER_WAKE_MS });
+    // An unanswered wake at 3 000 named 'blocked': it is re-owed only from notBefore; 'later' went idle after it.
+    const retry = { at: 3_000, notBefore: 3_000 + 4 * IDLE_PEER_WAKE_MS };
+    expect(idlePeersAwaitingLead(workers, 'solver', 1_000, 4_000 + IDLE_PEER_WAKE_MS, retry))
+      .toEqual({ due: ['later'], dueAt: 3_000 + 4 * IDLE_PEER_WAKE_MS });
+    expect(idlePeersAwaitingLead(workers, 'solver', 1_000, 3_000 + 4 * IDLE_PEER_WAKE_MS, retry))
+      .toEqual({ due: ['blocked', 'later'], dueAt: undefined });
   });
 });

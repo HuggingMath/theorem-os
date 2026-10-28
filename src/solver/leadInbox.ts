@@ -25,11 +25,13 @@ export const IDLE_PEER_WAKE_MS = 10 * 60_000;
 const NO_WORK_STAGES = new Set(['m3-no-ready', 'dependency-blocked', 'm5-no-selection']);
 
 /**
- * Peers that went idle after `seenAt` (the last Lead turn's inbox basis or idle wake) and have had no startable
- * work for IDLE_PEER_WAKE_MS, counted from the later of their idle start and the Lead's own. `dueAt` is the
- * earliest time a not-yet-due peer qualifies.
+ * Peers that went idle after `seenAt` (the basis of the last deciding Lead turn, or an idle wake) and have had no
+ * startable work for IDLE_PEER_WAKE_MS, counted from the later of their idle start and the Lead's own. A peer an
+ * unanswered earlier wake already named (idle since `retry.at` or before) is due no earlier than `retry.notBefore`.
+ * `dueAt` is the earliest time a not-yet-due peer qualifies.
  */
-export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], leadId: string, seenAt: number, now = Date.now()) {
+export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], leadId: string, seenAt: number, now = Date.now(),
+  retry?: { at: number; notBefore: number }) {
   const lead = workers.find(worker => worker.id === leadId)?.scheduling;
   const leadIdleSince = lead?.status === 'idle' ? lead.since : now;
   const due: string[] = [];
@@ -38,7 +40,8 @@ export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], lea
     const scheduling = worker.scheduling, wait = scheduling?.wait;
     if (worker.id === leadId || scheduling?.status !== 'idle' || scheduling.since <= seenAt ||
         !wait || wait.endedAt !== undefined || !NO_WORK_STAGES.has(wait.stage)) continue;
-    const at = Math.max(scheduling.since, leadIdleSince) + IDLE_PEER_WAKE_MS;
+    const at = Math.max(Math.max(scheduling.since, leadIdleSince) + IDLE_PEER_WAKE_MS,
+      retry && scheduling.since <= retry.at ? retry.notBefore : 0);
     if (at <= now) due.push(worker.id);
     else dueAt = Math.min(dueAt ?? at, at);
   }

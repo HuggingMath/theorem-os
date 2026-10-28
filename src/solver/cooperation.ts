@@ -25,9 +25,9 @@ import { deliverHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
-import { taskTypePreflightEnvironmentIdentity, type TaskTypePreflight } from './taskTypePreflight';
+import { taskTypePreflightEnvironmentIdentity, typeDiagnosticExcerpt, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
-import { consumeLeadWakes, dropLeadWakes, leadWakePending, settleLeadWakes } from './leadWakes';
+import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
 import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
@@ -116,16 +116,21 @@ export class CooperativeResearch extends CooperationInputs {
   private idlePeerTimer?: NodeJS.Timeout;
   /**
    * Busy peers never return the Lead's turn, so a peer left without startable work would wait for them. One wake per
-   * idle peer the Lead has not seen idle: the inbox already lists idle workers, and the turn (or this wake) moves
-   * the basis past them. Nothing running is the ordinary idle-Lead path, not this one.
+   * idle peer no deciding Lead turn has seen idle: the inbox already lists idle workers, and a turn that decides (or
+   * this wake) moves the basis past them. A turn cut or paused without a decision has not answered them, so a peer
+   * an earlier wake named is re-owed a turn on the Lead's backoff schedule. Nothing running is the ordinary
+   * idle-Lead path, not this one.
    */
   private wakeForIdlePeers() {
     clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
     if (this.stopping || !this.active.size || this.active.has(this.lead.id) || !this.archive.tasks.length) return;
-    const seenAt = Math.max(this.archive.leadInboxBasis?.at ?? 0, this.archive.idlePeerWake?.at ?? 0);
-    const { due, dueAt } = idlePeersAwaitingLead(this.input.state.workers ?? [], this.lead.id, seenAt);
+    const decidedAt = this.archive.leadDecisionBasisAt ?? 0, previous = this.archive.idlePeerWake;
+    const unanswered = previous && previous.at > decidedAt ? previous : undefined;
+    const retry = unanswered && { at: unanswered.at,
+      notBefore: unanswered.at + IDLE_PEER_WAKE_MS * 2 ** Math.min(unanswered.count ?? 1, LEAD_MAX_BACKOFF) };
+    const { due, dueAt } = idlePeersAwaitingLead(this.input.state.workers ?? [], this.lead.id, decidedAt, Date.now(), retry);
     if (due.length) {
-      this.archive.idlePeerWake = { at: Date.now(), workerIds: due };
+      this.archive.idlePeerWake = { at: Date.now(), workerIds: due, ...(unanswered ? { count: (unanswered.count ?? 1) + 1 } : {}) };
       this.wakeLead('peers-idle');
       this.input.emit('lead_woken_for_idle_peers', { workerIds: due, idleWakeMs: IDLE_PEER_WAKE_MS });
       this.input.save();
@@ -581,8 +586,9 @@ export class CooperativeResearch extends CooperationInputs {
           this.invalidTaskTypes.set(node, { canonical: seed, environment, taskDigest, dependencies, project, workerId: worker.id,
             environmentIdentity: taskTypePreflightEnvironmentIdentity(project, workerAccess!.environment) });
           this.moveTask(node, 'blocked', 'rejected');
-          node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) +
-            (checked.result.artifact ? `\nAdvisory type diagnostics: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
+          const excerpt = typeDiagnosticExcerpt(task.type!, checked.result.reason);
+          node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) + (excerpt ? `\n${excerpt}` : '') +
+            (checked.result.artifact ? `\nAdvisory type diagnostics in ${worker.id}'s worktree: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
             '\nRevise the closed helper type or its context before proving it. This is not proof acceptance or a mathematical refutation.';
           this.wakeLead('task-type-invalid'); this.changed(); return RETRY_DISPATCH;
         }

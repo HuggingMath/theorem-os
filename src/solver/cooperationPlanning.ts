@@ -104,6 +104,8 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.lastLeadInputDigest = this.leadEvidence.get(action) === this.planningEvidenceDigest()
         ? this.planningInputDigest() : action.planningInputDigest;
       this.archive.lastLeadPauseInputDigest = undefined;
+      // Idle peers this deciding turn was shown are answered; only one Lead turn runs at a time.
+      this.archive.leadDecisionBasisAt = this.archive.leadInboxBasis?.at ?? Date.now();
     }
   }
   protected activeGoalFrontier() {

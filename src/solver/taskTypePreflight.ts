@@ -109,6 +109,32 @@ function definiteTypeError(message: string): boolean {
     /^(?:(?:application\s+)?type mismatch|unknown (?:identifier|constant)|function expected|invalid (?:binder annotation|field(?: notation)?)|unexpected (?:token|identifier|end of input)|expected (?:token|term|type)|requested type must be closed)\b/iu.test(diagnostic);
 }
 
+// Checked against Lean v4.34.1: each fails as a bound variable name with "expected '(', '_' or identifier".
+const RESERVED_TERM_TOKENS = new Set(['λ', 'Π', 'Σ', 'fun', 'at', 'by', 'calc', 'deriving', 'do', 'else', 'end', 'exists',
+  'forall', 'from', 'have', 'if', 'in', 'let', 'match', 'open', 'Prop', 'show', 'Sort', 'suffices', 'then', 'Type', 'where', 'with']);
+
+/**
+ * runParserCategory reports only a codepoint position in the type string ("<input>:1:141: expected ..."), never the
+ * token it stopped at. Quote that point of the type, and name a reserved token used as an identifier.
+ */
+export function typeDiagnosticExcerpt(type: string, reason: string): string | undefined {
+  const match = /<input>:(\d+):(\d+):/u.exec(reason);
+  if (!match) return;
+  const line = type.split('\n')[Number(match[1]) - 1], column = Number(match[2]);
+  if (line === undefined) return;
+  const chars = Array.from(line);
+  if (column >= chars.length) return;
+  const rest = chars.slice(column).join('');
+  const token = /^[λΠΣ]/u.test(rest) ? rest[0] : rest.match(/^[\p{L}_][\p{L}\p{N}_'!?]*/u)?.[0] ?? chars[column];
+  const end = column + Array.from(token).length;
+  const excerpt = `Type text where the parser stopped (<input>:${match[1]}:${column}, 0-based codepoint column): ` +
+    `${column > 60 ? '…' : ''}${chars.slice(Math.max(0, column - 60), column).join('')}⟦${token}⟧` +
+    `${chars.slice(end, end + 40).join('')}${end + 40 < chars.length ? '…' : ''}`;
+  return RESERVED_TERM_TOKENS.has(token)
+    ? `${excerpt}\n\`${token}\` is a reserved Lean token, not an identifier; rename that bound variable everywhere in the type.`
+    : excerpt;
+}
+
 /** Process-local and content-bound; checkpoint JSON never authorizes skipping a new preflight. */
 export class TaskTypePreflightCache {
   private readonly results = new Map<string, { result: TaskTypePreflight; sourceDigest: string; projectionKey?: string }>();
