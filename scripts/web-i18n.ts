@@ -45,10 +45,9 @@ export function scanBundle(files = bundleSources()) {
 
 /**
  * Chinese literals that are not interface text: checks against server messages, the CJK-aware list separator, the
- * Chinese token units (English uses K/M), the share page's parser for stored "N 秒" metric values, and the language
- * switch's search keywords, which match in both languages.
+ * Chinese token units (English uses K/M), and the language switch's search keywords, which match in both languages.
  */
-const allowedText = new Set(['/会话/u', '/[，,\\s]+/u', "'会话校验'", '} 亿`', '} 万`', '/^([\\d.]+) 秒$/u',
+const allowedText = new Set(['/会话/u', '/[，,\\s]+/u', "'会话校验'", '} 亿`', '} 万`',
   "'language locale english chinese 语言 中文 英文'"]);
 const allowed = (node: ts.Node, source: ts.SourceFile) => allowedText.has(node.getText(source));
 

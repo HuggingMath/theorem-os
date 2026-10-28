@@ -41,6 +41,18 @@ export function newlyFinished(previous: readonly WebRun[], current: readonly Web
   return current.filter(run => active.has(run.id) && terminal(run));
 }
 
-export function documentTitle(base: string, active: number, unseen: number): string {
-  return unseen ? t('({0}) 研究已结束 · {1}', unseen, base) : active ? t('{0} 项进行中 · {1}', active, base) : base;
+/** A plan the owner can approve right now: drafted, not approved, and not being revised from their note. */
+export const waitsForOwner = (run: WebRun) => run.status === 'running' &&
+  run.observation?.inspection.planApproval?.status === 'pending' && !run.observation.inspection.planApproval.leadRevising;
+
+/** Runs whose plan started waiting for the owner since the previous list; a run first seen already waiting is not new. */
+export function newlyWaiting(previous: readonly WebRun[], current: readonly WebRun[]): WebRun[] {
+  const before = new Map(previous.map(run => [run.id, run]));
+  return current.filter(run => waitsForOwner(run) && before.has(run.id) && !waitsForOwner(before.get(run.id)!));
+}
+
+/** A plan waiting for approval holds its run, so it comes before finished runs and the active count. */
+export function documentTitle(base: string, active: number, unseen: number, waiting = 0): string {
+  return waiting ? t('({0}) 等你批准计划 · {1}', waiting, base) : unseen ? t('({0}) 研究已结束 · {1}', unseen, base)
+    : active ? t('{0} 项进行中 · {1}', active, base) : base;
 }

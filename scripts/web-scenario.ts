@@ -96,7 +96,7 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
   });
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    if (options.open === true) { await page.goto(suite.origin); await page.locator('#submit-run:enabled').waitFor(); }
+    if (options.open === true) { await page.goto(suite.origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); }
     else await options.open?.(h);
     const { label, seconds } = options.timeout;
     await Promise.race([run(h), new Promise<never>((_, reject) => {
@@ -124,14 +124,30 @@ export const preferFullCollaboration = (context: BrowserContext) => context.addI
   try { if (localStorage.getItem(key) === null) localStorage.setItem(key, 'full'); } catch { /* Storage is blocked; the page uses its default. */ }
 }, collaborationDetailStorageKey);
 export const normalize = (source: string) => source.replace(/\r\n?/g, '\n');
-export const ready = (page: Page) => page.locator('#submit-run:enabled').waitFor();
+export const ready = (page: Page) => page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 export function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
 export async function readRun(h: { page: Page }, id: string): Promise<WebRun> {
-  return h.page.evaluate(async id => (await (await fetch(`/api/runs/${id}`)).json()).run as WebRun, id);
+  const { status, body } = await h.page.evaluate(async id => {
+    const response = await fetch(`/api/runs/${id}`);
+    return { status: response.status, body: await response.json() as { run?: WebRun; error?: string } };
+  }, id);
+  if (!body.run) throw new Error(`Reading run ${id} failed with HTTP ${status}: ${body.error ?? 'no run'}`);
+  return body.run;
+}
+/** Poll a run from the test until `done` holds. page.waitForFunction cannot do this: it takes the Promise an async predicate
+ * returns as a truthy answer and returns at once. Ten reads a second stay well inside the server's 600 API requests a minute. */
+export async function waitForRun(h: { page: Page }, id: string, done: (run: WebRun) => boolean, timeoutMs = 10_000): Promise<WebRun> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const run = await readRun(h, id);
+    if (done(run)) return run;
+    if (Date.now() > deadline) throw new Error(`Run ${id} is still ${run.status} after ${timeoutMs} ms`);
+    await h.page.waitForTimeout(100);
+  }
 }
 /** Create a fixture run through the page's own session and CSRF token; `label` prefixes the creation error. */
 export async function postRun(h: { page: Page }, input: WebRunInput, label = 'Fixture'): Promise<WebRun> {

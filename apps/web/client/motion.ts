@@ -1,6 +1,6 @@
 import { gsap } from 'gsap';
 
-type MotionKind = 'workspace' | 'message' | 'event' | 'panel' | 'status' | 'dialog';
+type MotionKind = 'workspace' | 'panel' | 'status' | 'dialog';
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const active = new Map<HTMLElement, gsap.Context>();
 let pageActive = true;
@@ -33,7 +33,7 @@ export function animateEntrance(target: HTMLElement, kind: MotionKind) {
   // Revert the context on completion as well as interruption so original inline styles survive.
   const context = gsap.context(() => {
     gsap.fromTo(target, { opacity: kind === 'status' ? .55 : .35, y: stationary ? 0 : 5 }, {
-      opacity: 1, y: 0, duration: kind === 'message' ? .24 : .18, ease: 'power2.out',
+      opacity: 1, y: 0, duration: .18, ease: 'power2.out',
       onComplete: () => finish(target),
     });
   });

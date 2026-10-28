@@ -7,7 +7,8 @@ import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writ
 import { assertMathCanonicalPath } from '../../src/math/paths';
 import type { SolverRunState } from '../../src/solver/archive';
 import { buildRunInspection, exportRunPlan, readRunInspection } from '../../src/solver/inspection';
-import { queueRunEdit } from '../../src/solver/humanEdit';
+import { queuePlanApproval, queueRunEdit } from '../../src/solver/humanEdit';
+import { planApprovalInputSchema } from '../../src/solver/planApproval';
 import { humanGuidanceInputSchema, queueHumanGuidance, readHumanGuidance } from '../../src/solver/humanGuidance';
 import { parseCooperationPlan, taskGroup, taskVersion, type TaskRecord } from '../../src/solver/tasks';
 import { allowedKnowledgeFile, buildTheoremKnowledge, validateTheoremKnowledge, type TheoremKnowledgeBase } from '../../src/solver/theoremKnowledge';
@@ -280,6 +281,7 @@ const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('edit-preview'), proposal: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('edit'), proposal: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('guidance'), guidance: humanGuidanceInputSchema }).strict(),
+  z.object({ type: z.literal('plan-approval'), approval: planApprovalInputSchema }).strict(),
   z.object({ type: z.literal('capture') }).strict(),
 ]);
 
@@ -303,6 +305,18 @@ export async function handleWebWorkerCommand(value: unknown, options: { activeRu
       if (['web_guidance_observation_unknown', 'math_guidance_invalid', 'math_guidance_id_conflict',
         'math_guidance_run_inactive', 'math_guidance_task_superseded', 'math_guidance_worker_missing',
         'math_guidance_lead_missing', 'math_guidance_limit'].includes(reason)) return { id: command.guidance.id, status: 'rejected', reason };
+      throw error;
+    }
+  }
+  if (command.type === 'plan-approval') {
+    try { return { ...await queuePlanApproval(active.output, command.approval) }; }
+    catch (error) {
+      // Each of these is decided from the saved checkpoint before anything is written.
+      const reason = error instanceof Error ? error.message : '';
+      if (['math_plan_approval_invalid', 'math_plan_approval_id_conflict', 'math_plan_approval_not_required',
+        'math_plan_approval_run_inactive', 'math_plan_approval_already_approved', 'math_plan_approval_plan_unavailable',
+        'math_plan_approval_version_conflict', 'math_plan_approval_limit'].includes(reason))
+        return { id: command.approval.id, status: 'rejected', reason, planVersion: command.approval.planVersion };
       throw error;
     }
   }

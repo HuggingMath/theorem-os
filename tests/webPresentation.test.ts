@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, isAcceptedRun, resultDescription, runProgress } from '../apps/web/presentation';
+import { endedSummary, formatDuration, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel } from '../apps/web/presentation';
 import type { WebRun } from '../apps/web/shared';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16) + seconds * 1000).toISOString();
@@ -82,6 +82,28 @@ describe('workbench phase and elapsed-time presentation', () => {
     expect(resultDescription(value)).not.toBe('完整原题通过独立 Lean 验收。');
   });
 
+  it('says why a run without an acceptance verdict stopped, and tells a failed acceptance from none', () => {
+    const ended = (result: Partial<NonNullable<WebRun['result']>>, changes: Partial<WebRun> = {}) =>
+      run({ status: 'completed', phase: 'finished', finishedAt: at(180), result: { status: 'incomplete', proof: '', report: {}, ...result }, ...changes });
+    expect(stoppedLabel(ended({ status: 'limit_reached' }))).toBe('解题时间用完');
+    expect(stoppedLabel(ended({}, { failure: { kind: 'time_limit', reason: 'math_run_stopped' } }))).toBe('解题时间用完');
+    expect(stoppedLabel(ended({}, { failure: { kind: 'budget', reason: 'math_total_token_limit' } }))).toBe('用量到达上限');
+    expect(stoppedLabel(ended({ report: { stopReason: 'math_turn_limit_reached' } }))).toBe('研究轮次用完');
+    expect(stoppedLabel(ended({ report: { stopReason: 'math_research_routes_exhausted' } }))).toBe('研究路线用尽');
+    expect(stoppedLabel(ended({ report: { stopReason: 'math_run_stopped' } }))).toBe('解题时间用完');
+    expect(stoppedLabel(ended({}))).toBe('运行结束');
+    expect(['evaluated_failed', 'evaluated_rejected', 'evaluated_passed', 'incomplete'].map(status => isRejectedRun(ended({ status }))))
+      .toEqual([true, true, false, false]);
+    // The route map's closing line: a run stopped on a limit never reached acceptance, so it must not say acceptance failed.
+    expect(endedSummary(ended({ status: 'evaluated_passed' }))).toBe('研究已结束，原题已通过验收。');
+    expect(endedSummary(ended({ status: 'evaluated_failed' }))).toBe('研究已结束，候选证明没有通过验收。');
+    expect(endedSummary(ended({ status: 'limit_reached' }))).toBe('研究已结束：解题时间用完，没有得到通过验收的完整证明。');
+    expect(endedSummary(ended({ report: { stopReason: 'math_turn_limit_reached' } }))).toBe('研究已结束：研究轮次用完，没有得到通过验收的完整证明。');
+    expect(endedSummary(ended({}))).toBe('研究已结束，没有得到通过验收的完整证明。');
+    expect(endedSummary(run({ status: 'cancelled', phase: 'cancelled', finishedAt: at(180) }))).toBe('研究已取消，没有得到通过验收的完整证明。');
+    expect(endedSummary(run({ status: 'error', phase: 'error', finishedAt: at(180), failure: { kind: 'network' } }))).toBe('运行出错后中止，没有得到通过验收的完整证明。');
+  });
+
   it('falls back to legacy events and terminal update time without requiring a new archive schema', () => {
     const value = run({ timings: undefined, phase: 'finished', status: 'completed', updatedAt: at(180),
       events: [{ sequence: 1, at: at(10), type: 'preparing', message: '' },
@@ -100,5 +122,57 @@ describe('workbench phase and elapsed-time presentation', () => {
     expect(formatDuration(Number.NaN)).toBe('--:--');
     expect(runProgress(run(), Date.parse(at(-10))).elapsed).toBe(0);
     expect(runProgress(run({ createdAt: 'invalid' })).elapsed).toBeNull();
+  });
+
+  it('says finished durations and report metrics the way a reader does', () => {
+    expect([26_302, 60_000, 378_000, 3_600_000, 3_900_000].map(readableDuration)).toEqual(['26 秒', '1 分钟', '6 分 18 秒', '1 小时', '1 小时 5 分']);
+    expect(readableMetric({ label: '求解耗时', value: '26.302 秒' })).toEqual({ label: '求解耗时', value: '26 秒' });
+    expect(readableMetric({ label: '总 Token', value: '48000' })).toEqual({ label: '总 Token', value: '5 万' });
+    expect(readableMetric({ label: '研究轮次', value: '2' })).toEqual({ label: '研究轮次', value: '2' });
+    expect(readableMetric({ label: '总 Token', value: 'unknown' })).toEqual({ label: '总 Token', value: 'unknown' });
+  });
+
+  it('counts a solving run as stuck after ten minutes without progress, from its last passing check', () => {
+    const solving = run({ phase: 'turn_started', timings: { preparing: at(10), solving: at(60) } });
+    expect(stalledMinutes(solving, Date.parse(at(60 + 9 * 60 + 59)))).toBeUndefined();
+    expect(stalledMinutes(solving, Date.parse(at(60 + 10 * 60)))).toBe(10);
+    expect(stalledMinutes({ ...solving, progressAt: at(300) }, Date.parse(at(60 + 10 * 60)))).toBeUndefined();
+    expect(stalledMinutes({ ...solving, progressAt: at(300) }, Date.parse(at(300 + 25 * 60)))).toBe(25);
+    // Preparing, evaluating and finished runs are never stuck in this sense.
+    expect(stalledMinutes(run({ timings: { preparing: at(10) } }), Date.parse(at(3_600)))).toBeUndefined();
+    expect(stalledMinutes({ ...solving, timings: { ...solving.timings, evaluating: at(120) } }, Date.parse(at(3_600)))).toBeUndefined();
+    expect(stalledMinutes({ ...solving, status: 'completed' }, Date.parse(at(3_600)))).toBeUndefined();
+  });
+
+  it('does not count waiting for plan approval as stuck, and restarts the count at approval', () => {
+    const solving = run({ phase: 'turn_started', timings: { preparing: at(10), solving: at(60) } });
+    const approval = (planApproval: Record<string, unknown>) => ({ ...solving,
+      observation: { inspection: { planApproval: { required: true, planVersion: 'plan-v1', rejections: [], leadRevising: false, ...planApproval } } } }) as unknown as WebRun;
+    const pending = approval({ status: 'pending' });
+    expect(stalledMinutes(pending, Date.parse(at(3_600)))).toBeUndefined();
+    expect([pending, approval({ status: 'awaiting-plan' }), approval({ status: 'approved' }), solving].map(planGated)).toEqual([true, true, false, false]);
+    expect(resultDescription(pending)).toBe('Lead 已经拟好研究计划，等你批准后 Agent 才开始工作。');
+    expect(resultDescription(approval({ status: 'pending', leadRevising: true }))).toBe('Lead 正在按你的留言修改研究计划，改完后再请你批准。');
+    // While the Lead revises, the header must not ask the owner for an approval they cannot give yet.
+    expect([pending, approval({ status: 'pending', leadRevising: true }), approval({ status: 'approved' })].map(item => runProgress(item).phaseLabel))
+      .toEqual(['等你批准计划', 'Lead 正在改计划', '构造证明']);
+    expect(resultDescription(approval({ status: 'awaiting-plan' }))).toBe('Lead 正在拟定研究计划，拟好后会请你批准。');
+    const approved = approval({ status: 'approved', approvedAt: Date.parse(at(1_800)) });
+    expect(stalledMinutes(approved, Date.parse(at(1_800 + 9 * 60)))).toBeUndefined();
+    expect(stalledMinutes(approved, Date.parse(at(1_800 + 10 * 60)))).toBe(10);
+    // The budget ran out before anyone approved: the guide says so instead of blaming the Agents.
+    const expired = { ...pending, status: 'error', failure: { kind: 'time_limit' } } as unknown as WebRun;
+    expect(resultDescription(expired)).toContain('研究计划直到解题时间用完都没有批准');
+  });
+});
+
+describe('runTokens', () => {
+  const observed = (usage: unknown) => ({ observation: { inspection: { usage } } }) as unknown as Partial<WebRun>;
+  it('reads the report once there is one, else the latest observation, else nothing', () => {
+    expect(runTokens(run())).toBeUndefined();
+    expect(runTokens(run(observed({ inputTokens: 900, outputTokens: 100 })))).toBe(1_000);
+    expect(runTokens(run({ ...observed({ totalTokens: 1_000 }), result: { status: 'limit_reached', proof: '', report: { usage: { totalTokens: 1_200 } } } } as Partial<WebRun>))).toBe(1_200);
+    expect(runTokens(run({ ...observed({ totalTokens: 1_000 }), result: { status: 'limit_reached', proof: '', report: { usage: {} } } } as Partial<WebRun>))).toBe(1_000);
+    expect(runTokens(run(observed({ totalTokens: -1 })))).toBeUndefined();
   });
 });

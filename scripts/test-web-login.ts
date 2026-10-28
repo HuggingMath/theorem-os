@@ -76,7 +76,7 @@ try {
   await page.waitForURL(`${origin}/`);
   await page.locator('#open-account').waitFor();
   assert.equal(await page.locator('#open-account').innerText(), 'alice@example.org');
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   mark('a wrong code is reported, the right code opens the workbench with the account in the top bar');
 
   // Signed in, the account button joins the top bar; on phones the model name truncates so the button stays on screen.

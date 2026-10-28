@@ -13,7 +13,7 @@ import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, settled, startBrowser } from './web-scenario';
-import { closeSettings, openSettings } from './web-ui-controls';
+import { closeSettings, newResearch, openSettings } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-saved-key');
@@ -54,12 +54,12 @@ async function signedIn(browser: Browser, email: string, options: { locale?: 'zh
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/runs') posted.push(request.postData() ?? ''); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   return { context, page, errors, posted };
 }
 async function submit(page: Page, posted: string[], task: string, key?: string) {
   const before = posted.length;
-  await page.locator('#new-research').click();
+  await newResearch(page);
   await page.locator('#task').fill(task);
   await openSettings(page);
   if (key !== undefined) await page.locator('#api-key').fill(key);
@@ -99,7 +99,7 @@ try {
   mark('ticked by default, the key is saved to the account on submission, the field empties and shows only the last four characters');
 
   await first.page.reload();
-  await first.page.locator('#submit-run:enabled').waitFor();
+  await first.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   const reused = await submit(first.page, first.posted, 'Reuse after reload');
   assert.equal(reused.apiKey, ''); assert.equal(reused.saveKey, undefined);
   const second = await signedIn(browser, 'alice@example.org');

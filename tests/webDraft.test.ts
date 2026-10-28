@@ -33,6 +33,14 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(decodeTaskDraft(archive())).not.toHaveProperty('result');
   });
 
+  it('keeps the plan-approval choice only when it is on', () => {
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(draft({ planApproval: true }))))).toEqual(draft({ planApproval: true }));
+    expect(decodeTaskDraft(envelope({ ...draft(), planApproval: false }))).toEqual(draft());
+    expect(() => decodeTaskDraft(envelope({ ...draft(), planApproval: 'yes' }))).toThrow('任务草稿格式无效');
+    const archived = archive();
+    expect(decodeTaskDraft({ ...archived, run: { ...archived.run, planApproval: true } })).toEqual(draft({ templateId: '', planApproval: true }));
+  });
+
   it('preserves unfinished empty text and configuration', () => {
     const original = draft({ providerId: '', model: '', source: '', task: '', maxTurns: '', maxRunSeconds: '', workers: '', templateId: '' });
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);

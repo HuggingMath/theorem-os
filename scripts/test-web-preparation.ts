@@ -8,7 +8,7 @@ import { readWebConfig, webLimits, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeHistory, closeSettings, discardSourceEditor, openHistory, openSettings, showArtifacts, withSettings } from './web-ui-controls';
+import { closeDialog, closeHistory, closeSettings, discardSourceEditor, historyDocked, openHistory, openSettings, showArtifacts, showChat, withSettings } from './web-ui-controls';
 import { freePort, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -53,7 +53,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   });
 async function open(h: Harness) {
   await h.page.goto(origin);
-  await h.page.locator('#submit-run:enabled').waitFor();
+  await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await h.page.locator('#submission-readiness[data-state="missing"]').waitFor();
 }
 async function readiness(page: Page, state: string) {
@@ -184,11 +184,14 @@ try {
       'Closing settings opened from the composer must restore the composer trigger');
     await page.locator('#composer-settings').click();
     await doesNotStealFocus(page, '#run-settings');
-    await openHistory(page);
-    await closeHistory(page);
-    assert.equal(await page.locator('#open-history').evaluate(button => button === document.activeElement), true);
-    await openHistory(page);
-    await doesNotStealFocus(page, '#history-dialog');
+    // Wide screens dock the history beside the workspace, so only the phone dialog hands focus back.
+    if (!historyDocked(page)) {
+      await openHistory(page);
+      await closeHistory(page);
+      assert.equal(await page.locator('#open-history').evaluate(button => button === document.activeElement), true);
+      await openHistory(page);
+      await doesNotStealFocus(page, '#history-dialog');
+    }
   }, width);
 
   for (const width of widths) await scenario(`Settings navigation keeps sections reachable and preserves the draft at ${width}px`, async h => {
@@ -692,7 +695,9 @@ try {
     release();
     assert.equal((await response).status(), 201);
     await page.waitForFunction(() => (document.querySelector('#api-key') as HTMLInputElement).value === '');
-    // The emptied task is shown as the next step, not as a fault; the Key is still required once a task is written.
+    // The new run opens in place of the composer. Back on the new-research page the emptied task is shown as the next step,
+    // not as a fault; the Key is still required once a task is written.
+    await showChat(page);
     await readiness(page, 'compose');
     assert.equal(await page.locator('#readiness-title').innerText(), '写下研究任务');
     await page.locator('#task').fill('The next research task');

@@ -47,7 +47,7 @@ async function finished(page: Page, id: string) {
 }
 async function open(page: Page, id: string) {
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await selectHistoryRun(page, id);
 }
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
@@ -60,7 +60,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 
   const rejected: WebRun = await postRun({ page }, input('rejected'));
   await finished(page, rejected.id);

@@ -139,7 +139,7 @@ const input: WebRunInput = { providerId: 'openai', apiKey: 'sk-local-knowledge-c
 try {
   await webScenario(browser, suite, 'real research context, stale response invalidation and historical references', async h => {
     const { page } = h, run = await postRun(h, input);
-    await refreshHistory(page); await selectHistoryRun(page, run.id);
+    await refreshHistory(page); await selectHistoryRun(page, run.id, 'collaboration');
     await page.locator('.collab-graph [data-collab-task="identity_task"]').click();
     const context = page.locator('[data-knowledge-context]'), detail = page.locator('.collab-knowledge-detail');
     const theorem = page.locator(`[data-knowledge-id="${theoremId}"]`), routeFinding = page.locator(`[data-knowledge-id="${findingId}"]`);

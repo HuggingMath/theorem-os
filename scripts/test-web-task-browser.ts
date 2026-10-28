@@ -119,7 +119,7 @@ const graphCard = (id: string) => `[data-collab-graph] [data-collab-task="${id}"
 const isFocused = (page: Page, selector: string) => page.locator(selector).evaluate(node => document.activeElement === node);
 async function create(h: Harness, title = input.task) {
   const run = await postRun(h, { ...input, task: title }); h.runIds.push(run.id);
-  await refreshHistory(h.page); await selectHistoryRun(h.page, run.id); await h.page.locator(count).waitFor();
+  await refreshHistory(h.page); await selectHistoryRun(h.page, run.id, 'collaboration'); await h.page.locator(count).waitFor();
   await tasksSection(h.page); return run;
 }
 async function tasksSection(page: Page) {
@@ -217,11 +217,11 @@ try {
     const savedOuter = await page.locator(panel).evaluate(node => node.scrollTop);
     const second = await create(h, 'Task browser run B'); await view(page, 'graph'); await page.locator(route).selectOption('B');
     await page.locator(state).selectOption('blocked'); await page.locator(query).fill('本地目标_b3');
-    await selectHistoryRun(page, first.id); assert.equal(await page.locator(map).getAttribute('data-task-view'), 'list');
+    await selectHistoryRun(page, first.id, 'collaboration'); assert.equal(await page.locator(map).getAttribute('data-task-view'), 'list');
     assert.equal(await page.locator(route).inputValue(), 'A'); assert.equal(await page.locator(state).inputValue(), ''); assert.equal(await page.locator(query).inputValue(), '本地目标_');
     assert.equal(await page.locator(list).evaluate(node => node.scrollTop), top); await expectSelected(page, 'original');
     assert.equal(await page.locator(panel).evaluate(node => node.scrollTop), savedOuter, 'switching runs restores the outer task reading position');
-    await selectHistoryRun(page, second.id); assert.equal(await page.locator(map).getAttribute('data-task-view'), 'graph');
+    await selectHistoryRun(page, second.id, 'collaboration'); assert.equal(await page.locator(map).getAttribute('data-task-view'), 'graph');
     assert.equal(await page.locator(route).inputValue(), 'B'); assert.equal(await page.locator(state).inputValue(), 'blocked'); assert.equal(await page.locator(query).inputValue(), '本地目标_b3');
   });
 

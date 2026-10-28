@@ -1,5 +1,5 @@
 import { createIcons, Copy, Download, ShieldCheck } from 'lucide';
-import { effortLabels, formatDateTime } from '../presentation';
+import { effortLabels, formatDateTime, readableMetric } from '../presentation';
 import { webShareToken, type WebShareSnapshot } from '../share';
 import { localizeText, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
@@ -25,8 +25,6 @@ function facts(target: HTMLElement, items: [string, string, boolean?][]) {
     return row;
   }));
 }
-// Snapshots store the report labels in Chinese; the page shows them in the reader's language.
-const metricValue = (value: string) => { const seconds = /^([\d.]+) 秒$/u.exec(value); return seconds ? t('{0} 秒', seconds[1]) : value; };
 function missing(text?: string) {
   $('#share-loading').hidden = true;
   if (text) $('#share-missing-text').textContent = text;
@@ -45,7 +43,7 @@ function show(share: WebShareSnapshot) {
   facts($('#share-facts'), [
     [t('证明环境'), share.environment === 'mathlib' ? 'Mathlib' : t('Lean 标准库')],
     [t('模型'), share.model, true], [t('推理强度'), effortLabels[share.effort] ?? share.effort], [t('Agent 数量'), String(share.workers)],
-    ...share.metrics.map(item => [localizeText(item.label), metricValue(item.value)] as [string, string]),
+    ...share.metrics.map(readableMetric).map(item => [item.label, item.value] as [string, string]),
     [t('完成时间'), formatDateTime(share.finishedAt ?? share.createdAt)], [t('分享时间'), formatDateTime(share.sharedAt)],
   ]);
   $('#share-task').textContent = share.task;
@@ -75,7 +73,7 @@ function show(share: WebShareSnapshot) {
     return item;
   }));
   facts($('#share-identity'), share.identity.map(item => [localizeText(item.label), item.value, true]));
-  $('#share-identity').hidden = !share.identity.length;
+  $('#share-credentials').hidden = !share.identity.length;
   showCode();
   $('#share-loading').hidden = true;
   $('#share-content').hidden = false;

@@ -110,7 +110,7 @@ const task = async (page: Page, id?: string) => { const plan = await proposal(pa
 const field = (page: Page, name: string, value: string) => page.locator(selector(name)).fill(value);
 const pick = (page: Page, name: string, value: string) => page.locator(selector(name)).selectOption(value);
 async function create(h: Harness) {
-  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id);
+  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id, 'collaboration');
   await h.page.locator('.collab-surface').waitFor(); await h.page.locator('[data-collab-plan]:enabled').click();
   await h.page.locator('.collab-plan-dialog[open]').waitFor(); await pick(h.page, 'task', 'base');
   await expand(h.page, '前提、证明位置与共享范围'); return run;

@@ -192,6 +192,26 @@ export class WebStorage {
     return bySequence(this.listRecords(directory).map(file => this.getRecord<WebEvent>([...directory, file])!));
   }
   getEvents(owner: string, runId: string): WebEvent[] { return this.listEvents(owner, runId); }
+  /** Events after a sequence, oldest first, at most `limit`; for incremental readers such as the trajectory index. */
+  listEventsAfter(owner: string, runId: string, after: number, limit: number): WebEvent[] {
+    return this.recordsAfter<WebEvent>([...this.runPath(owner, runId), 'events'], after, limit);
+  }
+  listObservationsAfter(owner: string, runId: string, after: number, limit: number): WebObservation[] {
+    return this.recordsAfter<WebObservation>([...this.runPath(owner, runId), 'observations'], after, limit);
+  }
+  /** Numbered records after `after` in sequence order; reading stops at a record that cannot be parsed, to be read again later. */
+  private recordsAfter<T>(directory: string[], after: number, limit: number): T[] {
+    const sequences = this.listRecords(directory).flatMap(file => /^\d+\.json$/u.test(file) ? [Number.parseInt(file, 10)] : [])
+      .filter(sequence => sequence > after).sort((a, b) => a - b).slice(0, limit);
+    const records: T[] = [];
+    for (const sequence of sequences) {
+      let record: T | undefined;
+      try { record = this.getRecord<T>([...directory, `${sequence}.json`]); } catch { break; }
+      if (record === undefined) break;
+      records.push(record);
+    }
+    return records;
+  }
 
   archiveRun(owner: string, run: WebRun, catalogDigest?: string): WebArchive {
     if (!this.getRun(owner, run.id)) throw new WebStorageError(404, '运行不存在或不属于当前会话。');

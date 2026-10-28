@@ -30,22 +30,32 @@ export async function closeSettings(page: Page) {
   }
 }
 
+/** Wider than 850px the history is docked beside the workspace; narrower it opens as a dialog. */
+export const historyDocked = (page: Page) => (page.viewportSize()?.width ?? 1440) > 850;
+
 export async function closeHistory(page: Page) {
   if (await page.locator('#history-dialog[open]').count()) {
     await closeDialog(page, '#history-dialog', () => page.locator('#close-history').click());
   }
 }
 
+/** The new-research page: the composer, and on phones its 编写 tab. A selected run is left through 新建研究. */
 export async function showChat(page: Page) {
   await closeSettings(page);
+  if (await page.locator('body[data-view="run"]').count()) {
+    await openHistory(page);
+    await page.locator('#open-draft').click();
+    await page.locator('body[data-view="draft"]').waitFor({ state: 'attached' });
+  }
   await closeHistory(page);
-  if ((page.viewportSize()?.width ?? 1440) <= 850) await page.locator('#mobile-compose').click();
+  if (!historyDocked(page)) await page.locator('#mobile-compose').click();
 }
 
+/** The selected run, or the draft preview on the new-research page (its 预览 tab on phones). */
 export async function showArtifacts(page: Page) {
   await closeSettings(page);
   await closeHistory(page);
-  if ((page.viewportSize()?.width ?? 1440) <= 850) await page.locator('#mobile-runs').click();
+  if (!historyDocked(page) && await page.locator('body[data-view="draft"]').count()) await page.locator('#mobile-runs').click();
 }
 
 export async function openSettings(page: Page) {
@@ -70,9 +80,15 @@ export async function selectConfig(page: Page, id: string, value: string) {
   await withSettings(page, () => page.locator(`#${id}`).selectOption(value));
 }
 
+/** Expands the docked sidebar, or opens the history dialog on narrow screens. */
 export async function openHistory(page: Page) {
-  if (await page.locator('#history-dialog[open]').count()) return;
   await closeSettings(page);
+  if (historyDocked(page)) {
+    if (await page.locator('body[data-history-collapsed="true"]').count()) await page.locator('#open-history').click();
+    await page.locator('#history-sidebar .run-history').waitFor();
+    return;
+  }
+  if (await page.locator('#history-dialog[open]').count()) return;
   await page.locator('#open-history').click();
   await page.locator('#history-dialog[open]').waitFor();
 }
@@ -83,10 +99,44 @@ export async function refreshHistory(page: Page) {
   await closeHistory(page);
 }
 
-export async function selectHistoryRun(page: Page, id: string) {
+/** Opens a run from the history; it lands on 结果 unless `tab` names another run tab. */
+export async function selectHistoryRun(page: Page, id: string, tab?: string) {
   await openHistory(page);
-  await closeDialog(page, '#history-dialog', () => page.locator(`[data-run-id="${id}"]`).click());
+  if (historyDocked(page)) await page.locator(`[data-run-id="${id}"]`).click();
+  else await closeDialog(page, '#history-dialog', () => page.locator(`[data-run-id="${id}"]`).click());
+  await page.locator(`[data-run-id="${id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
   await showArtifacts(page);
+  if (tab) await openTab(page, tab);
+}
+
+export async function openTab(page: Page, tab: string) {
+  if (await page.locator(`#detail-tab-${tab}[aria-selected="true"]`).count()) return;
+  await page.locator(`#detail-tab-${tab}`).click();
+  await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor({ state: 'attached' });
+}
+
+/** 清空草稿 on the new-research page, opening that page first when a run is shown. */
+export async function newResearch(page: Page) {
+  await showChat(page);
+  await page.locator('#new-research').click();
+}
+
+/** Opens the ⋯ menu in the run header, where the identifier, modules, download and deletion live. */
+export async function openRunMenu(page: Page) {
+  if (!await page.locator('[data-run-menu][open]').count()) await page.locator('[data-run-menu] > summary').click();
+}
+
+/** Runs an entry of the run header's ⋯ menu (copy-id, show-modules, delete-run); the menu closes behind it. */
+export async function runMenu(page: Page, action: string) {
+  await openRunMenu(page);
+  await page.locator(`[data-run-menu][open] [data-action="${action}"]`).click();
+}
+
+/** The modules tab is not one of the default tabs; it opens from the run menu. */
+export async function openModulesTab(page: Page) {
+  if (!await page.locator('#detail-tab-modules').count()) await runMenu(page, 'show-modules');
+  else await page.locator('#detail-tab-modules').click();
+  await page.locator('#detail-panel[data-tab="modules"]').waitFor();
 }
 
 export type EditorSnapshot = { value: string; start: number; end: number; direction: string; top: number; left: number };
@@ -114,6 +164,19 @@ export async function fitViewport(page: Page, selector: string, widen: string, n
     `${selector} must fit ${viewport.width}px: ${JSON.stringify(box)}`);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, widen);
 }
+/** Assert an ended run's header names every stage: each label shown whole, inside the viewport and clear of the next one. */
+export async function stageLabelsReadable(page: Page, context: string) {
+  const labels = await page.locator('.artifact-stages .stage-label').evaluateAll(items => items.map(label => {
+    const box = label.getBoundingClientRect();
+    return { text: label.textContent, left: box.left, right: box.right, width: box.width, cut: label.scrollWidth > label.clientWidth + 1 };
+  }));
+  assert.equal(labels.length, 4, `${context}: the header shows four stages`);
+  for (const [index, label] of labels.entries()) {
+    assert.ok(label.width > 2 && !label.cut && label.left >= -1 && label.right <= page.viewportSize()!.width + 1,
+      `${context}: stage label ${JSON.stringify(label.text)} must be shown whole: ${JSON.stringify(label)}`);
+    if (index) assert.ok(label.left >= labels[index - 1]!.right, `${context}: stage labels overlap`);
+  }
+}
 export async function selectEditorRange(page: Page, start: number, end = start, direction: 'forward' | 'backward' | 'none' = 'none') {
   await page.locator('#expanded-source').evaluate((node, selection) => {
     const editor = node as HTMLTextAreaElement; editor.focus({ preventScroll: true });
@@ -136,5 +199,5 @@ export async function selectModules(h: { page: Page }, id: string) {
   await h.page.locator('#refresh-runs').click(); await refreshed;
   await h.page.locator('#refresh-runs:enabled').waitFor(); await closeHistory(h.page);
   await selectHistoryRun(h.page, id); await showArtifacts(h.page);
-  await h.page.locator('#detail-tab-modules').click(); await h.page.locator('.module-workspace').waitFor();
+  await openModulesTab(h.page); await h.page.locator('.module-workspace').waitFor();
 }

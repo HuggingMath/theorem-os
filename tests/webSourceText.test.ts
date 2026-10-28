@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findSourceMatches, leanTokens } from '../apps/web/client/sourceText';
+import { findSourceMatches, leanLineTokens, leanTokens } from '../apps/web/client/sourceText';
 
 describe('literal source search', () => {
   it('treats regular expression punctuation, markup and spaces as literal text', () => {
@@ -85,5 +85,37 @@ describe('Lean reading tokens', () => {
     expect(tokens.length).toBeLessThanOrEqual(8000);
     expect(text('"theorem <img src=x> sorry')).toEqual([{ text: '"theorem <img src=x> sorry', kind: 'string' }]);
     expect(leanTokens('')).toEqual([]);
+  });
+});
+
+describe('Lean lines for numbered code', () => {
+  const lines = (source: string) => leanLineTokens(source).map(line => ({ line: source.slice(line.start, line.end),
+    tokens: line.tokens.map(token => `${token.kind}:${source.slice(token.start, token.end)}`) }));
+
+  it('numbers blank lines but not the empty end after the final line break', () => {
+    expect(lines('namespace A\n\ntheorem t : True := by trivial\n')).toEqual([
+      { line: 'namespace A', tokens: ['keyword:namespace'] }, { line: '', tokens: [] },
+      { line: 'theorem t : True := by trivial', tokens: ['keyword:theorem', 'keyword:by', 'tactic:trivial'] },
+    ]);
+    expect(lines('')).toEqual([{ line: '', tokens: [] }]);
+    expect(lines('\n')).toEqual([{ line: '', tokens: [] }]);
+    expect(lines('a\n\n')).toEqual([{ line: 'a', tokens: [] }, { line: '', tokens: [] }]);
+  });
+
+  it('cuts a block comment at its line breaks so each line keeps its own colour', () => {
+    expect(lines('/- one\ntwo -/ exact sorry')).toEqual([
+      { line: '/- one', tokens: ['comment:/- one'] },
+      { line: 'two -/ exact sorry', tokens: ['comment:two -/', 'tactic:exact', 'placeholder:sorry'] },
+    ]);
+  });
+
+  it('covers the source without overlap, so the lines joined again are the text', () => {
+    const source = 'theorem α₂ : 1 = 1 := by\n  /- a\n\n b -/ rfl\n-- note';
+    const result = leanLineTokens(source);
+    expect(result.map(line => source.slice(line.start, line.end)).join('\n')).toBe(source);
+    for (const line of result) for (const [index, token] of line.tokens.entries()) {
+      expect(token.start).toBeGreaterThanOrEqual(index ? line.tokens[index - 1]!.end : line.start);
+      expect(token.end).toBeLessThanOrEqual(line.end);
+    }
   });
 });

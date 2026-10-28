@@ -12,6 +12,7 @@ function copyDraft(draft: TaskDraft): TaskDraft {
     maxTurns: draft.maxTurns, maxRunSeconds: draft.maxRunSeconds, workers: draft.workers,
     ...(draft.maxTotalTokens !== undefined ? { maxTotalTokens: draft.maxTotalTokens } : {}),
     effort: draft.effort, environment: draft.environment, coordination: draft.coordination, templateId: draft.templateId,
+    ...(draft.planApproval ? { planApproval: true as const } : {}),
     ...(draft.modulePlan ? { modulePlan: structuredClone(draft.modulePlan) } : {}) };
 }
 

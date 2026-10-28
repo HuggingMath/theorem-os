@@ -26,7 +26,7 @@ export const Code = (props: { value: unknown; label?: string; [attribute: `data-
 export const Detail = (props: { title: string; value: unknown; detailKey?: string }) =>
   <details class="collab-detail" data-detail-key={props.detailKey ?? props.title}><summary>{props.title}</summary><Code value={props.value} /></details>;
 
-/** Places elements into translated text: fill(t('{0}下载报告'), <Icon name="download" />). */
+/** Places elements into translated text: fill(t('{0}查看原始报告'), <Icon name="file-json-2" />). */
 export function fill(text: string, ...values: ComponentChildren[]) {
   return <>{text.split(/(\{\d+\})/u).map(part => /^\{\d+\}$/u.test(part) ? values[Number(part.slice(1, -1))] : part)}</>;
 }

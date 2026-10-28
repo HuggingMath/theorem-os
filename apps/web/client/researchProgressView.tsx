@@ -4,7 +4,7 @@ import { createElement, observedTime } from './collaborationUi';
 import { taskSourceKey } from './taskSourceComparison';
 import { Code, Detail, Facts, renderSection } from './ui/Section';
 import { TermHint } from './ui/TermHint';
-import { t } from '../i18n';
+import { localizeText, t } from '../i18n';
 
 export function recordedTask(observation: WebObservation, id: string, version?: string) {
   const task = observation.inspection.tasks.find(task => task.id === id && (!version || task.version === version));
@@ -14,8 +14,8 @@ export function recordedTask(observation: WebObservation, id: string, version?: 
 }
 
 export const taskCheckKey = (check: WebCheckReceipt) => JSON.stringify([check.id, check.taskId, check.taskVersion, check.commit, check.sourceDigest, check.environmentDigest]);
-const kindLabels: Record<string, string> = { progress: t('研究进展'), research: t('研究发现'), proof: t('证明交付'), review: t('审阅'), backtranslation: t('声明回译'), 'statement-review': t('声明审阅'), failure: t('失败报告') };
-const statusLabels: Record<string, string> = { active: t('生效中'), advisory: t('提示性材料'), conditional: t('有条件结果'), verified: t('记录为已验证'), failed: t('失败'), superseded: t('已被替代'), accepted: t('审阅接受'), changes_requested: t('请求修改'), open: t('待解决'), parked: t('已停放'), reopened: t('已重开') };
+export const kindLabels: Record<string, string> = { progress: t('研究进展'), research: t('研究发现'), proof: t('证明交付'), review: t('审阅'), backtranslation: t('声明回译'), 'statement-review': t('声明审阅'), failure: t('失败报告') };
+export const statusLabels: Record<string, string> = { active: t('生效中'), advisory: t('提示性材料'), conditional: t('有条件结果'), verified: t('记录为已验证'), failed: t('失败'), superseded: t('已被替代'), accepted: t('审阅接受'), changes_requested: t('请求修改'), open: t('待解决'), parked: t('已停放'), reopened: t('已重开') };
 const label = (value: string) => statusLabels[value] ?? value;
 const proofLabels: Record<string, string> = { none: t('尚无证明'), conditional: t('有条件结果'), checked: t('已记录检查'), stale: t('旧版本证据'), unverified: t('未验证') };
 const scopeLabels: Record<string, string> = { 'assigned-local-inference': t('当前任务的局部推理') };
@@ -138,7 +138,7 @@ export class ResearchProgressView {
     return <article key={item.id} class="collab-delivery-row" data-delivery-row={item.id}>
       <button type="button" class={`collab-delivery-choice${selected ? ' selected' : ''}`} data-delivery-id={item.id} data-focus-key={`delivery-${item.id}`} aria-pressed={selected} onClick={() => this.choose(item.id)}>
         <span class="collab-delivery-meta"><strong>{item.producer}</strong><span>{kindLabels[item.kind] ?? item.kind} · {label(item.status)}</span></span>
-        <span class="collab-delivery-summary">{item.summary || item.statement || item.id}</span><small>{item.taskId ?? t('未绑定任务')} · {this.relationship(item)}</small>
+        <span class="collab-delivery-summary">{item.summary ? localizeText(item.summary) : item.statement || item.id}</span><small>{item.taskId ?? t('未绑定任务')} · {this.relationship(item)}</small>
       </button></article>;
   }
 
@@ -185,7 +185,7 @@ export class ResearchProgressView {
       {help(t('交付状态：{0} · {1}。局部交付与审阅不代表完整原题验收。', label(delivery.status), this.relationship(delivery)))}
       <Facts facts={[[t('交付 ID'), delivery.id], [t('任务'), delivery.taskId], [t('任务版本'), delivery.taskDigest], [t('创建时间'), observedTime(delivery.createdAt)], ['commit', delivery.commit], [mathematicalSource ? t('记录摘要') : t('声明快照摘要'), delivery.sourceDigest]]} />
       <div class="collab-reference-list">{delivery.taskId ? this.taskLink(delivery.taskId, delivery.taskDigest, `delivery-task-${key}`) : <span class="collab-help">{t('本交付未绑定任务合同')}</span>}</div>
-      <h5>{t('摘要')}</h5><p class="collab-delivery-text">{delivery.summary || t('未记录摘要')}</p>
+      <h5>{t('摘要')}</h5><p class="collab-delivery-text">{delivery.summary ? localizeText(delivery.summary) : t('未记录摘要')}</p>
       <h5>{t('声明')}</h5><Code value={delivery.statement} />
       <Detail title={t('前提')} value={delivery.premises} detailKey={`delivery-premises-${key}`} />
       <h5>{t('版本固定的依赖')}</h5>

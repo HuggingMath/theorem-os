@@ -130,7 +130,7 @@ const section = '.collab-reviews', taskFilter = '[data-review-task]', statusFilt
 const list = '[data-review-list]', detail = '[data-review-detail]', candidateView = '[data-review-candidate]', acceptance = '[data-review-acceptance]';
 const choice = (page: Page, record: Review) => page.locator(`${list} [data-review-key=${JSON.stringify(key(record))}]`);
 async function create(h: Harness) {
-  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id);
+  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id, 'collaboration');
   await h.page.locator(section).waitFor(); await choice(h.page, main).waitFor(); return run;
 }
 async function choose(page: Page, record: Review) { await choice(page, record).click(); assert.equal(await choice(page, record).getAttribute('aria-pressed'), 'true'); }

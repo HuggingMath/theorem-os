@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebEventDetails, WebModuleId, WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { selectHistoryRun, selectModules, showArtifacts, showChat } from './web-ui-controls';
+import { closeHistory, openHistory, openModulesTab, selectHistoryRun, selectModules } from './web-ui-controls';
 import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -67,7 +67,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [], runIds: [], fixtureCancels: 0 }),
   routes: { local: 'module inspection must not contact external sites or model providers' }, timeout: { label: 'Module', seconds: 50 },
   open: async ({ page }) => {
-    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor();
+    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     draft = await page.locator('#source').inputValue(), task = await page.locator('#task').inputValue();
   },
   verify: async (h, elapsedMs) => {
@@ -241,18 +241,21 @@ try {
     const snapshot = await readRun(h, run.id), sequence = snapshot.modules!.M5!.lastEvent.sequence;
     assert.equal(await page.locator(`.module-events li[data-sequence="${sequence}"] p`).innerText(), 'Assign helper theorem to Researcher');
     await page.locator('[data-module-destination="events"]').click(); await page.locator('.activity-workspace').waitFor();
-    await page.locator('#detail-tab-modules').click();
+    await openModulesTab(page);
     await selectModule(page, 'M1'); await page.locator('[data-module-destination="source"]').click();
     await page.locator('#detail-tab-source[aria-selected="true"]').waitFor();
-    await page.locator('#detail-tab-modules').click(); await selectModule(page, 'S3');
-    await page.locator('[data-module-destination="report"]').click(); await page.locator('#detail-tab-report[aria-selected="true"]').waitFor();
-    await page.locator('#detail-tab-source').click(); await page.keyboard.press('ArrowRight');
-    await page.locator('#detail-tab-modules[aria-selected="true"]').waitFor();
-    assert.equal(await page.locator('#detail-tab-modules').evaluate(element => document.activeElement === element), true);
-    await page.keyboard.press('ArrowRight'); await page.locator('#detail-tab-overview[aria-selected="true"]').waitFor();
-    await page.keyboard.press('ArrowLeft'); await page.locator('#detail-tab-modules[aria-selected="true"]').waitFor();
+    await openModulesTab(page); await selectModule(page, 'S3');
+    await page.locator('[data-module-destination="report"]').click(); await page.locator('#detail-tab-result[aria-selected="true"]').waitFor();
+    // 模块方案 joins the tabs only while it is open, as the last one; leaving it removes it again.
+    await openModulesTab(page); await page.locator('#detail-tab-modules').focus();
+    await page.keyboard.press('ArrowLeft'); await page.locator('#detail-tab-events[aria-selected="true"]').waitFor();
+    assert.equal(await page.locator('#detail-tab-events').evaluate(element => document.activeElement === element), true);
+    assert.equal(await page.locator('#detail-tab-modules').count(), 0);
+    await openModulesTab(page); await page.locator('#detail-tab-modules').focus();
+    await page.keyboard.press('ArrowRight'); await page.locator('#detail-tab-result[aria-selected="true"]').waitFor();
+    await page.keyboard.press('ArrowLeft'); await page.locator('#detail-tab-events[aria-selected="true"]').waitFor();
+    await page.keyboard.press('Home'); await page.locator('#detail-tab-result[aria-selected="true"]').waitFor();
     await page.keyboard.press('End'); await page.locator('#detail-tab-events[aria-selected="true"]').waitFor();
-    await page.keyboard.press('Home'); await page.locator('#detail-tab-collaboration[aria-selected="true"]').waitFor();
   });
 
   await scenario('Latest module activity can be followed, paused, located and reset across runs', async h => {
@@ -279,12 +282,12 @@ try {
     await page.locator('#detail-tab-source').click();
     control.progress('proof_check_started', 'Check the latest candidate', { workerId: 'worker1', turn: 1 });
     await sync(h, run.id);
-    await page.locator('#detail-tab-modules').click(); await page.locator('#module-inspector[data-module="M2"]').waitFor();
+    await openModulesTab(page); await page.locator('#module-inspector[data-module="M2"]').waitFor();
     assert.equal(await follow.isChecked(), true, 'returning to the same run must retain follow mode');
     const other = await createRun(h, 'A different module run');
     controls.get(other.id)!.progress('context_compiled', 'Another run context');
     await sync(h, other.id); await selectHistoryRun(page, other.id); await selectHistoryRun(page, run.id);
-    await page.locator('#detail-tab-modules').click(); await page.locator('#module-inspector[data-module="M1"]').waitFor();
+    await openModulesTab(page); await page.locator('#module-inspector[data-module="M1"]').waitFor();
     assert.equal(await follow.isChecked(), false, 'visiting another run source must also reset following');
     await selectModules(h, other.id); await page.locator('#module-inspector[data-module="M1"]').waitFor();
     assert.equal(await follow.isChecked(), false, 'changing run must reset following');
@@ -329,9 +332,9 @@ try {
     await page.locator('#module-inspector[data-module="M1"]').waitFor();
     offline = false; await sync(h, run.id); await page.locator('.module-workspace[data-stale="false"]').waitFor();
     await page.locator('#module-inspector[data-module="M2"]').waitFor();
-    await showChat(page);
-    control.progress('context_compiled', 'Context while viewing conversation', { workerId: 'worker1' });
-    await sync(h, run.id); await showArtifacts(page);
+    await openHistory(page);
+    control.progress('context_compiled', 'Context while the history is open', { workerId: 'worker1' });
+    await sync(h, run.id); await closeHistory(page);
     await page.locator('#module-inspector[data-module="M4"]').waitFor();
     assert.equal(await page.locator('[data-module-follow]').isChecked(), true);
     await page.locator('[data-module-follow]').uncheck();
@@ -440,7 +443,7 @@ try {
     assert.equal(await page.locator('.module-events li').count(), 0);
     assert.equal(await page.locator('.module-events-empty').innerText(), diagnostic.replaceAll(credential, '[REDACTED]'));
     assert.match(await page.locator('.module-retention').innerText(), /较早活动已移出保留范围/); await noInjection(page);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor(); await selectModules(h, run.id);
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await selectModules(h, run.id);
     await selectModule(page, 'M4'); assert.equal((await facts(page))['活动事件'], '1');
     assert.equal((await facts(page))['上下文大小'], '1.0 KB / 8.0 KB'); await noInjection(page);
     await selectModule(page, 'M1'); assert.equal((await facts(page))['活动事件'], '25'); await state(page, 'M1', 'active');
@@ -486,7 +489,7 @@ try {
       assert.ok(Math.abs(stable.scrollTop - stable.beforeScrollTop) <= 1.5, 'polling must preserve module scroll position');
     }
     const before = await page.locator('#detail-panel').evaluate(panel => panel.scrollTop);
-    await page.locator('#detail-tab-source').click(); await page.locator('#detail-tab-modules').click();
+    await page.locator('#detail-tab-source').click(); await openModulesTab(page);
     await page.locator('#module-inspector[data-module="M4"]').waitFor();
     assert.ok(Math.abs(await page.locator('#detail-panel').evaluate(panel => panel.scrollTop) - before) <= 1.5, 'returning to the module tab must preserve its reading position');
   });
@@ -534,12 +537,12 @@ try {
     await page.locator('#module-inspector').scrollIntoViewIfNeeded(); await screenshot(page, `modules-${width}-inspector.png`);
     const before = await page.locator('#module-inspector').evaluate(inspector => inspector.getBoundingClientRect().top);
     if (width <= 850) {
-      await showChat(page); control.progress('diagnostic', `Module hidden at ${width}px`); await sync(h, run.id);
-      await showArtifacts(page); await page.locator('#module-inspector[data-module="M4"]').waitFor();
+      await openHistory(page); control.progress('diagnostic', `Module behind the history at ${width}px`); await sync(h, run.id);
+      await closeHistory(page); await page.locator('#module-inspector[data-module="M4"]').waitFor();
       const after = await page.locator('#module-inspector').evaluate(inspector => inspector.getBoundingClientRect().top);
-      assert.ok(Math.abs(after - before) <= 1.5, `switching mobile panes must retain the module reading position: ${JSON.stringify({ width, before, after })}`);
+      assert.ok(Math.abs(after - before) <= 1.5, `opening the history must retain the module reading position: ${JSON.stringify({ width, before, after })}`);
     }
-    await page.locator('#detail-tab-source').click(); await page.locator('#detail-tab-modules').click();
+    await page.locator('#detail-tab-source').click(); await openModulesTab(page);
     await page.locator('#module-inspector[data-module="M4"]').waitFor();
     await horizontalFit(page, '.module-node');
   }, width);

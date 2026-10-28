@@ -87,8 +87,9 @@ async function post(page: Page): Promise<WebRun> {
   const result = await response;
   assert.equal(result.status(), 201);
   const { run } = await result.json() as { run: WebRun };
-  await page.locator(`[data-run-id="${run.id}"]`).waitFor({ state: 'attached' });
-  await page.locator('#detail-tab-overview').click();
+  // A submitted run opens on its 结果 tab.
+  await page.locator(`[data-run-id="${run.id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+  await page.locator('#detail-panel[data-tab="result"]').waitFor();
   return run;
 }
 async function transition(page: Page, type: 'pagehide' | 'pageshow') {
@@ -248,7 +249,7 @@ try {
     const before = detailRequests;
     controls.get(run.id)!({ status: 'evaluated_passed', proof: run.source.replace('by sorry', 'by ring'), report: { fixture: true } });
     await refreshHistory(h.page);
-    await h.page.locator('.result-banner.passed').waitFor();
+    await h.page.locator('#detail-panel .result-verdict.passed').waitFor();
     assert.equal(detailRequests, before, 'polling must not depend on an additional detail GET');
     assert.equal(await h.page.locator('.run-row.selected .badge.passed').count(), 1);
   });

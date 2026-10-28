@@ -7,10 +7,10 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import { readWebConfig, webLimits } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
-import type { WebRun, WebRunInput } from '../apps/web/shared';
+import type { WebRunInput } from '../apps/web/shared';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeSettings, fitViewport, openSettings, selectHistoryRun, text } from './web-ui-controls';
-import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeDialog, closeSettings, fitViewport, openSettings, selectHistoryRun, showChat, text } from './web-ui-controls';
+import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, waitForRun, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-source-handoff'), reportFile = path.join(output, 'report.json');
@@ -47,7 +47,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [], creates: 0, owner: '', releases: [] }),
   routes: { local: 'source handoff must remain local' }, timeout: { label: 'Source handoff', seconds: 50 },
   open: async h => {
-    await h.page.goto(origin); await h.page.locator('#submit-run:enabled').waitFor();
+    await h.page.goto(origin); await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     h.owner = (await h.context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session')?.value ?? '';
     assert.ok(h.owner, 'a handoff fixture requires a real local session');
   },
@@ -191,10 +191,7 @@ async function createRun(h: Harness, title: string) {
     maxTurns: 2, maxRunSeconds: 60, workers: 1, coordination: 'independent' };
   const run = await postRun(h, input, 'Read-only handoff fixture');
   h.creates++;
-  await h.page.waitForFunction(async id => {
-    const run = (await (await fetch(`/api/runs/${id}`)).json()).run as WebRun;
-    return run.status === 'completed';
-  }, run.id);
+  await waitForRun(h, run.id, run => run.status === 'completed');
   return run;
 }
 async function poll(h: Harness) {
@@ -377,11 +374,11 @@ try {
     for (const run of [a, b]) {
       await selectHistoryRun(page, run.id); await page.locator('#detail-tab-source').click(); await find(page, 'candidateNeedle', '1/1'); await locationAvailable(page, false);
       await page.locator('[data-source-view="input"]').click(); await find(page, 'runOriginalNeedle', '1/1'); await locationAvailable(page, false);
-      if (page.viewportSize()!.width <= 850) await page.locator('#mobile-compose').click();
-      await enter(page, source, 0, 0, '#edit-draft-source', 'run view opens a separate draft editor'); await closeEditor(page);
+      await showChat(page);
+      await enter(page, source, 0, 0, '#edit-draft-source', 'leaving a run opens a separate draft editor'); await closeEditor(page);
       assert.equal(service.jobs.get(h.owner, run.id)?.source, run.source, 'submitted source must remain frozen');
     }
-    await page.locator('#return-to-draft').click(); await showDraft(page); await locationAvailable(page, false);
+    await showDraft(page); await locationAvailable(page, false);
     await enter(page, source, 0, 0, previewEdit, 'returning from run scopes cannot reuse a run match'); await closeEditor(page);
   }, 375);
 

@@ -95,6 +95,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   invalidTaskTransitions?: import('./taskLifecycle').InvalidTaskTransition[];
   /** A saved unfinished Lead turn waits for changed inputs; it is not a completed decision. */
   lastLeadPauseInputDigest?: string;
+  /** Human approval of the first accepted plan, when the run requires it (state.planApproval). */
+  planApproval?: import('./planApproval').PlanApprovalRecord;
   /**
    * Latest original-goal path stall (no runnable frontier input). `answeredAt` once a Lead turn shown it adopted or declined
    * every presented input, or the stall changed; after MAX_UNANSWERED_GOAL_PATH_TURNS turns that did neither, it is

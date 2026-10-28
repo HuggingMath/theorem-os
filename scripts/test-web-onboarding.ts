@@ -9,6 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { webSampleRunId } from '../apps/web/shared';
 import { freePort, settled, startBrowser } from './web-scenario';
+import { newResearch, openModulesTab } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -36,7 +37,7 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => { if (request.method() !== 'GET' && request.url().includes(webSampleRunId)) writes.push(`${request.method()} ${request.url()}`); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 
   // A new visitor sees the three steps, the sample entry and the glossary link.
   const welcome = page.locator('.chat-welcome[data-first-run="true"]');
@@ -52,19 +53,20 @@ try {
   await page.locator('.welcome-sample').click();
   await page.locator('[data-sample-badge]').waitFor();
   assert.match(await page.locator('[data-sample-note]').innerText(), /离线脚本[\s\S]*独立验收都是真实执行的/u);
-  assert.equal(await page.locator('#detail-tab-overview').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
   for (const action of ['delete-run', 'cancel', 'share-run']) assert.equal(await page.locator(`[data-action="${action}"]`).count(), 0, `Sample offers ${action}`);
   assert.match(await page.locator('[data-action="reuse-run"]').innerText(), /用这道题开始研究/u);
   assert.match(await page.locator('#detail-panel').innerText(), /完整原题已通过独立验收/u);
-  await page.locator('.overview-workspace [data-term="acceptance"]').waitFor();
+  await page.locator('#detail-panel .result-verdict [data-term="acceptance"]').waitFor();
   assert.equal(await field(page, 'api-key'), '');
   await settled(page);
   await page.screenshot({ path: path.join(output, 'onboarding-sample-1440.png') });
   mark('the sample opens without an API key as a read-only accepted run');
 
   // Every tab renders the recording; collaboration shows the plan and hides archiving.
-  for (const tab of ['collaboration', 'source', 'modules', 'report', 'events']) {
-    await page.locator(`#detail-tab-${tab}`).click();
+  for (const tab of ['trajectory', 'collaboration', 'source', 'events', 'modules']) {
+    if (tab === 'modules') await openModulesTab(page);
+    else await page.locator(`#detail-tab-${tab}`).click();
     await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor();
   }
   // A first visit sees the simple layer: the outcome with a way to the report, and none of the expert sections.
@@ -127,7 +129,10 @@ try {
   mark('a tip inside the settings dialog shows above it and Escape closes only the tip');
 
   // Reusing the sample fills a draft; the key stays empty and the saved position still points nowhere.
+  // Settings opened the new-research page, so the sample is opened again first.
   const connection = { provider: await field(page, 'provider'), model: await field(page, 'model'), effort: await field(page, 'effort') };
+  await page.locator('.welcome-sample').click();
+  await page.locator('[data-sample-badge]').waitFor();
   await page.locator('[data-action="reuse-run"]').click();
   await page.locator('#draft-preview').waitFor();
   assert.match(await field(page, 'task'), /自然数加法定理/u);
@@ -167,7 +172,7 @@ try {
     assert.ok(await noOverflow(page), `Sample overflows at ${width}px`);
     await page.screenshot({ path: path.join(output, `onboarding-sample-${width}.png`) });
   }
-  await page.locator('#new-research').click().catch(() => undefined);
+  await newResearch(page);
   const fresh = await context.newPage();
   await fresh.setViewportSize({ width: 320, height: 760 });
   await fresh.goto(origin);

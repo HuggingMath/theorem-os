@@ -9,6 +9,9 @@ services:
       target: web
     ports:
       - "127.0.0.1:8787:8787"
+    # The web process calls the provider itself when a reader asks why a step failed; workers get the same mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       THEOREMOS_WEB_PUBLIC_URL: ${THEOREMOS_WEB_PUBLIC_URL:-http://127.0.0.1:8787}
       THEOREMOS_WEB_WORKER_IMAGE: theorem-os-worker:local

@@ -5,18 +5,23 @@ import { siteHome } from '../feedback';
 
 export type TopbarLive = { label: string; detail: string; tone: string; count: number };
 export type TopbarProps = {
-  title: string; model: string; connection: { tone: 'ready' | 'offline'; label: string }; settingsDisabled: boolean;
+  model: string;
+  /** Desktop docks the history beside the run; narrow screens open it as a dialog. */ history: { docked: boolean; expanded: boolean };
+  connection: { tone: 'ready' | 'offline'; label: string }; settingsDisabled: boolean;
   live?: TopbarLive; mac: boolean; account?: string;
-  onHistory(): void; onSettings(): void; onPalette(): void; onLive(): void; onAccount(): void; onGlossary(): void; onLocale(): void;
+  onHistory(): void; onDraft(): void; onSettings(): void; onPalette(): void; onLive(): void; onAccount(): void; onGlossary(): void; onLocale(): void;
 };
 
 function Topbar(props: TopbarProps) {
   const { live } = props;
   return <>
-    <button type="button" id="open-history" class="icon-button" aria-label={t('打开研究记录')} title={t('研究记录')} onClick={props.onHistory}><Icon name="panel-left" /></button>
+    {props.history.docked
+      ? <button type="button" id="open-history" class="icon-button" aria-controls="history-sidebar" aria-expanded={props.history.expanded}
+        aria-label={props.history.expanded ? t('收起研究记录') : t('展开研究记录')} title={props.history.expanded ? t('收起研究记录') : t('展开研究记录')} onClick={props.onHistory}><Icon name="panel-left" /></button>
+      : <button type="button" id="open-history" class="icon-button" aria-haspopup="dialog" aria-label={t('打开研究记录')} title={t('研究记录')} onClick={props.onHistory}><Icon name="panel-left" /></button>}
+    {/* The collapsed sidebar hides its own 新建研究 button, so the bar keeps one. */}
+    {props.history.docked && !props.history.expanded && <button type="button" id="topbar-draft" class="icon-button" aria-label={t('新建研究')} title={t('新建研究')} onClick={props.onDraft}><Icon name="square-pen" /></button>}
     <a class="brand" href={siteHome} aria-label={t('TheoremOS 官网')}><img src="assets/mark.svg" alt="" width="26" height="26" /><span>Theorem<span class="brand-os">OS</span></span></a>
-    <span class="topbar-divider" aria-hidden="true" />
-    <span id="workspace-title" class="workspace-name" translate={false}>{props.title}</span>
     {live && <button type="button" class="live-pill" data-tone={live.tone} onClick={props.onLive} title={`${live.label} · ${live.detail}`} aria-label={t('查看进行中的研究：{0}', live.label)}>
       <span class="live-pill-dot" aria-hidden="true" /><span class="live-pill-label">{live.label}</span>
       <span class="live-pill-detail mono">{live.detail}</span>

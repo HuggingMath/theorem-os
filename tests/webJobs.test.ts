@@ -294,6 +294,34 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     } finally { vi.useRealTimers(); }
   });
 
+  it('dates the last passing check or integration, through activity-log rotation', async () => {
+    const { jobs, runner } = setup();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime('2026-10-16T00:00:00.000Z');
+      const run = jobs.create('owner', input(), provider);
+      await tick();
+      const send = (event: string, details?: Extract<WorkerMessage, { type: 'progress' }>['details']) =>
+        runner.calls[0].send({ type: 'progress', event, message: event, ...(details ? { details } : {}) });
+      vi.setSystemTime('2026-10-16T00:01:00.000Z');
+      send('solve_started');
+      send('task_checked', { taskId: 'goal_1', passed: false });
+      send('proof_checked', { passed: true, reused: true });
+      expect(run.progressAt).toBeUndefined();
+      vi.setSystemTime('2026-10-16T00:02:00.000Z');
+      send('task_checked', { taskId: 'goal_1', passed: true });
+      vi.setSystemTime('2026-10-16T00:03:00.000Z');
+      for (let index = 0; index < 210; index++) send('worker_activity');
+      send('task_recheck_finished', { taskId: 'goal_1', passed: false });
+      expect(run.progressAt).toBe('2026-10-16T00:02:00.000Z');
+      vi.setSystemTime('2026-10-16T00:04:00.000Z');
+      send('task_integrated', { taskId: 'goal_1' });
+      expect(run.progressAt).toBe('2026-10-16T00:04:00.000Z');
+      runner.calls[0].finish();
+      await tick();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('retains structured module evidence through log rotation and cleans concurrent intervals on cancellation', async () => {
     const { jobs, runner } = setup();
     const run = jobs.create('owner', { ...input(), workers: 2 }, provider);

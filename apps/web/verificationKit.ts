@@ -1,11 +1,10 @@
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import type { WebProofOutline, WebProofOutlineDeclaration, WebRun } from './shared';
+import { standardAxioms } from './report';
 
 const maximumDeclarations = 128;
 const maximumType = 2_000;
-// Lean's three classical axioms; anything else in a target's closure deserves a reader's attention.
-const standardAxioms = new Set(['propext', 'Classical.choice', 'Quot.sound']);
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;

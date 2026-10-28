@@ -45,6 +45,17 @@ describe('web research history filtering', () => {
       expect(filterRuns(runs, '', filter as RunFilter).map(run => run.id)).toEqual(ids);
   });
 
+  it('lists a run its provider or environment failed with the errors, as its 运行失败 badge says, and a stopped budget with the unproved', () => {
+    const stopped = { status: 'limit_reached', proof: '', report: {} };
+    const runs = [run('key-rejected', { failure: { kind: 'authentication' }, result: { ...stopped, status: 'incomplete' } }),
+      run('environment', { failure: { kind: 'environment' } }), run('time', { failure: { kind: 'time_limit' }, result: stopped }),
+      run('usage', { failure: { kind: 'budget' }, result: stopped }), run('worker-error', { status: 'error', failure: { kind: 'network' } }),
+      run('accepted-despite-note', { failure: { kind: 'unknown' }, result: accepted })];
+    expect(filterRuns(runs, '', 'error').map(run => run.id)).toEqual(['key-rejected', 'environment', 'worker-error']);
+    expect(filterRuns(runs, '', 'unproved').map(run => run.id)).toEqual(['time', 'usage']);
+    expect(filterRuns(runs, '', 'passed').map(run => run.id)).toEqual(['accepted-despite-note']);
+  });
+
   it('preserves server ordering and original records when a query is empty or multiple records match', () => {
     const runs = Object.freeze([Object.freeze(run('third')), Object.freeze(run('first')), Object.freeze(run('second'))]);
     const filtered = filterRuns(runs, '  \n\t ', 'all');

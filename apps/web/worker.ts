@@ -5,7 +5,7 @@ import { stringify as stringifyToml } from 'smol-toml';
 import { bootstrapLeanTask } from '../../src/math/leanTask';
 import { classifyWebError, classifyWebResult } from './failure';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { readMathJson, readMathText } from '../../src/math/mathRuntimeIo';
+import { mathDigest, readMathJson, readMathText } from '../../src/math/mathRuntimeIo';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { createCodexMathSession } from '../../src/runtime/codexSession';
 import { sub2apiModelCatalog } from '../../src/runtime/sub2api';
@@ -13,6 +13,7 @@ import type { SolverModules } from '../../src/solver/modules';
 import { configurableSolverModules } from '../../src/solver/modules/custom';
 import { solverModuleConfiguration } from '../../src/solver/modules/moduleIdentity';
 import { researchWorkers } from '../../src/solver/modules/organization';
+import { readSolverProblem } from '../../src/solver/problem';
 import { runSolver } from '../../src/solver/run';
 import { readKnowledgeCatalog } from '../../src/solver/theoremKnowledgeStore';
 import { createWebProgressForwarder } from './progress';
@@ -137,6 +138,28 @@ export function prepareWebProviderProfile(profile: string, request: WorkerInput)
   fs.writeFileSync(path.join(profile, 'config.toml'), webProviderConfig(request, modelCatalog), { mode: 0o600, flag: 'wx' });
 }
 
+/**
+ * Writes the version a run continues from beside the task as the solver's continuation input: the file is an advisory
+ * attachment every Agent can read, recorded but not replayed here; the task file and the problem stay the original's.
+ * Returns the manifest to pass as --continuation-manifest.
+ */
+export function writeWebContinuation(directory: string, continuation: NonNullable<WorkerInput['continuation']>,
+  identity: { taskFile: string; workspace: string; receiptFile: string }): string {
+  const content = Buffer.from(continuation.source, 'utf8'), file = path.join(directory, 'continuation-previous.lean');
+  fs.writeFileSync(file, content, { mode: 0o600, flag: 'wx' });
+  const manifest = {
+    schema: 'theorem-os.continuation-input.v1',
+    taskDigest: mathDigest(fs.readFileSync(identity.taskFile, 'utf8')),
+    problemReceiptDigest: readSolverProblem(identity.workspace, identity.receiptFile).receiptDigest,
+    attachments: [{ id: 'previous-version', kind: 'proof-source', path: path.basename(file), bytes: content.length, sha256: mathDigest(content),
+      provenance: { source: `${continuation.label} (${continuation.file})`.slice(0, 1000), evidence: 'recorded-not-replayed', runId: continuation.runId,
+        ...(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(continuation.commit) ? { commit: continuation.commit } : {}) } }],
+  };
+  const manifestFile = path.join(directory, 'continuation-input.json');
+  fs.writeFileSync(manifestFile, JSON.stringify(manifest), { mode: 0o600, flag: 'wx' });
+  return manifestFile;
+}
+
 export function webSolverModules(request: WorkerInput): SolverModules {
   const base = configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
   const identity = webByokModuleIdentity(solverModuleConfiguration(base));
@@ -206,6 +229,8 @@ async function main() {
       if (!knowledgeFile) throw new Error('math_knowledge_identity_changed');
       readKnowledgeCatalog(knowledgeFile, request.input.knowledgeDigest);
     }
+    const continuationFile = request.continuation && writeWebContinuation(directory, request.continuation,
+      { taskFile, workspace: receipt.workspaceRoot, receiptFile: receipt.activeProblemPath });
     sampleArtifact = createWebArtifactSampler({ directory, output, workers: request.input.workers,
       source: request.input.source, apiKey: key, onArtifact: artifact => {
         latestArtifact = artifact;
@@ -218,7 +243,9 @@ async function main() {
       '--receipt-file', receipt.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
       '--model', request.input.model, '--effort', request.input.effort, '--workers', String(request.input.workers),
       '--coordination', request.input.coordination, '--max-turns', String(request.input.maxTurns),
+      ...(request.input.planApproval ? ['--plan-approval'] : []),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
+      ...(continuationFile ? ['--continuation-manifest', continuationFile] : []),
       '--max-run-seconds', String(request.input.maxRunSeconds), '--max-turn-seconds', '120',
       ...(request.input.maxTotalTokens ? ['--max-total-tokens', String(request.input.maxTotalTokens)] : []),
       '--prepare-timeout-seconds', environment.id === 'mathlib' ? '600' : '120',

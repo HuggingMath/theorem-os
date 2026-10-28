@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decodeTaskDraft, encodeTaskDraft, type TaskDraft } from '../apps/web/client/draft';
-import { documentTitle, finishedSince, newlyFinished, readResume, resumeStorageKey, saveResume } from '../apps/web/client/runAwareness';
+import { documentTitle, finishedSince, newlyFinished, newlyWaiting, readResume, resumeStorageKey, saveResume, waitsForOwner } from '../apps/web/client/runAwareness';
 import { submissionIssues, tokenCap } from '../apps/web/client/submission';
 import { formatTokens, usageEstimate } from '../apps/web/presentation';
 import type { WebRun, WebSession } from '../apps/web/shared';
@@ -79,5 +79,18 @@ describe('returning to long runs', () => {
     expect(documentTitle('TheoremOS', 0, 0)).toBe('TheoremOS');
     expect(documentTitle('TheoremOS', 2, 0)).toBe('2 项进行中 · TheoremOS');
     expect(documentTitle('TheoremOS', 2, 1)).toBe('(1) 研究已结束 · TheoremOS');
+    expect(documentTitle('TheoremOS', 2, 1, 1)).toBe('(1) 等你批准计划 · TheoremOS');
+  });
+
+  it('finds plans that just started waiting for the owner, not ones being revised or already waiting', () => {
+    const plan = (id: string, status: string, leadRevising = false) => run(id, { status: 'running', finishedAt: undefined,
+      observation: { inspection: { planApproval: { required: true, status, planVersion: 'plan-v1', rejections: [], leadRevising } } } as unknown as WebRun['observation'] });
+    expect([plan('a', 'pending'), plan('b', 'pending', true), plan('c', 'awaiting-plan'), plan('d', 'approved'), run('e')].map(waitsForOwner))
+      .toEqual([true, false, false, false, false]);
+    expect(waitsForOwner({ ...plan('f', 'pending'), status: 'completed' })).toBe(false);
+    const before = [plan('drafted', 'awaiting-plan'), plan('revised', 'pending', true), plan('waiting', 'pending'), plan('approved', 'pending')];
+    const after = [plan('drafted', 'pending'), plan('revised', 'pending'), plan('waiting', 'pending'), plan('approved', 'approved'), plan('new', 'pending')];
+    expect(newlyWaiting(before, after).map(item => item.id)).toEqual(['drafted', 'revised']);
+    expect(newlyWaiting([], after)).toEqual([]);
   });
 });

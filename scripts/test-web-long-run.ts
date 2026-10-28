@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput, WorkerInput } from '../apps/web/shared';
-import { fillConfig, selectHistoryRun, showChat, withSettings } from './web-ui-controls';
+import { fillConfig, selectHistoryRun, withSettings } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,7 +70,7 @@ try {
   };
   watch(page);
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 
   assert.match(await estimate(page), /还没有这个模型的用量记录/u);
   await fillConfig(page, 'max-tokens', '0');
@@ -83,15 +83,15 @@ try {
   assert.match(await page.locator('#budget-estimate').innerText(), /最长约 5 分钟，全部 Agent 合计最多 5 轮模型调用。.*达到 50 万 Token 后停止新的调用/u);
   await page.screenshot({ path: path.join(output, 'long-run-budget-1440.png') });
   await page.locator('#settings-submit').click();
-  await page.locator('#conversation .chat-message.user').waitFor();
+  await page.locator('body[data-view="run"] #detail-panel .result-task').waitFor();
   await page.waitForFunction(() => document.title.startsWith('1 项进行中'));
   const capped = inputs.at(-1)!;
   assert.equal(capped.input.maxTotalTokens, 500_000);
   mark('the settings reject an invalid token cap, show the time, turn and token limits, and send the cap to the worker');
 
-  await showChat(page);
-  await page.locator('[data-chat-action="notify"]').click();
-  await page.locator('[data-chat-action="notify"][aria-pressed="true"]').waitFor();
+  // The new run's result tab offers the notification while it works.
+  await page.locator('#detail-panel [data-action="notify"]').click();
+  await page.locator('#detail-panel [data-action="notify"][aria-pressed="true"]').waitFor();
   await setHidden(page, true);
   finish.get(capped.id)!();
   await page.waitForFunction(() => document.title.startsWith('(1) 研究已结束'), undefined, { timeout: 25_000 });
@@ -109,10 +109,10 @@ try {
   const older = await postRun({ page }, input('older')), away = await postRun({ page }, input('away'));
   await until(page, away.id, run => run.status === 'running');
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await selectHistoryRun(page, older.id);
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await page.locator(`.run-row.selected[data-run-id="${older.id}"]`).waitFor({ state: 'attached' });
   mark('a reload reopens the run that was open, not the newest one');
 

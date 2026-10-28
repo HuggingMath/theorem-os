@@ -51,3 +51,24 @@ export function agentRoutes(events: readonly WebEvent[]): AgentRoute[] {
   for (const route of routes.values()) for (const step of route.steps) step.count = Math.max(1, step.count);
   return [...routes.values()];
 }
+
+/**
+ * What a reader calls each Agent: its role, numbered only when several Agents share it ("Researcher 1", "Researcher 2").
+ * Agents without a known role keep their id.
+ */
+export function agentNames(workers: readonly { id: string; role?: string }[]): Map<string, string> {
+  const shared = new Map<string, number>();
+  for (const worker of workers) if (worker.role) shared.set(worker.role, (shared.get(worker.role) ?? 0) + 1);
+  const seen = new Map<string, number>(), names = new Map<string, string>();
+  for (const worker of workers) {
+    if (!worker.role) continue;
+    const index = (seen.get(worker.role) ?? 0) + 1;
+    seen.set(worker.role, index);
+    names.set(worker.id, shared.get(worker.role)! > 1 ? `${worker.role} ${index}` : worker.role);
+  }
+  return names;
+}
+
+/** A task as a reader knows it: the last part of its theorem's name (Tutorial.add_zero → add_zero). */
+export const taskNames = (tasks: readonly { id: string; theorem?: string }[]) =>
+  new Map(tasks.flatMap(task => task.theorem ? [[task.id, task.theorem.split('.').at(-1)!] as const] : []));

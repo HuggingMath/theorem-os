@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { fillConfig, refresh, selectHistoryRun } from './web-ui-controls';
+import { fillConfig, refresh, selectHistoryRun, showArtifacts } from './web-ui-controls';
 import { freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -202,7 +202,7 @@ try {
     await h.page.locator('button[data-source-view="input"]').click();
     await h.page.locator('button[data-source-view="diff"]').click();
     await position(h.page, '3/3'); await changeVisible(h.page, 2);
-    await h.page.locator('#detail-tab-overview').click();
+    await h.page.locator('#detail-tab-collaboration').click();
     await h.page.locator('#detail-tab-source').click();
     assert.equal(await h.page.locator('button[data-source-view="diff"]').getAttribute('aria-pressed'), 'true');
     await position(h.page, '3/3'); await changeVisible(h.page, 2);
@@ -273,8 +273,8 @@ try {
     const actual = await h.page.evaluate(async id => (await (await fetch(`/api/runs/${id}`)).json()).run as WebRun, run.id);
     assert.equal(actual.status, 'running');
     assert.equal(actual.result?.status, 'evaluated_passed');
-    await h.page.locator('#detail-tab-overview').click();
-    assert.equal(await h.page.locator('.result-banner.passed').count(), 0);
+    await h.page.locator('#detail-tab-result').click();
+    assert.equal(await h.page.locator('.result-verdict.passed').count(), 0);
   });
 
   await scenario('Large full views cap at 2000 source rows and display truncation without losing the original proof', async h => {
@@ -326,7 +326,7 @@ try {
     if (!(await h.page.locator('#diff-changes-only').isChecked())) await h.page.locator('#diff-changes-only').check();
     for (const width of widths) {
       await h.page.setViewportSize({ width, height: width > 850 ? 900 : 812 });
-      if (width <= 850) await h.page.locator('#mobile-runs').click();
+      await showArtifacts(h.page);
       await horizontalFit(h.page, '.source-topline', width);
       await horizontalFit(h.page, '#detail-panel .diff-scroll', width);
       for (const selector of ['button[data-source-view="diff"]', '[data-action="copy-source"]', '[data-action="download-proof"]',

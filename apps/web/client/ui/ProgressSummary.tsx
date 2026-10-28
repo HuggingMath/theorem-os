@@ -5,7 +5,8 @@ export type Meter = { name: string; segments: { key: string; label: string; coun
 export type ProgressSummaryProps = {
   proof: { checked: number; total: number; meter: Meter };
   agents: { working: number; total: number; meter: Meter };
-  accepted: boolean; completedResearch: number;
+  /** `rejected`: the acceptance ran and failed, which is not the same as not having run yet. */
+  accepted: boolean; rejected?: boolean; completedResearch: number;
   /** After the run the Agent card counts who took part instead of who is working now. */ ended: boolean;
 };
 
@@ -26,7 +27,7 @@ function ProgressSummary(props: ProgressSummaryProps) {
       : <div><span>{t('证明任务')}</span><strong>{t('未拆分')}</strong><small>{t('直接证明完整原题')}</small></div>}
     {props.ended ? <div><span>Agent</span><strong>{props.agents.total}</strong><small>{t('参与了这次研究')}</small></div>
       : <div><span>Agent</span><strong>{props.agents.working} / {props.agents.total}</strong><small>{t('实际工作中')}</small><MeterBar meter={props.agents.meter} /></div>}
-    <div><span>{t('最终验收')}<span class="collab-expert-term"> S3</span></span><strong class={props.accepted ? 'collab-accepted' : ''}>{props.accepted ? t('验收通过') : t('尚未验收通过')}</strong>
+    <div><span>{t('最终验收')}<span class="collab-expert-term"> S3</span></span><strong class={props.accepted ? 'collab-accepted' : props.rejected ? 'collab-rejected' : ''}>{props.accepted ? t('验收通过') : props.rejected ? t('验收未通过') : props.ended ? t('没有验收结果') : t('尚未验收通过')}</strong>
       <small>{t('以完整报告独立判断')}</small>{props.completedResearch > 0 && <small>{t('研究任务已完成 {0} 项', props.completedResearch)}</small>}</div>
   </div>;
 }

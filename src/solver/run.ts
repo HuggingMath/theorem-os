@@ -54,12 +54,14 @@ export async function runSolver(args: string[], root: string, customModules?: So
     method: { type: 'string', default: 'direct' }, workers: { type: 'string', default: '4' },
     'module-plan': { type: 'string' },
     scheduler: { type: 'string', default: 'plan' }, coordination: { type: 'string', default: 'cooperative' },
+    'plan-approval': { type: 'boolean' },
   } });
   if (values.help) {
-    console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --max-run-seconds, --max-turns, --max-turn-seconds or --evaluator-timeout-seconds to disable that limit. Unlimited total solving time also disables proof verification deadlines.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
+    console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --max-run-seconds, --max-turns, --max-turn-seconds or --evaluator-timeout-seconds to disable that limit. Unlimited total solving time also disables proof verification deadlines.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
     console.log('--knowledge-base FILE attaches an immutable saved-theorem catalog. Resume requires the same catalog digest. Historical knowledge never grants proof acceptance.');
     console.log('--continuation-manifest FILE attaches explicit historical sources and notes without changing the verbatim task file. Resume retains the frozen attachment identity; historical material remains advisory.');
     console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. Use --resume to retry an interrupted zero-turn initialization; combine with --startup-only to retain a prepared checkpoint.');
+    console.log('--plan-approval holds every worker after the first accepted plan until a person approves that exact plan version (queuePlanApproval, the web workbench). The Lead takes a revision turn only for Lead guidance written while it waits. Waiting counts toward --max-run-seconds. Requires cooperative coordination and at least 2 workers; resume requires the same setting.');
     console.log('Lead planning and ordinary research first yield a resumable scheduling checkpoint after 120 seconds, with a reminder after 90 seconds. Lead planning keeps 120-second slices; ordinary research backs off to at most 960 seconds. Saved threads and drafts survive resume. Proof turns and total solving budgets are unchanged.');
     return 0;
   }
@@ -94,6 +96,9 @@ export async function runSolver(args: string[], root: string, customModules?: So
   if (workerCount > MAX_RESEARCH_WORKERS) throw new Error('invalid --workers');
   if (values['continuation-source-run'] && (coordination !== 'cooperative' || workerCount < 2))
     throw new Error('--continuation-source-run requires cooperative coordination and at least 2 workers');
+  const planApproval = values['plan-approval'] === true;
+  if (planApproval && (coordination !== 'cooperative' || workerCount < 2))
+    throw new Error('--plan-approval requires cooperative coordination and at least 2 workers');
   if (values['continuation-source-run'] && values['continuation-manifest'])
     throw new Error('--continuation-source-run cannot combine with --continuation-manifest');
   const workspace = fs.realpathSync(required('workspace'));
@@ -185,6 +190,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (!state.methodDigest && modules === directSolverModules && coordination === 'cooperative') state.methodDigest = identity.methodDigest;
         if ((state.coordination ?? 'cooperative') !== coordination) throw new Error('math_resume_coordination_changed');
         if ((state.workerCount ?? 1) !== workerCount) throw new Error('math_resume_worker_count_changed');
+        if (Boolean(state.planApproval) !== planApproval) throw new Error('math_resume_plan_approval_changed');
         if (workerCount > 1 && (!state.workers || state.workers.length !== workerCount ||
             state.workers.some((worker, index) => worker.id !== workers[index].id ||
               worker.role !== workers[index].role || worker.worktree !== workers[index].worktree)))
@@ -221,7 +227,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         state = { schema: 'deepscientist.math.solver.v1', runId: crypto.randomUUID(), problem, ...identity,
           ...(continuation ? { continuationDigest: continuation.digest } : {}),
           worktree: path.join(directory, 'worktree'), phase: 'prepared', turns: 0, dispatchCounts: {}, workerCount,
-          coordination, moduleConfiguration, tokenBudget: buildTokenBudget(maxTotalTokens, [],
+          coordination, ...(planApproval ? { planApproval } : {}), moduleConfiguration, tokenBudget: buildTokenBudget(maxTotalTokens, [],
             westlakeProfile ? 'provider-observed-upstream-request-limit' : undefined) };
         if (workerCount > 1) state.workers = workers
           .map(worker => ({ id: worker.id, role: worker.role, worktree: worker.worktree, phase: 'prepared', turns: 0, dispatchCounts: {} }));

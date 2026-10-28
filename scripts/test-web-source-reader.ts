@@ -8,7 +8,7 @@ import { readWebConfig, webLimits } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRunInput } from '../apps/web/shared';
-import { closeHistory, closeSettings, fillConfig, openHistory, openSettings, selectHistoryRun, text } from './web-ui-controls';
+import { closeHistory, closeSettings, fillConfig, newResearch, openHistory, openSettings, selectHistoryRun, text } from './web-ui-controls';
 import { freePort, normalize, postRun, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -402,7 +402,7 @@ try {
     assert.equal(await page.locator('#source').inputValue(), draft, 'source inspection must preserve the separate composer source');
     assert.equal(await page.locator('#task').inputValue(), task, 'source inspection must preserve the separate composer task');
     assert.equal(await page.locator('#api-key').inputValue(), credential, 'source inspection must leave the separate composer key alone');
-    await page.locator('#new-research').click(); await showSource(page);
+    await newResearch(page); await showSource(page);
     assert.equal(await page.locator('#source-find-input').inputValue(), '', 'a new draft must not inherit a run query');
   });
 
@@ -437,7 +437,8 @@ try {
     assert.deepEqual(live.selection, [2, 4]);
     await page.evaluate(selector => { (window as unknown as { __readerText: Node | null }).__readerText = document.querySelector(selector)!.firstChild; }, runCode);
     control.progress('Source reader fixture activity');
-    await page.waitForFunction(() => document.querySelector('#conversation')?.textContent?.includes('Source reader fixture activity'));
+    // The screen-reader announcement repeats the newest step whichever tab is open.
+    await page.waitForFunction(() => document.querySelector('#conversation-announcement')?.textContent?.includes('Source reader fixture activity'));
     assert.equal(await page.locator(runCode).evaluate(code => code.firstChild === (window as unknown as { __readerText: Node }).__readerText), true,
       'unrelated activity must preserve the highlighted source text node');
     assert.equal(await page.locator('#source-find-input').evaluate(input => input === document.activeElement), true);

@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
-import { closeDialog, closeHistory, fitViewport, openHistory } from './web-ui-controls';
+import { closeDialog, closeHistory, fitViewport, historyDocked, openHistory, showChat } from './web-ui-controls';
 import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,7 +98,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
 });
 async function open(h: Harness) {
   await h.page.goto(origin);
-  await h.page.locator('#submit-run:enabled').waitFor();
+  await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await collectOwner(h);
   assert.ok(h.owner, 'the fixture requires a real local session');
 }
@@ -153,13 +153,15 @@ async function show(h: Harness, expected: WebRun[]) {
   await openHistory(h.page); await poll(h); await rows(h.page, expected);
 }
 async function selected(page: Page, id: string) {
-  assert.equal(await page.locator('.detail-identifier code').textContent(), id);
+  assert.equal(await page.locator('.detail-heading').getAttribute('data-run'), id);
   const visible = await page.locator(`${button(id)}.selected`).count();
   assert.equal(await page.locator('#run-list .run-row.selected').count(), visible);
   if (visible) assert.equal(await page.locator(button(id)).getAttribute('aria-pressed'), 'true');
 }
 async function choose(page: Page, id: string) {
-  await closeDialog(page, '#history-dialog', () => page.locator(button(id)).click());
+  // The docked sidebar stays open beside the run it selects; the phone dialog closes behind it.
+  if (historyDocked(page)) await page.locator(button(id)).click();
+  else await closeDialog(page, '#history-dialog', () => page.locator(button(id)).click());
   await selected(page, id);
   await openHistory(page);
 }
@@ -278,7 +280,7 @@ try {
     await retained(page, 'keyboard selection patch', { focus: false, selection: true });
     await page.keyboard.press('Home'); await selected(page, runs[0]!.id);
     await retained(page, 'selection returns to its original button', { selection: true });
-    for (const selector of ['#history-dialog', '#run-search', '#run-filter', '#run-list', button(runs[0]!.id)]) await fit(page, selector);
+    for (const selector of [historyDocked(page) ? '#history-sidebar' : '#history-dialog', '#run-search', '#run-filter', '#run-list', button(runs[0]!.id)]) await fit(page, selector);
     await screenshot(page, `history-${width}-stable.png`);
   }, width);
 
@@ -333,7 +335,8 @@ try {
 
   await scenario('Updates while history is closed preserve its reading anchor and the draft input focus and selection', async h => {
     const { page } = h; await open(h);
-    const runs = await seed(h, 16); await show(h, runs); await scroll(page, 560);
+    // The newest run opens on its own; the draft lives on the new-research page.
+    const runs = await seed(h, 16); await showChat(page); await show(h, runs); await scroll(page, 560);
     const before = await anchor(page); await closeHistory(page);
     await page.locator('#task').fill('Unsent history draft with a backward text selection');
     const inputBefore = await page.locator('#task').evaluate(node => {
@@ -402,7 +405,7 @@ try {
     const { page } = h; await open(h);
     const runs = await seed(h, 6); await show(h, runs);
     const moved = runs.at(-1)!; await bookmark(page, moved.id);
-    const selection = (await page.locator('.detail-identifier code').textContent())!;
+    const selection = (await page.locator('.detail-heading').getAttribute('data-run'))!;
     service.jobs.get(h.owner, moved.id)!.createdAt = orderedAt(100);
     await poll(h); await rows(page, [moved, ...runs.slice(0, -1)]);
     await retained(page, 'focused history row reordered'); await focused(page, button(moved.id));

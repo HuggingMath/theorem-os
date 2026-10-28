@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { agentRoutes } from '../apps/web/client/agentRoute';
+import { agentNames, agentRoutes, taskNames } from '../apps/web/client/agentRoute';
 import { loadWebSample } from '../apps/web/sample';
 import type { WebEvent } from '../apps/web/shared';
 
@@ -38,5 +38,13 @@ describe('agent routes', () => {
     const routes = agentRoutes(loadWebSample()!.run.events);
     expect(routes.map(route => route.workerId)).toEqual(['solver', 'engineer', 'researcher-1']);
     expect(routes[0].steps.at(-1)).toMatchObject({ kind: 'accept', outcome: 'passed' });
+  });
+
+  test('Agents are named by role, numbered only when a role is shared', () => {
+    expect([...agentNames([{ id: 'solver', role: 'Lead' }, { id: 'researcher-1', role: 'Researcher' }, { id: 'researcher-2', role: 'Researcher' },
+      { id: 'engineer', role: 'Engineer' }, { id: 'unknown' }])]).toEqual([['solver', 'Lead'], ['researcher-1', 'Researcher 1'],
+      ['researcher-2', 'Researcher 2'], ['engineer', 'Engineer']]);
+    expect([...taskNames([{ id: 'goal_1', theorem: 'Tutorial.add_zero' }, { id: 'bridge', theorem: 'zero_add' }, { id: 'draft' }])])
+      .toEqual([['goal_1', 'add_zero'], ['bridge', 'zero_add']]);
   });
 });

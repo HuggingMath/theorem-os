@@ -48,9 +48,18 @@ export type WebRunInput = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  /** Hold every Agent after the first plan until the person who started the run approves it. */
+  planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
+  continueFrom?: WebContinuation;
 };
+/**
+ * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
+ * advisory attachment, never as the problem or as evidence. `label` names it for people (「zero_add · 第 2 次」).
+ */
+export type WebContinuation = { runId: string; taskId: string; commit: string; label: string };
+export const webContinuationLabelMax = 200;
 export type WebModuleId = 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'S3';
 export type WebEventDetails = {
   workerId?: string;
@@ -93,6 +102,8 @@ export type WebRun = {
   updatedAt: string;
   finishedAt?: string;
   timings?: { preparing?: string; solving?: string; evaluating?: string };
+  /** When a Lean check last passed or a checked result was integrated; kept after the activity log rotates. */
+  progressAt?: string;
   providerId: string;
   model: string;
   effort: WebEffort;
@@ -105,8 +116,10 @@ export type WebRun = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
+  continueFrom?: WebContinuation;
   observation?: WebObservation;
   archives?: WebArchive[];
   knowledgeCatalogDigest?: string;
@@ -163,7 +176,9 @@ export type WebProofOutlineDeclaration = {
 };
 export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
-export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown };
+export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown;
+  /** The saved file of `input.continueFrom`, read by the server from the account's own run. */
+  continuation?: WebContinuation & { file: string; source: string } };
 export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
   | { type: 'artifact'; artifact: WebArtifact }
@@ -173,6 +188,12 @@ export type WorkerMessage =
   | { type: 'error'; message: string; failure?: WebFailure };
 /** The id of the read-only sample run (apps/web/sample.ts); fixed so links and saved positions never collide with real runs. */
 export const webSampleRunId = '00000000-0000-4000-8000-00000000a001';
+/** A Lean check that passed afresh, or a checked result joining the main line: what a reader counts as progress. */
+export function isProgressEvent(type: string, details?: WebEventDetails): boolean {
+  if (type === 'task_integrated') return true;
+  if (type === 'task_checked' || type === 'task_recheck_finished') return details?.passed === true;
+  return type === 'proof_checked' && details?.passed === true && details.reused !== true;
+}
 
 /** The admin dialog: who may sign in, which accounts exist with their beta milestones, and the funnel totals. */
 export type WebAdminOverview = {

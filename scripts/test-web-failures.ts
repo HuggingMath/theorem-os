@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { selectHistoryRun, showChat } from './web-ui-controls';
+import { selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -47,11 +47,11 @@ async function settledRun(page: Page, id: string, done: (run: WebRun) => boolean
 }
 async function open(page: Page, id: string) {
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await selectHistoryRun(page, id);
-  await showChat(page);
 }
-const result = (page: Page) => page.locator('#conversation .chat-result');
+/** The verdict at the top of the run's 结果 tab. */
+const result = (page: Page) => page.locator('#detail-panel .result-verdict');
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
@@ -60,7 +60,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of 429/u.test(message.text())) errors.push(message.text()); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 
   const holding = await postRun({ page }, input('hold'));
   const queued = await postRun({ page }, input('hold'));
@@ -69,7 +69,7 @@ try {
   await open(page, queued.id);
   await result(page).filter({ hasText: '前面还有 0 个任务' }).or(result(page).filter({ hasText: '排在第 1 位' })).waitFor();
   assert.match(await result(page).innerText(), /1\/1 个运行位正在使用/u);
-  assert.match(await result(page).locator('h3').innerText(), /排队中 · 第 1 位/u);
+  assert.match(await page.locator('.detail-statusline .badge').first().innerText(), /排队中 · 第 1 位/u);
   await page.screenshot({ path: path.join(output, 'failure-queue-1440.png') });
   const full = await page.evaluate(async body => {
     const session = await (await fetch('/api/session')).json();
@@ -90,7 +90,7 @@ try {
   await open(page, auth.id);
   await result(page).locator('h3', { hasText: 'API Key 未通过认证' }).waitFor();
   assert.equal(await page.locator('[data-recovery]').count(), 1);
-  assert.equal(await result(page).getAttribute('class'), 'chat-result failed', 'A failure that needs action is not shown as a neutral end');
+  assert.equal(await result(page).getAttribute('class'), 'result-verdict failed', 'A failure that needs action is not shown as a neutral end');
   await page.screenshot({ path: path.join(output, 'failure-auth-1440.png') });
   await page.locator('[data-recovery="key"]').click();
   await page.locator('#run-settings[open]').waitFor();
@@ -117,9 +117,9 @@ try {
   await result(page).locator('h3', { hasText: '运行环境出错' }).waitFor();
   assert.doesNotMatch(await result(page).innerText(), /未返回验收结果/u, 'The guide replaces the operator message');
   assert.equal(await page.locator('[data-recovery="retry"]').count(), 1);
-  assert.equal(await page.locator('[data-chat-action="reuse"]').count(), 0, 'Retry replaces the duplicate reuse link');
+  assert.equal(await page.locator('#detail-panel [data-action="reuse-run"]').count(), 0, 'Retry is the one way to start over inside the result');
   // A failure on our side links to the prefilled public feedback form, which never carries the run or the task.
-  const feedback = new URL((await page.locator('#conversation [data-feedback-link]').getAttribute('href'))!);
+  const feedback = new URL((await page.locator('#detail-panel [data-feedback-link]').getAttribute('href'))!);
   assert.equal(`${feedback.origin}${feedback.pathname}`, 'https://theoremos.top/feedback.html');
   assert.equal(feedback.searchParams.get('area'), 'workbench');
   assert.equal(feedback.searchParams.get('kind'), 'bug');

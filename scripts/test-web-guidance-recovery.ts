@@ -101,7 +101,7 @@ const delivered = (id: string) => commands.filter(item => item.runId === id && i
 const original = (h: Harness, id: string) => JSON.parse(posts(h, id)[0]!.body!) as WebGuidanceInput;
 async function draft(page: Page) { return { text: await page.locator(text).inputValue(), kind: await page.locator(kind).inputValue(), target: await page.locator(target).inputValue() }; }
 async function select(h: Harness, id: string) {
-  await selectHistoryRun(h.page, id); await h.page.locator('.collab-surface').waitFor();
+  await selectHistoryRun(h.page, id, 'collaboration'); await h.page.locator('.collab-surface').waitFor();
   await h.page.locator('[data-collab-task="base"]:visible').first().waitFor();
 }
 async function create(h: Harness) {
@@ -111,7 +111,7 @@ async function create(h: Harness) {
 async function guideTask(page: Page, id = 'base') {
   await page.locator(`[data-collab-task="${id}"]:visible`).first().click();
   await page.locator('[data-collab-guide-task]').click();
-  await page.locator(context).filter({ hasText: `${id}-v1` }).waitFor();
+  await page.waitForFunction(([target, id]) => (document.querySelector(target) as HTMLSelectElement | null)?.value === id, [target, id] as const);
 }
 async function workerDraft(page: Page, value: string) {
   await page.locator(text).fill(value); await page.locator(kind).selectOption('worker'); await page.locator(target).selectOption('prover-1');
@@ -170,13 +170,12 @@ try {
       await page.locator(refresh).click(); await page.locator(pending).waitFor({ state: 'hidden' });
       const sequence = control.observation.sequence;
       await page.waitForFunction(sequence => document.querySelector('[data-collab-observation]')?.textContent?.includes(`观察 #${sequence} ·`), sequence);
-      const updated = await page.evaluate(at => `更新 ${new Intl.DateTimeFormat('zh-CN', {
-        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-      }).format(new Date(at))}`, future);
-      assert.equal(await page.locator('.updated-at').innerText(), updated, 'receipt also updates the app run cache and header');
-      assert.match(await page.locator('.collab-graph [data-collab-task="base"]').innerText(), /prover-1/);
+      // The run header keeps the last recorded change on its heading rather than showing it.
+      const updated = () => page.locator('.detail-heading').getAttribute('data-updated-at').then(at => at && new Date(at).getTime());
+      assert.equal(await updated(), new Date(future).getTime(), 'receipt also updates the app run cache and header');
+      assert.match(await page.locator('.collab-graph [data-collab-task="base"]').innerText(), /Prover/);
       release.resolve(); await oldList; await settled(page);
-      assert.equal(await page.locator('.updated-at').innerText(), updated, 'late list cannot rewind the app observation timestamp');
+      assert.equal(await updated(), new Date(future).getTime(), 'late list cannot rewind the app observation timestamp');
       assert.match(await page.locator('[data-collab-observation]').innerText(), new RegExp(`观察 #${sequence} ·`));
       assert.equal(await page.locator(text).inputValue(), 'A newer draft must survive the receipt and stale list');
       assert.equal(posts(h, run.id).length, 1); assert.equal(delivered(run.id).length, 1);
@@ -334,7 +333,8 @@ try {
     await pendingOriginal(page, original(h, run.id)); await showArtifacts(page);
     const summary = page.locator(`${pending} summary`); if (await summary.count()) await summary.click();
     await page.locator(refresh).scrollIntoViewIfNeeded();
-    for (const selector of [pending, refresh, retry, context, text, submit]) {
+    assert.equal(await page.locator(context).innerText(), '', 'task versions stay out of the form until the task changes');
+    for (const selector of [pending, refresh, retry, text, submit]) {
       const box = await page.locator(selector).boundingBox();
       assert.ok(box && box.width > 0 && box.x >= -1 && box.x + box.width <= width + 1, `${selector} must fit ${width}px: ${JSON.stringify(box)}`);
     }

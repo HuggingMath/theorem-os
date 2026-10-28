@@ -14,6 +14,8 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+import { loadWebSample, type WebSampleFile } from '../apps/web/sample';
+import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-readable-results');
@@ -57,9 +59,49 @@ function observation(id: string): WebObservation {
       progress: { checkedProofTasks: 1, conditionalProofTasks: 0, completedResearchTasks: 0, openProofTasks: ['main_goal', 'bridge'] },
       groups: [], tasks, workers: [], statementReviews: [], edits: [] } };
 }
+/** Six parts of one problem stopped by the budget: two closed by the solver's own Lean check, one conditional, three open. */
+function manyGoals(id: string): WebObservation {
+  const base = observation(id), parts = ['a', 'b', 'c', 'd', 'e', 'f'], closed = new Set(['a', 'd']);
+  const tasks = parts.map(part => task(`goal_${part}`, { kind: 'goal', theorem: `Fixture.part_${part}`, type: 'True',
+    ...(closed.has(part) ? { status: 'integrated', proof: { status: 'checked' } } : part === 'e'
+      ? { status: 'conditional', proof: { status: 'conditional', conditions: [{ taskId: 'goal_b', taskDigest: 'goal_b-v1' }] } } : {}) }));
+  const goals = parts.map(part => ({ taskId: `goal_${part}`, taskDigest: `goal_${part}-v1`, closed: closed.has(part), frontier: [], missingDependencies: [] }));
+  const inspection = base.inspection;
+  return { ...base, inspection: { ...inspection, tasks, usage: { inputTokens: 98_000, outputTokens: 30_000, totalTokens: 128_000 },
+    problem: { ...inspection.problem, targets: parts.map(part => ({ proofPath: 'Submission.lean', theoremName: `Fixture.part_${part}` })) },
+    mathematics: { ...inspection.mathematics!, snapshot: { ...inspection.mathematics!.snapshot, goals, blockers: [] } } } };
+}
+const sample = loadWebSample()!;
+/** The recording up to zero_add's rejected first try, where the budget runs out: add_zero is checked, zero_add's latest check failed. */
+function stoppedAfterFailure(): WebSampleFile {
+  const recording = withFailedAttempt(sample);
+  const failed = recording.events.find(event => event.type === 'task_checked' && event.details?.passed === false)!;
+  recording.events = recording.events.filter(event => event.sequence <= failed.sequence);
+  recording.observations = recording.observations.slice(0, 4);
+  const last = recording.observations.at(-1)!;
+  last.inspection.tasks = last.inspection.tasks.map(task => task.id === 'goal_2' ? { ...task, attempts: 1, proof: { ...task.proof, status: 'failed', failureCategory: 'proof' } } : task);
+  return recording;
+}
+const limitReached = { status: 'limit_reached', proof: '', report: { status: 'limit_reached', reason: 'math_run_stopped', failure: { kind: 'time_limit', reason: 'math_run_stopped' } } } as const;
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: 'Local readable results fixture; no model or Lean' }; },
-  async run(input, send) {
+  async run(input, send, signal) {
+    // The recorded sample up to add_zero's own Lean check, then the time budget runs out before acceptance.
+    if (input.input.task.includes('checked')) {
+      await replaySample(sample, input.id, send, signal, { until: 'task_recheck_finished' });
+      send({ type: 'result', result: { status: 'limit_reached', proof: '', report: { status: 'limit_reached', reason: 'math_run_stopped', failure: { kind: 'time_limit', reason: 'math_run_stopped' } } } });
+      return;
+    }
+    if (input.input.task.includes('failed check')) {
+      await replaySample(stoppedAfterFailure(), input.id, message => { if (message.type !== 'artifact' && message.type !== 'result') send(message); }, signal);
+      send({ type: 'result', result: limitReached }); return;
+    }
+    if (input.input.task.includes('many goals')) {
+      // The report's total is the run's own count; it wins over the last observation's.
+      send({ type: 'observation', observation: manyGoals(input.id) });
+      send({ type: 'result', result: { status: 'limit_reached', proof: '', report: { status: 'limit_reached', reason: 'math_run_stopped', usage: { totalTokens: 131_400 } } } });
+      return;
+    }
     if (input.input.task.includes('stuck')) {
       send({ type: 'observation', observation: observation(input.id) });
       send({ type: 'result', result: { status: 'limit_reached', proof: '', report: { status: 'limit_reached', reason: 'math_run_stopped' } } });
@@ -74,7 +116,8 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
 const browser = await startBrowser(service.server, port);
 const suite: ScenarioSuite = { origin, output, checks: [], failedScenario: '' };
 const input = (task: string): WebRunInput => ({ providerId: 'openai', apiKey: 'sk-local-readable-results-fixture', model: 'fixture', effort: 'low',
-  environment: 'standard', source, task, maxTurns: 2, maxRunSeconds: 60, workers: 1, coordination: 'cooperative' });
+  environment: 'standard', source: task.includes('checked') || task.includes('failed check') ? sample.run.source : source, task, maxTurns: 2, maxRunSeconds: 60, workers: 1, coordination: 'cooperative',
+  ...(task.includes('many goals') ? { maxTotalTokens: 500_000 } : {}) });
 type Harness = ScenarioHarness;
 const screenshots: string[] = [];
 function scenario(name: string, run: (h: Harness) => Promise<void>, options: { width?: number; locale?: 'zh' | 'en' } = {}) {
@@ -88,13 +131,14 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, options: { w
 }
 async function open(h: Harness, task: string) {
   const run = await postRun(h, input(task));
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // The replayed sample takes a few seconds at its recorded pace; the other fixtures finish at once.
+  for (let attempt = 0; attempt < 200; attempt++) {
     const state = await h.page.evaluate(async id => (await (await fetch(`/api/runs/${id}`)).json()).run.status, run.id);
     if (state === 'completed') break;
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await new Promise(resolve => setTimeout(resolve, attempt < 20 ? 30 : 100));
   }
   await refreshHistory(h.page); await selectHistoryRun(h.page, run.id);
-  await h.page.locator('#detail-tab-report').click();
+  await h.page.locator('#detail-tab-result').click();
   await h.page.locator('#detail-panel .report-summary').waitFor();
   return run;
 }
@@ -131,7 +175,7 @@ try {
     assert.equal(await page.locator('#detail-panel .report-stuck').count(), 0, 'a passed run has nothing stuck');
     await outline.scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(output, 'outline-desktop.png') }); screenshots.push('outline-desktop.png');
     const reads = h.requests.filter(item => item.pathname === `/api/runs/${run.id}/outline`).length;
-    await page.locator('#detail-tab-overview').click(); await page.locator('#detail-tab-report').click();
+    await page.locator('#detail-tab-collaboration').click(); await page.locator('#detail-tab-result').click();
     await outline.locator('.outline-item').first().waitFor(); await settled(page);
     assert.equal(h.requests.filter(item => item.pathname === `/api/runs/${run.id}/outline`).length, reads, 'the outline is read once per run');
   });
@@ -169,6 +213,83 @@ try {
     await page.locator('[data-inspected-task-heading]').filter({ hasText: 'bridge' }).waitFor();
     assert.equal(await page.locator('#detail-tab-collaboration').getAttribute('aria-selected'), 'true');
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-inspected-task-heading')), true, 'focus lands on the task');
+  });
+
+  await scenario('a long goal list reads by status, with the checked goals folded and a bar of what is finished', async h => {
+    const { page } = h; await open(h, 'Stop with many goals');
+    const goals = page.locator('#detail-panel .result-goals');
+    assert.equal((await goals.locator('[data-goal-counts]').innerText()).replace(/\s+/gu, ' '), 'Lean 已检查 2 · 有条件 1 · 未解决 3');
+    assert.deepEqual(await goals.locator('.goal-group').evaluateAll(groups => groups.map(group => [(group as HTMLElement).dataset.goalGroup,
+      group.querySelector('summary')!.textContent, (group as HTMLDetailsElement).open])), [['open', '未解决4', true], ['checked', 'Lean 已检查2', false]]);
+    assert.deepEqual(await goals.locator('[data-goal-group="open"] .goal-row .item-heading code').allInnerTexts(),
+      ['Fixture.part_b', 'Fixture.part_c', 'Fixture.part_e', 'Fixture.part_f'], 'problem order inside the group');
+    assert.deepEqual(await goals.locator('.goal-bar').evaluate(bar => [bar.classList.contains('ended'), ...Array.from(bar.children, item =>
+      [(item as HTMLElement).dataset.goalSegment, Math.round(item.getBoundingClientRect().width / bar.getBoundingClientRect().width * 100)])]),
+      [true, ['checked', 33], ['conditional', 17]]);
+    assert.equal(await goals.locator('[data-goal-group="checked"] .goal-row').first().isVisible(), false, 'finished goals start folded');
+    await goals.locator('[data-goal-group="checked"] summary').click();
+    await goals.locator('[data-goal-group="checked"] .goal-row[data-goal-state="checked"]').first().waitFor();
+    await settled(page); await goals.scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(output, 'goals-grouped.png') }); screenshots.push('goals-grouped.png');
+    const tokens = page.locator('.detail-statusline [data-header-tokens]');
+    assert.equal(await tokens.innerText(), 'Token 13 万 / 50 万', 'the run\'s own total, from its report, beside its cap');
+    assert.match(await tokens.getAttribute('title') ?? '', /所有 Agent.*上限 50 万/u);
+    await page.locator('.detail-heading').screenshot({ path: path.join(output, 'header-tokens.png') }); screenshots.push('header-tokens.png');
+    await open(h, 'Stop when stuck');
+    assert.equal(await page.locator('#detail-panel .result-goals .goal-group').count(), 0, 'one goal stays a flat list');
+    assert.equal(await page.locator('#detail-panel .result-goals .goal-bar').count(), 0, 'one goal needs no bar');
+    assert.equal(await page.locator('.detail-statusline [data-header-tokens]').count(), 0, 'a run with no reported usage shows no count');
+  });
+
+  await scenario('a run that ended unaccepted offers its checked code and why its latest check failed as next steps, without a model call', async h => {
+    const { page } = h; await open(h, 'Stop after a failed check');
+    const actions = page.locator('#detail-panel .result-verdict-actions [data-recovery]');
+    assert.deepEqual(await actions.evaluateAll(items => items.map(item => [(item as HTMLElement).dataset.recovery, item.textContent])),
+      [['continue-checked', '从已检查的代码继续'], ['ask-failed', '问为什么没通过'], ['budget', '提高解题预算']]);
+    await page.locator('#detail-panel .result-verdict').screenshot({ path: path.join(output, 'next-steps.png') }); screenshots.push('next-steps.png');
+    await actions.filter({ hasText: '问为什么没通过' }).click();
+    const viewer = page.locator('#trajectory-viewer[open]');
+    await viewer.waitFor(); await viewer.locator('[data-ask-question]').waitFor();
+    assert.equal(await page.locator('#detail-tab-trajectory').getAttribute('aria-selected'), 'true');
+    assert.match(await viewer.locator('.side-viewer-heading').innerText(), /zero_add/u);
+    await page.waitForFunction(() => document.activeElement?.hasAttribute('data-ask-question'));
+    assert.equal(h.requests.filter(item => item.pathname.endsWith('/explain')).length, 0, 'opening the question asks nothing yet');
+    await page.screenshot({ path: path.join(output, 'next-steps-ask.png') }); screenshots.push('next-steps-ask.png');
+    await page.locator('#detail-tab-result').click(); await actions.first().waitFor();
+    await actions.filter({ hasText: '从已检查的代码继续' }).click();
+    await page.locator('#run-settings[open]').waitFor();
+    assert.equal(await page.locator('#draft-continuation-label').innerText(), '从「add_zero · 第 1 次」继续');
+    assert.equal(await page.locator('#task').inputValue(), 'Stop after a failed check', 'the new draft is the same problem');
+    assert.equal(await page.locator('#api-key').evaluate(field => field === document.activeElement), true, 'continuing asks for the key first');
+  });
+
+  await scenario('a run stopped by its budget ends its trajectory with where its targets stood', async h => {
+    const { page } = h; await open(h, 'Stop when stuck');
+    await page.locator('#detail-tab-trajectory').click();
+    const end = page.locator('#detail-panel .trajectory-step[data-kind="end"]');
+    await end.waitFor();
+    assert.match(await end.locator('h4').innerText(), /解题时间用完/u);
+    assert.equal((await end.locator('[data-end-goals="open"]').innerText()).replace(/\s+/gu, ' ').trim(), '仍未解决 main');
+    assert.equal(await end.locator('[data-end-goals="passed"]').count(), 0, 'nothing the run did not check is listed as checked');
+  });
+
+  await scenario('a goal the run checked but did not get accepted opens its checked code', async h => {
+    const { page } = h; await open(h, 'Stop once checked');
+    const checked = page.locator('#detail-panel .result-goals .goal-row[data-goal-state="checked"]');
+    await checked.waitFor();
+    assert.match(await checked.locator('code').first().innerText(), /add_zero/u);
+    assert.equal(await checked.getByRole('button', { name: '在协作中查看' }).count(), 0, 'a checked goal points at its code, not at collaboration');
+    assert.equal(await page.locator('#detail-panel .result-goals .goal-row[data-goal-state="open"]').getByRole('button', { name: '在协作中查看' }).count(), 1,
+      'an open goal still opens in collaboration');
+    await checked.getByRole('button', { name: '查看通过检查的代码' }).click();
+    const viewer = page.locator('#trajectory-viewer[open]');
+    await viewer.waitFor();
+    assert.equal(await page.locator('#detail-tab-trajectory').getAttribute('aria-selected'), 'true');
+    assert.match(await viewer.locator('.side-viewer-heading').innerText(), /add_zero[\s\S]*Lean 检查通过/u);
+    assert.match(await viewer.locator('.trajectory-code-text').innerText(), /theorem add_zero \(n : Nat\) : n \+ 0 = n := by rfl/u);
+    const opened = page.locator('#detail-panel .trajectory-step[data-kind="attempt"] [data-trajectory-mode="code"][aria-expanded="true"]');
+    assert.equal(await opened.count(), 1, 'the attempt it came from is open beside the code');
+    assert.match(await opened.locator('xpath=ancestor::li[contains(@class,"trajectory-step")]').locator('h4').innerText(), /add_zero/u);
+    await page.screenshot({ path: path.join(output, 'checked-code-desktop.png') }); screenshots.push('checked-code-desktop.png');
   });
 
   await scenario('the result views read in English', async h => {

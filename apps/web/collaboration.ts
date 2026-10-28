@@ -104,8 +104,16 @@ export type WebInspection = {
   groups: { group: WebPlanGroup; turns: number; busy?: number }[]; tasks: WebInspectedTask[]; workers: WebInspectedWorker[];
   statementReviews: WebStatementReview[];
   review?: { commit: string; sourceDigest: string; status: string; workerId?: string; assignmentId?: string; summary?: string };
-  edits: WebHumanEdit[]; error?: string; failureCategory?: string;
+  edits: WebHumanEdit[]; planApproval?: WebPlanApproval; error?: string; failureCategory?: string;
 };
+/** Whether dispatch waits for a person to approve the first accepted plan (runs started with that option). */
+export type WebPlanApproval = {
+  required: boolean; status: 'not-required' | 'awaiting-plan' | 'pending' | 'approved'; planVersion?: string;
+  requestedAt?: number; approvedId?: string; approvedVersion?: string; approvedAt?: number;
+  rejections: { id: string; reason: string; planVersion?: string; at: number }[];
+  leadRevising: boolean;
+};
+export type WebPlanApprovalInput = { id: string; planVersion: string };
 export type WebDelivery = {
   id: string; producer: string; taskId?: string; taskDigest?: string; kind: string; status: string;
   statement: string; premises: readonly string[]; dependencies: WebTaskReference[]; remainingObligations: readonly string[];
@@ -145,6 +153,7 @@ export type WebObservation = {
 export type WebCommand =
   | { type: 'edit-preview' | 'edit'; proposal: WebPlanProposal }
   | { type: 'guidance'; guidance: WebGuidanceInput }
+  | { type: 'plan-approval'; approval: WebPlanApprovalInput }
   | { type: 'capture' };
 export type WebCommandResult = {
   id: string; status: string; baseVersion?: string; planVersion?: string; reason?: string;

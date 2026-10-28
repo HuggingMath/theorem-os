@@ -9,7 +9,7 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { keyMemoryStorageKey } from '../apps/web/client/keyMemory';
-import { closeSettings, openSettings } from './web-ui-controls';
+import { closeSettings, newResearch, openSettings } from './web-ui-controls';
 import { freePort, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite } from './web-scenario';
 
 /**
@@ -56,7 +56,7 @@ const storage = (page: Page) => page.evaluate(key => ({ tab: sessionStorage.getI
 const keyField = (page: Page) => page.locator('#api-key').inputValue();
 async function submit(h: Harness, task: string, options: { key?: string; remember?: boolean } = {}) {
   const { page } = h, before = h.posted.length;
-  await page.locator('#new-research').click();
+  await newResearch(page);
   await page.locator('#task').fill(task);
   await openSettings(page);
   if (options.key !== undefined) await page.locator('#api-key').fill(options.key);
@@ -93,13 +93,13 @@ try {
     assert.equal(await page.locator('#forget-key').isVisible(), true);
     await page.screenshot({ path: path.join(output, 'remembered-1440.png') }); screenshots.push('remembered-1440.png');
     await closeSettings(page);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor();
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await openSettings(page); assert.equal(await keyField(page), credential, 'a reload in the same tab keeps it'); await closeSettings(page);
     // Draft storage holds no key even while one is remembered.
     stored = await storage(page);
     assert.equal(stored.session.split(credential).length - 1, 1, 'only the memory entry holds the key');
     const other = await context.newPage();
-    await other.goto(origin); await other.locator('#submit-run:enabled').waitFor();
+    await other.goto(origin); await other.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await openSettings(other);
     assert.equal(await keyField(other), '', 'another tab does not get it'); assert.equal(await other.locator('#remember-key').isChecked(), false);
     await other.close();
@@ -108,7 +108,7 @@ try {
   await scenario('another provider address gets no key, and switching back offers it again', async h => {
     const { page } = h;
     await submit(h, 'First', { key: credential, remember: true });
-    await page.locator('#new-research').click(); await openSettings(page);
+    await newResearch(page); await openSettings(page);
     await page.locator('#provider').selectOption('second');
     assert.equal(await keyField(page), '', 'not offered to another address'); assert.equal(await page.locator('#remember-key').isChecked(), false);
     await page.locator('#api-key').fill('sk-typed-for-second');
@@ -124,7 +124,7 @@ try {
   await scenario('unticking or "forget" clears it at once', async h => {
     const { page } = h;
     await submit(h, 'First', { key: credential, remember: true });
-    await page.locator('#new-research').click(); await openSettings(page);
+    await newResearch(page); await openSettings(page);
     await page.locator('#remember-key').setChecked(false);
     assert.equal((await storage(page)).tab, null, 'unticking forgets');
     await page.locator('#remember-key').setChecked(true);
@@ -157,7 +157,7 @@ try {
   for (const width of [375, 320]) await scenario(`the option fits ${width}px`, async h => {
     const { page } = h;
     await submit(h, 'First', { key: credential, remember: true });
-    await page.locator('#new-research').click(); await openSettings(page);
+    await newResearch(page); await openSettings(page);
     await page.locator('#forget-key').scrollIntoViewIfNeeded();
     for (const selector of ['.key-memory-option', '#forget-key', '#key-memory-note']) {
       const box = await page.locator(selector).boundingBox();

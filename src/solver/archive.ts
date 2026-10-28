@@ -23,7 +23,7 @@ export type DispatchWaitObservation = {
   endedAt?: number;
   planVersion?: string;
   stage: 'm3-no-ready' | 'host-filtered' | 'm5-no-selection' | 'budget-gated' | 'lead-unavailable' |
-    'dependency-blocked' | 'integration-queue' | 'synchronizing';
+    'dependency-blocked' | 'integration-queue' | 'synchronizing' | 'plan-approval';
   gate?: 'time-limit' | 'turn-limit' | 'model-disabled';
   candidateCount: number;
   omittedCandidates: number;
@@ -66,6 +66,8 @@ export type SolverRunState = {
   providerProfileDigest?: string;
   methodDigest?: string;
   coordination?: 'cooperative' | 'independent';
+  /** Workers wait after the first accepted plan until a human approves that exact version. */
+  planApproval?: boolean;
   moduleConfiguration?: { id: string; versions: Record<string, string> };
   retrievalDigest?: string;
   knowledgeDigest?: string;
@@ -121,7 +123,7 @@ const record = z.record(z.unknown());
 const safeCount = count.max(Number.MAX_SAFE_INTEGER);
 const dispatchWaitObservation = z.object({ observedAt: safeCount, endedAt: safeCount.optional(), planVersion: z.string().optional(),
   stage: z.enum(['m3-no-ready', 'host-filtered', 'm5-no-selection', 'budget-gated', 'lead-unavailable',
-    'dependency-blocked', 'integration-queue', 'synchronizing']),
+    'dependency-blocked', 'integration-queue', 'synchronizing', 'plan-approval']),
   gate: z.enum(['time-limit', 'turn-limit', 'model-disabled']).optional(),
   candidateCount: safeCount, omittedCandidates: safeCount,
   candidates: z.array(z.object({ taskId: z.string(), taskDigest: z.string(),
@@ -285,6 +287,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   })) }).optional(),
   knowledgeUses: z.array(knowledgeUse.extend({ workerId: z.string(), commit: z.string() })).optional(),
   coordination: z.enum(['cooperative', 'independent']).optional(),
+  planApproval: z.boolean().optional(),
   workers: z.array(research.extend({ id: z.string(), role, sessionRole: role.optional(),
     sessionLeadMode: z.enum(['planning', 'coordination']).optional(),
     sessionAssignmentId: z.string().optional(),
@@ -300,6 +303,11 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     proofImports: z.array(proofImportRecordSchema).optional(),
     initialPlanPublication: planPublication.optional(), planPublication: planPublication.optional(),
     lastLeadPauseInputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+    planApproval: z.object({ requestedAt: safeCount.optional(), requestedVersion: z.string().optional(),
+      approvedId: z.string().optional(), approvedVersion: z.string().optional(), approvedAt: safeCount.optional(),
+      rejections: z.array(z.object({ id: z.string(), reason: z.string().max(200), planVersion: z.string().optional(),
+        at: safeCount }).strict()).max(16).optional(),
+      guidanceIds: z.array(z.string()).max(512).optional(), revisionAt: safeCount.optional() }).strict().optional(),
     goalPathStall: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/u), active: z.boolean(), at: safeCount,
       goalIds: z.array(z.string()), taskIds: z.array(z.string()).max(16), answeredAt: safeCount.optional(),
       unanswered: safeCount.optional(), ignoredAt: safeCount.optional(),

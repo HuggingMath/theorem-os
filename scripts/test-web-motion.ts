@@ -9,7 +9,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun } from '../apps/web/shared';
-import { closeHistory, closeSettings, openHistory, openSettings, showArtifacts, showChat, withSettings } from './web-ui-controls';
+import { closeHistory, closeSettings, historyDocked, openHistory, openSettings, selectHistoryRun, showArtifacts, showChat, withSettings } from './web-ui-controls';
 import { freePort, type RequestRecord, scenarioFailure, type ScenarioSuite, startBrowser, webScenario } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,10 +46,10 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_CONCURRENCY: '8' }), runner);
 type MotionStart = { node: Element; kind: string };
 type MotionProbe = { starts: MotionStart[]; observer: MutationObserver };
-type MotionEntry = { kind: string; target: string; sequence: string | null; message: string | null; panel: boolean; code: boolean; status: boolean; dialog: boolean };
+type MotionEntry = { kind: string; target: string; panel: boolean; code: boolean; status: boolean; dialog: boolean };
 type Harness = { page: Page; context: BrowserContext; requests: RequestRecord[]; runIds: string[] };
 type ReadingProbe = { nodes: Record<string, Element | null>; text: Node | null; focus: Element | null; selection: string;
-  scrolls: Record<string, { node: Element; top: number; left: number }>; sequences: string[] };
+  scrolls: Record<string, { node: Element; top: number; left: number }> };
 type Check = { name: string; elapsedMs: number; requests: RequestRecord[] };
 const checks: Check[] = [];
 const samples: Array<{ name: string; entries: MotionEntry[] }> = [];
@@ -78,11 +78,9 @@ async function entries(page: Page, since: number): Promise<MotionEntry[]> {
   await nextPaint(page);
   return page.evaluate(since => (window as unknown as { __motionProbe: MotionProbe }).__motionProbe.starts.slice(since).map(({ node, kind }) => ({
     kind, target: node.id || node.getAttribute('class') || node.tagName,
-    sequence: node.closest<HTMLElement>('.timeline-event')?.dataset.sequence ?? null,
-    message: node.closest('.chat-message')?.classList.contains('user') ? 'user' : node.closest('.chat-message') ? 'assistant' : null,
     panel: node.id === 'detail-panel',
     code: Boolean(node.closest('.source-code-grid,.draft-source-scroll,.diff-scroll') || node.querySelector('.source-code-grid,.draft-source-scroll,.diff-scroll')),
-    status: Boolean(node.closest('.detail-statusline .badge,.chat-result') || node.matches('.detail-statusline .badge,.chat-result')),
+    status: node.matches('.detail-statusline .badge'),
     dialog: node instanceof HTMLDialogElement,
   })), since);
 }
@@ -99,31 +97,24 @@ async function screenshot(page: Page, name: string) {
 }
 
 async function rememberReading(page: Page) {
-  // Reading history starts by expanding the folded older steps.
-  const fold = page.locator('#conversation [data-timeline-fold][aria-expanded="false"]');
-  if (await fold.count()) { await fold.click(); await settled(page); }
-  await page.locator('#conversation [data-chat-action="source"]').focus();
+  // Reading the source: a scrolled, focused editor with a selection in it.
+  await page.locator('#detail-panel .code-scroll').focus();
   await page.evaluate(() => {
-    const conversation = document.querySelector('#conversation-scroll')!;
     const code = document.querySelector('#detail-panel .code-scroll')!;
-    conversation.scrollTop = 120; code.scrollTop = 120; code.scrollLeft = 80;
-    const text = document.querySelector('#conversation .chat-message.user .message-body')!.firstChild!;
+    code.scrollTop = 120; code.scrollLeft = 80;
+    const text = document.querySelector('#detail-panel .source-code code')!.firstChild!;
     const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 7);
     getSelection()!.removeAllRanges(); getSelection()!.addRange(range);
   });
   await nextPaint(page);
   await page.evaluate(() => {
-    const selectors = { user: '#conversation .chat-message.user', attachment: '#conversation [data-chat-action="source"]',
-      assistant: '#conversation .chat-message.assistant', timeline: '#conversation .research-timeline',
-      code: '#detail-panel .code-scroll code', panel: '#detail-panel' };
+    const selectors = { heading: '.detail-heading', tabs: '.detail-tabs', code: '#detail-panel .source-code code', panel: '#detail-panel' };
     const nodes = Object.fromEntries(Object.entries(selectors).map(([name, selector]) => [name, document.querySelector(selector)]));
-    const scrolls = Object.fromEntries(['#conversation-scroll', '#detail-panel .code-scroll'].map(selector => {
+    const scrolls = Object.fromEntries(['#detail-panel .code-scroll'].map(selector => {
       const node = document.querySelector(selector)!; return [selector, { node, top: node.scrollTop, left: node.scrollLeft }];
     }));
-    const rows = Array.from(document.querySelectorAll<HTMLElement>('#conversation .timeline-event'));
-    for (const row of rows) nodes[`event-${row.dataset.sequence}`] = row;
     (window as unknown as { __readingProbe: ReadingProbe }).__readingProbe = { nodes, text: nodes.code?.firstChild ?? null,
-      focus: document.activeElement, selection: getSelection()?.toString() ?? '', scrolls, sequences: rows.map(row => row.dataset.sequence!) };
+      focus: document.activeElement, selection: getSelection()?.toString() ?? '', scrolls };
   });
 }
 
@@ -147,7 +138,7 @@ async function readingIntact(page: Page, sameCodeText = true) {
 async function immediate(page: Page, reduced = true) {
   const result = await page.evaluate(() => {
     const starts = (window as unknown as { __motionProbe: MotionProbe }).__motionProbe.starts;
-    const nodes = Array.from(new Set([...starts.map(item => item.node), ...Array.from(document.querySelectorAll('.chat-message,.timeline-event,#detail-panel,dialog[open]'))]))
+    const nodes = Array.from(new Set([...starts.map(item => item.node), ...Array.from(document.querySelectorAll('#detail-panel,.detail-statusline .badge,dialog[open]'))]))
       .filter(node => node.isConnected && node.getClientRects().length);
     return { marked: document.querySelectorAll('[data-motion]').length,
       cssAnimations: document.getAnimations().filter(animation => animation.playState === 'running').length,
@@ -188,17 +179,25 @@ async function createRun(h: Harness) {
   assert.equal(response.status(), 201);
   const { run } = await response.json() as { run: WebRun };
   h.runIds.push(run.id);
-  await h.page.locator('#conversation .chat-message.user').waitFor();
+  await h.page.locator(`[data-run-id="${run.id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+  await h.page.locator('body[data-view="run"] #detail-panel').waitFor();
   assert.ok(controls.has(run.id));
-  await h.page.waitForFunction(() => document.querySelector('#conversation')?.textContent?.includes('Motion fixture solving started'));
+  await h.page.waitForFunction(() => document.querySelector('#conversation-announcement')?.textContent?.includes('Motion fixture solving started'));
   return { run, control: controls.get(run.id)! };
 }
 
+/** Activity reaches the selected run; the announcement repeats its newest step. */
 async function activity(page: Page, control: Control, message: string) {
   control.progress(message);
-  await page.waitForFunction(message => Array.from(document.querySelectorAll('#conversation .timeline-text>span'))
-    .some(node => node.textContent === message), message);
-  return page.locator('#conversation .timeline-event').filter({ hasText: message });
+  await page.waitForFunction(message => document.querySelector('#conversation-announcement')?.textContent?.includes(message), message);
+}
+
+/** Opens a tab and reports, in the same task as the click, whether its panel started an entrance. */
+async function enterTab(page: Page, tab: string) {
+  return page.evaluate(tab => {
+    document.querySelector<HTMLElement>(`#detail-tab-${tab}`)!.click();
+    return document.querySelector<HTMLElement>('#detail-panel')!.dataset.motion ?? null;
+  }, tab);
 }
 
 const scenario = (name: string, run: (h: Harness) => Promise<void>, reducedMotion: 'reduce' | 'no-preference' = 'no-preference') =>
@@ -219,7 +218,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, reducedMotio
       (window as unknown as { __motionProbe: MotionProbe }).__motionProbe = { starts, observer };
     }),
     harness: (page, context) => ({ page, context, requests: [], runIds: [] }), routes: 'observe',
-    open: async ({ page }) => { await page.goto(origin); await page.locator('#submit-run:enabled').waitFor(); await settled(page); },
+    open: async ({ page }) => { await page.goto(origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await settled(page); },
     timeout: { label: 'Motion', seconds: 40 }, failure: { capture: screenshot },
     cleanup: ({ runIds }) => { for (const id of runIds) controls.get(id)?.finish({ status: 'incomplete', proof: source, report: { reason: 'Local fixture cleanup' } }); },
   });
@@ -237,49 +236,47 @@ async function writeReport(status: 'passed' | 'failed', error?: unknown) {
 try {
   browser = await startBrowser(service.server, port);
 
-  await scenario('New conversation messages animate once; ordinary list polling never replays their entrance', async h => {
+  await scenario('Opening a new run cues only its status; ordinary list polling never replays an entrance', async h => {
     const since = await offset(h.page);
     await createRun(h);
     await settled(h.page);
-    const entered = await record(h.page, 'conversation-entrance', since);
-    for (const role of ['user', 'assistant']) assert.equal(entered.filter(entry => entry.message === role && entry.target.split(' ').includes('chat-message')).length,
-      1, `${role} message must enter exactly once`);
+    const entered = (await record(h.page, 'run-opened', since)).filter(entry => !entry.dialog);
+    assert.equal(entered.every(entry => entry.status), true, 'opening a run may only cue its status change');
     const afterEntrance = await offset(h.page);
     const listed = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
     await h.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await listed; await nextPaint(h.page); await settled(h.page);
     assert.deepEqual(await record(h.page, 'unchanged-poll', afterEntrance), [], 'an unchanged poll replayed an entrance or status animation');
     assert.equal(h.requests.filter(request => request.method === 'POST').length, 1);
-    await screenshot(h.page, 'desktop-conversation.png');
+    await screenshot(h.page, 'desktop-run.png');
   });
 
-  await scenario('Following animates only new activity; history reading keeps messages, focus, selection and both reading positions intact', async h => {
+  await scenario('New activity never animates; reading the source or earlier steps keeps focus, selection and reading positions intact', async h => {
     const { control } = await createRun(h);
-    await h.page.locator('#detail-tab-source').click(); await settled(h.page);
     for (let index = 0; index < 28; index++) control.progress(`Existing research step ${index + 1}`);
-    await h.page.waitForFunction(() => document.querySelectorAll('#conversation .timeline-event').length >= 28);
-    await settled(h.page);
-    const oldSequences = await h.page.locator('#conversation .timeline-event').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.sequence!));
-    const since = await offset(h.page);
-    const row = await activity(h.page, control, 'New isolated motion event');
-    const sequence = await row.getAttribute('data-sequence');
-    await settled(h.page);
-    const entered = await record(h.page, 'appended-event', since);
-    assert.equal(entered.filter(entry => entry.sequence === sequence).length, 1, 'the new followed event must enter once');
-    assert.equal(entered.some(entry => entry.sequence && oldSequences.includes(entry.sequence)), false, 'an old event replayed');
-    assert.equal(entered.some(entry => entry.message && !entry.sequence), false, 'an existing message replayed');
-    assert.equal(entered.some(entry => entry.code || entry.panel), false, 'appending activity animated the source');
+    await activity(h.page, control, 'Existing research step 29');
+    await h.page.locator('#detail-tab-source').click(); await settled(h.page);
     await rememberReading(h.page);
+    const since = await offset(h.page);
+    await activity(h.page, control, 'New activity while reading the source');
+    await nextPaint(h.page); await settled(h.page); await readingIntact(h.page);
+    const entered = await record(h.page, 'appended-during-source-reading', since);
+    assert.equal(entered.some(entry => entry.code || entry.panel), false, 'appending activity animated the source');
+    await screenshot(h.page, 'desktop-reading.png');
+    await h.page.locator('#detail-tab-events').click(); await settled(h.page);
+    const scroll = h.page.locator('#detail-panel .activity-scroll');
+    await scroll.evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event('scroll')); }); await nextPaint(h.page);
+    const top = await scroll.evaluate(node => node.scrollTop);
     const readingSince = await offset(h.page);
     await activity(h.page, control, 'New activity while reading earlier steps');
-    await settled(h.page); await readingIntact(h.page);
+    await nextPaint(h.page); await settled(h.page);
+    assert.equal(await scroll.evaluate(node => node.scrollTop), top, 'appending activity moved the earlier steps being read');
     assert.deepEqual(await record(h.page, 'appended-during-history-reading', readingSince), [], 'appending during history reading scheduled motion');
-    await screenshot(h.page, 'desktop-reading.png');
   });
 
-  await scenario('Explicit non-source tabs transition; live candidate refresh preserves the source and does not animate code', async h => {
+  await scenario('Explicit tab changes transition; live candidate refresh preserves the source and does not animate code', async h => {
     const { control } = await createRun(h);
     await settled(h.page);
-    for (const tab of ['overview', 'report', 'events']) {
+    for (const tab of ['collaboration', 'events', 'result']) {
       const since = await offset(h.page);
       await h.page.locator(`#detail-tab-${tab}`).click();
       await settled(h.page);
@@ -323,67 +320,61 @@ try {
     assert.deepEqual(await record(h.page, 'unchanged-terminal-poll', next), []);
   });
 
-  await scenario('Reduced motion displays messages, events, panels and dialogs immediately with no active tween', async h => {
-    const { control } = await createRun(h);
-    await activity(h.page, control, 'Reduced motion research update');
-    for (const tab of ['overview', 'report', 'events', 'source']) await h.page.locator(`#detail-tab-${tab}`).click();
+  await scenario('Reduced motion displays panels and dialogs immediately with no active tween', async h => {
+    await createRun(h);
+    for (const tab of ['collaboration', 'events', 'source', 'result']) await h.page.locator(`#detail-tab-${tab}`).click();
+    await immediate(h.page);
     await openSettings(h.page); await immediate(h.page); await closeSettings(h.page);
-    await openHistory(h.page); await immediate(h.page); await closeHistory(h.page);
     await h.page.setViewportSize({ width: 320, height: 812 });
+    await openHistory(h.page); await immediate(h.page); await closeHistory(h.page);
     await showArtifacts(h.page); await immediate(h.page); await fits(h.page);
     await showChat(h.page); await immediate(h.page); await fits(h.page);
     assert.deepEqual(await record(h.page, 'initial-reduced-motion', 0), [], 'reduced motion scheduled an application tween');
     await screenshot(h.page, 'mobile-reduced.png');
   }, 'reduce');
 
-  await scenario('Changing reduced motion during an entrance clears it and future content remains immediately visible', async h => {
-    const { control } = await createRun(h);
+  await scenario('Changing reduced motion during an entrance clears it and later tabs open immediately', async h => {
+    await createRun(h);
     await settled(h.page);
-    await activity(h.page, control, 'Entrance interrupted by reduced motion');
-    await h.page.waitForFunction(() => Boolean(document.querySelector('#conversation .timeline-event[data-motion]')));
+    assert.equal(await enterTab(h.page, 'events'), 'panel');
     await h.page.emulateMedia({ reducedMotion: 'reduce' });
     await settled(h.page); await immediate(h.page);
     const since = await offset(h.page);
-    await activity(h.page, control, 'New content after reduced motion changed');
+    assert.equal(await enterTab(h.page, 'source'), null);
     await immediate(h.page);
     assert.deepEqual(await record(h.page, 'dynamic-reduced-motion', since), []);
     await screenshot(h.page, 'desktop-dynamic-reduced.png');
     await h.page.emulateMedia({ reducedMotion: 'no-preference' });
     const restoredSince = await offset(h.page);
-    const restored = await activity(h.page, control, 'Only future content animates after motion is restored');
-    const restoredSequence = await restored.getAttribute('data-sequence');
+    assert.equal(await enterTab(h.page, 'result'), 'panel', 'motion must resume for the next tab change');
     await settled(h.page);
     const resumed = await record(h.page, 'restored-motion', restoredSince);
-    assert.equal(resumed.filter(entry => entry.sequence === restoredSequence).length, 1, 'motion must resume for new followed activity');
-    assert.equal(resumed.some(entry => entry.sequence && entry.sequence !== restoredSequence), false, 'restoring motion replayed old activity');
+    assert.equal(resumed.filter(entry => entry.panel).length, 1, 'restoring motion must animate only the new tab');
     const detachedSince = await offset(h.page);
-    await h.page.evaluate(() => {
-      const observer = new MutationObserver(records => {
-        const target = records.map(record => record.target).find(node => node instanceof HTMLElement && node.matches('.timeline-event[data-motion]')
-          && node.textContent?.includes('Detached entrance cleaned by pagehide')) as HTMLElement | undefined;
-        if (!target) return;
-        const wasMarked = target.hasAttribute('data-motion');
-        target.remove();
-        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
-        (window as unknown as { __detachedCleanup: unknown }).__detachedCleanup = { wasMarked, marked: target.hasAttribute('data-motion'),
-          transform: target.style.transform, opacity: target.style.opacity };
-        observer.disconnect();
-      });
-      observer.observe(document.querySelector('#conversation')!, { subtree: true, attributes: true, attributeFilter: ['data-motion'] });
+    // A target removed mid-entrance is still reverted synchronously; it is put back so the page stays whole.
+    const detached = await h.page.evaluate(() => {
+      document.querySelector<HTMLElement>('#detail-tab-events')!.click();
+      const panel = document.querySelector<HTMLElement>('#detail-panel')!, parent = panel.parentElement!, next = panel.nextSibling;
+      const wasMarked = panel.hasAttribute('data-motion');
+      panel.remove();
+      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+      const result = { wasMarked, marked: panel.hasAttribute('data-motion'), transform: panel.style.transform, opacity: panel.style.opacity };
+      parent.insertBefore(panel, next);
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+      return result;
     });
-    control.progress('Detached entrance cleaned by pagehide');
-    await h.page.waitForFunction(() => Boolean((window as unknown as { __detachedCleanup?: unknown }).__detachedCleanup));
-    const detached = await h.page.evaluate(() => (window as unknown as { __detachedCleanup: unknown }).__detachedCleanup);
     assert.deepEqual(detached, { wasMarked: true, marked: false, transform: '', opacity: '' }, 'global motion cleanup must synchronously revert an unexpectedly detached target');
     await record(h.page, 'detached-target-cleanup', detachedSince);
   });
 
   await scenario('Settings, history and mobile view entrances stay within narrow and desktop viewports', async h => {
-    const { control } = await createRun(h); await settled(h.page);
+    const { run, control } = await createRun(h); await settled(h.page);
     for (const width of [1440, 375, 320]) {
       await h.page.setViewportSize({ width, height: width > 850 ? 900 : 812 });
       await showChat(h.page); await settled(h.page);
-      for (const [open, close, dialog] of [[openSettings, closeSettings, '#run-settings'], [openHistory, closeHistory, '#history-dialog']] as const) {
+      // Wider than 850px the history is the docked column, which has no entrance of its own.
+      const dialogs = [[openSettings, closeSettings, '#run-settings'], [openHistory, closeHistory, '#history-dialog']] as const;
+      for (const [open, close, dialog] of historyDocked(h.page) ? dialogs.slice(0, 1) : dialogs) {
         const since = await offset(h.page);
         await open(h.page); await fits(h.page, dialog); await settled(h.page); await fits(h.page, dialog);
         const entered = await record(h.page, `${dialog}-${width}`, since);
@@ -391,25 +382,23 @@ try {
         await close(h.page); await settled(h.page);
       }
       await showArtifacts(h.page); await fits(h.page); await settled(h.page);
-      if (width <= 850) {
-        const hiddenSince = await offset(h.page);
-        await activity(h.page, control, `Activity received in the hidden ${width}px conversation`);
-        await settled(h.page);
-        const hidden = await record(h.page, `hidden-mobile-activity-${width}`, hiddenSince);
-        assert.equal(hidden.some(entry => entry.sequence || entry.message), false, 'hidden mobile content must append without entrance motion');
-      }
       const returningSince = await offset(h.page);
       await showChat(h.page); await fits(h.page); await settled(h.page);
-      if (width <= 850) assert.equal((await record(h.page, `returning-mobile-conversation-${width}`, returningSince))
-        .some(entry => entry.sequence || entry.message), false, 'returning to the conversation must not replay existing messages or events');
+      assert.equal((await record(h.page, `returning-compose-${width}`, returningSince)).every(entry => entry.kind === 'workspace'), true,
+        'returning to the new-research page may only move the workspace');
+      await selectHistoryRun(h.page, run.id); await settled(h.page);
+      const activitySince = await offset(h.page);
+      await activity(h.page, control, `Activity received at ${width}px`);
+      await nextPaint(h.page); await settled(h.page);
+      assert.equal((await record(h.page, `run-activity-${width}`, activitySince)).some(entry => entry.panel || entry.code), false,
+        'activity must reach the shown run without an entrance');
       await screenshot(h.page, `views-${width}.png`);
     }
   });
 
   await scenario('Hiding or leaving a page finishes active entrances and never leaves content transformed', async h => {
-    const { control } = await createRun(h); await settled(h.page);
-    await activity(h.page, control, 'Entrance interrupted by hidden page');
-    await h.page.waitForFunction(() => Boolean(document.querySelector('#conversation .timeline-event[data-motion]')));
+    await createRun(h); await settled(h.page);
+    assert.equal(await enterTab(h.page, 'events'), 'panel');
     await h.page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { configurable: true, value: true });
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
@@ -421,8 +410,7 @@ try {
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await activity(h.page, control, 'Entrance interrupted by pagehide');
-    await h.page.waitForFunction(() => Boolean(document.querySelector('#conversation .timeline-event[data-motion]')));
+    assert.equal(await enterTab(h.page, 'collaboration'), 'panel');
     await h.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
     await settled(h.page); await immediate(h.page, false);
     await screenshot(h.page, 'desktop-inactive.png');

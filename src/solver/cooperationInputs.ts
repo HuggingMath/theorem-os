@@ -15,6 +15,7 @@ import { directDeliveryRejections, rejectionCode, HumanEditRecord, TaskVersions,
 import { CooperationPlanning } from './cooperationPlanning';
 import { ResearchAdmissionError } from './researchAdmission';
 import { acceptContextCheckpoint, contextCheckpointRejection, contextCheckpointRejectionFeedback, savedContextCheckpoint } from './contextCheckpoint';
+import { MAX_PLAN_APPROVAL_REJECTIONS, planApprovalInputSchema, planApprovalLog, planApprovalStatus, type PlanApprovalInput } from './planApproval';
 
 /** Worker delivery intake. */
 export abstract class CooperationInputs extends CooperationPlanning {
@@ -114,6 +115,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
       }
       advance(entry.offset);
     }
+    this.readPlanApprovals(cursors);
     await this.readPlanDelivery(cursors);
     for (const worker of this.input.workers) {
       if (this.deliveryChecks.has(worker.id)) continue;
@@ -129,6 +131,35 @@ export abstract class CooperationInputs extends CooperationPlanning {
       }).catch(() => {});
     }
     return new Map(this.deliveryChecks);
+  }
+  /** Human approvals queued by queuePlanApproval; each names the exact plan version it opens dispatch for. */
+  private readPlanApprovals(cursors: Record<string, number>) {
+    const file = planApprovalLog(path.join(path.dirname(this.lead.worktree), 'state.json'));
+    for (const entry of readDeliveryLines(file, cursors.planApprovals ?? 0).entries!) {
+      this.input.signal.throwIfAborted();
+      let parsed: PlanApprovalInput | undefined;
+      try { parsed = planApprovalInputSchema.parse(JSON.parse(entry.line ?? '')); } catch { parsed = undefined; }
+      if (entry.line?.trim()) this.applyPlanApproval(parsed);
+      cursors.planApprovals = entry.offset; this.input.save();
+    }
+  }
+  private applyPlanApproval(approval: PlanApprovalInput | undefined) {
+    const record = this.archive.planApproval ??= {};
+    if (approval && record.approvedId === approval.id) return;
+    const status = planApprovalStatus(this.input.state);
+    const reason = !approval ? 'math_plan_approval_invalid' : status === 'not-required' ? 'math_plan_approval_not_required' :
+      status === 'approved' ? 'math_plan_approval_already_approved' : status === 'awaiting-plan' ? 'math_plan_approval_plan_unavailable' :
+      approval.planVersion !== this.archive.planVersion ? 'math_plan_approval_version_conflict' : undefined;
+    if (!approval || reason) {
+      const rejection = { id: approval?.id ?? crypto.randomUUID(), reason: reason!, at: Date.now(),
+        ...(approval ? { planVersion: approval.planVersion } : {}) };
+      record.rejections = [...record.rejections ?? [], rejection].slice(-MAX_PLAN_APPROVAL_REJECTIONS);
+      this.input.emit('plan_approval_rejected', rejection);
+    } else {
+      Object.assign(record, { approvedId: approval.id, approvedVersion: approval.planVersion, approvedAt: Date.now() });
+      this.input.emit('plan_approved', { id: approval.id, planVersion: approval.planVersion });
+    }
+    this.changed();
   }
   private async readPlanDelivery(cursors: Record<string, number>) {
     const active = this.active.get(this.lead.id), action = active?.action;

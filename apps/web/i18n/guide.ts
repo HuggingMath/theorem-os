@@ -37,8 +37,8 @@ export const guide: Record<string, string> = {
   "阶段进度、轮次、耗时和 Token 用量。": "Stage progress, turns, time and token usage.",
   "结论、每个目标定理的检查记录、卡住的地方，以及证明结构。": "The verdict, the checks for each target theorem, where the work got stuck, and the proof outline.",
   "按时间排列的完整事件记录。": "Every event in time order.",
-  "运行时间较长时，可以开启「结束时通知我」，研究结束时浏览器会提醒你。手机上用顶部的「对话 / 工作区」切换两栏。":
-    "For a long run, turn on \"Notify me when done\" and the browser will tell you when the research finishes. On a phone, switch between the two panes with Chat / Workspace at the top.",
+  "运行时间较长时，可以开启「结束时通知我」，研究结束时浏览器会提醒你；开了「先审计划」的研究，计划拟好等你批准时也会提醒。手机上用顶部的「对话 / 工作区」切换两栏。":
+    "For a long run, turn on \"Notify me when done\" and the browser will tell you when the research finishes, and for a run with \"Review plan first\" also when its plan is ready for your approval. On a phone, switch between the two panes with Chat / Workspace at the top.",
   "所有目标定理都通过了独立验收。这是唯一算数的结论。": "Every target theorem passed independent acceptance. This is the only verdict that counts.",
   "Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。": "The Agents submitted a candidate proof, but independent acceptance rejected it. The report says which check failed.",
   "到达轮次、时间或用量上限时还没有完成证明。已检查的成果保留在报告里，可以提高预算后重新运行。":

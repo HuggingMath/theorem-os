@@ -62,7 +62,7 @@ const scenario = (name: string, run: (h: ScenarioHarness) => Promise<void>, widt
   context: { viewport: { width, height: width > 850 ? 1000 : 812 }, reducedMotion: 'reduce' },
   harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'Plan operations must stay local' },
   open: async ({ page }) => {
-    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor(); await openSettings(page);
+    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await openSettings(page);
     await page.locator('[data-server-module-library] > summary').click();
     await page.locator('[data-server-plan-refresh]:enabled').waitFor();
   },

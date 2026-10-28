@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
 import type { WebRunInput } from '../apps/web/shared';
-import { fillConfig } from './web-ui-controls';
+import { fillConfig, openTab } from './web-ui-controls';
 import { deferred, freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport,
   type ScenarioHarness, type ScenarioSuite } from './web-scenario';
 
@@ -73,8 +73,12 @@ async function sequence(page: Page, value: number, timeout = 10_000) {
   await page.waitForFunction(value => document.querySelector('[data-collab-observation]')?.textContent?.includes(`观察 #${value} ·`), value, { timeout });
 }
 async function live(page: Page) { await page.waitForFunction(() => (window as unknown as { __liveSync: Probe }).__liveSync.events > 0); }
+/** A new run opens on 结果; these checks read the task graph, so they move to 协作 once it is selected. */
+async function collaboration(page: Page, id: string) {
+  await page.locator(`[data-run-id="${id}"][aria-pressed="true"]`).waitFor({ state: 'attached' }); await openTab(page, 'collaboration');
+}
 async function create(h: Harness) {
-  const run = await postRun(h, input); h.runIds.push(run.id);
+  const run = await postRun(h, input); h.runIds.push(run.id); await collaboration(h.page, run.id);
   await h.page.locator('.collab-graph [data-collab-task="original"]').waitFor(); await settled(h.page); return run;
 }
 function scenario(name: string, run: (h: Harness) => Promise<void>, options: { unavailable?: boolean; interruptFirst?: boolean } = {}) {
@@ -167,10 +171,10 @@ try {
     await live(h.page); const run = await create(h), control = controls.get(run.id)!;
     const other = await h.context.newPage();
     try {
-      await other.goto(origin); await live(other); await sequence(other, control.observation.sequence);
+      await other.goto(origin); await live(other); await collaboration(other, run.id); await sequence(other, control.observation.sequence);
       control.observation.inspection.tasks[0]!.owner = 'shared-session-update'; control.emit();
       await Promise.all([sequence(h.page, control.observation.sequence, 1500), sequence(other, control.observation.sequence, 1500)]);
-      await h.page.locator('[data-action="cancel"]').click();
+      await h.page.locator('[data-action="cancel"]').click(); await h.page.locator('#confirm-cancel-run').click();
       await other.waitForFunction(() => document.querySelector('.detail-statusline .badge')?.getAttribute('data-status')?.startsWith('cancelled:'));
       assert.equal(await other.locator('[data-action="cancel"]').count(), 0);
     } finally { await other.close(); }
@@ -193,7 +197,7 @@ try {
     await page.waitForFunction(() => (window as unknown as { __liveSync: Probe }).__liveSync.errors > 0);
     const initial = await probe(page);
     const run = await postRun(h, input); h.runIds.push(run.id);
-    const control = controls.get(run.id)!;
+    const control = controls.get(run.id)!; await collaboration(page, run.id);
     control.observation.inspection.tasks[0]!.owner = 'changed-during-reconnect'; control.emit();
     await page.waitForFunction(events => (window as unknown as { __liveSync: Probe }).__liveSync.events > events, initial.events);
     await sequence(page, control.observation.sequence, 1500);
@@ -238,15 +242,24 @@ try {
     };
     await page.locator('#submit-run').click(); await held.promise;
     try {
-      const control = controls.get(createdId)!; control.observation.inspection.tasks[0]!.owner = 'ahead-of-post-response'; control.emit();
-      await sequence(page, control.observation.sequence, 1500);
+      // The composer stays until the response settles the outcome; the newer stream state reaches the list first.
+      const control = controls.get(createdId)!;
+      const streamed = page.waitForResponse(async response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET'
+        && response.status() === 200 && (await response.text()).includes('ahead-of-post-response'));
+      control.observation.inspection.tasks[0]!.owner = 'ahead-of-post-response'; control.emit();
+      await streamed; await page.locator(`#run-list [data-run-id="${createdId}"]`).waitFor({ state: 'attached' });
+      assert.equal(await page.locator('body[data-view="draft"]').count(), 1, 'the run must not replace the composer before its response');
       await page.evaluate(() => {
-        const node = document.querySelector('.detail-statusline .badge')!;
+        // Every status the run header shows from now on, including the first one when the run opens.
         const statuses: string[] = []; (window as unknown as { __statuses: string[] }).__statuses = statuses;
-        new MutationObserver(() => statuses.push(node.getAttribute('data-status') ?? '')).observe(node, { attributes: true, attributeFilter: ['data-status'] });
+        const record = () => { const status = document.querySelector('.detail-statusline .badge')?.getAttribute('data-status'); if (status && statuses.at(-1) !== status) statuses.push(status); };
+        new MutationObserver(record).observe(document.querySelector('#run-detail')!, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-status'] });
       });
-      release.resolve(); await page.locator('#submit-run:enabled').waitFor(); await settled(page);
-      assert.equal(await page.evaluate(() => (window as unknown as { __statuses: string[] }).__statuses.some(value => value.startsWith('queued:'))), false);
+      // The new run replaces the composer with the newer streamed state, never the response's older one.
+      release.resolve(); await collaboration(page, createdId); await settled(page);
+      await sequence(page, control.observation.sequence, 1500);
+      const statuses = await page.evaluate(() => (window as unknown as { __statuses: string[] }).__statuses);
+      assert.ok(statuses.length > 0, 'the run header must open'); assert.equal(statuses.some(value => value.startsWith('queued:')), false, statuses.join(','));
       assert.match(await page.locator('.collab-graph [data-collab-task="original"]').innerText(), /ahead-of-post-response/);
       assert.equal(h.requests.filter(r => r.method === 'POST' && r.pathname === '/api/runs').length, 1);
     } finally { release.resolve(); }

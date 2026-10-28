@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
-import type { WebEvent, WebEventDetails, WebProvider, WebRun, WebRunInput, WorkerMessage } from './shared';
-import { parseWebFailure } from './shared';
+import type { WebEvent, WebEventDetails, WebProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
+import { isProgressEvent, parseWebFailure } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
@@ -11,7 +11,8 @@ import { WebKnowledgeService } from './knowledgeService';
 import { freezeModuleConfiguration } from './moduleRegistry';
 import { WebStorageError } from './storage';
 
-type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebProvider; controller: AbortController };
+type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebProvider; controller: AbortController;
+  continuation?: WorkerInput['continuation'] };
 const terminal = (run: WebRun) => ['completed', 'cancelled', 'error'].includes(run.status);
 const clean = <T>(value: T, key: string): T => JSON.parse(key ? JSON.stringify(value).replaceAll(
   JSON.stringify(key).slice(1, -1), '[REDACTED]') : JSON.stringify(value));
@@ -29,11 +30,13 @@ export class WebJobs {
   readonly knowledge: WebKnowledgeService;
   private readonly onAccepted?: (owner: string) => void;
   private readonly onFinished?: (owner: string, run: WebRun) => void;
+  private readonly onPlanWaiting?: (owner: string, run: WebRun) => void;
   constructor(private readonly runner: WebRunner, private readonly config: Pick<WebConfig, 'concurrency' | 'queueLimit'>,
     options: { storage?: WebStorage; knowledge?: WebKnowledgeService; onAccepted?: (owner: string) => void;
-      onFinished?: (owner: string, run: WebRun) => void } = {}) {
+      onFinished?: (owner: string, run: WebRun) => void; onPlanWaiting?: (owner: string, run: WebRun) => void } = {}) {
     this.onAccepted = options.onAccepted;
     this.onFinished = options.onFinished;
+    this.onPlanWaiting = options.onPlanWaiting;
     this.storage = options.storage ?? new WebStorage();
     this.knowledge = options.knowledge ?? new WebKnowledgeService(this.storage);
     for (const { owner, run } of this.storage.loadRuns()) {
@@ -69,7 +72,8 @@ export class WebJobs {
       if (!listeners.size && this.listeners.get(owner) === listeners) this.listeners.delete(owner);
     };
   }
-  create(owner: string, input: WebRunInput, provider: WebProvider): WebRun {
+  /** `continuation` is the saved file `input.continueFrom` names; it goes to the worker and is not kept with the run. */
+  create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation']): WebRun {
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
     const count = (status: string) => [...this.jobs.values()].filter(job => job.run.status === status).length;
     const active = count('running'), waiting = count('queued');
@@ -86,7 +90,8 @@ export class WebJobs {
       phase: 'queued', createdAt: now, updatedAt: now, timings: {}, events: [], modules: {} };
     run.title = run.task.split('\n')[0].slice(0, 60) || 'Lean 研究';
     run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
-    this.jobs.set(run.id, { owner, input: { ...input, environment }, provider, run, controller: new AbortController() });
+    this.jobs.set(run.id, { owner, input: { ...input, environment }, provider, run, controller: new AbortController(),
+      ...(continuation ? { continuation } : {}) });
     this.event(run, 'queued', '任务已进入队列');
     this.reindex();
     queueMicrotask(() => this.pump());
@@ -101,7 +106,7 @@ export class WebJobs {
       delete job.run.queue;
       this.event(job.run, 'cancelled', '运行已取消');
       job.controller.abort();
-      if (queued) { job.input.apiKey = ''; this.reindex(); }
+      if (queued) { job.input.apiKey = ''; delete job.continuation; this.reindex(); }
     }
     return job.run;
   }
@@ -168,12 +173,17 @@ export class WebJobs {
     if (edit) return { ...saved, status: edit.status, reason: edit.reason,
       baseVersion: edit.baseVersion ?? saved.baseVersion, planVersion: edit.planVersion,
       affectedTaskIds: edit.affectedTasks ?? saved.affectedTaskIds, edit };
+    // An approval is settled once the running solver records it as the approval, or rejects it.
+    const approval = run.observation?.inspection.planApproval;
+    if (approval?.approvedId === id) return { ...saved, status: 'approved', reason: undefined, planVersion: approval.approvedVersion };
+    const rejected = approval?.rejections.find(item => item.id === id);
+    if (rejected) return { ...saved, status: 'rejected', reason: rejected.reason, planVersion: rejected.planVersion ?? saved.planVersion };
     return saved;
   }
   async command(owner: string, runId: string, command: Exclude<WebCommand, { type: 'capture' }>): Promise<WebCommandResult> {
     const job = this.jobs.get(runId);
     if (!job || job.owner !== owner) throw new Error('运行不存在或不属于当前会话。');
-    const id = command.type === 'guidance' ? command.guidance.id : command.proposal.id;
+    const id = command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
     const key = `${runId}/${command.type === 'edit-preview' ? 'preview/' : ''}${id}`;
     const digest = crypto.createHash('sha256').update(canonicalMathJson(command)).digest('hex');
     const previous = this.commandReceipt(owner, runId, id);
@@ -198,7 +208,9 @@ export class WebJobs {
         if (job.run.observation) receipt.observation = job.run.observation;
         if (command.type !== 'edit-preview') {
           this.storage.saveCommand(owner, runId, id, { ...receipt, commandDigest: digest });
-          this.event(job.run, command.type === 'guidance' ? 'guidance_queued' : 'human_edit_queued',
+          if (command.type === 'plan-approval') {
+            if (receipt.status === 'queued') this.event(job.run, 'plan_approval_queued', '计划批准已提交；运行确认后 Agent 才开始工作，未生效会另行记录。');
+          } else this.event(job.run, command.type === 'guidance' ? 'guidance_queued' : 'human_edit_queued',
             command.type === 'guidance' ? '数学指导已提交；投递和采纳结果另行记录。' : '计划修改已提交；应用与证明重查结果另行记录。');
         }
         return command.type === 'edit-preview' ? receipt : this.commandReceipt(owner, runId, id) ?? receipt;
@@ -237,6 +249,7 @@ export class WebJobs {
     // Keep phase boundaries even after the bounded activity log has rotated.
     if (timing) (run.timings ??= {})[timing] ??= run.updatedAt;
     const details = sanitizeWebEventDetails(rawDetails);
+    if (isProgressEvent(type, details)) run.progressAt = run.updatedAt;
     const event: WebEvent = { sequence, at: run.updatedAt, type, message: message.slice(0, 2_000), ...(details ? { details } : {}) };
     recordWebModuleEvent(run, event);
     run.events.push(event);
@@ -273,6 +286,9 @@ export class WebJobs {
       if (message.type === 'progress') {
         job.run.phase = message.event;
         this.event(job.run, message.event, message.message, message.details);
+        // The solver asks once per run, when its first plan is accepted; the owner may be away from the page.
+        if (message.event === 'plan_approval_requested')
+          try { this.onPlanWaiting?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }
       } else if (message.type === 'artifact') {
         if (job.run.result) return;
         job.run.artifact = message.artifact;
@@ -299,7 +315,8 @@ export class WebJobs {
     };
     try {
       await this.runner.run({ id: job.run.id, input: job.input, provider: job.provider,
-        ...(job.input.knowledgeDigest ? { knowledgeCatalog: this.knowledge.getCatalog(job.owner, job.input.knowledgeDigest) } : {}) }, handle, job.controller.signal);
+        ...(job.input.knowledgeDigest ? { knowledgeCatalog: this.knowledge.getCatalog(job.owner, job.input.knowledgeDigest) } : {}),
+        ...(job.continuation ? { continuation: job.continuation } : {}) }, handle, job.controller.signal);
       if (!terminal(job.run)) {
         if (!job.run.result) throw new Error(job.run.error || '没有收到运行结果。');
         job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
@@ -316,6 +333,7 @@ export class WebJobs {
       }
     } finally {
       job.input.apiKey = '';
+      delete job.continuation;
       job.run.finishedAt ??= new Date().toISOString();
       this.persist(job.run);
       try { this.onFinished?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }

@@ -31,7 +31,7 @@ export const admin: Record<string, string> = {
   "管理员只能看到邮箱和这几个时间，看不到其他账号的题目、证明和运行记录。":
     "Admins only see addresses and these times, never another account's problems, proofs or runs.",
   "研究结束时发邮件": "Email me when research ends",
-  "把结果和链接发到登录邮箱；邮件里不含源码、证明或 API Key。停止的研究不发。": "Sends the outcome and a link to your login email. The mail has no source, proof or API key. Stopped runs send nothing.",
+  "把结果和链接发到登录邮箱；开了「先审计划」的研究，计划拟好时也发一封。邮件里不含源码、证明或 API Key。停止的研究不发。": "Sends the outcome and a link to your login email, and for runs with “Review plan first” one more when the plan is ready. The mail has no source, proof or API key. Stopped runs send nothing.",
   "研究结束时会发邮件到登录邮箱": "You will get an email when research ends",
   "已关闭结束邮件": "Research-end emails are off",
   "留空即使用服务器为管理员保存的 Key；服务器不会把它发给浏览器。": "Leave it empty to use the key the server keeps for admins; the server never sends it to the browser.",

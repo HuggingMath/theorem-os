@@ -10,6 +10,7 @@ import { captureObligationSnapshot } from './obligationProgress';
 import { contributionExecutionAttempts, type ContributionObservation, type ResearchContributionFlow } from './contributionFlow';
 import type { StoredRunInspectionArtifacts } from './storedRunInspection';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
+import { planApprovalInspection } from './planApproval';
 
 /** Binds a report to the stored observation; this does not replay or accept its proof evidence. */
 export function runInspectionSnapshot(state: SolverRunState, result?: Record<string, unknown>) {
@@ -140,7 +141,8 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       intendedStatement: review.intendedStatement, leanStatement: review.leanStatement,
       translation: review.translation, summary: review.summary,
     })),
-    review: cooperative?.review, edits: cooperative?.edits ?? [], proofImports: cooperative?.proofImports ?? [],
+    review: cooperative?.review, edits: cooperative?.edits ?? [], planApproval: planApprovalInspection(state),
+    proofImports: cooperative?.proofImports ?? [],
     error: cooperative?.error ?? state.error,
     failureCategory: researchFailureCategory(cooperative?.error ?? state.error),
   };

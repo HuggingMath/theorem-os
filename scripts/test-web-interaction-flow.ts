@@ -182,7 +182,7 @@ try {
     await route.continue();
   });
   await page.goto(origin);
-  try { await page.locator('#submit-run:enabled').waitFor(); }
+  try { await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); }
   catch (error) { console.error(JSON.stringify(await page.evaluate(() => ({ runtime: document.querySelector('#runtime-note')?.textContent,
     notice: document.querySelector('#global-notice-text')?.textContent, provider: document.querySelector<HTMLSelectElement>('#provider')?.innerHTML,
     disabled: document.querySelector<HTMLButtonElement>('#submit-run')?.disabled })))); throw error; }
@@ -192,7 +192,7 @@ try {
   const deadline = Date.now() + 10_000;
   while (!controls.has(run.id) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(controls.has(run.id), 'fixture runner started');
-  await refreshHistory(page); await selectHistoryRun(page, run.id);
+  await refreshHistory(page); await selectHistoryRun(page, run.id, 'collaboration');
   await page.locator('[data-collab-graph] [data-collab-task="task-073"]').waitFor(); await waitForTaskCount(taskTotal + 1);
   await page.locator('[data-collab-task-view="list"]').click();
   await page.locator(listTask('task-073')).waitFor();
@@ -277,7 +277,8 @@ try {
     const node = document.querySelector('[data-collab-agents] .collab-agent:first-child .collab-facts');
     return node && Array.from(node.querySelectorAll('dt')).some(dt => dt.textContent?.trim() === '轮次' && dt.nextElementSibling?.textContent?.trim() === '12');
   });
-  assert.ok((await page.locator(listTask('task-073')).innerText()).includes('lead'), 'increasing observation updates the task owner');
+  // Owners are named by role on the card.
+  assert.ok((await page.locator(listTask('task-073')).innerText()).includes('Lead'), 'increasing observation updates the task owner');
   assert.ok((await page.locator('[data-collab-inspector]').innerText()).includes('lead'), 'inspector reflects the latest task assignment');
   assert.ok((await page.locator(listTask('task-073')).innerText()).includes('CURVATURE_ANCHOR_0073'), 'updated task card retains its exact mathematical objective');
   const increasingMeasure = await end();
