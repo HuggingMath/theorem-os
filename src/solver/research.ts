@@ -34,13 +34,14 @@ import { importAssignedProof, syncProofImports } from './proofImport';
 import type { TaskProof } from './cooperativeProof';
 import { captureResearchBasis, researchSourceDigest, type ResearchBasis } from './researchRecords';
 import { writeOwnedDeclarationIndex } from './declarationIndex';
+import { LEAD_MAX_BACKOFF } from './leadWakes';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
 const advisoryCheckpointMs = 120_000;
 const advisoryInterruptGraceMs = 10_000;
 const advisoryProgressPollMs = 5_000;
-const advisoryMaxBackoff = 3;
+const advisoryMaxBackoff = LEAD_MAX_BACKOFF;
 // Provider latency is not mathematical work: the advisory clock starts only at the model's first
 // item, with a hard cap so a turn that never responds still yields a resumable checkpoint.
 const advisoryFirstActivityMs = 15 * 60_000;

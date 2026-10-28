@@ -713,6 +713,27 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     expect(state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
   });
 
+  it.each([[0, true], [3, true], [4, false]] as const)(
+    'continues a cut Lead draft when nothing else runs until the backoff cap (unchanged streak %i)', async (streak, resumes) => {
+      parkCore();
+      requestLeadWake(state.cooperation!.leadWakes!, 'research-finding');
+      const cut = await cooperative.next(lead, budget);
+      if (cut?.kind !== 'lead') throw new Error('expected_unfinished_lead');
+      await cooperative.deliver(lead, cut, seed, true, 'scheduling-checkpoint');
+      expect(state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
+      state.advisoryCheckpoint = { scope: 'lead', noProgressStreak: streak };
+      const emit = vi.fn(); (cooperative as any).input.emit = emit;
+      const next = await cooperative.next(lead, budget);
+      if (resumes) {
+        expect(next).toMatchObject({ kind: 'lead', planNonce: expect.any(String) });
+        expect(emit).toHaveBeenCalledWith('lead_pause_resumed', { noProgressStreak: streak });
+      } else {
+        expect(next).toBeUndefined();
+        expect(emit).toHaveBeenCalledWith('routes_idle', expect.anything());
+      }
+      expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
+    });
+
   it('ignores a repeated advisory decision hint while a peer is still running on unchanged input', async () => {
     parkCore(); record.status = 'running';
     const progress = { id: 'progress-one', kind: 'progress', taskId: record.task.id,

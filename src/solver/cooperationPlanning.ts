@@ -16,7 +16,7 @@ import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, Dispat
   type LeadPlan } from './cooperationShared';
 import { formatPlanJson, type PlanPatchBase } from './planPatch';
 import { collapseTaskFamilies } from './taskFamilies';
-import { dropLeadWakes } from './leadWakes';
+import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
@@ -408,10 +408,26 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       groups: this.archive.groups?.map(route => route.group),
       ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}) }));
   }
+  /**
+   * A checkpoint cut is not a Lead decision. When nothing else runs, the cut draft is the only possible input,
+   * so the Lead continues it on its backoff schedule; only a pause past the backoff cap, unchanged, ends the run.
+   */
+  protected resumePausedLead() {
+    if (!this.archive.lastLeadPauseInputDigest || this.active.size) return false;
+    const research = this.input.state.workers?.find(record => record.id === this.lead.id) ?? this.input.state;
+    const streak = research.advisoryCheckpoint?.noProgressStreak ?? 0;
+    if (streak > LEAD_MAX_BACKOFF) return false;
+    this.archive.lastLeadPauseInputDigest = undefined;
+    this.wakeLead('lead-pause-idle');
+    this.input.emit('lead_pause_resumed', { noProgressStreak: streak });
+    this.changed();
+    return true;
+  }
   /** Nothing runs and the Lead already decided on these inputs: no process input can arrive, so the run ends. */
   protected async idleFrontier(frontier: ReturnType<CooperationPlanning['activeGoalFrontier']>, inputDigest: string): Promise<DispatchResult> {
     if (this.preparingTaskTypes.size) return this.waitForDispatch();
     if (this.resumeUnattemptedFrontier(frontier)) return RETRY_DISPATCH;
+    if (this.resumePausedLead()) return RETRY_DISPATCH;
     this.input.emit('routes_idle', { groups: this.archive.groups,
       goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], frontier,
       reason: frontier.length ? 'unchanged-mathematical-input' : 'no-active-goal-frontier', inputDigest });
