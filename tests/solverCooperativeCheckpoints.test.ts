@@ -640,8 +640,14 @@ describe('cooperative advisory scheduling checkpoints', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(sessions.get('solver')!.interrupt).not.toHaveBeenCalled();
     expect(events).toContainEqual(expect.objectContaining({ event: 'cooperative_checkpoint_scheduled',
-      details: expect.objectContaining({ workerId: 'solver', checkpointAfterMs: 20 * 60_000 }) }));
-    await vi.advanceTimersByTimeAsync(20 * 60_000 - 120_000);
+      details: expect.objectContaining({ workerId: 'solver', checkpointAfterMs: 20 * 60_000, noticeAfterMs: 5 * 60_000 }) }));
+    expect(sessions.get('solver')!.notify).not.toHaveBeenCalled();
+    // The reminder to publish comes at five minutes, long before the slice ends.
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 120_000);
+    expect(sessions.get('solver')!.notify).toHaveBeenCalledOnce();
+    expect(sessions.get('solver')!.notify.mock.calls[0]![0]).toMatch(/^Publish the first plan now/u);
+    expect(sessions.get('solver')!.interrupt).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20 * 60_000 - 5 * 60_000);
     await proofStarted.promise;
     expect(sessions.get('solver')!.notify).toHaveBeenCalledOnce();
     expect(sessions.get('solver')!.interrupt).toHaveBeenCalledOnce();

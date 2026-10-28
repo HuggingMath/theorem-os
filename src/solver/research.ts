@@ -51,6 +51,9 @@ const advisoryGoalNoticeMs = 15 * 60_000;
 // The initial plan is the whole blueprint (Goedel-Architect, arXiv 2606.06468): peers have nothing to
 // run until it exists, and a 2-minute slice ended every observed first plan before it was written.
 const advisoryInitialPlanMs = 20 * 60_000;
+// Its reminder comes early: observed Leads spent the whole slice on probes and never published,
+// although a direct goal task plus research questions is already a valid first graph.
+const advisoryInitialPlanNoticeMs = 5 * 60_000;
 // Compaction is maintenance, not a mathematical attempt. A stalled operation restarts from saved work.
 const compactionRecoveryMs = 10 * 60_000;
 
@@ -452,7 +455,8 @@ export async function runResearchWorkers(input: {
           const backoff = !noticeOnly && !initialPlan;
           const checkpointAfterMs = noticeOnly ? advisoryGoalNoticeMs : initialPlan ? advisoryInitialPlanMs :
             advisoryCheckpointMs * (backoff ? 2 ** Math.min(noProgressStreak, advisoryMaxBackoff) : 1);
-          const noticeAfterMs = checkpointAfterMs * advisoryCheckpointNoticeMs / advisoryCheckpointMs;
+          const noticeAfterMs = initialPlan ? advisoryInitialPlanNoticeMs :
+            checkpointAfterMs * advisoryCheckpointNoticeMs / advisoryCheckpointMs;
           emit('cooperative_checkpoint_scheduled', { turnId, checkpointAfterMs, noticeAfterMs, noProgressStreak,
             protected: false, ...(noticeOnly ? { noticeOnly: true } : {}),
             backoffCapped: Boolean(backoff) && noProgressStreak >= advisoryMaxBackoff });
@@ -469,6 +473,11 @@ export async function runResearchWorkers(input: {
               return activeSession.notify?.(noticeOnly
                 ? 'Save the current mathematical argument, the exact unresolved step and useful references in RESEARCH.md now. ' +
                   'This turn keeps running: no checkpoint will interrupt or end it, so save notes incrementally and continue proving.'
+                : initialPlan
+                ? 'Publish the first plan now, before further searches or experiments: append the complete plan JSON line to this ' +
+                  'assignment\'s delivery log as described in your instructions. Peers cannot start until it exists. A direct goal task ' +
+                  'for each original target plus research tasks for the open questions is a valid first plan; later Lead turns revise it. ' +
+                  'Save the current argument in RESEARCH.md as well.'
                 : 'Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +
                   'For planning, save or publish the smallest valid complete task graph using this assignment\'s delivery protocol. ' +
                   'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
