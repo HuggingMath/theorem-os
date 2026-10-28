@@ -3,7 +3,7 @@ import type { FormalizationTranslation } from './formalization';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from './leanTaskEnvironment';
 import type { LeanStatementContext } from './leanStatementContext';
 import { canonicalMathJson, mathDigest } from './mathRuntimeIo';
-import { assertFormalizationFidelity, formalizationFidelitySchema, FIDELITY_REVIEW_INSTRUCTIONS,
+import { assertFormalizationFidelity, formalizationFidelitySchema, fidelityReviewInstructions,
   type FormalizationFidelity } from './formalizationFidelity';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -113,7 +113,7 @@ export type StructuredReviewInput = {
   baseInputDigest: string; original: string; header: string; candidate: string;
   observation: ReviewStatementObservation; translation: FormalizationTranslation | null;
   reviewerId?: string; planDigest?: string;
-  fidelityPolicy?: 'task-preserving-v1';
+  fidelityPolicy?: 'task-preserving-v1' | 'task-preserving-v2';
 };
 
 export function structuredSemanticReviewValidator(input: StructuredReviewInput) {
@@ -221,7 +221,7 @@ export const REVIEW_BACKTRANSLATION_INSTRUCTIONS = [
 
 /** Absence of the frozen context protocol preserves the exact legacy role text. */
 export function formalizationReviewInstructions(role: 'review' | 'backtranslate', semanticContext: boolean, structureContext = false,
-  fidelityPolicy?: 'task-preserving-v1'): string {
+  fidelityPolicy?: 'task-preserving-v1' | 'task-preserving-v2'): string {
   const base = role === 'review' ? STRUCTURED_REVIEW_INSTRUCTIONS : REVIEW_BACKTRANSLATION_INSTRUCTIONS;
   const instructions = !semanticContext ? base : base + '\n' + [
     'This request includes kernel-v1 statement context. Every target.context.semantic contains schema, rawType, kernelType and localMeaningClosure. Read these fields together with the readable type and binder dependencies; page large fields using the input-reading instructions.',
@@ -237,5 +237,5 @@ export function formalizationReviewInstructions(role: 'review' | 'backtranslate'
     'The entries do not recursively expand parent fields or describe every imported definition. They contain no proof bodies, no planner mappings and no library search results. An empty entry list is a valid observation. Missing required structure observations are unresolved evidence, not proof of mistranslation.',
     ...(role === 'review' ? ['candidateFragment may also quote an exact structure entry name, projection name or field type from context.structures. Field observations support inspection; they do not establish natural-language equivalence or approval.'] : []),
   ].join('\n') : '');
-  return instructions + (role === 'review' && fidelityPolicy ? '\n' + FIDELITY_REVIEW_INSTRUCTIONS : '');
+  return instructions + (role === 'review' && fidelityPolicy ? '\n' + fidelityReviewInstructions(fidelityPolicy) : '');
 }

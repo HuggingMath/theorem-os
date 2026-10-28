@@ -126,6 +126,16 @@ export function formalizationTargets(source: string): { name: string; declaratio
     declarationHash: mathDigest(item.declarationType) }));
 }
 
+/** Check statement-only theorem bodies without changing submitted source bytes. */
+export function hasErasedFormalizationProofs(source: string): boolean {
+  const inspected = inspectFormalizationSource(source);
+  // Keep the existing comment-free contract. Inspect only theorem bodies so
+  // whitespace inside definitions, strings and statement types stays significant.
+  return inspected.statement === source && inspected.theoremRegions.every(region =>
+    source.slice(region.bodyOffset - 2, region.bodyOffset) === ':=' &&
+    /^\s+by\s+sorry\s*$/u.test(source.slice(region.bodyOffset, region.endOffset)));
+}
+
 /** Remove comments and every theorem proof before elaboration or blind review. */
 export function eraseFormalizationProofs(source: string): string {
   const inspected = inspectFormalizationSource(source);

@@ -142,7 +142,7 @@ describe('frozen fidelity policy and parallel formalization workflow', () => {
     oldSchema.properties!.inputDigest = { const: 'b'.repeat(64) };
     expect(mathDigest(canonicalMathJson(oldSchema))).toBe('84772942f1c05965472bd77c882a13a795146b1b2b6175407d7cc540c1a374f9');
     expect(mathDigest(formalizationReviewInstructions('review', true, true)))
-      .toBe('668e8a831b5502519b1f768b7f7740b10dffee08b85df72cfbdb2163731bf600')
+      .toBe('668e8a831b5502519b1f768b7f7740b10dffee08b85df72cfbdb2163731bf600');
     const current: StructuredReviewInput = { ...legacy, fidelityPolicy: 'task-preserving-v1' };
     const newReview = semanticReviewFixture(current);
     expect(() => assertStructuredSemanticReview(current, newReview)).toThrow();

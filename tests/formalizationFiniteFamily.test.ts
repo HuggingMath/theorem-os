@@ -13,9 +13,11 @@ universe u v w
 const source = (headers: Record<string, string>) => prelude + Object.entries(headers)
   .map(([name, header]) => `theorem ${name} ${header} := by original_proof_must_not_run
 `).join('');
-const request = (candidate: Record<string, string>, reference: Record<string, string>): FormalizationReferenceInput => ({
+const request = (candidate: Record<string, string>, reference: Record<string, string>,
+  purpose?: FormalizationReferenceInput['purpose']): FormalizationReferenceInput => ({
   candidateSource: source(candidate), referenceSource: source(reference), environment: 'mathlib',
   pairs: Object.keys(candidate).map(name => ({ candidateTarget: name, referenceTarget: name })),
+  ...(purpose ? { purpose } : {}),
 });
 const binders = '{α : Type u} {β : Type w} (P : α → Prop) (U : α → Set β) (Q : Set β → Prop)';
 const finiteLaw = '∀ s : Finset α, (∀ a ∈ s, P a) → Q (⋃ a ∈ s, U a)';
@@ -158,4 +160,53 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
       }
       expect(() => assertFormalizationReferenceResult(positiveInput, modified)).toThrow();
     });
+});
+
+describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean proper finite-family correspondence', () => {
+  let root: string;
+  const candidate = '{F V : Type*} [Field F] [Infinite F] [AddCommGroup V] [Module F V]\n'
+    + '    (s : Finset (Subspace F V)) (hs : ∀ p ∈ s, p < ⊤) :\n'
+    + '    (⋃ p ∈ s, (p : Set V)) ≠ Set.univ';
+  const reference = '{K V : Type*} [Field K] [Infinite K] [AddCommGroup V]\n'
+    + '  [Module K V] {ι : Type*} [Fintype ι] (γ : ι → Submodule K V)\n'
+    + '  (h : ∀ i : ι, γ i ≠ ⊤) :\n'
+    + '  (⋃ (i : ι), (γ i : Set V)) ≠ ⊤';
+  const properInput: FormalizationReferenceInput = { candidateSource: source({ not_union_finset_proper_subspaces: candidate }),
+    referenceSource: source({ exercise_3_7_2: reference }), environment: 'mathlib', purpose: 'task-fidelity-v2',
+    pairs: [{ candidateTarget: 'not_union_finset_proper_subspaces', referenceTarget: 'exercise_3_7_2' }] };
+  beforeAll(() => { root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'finite-proper-native-'))); });
+  afterAll(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
+  const checkCompleted = (result: FormalizationReferenceResult, name: string) => {
+    let detail = result.reason ?? 'unknown';
+    try {
+      const diagnostics = JSON.parse(fs.readFileSync(path.join(root, name, 'diagnostics.json'), 'utf8'));
+      detail += '\n' + JSON.stringify(diagnostics.firstBlocking ?? diagnostics.stderr);
+    } catch { /* The solver may fail before creating compiler diagnostics. */ }
+    expect(result.check, detail).toBe('completed');
+  };
+
+  it('proves the strict proper-condition conversion and keeps its trace auditable', async () => {
+    const result = await compareFormalizationReference(path.join(root, 'positive'), properInput, { env: process.env, timeoutMs: 0 });
+    expect(() => assertFormalizationReferenceResult(properInput, result)).not.toThrow();
+    checkCompleted(result, 'positive');
+    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v5', method: 'cardinality-correspondence-v6',
+      check: 'completed', status: 'established', modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
+    const report = JSON.parse(result.evidence!.reportText);
+    expect(report.schema).toBe('theoremos.reference-report.v5');
+    const steps = report.pairs[0].transformations;
+    expect(steps.map((step: { ruleId: string }) => step.ruleId)).toEqual(expect.arrayContaining([
+      'finite-proper-condition', 'finite-family-reindex',
+    ]));
+    for (const step of steps) expect(step.ruleVersion).toBe(1);
+    expect(Object.values(result.files).map(file => file.text).join('')).not.toMatch(/\b(?:sorry|sorryAx|axiom|admit)\b/u);
+  }, 0);
+
+  it('does not treat a non-equivalent non-strict condition as properness', async () => {
+    const changed: FormalizationReferenceInput = { ...properInput,
+      candidateSource: source({ not_union_finset_proper_subspaces: candidate.replace('p < ⊤', 'p ≤ ⊤') }) };
+    const result = await compareFormalizationReference(path.join(root, 'negative'), changed, { env: process.env, timeoutMs: 0 });
+    checkCompleted(result, 'negative');
+    expect(result).toMatchObject({ check: 'completed', status: 'not-established' });
+    expect(result.pairs[0]).toMatchObject({ candidateToReference: { status: 'not-established' }, referenceToCandidate: { status: 'not-established' } });
+  }, 0);
 });

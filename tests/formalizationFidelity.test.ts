@@ -41,7 +41,7 @@ describe('task-preserving fidelity linkage', () => {
       candidateSource: snapshot.source, referenceSource: fidelity.sourceContract!.source,
       environment: 'standard', pairs: fidelity.sourceContract!.pairs, purpose: 'task-fidelity-v1',
     });
-    expect(fidelityPolicySchema.safeParse('task-preserving-v2').success).toBe(false);
+    expect(fidelityPolicySchema.safeParse('task-preserving-v2').success).toBe(true);
     expect(formalizationFidelitySchema.safeParse({ ...fidelity, machineVerified: true }).success).toBe(false);
   });
 
@@ -118,6 +118,38 @@ describe('task-preserving fidelity linkage', () => {
     expect(() => assertFormalizationFidelity(axiom.input, 'approved', axiom.fidelity)).toThrow('unsupported_declaration');
   });
 
+  it.each([
+    ['blank lines before end', ' by sorry\n\n\n'],
+    ['trailing spaces', ' by sorry   \n\n'],
+    ['CRLF', ' by sorry\r\n\r\n'],
+    ['multiline placeholder', ' by\n  sorry\n\n'],
+    ['extra spaces around tokens', '  by   sorry\n\n'],
+  ])('accepts %s without rewriting the submitted source contract', (_name, body) => {
+    const { input, fidelity, snapshot } = fixture(), contract = fidelity.sourceContract!;
+    contract.source = 'namespace SourceContract\n' + contract.source.replace(' by sorry\n', body) + 'end SourceContract\n';
+    contract.pairs[0]!.referenceTarget = 'SourceContract.source_answer';
+    const before = JSON.stringify(fidelity), source = contract.source;
+    expect(assertFormalizationFidelity(input, 'approved', fidelity)).toEqual(fidelity);
+    expect(fidelityReferenceInput(snapshot, fidelity).referenceSource).toBe(source);
+    expect(JSON.stringify(fidelity)).toBe(before);
+  });
+
+  it.each(['', '\n\n', '\r\n\r\n'])('accepts a placeholder at EOF with optional trailing newlines (%j)', ending => {
+    const { input, fidelity, snapshot } = fixture(), contract = fidelity.sourceContract!;
+    contract.source = contract.source.trimEnd() + ending;
+    expect(assertFormalizationFidelity(input, 'approved', fidelity).sourceContract!.source).toBe(contract.source);
+    expect(fidelityReferenceInput(snapshot, fidelity).referenceSource).toBe(contract.source);
+  });
+
+  it.each(['by trivial', 'True.intro', 'by exact (by sorry)', 'by admit', 'by sorry; trivial',
+    'by sorry\n  trivial', 'by sorry -- proof comment', 'by /- proof comment -/ sorry'])(
+    'still rejects executable proof text or comments (%s)', body => {
+      const { input, fidelity, snapshot } = fixture();
+      fidelity.sourceContract!.source = fidelity.sourceContract!.source.replace('by sorry', body);
+      expect(() => assertFormalizationFidelity(input, 'approved', fidelity)).toThrow('source_contract_not_erased');
+      expect(() => fidelityReferenceInput(snapshot, fidelity)).toThrow('source_contract_not_erased');
+    });
+
   it('erases candidate proofs in the comparison request and retains each pinned environment', () => {
     const { snapshot, fidelity } = fixture();
     snapshot.source = snapshot.source.replace('by sorry', 'by simpa [h]');
@@ -127,6 +159,13 @@ describe('task-preserving fidelity linkage', () => {
     expect(fidelityReferenceInput(snapshot, fidelity).environment).toBe('mathlib');
     snapshot.environment = 'mathlib-4.8';
     expect(fidelityReferenceInput(snapshot, fidelity)).toMatchObject({ environment: 'mathlib-4.8', purpose: 'task-fidelity-v1' });
+  });
+
+  it('routes new fidelity contracts through the independently versioned v2 comparison', () => {
+    const { snapshot, fidelity } = fixture();
+    fidelity.policy = 'task-preserving-v2';
+    expect(fidelityReferenceInput(snapshot, fidelity)).toMatchObject({ purpose: 'task-fidelity-v2' });
+    expect(fidelityPolicySchema.safeParse('task-preserving-v3').success).toBe(false);
   });
 
   it('does not turn a reviewer-authored strengthening claim into machine evidence', () => {

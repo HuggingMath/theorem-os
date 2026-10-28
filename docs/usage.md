@@ -7,16 +7,18 @@
 ## 环境诊断与小题示例
 
 第一次使用可以先运行只依赖 Lean 标准库的[小题示例](../examples/getting-started/README.md)，
-再准备 Mathlib 和公开题目。诊断命令会检查本地工具、Codex 登录、Bubblewrap 权限，以及指定项目的编译器和依赖：
+再准备 Mathlib 和公开题目。诊断命令会检查本地工具、所选 provider 的认证配置、Bubblewrap 权限，以及指定项目的编译器和依赖：
 
 ```bash
 bun run math doctor
+bun run math doctor --network
 bun run math doctor --project /absolute/path/to/lean-project
 bun run math doctor --lean-only --json
 ```
 
 `--lean-only` 跳过 Codex 检查，适合预设回放。`--network` 可额外检查 provider 的 HTTP 连通性，
-不携带认证信息，也不发起推理。默认诊断不会连接模型服务；登录状态和网络可达都不能保证模型访问权限。
+不携带认证信息，也不发起推理。自定义 provider 检查配置的环境变量或认证命令，不要求 OpenAI 登录。
+默认诊断不会连接模型服务；凭据存在和网络可达都不能保证模型访问权限。
 必需项失败时退出码为 1；警告仍需按具体题目的要求处理。FUSE 工具只在使用外部依赖时需要，
 能打开设备也不等于实际挂载一定成功，完整运行条件继续由启动预检确认。
 
@@ -40,7 +42,9 @@ bun run build
 
 构建生成 `out/main/math-solver.js`、`search-lean.js` 和 `check-lean.js`，并输出 JSON。记录其中的 **`buildManifestRef`**，运行时需要传入这个文件的绝对路径。源码与 bundle 均校验哈希，修改运行时代码后需重新构建。
 
-CLI 默认使用 `~/.config/deepscientist/math-sol-codex` 中的 Codex profile。请先为该 profile 配置认证，或通过 `CODEX_HOME` 指向你已有的 profile。
+CLI 默认使用 `~/.config/deepscientist/math-sol-codex` 中的 Codex profile（本地 Sub2API 网关的 `deepseek-flash` / `max`，网关 `http://127.0.0.1:8080/v1`）。本机 profile 的认证命令按需读取已有部署的 Westlake 号池密钥，无需复制密钥或手动 export。也可通过 `CODEX_HOME` 指向其他已有 profile。
+
+`compare --provider sub2api` 和 `sample-putnam` 创建的独立 profile 使用环境变量 `SUB2API_WESTLAKE_API_KEY`；启动这些实验前需要在调用环境中设置它。密钥不会写入实验 profile 或数学工具环境文件。
 
 项目原名 DeepScientist Math。CLI 入口为 `theorem-os`，同时保留 `deepscientist-math` 别名与 `bun run math`；已有环境变量、默认配置路径和运行档案格式继续兼容。
 
@@ -183,6 +187,8 @@ bun run math batch \
 
 默认同时运行两题，剩余题目依次补位；每题保留自己的 Agent、预算、检查和最终评测，一题失败不影响其他题。`batch.json` 记录进程状态，每题完整日志写入 `batch.json.logs/`；`completed` 只表示进程正常结束，证明是否通过仍以该题的结果和验收回执为准。
 
+默认不限制空闲时间（`--idle-timeout-seconds 0`）。显式设置后，某题日志连续 N 秒没有增长时会被终止并记为 `stalled`：它不占用并发槽，也不会让批次退出码变为失败，便于无人值守批跑在有限尝试后继续后面的题。模型单轮可能长时间没有输出，阈值应大于最慢的单轮耗时。
+
 启动文件可选 `cwd` 和 `envFile`，路径相对启动文件所在目录解析；默认工作目录为启动文件所在目录，环境继承调用者。需要恢复时在对应题目的参数中添加 `--resume`，并为新批次指定新的 `--output`。Ctrl+C 会通知运行中的求解器保存退出，并停止启动排队题目；30 秒后仍未退出的进程会被强制停止。并发题数与每题 `--workers` 一起决定资源占用。
 
 ## 协作方式
@@ -211,9 +217,7 @@ Lead 计入 `--workers` 的总人数。默认配置中，Engineer 持续负责�
 
 任务按依赖就绪异步执行，最多三个 worker 并发。多条路线共享 Agent 名额与原题预算，可以分别设置任务、负责人、暂停状态和路线预算。
 
-### 直接证明与辅助引理
-
-`--method direct` 为默认方法。`--method lemma` 启用辅助引理流程：尝试原题 → 提出引理 → 检查引理对原题的条件性连接 → 证明引理 → 完成原题。两种方法都支持协作运行。
+### 辅助引理与条件性检查
 
 条件性检查在临时源码投影中将待证引理转换为显式参数，保留未完成义务；依赖闭合后再组合并检查普通证明。局部引理、研究笔记和审阅意见分别记录，最终验收检查全部原题目标。
 
@@ -246,13 +250,13 @@ Lead 计入 `--workers` 的总人数。默认配置中，Engineer 持续负责�
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `--model` | `gpt-6.1-sol` | 所选 provider 提供的模型 ID |
-| `--effort` | `xhigh` | 推理强度 |
+| `--model` | `deepseek-flash` | 所选 provider 提供的模型 ID |
+| `--effort` | `max` | 推理强度（Sub2API DeepSeek 支持 low/high/max） |
 | `--workers` | `4` | Agent 总数，支持 1–4 |
-| `--method` | `direct` | `direct` 或 `lemma` |
+| `--method` | `direct` | 仅支持 `direct`，保留以兼容已有命令 |
 | `--coordination` | `cooperative` | 协作，或 `independent` 独立并行尝试 |
 | `--continuation-manifest` | 无 | 新建时绑定显式历史附件；恢复时沿用同一只读快照 |
-| `--scheduler` | `plan` | 按计划顺序调度；`goals-first` 优先已就绪原题目标；`critical-path` 按依赖链排序；`continuation` 优先承接已证成果的主路径任务 |
+| `--scheduler` | `plan` | 按计划顺序调度；`critical-path` 按依赖链排序；`continuation` 优先承接已证成果的主路径任务 |
 | `--prepare-timeout-seconds` | `1800` | 环境准备与依赖预编译预算 |
 | `--max-run-seconds` | `1800` | 准备完成后的共享解题时间预算 |
 | `--max-turns` | `200` | 所有 Agent 合计模型调度次数 |
@@ -262,7 +266,7 @@ Lead 计入 `--workers` 的总人数。默认配置中，Engineer 持续负责�
 
 `--max-run-seconds`、`--max-turns`、`--max-turn-seconds` 与 `--evaluator-timeout-seconds` 可设为 `0` 关闭对应限制。关闭总解题时间限制时，证明检查的期限也会关闭。
 
-`--max-total-tokens` 包含规划、研究、证明和审阅角色，按跨线程累计消费计算；恢复时继续使用历史用量，省略参数时保留已存额度。它依据 provider 的事后通知阻止新请求，不能保证并发在途消费不超过阈值。报告保留超额与用量完整性；有限额度下缺失已执行请求的用量会停止继续派发。旧运行未记录逐轮用量完整性，不能直接当作严格 token 对照。默认不限 token，不为已有长跑增加停止条件。
+`--max-total-tokens` 包含规划、研究、证明和审阅角色，按跨线程累计消费计算；恢复时继续使用历史用量，省略参数时保留已存额度。它依据 provider 的事后通知阻止新请求，不能保证并发在途消费不超过阈值。报告保留超额与用量完整性；有限额度下缺失已执行请求的用量会停止继续派发。旧运行未记录逐轮用量完整性，不能直接当作严格 token 对照。默认不限 token，不为已有长跑增加停止条件。原生 provider 的用量按完整 turn 记账：turn 被 `--max-turn-seconds` 截断时该轮用量记为不完整，有限额度会以 usage-unavailable 停止；需要有限 token 额度时应同时放宽 `--max-turn-seconds`（或设为 0）。
 
 ### 环境配置
 
@@ -355,11 +359,11 @@ bun run math check-lean \
 
 [index.ts](../src/solver/modules/index.ts) 绑定默认模块与版本；`runSolver(args, root, modules)` 支持替换模块，模块版本参与恢复身份。宿主固定执行源码边界检查、总预算限制和最终验收。当前 M3 采用规则与依赖调度，S2 跨任务学习尚未实现。
 
-命令行可用 `--scheduler goals-first` 单独替换 M3 的就绪任务排序；`--scheduler critical-path` 同时替换 M3 排序和 M5 分配，按通往未完成原题目标的最长依赖链排序，同长度时优先覆盖更多目标的任务，由 Researcher 和 Engineer 共同领取。显式负责人、路线限制和恢复归属仍然生效；链长只作启发式排序，不预测证明耗时。模块版本写入状态，恢复时校验。这些策略尚无性能提升结论。[三组对照实验](../examples/imo2026/COMPARISON.md) 提供固定题目、模型和总预算的准备、运行与汇总步骤，保留失败、缺失记录和用量缺口。
+命令行可用 `--scheduler critical-path` 同时替换 M3 排序和 M5 分配，按通往未完成原题目标的最长依赖链排序，同长度时优先覆盖更多目标的任务，由 Researcher 和 Engineer 共同领取。显式负责人、路线限制和恢复归属仍然生效；链长只作启发式排序，不预测证明耗时。模块版本写入状态，恢复时校验。这些策略尚无性能提升结论。[三组对照实验](../examples/imo2026/COMPARISON.md) 提供固定题目、模型和总预算的准备、运行与汇总步骤，保留失败、缺失记录和用量缺口。
 
 `--scheduler continuation` 优先推进通往未完成原题、能够使用当前已证引理的就绪任务，再推进主路径的核心缺口；两项主路径工作并行时，为其他就绪路线保留一个探索机会。负责人、依赖、路线和固定版本检查继续生效。Lead、证明角色与 `inspect` 报告会看到原题的未闭合依赖前沿，并分别列出计划消费者、Lean 回执中的证明引用、声明引用和条件性引用。未记录消费者不代表引理无用；这些摘要不提供完成百分比或新的证明验收。重复两次交付未更新的继承研究笔记会交给 Lead 决策，正常长研究与 checkpoint 不按此计数。
 
-辅助引理方法在 [lemma.ts](../src/solver/lemma.ts)；Codex stdio 协议适配在 [codexSession.ts](../src/runtime/codexSession.ts)。
+Codex stdio 协议适配在 [codexSession.ts](../src/runtime/codexSession.ts)。
 
 <details>
 <summary>Agent 交付协议与提前共享</summary>
@@ -387,10 +391,6 @@ agent 的常用协议只有两步：读取任务，写出成果。需要结构�
 证明进行中也可向同一分工日志发表完整研究事件：`{"kind":"research","finding":{"summary":"完整论证、精确前提和局部缺口","conclusion":"refuted","needsDecision":true,"evidenceRefs":[],"lemmaRequests":[]}}`。宿主在独立快照中冻结该事件，不修改 worker 的工作文件；每次发表分别保留完整 finding，跨重启去重，并交给 Lead 处理反驳和引理提案。可选 `commit` 指向本次分工种子之后已冻结的支持材料。发表不结束当前证明、不接受定理，也不会仅因反驳结论停放路线。
 
 任务图为空的初始 Lead 还可向提示词指定的独立日志追加一行 `{"kind":"plan","baseVersion":"当前基版本","summary":"路线说明","tasks":[...]}`，提前发布一次完整有效计划并继续研究。其他角色从 canonical 源码开始；普通笔记草稿不会自动发布。必需上下文中的研究反驳须用 `challengeDecisions` 明确修订、附证据反对或说明等待输入，不能由省略字段静默忽略。
-
-单 Agent 的辅助引理提案使用 `RESEARCH.md` 中的 `math-lemma` JSON 代码块，包含 `proofPath`、原题完整名称 `target`、引理完整名称 `lemma` 和闭合 Lean 类型 `type`。引理置于目标之前，使用普通 `:=` 证明；目标通过引理的局部名称引用它。连接与引理分别在临时投影中检查。
-
-辅助义务仅在完整投影、提案和环境一致时复用本进程的成功回执；输入变化或进程恢复后重新检查。同一失败义务连续两次没有证明输入变化时，控制器重新分解路线并保留失败原因。
 
 </details>
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eraseFormalizationProofs, formalizationTargets } from '../src/math/formalizationSource';
+import { eraseFormalizationProofs, formalizationTargets, hasErasedFormalizationProofs } from '../src/math/formalizationSource';
 
 const source = [
   'import Mathlib',
@@ -131,6 +131,28 @@ describe('formalization source admission', () => {
 });
 
 describe('proof erasure for formalization snapshots', () => {
+  it('checks every theorem while preserving complete definitions and string-valued data', () => {
+    const input = [
+      'namespace SourceContract',
+      'def label : String := "-- by sorry; a  b /- literal -/"',
+      'def zero : Nat := by\n  exact 0',
+      'theorem first (n : Nat) : n = n := by sorry',
+      '',
+      'lemma second : zero = 0 := by\n  sorry',
+      '',
+      'end SourceContract',
+      '',
+    ].join('\n');
+    const targets = formalizationTargets(input);
+    expect(hasErasedFormalizationProofs(input)).toBe(true);
+    expect(formalizationTargets(input)).toEqual(targets);
+    expect(input).toContain('a  b');
+    expect(input).toContain('def zero : Nat := by\n  exact 0');
+    expect(hasErasedFormalizationProofs(input.replace('zero = 0 := by\n  sorry', 'zero = 0 := by\n  rfl'))).toBe(false);
+    expect(hasErasedFormalizationProofs(input.replace('n = n := by sorry', 'n = n := by sorry\n  done'))).toBe(false);
+    expect(hasErasedFormalizationProofs('/- a real comment -/\n' + input)).toBe(false);
+  });
+
   it('removes all theorem proofs and comments while preserving definitions, strings, scopes and target identities', () => {
     const input = [
       'namespace Snapshot',

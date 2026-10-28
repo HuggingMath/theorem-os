@@ -15,8 +15,11 @@ const original = z.string().min(1).max(originalMaxBytes).refine(value =>
 const leanName = z.string().min(1).max(512).refine(value => isSimpleLeanName(value) && !value.startsWith('_root_.'));
 const spanIds = z.array(id).min(1).max(recordLimit);
 const spanSchema = z.object({
-  id, start: z.number().int().min(0).max(originalMaxBytes),
-  end: z.number().int().min(1).max(originalMaxBytes), text: original,
+  id, start: z.number().int().min(0).max(originalMaxBytes)
+    .describe('Zero-based UTF-16 offset into the parsed INPUT.statement string, not the INPUT.json file, JSON escapes, UTF-8 bytes or Unicode code points. Compute with statement.indexOf(text), choosing the intended occurrence if repeated.'),
+  end: z.number().int().min(1).max(originalMaxBytes)
+    .describe('Exclusive UTF-16 offset in parsed INPUT.statement. Compute end = start + text.length and verify statement.slice(start, end) === text.'),
+  text: original.describe('An exact nonempty substring of parsed INPUT.statement. Copy whitespace and punctuation unchanged; do not add a period or paraphrase.'),
 }).strict();
 
 const planSchema = z.object({
@@ -26,10 +29,14 @@ const planSchema = z.object({
   objects: z.array(z.object({ id, spanIds, description: text, leanType: text }).strict()).max(recordLimit),
   assumptions: z.array(z.object({ id, spanIds, mathematics: text }).strict()).max(recordLimit),
   conclusions: z.array(z.object({ id, spanIds, mathematics: text,
-    targetNames: z.array(leanName).min(1).max(recordLimit), assumptionIds: z.array(id).max(recordLimit),
+    targetNames: z.array(leanName).min(1).max(recordLimit)
+      .describe('Names of theorem/lemma declarations to generate for this conclusion, qualified by their Lean namespace. Do not list imported library constants, classes, object types, definitions or dependencies here.'),
+    assumptionIds: z.array(id).max(recordLimit),
   }).strict()).min(1).max(recordLimit),
   definitions: z.array(z.object({ id, spanIds, mathematics: text, implementation: z.enum(['existing', 'new']),
-    leanNames: z.array(leanName).min(1).max(recordLimit), dependsOn: z.array(id).max(recordLimit), justification: text,
+    leanNames: z.array(leanName).min(1).max(recordLimit)
+      .describe('For existing, cite pinned library constants; separate records may reuse a constant for distinct source meanings. For new, name the local def/abbrev/named instance to generate. New names must be unique across all definition records. No definition name may name a conclusion theorem.'),
+    dependsOn: z.array(id).max(recordLimit), justification: text,
   }).strict()).max(recordLimit),
   unresolved: z.array(z.object({ id, spanIds, description: text }).strict()).max(recordLimit),
 }).strict();
@@ -73,16 +80,21 @@ export const formalizationPlanSchema = planSchema.superRefine((plan, context) =>
   });
   const targets = new Set(plan.conclusions.flatMap(item => item.targetNames));
   const definitions = new Map(plan.definitions.map(item => [item.id, item]));
-  const definitionNames = new Set<string>();
+  const definitionNames = new Map<string, 'existing' | 'new'>();
   plan.definitions.forEach((definition, index) => {
     unique(definition.leanNames, ['definitions', index, 'leanNames']);
     unique(definition.dependsOn, ['definitions', index, 'dependsOn']);
     if (definition.dependsOn.some(dependency => !definitions.has(dependency)))
       issue('formalization_plan_definition_reference_invalid', ['definitions', index, 'dependsOn']);
     for (const name of definition.leanNames) {
-      if (definitionNames.has(name)) issue('formalization_plan_duplicate', ['definitions', index, 'leanNames']);
+      const previous = definitionNames.get(name);
+      // Multiple source meanings may use the same imported constant. A local
+      // declaration still has exactly one planned implementation and cannot
+      // simultaneously claim an existing library name.
+      if (previous !== undefined && (previous === 'new' || definition.implementation === 'new'))
+        issue('formalization_plan_duplicate', ['definitions', index, 'leanNames']);
       if (targets.has(name)) issue('formalization_plan_definition_target_overlap', ['definitions', index, 'leanNames']);
-      definitionNames.add(name);
+      if (previous !== 'new') definitionNames.set(name, definition.implementation);
     }
   });
   const visiting = new Set<string>(), visited = new Set<string>();

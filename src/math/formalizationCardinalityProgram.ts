@@ -27,3 +27,19 @@ theorem finitePrimeProductIff {α : Type u} (Q : ℕ → ℕ → Prop) :
 
 end TheoremOSRepresentation
 `;
+
+export const finiteCardinalityPrelude = `namespace TheoremOSRepresentation
+
+/-- A nonzero natural cardinality supplies the finite instance required by Fintype.card. -/
+theorem finiteCardinalityIff {α : Type u} {n : ℕ} (hn : n ≠ 0) (Q : Prop) :
+    (∀ [Fintype α], Fintype.card α = n → Q) ↔ (Nat.card α = n → Q) := by
+  constructor
+  · intro h hc
+    haveI : Finite α := Nat.finite_of_card_ne_zero (hc.trans_ne hn)
+    letI : Fintype α := Fintype.ofFinite α
+    exact h ((Nat.card_eq_fintype_card (α := α)).symm.trans hc)
+  · intro h inst hc
+    exact h ((Nat.card_eq_fintype_card (α := α)).trans hc)
+
+end TheoremOSRepresentation
+`;

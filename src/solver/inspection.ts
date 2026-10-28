@@ -82,6 +82,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       conditionalProofTasks: tasks.filter(node => proofRecord(node, state).status === 'conditional').length,
       completedResearchTasks: tasks.filter(node => ['research', 'sketch'].includes(node.task.kind) && node.status === 'completed').length,
       openProofTasks: tasks.filter(node => ['lemma', 'goal'].includes(node.task.kind) && !checked.includes(node)).map(node => node.task.id) },
+    waiting: cooperative?.frontierWaiting ? { ...cooperative.frontierWaiting } : undefined,
     groups: cooperative?.groups ?? [],
     tasks: (cooperative?.tasks ?? []).map(node => ({
       id: node.task.id, kind: node.task.kind, objective: node.task.objective,
@@ -150,6 +151,9 @@ export function renderRunInspection(report: Inspection): string {
     'Usage origins are model-reported; checked references confirm a declaration in a recorded proof, not historical authorship or current acceptance.\n';
   text += section('Original targets', table(['Declaration', 'File'], report.problem.targets.map(target => [target.theoremName, target.proofPath])));
   text += section('Recorded progress', `${report.progress.checkedProofTasks} checked proof tasks; ${report.progress.conditionalProofTasks} conditional; ${report.progress.completedResearchTasks} completed research tasks.\n\nOpen proof tasks: ${report.progress.openProofTasks.join(', ') || 'none'}. Dispatch counts include retries and do not measure mathematical progress.`);
+  if (report.waiting) text += section('Waiting for input', `${report.waiting.reason}${report.waiting.investigation
+    ? `; investigation ${report.waiting.investigation.state}${report.waiting.investigation.reason ? ` (${report.waiting.investigation.reason})` : ''}` : ''}
+Waiting is a scheduling state, not a mathematical failure. An abandoned or rejected advisory investigation produced no accepted finding.`);
   text += section('Proof continuation', table(['Original goal', 'Recorded proof', 'Open dependency frontier', 'Missing tasks'],
     report.continuation.goals.map(goal => [goal.taskId, goal.recordedProof, goal.frontier.join(', ') || 'none', goal.missingDependencies.join(', ') || 'none'])));
   const transitions = report.mathematics.recentChanges.filter(receipt => receipt.kind === 'transition').slice(-12);

@@ -92,7 +92,7 @@ docker compose -f apps/web/compose.yml build worker web
 docker compose -f apps/web/compose.yml up -d web
 ```
 
-打开 <http://127.0.0.1:8787>，选择证明环境和模板，输入模型名称与自己的 API Key。默认使用 Mathlib，也可切换为 Lean 标准库；页面会显示固定的 Lean 工具链和 Mathlib 版本。
+打开 <http://127.0.0.1:8787>，选择证明环境和模板，填写自己的 API Key。默认连接宿主机 8080 端口的 Sub2API，模型为 `deepseek-flash`、推理强度为 `max`；也可选择 OpenAI 并填写其支持的模型。默认使用 Mathlib，也可切换为 Lean 标准库；页面会显示固定的 Lean 工具链和 Mathlib 版本。
 
 <details>
 <summary>资源要求、API Key 与运行记录</summary>

@@ -26,25 +26,45 @@ const CODEX_FAILURE_CODES = [
   'responseStreamConnectionFailed', 'internalServerError', 'unauthorized', 'badRequest', 'threadRollbackFailed',
   'sandboxError', 'responseStreamDisconnected', 'responseTooManyFailedAttempts', 'activeTurnNotSteerable', 'other',
 ] as const;
+export type MathAgentFailureReason = 'account_concurrency_limit' | 'upstream_request_failed' | 'invalid_tool_call_arguments';
 export type MathAgentFailureDiagnostic = Readonly<{
   code: typeof CODEX_FAILURE_CODES[number];
   httpStatusCode?: number;
+  /** Safe, allowlisted detail; provider messages and tool arguments are never copied here. */
+  reason?: MathAgentFailureReason;
 }>;
 const HTTP_FAILURE_CODES = new Set(['httpConnectionFailed', 'responseStreamConnectionFailed',
   'responseStreamDisconnected', 'responseTooManyFailedAttempts']);
+const TRANSIENT_FAILURE_CODES = new Set([...HTTP_FAILURE_CODES, 'other', 'rateLimitExceeded',
+  'flexUnavailable', 'serverOverloaded', 'internalServerError']);
 const failureDiagnostic = (error: Json): MathAgentFailureDiagnostic | undefined => {
   const info = error.codexErrorInfo;
   const structured = info && typeof info === 'object' && !Array.isArray(info) ? info as Json : undefined;
   const keys = structured ? Object.keys(structured) : [];
   const candidate = typeof info === 'string' ? info : keys.length === 1 ? keys[0] : undefined;
   const code = CODEX_FAILURE_CODES.find(value => value === candidate);
-  if (!code) return undefined;
-  const payload = structured?.[code];
+  const payload = code ? structured?.[code] : undefined;
   const status = payload && typeof payload === 'object' && !Array.isArray(payload)
     ? (payload as Json).httpStatusCode : undefined;
-  return { code,
-    ...(HTTP_FAILURE_CODES.has(code) && typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
-      ? { httpStatusCode: status } : {}) };
+  const httpStatusCode = code && HTTP_FAILURE_CODES.has(code) && typeof status === 'number' &&
+    Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+  // Some gateways expose actionable failures as `other`, including the public
+  // stream-disconnected wrapper. Keep native auth/policy/budget/client failures
+  // authoritative, and persist only the matched category rather than raw text.
+  const message = typeof error.message === 'string' ? error.message : '';
+  let reason: MathAgentFailureDiagnostic['reason'];
+  if ((!code || TRANSIENT_FAILURE_CODES.has(code)) &&
+      (httpStatusCode === undefined || httpStatusCode === 408 || httpStatusCode === 429 || httpStatusCode >= 500)) {
+    if (/concurrency limit exceeded for account|timeout waiting for account concurrency slot|account_slot_acquire_failed/iu.test(message))
+      reason = 'account_concurrency_limit';
+    else if (/invalid tool call arguments from upstream|(?:tool|function) call\b[^\n]{0,240}\barguments (?:are|is) invalid JSON|(?:error parsing|failed to (?:parse|deserialize)) (?:function|tool) (?:call|arguments)/iu.test(message))
+      reason = 'invalid_tool_call_arguments';
+    else if (/stream disconnected before completion|upstream request failed|error sending request/iu.test(message))
+      reason = 'upstream_request_failed';
+  }
+  if (!code && !reason) return undefined;
+  return { code: code ?? (reason === 'account_concurrency_limit' ? 'rateLimitExceeded' : 'responseStreamDisconnected'),
+    ...(httpStatusCode !== undefined ? { httpStatusCode } : {}), ...(reason ? { reason } : {}) };
 };
 export type MathAgentActivity = {
   event: 'item_started' | 'item_completed' | 'reasoning' | 'message' | 'command_output' | 'lean_lock_waiting' | 'lean_lock_acquired';

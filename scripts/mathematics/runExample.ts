@@ -77,7 +77,7 @@ async function main(): Promise<number> {
   }
   if (action === 'prepare' || action === 'replay') await prepare(directory, {
     mode: action === 'replay' ? 'replay' : 'model', component: values.component, workers,
-    model: values.model || 'gpt-6.1-sol', effort: values.effort || 'xhigh', codex: values.codex,
+    model: values.model || 'deepseek-flash', effort: values.effort || 'max', codex: values.codex,
   });
   if (action === 'prepare') return 0;
   const config = readMathJson(path.join(directory, 'case.json')) as ExampleCase;

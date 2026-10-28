@@ -1,6 +1,6 @@
 # Source-aware semantic review
 
-New CLI model runs also freeze `fidelityPolicy: "task-preserving-v1"`. They require complete scope evidence and a host-run guarded correspondence check for approved source readings. Unestablished correspondence cannot become approval through reviewer agreement. See [whole-task fidelity](formalization-fidelity.md); absent policy fields preserve earlier schemas, instructions and judgments.
+New CLI model runs also freeze `fidelityPolicy: "task-preserving-v2"`. They require complete scope evidence and a host-run guarded correspondence check for approved source readings. Unestablished correspondence cannot become approval through reviewer agreement. See [whole-task fidelity](formalization-fidelity.md); absent policy fields preserve earlier schemas, instructions and judgments.
 
 Generated statements prepared with request v3 use the same schema, evidence validation and reading instructions from `src/math/formalizationSemanticReview.ts`. Generation keeps its existing blind translation and all-reviewer approval policy; evaluation keeps its primary/recheck routing and frozen receipts. Both require the same six aspects, source readings and concrete mismatch evidence. Generation stores full reviewer results in evidence v3 rather than reducing them to four booleans.
 

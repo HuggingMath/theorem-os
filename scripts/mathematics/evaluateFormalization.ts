@@ -105,7 +105,7 @@ export async function evaluateFormalization(argv: string[]): Promise<number> {
     const contextProtocol = saved ? saved.schema === 'theorem-os.formalization-review-run.v2' ?
       saved.configuration?.contextProtocol : undefined : execution === 'model' && protocol === 'v2' ? LEAN_STATEMENT_CONTEXT_PROTOCOL : undefined;
     const fidelityPolicy = saved ? saved.schema === 'theorem-os.formalization-review-run.v2' ?
-      saved.configuration?.fidelityPolicy : undefined : execution === 'model' && protocol === 'v2' ? 'task-preserving-v1' : undefined;
+      saved.configuration?.fidelityPolicy : undefined : execution === 'model' && protocol === 'v2' ? 'task-preserving-v2' : undefined;
     const common = { environment, ...(protocol === 'v2' ? { protocol: 'v2',
       ...(contextProtocol === undefined ? {} : { contextProtocol }),
       ...(fidelityPolicy === undefined ? {} : { fidelityPolicy }) } : {}) };

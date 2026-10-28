@@ -125,7 +125,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     if (flags.has('reference-provenance')) throw new Error('--reference-provenance requires --reference-file');
   }
   const request = prepareFormalization(directory, { problemId, statement, environment, execution: 'model', ...author, workflow,
-    fidelityPolicy: 'task-preserving-v1',
+    fidelityPolicy: 'task-preserving-v2',
     ...(retrieval ? { retrieval } : {}),
     buildManifestRef: buildManifest(required(flags, 'build-manifest')),
     maxRounds: integerFlag(flags, 'max-rounds', 0), maxRunSeconds: integerFlag(flags, 'max-run-seconds', 0),

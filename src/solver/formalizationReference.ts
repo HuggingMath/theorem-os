@@ -47,8 +47,12 @@ export async function compareFormalizationReference(directory: string, input: Fo
     candidateToReference: { status: 'not-established' as const, reason },
     referenceToCandidate: { status: 'not-established' as const, reason } }));
   let result: CurrentFormalizationReferenceResult = {
-    schema: 'theoremos.formalization-reference.v4', authority: 'advisory-lean-process',
-    method: 'cardinality-correspondence-v5', status: 'not-established', check: 'unavailable', proofVerified: false,
+    ...(input.purpose === 'task-fidelity-v2' ? {
+      schema: 'theoremos.formalization-reference.v5' as const, method: 'cardinality-correspondence-v6' as const,
+    } : {
+      schema: 'theoremos.formalization-reference.v4' as const, method: 'cardinality-correspondence-v5' as const,
+    }),
+    authority: 'advisory-lean-process', status: 'not-established', check: 'unavailable', proofVerified: false,
     semanticEquivalenceClaimed: false, modelInvoked: false, inputDigest: mathDigest(canonicalMathJson(input)),
     candidateSourceSha256: mathDigest(input.candidateSource), referenceSourceSha256: mathDigest(input.referenceSource),
     environment: input.environment, environmentDigest: config.dependencyDigest,

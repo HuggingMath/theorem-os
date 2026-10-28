@@ -15,7 +15,8 @@ import { captureObligationSnapshot } from './obligationProgress';
 import { taskConnectionCheckCurrent } from './taskConnections';
 import { taskGroup, taskVersion, taskProofContractVersion, taskReferenceDependencies, invalidatedTaskIds, type CooperativeTask, type TaskRecord,
   type CooperativeAction } from './tasks';
-import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan } from './cooperationShared';
+import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan,
+  type InvestigationOutcome } from './cooperationShared';
 import { CooperationIntegration } from './cooperationIntegration';
 
 /** Lead plan acceptance, plan identity and original-goal frontier recovery. */
@@ -123,17 +124,43 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     this.changed();
     return action;
   }
+  /** A removed or failed investigation is not a completed one; the stored marker alone cannot tell them apart. */
+  protected investigationOutcome(recovery: { investigationTaskId?: string; investigationAttempts?: number }): InvestigationOutcome | undefined {
+    const taskId = recovery.investigationTaskId;
+    if (!taskId) return;
+    const failure = [...(this.archive.deliveries ?? [])].reverse().find(record =>
+      record.taskId === taskId && record.kind === 'failure');
+    const reason = failure ? bounded(failure.summary.split('\n')[0]!, 200) : undefined;
+    const node = this.archive.tasks.find(item => item.task.id === taskId);
+    if (!node) return { taskId, state: 'abandoned', ...(reason ? { reason } : {}) };
+    if (node.status === 'completed') return { taskId, state: 'delivered' };
+    if (node.status === 'blocked' && failure) return { taskId, state: 'rejected', ...(reason ? { reason } : {}) };
+    return { taskId, state: 'dispatched' };
+  }
   protected async investigateFrontierRecovery(frontier: ReturnType<CooperationPlanning['activeGoalFrontier']>) {
     if (!this.input.continuousResearch) return false;
     const inputs = new Set(frontier.map(item => this.recoveryTaskInput(this.node(item.taskId))));
     const recovery = this.archive.frontierRecoveries?.find(item => item.status === 'awaiting-input' &&
-      !item.investigationTaskId && item.taskInputDigests.every(input => inputs.has(input)));
+      item.taskInputDigests.every(input => inputs.has(input)));
     if (!recovery) return false;
+    const investigation = this.investigationOutcome(recovery);
+    // A dispatched or delivered investigation is durable. A rejected one is still owned by the current plan;
+    // an abandoned one produced no accepted finding, so it may be replaced once with its failure as input.
+    if (investigation && investigation.state !== 'abandoned') return false;
+    const attempts = recovery.investigationAttempts ?? (investigation ? 1 : 0);
+    if (investigation && attempts >= 2) {
+      this.input.emit('frontier_investigation_exhausted', { recoveryId: recovery.id, taskId: investigation.taskId,
+        attempts, reason: investigation.reason ?? 'investigation-removed-without-finding' });
+      return false;
+    }
     const tasks = recovery.taskIds.map(id => this.node(id)).filter(node => node && node.status === 'blocked');
     if (!tasks.length) return false;
     const task: CooperativeTask = { id: `frontier_input_${recovery.id.slice(0, 40)}`, kind: 'research', revision: 0,
       groupId: taskGroup(tasks[0].task), dependsOn: tasks.map(node => node.task.id),
       objective: `Independently investigate new mathematical inputs for the unresolved original-goal frontier ${tasks.map(node => node.task.id).join(', ')}. ` +
+        (investigation ? 'A previous investigation of this input ended without an accepted finding' +
+          (investigation.reason ? ` (${investigation.reason})` : '') +
+          '. Do not repeat that failure; return a complete math-result finding and never present an unchecked proof as accepted. ' : '') +
         `The previous recovery could not supply an executable step: ${recovery.reason ?? 'The original inference remains unresolved.'} ` +
         'Inspect relevant mathematical references, available library results, and distinct constructions. Report concrete evidence, exact hypotheses, and unresolved gaps; findings remain advisory. ' +
         'Do not resubmit the unchanged failed proof, rename the same obligation, or claim that a proposed input has been proved.' };
@@ -141,7 +168,9 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     if (!routeAllowsTask(task, [...this.archive.tasks, node], this.archive.groups) ||
         !this.livePeers.some(worker => this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks) === node)) return false;
     // The marker shares the accepted-plan checkpoint so restarting cannot create another investigation of this input.
+    const previousAttempts = recovery.investigationAttempts;
     recovery.investigationTaskId = task.id;
+    recovery.investigationAttempts = investigation ? attempts + 1 : 1;
     if (!this.archive.tasks.some(node => node.task.id === task.id)) {
       const evidence = this.planningEvidenceDigest();
       try {
@@ -149,7 +178,12 @@ export abstract class CooperationPlanning extends CooperationIntegration {
           tasks: [...this.archive.tasks.map(node => node.task), task], groups: this.archive.groups?.map(route => route.group),
           ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}),
         }));
-      } catch (error) { delete recovery.investigationTaskId; throw error; }
+      } catch (error) {
+        delete recovery.investigationTaskId;
+        if (previousAttempts === undefined) delete recovery.investigationAttempts;
+        else recovery.investigationAttempts = previousAttempts;
+        throw error;
+      }
       this.archive.lastLeadInputDigest = evidence === this.planningEvidenceDigest()
         ? this.planningInputDigest() : this.archive.lastLeadInputDigest;
       this.archive.planEdited = true; this.syncPlanNotes();
@@ -164,8 +198,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     if (!this.input.continuousResearch || !frontier.length) return false;
     if (this.stopping || this.input.modelDispatchAllowed?.() === false || inputDigest !== this.planningInputDigest()) return true;
     if (this.archive.frontierWaiting?.inputDigest !== inputDigest) {
+      const inputs = new Set(frontier.map(item => this.recoveryTaskInput(this.node(item.taskId))));
+      const recovery = this.archive.frontierRecoveries?.find(item => item.status === 'awaiting-input' &&
+        item.taskInputDigests.every(input => inputs.has(input)));
+      const investigation = recovery && this.investigationOutcome(recovery);
       this.archive.frontierWaiting = { inputDigest, taskIds: frontier.map(item => item.taskId),
-        goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], reason: 'awaiting-new-mathematical-input' };
+        goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], reason: 'awaiting-new-mathematical-input',
+        ...(investigation ? { investigation } : {}) };
       this.input.emit('frontier_recovery_waiting', { ...this.archive.frontierWaiting });
       this.changed();
     }

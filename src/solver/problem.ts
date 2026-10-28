@@ -219,7 +219,20 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
   }
 }
 
+/** Ephemeral worker scratch is not proof content: remove it before enforcing source ownership.
+ *  The project itself still rejects tracked edits and arbitrary untracked files. */
+const solverScratch = (relative: string) => {
+  if (/(^|\/)Probe[^/]*\.lean$/u.test(relative)) return true;
+  const top = relative.split('/')[0]!;
+  return top === '.scratch' || top === 'scratch' || top === '.probe' || /^scratch_/u.test(top);
+};
+function removeSolverScratch(worktree: string): void {
+  for (const relative of git(worktree, ['ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean))
+    if (solverScratch(relative)) fs.rmSync(path.join(worktree, relative), { recursive: true, force: true });
+}
+
 export function assertSolverSources(problem: SolverProblem, worktree: string): void {
+  removeSolverScratch(worktree);
   const project = path.join(worktree, problem.projectRelative);
   assertSolverProjectSources(problem, project);
   git(worktree, ['merge-base', '--is-ancestor', problem.baseCommit, 'HEAD']);

@@ -22,7 +22,8 @@ function fixture(overrides: Record<string, unknown> = {}) {
     ...overrides });
   return { parent, root, manifest, directory, request };
 }
-function preset(options: { rejectFirst?: boolean; unknownFirst?: boolean; unchanged?: boolean; reusedThread?: boolean; mutateInput?: boolean; mutateContract?: boolean;
+function preset(options: { rejectFirst?: boolean; unknownFirst?: boolean; alwaysUnknown?: boolean; unchanged?: boolean;
+  reusedThread?: boolean; mutateInput?: boolean; mutateContract?: boolean;
   missingUsage?: boolean; tokens?: number; submitted?: boolean; isolationReceipt?: Record<string, unknown>;
   changeReview?: (output: any, input: any) => unknown } = {}) {
   let generation = 0, sessions = 0;
@@ -50,7 +51,7 @@ function preset(options: { rejectFirst?: boolean; unknownFirst?: boolean; unchan
           assumptions: [], definitions: [], targets: input.targets.map((item: { name: string }) => ({ name: item.name, mathematics: 'n + 0 = n' })) };
         else {
           const verdict = generation === 1 && options.rejectFirst ? 'changes_requested' :
-            generation === 1 && options.unknownFirst ? 'unknown' : 'approved';
+            generation === 1 && options.unknownFirst ? 'unknown' : options.alwaysUnknown ? 'unknown' : 'approved';
           output = input.schema === 'theorem-os.formalization-review-input.v2' ?
             semanticReviewFixture(input, verdict, verdict === 'approved' ? 'Faithful test statement.' : 'Clarify the domain.') :
             { inputDigest: input.inputDigest, snapshotDigest: input.snapshotDigest, translationDigest: input.translationDigest,
@@ -374,6 +375,25 @@ describe('formalization generation and independent statement review', () => {
     expect(agent.seen.filter(item => item.role === 'compare')).toHaveLength(2);
     expect(agent.seen.filter(item => item.role === 'generate')[1].input.feedback).toContain('unknown');
     expect(readFormalizationState(f.directory)!.rejectedCandidates ?? []).toEqual([]);
+  });
+
+  it('ends an unlimited-round run after three consecutive unknown semantic reviews', async () => {
+    const f = fixture({ maxRounds: 0, maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0 }),
+      agent = preset({ alwaysUnknown: true });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
+    expect(result).toMatchObject({ status: 'exhausted', rounds: 3 });
+    expect(result.error).toContain('formalization_semantic_unknown:');
+    expect(agent.seen.filter(item => item.role === 'compare')).toHaveLength(3);
+    expect(readFormalizationState(f.directory)!.rejectedCandidates ?? []).toEqual([]);
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it('resets the consecutive unknown count when a later round reaches a concrete verdict', async () => {
+    const f = fixture({ maxRounds: 0, maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0 }),
+      agent = preset({ unknownFirst: true });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
+    expect(result).toMatchObject({ status: 'approved', rounds: 2 });
+    expect(readFormalizationState(f.directory)!.unknownRounds).toBeUndefined();
   });
 
   it.each([{ reusedThread: true }, { mutateInput: true }])('blocks reused review threads or modified role inputs: %j', async options => {

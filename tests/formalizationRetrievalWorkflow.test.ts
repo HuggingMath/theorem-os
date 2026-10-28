@@ -7,6 +7,7 @@ import { assertFormalizationEvidence, formalizationDigest, prepareFormalization,
 import type { FormalizationPlan } from '../src/math/formalizationPlan';
 import { defaultFormalizationWorkflow } from '../src/math/formalizationWorkflow';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
+import { leanLibrarySymbolCommands } from '../src/math/leanLibrarySymbolsProgram';
 import { createMathRetrievalCorpus } from '../src/math/mathRetrievalCorpus';
 import { canonicalMathJson, mathDigest, readMathText } from '../src/math/mathRuntimeIo';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
@@ -19,7 +20,7 @@ afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursiv
 const author = { model: 'preset-retrieval-author', effort: 'none', profile: '/preset-only', executable: '/no-model' };
 const marker = 'retrievalOnlyMarker';
 
-async function fixture(retrieval = true) {
+async function fixture(retrieval: boolean | 'symbols' = true) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'formalization-retrieval-workflow-')));
   roots.push(base);
   const { root, manifest } = buildFixture(base), directory = path.join(base, 'run');
@@ -38,7 +39,8 @@ async function fixture(retrieval = true) {
     problemId: 'synthetic_addition', statement: fixtureStatement, environment: 'mathlib', execution: 'replay',
     ...author, workflow: defaultFormalizationWorkflow(author), buildManifestRef: manifest,
     maxRounds: 2, maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: 0,
-    ...(retrieval ? { retrieval: { workspace, corpusFile } } : {}),
+    ...(retrieval ? { retrieval: { workspace, corpusFile,
+      ...(retrieval === 'symbols' ? { symbolProtocol: 'lean-exact-names-v1' as const } : {}) } } : {}),
   });
   return { base, root, directory, workspace, source, corpusFile, request };
 }
@@ -154,7 +156,7 @@ describe('frozen plan retrieval in formalization generation', () => {
     expect(formalizationDigest(readFormalizationArtifact(path.join(f.directory, 'artifact')))).toBe(digest);
   });
 
-  it('reuses the deterministic packet after interruption and replanning the same frozen task', async () => {
+  it('reuses the plan and deterministic packet after interruption in the same frozen round', async () => {
     const f = await fixture(), controller = new AbortController();
     let interrupted = false;
     const agent = preset(role => {
@@ -164,12 +166,48 @@ describe('frozen plan retrieval in formalization generation', () => {
     expect(stopped).toMatchObject({ status: 'stopped', rounds: 1 });
     expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
     const first = agent.seen.find(item => item.role === 'generate')!.input.retrieval;
-    expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate })).toMatchObject({ status: 'approved', rounds: 2 });
+    expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate })).toMatchObject({ status: 'approved', rounds: 1 });
+    expect(agent.seen.filter(item => item.role.startsWith('plan-'))).toHaveLength(1);
     const generated = agent.seen.filter(item => item.role === 'generate');
     expect(generated).toHaveLength(2);
     expect(generated[1].input.retrieval).toEqual(first);
     expect(formalizationDigest(generated[1].input.retrieval)).toBe(formalizationDigest(first));
     expect(readFormalizationArtifact(path.join(f.directory, 'artifact')).generation.input.retrieval).toEqual(first);
+  });
+
+  it.each(['corpus', 'source'] as const)('rejects a changed frozen %s before reusing retrieval on resume', async field => {
+    const f = await fixture('symbols'), controller = new AbortController();
+    const agent = preset(role => { if (role === 'generate') controller.abort(); });
+    let lookups = 0;
+    const lookupSymbols: NonNullable<Parameters<typeof runFormalization>[2]>['lookupSymbols'] = async (_directory, names, environment) => {
+      lookups++;
+      const config = getLeanTaskEnvironment(environment);
+      const symbols = names.map(name => ({ name, exists: true as const, module: 'Init.Prelude', kind: 'inductive' as const,
+        class: false, structure: false, type: 'Type', fields: [] }));
+      return { schema: 'theorem-os.lean-library-symbols.v1', authority: 'advisory-lean-process', environment,
+        environmentDigest: config.dependencyDigest, toolchain: config.toolchain, mathlibRevision: config.mathlibRevision ?? null,
+        querySha256: mathDigest(leanLibrarySymbolCommands(names, environment)), symbolsSha256: formalizationDigest(symbols),
+        observation: { sourceDigest: mathDigest('synthetic symbols source'), environmentDigest: mathDigest('synthetic sealed environment'),
+          toolIdentity: mathDigest('synthetic compiler identity') }, symbols };
+    };
+    expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate, lookupSymbols, signal: controller.signal }))
+      .toMatchObject({ status: 'stopped', rounds: 1 });
+    expect(agent.seen.map(item => item.role)).toEqual(['plan-1', 'generate']);
+    expect(lookups).toBe(1);
+    const interrupted = readFormalizationState(f.directory)!;
+    expect(interrupted.activeRound?.retrievalDigest).toBeDefined();
+    if (field === 'corpus') {
+      const file = path.join(f.directory, 'retrieval-corpus.json');
+      fs.chmodSync(file, 0o600); fs.appendFileSync(file, '\n');
+    } else fs.appendFileSync(f.source, '\ndef changed_while_interrupted : Nat := 1\n');
+    const resumed = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate, lookupSymbols });
+    expect(resumed).toMatchObject({ status: 'stopped', rounds: 1 });
+    expect(resumed.error).toContain('formalization_retrieval_failed:');
+    expect(resumed.error).toContain(field === 'corpus' ? 'formalization_retrieval_corpus_changed' : 'math_corpus_source_changed');
+    expect(agent.seen.map(item => item.role)).toEqual(['plan-1', 'generate']);
+    expect(lookups).toBe(1);
+    expect(readFormalizationState(f.directory)!.sessions).toHaveLength(interrupted.sessions.length);
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
   });
 
   it.each(['corpus', 'source'] as const)('stops a changed frozen %s before generation without retrying', async field => {
@@ -199,9 +237,9 @@ describe('frozen plan retrieval in formalization generation', () => {
     expect(generated.input).not.toHaveProperty('retrieval');
     // Frozen from the previous kernel-context replay, before retrieval integration.
     // Re-pinned when generation learned to state conclusions at the source's own type
-    // (Type* carriers, Fintype/first-class finite families, Nat.Prime).
-    // Re-pinned when generation learned to keep the source's own claim shape
-    // (explicit equation with its witness, no bundled library relation).
+    // (Type* carriers, Fintype/first-class finite families, Nat.Prime), then again
+    // when it learned to keep the source's own claim shape (explicit equation with
+    // its witness, no bundled library relation).
     expect(mathDigest(generated.config.instructions)).toBe('0b47d9c571654b78f9009d810546e3abd7c0275a0f9f1a3f755022725b879ac8');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
     expect(evidence.generation.input).not.toHaveProperty('retrieval');

@@ -87,7 +87,6 @@ describe('module experiment definitions', () => {
       return modules.M5.assign(modules.M3.ready(tasks), workers[1], workers)?.task.id;
     };
     expect(assigned('plan')).toBe('ready-goal');
-    expect(assigned('goals-first')).toBe('ready-goal');
     expect(assigned('critical-path')).toBe('bridge');
   });
 });
@@ -148,11 +147,12 @@ describe('frozen module comparison launches', () => {
   it.each([
     ['deepseek', 'deepseek-v4-pro', 'DEEPSEEK_API_KEY', 'https://api.deepseek.com', 'responses'],
     ['westlake', 'deepseek-flash', 'WESTLAKEHPC_API_KEY', 'https://hpc-api.westlake.edu.cn/v1', 'chat-completions'],
+    ['sub2api', 'deepseek-flash', 'SUB2API_WESTLAKE_API_KEY', 'http://127.0.0.1:8080/v1', 'responses'],
   ])('prepares %s experiments without a key or model call and isolates every provider profile', async (provider, model, envKey, baseUrl, wireApi) => {
     vi.stubEnv(envKey, '');
     const run = vi.spyOn(batch, 'runMathBatch').mockResolvedValue(0);
     const { directory, plan } = await prepare(2, provider);
-    expect(plan.configuration).toMatchObject({ provider, model, effort: 'high' });
+    expect(plan.configuration).toMatchObject({ provider, model, effort: provider === 'deepseek' ? 'high' : 'max' });
     expect(new Set(plan.jobs.map(job => job.codexProfile)).size).toBe(8);
     for (const job of plan.jobs) {
       expect(read(job.launch).codexHome).toBe(job.codexProfile);
@@ -223,9 +223,14 @@ describe('frozen module comparison launches', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it.each([['--workers', '2'], ['--method', 'lemma'], ['--scheduler', 'goals-first']])('rejects incompatible common option %s %s', async (flag, value) => {
+  it.each([['--workers', '2'], ['--scheduler', 'continuation']])('rejects incompatible common option %s %s', async (flag, value) => {
     await expect(compareMathRuns(['--phase', 'prepare', '--directory', '/unused', flag, value,
       '--module-experiment', path.join(root, 'examples/components/module-experiment.json')])).rejects.toThrow('module experiments require');
+  });
+
+  it('rejects the removed lemma method when preparing a comparison', async () => {
+    await expect(compareMathRuns(['--phase', 'prepare', '--directory', '/unused', '--method', 'lemma']))
+      .rejects.toThrow('invalid method or scheduler');
   });
 
   it('rejects a dropped planned attempt instead of silently shrinking the denominator', async () => {
@@ -279,7 +284,11 @@ describe('CLI module-plan boundary', () => {
     expect(fs.readdirSync(directory)).toEqual(['module-plan.json']);
   });
 
-  it.each([['--method', 'lemma'], ['--scheduler', 'critical-path']])('rejects conflicting %s before reading a module plan', async (flag, value) => {
-    await expect(runSolver(['--module-plan', '/unused.json', flag, value], root)).rejects.toThrow('--module-plan requires');
+  it('rejects a conflicting scheduler before reading a module plan', async () => {
+    await expect(runSolver(['--module-plan', '/unused.json', '--scheduler', 'critical-path'], root)).rejects.toThrow('--module-plan requires');
+  });
+
+  it('rejects the removed lemma method', async () => {
+    await expect(runSolver(['--module-plan', '/unused.json', '--method', 'lemma'], root)).rejects.toThrow('invalid --method');
   });
 });

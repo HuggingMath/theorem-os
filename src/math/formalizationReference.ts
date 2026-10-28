@@ -3,8 +3,10 @@ import { formalizationReferenceResultSchema as legacyResultSchema, formalization
   assertFormalizationReferenceResult as assertLegacyResult } from './formalizationReferenceV2';
 import { formalizationReferenceV3ResultSchema as previousResultSchema, assertFormalizationReferenceResult as assertPreviousResult } from './formalizationReferenceV3';
 import { formalizationReferenceV4ResultSchema as finiteFamilyResultSchema, assertFormalizationReferenceResult as assertFiniteFamilyResult } from './formalizationReferenceV4';
-import { cardinalityPrelude } from './formalizationCardinalityProgram';
+import { cardinalityPrelude, finiteCardinalityPrelude } from './formalizationCardinalityProgram';
 import { finiteFamilyPrelude } from './formalizationFiniteFamilyProgram';
+import { finiteProperPrelude } from './formalizationFiniteProperProgram';
+import { groupCenterProductPrelude } from './formalizationGroupCenterProgram';
 import { representationProgramLines } from './formalizationReferenceProgram';
 import { eraseFormalizationProofs, formalizationTargets } from './formalizationSource';
 import { getLeanTaskEnvironment } from './leanTaskEnvironment';
@@ -19,7 +21,7 @@ const target = z.string().max(1000).refine(isSimpleLeanName);
 // method admits the already pinned Lean 4.8 environment, using structural rules only.
 export const formalizationReferenceInputSchema = legacyInputSchema.innerType().extend({
   environment: z.enum(['standard', 'mathlib', 'mathlib-4.8']),
-  purpose: z.literal('task-fidelity-v1').optional(),
+  purpose: z.enum(['task-fidelity-v1', 'task-fidelity-v2']).optional(),
 }).strict().superRefine((input, context) => {
   const { purpose: _purpose, ...base } = input;
   const checked = legacyInputSchema.safeParse({ ...base, environment: input.environment === 'standard' ? 'standard' : 'mathlib' });
@@ -45,6 +47,12 @@ const transformation = z.object({
     type: z.string().min(1).max(300000), term: z.string().min(1).max(300000) }).strict()),
   proof: z.object({ forward: z.string().min(1).max(300000), backward: z.string().min(1).max(300000) }).strict(),
 }).strict();
+const transformationV6 = transformation.extend({
+  ruleId: z.enum(['group-conjugacy-exists', 'group-multiplication-association', 'finite-family-reindex',
+    'cardinality-prime-product', 'boolean-false', 'finite-proper-condition', 'finite-cardinality-value', 'group-center-product']),
+  sideConditions: z.array(z.object({ kind: z.enum(['group-instance', 'finite-index-universe', 'prime-product-nonzero',
+    'cardinality-nonzero']), type: z.string().min(1).max(300000), term: z.string().min(1).max(300000) }).strict()),
+}).strict();
 const representationResultSchema = z.object({
   schema: z.literal('theoremos.formalization-reference.v4'), authority: z.literal('advisory-lean-process'),
   method: z.literal('cardinality-correspondence-v5'), status: z.enum(['established', 'not-established']),
@@ -59,8 +67,14 @@ const representationResultSchema = z.object({
     latest: z.unknown(), artifacts: z.array(z.object({ digest, text: z.string().max(4000000) }).strict()).min(1).max(4),
     reportText: z.string().max(1000000), reportSha256: digest }).strict().optional(),
 }).strict();
-export type CurrentFormalizationReferenceResult = z.infer<typeof representationResultSchema>;
-export const formalizationReferenceResultSchema = z.discriminatedUnion('schema', [legacyResultSchema, previousResultSchema, finiteFamilyResultSchema, representationResultSchema]);
+const taskFidelityV2ResultSchema = representationResultSchema.extend({
+  schema: z.literal('theoremos.formalization-reference.v5'),
+  method: z.literal('cardinality-correspondence-v6'),
+}).strict();
+export type CurrentFormalizationReferenceResult = z.infer<typeof representationResultSchema> |
+  z.infer<typeof taskFidelityV2ResultSchema>;
+export const formalizationReferenceResultSchema = z.discriminatedUnion('schema', [legacyResultSchema, previousResultSchema,
+  finiteFamilyResultSchema, representationResultSchema, taskFidelityV2ResultSchema]);
 export type FormalizationReferenceResult = z.infer<typeof formalizationReferenceResultSchema>;
 
 export const FORMALIZATION_REFERENCE_QUERY = 'ReferenceComparison.lean';
@@ -128,7 +142,8 @@ function querySource(input: FormalizationReferenceInput): string {
     'import ReferenceCandidate', 'import ReferenceGold',
     'set_option maxHeartbeats 100000', 'set_option maxRecDepth 512',
     'set_option pp.fullNames true', 'set_option pp.notation false',
-    ...(input.environment === 'mathlib' ? [finiteFamilyPrelude, cardinalityPrelude] : []),
+    ...(input.environment === 'mathlib' ? [finiteFamilyPrelude, cardinalityPrelude,
+      ...(input.purpose === 'task-fidelity-v2' ? [finiteProperPrelude, finiteCardinalityPrelude, groupCenterProductPrelude] : [])] : []),
     ...(input.environment === 'mathlib-4.8' ? [
       // Lean 4.8 leaves a metavariable for this recursive closure inside run_cmd.
       // Keep the older toolchain's recursion closed over explicit arguments.
@@ -217,7 +232,8 @@ function querySource(input: FormalizationReferenceInput): string {
     '    let type := Lean.Expr.forallE `opposite premise conclusion Lean.BinderInfo.default',
     '    let levelParams := (Lean.collectLevelParams {} type).params.toList',
     '    Lean.addDecl (.thmDecl { name, levelParams, type, value })',
-    ...representationProgramLines(input.environment === 'mathlib-4.8' ? 'standard' : input.environment),
+    ...representationProgramLines(input.environment === 'mathlib-4.8' ? 'standard' : input.environment,
+      input.purpose === 'task-fidelity-v2', input.purpose === 'task-fidelity-v2', input.purpose === 'task-fidelity-v2'),
     '  let mut reports : Array Lean.Json := #[]',
     ...input.pairs.flatMap((pair, index) => {
       const forward = `TheoremOSCorrespondence.candidateToReference${index}`;
@@ -273,7 +289,7 @@ function querySource(input: FormalizationReferenceInput): string {
         '  reports := reports.push pairReport',
       ];
     }),
-    '  let report := (Lean.Json.mkObj [("schema", Lean.toJson "theoremos.reference-report.v4"), ("pairs", Lean.toJson reports)]).compress',
+    `  let report := (Lean.Json.mkObj [("schema", Lean.toJson ${input.purpose === 'task-fidelity-v2' ? '"theoremos.reference-report.v5"' : '"theoremos.reference-report.v4"'}), ("pairs", Lean.toJson reports)]).compress`,
     '  if report.utf8ByteSize > 1000000 then throwError "reference report bound exceeded"',
     '  Lean.logInfo m!"THEOREMOS_REFERENCE_REPORT:{report}"',
     `  Lean.Core.liftIOCore <| IO.FS.writeFile ${JSON.stringify(FORMALIZATION_REFERENCE_REPORT)} report`, ''].join('\n');
@@ -297,7 +313,9 @@ export function formalizationReferenceFiles(input: FormalizationReferenceInput):
 export function assertFormalizationReferenceResult(input: FormalizationReferenceInput, value: unknown): asserts value is FormalizationReferenceResult {
   input = formalizationReferenceInputSchema.parse(input);
   const parsed = formalizationReferenceResultSchema.parse(value);
-  if ((input.environment === 'mathlib-4.8' || input.purpose) && parsed.schema !== 'theoremos.formalization-reference.v4')
+  if (input.purpose === 'task-fidelity-v2' && parsed.schema !== 'theoremos.formalization-reference.v5' ||
+      input.purpose !== 'task-fidelity-v2' && (input.environment === 'mathlib-4.8' || input.purpose) &&
+        parsed.schema !== 'theoremos.formalization-reference.v4')
     throw new Error('formalization_reference_legacy_environment_unsupported');
   if (parsed.schema === 'theoremos.formalization-reference.v1') {
     assertLegacyResult({ ...input, environment: input.environment as 'standard' | 'mathlib' }, value);
@@ -311,6 +329,9 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
     assertFiniteFamilyResult({ ...input, environment: input.environment as 'standard' | 'mathlib' }, value);
     return;
   }
+  if (input.purpose === 'task-fidelity-v2' && parsed.schema !== 'theoremos.formalization-reference.v5' ||
+      input.purpose !== 'task-fidelity-v2' && parsed.schema !== 'theoremos.formalization-reference.v4')
+    throw new Error('formalization_reference_evidence_invalid');
   const result = parsed;
   const invalid = () => { throw new Error('formalization_reference_evidence_invalid'); };
   if (result.inputDigest !== mathDigest(canonicalMathJson(input)) ||
@@ -349,22 +370,29 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
         latest.sourceFiles.map((entry: any) => [entry.file, entry.digest])])) ||
       mathDigest(evidence.reportText) !== evidence.reportSha256) invalid();
   const report = JSON.parse(evidence.reportText);
-  if (report.schema !== 'theoremos.reference-report.v4' || !Array.isArray(report.pairs) || report.pairs.length !== result.pairs.length ||
+  const isV6 = result.schema === 'theoremos.formalization-reference.v5';
+  if (report.schema !== (isV6 ? 'theoremos.reference-report.v5' : 'theoremos.reference-report.v4') ||
+      !Array.isArray(report.pairs) || report.pairs.length !== result.pairs.length ||
       canonicalMathJson(report.pairs.map((pair: any) => ({ candidateTarget: pair.candidateTarget, referenceTarget: pair.referenceTarget,
         candidateToReference: pair.candidateToReference, referenceToCandidate: pair.referenceToCandidate }))) !== canonicalMathJson(result.pairs)) invalid();
   report.pairs.forEach((pair: any, index: number) => {
     const established = result.pairs[index].candidateToReference.status === 'established';
     if (typeof pair.representationCorrespondence !== 'boolean' || !Array.isArray(pair.transformations)) invalid();
-    const transformations = z.array(transformation).parse(pair.transformations);
+    const transformations = (isV6 ? z.array(transformationV6) : z.array(transformation)).parse(pair.transformations);
     if (pair.representationCorrespondence !== (transformations.length > 0) ||
         pair.representationCorrespondence && !established) invalid();
     for (const step of transformations) {
       const finiteFamily = step.ruleId === 'finite-family-reindex';
+      const finiteProper = step.ruleId === 'finite-proper-condition';
       const cardinality = step.ruleId === 'cardinality-prime-product';
+      const finiteCardinality = step.ruleId === 'finite-cardinality-value';
+      const groupCenterProduct = step.ruleId === 'group-center-product';
       const booleanFalse = step.ruleId === 'boolean-false';
-      const expectedCondition = finiteFamily ? 'finite-index-universe' : cardinality ? 'prime-product-nonzero' : 'group-instance';
-      if (step.position.kind !== (finiteFamily || cardinality ? 'forall-suffix' : 'forall-conclusion') ||
-          (booleanFalse ? step.sideConditions.length !== 0 : step.sideConditions.length !== 1 ||
+      const expectedCondition = finiteFamily ? 'finite-index-universe' : cardinality ? 'prime-product-nonzero' :
+        finiteCardinality ? 'cardinality-nonzero' : 'group-instance';
+      if ((finiteProper || finiteCardinality || groupCenterProduct) && !isV6 ||
+          step.position.kind !== (finiteFamily || finiteProper || cardinality || finiteCardinality ? 'forall-suffix' : 'forall-conclusion') ||
+          (booleanFalse || finiteProper || groupCenterProduct ? step.sideConditions.length !== 0 : step.sideConditions.length !== 1 ||
             step.sideConditions.some(c => c.kind !== expectedCondition)) ||
           (finiteFamily ? step.after.universes.some(u => !step.before.universes.includes(u)) :
             canonicalMathJson(step.before.universes) !== canonicalMathJson(step.after.universes))) invalid();
@@ -374,7 +402,7 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
           step.after.context.some((entry, i) => entry.index !== i) ||
           canonicalMathJson(step.before.context) !== canonicalMathJson(step.after.context)) invalid();
     }
-    const identityAllowed = input.purpose === 'task-fidelity-v1' && pair.definitionallyEqual === true;
+    const identityAllowed = input.purpose !== undefined && pair.definitionallyEqual === true;
     if (established && ((!identityAllowed && (pair.candidateBaseline !== false || pair.referenceBaseline !== false)) ||
         (pair.definitionallyEqual !== true && pair.binderPermutation !== true && pair.representationCorrespondence !== true) ||
         pair.candidateToReference.proofDeclaration !== `TheoremOSCorrespondence.candidateToReference${index}` ||

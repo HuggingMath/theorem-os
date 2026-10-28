@@ -7,6 +7,8 @@ import { assertFormalizationReferenceResult, type FormalizationReferenceInput,
 import { canonicalMathJson, mathDigest, writeMathFrozen } from '../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { formalizationTargets } from '../src/math/formalizationSource';
+import { assertFormalizationFidelity, fidelityReferenceInput,
+  type FormalizationFidelity, type FormalizationFidelitySnapshot } from '../src/math/formalizationFidelity';
 import { resolveReviewEnvironment, structuredReviewDigest,
   type StructuredReviewInput } from '../src/math/formalizationSemanticReview';
 import { compareFormalizationReference } from '../src/solver/formalizationReference';
@@ -114,6 +116,37 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('task-fidelit
     expect(positive).toMatchObject({ modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
     expect(Object.values(positive.files).map(file => file.text).join('\n')).not.toMatch(/\b(?:sorry|sorryAx|admit|axiom)\b/u);
   });
+
+  it('accepts placeholder layout without changing source digests or string-valued definitions', async () => {
+    const source = 'namespace Candidate\ndef label : String := "a  b"\n'
+      + 'theorem same : label = "a  b" := by sorry\n'
+      + 'theorem different : label = "a b" := by sorry\nend Candidate\n';
+    const contract = 'namespace SourceContract\r\ndef label : String := "a  b"\r\n'
+      + 'theorem same : label = "a  b" := by sorry\r\n\r\n'
+      + 'theorem different : label = "a  b" := by\r\n  sorry\r\n\r\nend SourceContract\r\n';
+    const snapshot: FormalizationFidelitySnapshot = { source, environment: 'standard',
+      targets: formalizationTargets(source).map(target => ({ ...target, context: { bindings: {
+        binders: [], conclusion: 'String equality.', conclusionDependencies: [],
+      } } })) };
+    const original = 'Keep the complete string-valued definitions and both equality claims.';
+    const fidelity: FormalizationFidelity = { policy: 'task-preserving-v1',
+      targets: snapshot.targets.map(target => ({ targetName: target.name, originalFragment: original,
+        sourceClaim: original, candidateClaim: original, hypothesisScope: 'No hypotheses.',
+        quantifierOrder: 'No parameters.', binderIds: [], conclusionDependencies: [] })),
+      sourceContract: { source: contract, pairs: ['same', 'different'].map(name =>
+        ({ candidateTarget: 'Candidate.' + name, referenceTarget: 'SourceContract.' + name })) } };
+    const before = canonicalMathJson(fidelity);
+    expect(assertFormalizationFidelity({ original, observation: { snapshot } }, 'approved', fidelity)).toEqual(fidelity);
+    const input = fidelityReferenceInput(snapshot, fidelity);
+    expect(input.referenceSource).toBe(contract);
+    const result = await compare('placeholder-layout', input);
+    expect(result.referenceSourceSha256).toBe(mathDigest(contract));
+    expect(result.pairs[0].candidateToReference.status).toBe('established');
+    expect(result.pairs[0].referenceToCandidate.status).toBe('established');
+    expect(result.pairs[1].candidateToReference.status).toBe('not-established');
+    expect(result.status).toBe('not-established');
+    expect(canonicalMathJson(fidelity)).toBe(before);
+  }, 65000);
 
   it('retains the baseline-trivial refusal for an identical legacy request without purpose', async () => {
     const { purpose: _purpose, ...legacy } = request(identitySource);

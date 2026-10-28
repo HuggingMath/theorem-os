@@ -132,7 +132,15 @@ export function getFormalizationRoleOutputValidator<Role extends FormalizationOu
 
 /** A fresh serializable guide for OUTPUT.schema.json; original host validators remain authoritative. */
 export function getFormalizationRoleOutputSchema(role: FormalizationOutputRole): FormalizationOutputJsonSchema {
-  return { ...deriveFormalizationRoleOutputJsonSchema(getFormalizationRoleOutputValidator(role)),
+  const schema = deriveFormalizationRoleOutputJsonSchema(getFormalizationRoleOutputValidator(role));
+  if (role === 'generate') {
+    const coverage = schema.properties!.coverage;
+    coverage.description = 'Bind original task excerpts to generated theorem/lemma targets. When INPUT.plan is present, create an item for every conclusion span using the corresponding plan.spans text and conclusion.targetNames; collectively preserve every full planned conclusion span for each target.';
+    const item = coverage.items!.properties!;
+    item.originalText.description = 'An exact substring of parsed INPUT.statement, including its original whitespace and punctuation. Copy plan.spans text verbatim when covering a planned conclusion span. Do not add punctuation, change TeX escaping or paraphrase. With a plan, supplemental excerpts must be contained in, or contain, a span of a conclusion mapped to that target.';
+    item.targetNames.description = 'Only generated theorem/lemma names, including their Lean namespace, exactly as listed in INPUT.plan.conclusions when a plan is present. Never put imported constants, classes, definitions or dependency names here. Explain those in assumptions or definitionsExplanation.';
+  }
+  return { ...schema,
     $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'TheoremOS ' + role + ' OUTPUT.json',
     $comment: hostRefinements };
 }

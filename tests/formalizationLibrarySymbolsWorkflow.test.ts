@@ -284,7 +284,7 @@ describe('Lean exact-name metadata in formalization generation', () => {
     expect(formalizationDigest(readFormalizationArtifact(path.join(f.directory, 'artifact')))).toBe(digest);
   });
 
-  it('reproduces the exact query and advisory packet on interruption while reviewers remain independent', async () => {
+  it('reuses the exact query and advisory packet on interruption while reviewers remain independent', async () => {
     const f = await fixture(), controller = new AbortController(), lookup = lookupFixture(); let interrupted = false;
     const agent = preset(role => { if (role === 'generate' && !interrupted) { interrupted = true; controller.abort(); } });
     expect(await runFormalization(f.directory, f.root,
@@ -292,9 +292,10 @@ describe('Lean exact-name metadata in formalization generation', () => {
       .toMatchObject({ status: 'stopped', rounds: 1 });
     const first = agent.seen.find(item => item.role === 'generate')!.input.retrieval;
     expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate, lookupSymbols: lookup.lookup }))
-      .toMatchObject({ status: 'approved', rounds: 2 });
-    expect(lookup.calls).toHaveLength(2);
-    expect(lookup.calls.map(item => item.names)).toEqual([expectedNames, expectedNames]);
+      .toMatchObject({ status: 'approved', rounds: 1 });
+    expect(lookup.calls).toHaveLength(1);
+    expect(lookup.calls.map(item => item.names)).toEqual([expectedNames]);
+    expect(agent.seen.filter(item => item.role.startsWith('plan-'))).toHaveLength(1);
     expect(agent.seen.filter(item => item.role === 'generate').map(item => item.input.retrieval)).toEqual([first, first]);
     expect(readFormalizationArtifact(path.join(f.directory, 'artifact')).generation.input.retrieval).toEqual(first);
     for (const item of agent.seen.filter(item => item.role !== 'generate')) {
@@ -446,7 +447,7 @@ describe('Lean-resolved object queries in formalization generation', () => {
     expect(formalizationDigest(readFormalizationArtifact(path.join(f.directory, 'artifact')))).toBe(digest);
   });
 
-  it('repeats the exact metadata lookup and resolved query packet when resuming an interrupted round', async () => {
+  it('reuses the exact metadata lookup and resolved query packet when resuming an interrupted round', async () => {
     const f = await fixture('resolved'), controller = new AbortController(), lookup = lookupFixture(); let interrupted = false;
     const agent = preset(role => { if (role === 'generate' && !interrupted) { interrupted = true; controller.abort(); } }, resolvedPlan);
     expect(await runFormalization(f.directory, f.root,
@@ -454,8 +455,9 @@ describe('Lean-resolved object queries in formalization generation', () => {
       .toMatchObject({ status: 'stopped', rounds: 1 });
     const first = agent.seen.find(item => item.role === 'generate')!.input.retrieval;
     expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate, lookupSymbols: lookup.lookup }))
-      .toMatchObject({ status: 'approved', rounds: 2 });
-    expect(lookup.calls.map(item => item.names)).toEqual([resolvedExpectedNames, resolvedExpectedNames]);
+      .toMatchObject({ status: 'approved', rounds: 1 });
+    expect(lookup.calls.map(item => item.names)).toEqual([resolvedExpectedNames]);
+    expect(agent.seen.filter(item => item.role.startsWith('plan-'))).toHaveLength(1);
     expect(agent.seen.filter(item => item.role === 'generate').map(item => item.input.retrieval)).toEqual([first, first]);
     expect(readFormalizationArtifact(path.join(f.directory, 'artifact')).generation.input.retrieval).toEqual(first);
     for (const item of agent.seen.filter(item => item.role !== 'generate')) {

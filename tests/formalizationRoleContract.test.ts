@@ -63,8 +63,8 @@ describe('formalization role output contracts derived from host Zod schemas', ()
     expect(properties.taskKind).toEqual({ type: 'string', enum: ['prove', 'decision', 'construction'] });
     expect(properties.spans).toMatchObject({ type: 'array', minItems: 1, maxItems: 256 });
     const span = properties.spans.items!.properties!;
-    expect(span.start).toEqual({ type: 'integer', minimum: 0, maximum: 256 * 1024 });
-    expect(span.end).toEqual({ type: 'integer', minimum: 1, maximum: 256 * 1024 });
+    expect(span.start).toMatchObject({ type: 'integer', minimum: 0, maximum: 256 * 1024 });
+    expect(span.end).toMatchObject({ type: 'integer', minimum: 1, maximum: 256 * 1024 });
     expect(span.id.pattern).toBe('^[A-Za-z0-9_-]{1,128}$');
     expect(new RegExp(span.id.pattern!).test('span-1')).toBe(true);
     expect(new RegExp(span.id.pattern!).test('invalid span')).toBe(false);
@@ -75,6 +75,20 @@ describe('formalization role output contracts derived from host Zod schemas', ()
     ]);
     expect(properties.conclusions.items!.properties!.assumptionIds).toMatchObject({ type: 'array', maxItems: 256 });
     expect(properties.conclusions.items!.properties!.targetNames).toMatchObject({ minItems: 1, maxItems: 256 });
+  });
+
+  it('explains source coordinates and theorem-only coverage at the fields models write', () => {
+    const plan = getFormalizationRoleOutputSchema('plan').properties!, span = plan.spans.items!.properties!;
+    expect(span.start.description).toContain('parsed INPUT.statement');
+    expect(span.start.description).toContain('statement.indexOf(text)');
+    expect(span.end.description).toContain('statement.slice(start, end) === text');
+    expect(span.text.description).toContain('whitespace and punctuation unchanged');
+    expect(plan.conclusions.items!.properties!.targetNames.description).toContain('Do not list imported library constants');
+    expect(plan.definitions.items!.properties!.leanNames.description).toContain('separate records may reuse a constant');
+    const coverage = getFormalizationRoleOutputSchema('generate').properties!.coverage;
+    expect(coverage.description).toContain('every full planned conclusion span for each target');
+    expect(coverage.items!.properties!.originalText.description).toContain('Copy plan.spans text verbatim');
+    expect(coverage.items!.properties!.targetNames.description).toContain('Only generated theorem/lemma names');
   });
 
   it('retains generation and backtranslation text/array limits instead of replacing refined text with an unconstrained type', () => {

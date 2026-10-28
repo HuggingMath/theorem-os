@@ -18,6 +18,8 @@ import { mathematicalGaps } from './mathematicalGaps';
 import { taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
 
 export const digest = taskVersion;
+/** Derived from stored task and failure records; the marker is never a separate acceptance state. */
+export type InvestigationOutcome = { taskId: string; state: 'dispatched' | 'delivered' | 'rejected' | 'abandoned'; reason?: string };
 export const taskSourceRejections = new Set(['math_task_source_outside_scope', 'math_task_ambiguous_declaration',
   'math_task_existing_declaration_removed', 'math_task_existing_declaration_changed', 'math_task_requires_theorem',
   'math_task_helper_is_original_declaration', 'math_task_conditional_header_unsupported',
@@ -66,8 +68,9 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   lastLeadInputDigest?: string;
   frontierRecoveries?: { id: string; taskIds: string[]; goalIds: string[];
     status: 'requested' | 'planned' | 'awaiting-input'; taskInputDigests: string[]; readyTaskIds?: string[]; reason?: string;
-    investigationTaskId?: string }[];
-  frontierWaiting?: { inputDigest: string; taskIds: string[]; goalIds: string[]; reason: 'awaiting-new-mathematical-input' };
+    investigationTaskId?: string; investigationAttempts?: number }[];
+  frontierWaiting?: { inputDigest: string; taskIds: string[]; goalIds: string[]; reason: 'awaiting-new-mathematical-input';
+    investigation?: InvestigationOutcome };
   failedTaskInputs?: FailedTaskInput[];
   blockers?: RouteBlocker[];
   proofRoutes?: ProofRoute[];

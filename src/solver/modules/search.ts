@@ -13,7 +13,7 @@ import { allRoutesParked, checkedUnconditionally, freshlyAccepted, groupOpen, is
 export type ResearchBudget = Readonly<{ maxTurns: number; remainingMs: number; aborted: boolean }>;
 export type ActionPlan = Readonly<{
   operation: ResearchOperation | 'stop';
-  reason: 'continue' | 'budget-exhausted' | 'no-operation' | 'direct-proof-gap' | 'repair-bridge' | 'prove-needed-lemma' | 'dependencies-checked' | 'stalled-obligation';
+  reason: 'continue' | 'budget-exhausted' | 'no-operation';
 }>;
 
 /** Select dependency-ready work; worker identities belong to M5. */
@@ -153,7 +153,7 @@ function prioritizeEarlyRouteChecks(ready: TaskRecord[], tasks: readonly TaskRec
   return [...consuming, check, ...ready.filter(node => node !== check && !consuming.includes(node))];
 }
 
-/** A simple M3 ablation: prefer ready original goals, preserving all readiness gates. */
+/** The scripts/mathematics/runGoalsFirst.ts extension example: prefer ready original goals, preserving all readiness gates. */
 export function goalsFirstResearchTasks(tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]): TaskRecord[] {
   return prioritizeEarlyRouteChecks(readyResearchTasks(tasks, groups).toSorted((a, b) =>
     Number(b.task.kind === 'goal') - Number(a.task.kind === 'goal')), tasks, groups);
@@ -350,32 +350,6 @@ export function selectResearchAction(state: Readonly<SolverRunState>, options: r
     return { operation: 'stop', reason: 'budget-exhausted' };
   return options.includes('direct') ? { operation: 'direct', reason: 'continue' } :
     { operation: 'stop', reason: 'no-operation' };
-}
-
-/** A single conditional connection is checked before investing in its lemma. */
-export function selectLemmaAction(state: Readonly<SolverRunState>, options: readonly ResearchOperation[],
-  budget: ResearchBudget, assignment?: CooperativeAction): ActionPlan {
-  const baseline = selectResearchAction(state, options, budget);
-  if (baseline.operation === 'stop') return baseline;
-  if (assignment) {
-    const operation = assignment.kind === 'lead' ? 'decompose' : assignment.kind !== 'task' ? 'direct' :
-      assignment.task.kind === 'lemma' ? 'prove-lemma' : assignment.task.kind !== 'goal' ? 'direct' :
-      assignment.task.conditional || assignment.assignment.connectionCheck ? 'bridge' : assignment.task.dependsOn.length ? 'integrate-lemma' : 'direct';
-    if (!options.includes(operation)) return baseline;
-    return { operation, reason: operation === 'decompose' ? 'direct-proof-gap' : operation === 'bridge' ? 'repair-bridge' :
-      operation === 'prove-lemma' ? 'prove-needed-lemma' : operation === 'integrate-lemma' ? 'dependencies-checked' : 'continue' };
-  }
-  if (!state.check || state.check.passed) return baseline;
-  const research = state.lemmaResearch;
-  const stalled = research?.bridge && !research.bridge.passed ? research.bridge : research?.lemma && !research.lemma.passed ? research.lemma : undefined;
-  if (stalled && stalled.unchangedFailures >= 2 && options.includes('decompose'))
-    return { operation: 'decompose', reason: 'stalled-obligation' };
-  const operation = !research?.plan || research.error ? 'decompose' : !research.bridge?.passed ? 'bridge' :
-    !research.lemma?.passed ? 'prove-lemma' : 'integrate-lemma';
-  if (!options.includes(operation)) return baseline;
-  const reason = operation === 'decompose' ? 'direct-proof-gap' : operation === 'bridge' ? 'repair-bridge' :
-    operation === 'prove-lemma' ? 'prove-needed-lemma' : 'dependencies-checked';
-  return { operation, reason };
 }
 
 function structuredResearchFailure(diagnostic?: MathAgentFailureDiagnostic): string | undefined {

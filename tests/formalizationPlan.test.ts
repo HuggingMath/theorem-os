@@ -101,6 +101,31 @@ describe('formalization plan structure and source binding', () => {
     expect(() => assertFormalizationPlan(statement, plan)).toThrow('formalization_plan_duplicate');
   });
 
+  it('preserves distinct source mappings to the same existing library constant', () => {
+    const plan = fixture();
+    plan.definitions.push({ id: 'd-natural-quantifier', spanIds: ['s-object'], mathematics: 'The quantified variable has natural-number type.',
+      implementation: 'existing', leanNames: ['Nat'], dependsOn: [], justification: 'The domain and the variable both use the same installed type.' });
+    expect(formalizationPlanSchema.parse(plan)).toEqual(plan);
+    expect(() => assertFormalizationPlan(statement, plan)).not.toThrow();
+    expect(() => assertFormalizationPlanCandidate(plan, source, coverage)).not.toThrow();
+  });
+
+  it.each(['existing-first', 'new-first'] as const)('rejects an imported/local definition name collision (%s)', order => {
+    const plan = fixture();
+    plan.definitions.push({ id: 'd-shadow-nat', spanIds: ['s-domain'], mathematics: 'An attempted local replacement for the natural-number type.',
+      implementation: 'new', leanNames: ['Nat'], dependsOn: [], justification: 'This must not also claim the imported name.' });
+    if (order === 'new-first') plan.definitions.reverse();
+    expect(() => assertFormalizationPlan(statement, plan)).toThrow('formalization_plan_duplicate');
+  });
+
+  it('still rejects repeated names within one existing record and across new definitions', () => {
+    const existing = fixture(); existing.definitions[1].leanNames.push('Nat');
+    expect(() => assertFormalizationPlan(statement, existing)).toThrow('formalization_plan_duplicate');
+    const local = fixture();
+    local.definitions.push({ ...local.definitions[0], id: 'd-domain-again' });
+    expect(() => assertFormalizationPlan(statement, local)).toThrow('formalization_plan_duplicate');
+  });
+
   it.each([
     ['span', (plan: FormalizationPlan) => { plan.objects[0].spanIds = ['missing-span']; }],
     ['assumption', (plan: FormalizationPlan) => { plan.conclusions[0].assumptionIds = ['missing-assumption']; }],

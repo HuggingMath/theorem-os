@@ -1,8 +1,10 @@
 # Whole-task fidelity
 
-New CLI model requests freeze `fidelityPolicy: "task-preserving-v1"`. An absent
-field preserves the earlier input, output schema, instructions and acceptance
-rules. Saved requests and judgments are never upgraded during recovery.
+New CLI model requests freeze `fidelityPolicy: "task-preserving-v2"`. An explicit
+`task-preserving-v1` request remains byte-compatible with its earlier comparison
+query and receipt. An absent field preserves the earlier input, output schema,
+instructions and acceptance rules. Saved requests and judgments are never
+upgraded during recovery.
 
 Every reviewer records each target's complete source claim and candidate claim,
 hypothesis scope, quantifier order, all observed binder IDs and actual conclusion
@@ -25,6 +27,11 @@ restatement of the original, with complete definitions, erased theorem proofs an
 a bijection covering every candidate and contract target. The reviewer has seen
 the candidate. This is a reviewer-authored source reading, not a blind independent
 formalization or a trusted reference answer.
+
+The host checks that every source-contract theorem body contains only `by sorry`.
+Blank lines and whitespace around these placeholders are allowed. The submitted
+source and its digests remain unchanged; executable theorem proofs and comments
+are still rejected, while complete definitions are retained.
 
 Before admitting approval, the host uses the existing guarded reference Module
 to compare the **whole targets**. It compiles predicate carriers instead of

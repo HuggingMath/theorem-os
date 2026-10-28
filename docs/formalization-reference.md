@@ -2,7 +2,7 @@
 
 `compareFormalizationReference` adds advisory evidence when a reviewed Lean reference statement is available. It checks a complete, explicit mapping of at most 16 candidate/reference theorem targets in a fresh local comparison directory. It never calls a model or downloads dependencies. The environment uses the runtime's pinned standard library or Mathlib and its existing sandboxed Lean diagnostics path.
 
-This implementation borrows the reference comparison and baseline-guard ideas from [BEq+](https://github.com/augustepoiroux/LeanInteract/blob/768e18ebcb5c7ec34d308768a785389eeac37798/examples/beq_plus.py), but implements a narrower check independently. The current method `cardinality-correspondence-v5` first accepts definitionally identical closed propositions or bijective binder permutations with definitionally identical domains and conclusions, including binder renaming, rigid universe-parameter renaming and reducible definitions. It additionally applies closed, host-owned representation conversions for conjugacy, finite families, the exact prime-product cardinality template below, and the final `Bool.false` proposition; it does not reproduce BEq+'s tactic search. Target binders must be explicit in the declaration: section `variable`/`include`/`omit` commands are unsupported because Lean generalizes them differently for theorem and definition commands. Unsupported source syntax and transformations outside the fixed rules yield `not-established`. New receipts also expose `check: completed | unsupported | unavailable`, separating an actual unresolved comparison from unsupported input and compiler/dependency/cancellation failures. None means that the statements are inequivalent.
+This implementation borrows the reference comparison and baseline-guard ideas from [BEq+](https://github.com/augustepoiroux/LeanInteract/blob/768e18ebcb5c7ec34d308768a785389eeac37798/examples/beq_plus.py), but implements a narrower check independently. The legacy method `cardinality-correspondence-v5` accepts definitionally identical closed propositions or bijective binder permutations with definitionally identical domains and conclusions, including binder renaming, rigid universe-parameter renaming and reducible definitions. It additionally applies closed, host-owned representation conversions for conjugacy, finite families, the exact prime-product cardinality template below, and the final `Bool.false` proposition; it does not reproduce BEq+'s tactic search. New task-fidelity-v2 requests use `cardinality-correspondence-v6`, which also supports the exact center-of-product equality/isomorphism correspondence, strict proper finite conditions, and a fixed nonzero finite-cardinality value. Target binders must be explicit in the declaration: section `variable`/`include`/`omit` commands are unsupported because Lean generalizes them differently for theorem and definition commands. Unsupported source syntax and transformations outside the fixed rules yield `not-established`. New receipts also expose `check: completed | unsupported | unavailable`, separating an actual unresolved comparison from unsupported input and compiler/dependency/cancellation failures. None means that the statements are inequivalent.
 
 Universe parameters are renamed consistently in first-use order within each closed proposition, and remain universally quantified in the generated proof declarations. They are never specialized to level zero or replaced by solvable metavariables. Two independent universes stay distinct; a candidate ranging over two independent universes does not match a reference restricted to one shared universe. The final Lean kernel checks the polymorphic implication declarations at their full declared universes.
 
@@ -19,13 +19,13 @@ The receipt records raw source hashes, exact generated source/configuration text
 
 The first representation rule handles `IsConj x y` and the corresponding existential conjugation equation for arbitrary group elements. It admits multiplication reassociation and equation orientation only within the recognized conjugation expression. It does not invoke the theorem that the products `a*b` and `b*a` are conjugate, and cannot replace arbitrary provable goals by `True`. Outer parameters must still match bijectively with rigid universes and preserved dependencies. Two kernel-checked implications relate the original complete propositions.
 
-A proof of an arbitrary `P ↔ Q` is insufficient evidence of statement correspondence: two unrelated true statements can be separately proved. Only the fixed representation templates and their structural matching are allowed here. Cardinality transformations beyond the exact template below, and ambient subgroup equality versus abstract isomorphism, remain outside these rules.
+A proof of an arbitrary `P ↔ Q` is insufficient evidence of statement correspondence: two unrelated true statements can be separately proved. Only the fixed representation templates and their structural matching are allowed here. Cardinality transformations outside the exact prime-product and fixed nonzero-value templates below remain outside these rules. The v2 center-of-product template is described below; it does not generalize to arbitrary ambient subgroup equality versus abstract isomorphism.
 
 The query report records whether representation conversion was used and its trace. The trace is bound to the exact host-generated query and captured Lean report; it is explanatory evidence, not a user-supplied proof or a substitute for native compilation. The receipt retains `proofVerified:false` and `semanticEquivalenceClaimed:false`.
 
 ## Receipt versions
 
-The current method is `cardinality-correspondence-v5`, with receipt schema `theoremos.formalization-reference.v4` and report schema `theoremos.reference-report.v4`. Saved schema-v1/method-v2, schema-v2/method-v3 and schema-v3/method-v4 receipts retain their frozen generators and validators. In particular, existing `finite-family-correspondence-v4` receipts keep their original bytes and use their frozen v4 implementation; they are not relabeled or regenerated with current rules. Changing a receipt's schema or method is not a migration.
+The legacy current method is `cardinality-correspondence-v5`, with receipt schema `theoremos.formalization-reference.v4` and report schema `theoremos.reference-report.v4`. New task-fidelity-v2 requests use `cardinality-correspondence-v6`, receipt schema `theoremos.formalization-reference.v5` and report schema `theoremos.reference-report.v5`; this path adds the host-owned proper finite condition, fixed nonzero finite cardinality, and center-product conversions below. Saved schema-v1/method-v2, schema-v2/method-v3 and schema-v3/method-v4 receipts retain their frozen generators and validators. In particular, existing `finite-family-correspondence-v4` and task-fidelity-v1/cardinality-correspondence-v5 receipts keep their original bytes and use their frozen implementation; they are not relabeled or regenerated with current rules. Changing a receipt's schema or method is not a migration.
 
 ### Finite-family reindexing
 
@@ -50,6 +50,40 @@ The matcher recognizes exactly the six binders on the first side: the `Fintype �
 The conversion uses `Nat.prime_iff` for the two prime predicates. Their nonzero consequences prove `p * q ≠ 0`; together with the given cardinality equality, this proves `Nat.card α ≠ 0` and hence `Finite α`. Only then does the fixed proof construct a `Fintype α` instance and relate the two cardinalities with `Nat.card_eq_fintype_card`. This finite instance is derived inside the checked conversion, not added as an assumption. The nonzero step is necessary because infinite types have `Nat.card α = 0`. There is no general finite-instance synthesis or arbitrary arithmetic search.
 
 The rule has no group assumption and does not use a theorem about groups of order p*q or prove Q. Full original propositions are related by two kernel-checked implications. The trace retains the fixed suffix conversion, its context, expression identities and proof terms. Other binder arrangements, cardinality expressions and prime predicates are supported only when they match this fixed template definitionally; otherwise correspondence remains unknown.
+
+### Proper finite subobjects
+
+The v6 task-fidelity path also recognizes the exact Finset suffix
+`∀ s, (∀ a ∈ s, a < ⊤) → Q s` and converts it to
+`∀ s, (∀ a ∈ s, a ≠ ⊤) → Q s` with the host-owned Lean theorem
+`finiteProperFinsetIff`. The theorem requires only `PartialOrder` and `OrderTop`,
+and the matcher rejects conclusions that depend on the premise proof or any
+condition other than strictness against top. The resulting trace uses
+`finite-proper-condition`; it is then eligible for the existing finite-family
+reindexing rule. Non-strict conditions such as `a ≤ ⊤` remain unsupported.
+
+### Fixed nonzero finite cardinality
+
+The v6 task-fidelity path recognizes the suffix
+`∀ [Fintype α], Fintype.card α = n → Q` when `n` is a closed natural-number
+expression for which the Lean kernel can prove `n ≠ 0`. It converts it to
+`Nat.card α = n → Q`. The conversion derives `Finite α` from the nonzero
+cardinality before constructing `Fintype.ofFinite α`, and rejects conclusions
+that depend on the removed finite instance or cardinality proof. Zero values,
+open or unproved nonzero expressions, and instance-dependent conclusions remain
+unsupported. The trace uses `finite-cardinality-value` with the
+`cardinality-nonzero` side condition.
+
+### Center of a product group
+
+The v2 task-fidelity path recognizes the exact equality
+`Subgroup.center (G × H) = (Subgroup.center G).prod (Subgroup.center H)` and relates it to
+`Nonempty (Subgroup.center (G × H) ≃* (Subgroup.center G) × (Subgroup.center H))`.
+The fixed Lean theorem constructs the multiplicative equivalence from the subgroup equality
+using `Subgroup.prodEquiv`; in the reverse direction it uses `Subgroup.center_prod`.
+Only this center-product template is accepted, with outer binders preserved. The trace uses
+`group-center-product`, records the full conclusion and its closed bidirectional proof, and has
+no side conditions. Other subgroup equalities and abstract isomorphisms remain unsupported.
 
 ### Boolean false as a proposition
 

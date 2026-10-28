@@ -75,6 +75,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (message !== 'wait') {
       send({ method: 'thread/tokenUsage/updated', params: { threadId: settings.threadId || 'thread-fixture', tokenUsage: { total: { totalTokens: 21 }, last: { inputTokens: 12345 } } } });
       const structured = {
+        'public-failure': process.env.THEOREM_OS_FIXTURE_PUBLIC_FAILURE_ERROR
+          ? JSON.parse(process.env.THEOREM_OS_FIXTURE_PUBLIC_FAILURE_ERROR) : undefined,
         'structured-unauthorized': { message: 'private provider diagnostic', codexErrorInfo: 'unauthorized', additionalDetails: 'private response' },
         'structured-rate-limit': { message: 'private provider diagnostic', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429, body: 'private response' } } },
         'structured-disconnected': { message: 'private provider diagnostic', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } } },
@@ -358,6 +360,63 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(await session.run(message, 'failed-turn', root, () => {})).toBe('failed');
     expect(session.lastFailureDiagnostic).toEqual(expected);
     expect(JSON.stringify(session.lastFailureDiagnostic) ?? '').not.toMatch(/private|body|message|additionalDetails/);
+    expect(await session.run('proof', 'next-turn', root, () => {})).toBe('completed');
+    expect(session.lastFailureDiagnostic).toBeUndefined();
+  });
+
+  it.each([
+    ['gateway concurrency wrapper', {
+      message: 'stream disconnected before completion: Concurrency limit exceeded for account, please retry later',
+      codexErrorInfo: 'other',
+    }, { code: 'other', reason: 'account_concurrency_limit' }],
+    ['gateway account slot timeout', {
+      message: 'timeout waiting for account concurrency slot', codexErrorInfo: { other: {} },
+    }, { code: 'other', reason: 'account_concurrency_limit' }],
+    ['unstructured account concurrency error', {
+      message: 'Concurrency limit exceeded for account',
+    }, { code: 'rateLimitExceeded', reason: 'account_concurrency_limit' }],
+    ['gateway upstream wrapper without hidden cause', {
+      message: 'stream disconnected before completion: Upstream request failed', codexErrorInfo: 'other',
+    }, { code: 'other', reason: 'upstream_request_failed' }],
+    ['unstructured stream disconnect', {
+      message: 'stream disconnected before completion: error sending request',
+    }, { code: 'responseStreamDisconnected', reason: 'upstream_request_failed' }],
+    ['explicit gateway tool JSON rejection', {
+      message: 'stream disconnected before completion: invalid tool call arguments from upstream: tool call "fixture" (exec_command) arguments are invalid JSON',
+      codexErrorInfo: 'other',
+    }, { code: 'other', reason: 'invalid_tool_call_arguments' }],
+    ['tool argument JSON parse failure', {
+      message: 'error parsing tool arguments: private tool arguments', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } },
+    }, { code: 'responseStreamDisconnected', httpStatusCode: 502, reason: 'invalid_tool_call_arguments' }],
+    ['authoritative native authentication error', {
+      message: 'stream disconnected before completion: Upstream request failed', codexErrorInfo: 'unauthorized',
+    }, { code: 'unauthorized' }],
+    ['authoritative HTTP authentication error', {
+      message: 'stream disconnected before completion: Concurrency limit exceeded for account',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 401 } },
+    }, { code: 'responseStreamDisconnected', httpStatusCode: 401 }],
+    ['authoritative HTTP client error', {
+      message: 'stream disconnected before completion: Upstream request failed',
+      codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 400 } },
+    }, { code: 'httpConnectionFailed', httpStatusCode: 400 }],
+    ['authoritative context limit', {
+      message: 'stream disconnected before completion: Upstream request failed', codexErrorInfo: 'contextWindowExceeded',
+    }, { code: 'contextWindowExceeded' }],
+    ['authoritative native bad request', {
+      message: 'invalid tool call arguments from upstream', codexErrorInfo: 'badRequest',
+    }, { code: 'badRequest' }],
+    ['unrelated invalid output JSON', {
+      message: 'OUTPUT.json is invalid JSON', codexErrorInfo: 'other',
+    }, { code: 'other' }],
+  ] as const)('classifies %s without copying provider data or overriding permanent failures', async (_name, error, expected) => {
+    session = await createCodexMathSession({ ...options, environment: { ...process.env,
+      THEOREM_OS_FIXTURE_PUBLIC_FAILURE_ERROR: JSON.stringify({ ...error,
+        additionalDetails: 'private response with fixture-secret', body: 'fixture-secret',
+      }),
+    } });
+    expect(await session.run('public-failure', 'failed-turn', root, () => {})).toBe('failed');
+    expect(session.lastFailureDiagnostic).toEqual(expected);
+    expect(JSON.stringify(session.lastFailureDiagnostic)).not.toMatch(/private|fixture|message|body|additionalDetails|exec_command/);
     expect(await session.run('proof', 'next-turn', root, () => {})).toBe('completed');
     expect(session.lastFailureDiagnostic).toBeUndefined();
   });

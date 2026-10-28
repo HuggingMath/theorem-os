@@ -4,33 +4,37 @@ import { getFormalizationRoleOutputSchema, getFormalizationRoleOutputValidator,
   getStructuredFormalizationReviewOutputSchema } from '../math/formalizationRoleContract';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { setTimeout as wait } from 'node:timers/promises';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
-import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
+import { createCodexMathSession, type MathAgentFailureDiagnostic, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathJsonDurable } from '../math/mathRuntimeIo';
-import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
+import { assertMathCanonicalPath, isMathPathWithin, repositoryRelativePath } from '../math/paths';
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { getLeanTaskEnvironment } from '../math/leanTaskEnvironment';
+import { assertMathRetrievalCorpus } from '../math/mathRetrievalCorpus';
 import { eraseFormalizationProofs } from '../math/formalizationSource';
 import { assertFormalizationCandidate, bootstrapFormalizedProblem, formalizationCandidateSchema, formalizationDigest,
   formalizationInputDigest, formalizationReviewInput, formalizationReviewSchema, formalizationSnapshotSchema, formalizationTranslationSchema,
   prepareFormalization, readFormalizationArtifact, readFormalizationRequest, writeFormalizationArtifact,
   type FormalizationCandidate, type FormalizationEvidence, type FormalizationRequest } from '../math/formalization';
-import { elaborateFormalization } from './formalizationElaboration';
+import { elaborateFormalization, type FormalizationElaboration } from './formalizationElaboration';
 import { formalizationPlanSchema, assertFormalizationPlan, assertFormalizationPlanReady, assertFormalizationPlanCandidate,
   type FormalizationPlan } from '../math/formalizationPlan';
 import { defaultFormalizationWorkflow, formalizationModelConfigurations, formalizationModelConfigurationDigest,
   distinctFormalizationModelConfigurations } from '../math/formalizationWorkflow';
 import { compareFormalizationReference } from './formalizationReference';
+import { assertFormalizationReferenceResult, type FormalizationReferenceResult } from '../math/formalizationReference';
 import { checkFormalizationFidelity } from './formalizationFidelity';
 import { assertStructuredSemanticReview, resolveStructuredReviewPanel, structuredReviewAspects,
   formalizationReviewInstructions, STRUCTURED_REVIEW_PROTOCOL,
   type StructuredReviewInput } from '../math/formalizationSemanticReview';
 import { parseLeanStatementContexts } from '../math/leanStatementContext';
-import { retrieveFormalizationPlan } from '../math/formalizationRetrieval';
+import { assertFormalizationRetrieval, formalizationRetrievalSchema, retrieveFormalizationPlan } from '../math/formalizationRetrieval';
 import type { lookupLeanLibrarySymbols } from '../math/leanLibrarySymbols';
 import { buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed, reportedTotalTokens, type UsageAccounting } from './usageBudget';
+import { acquireMathModelSlot, configuredMathModelSlots, type MathModelSlot } from '../math/mathModelSlot';
 
 const roleSchema = z.enum(['plan', 'generate', 'backtranslate', 'compare']);
 type Role = z.infer<typeof roleSchema>;
@@ -41,7 +45,10 @@ const sessionSchema = z.object({
   completionReason: z.literal('validated-output').optional(), isolationReceipt: z.record(z.unknown()).optional(),
   roleContract: z.object({ schema: z.literal('theorem-os.formalization-role-contract.v1'),
     roleInstructionsSha256: z.string().regex(/^[a-f0-9]{64}$/u), outputSchemaSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().optional(),
-  failureDiagnostic: z.object({ code: z.string(), httpStatusCode: z.number().int().optional() }).strict().optional(),
+  failureDiagnostic: z.object({ code: z.string(), httpStatusCode: z.number().int().optional(),
+    reason: z.enum(['account_concurrency_limit', 'upstream_request_failed', 'invalid_tool_call_arguments']).optional() }).strict().optional(),
+  workspace: z.string().refine(value => repositoryRelativePath(value) !== undefined).optional(),
+  candidateCounted: z.boolean().optional(),
   turns: z.number().int().nonnegative(), usage: z.record(z.unknown()),
   usageAccounting: z.object({ startedTurns: z.number().int().nonnegative(), reportedTurns: z.number().int().nonnegative(),
     pending: z.boolean(), incomplete: z.boolean() }).strict(),
@@ -53,8 +60,14 @@ const stateSchema = z.object({
   sessions: z.array(sessionSchema), feedback: z.string().optional(), previousCandidate: formalizationCandidateSchema.optional(),
   error: z.string().optional(),
   activeSince: z.number().int().nonnegative().optional(), rejectedCandidates: z.array(z.string()).optional(),
+  unknownRounds: z.number().int().positive().optional(),
   unsupportedTaskKind: z.enum(['decision', 'construction']).optional(),
   generatedCandidates: z.number().int().nonnegative().optional(),
+  activeRound: z.object({ directory: z.string().regex(/^round-\d+-[a-f0-9-]{36}$/u),
+    feedback: z.string().optional(), previousCandidate: formalizationCandidateSchema.optional(),
+    planning: z.object({ round: z.number().int().positive(), feedback: z.string().optional() }).strict().optional(),
+    retrievalDigest: z.string().optional(), elaborationDigest: z.string().optional(),
+    referenceDigest: z.string().optional() }).strict().optional(),
 }).strict();
 type SessionRecord = Omit<z.infer<typeof sessionSchema>, 'turns' | 'usageAccounting'> & { turns: number; usageAccounting: UsageAccounting };
 type State = Omit<z.infer<typeof stateSchema>, 'sessions'> & { sessions: SessionRecord[] };
@@ -75,11 +88,31 @@ type Options = {
   compareReference?: typeof compareFormalizationReference;
   lookupSymbols?: typeof lookupLeanLibrarySymbols;
   env?: NodeJS.ProcessEnv; signal?: AbortSignal;
+  waitForRetry?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   onEvent?: (event: { event: string; round: number; role?: Role; error?: string }) => void;
 };
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const infrastructureFailure = (message: string) =>
-  /(?:formalization_(?:sandbox|relay|profile|build|retrieval)|math_model_api_key_missing|math_codex_(?:transport_closed|rpc_failed|session_binding_mismatch))/u.test(message);
+  /(?:formalization_(?:sandbox|relay|profile|build|retrieval|checkpoint|fidelity_comparison_interrupted)|math_model_api_key_missing|math_codex_(?:transport_closed|rpc_failed|session_binding_mismatch))/u.test(message);
+class FormalizationRoleFailure extends Error {
+  constructor(status: string, readonly diagnostic?: MathAgentFailureDiagnostic) {
+    super('formalization_role_incomplete:' + status + (diagnostic ? ':' + diagnostic.code +
+      (diagnostic.reason ? ':' + diagnostic.reason : '') : ''));
+  }
+}
+const retryableRoleFailure = (cause: unknown) => {
+  if (!(cause instanceof FormalizationRoleFailure) || !cause.diagnostic) return false;
+  const { code, httpStatusCode, reason } = cause.diagnostic;
+  if (httpStatusCode !== undefined && httpStatusCode < 500 && httpStatusCode !== 408 && httpStatusCode !== 429) return false;
+  return code === 'other' && Boolean(reason) || ['rateLimitExceeded', 'flexUnavailable', 'serverOverloaded', 'httpConnectionFailed',
+    'responseStreamConnectionFailed', 'internalServerError', 'responseStreamDisconnected', 'responseTooManyFailedAttempts'].includes(code);
+};
+// An unknown semantic verdict is not a mismatch, so the source is never
+// blacklisted and the next round may re-review it. Repeated consecutive unknown
+// rounds with no intervening concrete judgment show that more rounds are not
+// resolving the ambiguity, so the run ends exhausted instead of re-generating
+// candidates forever under an unlimited round budget.
+const MAX_UNKNOWN_ROUNDS = 3;
 const roleInstructions: Record<Role, string> = {
   plan: [
     'Plan a faithful Lean formalization of the complete original mathematical task in INPUT.json before generating declarations.',
@@ -197,28 +230,27 @@ export async function runFormalization(directory: string, root: string, options:
       };
       const summary = () => summarizeRun(directory, request, state);
       const event = (name: string, role?: Role, error?: string) => options.onEvent?.({ event: name, round: state.rounds, role, error });
-      const dispatch = async (role: Role, roundDirectory: string, input: unknown, inputDigest: string,
-        slot?: { reviewerId?: string; name?: string }) => {
+      const dispatchOnce = async (role: Role, roundDirectory: string, input: unknown, inputDigest: string,
+        slot?: { reviewerId?: string; name?: string; requireCached?: boolean }) => {
         lease.signal.throwIfAborted();
         if (remaining() <= 0) throw new Error('formalization_time_limit');
-        const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
-        if (!modelDispatchAllowed(budget)) throw new Error(budget.reason ?? 'formalization_token_limit');
         if (currentProfileDigest() !== profileDigest) throw new Error('formalization_profile_changed_during_run');
         const config = role === 'plan' ? request.workflow!.planner : role === 'backtranslate' && request.workflow ?
           request.workflow.backtranslator : role === 'compare' && request.workflow ?
             request.workflow.reviewers.find(item => item.id === slot?.reviewerId)! : request;
         if (!config) throw new Error('formalization_role_configuration_missing');
-        const workspace = path.join(roundDirectory, slot?.name ?? (slot?.reviewerId ? 'compare-' + slot.reviewerId : role));
-        fs.mkdirSync(workspace, { mode: 0o700 });
-        const inputFile = path.join(workspace, 'INPUT.json'), outputFile = path.join(workspace, 'OUTPUT.json');
         const inputText = canonicalMathJson(input);
-        fs.writeFileSync(inputFile, inputText, { mode: 0o400, flag: 'wx' });
-        const instructionsFile = path.join(workspace, 'ROLE.md'), schemaFile = path.join(workspace, 'OUTPUT.schema.json');
         const structuredInput = structured && role === 'compare' ? input as StructuredReviewInput : undefined;
         const validateOutput = (value: unknown) => structuredInput ? assertStructuredSemanticReview(structuredInput, value) :
           getFormalizationRoleOutputValidator(role).parse(value);
         const instructionsText = (structured && role === 'compare' ? formalizationReviewInstructions('review', semanticContext, structureContext, request.fidelityPolicy) :
           structured && role === 'backtranslate' ? formalizationReviewInstructions('backtranslate', semanticContext, structureContext) : roleInstructions[role]) +
+          (request.fidelityPolicy && role === 'plan' ? '\n' + [
+            'All source coordinates are offsets in the parsed INPUT.statement string, never INPUT.json file positions or JSON-escaped text. Use JavaScript to parse INPUT.json, set statement = input.statement, compute start = statement.indexOf(text) (choose the intended occurrence if repeated), end = start + text.length, and verify statement.slice(start,end) === text before submitting.',
+            'conclusions.targetNames contains only the theorem/lemma names you will generate, with namespace qualification; map imported library constants/classes/types in definitions.leanNames instead.',
+            'Different existing-definition records may cite the same imported constant for distinct source meanings. A new local definition name must remain unique across every definition record, including existing mappings; names within one record may not repeat.',
+          ].join('\n') : '') +
+          (request.fidelityPolicy && role === 'generate' ? '\nFor each plan conclusion, copy each referenced plan.spans text verbatim into a coverage item with that conclusion\'s targetNames. Use only generated theorem/lemma names in coverage.targetNames; never library constants such as Group, Ring, Nat.card or IsSimpleGroup. Do not add punctuation or change whitespace/TeX escaping. Record separate domain/definition notes in assumptions or definitionsExplanation; supplemental coverage excerpts must map to that target\'s conclusion span. Every full planned conclusion span is still required.' : '') +
           (role === 'generate' && request.retrieval ? '\nINPUT.retrieval contains host-observed lookup hints from the frozen Mathlib corpus, interleaved across plan queries and deduplicated by declaration location.\n'
             + 'Each hint includes its source hash, module, line, header, variable/open context and query/rank provenance. Source files are relative to .lake/packages; read them under /opt/lean-packages.\n'
             + 'Headers can be truncated and are not closed Lean types or proofs. Check actual constants in the pinned Lean environment. A hit does not establish fidelity; no hit does not establish absence.\n'
@@ -255,20 +287,63 @@ export async function runFormalization(directory: string, root: string, options:
         ].join('\n');
         const schemaText = canonicalMathJson(structuredInput ?
           getStructuredFormalizationReviewOutputSchema(structuredInput) : getFormalizationRoleOutputSchema(role));
+        const roleContract = { schema: 'theorem-os.formalization-role-contract.v1' as const,
+          roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) };
+        // Only closed, validated writers can be reused. Bind the actual input and
+        // protocol bytes as well as their role-specific identity digests.
+        const cached = state.sessions.findLast(item => item.round === state.rounds && item.role === role &&
+          item.reviewerId === slot?.reviewerId && item.inputDigest === inputDigest && item.workspace && item.outputDigest &&
+          item.model === config.model && item.effort === config.effort && item.threadId && item.turnId &&
+          ['completed', 'submitted'].includes(item.status));
+        if (cached) {
+          try {
+            const workspace = path.resolve(directory, cached.workspace!);
+            if (!isMathPathWithin(roundDirectory, workspace) ||
+                canonicalMathJson(cached.roleContract) !== canonicalMathJson(roleContract) ||
+                request.workflow && cached.configurationDigest !== formalizationModelConfigurationDigest(config) ||
+                readMathText(path.join(workspace, 'INPUT.json'), 8_000_000) !== inputText ||
+                readMathText(path.join(workspace, 'ROLE.md'), 1_000_000) !== instructionsText ||
+                readMathText(path.join(workspace, 'OUTPUT.schema.json'), 1_000_000) !== schemaText)
+              throw new Error('identity');
+            const output = JSON.parse(readMathText(path.join(workspace, 'OUTPUT.json'), 2_000_000)) as unknown;
+            if (formalizationDigest(output) !== cached.outputDigest) throw new Error('output');
+            validateOutput(output);
+            event('formalization_role_restored', role);
+            return { output, record: cached };
+          } catch { throw new Error('formalization_checkpoint_changed:' + role); }
+        }
+        if (slot?.requireCached) throw new Error('formalization_checkpoint_changed:' + role);
+        const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
+        if (!modelDispatchAllowed(budget)) throw new Error(budget.reason ?? 'formalization_token_limit');
+        const name = slot?.name ?? (slot?.reviewerId ? 'compare-' + slot.reviewerId : role);
+        const baseWorkspace = path.join(roundDirectory, name);
+        const workspace = fs.existsSync(baseWorkspace) ? path.join(roundDirectory, 'retry-' + crypto.randomUUID(), name) : baseWorkspace;
+        assertMathCanonicalPath(workspace);
+        fs.mkdirSync(workspace, { mode: 0o700, recursive: true });
+        const inputFile = path.join(workspace, 'INPUT.json'), outputFile = path.join(workspace, 'OUTPUT.json');
+        const instructionsFile = path.join(workspace, 'ROLE.md'), schemaFile = path.join(workspace, 'OUTPUT.schema.json');
+        fs.writeFileSync(inputFile, inputText, { mode: 0o400, flag: 'wx' });
         fs.writeFileSync(instructionsFile, instructionsText, { mode: 0o400, flag: 'wx' });
         fs.writeFileSync(schemaFile, schemaText, { mode: 0o400, flag: 'wx' });
         const record: SessionRecord = { role, round: state.rounds, status: 'opening', inputDigest,
           model: config.model, effort: config.effort, turns: 0, usage: {},
-          roleContract: { schema: 'theorem-os.formalization-role-contract.v1',
-            roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) },
+          roleContract, workspace: path.relative(directory, workspace),
           ...(request.workflow ? { configurationDigest: formalizationModelConfigurationDigest(config),
             ...(slot?.reviewerId ? { reviewerId: slot.reviewerId } : {}) } : {}),
           usageAccounting: { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false } };
         state.sessions.push(record); save(); event('formalization_role_started', role);
-        let session: MathAgentSession | undefined, incomplete = false;
+        let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined;
         const interrupt = () => { void session?.interrupt().catch(() => {}); void session?.close().catch(() => {}); };
         lease.signal.addEventListener('abort', interrupt, { once: true });
         try {
+          // Host-side admission control across every process sharing the model
+          // gateway. Preset sessions neither open a model nor consume a slot.
+          const slotConfiguration = request.execution === 'model' && !options.openSession ? configuredMathModelSlots() : undefined;
+          if (slotConfiguration) {
+            event('formalization_model_slot_waiting', role);
+            modelSlot = await acquireMathModelSlot(slotConfiguration, { signal: lease.signal });
+            event('formalization_model_slot_acquired', role);
+          }
           session = await (options.openSession ?? createCodexMathSession)({
             executable: config.executable, profile: config.profile, workspace, model: config.model, effort: config.effort,
             instructions: instructionsText,
@@ -293,8 +368,7 @@ export async function runFormalization(directory: string, root: string, options:
           if (record.status === 'submitted') record.completionReason = 'validated-output';
           if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
             if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
-            throw new Error('formalization_role_incomplete:' + record.status +
-              (session.lastFailureDiagnostic ? ':' + session.lastFailureDiagnostic.code : ''));
+            throw new FormalizationRoleFailure(record.status, session.lastFailureDiagnostic);
           }
           // Stop the writer before parsing or binding a submitted output.
           await session.close();
@@ -309,6 +383,7 @@ export async function runFormalization(directory: string, root: string, options:
           return { output, record };
         } finally {
           await session?.close();
+          await modelSlot?.release();
           if (['opening', 'running'].includes(record.status)) record.status = lease.signal.aborted ? 'interrupted' : 'failed';
           lease.signal.removeEventListener('abort', interrupt);
           record.usageAccounting.pending = false;
@@ -316,6 +391,45 @@ export async function runFormalization(directory: string, root: string, options:
           record.usageAccounting.incomplete = incomplete || (record.usageAccounting.startedTurns > record.usageAccounting.reportedTurns);
           save(); event('formalization_role_finished', role);
         }
+      };
+      const dispatch = async (...args: Parameters<typeof dispatchOnce>) => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            const result = await dispatchOnce(...args);
+            if (state.error?.startsWith('formalization_role_incomplete:')) { delete state.error; save(); }
+            return result;
+          }
+          catch (cause) {
+            if (!retryableRoleFailure(cause)) throw cause;
+            lease.signal.throwIfAborted();
+            if (remaining() <= 0) throw new Error('formalization_time_limit');
+            const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
+            if (!modelDispatchAllowed(budget)) throw new Error(budget.reason ?? 'formalization_token_limit');
+            state.error = errorText(cause); save(); event('formalization_role_retrying', args[0], state.error);
+            // This is a delay cap, not an attempt/time/token limit. Only this role
+            // repeats, in a fresh isolated thread, with its input unchanged.
+            // The wait is jittered so roles hit by the same gateway event do not
+            // retry in lockstep; capacity is enforced by admission control.
+            const cap = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5), remaining());
+            const delay = Math.max(1, Math.round(cap * (0.5 + Math.random() * 0.5)));
+            await (options.waitForRetry ?? ((ms, signal) => wait(ms, undefined, { signal })))(delay, lease.signal);
+          }
+        }
+      };
+      const readStageCheckpoint = (stage: 'retrieval' | 'elaboration' | 'reference'): unknown => {
+        const digest = state.activeRound?.[`${stage}Digest`];
+        if (!digest) return undefined;
+        try {
+          const file = path.join(directory, state.activeRound!.directory, stage + '-result.json');
+          const output: unknown = JSON.parse(readMathText(file, 16_000_000));
+          if (formalizationDigest(output) !== digest) throw new Error('digest');
+          return output;
+        } catch { throw new Error('formalization_checkpoint_changed:' + stage); }
+      };
+      const saveStageCheckpoint = (stage: 'retrieval' | 'elaboration' | 'reference', output: unknown) => {
+        writeMathJsonDurable(path.join(directory, state.activeRound!.directory, stage + '-result.json'), output);
+        state.activeRound![`${stage}Digest`] = formalizationDigest(output);
+        save();
       };
       try {
         if (state.unsupportedTaskKind) {
@@ -331,12 +445,17 @@ export async function runFormalization(directory: string, root: string, options:
         }
         if (state.status === 'approved') throw new Error('formalization_approved_artifact_missing');
         state.status = 'running'; delete state.error; save();
-        while (request.maxRounds === 0 || state.rounds < request.maxRounds) {
+        while (state.activeRound || request.maxRounds === 0 || state.rounds < request.maxRounds) {
           lease.signal.throwIfAborted();
           if (remaining() <= 0) throw new Error('formalization_time_limit');
-          state.rounds++; save();
-          const roundDirectory = path.join(directory, 'round-' + String(state.rounds).padStart(2, '0') + '-' + crypto.randomUUID());
-          fs.mkdirSync(roundDirectory, { mode: 0o700 });
+          if (!state.activeRound) {
+            state.rounds++;
+            state.activeRound = { directory: 'round-' + String(state.rounds).padStart(2, '0') + '-' + crypto.randomUUID(),
+              feedback: state.feedback, previousCandidate: state.previousCandidate };
+            fs.mkdirSync(path.join(directory, state.activeRound.directory), { mode: 0o700 }); save();
+          }
+          const roundDirectory = path.join(directory, state.activeRound.directory);
+          assertMathCanonicalPath(roundDirectory);
           let currentCandidate: FormalizationCandidate | undefined;
           let semanticallyRejected = false;
           try {
@@ -344,24 +463,28 @@ export async function runFormalization(directory: string, root: string, options:
               round: number; planningRound: number; feedback?: string }; output: FormalizationPlan; digest: string;
               session: Awaited<ReturnType<typeof dispatch>> } | undefined;
             if (request.workflow) {
-              let planningFeedback = state.feedback;
-              for (let planningRound = 1; request.workflow.maxPlanningRounds === 0 || planningRound <= request.workflow.maxPlanningRounds; planningRound++) {
+              const acceptedPlanning = state.activeRound.planning;
+              let planningFeedback = acceptedPlanning ? acceptedPlanning.feedback : state.activeRound.feedback;
+              for (let planningRound = acceptedPlanning?.round ?? 1;
+                request.workflow.maxPlanningRounds === 0 || planningRound <= request.workflow.maxPlanningRounds; planningRound++) {
                 lease.signal.throwIfAborted();
                 const input = { problemId: request.problemId, statement: request.statement, environment: request.environment,
                   toolchain: getLeanTaskEnvironment(request.environment).toolchain, round: state.rounds, planningRound, feedback: planningFeedback };
                 try {
-                  const session = await dispatch('plan', roundDirectory, input, formalizationDigest(input), { name: 'plan-' + planningRound });
+                  const session = await dispatch('plan', roundDirectory, input, formalizationDigest(input),
+                    { name: 'plan-' + planningRound, requireCached: Boolean(acceptedPlanning) });
                   const output = formalizationPlanSchema.parse(session.output);
                   assertFormalizationPlan(request.statement, output);
                   if (output.taskKind !== 'prove') { state.unsupportedTaskKind = output.taskKind; save(); }
                   assertFormalizationPlanReady(output);
                   planning = { input, output, digest: formalizationDigest(output), session };
+                  state.activeRound.planning = { round: planningRound, feedback: planningFeedback }; save();
                   break;
                 } catch (cause) {
                   planningFeedback = errorText(cause).slice(0, 16_000);
                   writeMathJsonDurable(path.join(roundDirectory, 'plan-failure-' + planningRound + '.json'), { error: planningFeedback });
                   if (lease.signal.aborted || !modelDispatchAllowed(buildTokenBudget(request.maxTotalTokens, state.sessions)) ||
-                      planningFeedback.includes('formalization_plan_task_kind_unsupported') || infrastructureFailure(planningFeedback) ||
+                      cause instanceof FormalizationRoleFailure || planningFeedback.includes('formalization_plan_task_kind_unsupported') || infrastructureFailure(planningFeedback) ||
                       /formalization_role_incomplete:failed:(?:unauthorized|badRequest|misalignmentPolicyViolation|cyberPolicy)/u.test(planningFeedback)) throw cause;
                 }
               }
@@ -369,21 +492,37 @@ export async function runFormalization(directory: string, root: string, options:
             }
             let retrieval;
             if (request.retrieval) {
-              try { retrieval = await retrieveFormalizationPlan(directory, request.retrieval, planning!.output, {
-                directory: path.join(roundDirectory, 'library-symbols'), env, signal: lease.signal,
-                timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ? stageTimeout(request.maxCompileSeconds) : 0,
-                lookupSymbols: options.lookupSymbols,
-              }); }
+              try {
+                const cached = readStageCheckpoint('retrieval');
+                if (cached !== undefined) {
+                  const corpusText = readMathText(path.join(directory, 'retrieval-corpus.json'));
+                  if (mathDigest(corpusText) !== request.retrieval.corpusSha256) throw new Error('formalization_retrieval_corpus_changed');
+                  assertMathRetrievalCorpus(request.retrieval.workspace, JSON.parse(corpusText));
+                  retrieval = formalizationRetrievalSchema.parse(cached);
+                  assertFormalizationRetrieval(request.retrieval, planning!.output, retrieval);
+                } else {
+                  const base = path.join(roundDirectory, 'library-symbols');
+                  retrieval = await retrieveFormalizationPlan(directory, request.retrieval, planning!.output, {
+                    directory: fs.existsSync(base) ? base + '-' + crypto.randomUUID() : base, env, signal: lease.signal,
+                    timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ? stageTimeout(request.maxCompileSeconds) : 0,
+                    lookupSymbols: options.lookupSymbols,
+                  });
+                  saveStageCheckpoint('retrieval', retrieval);
+                }
+              }
               catch (cause) { throw new Error('formalization_retrieval_failed: ' + errorText(cause)); }
             }
             const generationInput = { problemId: request.problemId, statement: request.statement, environment: request.environment,
               toolchain: getLeanTaskEnvironment(request.environment).toolchain, round: state.rounds,
-              feedback: state.feedback, previousCandidate: state.previousCandidate,
+              feedback: state.activeRound.feedback, previousCandidate: state.activeRound.previousCandidate,
               ...(planning ? { plan: planning.output, planDigest: planning.digest } : {}),
               ...(retrieval ? { retrieval } : {}) };
             const generated = await dispatch('generate', roundDirectory, generationInput, formalizationDigest(generationInput));
             const generatedCandidate = formalizationCandidateSchema.parse(generated.output);
-            state.generatedCandidates = (state.generatedCandidates ?? 0) + 1; save();
+            if (!generated.record.candidateCounted) {
+              state.generatedCandidates = (state.generatedCandidates ?? 0) + 1;
+              generated.record.candidateCounted = true; save();
+            }
             let candidate = { ...generatedCandidate, source: eraseFormalizationProofs(generatedCandidate.source) };
             assertFormalizationCandidate(request, candidate);
             if (planning) assertFormalizationPlanCandidate(planning.output, candidate.source, candidate.coverage);
@@ -391,13 +530,21 @@ export async function runFormalization(directory: string, root: string, options:
               throw new Error('formalization_candidate_unchanged_after_rejection');
             currentCandidate = candidate;
             state.previousCandidate = candidate; save();
-            event('formalization_compilation_started');
-            const elaborated = await (options.elaborate ?? elaborateFormalization)(path.join(roundDirectory, 'elaboration'),
-              candidate.source, request.environment, { env, signal: lease.signal,
-                ...(structured ? { detailedContext: true } : {}),
-                ...(semanticContext ? { semanticContext: true } : {}),
-                ...(structureContext ? { structureContext: true } : {}),
-                timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ? stageTimeout(request.maxCompileSeconds) : 0 });
+            let elaborated = readStageCheckpoint('elaboration') as FormalizationElaboration | undefined;
+            if (!elaborated) {
+              event('formalization_compilation_started');
+              const base = path.join(roundDirectory, 'elaboration');
+              elaborated = await (options.elaborate ?? elaborateFormalization)(fs.existsSync(base) ? base + '-' + crypto.randomUUID() : base,
+                candidate.source, request.environment, { env, signal: lease.signal,
+                  ...(structured ? { detailedContext: true } : {}),
+                  ...(semanticContext ? { semanticContext: true } : {}),
+                  ...(structureContext ? { structureContext: true } : {}),
+                  timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ? stageTimeout(request.maxCompileSeconds) : 0 });
+              saveStageCheckpoint('elaboration', elaborated);
+            } else if (elaborated.source !== candidate.source || elaborated.sourceSha256 !== mathDigest(candidate.source) ||
+                elaborated.environmentDigest !== getLeanTaskEnvironment(request.environment).dependencyDigest) {
+              throw new Error('formalization_checkpoint_changed:elaboration');
+            }
             candidate = { ...candidate, source: elaborated.source };
             const snapshot = formalizationSnapshotSchema.parse(elaborated.snapshot), snapshotDigest = formalizationDigest(snapshot);
             if (snapshotDigest !== elaborated.snapshotDigest || snapshot.targets.some(item => item.context.omitted.length))
@@ -442,11 +589,25 @@ export async function runFormalization(directory: string, root: string, options:
             const comparisons = [];
             if (request.workflow?.reviewScheduling === 'parallel') {
               // Join every role before revision/exit; preserve configured order, not finish order.
-              const settled = await Promise.allSettled(reviewers.map(runReviewer));
+              // A permanent role/infrastructure failure must also end a sibling's
+              // unlimited transient retries, while preserving the original error.
+              let terminalFailure: { cause: unknown } | undefined;
+              const settled = await Promise.allSettled(reviewers.map(async reviewer => {
+                try { return await runReviewer(reviewer); }
+                catch (cause) {
+                  if (!lease.signal.aborted && (cause instanceof FormalizationRoleFailure || infrastructureFailure(errorText(cause)) ||
+                      !modelDispatchAllowed(buildTokenBudget(request.maxTotalTokens, state.sessions)))) {
+                    terminalFailure ??= { cause }; controller.abort();
+                  }
+                  throw cause;
+                }
+              }));
+              if (terminalFailure) throw terminalFailure.cause;
               for (const result of settled) if (result.status === 'fulfilled') comparisons.push(result.value);
               const failure = settled.find(result => result.status === 'rejected');
               if (failure?.status === 'rejected') throw failure.reason;
             } else for (const reviewer of reviewers) comparisons.push(await runReviewer(reviewer));
+            lease.signal.throwIfAborted();
             // Ask every frozen reviewer before deciding, so disagreements remain observable.
             const rejected = comparisons.filter(item => item.review.verdict !== 'approved' || !structured && (item.review.issues.length ||
               Object.values(item.review.checks).some(value => !value)));
@@ -469,17 +630,31 @@ export async function runFormalization(directory: string, root: string, options:
                 '. This is unresolved correspondence, not proof of inequivalence. Revise the source reading or candidate without proving the original theorem.');
             const finalUsage = buildTokenBudget(request.maxTotalTokens, state.sessions);
             if (finalUsage.status === 'usage-unavailable') throw new Error(finalUsage.reason);
-            let reference;
+            let reference: FormalizationReferenceResult | undefined;
             if (request.workflow?.reference) {
               const configured = request.workflow.reference;
               if (canonicalMathJson(configured.pairs.map(item => item.candidateTarget).sort()) !==
                   canonicalMathJson(elaborated.targets.map(item => item.name).sort()))
                 throw new Error('formalization_reference_target_mapping_invalid');
-              event('formalization_reference_started');
-              reference = await (options.compareReference ?? compareFormalizationReference)(path.join(roundDirectory, 'reference'), {
+              const referenceInput = {
                 candidateSource: candidate.source, referenceSource: configured.source, environment: request.environment, pairs: configured.pairs,
-              }, { env, signal: lease.signal, timeoutMs: Number.isFinite(stageTimeout(configured.maxSeconds)) ? stageTimeout(configured.maxSeconds) : 0 });
-              writeMathJsonDurable(path.join(roundDirectory, 'reference-result.json'), reference);
+              };
+              const cachedReference = readStageCheckpoint('reference');
+              if (cachedReference === undefined) {
+                event('formalization_reference_started');
+                const base = path.join(roundDirectory, 'reference');
+                reference = await (options.compareReference ?? compareFormalizationReference)(
+                  fs.existsSync(base) ? base + '-' + crypto.randomUUID() : base, referenceInput,
+                  { env, signal: lease.signal, timeoutMs: Number.isFinite(stageTimeout(configured.maxSeconds)) ? stageTimeout(configured.maxSeconds) : 0 });
+                lease.signal.throwIfAborted();
+                if (reference.status === 'established') {
+                  assertFormalizationReferenceResult(referenceInput, reference);
+                  saveStageCheckpoint('reference', reference);
+                }
+              } else {
+                assertFormalizationReferenceResult(referenceInput, cachedReference);
+                reference = cachedReference;
+              }
               if (reference.status !== 'established') throw new Error('formalization_reference_not_established');
             }
             const review = comparisons[0]!.review;
@@ -505,19 +680,30 @@ export async function runFormalization(directory: string, root: string, options:
               })), approvedAt: new Date().toISOString(), round: state.rounds } as FormalizationEvidence;
             writeFormalizationArtifact(directory, evidence);
             const seed = bootstrapFormalizedProblem(directory);
-            state.status = 'approved'; delete state.error; delete state.feedback; save();
+            state.status = 'approved'; delete state.error; delete state.feedback; delete state.activeRound; delete state.unknownRounds; save();
             event('formalization_approved');
             return { ...summary(), ...seed };
           } catch (cause) {
             if (fs.existsSync(path.join(directory, 'artifact'))) throw cause;
             if (currentCandidate && semanticallyRejected)
               state.rejectedCandidates = [...new Set([...(state.rejectedCandidates ?? []), mathDigest(currentCandidate.source)])];
-            state.feedback = errorText(cause).slice(0, 16_000); state.error = state.feedback;
-            writeMathJsonDurable(path.join(roundDirectory, 'failure.json'), { error: state.feedback, round: state.rounds });
-            save(); event('formalization_revision_requested', undefined, state.feedback);
+            // An unknown verdict is unresolved evidence, never a mismatch: it is
+            // not blacklisted, but repeated consecutive unknown rounds are.
+            if (!semanticallyRejected && errorText(cause).startsWith('formalization_semantic_unknown:'))
+              state.unknownRounds = (state.unknownRounds ?? 0) + 1;
+            else delete state.unknownRounds;
+            state.error = errorText(cause).slice(0, 16_000);
+            writeMathJsonDurable(path.join(roundDirectory, 'failure.json'), { error: state.error, round: state.rounds });
+            save();
             if (lease.signal.aborted || !modelDispatchAllowed(buildTokenBudget(request.maxTotalTokens, state.sessions)) ||
-                state.feedback.includes('formalization_plan_task_kind_unsupported') || infrastructureFailure(state.feedback) ||
-                /formalization_role_incomplete:failed:(?:unauthorized|badRequest|misalignmentPolicyViolation|cyberPolicy)/u.test(state.feedback)) throw cause;
+                cause instanceof FormalizationRoleFailure || state.error.includes('formalization_plan_task_kind_unsupported') || infrastructureFailure(state.error) ||
+                /formalization_role_incomplete:failed:(?:unauthorized|badRequest|misalignmentPolicyViolation|cyberPolicy)/u.test(state.error)) throw cause;
+            state.feedback = state.error; delete state.activeRound; save();
+            // Another round is pointless once consecutive unknown verdicts prove
+            // the ambiguity survives fresh candidates, and an unlimited round
+            // budget would otherwise never end the run.
+            if ((state.unknownRounds ?? 0) >= MAX_UNKNOWN_ROUNDS) break;
+            event('formalization_revision_requested', undefined, state.feedback);
           }
         }
         state.status = 'exhausted'; save();

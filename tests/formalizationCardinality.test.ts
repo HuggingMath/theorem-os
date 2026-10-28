@@ -37,6 +37,16 @@ const positiveInput = request({
   cardinality_and_false: '{α : Type u} (P : ℕ → ℕ → Prop) : ∀ (p q : ℕ),'
     + ' Nat.Prime p → Nat.Prime q → Nat.card α = p * q → (P p q → False)',
 });
+const proofnet005Input: FormalizationReferenceInput = {
+  ...request({
+    no_simple_group_of_order_224:
+      '(G : Type u) [Group G] (hG : Nat.card G = 224) : ¬ IsSimpleGroup G',
+  }, {
+    no_simple_group_of_order_224:
+      '{G : Type u} [Group G] [Fintype G] (hG : Fintype.card G = 224) : IsSimpleGroup G → false',
+  }),
+  purpose: 'task-fidelity-v2',
+};
 
 const expectClosedDag = (text: string) => {
   const expression = JSON.parse(text);
@@ -116,8 +126,40 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
     expect(generated).not.toMatch(/\b(?:sorry|sorryAx|axiom|admit)\b/u);
   });
 
+  it('establishes ProofNet 005 with a kernel-proved nonzero Fintype-to-Nat.card conversion', async () => {
+    const result = await compare('proofnet-005', proofnet005Input);
+    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v5',
+      method: 'cardinality-correspondence-v6', check: 'completed', status: 'established',
+      modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
+    expect(result.pairs).toHaveLength(1);
+    expect(result.pairs[0]).toMatchObject({
+      candidateToReference: { status: 'established' }, referenceToCandidate: { status: 'established' },
+    });
+    const report = JSON.parse(result.evidence!.reportText);
+    const steps = report.pairs[0].transformations;
+    const cardinality = steps.find((step: { ruleId: string }) => step.ruleId === 'finite-cardinality-value');
+    expect(cardinality).toMatchObject({ ruleVersion: 1, side: 'reference',
+      position: { kind: 'forall-suffix', binderCount: 2 },
+      sideConditions: [{ kind: 'cardinality-nonzero' }] });
+    expectClosedDag(cardinality.sideConditions[0].type);
+    expectClosedDag(cardinality.sideConditions[0].term);
+    expect(steps.map((step: { ruleId: string }) => step.ruleId)).toContain('boolean-false');
+    for (const mutation of ['rule-version', 'side-condition']) {
+      const modified = JSON.parse(canonicalMathJson(result));
+      const changed = JSON.parse(modified.evidence.reportText);
+      const step = changed.pairs[0].transformations.find((value: { ruleId: string }) =>
+        value.ruleId === 'finite-cardinality-value');
+      if (mutation === 'rule-version') step.ruleVersion = 2;
+      else step.sideConditions[0].kind = 'unchecked-cardinality';
+      modified.evidence.reportText = JSON.stringify(changed);
+      modified.evidence.reportSha256 = mathDigest(modified.evidence.reportText);
+      expect(() => assertFormalizationReferenceResult(proofnet005Input, modified)).toThrow();
+    }
+  }, 0);
+
   it('keeps missing primes, changed hypotheses, zero or infinite cardinality, and instance-dependent conclusions unknown', async () => {
-    const input = request({
+    const input: FormalizationReferenceInput = {
+      ...request({
       missing_prime: `${binders} : ${finiteLaw}`,
       extra_premise: `${binders} : ${finiteLaw}`,
       missing_cardinality: `${binders} : ${finiteLaw}`,
@@ -127,6 +169,10 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
         + ' Prime p → Prime q → Fintype.card ℕ = 0 → Q p q',
       instance_dependent: '{α : Type u} [Finite α] (R : Fintype α → ℕ → ℕ → Prop) :'
         + ' ∀ [inst : Fintype α] (p q : ℕ), Prime p → Prime q → Fintype.card α = p * q → R inst p q',
+      zero_finite_cardinality: '{α : Type u} (Q : Prop) : ∀ [Fintype α], Fintype.card α = 0 → Q',
+      instance_dependent_finite_cardinality:
+        '{α : Type u} [Finite α] (R : Fintype α → Prop) : ∀ [inst : Fintype α],'
+          + ' Fintype.card α = 224 → R inst',
       changed_conclusion: `${binders} : ${finiteLaw}`,
       arbitrary_boolean: '(b : Bool) (P : Prop) : P → (b : Prop)',
     }, {
@@ -140,14 +186,22 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
         + ' Nat.Prime p → Nat.Prime q → Nat.card ℕ = 0 → Q p q',
       instance_dependent: '{α : Type u} [Finite α] (R : Fintype α → ℕ → ℕ → Prop) :'
         + ' ∀ (p q : ℕ), Nat.Prime p → Nat.Prime q → Nat.card α = p * q → R (Fintype.ofFinite α) p q',
+      zero_finite_cardinality: '{α : Type u} (Q : Prop) : Nat.card α = 0 → Q',
+      instance_dependent_finite_cardinality:
+        '{α : Type u} [Finite α] (R : Fintype α → Prop) : Nat.card α = 224 → R (Fintype.ofFinite α)',
       changed_conclusion: `${binders} : ∀ (p q : ℕ), Nat.Prime p → Nat.Prime q →`
         + ' Nat.card α = p * q → ¬ Q p q',
       arbitrary_boolean: '(b : Bool) (P : Prop) : P → False',
-    });
+    }),
+      purpose: 'task-fidelity-v2',
+    };
     const result = await compare('negative', input);
-    expect(result).toMatchObject({ check: 'completed', status: 'not-established' });
+    const diagnosticsFile = path.join(root, 'negative', 'diagnostics.json');
+    const diagnostics = fs.existsSync(diagnosticsFile) ? JSON.parse(fs.readFileSync(diagnosticsFile, 'utf8')) : undefined;
+    const details = `${result.reason}: ${JSON.stringify(diagnostics?.messages ?? diagnostics?.stdout?.slice(-4000) ?? '')}`;
+    expect(result, details).toMatchObject({ check: 'completed', status: 'not-established' });
     expect(result.evidence).toBeDefined();
-    expect(result.pairs).toHaveLength(9);
+    expect(result.pairs).toHaveLength(11);
     for (const pair of result.pairs) expect(pair).toMatchObject({
       candidateToReference: { status: 'not-established' }, referenceToCandidate: { status: 'not-established' },
     });

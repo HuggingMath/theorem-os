@@ -66,7 +66,7 @@ export function assertReviewStatementObservation(input: FormalizationEvaluationR
 
 export function structuredReviewInput(input: FormalizationEvaluationReviewerInput,
   observation: ReviewStatementObservation, translation: FormalizationTranslation | null = null,
-  fidelityPolicy?: 'task-preserving-v1'): StructuredReviewInput {
+  fidelityPolicy?: 'task-preserving-v1' | 'task-preserving-v2'): StructuredReviewInput {
   return { schema: 'theorem-os.formalization-review-input.v2', role: translation ? 'recheck' : 'primary',
     caseId: input.caseId, baseInputDigest: formalizationEvaluationInputDigest(input),
     original: input.original, header: input.header, candidate: input.candidate, observation, translation,
