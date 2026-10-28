@@ -50,6 +50,19 @@ describe('Lead plan revisions', () => {
     expect(cleared.tasks[1].ownerId).toBeUndefined();
   });
 
+  it('reads a null field of a complete plan as unset, as a revision does', () => {
+    const goal = { id: 'goal', kind: 'goal', objective: 'Prove the frozen target.', theoremName: 'Submission.main', dependsOn: ['core'] };
+    const plan = parseLeadPlan(problem, { tasks: [{ ...lemma('core'), ownerId: null, status: null, family: null }, { ...goal, ownerId: null }],
+      groups: [{ id: 'main', objective: 'Main.', engineerId: null }] });
+    expect(plan.tasks).toEqual(parseCooperationPlan(problem, { tasks: [lemma('core'), goal],
+      groups: [{ id: 'main', objective: 'Main.' }] }).tasks);
+    expect(plan.tasks[0]).not.toHaveProperty('ownerId');
+    expect(plan.groups[0]).not.toHaveProperty('engineerId');
+    expect(() => parseCooperationPlan(problem, { tasks: [null, goal] })).toThrow('math_plan_invalid_task: {"field":"task"}');
+    expect(() => parseCooperationPlan(problem, { tasks: [{ ...lemma('core'), ownerId: 7 }, goal] }))
+      .toThrow('math_plan_invalid_task: {"taskId":"core","field":"ownerId"}');
+  });
+
   it('replaces a task whose kind changes instead of keeping stale typed fields', () => {
     const plan = parseLeadPlan(problem, { baseVersion: 'v1', upsert: [
       { id: 'side', kind: 'research', objective: 'Investigate whether side is needed.' }] }, base);
