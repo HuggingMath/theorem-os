@@ -124,6 +124,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
         if (action.kind !== 'task' || action.task.id !== 'investigate') throw new Error('fixture_unexpected_responsibility:' + action.kind);
         actions.push(action); active = done[turn];
         onStarted(`backoff-turn-${turn}`); started[turn].resolve();
+        // The advisory clock starts at the model's first produced item, not at turn admission.
+        options.onActivity?.({ event: 'reasoning' });
         return done[turn].promise;
       },
     }));
@@ -159,7 +161,10 @@ describe('cooperative advisory scheduling checkpoints', () => {
           onStarted(`continuation-turn-${turn}`);
           if (turn === 0 && options.saveNotes)
             fs.writeFileSync(path.join(access.workspace, 'RESEARCH.md'), 'The current mathematical argument and exact unresolved inference are saved.\n');
-          started[turn].resolve(); return done[turn].promise;
+          started[turn].resolve();
+          // The advisory clock starts at the model's first produced item, not at turn admission.
+          access.onActivity?.({ event: 'reasoning' });
+          return done[turn].promise;
         } };
     });
     const wait = (turn: number, completion: Promise<unknown>) => Promise.race([started[turn].promise,
@@ -400,6 +405,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
           lastError = undefined;
           const action = JSON.parse(message) as Extract<CooperativeAction, { kind: 'task' }>;
           actions.push(action); onStarted(`advisory-turn-${++turns}`);
+          options.onActivity?.({ event: 'reasoning' });
           const notes = path.join(options.workspace, 'RESEARCH.md');
           if (turns === 1) {
             fs.writeFileSync(notes, 'A partial construction and its exact remaining quantitative gap.\n');
@@ -505,11 +511,13 @@ describe('cooperative advisory scheduling checkpoints', () => {
     const { check, events, run } = fixture();
     const started = deferred(), done = deferred<string>();
     let lastError: string | undefined;
-    const open = async (): Promise<MathAgentSession> => ({ threadId: 'failed-advisory-thread',
+    const open = async (options: MathAgentOptions): Promise<MathAgentSession> => ({ threadId: 'failed-advisory-thread',
       get lastError() { return lastError; }, close: async () => {},
       interrupt: async () => { lastError = 'math_model_tool_failed'; done.resolve('failed'); },
       run: async (_message, _messageId, _workspace, onStarted) => {
-        onStarted('failed-turn'); started.resolve(); return done.promise;
+        onStarted('failed-turn'); started.resolve();
+        options.onActivity?.({ event: 'reasoning' });
+        return done.promise;
       } });
     const completion = run(open, 1); void completion.catch(() => {});
     await started.promise;
@@ -537,6 +545,11 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(state.cooperation!.researchCheckpoints?.investigate).toMatchObject({ count: 3, paused: true });
     expect(state.cooperation!.tasks.find(node => node.task.id === 'investigate'))
       .toMatchObject({ status: 'blocked', feedback: expect.stringContaining('math_research_checkpoint_unchanged') });
+    // The pause parks the input for the Lead instead of leaving it silently blocked; parking is advisory.
+    const parking = state.cooperation!.blockers!.find(record => record.mechanism === 'unchanged-research-checkpoint')!;
+    expect(parking.status).toBe('parked');
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'investigate')!.routeParking).toEqual([parking.id]);
+    expect(events.filter(item => item.event === 'route_parked')).toHaveLength(1);
     expect(events.filter(item => item.event === 'cooperative_checkpoint_scheduled')
       .map(item => item.details!.checkpointAfterMs)).toEqual([120_000, 240_000, 480_000]);
     expect(events.some(item => item.event === 'worker_failed' || item.event === 'turn_failed')).toBe(false);
@@ -613,6 +626,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
       return { threadId: `thread-${id}`, interrupt, notify, close: async () => { done.resolve('interrupted'); },
         run: async (_message, _messageId, _workspace, onStarted) => {
           onStarted(`turn-${id}`);
+          options.onActivity?.({ event: 'reasoning' });
           if (id === 'solver') {
             fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), 'The first construction is incomplete; a quantifier bridge remains open.\n');
             leadStarted.resolve();
@@ -632,8 +646,15 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(state.check).toBeUndefined(); expect(check).not.toHaveBeenCalled();
     expect(workers[1].role).toBe('engineer');
     await vi.advanceTimersByTimeAsync(2 * 3_600_000);
+    // The goal writer is the only worker that can close the problem: it is reminded to keep a
+    // durable handoff, but its turn is never taken away and it never receives a yield notice.
     expect(sessions.get('engineer')!.interrupt).not.toHaveBeenCalled();
-    expect(sessions.get('engineer')!.notify).not.toHaveBeenCalled();
+    expect(sessions.get('engineer')!.notify).toHaveBeenCalledOnce();
+    expect(sessions.get('engineer')!.notify.mock.calls[0]![0]).toMatch(/RESEARCH\.md/u);
+    expect(sessions.get('engineer')!.notify.mock.calls[0]![0]).toMatch(/no checkpoint will interrupt or end it/u);
+    expect(events).toContainEqual(expect.objectContaining({ event: 'cooperative_checkpoint_scheduled',
+      details: expect.objectContaining({ workerId: 'engineer', noticeOnly: true, checkpointAfterMs: 15 * 60_000 }) }));
+    expect(events.some(item => item.event === 'cooperative_checkpoint_interrupted' && item.details?.workerId === 'engineer')).toBe(false);
     expect(open.mock.calls.every(([options]) => options.turnTimeoutMs === undefined)).toBe(true);
     expect(events.some(item => item.event === 'turn_checkpoint' &&
       item.details?.reason === 'math_cooperative_scheduling_checkpoint')).toBe(true);

@@ -7,7 +7,7 @@ import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import type { SolverRunState, SolverWorkerState } from './archive';
-import { commitSolverSources, git } from './problem';
+import { commitSolverSources, git, solverScratchDigest } from './problem';
 import { CooperativeResearch } from './cooperation';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, taskGroup, type CooperativeAction } from './tasks';
 import { isStatementAction } from './statementReview';
@@ -41,6 +41,12 @@ const advisoryCheckpointMs = 120_000;
 const advisoryInterruptGraceMs = 10_000;
 const advisoryProgressPollMs = 5_000;
 const advisoryMaxBackoff = 3;
+// Provider latency is not mathematical work: the advisory clock starts only at the model's first
+// item, with a hard cap so a turn that never responds still yields a resumable checkpoint.
+const advisoryFirstActivityMs = 15 * 60_000;
+// A goal turn is the only work that can close the problem, so it is never yielded. It still owes a
+// durable handoff: this is the long cadence of the save-only reminder, which never interrupts it.
+const advisoryGoalNoticeMs = 15 * 60_000;
 // Compaction is maintenance, not a mathematical attempt. A stalled operation restarts from saved work.
 const compactionRecoveryMs = 10 * 60_000;
 
@@ -60,7 +66,16 @@ export function advisoryCheckpointScope(assignment: CooperativeAction | undefine
   }
   if (assignment?.kind === 'task' && ['research', 'sketch'].includes(assignment.task.kind) && !isFeasibilityReview(assignment.task))
     return mathDigest(canonicalMathJson({ kind: 'task', taskDigest: assignment.assignment.taskDigest }));
+  // An original goal is the only work that can close the problem, so its writer is never yielded;
+  // it still owes a durable handoff, which the notice-only checkpoint asks for without interrupting.
+  if (assignment?.kind === 'task' && assignment.task.kind === 'goal')
+    return mathDigest(canonicalMathJson({ kind: 'task', taskDigest: assignment.assignment.taskDigest, noticeOnly: true }));
   return undefined;
+}
+
+/** Proof work is reminded to save notes, but an advisory checkpoint never takes its writer away. */
+export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | undefined): boolean {
+  return assignment?.kind === 'task' && assignment.task.kind === 'goal';
 }
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
@@ -235,10 +250,12 @@ export async function runResearchWorkers(input: {
       const advisoryContentDigest = () => {
         try {
           const notes = path.join(worker.worktree, 'RESEARCH.md');
+          // Scratch probes are advisory: they can show exploration advanced, never that a proof exists.
           return mathDigest(canonicalMathJson([
             ...state.problem.ownedFiles.map(file => [file, mathDigest(fs.readFileSync(
               path.join(worker.worktree, state.problem.projectRelative, file)))]),
             ['RESEARCH.md', mathDigest(fs.existsSync(notes) ? fs.readFileSync(notes) : '')],
+            ['scratch', solverScratchDigest(state.problem, worker.worktree) ?? 'none'],
           ]));
         } catch { return undefined; }
       };
@@ -311,6 +328,8 @@ export async function runResearchWorkers(input: {
         let sliceStartedAt: number | undefined;
         let activeSliceMs = 0, noticeSent = false;
         let scheduleSlice: (() => void) | undefined;
+        let clockArmed = false;
+        let firstActivityTimer: ReturnType<typeof setTimeout> | undefined;
         turnAssignment = assignment;
         const live = () => !finished && !signal.aborted && session === activeSession;
         const current = () => live() && Boolean(assignment && cooperation?.current(assignment));
@@ -347,13 +366,22 @@ export async function runResearchWorkers(input: {
           compactionTimer.unref();
         };
         turnActivity = activity => {
+          // Waiting on the provider is not a work slice: only the first produced item starts the
+          // advisory clock, so a slow first token cannot be mistaken for a stalled mathematical turn.
+          if (!clockArmed && activity.itemType !== 'contextCompaction') {
+            clockArmed = true;
+            clearTimeout(firstActivityTimer); firstActivityTimer = undefined;
+            if (advisoryScope) emit('cooperative_checkpoint_clock_started', { itemType: activity.itemType });
+            scheduleSlice?.();
+          }
           if (!current() || activity.itemType !== 'contextCompaction') return;
           if (activity.event === 'item_started') {
             if (compactionStartedAt !== undefined) return;
             compactionStartedAt = Date.now();
             if (sliceStartedAt !== undefined) activeSliceMs += Date.now() - sliceStartedAt;
             sliceStartedAt = undefined;
-            clearTimeout(noticeTimer); clearTimeout(checkpointTimer);
+            clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(firstActivityTimer);
+            firstActivityTimer = undefined;
             emit('context_compaction_started', { threadId: research.threadId });
             watchCompaction();
           } else if (activity.event === 'item_completed' && compactionStartedAt !== undefined) {
@@ -408,17 +436,20 @@ export async function runResearchWorkers(input: {
             return;
           }
           const contentDigest = advisoryContentDigest(), previous = research.advisoryCheckpoint;
-          const noProgressStreak = previous?.scope === advisoryScope &&
+          const noticeOnly = advisoryCheckpointNoticeOnly(assignment);
+          const noProgressStreak = noticeOnly ? 0 : previous?.scope === advisoryScope &&
             (contentDigest === undefined || contentDigest === previous.contentDigest) ? previous.noProgressStreak : 0;
           research.advisoryCheckpoint = { scope: advisoryScope, contentDigest, noProgressStreak };
           advisoryTurn = { scope: advisoryScope, contentDigest };
           save();
           // Lead planning retains its cadence; advisory research backs off after unchanged checkpoints.
-          const backoff = assignment?.kind !== 'lead';
-          const checkpointAfterMs = advisoryCheckpointMs * (backoff ? 2 ** Math.min(noProgressStreak, advisoryMaxBackoff) : 1);
+          const backoff = !noticeOnly && assignment?.kind !== 'lead';
+          const checkpointAfterMs = noticeOnly ? advisoryGoalNoticeMs :
+            advisoryCheckpointMs * (backoff ? 2 ** Math.min(noProgressStreak, advisoryMaxBackoff) : 1);
           const noticeAfterMs = checkpointAfterMs * advisoryCheckpointNoticeMs / advisoryCheckpointMs;
           emit('cooperative_checkpoint_scheduled', { turnId, checkpointAfterMs, noticeAfterMs, noProgressStreak,
-            protected: false, backoffCapped: Boolean(backoff) && noProgressStreak >= advisoryMaxBackoff });
+            protected: false, ...(noticeOnly ? { noticeOnly: true } : {}),
+            backoffCapped: Boolean(backoff) && noProgressStreak >= advisoryMaxBackoff });
           if (noProgressStreak) emit('cooperative_checkpoint_deferred', { turnId, checkpointAfterMs,
             noProgressStreak, protected: false, reason: 'no-durable-progress' });
           const sendNotice = () => {
@@ -427,10 +458,15 @@ export async function runResearchWorkers(input: {
             emit('cooperative_checkpoint_requested', { turnId, checkpointAfterMs, noProgressStreak, protected: false });
             void Promise.resolve().then(() => {
               if (!current()) return;
-              return activeSession.notify?.('Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +
-                'For planning, save or publish the smallest valid complete task graph using this assignment\'s delivery protocol. ' +
-                'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
-                'The same thread and saved work will remain available for continuation; this does not end the solving budget.');
+              // A goal turn is never yielded, so its reminder must not promise a checkpoint that will
+              // not come: it asks for the durable handoff and leaves the writing turn running.
+              return activeSession.notify?.(noticeOnly
+                ? 'Save the current mathematical argument, the exact unresolved step and useful references in RESEARCH.md now. ' +
+                  'This turn keeps running: no checkpoint will interrupt or end it, so save notes incrementally and continue proving.'
+                : 'Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +
+                  'For planning, save or publish the smallest valid complete task graph using this assignment\'s delivery protocol. ' +
+                  'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
+                  'The same thread and saved work will remain available for continuation; this does not end the solving budget.');
             }).catch(() => { if (current()) emit('cooperative_checkpoint_notice_failed'); });
           };
           const checkpoint = (yieldForProof = false) => {
@@ -441,11 +477,26 @@ export async function runResearchWorkers(input: {
           };
           scheduleSlice = () => {
             if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
+            // The advisory clock measures mathematical work, not provider latency. Until the model
+            // produces its first item the turn is held open, bounded only by the silent-turn cap.
+            if (!clockArmed) {
+              firstActivityTimer ??= setTimeout(() => {
+                firstActivityTimer = undefined;
+                if (!current() || clockArmed) return;
+                clockArmed = true;
+                emit('cooperative_checkpoint_clock_started', { itemType: 'none', silentMs: advisoryFirstActivityMs });
+                scheduleSlice?.();
+              }, advisoryFirstActivityMs);
+              firstActivityTimer.unref();
+              return;
+            }
             sliceStartedAt = Date.now();
             if (!noticeSent) {
               noticeTimer = setTimeout(sendNotice, Math.max(0, noticeAfterMs - activeSliceMs));
               noticeTimer.unref();
             }
+            // A goal writer keeps its turn; only the reminder above is scheduled for it.
+            if (noticeOnly) return;
             checkpointTimer = setTimeout(() => checkpoint(), Math.max(0, checkpointAfterMs - activeSliceMs));
             checkpointTimer.unref();
           };
@@ -481,7 +532,7 @@ export async function runResearchWorkers(input: {
         finally {
           finished = true;
           clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(interruptTimer);
-          clearTimeout(compactionTimer); turnActivity = undefined; turnAssignment = undefined;
+          clearTimeout(compactionTimer); clearTimeout(firstActivityTimer); turnActivity = undefined; turnAssignment = undefined;
           clearInterval(capacityTimer); clearInterval(contextTimer);
           // A transport failure may settle run() before process-group teardown finishes.
           // Do not freeze sources or reopen this thread until the writer is fully closed.

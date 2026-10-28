@@ -281,6 +281,35 @@ function isUntrackedSolverScratch(problem: SolverProblem, worktree: string, rela
 const solverGitPaths = (worktree: string, args: string[]): string[] => mathGitBytes(worktree, args,
   { timeout: 30_000, maxBuffer: 1024 * 1024, errorMessage: `math_git_failed:${args[0]}` }).toString('utf8').split('\0').filter(Boolean);
 
+/**
+ * Advisory progress inside the worker's own scratch roots: numerical probes, search scripts and
+ * command output live there while a research assignment is still being explored, so a scheduling
+ * clock that only reads committed notes reports no progress for genuine work. Reading scratch can
+ * never accept anything; this digest is scheduling evidence only and is bounded so a large probe
+ * output cannot turn the checkpoint into a bulk read.
+ */
+export function solverScratchDigest(problem: SolverProblem, worktree: string): string | undefined {
+  try {
+    const untracked = new Set(solverGitPaths(worktree, ['ls-files', '--others', '--exclude-standard', '-z']));
+    const scratch = [...untracked].filter(relative => solverScratch(problem, relative)).sort().slice(0, 256);
+    if (!scratch.length) return undefined;
+    let budget = 4 * 1024 * 1024;
+    const entries: [string, string][] = [];
+    for (const relative of scratch) {
+      const file = path.join(worktree, relative);
+      try {
+        assertMathCanonicalPath(file);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile()) { entries.push([relative, 'non-file']); continue; }
+        if (stat.size > budget) { entries.push([relative, `large:${stat.size}`]); continue; }
+        budget -= stat.size;
+        entries.push([relative, mathDigest(fs.readFileSync(file))]);
+      } catch { continue; }
+    }
+    return entries.length ? mathDigest(canonicalMathJson(entries)) : undefined;
+  } catch { return undefined; }
+}
+
 /** Changed paths outside the owned sources, journals and advisory scratch roots. */
 function solverPathsOutsideOwnership(problem: SolverProblem, worktree: string) {
   const untracked = new Set(solverGitPaths(worktree, ['ls-files', '--others', '--exclude-standard', '-z']));

@@ -90,7 +90,12 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       ? committedSource(this.lead.worktree, commit, 'RESEARCH.md') : '') :
       (fs.existsSync(path.join(this.lead.worktree, 'RESEARCH.md'))
         ? readMathText(path.join(this.lead.worktree, 'RESEARCH.md'), MAX_RESEARCH_NOTES_BYTES) : '');
-    return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest(true), planVersion: this.planVersion(),
+    // New peer evidence must release the pause, because a plan input drops any delivery whose task version
+    // has since advanced and would otherwise hide the finding that alone can wake the Lead. The immutable
+    // content of peer publications is that evidence; a peer saving its notes mid-slice is work this Lead
+    // already dispatched and must not re-open the turn on every checkpoint.
+    return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest(true),
+      evidenceDigest: this.planningEvidenceDigest(), planVersion: this.planVersion(),
       sourceDigest, notesDigest: mathDigest(notes) }));
   }
   /** A completed decision covers its own bookkeeping, but never evidence arriving during that dispatch. */
@@ -362,15 +367,34 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     if (this.archive.tasks.length) return;
     const reason = this.archive.error ?? 'math_initial_plan_checkpoint';
     const researchers = this.input.workers.filter(worker => worker.role === 'researcher' && this.liveWorkers.has(worker.id));
+    const engineer = this.input.workers.find(worker => worker.role === 'engineer' && this.liveWorkers.has(worker.id));
     const targets = this.input.state.problem.targets;
-    const tasks = [
-      ...targets.map((target, index) => ({ id: `initial_goal_${index + 1}`, kind: 'goal',
-        objective: `Prove the frozen original target ${target.theoremName}; use researcher findings as advisory guidance.`,
-        proofPath: target.proofPath, theoremName: target.theoremName })),
-      ...researchers.map((worker, index) => ({ id: `initial_research_${index + 1}`, kind: 'research', ownerId: worker.id,
-        objective: `Investigate proof routes and difficult library connections for ${targets.filter((_, i) => i % researchers.length === index)
-          .map(target => target.theoremName).join(', ') || 'the original targets'}. Report concrete evidence and unresolved gaps; findings are advisory.` })),
+    // The fallback is a coordination scaffold, not a mathematical plan. An original goal is proof work,
+    // so pin it to a live Engineer: one unowned goal would otherwise be taken by the first ready
+    // Researcher, which strands that Researcher's own investigation and leaves the Engineer with nothing.
+    const goals = targets.map((target, index) => ({ id: `initial_goal_${index + 1}`, kind: 'goal' as const,
+      objective: `Prove the frozen original target ${target.theoremName}; use researcher findings as advisory guidance.`,
+      ...(engineer ? { ownerId: engineer.id } : {}),
+      proofPath: target.proofPath, theoremName: target.theoremName }));
+    // Identical investigation text makes two Researchers ask one question; each gets a distinct angle.
+    const angles = [
+      'the central construction or quantitative estimate, with its exact assumptions and the missing inference',
+      'library connections: the exact existing lemmas or definitions that could discharge a step, with pinned versions and searches',
+      'the hardest substantive inference: whether it holds as stated, with a counterexample search or a concrete reduction',
+      'a concrete end-to-end proof route, naming the remaining gaps in order',
     ];
+    const tasks = [...goals, ...researchers.map((worker, index) => {
+      // Round-robin coverage, but never an empty assignment: one target belongs to every Researcher.
+      const primary = targets.filter((_, targetIndex) => targetIndex % researchers.length === index);
+      const covered = (primary.length ? primary : targets).map(target => target.theoremName).join(', ');
+      return { id: `initial_research_${index + 1}`, kind: 'research' as const, ownerId: worker.id,
+        // The goal is an inspection input, never a proof dependency: a parked advisory review must not
+        // make the original goal unstartable (advisory tasks may depend on the consumer, not the reverse).
+        dependsOn: goals.map(goal => goal.id),
+        objective: `Investigate ${angles[index % angles.length]} for ${covered}` +
+          `${researchers.length > 1 ? ` (investigation ${index + 1} of ${researchers.length})` : ''}. ` +
+          'Report concrete evidence and unresolved gaps; findings are advisory.' };
+    })];
     await this.acceptPlan(parseCooperationPlan(this.input.state.problem, { tasks }));
     dropLeadWakes(this.archive.leadWakes!);
     this.archive.initialPlanFallback = { at: Date.now(), reason };

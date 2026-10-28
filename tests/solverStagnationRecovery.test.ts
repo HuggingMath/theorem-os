@@ -235,6 +235,8 @@ describe('durable checkpoint before context rotation', () => {
         const turn = turns++;
         if (turn >= 3) throw new Error('fixture_unexpected_fourth_turn');
         messages.push(message); onStarted(`deduplicated-turn-${turn}`);
+        // A writing turn arms the advisory clock at its first produced item.
+        options.onActivity?.({ event: 'reasoning' });
         started[turn].resolve(); return done[turn].promise;
       },
     }));

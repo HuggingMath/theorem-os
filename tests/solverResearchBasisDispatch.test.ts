@@ -119,6 +119,8 @@ describe('research basis at actual model dispatch', () => {
           if (index >= count) throw new Error('fixture_unexpected_real_context_turn');
           messages.push(message); threads.push(threadId); active = done[index];
           onStarted(`real-context-turn-${index}`);
+          // The advisory clock measures produced work, so this writing turn arms it immediately.
+          options.onActivity?.({ event: 'reasoning' });
           fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), `An unfinished derivation retains its exact remaining inference at step ${index}.\n`);
           started[index].resolve(); return done[index].promise;
         } };
@@ -249,6 +251,8 @@ describe('research basis at actual model dispatch', () => {
         messages.push(JSON.parse(message)); active = done[index]; entered[index].resolve();
         if (index === 1) await startSecond.promise;
         onStarted(`basis-continuation-${index}`); started[index].resolve();
+        // A writing turn arms the advisory clock at its first produced item.
+        options.onActivity?.({ event: 'reasoning' });
         fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), index === 0
           ? 'The unfinished derivation and exact remaining inference are retained.\n'
           : 'The completed advisory derivation retains all quantified hypotheses.\n');
@@ -312,12 +316,14 @@ describe('research basis at actual model dispatch', () => {
     releases.push(() => done.forEach(turn => turn.resolve('interrupted')));
     let turn = 0, active = done[0];
     if (!previous) settings.omitFinding = true;
-    const completion = run(async (): Promise<MathAgentSession> => ({ threadId: 'omitted-finding-thread',
+    const completion = run(async (options): Promise<MathAgentSession> => ({ threadId: 'omitted-finding-thread',
       close: async () => { active.resolve('interrupted'); }, interrupt: async () => { active.resolve('interrupted'); }, notify: async () => {},
       run: async (message, _id, worktree, onStarted) => {
         const index = turn++; active = done[index];
         if (settings.omitFinding) expect(JSON.parse(message).dependencyFinding).toBeUndefined();
         onStarted(`omitted-finding-turn-${index}`); started[index].resolve();
+        // A writing turn arms the advisory clock at its first produced item.
+        options.onActivity?.({ event: 'reasoning' });
         fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), index === 0 && previous
           ? 'An unfinished derivation using the supplied first dependency finding.\n'
           : 'An advisory derivation based on the dependency findings actually supplied.\n');

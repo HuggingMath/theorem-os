@@ -103,6 +103,9 @@ describe('Lead planning liveness across checkpoints and restore', () => {
             const parsed = JSON.parse(message) as (typeof messages)[number];
             messages.push({ ...parsed, threadId }); active = deferred<string>();
             onStarted(`offline-turn-${messages.length}`);
+            // The advisory clock measures mathematical work, so a turn arms it once the model produces
+            // its first item. This offline writer produces one immediately; only provider latency waits.
+            options.onActivity?.({ event: 'reasoning' });
             if (parsed.assignment.kind === 'lead') firstLead.resolve();
             else if (parsed.assignment.kind === 'task' && parsed.assignment.task.id === 'investigate') firstResearch.resolve();
             else throw new Error('fixture_unexpected_assignment');

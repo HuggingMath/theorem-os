@@ -248,7 +248,18 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         !this.archive.tasks.some(other => other.task.id !== taskId && other.status === 'running' && other.assignment?.workerId === worker.id);
       const outputChanged = ownsOutput &&
         this.checkpointOutputDigest(worker.worktree, git(worker.worktree, ['rev-parse', 'HEAD'])) !== checkpoint.outputDigest;
-      if (!inputChanged && !outputChanged) continue;
+      if (!inputChanged && !outputChanged) {
+        // The pause is still current, so its obstruction now parks this input for the Lead instead of
+        // leaving silently blocked. Parking is a scheduling verdict only: it names what must change and
+        // never accepts or refutes anything. Escalate once so repeated passes stay quiet.
+        const parking = this.archive.blockers?.find(record => record.id === checkpoint.blockerId);
+        if (parking?.status === 'open') {
+          parking.status = 'parked'; parking.count = Math.max(parking.count, 2); parking.updatedAt = Date.now();
+          this.input.emit('route_parked', { blockerId: parking.id, taskId: parking.taskId, groupId: parking.groupId,
+            count: parking.count, scope: parking.scope, evidenceStatus: parking.evidenceStatus, reopenOn: parking.reopenOn });
+        }
+        continue;
+      }
       const blocker = this.archive.blockers?.find(record => record.id === checkpoint.blockerId);
       if (blocker) { blocker.status = 'reopened'; blocker.reopenedReason = inputChanged ? 'checkpoint-input-changed' : 'checkpoint-output-changed'; }
       this.moveTask(node, 'pending', 'reopened'); node.feedback = undefined;
