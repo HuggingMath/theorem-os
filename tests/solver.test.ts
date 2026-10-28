@@ -10,7 +10,7 @@ import { hashMathFormalSourceDeclaration, type MathematicsVerifierBatchRequest, 
 import * as verifier from '../src/math/verifier';
 import { readSolverProblem, assertSolverSources, assertSolverProjectSources, commitSolverSources, git, withSolverWorktree, SolverSourceError, type SolverProblem } from '../src/solver/problem';
 import { ownedSourceDeclarations } from '../src/solver/declarationIndex';
-import { checkSolverProof } from '../src/solver/modules/evidence';
+import { checkProjectedDeclarations, checkSolverProof } from '../src/solver/modules/evidence';
 import { assessTaskResponsibility } from '../src/solver/modules/organization';
 import { directSolverModules } from '../src/solver/modules';
 import { configurableSolverModules } from '../src/solver/modules/custom';
@@ -3279,6 +3279,54 @@ describe('isolated solver and host acceptance', () => {
       expect(fs.readFileSync(mergedFile, 'utf8')).toBe(merged);
     });
     expect(host.createSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps a helper added at the end of a namespace block in that block when a later block opens another namespace', async () => {
+    const helper = 'Submission/Helpers.lean';
+    const seed = 'namespace Submission.Helpers\ndef base : Nat := 2\nend Submission.Helpers\n\n' +
+      'namespace Submission.Helpers.Spec\ndef Statement : Prop := Submission.Helpers.base = 2\nend Submission.Helpers.Spec\n';
+    fs.mkdirSync(path.join(project, 'Submission'));
+    fs.writeFileSync(path.join(project, helper), seed);
+    const receipt = JSON.parse(fs.readFileSync(problem.activeProblemPath, 'utf8'));
+    receipt.solverOwnedFiles.push(helper);
+    fs.writeFileSync(problem.activeProblemPath, JSON.stringify(receipt));
+    git(workspace, ['add', '--', `generated/p/${helper}`]);
+    commitFixture(workspace, 'Owned helper module with a later specification namespace');
+    problem = readSolverProblem(workspace, problem.activeProblemPath);
+    const task: CooperativeTask = { id: 'first', kind: 'goal', objective: 'Prove the first target', dependsOn: [], revision: 0,
+      proofPath: 'Submission.lean', theoremName: 'Submission.first' };
+    const lemmas = 'lemma base_eq : base = 2 := rfl\nlemma base_pos : 0 < base := by rw [base_eq]; decide\n';
+    fs.writeFileSync(path.join(project, helper), seed.replace('end Submission.Helpers\n\n', lemmas + 'end Submission.Helpers\n\n'));
+    const changes = taskChanges(problem, workspace, commitSolverSources(problem, workspace), task, { seedCommit: problem.baseCommit });
+    expect(changes).toMatchObject([{ name: 'base_eq', afterName: 'base' }, { name: 'base_pos', afterName: 'base_eq' }]);
+    await withSolverWorktree(workspace, problem.baseCommit, async checkout => {
+      const file = path.join(checkout, problem.projectRelative, helper);
+      fs.writeFileSync(file, seed.replace('def base : Nat := 2\n', 'def base : Nat := 2\nlemma peer : True := by trivial\n'));
+      applyTaskChanges(problem, checkout, changes);
+      const source = fs.readFileSync(file, 'utf8');
+      expect(inspectScopedLeanDeclarations(source).map(item => item.qualifiedName)).toEqual(['Submission.Helpers.base',
+        'Submission.Helpers.base_eq', 'Submission.Helpers.base_pos', 'Submission.Helpers.peer', 'Submission.Helpers.Spec.Statement']);
+      applyTaskChanges(problem, checkout, changes);
+      expect(fs.readFileSync(file, 'utf8')).toBe(source);
+      // A replayed insertion is not a move: a later peer helper anchored on the same sibling keeps its place.
+      applyTaskChanges(problem, checkout, [{ file: helper, name: 'later', after: 'lemma later : True := by trivial\n', afterName: 'base' }]);
+      const withLater = fs.readFileSync(file, 'utf8');
+      applyTaskChanges(problem, checkout, changes);
+      expect(fs.readFileSync(file, 'utf8')).toBe(withLater);
+    });
+  });
+
+  it('rejects a typed task check whose exact declaration name is absent instead of crashing the type query', async () => {
+    fs.writeFileSync(path.join(project, 'Submission.lean'),
+      original.replace('end Submission', 'lemma helper : True := by trivial\nend Submission'));
+    const commit = commitSolverSources(problem, workspace);
+    await withSolverWorktree(workspace, commit, async checkout => {
+      const targets = [{ proofPath: 'Submission.lean', theoremName: 'Submission.Spec.helper', digest: 'a'.repeat(64),
+        missingError: 'math_task_missing_declaration' }];
+      await expect(checkProjectedDeclarations(problem, checkout, workspace, commit, targets,
+        { timeoutMs: 1_000, expectedDeclarationType: 'True' })).rejects.toThrow(/^math_task_missing_declaration$/u);
+    });
+    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it('merges independent helpers inside an initially empty namespace', async () => {

@@ -55,11 +55,16 @@ export function inspectScopedLeanDeclarations(source: string) {
   });
 }
 
+/** The declaration a closed type query reopens; a same-named declaration in another namespace is not it. */
+export function findLeanTypeQueryDeclaration(source: string, theoremName: string) {
+  const declarations = inspectScopedLeanDeclarations(source);
+  return declarations.find(declaration => declaration.qualifiedName === theoremName) ??
+    declarations.find(declaration => declaration.name === theoremName);
+}
+
 /** Reopen a declaration's namespaces and active lookup scopes for a closed type query. */
 export function leanDeclarationContextCommands(source: string, theoremName: string) {
-  const declarations = inspectScopedLeanDeclarations(source);
-  const target = declarations.find(declaration => declaration.qualifiedName === theoremName) ??
-    declarations.find(declaration => declaration.name === theoremName);
+  const target = findLeanTypeQueryDeclaration(source, theoremName);
   if (!target) throw new Error('Lean type query declaration was not found.');
   const regions = inspectLeanDeclarationRegions(source);
   const frames: string[][] = [[]];

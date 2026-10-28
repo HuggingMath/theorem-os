@@ -17,6 +17,7 @@ import { compactTaskSources } from './taskProjection';
 
 export { TaskProofCache } from './taskProofCache';
 
+/** `afterName` moves an existing declaration after that sibling, or inserts a new one after it. */
 export type DeclarationChange = { file: string; name: string; before?: string; after: string; beforeName?: string; afterName?: string; tail?: string };
 export type TaskProjectionReuse = Readonly<{ schema: 'theorem-os.task-projection-reuse.v1'; projectionCommit: string;
   checkedProjectionCommit: string; projectionTree: string; inputDigest: string }>;
@@ -111,8 +112,15 @@ export function taskChanges(problem: SolverProblem, worktree: string, sourceComm
           after: text(after, region), afterName: previous.name });
       }
     }
+    const contexts = new Map<string, string>();
+    const context = (name: string) => contexts.get(name) ??
+      contexts.set(name, canonicalMathJson(leanDeclarationContextCommands(after, name))).get(name)!;
     for (const region of updated.filter(item => !originals.some(original => original.name === item.name))) {
       const next = updated.find(item => item.startOffset > region.startOffset && originals.some(original => original.name === item.name));
+      // An anchor in another namespace/section block would rename the helper; follow its nearest same-scope sibling instead.
+      const previous = next && context(next.name) !== context(region.name) ?
+        updated.findLast(item => item.startOffset < region.startOffset && context(item.name) === context(region.name)) : undefined;
+      if (previous) { changes.push({ file, name: region.name, after: text(after, region), afterName: previous.name }); continue; }
       changes.push({ file, name: region.name, after: text(after, region), beforeName: next?.name,
         tail: next ? undefined : originals.length ? before.slice(originals.at(-1)!.endOffset) : after.slice(updated.at(-1)!.endOffset) });
     }
@@ -490,7 +498,7 @@ export function applyTaskChanges(problem: SolverProblem, worktree: string, chang
       const start = source.lastIndexOf('\n', existing.startOffset - 1) + 1;
       const actual = source.slice(start, existing.endOffset).trimEnd() + '\n';
       if (actual !== change.after && (!change.before || actual !== change.before)) throw new Error('math_task_integration_conflict');
-      if (change.afterName) {
+      if (change.afterName && change.before) {
         const anchor = regions.find(region => region.name === change.afterName);
         if (!anchor || canonicalMathJson(leanDeclarationContextCommands(source, change.name)) !==
             canonicalMathJson(leanDeclarationContextCommands(source, change.afterName)))
@@ -508,10 +516,12 @@ export function applyTaskChanges(problem: SolverProblem, worktree: string, chang
     } else {
       if (change.before) throw new Error('math_task_integration_missing_declaration');
       const anchor = change.beforeName && regions.find(region => region.name === change.beforeName);
-      const offset = anchor ? declarationStartWithDoc(source, anchor.startOffset) :
+      const sibling = change.afterName && regions.find(region => region.name === change.afterName);
+      const offset = anchor ? declarationStartWithDoc(source, anchor.startOffset) : sibling ? sibling.endOffset :
         change.tail !== undefined && source.endsWith(change.tail) ? source.length - change.tail.length : -1;
       if (offset < 0) throw new Error('math_task_integration_missing_context');
-      source = source.slice(0, offset) + change.after + source.slice(offset);
+      const separator = sibling && offset > 0 && source[offset - 1] !== '\n' ? '\n' : '';
+      source = source.slice(0, offset) + separator + change.after + source.slice(offset);
     }
     files.set(change.file, source);
   }

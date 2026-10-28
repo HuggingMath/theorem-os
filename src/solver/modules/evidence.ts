@@ -5,7 +5,7 @@ import { checkManyFormalVerifications, type MathematicsVerifierBatchItem, type M
 import { canonicalMathJson, mathDigest } from '../../math/mathRuntimeIo';
 import { commitSolverSources, git, withSolverWorktree, type SolverProblem } from '../problem';
 import { bindLeanPackages } from '../../math/leanDiagnostics';
-import { hashMathFormalSourceDeclaration } from '../../math/leanSource';
+import { findLeanTypeQueryDeclaration, hashMathFormalSourceDeclaration } from '../../math/leanSource';
 import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure, proofReuseEnvironment, proofVerificationDigest } from '../proofReuse';
 
 export type ProofCheck = Readonly<{ commit: string; sourceDigest: string; passed: boolean; verification: MathematicsVerifierBatchResult }>;
@@ -99,8 +99,11 @@ export async function checkProjectedDeclarations(problem: SolverProblem, checkou
   options: MathematicsVerifierExecutionOptions & { timeoutMs: number }) {
   const projectRoot = path.join(checkout, problem.projectRelative);
   const items = targets.map(target => {
-    const declarationHash = hashMathFormalSourceDeclaration(fs.readFileSync(path.join(projectRoot, target.proofPath), 'utf8'), target.theoremName);
-    if (!declarationHash) throw new Error(target.missingError);
+    const source = fs.readFileSync(path.join(projectRoot, target.proofPath), 'utf8');
+    const declarationHash = hashMathFormalSourceDeclaration(source, target.theoremName);
+    // The hash matches a local name; a typed check queries the exact name and would otherwise throw outside any receipt.
+    const typed = (options.expectedDeclarationTypes?.[target.theoremName] ?? options.expectedDeclarationType) !== undefined;
+    if (!declarationHash || typed && !findLeanTypeQueryDeclaration(source, target.theoremName)) throw new Error(target.missingError);
     return { proofPath: target.proofPath, theoremName: target.theoremName, expectedSourceDeclarationHash: declarationHash,
       statementHash: target.digest, leanStatementHash: target.digest, claim: 'statement' as const };
   });
