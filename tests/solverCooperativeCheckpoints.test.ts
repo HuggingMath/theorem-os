@@ -15,7 +15,7 @@ import { leadWorker, localExample, peerWorker, solverState } from './helpers/sol
 
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 
-// A Lead revision turn has one fixed decision slice.
+// A Lead revision turn has one fixed decision slice; any slice that ends mid-request waits for it.
 const LEAD_REVISION_MS = 10 * 60_000;
 
 describe('cooperative advisory scheduling checkpoints', () => {
@@ -251,6 +251,68 @@ describe('cooperative advisory scheduling checkpoints', () => {
       controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
       expect(vi.getTimerCount()).toBe(0);
     });
+
+  it('lets an advisory research slice that ends mid-request wait for that request before its checkpoint', async () => {
+    const { state, events, controller, run } = fixture();
+    const held = heldAdvisoryTurns(2), completion = run(held.open, Infinity); void completion.catch(() => {});
+    await held.wait(0, completion);
+    const activity = held.open.mock.calls[0][0].onActivity!;
+    // A two-minute research slice usually ends inside one request; cutting there saves nothing.
+    await vi.advanceTimersByTimeAsync(120_000 - 30_000);
+    activity({ event: 'reasoning' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(held.interrupt).not.toHaveBeenCalled();
+    expect(events).toContainEqual({ event: 'cooperative_checkpoint_awaiting_request', details: expect.objectContaining({
+      workerId: 'researcher', checkpointAfterMs: 120_000, maxWaitMs: 10 * 60_000, outputAgeMs: 30_000 }) });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    activity({ event: 'item_started', itemType: 'commandExecution' });
+    activity({ event: 'item_completed', itemType: 'commandExecution' });
+    await held.wait(1, completion);
+    expect(held.interrupt).toHaveBeenCalledOnce();
+    expect(events).toContainEqual({ event: 'cooperative_checkpoint_request_settled', details: expect.objectContaining({
+      workerId: 'researcher', boundary: 'request-returned', waitedMs: 5 * 60_000 }) });
+    expect(state.cooperation!.researchCheckpoints?.investigate).toMatchObject({ count: 1, paused: false });
+    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('lets an initial-plan slice that ends mid-request wait for that request before the fallback plan', async () => {
+    const { state, events, controller, run } = fixture(true);
+    const leadStarted = deferred(), leadDone = deferred<string>(), engineerStarted = deferred();
+    const leadInterrupt = vi.fn(async () => { leadDone.resolve('interrupted'); });
+    let leadActivity: MathAgentOptions['onActivity'];
+    const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
+      const lead = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID === 'solver';
+      const done = lead ? leadDone : deferred<string>();
+      return { threadId: lead ? 'thread-solver' : 'thread-engineer', notify: vi.fn(async () => {}),
+        interrupt: lead ? leadInterrupt : vi.fn(async () => { done.resolve('interrupted'); }),
+        close: async () => { done.resolve('interrupted'); },
+        run: async (_message, _messageId, _workspace, onStarted) => {
+          onStarted(lead ? 'turn-solver' : 'turn-engineer');
+          options.onActivity?.({ event: 'reasoning' });
+          if (lead) { leadActivity = options.onActivity; leadStarted.resolve(); } else engineerStarted.resolve();
+          return done.promise;
+        } };
+    });
+    const completion = run(open); void completion.catch(() => {});
+    await leadStarted.promise;
+    // One long first-plan request is still streaming when the 20-minute slice ends.
+    await vi.advanceTimersByTimeAsync(20 * 60_000 - 30_000);
+    leadActivity!({ event: 'reasoning' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(leadInterrupt).not.toHaveBeenCalled();
+    expect(state.cooperation?.initialPlanFallback).toBeUndefined();
+    expect(events).toContainEqual({ event: 'cooperative_checkpoint_awaiting_request', details: expect.objectContaining({
+      workerId: 'solver', checkpointAfterMs: 20 * 60_000, outputAgeMs: 30_000 }) });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await engineerStarted.promise;
+    expect(leadInterrupt).toHaveBeenCalledOnce();
+    expect(events).toContainEqual({ event: 'cooperative_checkpoint_request_settled', details: expect.objectContaining({
+      workerId: 'solver', boundary: 'wait-limit', waitedMs: 10 * 60_000 }) });
+    expect(state.cooperation!.initialPlanFallback).toBeDefined();
+    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it('recovers a stalled compaction into a fresh thread while preserving the same assignment and draft', async () => {
     const { state, workers, events, controller, run } = fixture(false, undefined, 'lead');

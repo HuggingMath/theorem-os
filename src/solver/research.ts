@@ -59,8 +59,9 @@ const advisoryInitialPlanNoticeMs = 5 * 60_000;
 // A revision gets one fixed slice that a returned decision normally ends, and an early decide-now reminder.
 const advisoryRevisionMs = 10 * 60_000;
 const advisoryRevisionNoticeMs = 4 * 60_000;
-// A revision slice that ends while the model is streaming waits for that request to settle, up to this long.
-const advisoryRevisionRequestWaitMs = 10 * 60_000;
+// A yielding slice that ends while the model is streaming waits for that request to settle, up to this long.
+// Completed deepseek-flash requests in the OpenAI-math campaign took p99 446 s (workers) and 582 s (Lead).
+const advisoryRequestWaitMs = 10 * 60_000;
 // Codex reports streamed output at most every 30 s and the provider stream idles out at 60 s, so output
 // newer than this means a model request is still producing.
 const advisoryModelStreamingMs = 90_000;
@@ -527,9 +528,10 @@ export async function runResearchWorkers(input: {
               { turnId, checkpointAfterMs, noProgressStreak, protected: false }) && yieldForProof)
               emit('capacity_exploration_yielded', { turnId, reason: 'typed-work-ready' });
           };
-          // Interrupting a streaming request discards its unfinished reasoning and tool call; a Lead revision cut
-          // lets that one request return (its tool results recorded) first, bounded by advisoryRevisionRequestWaitMs.
-          const endRevisionSlice = () => {
+          // Interrupting a streaming request discards its unfinished reasoning and tool call, and research whose every
+          // cut lands mid-request saves nothing and is parked as unchanged. A slice cut (initial plan, revision or
+          // research) lets that one request return (its tool results recorded) first, bounded by advisoryRequestWaitMs.
+          const endSlice = () => {
             if (compactionStartedAt !== undefined || cutAtRequestBoundary) return;
             // One wait per turn: a slice re-armed after compaction or the wait limit cuts at once.
             if (requestWaited || toolsRunning || lastModelOutputAt === undefined ||
@@ -544,10 +546,10 @@ export async function runResearchWorkers(input: {
               checkpoint();
             };
             cutAtRequestBoundary = () => cut('request-returned');
-            requestWaitTimer = setTimeout(() => cut('wait-limit'), advisoryRevisionRequestWaitMs);
+            requestWaitTimer = setTimeout(() => cut('wait-limit'), advisoryRequestWaitMs);
             requestWaitTimer.unref();
             emit('cooperative_checkpoint_awaiting_request', { turnId, checkpointAfterMs,
-              maxWaitMs: advisoryRevisionRequestWaitMs, outputAgeMs: Date.now() - lastModelOutputAt });
+              maxWaitMs: advisoryRequestWaitMs, outputAgeMs: Date.now() - lastModelOutputAt });
           };
           scheduleSlice = () => {
             if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
@@ -571,7 +573,7 @@ export async function runResearchWorkers(input: {
             }
             // A goal writer keeps its turn; only the reminder above is scheduled for it.
             if (noticeOnly) return;
-            checkpointTimer = setTimeout(() => revision ? endRevisionSlice() : checkpoint(), Math.max(0, checkpointAfterMs - activeSliceMs));
+            checkpointTimer = setTimeout(endSlice, Math.max(0, checkpointAfterMs - activeSliceMs));
             checkpointTimer.unref();
           };
           scheduleSlice(); watchCompaction();
