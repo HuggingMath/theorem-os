@@ -15,6 +15,27 @@ import { safeFailureDiagnostic, type MathAgentFailureDiagnostic } from './failur
 export type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 
 type Json = Record<string, unknown>;
+
+export const MATH_WORKER_PERMISSION_PROFILE = 'math-worker';
+
+/**
+ * Worker shells read the host and write only their workspace. Network is on solely so the managed
+ * proxy can pass the sealed Lean lease's AF_UNIX socket; it allows no domain, so TCP stays closed.
+ * Unix sockets are not path-filtered on Linux, so /run and /tmp, where host services (docker, the
+ * session bus, Codex daemons) listen, are hidden. A thread keeps the policy it started with.
+ */
+export function mathWorkerPermissionConfig(workspace: string): Json {
+  const hidden = ['/run', '/tmp'].filter(root => workspace !== root && !workspace.startsWith(`${root}/`));
+  return {
+    default_permissions: MATH_WORKER_PERMISSION_PROFILE,
+    [`permissions.${MATH_WORKER_PERMISSION_PROFILE}.filesystem`]: {
+      '/': 'read', [workspace]: 'write', ...Object.fromEntries(hidden.map(root => [root, 'none'])),
+    },
+    [`permissions.${MATH_WORKER_PERMISSION_PROFILE}.network.enabled`]: true,
+    'features.network_proxy': { enabled: true, domains: {}, dangerously_allow_all_unix_sockets: true },
+  };
+}
+
 const object = (value: unknown): Json => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('math_codex_invalid_message');
   return value as Json;
@@ -303,7 +324,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     const disabled = Object.fromEntries(Object.keys(inherited ?? {}).map(name => [name, { enabled: false }]));
     const settings = {
       model: options.model, cwd: options.workspace,
-      approvalPolicy: 'never', sandbox: 'workspace-write',
+      approvalPolicy: 'never',
       developerInstructions: options.instructions,
       config: {
         mcp_servers: disabled,
@@ -317,7 +338,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         ...(bridge ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'features.goals': false, 'features.view_image': false } : {}),
         model_reasoning_effort: options.effort,
-        'sandbox_workspace_write.network_access': true,
+        ...mathWorkerPermissionConfig(options.workspace),
         ...shellCredentialPolicy,
         ...shellTemporaryPolicy,
         ...providerSettings,
@@ -333,6 +354,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     if (result.model !== options.model || result.reasoningEffort !== options.effort || result.approvalPolicy !== 'never')
       throw new Error('math_codex_session_binding_mismatch');
     if (providerId && result.modelProvider !== providerId) throw new Error('math_codex_session_binding_mismatch');
+    // A new thread fixes its sandbox now; one that ignored the profile would keep host network and sockets.
+    if (!options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
+      throw new Error('math_codex_sandbox_profile_mismatch');
     return {
       threadId,
       ...(bridge && options.requestGate ? { usageSource: 'upstream-requests' as const } : {}),
@@ -359,7 +383,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           const started = await rpc.request('turn/start', {
             threadId, clientUserMessageId: messageId, cwd: workspace,
             model: options.model, effort: options.effort, approvalPolicy: 'never',
-            sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
             input: [{ type: 'text', text: message, text_elements: [] }],
           });
           const turnId = object(started.turn).id;

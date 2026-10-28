@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import net from 'node:net';
+import { execFile, spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepareMathProofEnvironment, mathProofEnvironmentWorkerEnvironment,
   resolveMathProofEnvironment, MATH_PROOF_ENVIRONMENT_ENV, MATH_PROOF_ENVIRONMENT_SANDBOX_ENV } from '../src/math/mathProofEnvironment';
 import { projectMathematicsRuntimeEnvironment } from '../src/math/mathRuntimeEnvironment';
 import { MATH_SEALED_ENVIRONMENT_HELPER } from '../src/math/mathSealedEnvironmentHelper';
+import { MATH_WORKER_PERMISSION_PROFILE, mathWorkerPermissionConfig } from '../src/runtime/codexSession';
 import { withMathRuntimeLease } from '../src/math/mathRuntimeIo';
 
 describe.skipIf(process.platform !== 'linux')('proof environment tool preflight', () => {
@@ -151,6 +153,13 @@ it.skipIf(process.env.DEEPSCIENTIST_TEST_FUSE !== '1')(
   }, 25_000,
 );
 
+const toml = (value: unknown): string => value && typeof value === 'object'
+  ? `{${Object.entries(value).map(([key, entry]) => `${JSON.stringify(key)}=${toml(entry)}`).join(',')}}` : JSON.stringify(value);
+/** `codex sandbox` arguments for the same named profile a worker thread starts with. */
+const workerSandbox = (workspace: string) => ['sandbox', '--permission-profile', MATH_WORKER_PERMISSION_PROFILE,
+  ...Object.entries(mathWorkerPermissionConfig(workspace)).flatMap(([key, value]) => ['-c', `${key}=${toml(value)}`]),
+  '-C', workspace, '--'];
+
 // Opt in on hosts with Codex, FUSE, squashfs tools and the pinned Lean toolchain.
 it.skipIf(process.env.DEEPSCIENTIST_TEST_CODEX_SANDBOX !== '1')(
   'compiles saved Lean through a real Codex PID namespace using the same sealed dependencies', async () => {
@@ -171,15 +180,14 @@ it.skipIf(process.env.DEEPSCIENTIST_TEST_CODEX_SANDBOX !== '1')(
       const worker = mathProofEnvironmentWorkerEnvironment(project, host);
       expect(worker[MATH_PROOF_ENVIRONMENT_ENV]).toBe(host[MATH_PROOF_ENVIRONMENT_ENV]);
       expect(JSON.parse(worker[MATH_PROOF_ENVIRONMENT_SANDBOX_ENV]!).rootPath).not.toMatch(/^\/proc\//u);
-      const command = ['sandbox', '--permission-profile', 'math',
-        '-c', `permissions.math.filesystem={"/"="read",${JSON.stringify(project)}="write"}`,
-        '-c', 'permissions.math.network.enabled=true', '-C', project, '--', process.execPath,
+      // The worker's own profile: the lease handshake must pass the managed proxy that closes TCP.
+      const command = [...workerSandbox(project), process.execPath,
         path.resolve('out/main/check-lean.js'), '--workspace', project, '--file', 'Probe.lean', '--timeout-seconds', '15'];
       const check = (environment: NodeJS.ProcessEnv) => spawnSync('codex', command, {
         env: { ...environment, CODEX_HOME: profile }, encoding: 'utf8', timeout: 20_000, maxBuffer: 8192,
       });
       const before = check(host);
-      expect(before.status).toBe(1);
+      expect(before.status, before.stderr).toBe(1);
       expect(before.stderr).toMatch(/ENOENT.*\/proc\/\d+\/stat/u);
       const after = check(worker);
       expect(after.error).toBeUndefined();
@@ -189,4 +197,42 @@ it.skipIf(process.env.DEEPSCIENTIST_TEST_CODEX_SANDBOX !== '1')(
       expect(fs.readFileSync(path.join(packages, 'Dependency.lean'), 'utf8')).toBe('example : True := by trivial\n');
     } finally { await proof?.dispose(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 45_000,
+);
+
+it.skipIf(process.env.DEEPSCIENTIST_TEST_CODEX_SANDBOX !== '1')(
+  'lets a worker reach a workspace socket but no host TCP port or socket under /tmp', async () => {
+    const workspace = fs.realpathSync(fs.mkdtempSync(path.join('/var/tmp', 'worker-network-')));
+    const hiddenRoot = fs.mkdtempSync('/tmp/worker-network-hidden-');
+    const listeners: net.Server[] = [];
+    const listen = (target: string | number) => new Promise<void>((resolve, reject) => {
+      const server = net.createServer(socket => socket.end('ok')).once('error', reject);
+      listeners.push(server);
+      typeof target === 'number' ? server.listen(target, '127.0.0.1', resolve) : server.listen(target, resolve);
+    });
+    try {
+      const lease = path.join(workspace, 'lease.sock'), hidden = path.join(hiddenRoot, 'service.sock');
+      await listen(lease); await listen(hidden); await listen(0);
+      const port = (listeners[2]!.address() as net.AddressInfo).port;
+      const probe = `const net = require('node:net');
+const reach = target => new Promise(resolve => {
+  const socket = net.connect(target); socket.setTimeout(3000, () => { socket.destroy(); resolve('timeout'); });
+  socket.once('data', () => { socket.destroy(); resolve('reached'); }).once('error', error => resolve(error.code));
+});
+Promise.all([reach(${JSON.stringify(lease)}), reach(${JSON.stringify(hidden)}), reach({ host: '127.0.0.1', port: ${port} })])
+  .then(([lease, hidden, tcp]) => console.log(JSON.stringify({ lease, hidden, tcp })));`;
+      const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>(resolve => {
+        execFile('codex', [...workerSandbox(workspace), process.execPath, '-e', probe],
+          { env: { ...process.env, CODEX_HOME: workspace }, timeout: 20_000 },
+          (error, stdout, stderr) => resolve({ status: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const reached = JSON.parse(result.stdout);
+      expect(reached.lease).toBe('reached');
+      expect(reached.hidden).not.toBe('reached');
+      expect(reached.tcp).not.toBe('reached');
+    } finally {
+      for (const server of listeners) server.close();
+      fs.rmSync(hiddenRoot, { recursive: true, force: true }); fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  }, 30_000,
 );
