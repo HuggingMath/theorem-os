@@ -6,6 +6,9 @@ import { canonicalMathJson, mathDigest, readMathJson, writeMathJsonDurable } fro
 import { inspectScopedLeanDeclarations } from './leanSource';
 import { maskLeanCommentsAndStrings } from './leanSyntax';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from './leanTaskEnvironment';
+import { installLibraryPack, isLibraryPackFile, libraryDeclarationConflict, libraryPackDigest, MAX_LIBRARY_MODULE_BYTES,
+  parseLibraryPack, type LibraryPack } from './libraryPacks';
+import { mathConstructionImports } from './mathConstructionSources';
 import { mathGitBytes, mathGitText } from './mathGit';
 import { assertMathCanonicalPath } from './paths';
 
@@ -19,7 +22,9 @@ const inputSchema = z.object({
   source: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
   task: z.string().trim().min(1).max(LEAN_TASK_DESCRIPTION_MAX_LENGTH),
   environment: z.enum(['standard', 'mathlib']).optional(),
+  libraryPack: z.unknown().optional(),
 }).strict();
+const libraryPackSchema = z.object({ digest: hash, files: z.record(z.string(), hash) }).strict();
 const declarationSchema = z.object({
   name: z.string().min(1), kind: z.enum(['theorem', 'definition', 'instance']), declarationHash: hash,
 }).strict();
@@ -31,14 +36,18 @@ const receiptSchema = z.object({
   environment: inputSchema.shape.environment, environmentDigest: hash.optional(),
   contract: z.record(z.unknown()), trustedFiles: z.array(z.string()), solverOwnedFiles: z.array(z.string()),
   publicObligations: z.array(obligationSchema), declarations: z.array(declarationSchema),
+  libraryPack: libraryPackSchema.optional(),
 }).strict();
 const seedSchema = z.object({
   schema: z.literal('theorem-os.lean-task-seed.v1'), task: inputSchema.shape.task, sourceHash: hash,
   environment: inputSchema.shape.environment, environmentDigest: hash.optional(),
+  libraryPack: libraryPackSchema.optional(),
 }).strict();
 
 export type LeanTaskReceipt = Omit<z.infer<typeof receiptSchema>, 'contract'> & { contract: MathProblemContract };
-export type LeanTaskInput = { source: string; task: string; environment?: LeanTaskEnvironment };
+export type LeanTaskInput = { source: string; task: string; environment?: LeanTaskEnvironment;
+  /** Frozen Submission/Library modules (see libraryPacks.ts) installed beside Submission.lean. */
+  libraryPack?: LibraryPack };
 
 function inspectInput(input: LeanTaskInput) {
   const parsed = inputSchema.parse(input);
@@ -62,6 +71,26 @@ function inspectInput(input: LeanTaskInput) {
       declarationHash: mathDigest(item.declarationType) })),
     publicObligations: targets.map(item => ({ name: item.qualifiedName, declarationHash: mathDigest(item.declarationType) })),
   };
+}
+
+/**
+ * A task pack builds on the pinned packages only: Challenge.lean is the untrusted statement and Submission.lean
+ * is proof work, so neither may be imported, and no pack declaration may share a name with the statement's.
+ */
+function inspectLibraryPack(value: unknown, source: string): LibraryPack {
+  const pack = parseLibraryPack(value);
+  if (pack.requires?.length) throw new Error('lean_task_library_pack_requirement_invalid');
+  const local = new Set(pack.modules.map(module => module.file.slice(0, -'.lean'.length).replaceAll('/', '.')));
+  for (const module of pack.modules) {
+    const outside = mathConstructionImports(module.source).map(name => name.replaceAll('«', '').replaceAll('»', ''))
+      .find(name => !local.has(name) && (name === 'Challenge' || name.startsWith('Challenge.') ||
+        name === 'Submission' || name.startsWith('Submission.')));
+    if (outside) throw new Error(`lean_task_library_pack_import_invalid: ${module.file} imports ${outside}`);
+  }
+  const conflict = libraryDeclarationConflict(Object.fromEntries(pack.modules.map(module => [module.file, module.source])),
+    { 'Submission.lean': source });
+  if (conflict) throw new Error(`lean_task_library_pack_declaration_conflict: ${conflict.name}`);
+  return pack;
 }
 
 function trustedSources(source: string, environment: LeanTaskEnvironment): Record<string, string> {
@@ -92,6 +121,7 @@ function assertRegularFile(file: string): void {
 export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): LeanTaskReceipt {
   const inspected = inspectInput(input);
   const environment = getLeanTaskEnvironment(inspected.environment ?? 'standard');
+  const libraryPack = inspected.libraryPack === undefined ? undefined : inspectLibraryPack(inspected.libraryPack, inspected.source);
   workspace = path.resolve(workspace);
   assertMathCanonicalPath(workspace);
   if (fs.existsSync(workspace)) throw new Error('Lean task workspace already exists; use a new directory.');
@@ -100,10 +130,14 @@ export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): Lean
   const sources = trustedSources(inspected.source, environment.id);
   for (const [relative, contents] of Object.entries({ ...sources, 'Submission.lean': inspected.source }))
     fs.writeFileSync(path.join(projectRoot, relative), contents, { flag: 'wx', mode: 0o600 });
+  const libraryFiles = libraryPack && installLibraryPack(projectRoot, libraryPack,
+    { trustedFiles: Object.keys(sources), solverOwnedFiles: ['Submission.lean'] });
+  const library = libraryPack && libraryFiles ? { digest: libraryPackDigest(libraryPack), files: libraryFiles } : undefined;
   gitText(workspace, ['init', '--quiet']);
   gitText(workspace, ['add', '--', 'generated']);
   const message = seedPrefix + canonicalMathJson({ schema: 'theorem-os.lean-task-seed.v1', task: inspected.task,
-    sourceHash: mathDigest(inspected.source), environment: environment.id, environmentDigest: environment.dependencyDigest });
+    sourceHash: mathDigest(inspected.source), environment: environment.id, environmentDigest: environment.dependencyDigest,
+    ...(library ? { libraryPack: library } : {}) });
   gitText(workspace, ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=TheoremOS', '-c', 'user.email=theoremos@localhost',
     'commit', '--no-gpg-sign', '--quiet', '--cleanup=verbatim', '-m', message]);
   fs.appendFileSync(path.join(workspace, '.git/info/exclude'), '\n/active-problem.json\n**/.lake/\n');
@@ -111,8 +145,9 @@ export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): Lean
     activeProblemPath: path.join(workspace, 'active-problem.json'), baseCommit: gitText(workspace, ['rev-parse', 'HEAD']),
     toolchain: environment.toolchain, environment: environment.id, environmentDigest: environment.dependencyDigest,
     contract: contractFor(inspected.source, inspected.task),
-    trustedFiles: Object.keys(sources), solverOwnedFiles: ['Submission.lean'],
-    publicObligations: inspected.publicObligations, declarations: inspected.declarations };
+    trustedFiles: Object.keys(sources), solverOwnedFiles: ['Submission.lean', ...Object.keys(library?.files ?? {}).sort()],
+    publicObligations: inspected.publicObligations, declarations: inspected.declarations,
+    ...(library ? { libraryPack: library } : {}) };
   writeMathJsonDurable(receipt.activeProblemPath, receipt);
   return receipt;
 }
@@ -145,17 +180,22 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
       (seed.environment !== environment.id || parsed.environment !== seed.environment ||
         seed.environmentDigest !== environment.dependencyDigest || parsed.environmentDigest !== seed.environmentDigest)))
     throw new Error('lean_task_environment_changed');
+  const libraryFiles = Object.keys(seed.libraryPack?.files ?? {}).sort();
+  if (canonicalMathJson(parsed.libraryPack ?? null) !== canonicalMathJson(seed.libraryPack ?? null) ||
+      (seed.libraryPack && (!libraryFiles.length || libraryFiles.some(file => !isLibraryPackFile(file)))))
+    throw new Error('lean_task_identity_changed');
   const entries = gitText(workspace, ['ls-tree', '-r', '-z', parsed.baseCommit]).split('\0').filter(Boolean);
-  const expectedFiles = [...Object.keys(trustedSources('', environment.id)), 'Submission.lean'].map(relative => `${projectRelative}/${relative}`).sort();
+  const expectedFiles = [...Object.keys(trustedSources('', environment.id)), 'Submission.lean', ...libraryFiles].map(relative => `${projectRelative}/${relative}`).sort();
   const actualFiles = entries.map(entry => {
     const match = /^100644 blob (?:[0-9a-f]{40}|[0-9a-f]{64})\t(.+)$/u.exec(entry);
     if (!match) throw new Error('lean_task_seed_invalid');
     return match[1]!;
   }).sort();
   if (canonicalMathJson(actualFiles) !== canonicalMathJson(expectedFiles)) throw new Error('lean_task_seed_invalid');
-  const blob = (relative: string) => mathGitBytes(workspace,
+  const blobBytes = (relative: string, maxBuffer = LEAN_TASK_SOURCE_MAX_BYTES + 1) => mathGitBytes(workspace,
     ['--no-replace-objects', 'cat-file', 'blob', `${parsed.baseCommit}:${projectRelative}/${relative}`],
-    { timeout: 30_000, maxBuffer: LEAN_TASK_SOURCE_MAX_BYTES + 1, errorMessage: 'lean_task_seed_unavailable' }).toString('utf8');
+    { timeout: 30_000, maxBuffer, errorMessage: 'lean_task_seed_unavailable' });
+  const blob = (relative: string) => blobBytes(relative).toString('utf8');
   const source = blob('Challenge.lean');
   if (mathDigest(source) !== seed.sourceHash) throw new Error('lean_task_seed_invalid');
   const inspected = inspectInput({ source, task: seed.task, environment: environment.id });
@@ -164,7 +204,9 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
       canonicalMathJson(parsed.publicObligations) !== canonicalMathJson(inspected.publicObligations) ||
       canonicalMathJson(parsed.declarations) !== canonicalMathJson(inspected.declarations) ||
       canonicalMathJson(parsed.trustedFiles) !== canonicalMathJson(Object.keys(sources)) ||
-      canonicalMathJson(parsed.solverOwnedFiles) !== canonicalMathJson(['Submission.lean']) || blob('Submission.lean') !== source)
+      canonicalMathJson(parsed.solverOwnedFiles) !== canonicalMathJson(['Submission.lean', ...libraryFiles]) ||
+      blob('Submission.lean') !== source ||
+      libraryFiles.some(file => mathDigest(blobBytes(file, MAX_LIBRARY_MODULE_BYTES + 1)) !== seed.libraryPack!.files[file]))
     throw new Error('lean_task_identity_changed');
   for (const [relative, contents] of Object.entries(sources)) {
     const target = path.join(projectRoot, relative);
@@ -172,6 +214,6 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
     if (blob(relative) !== contents || fs.readFileSync(target, 'utf8') !== contents)
       throw new Error(`lean_task_protected_file_changed:${relative}`);
   }
-  assertRegularFile(path.join(projectRoot, 'Submission.lean'));
+  for (const file of ['Submission.lean', ...libraryFiles]) assertRegularFile(path.join(projectRoot, file));
   return parsed as LeanTaskReceipt;
 }
