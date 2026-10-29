@@ -76,6 +76,7 @@
     "test:web-admin": "bun scripts/test-web-admin.ts",
     "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",
     "test": "vitest run",
+    "test:formalization": "bun scripts/test-formalization.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

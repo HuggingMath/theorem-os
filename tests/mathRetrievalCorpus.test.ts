@@ -118,6 +118,45 @@ describe('frozen Lean declaration lookup', () => {
     expect(result.results[0]).toMatchObject({ name: 'sqrt_nonneg', qualifiedName: 'Real.sqrt_nonneg', sourceLine: 2 });
   });
 
+  it('does not invent named declarations from deriving instance or consume the next theorem', async () => {
+    fs.writeFileSync(source, [
+      'deriving instance Infinite for FreeRing, FreeCommRing',
+      'namespace Derived',
+      'theorem retained : True := by trivial',
+      'deriving /- a multiline command -/',
+      '  instance Nontrivial, Add, Sub',
+      '  for ENat',
+      'theorem nextRetained (n : Nat := 0) : n = n := by rfl',
+      'end Derived',
+    ].join('\n'));
+    const corpus = await createMathRetrievalCorpus(root, ['mathlib']);
+    expect(searchMathRetrievalCorpus(root, corpus, 'Infinite').results).toEqual([]);
+    expect(searchMathRetrievalCorpus(root, corpus, 'Nontrivial').results).toEqual([]);
+    expect(searchMathRetrievalCorpus(root, corpus, 'Derived.retained').results[0]).toMatchObject({
+      qualifiedName: 'Derived.retained', sourceLine: 3, sourceHeader: 'retained : True',
+    });
+    expect(searchMathRetrievalCorpus(root, corpus, 'Derived.nextRetained').results).toEqual([
+      expect.objectContaining({ qualifiedName: 'Derived.nextRetained', sourceLine: 7,
+        sourceHeader: 'nextRetained (n : Nat := 0) : n = n' }),
+    ]);
+  });
+
+  it('preserves ordinary named instances and deriving text inside comments or string values', async () => {
+    fs.writeFileSync(source, [
+      '/- deriving instance hidden for Type -/',
+      'def text : String := "deriving instance pretend for String"',
+      'instance named : Inhabited Nat := ⟨0⟩',
+      'theorem after : True := by trivial',
+    ].join('\n'));
+    const corpus = await createMathRetrievalCorpus(root, ['mathlib']);
+    const matches = searchMathRetrievalCorpus(root, corpus, 'named').results;
+    expect(matches).toEqual([expect.objectContaining({ name: 'named', sourceLine: 3,
+      sourceHeader: 'named : Inhabited Nat', kind: 'instance' })]);
+    expect(searchMathRetrievalCorpus(root, corpus, 'after').results).toEqual([
+      expect.objectContaining({ name: 'after', sourceLine: 4, sourceHeader: 'after : True' }),
+    ]);
+  });
+
   it('ranks by the goal conclusion and types independently of local variable names', async () => {
     fs.writeFileSync(source, [
       'lemma bound_a_nat (x y : Nat) (h : x ≤ y) : x ≤ y := by sorry',

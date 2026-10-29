@@ -117,7 +117,19 @@ end User
     expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
   });
 
-  it.each(['standard', 'mathlib'] as const)('binds %s receipt selection and digest to the committed environment', environment => {
+  it('prepares an explicitly selected source-era Mathlib task with replayable frozen dependencies', () => {
+    const { receipt } = fixture('mathlib-4.8');
+    const environment = getLeanTaskEnvironment('mathlib-4.8');
+    expect(receipt.environment).toBe('mathlib-4.8');
+    expect(receipt.toolchain).toBe('leanprover/lean4:v4.8.0');
+    expect(receipt.environmentDigest).toBe(environment.dependencyDigest);
+    for (const [relative, contents] of Object.entries(environment.files))
+      expect(fs.readFileSync(path.join(receipt.projectRoot, relative), 'utf8')).toBe(contents);
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
+    expect(() => assertSolverSources(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), receipt.workspaceRoot)).not.toThrow();
+  });
+
+  it.each(['standard', 'mathlib', 'mathlib-4.8'] as const)('binds %s receipt selection and digest to the committed environment', environment => {
     const { receipt } = fixture(environment);
     const replacement = environment === 'standard' ? 'mathlib' : 'standard';
     saveReceipt(receipt, { environment: replacement,

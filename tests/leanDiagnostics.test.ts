@@ -69,6 +69,20 @@ describe('bounded local Lean diagnostics', () => {
     expect(run).toHaveBeenCalledTimes(6);
   });
 
+  it('builds and reuses source-era library outputs for the pinned Lean 4.8 toolchain', async () => {
+    fs.writeFileSync(path.join(root, 'lean-toolchain'), 'leanprover/lean4:v4.8.0\n');
+    const input = { projectRoot: root, files: ['Submission.lean'], timeoutMs: 1000 };
+    const first = await runLeanDiagnostics(input), repeat = await runLeanDiagnostics(input);
+    expect(first.exitCode).toBe(0);
+    expect(repeat.phases.every(phase => phase.cached)).toBe(true);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(fs.readFileSync(path.join(root, '.lake/build/lib/ChallengeDeps.olean'), 'utf8')).toBe('compiled');
+    expect(fs.existsSync(path.join(root, '.lake/build/lib/lean/ChallengeDeps.olean'))).toBe(false);
+    fs.writeFileSync(path.join(root, '.lake/build/lib/ChallengeDeps.olean'), 'tampered');
+    const repaired = await runLeanDiagnostics(input);
+    expect(repaired.phases.map(phase => phase.cached)).toEqual([false, true]);
+  });
+
   it.each([
     { cached: [false, false], prepare: 'none' },
     { cached: [true, false], prepare: 'dependency' },
@@ -339,15 +353,19 @@ setInterval(() => {}, 1000);\n`);
     expect(fs.existsSync(path.join(root, '.lake/lean-diagnostics.json'))).toBe(false);
   });
 
-  it('checks the saved file inside an authenticated worker without creating a nested sandbox', async () => {
+  it.each(['modern', '4.8'])('checks the saved file inside a %s authenticated worker without creating a nested sandbox', async version => {
+    const libraryDirectory = version === '4.8' ? '.lake/build/lib' : '.lake/build/lib/lean';
+    if (version === '4.8') fs.writeFileSync(path.join(root, 'lean-toolchain'), 'leanprover/lean4:v4.8.0\n');
+    const packages = path.join(root, 'packages'), packageLibrary = path.join(packages, 'dependency', libraryDirectory);
+    fs.mkdirSync(packageLibrary, { recursive: true });
     const compiler = path.join(root, 'lean');
     fs.writeFileSync(compiler, `#!${process.execPath}\nconst fs = require('node:fs');
 const args = process.argv.slice(2), file = args.at(-1), source = fs.readFileSync(file, 'utf8');
 if (file === 'Submission.lean' && source !== ${JSON.stringify(fs.readFileSync(path.join(root, 'Submission.lean'), 'utf8'))}) process.exit(9);
+if (!(process.env.LEAN_PATH || '').split(require('node:path').delimiter).includes(${JSON.stringify(packageLibrary)})) process.exit(10);
 fs.writeFileSync(args[args.indexOf('-o') + 1], source); console.log(file);
 `);
     fs.chmodSync(compiler, 0o700);
-    const packages = path.join(root, 'packages'); fs.mkdirSync(packages);
     const release = vi.fn(); lease.mockResolvedValue({ packagesRoot: packages, release });
     readiness.mockReturnValue({ status: 'ready', leanPath: compiler });
     const result = await runLeanDiagnostics({ projectRoot: root, files: ['Submission.lean'], timeoutMs: Infinity,
@@ -356,7 +374,7 @@ fs.writeFileSync(args[args.indexOf('-o') + 1], source); console.log(file);
     expect(result.stdout).toContain('Submission.lean');
     expect(run).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(2);
-    expect(fs.readFileSync(path.join(root, '.lake/build/lib/lean/Submission.olean'), 'utf8'))
+    expect(fs.readFileSync(path.join(root, libraryDirectory, 'Submission.olean'), 'utf8'))
       .toBe(fs.readFileSync(path.join(root, 'Submission.lean'), 'utf8'));
   });
 

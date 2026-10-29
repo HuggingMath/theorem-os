@@ -1,0 +1,105 @@
+{
+  "schema": "theorem-os.first-proof.source-snapshot.v1",
+  "repository": "https://github.com/1stproof/batch-3",
+  "commit": "5908aab1a1067d0e858294950537d0c471d7bb7f",
+  "files": [
+    {
+      "path": "batch-3-problems/problem-01/problem.tex",
+      "bytes": 7760,
+      "gitBlobSha1": "5d5fcae894c590d61a1535a5aa09e712a405744e",
+      "sha256": "ca89dfc7903ed2119c5f13424bbcf039bd9ce74f984baa720978b2519a4ac445",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-01/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-02/problem.tex",
+      "bytes": 2185,
+      "gitBlobSha1": "376f166475702c5289c7720891957714cd365556",
+      "sha256": "0a28765947f9e5ff3533af2487722ccb05addaa3b1e229843b098b15b09db66f",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-02/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-03/problem.tex",
+      "bytes": 22904,
+      "gitBlobSha1": "340cd005c560e295df4c00792415aa7c1cb32b7e",
+      "sha256": "db844a3afd7f4dd802b2f8c2a968fa25b549cf3e50caec3826226467e79837a4",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-03/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-04/problem.tex",
+      "bytes": 1930,
+      "gitBlobSha1": "ff88985dd0bc6ad2edfbbe6a7f6bb85b7d55eef5",
+      "sha256": "be8c4689fa1cd233147ed1e316e22c8da894f38e764b558fe7b4f7e1c1989b36",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-04/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-05/problem.tex",
+      "bytes": 2166,
+      "gitBlobSha1": "30d8cd8a5abdb234b21acde0c3cfe7172b0d8b7a",
+      "sha256": "f5415a881df7b19752e921a2e66c8c1a40dcc645d02ee7efcea4268902963eca",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-05/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-06/problem.tex",
+      "bytes": 724,
+      "gitBlobSha1": "189894d34ad105cf88d970a914a1f56bf72905ab",
+      "sha256": "bb962380085559fe5c5b6edd06aa5d984e08e445fbaaf13b21e86bb0181675cd",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-06/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-07/problem.tex",
+      "bytes": 2954,
+      "gitBlobSha1": "5eae0361475c3abac81f001afe567e1cb893bd5e",
+      "sha256": "af49b7b0f3703edccc4178c2cd5c0d8278bf69d84bd182d4020069ce2a00c236",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-07/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-08/problem.tex",
+      "bytes": 17665,
+      "gitBlobSha1": "a1e75c5b6d6664614951b5382a56eadafecb3aa9",
+      "sha256": "bfbd563b3cff35cb2bfe31b06d562d4f7b3999a84ca9ce6cb52d2974be93b526",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-08/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-09/problem.tex",
+      "bytes": 5901,
+      "gitBlobSha1": "ab398f192fdbd6ff2e86ab04b07ed2ec48781681",
+      "sha256": "b3e93294c73066cb7e35b10d696e825135fbb9f28ba58027ab2fc424f00f0367",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-09/problem.tex"
+    },
+    {
+      "path": "batch-3-problems/problem-10/problem.tex",
+      "bytes": 8389,
+      "gitBlobSha1": "0fd5a3b3265f9eadf8d6ecf2e22d90f77485e363",
+      "sha256": "c8f1f1bad72ccf335189e717f2b48cd114988e4f4f6343005657b48b767e6f8f",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/batch-3-problems/problem-10/problem.tex"
+    },
+    {
+      "path": "README.md",
+      "bytes": 775,
+      "gitBlobSha1": "badf2f38d5320e3070f5f56b9e858d52116e0cbe",
+      "sha256": "89767326948f3e5d04dd674dfbc19fb55104c09f4c47f4b0d317c71665a18875",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/README.md"
+    },
+    {
+      "path": "DATA-LICENSE.md",
+      "bytes": 5076,
+      "gitBlobSha1": "df8c482ad84293b18964566272dd0507e4029456",
+      "sha256": "22ca0ca7ad5b8319d6b0caa18e66604366ed4d2df9614a010d10656f05ba00ca",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/DATA-LICENSE.md"
+    },
+    {
+      "path": "LICENSE-DOCS",
+      "bytes": 20138,
+      "gitBlobSha1": "2d58298e6eda10e7204abb52722efbc840db2390",
+      "sha256": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/LICENSE-DOCS"
+    },
+    {
+      "path": "NOTICE",
+      "bytes": 2798,
+      "gitBlobSha1": "00b06dac2279fef2779de022f3c83398f6ceff29",
+      "sha256": "7aaf4869e3981dd53f8574ed91501f75494f7d76c2806f8955081118d8b36b00",
+      "url": "https://raw.githubusercontent.com/1stproof/batch-3/5908aab1a1067d0e858294950537d0c471d7bb7f/NOTICE"
+    }
+  ]
+}

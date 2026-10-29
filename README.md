@@ -231,6 +231,8 @@ TheoremOS 使用 `gpt-5.6-sol`、`xhigh`、每题 4 个 worker，通过 **6/6 �
 
 [PutnamBench 小样本](examples/putnambench/README.md)可固定种子抽取三道兼容原题，每题准备四组模块方案，共 12 次隔离运行计划，并按题目分别配对汇总。准备和汇总均不调用模型。
 
+[自然语言题面形式化](docs/formalization.md)先规划定义与依赖，再进行模型生成、Lean 编译、盲回译和多审核者对照；支持分别配置模型及可选的参考 Lean 题面比较，通过后冻结为原生 Lean 求解任务。[离线审核评测](docs/formalization-evaluation.md)保留标签来源和数据划分，分别统计误放行、误拒绝、未知与编译结果。[First Proof Batch 3 Lean 接入](examples/first-proof/README.md)保存 10 道官方题面，可导入完整审核产物，也保留人工审核路径。决策题的答案合同仍待补齐；当前尚未调用模型生成这 10 题的形式化，练习题回放不计入 benchmark 成绩。
+
 当前通过 TypeScript 源码接口替换组件，尚未提供稳定 SDK 或动态插件加载。运行时保存组件版本，恢复时检查版本一致性。跨任务学习仍是后续扩展。
 
 ## 文档与开发
@@ -242,6 +244,7 @@ TheoremOS 使用 `gpt-5.6-sol`、`xhigh`、每题 4 个 worker，通过 **6/6 �
 | [小题示例](examples/getting-started/README.md) · [IMO2026](examples/imo2026/README.md) | 从第一次回放到真实题目 |
 | [组件示例](examples/components/README.md) · [对照实验](examples/imo2026/COMPARISON.md) | 接入研究策略与比较实验 |
 | [PutnamBench 小样本](examples/putnambench/README.md) | 固定选题、逐题模块对照与离线汇总 |
+| [First Proof Batch 3](examples/first-proof/README.md) | 官方题面快照、形式化审核门槛和离线接入 |
 | [成果来源](accepted/README.md) · [发布说明](docs/releases/v0.1.0.md) | 归属与验收记录、当前版本范围与限制 |
 
 <a id="架构与开发"></a>

@@ -11,6 +11,7 @@ import { checkResolvedLeanToolchainReadiness } from './leanToolchainReadiness';
 import { parseLeanDiagnosticOutput, renderLeanDiagnosticOutput } from './leanDiagnosticMessages';
 import type { LeanDiagnosticArtifactReference, LeanDiagnosticMessage } from './leanTypes';
 import { leanDiagnosticEnvironmentIdentity } from './leanResidualGoals';
+import { getLeanTaskEnvironment } from './leanTaskEnvironment';
 
 const DIAGNOSTIC_CAPTURE_LIMIT = 4_000_000;
 type DiagnosticCacheRecord = { source: string; output: string; stdout?: string; stderr?: string;
@@ -18,7 +19,7 @@ type DiagnosticCacheRecord = { source: string; output: string; stdout?: string; 
 
 /** Advisory checks already inside the host's isolated worker must not nest a namespace sandbox. */
 async function runWorkerLean(project: string, module: { file: string; sourceRoot: string }, output: string,
-  env: NodeJS.ProcessEnv, timeoutMs: number, signal: AbortSignal | undefined, outputLimit: number) {
+  libraryDirectory: string, env: NodeJS.ProcessEnv, timeoutMs: number, signal: AbortSignal | undefined, outputLimit: number) {
   const startedAt = Date.now(), deadlineAt = startedAt + timeoutMs;
   const stopped = () => ({ started: false, exitCode: null, timedOut: !signal?.aborted, aborted: Boolean(signal?.aborted),
     durationMs: Date.now() - startedAt, stdout: '', stderr: '' });
@@ -34,8 +35,8 @@ async function runWorkerLean(project: string, module: { file: string; sourceRoot
     const readiness = checkResolvedLeanToolchainReadiness({ projectRoot: project, env, timeoutMs: Math.min(10_000, deadlineAt - Date.now()) });
     if (signal?.aborted || Date.now() >= deadlineAt) return stopped();
     if (readiness.status !== 'ready' || !readiness.leanPath) throw new Error('math_diagnostics_lean_unavailable');
-    const libraries = [path.join(project, '.lake/build/lib/lean'),
-      ...fs.readdirSync(lease.packagesRoot).map(name => path.join(lease.packagesRoot, name, '.lake/build/lib/lean'))]
+    const libraries = [path.join(project, libraryDirectory),
+      ...fs.readdirSync(lease.packagesRoot).map(name => path.join(lease.packagesRoot, name, libraryDirectory))]
       .filter(file => fs.existsSync(file));
     fs.mkdirSync(path.dirname(path.join(project, output)), { recursive: true });
     signal?.throwIfAborted();
@@ -63,6 +64,9 @@ export async function runLeanDiagnostics(input: {
   const project = fs.realpathSync(input.projectRoot);
   const env = resolveMathematicsRuntimeEnvironment(input.env || process.env);
   assertMathConstructionSources(project, input.files);
+  const toolchainFile = path.join(project, 'lean-toolchain'), legacy = getLeanTaskEnvironment('mathlib-4.8');
+  const libraryDirectory = fs.existsSync(toolchainFile) && fs.readFileSync(toolchainFile, 'utf8').trim() === legacy.toolchain
+    ? legacy.packageLibraryDirectory! : '.lake/build/lib/lean';
   const modules = mathLocalModuleBuildOrder(project, input.files);
   const excluded = new Set(input.excludedFiles ?? []);
   const cacheFile = path.join(project, '.lake', 'lean-diagnostics.json');
@@ -167,7 +171,7 @@ export async function runLeanDiagnostics(input: {
     input.signal?.throwIfAborted();
     sources.push(mathDigest(fs.readFileSync(path.join(project, module.file))));
     if (input.dependenciesOnly && (input.files.includes(module.file) || excluded.has(module.file))) continue;
-    const output = `.lake/build/lib/lean/${path.posix.relative(module.sourceRoot, module.file).replace(/\.lean$/u, '.olean')}`;
+    const output = `${libraryDirectory}/${path.posix.relative(module.sourceRoot, module.file).replace(/\.lean$/u, '.olean')}`;
     const absoluteOutput = path.join(project, output);
     assertMathCanonicalPath(absoluteOutput);
     const digest = mathDigest(JSON.stringify([environmentIdentity, config, sources]));
@@ -185,7 +189,7 @@ export async function runLeanDiagnostics(input: {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return finish({ exitCode: null, timedOut: true, stdout, stderr, phases, ...summary() });
     const result = env[MATH_PROOF_ENVIRONMENT_SANDBOX_ENV]
-      ? await runWorkerLean(project, module, output, env, remainingMs, input.signal, DIAGNOSTIC_CAPTURE_LIMIT)
+      ? await runWorkerLean(project, module, output, libraryDirectory, env, remainingMs, input.signal, DIAGNOSTIC_CAPTURE_LIMIT)
       : await runMathematicsSandboxedCommand({ checkoutRoot: project, command: 'lake',
       args: ['env', '/bin/sh', '-ceu', `mkdir -p ${quote(path.posix.dirname(output))}\nexec lean --json -j1 -R ${quote(module.sourceRoot)} -o ${quote(output)} ${quote(module.file)}`],
       env, signal: input.signal, timeoutMs: remainingMs, outputCapture: 'head', outputLimit: DIAGNOSTIC_CAPTURE_LIMIT });
