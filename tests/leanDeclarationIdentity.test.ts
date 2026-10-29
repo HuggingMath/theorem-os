@@ -68,6 +68,26 @@ describe('punctuation in cooperative declaration identities', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(source);
   });
 
+  it.each([['declared', 'lemma premise : True := by trivial\n'], ['undeclared', '']])(
+    'removes wrapper chains of a %s input and of the parameterized consumer under an open command', (_, input) => {
+      // 2026-10-29 TriangularCovering: the challenge's `open Set` disabled this cleanup, so stale wrappers broke
+      // every conditional check of A_min_eq_H.
+      const opened = original.replace('namespace Submission\n', 'namespace Submission\nopen Classical\n');
+      const root = path.join(directory, 'opened');
+      const receipt = bootstrapLeanTask(root, { source: opened, task: 'Prove the goal.' });
+      const openedProblem = readSolverProblem(root, receipt.activeProblemPath);
+      fs.writeFileSync(path.join(receipt.projectRoot, 'Submission.lean'), opened.replace('theorem goal',
+        `${input}lemma uses_premise : True := premise\nlemma consumer : True := premise\n` +
+        'lemma uses_consumer : True := by exact consumer\nlemma uses_chain : True := uses_consumer\n' +
+        'lemma independent : True := trivial\ntheorem goal'));
+      const commit = commitSolverSources(openedProblem, root);
+      const projected = createTaskSourceProjector(openedProblem, root, commit)(
+        { ...helper('consumer'), dependsOn: ['input'], conditional: true }, [], [{ ...helper('premise'), id: 'input' }])
+        .get('Submission.lean')!;
+      expect(projected).toContain('lemma consumer (premise : True) : True := premise');
+      expect(inspectLeanDeclarationRegions(projected).map(item => item.name)).toEqual(['consumer', 'independent']);
+    });
+
   it.each(['?', '!'])('retains a %s helper wrapper when only the plain-name peer is unfinished', suffix => {
     const { commit } = save('lemma premise : True := by sorry\n' +
       `lemma premise${suffix} : True := by trivial\nlemma wrapper : True := premise${suffix}\n` +

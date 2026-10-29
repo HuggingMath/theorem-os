@@ -148,7 +148,6 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       const header = source.slice(region.startOffset, region.bodyOffset);
       return { ...declaration, file, id: key(file, declaration.qualifiedName),
         theorem: /^(?:theorem|lemma)\s/u.test(header), header: identifiers(header),
-        opened: leanDeclarationContextCommands(source, declaration.qualifiedName).before.some(command => /^open\b/u.test(command)),
         references: identifiers(source.slice(region.startOffset, region.endOffset)) };
     });
   });
@@ -212,8 +211,9 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     }
     // Only unambiguous source names guide projection cleanup; Lean owns actual dependency evidence.
     const referenceKey = (declaration: typeof declarations[number], name: string) => {
-      if (!name.includes('.') && (declaration.header.includes(name) || declaration.opened)) return;
-      if (declaration.opened && !name.startsWith('_root_.') && !bindings.has(name)) return;
+      if (!name.includes('.') && declaration.header.includes(name)) return;
+      // Lean tries enclosing namespaces before opened ones, so `open` leaves these candidates unchanged.
+      // Only a root-level helper could be shadowed by an opened name, and owned sources rarely have one.
       const namespace = declaration.namespace.split('.').filter(Boolean);
       const names = name.startsWith('_root_.') ? [name.slice(7)] :
         Array.from({ length: namespace.length + 1 }, (_, index) => [...namespace.slice(0, namespace.length - index), name].join('.'));
