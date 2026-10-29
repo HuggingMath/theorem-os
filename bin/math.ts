@@ -33,6 +33,7 @@ const commands: Readonly<Record<string, string>> = {
   'sample-putnam': 'scripts/mathematics/samplePutnamRuns.ts',
   'first-proof': 'scripts/mathematics/firstProof.ts',
   formalize: 'scripts/mathematics/formalize.ts',
+  informalize: 'scripts/mathematics/informalize.ts',
   'evaluate-formalization': 'scripts/mathematics/evaluateFormalization.ts',
   summarize: 'scripts/mathematics/summarizeMathProofRuns.ts',
 };
@@ -66,6 +67,7 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   sample-putnam        Prepare and report reproducible PutnamBench samples
   first-proof          Audit and prepare the First Proof Batch 3 Lean adaptation offline
   formalize            Formalize an informal problem and review its Lean statement
+  informalize          Explain a checked Lean proof in natural language, step by step with audits
   evaluate-formalization Prepare, review and score blind formalization candidates
   summarize           Summarize saved proof-run receipts
 
