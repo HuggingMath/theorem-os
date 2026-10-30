@@ -301,6 +301,18 @@ export function retryRuns<T extends { step: TrajectoryStep }>(items: readonly T[
   });
 }
 
+/**
+ * Whether two objectives read the same apart from whitespace. Objectives arrive clipped with "…", and extra spaces move
+ * the clip, so two clipped ones compare over the shorter shown part; what lies past it is unknown ('shown').
+ */
+export function sameWords(a: string, b: string): 'whole' | 'shown' | undefined {
+  const words = (text: string) => text.replace(/\s+/g, ' ').trim();
+  if (words(a) === words(b)) return 'whole';
+  if (!a.endsWith('…') || !b.endsWith('…')) return;
+  const [x, y] = [words(a.slice(0, -1)), words(b.slice(0, -1))].sort((p, q) => p.length - q.length);
+  return y.startsWith(x) ? 'shown' : undefined;
+}
+
 /** A task as the trajectory names it: its theorem's last name, from the latest plan that names it, or else from its own
  * checks when every one of them is about the same single theorem (a run without a plan). */
 export function trajectoryTaskNames(data: TrajectoryData): Map<string, string> {

@@ -175,7 +175,7 @@ try {
     assert.deepEqual(await rows(h.page), expected);
     await count(h.page, '.diff-count-added', 5); await count(h.page, '.diff-count-removed', 4);
     assert.equal(await h.page.locator('#detail-panel [data-change-start]').count(), 3);
-    assert.ok(await h.page.locator('#detail-panel .diff-no-newline[data-eof-side="both"]').count() > 0);
+    assert.equal(await h.page.locator('#detail-panel .diff-no-newline').count(), 0);
     await noInjection(h.page);
     await screenshot(h.page, 'source-diff-desktop-exact.png');
   });
@@ -229,7 +229,7 @@ try {
     }
   });
 
-  await scenario('Identical source and CRLF-only differences are explicit while final-newline changes remain real diffs', async h => {
+  await scenario('Identical source, CRLF-only and final-newline-only differences are explicit, not line changes', async h => {
     const source = 'namespace Format\n-- keep spacing \t\nend Format';
     for (const [title, before, proof, formatOnly] of [
       ['Identical source', source, source, false],
@@ -243,12 +243,13 @@ try {
       assert.equal(await h.page.locator('[data-action="diff-next"]').count(), 0);
       await copyProof(h.page, proof);
     }
-    const run = await createRun(h, 'Final newline is a real change', 'theorem final_newline : True := by trivial', result('theorem final_newline : True := by trivial\n'));
+    // The service trims submitted input, so a proof's final newline is formatting, not a change to the last line.
+    const run = await createRun(h, 'Final newline only', 'theorem final_newline : True := by trivial', result('theorem final_newline : True := by trivial\n'));
     await selectSource(h, run.id);
-    await count(h.page, '.diff-count-added', 1); await count(h.page, '.diff-count-removed', 1);
-    assert.equal(await h.page.locator('#detail-panel .diff-identical').count(), 0);
-    assert.equal(await h.page.locator('#detail-panel .diff-removed .diff-no-newline[data-eof-side="old"]').count(), 1);
-    assert.equal(await h.page.locator('#detail-panel .diff-added .diff-no-newline').count(), 0);
+    await h.page.locator('#detail-panel .diff-identical').waitFor();
+    assert.match(await h.page.locator('#detail-panel .diff-identical').innerText(), /\u4ec5\u6362\u884c\u683c\u5f0f\u4e0d\u540c/);
+    assert.equal(await sourceRows(h.page).count(), 0);
+    assert.equal(await h.page.locator('#detail-panel .diff-no-newline').count(), 0);
   });
 
   await scenario('Pending results and empty proof strings have no diff control and retain original input', async h => {

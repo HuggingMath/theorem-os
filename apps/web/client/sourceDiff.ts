@@ -32,11 +32,19 @@ function unavailable(): SourceComparison {
   return { status: 'unavailable', added: 0, removed: 0, rows: [], changeCount: 0, omittedLines: 0, lineEndingsChanged: false };
 }
 
-export function compareSources(before: string, after: string, changesOnly = true): SourceComparison {
+/**
+ * `finalNewline: false` treats a missing last newline as formatting only: the service trims submitted input, so an
+ * input-to-proof comparison would otherwise mark every run's last line.
+ */
+export function compareSources(before: string, after: string, changesOnly = true, finalNewline = true): SourceComparison {
   if (before.length + after.length > maximumInputBytes
     || encoder.encode(before).byteLength + encoder.encode(after).byteLength > maximumInputBytes) return unavailable();
 
-  const oldSource = before.replace(/\r\n?/g, '\n'), newSource = after.replace(/\r\n?/g, '\n');
+  const normalize = (source: string) => {
+    const text = source.replace(/\r\n?/g, '\n');
+    return finalNewline || text === '' || text.endsWith('\n') ? text : `${text}\n`;
+  };
+  const oldSource = normalize(before), newSource = normalize(after);
   let changes;
   try { changes = diffLines(oldSource, newSource, { timeout: 80, maxEditLength: 2_000 }); }
   catch { return unavailable(); }
