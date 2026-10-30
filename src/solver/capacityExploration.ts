@@ -4,6 +4,13 @@ import { checkedUnconditionally, taskGroup, taskVersion, type CooperativeTask, t
 
 export const CAPACITY_EXPLORATION_FOCUSES = ['construction', 'interface', 'decomposition', 'boundary'] as const;
 export type CapacityExplorationFocus = typeof CAPACITY_EXPLORATION_FOCUSES[number];
+/** A small timed team explores only after a peer has waited this long with nothing startable. */
+export const TIMED_EXPLORATION_IDLE_MS = 30 * 60_000;
+/** ...and the Lead has been woken for idle peers this many times without a deciding turn. */
+export const TIMED_EXPLORATION_UNANSWERED_WAKES = 2;
+/** ...and at least this much solving time remains. */
+export const TIMED_EXPLORATION_MIN_REMAINING_MS = 30 * 60_000;
+export const TIMED_EXPLORATION_FOCUSES = ['decomposition', 'construction'] as const satisfies readonly CapacityExplorationFocus[];
 export type CapacityExploration = Readonly<{
   schema: 'theorem-os.capacity-exploration.v1';
   targetTaskId: string; targetTaskDigest: string; inputDigest: string; focus: CapacityExplorationFocus;
@@ -57,6 +64,12 @@ function targetAvailable(node: TaskRecord): boolean {
     (node.task.kind === 'goal' || nonempty(node.task.type) && node.task.type.trim() !== 'FULL_CLOSED_LEAN_TYPE') &&
     nonempty(node.task.theoremName) && nonempty(node.task.proofPath) &&
     (node.task.status ?? 'active') === 'active' && node.status !== 'completed' && !checkedUnconditionally(node);
+}
+
+/** The timed gate's crux order: the consumer most turns were started on first, then a running one, then by id. */
+export function timedExplorationTargets(targets: readonly TaskRecord[]): TaskRecord[] {
+  return targets.filter(targetAvailable).toSorted((a, b) => b.attempts - a.attempts ||
+    Number(b.status === 'running') - Number(a.status === 'running') || a.task.id.localeCompare(b.task.id));
 }
 
 const focusInstructions: Record<CapacityExplorationFocus, string> = {

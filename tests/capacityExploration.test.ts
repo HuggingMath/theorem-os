@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CAPACITY_EXPLORATION_FOCUSES, capacityExplorationInput, capacityExplorationWorkerCanTask,
-  createCapacityExploration, currentCapacityExploration, plannedTaskRecords,
+  createCapacityExploration, currentCapacityExploration, plannedTaskRecords, timedExplorationTargets,
   type CapacityExploration, type CapacityExplorationFocus } from '../src/solver/capacityExploration';
 import { taskVersion, type TaskRecord } from '../src/solver/tasks';
 import { assignSharedResearchTask, type ResearchWorker } from '../src/solver/modules/organization';
@@ -297,4 +297,16 @@ describe('optional exploration priority', () => {
       expect(assignSharedResearchTask([optional, typed], peer, live, groups, tasks)).toBe(typed);
       expect(assignSharedResearchTask([optional], peer, live, groups, tasks)).toBe(optional);
     });
+});
+
+describe('timed exploration crux order', () => {
+  it('puts the consumer with the most started turns first, then a running one, and skips unavailable consumers', () => {
+    const crux = node('crux'), running = node('running'), quiet = node('quiet'), paused = node('paused');
+    const goal = node('original', ['crux', 'running', 'quiet'], 'goal');
+    crux.attempts = 7; running.attempts = 2; running.status = 'running'; quiet.attempts = 2;
+    paused.attempts = 30; paused.task = { ...paused.task, status: 'paused' };
+    const finished = node('finished'); finished.attempts = 40; finished.status = 'completed';
+    expect(timedExplorationTargets([quiet, goal, paused, running, finished, crux]).map(item => item.task.id))
+      .toEqual(['crux', 'running', 'quiet', 'original']);
+  });
 });

@@ -9,7 +9,8 @@ import { solverProofFeedback, solverSourceFeedback } from './feedback';
 import { assessTaskResponsibility, assignSharedResearchTask, independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
 import type { DispatchWaitObservation } from './archive';
 import { CAPACITY_EXPLORATION_FOCUSES, capacityExplorationInput, createCapacityExploration,
-  currentCapacityExploration } from './capacityExploration';
+  currentCapacityExploration, TIMED_EXPLORATION_FOCUSES, TIMED_EXPLORATION_IDLE_MS, TIMED_EXPLORATION_MIN_REMAINING_MS,
+  TIMED_EXPLORATION_UNANSWERED_WAKES, timedExplorationTargets } from './capacityExploration';
 import { hasFreshSolverCheck, proofReceiptsMatch, type ProofCheck } from './modules/evidence';
 import { originalGoalTaskFocus, readyResearchTasks, researchCanAdvance, routeAllowsTask, taskCanStart, taskDependenciesReady, selectedTaskRoute } from './modules/search';
 import { deliveryDetails, reviewVerdict, readMathResponse as block, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
@@ -28,7 +29,7 @@ import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { taskTypePreflightEnvironmentIdentity, typeDiagnosticExcerpt, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
-import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, type LeadInboxBasis } from './leadInbox';
+import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
@@ -61,10 +62,15 @@ export class CooperativeResearch extends CooperationInputs {
       this.input.emit('human_guidance_unavailable', { reason: error instanceof Error ? error.message : 'math_guidance_unavailable' });
     }).finally(() => { this.guidancePulse = undefined; });
   }
-  /** Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. */
+  /**
+   * Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. A small team with a
+   * solving deadline gets the same supply only through a narrow gate (timedExplorationDue), on its crux consumer.
+   */
   private async requestCapacityExploration(worker: ResearchWorker, budget: DispatchBudget, previousReady: readonly TaskRecord[]) {
-    if (!this.input.continuousResearch || this.input.workers.length <= 4 ||
-        !['prover', 'researcher', 'engineer'].includes(worker.role) || budget.maxTurns !== Infinity || budget.remainingMs !== Infinity) return false;
+    const expanded = this.input.workers.length > 4 && budget.remainingMs === Infinity;
+    const timed = this.input.workers.length <= 4 && Number.isFinite(budget.remainingMs);
+    if (!this.input.continuousResearch || !expanded && !timed ||
+        !['prover', 'researcher', 'engineer'].includes(worker.role) || budget.maxTurns !== Infinity) return false;
     return this.input.exclusiveCheck(async () => {
       if (this.stopping || this.failure || this.input.signal.aborted || this.input.modelDispatchAllowed?.() === false ||
           !this.liveWorkers.has(this.lead.id) || !this.allocationPeers.some(peer => peer.id === worker.id) ||
@@ -77,11 +83,16 @@ export class CooperativeResearch extends CooperationInputs {
       // A peer may have published real work while this request waited for the archive transaction.
       const newlyReady = assignSharedResearchTask(ready, worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers);
       if (newlyReady) return !previousReady.includes(newlyReady);
+      if (timed && !this.timedExplorationDue(worker, budget)) return false;
       const focus = originalGoalTaskFocus(this.plannedTasks(), this.archive.groups, this.input.state.environmentDigest);
       const targets = [...focus.frontier].map(id => this.node(id)).filter(node => node &&
         ['lemma', 'goal'].includes(node.task.kind) && !['integrated', 'completed', 'delivered'].includes(node.status) &&
         !this.synchronizationBlocked(node.task) && routeAllowsTask(node.task, this.archive.tasks, this.archive.groups));
-      for (const method of CAPACITY_EXPLORATION_FOCUSES) for (const target of targets) {
+      // Expanded teams spread each method across the frontier; the timed gate stays on the crux first.
+      const plan = timed ? timedExplorationTargets(targets).flatMap(target =>
+        TIMED_EXPLORATION_FOCUSES.map(method => ({ method, target })))
+        : CAPACITY_EXPLORATION_FOCUSES.flatMap(method => targets.map(target => ({ method, target })));
+      for (const { method, target } of plan) {
         const inputDigest = capacityExplorationInput(target.task, this.archive.tasks, this.explorationIdentity);
         if (this.archive.capacityExplorationInputs?.some(input => input.targetTaskId === target.task.id &&
             input.inputDigest === inputDigest && input.focus === method)) continue;
@@ -94,11 +105,36 @@ export class CooperativeResearch extends CooperationInputs {
           targetTaskId: target.task.id, taskId: node.task.id });
         this.archive.tasks.push(node);
         this.input.emit('capacity_exploration_requested', { workerId: worker.id, taskId: node.task.id,
-          targetTaskId: target.task.id, inputDigest, focus: method, evidenceStatus: 'advisory' });
+          targetTaskId: target.task.id, inputDigest, focus: method, evidenceStatus: 'advisory',
+          ...(timed ? { gate: 'timed-idle' } : {}) });
         this.changed(); return true;
       }
       return false;
     });
+  }
+  private explorationTimer?: { at: number; timer: NodeJS.Timeout };
+  /**
+   * The narrow gate for a team of at most four with a solving deadline. This peer has waited at least
+   * TIMED_EXPLORATION_IDLE_MS with nothing it can start; since the last deciding Lead turn the Lead was woken for idle
+   * peers at least twice while this peer was idle, and no Lead turn is running now; and enough solving time remains.
+   * Only the wait itself matures with time, so a peer that is otherwise eligible is re-dispatched when it does.
+   */
+  private timedExplorationDue(worker: ResearchWorker, budget: DispatchBudget): boolean {
+    const scheduling = this.input.state.workers?.find(record => record.id === worker.id)?.scheduling;
+    const wait = scheduling?.wait, wake = this.archive.idlePeerWake;
+    if (budget.remainingMs < TIMED_EXPLORATION_MIN_REMAINING_MS || this.active.has(this.lead.id) ||
+        scheduling?.status !== 'idle' || !wait || wait.endedAt !== undefined || !NO_WORK_STAGES.has(wait.stage) ||
+        !wake || wake.at <= (this.archive.leadDecisionBasisAt ?? 0) || (wake.count ?? 1) < TIMED_EXPLORATION_UNANSWERED_WAKES ||
+        wake.at < scheduling.since) return false;
+    const dueAt = scheduling.since + TIMED_EXPLORATION_IDLE_MS, now = Date.now();
+    if (dueAt <= now) return true;
+    // One timer serves every waiting peer: the earliest one re-dispatches all, and later peers re-arm it.
+    if (dueAt - now <= budget.remainingMs - TIMED_EXPLORATION_MIN_REMAINING_MS && !(this.explorationTimer && this.explorationTimer.at <= dueAt)) {
+      clearTimeout(this.explorationTimer?.timer);
+      const timer = setTimeout(() => { this.explorationTimer = undefined; if (!this.stopping) this.wake(); }, dueAt - now);
+      timer.unref(); this.explorationTimer = { at: dueAt, timer };
+    }
+    return false;
   }
   /** A normal advisory checkpoint preserves the draft before the new typed task takes priority. */
   shouldYieldCapacityExploration(worker: ResearchWorker, action: CooperativeAction): boolean {
@@ -184,6 +220,7 @@ export class CooperativeResearch extends CooperationInputs {
   async stop() {
     this.stopping = true;
     clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
+    clearTimeout(this.explorationTimer?.timer); this.explorationTimer = undefined;
     for (const worker of this.input.workers) this.clearDispatchWait(worker, 'stopped');
     this.wake();
     clearInterval(this.timer);

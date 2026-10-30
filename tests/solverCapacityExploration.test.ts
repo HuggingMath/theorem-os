@@ -430,6 +430,16 @@ describe('host exploration for spare cooperative capacity', () => {
     expect(state.cooperation!.capacityExplorationInputs).toBeUndefined();
   });
 
+  it('keeps an eight-worker team with a solving deadline off even when the timed gate would open', async () => {
+    const worker = provers()[0];
+    state.workers!.find(item => item.id === worker.id)!.scheduling = { status: 'idle', since: Date.now() - 31 * 60_000 };
+    state.cooperation!.leadDecisionBasisAt = Date.now() - 90 * 60_000;
+    state.cooperation!.idlePeerWake = { at: Date.now() - 5 * 60_000, workerIds: [worker.id], count: 2 };
+    await waitForCapacity(worker, { maxTurns: Infinity, remainingMs: 2 * 60 * 60_000 });
+    expect(overlays()).toHaveLength(0);
+    expect(state.cooperation!.capacityExplorationInputs).toBeUndefined();
+  });
+
   it('waits for a group slot and only records a method when the slot becomes available', async () => {
     const route = state.cooperation!.groups![0];
     route.group = { ...route.group, maxConcurrent: 1 }; refresh();
@@ -502,5 +512,119 @@ describe('host exploration for spare cooperative capacity', () => {
     expect(cooperative.shouldYieldCapacityExploration(worker, action)).toBe(true);
     typed.task = { ...typed.task, ownerId: provers()[1].id }; refresh();
     expect(cooperative.shouldYieldCapacityExploration(worker, action)).toBe(false);
+  });
+  describe('four workers with a solving deadline', () => {
+    const timedBudget = { maxTurns: Infinity, remainingMs: 2 * 60 * 60_000 };
+    const researchers = () => workers.filter(worker => worker.role === 'researcher');
+    const idleFor = (worker: ResearchWorker, ms: number) => {
+      const record = state.workers!.find(item => item.id === worker.id)!;
+      record.scheduling = { status: 'idle', since: Date.now() - ms };
+    };
+    const unanswered = (count: number, at = Date.now() - 5 * 60_000) => {
+      state.cooperation!.leadDecisionBasisAt = Date.now() - 90 * 60_000;
+      state.cooperation!.idlePeerWake = { at, workerIds: researchers().map(worker => worker.id), count };
+    };
+    const timedClaim = async (worker: ResearchWorker, dispatchBudget = timedBudget) => {
+      const action = taskAction(await track(cooperative.next(worker, dispatchBudget)));
+      activate(worker, action);
+      return action;
+    };
+    beforeEach(() => {
+      // The campaign team: solver Lead, two Researchers and the Engineer holding the crux.
+      instances.at(-1)!.controller.abort();
+      workers = [workers[0], ...researchers(), workers.at(-1)!];
+      state.workers = state.workers!.filter(record => workers.some(worker => worker.id === record.id));
+      for (const planned of ['planned_research_1', 'planned_research_2']) (node(planned) as unknown as { status: string }).status = 'completed';
+      cooperative = create();
+      const busy = node('busy_helper');
+      activate(workers.at(-1)!, { kind: 'task', task: busy.task, assignment: busy.assignment! });
+    });
+
+    it('explores the crux once per idle peer after two unanswered Lead wakes, decomposition before construction', async () => {
+      const [first, second] = researchers(), mathematicalInput = snapshot(), version = state.cooperation!.planVersion;
+      idleFor(first, 31 * 60_000); idleFor(second, 31 * 60_000); unanswered(2);
+      const decomposition = await timedClaim(first), construction = await timedClaim(second);
+      expect(node(decomposition.task.id).capacityExploration).toMatchObject({ targetTaskId: 'busy_helper', focus: 'decomposition', workerId: first.id });
+      expect(node(construction.task.id).capacityExploration).toMatchObject({ targetTaskId: 'busy_helper', focus: 'construction', workerId: second.id });
+      expect(events.filter(item => item.event === 'capacity_exploration_requested').map(item => item.details?.gate))
+        .toEqual(['timed-idle', 'timed-idle']);
+      expect(state.cooperation!.planVersion).toBe(version);
+      expect(snapshot()).toEqual(mathematicalInput);
+    });
+
+    it('opens one exploration per idle wait and never repeats a method for the same consumer input', async () => {
+      const worker = researchers()[0];
+      idleFor(worker, 31 * 60_000); unanswered(2);
+      const decomposition = await timedClaim(worker);
+      expect(node(decomposition.task.id).capacityExploration).toMatchObject({ targetTaskId: 'busy_helper', focus: 'decomposition' });
+      await complete(worker, decomposition);
+      // The completed turn starts a new wait; re-polling at once must not open the next method.
+      const { waiting } = await waitForCapacity(worker, timedBudget);
+      expect(overlays()).toHaveLength(1);
+      idleFor(worker, 31 * 60_000); unanswered(2); refresh();
+      const construction = taskAction(await waiting);
+      expect(node(construction.task.id).capacityExploration).toMatchObject({ targetTaskId: 'busy_helper', focus: 'construction' });
+      activate(worker, construction); await complete(worker, construction);
+      // Both timed methods are tombstoned for this consumer input.
+      idleFor(worker, 31 * 60_000); unanswered(2);
+      await waitForCapacity(worker, timedBudget);
+      expect(overlays().map(item => item.capacityExploration!.focus)).toEqual(['decomposition', 'construction']);
+      expect(state.cooperation!.capacityExplorationInputs).toHaveLength(2);
+    });
+
+    it('takes the consumer with the most started turns as the crux', async () => {
+      const goal = node('goal_0'), second = parseCooperationPlan(problem, { tasks: [...plan().tasks,
+        { id: 'second_helper', kind: 'lemma', ownerId: 'engineer', objective: 'Prove the other original-goal input.',
+          proofPath: 'Submission.lean', theoremName: 'Tutorial.second_helper', type: 'True' }],
+      groups: plan().groups }).tasks.find(task => task.id === 'second_helper')!;
+      state.cooperation!.tasks.push({ task: second, status: 'pending', attempts: 5 });
+      goal.task = { ...goal.task, dependsOn: ['busy_helper', 'second_helper'] };
+      node('busy_helper').attempts = 2;
+      state.cooperation!.planVersion = (cooperative as any).planVersion();
+      state.cooperation!.planEdited = true; (cooperative as any).syncPlanNotes(); refresh();
+      const worker = researchers()[0];
+      idleFor(worker, 31 * 60_000); unanswered(2);
+      expect(node((await timedClaim(worker)).task.id).capacityExploration).toMatchObject({ targetTaskId: 'second_helper', focus: 'decomposition' });
+    });
+
+    it.each([
+      { name: 'a peer waiting under 30 minutes', idle: 29 * 60_000 },
+      { name: 'one unanswered Lead wake', count: 1 },
+      { name: 'a deciding Lead turn after the last wake', decided: true },
+      { name: 'a peer that went idle after the last wake', wakeAgo: 40 * 60_000 },
+      { name: 'under 30 minutes of solving time left', remainingMs: 29 * 60_000 },
+      { name: 'a finite turn budget', maxTurns: 50 },
+    ] as { name: string; idle?: number; count?: number; decided?: boolean; wakeAgo?: number; remainingMs?: number; maxTurns?: number }[])(
+      'does not explore with $name', async scenario => {
+        const worker = researchers()[0];
+        idleFor(worker, scenario.idle ?? 31 * 60_000);
+        unanswered(scenario.count ?? 2, Date.now() - (scenario.wakeAgo ?? 5 * 60_000));
+        if (scenario.decided) state.cooperation!.leadDecisionBasisAt = Date.now() - 60_000;
+        await waitForCapacity(worker, { maxTurns: scenario.maxTurns ?? Infinity, remainingMs: scenario.remainingMs ?? timedBudget.remainingMs });
+        expect(overlays()).toHaveLength(0);
+        expect(state.cooperation!.capacityExplorationInputs).toBeUndefined();
+      });
+
+    it('waits for a running Lead turn to end without a decision before exploring', async () => {
+      const worker = researchers()[0];
+      unanswered(2);
+      const lead = await startLead();
+      idleFor(worker, 31 * 60_000);
+      const { waiting } = await waitForCapacity(worker, timedBudget);
+      expect(overlays()).toHaveLength(0);
+      cooperative.deactivate(workers[0]);
+      expect(lead.kind).toBe('lead');
+      expect(node(taskAction(await waiting).task.id).capacityExploration).toMatchObject({ focus: 'decomposition' });
+    });
+
+    it('re-dispatches a waiting peer when its wait reaches 30 minutes', async () => {
+      const worker = researchers()[0];
+      idleFor(worker, 30 * 60_000 - 3_000); unanswered(2);
+      const { waiting } = await waitForCapacity(worker, timedBudget);
+      expect(overlays()).toHaveLength(0);
+      const since = state.workers!.find(item => item.id === worker.id)!.scheduling!.since;
+      expect((cooperative as any).explorationTimer?.at).toBe(since + 30 * 60_000);
+      expect(node(taskAction(await waiting).task.id).capacityExploration).toMatchObject({ focus: 'decomposition' });
+    }, 30_000);
   });
 });

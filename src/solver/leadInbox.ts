@@ -22,7 +22,7 @@ const MAX_DELIVERIES = 16, MAX_STATUS_CHANGES = 32, SUMMARY_BYTES = 600;
 /** A peer idle this long with no startable work, while others run, is owed one Lead turn. */
 export const IDLE_PEER_WAKE_MS = 10 * 60_000;
 // Wait stages meaning the accepted plan has nothing this peer can start; host gates and budgets are excluded.
-const NO_WORK_STAGES = new Set(['m3-no-ready', 'dependency-blocked', 'm5-no-selection']);
+export const NO_WORK_STAGES: ReadonlySet<string> = new Set(['m3-no-ready', 'dependency-blocked', 'm5-no-selection']);
 
 /**
  * Peers that went idle after `seenAt` (the basis of the last deciding Lead turn, or an idle wake) and have had no
