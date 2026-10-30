@@ -12,7 +12,9 @@ import { mathConstructionImports } from './mathConstructionSources';
 import { mathGitBytes, mathGitText } from './mathGit';
 import { assertMathCanonicalPath } from './paths';
 
-export const LEAN_TASK_SOURCE_MAX_BYTES = 128 * 1024;
+export const LEAN_TASK_SOURCE_MAX_BYTES = 1024 * 1024;
+/** Declarations, and so definition targets, per statement. */
+export const LEAN_TASK_DECLARATIONS_MAX = 1024;
 export const LEAN_TASK_DESCRIPTION_MAX_LENGTH = 8_000;
 const projectRelative = 'generated/problem';
 const schema = 'theorem-os.lean-task.v1' as const;
@@ -56,7 +58,7 @@ function inspectInput(input: LeanTaskInput) {
       /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(parsed.source + parsed.task))
     throw new Error('lean_task_input_invalid');
   const declarations = inspectScopedLeanDeclarations(parsed.source);
-  if (declarations.length > 256) throw new Error('lean_task_declarations_limit');
+  if (declarations.length > LEAN_TASK_DECLARATIONS_MAX) throw new Error('lean_task_declarations_limit');
   // Declarations repeating a final name component are identified by qualified name (leanDeclarationKeys);
   // targets are still found by their final component, which must therefore be unique.
   if (new Set(declarations.map(item => item.qualifiedName)).size !== declarations.length)
@@ -115,7 +117,7 @@ function contractFor(source: string, task: string): MathProblemContract {
 }
 
 const gitText = (workspace: string, args: string[]) => mathGitText(workspace, ['--no-replace-objects', ...args],
-  { timeout: 30_000, maxBuffer: 256 * 1024, errorMessage: 'lean_task_seed_unavailable' });
+  { timeout: 30_000, maxBuffer: 1024 * 1024, errorMessage: 'lean_task_seed_unavailable' });
 
 function assertRegularFile(file: string): void {
   assertMathCanonicalPath(file);
@@ -161,7 +163,8 @@ export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): Lean
 export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
   file = path.resolve(file);
   assertRegularFile(file);
-  if (fs.statSync(file).size > 1024 * 1024) throw new Error('lean_task_receipt_invalid');
+  // The receipt repeats the source in its contract beside one declaration record per declaration.
+  if (fs.statSync(file).size > 4 * LEAN_TASK_SOURCE_MAX_BYTES) throw new Error('lean_task_receipt_invalid');
   const parsed = receiptSchema.parse(readMathJson(file));
   const workspace = path.dirname(file);
   assertMathCanonicalPath(workspace);

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import { bootstrapLeanTask, readLeanTaskReceipt, LEAN_TASK_SOURCE_MAX_BYTES } from '../src/math/leanTask';
+import { bootstrapLeanTask, readLeanTaskReceipt, LEAN_TASK_DECLARATIONS_MAX, LEAN_TASK_SOURCE_MAX_BYTES } from '../src/math/leanTask';
 import { LOCAL_EXAMPLE_TOOLCHAIN } from '../src/math/localExample';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { canonicalMathProblemStatementPayloads } from '../src/math/contracts';
@@ -188,6 +188,22 @@ end User
   ])('rejects invalid, missing or ambiguous declarations without creating a workspace', (text, description) => {
     const workspace = path.join(rootDirectory(), 'workspace');
     expect(() => bootstrapLeanTask(workspace, { source: text, task: description })).toThrow();
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  it('prepares a statement above the earlier 128 KiB and 256-declaration limits and stops at 1024 declarations', () => {
+    const large = (count: number) => [`/- ${'x'.repeat(140 * 1024)} -/`, 'namespace Large',
+      ...Array.from({ length: count - 1 }, (_, index) => `def value${index} : Nat := ${index}`),
+      'theorem goal : value0 = 0 := by sorry', 'end Large', ''].join('\n');
+    const accepted = large(LEAN_TASK_DECLARATIONS_MAX);
+    expect(Buffer.byteLength(accepted)).toBeGreaterThan(128 * 1024);
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source: accepted, task });
+    expect(readLeanTaskReceipt(receipt.activeProblemPath).declarations).toHaveLength(LEAN_TASK_DECLARATIONS_MAX);
+    expect(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath).targets.map(target => target.theoremName))
+      .toEqual(['Large.goal']);
+    const workspace = path.join(rootDirectory(), 'workspace');
+    expect(() => bootstrapLeanTask(workspace, { source: large(LEAN_TASK_DECLARATIONS_MAX + 1), task }))
+      .toThrow('lean_task_declarations_limit');
     expect(fs.existsSync(workspace)).toBe(false);
   });
 

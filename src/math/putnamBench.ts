@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { bootstrapLeanTask, LEAN_TASK_SOURCE_MAX_BYTES, type LeanTaskReceipt } from './leanTask';
+import { bootstrapLeanTask, type LeanTaskReceipt } from './leanTask';
 import { getLeanTaskEnvironment } from './leanTaskEnvironment';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from './leanSource';
 import { maskLeanComments, maskLeanCommentsAndStrings } from './leanSyntax';
@@ -31,6 +31,8 @@ type TreeEntry = { mode: string; oid: string; path: string };
 class IneligibleProblem extends Error {}
 
 const gitOptions = { timeout: 30_000, maxBuffer: 1024 * 1024, errorMessage: 'putnam_bench_source_unavailable' };
+/** The pool's eligibility limit, kept apart from the Lean task limit so the frozen selection does not move. */
+const PUTNAM_BENCH_SOURCE_MAX_BYTES = 128 * 1024;
 function readTree(repository: string): Map<string, TreeEntry> {
   if (mathGitText(repository, ['--no-replace-objects', 'rev-parse', '--verify', `${PUTNAM_BENCH_SOURCE_COMMIT}^{commit}`], gitOptions)
       !== PUTNAM_BENCH_SOURCE_COMMIT) throw new Error('putnam_bench_source_commit_mismatch');
@@ -45,7 +47,7 @@ function readTree(repository: string): Map<string, TreeEntry> {
   return entries;
 }
 
-function readBlob(repository: string, entry: TreeEntry | undefined, limit = LEAN_TASK_SOURCE_MAX_BYTES): { source: string; sha256: string } {
+function readBlob(repository: string, entry: TreeEntry | undefined, limit = PUTNAM_BENCH_SOURCE_MAX_BYTES): { source: string; sha256: string } {
   if (!entry || entry.mode !== '100644') throw new Error('putnam_bench_file_mode_invalid');
   const bytes = mathGitBytes(repository, ['--no-replace-objects', 'cat-file', 'blob',
     `${PUTNAM_BENCH_SOURCE_COMMIT}:${entry.path}`], { ...gitOptions, maxBuffer: limit + 1 });
