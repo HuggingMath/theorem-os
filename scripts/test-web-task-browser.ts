@@ -312,7 +312,7 @@ try {
     const tokens = (id: string) => page.locator(`${graphCard(id)} .collab-task-tokens`);
     const share = (id: string) => page.locator(`${graphCard(id)} .collab-task-usage>span`).evaluate(node =>
       node.getBoundingClientRect().width / node.parentElement!.getBoundingClientRect().width);
-    assert.deepEqual(await Promise.all(['a2', 'a6', 'b2', 'b6'].map(id => tokens(id).innerText())), ['1.23M', '300K', '50K', '800']);
+    assert.deepEqual(await Promise.all(['a2', 'a6', 'b2', 'b6'].map(id => tokens(id).innerText())), ['123 万', '30 万', '5 万', '800']);
     assert.ok(Math.abs(await share('a2') - 1) < 0.01, 'the task with the most tokens fills its meter');
     assert.ok(Math.abs(await share('a6') - 300_000 / 1_234_567) < 0.01, 'meters are proportional to the largest task');
     assert.equal(await page.locator(`${graphCard('a1')} .collab-task-tokens, ${graphCard('a1')} .collab-task-usage`).count(), 0, 'no usage is drawn without a record');
@@ -325,9 +325,9 @@ try {
         range.selectNodeContents(node); return range.getBoundingClientRect().right <= label.left;
       }), `${id} owner text ends before the token count`);
     }
-    assert.deepEqual(await page.locator('[data-collab-usage-legend]>span').allInnerTexts(), ['Token 色条：相对用量最多的任务', '任务 1.59M / 运行 2.00M']);
+    assert.deepEqual(await page.locator('[data-collab-usage-legend]>span').allInnerTexts(), ['Token 色条：相对用量最多的任务', '任务 159 万 / 运行 200 万']);
     await page.locator(graphCard('a2')).click(); await expectSelected(page, 'a2');
-    assert.match(await page.locator(inspector).innerText(), /Token 用量\s*1\.23M · 输入 1\.20M（缓存命中 900K） · 输出 35K/);
+    assert.match(await page.locator(inspector).innerText(), /Token 用量\s*123 万 · 输入 120 万（缓存命中 90 万） · 输出 3\.5 万/);
     await page.screenshot({ path: path.join(output, 'desktop-usage.png') });
     await create(h, emptyTask); assert.equal(await page.locator('[data-collab-usage-legend]').isHidden(), true, 'runs without task usage hide the legend');
   });

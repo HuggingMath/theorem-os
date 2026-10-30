@@ -511,7 +511,7 @@ try {
   assert.match(await answer.locator('p').first().innerText(), /^原因：rfl 只在两边/u, 'bold and code spans are kept, without their marks');
   assert.match(await answer.locator('.trajectory-ask-code').innerText(), /exact Nat\.zero_add n/u);
   assert.equal(await answer.locator('.trajectory-ask-code .lean-keyword').count() > 0, true, 'code in an answer is coloured like the code viewer');
-  assert.match(await viewer(page).locator('.trajectory-ask-turn .trajectory-note').innerText(), /约 1K Token · 这是解释，没有经过 Lean 检查/u);
+  assert.match(await viewer(page).locator('.trajectory-ask-turn .trajectory-note').innerText(), /约 1320 Token · 这是解释，没有经过 Lean 检查/u);
   assert.equal(await question.inputValue(), '', 'the box empties for a follow-up');
   assert.deepEqual(await audit(page, { scope: '#detail-panel' }), [], 'Ask panel accessibility');
   await viewer(page).locator('[data-ask-submit]').scrollIntoViewIfNeeded();

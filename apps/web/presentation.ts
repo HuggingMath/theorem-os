@@ -223,9 +223,16 @@ const reportedTokens = (usage: unknown) => {
   const total = count('totalTokens'), input = count('inputTokens'), output = count('outputTokens');
   return total ?? (input !== undefined && output !== undefined ? input + output : undefined);
 };
+/** Lines a reader sees in read-only code: a final newline ends the last line instead of numbering an empty one after it. */
+export function shownLines(source: string): string[] {
+  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  return lines.length > 1 && lines.at(-1) === '' ? lines.slice(0, -1) : lines;
+}
+/** Tokens in the reader's units; Chinese keeps one decimal below 100 万, so a task's 6.4 万 is not read as 6 万. */
 export const formatTokens = (value: number) => locale === 'en'
   ? value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e4 ? `${Math.round(value / 1e3)}K` : String(value)
-  : value >= 1e8 ? `${(value / 1e8).toFixed(1)} 亿` : value >= 1e4 ? `${Math.round(value / 1e4)} 万` : String(value);
+  : value >= 1e8 ? `${(value / 1e8).toFixed(1)} 亿` : value >= 1e6 ? `${Math.round(value / 1e4)} 万`
+    : value >= 1e4 ? `${Number((value / 1e4).toFixed(1))} 万` : String(value);
 /** Tokens the whole run used, every Agent's turns included: as its report states once it has one, else the latest observation. */
 export const runTokens = (run: WebRun) => reportedTokens(run.result?.report?.usage) ?? reportedTokens(run.observation?.inspection.usage);
 
