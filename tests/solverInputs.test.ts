@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MAX_DELIVERY_LINE_BYTES, readDeliveryLines, readMathResponse } from '../src/solver/deliveries';
 import { readMathText } from '../src/math/mathRuntimeIo';
 
@@ -61,6 +61,37 @@ describe('solver input boundaries', () => {
     expect(readDeliveryLines(file, 0, recovery ? { discardingOversized: false } : undefined))
       .toMatchObject({ lines: [line], offset: MAX_DELIVERY_LINE_BYTES + 1,
         entries: [{ line, offset: MAX_DELIVERY_LINE_BYTES + 1, discardingOversized: false }] });
+  });
+
+  it('skips a log rewritten below the cursor once for recovery callers and stays strict otherwise', () => {
+    const file = path.join(temp(), 'DELIVERIES.jsonl'), first = '{"summary":"first"}\n', second = '{"summary":"second"}\n';
+    fs.writeFileSync(file, first + second);
+    const end = readDeliveryLines(file, 0, { discardingOversized: false }).offset;
+    fs.writeFileSync(file, second);
+    expect(() => readDeliveryLines(file, end)).toThrow('math_delivery_log_invalid');
+    expect(readDeliveryLines(file, end, { discardingOversized: false })).toEqual({ lines: [], offset: second.length,
+      entries: [{ error: 'math_delivery_log_rewritten', offset: second.length, discardingOversized: false }], discardingOversized: false });
+    fs.writeFileSync(file, second + '{"summ');
+    const rewritten = readDeliveryLines(file, end, { discardingOversized: false });
+    expect(rewritten).toMatchObject({ lines: [], offset: fs.statSync(file).size, discardingOversized: true,
+      entries: [{ error: 'math_delivery_log_rewritten', offset: second.length, discardingOversized: true }] });
+    fs.appendFileSync(file, 'ary":"fragment"}\n' + first);
+    expect(readDeliveryLines(file, rewritten.offset, { discardingOversized: true }))
+      .toMatchObject({ lines: [first.slice(0, -1)], offset: fs.statSync(file).size, discardingOversized: false });
+    fs.writeFileSync(file, '');
+    expect(readDeliveryLines(file, end, { discardingOversized: true })).toEqual({ lines: [], offset: 0,
+      entries: [{ error: 'math_delivery_log_rewritten', offset: 0, discardingOversized: false }], discardingOversized: false });
+  });
+
+  it('bounds the read of a rewritten log whose last line is oversized', () => {
+    const file = path.join(temp(), 'DELIVERIES.jsonl');
+    fs.writeFileSync(file, 'x'.repeat(MAX_DELIVERY_LINE_BYTES * 2));
+    const read = vi.spyOn(fs, 'readSync');
+    try {
+      expect(readDeliveryLines(file, MAX_DELIVERY_LINE_BYTES * 3, { discardingOversized: false })).toMatchObject({ lines: [],
+        offset: MAX_DELIVERY_LINE_BYTES * 2, discardingOversized: true, entries: [{ error: 'math_delivery_log_rewritten' }] });
+      expect(read.mock.calls.every(call => (call[3] as number) <= MAX_DELIVERY_LINE_BYTES + 1)).toBe(true);
+    } finally { read.mockRestore(); }
   });
 
   it.skipIf(process.platform === 'win32')('rejects FIFOs without waiting for a writer', () => {
