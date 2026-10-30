@@ -122,4 +122,13 @@ export const errors: Record<string, string> = {
   "研究记录仅支持 finding 分页。": "Research records only page by finding.",
   "知识条目不存在。": "Knowledge entry not found.",
   "知识读取方式无效。": "Invalid way to read knowledge.",
+  "这次运行没有可讲解的候选证明。": "This run has no candidate proof to explain.",
+  "请检查讲解的目标定理、语言与 API Key。": "Check the explanation's target theorem, language and API key.",
+  "目标定理不在原题中。": "The target theorem is not in the original problem.",
+  "请检查讲解的目标定理与语言。": "Check the explanation's target theorem and language.",
+  "这份讲解还没有生成。": "This explanation has not been generated yet.",
+  "讲解正在生成，请先取消。": "The explanation is being generated; cancel it first.",
+  "已保存的讲解与这次运行的证明不一致。": "The saved explanation does not match this run's proof.",
+  "这次运行的证明讲解正在生成，请先取消或等待结束。": "A proof explanation for this run is being generated; cancel it or wait for it to finish.",
+  "讲解标识无效。": "Invalid explanation id.",
 };

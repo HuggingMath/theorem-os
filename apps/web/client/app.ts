@@ -1299,7 +1299,8 @@ function reportProps(run: WebRun): ReportPanelProps {
     checks: summary.checks.map(check => { const why = checkReason(check); return { ...check, ...(why ? { reason: why } : {}) }; }),
     metrics: summary.metrics.map(readableMetric), identity: summary.identity }, accepted: passed(run), ...(stuck ? { stuck } : {}),
     ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`, headings: headingsOf(run.result.proof),
-      mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib') } } : {}) };
+      mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib'),
+      ...(isAcceptedRun(run) && !isSample(run) ? { explainRun: run.id } : {}) } } : {}) };
 }
 const outlines = new Map<string, OutlineState>();
 /** Starts loading the proof outline; the report re-renders when it arrives. Returns whether a request started. */

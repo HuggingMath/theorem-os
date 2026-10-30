@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
-import type { WebAgentAction, WebEvent, WebRun } from './shared';
+import type { WebAgentAction, WebEvent, WebExplanation, WebRun } from './shared';
 import type { WebShareSnapshot } from './share';
 
 export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
@@ -187,6 +187,30 @@ export class WebStorage {
     const directory = [...this.runPath(owner, runId), 'commands'];
     return this.listRecords(directory).map(file => this.getRecord<WebCommandResult>([...directory, file])!);
   }
+  /** One explanation per target and language; the approved evidence is written once and never replaced. */
+  private explanationPath(owner: string, runId: string, key: string): string[] {
+    if (!/^[a-f0-9]{64}$/u.test(key)) throw new WebStorageError(400, '讲解标识无效。');
+    return [...this.runPath(owner, runId), 'explanations', key];
+  }
+  saveExplanation(owner: string, key: string, explanation: WebExplanation): void {
+    this.saveRecord([...this.explanationPath(owner, explanation.runId, key), 'record.json'], explanation);
+  }
+  getExplanation(owner: string, runId: string, key: string): WebExplanation | undefined {
+    return this.getRecord([...this.explanationPath(owner, runId, key), 'record.json']);
+  }
+  listExplanations(owner: string, runId: string): { key: string; explanation: WebExplanation }[] {
+    return this.listRecords([...this.runPath(owner, runId), 'explanations']).flatMap(key => {
+      const explanation = /^[a-f0-9]{64}$/u.test(key) ? this.getExplanation(owner, runId, key) : undefined;
+      return explanation ? [{ key, explanation }] : [];
+    });
+  }
+  saveExplanationEvidence(owner: string, runId: string, key: string, evidence: unknown): void {
+    this.saveRecord([...this.explanationPath(owner, runId, key), 'evidence.json'], evidence, true);
+  }
+  getExplanationEvidence(owner: string, runId: string, key: string): unknown {
+    return this.getRecord([...this.explanationPath(owner, runId, key), 'evidence.json']);
+  }
+  deleteExplanation(owner: string, runId: string, key: string): void { this.deleteRecord(this.explanationPath(owner, runId, key)); }
   listEvents(owner: string, runId: string): WebEvent[] {
     const directory = [...this.runPath(owner, runId), 'events'];
     return bySequence(this.listRecords(directory).map(file => this.getRecord<WebEvent>([...directory, file])!));

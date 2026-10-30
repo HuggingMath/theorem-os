@@ -44,6 +44,48 @@ describe('isolated local Lean dependencies', () => {
     expect(() => mathLocalModuleBuildOrder(root, 'Submission.lean')).toThrow('math_local_module_source_invalid');
   });
 
+  it.runIf(process.platform === 'linux').each([7, '1.2.0'])
+  ('mounts source-era path manifests only for Lake manifest version %s, preserving host pins', async version => {
+    const project = path.join(root, 'project'), elan = path.join(root, 'elan');
+    const toolchain = path.join(root, 'external-lean'), tools = path.join(root, 'tools');
+    const packages = path.join(root, 'packages');
+    fs.mkdirSync(path.join(packages, 'mathlib'), { recursive: true });
+    write(elan, 'bin/elan', `#!/bin/sh\nprintf '%s\\n' '${toolchain}/bin/lean'\n`);
+    write(elan, 'bin/lean', '#!/bin/sh\nexit 0\n');
+    for (const name of ['lean', 'lake']) write(toolchain, `bin/${name}`, '#!/bin/sh\nexit 0\n');
+    fs.mkdirSync(path.join(toolchain, 'lib/lean'), { recursive: true });
+    fs.mkdirSync(path.join(elan, 'toolchains'));
+    fs.symlinkSync(toolchain, path.join(elan, 'toolchains/pinned'));
+    const manifest = JSON.stringify({ version, name: 'fixed', packagesDir: '.lake/packages', packages: [{
+      name: 'mathlib', type: 'git', url: 'https://example.invalid/mathlib', rev: 'f'.repeat(40),
+      inherited: false, configFile: 'lakefile.lean', manifestFile: 'lake-manifest.json',
+    }] }) + '\n';
+    const sourceOverride = '{"fixture":"unchanged"}\n';
+    write(project, 'lake-manifest.json', manifest);
+    write(project, '.lake/package-overrides.json', sourceOverride);
+    write(tools, 'bwrap', `#!/usr/bin/python3
+import json, sys
+args = sys.argv[1:]
+overlays = {}
+for index, item in enumerate(args):
+    if item == '--ro-bind' and args[index + 2].endswith('.json'):
+        overlays[args[index + 2]] = json.load(open(args[index + 1]))
+print(json.dumps({'args': args, 'overlays': overlays}))
+`);
+    const result = await runMathematicsSandboxedCommand({ checkoutRoot: project, command: 'lake', args: ['env'],
+      lakePackagesPath: packages, timeoutMs: 10_000, env: { PATH: `${tools}:${elan}/bin:/usr/bin:/bin`, ELAN_HOME: elan,
+        DEEPSCIENTIST_MATH_ENV_FILE: path.join(root, 'absent.env'), DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap' } });
+    expect(result.exitCode).toBe(0);
+    const observed = JSON.parse(result.stdout), override = observed.overlays['/workspace/.lake/package-overrides.json'];
+    expect(override).toMatchObject({ schemaVersion: '1.2.0', packages: [{ name: 'mathlib', type: 'path' }] });
+    if (version === 7) expect(observed.overlays['/workspace/lake-manifest.json']).toMatchObject({
+      version: 7, name: 'fixed', packages: [{ name: 'mathlib', type: 'path', dir: override.packages[0].dir }],
+    });
+    else expect(observed.overlays['/workspace/lake-manifest.json']).toBeUndefined();
+    expect(fs.readFileSync(path.join(project, 'lake-manifest.json'), 'utf8')).toBe(manifest);
+    expect(fs.readFileSync(path.join(project, '.lake/package-overrides.json'), 'utf8')).toBe(sourceOverride);
+  });
+
   it.runIf(process.platform === 'linux').each([[10_000, false], [Infinity, false], [10_000, true]] as const)
   ('mounts and cleans up the pinned toolchain with timeout %s and setup failure=%s', async (timeoutMs, setupFailure) => {
     const project = path.join(root, 'project');

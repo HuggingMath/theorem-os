@@ -11,8 +11,13 @@ import { DEEPSEEK_PROVIDER } from './deepseek';
 import { WESTLAKE_PROVIDER, validateWestlakeModel } from './westlake';
 import { SUB2API_PROVIDER } from './sub2api';
 import type { ModelRequestGate } from './modelRequest';
-import { safeFailureDiagnostic, type MathAgentFailureDiagnostic } from './failureDiagnostic';
-export type { MathAgentFailureDiagnostic } from './failureDiagnostic';
+import { prepareFormalizationSandbox } from './formalizationSandbox';
+import type { LeanTaskEnvironment } from '../math/leanTaskEnvironment';
+import { mathDigest, readMathText } from '../math/mathRuntimeIo';
+import { scheduleMathTimeout } from '../math/mathTimers';
+import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpStatusCode,
+  type MathAgentFailureDiagnostic } from './failureDiagnostic';
+export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
 
 type Json = Record<string, unknown>;
 
@@ -46,10 +51,15 @@ const failureDiagnostic = (error: Json): MathAgentFailureDiagnostic | undefined 
   const structured = info && typeof info === 'object' && !Array.isArray(info) ? info as Json : undefined;
   const keys = structured ? Object.keys(structured) : [];
   const candidate = typeof info === 'string' ? info : keys.length === 1 ? keys[0] : undefined;
-  const payload = candidate ? structured?.[candidate] : undefined;
+  const code = CODEX_FAILURE_CODES.find(value => value === candidate);
+  const payload = code ? structured?.[code] : undefined;
   const status = payload && typeof payload === 'object' && !Array.isArray(payload)
     ? (payload as Json).httpStatusCode : undefined;
-  return safeFailureDiagnostic({ code: candidate, httpStatusCode: status });
+  const httpStatusCode = code && HTTP_FAILURE_CODES.has(code) ? safeHttpStatusCode(status) : undefined;
+  const reason = safeFailureReason(code, httpStatusCode, typeof error.message === 'string' ? error.message : '');
+  if (!code && !reason) return undefined;
+  return { code: code ?? (reason === 'account_concurrency_limit' ? 'rateLimitExceeded' : 'responseStreamDisconnected'),
+    ...(httpStatusCode !== undefined ? { httpStatusCode } : {}), ...(reason ? { reason } : {}) };
 };
 export type MathAgentActivity = {
   event: 'item_started' | 'item_completed' | 'reasoning' | 'message' | 'command_output' | 'lean_lock_waiting' | 'lean_lock_acquired';
@@ -79,6 +89,16 @@ export type MathAgentOptions = {
   onItem?: (phase: 'started' | 'completed', item: Json) => void;
   /** Directories this session's shells cannot read; see mathWorkerPermissionConfig. */
   hiddenRoots?: readonly string[];
+  /** Required OS read boundary for natural-language formalization roles. */
+  readIsolation?: { environment: LeanTaskEnvironment };
+  /** The first complete contract-valid file is an explicit submission. */
+  completedOutput?: {
+    file: string;
+    validate: (value: unknown) => void;
+    /** Feedback for complete JSON rejected by validate; incomplete files remain editable. */
+    validationFeedback?: (error: unknown, output: { text: string; turnId: string }) => string;
+  };
+  signal?: AbortSignal;
 };
 export type MathAgentSession = {
   threadId: string;
@@ -86,6 +106,7 @@ export type MathAgentSession = {
   readonly lastFailureDiagnostic?: MathAgentFailureDiagnostic;
   readonly lastInputTokens?: number;
   readonly usageSource?: 'upstream-requests';
+  readonly isolationReceipt?: Record<string, unknown>;
   run: (message: string, messageId: string, workspace: string, onStarted: (turnId: string) => void) => Promise<string>;
   notify?: (message: string) => Promise<void>;
   interrupt: () => Promise<void>;
@@ -114,9 +135,12 @@ class CodexRpc {
   onNotification: (method: string, params: Json) => void = () => {};
   onFailure: (error: Error) => void = () => {};
 
-  constructor(executable: string, profile: string, environment: NodeJS.ProcessEnv = process.env) {
-    this.child = spawn(executable, ['app-server', '--listen', 'stdio://'], {
-      env: { ...environment, CODEX_HOME: profile }, stdio: 'pipe', detached: process.platform !== 'win32',
+  constructor(executable: string, profile: string, environment: NodeJS.ProcessEnv = process.env,
+    launch?: { command: string; args: string[]; inheritedFds?: readonly number[] }) {
+    this.child = spawn(launch?.command ?? executable, launch?.args ?? ['app-server', '--listen', 'stdio://'], {
+      env: { ...environment, CODEX_HOME: profile },
+      stdio: launch?.inheritedFds?.length ? ['pipe', 'pipe', 'pipe', ...launch.inheritedFds] : 'pipe',
+      detached: process.platform !== 'win32',
     });
     // Do not forward provider diagnostics, which can contain credentials or task text.
     this.child.stderr.resume();
@@ -210,8 +234,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     ? provider.env_key : undefined;
   if (envKey && !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(envKey)) throw new Error('math_model_api_key_environment_invalid');
   const apiKey = envKey ? options.environment?.[envKey] ?? process.env[envKey] : undefined;
-  if (envKey && !apiKey?.trim()) throw new Error(`math_model_api_key_missing:${envKey}`);
-  const workerEnvironment = options.proofProjectRoot
+  if (!options.readIsolation && envKey && !apiKey?.trim()) throw new Error(`math_model_api_key_missing:${envKey}`);
+  const workerEnvironment = !options.readIsolation && options.proofProjectRoot
     ? mathProofEnvironmentWorkerEnvironment(options.proofProjectRoot, options.environment ?? process.env)
     : options.environment;
   const temporaryDirectory = options.proofProjectRoot ? prepareWorkerTemporaryDirectory(options.workspace) : undefined;
@@ -224,18 +248,23 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   const shellCredentialPolicy = !envKey ? {} : filters && typeof filters === 'object'
     ? { 'shell_environment_policy.filters': { ...filters, [envKey]: 'exclude' } }
     : { 'shell_environment_policy.exclude': [...new Set([...exclude, envKey])] };
-  // Credentials enter only the provider process, after preparing solver-visible environments.
-  let environment = envKey ? { ...(workerEnvironment ?? process.env), [envKey]: apiKey } : workerEnvironment;
-  if (temporaryDirectory) environment = { ...(environment ?? process.env), TMPDIR: temporaryDirectory };
-  let bridge: Awaited<ReturnType<typeof startChatCompletionsBridge>> | undefined;
-  let nativeProfile = options.profile;
   if (providerId === WESTLAKE_PROVIDER.id) {
     if (envKey !== WESTLAKE_PROVIDER.apiKeyEnvironment || provider.base_url !== WESTLAKE_PROVIDER.baseUrl)
       throw new Error('math_westlake_profile_invalid');
     validateWestlakeModel(options.model, options.effort);
   }
-  if (providerId === DEEPSEEK_PROVIDER.id || providerId === WESTLAKE_PROVIDER.id ||
-      providerId === SUB2API_PROVIDER.id) {
+  const isolated = options.readIsolation ? await prepareFormalizationSandbox({
+    workspace: options.workspace, executable: options.executable, profile: options.profile,
+    model: options.model, effort: options.effort, environment: options.readIsolation.environment,
+    env: options.environment, signal: options.signal,
+  }) : undefined;
+  // Credentials enter only the provider process, after preparing solver-visible environments.
+  let environment = isolated?.env ?? (envKey ? { ...(workerEnvironment ?? process.env), [envKey]: apiKey } : workerEnvironment);
+  if (!isolated && temporaryDirectory) environment = { ...(environment ?? process.env), TMPDIR: temporaryDirectory };
+  let bridge: Awaited<ReturnType<typeof startChatCompletionsBridge>> | undefined;
+  let nativeProfile = isolated?.profile ?? options.profile;
+  if (!isolated && (providerId === DEEPSEEK_PROVIDER.id || providerId === WESTLAKE_PROVIDER.id ||
+      providerId === SUB2API_PROVIDER.id)) {
     // Codex persists project trust in config.toml; keep those writes outside the frozen profile.
     nativeProfile = path.join(options.profile, 'runtime');
     fs.mkdirSync(nativeProfile, { recursive: true, mode: 0o700 });
@@ -253,18 +282,22 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       .filter(([name]) => !name.startsWith('WESTLAKEHPC_API_KEY')));
     environment[envKey] = bridge.apiKey;
   }
-  const providerSettings = providerId ? {
+  const providerSettings = isolated ? {
+    model_provider: isolated.providerId,
+    [`model_providers.${isolated.providerId}.base_url`]: isolated.providerBaseUrl,
+    model_catalog_json: '/profile/models.json',
+  } : providerId ? {
     model_provider: providerId,
     ...(provider && typeof provider.base_url === 'string'
       ? { [`model_providers.${providerId}.base_url`]: bridge?.baseUrl ?? provider.base_url } : {}),
     ...(typeof profileConfig.model_catalog_json === 'string' ? { model_catalog_json: profileConfig.model_catalog_json } : {}),
   } : {};
   let rpc: CodexRpc;
-  try { rpc = new CodexRpc(options.executable, nativeProfile, environment); }
-  catch (error) { await bridge?.close(); throw error; }
+  try { rpc = new CodexRpc(options.executable, nativeProfile, environment, isolated); }
+  catch (error) { await bridge?.close(); await isolated?.close(); throw error; }
   let closing: Promise<void> | undefined;
   const closeSession = () => closing ??= (async () => {
-    try { await rpc.close(); } finally { await bridge?.close(); }
+    try { await rpc.close(); } finally { try { await bridge?.close(); } finally { await isolated?.close(); } }
   })();
   let activeTurn: string | undefined;
   let completion: { resolve: (turn: Json) => void; reject: (error: Error) => void } | undefined;
@@ -276,6 +309,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let threadId = options.threadId;
   let lastStreamActivityAt = 0;
   const outputTails = new Map<string, string>();
+  const reportedInvalidOutputs = new Set<string>();
+  let validationFeedbackPending = false;
   const activity = (event: MathAgentActivity['event'], itemType?: string, streaming = false) => {
     if (!options.onActivity || !completion) return;
     const now = Date.now();
@@ -335,8 +370,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     const inherited = profileConfig.mcp_servers;
     const disabled = Object.fromEntries(Object.keys(inherited ?? {}).map(name => [name, { enabled: false }]));
     const settings = {
-      model: options.model, cwd: options.workspace,
-      approvalPolicy: 'never',
+      model: options.model, cwd: isolated?.workspace ?? options.workspace,
+      approvalPolicy: 'never', ...(isolated ? { sandbox: 'danger-full-access' } : {}),
       developerInstructions: options.instructions,
       config: {
         mcp_servers: disabled,
@@ -347,12 +382,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         allow_login_shell: false,
         'features.shell_snapshot': false,
         'shell_environment_policy.experimental_use_profile': false,
-        ...(bridge ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
+        ...(bridge || isolated ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'features.goals': false, 'features.view_image': false } : {}),
         model_reasoning_effort: options.effort,
-        ...mathWorkerPermissionConfig(options.workspace, options.hiddenRoots),
-        ...shellCredentialPolicy,
-        ...shellTemporaryPolicy,
+        // The formalization sandbox is the OS boundary for isolated roles; every other shell runs the worker profile.
+        ...(!isolated ? { ...mathWorkerPermissionConfig(options.workspace, options.hiddenRoots),
+          ...shellCredentialPolicy, ...shellTemporaryPolicy } : {}),
         ...providerSettings,
       },
     };
@@ -367,10 +402,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       throw new Error('math_codex_session_binding_mismatch');
     if (providerId && result.modelProvider !== providerId) throw new Error('math_codex_session_binding_mismatch');
     // A new thread fixes its sandbox now; one that ignored the profile would keep host network and sockets.
-    if (!options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
+    if (!isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
       throw new Error('math_codex_sandbox_profile_mismatch');
     return {
       threadId,
+      ...(isolated ? { isolationReceipt: isolated.receipt } : {}),
       ...(bridge && options.requestGate ? { usageSource: 'upstream-requests' as const } : {}),
       get lastError() { return lastError; },
       get lastFailureDiagnostic() { return lastFailureDiagnostic; },
@@ -386,26 +422,77 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         const done = new Promise<Json>((yes, no) => { resolve = yes; reject = no; });
         // Attach immediately so a transport failure during turn/start is handled.
         void done.catch(() => {});
-        completion = { resolve, reject };
+        let turnSettled = false;
+        completion = {
+          resolve: turn => { turnSettled = true; resolve(turn); },
+          reject: error => { turnSettled = true; reject(error); },
+        };
         lastStreamActivityAt = 0; outputTails.clear();
         let checkpoint = false;
-        let timer: NodeJS.Timeout | undefined;
+        let submitted = false;
+        let cancelTimer: (() => void) | undefined;
+        let outputWatcher: NodeJS.Timeout | undefined;
         let interruptDeadline: NodeJS.Timeout | undefined;
         try {
           const started = await rpc.request('turn/start', {
-            threadId, clientUserMessageId: messageId, cwd: workspace,
+            threadId, clientUserMessageId: messageId, cwd: isolated?.workspace ?? workspace,
             model: options.model, effort: options.effort, approvalPolicy: 'never',
+            ...(isolated ? { sandboxPolicy: { type: 'dangerFullAccess' } } : {}),
             input: [{ type: 'text', text: message, text_elements: [] }],
           });
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
           activeTurn = turnId;
           onStarted(activeTurn);
-          if (options.turnTimeoutMs) timer = setTimeout(() => {
-            checkpoint = true;
-            // Only check sources after turn/completed confirms the writer stopped.
+          const requestInterruption = () => {
+            // A cleanup deadline after submission/cancellation is independent of solving budgets.
             interruptDeadline = setTimeout(() => { void closeSession(); }, 10_000);
             void rpc.request('turn/interrupt', { threadId, turnId: activeTurn }).catch(() => { void closeSession(); });
+          };
+          if (options.completedOutput) {
+            // A file submission ends this role. Admit it only after turn/completed
+            // confirms that the writer stopped; the caller then rechecks its digest.
+            const checkOutput = () => {
+              if (submitted || checkpoint || !activeTurn || options.signal?.aborted) return;
+              let outputText: string, value: unknown;
+              try {
+                const file = options.completedOutput!.file;
+                outputText = readMathText(file, 2_000_000);
+                value = JSON.parse(outputText);
+              } catch { return; /* Missing, partial or unsafe files are not submissions. */ }
+              try {
+                options.completedOutput!.validate(value);
+              } catch (error) {
+                const feedback = options.completedOutput!.validationFeedback;
+                if (!feedback || turnSettled || earlyCompletions.has(turnId) || validationFeedbackPending) return;
+                const outputDigest = mathDigest(outputText);
+                if (reportedInvalidOutputs.has(outputDigest)) return;
+                reportedInvalidOutputs.add(outputDigest);
+                let message: string;
+                try { message = feedback(error, { text: outputText, turnId }); }
+                catch (cause) {
+                  completion?.reject(cause instanceof Error ? cause : new Error('math_codex_validation_feedback_failed'));
+                  return;
+                }
+                validationFeedbackPending = true;
+                // A turn may finish before the steer is handled. Its failure must not
+                // affect a later run or leave an unhandled rejection behind.
+                void rpc.request('turn/steer', { threadId, expectedTurnId: turnId,
+                  input: [{ type: 'text', text: message, text_elements: [] }] })
+                  .catch(() => {}).finally(() => { validationFeedbackPending = false; });
+                return;
+              }
+              submitted = true;
+              requestInterruption();
+            };
+            outputWatcher = setInterval(checkOutput, 100);
+            checkOutput();
+          }
+          if (options.turnTimeoutMs) cancelTimer = scheduleMathTimeout(() => {
+            if (submitted) return;
+            checkpoint = true;
+            // Only check sources after turn/completed confirms the writer stopped.
+            requestInterruption();
           }, options.turnTimeoutMs);
           const early = earlyCompletions.get(activeTurn);
           earlyCompletions.delete(activeTurn);
@@ -417,12 +504,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             lastFailureDiagnostic = failureDiagnostic(error);
             if (typeof error.message === 'string') lastError = error.message;
           }
-          return checkpoint && finished.status === 'interrupted' ? 'checkpoint' : finished.status;
+          return submitted && finished.status === 'interrupted' ? 'submitted' :
+            checkpoint && finished.status === 'interrupted' ? 'checkpoint' : finished.status;
         } catch (error) {
           lastError = error instanceof Error ? error.message : 'math_codex_turn_failed';
           throw error;
         } finally {
-          clearTimeout(timer); clearTimeout(interruptDeadline);
+          cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher);
           activeTurn = undefined; completion = undefined;
           earlyCompletions.clear();
           outputTails.clear();

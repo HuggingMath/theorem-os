@@ -25,7 +25,8 @@ export type ReportPanelProps =
   | { kind: 'error'; error: string }
   | { kind: 'json'; report: unknown }
   | { kind: 'summary'; summary: ReportSummary & { /** A reason code with no wording of its own, kept folded for a feedback report. */ diagnostic?: string }; stuck?: StuckSummary; accepted: boolean;
-    outline?: { state?: OutlineState; kitUrl: string; mathlib: boolean; /** The proof's declarations, so each name opens its line. */ headings: readonly LeanHeading[] } };
+    outline?: { state?: OutlineState; kitUrl: string; mathlib: boolean; /** The proof's declarations, so each name opens its line. */ headings: readonly LeanHeading[];
+      /** An accepted run's id, so each target links to its explanation page. */ explainRun?: string } };
 /** The result tab: the verdict, the proof, who did what, the acceptance report, then the task and its configuration. */
 type ResultFact = { label: string; value: string; mono: boolean };
 export type ResultPanelProps = {
@@ -404,7 +405,7 @@ function StuckItem(task: StuckTask) {
     <button type="button" class="report-detail-link" data-action="inspect-task" data-task-id={task.id}>{fill(t('{0}在协作中查看'), <Icon name="network" />)}</button></li>;
 }
 
-function Outline(props: { state?: OutlineState; kitUrl: string; mathlib: boolean; headings: readonly LeanHeading[] }) {
+function Outline(props: { state?: OutlineState; kitUrl: string; mathlib: boolean; headings: readonly LeanHeading[]; explainRun?: string }) {
   const { state } = props;
   if (!state || state.status === 'loading') return <div class="skeleton-block" aria-busy="true"><span class="skeleton-lines" aria-hidden="true">{[48, 72, 60].map(width => <i key={width} style={{ width: `${width}%` }} />)}</span>
     <p class="report-method">{t('正在整理证明结构…')}</p></div>;
@@ -414,7 +415,7 @@ function Outline(props: { state?: OutlineState; kitUrl: string; mathlib: boolean
   return <>
     <p class="report-method">{helpers.length ? t('{0} 个原题目标，求解过程新增了 {1} 个辅助声明。', targets.length, helpers.length) : t('{0} 个原题目标，没有新增辅助声明。', targets.length)}
       {outline.references === 'unrecorded' && helpers.length > 0 && ` ${t('这次运行没有记录引用关系，未标出各目标用到哪些辅助声明。')}`}</p>
-    <h4 class="outline-heading">{t('原题目标')}</h4><ul class="verification-targets">{targets.map(item => <Declaration key={item.name} item={item} line={headingLine(props.headings, item.name)} />)}</ul>
+    <h4 class="outline-heading">{t('原题目标')}</h4><ul class="verification-targets">{targets.map(item => <Declaration key={item.name} item={item} line={headingLine(props.headings, item.name)} explainRun={props.explainRun} />)}</ul>
     {helpers.length > 0 && <><h4 class="outline-heading">{t('新增辅助声明')}</h4><ul class="verification-targets">{helpers.map(item => <Declaration key={item.name} item={item} line={headingLine(props.headings, item.name)} />)}</ul></>}
     {outline.omitted > 0 && <p class="report-method">{t('另有 {0} 个声明未列出', outline.omitted)}</p>}
     <div class="local-check"><a class="button" href={props.kitUrl} download>{fill(t('{0}下载本地复核包'), <Icon name="download" />)}</a>
@@ -426,7 +427,7 @@ function Names(props: { names: string[] }) {
   return <>{props.names.map((name, index) => <Fragment key={index}>{index > 0 && t('、')}<LeanName name={name} /></Fragment>)}</>;
 }
 /** A declaration of the proof; where its line is known, its name opens the source tab there (the line number is in the tooltip). */
-function Declaration({ item, line }: { item: WebProofOutlineDeclaration; line?: number }) {
+function Declaration({ item, line, explainRun }: { item: WebProofOutlineDeclaration; line?: number; explainRun?: string }) {
   const nonstandard = item.nonstandardAxioms ?? [];
   const kind = item.kind === 'definition' ? t('定义') : item.kind === 'instance' ? t('实例') : t('引理');
   const name = <LeanName name={item.name} />;
@@ -438,6 +439,9 @@ function Declaration({ item, line }: { item: WebProofOutlineDeclaration; line?: 
       {item.uses && <p class="outline-uses">{item.uses.length ? fill(t('用到：{0}'), <Names names={item.uses} />) : t('直接证明，没有用到新增的辅助声明')}</p>}
       {item.axioms && <p class="outline-uses">{item.axioms.length ? fill(t('依赖公理：{0}'), <Names names={item.axioms} />) : t('不依赖任何公理')}
         {nonstandard.length > 0 && <> <span class="outline-warning">{fill(t('{0} 不在 Lean 的三个标准公理之内，请逐一核对'), <Names names={nonstandard} />)}</span></>}</p>}
+      {/* A separate page, so the run stays open here while an explanation is read or generated. */}
+      {explainRun && <a class="report-detail-link" href={`explain.html?${new URLSearchParams({ run: explainRun, target: item.name })}`} target="_blank" rel="noopener">
+        {fill(t('{0}证明讲解：Lean 与自然语言对照'), <Icon name="book-open" />)}</a>}
     </> : item.usedBy && <p class="outline-uses">{item.usedBy.length ? fill(t('被 {0} 用到'), <Names names={item.usedBy} />) : t('没有被任何目标用到')}</p>}</li>;
 }
 function LocalCheckGuide(props: { mathlib: boolean }) {

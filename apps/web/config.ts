@@ -109,6 +109,13 @@ export { webLimits };
 // The first provider is the host's deployed sub2api gateway, reached from isolated Docker workers.
 export const webDefaults = Object.freeze({ model: 'deepseek-flash', effort: 'max' as const,
   environment: 'mathlib' as const, maxTurns: 5, maxRunSeconds: 300, workers: 1, coordination: 'cooperative' as const });
+/**
+ * Proof explanations (docs/informalization.md) run one at a time on the sub2api gateway. The reference is the measured
+ * Mathlib smoke run of 2026-10-29: 14 declarations, about 4.5 hours and 10.75 million provider tokens.
+ */
+export const webExplanationLimits = Object.freeze({ maxRunSeconds: 8 * 60 * 60, maxTotalTokens: 40_000_000,
+  maxRoundsPerBatch: 6, auditors: 2, concurrency: 1, queueLimit: 4, perOwner: 2,
+  reference: Object.freeze({ declarations: 14, seconds: 16_200, tokens: 10_750_000 }) });
 
 export function getWebEnvironments(): WebEnvironmentOption[] {
   return (['standard', 'mathlib'] as WebEnvironment[]).map(id => {

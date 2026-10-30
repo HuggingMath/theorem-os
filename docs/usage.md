@@ -389,6 +389,9 @@ bun run math bootstrap-lean-eval --help
 | `component` | 生成 M3 排序组件模板，检查基本任务约束 |
 | `bootstrap-imo` | 从固定公开提交准备 IMO2026 题目 |
 | `bootstrap-lean-eval` | 准备 Lean-Eval 题目与评测绑定；`--library-pack PACK` 安装冻结库模块 |
+| `first-proof` | 固定第三批 10 题，审核形式化后离线准备，汇总原始目标 S3 证据；见 [First Proof 接入](../examples/first-proof/README.md) |
+| `formalize` | 自然语言/TeX → Lean 题面，编译修订、独立回译审核、冻结求解任务；见 [形式化流程](formalization.md) |
+| `informalize` | 已编译的 Lean 证明 → 逐步对应 Lean 声明的自然语言证明，宿主校验引用与原文摘录，独立审核查漏步与编造；见 [证明讲解](informalization.md) |
 | `library-pack` | 从保存运行抽取已检查的 owned 模块，或从本地上游仓库原样回移文件，生成库包（[规则](solver-modules.md)） |
 | `run` | 启动、预检或恢复运行 |
 | `inspect` | 查看存档研究报告，导出 JSON 或带版本的可编辑计划 |

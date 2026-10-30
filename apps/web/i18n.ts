@@ -26,7 +26,7 @@ export const localeTag = locale === 'en' ? 'en-US' : 'zh-CN';
 /** English counts in the dictionary are written plural; a count of exactly 1 takes the singular noun. */
 const singulars: Record<string, string> = { agents: 'agent', lines: 'line', theorems: 'theorem', tasks: 'task', tokens: 'token',
   findings: 'finding', strategies: 'strategy', runs: 'run', records: 'record', minutes: 'minute', entries: 'entry', bytes: 'byte',
-  times: 'time', matches: 'match', characters: 'character', goals: 'goal' };
+  times: 'time', matches: 'match', characters: 'character', goals: 'goal', declarations: 'declaration', auditors: 'auditor' };
 const countedPlural = new RegExp(`(^|[^\\d.,])1 ((?:more |research )?)(${Object.keys(singulars).join('|')})\\b`, 'gu');
 const singular = (text: string) => text.replace(countedPlural, (_match, before: string, middle: string, noun: string) => `${before}1 ${middle}${singulars[noun]}`);
 

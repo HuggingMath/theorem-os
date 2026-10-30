@@ -1,0 +1,289 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { stringify as stringifyToml } from 'smol-toml';
+import { assertMathCanonicalPath } from '../math/paths';
+import { canonicalMathJson, mathDigest, readMathFile } from '../math/mathRuntimeIo';
+import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../math/leanTaskEnvironment';
+import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_ENV, prepareMathProofEnvironment,
+  resolveMathProofEnvironment } from '../math/mathProofEnvironment';
+import { resolveMathematicsLakePackagesCache } from '../math/verifier';
+import { startFormalizationRelay } from './formalizationRelay';
+import { SUB2API_PROVIDER, sub2apiModelCatalog, validateSub2apiModel } from './sub2api';
+
+const CAPABILITY_ENV = 'FORMALIZATION_RELAY_CAPABILITY';
+const BASE_URL = 'http://127.0.0.1:18888/v1';
+const SOCKET = '/run/model.sock';
+const HELPER = '/opt/formalization/launch.py';
+const COMMAND = '/opt/codex/bin/codex';
+const SPAWN_ENV = Object.freeze({ PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' });
+const PROTOCOL_FILES = [
+  { name: 'INPUT.json', maxBytes: 8_000_000 },
+  { name: 'ROLE.md', maxBytes: 256_000 },
+  { name: 'OUTPUT.schema.json', maxBytes: 1_000_000 },
+] as const;
+
+// This helper owns the private loopback transport and forwards only the model route over
+// the one socket mounted into this role. It never receives a real provider credential.
+const LAUNCHER = String.raw`import os, select, signal, socket, socketserver, subprocess, sys, threading
+class Relay(socketserver.BaseRequestHandler):
+    def handle(self):
+        upstream = None
+        try:
+            self.request.settimeout(10)
+            data = b''
+            while b'\r\n\r\n' not in data:
+                chunk = self.request.recv(4096)
+                if not chunk or len(data) + len(chunk) > 65536: return
+                data += chunk
+            head, body = data.split(b'\r\n\r\n', 1)
+            lines = head.split(b'\r\n')
+            if lines[0] != b'POST /v1/responses HTTP/1.1':
+                self.request.sendall(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                return
+            headers = [line for line in lines[1:] if line.split(b':', 1)[0].lower() not in (b'host', b'connection', b'proxy-connection')]
+            upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            upstream.connect('/run/model.sock')
+            upstream.sendall(b'\r\n'.join([lines[0], *headers, b'Host: formalization-relay.local', b'Connection: close']) + b'\r\n\r\n' + body)
+            self.request.settimeout(None)
+            readers = [self.request, upstream]
+            while upstream in readers:
+                ready, _, _ = select.select(readers, [], [])
+                for source in ready:
+                    chunk = source.recv(65536)
+                    destination = upstream if source is self.request else self.request
+                    if not chunk:
+                        readers.remove(source)
+                        if source is self.request:
+                            try: upstream.shutdown(socket.SHUT_WR)
+                            except OSError: pass
+                        continue
+                    destination.sendall(chunk)
+        except (OSError, ValueError): pass
+        finally:
+            if upstream is not None: upstream.close()
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    def handle_error(self, request, address): pass
+server = Server(('127.0.0.1', 18888), Relay)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+child = subprocess.Popen(sys.argv[1:], close_fds=True)
+def interrupt(signum, frame):
+    try: child.send_signal(signum)
+    except ProcessLookupError: pass
+signal.signal(signal.SIGTERM, interrupt)
+signal.signal(signal.SIGINT, interrupt)
+try: status = child.wait()
+finally:
+    server.shutdown()
+    server.server_close()
+sys.exit(status if status >= 0 else 128 - status)
+`;
+
+export type FormalizationSandboxReceipt = Readonly<{
+  schema: 'theorem-os.formalization-sandbox.v2'; backend: 'bwrap';
+  workspace: '/workspace'; profile: '/profile'; providerId: 'sub2api';
+  namespaces: readonly ['user', 'mount', 'pid', 'ipc', 'uts', 'net'];
+  network: 'role-model-relay-only'; credentials: 'host-only'; input: 'read-only';
+  toolchain: string; environmentDigest: string; executableSha256: string; profileDigest: string; inputSha256: string;
+  roleInstructionsSha256: string; outputSchemaSha256: string;
+  packages: Readonly<{ kind: 'none' | 'sealed'; root?: '/opt/lean-packages'; identity?: string }>;
+  auditDirectory: string; canary: 'passed';
+}>;
+export type FormalizationSandbox = Readonly<{
+  command: string; args: string[]; env: NodeJS.ProcessEnv; inheritedFds?: readonly number[];
+  workspace: '/workspace'; profile: '/profile'; providerId: 'sub2api'; providerBaseUrl: string;
+  receipt: FormalizationSandboxReceipt; close: () => Promise<void>;
+}>;
+type Input = Readonly<{
+  workspace: string; executable: string; profile: string; model: string; effort: string;
+  environment: LeanTaskEnvironment; env?: NodeJS.ProcessEnv; signal?: AbortSignal;
+}>;
+
+function nativeFile(file: string): string {
+  const canonical = fs.realpathSync(file), stat = fs.statSync(canonical);
+  const fd = fs.openSync(canonical, 'r'), magic = Buffer.alloc(4);
+  try { fs.readSync(fd, magic, 0, 4, 0); } finally { fs.closeSync(fd); }
+  if (!stat.isFile() || !(stat.mode & 0o111) || !magic.equals(Buffer.from([127, 69, 76, 70])))
+    throw new Error('formalization_sandbox_native_executable_required');
+  return canonical;
+}
+
+function codexExecutable(executable: string, env: NodeJS.ProcessEnv): { file: string; vendor?: string } {
+  const file = path.isAbsolute(executable) ? executable : (env.PATH ?? process.env.PATH ?? '').split(path.delimiter)
+    .filter(directory => path.isAbsolute(directory)).map(directory => path.join(directory, executable))
+    .find(candidate => fs.existsSync(candidate));
+  if (!file) throw new Error('formalization_sandbox_codex_unavailable');
+  const canonical = fs.realpathSync(file);
+  let native: string;
+  if (canonical.endsWith('.js')) {
+    const root = path.dirname(path.dirname(canonical));
+    if (JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name !== '@openai/codex')
+      throw new Error('formalization_sandbox_codex_launcher_unsupported');
+    const platform = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : '';
+    if (!platform) throw new Error('formalization_sandbox_architecture_unsupported');
+    const triple = platform === 'x64' ? 'x86_64-unknown-linux-musl' : 'aarch64-unknown-linux-musl';
+    const roots = [path.join(root, 'vendor', triple),
+      path.join(root, 'node_modules', '@openai', 'codex-linux-' + platform, 'vendor', triple),
+      path.join(path.dirname(root), 'codex-linux-' + platform, 'vendor', triple)];
+    const found = roots.flatMap(vendor => [path.join(vendor, 'bin', 'codex'), path.join(vendor, 'codex', 'codex')])
+      .find(candidate => fs.existsSync(candidate));
+    if (!found) throw new Error('formalization_sandbox_codex_native_unavailable');
+    native = nativeFile(found);
+  } else native = nativeFile(canonical);
+  const vendor = path.dirname(path.dirname(native));
+  return { file: native, ...(fs.existsSync(path.join(vendor, 'codex-package.json')) ? { vendor: fs.realpathSync(vendor) } : {}) };
+}
+
+function leanToolchain(toolchain: string, env: NodeJS.ProcessEnv): string {
+  const name = toolchain.replace(/[/:]/gu, value => value === '/' ? '--' : '---');
+  const roots = [env.ELAN_HOME, ...(env.DEEPSCIENTIST_MATH_TRUSTED_ELAN_ROOTS ?? '').split(path.delimiter), path.join(os.homedir(), '.elan')]
+    .filter((value): value is string => Boolean(value));
+  for (const root of roots) {
+    for (const candidate of [path.join(root, 'toolchains', name), root]) {
+      try {
+        const canonical = fs.realpathSync(candidate);
+        nativeFile(path.join(canonical, 'bin', 'lean')); nativeFile(path.join(canonical, 'bin', 'lake'));
+        if (fs.statSync(path.join(canonical, 'lib', 'lean')).isDirectory()) return canonical;
+      } catch { /* Only an installed native pinned toolchain may enter the sandbox. */ }
+    }
+  }
+  throw new Error('formalization_sandbox_lean_toolchain_unavailable');
+}
+
+/** Full-process isolation. No host profile, campaign directory or credential enters the mount namespace. */
+export async function prepareFormalizationSandbox(input: Input): Promise<FormalizationSandbox> {
+  if (process.platform !== 'linux') throw new Error('formalization_sandbox_requires_linux');
+  input.signal?.throwIfAborted(); validateSub2apiModel(input.model, input.effort);
+  const workspace = path.resolve(input.workspace); assertMathCanonicalPath(workspace);
+  if (!fs.statSync(workspace).isDirectory()) throw new Error('formalization_sandbox_input_unavailable');
+  // Read each host-owned contract once before any asynchronous preparation. Reject links,
+  // oversized files and identity changes, then mount independent role-only snapshots.
+  const protocol = PROTOCOL_FILES.map(({ name, maxBytes }) => {
+    const file = path.join(workspace, name); assertMathCanonicalPath(file);
+    return { name, bytes: readMathFile(file, maxBytes).bytes };
+  });
+  const environment = input.env ?? process.env, config = getLeanTaskEnvironment(input.environment);
+  const executable = codexExecutable(input.executable, environment), toolchain = leanToolchain(config.toolchain, environment);
+  const command = nativeFile('/usr/bin/bwrap');
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theorem-os-formalization-role-')));
+  fs.chmodSync(temporary, 0o700);
+  let relay: Awaited<ReturnType<typeof startFormalizationRelay>> | undefined;
+  let prepared: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
+  let lease: Awaited<ReturnType<typeof acquireMathProofEnvironmentLease>>;
+  let packagesFd: number | undefined, closing: Promise<void> | undefined;
+  let audit = false;
+  const close = () => closing ??= (async () => {
+    input.signal?.removeEventListener('abort', aborted);
+    try { await relay?.close(); }
+    finally {
+      if (packagesFd !== undefined) { fs.closeSync(packagesFd); packagesFd = undefined; }
+      try { await lease?.release(); } finally { await prepared?.dispose(); }
+      if (!audit) fs.rmSync(temporary, { recursive: true, force: true });
+      else for (const entry of fs.readdirSync(temporary)) if (entry !== 'profile' && entry !== 'receipt.json')
+        fs.rmSync(path.join(temporary, entry), { recursive: true, force: true });
+    }
+  })();
+  const aborted = () => { void close().catch(() => {}); };
+  try {
+    const profile = path.join(temporary, 'profile'), probe = path.join(temporary, 'probe');
+    fs.mkdirSync(profile, { mode: 0o700 }); fs.mkdirSync(probe, { mode: 0o700 });
+    for (const [name, text] of Object.entries(config.files)) {
+      fs.mkdirSync(path.dirname(path.join(probe, name)), { recursive: true }); fs.writeFileSync(path.join(probe, name), text);
+    }
+    let packages: FormalizationSandboxReceipt['packages'] = { kind: 'none' }, packageNames: string[] = [];
+    if (config.mathlibRevision) {
+      let packageEnvironment = environment;
+      if (!resolveMathProofEnvironment(probe, environment)) {
+        const root = resolveMathematicsLakePackagesCache(probe, environment);
+        if (!root) throw new Error('formalization_sandbox_pinned_mathlib_unavailable');
+        prepared = await prepareMathProofEnvironment(probe, root, { env: environment, signal: input.signal,
+          cacheRoot: path.join(os.homedir(), '.cache', 'theorem-os', 'formalization-packages') });
+        packageEnvironment = { ...environment, [MATH_PROOF_ENVIRONMENT_ENV]: prepared.environmentValue };
+      }
+      const sealed = resolveMathProofEnvironment(probe, packageEnvironment)!;
+      lease = await acquireMathProofEnvironmentLease(probe, packageEnvironment, input.signal);
+      if (!lease) throw new Error('formalization_sandbox_sealed_mathlib_unavailable');
+      packagesFd = fs.openSync(lease.packagesRoot, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
+      const opened = fs.fstatSync(packagesFd, { bigint: true }), expected = fs.statSync(lease.packagesRoot, { bigint: true });
+      sealed.verify();
+      if (!opened.isDirectory() || opened.dev !== expected.dev || opened.ino !== expected.ino)
+        throw new Error('formalization_sandbox_mathlib_identity_changed');
+      packageNames = JSON.parse(config.files['lake-manifest.json']).packages.map((item: { name: string }) => item.name);
+      if (packageNames.some(name => !/^[A-Za-z0-9_-]+$/u.test(name))) throw new Error('formalization_sandbox_package_name_invalid');
+      packages = { kind: 'sealed', root: '/opt/lean-packages', identity: sealed.identity };
+    }
+    input.signal?.throwIfAborted();
+    relay = await startFormalizationRelay({ socketPath: path.join(temporary, 'model.sock'), profile: input.profile,
+      model: input.model, effort: input.effort, env: environment, signal: input.signal });
+    const profileConfig = stringifyToml({ model: input.model, model_provider: SUB2API_PROVIDER.id,
+      model_reasoning_effort: input.effort, model_catalog_json: '/profile/models.json', web_search: 'disabled',
+      approval_policy: 'never', sandbox_mode: 'danger-full-access',
+      model_providers: { sub2api: { name: 'Isolated role model relay', base_url: BASE_URL, wire_api: 'responses',
+        env_key: CAPABILITY_ENV, requires_openai_auth: false, request_max_retries: 0, stream_max_retries: 0 } },
+      features: { apps: false, plugins: false, multi_agent: false, multi_agent_v2: false, goals: false,
+        shell_snapshot: false, view_image: false },
+      shell_environment_policy: { inherit: 'all', exclude: [CAPABILITY_ENV] },
+      history: { persistence: 'none' }, analytics: { enabled: false }, allow_login_shell: false });
+    const catalog = canonicalMathJson(sub2apiModelCatalog());
+    fs.writeFileSync(path.join(profile, 'config.toml'), profileConfig, { flag: 'wx', mode: 0o400 });
+    fs.writeFileSync(path.join(profile, 'models.json'), catalog, { flag: 'wx', mode: 0o400 });
+    for (const { name, bytes } of protocol)
+      fs.writeFileSync(path.join(temporary, name), bytes, { flag: 'wx', mode: 0o400 });
+    fs.writeFileSync(path.join(temporary, 'launch.py'), LAUNCHER, { flag: 'wx', mode: 0o400 });
+    const args = ['--unshare-user', '--uid', '0', '--gid', '0', '--unshare-pid', '--unshare-net', '--unshare-ipc', '--unshare-uts',
+      '--die-with-parent', '--new-session', '--clearenv', '--cap-drop', 'ALL', '--ro-bind', '/usr', '/usr',
+      '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/sbin', '/sbin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
+      '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/home/role', '--dir', '/run', '--dir', '/opt/formalization',
+      '--bind', workspace, '/workspace',
+      ...protocol.flatMap(({ name }) => ['--ro-bind', path.join(temporary, name), '/workspace/' + name]),
+      '--bind', profile, '/profile', '--ro-bind', path.join(profile, 'config.toml'), '/profile/config.toml',
+      '--ro-bind', path.join(profile, 'models.json'), '/profile/models.json',
+      '--ro-bind', relay.socketPath, SOCKET, '--ro-bind', path.join(temporary, 'launch.py'), HELPER,
+      '--ro-bind', toolchain, '/opt/lean'];
+    if (executable.vendor) args.push('--ro-bind', executable.vendor, '/opt/codex');
+    // Also support a directly supplied native executable without exposing its host parent.
+    args.push('--ro-bind', executable.file, COMMAND);
+    if (packagesFd !== undefined) args.push('--ro-bind-fd', '3', '/opt/lean-packages');
+    const variables = { PATH: '/opt/codex/codex-path:/opt/codex/path:/opt/lean/bin:/usr/bin:/bin', HOME: '/home/role',
+      CODEX_HOME: '/profile', TMPDIR: '/tmp', LANG: 'C.UTF-8', LAKE_HOME: '/tmp/lake', ELAN_HOME: '/tmp/elan',
+      LEAN_NUM_THREADS: '1', LEAN_PATH: ['/opt/lean/lib/lean', ...packageNames.map(name =>
+        `/opt/lean-packages/${name}/${config.packageLibraryDirectory ?? '.lake/build/lib/lean'}`)].join(':'),
+      ...(packageNames.includes('mathlib') ? { MATHLIB_ROOT: '/opt/lean-packages/mathlib' } : {}), [CAPABILITY_ENV]: relay.apiKey };
+    args.push('--chdir', '/workspace', ...Object.entries(variables).flatMap(([name, value]) => ['--setenv', name, value]));
+    const expectedVersion = config.toolchain.replace(/^leanprover\/lean4:v/u, '');
+    const canary = spawnSync(command, [...args, '--', '/usr/bin/python3', '-I', '-c', String.raw`import hashlib, os, subprocess
+assert os.readlink('/proc/self/ns/net') != ${JSON.stringify(fs.readlinkSync('/proc/self/ns/net'))}
+assert os.readlink('/proc/self/ns/pid') != ${JSON.stringify(fs.readlinkSync('/proc/self/ns/pid'))}
+assert not os.path.exists(${JSON.stringify(workspace)})
+for name, digest in ${JSON.stringify(protocol.map(({ name, bytes }) => [name, mathDigest(bytes)]))}:
+    file = '/workspace/' + name
+    assert hashlib.sha256(open(file, 'rb').read()).hexdigest() == digest
+    try:
+        open(file, 'ab').close()
+        raise AssertionError('writable protocol file: ' + name)
+    except OSError: pass
+result = subprocess.run(['/opt/lean/bin/lean', '--version'], capture_output=True, text=True, check=True)
+assert 'Lean (version ${expectedVersion},' in result.stdout
+`], { env: SPAWN_ENV, encoding: 'utf8', timeout: 15_000, maxBuffer: 4096,
+      ...(packagesFd === undefined ? {} : { stdio: ['pipe', 'pipe', 'pipe', packagesFd] }) });
+    if (canary.status !== 0 || canary.error) throw new Error('formalization_sandbox_canary_failed');
+    input.signal?.throwIfAborted();
+    const receipt: FormalizationSandboxReceipt = { schema: 'theorem-os.formalization-sandbox.v2', backend: 'bwrap',
+      workspace: '/workspace', profile: '/profile', providerId: 'sub2api', namespaces: ['user', 'mount', 'pid', 'ipc', 'uts', 'net'],
+      network: 'role-model-relay-only', credentials: 'host-only', input: 'read-only', toolchain: config.toolchain,
+      environmentDigest: config.dependencyDigest, executableSha256: mathDigest(fs.readFileSync(executable.file)),
+      profileDigest: mathDigest(canonicalMathJson({ config: profileConfig, catalog })),
+      inputSha256: mathDigest(protocol[0].bytes), roleInstructionsSha256: mathDigest(protocol[1].bytes),
+      outputSchemaSha256: mathDigest(protocol[2].bytes),
+      packages, auditDirectory: profile, canary: 'passed' };
+    fs.writeFileSync(path.join(temporary, 'receipt.json'), canonicalMathJson(receipt), { mode: 0o400, flag: 'wx' });
+    audit = true;
+    input.signal?.addEventListener('abort', aborted, { once: true });
+    return { command, args: [...args, '--', '/usr/bin/python3', '-I', HELPER, COMMAND, 'app-server', '--listen', 'stdio://'],
+      env: { ...SPAWN_ENV }, ...(packagesFd === undefined ? {} : { inheritedFds: [packagesFd] }),
+      workspace: '/workspace', profile: '/profile', providerId: 'sub2api', providerBaseUrl: BASE_URL, receipt, close };
+  } catch (cause) { await close(); throw cause; }
+}

@@ -30,6 +30,7 @@
     "test:web-share": "bun scripts/test-web-share.ts",
     "test:web-trajectory": "bun scripts/test-web-trajectory.ts",
     "test:web-agent-route": "bun scripts/test-web-agent-route.ts",
+    "test:web-explain": "bun scripts/test-web-explain.ts",
     "test:web-onboarding": "bun scripts/test-web-onboarding.ts",
     "test:web-i18n": "bun scripts/test-web-i18n.ts",
     "test:web-collaboration": "bun scripts/test-web-collaboration.ts",
@@ -79,6 +80,7 @@
     "test:web-admin": "bun scripts/test-web-admin.ts",
     "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",
     "test": "vitest run",
+    "test:formalization": "bun scripts/test-formalization.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

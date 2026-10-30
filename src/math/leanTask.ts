@@ -18,7 +18,7 @@ const hash = z.string().regex(/^[0-9a-f]{64}$/u);
 const inputSchema = z.object({
   source: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
   task: z.string().trim().min(1).max(LEAN_TASK_DESCRIPTION_MAX_LENGTH),
-  environment: z.enum(['standard', 'mathlib']).optional(),
+  environment: z.enum(['standard', 'mathlib', 'mathlib-4.8']).optional(),
 }).strict();
 const declarationSchema = z.object({
   name: z.string().min(1), kind: z.enum(['theorem', 'definition', 'instance']), declarationHash: hash,

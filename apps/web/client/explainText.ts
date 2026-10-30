@@ -1,0 +1,467 @@
+import type { WebExplanationDocument, WebExplanationLines, WebExplanationSection } from '../shared';
+import { leanTokens, type LeanToken } from './sourceText';
+
+/**
+ * Pure helpers for the explanation page (explain.html): the proof split into highlighted lines, the mapping between
+ * Lean lines and explanation steps, and a small TeX reader for the `$…$` mathematics the writer is asked to use.
+ * Nothing here touches the DOM, so model text can only ever reach the page as text nodes.
+ */
+export type LeanSegment = { text: string; kind?: LeanToken['kind'] };
+
+/** One entry per line of the proof file (line 1 first), each split at the highlighting tokens that cross it. */
+export function leanLines(source: string): LeanSegment[][] {
+  const text = source.replaceAll('\r\n', '\n'), lines: LeanSegment[][] = [[]];
+  const push = (from: number, to: number, kind?: LeanToken['kind']) => {
+    let start = from;
+    while (start < to) {
+      const newline = text.indexOf('\n', start), end = newline < 0 || newline >= to ? to : newline;
+      if (end > start) lines.at(-1)!.push(kind ? { text: text.slice(start, end), kind } : { text: text.slice(start, end) });
+      if (end < to) lines.push([]);
+      start = end + 1;
+    }
+  };
+  let offset = 0;
+  for (const token of leanTokens(text)) {
+    push(offset, token.start);
+    push(token.start, token.end, token.kind);
+    offset = token.end;
+  }
+  push(offset, text.length);
+  // A final newline ends the last line rather than starting an empty one.
+  if (lines.length > 1 && !lines.at(-1)!.length && text.endsWith('\n')) lines.pop();
+  return lines;
+}
+
+/** A declaration (`step` absent), its statement (the signature's lines), or one of its steps. */
+export type StepRef = { section: number; step?: number; statement?: true };
+const span = (lines: readonly WebExplanationLines[]) => lines.reduce((sum, item) => sum + item.end - item.start + 1, 0);
+const within = (lines: readonly WebExplanationLines[], line: number) => lines.some(item => line >= item.start && line <= item.end);
+const sectionAt = (document: WebExplanationDocument, line: number) =>
+  document.sections.findIndex(section => line >= section.lines.start && line <= section.lines.end);
+function tightestStep(section: WebExplanationSection, line: number): number | undefined {
+  let best: { index: number; size: number } | undefined;
+  section.steps.forEach((step, index) => {
+    if (!within(step.lines, line)) return;
+    const size = span(step.lines);
+    if (!best || size < best.size) best = { index, size };
+  });
+  return best?.index;
+}
+
+/**
+ * What a Lean line belongs to: the step whose quoted lines contain it most tightly; else, for a proof line no step
+ * quotes, the declaration; else, on the signature, the statement; else the declaration.
+ */
+export function stepAtLine(document: WebExplanationDocument, line: number): StepRef | undefined {
+  const index = sectionAt(document, line);
+  if (index < 0) return undefined;
+  const section = document.sections[index]!, step = tightestStep(section, line);
+  if (step !== undefined) return { section: index, step };
+  if (!section.unexplained.includes(line) && within([section.signature], line)) return { section: index, statement: true };
+  return { section: index };
+}
+
+/** The Lean lines a reference points at: a step's quoted lines (the declaration when it quotes none), or the signature. */
+export function refLines(document: WebExplanationDocument, ref: StepRef): WebExplanationLines[] {
+  const section = document.sections[ref.section];
+  if (!section) return [];
+  if (ref.statement) return [section.signature];
+  const lines = ref.step === undefined ? [] : section.steps[ref.step]?.lines ?? [];
+  return lines.length ? lines : [section.lines];
+}
+
+/**
+ * The line range a prose anchor stands for while the panes scroll together: a step its first quoted line to its last,
+ * a section's heading and statement its signature, up to the first line a step quotes.
+ */
+export function anchorSpan(document: WebExplanationDocument, ref: StepRef): WebExplanationLines {
+  const section = document.sections[ref.section]!;
+  if (ref.step !== undefined) {
+    const lines = section.steps[ref.step]?.lines ?? [];
+    return lines.length ? { start: lines[0]!.start, end: lines.at(-1)!.end } : section.lines;
+  }
+  const first = section.steps.flatMap(step => step.lines).reduce((min, item) => Math.min(min, item.start), Number.POSITIVE_INFINITY);
+  const { start, end } = section.signature;
+  return { start, end: Math.max(start, Math.min(end, first - 1)) };
+}
+
+/** Where the prose follows Lean line `exact` (fractional) while the panes scroll together: an anchor and how far through it. */
+export function proseAt(document: WebExplanationDocument, exact: number): { ref: StepRef; fraction: number } | undefined {
+  const line = Math.floor(exact), index = sectionAt(document, line);
+  if (index < 0) {
+    const next = document.sections.findIndex(section => section.lines.start > line);
+    if (next >= 0) return { ref: { section: next }, fraction: 0 };
+    return document.sections.length ? { ref: { section: document.sections.length - 1 }, fraction: 1 } : undefined;
+  }
+  const section = document.sections[index]!, step = tightestStep(section, line);
+  const through = (lines: WebExplanationLines) => Math.min(1, Math.max(0, (exact - lines.start) / (lines.end - lines.start + 1)));
+  if (step !== undefined) return { ref: { section: index, step }, fraction: through(anchorSpan(document, { section: index, step })) };
+  // A body line no step quotes keeps in view, read to its end, the step that quoted a line most recently before it.
+  let before: { step: number; end: number } | undefined;
+  section.steps.forEach((item, stepIndex) => {
+    const end = item.lines.reduce((max, range) => range.end < line ? Math.max(max, range.end) : max, 0);
+    if (end && (!before || end >= before.end)) before = { step: stepIndex, end };
+  });
+  if (before && !within([section.signature], line)) return { ref: { section: index, step: before.step }, fraction: 1 };
+  return { ref: { section: index }, fraction: through(anchorSpan(document, { section: index })) };
+}
+
+/** A Lean line's margin mark: its step (numbered on the first line of a run), the statement, or a proof line no step quotes. */
+export type GutterMark = { kind: 'step'; step: number; first: boolean } | { kind: 'statement' | 'unexplained'; first: boolean };
+export function leanGutter(document: WebExplanationDocument): Map<number, GutterMark> {
+  const marks = new Map<number, GutterMark>();
+  for (const section of document.sections) {
+    const unexplained = new Set(section.unexplained);
+    let previous = '';
+    for (let line = section.lines.start; line <= section.lines.end; line++) {
+      const step = tightestStep(section, line);
+      const kind = step !== undefined ? 'step' : unexplained.has(line) ? 'unexplained' : within([section.signature], line) ? 'statement' : undefined;
+      const key = kind === 'step' ? `step ${step}` : kind ?? '';
+      if (kind === 'step') marks.set(line, { kind, step: step!, first: key !== previous });
+      else if (kind) marks.set(line, { kind, first: key !== previous });
+      previous = key;
+    }
+  }
+  return marks;
+}
+
+/** Time and tokens scaled linearly by declarations from one measured run, capped by the limits. */
+export function explanationEstimate(declarations: number, reference: { declarations: number; seconds: number; tokens: number },
+  limits: { maxRunSeconds: number; maxTotalTokens: number }) {
+  const scale = Math.max(1, declarations) / Math.max(1, reference.declarations);
+  return { seconds: Math.min(limits.maxRunSeconds, Math.round(reference.seconds * scale)),
+    tokens: Math.min(limits.maxTotalTokens, Math.round(reference.tokens * scale)) };
+}
+/** Prose split at inline code, bold, and `$…$`, `$$…$$`, `\(…\)`, `\[…\]` mathematics. */
+export type ProseSegment = { kind: 'text' | 'code' | 'strong' | 'math' | 'display'; text: string };
+const delimiters = [['$$', '$$', 'display'], ['\\[', '\\]', 'display'], ['\\(', '\\)', 'math'], ['$', '$', 'math']] as const;
+function closing(text: string, close: string, from: number) {
+  for (let index = from; index < text.length; index++) {
+    if (text.startsWith(close, index)) return index;
+    if (text[index] === '\\') index++;
+  }
+  return -1;
+}
+export function proseSegments(text: string): ProseSegment[] {
+  const segments: ProseSegment[] = [];
+  const add = (kind: ProseSegment['kind'], value: string) => {
+    const last = segments.at(-1);
+    if (kind === 'text' && last?.kind === 'text') last.text += value;
+    else if (value) segments.push({ kind, text: value });
+  };
+  const fence = /`+/y;
+  let index = 0;
+  while (index < text.length) {
+    if (text.startsWith('\\$', index)) { add('text', '$'); index += 2; continue; }
+    fence.lastIndex = index;
+    const ticks = fence.exec(text)?.[0];
+    if (ticks) {
+      const end = text.indexOf(ticks, index + ticks.length);
+      if (end > 0) add('code', text.slice(index + ticks.length, end).trim());
+      else add('text', ticks);
+      index = end > 0 ? end + ticks.length : index + ticks.length;
+      continue;
+    }
+    if (text.startsWith('**', index)) {
+      const end = text.indexOf('**', index + 2);
+      if (end > index + 2) { add('strong', text.slice(index + 2, end)); index = end + 2; continue; }
+    }
+    const delimiter = delimiters.find(([open]) => text.startsWith(open, index));
+    if (delimiter) {
+      const [open, close, kind] = delimiter, end = closing(text, close, index + open.length);
+      if (end > index + open.length) { add(kind, text.slice(index + open.length, end)); index = end + close.length; continue; }
+    }
+    add('text', text[index]!);
+    index++;
+  }
+  return segments;
+}
+/** A parsed `$…$` formula; the page renders it with plain elements and falls back to the source text on anything odd. */
+export type MathStyle = 'text' | 'roman' | 'italic' | 'bold';
+export type MathNode =
+  | { type: 'text'; text: string; style?: MathStyle; role?: 'op' | 'punct' | 'big' | 'fn' }
+  | { type: 'row'; children: MathNode[]; style?: MathStyle }
+  | { type: 'script'; base: MathNode; sup?: MathNode; sub?: MathNode }
+  | { type: 'frac'; top: MathNode; bottom: MathNode; bar: boolean }
+  | { type: 'sqrt'; body: MathNode; index?: MathNode }
+  | { type: 'accent'; body: MathNode; mark: string }
+  | { type: 'line'; body: MathNode; position: 'over' | 'under' }
+  | { type: 'stack'; base: MathNode; note: MathNode; position: 'over' | 'under' }
+  | { type: 'table'; rows: MathNode[][]; open: string; close: string; align: 'center' | 'left' | 'pairs' };
+
+const table = (spec: string) => new Map(spec.trim().split(/\s+/u).map(pair => { const at = pair.indexOf(':'); return [pair.slice(0, at), pair.slice(at + 1)] as [string, string]; }));
+const greek = table(`alpha:α beta:β gamma:γ delta:δ epsilon:ϵ varepsilon:ε zeta:ζ eta:η theta:θ vartheta:ϑ iota:ι kappa:κ lambda:λ mu:μ
+  nu:ν xi:ξ pi:π varpi:ϖ rho:ρ varrho:ϱ sigma:σ varsigma:ς tau:τ upsilon:υ phi:ϕ varphi:φ chi:χ psi:ψ omega:ω
+  Gamma:Γ Delta:Δ Theta:Θ Lambda:Λ Xi:Ξ Pi:Π Sigma:Σ Upsilon:Υ Phi:Φ Psi:Ψ Omega:Ω`);
+const ordinary = table(`infty:∞ emptyset:∅ varnothing:∅ nabla:∇ partial:∂ forall:∀ exists:∃ nexists:∄ neg:¬ lnot:¬ top:⊤ bot:⊥
+  ell:ℓ hbar:ℏ aleph:ℵ Re:ℜ Im:ℑ wp:℘ prime:′ angle:∠ triangle:△ square:□ Box:□ checkmark:✓ dagger:† ddagger:‡ star:⋆
+  ldots:… dots:… cdots:⋯ vdots:⋮ ddots:⋱ dotsc:… dotsb:⋯ langle:⟨ rangle:⟩ lceil:⌈ rceil:⌉ lfloor:⌊ rfloor:⌋ lvert:| rvert:|
+  vert:| lVert:‖ rVert:‖ Vert:‖ lbrace:{ rbrace:} backslash:∖ S:§ P:¶ circ:∘ bullet:∙ diamond:⋄ ast:∗ colon:: natural:♮`);
+const operators = table(`pm:± mp:∓ times:× div:÷ cdot:⋅ ast:∗ cup:∪ cap:∩ setminus:∖ smallsetminus:∖ wedge:∧ land:∧ vee:∨ lor:∨
+  oplus:⊕ ominus:⊖ otimes:⊗ odot:⊙ uplus:⊎ sqcup:⊔ sqcap:⊓ amalg:⨿ triangleleft:◁ triangleright:▷
+  le:≤ leq:≤ ge:≥ geq:≥ leqslant:⩽ geqslant:⩾ ne:≠ neq:≠ lt:< gt:> ll:≪ gg:≫ equiv:≡ approx:≈ cong:≅ sim:∼ simeq:≃ propto:∝
+  doteq:≐ in:∈ notin:∉ ni:∋ subset:⊂ supset:⊃ subseteq:⊆ supseteq:⊇ subsetneq:⊊ supsetneq:⊋ sqsubseteq:⊑ mid:∣ nmid:∤
+  parallel:∥ perp:⊥ vdash:⊢ dashv:⊣ models:⊨ prec:≺ succ:≻ preceq:⪯ succeq:⪰ to:→ gets:← rightarrow:→ leftarrow:←
+  Rightarrow:⇒ Leftarrow:⇐ leftrightarrow:↔ Leftrightarrow:⇔ implies:⟹ impliedby:⟸ iff:⟺ mapsto:↦ longmapsto:⟼
+  longrightarrow:⟶ longleftarrow:⟵ Longrightarrow:⟹ Longleftarrow:⟸ longleftrightarrow:⟷ Longleftrightarrow:⟺ hookrightarrow:↪
+  twoheadrightarrow:↠ uparrow:↑ downarrow:↓ nearrow:↗ searrow:↘ coloneqq:≔ eqqcolon:≕ triangleq:≜ defeq:≝ lhd:⊲ rhd:⊳ unlhd:⊴ unrhd:⊵`);
+const big = table(`sum:∑ prod:∏ coprod:∐ int:∫ iint:∬ iiint:∭ oint:∮ bigcup:⋃ bigcap:⋂ bigoplus:⨁ bigotimes:⨂ bigodot:⨀
+  bigvee:⋁ bigwedge:⋀ biguplus:⨄ bigsqcup:⨆`);
+const functions = new Set(`sin cos tan cot sec csc arcsin arccos arctan sinh cosh tanh coth log ln lg exp lim sup inf max min det dim ker
+  deg gcd lcm hom arg Pr mod`.split(/\s+/u));
+const negated = table(`=:≠ in:∉ subset:⊄ subseteq:⊈ supset:⊅ supseteq:⊉ equiv:≢ le:≰ leq:≰ ge:≱ geq:≱ <:≮ >:≯ sim:≁ approx:≉
+  cong:≇ mid:∤ exists:∄ parallel:∦ vdash:⊬ models:⊭`);
+const accents = new Map(Object.entries({ hat: '\u0302', widehat: '\u0302', tilde: '\u0303', widetilde: '\u0303', bar: '\u0304',
+  vec: '\u20d7', dot: '\u0307', ddot: '\u0308', check: '\u030c', breve: '\u0306', acute: '\u0301', grave: '\u0300', mathring: '\u030a' }));
+// Written as escapes: the spacing characters are invisible and `\s` would split them.
+const spaces = new Map(Object.entries({ quad: '\u2003', qquad: '\u2003\u2003', enspace: '\u2002', thinspace: '\u2009',
+  medspace: '\u205f', thickspace: '\u2004', space: ' ', ' ': ' ', ',': '\u2009', ':': '\u205f', '>': '\u205f', ';': '\u2004', '!': '' }));
+const controls = new Map(Object.entries({ '{': '{', '}': '}', '%': '%', '&': '&', '#': '#', '_': '_', '$': '$', '|': '‖' }));
+const operatorText = new Set('+−=<>±∓×÷⋅∗∪∩∖∧∨⊕⊗≤≥≠≡≈≅∼≃∝∈∉∋⊂⊃⊆⊇⊊⊋∣∤∥⊢⊨→←⇒⇐↔⇔⟹⟸⟺↦⟶⟷↪↠≔∘'.split(''));
+const environments: Record<string, { open: string; close: string; align: 'center' | 'left' | 'pairs' }> = {
+  matrix: { open: '', close: '', align: 'center' }, smallmatrix: { open: '', close: '', align: 'center' },
+  pmatrix: { open: '(', close: ')', align: 'center' }, bmatrix: { open: '[', close: ']', align: 'center' },
+  Bmatrix: { open: '{', close: '}', align: 'center' }, vmatrix: { open: '|', close: '|', align: 'center' },
+  Vmatrix: { open: '‖', close: '‖', align: 'center' }, cases: { open: '{', close: '', align: 'left' },
+  dcases: { open: '{', close: '', align: 'left' }, array: { open: '', close: '', align: 'center' },
+  aligned: { open: '', close: '', align: 'pairs' }, align: { open: '', close: '', align: 'pairs' }, 'align*': { open: '', close: '', align: 'pairs' },
+  alignedat: { open: '', close: '', align: 'pairs' }, split: { open: '', close: '', align: 'pairs' }, gathered: { open: '', close: '', align: 'center' },
+  gather: { open: '', close: '', align: 'center' }, 'gather*': { open: '', close: '', align: 'center' }, eqnarray: { open: '', close: '', align: 'pairs' },
+};
+const alphabets: Record<string, { upper: number; lower?: number; digit?: number; except?: Record<string, string> }> = {
+  bb: { upper: 0x1d538, lower: 0x1d552, digit: 0x1d7d8, except: { C: 'ℂ', H: 'ℍ', N: 'ℕ', P: 'ℙ', Q: 'ℚ', R: 'ℝ', Z: 'ℤ' } },
+  cal: { upper: 0x1d49c, except: { B: 'ℬ', E: 'ℰ', F: 'ℱ', H: 'ℋ', I: 'ℐ', L: 'ℒ', M: 'ℳ', R: 'ℛ' } },
+  frak: { upper: 0x1d504, lower: 0x1d51e, except: { C: 'ℭ', H: 'ℌ', I: 'ℑ', R: 'ℜ', Z: 'ℨ' } },
+};
+const fonts: Record<string, string> = { mathbb: 'bb', mathbbm: 'bb', Bbb: 'bb', mathcal: 'cal', mathscr: 'cal', mathfrak: 'frak' };
+function letters(text: string, name: string) {
+  const alphabet = alphabets[name]!;
+  return [...text].map(character => {
+    if (alphabet.except?.[character]) return alphabet.except[character];
+    const code = character.charCodeAt(0);
+    if (code >= 65 && code <= 90) return String.fromCodePoint(alphabet.upper + code - 65);
+    if (code >= 97 && code <= 122 && alphabet.lower) return String.fromCodePoint(alphabet.lower + code - 97);
+    if (code >= 48 && code <= 57 && alphabet.digit) return String.fromCodePoint(alphabet.digit + code - 48);
+    return character;
+  }).join('');
+}
+type Stop = '}' | ']' | 'cell';
+class TexParser {
+  index = 0;
+  /** Open groups and arguments, `\\text` math included, so a deep formula fails here rather than in the renderer. */
+  private nesting: number;
+  constructor(readonly source: string, nesting = 0) { this.nesting = nesting; }
+  private enter() { if (++this.nesting > 48) throw new Error('math_too_deep'); }
+  private peek(text: string) { return this.source.startsWith(text, this.index); }
+  private skipSpace() { while (/\s/u.test(this.source[this.index] ?? '')) this.index++; }
+  private name() {
+    const match = /^[A-Za-z]+/u.exec(this.source.slice(this.index, this.index + 40));
+    if (!match) { this.index++; return this.source[this.index - 1] ?? ''; }
+    this.index += match[0].length;
+    let name = match[0];
+    if (name === 'operatorname' && this.source[this.index] === '*') { this.index++; name += '*'; }
+    this.skipSpace();
+    return name;
+  }
+  /** Nodes up to the stop (not consumed); a cell stop also ends at `&`, `\\` and `\end`. */
+  list(stop?: Stop): MathNode[] {
+    this.enter();
+    const nodes: MathNode[] = [];
+    while (this.index < this.source.length) {
+      const character = this.source[this.index]!;
+      if (stop === '}' && character === '}' || stop === ']' && character === ']') break;
+      if (stop === 'cell' && (character === '&' || this.peek('\\\\') || this.peek('\\end'))) break;
+      if (character === '^' || character === '_') {
+        this.index++;
+        this.attach(nodes, character === '^' ? 'sup' : 'sub', this.argument());
+        continue;
+      }
+      if (character === "'") {
+        let primes = '';
+        while (this.source[this.index] === "'") { primes += '′'; this.index++; }
+        this.attach(nodes, 'sup', { type: 'text', text: primes, style: 'roman' });
+        continue;
+      }
+      nodes.push(...this.atom());
+    }
+    this.nesting--;
+    return nodes;
+  }
+  private attach(nodes: MathNode[], slot: 'sup' | 'sub', value: MathNode) {
+    const last = nodes.at(-1);
+    if (last?.type === 'script' && !last[slot]) { last[slot] = value; return; }
+    const script: MathNode = { type: 'script', base: last && last.type !== 'script' ? nodes.pop()! : { type: 'text', text: '' } };
+    script[slot] = value;
+    nodes.push(script);
+  }
+  /** A braced group, one command, or one character, as TeX reads a script or macro argument. */
+  argument(): MathNode {
+    this.enter();
+    this.skipSpace();
+    const nodes = this.source[this.index] === '{' ? [this.group()] : this.source[this.index] === '\\' ? this.atom() : this.character(true);
+    this.nesting--;
+    return nodes.length === 1 ? nodes[0]! : { type: 'row', children: nodes };
+  }
+  private group(): MathNode {
+    this.index++;
+    const children = this.list('}');
+    if (this.source[this.index] !== '}') throw new Error('math_group_open');
+    this.index++;
+    return { type: 'row', children };
+  }
+  private optional(): MathNode | undefined {
+    this.skipSpace();
+    if (this.source[this.index] !== '[') return undefined;
+    this.index++;
+    const children = this.list(']');
+    if (this.source[this.index] !== ']') throw new Error('math_option_open');
+    this.index++;
+    return { type: 'row', children };
+  }
+  /** A group's source text, for commands whose argument is text rather than mathematics. */
+  private raw(): string {
+    this.skipSpace();
+    if (this.source[this.index] !== '{') {
+      const start = this.index;
+      if (this.source[this.index] === '\\') { this.index++; this.name(); } else this.index += this.codePointLength();
+      return this.source.slice(start, this.index);
+    }
+    let depth = 0;
+    const start = this.index + 1;
+    for (; this.index < this.source.length; this.index++) {
+      const character = this.source[this.index];
+      if (character === '\\') { this.index++; continue; }
+      if (character === '{') depth++;
+      if (character === '}' && --depth === 0) { this.index++; return this.source.slice(start, this.index - 1); }
+    }
+    throw new Error('math_group_open');
+  }
+  private codePointLength() { return (this.source.codePointAt(this.index) ?? 0) > 0xffff ? 2 : 1; }
+  /** A letter or digit run (one character when reading an argument), or a symbol. */
+  private character(single = false): MathNode[] {
+    const rest = this.source.slice(this.index, this.index + 200);
+    const run = single ? undefined : /^(?:[A-Za-zα-ωΑ-Ω]+|\d+(?:\.\d+)?)/u.exec(rest)?.[0];
+    const text = run ?? String.fromCodePoint(this.source.codePointAt(this.index)!);
+    this.index += text.length;
+    if (/^[A-Za-zα-ωΑ-Ω]+$/u.test(text)) return [{ type: 'text', text, style: 'italic' }];
+    if (/^[\d.]+$/u.test(text)) return [{ type: 'text', text, style: 'roman' }];
+    if (/\s/u.test(text) || text === '&') return [];
+    if (text === '{') { this.index--; return [this.group()]; }
+    if (text === '}') throw new Error('math_group_close');
+    if (text === '~') return [{ type: 'text', text: ' ' }];
+    if (text === '-') return [{ type: 'text', text: '−', role: 'op' }];
+    if (text === '*') return [{ type: 'text', text: '∗', role: 'op' }];
+    if (text === ',' || text === ';') return [{ type: 'text', text, role: 'punct' }];
+    if (text === ':') return [{ type: 'text', text, role: 'op' }];
+    if (operatorText.has(text)) return [{ type: 'text', text, role: 'op' }];
+    return [{ type: 'text', text, style: /\p{Script=Han}/u.test(text) ? 'text' : 'roman' }];
+  }
+  private atom(): MathNode[] {
+    if (this.source[this.index] !== '\\') return this.character();
+    if (this.peek('\\\\')) { this.index += 2; if (this.source[this.index] === '[') this.optional(); return []; }
+    this.index++;
+    const name = this.name();
+    const roman = (text: string, role?: 'fn' | 'big' | 'op'): MathNode[] => [{ type: 'text', text, style: 'roman', ...(role ? { role } : {}) }];
+    if (spaces.has(name)) return spaces.get(name) ? [{ type: 'text', text: spaces.get(name)! }] : [];
+    if (controls.has(name)) return roman(controls.get(name)!);
+    if (greek.has(name)) return [{ type: 'text', text: greek.get(name)!, style: /^[A-Z]/u.test(name) ? 'roman' : 'italic' }];
+    if (operators.has(name)) return roman(operators.get(name)!, 'op');
+    if (ordinary.has(name)) return roman(ordinary.get(name)!);
+    if (big.has(name)) return roman(big.get(name)!, 'big');
+    if (functions.has(name)) return roman(name, 'fn');
+    if (name === 'liminf' || name === 'limsup') return roman(`lim ${name.slice(3)}`, 'fn');
+    if (name === 'operatorname' || name === 'operatorname*') return roman(plainTex(this.raw()), 'fn');
+    if (['text', 'textrm', 'textnormal', 'textup', 'mbox', 'hbox', 'textsf', 'texttt'].includes(name)) return [this.text(this.raw(), 'text')];
+    if (['textit', 'emph', 'textsl'].includes(name)) return [this.text(this.raw(), 'italic')];
+    if (name === 'textbf') return [this.text(this.raw(), 'bold')];
+    if (['mathrm', 'mathsf', 'mathtt', 'mathup'].includes(name)) return [{ type: 'row', children: [this.argument()], style: 'roman' }];
+    if (['mathit', 'mathnormal'].includes(name)) return [{ type: 'row', children: [this.argument()], style: 'italic' }];
+    if (['mathbf', 'boldsymbol', 'bm', 'pmb'].includes(name)) return [{ type: 'row', children: [this.argument()], style: 'bold' }];
+    if (fonts[name]) return roman(letters(plainTex(this.raw()), fonts[name]!));
+    if (['frac', 'dfrac', 'tfrac', 'cfrac'].includes(name)) return [{ type: 'frac', top: this.argument(), bottom: this.argument(), bar: true }];
+    if (['binom', 'dbinom', 'tbinom'].includes(name))
+      return [{ type: 'row', children: [...roman('('), { type: 'frac', top: this.argument(), bottom: this.argument(), bar: false }, ...roman(')')] }];
+    if (name === 'sqrt') { const index = this.optional(); return [{ type: 'sqrt', body: this.argument(), ...(index ? { index } : {}) }]; }
+    if (accents.has(name)) {
+      const argument = this.argument(), body = argument.type === 'row' && argument.children.length === 1 ? argument.children[0]! : argument;
+      return [body.type === 'text' && [...body.text].length === 1 ? { ...body, text: body.text + accents.get(name)! } : { type: 'accent', body, mark: accents.get(name)! }];
+    }
+    if (name === 'overline' || name === 'underline') return [{ type: 'line', body: this.argument(), position: name === 'overline' ? 'over' : 'under' }];
+    if (name === 'overbrace' || name === 'underbrace') return [{ type: 'line', body: this.argument(), position: name === 'overbrace' ? 'over' : 'under' }];
+    if (name === 'overset' || name === 'stackrel' || name === 'underset') {
+      const note = this.argument();
+      return [{ type: 'stack', note, base: this.argument(), position: name === 'underset' ? 'under' : 'over' }];
+    }
+    if (name === 'not') {
+      this.skipSpace();
+      const start = this.index;
+      let next = this.source[this.index++] ?? '';
+      if (next === '\\') next = this.name();
+      if (negated.has(next)) return roman(negated.get(next)!, 'op');
+      this.index = start;
+      const [node] = this.atom();
+      return node?.type === 'text' ? [{ ...node, text: `${node.text}\u0338` }] : node ? [node, { type: 'text', text: '\u0338' }] : [];
+    }
+    if (['left', 'right', 'middle', 'big', 'Big', 'bigg', 'Bigg', 'bigl', 'bigr', 'Bigl', 'Bigr', 'biggl', 'biggr', 'Biggl', 'Biggr', 'bigm', 'Bigm'].includes(name)) {
+      this.skipSpace();
+      if (this.source[this.index] === '.') this.index++;
+      return [];
+    }
+    if (['displaystyle', 'textstyle', 'scriptstyle', 'limits', 'nolimits', 'nonumber', 'notag', 'qedhere', 'allowbreak'].includes(name)) return [];
+    if (['label', 'tag', 'phantom', 'hphantom', 'vphantom', 'hspace', 'vspace', 'kern', 'mkern', 'hskip'].includes(name)) { this.raw(); return []; }
+    if (name === 'pmod') return [{ type: 'row', children: [...roman(' ('), ...roman('mod', 'fn'), this.argument(), ...roman(')')] }];
+    if (name === 'bmod') return roman('mod', 'op');
+    if (name === 'mathop' || name === 'boxed' || name === 'mathclap' || name === 'substack') return [this.argument()];
+    if (name === 'begin') return [this.environment()];
+    if (name === 'end') { this.raw(); return []; }
+    return roman(`\\${name}`);
+  }
+  /** `\text{…}` content: words in the text font, with any `$…$` inside read as mathematics again. */
+  private text(source: string, style: MathStyle): MathNode {
+    const children = source.split(/(?<!\\)\$/u).map((piece, index): MathNode => index % 2
+      ? { type: 'row', children: new TexParser(piece, this.nesting + 1).list() }
+      : { type: 'text', text: plainTex(piece), style });
+    return children.length === 1 ? children[0]! : { type: 'row', children, style };
+  }
+  private environment(): MathNode {
+    const name = plainTex(this.raw()).trim(), shape = environments[name] ?? { open: '', close: '', align: 'center' as const };
+    if (name === 'array' || name === 'alignedat') this.raw();
+    const rows: MathNode[][] = [[]];
+    for (;;) {
+      const cell = this.list('cell');
+      rows.at(-1)!.push(cell.length === 1 ? cell[0]! : { type: 'row', children: cell });
+      if (this.index >= this.source.length) throw new Error('math_environment_open');
+      if (this.source[this.index] === '&') { this.index++; continue; }
+      if (this.peek('\\\\')) {
+        this.index += 2;
+        if (this.source[this.index] === '[') this.optional();
+        rows.push([]);
+        continue;
+      }
+      this.index += '\\end'.length;
+      if (plainTex(this.raw()).trim() !== name) throw new Error('math_environment_mismatch');
+      break;
+    }
+    const last = rows.at(-1)!;
+    if (rows.length > 1 && last.length === 1 && last[0]!.type === 'row' && !last[0]!.children.length) rows.pop();
+    return { type: 'table', rows, open: shape.open, close: shape.close, align: shape.align };
+  }
+}
+
+/** Source text with symbol commands replaced, for `\text{…}` and font arguments. */
+function plainTex(source: string): string {
+  // A control word swallows the spaces after it; a control symbol such as `\,` does not.
+  return source.replace(/\\(?:([A-Za-z]+)\s*|(.))/gu, (match, word: string | undefined, symbol: string | undefined) => {
+    const name = word ?? symbol!;
+    return greek.get(name) ?? ordinary.get(name) ?? operators.get(name) ?? controls.get(name) ?? spaces.get(name) ?? (name === '\\' ? ' ' : match);
+  }).replace(/[{}]/gu, '').replaceAll('~', ' ');
+}
+
+/** The formula as nodes, or undefined when it does not parse; the caller then shows the source as written. */
+export function parseMath(source: string): MathNode | undefined {
+  if (source.length > 4000) return undefined;
+  try {
+    const parser = new TexParser(source), children = parser.list();
+    return parser.index >= source.length ? { type: 'row', children } : undefined;
+  } catch { return undefined; }
+}
