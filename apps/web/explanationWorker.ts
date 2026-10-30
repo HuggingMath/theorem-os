@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { prepareInformalization, readInformalizationArtifact } from '../../src/math/informalization';
+import { INFORMALIZATION_ALIGNMENT, prepareInformalization, readInformalizationArtifact } from '../../src/math/informalization';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { readMathJson } from '../../src/math/mathRuntimeIo';
 import { createCodexMathSession } from '../../src/runtime/codexSession';
@@ -119,7 +119,8 @@ async function main() {
       executable: process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' };
     prepareInformalization(directory, {
       proofId: input.target.replace(/[^A-Za-z0-9_-]+/gu, '_').slice(0, 128), proofFile, projectRoot: project,
-      target: input.target, environment: input.environment, statement: null, language: input.language, writer,
+      target: input.target, environment: input.environment, statement: null, alignment: INFORMALIZATION_ALIGNMENT,
+      language: input.language, writer,
       auditors: Array.from({ length: input.auditors }, (_, index) => ({ ...writer, id: `auditor-${index + 1}` })),
       batching: { maxUnits: 12, maxSourceBytes: 60_000 }, maxRoundsPerBatch: input.maxRoundsPerBatch,
       maxRunSeconds: input.maxRunSeconds, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: input.maxTotalTokens,

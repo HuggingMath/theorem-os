@@ -56,7 +56,7 @@ const allowed = (node: ts.Node, source: ts.SourceFile) => allowedText.has(node.g
 export function pageKeys() {
   const keys = new Map<string, string>();
   const decode = (value: string) => value.replace(/&nbsp;/gu, ' ').replace(/&lt;/gu, '<').replace(/&gt;/gu, '>').replace(/&quot;/gu, '"').replace(/&#39;/gu, "'").replace(/&amp;/gu, '&');
-  for (const name of ['index.html', 'login.html', 'share.html', 'guide.html', 'explain.html']) {
+  for (const name of ['index.html', 'login.html', 'share.html', 'guide.html', 'explain.html', 'formalization.html']) {
     const markup = read(web('client', name)).replace(/<(script|style)\b[\s\S]*?<\/\1>/giu, '').replace(/<!--[\s\S]*?-->/gu, '');
     const add = (value: string) => { const key = decode(value).trim().replace(/\s+/gu, ' '); if (han.test(key) && !keys.has(key)) keys.set(key, name); };
     for (const match of markup.matchAll(/>([^<]+)</gu)) add(match[1]);

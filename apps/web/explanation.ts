@@ -1,33 +1,17 @@
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { assertInformalizationEvidence, type InformalizationEvidence } from '../../src/math/informalization';
 import { leanSourceSlice, type InformalizationUnit } from '../../src/math/informalizationExtraction';
+import { codeOnly, count, findWithin, identifierChar, lineEnds, lineStart, offsetSpans, placeExcerpts, signatureEnd,
+  statementRegion, stepGoals, type SourceOffsets as Offsets } from '../../src/math/informalizationAlignment';
+import { formalizationDigest, type FormalizationEvidence } from '../../src/math/formalization';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
 import { reportedTotalTokens } from '../../src/solver/usageBudget';
-import type { WebEnvironment, WebExplanationDocument, WebExplanationGoals, WebExplanationLanguage, WebExplanationLines,
+import { declarationNames, declarationRegions, formalizationCorrespondences } from './formalizationReport';
+import type { WebEnvironment, WebExplanationDocument, WebExplanationLanguage, WebExplanationLines, WebExplanationLink,
   WebExplanationUse } from './shared';
 
 /** What an explanation must be about: one target of one accepted proof, in one language and environment. */
 export type WebExplanationBinding = { proof: string; target: string; language: WebExplanationLanguage; environment: WebEnvironment };
-
-const lineEnds = (value: string) => value.replaceAll('\r\n', '\n');
-/** The host's excerpt match (whitespace runs collapse, ends trimmed), with each kept character's raw offset. */
-function collapsed(value: string): { text: string; offsets: number[] } {
-  let text = '';
-  const offsets: number[] = [];
-  let space = false;
-  for (const match of value.matchAll(/\s+|[^\s]+/gu)) {
-    if (/^\s/u.test(match[0])) { space = text.length > 0; continue; }
-    if (space) { text += ' '; offsets.push(match.index!); space = false; }
-    for (let index = 0; index < match[0].length; index++) offsets.push(match.index! + index);
-    text += match[0];
-  }
-  return { text, offsets };
-}
-const count = (value: string, end: number) => {
-  let lines = 0;
-  for (let index = value.indexOf('\n'); index >= 0 && index < end; index = value.indexOf('\n', index + 1)) lines++;
-  return lines;
-};
 
 /** Lines (1-based in the proof file) a declaration covers; a range ending at column 0 ends on the line before. */
 export function unitLines(unit: Pick<InformalizationUnit, 'range'>): WebExplanationLines {
@@ -35,34 +19,6 @@ export function unitLines(unit: Pick<InformalizationUnit, 'range'>): WebExplanat
   return { start: line, end: endLine > line && endColumn === 0 ? endLine - 1 : endLine };
 }
 
-type Offsets = { start: number; end: number };
-const identifierChar = /[\p{L}\p{N}_'!?₀-ₜᵢ-ᵪ]/u;
-const lineStart = (text: string, index: number) => text.lastIndexOf('\n', index - 1) + 1;
-const lineEnd = (text: string, index: number) => { const end = text.indexOf('\n', index); return end < 0 ? text.length : end; };
-
-/**
- * Where each step's excerpts are in the declaration's source (raw offsets, end exclusive), matched with whitespace runs
- * collapsed. Steps are placed in order: an excerpt is looked for after the previous step's first match, then from the
- * start, so a repeated tactic lands on the occurrence that follows the steps before it.
- */
-function placeExcerpts(source: string, steps: readonly (readonly string[])[]): { places: Offsets[][]; ambiguous: number } {
-  const { text, offsets } = collapsed(source);
-  let cursor = 0, ambiguous = 0;
-  const places = steps.map(excerpts => {
-    let first = Number.POSITIVE_INFINITY;
-    const found = excerpts.flatMap(excerpt => {
-      const value = collapsed(excerpt).text, earliest = value ? text.indexOf(value) : -1;
-      if (earliest < 0) return [];
-      if (text.indexOf(value, earliest + 1) >= 0) ambiguous++;
-      const after = text.indexOf(value, cursor), start = after >= 0 ? after : earliest;
-      first = Math.min(first, start);
-      return [{ start: offsets[start]!, end: offsets[start + value.length - 1]! + 1 }];
-    });
-    if (first < Number.POSITIVE_INFINITY) cursor = first + 1;
-    return found;
-  });
-  return { places, ambiguous };
-}
 /** Proof-file lines of placed excerpts, sorted, with touching ranges merged. */
 function placedLines(unit: Pick<InformalizationUnit, 'range'>, source: string, places: readonly Offsets[]): WebExplanationLines[] {
   const ranges = places.map(place => ({ start: unit.range.line + count(source, place.start), end: unit.range.line + count(source, place.end - 1) }))
@@ -81,47 +37,6 @@ export function excerptLines(unit: Pick<InformalizationUnit, 'range' | 'source'>
   return placedLines(unit, source, placeExcerpts(source, [excerpts]).places[0]!);
 }
 
-/** The source with comments and string and character literals blanked (newlines kept), so offsets are the source's. */
-function codeOnly(source: string): string {
-  const chars = source.split('');
-  const blank = (from: number, to: number) => { for (let index = from; index < to; index++) if (chars[index] !== '\n') chars[index] = ' '; };
-  for (let index = 0; index < source.length;) {
-    let end = index + 1;
-    if (source.startsWith('--', index)) end = lineEnd(source, index);
-    else if (source.startsWith('/-', index)) {
-      let depth = 1;
-      for (end = index + 2; end < source.length && depth;) {
-        if (source.startsWith('/-', end)) { depth++; end += 2; } else if (source.startsWith('-/', end)) { depth--; end += 2; } else end++;
-      }
-    } else if (source[index] === '"') {
-      while (end < source.length && source[end] !== '"') end += source[end] === '\\' ? 2 : 1;
-      end = Math.min(source.length, end + 1);
-    } else if (source[index] === "'" && !identifierChar.test(source[index - 1] ?? ' ')) {
-      const literal = /^'(?:\\.|[^\\'\n])'/u.exec(source.slice(index, index + 4));
-      if (literal) end = index + literal[0].length;
-    }
-    if (end > index + 1) blank(index, end);
-    index = end;
-  }
-  return chars.join('');
-}
-/**
- * Where a theorem's signature ends in its code: the first `:=` or `where` outside brackets, or a `|` that starts a line
- * of match arms. -1 when there is none, as for an axiom; a `:=` inside a `let` in the statement would end it early.
- */
-function signatureEnd(code: string): number {
-  let depth = 0;
-  for (let index = 0; index < code.length; index++) {
-    const char = code[index]!;
-    if ('([{⦃⟨'.includes(char)) depth++;
-    else if (')]}⦄⟩'.includes(char)) depth = Math.max(0, depth - 1);
-    else if (depth) continue;
-    else if (code.startsWith(':=', index)) return index;
-    else if (code.startsWith('where', index) && !identifierChar.test(code[index - 1] ?? ' ') && !identifierChar.test(code[index + 5] ?? ' ')) return index;
-    else if (char === '|' && !code.slice(lineStart(code, index), index).trim() && code.slice(index, lineEnd(code, index)).includes('=>')) return index;
-  }
-  return -1;
-}
 /** A line of only keywords and punctuation (`by`, `calc`, `·`, brackets) explains nothing on its own. */
 const trivialLine = (code: string) => !code.replace(/:=|\b(?:by|calc|do|fun|show|from|where)\b|[()[\]{}⟨⟩·.,;|=>]/gu, '').trim();
 
@@ -159,39 +74,6 @@ function locateUse(code: string, name: string, step: readonly Offsets[]): { plac
 }
 const within = (lines: readonly WebExplanationLines[], line: number) => lines.some(item => line >= item.start && line <= item.end);
 
-/**
- * Goals around the tactics a step quotes: the outermost recorded tactics inside its placed excerpts, or, when the excerpts
- * are part of one tactic (the first line of a `have … := by`), the smallest tactic they overlap. Before is the first
- * one's, after the last one's.
- */
-function stepGoals(unit: InformalizationUnit, source: string, places: readonly Offsets[]): WebExplanationGoals | undefined {
-  if (!unit.goals?.tactics.length || !places.length) return undefined;
-  const lines = source.split('\n'), starts: number[] = [];
-  let at = 0;
-  for (const line of lines) { starts.push(at); at += line.length + 1; }
-  // Tactic positions are proof-file lines and codepoint columns; the source's first line starts at the unit's column.
-  const offset = (line: number, column: number) => {
-    const index = line - unit.range.line, text = lines[index];
-    if (text === undefined) return source.length;
-    return starts[index]! + [...text].slice(0, Math.max(0, column - (index ? 0 : unit.range.column))).join('').length;
-  };
-  const tactics = unit.goals.tactics.map(item => ({ item, start: offset(item.range.line, item.range.column),
-    end: offset(item.range.endLine, item.range.endColumn) }));
-  const inside = tactics.filter(tactic => tactic.end > tactic.start &&
-    places.some(place => tactic.start >= place.start && tactic.end <= place.end));
-  let chosen = inside.filter(tactic => !inside.some(other => other !== tactic && other.start <= tactic.start && other.end >= tactic.end &&
-    other.end - other.start > tactic.end - tactic.start));
-  if (!chosen.length) {
-    const overlapping = tactics.filter(tactic => places.some(place => tactic.start < place.end && place.start < tactic.end));
-    chosen = overlapping.toSorted((a, b) => a.end - a.start - (b.end - b.start)).slice(0, 1);
-  }
-  if (!chosen.length) return undefined;
-  chosen.sort((a, b) => a.start - b.start);
-  const first = chosen[0]!.item, last = chosen.at(-1)!.item;
-  return { before: first.before, beforeCount: first.beforeCount, after: last.after, afterCount: last.afterCount,
-    lines: { start: first.range.line, end: Math.max(...chosen.map(tactic => tactic.item.range.endLine)) } };
-}
-
 /** Re-derive the evidence and check it explains exactly this proof; a worker's claims are not trusted. */
 export function verifyExplanationEvidence(value: unknown, binding: WebExplanationBinding): { evidence: InformalizationEvidence; markdown: string } {
   let verified: ReturnType<typeof assertInformalizationEvidence>;
@@ -214,10 +96,15 @@ export function verifyExplanationEvidence(value: unknown, binding: WebExplanatio
 
 /**
  * The page's projection: declarations in file order (the main theorem need not be last); a theorem's statement tied to
- * its signature and each step to the lines it quotes; cited names to where they are written; auditor explanations.
- * `proof` is the verified proof file, read for the columns of names on a declaration's first line.
+ * its signature and each step to the lines it quotes; cited names and linked phrases to where they are written; auditor
+ * explanations. `proof` is the verified proof file, read for the columns of names on a declaration's first line.
+ * `formalization` is the verified formalization the evidence records, when it records one.
  */
-export function explanationDocument(evidence: InformalizationEvidence, proof: string): WebExplanationDocument {
+export function explanationDocument(evidence: InformalizationEvidence, proof: string,
+  formalization?: FormalizationEvidence): WebExplanationDocument {
+  if (Boolean(formalization) !== Boolean(evidence.formalization) ||
+      formalization && formalizationDigest(formalization) !== evidence.formalization!.evidenceSha256)
+    throw new Error('explanation_formalization_mismatch');
   const written = new Map(evidence.batches.flatMap(batch => batch.writer.sections.map(section => [section.declaration, { section, batch }] as const)));
   const fileLines = lineEnds(proof).split('\n');
   const target = evidence.outline.units.at(-1)!;
@@ -235,11 +122,24 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
       const line = count(source, at), start = lineStart(source, at);
       return { line: unit.range.line + line, column: at - start + (line ? 0 : firstColumn) };
     };
+    // A phrase's offsets in its prose and its Lean's place in the file; the host checked both when the batch was accepted.
+    const linked = (prose: string, links: readonly { text: string; lean: string }[] | undefined, regions: readonly Offsets[]) =>
+      (links ?? []).flatMap((link): WebExplanationLink[] => {
+        const start = prose.indexOf(link.text), place = findWithin(source, link.lean, regions);
+        if (start < 0 || !place) return [];
+        return [{ start, end: start + link.text.length, lean: offsetSpans(source, place.start, place.end).map(span => ({
+          line: unit.range.line + span.line, start: span.start + (span.line ? 0 : firstColumn), end: span.end + (span.line ? 0 : firstColumn) })) }];
+      });
     const audits = batch.audits.map(audit => audit.output.sections.find(item => item.declaration === unit.name));
     const reviews = (pick: (audit: NonNullable<typeof audits[number]>) => string | undefined) =>
       audits.flatMap(audit => { const text = audit && pick(audit)?.trim(); return text ? [text] : []; });
     const steps = section.proof.map((step, index) => {
       const goals = stepGoals(unit, source, places[index]!);
+      const links = linked(step.text, 'links' in step ? step.links : undefined, places[index]!);
+      const goalsChecked = evidence.alignment && goals ? audits.filter(audit => {
+        const verdict = audit?.steps[index];
+        return verdict && 'goals' in verdict && verdict.goals === 'consistent';
+      }).length : 0;
       return { text: step.text, lines: placedLines(unit, source, places[index]!),
         uses: step.uses.map(name => {
           const found = locateUse(code, name, places[index]!);
@@ -248,8 +148,10 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
             return { line, start: column, end: column + found.length };
           }) };
         }),
-        reviews: reviews(audit => audit.steps[index]?.explanation), ...goals ? { goals } : {} };
+        reviews: reviews(audit => audit.steps[index]?.explanation), ...goals ? { goals } : {},
+        ...links.length ? { links } : {}, ...goalsChecked ? { goalsChecked } : {} };
     });
+    const statementLinks = linked(section.statement, 'statementLinks' in section ? section.statementLinks : undefined, [statementRegion(unit)]);
     // A theorem's statement explains its signature and the steps its body; any other declaration is all statement.
     const split = unit.kind === 'theorem' ? signatureEnd(code) : -1;
     const signature = split < 0 ? lines : { start: lines.start, end: position(split).line };
@@ -265,8 +167,13 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
       }
     }
     return { name: unit.name, kind: unit.kind, target: unit === target, title: section.title, statement: section.statement, lines, signature,
-      unexplained, statementReviews: reviews(audit => audit.statement.explanation), steps };
+      unexplained, statementReviews: reviews(audit => audit.statement.explanation), steps,
+      ...statementLinks.length ? { statementLinks } : {} };
   });
+  // The formalization's statement declarations, where the proof keeps them (the host checked it keeps every one).
+  const problem = formalization && { problemId: formalization.request.problemId, original: formalization.request.statement,
+    correspondences: formalizationCorrespondences(formalization, proof,
+      declarationRegions(proof, declarationNames(formalization.candidate.source))) };
   return { schema: 'theorem-os.web-explanation.v1', target: evidence.target, language: evidence.language,
     toolchain: evidence.toolchain, mathlibRevision: evidence.mathlibRevision,
     overview: evidence.batches.at(-1)!.writer.overview!, axioms: evidence.outline.axioms, sections,
@@ -274,7 +181,8 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
       excerptCoverage: evidence.metrics.excerptCoverage, proofLines, explainedLines, ambiguousExcerpts },
     model: evidence.writer.model, effort: evidence.writer.effort, auditors: evidence.auditors.length,
     rounds: evidence.batches.reduce((sum, batch) => sum + batch.rounds, 0),
-    tokens: totals.length ? totals.reduce((sum, value) => sum + value, 0) : null };
+    tokens: totals.length ? totals.reduce((sum, value) => sum + value, 0) : null,
+    ...evidence.alignment ? { alignment: evidence.alignment } : {}, ...problem ? { problem } : {} };
 }
 
 export function explanationMarkdownFilename(runId: string, target: string, language: WebExplanationLanguage): string {

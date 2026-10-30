@@ -122,6 +122,14 @@ bun run math formalize --phase inspect --directory /tmp/theorem-os-formalization
 
 An approved run returns the artifact directory, `workspaceRoot`, `receiptFile`, `taskFile`, and `runArguments` for the existing proof solver. The artifact preserves `original.txt`, `Statement.lean` and `evidence.json`; changing the original, source, targets, environment or review breaks its identity checks. Pass the returned `runArguments` to `bun run math run`, adding the desired native proof-search configuration and budget. Formalization approval alone never counts as solving the problem.
 
+`report` writes an approved run as one offline comparison page. It calls no model and needs `bun run build:web` first:
+
+```sh
+bun run math formalize --phase report --directory /tmp/theorem-os-formalization-bounded --output /absolute/path/comparison.html
+```
+
+The page shows the frozen `Statement.lean` on the left. On the right are the original problem with the fragments the reviewers matched underlined, each correspondence (aspect, relation, both fragments, how many reviewers gave it, their notes folded), the blind back-translation, the plan, the author's coverage notes, each review's checks and the evidence digest (`apps/web/formalizationReport.ts`). Correspondences come from the structured reviews; pairs that several reviewers quote are merged and keep the weakest relation. A Lean fragment is located in the statement source with comments skipped. A fragment the reviewer quoted from Lean's elaborated type, such as `forall (n : Nat), n + 0 = n`, has no place in the source and is listed but not marked. An original fragment that overlaps an earlier one is not underlined but stays in the list. Clicking an underlined fragment or a pair marks its Lean; clicking a Lean line marks the pairs written on it. Older reviews without correspondences show only their checks. The file is new (an existing file is never replaced), outside the source repository, read-only, and self-contained: scripts, styles, Latin fonts and data are inlined, Chinese text uses system fonts, and a Content-Security-Policy forbids loading anything. The JSON summary reports `targets`, `correspondences` and `locatedCorrespondences`. `bun run test:web-report` checks this page and the explanation report in Chromium from a preset approved run.
+
 Frozen v1/v2 requests and artifacts, and earlier v3 requests without `contextProtocol`, remain readable with their original review protocol and exact evidence digests. They are never silently upgraded. A completed artifact can be restored without opening a model session. Unfinished runs still require their frozen source/build identity. Prepare a new directory and build to use the new context. The First Proof adapter preserves the full structured v3 evidence and optional semantic context, as well as legacy evidence, and attributes its review to the configured reviewers.
 
 ## First Proof Batch 3

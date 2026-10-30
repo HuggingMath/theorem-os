@@ -4,15 +4,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
-import { informalizationDigest, prepareInformalization, readInformalizationArtifact, readInformalizationRequest,
-  type InformalizationRequest } from '../../src/math/informalization';
+import { INFORMALIZATION_ALIGNMENT, informalizationDigest, prepareInformalization, readInformalizationArtifact,
+  readInformalizationRequest, type InformalizationRequest } from '../../src/math/informalization';
+import { leanSourceSlice } from '../../src/math/informalizationExtraction';
+import { lineEnds } from '../../src/math/informalizationAlignment';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { mathDigest, readMathText } from '../../src/math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin } from '../../src/math/paths';
+import { explanationDocument } from '../../apps/web/explanation';
+import { writeStaticReport } from '../../apps/web/staticReport';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
-const configurationFlags = ['proof-file', 'project-root', 'target', 'proof-id', 'environment', 'statement-file', 'language',
+const configurationFlags = ['proof-file', 'project-root', 'target', 'proof-id', 'environment', 'statement-file', 'formalization',
+  'alignment', 'language',
   'model', 'effort', 'profile', 'codex', 'auditors', 'max-rounds-per-batch', 'max-units-per-batch', 'max-batch-source-bytes',
   'max-run-seconds', 'max-turn-seconds', 'max-compile-seconds', 'max-total-tokens', 'build-manifest'] as const;
 
@@ -38,11 +43,21 @@ function buildManifest(value: string): string {
   return file;
 }
 
+/** A formalization run directory (its approved artifact/) or the artifact directory itself. */
+function formalizationArtifact(value: string): string {
+  const directory = path.resolve(value); assertMathCanonicalPath(directory);
+  const artifact = fs.existsSync(path.join(directory, 'evidence.json')) ? directory : path.join(directory, 'artifact');
+  assertMathCanonicalPath(artifact);
+  if (!fs.existsSync(path.join(artifact, 'evidence.json'))) throw new Error('--formalization must name an approved formalization run or its artifact');
+  return artifact;
+}
+
 const requestSummary = (request: InformalizationRequest) => ({
   schema: request.schema, protocol: request.protocol, proofId: request.proofId, target: request.target,
   environment: request.environment, toolchain: request.toolchain, mathlibRevision: request.mathlibRevision,
   rootModule: request.rootModule, sources: request.sources.map(item => ({ origin: item.origin, sha256: item.sha256, bytes: item.bytes })),
-  statementSha256: request.statementSha256, language: request.language, writer: request.writer,
+  statementSha256: request.statementSha256, ...request.formalization ? { formalization: request.formalization } : {},
+  alignment: request.alignment ?? 'none', language: request.language, writer: request.writer,
   auditors: request.auditors, batching: request.batching, maxRoundsPerBatch: request.maxRoundsPerBatch,
   maxRunSeconds: request.maxRunSeconds, maxTurnSeconds: request.maxTurnSeconds, maxCompileSeconds: request.maxCompileSeconds,
   maxTotalTokens: request.maxTotalTokens, buildManifestRef: request.buildManifestRef, buildDigest: request.buildDigest });
@@ -56,10 +71,14 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const language = flags.get('language') ?? 'zh';
   if (language !== 'zh' && language !== 'en') throw new Error('--language must be zh or en');
   let statement: string | null = null;
+  if (flags.has('statement-file') && flags.has('formalization'))
+    throw new Error('--statement-file and --formalization are exclusive: the formalization\'s original problem is the statement');
   if (flags.has('statement-file')) {
     const file = path.resolve(required(flags, 'statement-file')); assertMathCanonicalPath(file);
     statement = readMathText(file, 256 * 1024);
   }
+  const alignment = flags.get('alignment') ?? INFORMALIZATION_ALIGNMENT;
+  if (alignment !== INFORMALIZATION_ALIGNMENT && alignment !== 'none') throw new Error(`--alignment must be ${INFORMALIZATION_ALIGNMENT} or none`);
   const writer = {
     model: flags.has('model') ? required(flags, 'model') : 'deepseek-flash',
     effort: flags.has('effort') ? required(flags, 'effort') : 'max',
@@ -72,6 +91,8 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     proofId: flags.get('proof-id') ?? target.replace(/[^A-Za-z0-9_-]+/gu, '_').slice(0, 128),
     proofFile, projectRoot: path.resolve(flags.get('project-root') ?? path.dirname(proofFile)),
     target, environment, statement, language, writer,
+    ...flags.has('formalization') ? { formalizationArtifact: formalizationArtifact(required(flags, 'formalization')) } : {},
+    ...alignment === 'none' ? {} : { alignment },
     auditors: Array.from({ length: auditorCount }, (_, index) => ({ ...writer, id: `auditor-${index + 1}` })),
     batching: { maxUnits: integerFlag(flags, 'max-units-per-batch', 12), maxSourceBytes: integerFlag(flags, 'max-batch-source-bytes', 60_000) },
     maxRoundsPerBatch: integerFlag(flags, 'max-rounds-per-batch', 6), maxRunSeconds: integerFlag(flags, 'max-run-seconds', 0),
@@ -114,30 +135,61 @@ function inspect(directory: string) {
     requestDigest, request: requestSummary(request), state, artifact };
 }
 
+/**
+ * The approved explanation as one offline HTML page (Lean on the left, prose on the right). Its line numbers are the
+ * root file's, so every explained declaration must be written there; the formalization, when recorded, adds 原题.
+ */
+function writeReport(directory: string, output: string) {
+  const { request, sources, formalization } = readInformalizationRequest(directory), requestDigest = informalizationDigest(request);
+  const artifactDirectory = path.join(directory, 'artifact');
+  assertMathCanonicalPath(artifactDirectory);
+  if (!fs.existsSync(artifactDirectory)) throw new Error('informalization_artifact_missing');
+  const evidence = readInformalizationArtifact(artifactDirectory);
+  if (evidence.requestDigest !== requestDigest) throw new Error('informalization_artifact_request_mismatch');
+  const proof = sources.at(-1)!;
+  for (const unit of evidence.outline.units) {
+    if (unit.file !== proof.file) throw new Error('informalization_report_multiple_files: ' + unit.name);
+    if (lineEnds(leanSourceSlice(proof.text, unit.range)) !== lineEnds(unit.source)) throw new Error('informalization_artifact_changed');
+  }
+  const markdown = readMathText(path.join(artifactDirectory, 'proof.md'), 32_000_000);
+  const file = writeStaticReport(root, output, { page: 'explain', data: { schema: 'theorem-os.web-explanation-report.v1',
+    title: request.proofId, environment: request.environment, proof: proof.text,
+    document: explanationDocument(evidence, proof.text, formalization), markdown,
+    filename: path.basename(output).replace(/\.html$/u, '.md') } });
+  return { schema: 'theorem-os.informalization-cli.v1', phase: 'report', directory, modelInvoked: false, requestDigest,
+    output: file, bytes: fs.statSync(file).size, alignment: request.alignment ?? 'none',
+    ...formalization ? { formalization: request.formalization } : {} };
+}
+
 export async function informalize(argv: string[]): Promise<number> {
-  const flags = parseFlags(argv, ['phase', 'directory', ...configurationFlags]);
+  const flags = parseFlags(argv, ['phase', 'directory', 'output', ...configurationFlags]);
   if (flags.has('help')) {
-    console.log('Usage: theorem-os informalize --phase prepare|run|inspect --directory DIR [options]\n'
+    console.log('Usage: theorem-os informalize --phase prepare|run|inspect|report --directory DIR [options]\n'
       + 'prepare (offline): --proof-file FILE --target NAME --build-manifest FILE\n'
       + '  [--project-root DIR] (default: the proof file directory; its local imports are frozen too)\n'
       + '  [--proof-id ID] [--environment mathlib|standard] [--statement-file FILE] (writer vocabulary only; auditors never see it)\n'
+      + '  [--formalization DIR] (an approved formalization run or its artifact; its original problem becomes the statement and\n'
+      + '    the proof must keep its declarations; excludes --statement-file)\n'
+      + '  [--alignment lean-phrase-alignment-v1|none] (default lean-phrase-alignment-v1: phrases paired with Lean, steps checked against goals)\n'
       + '  [--language zh|en] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE] [--auditors 2]\n'
       + '  [--max-rounds-per-batch 6] [--max-units-per-batch 12] [--max-batch-source-bytes 60000]\n'
       + '  [--max-run-seconds 0] [--max-turn-seconds 0] [--max-compile-seconds 0] [--max-total-tokens 0] (0 = unlimited)\n'
       + 'run: compile the frozen proof in the pinned environment, extract its declarations, then write and audit the explanation batch by batch.\n'
       + 'inspect (offline): read a bounded summary and validate the approved artifact; never starts or resumes a run.\n'
+      + 'report (offline): --output FILE.html; the approved explanation as one self-contained page (needs bun run build:web).\n'
       + 'The artifact is artifact/proof.md with artifact/informalization.json. The prose is model-written and model-audited, not human-reviewed.\n'
       + 'All directories must be outside the source repository. See docs/informalization.md.');
     return 0;
   }
   const phase = required(flags, 'phase');
-  const phases: Record<string, readonly string[]> = { prepare: configurationFlags, run: [], inspect: [] };
+  const phases: Record<string, readonly string[]> = { prepare: configurationFlags, run: [], inspect: [], report: ['output'] };
   if (!Object.hasOwn(phases, phase)) throw new Error('Unknown informalization phase.');
   for (const name of flags.keys()) if (!['phase', 'directory', ...phases[phase]!].includes(name))
     throw new Error(`--${name} is not valid for --phase ${phase}`);
   const directory = externalDirectory(required(flags, 'directory'));
   let report: unknown, code = 0;
   if (phase === 'prepare') report = prepare(flags, directory);
+  else if (phase === 'report') report = writeReport(directory, required(flags, 'output'));
   else if (phase === 'inspect') {
     const result = inspect(directory);
     report = result; if (result.artifact.status === 'invalid') code = 2;

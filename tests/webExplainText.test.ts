@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorSpan, explanationEstimate, leanGutter, leanLines, parseMath, proseAt, proseSegments, refLines, stepAtLine, type MathNode } from '../apps/web/client/explainText';
+import { anchorSpan, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, refLines, stepAtLine, type MathNode } from '../apps/web/client/explainText';
 import type { WebExplanationDocument, WebExplanationSection } from '../apps/web/shared';
 
 // The explanation page's pure helpers: Lean line split, line ↔ step mapping, estimate, prose and TeX reading.
@@ -108,6 +108,40 @@ describe('prose segments', () => {
   it('skips escaped closers and reads double backticks', () => {
     expect(proseSegments('$a \\$ b$ ``x ` y``')).toEqual([{ kind: 'math', text: 'a \\$ b' }, { kind: 'text', text: ' ' }, { kind: 'code', text: 'x ` y' }]);
     expect(proseSegments('**')).toEqual([{ kind: 'text', text: '**' }]);
+  });
+});
+
+describe('linked prose', () => {
+  const PROSE = '若 $n$ 是自然数，则 $n + 0 = n$，价格 \\$5 与 `double n` 不变。';
+  const at = (needle: string, length = needle.length) => ({ start: PROSE.indexOf(needle), end: PROSE.indexOf(needle) + length });
+  // Runs flattened back into segments, adjacent text merged: what proseSegments gives for the whole text.
+  const flatten = (runs: ReturnType<typeof linkedProse>) => runs.flatMap(run => run.segments).reduce<ReturnType<typeof proseSegments>>(
+    (all, segment) => {
+      const last = all.at(-1);
+      if (last?.kind === 'text' && segment.kind === 'text') all[all.length - 1] = { kind: 'text', text: last.text + segment.text };
+      else all.push(segment);
+      return all;
+    }, []);
+
+  it('widens a link to the whole formula, code span or escape it touches', () => {
+    const runs = linkedProse(PROSE, [at('+ 0', 3), at('\\$', 1), at('double')]);
+    expect(runs.filter(run => run.link !== undefined)).toEqual([
+      { segments: [{ kind: 'math', text: 'n + 0 = n' }], link: 0 },
+      { segments: [{ kind: 'text', text: '$' }], link: 1 },
+      { segments: [{ kind: 'code', text: 'double n' }], link: 2 }]);
+  });
+
+  it('keeps a link over text and formulas as one run and drops later overlapping or empty links', () => {
+    const runs = linkedProse(PROSE, [at('是自然数，则 $n + 0 = n$'), at('自然数'), { start: 3, end: 3 }, { start: 500, end: 510 }, at('$n$')]);
+    expect(runs.filter(run => run.link !== undefined)).toEqual([
+      { segments: [{ kind: 'math', text: 'n' }], link: 4 },
+      { segments: [{ kind: 'text', text: '是自然数，则 ' }, { kind: 'math', text: 'n + 0 = n' }], link: 0 }]);
+  });
+
+  it('gives back exactly the unlinked segments', () => {
+    for (const links of [[], [at('自然数')], [at('+ 0', 3), at('\\$5'), at('不变')], [{ start: 0, end: PROSE.length }]])
+      expect(flatten(linkedProse(PROSE, links))).toEqual(proseSegments(PROSE));
+    expect(linkedProse('', [{ start: 0, end: 1 }])).toEqual([]);
   });
 });
 

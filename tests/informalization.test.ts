@@ -2,13 +2,17 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { explanationDocument } from '../apps/web/explanation';
+import type { StaticReportPage } from '../apps/web/staticReport';
+import { formalizationDigest, readFormalizationArtifact } from '../src/math/formalization';
 import { attachInformalizationGoals, informalizationExtractionQuery, informalizationGoalsQuery, informalizationLibraryContext,
   informalizationOutline, informalizationOutlineSchema, leanSourceSlice, type InformalizationGoalsResult,
   type InformalizationOutline } from '../src/math/informalizationExtraction';
-import { INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS, assertInformalizationEvidence,
-  informalizationAuditApproved, informalizationAuditFeedback, informalizationAuditInput, informalizationAuditRejections,
-  informalizationBatches, informalizationExcerptCoverage, informalizationRoleOutputSchema, informalizationWriterInput,
-  informalizationWriterRejections, readInformalizationArtifact, readInformalizationRequest, renderInformalization,
+import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS,
+  assertInformalizationEvidence, informalizationAuditApproved, informalizationAuditFeedback, informalizationAuditInput,
+  informalizationAuditRejections, informalizationBatches, informalizationExcerptCoverage, informalizationRoleInstructions,
+  informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterRejections, readInformalizationArtifact,
+  readInformalizationRequest, renderInformalization, type InformalizationAlignedAuditOutput, type InformalizationAlignedSection,
   type InformalizationAuditInput, type InformalizationAuditOutput, type InformalizationSection,
   type InformalizationWriterInput, type InformalizationWriterOutput } from '../src/math/informalization';
 import { mathDigest, readMathText } from '../src/math/mathRuntimeIo';
@@ -17,15 +21,27 @@ import { readInformalizationState, runInformalization } from '../src/solver/info
 import { informalize } from '../scripts/mathematics/informalize';
 import { INFORMALIZATION_NONCE, LIB_SOURCE, PROOF_SOURCE, informalizationFixture, informalizationGoalsReport, informalizationReport,
   informalizationSources, sourceRange } from './helpers/informalizationFixture';
+import { ADDITION_PROOF, approvedFormalization } from './helpers/approvedFormalizationFixture';
+import { fixtureStatement } from './helpers/formalizationFixture';
 
 // Protocol and host-check fixtures with preset roles; these are not model or Lean accuracy measurements.
 const forbidden = vi.hoisted(() => ({ model: vi.fn(async () => { throw new Error('model_must_not_open'); }) }));
 vi.mock('../src/runtime/codexSession', async original =>
   ({ ...await original<typeof import('../src/runtime/codexSession')>(), createCodexMathSession: forbidden.model }));
+// The report phase's page payload, written as JSON; tests/staticReport.test.ts covers the page itself, which needs a web build.
+const pages = vi.hoisted(() => ({ written: [] as { output: string; report: StaticReportPage }[] }));
+vi.mock('../apps/web/staticReport', async original => ({ ...await original<typeof import('../apps/web/staticReport')>(),
+  writeStaticReport: (_root: string, output: string, report: StaticReportPage) => {
+    pages.written.push({ output, report });
+    // Called during a test, after this file's imports are bound.
+    fs.writeFileSync(output, JSON.stringify(report));
+    return output;
+  } }));
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   forbidden.model.mockClear();
+  pages.written.length = 0;
 });
 
 type Report = ReturnType<typeof informalizationReport>;
@@ -412,6 +428,143 @@ describe('goal states', () => {
       feedback: null, previousOutput: null }).inputDigest).toBe(writerInput(1).inputDigest);
   });
 });
+
+// Phrase alignment: a writer that links each theorem's binder and each step's last tactic line to its prose.
+type AlignedSection = InformalizationAlignedSection;
+const signatureBinder = (signature: string) => signature.slice(signature.indexOf('('), signature.indexOf(')') + 1);
+function alignedExplain(input: InformalizationWriterInput, edit?: (sections: AlignedSection[]) => void) {
+  const base = explain(input), sections = base.sections.map((section, index): AlignedSection => {
+    const unit = input.units[index]!, binder = signatureBinder(unit.signature), last = unit.source.split('\n').at(-1)!.trim();
+    return { ...section, statement: 'For every ' + binder + ': ' + section.statement,
+      statementLinks: [{ text: binder, lean: unit.kind === 'theorem' ? binder : unit.signature }],
+      proof: section.proof.map(step => ({ ...step, text: step.text + ' It ends with ' + last + '.', links: [{ text: last, lean: last }] })) };
+  });
+  edit?.(sections);
+  return { ...base, sections };
+}
+const alignedWriterInput = (index: number, base = outline) => informalizationWriterInput({ outline: base, batch: batchesOf()[index]!,
+  accepted: new Map(), sources: informalizationSources(), language: 'zh', alignment: INFORMALIZATION_ALIGNMENT, round: 1,
+  problemStatement: 'Show that double (n + 0) is 2n.', feedback: null, previousOutput: null });
+const alignedAuditInput = (index: number, base = outline, explanation = alignedExplain(alignedWriterInput(index, base))) =>
+  informalizationAuditInput({ outline: base, batch: batchesOf()[index]!, accepted: new Map(), sources: informalizationSources(),
+    language: 'zh', alignment: INFORMALIZATION_ALIGNMENT, explanation });
+// An aligned audit that approves everything and says each step agrees with its recorded goals.
+function alignedReview(input: InformalizationAuditInput, edit?: (output: InformalizationAlignedAuditOutput) => void) {
+  const base = review(input), output: InformalizationAlignedAuditOutput = { ...base, sections: base.sections.map((section, index) => ({
+    ...section, steps: section.steps.map((step, stepIndex) => ({ ...step,
+      goals: input.stepGoals?.[index]?.steps[stepIndex] ? 'consistent' as const : 'unrecorded' as const })) })) };
+  edit?.(output);
+  return output;
+}
+const exactly = (problem: string) => new RegExp('^' + problem.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&') + '$', 'u');
+
+describe('phrase alignment', () => {
+  it('accepts links verbatim on both sides, inside the signature or the step\'s own excerpts, modulo Lean whitespace', () => {
+    for (const index of [0, 1]) {
+      const input = alignedWriterInput(index);
+      expect(input.alignment).toBe(INFORMALIZATION_ALIGNMENT);
+      expect(informalizationWriterRejections(input, alignedExplain(input))).toEqual([]);
+    }
+    const input = alignedWriterInput(1);
+    expect(informalizationWriterRejections(input, alignedExplain(input, sections => {
+      sections[0]!.proof = [{ text: 'Unfold double, then omega closes n + n = 2 * n.', uses: ['double', 'Nat.two_mul'],
+        lean: ['unfold double\n  omega'], links: [{ text: 'omega closes n + n = 2 * n', lean: 'double\n\n   omega' }] }];
+    }))).toEqual([]);
+  });
+
+  it.each([
+    ['a paraphrased phrase', (s: AlignedSection[]) => { s[0]!.statementLinks[0]!.text = '(n : ℕ)'; },
+      'double_eq statement: link text is not verbatim text of it: (n : ℕ)'],
+    ['a statement link into the proof', (s: AlignedSection[]) => { s[0]!.statementLinks[0]!.lean = 'unfold double'; },
+      'double_eq statement: link lean is not verbatim text of the Lean it explains: unfold double'],
+    ['a theorem statement without links', (s: AlignedSection[]) => { s[1]!.statementLinks = []; },
+      'double_add_zero statement: link at least one phrase to the Lean signature'],
+    ['a step link outside its own excerpts', (s: AlignedSection[]) => {
+      s[0]!.proof = [{ text: 'Unfold double.', uses: ['double'], lean: ['unfold double'], links: [{ text: 'Unfold double', lean: 'unfold double' }] },
+        { text: 'Then omega.', uses: ['Nat.two_mul'], lean: ['omega'], links: [{ text: 'omega', lean: 'unfold double' }] }];
+    }, 'double_eq step 2: link lean is not verbatim text of the Lean it explains: unfold double'],
+    ['a step phrase from another step', (s: AlignedSection[]) => { s[1]!.proof[0]!.links[0]!.text = 'Follow the Lean proof of double_eq'; },
+      'double_add_zero step 1: link text is not verbatim text of it: Follow the Lean proof of double_eq'],
+  ])('rejects a linked explanation with %s', (_name, edit, problem) => {
+    const input = alignedWriterInput(1), problems = informalizationWriterRejections(input, alignedExplain(input, edit));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(exactly(problem));
+  });
+
+  it('requires links exactly when the request opts in, and leaves unaligned inputs unchanged', () => {
+    const aligned = alignedWriterInput(1), plain = writerInput(1);
+    expect(informalizationWriterRejections(aligned, explain(aligned)))
+      .toEqual(expect.arrayContaining([expect.stringMatching(/^sections\.0\.statementLinks: /u), expect.stringMatching(/^sections\.0\.proof\.0\.links: /u)]));
+    expect(informalizationWriterRejections(plain, alignedExplain(plain)))
+      .toEqual(expect.arrayContaining([expect.stringMatching(/^sections\.0: Unrecognized key/u)]));
+    expect(plain).not.toHaveProperty('alignment');
+    expect(aligned.inputDigest).not.toBe(plain.inputDigest);
+    expect(auditInput(1)).not.toHaveProperty('stepGoals');
+    expect(auditInput(1)).not.toHaveProperty('alignment');
+  });
+  it('gives auditors the goals the page shows beside each step and checks the goals verdict against them', () => {
+    const attached = withGoals(), input = alignedAuditInput(1, attached);
+    const goal = (target: string) => 'n : Nat\n⊢ ' + target;
+    expect(input.stepGoals).toEqual([
+      { declaration: 'double_eq', steps: [{ before: [goal('double n = 2 * n')], beforeCount: 1, after: [], afterCount: 0, lines: { start: 7, end: 8 } }] },
+      { declaration: 'double_add_zero', steps: [{ before: [goal('double (n + 0) = 2 * n')], beforeCount: 1, after: [], afterCount: 0,
+        lines: { start: 11, end: 12 } }] }]);
+    expect(informalizationAuditRejections(input, alignedReview(input))).toEqual([]);
+    expect(informalizationAuditApproved(alignedReview(input))).toBe(true);
+    expect(alignedAuditInput(1).stepGoals!.map(section => section.steps)).toEqual([[null], [null]]);
+    const plain = alignedAuditInput(1);
+    expect(informalizationAuditRejections(plain, alignedReview(plain))).toEqual([]);
+  });
+
+  it.each([
+    ['unrecorded goals that were recorded', withGoals(), (o: InformalizationAlignedAuditOutput) => { o.sections[0]!.steps[0]!.goals = 'unrecorded'; },
+      'double_eq step 1: goals must be consistent or inconsistent'],
+    ['a goals verdict where none were recorded', outline, (o: InformalizationAlignedAuditOutput) => { o.sections[1]!.steps[0]!.goals = 'consistent'; },
+      'double_add_zero step 1: goals must be unrecorded'],
+    ['unexplained inconsistent goals', withGoals(), (o: InformalizationAlignedAuditOutput) => { o.sections[1]!.steps[0]!.goals = 'inconsistent'; },
+      'double_add_zero step 1: inconsistent goals need an explanation'],
+  ])('rejects an aligned audit with %s', (_name, base, edit, problem) => {
+    const input = alignedAuditInput(1, base);
+    expect(informalizationAuditRejections(input, alignedReview(input, edit))).toEqual([problem]);
+    const missing = alignedReview(input, output => { Reflect.deleteProperty(output.sections[0]!.steps[0]!, 'goals'); });
+    expect(informalizationAuditRejections(input, missing)).toEqual([expect.stringMatching(/^sections\.0\.steps\.0\.goals: /u)]);
+  });
+
+  it('withholds approval on inconsistent goals and tells the writer which step disagrees', () => {
+    const input = alignedAuditInput(1, withGoals());
+    const goals = alignedReview(input, output => {
+      output.sections[1]!.steps[0] = { verdict: 'justified', goals: 'inconsistent', explanation: 'The recorded goal is double (n + 0) = 2 * n, not n + 0 = n.' };
+    });
+    const both = alignedReview(input, output => {
+      output.sections[0]!.steps[0] = { verdict: 'gap', goals: 'inconsistent', explanation: 'omega closes n + n = 2 * n, which the step never states.' };
+    });
+    for (const output of [goals, both]) {
+      expect(informalizationAuditRejections(input, output)).toEqual([]);
+      expect(informalizationAuditApproved(output)).toBe(false);
+    }
+    expect(informalizationAuditFeedback([{ auditorId: 'auditor-1', output: goals }, { auditorId: 'auditor-2', output: both }]).split('\n').slice(1)).toEqual([
+      'auditor-1, double_add_zero, step 1 goals inconsistent: The recorded goal is double (n + 0) = 2 * n, not n + 0 = n.',
+      'auditor-2, double_eq, step 1 gap, goals inconsistent: omega closes n + n = 2 * n, which the step never states.']);
+  });
+  it('adds the alignment rules and fields only to aligned role contracts', () => {
+    const extra = { write: 3, audit: 2 } as const;
+    for (const role of ['write', 'audit'] as const) {
+      const plain = informalizationRoleInstructions(role), aligned = informalizationRoleInstructions(role, INFORMALIZATION_ALIGNMENT);
+      expect(plain).toBe(role === 'write' ? INFORMALIZATION_WRITER_INSTRUCTIONS : INFORMALIZATION_AUDITOR_INSTRUCTIONS);
+      expect(plain).not.toContain(INFORMALIZATION_ALIGNMENT);
+      const added = aligned.split('\n').filter(line => !plain.split('\n').includes(line));
+      expect(added).toHaveLength(extra[role]);
+      expect(added[0]).toMatch(/^INPUT\.alignment is lean-phrase-alignment-v1: /u);
+      expect(aligned.split('\n').filter(line => !added.includes(line)).join('\n')).toBe(plain);
+      const field = role === 'write' ? 'statementLinks' : 'unrecorded';
+      const schema = informalizationRoleOutputSchema(role, INFORMALIZATION_ALIGNMENT);
+      expect(JSON.parse(JSON.stringify(schema))).toEqual(schema);
+      expect(JSON.stringify(schema)).toContain(field);
+      expect(schema.$comment).toContain('both sides of each link are verbatim');
+      expect(JSON.stringify(informalizationRoleOutputSchema(role))).not.toContain(field);
+    }
+  });
+});
 const provenance = { sources: [{ origin: 'Lib.lean', sha256: 'a'.repeat(64) }, { origin: 'Proof.lean', sha256: 'b'.repeat(64) }],
   toolchain: 'leanprover/lean4:v4.33.0', mathlibRevision: null };
 const allSections = () => batchesOf().flatMap((_batch, index) => explain(writerInput(index)).sections);
@@ -664,10 +817,188 @@ describe('informalization runner', () => {
     expect(r.extract).toHaveBeenCalledTimes(2);
   });
 
+  it('runs an aligned request with linked prose and goal checks, and records the alignment in the evidence', async () => {
+    const r = runner({ alignment: INFORMALIZATION_ALIGNMENT });
+    r.extract.mockImplementation(async (_directory, _request, sources) => attachInformalizationGoals(
+      informalizationOutline(informalizationReport(), { nonce: INFORMALIZATION_NONCE, target: 'double_add_zero', sources }),
+      goalResults(), { nonce: INFORMALIZATION_NONCE, sources }));
+    // The first write leaves the links out; the host sends that back.
+    const agent = presetAgent({ write: (input, count) => count === 1 ? explain(input) : alignedExplain(input),
+      audit: input => alignedReview(input) });
+    expect(r.request.alignment).toBe(INFORMALIZATION_ALIGNMENT);
+    expect(await r.run(agent)).toMatchObject({ status: 'approved', approvedBatches: 2, rounds: 3 });
+    const writes = agent.calls.filter(call => call.role === 'write');
+    expect(writes[1]!.input.feedback).toContain('sections.0.statementLinks: ');
+    expect(writes[1]!.input.previousOutput).toBeNull();
+    for (const call of agent.calls) {
+      expect(call.input.alignment).toBe(INFORMALIZATION_ALIGNMENT);
+      expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toBe(informalizationRoleInstructions(call.role, INFORMALIZATION_ALIGNMENT));
+      expect(JSON.parse(readMathText(path.join(call.workspace, 'OUTPUT.schema.json'))))
+        .toEqual(informalizationRoleOutputSchema(call.role, INFORMALIZATION_ALIGNMENT));
+    }
+    const audit = agent.calls.find(call => call.role === 'audit' && call.batch === 1)!;
+    expect((audit.input as unknown as InformalizationAuditInput).stepGoals!.map(section => section.steps.map(step => step?.lines)))
+      .toEqual([[{ start: 7, end: 8 }], [{ start: 11, end: 12 }]]);
+
+    const evidence = readInformalizationArtifact(path.join(r.directory, 'artifact'));
+    expect(evidence.alignment).toBe(INFORMALIZATION_ALIGNMENT);
+    expect((evidence.batches[1]!.writer.sections[0] as AlignedSection).statementLinks).toEqual([{ text: '(n : Nat)', lean: '(n : Nat)' }]);
+    type Evidence = { alignment?: string; batches: { writer: { sections: AlignedSection[] };
+      audits: { output: InformalizationAlignedAuditOutput }[] }[] };
+    const tamper = (edit: (value: Evidence) => void) => {
+      const value = structuredClone(evidence) as unknown as Evidence; edit(value);
+      return () => assertInformalizationEvidence(value);
+    };
+    expect(tamper(value => { value.batches[1]!.writer.sections[0]!.proof[0]!.links[0]!.lean = 'rw [lib_fact]'; }))
+      .toThrow('informalization_evidence_invalid');
+    expect(tamper(value => { value.batches[1]!.audits[0]!.output.sections[1]!.steps[0]!.goals = 'unrecorded'; }))
+      .toThrow('informalization_evidence_invalid');
+    expect(tamper(value => { delete value.alignment; })).toThrow('informalization_evidence_invalid');
+  });
+
+  it('keeps unaligned role files unchanged', async () => {
+    const r = runner(), agent = presetAgent();
+    expect(await r.run(agent)).toMatchObject({ status: 'approved' });
+    expect(r.request).not.toHaveProperty('alignment');
+    for (const call of agent.calls) {
+      expect(call.input).not.toHaveProperty('alignment');
+      expect(readMathText(path.join(call.workspace, 'ROLE.md')))
+        .toBe(call.role === 'write' ? INFORMALIZATION_WRITER_INSTRUCTIONS : INFORMALIZATION_AUDITOR_INSTRUCTIONS);
+    }
+    expect(readInformalizationArtifact(path.join(r.directory, 'artifact'))).not.toHaveProperty('alignment');
+  });
+
   it('stops at the token limit before dispatching another role', async () => {
     const r = runner({ maxTotalTokens: 1 }), agent = presetAgent();
     expect(await r.run(agent)).toMatchObject({ status: 'stopped', error: 'math_total_token_limit',
       tokenBudget: { status: 'exhausted', reportedTotalTokens: 1 } });
     expect(agent.calls).toHaveLength(1);
+  });
+});
+
+const additionUnit = (name: string, snippet: string, proofDependencies: string[]) => ({ name, displayName: name, kind: 'theorem',
+  module: 'Proof', range: sourceRange(ADDITION_PROOF, snippet), signature: snippet.split(' :=')[0]!.replace(/^theorem /u, ''),
+  statementDependencies: [], proofDependencies, external: ['Nat'], externalTruncated: false });
+function additionOutline(sources: readonly { module: string; file: string; text: string }[]) {
+  const report = { nonce: INFORMALIZATION_NONCE, target: 'addition', axioms: [], library: [], libraryTruncated: false, units: [
+    additionUnit('addition', 'theorem addition (n : Nat) : n + 0 = n := by\n  exact helper n', ['helper']),
+    additionUnit('helper', 'theorem helper (n : Nat) : n + 0 = n := rfl', [])] };
+  const goals = { nonce: INFORMALIZATION_NONCE, module: 'Proof', truncated: false, tactics: [{ range: sourceRange(ADDITION_PROOF, 'exact helper n'),
+    before: ['n : Nat\n⊢ n + 0 = n'], beforeCount: 1, after: [], afterCount: 0 }] };
+  return attachInformalizationGoals(informalizationOutline(report, { nonce: INFORMALIZATION_NONCE, target: 'addition', sources }),
+    [{ module: 'Proof', report: goals }], { nonce: INFORMALIZATION_NONCE, sources });
+}
+/** An aligned informalization of ADDITION_PROOF bound to an approved formalization run. */
+async function formalizedRunner(overrides: Parameters<typeof informalizationFixture>[1] = {}, proof = ADDITION_PROOF) {
+  const formalization = await approvedFormalization(roots);
+  const f = informalizationFixture(roots, { target: 'addition', statement: null, alignment: INFORMALIZATION_ALIGNMENT,
+    formalizationArtifact: path.join(formalization, 'artifact'), ...overrides }, { 'Proof.lean': proof });
+  const run = (agent: ReturnType<typeof presetAgent>) => runInformalization(f.directory, f.root, { openSession: agent.open,
+    extract: (async (_directory: string, _request: unknown, sources: readonly { module: string; file: string; text: string }[]) =>
+      additionOutline(sources)) as never, waitForRetry: async () => {} });
+  return { ...f, formalization, run };
+}
+const alignedAgent = () => presetAgent({ write: input => alignedExplain(input), audit: input => alignedReview(input) });
+async function cli(args: string[]) {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  try { return { code: await informalize(args), report: JSON.parse(String(log.mock.calls.at(-1)?.[0])) }; }
+  finally { log.mockRestore(); }
+}
+
+describe('formalized proofs', () => {
+  it('binds the proof to its approved formalization, whose original problem becomes the statement', async () => {
+    const f = await formalizedRunner(), request = f.prepare(), artifact = path.join(f.formalization, 'artifact');
+    const evidence = readFormalizationArtifact(artifact);
+    expect(request).toMatchObject({ target: 'addition', statement: fixtureStatement, statementSha256: mathDigest(fixtureStatement),
+      alignment: INFORMALIZATION_ALIGNMENT, formalization: { problemId: 'synthetic_addition', evidenceSha256: formalizationDigest(evidence),
+        statementSha256: evidence.sourceSha256, originalSha256: evidence.request.statementSha256 } });
+    for (const name of ['Statement.lean', 'original.txt', 'evidence.json']) {
+      expect(fs.readFileSync(path.join(f.directory, 'formalization', name))).toEqual(fs.readFileSync(path.join(artifact, name)));
+      expect(fs.statSync(path.join(f.directory, 'formalization', name)).mode & 0o777).toBe(0o400);
+    }
+    expect(readInformalizationRequest(f.directory).formalization).toEqual(evidence);
+  });
+
+  it.each([
+    ['a changed theorem header', {}, ADDITION_PROOF.replace('theorem addition (n : Nat) : n + 0 = n', 'theorem addition (n : Nat) : 0 + n = n'),
+      'informalization_formalization_declaration_changed: addition'],
+    ['a renamed theorem', { target: 'sum' }, ADDITION_PROOF.replaceAll('addition', 'sum'), 'informalization_formalization_target_missing'],
+    ['a target the formalization does not state', { target: 'helper' }, ADDITION_PROOF, 'informalization_formalization_target_missing'],
+    ['another environment', { environment: 'mathlib' as const }, ADDITION_PROOF, 'informalization_formalization_environment_mismatch'],
+    ['a statement of its own', { statement: 'Show n + 0 = n.' }, ADDITION_PROOF, 'informalization_formalization_statement_conflict'],
+  ])('refuses a proof with %s before writing anything', async (_name, overrides, proof, error) => {
+    const f = await formalizedRunner(overrides, proof);
+    expect(() => f.prepare()).toThrow(error);
+    expect(fs.existsSync(f.directory)).toBe(false);
+  });
+
+  it('refuses a formalization copy other than the one the request records', async () => {
+    const f = await formalizedRunner(), other = path.join(await approvedFormalization(roots, 'other_addition'), 'artifact');
+    f.prepare();
+    for (const name of ['Statement.lean', 'original.txt', 'evidence.json']) {
+      const copy = path.join(f.directory, 'formalization', name);
+      fs.chmodSync(copy, 0o600); fs.copyFileSync(path.join(other, name), copy);
+    }
+    expect(() => readInformalizationRequest(f.directory)).toThrow('informalization_formalization_mismatch');
+  });
+  it('explains the proof with the original problem in the writer\'s input only, and places the reviewers\' fragments in it', async () => {
+    const f = await formalizedRunner(); f.prepare();
+    const agent = alignedAgent();
+    expect(await f.run(agent)).toMatchObject({ status: 'approved', batches: 1, rounds: 1 });
+    const write = agent.calls.find(call => call.role === 'write')!;
+    expect(write.input).toMatchObject({ problemStatement: fixtureStatement, alignment: INFORMALIZATION_ALIGNMENT });
+    for (const call of agent.calls.filter(item => item.role === 'audit')) expect(JSON.stringify(call.input)).not.toContain(fixtureStatement);
+    const evidence = readInformalizationArtifact(path.join(f.directory, 'artifact'));
+    const formalization = readFormalizationArtifact(path.join(f.formalization, 'artifact'));
+    expect(evidence).toMatchObject({ statementSha256: mathDigest(fixtureStatement), alignment: INFORMALIZATION_ALIGNMENT,
+      formalization: { problemId: 'synthetic_addition', evidenceSha256: formalizationDigest(formalization) } });
+
+    const document = explanationDocument(evidence, ADDITION_PROOF, formalization);
+    const [helper, addition] = document.sections;
+    expect(addition!.statementLinks).toEqual([{ start: 'For every '.length, end: 'For every (n : Nat)'.length,
+      lean: [{ line: 3, start: 17, end: 26 }] }]);
+    expect(addition!.steps[0]).toMatchObject({ goals: { before: ['n : Nat\n⊢ n + 0 = n'], after: [] }, goalsChecked: 2,
+      links: [{ lean: [{ line: 4, start: 2, end: 16 }] }] });
+    expect(helper!.steps[0]).not.toHaveProperty('goals');
+    expect(helper!.steps[0]).not.toHaveProperty('goalsChecked');
+    expect(document).toMatchObject({ alignment: INFORMALIZATION_ALIGNMENT,
+      problem: { problemId: 'synthetic_addition', original: fixtureStatement } });
+    // Fragments are placed in the formalization's own declaration, not the helper that repeats its statement.
+    const where = Object.fromEntries(document.problem!.correspondences.map(item => [item.aspect, [item.leanText, item.lean, item.reviewers]]));
+    expect(where).toEqual({ domains: ['(n : Nat)', [{ line: 3, start: 17, end: 26 }], 2],
+      assumptions: ['addition (n : Nat) :', [{ line: 3, start: 8, end: 28 }], 2],
+      conclusions: ['n + 0 = n', [{ line: 3, start: 29, end: 38 }], 2], definitions: ['+', [{ line: 3, start: 31, end: 32 }], 2],
+      quantifierScope: ['theorem addition (n : Nat)', [{ line: 3, start: 0, end: 26 }], 2],
+      instanceCoherence: ['forall (n : Nat), n + 0 = n', [], 2] });
+    expect(() => explanationDocument(evidence, ADDITION_PROOF)).toThrow('explanation_formalization_mismatch');
+    const other = readFormalizationArtifact(path.join(await approvedFormalization(roots, 'other_addition'), 'artifact'));
+    expect(() => explanationDocument(evidence, ADDITION_PROOF, other)).toThrow('explanation_formalization_mismatch');
+  });
+
+  it('writes the offline report page from the approved run without a model', async () => {
+    const f = await formalizedRunner(); f.prepare();
+    const output = path.join(f.base, 'addition.html');
+    await expect(cli(['--phase', 'report', '--directory', f.directory, '--output', output])).rejects.toThrow('informalization_artifact_missing');
+    await f.run(alignedAgent());
+    const evidence = readInformalizationArtifact(path.join(f.directory, 'artifact'));
+    const formalization = readFormalizationArtifact(path.join(f.directory, 'formalization'));
+    expect(await cli(['--phase', 'report', '--directory', f.directory, '--output', output])).toEqual({ code: 0, report: {
+      schema: 'theorem-os.informalization-cli.v1', phase: 'report', directory: f.directory, modelInvoked: false,
+      requestDigest: evidence.requestDigest, output, bytes: fs.statSync(output).size, alignment: INFORMALIZATION_ALIGNMENT,
+      formalization: evidence.formalization } });
+    expect(pages.written).toEqual([{ output, report: { page: 'explain', data: { schema: 'theorem-os.web-explanation-report.v1',
+      title: 'synthetic_double', environment: 'standard', proof: ADDITION_PROOF,
+      document: explanationDocument(evidence, ADDITION_PROOF, formalization),
+      markdown: readMathText(path.join(f.directory, 'artifact', 'proof.md')), filename: 'addition.md' } } }]);
+    expect(forbidden.model).not.toHaveBeenCalled();
+    await expect(cli(['--phase', 'report', '--directory', f.directory])).rejects.toThrow('--output is required');
+    await expect(cli(['--phase', 'inspect', '--directory', f.directory, '--output', output])).rejects.toThrow('--output is not valid for --phase inspect');
+  });
+
+  it('refuses a report whose declarations are not all in the root file', async () => {
+    const r = runner(); await r.run(presetAgent());
+    await expect(cli(['--phase', 'report', '--directory', r.directory, '--output', path.join(r.base, 'double.html')]))
+      .rejects.toThrow('informalization_report_multiple_files: lib_fact');
+    expect(pages.written).toEqual([]);
   });
 });

@@ -142,39 +142,73 @@ function closing(text: string, close: string, from: number) {
   }
   return -1;
 }
-export function proseSegments(text: string): ProseSegment[] {
-  const segments: ProseSegment[] = [];
-  const add = (kind: ProseSegment['kind'], value: string) => {
-    const last = segments.at(-1);
-    if (kind === 'text' && last?.kind === 'text') last.text += value;
-    else if (value) segments.push({ kind, text: value });
-  };
+/** A piece of prose as written, `[start, end)` in the raw text: one character of text, or a whole code, bold or formula. */
+type ProseAtom = { kind: ProseSegment['kind']; start: number; end: number; text: string };
+function proseAtoms(text: string): ProseAtom[] {
+  const atoms: ProseAtom[] = [];
   const fence = /`+/y;
   let index = 0;
   while (index < text.length) {
-    if (text.startsWith('\\$', index)) { add('text', '$'); index += 2; continue; }
+    const start = index;
+    if (text.startsWith('\\$', index)) { atoms.push({ kind: 'text', start, end: index += 2, text: '$' }); continue; }
     fence.lastIndex = index;
     const ticks = fence.exec(text)?.[0];
     if (ticks) {
       const end = text.indexOf(ticks, index + ticks.length);
-      if (end > 0) add('code', text.slice(index + ticks.length, end).trim());
-      else add('text', ticks);
       index = end > 0 ? end + ticks.length : index + ticks.length;
+      atoms.push(end > 0 ? { kind: 'code', start, end: index, text: text.slice(start + ticks.length, end).trim() } : { kind: 'text', start, end: index, text: ticks });
       continue;
     }
     if (text.startsWith('**', index)) {
       const end = text.indexOf('**', index + 2);
-      if (end > index + 2) { add('strong', text.slice(index + 2, end)); index = end + 2; continue; }
+      if (end > index + 2) { atoms.push({ kind: 'strong', start, end: index = end + 2, text: text.slice(start + 2, end) }); continue; }
     }
     const delimiter = delimiters.find(([open]) => text.startsWith(open, index));
     if (delimiter) {
       const [open, close, kind] = delimiter, end = closing(text, close, index + open.length);
-      if (end > index + open.length) { add(kind, text.slice(index + open.length, end)); index = end + close.length; continue; }
+      if (end > index + open.length) { atoms.push({ kind, start, end: index = end + close.length, text: text.slice(start + open.length, end) }); continue; }
     }
-    add('text', text[index]!);
-    index++;
+    atoms.push({ kind: 'text', start, end: ++index, text: text[start]! });
+  }
+  return atoms;
+}
+function joinAtoms(atoms: readonly ProseAtom[]): ProseSegment[] {
+  const segments: ProseSegment[] = [];
+  for (const atom of atoms) {
+    const last = segments.at(-1);
+    if (atom.kind === 'text' && last?.kind === 'text') last.text += atom.text;
+    else if (atom.text) segments.push({ kind: atom.kind, text: atom.text });
   }
   return segments;
+}
+export const proseSegments = (text: string): ProseSegment[] => joinAtoms(proseAtoms(text));
+
+/** Prose segments grouped by the linked phrase they belong to (`link` indexes the links given), unlinked runs between. */
+export type ProseRun = { segments: ProseSegment[]; link?: number };
+/**
+ * Splits prose at linked phrases (UTF-16 offsets into the raw text, end exclusive). A phrase that cuts into a formula,
+ * inline code or bold text takes all of it, so a formula is never drawn in pieces; a phrase overlapping an earlier
+ * one (in start order) is dropped.
+ */
+export function linkedProse(text: string, links: readonly { start: number; end: number }[]): ProseRun[] {
+  const atoms = proseAtoms(text);
+  const spans = links.map((link, index) => {
+    const touched = link.end > link.start ? atoms.filter(atom => atom.start < link.end && atom.end > link.start) : [];
+    return touched.length ? { index, start: touched[0]!.start, end: touched.at(-1)!.end } : undefined;
+  }).filter((item): item is { index: number; start: number; end: number } => Boolean(item))
+    .sort((a, b) => a.start - b.start || a.index - b.index);
+  const kept: typeof spans = [];
+  for (const item of spans) if (!kept.some(other => item.start < other.end && item.end > other.start)) kept.push(item);
+  const runs: { atoms: ProseAtom[]; link?: number }[] = [];
+  for (const atom of atoms) {
+    const link = kept.find(item => atom.start >= item.start && atom.end <= item.end)?.index, last = runs.at(-1);
+    if (last && last.link === link) last.atoms.push(atom);
+    else runs.push(link === undefined ? { atoms: [atom] } : { atoms: [atom], link });
+  }
+  return runs.flatMap(run => {
+    const segments = joinAtoms(run.atoms);
+    return segments.length ? [run.link === undefined ? { segments } : { segments, link: run.link }] : [];
+  });
 }
 /** A parsed `$…$` formula; the page renders it with plain elements and falls back to the source text on anything odd. */
 export type MathStyle = 'text' | 'roman' | 'italic' | 'bold';

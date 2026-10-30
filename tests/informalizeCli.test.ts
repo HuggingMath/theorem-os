@@ -3,8 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { informalize } from '../scripts/mathematics/informalize';
-import { informalizationDigest, readInformalizationRequest } from '../src/math/informalization';
+import { formalizationDigest, readFormalizationArtifact } from '../src/math/formalization';
+import { INFORMALIZATION_ALIGNMENT, informalizationDigest, readInformalizationRequest } from '../src/math/informalization';
 import { mathDigest } from '../src/math/mathRuntimeIo';
+import { ADDITION_PROOF, approvedFormalization } from './helpers/approvedFormalizationFixture';
+import { fixtureStatement } from './helpers/formalizationFixture';
 import { LIB_SOURCE, PROOF_SOURCE, informalizationFixture } from './helpers/informalizationFixture';
 
 // Build identity is tested by mathBuildManifest tests; these offline CLI tests use the fixture's stand-in build and open no model.
@@ -46,7 +49,7 @@ describe('informalize offline CLI', () => {
     const writer = { model: 'deepseek-flash', effort: 'max', profile, executable: 'codex' };
     expect(prepared).toMatchObject({ code: 0, report: { phase: 'prepare', status: 'prepared', modelInvoked: false,
       requestDigest: informalizationDigest(request), request: { proofId: 'double_add_zero', target: 'double_add_zero',
-        environment: 'standard', rootModule: 'Proof', language: 'zh', statementSha256: null, writer,
+        environment: 'standard', rootModule: 'Proof', language: 'zh', statementSha256: null, alignment: INFORMALIZATION_ALIGNMENT, writer,
         auditors: [{ ...writer, id: 'auditor-1' }, { ...writer, id: 'auditor-2' }],
         batching: { maxUnits: 12, maxSourceBytes: 60_000 }, maxRoundsPerBatch: 6,
         maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: 0,
@@ -121,10 +124,37 @@ describe('informalize offline CLI', () => {
     expect(fs.readdirSync(f.directory).toSorted()).toEqual(['request.json', 'sources']);
   });
 
+  it('binds a formalization given as its run or its artifact, and opts out of phrase alignment on request', async () => {
+    const run = await approvedFormalization(roots), evidence = readFormalizationArtifact(path.join(run, 'artifact'));
+    for (const given of [run, path.join(run, 'artifact')]) {
+      const f = informalizationFixture(roots, {}, { 'Proof.lean': ADDITION_PROOF });
+      const { report } = await invoke(['--phase', 'prepare', '--directory', f.directory, '--proof-file', path.join(f.project, 'Proof.lean'),
+        '--target', 'addition', '--environment', 'standard', '--build-manifest', f.preparation.buildManifestRef, '--formalization', given]);
+      expect(report.request).toMatchObject({ target: 'addition', statementSha256: mathDigest(fixtureStatement), alignment: INFORMALIZATION_ALIGNMENT,
+        formalization: { problemId: 'synthetic_addition', evidenceSha256: formalizationDigest(evidence) } });
+      expect(JSON.stringify(report)).not.toContain(fixtureStatement);
+      expect(fs.readdirSync(f.directory).toSorted()).toEqual(['formalization', 'request.json', 'sources']);
+    }
+    const f = fixture();
+    expect((await invoke([...f.args, '--alignment', 'none'])).report.request.alignment).toBe('none');
+    expect(readInformalizationRequest(f.directory).request).not.toHaveProperty('alignment');
+  });
+
+  it('refuses a statement beside a formalization, an unknown alignment and a directory without an approved artifact', async () => {
+    const f = fixture(), statement = path.join(f.base, 'statement.txt');
+    fs.writeFileSync(statement, 'Show that double (n + 0) is 2n.\n');
+    await expect(invoke([...f.args, '--statement-file', statement, '--formalization', f.base]))
+      .rejects.toThrow('--statement-file and --formalization are exclusive');
+    await expect(invoke([...f.args, '--alignment', 'lean-phrase-alignment-v2'])).rejects.toThrow('--alignment must be lean-phrase-alignment-v1 or none');
+    await expect(invoke([...f.args, '--formalization', f.base])).rejects.toThrow('--formalization must name an approved formalization run or its artifact');
+    expect(fs.existsSync(f.directory)).toBe(false);
+  });
+
   it('prints help without inputs', async () => {
     const result = await invoke(['--help']);
     expect(result.code).toBe(0);
-    for (const text of ['prepare|run|inspect', '--max-rounds-per-batch 6', '--max-units-per-batch 12', '--auditors 2',
-      'auditors never see it', 'not human-reviewed', 'docs/informalization.md']) expect(result.output).toContain(text);
+    for (const text of ['prepare|run|inspect|report', '--max-rounds-per-batch 6', '--max-units-per-batch 12', '--auditors 2',
+      'auditors never see it', '--formalization DIR', 'excludes --statement-file', '--alignment lean-phrase-alignment-v1|none',
+      'report (offline): --output FILE.html', 'not human-reviewed', 'docs/informalization.md']) expect(result.output).toContain(text);
   });
 });

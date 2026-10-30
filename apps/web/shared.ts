@@ -187,9 +187,17 @@ export type WebExplanationSpan = { line: number; start: number; end: number };
  * as when notation (`^`, `ℂ`) or automation (simp) uses it. Every cited name is a dependency Lean checked.
  */
 export type WebExplanationUse = { name: string; place: 'step' | 'declaration' | 'implicit'; spans: WebExplanationSpan[] };
+/**
+ * A phrase of the prose (UTF-16 offsets into its text, end exclusive) and where the Lean it translates is written; each
+ * pair was checked verbatim on both sides by the host and judged by the auditors (phrase alignment).
+ */
+export type WebExplanationLink = { start: number; end: number; lean: WebExplanationSpan[] };
 /** Auditor explanations of a statement or step; empty ones are left out. */
 export type WebExplanationStep = { text: string; uses: WebExplanationUse[]; lines: WebExplanationLines[]; reviews: string[];
-  /** Lean's goals around the tactics the step quotes, when the evidence recorded goal states. */ goals?: WebExplanationGoals };
+  /** Lean's goals around the tactics the step quotes, when the evidence recorded goal states. */ goals?: WebExplanationGoals;
+  links?: WebExplanationLink[];
+  /** With phrase alignment and goals: how many auditors checked the step against those goals (all found it consistent). */
+  goalsChecked?: number };
 /**
  * Goals before the first and after the last of the outermost tactics a step quotes, as Lean printed them (at most 4 per
  * state; the counts give all). An empty `after` means those tactics closed their goal. `lines` are the tactics' lines.
@@ -201,7 +209,39 @@ export type WebExplanationSection = {
   title: string; statement: string; lines: WebExplanationLines;
   /** The lines the statement explains: a theorem's signature, or the whole of any other declaration. */ signature: WebExplanationLines;
   /** Proof-body lines with code that no step quotes. */ unexplained: number[];
-  statementReviews: string[]; steps: WebExplanationStep[];
+  statementReviews: string[]; steps: WebExplanationStep[]; statementLinks?: WebExplanationLink[];
+};
+export const webFormalizationAspects = ['domains', 'assumptions', 'conclusions', 'definitions', 'quantifierScope', 'instanceCoherence'] as const;
+/**
+ * How a fragment of the original problem corresponds to the Lean statement, as the formalization reviewers recorded it
+ * (merged when several quote the same pair). `lean` is where the Lean fragment is written; empty when it was quoted from
+ * Lean's elaborated types rather than the source.
+ */
+export type WebFormalizationCorrespondence = { aspect: typeof webFormalizationAspects[number];
+  relation: 'direct' | 'equivalent' | 'mismatch' | 'unresolved'; original: string;
+  /** UTF-16 offsets of the first occurrence in the original problem; null when it does not occur verbatim. */
+  originalStart: number | null; originalEnd: number | null; leanText: string; lean: WebExplanationSpan[];
+  reviewers: number; explanations: string[] };
+/** The original problem a proof was formalized from (formalization evidence bound to the explained proof). */
+export type WebExplanationProblem = { problemId: string; original: string; correspondences: WebFormalizationCorrespondence[] };
+/**
+ * An approved formalization, for the offline comparison page: the frozen Lean statement beside the original problem, what
+ * its reviewers matched, the blind back-translation and the plan. Lines count from 1 in Statement.lean.
+ */
+export type WebFormalizationReport = {
+  schema: 'theorem-os.web-formalization-report.v1'; problemId: string; original: string; statement: string;
+  environment: WebEnvironment; toolchain: string; mathlibRevision: string | null;
+  targets: { name: string; lines: WebExplanationLines }[];
+  correspondences: WebFormalizationCorrespondence[];
+  backtranslation: { mathematics: string; assumptions: string[]; definitions: string[]; targets: { name: string; mathematics: string }[] };
+  coverage: { original: string; originalStart: number | null; targets: string[]; explanation: string }[];
+  plan?: { taskKind: string; conclusions: { mathematics: string; targets: string[]; quotes: string[] }[];
+    assumptions: { mathematics: string; quotes: string[] }[]; definitions: { mathematics: string; names: string[]; quotes: string[] }[];
+    unresolved: { description: string; quotes: string[] }[] };
+  /** One per reviewer; `checks` are the six aspects for a structured review, the four booleans for an older one. */
+  reviews: { reviewer: string; verdict: string; summary: string; checks: { name: string; value: string }[]; issues: string[];
+    fidelity?: { target: string; original: string; sourceClaim: string; candidateClaim: string }[] }[];
+  model: string; effort: string; rounds: number; evidenceSha256: string; approvedAt: string;
 };
 export type WebExplanationDocument = {
   schema: 'theorem-os.web-explanation.v1'; target: string; language: WebExplanationLanguage;
@@ -215,7 +255,12 @@ export type WebExplanationDocument = {
     ambiguousExcerpts: number };
   /** Writer and auditor configurations, without profiles or executables. */
   model: string; effort: string; auditors: number; rounds: number; tokens: number | null;
+  /** Present when the explanation used phrase alignment. */ alignment?: string;
+  /** Present when the proof was bound to an approved formalization. */ problem?: WebExplanationProblem;
 };
+/** The payload of an offline explanation report (informalize --phase report): the page with nothing to fetch. */
+export type WebExplanationReport = { schema: 'theorem-os.web-explanation-report.v1'; title: string; environment: WebEnvironment;
+  proof: string; document: WebExplanationDocument; markdown: string; filename: string };
 export type WebExplanationProgress = { phase: WebExplanationPhase; batches?: number; approvedBatches?: number; round?: number;
   tokens?: number; updatedAt: string };
 export type WebExplanation = {
