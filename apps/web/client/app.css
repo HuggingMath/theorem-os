@@ -1094,15 +1094,18 @@ textarea.expanded-source{display:block;width:100%;height:100%;min-height:0;resiz
   .editor-footer .button,.settings-footer .button,.confirm-footer .button{min-height:38px}
 }
 @media(max-width:560px){
-  .brand{font-size:17px;gap:6px}
+  .brand{font-size:16px;gap:6px}
   .brand img{width:23px;height:23px}
-  .model-menu{max-width:144px;font-size:var(--text-xs);gap:5px;padding-inline:7px}
-  .model-menu>svg:first-child{display:none}
-  .connection-status{padding-left:2px;gap:5px;font-size:var(--text-xs)}
+  .model-menu{max-width:144px;font-size:var(--text-xs);gap:5px;padding-inline:6px}
+  /* Only the model name is left on a phone: the button still opens the settings, and the name reads in full. */
+  .model-menu>svg{display:none}
+  /* The status keeps only its dot (the label stays in the title and for screen readers), so the model name has room. */
+  .connection-status{font-size:0;padding-inline:4px;gap:0}
   .status-dot{width:5px;height:5px}
   /* Signed in, the account button joins the actions; the model name gives way (it truncates) so nothing leaves the screen. */
   .topbar-actions{gap:1px;flex-shrink:1}
   .topbar .model-menu{min-width:0}
+  .topbar #open-glossary{width:30px;height:32px}
   .mobile-switch{padding-inline:18px;gap:26px}
   .composer-heading{padding-inline:17px}
   .composer-heading h1{font-size:var(--text-sm)}
@@ -1237,7 +1240,7 @@ textarea.expanded-source{display:block;width:100%;height:100%;min-height:0;resiz
 @media(max-width:380px){
   .brand{font-size:var(--text-md);gap:5px}
   .brand img{width:21px;height:21px}
-  .model-menu{max-width:115px;padding-inline:5px}
+  .model-menu{max-width:120px;padding-inline:6px}
   .connection-status{font-size:0;padding-inline:4px;gap:0}
   .template-suggestion{gap:8px}
   .template-suggestion .suggestion-environment{font-size:var(--text-xs);max-width:34%}
@@ -2170,6 +2173,8 @@ body.share-page{height:auto;min-height:100dvh;overflow:visible}
 .agent-route-outcome{color:var(--gray-500)}
 .agent-route-step[data-outcome=passed] .agent-route-outcome{color:var(--green-700)}
 .agent-route-step[data-outcome=failed] .agent-route-outcome{color:var(--red-700)}
+.agent-route-step .agent-route-superseded{color:var(--gray-500)}
+.agent-route-step[data-superseded] .agent-route-label{border-style:dashed}
 .agent-route-more{color:var(--gray-500);padding-top:4px}
 @media (max-width:560px){.agent-route-lane{grid-template-columns:minmax(0,1fr)}}
 button.agent-route-label{cursor:pointer;font-size:inherit;color:inherit;line-height:inherit;transition:border-color .15s,background-color .15s}

@@ -68,7 +68,7 @@ export function formatDuration(value: number | null): string {
 }
 /** A finished duration as a reader says it: 26 秒, 6 分 18 秒, 1 小时 5 分. */
 export function readableDuration(value: number): string {
-  const seconds = Math.round(Math.max(0, value) / 1000), minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+  const seconds = Math.floor(Math.max(0, value) / 1000), minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
   if (seconds < 60) return t('{0} 秒', seconds);
   if (minutes < 60) return seconds % 60 ? t('{0} 分 {1} 秒', minutes, seconds % 60) : t('{0} 分钟', minutes);
   return minutes % 60 ? t('{0} 小时 {1} 分', hours, minutes % 60) : t('{0} 小时', hours);

@@ -6,6 +6,8 @@ export type RouteItem = { type: 'event'; event: WebEvent } | { type: 'action'; a
 export type RouteStep = {
   kind: RouteStepKind; at: string; count: number; outcome?: 'passed' | 'failed'; taskId?: string; reviewing?: boolean;
   /** A Lead turn in which the research plan changed. */ planning?: boolean;
+  /** The work was for an assignment a later plan replaced (the host superseded its delivery). */ superseded?: boolean;
+  /** Taking a task this Agent already had: the plan was revised and the task handed out again. */ again?: boolean;
   items: RouteItem[];
 };
 export type AgentRoute = { workerId: string; steps: RouteStep[] };
@@ -25,6 +27,8 @@ const closing = new Set(['proof_checked', 'task_checked', 'task_check_reused', '
 // Heartbeats say only that a session is alive; every other event about an Agent is shown inside its current step.
 const quiet = new Set(['worker_activity']);
 const humanEdits = new Set(['human_edit_queued', 'edit_received', 'edit_applied']);
+// The host replaced the Agent's assignment or delivery with a newer version of the plan.
+const superseding = new Set(['task_delivery_superseded', 'assignment_superseded']);
 const verdict = (event: WebEvent): RouteStep['outcome'] => {
   const details = event.details;
   if (event.type === 'evaluation_finished') return details?.status === 'passed' ? 'passed' : 'failed';
@@ -54,6 +58,7 @@ export function mergeAgentActions(actions: readonly WebAgentAction[]): WebAgentA
  */
 export function agentRoutes(events: readonly WebEvent[], options: { actions?: readonly WebAgentAction[]; lead?: string } = {}): AgentRoute[] {
   const routes = new Map<string, AgentRoute>(), owners = new Map<string, string>(), reviewing = new Set<string>();
+  const taken = new Map<string, Set<string>>();
   let accepting: string | undefined;
   const routeOf = (workerId: string) => {
     let route = routes.get(workerId);
@@ -72,6 +77,7 @@ export function agentRoutes(events: readonly WebEvent[], options: { actions?: re
       const step = workerId ? routes.get(workerId)?.steps.at(-1) : undefined;
       if (!step || quiet.has(event.type) || (event.type === 'plan_updated' && (turns.get(workerId!) ?? '') < edited)) return;
       step.items.push({ type: 'event', event });
+      if (superseding.has(event.type)) step.superseded = true;
       if (event.type === 'plan_updated' && step.kind === 'write') step.planning = true;
       return;
     }
@@ -82,8 +88,15 @@ export function agentRoutes(events: readonly WebEvent[], options: { actions?: re
     if (kind === 'accept') accepting = workerId;
     const route = routeOf(workerId);
     const last = route.steps.at(-1), outcome = verdict(event);
-    const step: RouteStep = last?.kind === kind ? last : { kind, at: event.at, count: 0, items: [], ...(kind === 'write' && reviewing.has(workerId) ? { reviewing: true } : {}) };
+    const step: RouteStep = last?.kind === kind ? last : { kind, at: event.at, count: 0, items: [], ...((kind === 'write' || kind === 'read') && reviewing.has(workerId) ? { reviewing: true } : {}) };
     if (step !== last) route.steps.push(step);
+    if (event.type === 'task_assigned') delete step.reviewing;
+    if (event.type === 'review_assigned' || event.type === 'statement_review_assigned') step.reviewing = true;
+    if (event.type === 'task_assigned' && details.taskId) {
+      const tasks = taken.get(workerId) ?? new Set<string>();
+      if (tasks.has(details.taskId)) step.again = true;
+      tasks.add(details.taskId); taken.set(workerId, tasks);
+    }
     step.items.push({ type: 'event', event });
     if (closing.has(event.type)) step.count++;
     if (outcome) step.outcome = outcome;
