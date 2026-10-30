@@ -7,12 +7,13 @@ import { layoutTaskGraph } from '../client/taskGraphLayout';
 import { renderAgentCards } from '../client/ui/AgentCards';
 import { CollaborationSurface } from '../client/ui/CollaborationSurface';
 import { createCommandPalette } from '../client/ui/CommandPalette';
-import { renderConversation, type ConversationRun } from '../client/ui/Conversation';
+import { renderAgentRoute } from '../client/ui/AgentRoute';
+import { renderConversation } from '../client/ui/Conversation';
+import { renderDetailPanel, type ResultPanelProps } from '../client/ui/DetailPanel';
 import { Icon, iconNames, Spinner } from '../client/ui/Icon';
 import { renderProgressSummary } from '../client/ui/ProgressSummary';
 import { renderRunHeader, type RunHeaderProps } from '../client/ui/RunHeader';
 import { renderRunMonitor } from '../client/ui/RunMonitor';
-import { renderRunOverview, type RunOverviewProps } from '../client/ui/RunOverview';
 import { Code, Detail, DiffRows, Empty, Facts } from '../client/ui/Section';
 import { renderTaskGraph, renderTaskList, type TaskCard } from '../client/ui/TaskBoard';
 import { renderTaskInspector } from '../client/ui/TaskInspector';
@@ -45,7 +46,7 @@ function Specimen(props: { id: string; title: string; note: string; children: Co
 const at = '2026-10-26T09:41:07.000Z';
 const lean = (body: string) => `theorem add_comm' (a b : Nat) : a + b = b + a := by\n${body}`;
 const card = (id: string, kind: string, state: string, proof: string, objective: string, owner: string, selected = false, share?: number): TaskCard => ({
-  id, version: `${id}@3f2a91c`, kind, kindLabel: kind === 'goal' ? t('原始目标') : kind === 'lemma' ? t('引理') : t('研究'),
+  id, name: id, version: `${id}@3f2a91c`, kind, kindLabel: kind === 'goal' ? t('原始目标') : kind === 'lemma' ? t('引理') : t('研究'),
   state, stateLabel: state === 'integrated' ? t('已集成') : state === 'running' ? t('进行中') : t('待调度'), objective, owner,
   proof, proofLabel: proof === 'checked' ? t('已记录检查') : t('尚无证明'), selected,
   tokens: share === undefined ? undefined : { label: share > .5 ? '182K' : '41K', share, detail: '' },
@@ -57,37 +58,41 @@ const cards = [
 ];
 const graphEdges = [{ from: 'T1', to: 'G', kind: 'and' as const }, { from: 'T2', to: 'G', kind: 'and' as const }];
 
-const tabs = [['collaboration', t('研究协作')], ['source', t('Lean 源码')], ['modules', t('模块')], ['overview', t('概览')], ['report', t('报告')], ['events', t('活动')]] as const;
+const tabs = [['result', t('结果')], ['collaboration', t('协作')], ['source', t('源码')], ['events', t('活动')]] as const;
 const header = (sample: boolean, active: boolean): RunHeaderProps => ({
-  title: 'add_comm\'', id: 'run-7c1d0e2a', environment: 'Lean 4.19 · Mathlib', updated: t('更新 {0}', '09:41:07'), error: '',
+  title: 'add_comm\'', id: 'run-7c1d0e2a', updated: at, error: '',
   status: active ? { key: 'running', label: t('构造证明'), tone: 'running', symbol: 'refresh-cw' } : { key: 'passed', label: t('完整原题通过'), tone: 'passed', symbol: 'circle-check' },
   stages: [{ label: t('排队'), state: 'done', clock: '0:02' }, { label: t('准备环境'), state: 'done', clock: '0:41' },
     { label: t('构造证明'), state: active ? 'active' : 'done', clock: '6:18' }, { label: t('独立验收'), state: active ? 'pending' : 'done', clock: active ? '' : '0:37' }],
-  elapsed: '7:38', tabs, tab: 'overview', active, cancelling: false, deleting: false, connected: true,
+  elapsed: '7:38', tabs, tab: 'result', active, cancelling: false, deleting: false, connected: true,
   download: active ? undefined : '#', shareable: !sample && !active, sample,
 });
-const overview: RunOverviewProps = {
-  runId: 'run-7c1d0e2a', active: false, tone: 'passed', symbol: 'circle-check', title: t('完整原题通过'), description: t('完整原题已通过独立验收'),
-  phaseLabel: t('独立验收'), elapsed: '7:38', solving: '6:18', budget: '30:00', budgetUsed: .21,
-  steps: [{ label: t('排队'), state: 'done', stateLabel: '✓', clock: '0:02', share: .01 }, { label: t('准备环境'), state: 'done', stateLabel: '✓', clock: '0:41', share: .09 },
-    { label: t('构造证明'), state: 'done', stateLabel: '✓', clock: '6:18', share: .82 }, { label: t('独立验收'), state: 'done', stateLabel: '✓', clock: '0:37', share: .08 }],
-  downloads: { proof: true, report: true }, task: 'Prove add_comm\' for natural numbers without using Nat.add_comm.',
-  facts: [{ label: 'Model', value: 'deepseek-flash', mono: true }, { label: 'Lean', value: '4.19.0', mono: true }],
-  agents: [{ id: 'lead', state: 'idle', phase: 'finished' }, { id: 'prover-1', state: 'idle', phase: 'finished', task: 'T1' }],
-  events: [{ sequence: 3, at, time: '09:41:07', type: 'evaluation_finished', message: 'S3 accepted the full statement.' },
-    { sequence: 2, at, time: '09:40:30', type: 'evaluation_started', message: 'Independent acceptance started.' },
-    { sequence: 1, at, time: '09:34:12', type: 'proof_checked', message: 'T1 and T2 checked; goal assembled.' }],
-  eventCount: 41,
-};
-const conversation = (working: boolean, failed = false): ConversationRun => ({
-  id: working ? 'live' : failed ? 'failed' : 'done', task: lean('  sorry'), environment: 'Lean 4.19', model: 'deepseek-flash', working,
-  events: [{ sequence: 1, at, time: '09:33:40', message: 'Environment ready.' }, { sequence: 2, at, time: '09:34:12', message: 'Lead split the goal into T1 and T2.' }],
-  result: failed ? { tone: 'failed', symbol: 'circle-alert', label: t('运行失败'), description: 'The provider rejected the API key.', candidate: false }
-    : working ? { tone: 'running', symbol: 'refresh-cw', label: t('构造证明'), description: 'prover-2 is working on T2.', candidate: true }
-    : { tone: 'passed', symbol: 'circle-check', label: t('完整原题通过'), description: t('完整原题已通过独立验收'), candidate: false },
-  recovery: failed ? [{ id: 'key', label: t('研究配置') }, { id: 'retry', label: t('重新连接') }] : undefined,
-  feedback: failed ? '#' : undefined, notify: working ? 'off' : undefined,
+const facts = [{ label: t('证明环境'), value: 'Mathlib', mono: false }, { label: t('模型'), value: 'deepseek-flash', mono: true }];
+const config = [{ label: t('Agent 数量'), value: '3', mono: false }, { label: t('Lean 版本'), value: '4.19.0', mono: true }];
+const proofText = lean('  induction b with\n  | zero => simp\n  | succ n ih =>\n    -- T2 closes the step\n    rw [Nat.add_succ, ih]\n    rfl');
+/** The result tab of an accepted run, a live run with a candidate and a run stopped by its provider. */
+const result = (kind: 'passed' | 'live' | 'failed'): ResultPanelProps => ({
+  verdict: kind === 'passed' ? { run: 'run-7c1d0e2a', tone: 'passed', symbol: 'circle-check', title: t('完整原题已通过独立验收'), description: t('完整原题通过独立 Lean 验收。'), active: false, candidate: false }
+    : kind === 'live' ? { run: 'run-7c1d0e2a', tone: 'running', symbol: 'refresh-cw', title: t('研究正在运行'), description: t('正在构造与检查候选证明。'), active: true, candidate: true,
+      latest: { at, time: '09:34:12', message: 'Lead split the goal into T1 and T2.' } }
+      : { run: 'run-7c1d0e2a', tone: 'failed', symbol: 'circle-alert', title: t('API Key 未通过认证'), description: 'The provider rejected the API key.', active: false, candidate: false },
+  recovery: kind === 'failed' ? [{ id: 'key', label: t('更换 API Key') }] : [], ...(kind === 'live' ? { notify: 'off' as const } : {}), ...(kind === 'failed' ? { feedback: '#' } : {}),
+  ...(kind === 'failed' ? {} : { proof: { source: proofText, verified: kind === 'passed' } }),
+  active: kind === 'live', route: true, written: name => name,
+  report: kind === 'passed' ? { kind: 'summary', accepted: true, summary: { metrics: [{ label: 'Turns', value: '14' }], identity: [], checks: [
+    { id: 'evaluation', label: t('独立验收'), status: t('通过'), tone: 'passed', targets: [{ name: 'add_comm\'', status: t('通过'), tone: 'passed', sorryCount: 0, diagnostics: [] }], omittedTargets: 0 }] } }
+    : kind === 'live' ? { kind: 'empty', active: true } : { kind: 'error', error: '401 Unauthorized' },
+  task: 'Prove add_comm\' for natural numbers without using Nat.add_comm.', facts, config,
 });
+function drawResult(kind: 'passed' | 'live' | 'failed') {
+  return (root: HTMLElement) => {
+    renderDetailPanel(root, { tab: 'result', result: result(kind) });
+    renderAgentRoute(root.querySelector<HTMLElement>('[data-result-route]')!, { running: kind === 'live', planned: kind === 'failed' ? 0 : 2, graph: 'elsewhere', time: () => '09:34',
+      tasks: new Map([['T2', 'add_succ']]),
+      routes: kind === 'failed' ? [] : [{ workerId: 'lead', name: 'Lead', steps: [{ kind: 'read', at, count: 1, items: [] }, { kind: 'write', at, count: 2, items: [] }] },
+        { workerId: 'prover-2', name: 'Prover', steps: [{ kind: 'read', at, count: 1, taskId: 'T2', items: [] }, { kind: 'check', at, count: 3, outcome: kind === 'passed' ? 'passed' : undefined, items: [] }] }] });
+  };
+}
 
 const before = lean('  induction b with\n  | zero => simp\n  | succ n ih => sorry'), after = lean('  induction b with\n  | zero => simp\n  | succ n ih => omega');
 const comparison = compareSources(before, after);
@@ -132,7 +137,7 @@ installTermHints(noop);
 
 const specimens = [
   ['foundations', 'Foundations'], ['sections', 'Section helpers'], ['topbar', 'Topbar'], ['conversation', 'Conversation'],
-  ['monitor', 'Run monitor'], ['header', 'Run header'], ['overview', 'Run overview'], ['collaboration', 'Collaboration'],
+  ['monitor', 'Run monitor'], ['header', 'Run header'], ['result', 'Result'], ['collaboration', 'Collaboration'],
 ] as const;
 
 function Preview() {
@@ -163,18 +168,18 @@ function Preview() {
         </div>
       </Specimen>
       <Specimen id="topbar" title="Topbar" note="Connected with a live run and an account; offline without them.">
-        <Mount class="topbar" data-variant="live" draw={root => renderTopbar(root, { title: 'add_comm\'', model: 'deepseek-flash', connection: { tone: 'ready', label: t('环境就绪') },
+        <Mount class="topbar" data-variant="live" draw={root => renderTopbar(root, { history: { docked: true, expanded: true }, model: 'deepseek-flash', connection: { tone: 'ready', label: t('环境就绪') },
           settingsDisabled: false, mac: false, account: 'reader@example.com', live: { label: t('构造证明'), detail: '6:18', tone: 'running', count: 1 },
-          onHistory: noop, onSettings: noop, onPalette: () => palette.open(), onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
-        <Mount class="topbar" data-variant="offline" draw={root => renderTopbar(root, { title: t('新研究'), model: 'deepseek-flash', connection: { tone: 'offline', label: t('连接中断') },
-          settingsDisabled: true, mac: true, onHistory: noop, onSettings: noop, onPalette: noop, onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
+          onHistory: noop, onDraft: noop, onSettings: noop, onPalette: () => palette.open(), onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
+        <Mount class="topbar" data-variant="offline" draw={root => renderTopbar(root, { history: { docked: false, expanded: false }, model: 'deepseek-flash', connection: { tone: 'offline', label: t('连接中断') },
+          settingsDisabled: true, mac: true, onHistory: noop, onDraft: noop, onSettings: noop, onPalette: noop, onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
+        {/* The docked history button controls the workbench's sidebar; this stands in for it. */}
+        <div id="history-sidebar" hidden />
       </Specimen>
-      <Specimen id="conversation" title="Conversation" note="First-run welcome, a live run, an accepted run and a failure with recovery.">
+      <Specimen id="conversation" title="New research" note="The welcome above the composer: first run with the sample, and a returning reader.">
         <div class="preview-grid">
           <Mount class="chat-thread" draw={root => renderConversation(root, { firstRun: true, sample: { title: 'Commutativity of Nat addition' }, templates: [{ id: 'add', name: 'add_comm\'', environment: 'Lean 4.19' }] })} />
-          <Mount class="chat-thread" draw={root => renderConversation(root, { run: conversation(true), templates: [], firstRun: false })} />
-          <Mount class="chat-thread" draw={root => renderConversation(root, { run: conversation(false), templates: [], firstRun: false })} />
-          <Mount class="chat-thread" draw={root => renderConversation(root, { run: conversation(false, true), templates: [], firstRun: false })} />
+          <Mount class="chat-thread" draw={root => renderConversation(root, { firstRun: false, templates: [{ id: 'add', name: 'add_comm\'', environment: 'Lean 4.19' }] })} />
         </div>
       </Specimen>
       <Specimen id="monitor" title="Run monitor" note="One run in progress and one finished, dismissible run.">
@@ -188,8 +193,10 @@ function Preview() {
         <section class="run-detail preview-column" aria-label="Accepted"><Mount draw={root => renderRunHeader(root, header(false, false))} /></section>
         <section class="run-detail preview-column" aria-label="Sample"><Mount draw={root => renderRunHeader(root, header(true, false))} /></section>
       </Specimen>
-      <Specimen id="overview" title="Run overview" note="The overview tab of an accepted run.">
-        <div class="detail-panel"><Mount class="overview-workspace" draw={root => renderRunOverview(root, overview)} /></div>
+      <Specimen id="result" title="Result" note="The result tab of an accepted run, a live run and a failed run.">
+        <Mount class="detail-panel" data-variant="passed" draw={drawResult('passed')} />
+        <Mount class="detail-panel" data-variant="live" draw={drawResult('live')} />
+        <Mount class="detail-panel" data-variant="failed" draw={drawResult('failed')} />
       </Specimen>
       <Specimen id="collaboration" title="Collaboration" note="The collaboration surface with a graph, an inspected task and Agent cards.">
         <Mount draw={drawCollaboration} />

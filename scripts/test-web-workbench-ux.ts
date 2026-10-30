@@ -116,7 +116,7 @@ const heading = (page: Page, id: Section) => page.locator(section(id)).locator('
 const focused = (page: Page, selector: string) => page.locator(selector).evaluate(node => document.activeElement === node);
 async function create(h: Harness, title = input.task) {
   const run = await postRun(h, { ...input, task: title }); h.runIds.push(run.id);
-  await refreshHistory(h.page); await selectHistoryRun(h.page, run.id);
+  await refreshHistory(h.page); await selectHistoryRun(h.page, run.id, 'collaboration');
   await h.page.locator('.collab-navigation').waitFor(); await h.page.locator('[data-review-id="review-0"]').waitFor(); return run;
 }
 async function poll(page: Page) {
@@ -219,12 +219,12 @@ try {
     assert.equal(await page.locator('[data-guidance-target]').inputValue(), 'researcher'); assert.equal(await page.locator(text).inputValue(), 'Retain run A task guidance');
     const runB = await create(h, 'Workbench usability run B'); await jump(page, 'guidance');
     assert.equal(await page.locator(text).inputValue(), ''); assert.equal(await page.locator('[data-guidance-kind]').inputValue(), 'lead');
-    await page.locator(text).fill('Separate run B draft'); await selectHistoryRun(page, runA.id);
+    await page.locator(text).fill('Separate run B draft'); await selectHistoryRun(page, runA.id, 'collaboration');
     assert.equal(await page.locator(text).inputValue(), 'Retain run A task guidance'); assert.equal(await page.locator('[data-guidance-target]').inputValue(), 'researcher');
     await returnTo(page, workerButton); await page.locator('[data-collab-nav-guide]').click();
     assert.equal(await focused(page, text), true); assert.equal(await page.locator('[data-guidance-kind]').inputValue(), 'worker');
     assert.equal(await page.locator('[data-guidance-target]').inputValue(), 'researcher'); assert.equal(await page.locator(text).inputValue(), 'Retain run A task guidance');
-    await selectHistoryRun(page, runB.id); assert.equal(await page.locator(text).inputValue(), 'Separate run B draft');
+    await selectHistoryRun(page, runB.id, 'collaboration'); assert.equal(await page.locator(text).inputValue(), 'Separate run B draft');
   });
 
   await scenario('review, mathematical change and knowledge references navigate to guidance and return without losing filters or nested reading', async h => {

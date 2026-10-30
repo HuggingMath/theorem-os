@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig, type WebConfig } from '../apps/web/config';
-import { completionMail, mailsCompletion } from '../apps/web/completionMail';
+import { completionMail, mailsCompletion, planApprovalMail } from '../apps/web/completionMail';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput, WebSession, WorkerInput, WorkerMessage } from '../apps/web/shared';
 
@@ -15,12 +15,16 @@ const input = (task: string): WebRunInput => ({ providerId: 'openai', apiKey: se
   source: 'theorem example : True := by sorry', task, maxTurns: 2, maxRunSeconds: 30, workers: 1, coordination: 'cooperative' });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
-/** Tasks named `pass` are accepted at once, `fail` ends with a worker error, anything else waits to be cancelled. */
+/**
+ * Tasks named `pass` are accepted at once, `fail` ends with a worker error, `plan` asks for the plan approval and then
+ * waits like anything else to be cancelled.
+ */
 class ScriptedRunner implements WebRunner {
   async readiness() { return { ready: true, message: 'Test worker ready' }; }
   async run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     if (value.input.task === 'pass') { send({ type: 'result', result: { status: 'evaluated_passed', proof: secretProof, report: {} } }); return; }
     if (value.input.task === 'fail') { send({ type: 'error', message: 'Model session failed' }); return; }
+    if (value.input.task === 'plan') send({ type: 'progress', event: 'plan_approval_requested', message: '研究计划等待你批准，Agent 暂不开始工作' });
     await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true }));
   }
 }
@@ -41,6 +45,36 @@ describe('completion mail content', () => {
     expect(mail.text).toContain('Email me when research ends');
     expect(mail.text).not.toMatch(/secret_source|trivial|sk-/u);
     expect(completionMail(run({ status: 'error', phase: 'failed' }), 'https://app.theoremos.top').subject).toContain('运行出错');
+  });
+
+  it('says which limit ended a run that reached no acceptance verdict', () => {
+    const subject = (patch: Partial<WebRun>) => completionMail(run(patch), 'https://app.theoremos.top').subject;
+    const ended = (result: Partial<NonNullable<WebRun['result']>>, patch: Partial<WebRun> = {}) =>
+      run({ result: { status: 'incomplete', proof: '', report: {}, ...result } as WebRun['result'], ...patch });
+    expect(subject(ended({ status: 'limit_reached' }))).toBe('TheoremOS · 解题时间用完：Infinitely many primes');
+    expect(subject(ended({ status: 'limit_reached' }, { failure: { kind: 'budget', reason: 'math_total_token_limit' } }))).toContain('用量到达上限');
+    expect(subject(ended({ report: { stopReason: 'math_turn_limit_reached' } }))).toContain('研究轮次用完');
+    expect(subject(ended({ report: { stopReason: 'math_research_routes_exhausted' } }))).toContain('研究路线用尽');
+    expect(subject(ended({}))).toContain('已结束');
+    const text = (value: WebRun) => completionMail(value, 'https://app.theoremos.top').text;
+    expect(text(ended({ status: 'limit_reached' }))).toContain('Your research "Infinitely many primes" used up its solve time.');
+    const preparation = ended({ status: 'limit_reached' }, { failure: { kind: 'time_limit', reason: 'math_preparation_stopped' } });
+    expect(text(preparation)).toContain('解题没有开始');
+    expect(text(preparation)).not.toContain('提高解题预算');
+    expect(completionMail(preparation, 'https://app.theoremos.top').subject).toContain('证明环境准备超时');
+    // The owner was mailed when the plan was ready; the stop mail says the wait is what used the time.
+    const unapproved = ended({ status: 'limit_reached' }, { observation: { inspection: { planApproval: { status: 'pending' } } } as unknown as WebRun['observation'] });
+    expect(text(unapproved)).toContain('研究计划直到解题时间用完都没有批准');
+    expect(text(unapproved)).not.toMatch(/secret_source|Prove it|sk-/u);
+  });
+
+  it('asks to approve a plan with a link back, and leaves out the plan, source and key', () => {
+    const mail = planApprovalMail(run({ status: 'running', phase: 'plan_approval_requested', finishedAt: undefined }), 'https://app.theoremos.top');
+    expect(mail.subject).toBe('TheoremOS · 研究计划等你批准：Infinitely many primes');
+    expect(mail.text).toContain('https://app.theoremos.top/?run=0f0e-run');
+    expect(mail.text).toContain('计入解题预算');
+    expect(mail.text).toContain('Email me when research ends');
+    expect(mail.text).not.toMatch(/secret_source|Prove it|sk-/u);
   });
 
   it('mails runs that end on their own, never stopped or restart-interrupted ones', () => {
@@ -131,6 +165,24 @@ describe('completion mail delivery', () => {
     expect((await (await request('/api/session', alice)).json() as WebSession).account).toEqual({ email: 'alice@example.org' });
     const loud = (await (await request('/api/runs', alice, input('pass'))).json()).run;
     await settle(alice, loud.id);
+    expect(completions()).toHaveLength(1);
+  });
+
+  it('mails once when a plan waits for approval, under the same preference, and not again when the run is stopped', async () => {
+    const alice = await login('alice@example.org');
+    const waiting = (await (await request('/api/runs', alice, input('plan'))).json()).run;
+    for (let attempt = 0; completions().length === 0 && attempt < 100; attempt++) await tick();
+    expect(completions()).toEqual([expect.objectContaining({ to: 'alice@example.org', subject: expect.stringContaining('研究计划等你批准') })]);
+    expect(completions()[0]!.text).toContain(`/?run=${waiting.id}`);
+    await request(`/api/runs/${waiting.id}/cancel`, alice, {});
+    await settle(alice, waiting.id);
+    expect(completions()).toHaveLength(1);
+
+    expect((await request('/api/auth/account', alice, { completionEmail: false }, 'PATCH')).status).toBe(200);
+    const quiet = (await (await request('/api/runs', alice, input('plan'))).json()).run;
+    for (let attempt = 0; attempt < 20; attempt++) await tick();
+    await request(`/api/runs/${quiet.id}/cancel`, alice, {});
+    await settle(alice, quiet.id);
     expect(completions()).toHaveLength(1);
   });
 

@@ -86,7 +86,7 @@ try {
     const page = await context.newPage(), errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
-    await page.locator('#submit-run:enabled').waitFor();
+    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 
     // A statement that compiles: the composer says so once the edit settles, and the list stays empty.
     // Each locale uses its own text, since the service answers a repeated statement from its cache.

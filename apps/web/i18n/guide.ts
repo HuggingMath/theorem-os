@@ -18,8 +18,8 @@ export const guide: Record<string, string> = {
   "先看示例": "Look at the sample first",
   "首页的「先看一次完整运行」是一次录制好的运行，不需要 API Key。可以逐个标签页浏览，了解一次研究从拆分任务到验收的全过程。":
     "\"See a complete run first\" on the start page is a recorded run that needs no API key. Browse its tabs to see a whole research run, from splitting the work to acceptance.",
-  "点输入框上方的 Submission.lean 打开源码编辑器，或用回形针附加 .lean 文件，也可以直接选一道示例题目。要证明的定理用 sorry 留空；定理的声明在研究过程中不会被改动。":
-    "Click Submission.lean above the input to open the source editor, attach a .lean file with the paperclip, or pick one of the sample problems. Leave each theorem to prove as sorry; theorem statements are never changed during the research.",
+  "点输入框上方的「原始题目」打开源码编辑器，或用回形针附加 .lean 文件，也可以直接选一道示例题目。要证明的定理用 sorry 留空；定理的声明在研究过程中不会被改动。":
+    "Click “Original problem” above the input to open the source editor, attach a .lean file with the paperclip, or pick one of the sample problems. Leave each theorem to prove as sorry; theorem statements are never changed during the research.",
   "确认原题能提交": "Make sure the problem can be submitted",
   "修改源码后，工作台会自动用 Lean 检查一遍原题，输入框上方显示结果。语法错误或缺少待证定理时会标出位置，改好之后才能提交。":
     "After you edit the source, the workbench checks the problem with Lean and shows the result above the input. Syntax errors or a missing theorem to prove are marked in place and must be fixed before you can submit.",
@@ -37,8 +37,8 @@ export const guide: Record<string, string> = {
   "阶段进度、轮次、耗时和 Token 用量。": "Stage progress, turns, time and token usage.",
   "结论、每个目标定理的检查记录、卡住的地方，以及证明结构。": "The verdict, the checks for each target theorem, where the work got stuck, and the proof outline.",
   "按时间排列的完整事件记录。": "Every event in time order.",
-  "运行时间较长时，可以开启「结束时通知我」，研究结束时浏览器会提醒你。手机上用顶部的「对话 / 工作区」切换两栏。":
-    "For a long run, turn on \"Notify me when done\" and the browser will tell you when the research finishes. On a phone, switch between the two panes with Chat / Workspace at the top.",
+  "运行时间较长时，可以开启「结束时通知我」，研究结束时浏览器会提醒你；开了「先审计划」的研究，计划拟好等你批准时也会提醒。手机上用顶部的「对话 / 工作区」切换两栏。":
+    "For a long run, turn on \"Notify me when done\" and the browser will tell you when the research finishes, and for a run with \"Review plan first\" also when its plan is ready for your approval. On a phone, switch between the two panes with Chat / Workspace at the top.",
   "所有目标定理都通过了独立验收。这是唯一算数的结论。": "Every target theorem passed independent acceptance. This is the only verdict that counts.",
   "Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。": "The Agents submitted a candidate proof, but independent acceptance rejected it. The report says which check failed.",
   "到达轮次、时间或用量上限时还没有完成证明。已检查的成果保留在报告里，可以提高预算后重新运行。":

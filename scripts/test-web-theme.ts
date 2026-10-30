@@ -12,6 +12,7 @@ import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, settled, startBrowser } from './web-scenario';
+import { openModulesTab } from './web-ui-controls';
 
 /**
  * Light and dark interface: without a choice the page follows the system, before the first paint and live when the
@@ -52,7 +53,7 @@ async function open(browser: Browser, colorScheme: 'light' | 'dark', width = 144
 }
 async function workbench(page: Page) {
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await settled(page);
 }
 async function paletteRun(page: Page, id: string) {
@@ -72,7 +73,7 @@ try {
     await page.route('**/app.js', async route => { await new Promise(resolve => setTimeout(resolve, 400)); await route.continue(); });
     await page.goto(origin, { waitUntil: 'domcontentloaded' });
     assert.deepEqual(await theme(page), { theme: scheme, background: paper[scheme], chrome: scheme === 'dark' ? '#1b1a18' : '#f5f4ee' }, `first paint follows the ${scheme} system theme`);
-    await page.locator('#submit-run:enabled').waitFor();
+    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     assert.equal(await stored(page), null, 'Following the system stores nothing');
     await page.emulateMedia({ colorScheme: scheme === 'light' ? 'dark' : 'light' });
     await page.waitForFunction(expected => document.documentElement.dataset.theme === expected, scheme === 'light' ? 'dark' : 'light');
@@ -91,7 +92,7 @@ try {
     const other = await context.newPage();
     await workbench(other);
     assert.equal((await theme(other)).theme, 'dark', 'A new tab opens with the choice');
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor();
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     assert.equal((await theme(page)).theme, 'dark', 'The choice survives a reload');
     await page.emulateMedia({ colorScheme: 'light' });
     assert.equal((await theme(page)).theme, 'dark', 'A choice is not overridden by the system');
@@ -144,7 +145,8 @@ try {
     const { context, page, errors } = await open(browser, scheme, 1440, locale);
     await workbench(page);
     await legible(page, `welcome (${scheme}, ${locale})`);
-    for (const [trigger, id] of [['#open-settings', 'run-settings'], ['#open-glossary', 'glossary-dialog'], ['#open-history', 'history-dialog'], ['.palette-trigger', 'command-palette']]) {
+    // At this width the history is the docked left column, checked with the rest of the page above.
+    for (const [trigger, id] of [['#open-settings', 'run-settings'], ['#open-glossary', 'glossary-dialog'], ['.palette-trigger', 'command-palette']]) {
       await page.locator(trigger).click();
       await page.locator(`#${id}[open]`).waitFor(); await settled(page);
       await legible(page, `${id} (${scheme}, ${locale})`, `#${id}`);
@@ -153,8 +155,11 @@ try {
     }
     await page.locator('.welcome-sample').click();
     await page.locator('[data-sample-badge]').waitFor();
-    for (const tab of ['collaboration', 'source', 'modules', 'overview', 'report', 'events']) {
-      await page.locator(`#detail-tab-${tab}`).click(); await settled(page);
+    for (const tab of ['result', 'trajectory', 'collaboration', 'source', 'events', 'modules']) {
+      if (tab === 'modules') await openModulesTab(page);
+      else await page.locator(`#detail-tab-${tab}`).click();
+      if (tab === 'trajectory') await page.locator('#detail-panel .trajectory-steps').waitFor();
+      await settled(page);
       if (tab === 'collaboration') {
         await page.locator('.collab-detail-toggle [data-collab-detail="full"]').click(); await settled(page);
       }

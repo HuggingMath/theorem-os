@@ -117,6 +117,39 @@ describe('isolated Web worker bridge', () => {
     await expect(handleWebWorkerCommand({ type: 'guidance', guidance }, options)).rejects.toThrow();
   });
 
+  it('queues a plan approval only for the exact pending version and reports each saved-checkpoint rejection', async () => {
+    const f = fixture(), options = { activeRunFile: f.activeRunFile };
+    const approval = (id: string, planVersion = 'plan-v1') => ({ type: 'plan-approval', approval: { id, planVersion } });
+    const log = path.join(path.dirname(f.stateFile), 'plan-approvals.jsonl');
+    expect(await handleWebWorkerCommand(approval('unflagged'), options)).toEqual({ id: 'unflagged', status: 'rejected',
+      reason: 'math_plan_approval_not_required', planVersion: 'plan-v1' });
+    f.state.planApproval = true; f.save();
+    expect((await handleWebWorkerCommand({ type: 'capture' }, options)).observation!.inspection.planApproval)
+      .toMatchObject({ required: true, status: 'pending', planVersion: 'plan-v1', leadRevising: false });
+    expect(await handleWebWorkerCommand(approval('stale', 'plan-v0'), options)).toEqual({ id: 'stale', status: 'rejected',
+      reason: 'math_plan_approval_version_conflict', planVersion: 'plan-v0' });
+    expect(fs.existsSync(log)).toBe(false);
+    expect(await handleWebWorkerCommand(approval('owner'), options)).toEqual({ id: 'owner', status: 'queued', planVersion: 'plan-v1' });
+    expect(await handleWebWorkerCommand(approval('owner'), options)).toEqual({ id: 'owner', status: 'already_queued', planVersion: 'plan-v1' });
+    expect(await handleWebWorkerCommand(approval('owner', 'plan-v2'), options)).toEqual({ id: 'owner', status: 'rejected',
+      reason: 'math_plan_approval_id_conflict', planVersion: 'plan-v2' });
+    expect(fs.readFileSync(log, 'utf8')).toBe(JSON.stringify({ id: 'owner', planVersion: 'plan-v1' }) + '\n');
+    await expect(handleWebWorkerCommand(approval('bad id!'), options)).rejects.toThrow();
+
+    const tasks = f.state.cooperation!.tasks;
+    f.state.cooperation!.tasks = []; f.save();
+    expect(await handleWebWorkerCommand(approval('early'), options)).toMatchObject({ status: 'rejected',
+      reason: 'math_plan_approval_plan_unavailable' });
+    f.state.cooperation!.tasks = tasks;
+    f.state.cooperation!.planApproval = { approvedId: 'owner', approvedVersion: 'plan-v1', approvedAt: 1 }; f.save();
+    expect(await handleWebWorkerCommand(approval('again'), options)).toMatchObject({ status: 'rejected',
+      reason: 'math_plan_approval_already_approved' });
+    f.state.phase = 'finished'; f.save();
+    expect(await handleWebWorkerCommand(approval('late'), options)).toMatchObject({ status: 'rejected',
+      reason: 'math_plan_approval_run_inactive' });
+    expect(fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
+  });
+
   it('reports unavailable sources as partial and retains recorded checks without accepting them', async () => {
     const f = fixture(), messages: WorkerMessage[] = [];
     f.state.problem = { ...f.state.problem, ownedFiles: ['Submission.lean', '../private.lean'] }; f.save();

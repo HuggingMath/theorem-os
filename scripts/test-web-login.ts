@@ -76,7 +76,7 @@ try {
   await page.waitForURL(`${origin}/`);
   await page.locator('#open-account').waitFor();
   assert.equal(await page.locator('#open-account').innerText(), 'alice@example.org');
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   mark('a wrong code is reported, the right code opens the workbench with the account in the top bar');
 
   // Signed in, the account button joins the top bar; on phones the model name truncates so the button stays on screen.
@@ -108,7 +108,7 @@ try {
   await page.goto(`${origin}/login.html`);
   await page.waitForURL(`${origin}/`);
   await page.locator(`#run-list [data-run-id="${older}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
-  assert.equal(new URL(page.url()).search, '', 'The run link stays in the address bar');
+  assert.equal(new URL(page.url()).search, `?run=${older}`, 'The address bar names the run the link opened');
   mark('a completion mail links to its run, and the link still opens that run after the login page');
 
   await page.click('#open-account');

@@ -153,7 +153,7 @@ const frontier = '[data-research-frontier]', blockers = '[data-research-blockers
 const producer = '[data-delivery-producer]', taskFilter = '[data-delivery-task]', query = '[data-delivery-query]';
 const list = '[data-delivery-list]', detail = '[data-delivery-detail]', inspector = '[data-collab-inspector]';
 async function create(h: Harness) {
-  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id);
+  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id, 'collaboration');
   await h.page.locator(frontier).waitFor(); await h.page.locator(`${list} [data-delivery-id="current-proof"]`).waitFor(); return run;
 }
 async function choose(page: Page, id: string) {

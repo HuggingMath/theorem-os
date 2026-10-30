@@ -66,7 +66,7 @@ try {
   {
     const { context, page, errors } = await open(browser);
     await page.goto(origin);
-    await page.locator('#submit-run:enabled').waitFor();
+    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     const welcomeGuide = page.locator('.chat-welcome a[data-guide]');
     assert.equal(await welcomeGuide.innerText(), '使用说明');
     assert.equal(await welcomeGuide.getAttribute('target'), '_blank');

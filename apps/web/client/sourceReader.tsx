@@ -1,4 +1,5 @@
 import { findSourceMatches, leanTokens, type SourceMatch, type SourceSelection } from './sourceText';
+import { leanOutline, type LeanHeading, type LeanHeadingKind } from './leanOutline';
 import { render } from 'preact';
 import { Icon } from './ui/Icon';
 import { t } from '../i18n';
@@ -6,12 +7,14 @@ import { t } from '../i18n';
 type Surface = { id: string; code: HTMLElement; scroll: HTMLElement; toolbar: HTMLElement; scope?: string;
   edit?: { source: string; open: (position: SourceSelection) => void } };
 const tokenKinds = ['comment', 'keyword', 'tactic', 'placeholder', 'string', 'number'] as const;
+const headingKinds: Record<LeanHeadingKind, string> = { theorem: t('定理'), definition: t('定义'), structure: t('结构'), instance: t('实例'), axiom: t('公理') };
 const canHighlight = () => typeof CSS !== 'undefined' && Boolean(CSS.highlights) && typeof Highlight !== 'undefined';
 function Toolbar() {
   const button = (id: string, label: string, title: string, icon: string) =>
     <button type="button" id={id} class="icon-button" aria-label={label} title={title}><Icon name={icon} /></button>;
   return <>
     <div class="source-reader-tools"><span id="source-find-location" class="mono" role="status" />
+      <button type="button" id="open-source-outline" class="source-find-toggle source-outline-toggle" aria-expanded="false" aria-controls="source-outline" title={t('按声明浏览源码')} hidden><Icon name="list-tree" />{t('目录')}<span class="field-count" /></button>
       <button type="button" id="open-source-line" class="icon-button source-line-toggle" aria-label={t('跳转行号')} aria-expanded="false" aria-controls="source-line-controls" title={t('跳转行号（Ctrl / ⌘ G）')}><Icon name="list-ordered" /></button>
       <button type="button" id="open-source-find" class="source-find-toggle" aria-expanded="false" aria-controls="source-find-controls" title={t('在源码中查找（Ctrl / ⌘ F）')}><Icon name="search" />{t('查找源码')}</button>
       <button type="button" id="edit-source-location" class="source-find-toggle" hidden><Icon name="square-pen" />{t('编辑此处')}</button></div>
@@ -28,8 +31,16 @@ function Toolbar() {
         <input type="number" id="source-line-input" min="1" step="1" inputMode="numeric" autoComplete="off" aria-describedby="source-line-range source-line-error source-find-scope" /><span id="source-line-range" class="mono" /></div>
       <div class="source-find-actions">{button('source-line-go', t('跳转至行'), t('跳转至行（Enter）'), 'corner-down-left')}{button('close-source-line', t('关闭行号定位'), t('关闭行号定位（Esc）'), 'x')}</div>
     </div>
+    <nav class="source-outline" id="source-outline" aria-label={t('源码目录')} hidden />
     <p id="source-line-error" class="source-line-error" role="status" hidden /><p id="source-find-scope" class="source-find-scope" hidden />
   </>;
+}
+/** The file's declarations in order; each jumps to its first line. A placeholder left in a body is marked. */
+function Outline(props: { headings: readonly LeanHeading[]; current?: number }) {
+  return <ol class="source-outline-list">{props.headings.map(item => <li key={`${item.line}:${item.name}`}>
+    <button type="button" class="source-outline-item" data-outline-line={item.line} aria-current={item.line === props.current ? 'location' : undefined} title={item.qualifiedName}>
+      <span class="source-outline-kind">{item.keyword === 'lemma' ? t('引理') : headingKinds[item.kind]}</span><code translate={false}>{item.name}</code>
+      {item.sorry && <span class="badge warning">sorry</span>}<span class="source-outline-line mono">{item.line}</span></button></li>)}</ol>;
 }
 
 export class SourceReader {
@@ -39,6 +50,9 @@ export class SourceReader {
   private text = '';
   private opened = false;
   private lineOpened = false;
+  private outlineOpened = false;
+  private headings: LeanHeading[] = [];
+  private drawnOutline?: { host: HTMLElement; headings: LeanHeading[]; current?: number };
   private lineInput = '1';
   private lineError = '';
   private lineStarts = [0];
@@ -63,7 +77,7 @@ export class SourceReader {
     if (this.identity !== surface.id) {
       this.identity = surface.id;
       this.opened = false; this.query = ''; this.caseSensitive = false; this.index = 0;
-      this.lineOpened = false; this.lineInput = '1'; this.lineError = ''; this.targetLine = undefined;
+      this.outlineOpened = false; this.lineOpened = false; this.lineInput = '1'; this.lineError = ''; this.targetLine = undefined;
       this.searchSignature = '';
       this.editLocation = undefined;
     }
@@ -77,6 +91,7 @@ export class SourceReader {
       this.text = source;
       this.lineStarts = [0];
       for (const match of source.matchAll(/\n/g)) this.lineStarts.push(match.index + 1);
+      this.headings = leanOutline(source);
       if (this.targetLine && this.targetLine > this.lineStarts.length) this.targetLine = undefined;
       this.searchSignature = '';
       this.paintSyntax();
@@ -109,6 +124,9 @@ export class SourceReader {
     });
     toolbar.addEventListener('click', event => {
       const id = (event.target as Element).closest('button')?.id;
+      const line = (event.target as Element).closest<HTMLElement>('[data-outline-line]')?.dataset.outlineLine;
+      if (line) { this.goToLine(Number(line)); return; }
+      if (id === 'open-source-outline') this.outlineOpened ? this.close() : this.openOutline();
       if (id === 'open-source-find') this.opened ? this.close() : this.open();
       if (id === 'close-source-find') this.close();
       if (id === 'open-source-line') this.lineOpened ? this.close() : this.openLine();
@@ -138,7 +156,7 @@ export class SourceReader {
     if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'g') {
       event.preventDefault(); this.openLine(); return true;
     }
-    if ((this.opened || this.lineOpened) && surface.toolbar.contains(target) && event.key === 'Escape') {
+    if ((this.opened || this.lineOpened || this.outlineOpened) && surface.toolbar.contains(target) && event.key === 'Escape') {
       event.preventDefault(); this.close(); return true;
     }
     if (this.opened && target === surface.toolbar.querySelector('#source-find-input') && event.key === 'Enter') {
@@ -152,7 +170,7 @@ export class SourceReader {
 
   private open() {
     this.opened = true;
-    this.lineOpened = false; this.targetLine = undefined; this.paintLine();
+    this.lineOpened = false; this.outlineOpened = false; this.targetLine = undefined; this.paintLine();
     this.expandDraft();
     this.refresh();
     if (this.matches.length) this.reveal();
@@ -161,16 +179,29 @@ export class SourceReader {
   }
 
   private close() {
-    this.opened = false; this.lineOpened = false;
+    this.opened = false; this.lineOpened = false; this.outlineOpened = false;
     this.refresh();
     this.surface?.scroll.focus({ preventScroll: true });
   }
 
   private openLine() {
-    this.opened = false; this.lineOpened = true; this.lineError = '';
+    this.opened = false; this.outlineOpened = false; this.lineOpened = true; this.lineError = '';
     this.expandDraft(); this.refresh();
     const input = this.surface?.toolbar.querySelector<HTMLInputElement>('#source-line-input');
     input?.focus({ preventScroll: true }); input?.select();
+  }
+
+  private openOutline() {
+    this.opened = false; this.lineOpened = false; this.outlineOpened = true;
+    this.expandDraft(); this.refresh();
+    const items = this.surface?.toolbar.querySelectorAll<HTMLElement>('.source-outline-item');
+    (items && ([...items].find(item => item.getAttribute('aria-current')) ?? items[0]))?.focus({ preventScroll: true });
+  }
+
+  /** Brings `line` of the shown source to the middle of the view and marks it, as 跳转行号 does. */
+  goToLine(line: number) {
+    this.lineInput = String(line); this.outlineOpened = false;
+    this.jumpToLine();
   }
 
   private jumpToLine() {
@@ -232,6 +263,19 @@ export class SourceReader {
     const match = this.matches[this.index];
     text('#source-find-location', this.opened && match ? t('第 {0} 行 · 第 {1} 列', match.line, match.column)
       : this.targetLine ? t('第 {0} 行 · 共 {1} 行', this.targetLine, this.lineStarts.length) : '');
+    const outlineToggle = toolbar.querySelector<HTMLElement>('#open-source-outline')!, outline = toolbar.querySelector<HTMLElement>('#source-outline')!;
+    // A table of contents is worth a button only with more than one entry.
+    const outlined = this.headings.length > 1, showOutline = outlined && this.outlineOpened;
+    if (outlineToggle.hidden === outlined) outlineToggle.hidden = !outlined;
+    if (outlineToggle.getAttribute('aria-expanded') !== String(showOutline)) outlineToggle.setAttribute('aria-expanded', String(showOutline));
+    text('#open-source-outline>.field-count', String(this.headings.length));
+    if (outline.hidden === showOutline) outline.hidden = !showOutline;
+    const current = this.targetLine === undefined ? undefined : this.headings.findLast(item => item.line <= this.targetLine!)?.line;
+    const drawn = this.drawnOutline;
+    if (showOutline && (drawn?.host !== outline || drawn.headings !== this.headings || drawn.current !== current)) {
+      this.drawnOutline = { host: outline, headings: this.headings, current };
+      render(<Outline headings={this.headings} current={current} />, outline);
+    }
     const lineControls = toolbar.querySelector<HTMLElement>('#source-line-controls')!;
     if (lineControls.hidden === this.lineOpened) lineControls.hidden = !this.lineOpened;
     const lineToggle = toolbar.querySelector('#open-source-line')!;

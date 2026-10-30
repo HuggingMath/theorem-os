@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
@@ -79,6 +80,8 @@ class FixtureRunner implements WebRunner {
       return { id: command.guidance.id, status: 'queued', guidance: { ...command.guidance, status: 'queued', createdAt: now, updatedAt: now },
         ...(this.commandObservation ? { observation: this.commandObservation } : {}) };
     }
+    if (command.type === 'plan-approval') return { id: command.approval.id, status: 'queued', planVersion: command.approval.planVersion,
+      ...(this.commandObservation ? { observation: this.commandObservation } : {}) };
     return { id: command.proposal.id, status: command.type === 'edit-preview' ? 'validated' : 'queued',
       baseVersion: command.proposal.baseVersion, affectedTaskIds: ['helper'] };
   }
@@ -136,6 +139,34 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
       observationRef: { sequence: 1, stateDigest: observed.snapshot.stateDigest } } });
     expect(jobs.guidance('alice', run.id, 'guidance-one')?.status).toBe('queued');
     expect(run.observation?.plan?.baseVersion).toBe('plan-1');
+    runner.calls[0].finish(); await tick();
+  });
+
+  it('settles a plan approval from the observed solver record and keeps a known rejection', async () => {
+    const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }); closing.push(() => jobs.close());
+    const run = jobs.create('alice', { ...input(), planApproval: true }, provider); await tick();
+    expect(runner.calls[0].value.input.planApproval).toBe(true);
+    const pending = observation(run.id);
+    pending.inspection.planApproval = { required: true, status: 'pending', planVersion: 'plan-1', rejections: [], leadRevising: false };
+    runner.calls[0].send({ type: 'observation', observation: pending });
+    const command = { type: 'plan-approval' as const, approval: { id: 'approve-one', planVersion: 'plan-1' } };
+    expect(await jobs.command('alice', run.id, command)).toMatchObject({ id: 'approve-one', status: 'queued', planVersion: 'plan-1' });
+    expect(run.events.at(-1)).toMatchObject({ type: 'plan_approval_queued' });
+    expect(await jobs.command('alice', run.id, command)).toMatchObject({ status: 'queued' });
+    expect(runner.commands.filter(item => item.type === 'plan-approval')).toHaveLength(1);
+    const stale = { type: 'plan-approval' as const, approval: { id: 'approve-stale', planVersion: 'plan-0' } };
+    runner.commandResult = value => ({ id: (value as typeof stale).approval.id, status: 'rejected',
+      reason: 'math_plan_approval_version_conflict', planVersion: 'plan-0' });
+    expect(await jobs.command('alice', run.id, stale)).toMatchObject({ status: 'rejected', reason: 'math_plan_approval_version_conflict' });
+    expect(run.events.filter(item => item.type === 'plan_approval_queued')).toHaveLength(1);
+
+    const approved = observation(run.id, 2);
+    approved.inspection.planApproval = { required: true, status: 'approved', planVersion: 'plan-1', approvedId: 'approve-one',
+      approvedVersion: 'plan-1', approvedAt: 5, rejections: [], leadRevising: false };
+    runner.calls[0].send({ type: 'observation', observation: approved });
+    expect(jobs.commandReceipt('alice', run.id, 'approve-one')).toMatchObject({ status: 'approved', planVersion: 'plan-1' });
+    expect(jobs.commandReceipt('alice', run.id, 'approve-stale')).toMatchObject({ status: 'rejected',
+      reason: 'math_plan_approval_version_conflict' });
     runner.calls[0].finish(); await tick();
   });
 
@@ -240,6 +271,120 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     runner.calls[0].finish(); await tick();
     expect(await receipt(proposals[0].id)).toEqual(applied);
     expect(runner.commands).toHaveLength(sentCommands);
+  });
+
+  it('continues from a recorded version of the account\'s own run, sending its saved file only to the worker', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-continue-http-')); roots.push(root);
+    const reservation = net.createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+    const port = (reservation.address() as net.AddressInfo).port;
+    await new Promise<void>(resolve => reservation.close(() => resolve()));
+    const base = `http://127.0.0.1:${port}`, runner = new FixtureRunner();
+    const service = createWebService({ ...readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: base }),
+      staticRoot: root }, runner); closing.push(() => service.close());
+    await new Promise<void>(resolve => service.server.listen(port, '127.0.0.1', resolve));
+    const login = async () => {
+      const session = await fetch(base + '/api/session'), cookie = session.headers.get('set-cookie')!.split(';')[0], csrf = (await session.json()).csrfToken;
+      return { owner: cookie.slice('theoremos_session='.length), request: (route: string, body?: unknown) => fetch(base + route, { method: body ? 'POST' : 'GET',
+        headers: { Cookie: cookie, 'X-CSRF-Token': csrf, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined }) };
+    };
+    const { owner, request: alice } = await login(), { request: bob } = await login();
+    const first = (await (await alice('/api/runs', input())).json()).run; await tick();
+    runner.calls[0].send({ type: 'observation', observation: observation(first.id) });
+    runner.calls[0].finish();
+    const from = { runId: first.id, taskId: 'helper', commit: 'a'.repeat(40), label: 'Conditional fixture helper · 第 1 次' };
+    expect((await alice('/api/runs', { ...input(), continueFrom: { ...from, commit: 'f'.repeat(40) } })).status).toBe(404);
+    expect((await bob('/api/runs', { ...input(), continueFrom: from })).status).toBe(404);
+    expect((await alice('/api/runs', { ...input(), continueFrom: { ...from, source: 'theorem forged : False := sorry' } })).status).toBe(400);
+    expect((await alice('/api/runs', { ...input(), continueFrom: { ...from, label: 'line\nbreak' } })).status).toBe(400);
+    const response = await alice('/api/runs', { ...input(), continueFrom: from });
+    expect(response.status).toBe(201);
+    const next = (await response.json()).run;
+    expect(next.continueFrom).toEqual(from);
+    expect(JSON.stringify(next)).not.toContain('-- fixture source');
+    for (let wait = 0; runner.calls.length < 2 && wait < 100; wait++) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(runner.calls[1]!.value.continuation).toEqual({ ...from, file: 'Submission.lean', source: '-- fixture source' });
+    expect(runner.calls[1]!.value.input.continueFrom).toEqual(from);
+    runner.calls[1]!.finish(); await tick();
+    expect(service.storage.getRun(owner, next.id)?.continueFrom).toEqual(from);
+    expect(JSON.stringify(service.storage.getRun(owner, next.id))).not.toContain('-- fixture source');
+  });
+
+  it('explains a failed version of the account\'s own run with its model and provider, keeping nothing', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-explain-http-')); roots.push(root);
+    // The provider is a local stand-in; `hold` keeps a reply open until released, `reject` answers 401.
+    const asked: { authorization?: string; body: { model: string; input: { role: string; content: { text: string }[] }[] } }[] = [];
+    let mode: 'answer' | 'hold' | 'reject' = 'answer', release = () => {}, upstreamClosed = false;
+    const upstream = http.createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', chunk => chunks.push(chunk));
+      request.on('end', () => {
+        asked.push({ authorization: request.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+        if (mode === 'reject') { response.writeHead(401); response.end(JSON.stringify({ error: `invalid ${key}` })); return; }
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const answer = () => response.end(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'Use `Nat.zero_add n`.' })}\n\n`
+          + `data: ${JSON.stringify({ type: 'response.completed', response: { usage: { input_tokens: 500, output_tokens: 20, total_tokens: 520 } } })}\n\n`);
+        if (mode === 'hold') { release = answer; response.once('close', () => { upstreamClosed = true; }); } else answer();
+      });
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    closing.push(() => new Promise(resolve => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
+    const reservation = net.createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+    const port = (reservation.address() as net.AddressInfo).port;
+    await new Promise<void>(resolve => reservation.close(() => resolve()));
+    const base = `http://127.0.0.1:${port}`, runner = new FixtureRunner();
+    const service = createWebService({ ...readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: base }), staticRoot: root,
+      providers: [{ id: 'openai', name: 'Fixture', baseUrl: `http://127.0.0.1:${(upstream.address() as net.AddressInfo).port}/v1` }] }, runner);
+    closing.push(() => service.close());
+    await new Promise<void>(resolve => service.server.listen(port, '127.0.0.1', resolve));
+    const login = async () => {
+      const session = await fetch(base + '/api/session'), cookie = session.headers.get('set-cookie')!.split(';')[0], csrf = (await session.json()).csrfToken;
+      return { owner: cookie.slice('theoremos_session='.length), request: (route: string, body: unknown, signal?: AbortSignal) => fetch(base + route, { method: 'POST', signal,
+        headers: { Cookie: cookie, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) };
+    };
+    const { owner, request: alice } = await login(), { request: bob } = await login();
+    const run = (await (await alice('/api/runs', input())).json()).run; await tick();
+    const failed = observation(run.id);
+    failed.checks[0]!.record = { passed: false, status: 'failed', theoremName: 'helper', stdoutPreview: 'Submission.lean:1:1: error: The rfl tactic failed.' };
+    runner.calls[0].send({ type: 'observation', observation: failed });
+    runner.calls[0].finish(); await tick();
+    const route = `/api/runs/${run.id}/explain`, question = { taskId: 'helper', commit: 'a'.repeat(40), question: 'Why did it fail?' };
+    expect((await alice(route, question)).status).toBe(400);
+    expect(asked).toHaveLength(0);
+    expect((await bob(route, { ...question, apiKey: key })).status).toBe(404);
+    expect((await alice(route, { ...question, commit: 'f'.repeat(40), apiKey: key })).status).toBe(404);
+    expect((await alice(route, { ...question, apiKey: key, source: 'theorem forged : False := sorry' })).status).toBe(400);
+    expect((await alice(route, { ...question, apiKey: key, turns: Array.from({ length: 6 }, () => ({ question: 'q', answer: 'a' })) })).status).toBe(400);
+    expect(asked).toHaveLength(0);
+
+    const response = await alice(route, { ...question, apiKey: key, turns: [{ question: 'First?', answer: 'Earlier answer.' }] });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ answer: 'Use `Nat.zero_add n`.', usage: { inputTokens: 500, outputTokens: 20, totalTokens: 520 } });
+    expect(asked[0]!.authorization).toBe(`Bearer ${key}`);
+    expect(asked[0]!.body.model).toBe('fixture');
+    expect(asked[0]!.body.input.map(item => item.role)).toEqual(['user', 'assistant', 'user']);
+    const context = asked[0]!.body.input[0]!.content[0]!.text;
+    for (const part of ['-- fixture source', 'The rfl tactic failed.', 'Conditional fixture helper', 'Offline collaboration fixture', 'Question: First?'])
+      expect(context).toContain(part);
+    expect(asked[0]!.body.input[2]!.content[0]!.text).toBe('Why did it fail?');
+
+    mode = 'hold';
+    const stop = new AbortController(), held = alice(route, { ...question, apiKey: key }, stop.signal).catch(() => undefined);
+    for (let wait = 0; asked.length < 2 && wait < 100; wait++) await new Promise(resolve => setTimeout(resolve, 10));
+    const busy = await alice(route, { ...question, apiKey: key });
+    expect(busy.status).toBe(429);
+    expect(asked).toHaveLength(2);
+    stop.abort(); await held;
+    for (let wait = 0; !upstreamClosed && wait < 100; wait++) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(upstreamClosed).toBe(true);
+    release();
+
+    mode = 'reject';
+    const rejected = await alice(route, { ...question, apiKey: key });
+    expect(rejected.status).toBe(502);
+    const body = await rejected.text();
+    expect(body).toContain('模型服务拒绝了这个 API Key。'); expect(body).not.toContain(key);
+    const stored = JSON.stringify([service.storage.getRun(owner, run.id), service.storage.getEvents(owner, run.id)]);
+    for (const text of ['Why did it fail?', 'Nat.zero_add', 'Earlier answer.', key]) expect(stored).not.toContain(text);
   });
 
   it.each(['queued', 'unknown', 'receipt-error'] as const)('keeps host outcomes that arrive before a %s worker receipt', async transport => {

@@ -5,6 +5,12 @@ export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
 export type WebRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'error';
 export type WebEnvironment = 'standard' | 'mathlib';
+/** What one web run may ask for; the server enforces these, and the workbench reads them to know when a limit is already at its highest. */
+/** `maxRuns` is how many run records one owner may keep; the composer warns before the server refuses the next one. */
+export const webLimits = Object.freeze({ maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4, maxTotalTokens: 100_000_000,
+  maxSourceBytes: 32_768, maxTaskBytes: 8_000, maxRuns: 20 });
+/** How long a run may spend preparing its proof environment; this is separate from the solve budget, which starts after it. */
+export const webPreparationSeconds: Readonly<Record<WebEnvironment, number>> = { standard: 120, mathlib: 600 };
 /** Why a run stopped without an accepted proof. Categories carry no provider text. */
 export const webFailureKinds = ['authentication', 'rate_limit', 'network', 'budget', 'time_limit', 'environment',
   'source', 'protocol', 'interrupted', 'unknown'] as const;
@@ -48,9 +54,18 @@ export type WebRunInput = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  /** Hold every Agent after the first plan until the person who started the run approves it. */
+  planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
+  continueFrom?: WebContinuation;
 };
+/**
+ * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
+ * advisory attachment, never as the problem or as evidence. `label` names it for people (「zero_add · 第 2 次」).
+ */
+export type WebContinuation = { runId: string; taskId: string; commit: string; label: string };
+export const webContinuationLabelMax = 200;
 export type WebModuleId = 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'S3';
 export type WebEventDetails = {
   workerId?: string;
@@ -93,6 +108,8 @@ export type WebRun = {
   updatedAt: string;
   finishedAt?: string;
   timings?: { preparing?: string; solving?: string; evaluating?: string };
+  /** When a Lean check last passed or a checked result was integrated; kept after the activity log rotates. */
+  progressAt?: string;
   providerId: string;
   model: string;
   effort: WebEffort;
@@ -105,13 +122,17 @@ export type WebRun = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
+  continueFrom?: WebContinuation;
   observation?: WebObservation;
   archives?: WebArchive[];
   knowledgeCatalogDigest?: string;
   moduleConfiguration?: WebFrozenModuleConfiguration;
   events: WebEvent[];
+  /** How many Agent actions are stored (read them from /actions) and how many arrived past the per-run limit. */
+  actions?: { count: number; dropped?: number };
   modules?: Partial<Record<WebModuleId, WebModuleSnapshot>>;
   moduleApplications?: Record<string, WebModuleSnapshot>;
   artifact?: WebArtifact;
@@ -134,7 +155,7 @@ export type WebSession = {
   environments: WebEnvironmentOption[];
   templates: WebTemplate[];
   defaults: Pick<WebRunInput, 'model' | 'effort' | 'maxTurns' | 'maxRunSeconds' | 'workers' | 'coordination'> & { environment: WebEnvironment };
-  limits: { maxTurns: number; maxRunSeconds: number; maxWorkers: number; maxTotalTokens: number; maxSourceBytes: number; maxTaskBytes: number };
+  limits: { maxTurns: number; maxRunSeconds: number; maxWorkers: number; maxTotalTokens: number; maxSourceBytes: number; maxTaskBytes: number; maxRuns: number };
   runtime: { ready: boolean; message: string };
   /** A recorded read-only run that needs no API key; absent when the image ships without one. */
   sample?: { id: string; title: string };
@@ -163,9 +184,45 @@ export type WebProofOutlineDeclaration = {
 };
 export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
-export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown };
+export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown;
+  /** The saved file of `input.continueFrom`, read by the server from the account's own run. */
+  continuation?: WebContinuation & { file: string; source: string } };
+/**
+ * One thing an Agent did inside its session, as Codex reported it: a command with the end of its output, a file
+ * change with its diff, its reasoning, a message or plan, a search or a tool call. The worker writes these after
+ * removing credentials and the host's own paths; `withheld` means a command touched host files, so only the command
+ * itself is kept. Lean checks and Mathlib searches keep what they reported (`lean`, `found`) in place of their JSON.
+ * `sequence` and `at` are the server's, so actions order with the run's events.
+ */
+export const webAgentActionKinds = ['command', 'edit', 'reasoning', 'message', 'plan', 'search', 'tool', 'compaction'] as const;
+export type WebAgentActionKind = typeof webAgentActionKinds[number];
+export type WebAgentActionIntent = { type: 'read' | 'list' | 'search'; path?: string; query?: string };
+export type WebAgentFileChange = { path: string; change: 'add' | 'delete' | 'update'; movedTo?: string; diff?: string; clipped?: boolean };
+/** What `math check-lean` reported, read from its JSON instead of shown as it. */
+export type WebAgentLeanCheck = {
+  passed: boolean; timedOut?: boolean;
+  messages: { severity: 'error' | 'warning' | 'info'; file?: string; line?: number; column?: number; text: string }[];
+  omittedMessages?: number;
+};
+/** What `math search-lean` found, per query: how many matches and the first declaration names. */
+export type WebAgentLeanSearch = { query: string; total: number; names: string[] }[];
+export type WebAgentActionBody = {
+  workerId: string; itemId: string; phase: 'started' | 'completed'; kind: WebAgentActionKind;
+  status: 'running' | 'done' | 'failed' | 'declined';
+  command?: string; intents?: WebAgentActionIntent[]; output?: string; outputClipped?: boolean; withheld?: boolean;
+  exitCode?: number; durationMs?: number; lean?: WebAgentLeanCheck; found?: WebAgentLeanSearch;
+  changes?: WebAgentFileChange[]; omittedChanges?: number;
+  text?: string; textClipped?: boolean;
+  query?: string; url?: string; tool?: string; arguments?: string;
+};
+export type WebAgentAction = WebAgentActionBody & { sequence: number; at: string };
+/** Per action field and per run; a run past `perRun` keeps counting what it dropped. */
+export const webAgentActionLimits = Object.freeze({ perRun: 3_000, page: 500, command: 2_000, output: 8_000, outputHead: 2_000,
+  diff: 6_000, diffs: 24_000, changes: 20, text: 4_000, intents: 8, query: 400, arguments: 1_000, encoded: 64 * 1024,
+  leanMessages: 12, leanMessage: 600, queries: 8, names: 8, name: 200 });
 export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
+  | { type: 'action'; action: WebAgentActionBody }
   | { type: 'artifact'; artifact: WebArtifact }
   | { type: 'observation'; observation: WebObservation }
   | { type: 'catalog'; catalog: unknown }
@@ -292,6 +349,12 @@ export type WorkerExplanationMessage =
 export const webExplanationReason = /^(?:explanation|informalization)_[a-z0-9_]{1,80}$/u;
 /** The id of the read-only sample run (apps/web/sample.ts); fixed so links and saved positions never collide with real runs. */
 export const webSampleRunId = '00000000-0000-4000-8000-00000000a001';
+/** A Lean check that passed afresh, or a checked result joining the main line: what a reader counts as progress. */
+export function isProgressEvent(type: string, details?: WebEventDetails): boolean {
+  if (type === 'task_integrated') return true;
+  if (type === 'task_checked' || type === 'task_recheck_finished') return details?.passed === true;
+  return type === 'proof_checked' && details?.passed === true && details.reused !== true;
+}
 
 /** The admin dialog: who may sign in, which accounts exist with their beta milestones, and the funnel totals. */
 export type WebAdminOverview = {

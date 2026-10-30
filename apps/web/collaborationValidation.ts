@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { WebGuidanceInput, WebPlanProposal } from './collaboration';
+import type { WebGuidanceInput, WebPlanApprovalInput, WebPlanProposal } from './collaboration';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
 const version = z.string().min(1).max(128);
@@ -19,3 +19,6 @@ export const webPlanProposalSchema = z.object({
   groups: z.array(z.record(z.unknown())).max(128).optional(),
   proofRoutes: z.array(z.record(z.unknown())).max(256).optional(),
 }).strict().transform(value => value as WebPlanProposal);
+
+/** Approves one exact plan version; the runtime rejects it when the plan changed first. */
+export const webPlanApprovalSchema = z.object({ id, planVersion: version }).strict().transform(value => value as WebPlanApprovalInput);

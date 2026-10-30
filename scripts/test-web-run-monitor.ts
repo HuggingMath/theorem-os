@@ -9,8 +9,8 @@ import type { TaskDraft } from '../apps/web/client/draft';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
-import { closeHistory, fitViewport, openHistory, withSettings } from './web-ui-controls';
-import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeHistory, fitViewport, newResearch, openHistory, withSettings } from './web-ui-controls';
+import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, waitForRun, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-run-monitor'), reportFile = path.join(output, 'report.json');
@@ -49,13 +49,20 @@ type Editable = { draft: TaskDraft; key: string; recovery: string | null; query:
 const checks: Array<{ name: string; width: number; elapsedMs: number; fixtureCreates: number; fixtureDeletes: number;
   cancelRequests: number; unexpectedWrites: number; requests: RequestRecord[] }> = [];
 const screenshots: string[] = [], restorations: Array<{ width: number; keyPreserved: boolean; backupPreserved: boolean }> = [];
-const readingChecks: Array<{ listScrollable: boolean; beforeListLeft: number; afterListLeft: number; beforeChatTop: number; afterChatTop: number }> = [];
+const readingChecks: Array<{ listScrollable: boolean; beforeListLeft: number; afterListLeft: number; beforeReadingOffset: number; afterReadingOffset: number }> = [];
 let raceEvidence: { confirmedByGetBeforeLostResponse: boolean; cancelPosts: number; extraSessionRequests: number; workerAborts: number } | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 const suite: ScenarioSuite = { origin, output, checks, failedScenario: '', failureScreenshot: '' };
 const row = (id: string) => `[data-monitor-id="${id}"]`;
 const opener = (id: string) => `[data-monitor-run-id="${id}"]`;
 const dismiss = (id: string) => `[data-dismiss-run-notice="${id}"]`;
+/** 取消运行 in the run header; it asks once before sending the request. */
+const stop = '.detail-actions [data-action="cancel"]';
+const cancelDialog = '#cancel-run-dialog[open]';
+async function confirmStop(page: Page) {
+  await page.locator(stop).click(); await page.locator(cancelDialog).waitFor();
+  await page.locator('#confirm-cancel-run').click(); await page.locator(cancelDialog).waitFor({ state: 'detached' });
+}
 const isList = (route: Route) => route.request().method() === 'GET' && new URL(route.request().url()).pathname === '/api/runs';
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 const count = (h: Harness, method: string, pathname: string) => h.requests.filter(request => request.method === method && request.pathname === pathname).length;
@@ -86,7 +93,7 @@ async function collectOwner(h: Harness) {
   const cookie = (await h.context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session');
   if (cookie) h.owners.add(cookie.value);
 }
-async function open(h: Harness) { await h.page.goto(origin); await h.page.locator('#submit-run:enabled').waitFor(); await collectOwner(h); }
+async function open(h: Harness) { await h.page.goto(origin); await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await collectOwner(h); }
 async function refresh(h: Harness) {
   await openHistory(h.page); await h.page.locator('#refresh-runs:enabled').waitFor();
   const loaded = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
@@ -109,11 +116,7 @@ async function mutateFixture(h: Harness, id: string, method: 'DELETE' | 'POST') 
   if (method === 'DELETE') h.deletes++;
 }
 async function waitTerminal(h: Harness, id: string) {
-  await h.page.waitForFunction(async id => {
-    const response = await fetch(`/api/runs/${id}`);
-    const run = (await response.json()).run as WebRun;
-    return !['queued', 'running'].includes(run.status);
-  }, id);
+  await waitForRun(h, id, run => !['queued', 'running'].includes(run.status));
 }
 async function monitorItems(page: Page, expected: string[]) {
   await page.waitForFunction(expected => {
@@ -122,12 +125,11 @@ async function monitorItems(page: Page, expected: string[]) {
   }, expected);
   assert.equal(await page.locator('#run-monitor').isVisible(), Boolean(expected.length));
 }
-async function openMonitored(page: Page, id: string, terminal = false) {
+async function openMonitored(page: Page, id: string) {
   await page.locator(opener(id)).click();
-  await page.waitForFunction(id => document.querySelector('.detail-identifier code')?.textContent === id, id);
-  assert.equal(await page.locator(`#detail-tab-${terminal ? 'report' : 'collaboration'}`).getAttribute('aria-selected'), 'true');
-  assert.equal(await page.locator('#return-to-draft').evaluate(button => (button as HTMLButtonElement).hidden), false);
-  if (page.viewportSize()!.width > 850) assert.equal(await page.locator('#return-to-draft').isVisible(), true);
+  await page.waitForFunction(id => document.querySelector<HTMLElement>('.detail-heading')?.dataset.run === id, id);
+  assert.equal(await page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.evaluate(() => document.body.dataset.view), 'run');
   if (page.viewportSize()!.width <= 850) assert.equal(await page.evaluate(() => document.body.dataset.mobileView), 'runs');
 }
 async function editable(page: Page): Promise<Editable> {
@@ -140,18 +142,20 @@ async function editable(page: Page): Promise<Editable> {
   }, recoveryKey);
 }
 async function preserved(page: Page, before: Editable) { assert.deepEqual(await editable(page), before, 'monitor actions must preserve every draft field, Key, backup and history filter'); }
+/** 新建研究 in the history returns to the unsent draft as it was left. */
 async function returnToDraft(page: Page, before: Editable) {
-  if (page.viewportSize()!.width <= 850) await page.locator('#mobile-compose').click();
-  await fit(page, '#return-to-draft');
-  await page.locator('#return-to-draft').click(); await preserved(page, before);
-  assert.equal(await page.locator('#return-to-draft').isVisible(), false);
+  await openHistory(page);
+  await fit(page, '#open-draft');
+  await page.locator('#open-draft').click();
+  await page.locator('body[data-view="draft"]').waitFor({ state: 'attached' }); await page.locator('#history-dialog[open]').waitFor({ state: 'detached' });
+  await preserved(page, before);
   assert.equal(await page.locator('#task').evaluate(input => input === document.activeElement), true);
   if (page.viewportSize()!.width <= 850) assert.equal(await page.evaluate(() => document.body.dataset.mobileView), 'compose');
   else assert.equal(await page.locator('#draft-preview').count(), 1);
   restorations.push({ width: page.viewportSize()!.width, keyPreserved: true, backupPreserved: true });
 }
 async function prepareDraft(page: Page) {
-  await page.locator('#new-research').click();
+  await newResearch(page);
   await withSettings(page, async () => {
     await page.locator('#environment').selectOption('standard'); await page.locator('#template').selectOption('');
     await page.locator('#source').fill(`-- ${injection}\ntheorem unsent_monitor_draft : True := by sorry\n`);
@@ -196,8 +200,8 @@ try {
     h.intercept = async route => { if (isList(route) && hold) { hold = false; firstList.resolve(); await release.promise; } return false; };
     await h.page.goto(origin); await firstList.promise;
     const old = await createRun(h, 'Already completed before the initial list'); controls.get(old.id)!.finish(); await waitTerminal(h, old.id);
-    release.resolve(); await h.page.locator('#submit-run:enabled').waitFor(); await settled(h.page); await monitorItems(h.page, []);
-    await h.page.locator('#new-research').click();
+    release.resolve(); await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await settled(h.page); await monitorItems(h.page, []);
+    await newResearch(h.page);
     const a = await createRun(h, 'Running task A'), b = await createRun(h, 'Running task B'), queued = await createRun(h, 'Queued task C');
     assert.equal((await readRun(h, queued.id)).status, 'queued'); assert.equal(controls.has(queued.id), false);
     await refresh(h); await monitorItems(h.page, [a.id, b.id, queued.id]);
@@ -207,7 +211,7 @@ try {
   });
 
   await scenario('Only background transitions retain completion notices until opened, dismissed or deleted', async h => {
-    const { page } = h; await open(h); await page.locator('#new-research').click();
+    const { page } = h; await open(h); await newResearch(page);
     const selected = await createRun(h, 'Foreground completion'), failed = await createRun(h, 'Background failed task'), cancelled = await createRun(h, 'Background cancelled task');
     await refresh(h); await monitorItems(page, [selected.id, failed.id, cancelled.id]); await openMonitored(page, selected.id);
     await mutateFixture(h, cancelled.id, 'POST'); controls.get(selected.id)!.finish(); controls.get(failed.id)!.fail();
@@ -216,7 +220,7 @@ try {
     assert.equal(await page.locator(dismiss(failed.id)).isVisible(), true); assert.equal(await page.locator(dismiss(cancelled.id)).isVisible(), true);
     await refresh(h); await monitorItems(page, [failed.id, cancelled.id]);
     await screenshot(page, 'background-completion-notices.png');
-    await openMonitored(page, cancelled.id, true); await monitorItems(page, [failed.id]);
+    await openMonitored(page, cancelled.id); await monitorItems(page, [failed.id]);
     await page.locator(dismiss(failed.id)).click(); await monitorItems(page, []);
     const removed = await createRun(h, 'Background notice removed with history'); await refresh(h);
     await monitorItems(page, [removed.id]); controls.get(removed.id)!.finish(); await waitTerminal(h, removed.id); await refresh(h);
@@ -225,58 +229,68 @@ try {
   }, 1440, 1);
 
   await scenario('A new session clears old completion notices without reviving terminal history', async h => {
-    const { page } = h; await open(h); await page.locator('#new-research').click();
+    const { page } = h; await open(h); await newResearch(page);
     const run = await createRun(h, 'Completion from the previous session'); await refresh(h); await monitorItems(page, [run.id]);
     controls.get(run.id)!.finish(); await waitTerminal(h, run.id); await refresh(h);
     assert.equal(await page.locator(dismiss(run.id)).isVisible(), true);
     const session = page.waitForResponse(response => new URL(response.url()).pathname === '/api/session' && response.status() === 200);
-    await h.context.clearCookies(); await refresh(h); await session; await page.locator('#submit-run:enabled').waitFor();
+    await h.context.clearCookies(); await refresh(h); await session; await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await monitorItems(page, []); assert.equal(await page.locator(`[data-run-id="${run.id}"]`).count(), 0);
   });
 
-  await scenario('Monitor polling reuses nodes and preserves keyboard focus, list scroll and paused conversation reading', async h => {
-    const { page } = h; await open(h); await page.locator('#new-research').click();
+  await scenario('Monitor polling reuses nodes and preserves keyboard focus, list scroll and paused activity reading', async h => {
+    const { page } = h; await open(h); await newResearch(page);
     const runs: WebRun[] = [];
     for (let index = 0; index < 10; index++) runs.push(await createRun(h, `Task ${index + 1}: ${'A long monitored mathematical research title '.repeat(3)}`));
     await refresh(h); await monitorItems(page, runs.map(run => run.id)); await openMonitored(page, runs[0]!.id);
     const control = controls.get(runs[0]!.id)!;
-    for (let index = 0; index < 85; index++) control.progress('worker_activity', `Conversation reading record ${index + 1}`);
-    await page.waitForFunction(() => document.querySelector('#conversation')?.textContent?.includes('Conversation reading record 85'));
-    await page.locator('#conversation-scroll').evaluate(scroll => { scroll.scrollTop = 120; }); await settled(page);
-    assert.ok(await page.locator('#conversation-scroll').evaluate(scroll => scroll.scrollTop) > 30, 'the conversation fixture must actually pause reading');
+    for (let index = 0; index < 85; index++) control.progress('worker_activity', `Activity reading record ${index + 1}`);
+    await page.waitForFunction(() => document.querySelector('#conversation-announcement')?.textContent?.includes('Activity reading record 85'));
+    await page.locator('#detail-tab-events').click(); await page.locator('#detail-panel .activity-scroll').waitFor();
+    await page.locator('#detail-panel .activity-scroll').evaluate(scroll => { scroll.scrollTop = 120; scroll.dispatchEvent(new Event('scroll')); }); await settled(page);
+    assert.ok(await page.locator('#detail-panel .activity-scroll').evaluate(scroll => scroll.scrollTop) > 30, 'the activity fixture must actually pause reading');
     await page.evaluate(id => {
       const root = document.querySelector('#run-monitor')!, list = document.querySelector<HTMLElement>('#run-monitor-list')!;
       const button = document.querySelector<HTMLElement>(`[data-monitor-run-id="${id}"]`)!;
       list.scrollLeft = Math.min(240, list.scrollWidth - list.clientWidth); button.focus({ preventScroll: true });
       (window as unknown as { __monitorProbe: unknown }).__monitorProbe = { root, list, button, focused: document.activeElement,
         rows: Array.from(list.querySelectorAll<HTMLElement>('[data-monitor-id]')).map(row => ({ id: row.dataset.monitorId!, node: row })),
-        listLeft: list.scrollLeft, listScrollable: list.scrollWidth > list.clientWidth,
-        chatTop: document.querySelector('#conversation-scroll')!.scrollTop };
+        listLeft: list.scrollLeft, listScrollable: list.scrollWidth > list.clientWidth, ...reading() };
+      // Newest steps are listed first, so the reader is held by the row being read, not by a scroll offset.
+      function reading() {
+        const scroll = document.querySelector('#detail-panel .activity-scroll')!, frame = scroll.getBoundingClientRect();
+        const head = scroll.querySelector('thead th')!.getBoundingClientRect().bottom;
+        const row = Array.from(scroll.querySelectorAll('tbody tr')).find(row => row.getBoundingClientRect().bottom > head + 1)!;
+        return { readingRow: row, readingOffset: row.getBoundingClientRect().top - frame.top };
+      }
     }, runs[1]!.id);
     const marker = 'A new event while monitor controls have focus', arrived = pollWith(page, runs[0]!.id, 'marker', marker);
     control.progress('worker_activity', marker); await arrived; await settled(page);
     const stable = await page.evaluate(() => {
       type Probe = { root: Element; list: HTMLElement; button: Element; focused: Element; rows: Array<{ id: string; node: Element }>;
-        listLeft: number; listScrollable: boolean; chatTop: number };
+        listLeft: number; listScrollable: boolean; readingRow: Element; readingOffset: number };
       const p = (window as unknown as { __monitorProbe: Probe }).__monitorProbe;
       return { sameRoot: p.root === document.querySelector('#run-monitor'), sameList: p.list === document.querySelector('#run-monitor-list'),
         sameButton: p.button === document.querySelector(`[data-monitor-run-id="${(p.button as HTMLElement).dataset.monitorRunId}"]`),
         focusPreserved: p.focused === document.activeElement, rowsRetained: p.rows.every(row => row.node === document.querySelector(`[data-monitor-id="${row.id}"]`)),
         listScrollable: p.listScrollable, beforeListLeft: p.listLeft, afterListLeft: p.list.scrollLeft,
-        beforeChatTop: p.chatTop, afterChatTop: document.querySelector('#conversation-scroll')!.scrollTop };
+        readingRowRetained: p.readingRow.isConnected, beforeReadingOffset: p.readingOffset,
+        afterReadingOffset: p.readingRow.getBoundingClientRect().top - document.querySelector('#detail-panel .activity-scroll')!.getBoundingClientRect().top };
     });
     assert.equal(stable.sameRoot && stable.sameList && stable.sameButton && stable.focusPreserved && stable.rowsRetained, true,
       `monitor polling replaced a node or focus: ${JSON.stringify(stable)}`);
     assert.equal(stable.listScrollable, true, 'the monitor fixture must overflow horizontally');
     assert.ok(stable.beforeListLeft > 0, 'the monitor fixture must actually scroll horizontally');
     assert.ok(Math.abs(stable.afterListLeft - stable.beforeListLeft) <= 1);
-    assert.ok(Math.abs(stable.afterChatTop - stable.beforeChatTop) <= 1);
+    assert.equal(stable.readingRowRetained, true, 'the activity row being read must be retained');
+    assert.ok(Math.abs(stable.afterReadingOffset - stable.beforeReadingOffset) <= 1,
+      `activity reading moved: ${stable.beforeReadingOffset} -> ${stable.afterReadingOffset}`);
     readingChecks.push({ listScrollable: stable.listScrollable, beforeListLeft: stable.beforeListLeft, afterListLeft: stable.afterListLeft,
-      beforeChatTop: stable.beforeChatTop, afterChatTop: stable.afterChatTop });
+      beforeReadingOffset: stable.beforeReadingOffset, afterReadingOffset: stable.afterReadingOffset });
     await screenshot(page, 'stable-focus-and-reading.png');
   });
 
-  await scenario('Cancellation stays immediate, busy in both places and sends only one request while switching views', async h => {
+  await scenario('Cancellation asks once, then stays busy in both places and sends only one request while switching views', async h => {
     const { page } = h; await open(h); const before = await prepareDraft(page);
     const run = await createRun(h, 'Cancel once while returning to a draft'); await refresh(h); await openMonitored(page, run.id);
     const seen = deferred(), release = deferred(); h.releases.push(release.resolve);
@@ -288,22 +302,46 @@ try {
     };
     const response = page.waitForResponse(response => new URL(response.url()).pathname === `/api/runs/${run.id}/cancel`);
     void response.catch(() => {});
-    await page.locator('#stop-research').click(); await seen.promise;
-    assert.equal(await page.locator('dialog[open]').count(), 0, 'stopping retains its immediate command behavior');
-    assert.equal(await page.locator('#stop-research').isDisabled(), true);
-    assert.match(`${await page.locator('#stop-research').getAttribute('aria-label')} ${await page.locator('#stop-research').getAttribute('title')}`, /正在取消/);
+    await confirmStop(page); await seen.promise;
+    assert.equal(await page.locator('dialog[open]').count(), 0, 'confirming closes the dialog before the request settles');
+    assert.equal(await page.locator(stop).isDisabled(), true);
+    assert.match(await page.locator(stop).innerText(), /正在取消/);
     assert.match(await page.locator(row(run.id)).innerText(), /正在取消/);
-    await page.locator('#stop-research').evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
+    await page.locator(stop).evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
     await returnToDraft(page, before); assert.match(await page.locator(row(run.id)).innerText(), /正在取消/);
-    await openMonitored(page, run.id); assert.equal(await page.locator('#stop-research').isDisabled(), true);
+    await openMonitored(page, run.id); assert.equal(await page.locator(stop).isDisabled(), true);
     assert.equal(count(h, 'POST', `/api/runs/${run.id}/cancel`), 1);
     await screenshot(page, 'cancellation-busy.png'); release.resolve(); assert.equal((await response).status(), 200);
-    await page.locator('#stop-research').waitFor({ state: 'hidden' }); await monitorItems(page, []);
+    await page.locator(stop).waitFor({ state: 'detached' }); await monitorItems(page, []);
     await returnToDraft(page, before);
   }, 1440, 1);
 
+  await scenario('Keeping the research, closing or Escape dismisses the cancel confirmation without a request', async h => {
+    const { page } = h; await open(h); await newResearch(page);
+    const run = await createRun(h, 'Kept after asking to stop'); await refresh(h); await openMonitored(page, run.id);
+    await page.locator(stop).click(); await page.locator(cancelDialog).waitFor();
+    assert.equal(await page.locator('#cancel-run-title').innerText(), 'Kept after asking to stop');
+    assert.match(await page.locator('#cancel-run-description').innerText(), /已通过 Lean 检查的代码.*都会保留/);
+    assert.equal(await page.locator('#keep-running').evaluate(button => button === document.activeElement), true, 'the safe choice has focus');
+    assert.equal(await page.locator('#confirm-cancel-run').isEnabled(), true);
+    await screenshot(page, 'cancel-confirmation.png');
+    for (const dismissal of ['#keep-running', '#close-cancel-run', 'Escape']) {
+      if (!await page.locator(cancelDialog).count()) { await page.locator(stop).click(); await page.locator(cancelDialog).waitFor(); }
+      if (dismissal === 'Escape') await page.keyboard.press('Escape'); else await page.locator(dismissal).click();
+      await page.locator(cancelDialog).waitFor({ state: 'detached' });
+      assert.equal(await page.locator(stop).isEnabled(), true, `${dismissal} keeps the run going`);
+    }
+    assert.equal(await page.locator(stop).evaluate(button => button === document.activeElement), true, 'focus returns to the stop button');
+    await page.locator(stop).click(); await page.locator(cancelDialog).waitFor();
+    controls.get(run.id)!.finish(); await waitTerminal(h, run.id);
+    await page.waitForFunction(() => document.querySelector('#cancel-run-notice')?.textContent?.includes('已经结束'));
+    assert.equal(await page.locator('#confirm-cancel-run').isDisabled(), true, 'a run that ended meanwhile cannot be cancelled');
+    await page.locator('#keep-running').click(); await page.locator(cancelDialog).waitFor({ state: 'detached' });
+    assert.equal(count(h, 'POST', `/api/runs/${run.id}/cancel`), 0);
+  });
+
   await scenario('A lost cancel response after GET confirmation cannot report uncertainty, reconnect or replay cancellation', async h => {
-    const { page } = h; await open(h); await page.locator('#new-research').click();
+    const { page } = h; await open(h); await newResearch(page);
     const run = await createRun(h, 'Cancel accepted before its response is lost'); await refresh(h); await openMonitored(page, run.id);
     const accepted = deferred(), release = deferred(); h.releases.push(release.resolve);
     const beforeSessions = count(h, 'GET', '/api/session'), beforeAborts = workerAborts;
@@ -314,7 +352,7 @@ try {
       accepted.resolve(); await release.promise; await route.abort('failed'); return true;
     };
     const confirmed = pollWith(page, run.id, 'cancelled');
-    await page.locator('#stop-research').click(); await accepted.promise; await confirmed;
+    await confirmStop(page); await accepted.promise; await confirmed;
     await page.waitForFunction(() => document.querySelector('.detail-statusline .badge')?.textContent?.includes('已取消'));
     const lost = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === `/api/runs/${run.id}/cancel`);
     release.resolve(); await lost; await settled(page);
@@ -332,7 +370,7 @@ try {
     const { page } = h; await open(h); const before = await prepareDraft(page);
     const foreground = await createRun(h, `Active mathematical task ${injection}`), background = await createRun(h, 'Background task completing during draft editing');
     await refresh(h); await monitorItems(page, [foreground.id, background.id]); await preserved(page, before);
-    assert.equal(await page.locator('#return-to-draft').isVisible(), false);
+    assert.equal(await page.evaluate(() => document.body.dataset.view), 'draft');
     for (const selector of ['#run-monitor', '#run-monitor-summary', '#run-monitor-list']) await fit(page, selector);
     for (const id of [foreground.id, background.id]) {
       await page.locator(opener(id)).evaluate(button => button.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'instant' }));
@@ -343,7 +381,7 @@ try {
     await screenshot(page, `monitor-${width}-active.png`); await returnToDraft(page, before);
     controls.get(background.id)!.finish(); await waitTerminal(h, background.id); await refresh(h);
     await page.locator(dismiss(background.id)).waitFor(); await preserved(page, before);
-    await openMonitored(page, background.id, true); await preserved(page, before);
+    await openMonitored(page, background.id); await preserved(page, before);
     await monitorItems(page, [foreground.id]); await returnToDraft(page, before);
     await screenshot(page, `monitor-${width}-returned.png`);
   }, width);

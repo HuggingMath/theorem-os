@@ -1,8 +1,8 @@
 import type { WebRun } from '../shared';
 import type { WebObservation, WebTaskSource, WebCheckReceipt, WebArchive } from '../collaboration';
-import { isAcceptedRun } from '../presentation';
+import { endedSummary, isAcceptedRun, isRejectedRun } from '../presentation';
 import { Fragment, render, type ComponentChildren, type VNode } from 'preact';
-import { clockTime, createElement, errorText, observedTime, coverageLabel, roleLabel, schedulingLabel, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
+import { clockTime, createElement, errorText, observedTime, coverageLabel, roleLabel, schedulingLabel, workerNames, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
 import { TaskPlanEditor } from './taskPlanEditor';
 import { KnowledgeView } from './knowledgeView';
 import { TaskSourceComparison, taskSourceKey } from './taskSourceComparison';
@@ -11,30 +11,28 @@ import { recordedTask, ResearchProgressView, taskCheckKey } from './researchProg
 import { MathematicalChangesView } from './mathematicalChangesView';
 import { ReviewView } from './reviewView';
 import { CollaborationNavigation } from './collaborationNavigation';
-import { collaborationDetailStorageKey } from './runAwareness';
+import { detailLevel, onDetailLevel, setDetailLevel, type DetailLevel } from './detailLevel';
 import { compactGraphMetrics, compactGraphTasks, graphMetrics, layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
 import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
 import { revealGraph } from './motion';
 import { renderAgentCards } from './ui/AgentCards';
 import { renderCollaborationNow } from './ui/CollaborationNow';
-import { agentRoutes } from './agentRoute';
+import { taskNames } from './agentRoute';
+import { AgentActivity } from './agentActivity';
 import { renderAgentRoute } from './ui/AgentRoute';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 import { renderTaskInspector } from './ui/TaskInspector';
 import { CollaborationSurface } from './ui/CollaborationSurface';
 import { Code, Detail, Facts, Host, renderOptions, renderSection } from './ui/Section';
-import { t } from '../i18n';
+import { localizeText, t } from '../i18n';
 
 type Task = WebObservation['inspection']['tasks'][number];
-type DetailLevel = 'simple' | 'full';
-// One choice per browser: new readers start with the simple layer, and opening any expert section keeps it full.
-const storedDetail = (): DetailLevel => { try { return localStorage.getItem(collaborationDetailStorageKey) === 'full' ? 'full' : 'simple'; } catch { return 'simple'; } };
 type TaskView = 'graph' | 'list';
 type ScrollPosition = { top: number; left: number };
 // Low enough for "fit" to show a large compact plan whole; card text is then a status overview.
 const minGraphZoom = 0.3;
 type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; routeKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
-const kindLabel: Record<string,string> = { research: t('研究'), sketch: t('草图'), lemma: t('引理'), goal: t('原始目标') };
+export const kindLabel: Record<string,string> = { research: t('研究'), sketch: t('草图'), lemma: t('引理'), goal: t('原始目标') };
 /** One status line for a run without a collaboration observation; the sections below need one to show anything. */
 function unobservedText(run: WebRun) {
   if (run.status === 'queued') return t('任务排队中。开始运行后，这里显示 Agent 的任务计划和进展。');
@@ -48,9 +46,9 @@ const routeConnectionLabel: Record<string,string> = { 'closed-by-original-check'
 const taskState = (task: Task) => task.control === 'active' ? task.status : task.control;
 const usageCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 // Same rule as the runtime budget: cached input and reasoning output are subsets of input and output.
-const totalTokens = (usage?: Record<string, number>) => usageCount(usage?.totalTokens) ??
+export const totalTokens = (usage?: Record<string, number>) => usageCount(usage?.totalTokens) ??
   (usageCount(usage?.inputTokens) !== undefined && usageCount(usage?.outputTokens) !== undefined ? usage!.inputTokens + usage!.outputTokens : undefined);
-const tokenText = (value: number) => value >= 1e6 ? `${(value / 1e6).toFixed(value >= 1e8 ? 0 : value >= 1e7 ? 1 : 2)}M` :
+export const tokenText = (value: number) => value >= 1e6 ? `${(value / 1e6).toFixed(value >= 1e8 ? 0 : value >= 1e7 ? 1 : 2)}M` :
   value >= 1e3 ? `${Math.round(value / 1e3)}K` : String(value);
 const usageDetail = (usage: Record<string, number>) => {
   const input = usageCount(usage.inputTokens), cached = usageCount(usage.cachedInputTokens), output = usageCount(usage.outputTokens);
@@ -72,8 +70,13 @@ export class CollaborationView {
   private connected = false;
   private readOnly = false;
   private planEditor: TaskPlanEditor;
-  private detail = storedDetail();
-  constructor(private api: WebApi, private observed: (observation: WebObservation) => void, private openReport: () => void = () => undefined) { this.planEditor = new TaskPlanEditor(api, observation => this.receive(observation)); }
+  // The workbench-wide choice (./detailLevel): new readers start with the simple layer, and opening any expert section keeps it full.
+  private detail = detailLevel();
+  constructor(private api: WebApi, private observed: (observation: WebObservation) => void, private openReport: () => void = () => undefined,
+    private activity = new AgentActivity(url => api(url))) {
+    this.planEditor = new TaskPlanEditor(api, observation => this.receive(observation));
+    onDetailLevel(level => this.applyLevel(level));
+  }
   /** readOnly (the sample run) keeps every read but hides archiving; plan and guidance already stay off because it is finished. */
   update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false) {
     this.connected = connected; this.readOnly = readOnly;
@@ -228,21 +231,45 @@ export class CollaborationView {
   }
   /** Switch every run's surface; a toggle keeps focus on its own button, the footer link hands it to the first expert heading. */
   private setDetail(detail: DetailLevel, origin?: HTMLButtonElement) {
-    if (this.detail !== detail) {
-      this.detail = detail;
-      try { localStorage.setItem(collaborationDetailStorageKey, detail); } catch { /* The choice lasts for this page only. */ }
-      for (const view of this.views.values()) this.applyDetail(view.element);
-      const view = this.current;
-      if (view?.viewport) view.navigation.connect(view.viewport);
-    }
+    setDetailLevel(detail);
     if (origin?.closest('.collab-expand')) {
       const heading = this.current?.element.querySelector<HTMLElement>('.collab-map h3');
       if (heading) { heading.tabIndex = -1; this.current!.navigation.reveal(heading); heading.focus({ preventScroll: true }); }
     }
   }
+  private applyLevel(detail: DetailLevel) {
+    if (this.detail === detail) return;
+    this.detail = detail;
+    for (const view of this.views.values()) this.applyDetail(view.element);
+    const view = this.current;
+    if (view?.viewport) view.navigation.connect(view.viewport);
+  }
   private applyDetail(element: HTMLElement) {
     element.dataset.detail = this.detail;
     for (const button of element.querySelectorAll<HTMLButtonElement>('.collab-detail-toggle [data-collab-detail]')) button.setAttribute('aria-pressed', String(button.dataset.collabDetail === this.detail));
+  }
+  /** Bring the guidance composer of the shown run into view and focus it, addressed to `taskId` when the latest observation
+   * has that task and with `text` added to its draft; false when that run is not shown. */
+  guide(runId: string, text?: string, notice?: string, taskId?: string): boolean {
+    const view = this.views.get(runId);
+    if (!view || this.current !== view) return false;
+    return this.provideGuidance(view, () => {
+      if (taskId && view.observation?.inspection.tasks.some(task => task.id === taskId)) view.guidance.guide('task', taskId);
+      return text === undefined ? undefined : view.guidance.appendReference(text, notice);
+    });
+  }
+  /** A note to the Lead about its plan, which it may revise before the plan is approved; false when that run is not shown. */
+  guideLead(runId: string): boolean {
+    const view = this.views.get(runId);
+    if (!view || this.current !== view) return false;
+    return this.provideGuidance(view, () => view.guidance.guideLead());
+  }
+  /** Open the plan editor of the shown run, as its 编辑计划 button does; false when that run is not shown or has no plan yet. */
+  editPlan(runId: string): boolean {
+    const view = this.views.get(runId);
+    if (!view || this.current !== view || !view.observation?.plan) return false;
+    this.planEditor.open(runId, view.observation, view.selectedTask);
+    return true;
   }
   /** Open one task in the inspector, as a click on it in the graph would; false when this run has no such task yet. */
   showTask(runId: string, taskId: string): boolean {
@@ -345,7 +372,7 @@ export class CollaborationView {
       agents: { working: scheduling.working, total: inspection.workers.length, meter: meter('agents', [['working', t('工作中'), scheduling.working], ['preparing', t('准备中'), scheduling.preparing],
         ['idle', t('空闲'), scheduling.idle], ['stopping', t('停止中'), scheduling.stopping], ['stopped', t('已停止'), scheduling.stopped],
         ['unscheduled', t('未记录调度'), Math.max(0, inspection.workers.length - scheduling.observedWorkers)]]) },
-      accepted: isAcceptedRun(run), completedResearch: inspection.progress.completedResearchTasks, ended: run.status !== 'queued' && run.status !== 'running',
+      accepted: isAcceptedRun(run), rejected: isRejectedRun(run), completedResearch: inspection.progress.completedResearchTasks, ended: run.status !== 'queued' && run.status !== 'running',
     });
     this.renderNow(view, run);
     this.renderTasks(view); this.renderInspector(view); this.renderAgents(view); view.progress.update(observation); view.changes.update(observation); view.reviews.update(observation, run);
@@ -387,7 +414,9 @@ export class CollaborationView {
     const routes = (observation.plan?.proofRoutes ?? []).filter(route => !view.route || route.id === view.route);
     const routeSelect = view.element.querySelector<HTMLSelectElement>('[data-collab-route]')!;
     const missingRoute = Boolean(view.route && !routes.length);
-    renderOptions(routeSelect, [['', t('全部路线')], ...(observation.plan?.proofRoutes ?? []).map(route => [route.id, `${route.id} → ${route.targetTaskId}`] as const),
+    // Tasks are named by the lemma they prove, as on the cards; a task without one keeps its plan id.
+    const theorems = taskNames(observation.inspection.tasks), named = (ids: readonly string[]) => ids.map(id => theorems.get(id) ?? id).join(t('、'));
+    renderOptions(routeSelect, [['', t('全部路线')], ...(observation.plan?.proofRoutes ?? []).map(route => [route.id, `${route.id} → ${named([route.targetTaskId])}`] as const),
       ...(missingRoute ? [[view.route, t('{0} · 已移除', view.route)] as const] : [])], view.route);
     const count = view.element.querySelector('[data-collab-task-count]')!, countText = t('显示 {0} / {1} 个任务', tasks.length, observation.inspection.tasks.length);
     if (count.textContent !== countText) count.textContent = countText;
@@ -399,12 +428,16 @@ export class CollaborationView {
       : <><strong>{t('尚无数学任务')}</strong><p>{t('运行生成任务计划后会显示在这里。')}</p></>);
     view.element.querySelector<HTMLElement>('.collab-map')!.dataset.taskEmpty = String(!tasks.length);
     this.renderTaskSelection(view, tasks, observation.inspection.tasks);
-    renderSection(view.element.querySelector('[data-collab-routes]')!, missingRoute ? <span>{t('所选路线 {0} 已从当前计划移除，请选择其他路线或清除筛选。', view.route)}</span>
+    // Routes read as a chain of lemma names; a plan without alternative routes needs no line here (the graph shows its dependencies).
+    const routeSummary = view.element.querySelector<HTMLElement>('[data-collab-routes]')!;
+    routeSummary.hidden = !missingRoute && !routes.length;
+    renderSection(routeSummary, missingRoute ? <span>{t('所选路线 {0} 已从当前计划移除，请选择其他路线或清除筛选。', view.route)}</span>
       : routes.length ? <>{routes.map(route => {
         const recorded = observation.inspection.mathematics.snapshot.routes.find(item => item.routeId === route.id);
-        const progress = recorded ? ` · ${recorded.ready ? t('前置已就绪') : t('等待 {0}', recorded.remainingPrerequisiteTaskIds.join(', ') || label(recorded.closingStatus))} · ${routeConnectionLabel[recorded.connection] ?? t('连接 {0}', recorded.connection)}` : '';
-        return <span key={route.id}><strong>OR {route.id}</strong>{t('：({0}) → {1} → {2}{3}', route.prerequisiteTaskIds.join(' AND ') || t('无额外前置'), route.closingTaskId, route.targetTaskId, progress)}</span>;
-      })}</> : <span>{t('当前计划按任务的 AND 前置依赖推进')}</span>);
+        const progress = recorded ? ` · ${recorded.ready ? t('前置已就绪') : t('等待 {0}', named(recorded.remainingPrerequisiteTaskIds) || label(recorded.closingStatus))} · ${routeConnectionLabel[recorded.connection] ?? t('连接 {0}', recorded.connection)}` : '';
+        const chain = [...(route.prerequisiteTaskIds.length ? [named(route.prerequisiteTaskIds)] : []), named([route.closingTaskId]), named([route.targetTaskId])].join(' → ');
+        return <span key={route.id}><strong>{t('路线 {0}', route.id)}</strong>{t('：{0}{1}', chain, progress)}</span>;
+      })}</> : null);
     this.renderTaskCards(view, tasks, mode);
   }
   private renderTaskSelection(view: ViewState, tasks: readonly Task[], currentTasks: readonly Task[]) {
@@ -421,8 +454,9 @@ export class CollaborationView {
   private renderTaskCards(view: ViewState, tasks: readonly Task[], mode: TaskView) {
     const observation = view.observation!;
     if (mode === 'list') {
+      const theorems = taskNames(observation.inspection.tasks);
       renderTaskList(view.element.querySelector<HTMLElement>('[data-collab-task-list]')!,
-        tasks.map(task => ({ ...this.taskCard(view, task, this.peakTokens(observation)), dependencies: t('AND 前置：{0}', task.plannedDependencies.join(', ') || t('无')) })));
+        tasks.map(task => ({ ...this.taskCard(view, task, this.peakTokens(observation)), dependencies: task.plannedDependencies.length ? t('需先完成：{0}', task.plannedDependencies.map(id => theorems.get(id) ?? id).join(t('、'))) : '' })));
       return;
     }
     const allTasks = observation.inspection.tasks;
@@ -502,8 +536,10 @@ export class CollaborationView {
   }
   private taskCard(view: ViewState, task: Task, peak: number): TaskCard {
     const state = taskState(task), tokens = totalTokens(task.usage);
-    return { id: task.id, version: task.version, kind: task.kind, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), objective: task.objective,
-      owner: task.owner ?? t('待分配'), proof: task.proof.status, proofLabel: label(task.proof.status),
+    const owner = task.owner && workerNames(view.observation?.inspection.workers).get(task.owner);
+    return { id: task.id, version: task.version, kind: task.kind, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), objective: localizeText(task.objective),
+      name: task.theorem?.split('.').at(-1) || task.id,
+      owner: owner || task.owner || t('待分配'), proof: task.proof.status, proofLabel: label(task.proof.status),
       ...(tokens !== undefined ? { tokens: { label: tokenText(tokens), share: peak ? tokens / peak : 0, detail: usageDetail(task.usage!) } } : {}),
       selected: view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version) };
   }
@@ -551,14 +587,14 @@ export class CollaborationView {
     const facts: [string, unknown][] = [
       ...(!historical ? [[t('负责人'),task.owner],[t('任务状态'),`${label(task.status)} / ${label(task.control)}`],[t('尝试次数'),task.attempts]] as [string, unknown][] : []),
       ...(!historical && totalTokens(task.usage) !== undefined ? [[t('Token 用量'),[tokenText(totalTokens(task.usage)!), usageDetail(task.usage!)].filter(Boolean).join(' · ')]] as [string, unknown][] : []),
-      [t('记录的证明状态'),label(task.proof.status)],[t('本版本计划依赖 AND'),task.plannedDependencies.join(', ')||t('无')],
+      [t('记录的证明状态'),label(task.proof.status)],[t('本版本需先完成'),task.plannedDependencies.join(', ')||t('无')],
       ...(!historical ? [[t('计划消费者'),plannedConsumers.join(', ')||t('无')]] as [string, unknown][] : []),
     ];
     const detail = (title: string, value: unknown, id: string) => ({ title, value, id: `${id}-${task.id}-${task.version}` });
     const state = taskState(task);
     renderTaskInspector(root, { mode: 'task', task: {
       id: task.id, version: task.version, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), proof: task.proof.status,
-      objective: task.objective, historical, ...(current ? { currentVersion: current.version } : {}),
+      objective: localizeText(task.objective), historical, ...(current ? { currentVersion: current.version } : {}),
       facts: facts.map(([name, value]) => ({ name, value: String(value ?? t('未记录')) })), type: task.type ?? t('本任务未提供类型'),
       details: [detail(t('前提'), task.premises, 'premises'), detail(t('实际证明引用'), task.proof.actualReferences ?? t('未记录'), 'refs'), detail(t('实际消费者'), actualConsumers, 'consumers'),
         ...(blockers.length ? [detail(t('数学阻塞'), blockers, 'blockers')] : []), ...(task.feedback ? [detail(t('检查反馈'), task.feedback, 'feedback')] : []),
@@ -575,26 +611,29 @@ export class CollaborationView {
       hasChecks: checks.length > 0,
     } });
   }
-  /** Re-rendered on new events as well as new observations; the key skips polls that changed neither. */
+  /** Re-rendered on new events, actions and observations; the key skips polls that changed none. The map reads new actions itself. */
   private renderRoute(view: ViewState, run: WebRun) {
     const observation = view.observation, ended = run.status !== 'queued' && run.status !== 'running';
-    const key = [run.events.length, run.events.at(-1)?.sequence, run.status, isAcceptedRun(run), observation?.sequence].join('|');
+    const key = [run.events.length, run.events.at(-1)?.sequence, run.actions?.count ?? 0, run.status, ended ? endedSummary(run) : '', observation?.sequence].join('|');
     if (view.routeKey === key) return;
     view.routeKey = key;
-    const roles = new Map(observation?.inspection.workers.map(worker => [worker.id, roleLabel(worker.role) ?? worker.role]) ?? []);
+    const inspection = observation?.inspection;
     renderAgentRoute(view.element.querySelector<HTMLElement>('[data-agent-route]')!, {
-      routes: agentRoutes(run.events).map(route => ({ ...route, role: roles.get(route.workerId) })), running: run.status === 'running',
-      ...(ended ? { ended: { accepted: isAcceptedRun(run) } } : {}), planned: observation?.inspection.tasks.length ?? 0, time: clockTime,
+      source: { store: this.activity, run, lead: inspection?.workers.find(worker => worker.role === 'lead')?.id },
+      names: workerNames(inspection?.workers), running: run.status === 'running', tasks: taskNames(inspection?.tasks ?? []),
+      ...(ended ? { ended: endedSummary(run) } : {}), planned: inspection?.tasks.length ?? 0, time: clockTime,
     });
   }
   private renderNow(view: ViewState, run: WebRun) {
     const inspection = view.observation!.inspection, tasks = new Map(inspection.tasks.map(task => [task.id, task]));
     const working = inspection.workers.filter(worker => worker.scheduling?.status === 'working');
+    const names = workerNames(inspection.workers), theorems = taskNames(inspection.tasks);
     renderCollaborationNow(view.element.querySelector<HTMLElement>('[data-collab-now]')!, {
       ended: run.status === 'queued' || run.status === 'running' ? undefined : { accepted: isAcceptedRun(run) },
       waiting: inspection.waiting ? inspection.waiting.reason : undefined,
-      working: working.map(worker => ({ id: worker.id, role: roleLabel(worker.role) ?? worker.role, phase: workerPhaseLabel(worker.phase) ?? t('未记录'),
-        task: worker.task, objective: worker.task ? tasks.get(worker.task)?.objective : undefined })),
+      working: working.map(worker => ({ id: worker.id, name: names.get(worker.id) ?? worker.id, phase: workerPhaseLabel(worker.phase) ?? t('未记录'),
+        task: worker.task, ...(worker.task && theorems.has(worker.task) ? { taskName: theorems.get(worker.task) } : {}),
+        objective: worker.task ? localizeText(tasks.get(worker.task)?.objective ?? '') || undefined : undefined })),
       others: inspection.workers.length - working.length,
     });
   }

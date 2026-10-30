@@ -9,7 +9,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput } from '../apps/web/shared';
-import { openHistory, selectHistoryRun } from './web-ui-controls';
+import { newResearch, openHistory, openModulesTab, selectHistoryRun, stageLabelsReadable } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -85,7 +85,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en-US');
   assert.deepEqual(await page.locator('.welcome-steps strong').allInnerTexts(), ['Write the problem', 'Connect a model', 'Wait for acceptance']);
@@ -98,16 +98,24 @@ try {
   // The sample run, every tab, settings, the glossary and the palette read in English; stored Chinese event text is translated.
   await page.locator('.welcome-sample').click();
   await page.locator('[data-sample-badge]').waitFor();
-  await english(page, 'sample overview');
-  for (const tab of ['collaboration', 'source', 'modules', 'report', 'events']) {
-    await page.locator(`#detail-tab-${tab}`).click();
+  await english(page, 'sample result');
+  for (const tab of ['trajectory', 'collaboration', 'source', 'events', 'modules']) {
+    if (tab === 'modules') await openModulesTab(page);
+    else await page.locator(`#detail-tab-${tab}`).click();
     await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor();
+    if (tab === 'trajectory') await page.locator('#detail-panel .trajectory-steps').waitFor();
     await settled(page);
     await english(page, `sample ${tab} tab`);
   }
   await page.locator('#open-settings').click();
   await page.locator('#run-settings[open]').waitFor();
+  // The registered module implementations, named by the server, read in English too once their sections are opened.
+  for (const selector of ['[data-server-module-library]', '[data-module-registry] details'])
+    await page.locator(`#run-settings ${selector}`).evaluate(details => { (details as HTMLDetailsElement).open = true; });
+  assert.match((await page.locator('#run-settings .collab-registry-entry strong').allInnerTexts()).join('\n'), /M1 · Bounded proof research/u);
   await english(page, 'settings', '#run-settings');
+  for (const selector of ['[data-module-registry] details', '[data-server-module-library]'])
+    await page.locator(`#run-settings ${selector}`).evaluate(details => { (details as HTMLDetailsElement).open = false; });
   await page.locator('#close-settings').click();
   await page.locator('#open-glossary').click();
   await page.locator('#glossary-dialog[open]').waitFor();
@@ -124,9 +132,9 @@ try {
   const run = await postRun({ page }, input);
   for (let attempt = 0; attempt < 100 && (await readRun({ page }, run.id)).status !== 'completed'; attempt++) await page.waitForTimeout(50);
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await openHistory(page);
-  await english(page, 'run history', '#history-dialog');
+  await english(page, 'run history', '#history-sidebar');
   await selectHistoryRun(page, run.id);
   await page.locator('[data-action="share-run"]').waitFor();
   await english(page, 'accepted run');
@@ -163,22 +171,22 @@ try {
   mark('the share page follows the reader\'s language, fits 320px, and switches to Chinese');
 
   // The switch saves the choice, keeps the draft, and the Chinese interface stays after a reload.
-  await page.locator('#new-research').click();
+  await newResearch(page);
   await page.locator('#task').fill('A draft that must survive the switch');
   await Promise.all([page.waitForEvent('load'), page.locator('#locale-switch').click()]);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   assert.equal(await page.evaluate(key => localStorage.getItem(key), localeKey), 'zh');
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');
   assert.equal(await page.locator('#task').inputValue(), 'A draft that must survive the switch');
   assert.equal(await page.locator('#locale-switch').innerText(), 'English');
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');
   // The palette switches back, so keyboard users never need the top bar.
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
   await page.locator('#command-palette[open] input').fill('english');
   await Promise.all([page.waitForEvent('load'), page.locator('#palette-switch-locale').click()]);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   assert.equal(await page.evaluate(key => localStorage.getItem(key), localeKey), 'en');
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en-US');
   mark('the top-bar switch and the palette command change language, remember it and keep the draft');
@@ -188,23 +196,28 @@ try {
     const narrow = await context.newPage();
     await narrow.setViewportSize({ width, height: 760 });
     await narrow.goto(origin);
-    await narrow.locator('#submit-run:enabled').waitFor();
+    await narrow.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await settled(narrow);
     assert.ok(await noOverflow(narrow), `English workbench overflows at ${width}px`);
     assert.ok(await narrow.evaluate(() => { const actions = document.querySelector('.topbar-actions')!; return actions.scrollWidth <= actions.clientWidth + 1 && actions.getBoundingClientRect().right <= innerWidth; }),
       `English top bar is clipped at ${width}px`);
     assert.equal(await narrow.getByRole('button', { name: '中文' }).count(), 1, 'The icon-only switch lost its accessible name');
+    // The visitor's accepted run reopens here; its longer English stage names wrap between words in their quarter of a phone.
+    await narrow.locator('.artifact-stages[data-ended]').waitFor();
+    await narrow.evaluate(() => document.fonts.ready);
+    await settled(narrow);
+    await stageLabelsReadable(narrow, `English run header at ${width}px`);
     await narrow.screenshot({ path: path.join(output, `i18n-workbench-${width}.png`) });
     await narrow.close();
   }
-  mark('the English workbench fits 375px and 320px and the icon-only switch keeps its name');
+  mark('the English workbench and an ended run\'s stage names fit 375px and 320px and the icon-only switch keeps its name');
   await context.close();
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close();
   await service.close();
 }
-// The login page is English for an English browser, with the switch in its footer; server errors stay Chinese by design.
+// The login page is English for an English browser, with the switch in its footer, and the server's refusals read in English too.
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-web-i18n-'));
 const loginPort = await freePort(), loginOrigin = `http://127.0.0.1:${loginPort}`;
 const login = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(loginPort), THEOREMOS_WEB_PUBLIC_URL: loginOrigin,
@@ -222,6 +235,13 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en-US');
   await english(page, 'login page');
   assert.equal(await page.locator('.locale-switch-separator').isVisible(), true);
+  await page.fill('#login-email', 'mallory@example.org');
+  await page.fill('#login-captcha', '24680');
+  await page.click('#send-code');
+  await page.locator('#login-error:not([hidden])').waitFor();
+  assert.equal(await page.locator('#login-error').innerText(), 'This email does not have beta access yet. Apply for the beta, then log in once you are accepted.');
+  await page.locator('#send-code:enabled').waitFor();
+  await english(page, 'login page after a refusal');
   await page.screenshot({ path: path.join(output, 'i18n-login-1440.png') });
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 760 });

@@ -21,7 +21,7 @@ import { attributeTaskReferences } from './taskReferenceAttribution';
 import { taskConsumerProjection } from './taskConsumers';
 import { parallelQuestions } from './taskQuestions';
 import { contextCheckpointRejection } from './contextCheckpoint';
-import { deliverHumanGuidance } from './humanGuidance';
+import { deliverHumanGuidance, readHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
@@ -54,8 +54,12 @@ export class CooperativeResearch extends CooperationInputs {
           current: () => !this.stopping && !this.input.signal.aborted && this.active.get(workerId) === active &&
             !active.cancelled && this.current(action), notify: message => active.notify(message, { requireTurn: true }) }];
       }),
-      onRecord: record => this.input.emit('human_guidance_' + record.status, { id: record.id, recipient: record.recipient,
-        taskRef: record.taskRef, deliveredTo: record.deliveredTo, reason: record.reason }),
+      onRecord: record => {
+        this.input.emit('human_guidance_' + record.status, { id: record.id, recipient: record.recipient,
+          taskRef: record.taskRef, deliveredTo: record.deliveredTo, reason: record.reason });
+        // A plan waiting for approval has no running Lead to receive it: wake one for a revision turn.
+        if (record.status === 'deferred' && record.recipient.kind === 'lead' && this.planApprovalPending()) this.wake();
+      },
     }).catch(error => {
       if (error instanceof Error && error.message === 'math_runtime_lease_busy') return;
       this.input.emit('human_guidance_unavailable', { reason: error instanceof Error ? error.message : 'math_guidance_unavailable' });
@@ -156,6 +160,7 @@ export class CooperativeResearch extends CooperationInputs {
   }
   async stop() {
     this.stopping = true;
+    if (this.planApprovalPending()) this.input.emit('plan_approval_unanswered', { planVersion: this.archive.planVersion });
     for (const worker of this.input.workers) this.clearDispatchWait(worker, 'stopped');
     this.wake();
     clearInterval(this.timer);
@@ -297,6 +302,16 @@ export class CooperativeResearch extends CooperationInputs {
       this.recordDispatchWait(worker, { stage: 'synchronizing', candidates: [], candidateCount: 0, omittedCandidates: 0 });
       return this.waitForDispatch();
     }
+    if (this.planApprovalPending()) {
+      // Nothing runs until a person approves; only their own note to the Lead earns a revision turn.
+      if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, this.active.size > 0);
+      const guidance = this.unansweredApprovalGuidance();
+      if (!guidance.length) return this.waitForDispatch();
+      const record = this.archive.planApproval ??= {};
+      record.guidanceIds = [...record.guidanceIds ?? [], ...guidance].slice(-512); record.revisionAt = Date.now();
+      this.input.emit('plan_approval_revision', { guidanceIds: guidance, planVersion: this.archive.planVersion });
+      return this.leadDecision(worker, this.archive.canonicalCommit!, this.planningInputDigest());
+    }
     if (this.pendingFixedStatementReviews()) {
       if (!this.livePeers.length || budget.remainingMs <= 0 ||
           this.input.state.turns >= budget.maxTurns && !this.reservedTurns.size || !modelAllowed && !this.active.size) return;
@@ -387,20 +402,33 @@ export class CooperativeResearch extends CooperationInputs {
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
       }
       consumeLeadWakes(wakes, through);
-      this.syncPlanNotes();
-      const planVersion = this.archive.planVersion ??= this.planVersion();
-      const action: CooperativeAction = { kind: 'lead', seedCommit: this.seed(worker, head), planVersion,
-        planningInputDigest: inputDigest, responsibilityDigest: this.leadResponsibilityDigest(),
-        ...(!this.archive.tasks.length && !this.archive.initialPlanPublication ? { initialPlanNonce: crypto.randomUUID() } : {}),
-        ...(this.archive.tasks.length ? { planNonce: crypto.randomUUID() } : {}) };
-      this.leadEvidence.set(action, this.planningEvidenceDigest());
-      this.leadPauseInputs.set(action, this.leadPauseInputDigest(action.seedCommit));
-      const presented = this.presentedGoalPathStall();
-      if (presented) this.presentedGoalPathStalls.set(action, presented);
+      const action = this.leadDecision(worker, head, inputDigest);
       if (goalPathStall) this.input.emit('goal_path_stall_dispatched', { digest: goalPathStall });
       return action;
     }
     return this.waitForDispatch();
+  }
+  private leadDecision(worker: ResearchWorker, head: string, inputDigest: string): CooperativeAction {
+    this.syncPlanNotes();
+    const planVersion = this.archive.planVersion ??= this.planVersion();
+    const action: CooperativeAction = { kind: 'lead', seedCommit: this.seed(worker, head), planVersion,
+      planningInputDigest: inputDigest, responsibilityDigest: this.leadResponsibilityDigest(),
+      ...(!this.archive.tasks.length && !this.archive.initialPlanPublication ? { initialPlanNonce: crypto.randomUUID() } : {}),
+      ...(this.archive.tasks.length ? { planNonce: crypto.randomUUID() } : {}) };
+    this.leadEvidence.set(action, this.planningEvidenceDigest());
+    this.leadPauseInputs.set(action, this.leadPauseInputDigest(action.seedCommit));
+    const presented = this.presentedGoalPathStall();
+    if (presented) this.presentedGoalPathStalls.set(action, presented);
+    return action;
+  }
+  /** Lead guidance written while the plan waits for approval, and not yet answered by a revision turn. */
+  private unansweredApprovalGuidance(): string[] {
+    const answered = new Set(this.archive.planApproval?.guidanceIds ?? []);
+    let records: ReturnType<typeof readHumanGuidance>;
+    try { records = readHumanGuidance(path.join(path.dirname(this.lead.worktree), 'state.json'), this.input.state.runId); }
+    catch { return []; }
+    return records.filter(record => record.recipient.kind === 'lead' && !record.taskRef &&
+      ['queued', 'deferred'].includes(record.status) && !answered.has(record.id)).map(record => record.id);
   }
   /** Work on a stalled goal's own route that settles without the Lead: a run, delivery, ready recheck, type or statement check. */
   private goalPathStallWorkRunning() {
@@ -442,6 +470,10 @@ export class CooperativeResearch extends CooperationInputs {
         gate: budget.remainingMs <= 0 ? 'time-limit' : !modelAllowed ? 'model-disabled' : 'turn-limit',
         candidates: [], candidateCount: 0, omittedCandidates: 0 });
       return budget.remainingMs <= 0 || !modelAllowed ? undefined : this.exhaustedDispatch(budget, modelAllowed);
+    }
+    if (this.planApprovalPending()) {
+      this.recordDispatchWait(worker, { stage: 'plan-approval', candidates: [], candidateCount: 0, omittedCandidates: 0 });
+      return this.waitForDispatch();
     }
     const review = this.archive.review;
     const reviewer = this.reviewer();

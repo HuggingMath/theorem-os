@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { readWebConfig, webDefaults } from '../apps/web/config';
-import { DockerWebRunner, parseWorkerMessage } from '../apps/web/runner';
+import { DockerWebRunner, parseWorkerMessage, webPrivateImagePaths } from '../apps/web/runner';
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 
 describe('Docker web runner', () => {
@@ -76,6 +76,42 @@ main().catch(() => process.exit(1));
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe('statement check container', () => {
+  const leak = '#eval show IO Unit from do\n  let text ← IO.FS.readFile "/opt/theorem-os/LICENSE"\n  throw (IO.userError (text.take 200).toString)\n' +
+    'theorem t : True := trivial\n';
+
+  it('covers the image\'s own code and build state', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-check-'));
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(require('node:path').join(__dirname, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+if (args[0] === 'start') process.stdin.on('data', () => {}).on('end', () => process.stdout.write('{}\\n'));
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    try {
+      await new DockerWebRunner(readWebConfig({})).check!({ environment: 'standard', source: leak }, new AbortController().signal);
+      const create = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[])
+        .find(args => args[0] === 'create')!;
+      const mounts = create.flatMap((arg, index) => arg === '--tmpfs' ? [create[index + 1]!.split(':')[0]] : []);
+      expect(mounts).toEqual(['/tmp', ...webPrivateImagePaths]);
+      expect(create).toContain('--network=none');
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // THEOREMOS_TEST_WORKER_IMAGE=theorem-os-worker:local runs it against a built image.
+  it.skipIf(!process.env.THEOREMOS_TEST_WORKER_IMAGE)('cannot read the application from a statement', async () => {
+    const runner = new DockerWebRunner({ workerImage: process.env.THEOREMOS_TEST_WORKER_IMAGE! });
+    const { output } = await runner.check!({ environment: 'standard', source: leak }, new AbortController().signal);
+    expect(output).toContain('/opt/theorem-os/LICENSE');
+    expect(output).toContain('no such file');
+    expect(output).not.toContain('proprietary');
+  }, 120_000);
 });
 
 describe('web worker protocol boundary', () => {

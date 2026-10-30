@@ -1,6 +1,6 @@
 import { createIcons, LogIn, MailCheck, RefreshCw } from 'lucide';
 import type { WebSession } from '../shared';
-import { mountLocaleSwitch, t } from '../i18n';
+import { localizeMessage, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 
 createIcons({ icons: { LogIn, MailCheck, RefreshCw }, attrs: { 'aria-hidden': 'true' } });
@@ -12,13 +12,15 @@ const email = $<HTMLInputElement>('#login-email'), captcha = $<HTMLInputElement>
 const sendCode = $<HTMLButtonElement>('#send-code'), verify = $<HTMLButtonElement>('#verify-code'), resend = $<HTMLButtonElement>('#resend-code');
 let csrf = '', captchaId = '', sentTo = '', resendTimer: ReturnType<typeof setInterval> | undefined;
 
+/** `message` is what the visitor sees; `reason` keeps the server's own text for the session check. */
 class LoginError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
+  constructor(readonly reason: string, readonly status: number) { super(localizeMessage(reason)); }
 }
 async function call<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store',
     headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+    .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('暂时无法连接服务，请稍后重试。')) : error; });
   const payload = await response.json().catch(() => undefined) as { error?: string } | undefined;
   if (!response.ok) throw new LoginError(payload?.error ?? t('请求失败 ({0})', response.status), response.status);
   return payload as T;
@@ -44,7 +46,7 @@ async function guarded(action: () => Promise<void>) {
   showError();
   try { await action(); }
   catch (error) {
-    if (error instanceof LoginError && [401, 403].includes(error.status) && /会话/u.test(error.message)) {
+    if (error instanceof LoginError && [401, 403].includes(error.status) && /会话/u.test(error.reason)) {
       await start().catch(() => undefined);
       showError(t('登录页面已过期，已经刷新，请重新输入。'));
     } else showError(error instanceof Error ? error.message : t('登录失败，请稍后重试。'));

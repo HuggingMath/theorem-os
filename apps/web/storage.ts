@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
-import type { WebEvent, WebExplanation, WebRun } from './shared';
+import type { WebAgentAction, WebEvent, WebExplanation, WebRun } from './shared';
 import type { WebShareSnapshot } from './share';
 
 export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
@@ -216,6 +216,45 @@ export class WebStorage {
     return bySequence(this.listRecords(directory).map(file => this.getRecord<WebEvent>([...directory, file])!));
   }
   getEvents(owner: string, runId: string): WebEvent[] { return this.listEvents(owner, runId); }
+  /** The first and last stored event sequence, read from the record names alone. */
+  eventRange(owner: string, runId: string): { first: number; last: number } {
+    let first = 0, last = 0;
+    for (const file of this.listRecords([...this.runPath(owner, runId), 'events'])) {
+      if (!/^\d+\.json$/u.test(file)) continue;
+      const sequence = Number.parseInt(file, 10);
+      if (!first || sequence < first) first = sequence;
+      if (sequence > last) last = sequence;
+    }
+    return { first, last };
+  }
+  /** Events after a sequence, oldest first, at most `limit`; for incremental readers such as the trajectory index. */
+  listEventsAfter(owner: string, runId: string, after: number, limit: number): WebEvent[] {
+    return this.recordsAfter<WebEvent>([...this.runPath(owner, runId), 'events'], after, limit);
+  }
+  saveAction(owner: string, runId: string, action: WebAgentAction): void {
+    if (!Number.isSafeInteger(action.sequence) || action.sequence < 1) throw new Error('web_storage_invalid_action_sequence');
+    this.saveRecord([...this.runPath(owner, runId), 'actions', `${action.sequence}.json`], action, true);
+  }
+  /** Agent actions after a sequence, oldest first, at most `limit`. */
+  listActionsAfter(owner: string, runId: string, after: number, limit: number): WebAgentAction[] {
+    return this.recordsAfter<WebAgentAction>([...this.runPath(owner, runId), 'actions'], after, limit);
+  }
+  listObservationsAfter(owner: string, runId: string, after: number, limit: number): WebObservation[] {
+    return this.recordsAfter<WebObservation>([...this.runPath(owner, runId), 'observations'], after, limit);
+  }
+  /** Numbered records after `after` in sequence order; reading stops at a record that cannot be parsed, to be read again later. */
+  private recordsAfter<T>(directory: string[], after: number, limit: number): T[] {
+    const sequences = this.listRecords(directory).flatMap(file => /^\d+\.json$/u.test(file) ? [Number.parseInt(file, 10)] : [])
+      .filter(sequence => sequence > after).sort((a, b) => a - b).slice(0, limit);
+    const records: T[] = [];
+    for (const sequence of sequences) {
+      let record: T | undefined;
+      try { record = this.getRecord<T>([...directory, `${sequence}.json`]); } catch { break; }
+      if (record === undefined) break;
+      records.push(record);
+    }
+    return records;
+  }
 
   archiveRun(owner: string, run: WebRun, catalogDigest?: string): WebArchive {
     if (!this.getRun(owner, run.id)) throw new WebStorageError(404, '运行不存在或不属于当前会话。');

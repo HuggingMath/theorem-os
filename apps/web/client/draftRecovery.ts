@@ -1,7 +1,7 @@
 import { decodeTaskDraft, encodeTaskDraft, type TaskDraft } from './draft';
 
 export const draftRecoveryStorageKey = 'theorem-os.web-draft-recovery.v1';
-export const replacementReasons = ['template', 'reset', 'reuse', 'import', 'source', 'edit'] as const;
+export const replacementReasons = ['template', 'reset', 'reuse', 'import', 'source', 'edit', 'paste'] as const;
 export type ReplacementReason = typeof replacementReasons[number];
 type Recovery = { draft: TaskDraft; reason: ReplacementReason; persisted: boolean };
 type RecoveryStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -12,6 +12,7 @@ function copyDraft(draft: TaskDraft): TaskDraft {
     maxTurns: draft.maxTurns, maxRunSeconds: draft.maxRunSeconds, workers: draft.workers,
     ...(draft.maxTotalTokens !== undefined ? { maxTotalTokens: draft.maxTotalTokens } : {}),
     effort: draft.effort, environment: draft.environment, coordination: draft.coordination, templateId: draft.templateId,
+    ...(draft.planApproval ? { planApproval: true as const } : {}),
     ...(draft.modulePlan ? { modulePlan: structuredClone(draft.modulePlan) } : {}) };
 }
 

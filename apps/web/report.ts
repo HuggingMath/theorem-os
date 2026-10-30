@@ -1,6 +1,6 @@
 import type { WebRun } from './shared';
 import { t } from './i18n';
-import { isAcceptedRun } from './presentation';
+import { failureGuide, isAcceptedRun, planGated, type RecoveryAction } from './presentation';
 
 export type ReportTone = 'passed' | 'failed' | 'warning' | 'muted';
 export type ReportDiagnostic = { label: string; text: string; truncated: boolean };
@@ -19,6 +19,8 @@ export type ReportCheck = {
   tone: ReportTone;
   method?: string;
   reason?: string;
+  /** Acceptance did not run at all. */
+  skipped?: boolean;
   targets: ReportTarget[];
   omittedTargets: number;
 };
@@ -79,7 +81,8 @@ export function withoutCheckMarkers(output: string): string {
   return output.split('\n').filter(line => !checkMarker.test(line.trim())).join('\n').trim();
 }
 
-function diagnostics(row: Record<string, unknown>): ReportDiagnostic[] {
+/** The error and Lean output of one check row, checker delimiters removed and each text capped. */
+export function diagnostics(row: Record<string, unknown>): ReportDiagnostic[] {
   const result: ReportDiagnostic[] = [];
   const seen = new Set<string>();
   for (const [key, label] of [['error', t('错误')], ['stdoutPreview', t('标准输出')], ['stderrPreview', t('标准错误')]]) {
@@ -131,7 +134,7 @@ export function summarizeReport(run: WebRun): ReportSummary {
   if (evaluationStatus || method || evaluationReason || evaluationTimedOut || evaluationTargets.targets.length) {
     const evaluationState: Status = evaluationTimedOut ? { status: t('验收超时'), tone: 'failed' }
       : status(evaluationStatus, evaluationStatuses);
-    checks.push({ id: 'evaluation', label: t('独立验收'), ...evaluationState,
+    checks.push({ id: 'evaluation', label: t('独立验收'), ...evaluationState, ...(evaluationStatus === 'skipped' ? { skipped: true } : {}),
       ...(method ? { method: evaluationMethods.get(method) ?? method } : {}),
       ...(evaluationReason ? { reason: evaluationReason } : {}), ...evaluationTargets });
   }
@@ -154,6 +157,111 @@ export function summarizeReport(run: WebRun): ReportSummary {
   }
   const reason = text(report?.reason) ?? text(record?.error);
   return { ...(reason ? { reason } : {}), checks, metrics, identity };
+}
+
+/** Lean's three classical axioms; anything else in a target's closure deserves a reader's attention. */
+export const standardAxioms: ReadonlySet<string> = new Set(['propext', 'Classical.choice', 'Quot.sound']);
+export type GoalState = 'proved' | 'checked' | 'conditional' | 'working' | 'planned' | 'open';
+export type GoalSubgoal = { id: string; name: string; state: GoalState };
+export type GoalRow = {
+  name: string; state: GoalState; status: string; tone: ReportTone | 'running'; taskId?: string;
+  /** Unproved subgoals this goal still rests on, by theorem name. */ waiting: string[];
+  /** The Lean axioms the accepted check recorded for this target; absent until a check records them. */
+  axioms?: string[]; nonstandardAxioms?: string[];
+  subgoals: GoalSubgoal[]; omittedSubgoals: number;
+};
+export type GoalChecklist = { goals: GoalRow[]; omitted: number; proved: number; checked: number; conditional: number; open: number };
+
+const maximumGoals = 64, maximumSubgoals = 32;
+export const goalStates: Record<GoalState, Pick<GoalRow, 'status' | 'tone'>> = {
+  proved: { status: t('已证明'), tone: 'passed' }, checked: { status: t('Lean 已检查'), tone: 'passed' }, conditional: { status: t('有条件'), tone: 'warning' },
+  working: { status: t('证明中'), tone: 'running' }, planned: { status: t('等计划批准'), tone: 'muted' },
+  open: { status: t('未解决'), tone: 'failed' },
+};
+const stringList = (value: unknown) => Array.isArray(value)
+  ? value.flatMap(item => typeof item === 'string' ? [item] : typeof object(item)?.name === 'string' ? [object(item)!.name as string] : []) : [];
+
+/**
+ * One row per original target: proved, conditional on named open subgoals, or unsolved, with the axioms its final
+ * check recorded. The independent acceptance decides first; the solver's recorded goal frontier explains the rest.
+ */
+export function summarizeGoals(run: WebRun): GoalChecklist | undefined {
+  const inspection = run.observation?.inspection;
+  const report = object(object(run.result)?.report), evaluator = object(report?.evaluator);
+  const rows = (value: unknown) => Array.isArray(value) ? value.map(object).filter(row => text(row?.theoremName)) as Record<string, unknown>[] : [];
+  const evaluated = new Map(rows(object(object(evaluator?.verification)?.verification)?.results).map(row => [row.theoremName as string, row]));
+  const tasks = inspection?.tasks ?? [], byId = new Map(tasks.map(task => [task.id, task]));
+  const goalTasks = tasks.filter(task => task.kind === 'goal');
+  const frontiers = new Map((inspection?.mathematics?.snapshot.goals ?? []).map(goal => [goal.taskId, goal]));
+  const names = [...new Set([...(inspection?.problem.targets ?? []).map(target => target.theoremName), ...evaluated.keys(),
+    ...goalTasks.flatMap(task => task.theorem ? [task.theorem] : [])])];
+  if (!names.length) return;
+  // Until the owner approves the plan no Agent works on any goal, so an open goal waits rather than being proved.
+  const accepted = isAcceptedRun(run), active = run.status === 'queued' || run.status === 'running';
+  const underway: GoalState = planGated(run) ? 'planned' : 'working';
+  const name = (id: string) => byId.get(id)?.theorem ?? id;
+  const proved = (id: string) => byId.get(id)?.proof.status === 'checked';
+  const taskState = (task: typeof tasks[number]): GoalState => task.proof.status === 'checked' ? 'proved'
+    : task.proof.status === 'conditional' ? 'conditional' : active && task.control === 'active' && task.status !== 'blocked' ? underway : 'open';
+  const goals = names.slice(0, maximumGoals).map((theorem): GoalRow => {
+    const task = goalTasks.find(item => item.theorem === theorem), frontier = task && frontiers.get(task.id), row = evaluated.get(theorem);
+    const conditional = task?.proof.status === 'conditional';
+    // Proved means the independent acceptance says so; a goal the solver's own Lean check closed is only checked.
+    const state: GoalState = accepted || row?.status === 'kernel_verified' ? 'proved' : !row && frontier?.closed ? 'checked'
+      : conditional ? 'conditional' : active && !row ? underway : 'open';
+    const waiting = state === 'proved' || state === 'checked' || !task ? [] : [...new Set([...(task.proof.conditions ?? []).map(item => item.taskId),
+      ...(frontier?.frontier ?? []).map(item => item.taskId), ...(frontier?.missingDependencies ?? [])])]
+      .filter(id => id !== task.id && !proved(id)).map(name);
+    // Axioms describe an accepted proof: a failed check's list says nothing about the target.
+    const axioms = state === 'proved' && row && Array.isArray(row.axioms) ? stringList(row.axioms) : undefined;
+    // Planned lemmas below this goal, in plan order; stopped routes are no longer part of its proof.
+    const below = new Set<string>(), visit = (id: string) => {
+      for (const next of byId.get(id)?.plannedDependencies ?? []) if (!below.has(next)) { below.add(next); visit(next); }
+    };
+    if (task) visit(task.id);
+    const subgoals = tasks.filter(item => below.has(item.id) && item.kind === 'lemma' && item.control !== 'stopped')
+      .map(item => ({ id: item.id, name: name(item.id), state: taskState(item) }));
+    return { name: theorem, state, ...goalStates[state], ...(task ? { taskId: task.id } : {}), waiting,
+      ...(axioms ? { axioms, nonstandardAxioms: axioms.filter(item => !standardAxioms.has(item)) } : {}),
+      subgoals: subgoals.slice(0, maximumSubgoals), omittedSubgoals: Math.max(0, subgoals.length - maximumSubgoals) };
+  });
+  const count = (state: GoalState) => goals.filter(goal => goal.state === state).length;
+  return { goals, omitted: names.length - goals.length, proved: count('proved'), checked: count('checked'), conditional: count('conditional'),
+    open: count('open') + count('working') + count('planned') };
+}
+
+export type GoalGroup = { id: 'underway' | 'open' | 'checked' | 'proved'; label: string; goals: GoalRow[]; folded: boolean };
+const goalGroupOf: Record<GoalState, GoalGroup['id']> = { working: 'underway', planned: 'underway', open: 'open', conditional: 'open', checked: 'checked', proved: 'proved' };
+/**
+ * A long goal list read by status: what is still being proved, what is unsolved (conditional ones too), then what is
+ * done. Finished groups start folded while anything is unfinished; problem order is kept inside each group.
+ * Short lists, or lists in a single state, stay flat.
+ */
+export function groupGoals(goals: readonly GoalRow[]): GoalGroup[] | undefined {
+  const ids = new Set(goals.map(goal => goalGroupOf[goal.state]));
+  if (goals.length < 4 || ids.size < 2) return;
+  const unfinished = ids.has('underway') || ids.has('open');
+  const underwayLabel = goals.some(goal => goal.state === 'working') ? t('证明中') : t('等计划批准');
+  const labels: Record<GoalGroup['id'], string> = { underway: underwayLabel, open: t('未解决'), checked: t('Lean 已检查'), proved: t('已证明') };
+  return (['underway', 'open', 'checked', 'proved'] as const).filter(id => ids.has(id)).map(id => ({ id, label: labels[id],
+    goals: goals.filter(goal => goalGroupOf[goal.state] === id), folded: unfinished && (id === 'checked' || id === 'proved') }));
+}
+
+/**
+ * What to do after a run ended without an accepted proof, at most three buttons and none of them a model call: start
+ * again from the code its own Lean check passed, read why the latest failed check failed, and the failure's own
+ * recovery (or a plain rerun when there is none). `tasks` names the goals or tasks each step acts on.
+ */
+export type NextStep = { id: 'continue-checked' | 'ask-failed'; label: string; tasks: string[] } | (RecoveryAction & { tasks?: undefined });
+export function nextSteps(run: WebRun, goals?: GoalChecklist): NextStep[] {
+  if (run.status === 'queued' || run.status === 'running' || isAcceptedRun(run)) return [];
+  const checked = (goals?.goals ?? []).filter(goal => goal.state === 'checked' && goal.taskId).map(goal => goal.taskId!);
+  const tasks = run.observation?.inspection.tasks ?? [];
+  const failed = tasks.filter(task => task.proof.status === 'failed' && task.control !== 'stopped')
+    .sort((a, b) => Number(b.kind === 'goal') - Number(a.kind === 'goal')).map(task => task.id);
+  const recovery = failureGuide(run)?.actions.filter(action => action.id !== 'report') ?? [{ id: 'retry', label: t('复用配置重新研究') } as RecoveryAction];
+  return [...checked.length ? [{ id: 'continue-checked' as const, label: t('从已检查的代码继续'), tasks: checked }] : [],
+    ...failed.length ? [{ id: 'ask-failed' as const, label: t('问为什么没通过'), tasks: failed }] : [], ...recovery].slice(0, 3);
 }
 
 export type StuckTask = {

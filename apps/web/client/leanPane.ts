@@ -10,7 +10,7 @@ export function buildLeanRows(source: string): HTMLElement[] {
     const row = document.createElement('div'), number = document.createElement('span'), gutter = document.createElement('span'),
       text = document.createElement('span');
     row.className = 'lean-row'; row.dataset.line = String(index + 1);
-    number.className = 'lean-number'; number.textContent = String(index + 1); number.setAttribute('aria-hidden', 'true');
+    number.className = 'lean-line-number'; number.textContent = String(index + 1); number.setAttribute('aria-hidden', 'true');
     gutter.className = 'lean-mark'; gutter.setAttribute('aria-hidden', 'true');
     text.className = 'lean-text';
     for (const segment of segments) {

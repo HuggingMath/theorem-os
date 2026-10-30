@@ -35,6 +35,9 @@ const descriptions: Record<string, string> = {
   human_guidance_queued: '数学指导已排队', human_guidance_delivered: '数学指导已送达 Agent',
   human_guidance_deferred: '数学指导暂缓投递，等待接收者到达检查点', human_guidance_failed: '数学指导未能投递',
   human_guidance_unavailable: '数学指导通道暂不可用',
+  plan_approval_requested: '研究计划等待你批准，Agent 暂不开始工作', plan_approved: '研究计划已批准，Agent 开始工作',
+  plan_approval_rejected: '计划批准未生效，请看当前计划后再批准', plan_approval_revision: 'Lead 正在按你的留言修改计划',
+  plan_approval_unanswered: '运行结束时研究计划仍未批准',
   // Lead planning and the goal path.
   initial_plan_published: '初始研究计划已发布', plan_published: '研究计划已发布',
   initial_plan_rejected: '初始研究计划未通过校验', plan_publication_rejected: '研究计划发布未通过校验',
@@ -104,7 +107,7 @@ const fields: Record<string, readonly (keyof WebEventDetails)[]> = {
   custom_module_applied: ['moduleId', 'slot', 'mode'],
   worker_failed: ['reason'], worker_recovered: ['reason'], routes_idle: ['reason'], initial_plan_fallback: ['reason'],
   task_tactic_battery: ['taskId', 'reason'],
-  edit_rejected: ['reason'], human_guidance_deferred: ['reason'], human_guidance_failed: ['reason'],
+  edit_rejected: ['reason'], plan_approval_rejected: ['reason'], human_guidance_deferred: ['reason'], human_guidance_failed: ['reason'],
   human_guidance_unavailable: ['reason'], initial_plan_rejected: ['reason'], plan_publication_rejected: ['reason'],
   initial_plan_fallback_failed: ['reason'], lead_draft_preserved: ['reason'],
   route_blocker_recorded: ['taskId'], delivery_rejected: ['reason'],

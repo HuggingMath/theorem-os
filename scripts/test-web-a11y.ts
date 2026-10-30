@@ -54,7 +54,7 @@ try {
     const page = await context.newPage(), errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
-    await page.locator('#submit-run:enabled').waitFor();
+    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
     await settled(page);
     await clean(page, `welcome (${locale})`);
@@ -70,7 +70,24 @@ try {
 
     await dialog(page, '#open-settings', 'run-settings', `settings (${locale})`);
     await dialog(page, '#open-glossary', 'glossary-dialog', `glossary (${locale})`);
-    await dialog(page, '#open-history', 'history-dialog', `history (${locale})`);
+    // Wide screens dock the history beside the workspace; its button folds and unfolds it and keeps focus.
+    const history = page.locator('#open-history');
+    await history.focus();
+    await page.keyboard.press('Enter');
+    await page.locator('body[data-history-collapsed="true"]').waitFor({ state: 'attached' });
+    assert.equal(await history.getAttribute('aria-expanded'), 'false');
+    await page.locator('#topbar-draft').waitFor();
+    await clean(page, `collapsed history (${locale})`);
+    await page.keyboard.press('Enter');
+    await page.locator('#history-sidebar .run-history').waitFor();
+    assert.equal(await history.getAttribute('aria-expanded'), 'true');
+    assert.ok(await page.evaluate(() => document.activeElement?.id === 'open-history' || Boolean(document.activeElement?.closest('#history-sidebar'))),
+      'unfolding the history must leave focus on its button or move it into the list');
+    await page.setViewportSize({ width: 820, height: 900 });
+    await settled(page);
+    await dialog(page, '#open-history', 'history-dialog', `history dialog (${locale})`);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await settled(page);
     await page.locator('.palette-trigger').focus();
     await page.keyboard.press('Enter');
     await page.locator('#command-palette[open]').waitFor();
@@ -78,12 +95,12 @@ try {
     await page.keyboard.press('Escape');
     await page.locator('#command-palette').waitFor({ state: 'hidden' });
     assert.ok(await page.locator('.palette-trigger').evaluate(element => element === document.activeElement), 'Palette did not return focus');
-    mark(`settings, glossary, history and the palette pass the audit, close on Escape and return focus (${locale})`);
+    mark(`settings, glossary, the history sidebar and dialog and the palette pass the audit, close on Escape and return focus (${locale})`);
 
     // The sample: each tab is reachable with the arrow keys and every panel passes the audit.
     await page.locator('.welcome-sample').click();
     await page.locator('[data-sample-badge]').waitFor();
-    await page.locator('#detail-tab-overview').focus();
+    await page.locator('#detail-tab-result').focus();
     const order = await page.locator('[data-detail-tab]').evaluateAll(tabs => tabs.map(tab => (tab as HTMLElement).dataset.detailTab!));
     for (let step = 0; step < order.length; step++) {
       const tab = await page.evaluate(() => (document.activeElement as HTMLElement).dataset.detailTab!);
@@ -111,10 +128,17 @@ try {
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.detailTab), order.at(-1));
     mark(`the sample's tabs follow the arrow-key pattern and every panel passes the audit (${locale})`);
 
-    // On a phone the compose and workspace switch is a tablist too.
+    // On a phone the run fills the screen; the new-research page splits into a compose and preview tablist.
     await page.setViewportSize({ width: 375, height: 760 });
     await settled(page);
-    await clean(page, `375px (${locale})`);
+    await clean(page, `375px run (${locale})`);
+    await page.locator('#open-history').click();
+    await page.locator('#history-dialog[open]').waitFor();
+    await page.locator('#open-draft').click();
+    await page.locator('body[data-view="draft"]').waitFor({ state: 'attached' });
+    await page.locator('#mobile-compose').waitFor();
+    await settled(page);
+    await clean(page, `375px new research (${locale})`);
     mark(`the 375px layout passes the audit (${locale})`);
     await page.screenshot({ path: path.join(output, `a11y-${locale}-375.png`) });
     assert.deepEqual(errors, []);

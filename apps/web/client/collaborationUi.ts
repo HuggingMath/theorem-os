@@ -1,4 +1,5 @@
 import { localeTag, t } from '../i18n';
+import { agentNames } from './agentRoute';
 export type WebApi = <T>(url: string, init?: RequestInit) => Promise<T>;
 export const jsonText = (value: unknown) => JSON.stringify(value, null, 2) ?? '—';
 export const errorText = (error: unknown) => error instanceof Error ? error.message : t('请求失败，请重试');
@@ -17,6 +18,8 @@ export const coverageLabel = (value: 'recorded' | 'partial') => value === 'recor
 /** Runtime codes shown to readers; an unknown code is shown as is rather than guessed. */
 const labels = (table: Record<string, string>) => (value: string | undefined) => value === undefined ? undefined : table[value] ?? value;
 export const roleLabel = labels({ lead: 'Lead', researcher: 'Researcher', prover: 'Prover', engineer: 'Engineer', reviewer: 'Reviewer' });
+/** Each Agent by its role label ("Researcher 2" when several share one); see agentNames. */
+export const workerNames = (workers: readonly { id: string; role: string }[] = []) => agentNames(workers.map(worker => ({ id: worker.id, role: roleLabel(worker.role) })));
 export const schedulingLabel = labels({ working: t('工作中'), preparing: t('准备中'), stopping: t('停止中'), idle: t('空闲'), stopped: t('已停止') });
 export const workerPhaseLabel = labels({ prepared: t('已准备'), running: t('研究中'), checking: t('检查中'), evaluating: t('验收中'), finished: t('已结束') });
 export const dispatchWaitLabel = labels({ recorded: t('已记录'), stale: t('记录已过期'), unknown: t('未记录') });

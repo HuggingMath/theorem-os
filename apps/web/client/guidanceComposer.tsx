@@ -1,8 +1,9 @@
 import type { WebCommandResult, WebGuidanceInput, WebGuidanceRecord, WebObservation } from '../collaboration';
-import { commandId, createElement, errorText, observedTime, recipientLabel, roleLabel, type WebApi } from './collaborationUi';
+import { commandId, createElement, errorText, observedTime, recipientLabel, workerNames, type WebApi } from './collaborationUi';
+import { taskNames } from './agentRoute';
 import { Code, Facts, renderSection } from './ui/Section';
 import { TermHint } from './ui/TermHint';
-import { t } from '../i18n';
+import { localizeText, t } from '../i18n';
 
 type PendingGuidance = { input: WebGuidanceInput; draftRevision: number; missing: boolean };
 type Kind = WebGuidanceInput['recipient']['kind'];
@@ -46,6 +47,9 @@ export class GuidanceComposer {
     this.kind = kind; this.renderTargets(id); this.selectTarget(); this.focus();
   }
 
+  /** Address the draft to the Lead, the one Agent that can revise the plan. */
+  guideLead() { this.kind = 'lead'; this.renderTargets(''); this.selectTarget(); this.focus(); }
+
   focus() { this.element.querySelector<HTMLTextAreaElement>('[data-guidance-text]')!.focus({ preventScroll: true }); }
 
   appendReference(text: string, notice = t('知识引用已加入本地指导草稿，尚未发送')) {
@@ -65,10 +69,16 @@ export class GuidanceComposer {
     this.draftRevision++; this.render();
   }
 
+  /** Tasks by their theorem and Agents by their role, the way the rest of 协作 names them; ids stay in the option values. */
+  private name(kind: Kind, id: string) {
+    const inspection = this.observation?.inspection;
+    return (kind === 'task' ? taskNames(inspection?.tasks ?? []) : kind === 'worker' ? workerNames(inspection?.workers) : new Map<string, string>()).get(id) ?? id;
+  }
+
   /** Recipients for the chosen kind; a chosen recipient that disappeared stays visible as removed rather than silently switching. */
   private renderTargets(value = this.target) {
-    const entries = this.kind === 'task' ? this.observation?.inspection.tasks.map(task => [task.id, t('{0} · 任务', task.id)] as [string, string]) :
-      this.kind === 'worker' ? this.observation?.inspection.workers.map(worker => [worker.id, `${worker.id} · ${roleLabel(worker.role)}`] as [string, string]) : [['', 'Lead'] as [string, string]];
+    const entries = this.kind === 'task' ? this.observation?.inspection.tasks.map(task => [task.id, this.name('task', task.id)] as [string, string]) :
+      this.kind === 'worker' ? this.observation?.inspection.workers.map(worker => [worker.id, this.name('worker', worker.id)] as [string, string]) : [['', 'Lead'] as [string, string]];
     const options = [...(entries ?? [])];
     if (value && !options.some(([id]) => id === value)) options.push([value, t('{0} · 已移除', value)]);
     this.targets = options;
@@ -87,9 +97,10 @@ export class GuidanceComposer {
   private context(issue: string | undefined) {
     const task = this.kind === 'task' ? this.observation?.inspection.tasks.find(task => task.id === this.target) : undefined;
     const notice = issue && <p class="collab-notice">{issue}</p>;
-    if (this.kind !== 'task') return notice;
-    return <><Facts facts={[[t('任务'), this.target], [t('草稿任务版本'), this.taskRef?.version], [t('当前任务版本'), task?.version]]} />
-      {notice}{issue && task && <button type="button" class="button" data-guidance-confirm-version data-focus-key="guidance-version" onClick={() => { this.selectTarget(); this.focus(); }}>{t('确认当前任务版本')}</button>}</>;
+    // The versions matter only once the task changed under the draft; until then the task's name is enough.
+    if (this.kind !== 'task' || !issue) return notice;
+    return <><Facts facts={[[t('任务'), this.name('task', this.target)], [t('草稿任务版本'), this.taskRef?.version], [t('当前任务版本'), task?.version]]} />
+      {notice}{task && <button type="button" class="button" data-guidance-confirm-version data-focus-key="guidance-version" onClick={() => { this.selectTarget(); this.focus(); }}>{t('确认当前任务版本')}</button>}</>;
   }
 
   private availability(issue: string | undefined) {
@@ -102,12 +113,14 @@ export class GuidanceComposer {
   }
 
   private record(record: WebGuidanceRecord) {
-    return <article key={record.id} class="collab-guidance-record">
-      <div><strong>{recipientLabel(record.recipient.kind)} {record.recipient.id}</strong><span class="badge">{statusLabel[record.status]}</span></div>
-      <p>{record.text}</p>
-      <small>{record.id} · {observedTime(record.updatedAt)}{record.deliveredTo?.length ? t(' · 接收 {0}', record.deliveredTo.join(', ')) : ''}</small>
-      {record.taskRef && <p class="collab-help">{t('任务 {0} · 版本 {1}', record.taskRef.id, record.taskRef.version)}</p>}
-      <p class="collab-help">{t('依据观察 #{0} · {1}', record.observationRef.sequence, record.observationRef.stateDigest)}</p>
+    // Ids, the task version and the observation it was written against stay in the tooltip for whoever needs them.
+    const trace = [record.id, record.taskRef && t('任务 {0} · 版本 {1}', record.taskRef.id, record.taskRef.version),
+      t('依据观察 #{0} · {1}', record.observationRef.sequence, record.observationRef.stateDigest)].filter(Boolean).join('\n');
+    const recipient = record.recipient.kind === 'lead' ? 'Lead' : `${recipientLabel(record.recipient.kind)} ${this.name(record.recipient.kind, record.recipient.id ?? '')}`;
+    return <article key={record.id} class="collab-guidance-record" title={trace}>
+      <div><strong>{recipient}</strong><span class="badge">{statusLabel[record.status]}</span></div>
+      <p>{localizeText(record.text)}</p>
+      <small>{observedTime(record.updatedAt)}{record.deliveredTo?.length ? t(' · 接收 {0}', record.deliveredTo.map(id => this.name('worker', id)).join(', ')) : ''}</small>
       {record.reason && <p class="collab-help">{record.reason}</p>}
     </article>;
   }

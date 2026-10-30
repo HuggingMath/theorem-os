@@ -35,6 +35,7 @@ import { assignmentDeliveryFile, isFeasibilityReview, markTaskAcceptance, markTa
 import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, RETRY_DISPATCH, bounded } from './cooperationShared';
 import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type LeadWakeReason } from './leadWakes';
 import { MAX_INVALID_TASK_TRANSITIONS, setTaskStatus, type TaskStatus, type TaskTransitionCause } from './taskLifecycle';
+import { planApprovalStatus } from './planApproval';
 
 /** Shared cooperation state, scheduling primitives and the per-worker context projection. */
 /** Lead turns that may leave a presented stall unanswered before it is recorded as ignored. */
@@ -383,6 +384,7 @@ export abstract class CooperationCore {
     for (const route of this.archive.groups ?? []) route.busy = busy.get(route.group.id)?.size ?? 0;
     this.archive.planVersion ??= this.planVersion();
     if (edit?.status === 'applied') edit.planVersion = this.archive.planVersion;
+    this.refreshPlanApproval();
     this.syncEditChecks(nodes, versions);
     // A new inbox can supersede an assessment-only Lead without publishing a plan.
     // Reclaim its running turn as well as rejecting stale decisions.
@@ -457,6 +459,15 @@ export abstract class CooperationCore {
       });
     }
     this.wake();
+  }
+  /** With --plan-approval, the first accepted plan holds every worker until a human approves its exact version. */
+  protected planApprovalPending() {
+    return planApprovalStatus(this.input.state) === 'pending';
+  }
+  private refreshPlanApproval() {
+    if (!this.planApprovalPending() || this.archive.planApproval?.requestedAt !== undefined) return;
+    this.archive.planApproval = { ...this.archive.planApproval, requestedAt: Date.now(), requestedVersion: this.archive.planVersion };
+    this.input.emit('plan_approval_requested', { planVersion: this.archive.planVersion });
   }
   protected cancelStaleTaskTypes() {
     for (const pending of this.preparingTaskTypes.values())

@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import type { WebObservation, WebInspection, WebGuidanceInput } from '../apps/web/collaboration';
 import { buildTheoremKnowledge } from '../src/solver/theoremKnowledge';
-import { closeSettings, openSettings, refreshHistory, selectHistoryRun, showArtifacts } from './web-ui-controls';
+import { closeSettings, openSettings, refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioSuite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), output = path.join(root,'out/web-collaboration');
@@ -49,6 +49,7 @@ const runner:WebRunner={async readiness(){return{ready:true,message:'Local colla
     const guidance={...command.guidance,status:'queued' as const,createdAt:now(),updatedAt:now()};control.observation.guidance.push(guidance);control.emit();
     return{id:guidance.id,status:'queued',guidance,observation:control.observation};
   }
+  if(command.type==='plan-approval')throw new Error('Collaboration fixture runs do not wait for plan approval');
   if(command.proposal.baseVersion!==control.observation.plan!.baseVersion)throw new Error('math_edit_version_conflict');
   if(command.type==='edit-preview')return{id:command.proposal.id,status:'validated',affectedTaskIds:['base'],changes:[{taskId:'base',fields:['type']}]};
   control.observation.plan={...command.proposal,baseVersion:'plan-v3'};control.observation.inspection.planVersion='plan-v3';
@@ -61,7 +62,7 @@ const service=createWebService(readWebConfig({THEOREMOS_WEB_PORT:String(port),TH
 const browser=await startBrowser(service.server,port);
 const suite:ScenarioSuite={origin,output,checks:[],failedScenario:''};
 const input:WebRunInput={providerId:'openai',apiKey:'sk-local-collaboration-fixture',model:'fixture',effort:'low',environment:'standard',source,task:'Inspect collaborative proof research',maxTurns:2,maxRunSeconds:60,workers:4,coordination:'cooperative'};
-async function create(page:Page,runInput=input){const run=await postRun({page},runInput);await refreshHistory(page);await selectHistoryRun(page,run.id);await page.locator('.collab-surface').waitFor();await page.locator('[data-collab-task="base"]:visible').waitFor();return run;}
+async function create(page:Page,runInput=input){const run=await postRun({page},runInput);await refreshHistory(page);await selectHistoryRun(page,run.id, 'collaboration');await page.locator('.collab-surface').waitFor();await page.locator('[data-collab-task="base"]:visible').waitFor();return run;}
 async function poll(page:Page){const response=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/runs'&&response.request().method()==='GET');await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await response;await settled(page);}
 async function fit(page:Page){assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'workspace must fit viewport');for(const selector of ['.collab-surface','.collab-layout','.collab-guidance']){const box=await page.locator(selector).boundingBox();assert.ok(box&&box.x>=-1&&box.x+box.width<=page.viewportSize()!.width+1,selector);}}
 try{
@@ -102,11 +103,13 @@ try{
   await page.locator('#knowledge-search').fill('known_true');await page.locator('.collab-knowledge-search button').click();await page.locator('.collab-knowledge-hit').getByText('known_true',{exact:true}).click();await page.locator('[data-knowledge-reference]').click();assert.ok((await guidance.inputValue()).includes(catalog.entries[0].id));
   await page.locator('[data-collab-archive]').click();await page.locator('[data-collab-archives] [data-collab-archive-download]').waitFor();
   const archiveId = await page.locator('[data-collab-archive-id]').getAttribute('data-collab-archive-id');control.emit();await poll(page);assert.equal(await page.locator('[data-collab-archive-id]').getAttribute('data-collab-archive-id'),archiveId,'archive summary survives polling');
-  await page.reload();await page.locator('#submit-run:enabled').waitFor();await selectHistoryRun(page,run.id);await page.locator('[data-collab-archive-download]').waitFor();assert.equal(await page.locator('[data-collab-archive-id]').getAttribute('data-collab-archive-id'),archiveId,'archive summary reloads from the server run');
+  await page.reload();await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });await selectHistoryRun(page,run.id, 'collaboration');await page.locator('[data-collab-archive-download]').waitFor();assert.equal(await page.locator('[data-collab-archive-id]').getAttribute('data-collab-archive-id'),archiveId,'archive summary reloads from the server run');
   const downloadReady = page.waitForEvent('download');await page.locator('[data-collab-archive-download]').click();const download=await downloadReady;const archiveFile=path.join(output,'downloaded-archive.json');await download.saveAs(archiveFile);const archiveText=await fs.readFile(archiveFile,'utf8');const archived=JSON.parse(archiveText) as {schema:string;summary:{id:string;runId:string;evidence:string};sources:Array<{taskVersion:string}>;checks:Array<{id:string}>};assert.equal(archived.schema,'theorem-os.web-archive.v1');assert.equal(archived.summary.runId,run.id);assert.equal(archived.summary.id,archiveId);assert.equal(archived.summary.evidence,'recorded-not-replayed');assert.ok(archived.sources.some(source=>source.taskVersion==='base-v1'));assert.ok(archived.checks.some(check=>check.id==='base-check'));assert.equal(archiveText.includes(input.apiKey),false);await page.locator('.collab-archives').screenshot({path:path.join(output,'archive-summary.png')});
   await openSettings(page);await page.locator('[data-server-module-library] > summary').click();await page.locator('[data-server-plan-name]').fill('Saved on server');await page.locator('#module-plan-scheduler').selectOption('critical-path');await page.locator('#module-plan-context').selectOption('essential');await page.locator('[data-server-plan-save]').click();await page.locator('[data-server-plan-notice]').getByText(/已保存/).waitFor();
   await page.locator('#module-plan-scheduler').selectOption('plan');await page.locator('[data-server-plan-load]').click();assert.equal(await page.locator('#module-plan-scheduler').inputValue(),'critical-path');
-  const catalogs=await page.evaluate(async()=>await(await fetch('/api/knowledge/catalogs')).json());await page.locator('#knowledge-catalog').selectOption(catalogs.catalogs[0].digest);await closeSettings(page);await showArtifacts(page);
+  const catalogs=await page.evaluate(async()=>await(await fetch('/api/knowledge/catalogs')).json());await page.locator('#knowledge-catalog').selectOption(catalogs.catalogs[0].digest);await closeSettings(page);
+  // Settings belong to the next research and open on the new-research page; return to the run.
+  await selectHistoryRun(page,run.id,'collaboration');await page.locator('.collab-surface').waitFor();
   await fit(page);await page.locator('#detail-panel').evaluate(node=>node.scrollTop=0);await page.screenshot({path:path.join(output,'desktop.png')});
  },{context:{viewport:{width:1440,height:1000},reducedMotion:'reduce'},harness:(page,context)=>({page,context,requests:[]}),routes:{local:'Browser fixture must stay local'},open:true,timeout:{label:'Collaboration',seconds:90}});
  await webScenario(browser,suite,'live catalogs recover from empty archives and preserve historical evidence',async({page,requests})=>{

@@ -87,3 +87,25 @@ export function leanTokens(source: string): LeanToken[] {
   }
   return tokens;
 }
+
+export type LeanLine = { start: number; end: number; tokens: LeanToken[] };
+/**
+ * The lines of `source` with the tokens on each, a token across lines (a block comment) cut at the line breaks. The
+ * file's final line break ends its last line, so nothing after it counts as a line.
+ */
+export function leanLineTokens(source: string): LeanLine[] {
+  const tokens = leanTokens(source), lines: LeanLine[] = [];
+  let start = 0, next = 0;
+  for (;;) {
+    const lineBreak = source.indexOf('\n', start), end = lineBreak < 0 ? source.length : lineBreak, own: LeanToken[] = [];
+    while (next < tokens.length && tokens[next]!.start < end) {
+      const token = tokens[next]!, from = Math.max(token.start, start), to = Math.min(token.end, end);
+      if (to > from) own.push({ start: from, end: to, kind: token.kind });
+      if (token.end > end) break;
+      next++;
+    }
+    lines.push({ start, end, tokens: own });
+    if (lineBreak < 0 || lineBreak === source.length - 1) return lines;
+    start = lineBreak + 1;
+  }
+}

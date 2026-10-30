@@ -54,7 +54,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       settings = request.params;
       threadId = settings.threadId || threadId;
       reply({ thread: { id: threadId }, model: settings.model, approvalPolicy: settings.approvalPolicy,
-        modelProvider: settings.config.model_provider,
+        modelProvider: settings.config.model_provider, activePermissionProfile: { id: settings.config.default_permissions },
         reasoningEffort: settings.config.model_reasoning_effort });
       return;
     }

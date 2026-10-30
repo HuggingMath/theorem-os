@@ -2,7 +2,7 @@ import type { ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { createElement, errorText, type WebApi } from './collaborationUi';
 import type { KnowledgeCatalog } from './knowledgeView';
 import { renderSection } from './ui/Section';
-import { t } from '../i18n';
+import { localizeText, t } from '../i18n';
 
 type SavedPlan = { id: string; name: string; plan: ResearchModulePlan; updatedAt: string; configuration: { methodDigest?: string } };
 type Registry = { entries: Array<{ id: string; slot: string; name: string; version: string; fixed: boolean; inputs: string[]; outputs: string[] }> };
@@ -115,7 +115,7 @@ export class ServerModulePlans {
     const registry = this.registry;
     renderSection(this.root, <>
       <details class="collab-detail" data-server-module-library><summary>{t('服务器方案与已注册实现')}</summary><div class="server-plan-content">
-        <p class="collab-help">{t('方案保存到服务器。M3 / M4 选择下方已注册实现；自定义内容作为模块建议。配置在新运行中固定。')}</p>
+        <p class="collab-help">{t('方案保存到服务器。搜索策略和上下文策略选用下方已注册的实现；自定义内容作为模块建议。配置在新运行中固定。')}</p>
         <div class="server-plan-selection">
           <label>{t('已保存方案')}<select data-server-plan-select disabled={busy} value={this.selected} onChange={event => this.choose(event.currentTarget.value)}>
             <option value="">{t('新建方案')}</option>{this.plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
@@ -138,7 +138,7 @@ export class ServerModulePlans {
         </div>
         <p data-server-plan-notice class="collab-help" role="status">{this.notice}</p>
         <div data-module-registry>{registry && <details class="collab-detail"><summary>{t('已注册代码实现 · {0}', registry.entries.length)}</summary>
-          {registry.entries.map(entry => <div key={`${entry.id}@${entry.version}`} class="collab-registry-entry"><strong>{entry.slot} · {entry.name}{entry.fixed ? t(' · 固定') : ''}</strong>
+          {registry.entries.map(entry => <div key={`${entry.id}@${entry.version}`} class="collab-registry-entry"><strong>{entry.slot} · {localizeText(entry.name)}{entry.fixed ? t(' · 固定') : ''}</strong>
             <code>{entry.id} @ {entry.version}</code><small>{t('输入 {0} → 输出 {1}', entry.inputs.join(', '), entry.outputs.join(', '))}</small></div>)}
         </details>}</div>
       </div></details>

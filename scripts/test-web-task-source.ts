@@ -83,7 +83,7 @@ const input: WebRunInput = { providerId: 'openai', apiKey: 'sk-local-source-fixt
   source: 'theorem other : True := by sorry\n', task: 'Inspect immutable task source snapshots', maxTurns: 1, maxRunSeconds: 60, workers: 1, coordination: 'cooperative' };
 const key = (source: WebTaskSource) => JSON.stringify([source.taskId, source.taskVersion, source.commit, source.sourceDigest, source.environmentDigest, source.file]);
 async function create(page: Page) {
-  const run = await postRun({ page }, input); await refreshHistory(page); await selectHistoryRun(page, run.id);
+  const run = await postRun({ page }, input); await refreshHistory(page); await selectHistoryRun(page, run.id, 'collaboration');
   await page.locator('.collab-surface').waitFor(); return run;
 }
 async function selectTask(page: Page, id: string) { await page.locator(`[data-collab-task="${id}"]:visible`).first().click(); }

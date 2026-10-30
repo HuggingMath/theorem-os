@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
-import { closeDialog, closeHistory, fitViewport, openHistory } from './web-ui-controls';
+import { closeDialog, closeHistory, fitViewport, historyDocked, openHistory, showChat } from './web-ui-controls';
 import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,7 +98,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
 });
 async function open(h: Harness) {
   await h.page.goto(origin);
-  await h.page.locator('#submit-run:enabled').waitFor();
+  await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await collectOwner(h);
   assert.ok(h.owner, 'the fixture requires a real local session');
 }
@@ -153,13 +153,15 @@ async function show(h: Harness, expected: WebRun[]) {
   await openHistory(h.page); await poll(h); await rows(h.page, expected);
 }
 async function selected(page: Page, id: string) {
-  assert.equal(await page.locator('.detail-identifier code').textContent(), id);
+  assert.equal(await page.locator('.detail-heading').getAttribute('data-run'), id);
   const visible = await page.locator(`${button(id)}.selected`).count();
   assert.equal(await page.locator('#run-list .run-row.selected').count(), visible);
   if (visible) assert.equal(await page.locator(button(id)).getAttribute('aria-pressed'), 'true');
 }
 async function choose(page: Page, id: string) {
-  await closeDialog(page, '#history-dialog', () => page.locator(button(id)).click());
+  // The docked sidebar stays open beside the run it selects; the phone dialog closes behind it.
+  if (historyDocked(page)) await page.locator(button(id)).click();
+  else await closeDialog(page, '#history-dialog', () => page.locator(button(id)).click());
   await selected(page, id);
   await openHistory(page);
 }
@@ -278,7 +280,7 @@ try {
     await retained(page, 'keyboard selection patch', { focus: false, selection: true });
     await page.keyboard.press('Home'); await selected(page, runs[0]!.id);
     await retained(page, 'selection returns to its original button', { selection: true });
-    for (const selector of ['#history-dialog', '#run-search', '#run-filter', '#run-list', button(runs[0]!.id)]) await fit(page, selector);
+    for (const selector of [historyDocked(page) ? '#history-sidebar' : '#history-dialog', '#run-search', '#run-filter', '#run-list', button(runs[0]!.id)]) await fit(page, selector);
     await screenshot(page, `history-${width}-stable.png`);
   }, width);
 
@@ -333,7 +335,8 @@ try {
 
   await scenario('Updates while history is closed preserve its reading anchor and the draft input focus and selection', async h => {
     const { page } = h; await open(h);
-    const runs = await seed(h, 16); await show(h, runs); await scroll(page, 560);
+    // The newest run opens on its own; the draft lives on the new-research page.
+    const runs = await seed(h, 16); await showChat(page); await show(h, runs); await scroll(page, 560);
     const before = await anchor(page); await closeHistory(page);
     await page.locator('#task').fill('Unsent history draft with a backward text selection');
     const inputBefore = await page.locator('#task').evaluate(node => {
@@ -374,6 +377,11 @@ try {
     assert.equal(await page.locator('#run-search').inputValue(), 'even');
     assert.equal(await page.locator('#run-count').innerText(), '8/16');
     await retained(page, 'filtered keyboard wrap retains all nodes');
+    // The list is one Tab stop, on the open run's row; the arrow keys above move inside it.
+    assert.deepEqual(await page.locator('#run-list [data-run-id][tabindex="0"]').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.runId)), [matching[0]!.id]);
+    await page.locator('#run-filter').focus(); await page.keyboard.press('Tab'); await focused(page, button(matching[0]!.id));
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => Boolean(document.activeElement?.closest('#run-list'))), false, 'Tab leaves the history after one row');
   });
 
   await scenario('Unchanged polling preserves populated rows and stable empty states including the focused clear button', async h => {
@@ -402,7 +410,7 @@ try {
     const { page } = h; await open(h);
     const runs = await seed(h, 6); await show(h, runs);
     const moved = runs.at(-1)!; await bookmark(page, moved.id);
-    const selection = (await page.locator('.detail-identifier code').textContent())!;
+    const selection = (await page.locator('.detail-heading').getAttribute('data-run'))!;
     service.jobs.get(h.owner, moved.id)!.createdAt = orderedAt(100);
     await poll(h); await rows(page, [moved, ...runs.slice(0, -1)]);
     await retained(page, 'focused history row reordered'); await focused(page, button(moved.id));
@@ -410,8 +418,43 @@ try {
     await screenshot(page, 'history-reordered-focus.png');
   });
 
+  for (const width of [1440, 375]) await scenario(`The address and tab title follow the open run; Back and Forward move between runs and the new-research page at ${width}px`, async h => {
+    const { page } = h; await open(h);
+    const seeded = await seed(h, 2);
+    const runs = [await createRun(h, 'History run whose task needs two lines on a phone', 3), ...seeded]; await show(h, runs);
+    const titled = (title: string) => { const name = [...title.trim()]; return `${name.length > 30 ? `${name.slice(0, 29).join('')}…` : name.join('')} · TheoremOS`; };
+    async function at(run: WebRun) {
+      await page.waitForFunction(id => document.querySelector('.detail-heading')?.getAttribute('data-run') === id, run.id);
+      assert.equal(new URL(page.url()).search, `?run=${run.id}`, 'the address names the open run');
+      assert.ok((await page.title()).endsWith(titled(run.title)), `the tab is named after the open run: ${await page.title()}`);
+      assert.equal(await page.locator('#history-dialog[open]').count(), 0, 'Back and Forward never leave the history dialog over the run');
+    }
+    await choose(page, runs[2]!.id); await choose(page, runs[0]!.id); await closeHistory(page); await at(runs[0]!);
+    if (width <= 850) {
+      const heading = await page.locator('.detail-heading h2').evaluate(node => ({ text: node.textContent, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth,
+        scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, lineHeight: getComputedStyle(node).lineHeight }));
+      assert.ok(heading.scrollWidth <= heading.clientWidth + 1 && heading.scrollHeight <= heading.clientHeight + 1
+        && heading.clientHeight > parseFloat(heading.lineHeight) * 1.5, `a phone shows a title too long for one line whole, on two lines: ${JSON.stringify(heading)}`);
+    }
+    await page.goBack(); await at(runs[2]!);
+    await page.goForward(); await at(runs[0]!);
+    await showChat(page);
+    await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
+    assert.ok((await page.title()).includes('研究工作台'), 'the new-research page keeps the workbench name');
+    await page.goBack(); await at(runs[0]!);
+    if (width <= 850) assert.equal(await page.locator('body[data-mobile-view="runs"]').count(), 1, 'Back on a phone shows the run, not the composer');
+    await page.goForward(); await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
+    // A pasted or bookmarked address opens its run, and a reload keeps it.
+    await page.goto(`${origin}/?run=${runs[1]!.id}`); await at(runs[1]!);
+    await page.reload(); await at(runs[1]!);
+    // An address naming a run that is not in this list falls back to an available run and corrects the address.
+    await page.goto(`${origin}/?run=${crypto.randomUUID()}`);
+    await page.waitForFunction(ids => ids.includes(document.querySelector('.detail-heading')?.getAttribute('data-run') ?? '') && location.search === `?run=${document.querySelector('.detail-heading')!.getAttribute('data-run')}`, runs.map(run => run.id));
+    await screenshot(page, `history-${width}-address.png`);
+  }, width);
+
   await writeReport('passed');
-  console.log(`History checks passed: ${checks.length} scenarios; stable row nodes and selection, active-filter focus recovery, visible and hidden reading anchors, keyboard navigation and no unexpected API writes.`);
+  console.log(`History checks passed: ${checks.length} scenarios; stable row nodes and selection, active-filter focus recovery, visible and hidden reading anchors, keyboard navigation, the run address with Back and Forward, and no unexpected API writes.`);
   console.log(`Report: ${path.relative(root, reportFile)}`);
 } catch (error) { await writeReport('failed', error); throw error; }
 finally { try { await browser?.close(); } finally { await service.close(); } }

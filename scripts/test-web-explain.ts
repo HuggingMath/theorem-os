@@ -106,15 +106,15 @@ try {
   browser = await startBrowser(service.server, port);
   const owner = await open(browser, `${origin}/`);
   const { page } = owner;
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   const run = await postRun({ page }, input);
   await until(async () => (await readRun({ page }, run.id)).status === 'completed', 'the fixture run finishes');
 
   // The report links each target to the explanation page; the run page itself is unchanged.
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  // The acceptance report, with the proof's structure, is part of 结果, where a run opens.
   await selectHistoryRun(page, run.id);
-  await page.locator('#detail-tab-report').click();
   const link = page.locator('#detail-panel .report-outline a[href^="explain.html"]');
   await link.waitFor();
   assert.equal(await link.count(), 1, 'one explanation link, on the target');

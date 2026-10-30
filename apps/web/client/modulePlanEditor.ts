@@ -18,7 +18,7 @@ const clonePlan = (plan: ResearchModulePlan): ResearchModulePlan => ({ ...plan, 
 const customId = () => `custom-${typeof crypto.randomUUID === 'function' ? crypto.randomUUID().replaceAll('-', '').slice(0, 24)
   : Array.from(crypto.getRandomValues(new Uint32Array(3)), value => value.toString(16).padStart(8, '0')).join('')}`;
 const slots: Array<[ResearchModuleSlot, string]> = [
-  ['M1', t('M1 · 证明构造')], ['M3', t('M3 · 搜索决策')], ['M4', t('M4 · 上下文选择')], ['M5', t('M5 · 协作与复用')],
+  ['M1', t('证明构造')], ['M3', t('搜索决策')], ['M4', t('上下文选择')], ['M5', t('协作与复用')],
 ];
 
 function create<T extends keyof HTMLElementTagNameMap>(tag: T, className?: string, content?: string) {
@@ -311,7 +311,7 @@ export class ModulePlanEditor {
     for (const [index, module] of this.plan.custom.entries()) {
       const row = this.rows.get(module.id)!, count = byteSize(module.instructions);
       total += count; row.element.dataset.enabled = String(module.enabled);
-      row.bytes.textContent = `${count} / ${maxRuleBytes} B`;
+      row.bytes.textContent = count >= maxRuleBytes * .8 ? `${count} / ${maxRuleBytes} B` : '';
       row.bytes.dataset.overLimit = String(count > maxRuleBytes);
       const name = module.name || t('策略 {0}', index + 1);
       row.name.textContent = name;
@@ -329,9 +329,10 @@ export class ModulePlanEditor {
         : t('复制{0}（副本默认停用）', module.name || t('策略 {0}', index + 1));
       row.duplicate.setAttribute('aria-label', row.duplicate.title);
     }
-    this.control('[data-module-plan-count]').textContent = `${this.plan.custom.length} / ${maxModules}`;
+    // Counts and sizes only matter once there is something to count or the limit is near.
+    this.control('[data-module-plan-count]').textContent = this.plan.custom.length ? `${this.plan.custom.length} / ${maxModules}` : '';
     const bytes = this.control('[data-module-plan-bytes]');
-    bytes.textContent = `${total} / ${maxTotalBytes} B`; bytes.dataset.overLimit = String(total > maxTotalBytes);
+    bytes.textContent = total >= maxTotalBytes * .8 ? `${total} / ${maxTotalBytes} B` : ''; bytes.dataset.overLimit = String(total > maxTotalBytes);
     this.add.disabled = this.plan.custom.length >= maxModules;
     this.add.title = this.add.disabled ? t('最多添加 8 个自定义策略') : t('新增自定义策略');
     this.expandAll.disabled = !this.plan.custom.length; this.collapseAll.disabled = !this.plan.custom.length;
@@ -391,10 +392,10 @@ export class ModulePlanEditor {
       : module.name.trim() ? t('名称最多 40 个字符。') : t('请填写名称。')}`;
     if (module && issue.path[2] === 'instructions') return `${prefix}${module.instructions.includes('\0') ? t('规则不能包含空字符。')
       : module.instructions.trim() ? t('规则最多 4000 字节。') : t('启用前请填写规则。')}`;
-    if (module && issue.path[2] === 'slot') return t('{0}请选择 M1、M3、M4 或 M5。', prefix);
+    if (module && issue.path[2] === 'slot') return t('{0}请选择所属模块。', prefix);
     if (module && issue.path[2] === 'id') return t('{0}策略 ID 无效，请删除此项后重新添加。', prefix);
     if (module && issue.path[2] === 'mode') return module.enabled && module.mode === 'replace'
-      ? t('{0} 只能启用一个「替换默认建议」策略。', module.slot) : t('{0}请选择有效的策略方式。', prefix);
+      ? t('「{0}」只能启用一个「替换默认建议」策略。', slots.find(([slot]) => slot === module.slot)?.[1] ?? module.slot) : t('{0}请选择有效的策略方式。', prefix);
     if (this.plan.custom.length > maxModules) return t('最多添加 8 个自定义策略。');
     if (this.plan.custom.reduce((total, module) => total + byteSize(module.instructions), 0) > maxTotalBytes)
       return t('全部规则合计最多 16000 字节。');

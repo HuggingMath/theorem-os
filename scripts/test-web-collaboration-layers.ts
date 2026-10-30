@@ -85,7 +85,7 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, options: { w
   });
 }
 const surface = '#detail-panel .collab-surface';
-async function open(h: Harness, task: string, tab: 'collaboration' | 'report' = 'collaboration') {
+async function open(h: Harness, task: string, tab: 'collaboration' | 'result' = 'collaboration') {
   const run = await postRun(h, input(task));
   for (let attempt = 0; attempt < 100; attempt++) {
     const value = await h.page.evaluate(async id => (await (await fetch(`/api/runs/${id}`)).json()).run, run.id);
@@ -110,9 +110,10 @@ try {
     await page.locator(`${surface} .collab-now-worker`).first().waitFor();
     assert.equal(await page.locator(surface).getAttribute('data-detail'), 'simple');
     const now = await page.locator(`${surface} .collab-now`).innerText();
-    for (const value of ['现在在做什么', 'prover-1', 'Prover', '研究中', 'bridge →', `Close the bridge lemma ${raw}`, '研究正在等待新的数学输入',
+    for (const value of ['现在在做什么', 'Prover', '研究中', 'bridge →', `Close the bridge lemma ${raw}`, '研究正在等待新的数学输入',
       `Need a new idea for the bridge ${raw}`, '可以在下方提供指导', '另有 2 个 Agent 空闲、准备中或已停止。']) assert.ok(now.includes(value), `now shows ${value}`);
-    assert.ok(!now.includes('researcher-1'), 'idle Agents are counted, not listed');
+    assert.ok(!now.includes('Researcher'), 'idle Agents are counted, not listed');
+    assert.ok(!now.includes('prover-1'), 'working Agents are named by role');
     for (const selector of expert) assert.equal(await hidden(page, selector), true, `${selector} is hidden in the simple layer`);
     for (const selector of ['[data-collab-summary]', '.collab-agent-route', '.collab-graph', '.collab-guidance', '.collab-expand', '[data-collab-refresh]'])
       assert.equal(await hidden(page, selector), false, `${selector} stays in the simple layer`);
@@ -131,7 +132,7 @@ try {
     assert.equal(await focused(page), 'full', 'focus stays on the toggle');
     for (const selector of ['.collab-now', '.collab-expand']) assert.equal(await hidden(page, selector), true, `${selector} leaves the full layer`);
     assert.equal(await stored(page), 'full');
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor();
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await selectHistoryRun(page, run.id); await page.locator('#detail-tab-collaboration').click();
     await page.locator(`${surface} .collab-layout`).waitFor();
     assert.equal(await page.locator(surface).getAttribute('data-detail'), 'full');
@@ -159,14 +160,17 @@ try {
     const { page } = h; await open(h, 'Stop when stuck');
     const ended = page.locator(`${surface} .collab-now-ended`);
     await ended.waitFor();
-    assert.ok((await ended.innerText()).includes('研究已结束，原题没有通过验收。'));
+    // The run stopped on its time budget before any acceptance, so the line says that rather than that acceptance failed.
+    assert.ok((await ended.innerText()).includes('研究已结束：解题时间用完，没有得到通过验收的完整证明。'));
     for (const selector of ['.collab-now', '.collab-guidance', '[data-collab-refresh]'])
       assert.equal(await hidden(page, selector), true, `${selector} leaves the simple layer once the run ends`);
     const summary = await page.locator(`${surface} [data-collab-summary]`).innerText();
     assert.ok(summary.includes('参与了这次研究') && !summary.includes('实际工作中') && !summary.includes('S3'), 'an ended run counts who took part, without module codes');
+    assert.ok(summary.includes('没有验收结果') && !summary.includes('尚未验收通过'), 'a run that stopped before acceptance promises no verdict to come');
     await ended.getByRole('button', { name: '查看报告' }).click();
-    await page.locator('#detail-panel[data-tab="report"] .report-stuck').waitFor();
-    assert.equal(await page.evaluate(() => document.activeElement?.id), 'detail-tab-report');
+    // The report is part of 结果; the button opens that tab at the report.
+    await page.locator('#detail-panel[data-tab="result"] .report-stuck').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'detail-tab-result');
     await page.locator('#detail-panel .report-stuck').getByRole('button', { name: '在协作中查看' }).first().click();
     await page.locator('[data-inspected-task-heading]').filter({ hasText: 'bridge' }).waitFor();
     assert.equal(await page.locator(surface).getAttribute('data-detail'), 'full');
@@ -177,7 +181,7 @@ try {
     const { page } = h; await open(h, 'Keep working');
     await page.locator(`${surface} .collab-now-worker`).first().waitFor();
     const text = await page.locator(surface).innerText();
-    for (const value of ['What is happening now', 'Simple', 'Full', 'Research is waiting for new mathematical input',
+    for (const value of ['What is happening now', 'Simple', 'Detailed', 'Research is waiting for new mathematical input',
       '2 more Agents are idle, preparing or stopped.', 'Show the full collaboration view']) assert.ok(text.includes(value), `English shows ${value}`);
   }, { locale: 'en' });
 

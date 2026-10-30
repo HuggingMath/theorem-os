@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { filterRuns, type RunFilter } from '../apps/web/client/history';
-import { readLeanFile } from '../apps/web/client/sourceFile';
+import { continuationsOf, filterRuns, ownerFirst, type RunFilter } from '../apps/web/client/history';
+import { looksLikeLeanSource, readLeanFile } from '../apps/web/client/sourceFile';
 import type { WebRun } from '../apps/web/shared';
 
 function run(id: string, overrides: Partial<WebRun> = {}): WebRun {
@@ -45,6 +45,17 @@ describe('web research history filtering', () => {
       expect(filterRuns(runs, '', filter as RunFilter).map(run => run.id)).toEqual(ids);
   });
 
+  it('lists a run its provider or environment failed with the errors, as its 运行失败 badge says, and a stopped budget with the unproved', () => {
+    const stopped = { status: 'limit_reached', proof: '', report: {} };
+    const runs = [run('key-rejected', { failure: { kind: 'authentication' }, result: { ...stopped, status: 'incomplete' } }),
+      run('environment', { failure: { kind: 'environment' } }), run('time', { failure: { kind: 'time_limit' }, result: stopped }),
+      run('usage', { failure: { kind: 'budget' }, result: stopped }), run('worker-error', { status: 'error', failure: { kind: 'network' } }),
+      run('accepted-despite-note', { failure: { kind: 'unknown' }, result: accepted })];
+    expect(filterRuns(runs, '', 'error').map(run => run.id)).toEqual(['key-rejected', 'environment', 'worker-error']);
+    expect(filterRuns(runs, '', 'unproved').map(run => run.id)).toEqual(['time', 'usage']);
+    expect(filterRuns(runs, '', 'passed').map(run => run.id)).toEqual(['accepted-despite-note']);
+  });
+
   it('preserves server ordering and original records when a query is empty or multiple records match', () => {
     const runs = Object.freeze([Object.freeze(run('third')), Object.freeze(run('first')), Object.freeze(run('second'))]);
     const filtered = filterRuns(runs, '  \n\t ', 'all');
@@ -53,6 +64,27 @@ describe('web research history filtering', () => {
     expect(filtered[0]).toBe(runs[0]);
     expect(filterRuns(runs, 'addition theorem', 'unproved')).toEqual(runs);
     expect(runs.map(run => run.id)).toEqual(['third', 'first', 'second']);
+  });
+
+  it('puts the runs whose plan waits for the owner first, each group in the server order', () => {
+    const approval = (status: string, leadRevising = false) => ({ inspection: { planApproval: { required: true, status, leadRevising } } }) as unknown as WebRun['observation'];
+    const runs = [run('done'), run('waiting-new', { status: 'running', observation: approval('pending') }),
+      run('revising', { status: 'running', observation: approval('pending', true) }), run('drafting', { status: 'running', observation: approval('awaiting-plan') }),
+      run('approved', { status: 'running', observation: approval('approved') }), run('waiting-old', { status: 'running', observation: approval('pending') }),
+      run('cancelled', { status: 'cancelled', observation: approval('pending') })];
+    const { waiting, others } = ownerFirst(runs);
+    expect(waiting.map(run => run.id)).toEqual(['waiting-new', 'waiting-old']);
+    expect(others.map(run => run.id)).toEqual(['done', 'revising', 'drafting', 'approved', 'cancelled']);
+    expect(ownerFirst([]).waiting).toEqual([]);
+  });
+
+  it('lists the runs continued from a run, oldest first, and only those', () => {
+    const from = (runId: string, createdAt: string) => ({ continueFrom: { runId, taskId: 'goal_2', commit: 'abc', label: 'zero_add · 第 2 次' }, createdAt });
+    const runs = [run('newer', from('origin', '2026-10-18T00:00:00.000Z')), run('origin'), run('elsewhere', from('other', '2026-10-17T00:00:00.000Z')),
+      run('older', from('origin', '2026-10-17T00:00:00.000Z')), run('grandchild', from('older', '2026-10-19T00:00:00.000Z'))];
+    expect(continuationsOf(runs, 'origin').map(item => item.id)).toEqual(['older', 'newer']);
+    expect(continuationsOf(runs, 'older').map(item => item.id)).toEqual(['grandchild']);
+    expect(continuationsOf(runs, 'newer')).toEqual([]);
   });
 });
 
@@ -72,6 +104,23 @@ describe('local Lean source file reading', () => {
     const candidate = file(name, 'theorem proof : True := by trivial');
     await expect(readLeanFile(candidate, 1024)).rejects.toThrow('.lean');
     expect(candidate.arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'import Mathlib\n\ntheorem t (x : ℝ) : x ^ 2 ≥ 0 := by\n  sorry',
+    'theorem my_comm (a b : Nat) : a + b = b + a := by\n  sorry\n',
+    'namespace Demo\n\n@[simp] lemma l : 1 + 1 = 2 := rfl\nend Demo',
+    '-- 我的题目\nprivate theorem p : True :=\n  trivial',
+  ])('takes pasted Lean source for the original problem: %#', text => {
+    expect(looksLikeLeanSource(text)).toBe(true);
+  });
+  it.each([
+    '证明加法交换律，可以用 Nat.add_comm。',
+    '先证明 theorem helper 再推出主定理',
+    'Use the lemma add_comm := ... as a hint',
+    'Prove that every theorem in the file compiles.',
+  ])('keeps a pasted description as the task: %s', text => {
+    expect(looksLikeLeanSource(text)).toBe(false);
   });
 
   it('decodes an optional UTF-8 BOM while retaining the rest of the original source', async () => {

@@ -4,6 +4,7 @@ import { compactGraphMetrics, graphMetrics } from '../taskGraphLayout';
 import { t } from '../../i18n';
 
 export type TaskCard = { id: string; version: string; kind: string; kindLabel: string; state: string; stateLabel: string;
+  /** The task's theorem as a reader knows it, or its id; `owner` is the Agent's name. */ name: string;
   objective: string; owner: string; proof: string; proofLabel: string; selected: boolean;
   /** Provider-reported tokens of this task's turns; share is relative to the task with the most. */
   tokens?: { label: string; share: number; detail: string } };
@@ -26,11 +27,11 @@ function Card({ card, graph, compact, x, y, dimmed, onHover }: { card: TaskCard;
   }, [card.state]);
   return <button ref={node} type="button" class={`collab-task${card.selected ? ' selected' : ''}${dimmed ? ' dimmed' : ''}`} data-collab-task={card.id} data-focus-key={`${graph ? 'graph' : 'list'}-${card.id}`}
     data-task-state={card.state} data-task-kind={card.kind} data-task-proof={card.proof} aria-pressed={card.selected}
-    title={compact ? `${card.id}\n${card.objective}\n${card.owner} · ${card.proofLabel}${card.tokens ? `\nToken ${card.tokens.label}` : ''}` : undefined}
+    title={compact ? `${card.name}\n${card.objective}\n${card.owner} · ${card.proofLabel}${card.tokens ? `\nToken ${card.tokens.label}` : ''}` : undefined}
     style={graph ? { left: `${x}px`, top: `${y}px` } : undefined}
     onPointerEnter={onHover && (() => onHover(card.id))} onPointerLeave={leave} onFocus={onHover && (() => onHover(card.id))} onBlur={leave}>
     <span class="collab-task-top"><span>{card.kindLabel}</span><span class="collab-task-state">{card.stateLabel}</span></span>
-    <strong>{card.id}</strong><span class="collab-task-objective">{card.objective}</span><small>{card.owner} · {card.proofLabel}</small>
+    <strong title={!compact && card.name !== card.id ? card.id : undefined}>{card.name}</strong><span class="collab-task-objective">{card.objective}</span><small>{card.owner} · {card.proofLabel}</small>
     {card.tokens && <>
       <span class="collab-task-tokens" title={card.tokens.detail ? t('Token {0}：{1}', card.tokens.label, card.tokens.detail) : undefined}>{card.tokens.label}</span>
       <span class="collab-task-usage" aria-hidden="true"><span style={{ width: `${Math.max(card.tokens.share * 100, card.tokens.share ? 2 : 0)}%` }} /></span>

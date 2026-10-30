@@ -136,14 +136,6 @@ async function sourceMatches(page: Page, selector: string, expected: string) {
   await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent === expected, { selector, expected });
 }
 
-function listedActivity(page: Page, message: string) {
-  return page.waitForResponse(async response => {
-    if (new URL(response.url()).pathname !== '/api/runs' || response.request().method() !== 'GET' || response.status() !== 200) return false;
-    const payload = await response.json() as { runs: WebRun[] };
-    return payload.runs.some(run => run.events.some(event => event.message === message));
-  });
-}
-
 async function screenshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(output, name), fullPage: true });
   screenshots.push(name);
@@ -168,7 +160,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') apiWrites++; });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   const source = Array.from({ length: 150 }, (_, index) => `-- source line ${index + 1} ${'long_identifier_'.repeat(12)}`).join('\n')
     + '\n\ntheorem performance_fixture : True := by\n  sorry\n';
   await withSettings(page, async () => {
@@ -185,7 +177,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#draft-preview-task')?.textContent?.endsWith(' beta'));
   const taskSample = await end(page);
   retains(taskSample, Object.keys(draftNodes), ['sourceCode']);
-  assert.equal(taskSample.mutations['#conversation']!.childLists, 0, 'task typing must not rebuild unchanged chat icons');
+  assert.equal(taskSample.mutations['#conversation']!.childLists, 0, 'task typing must not rebuild the new-research page');
   mark('Task typing keeps the unchanged source nodes, focus and both scroll positions');
   await openSettings(page);
   await page.locator('#model').focus();
@@ -195,7 +187,7 @@ try {
   await sourceMatches(page, '[data-preview-value="model"]', model);
   const modelSample = await end(page);
   retains(modelSample, Object.keys(draftNodes), ['sourceCode']);
-  assert.equal(modelSample.mutations['#conversation']!.childLists, 0, 'model typing must not rebuild unchanged chat icons');
+  assert.equal(modelSample.mutations['#conversation']!.childLists, 0, 'model typing must not rebuild the new-research page');
   mark('Model typing patches metadata without replacing the source or losing focus');
   await closeSettings(page);
   await screenshot(page, 'draft.png');
@@ -224,101 +216,69 @@ try {
     await sourceMatches(page, '#detail-panel .code-scroll code', candidate);
     const sample = await end(page);
     retains(sample, ['detailHeading', 'detailTabs', 'panel', 'sourceScroll']);
-    assert.equal(sample.mutations['#conversation']!.childLists, 0, 'candidate text updates must not rebuild unchanged chat content');
+    assert.equal(sample.mutations['#conversation']!.childLists, 0, 'candidate text updates must not rebuild the new-research page');
   }
   mark('Three live candidate changes preserve the detail shell, source scroller, focus and reading position');
   await screenshot(page, 'candidate.png');
 
-  await page.waitForFunction(() => document.querySelectorAll('#conversation .timeline-event').length >= 24);
-  // Older steps are folded; reading them starts by expanding the thread.
-  await page.locator('#conversation [data-timeline-fold]').click();
-  await nextPaint(page);
-  await page.locator('#conversation [data-chat-action="source"]').focus();
-  await page.locator('#conversation-scroll').evaluate(scroll => { scroll.scrollTop = 120; });
-  await page.waitForFunction(() => Math.abs(document.querySelector('#conversation-scroll')!.scrollTop - 120) < 1);
+  // Activity lands in the 活动 tab; the screen-reader announcement repeats the newest step whichever tab is open.
+  const announced = (message: string) => page!.waitForFunction(message => document.querySelector('#conversation-announcement')?.textContent?.includes(message), message);
+  await page.locator('#detail-panel .code-scroll').evaluate(scroll => { scroll.scrollTop = 120; scroll.scrollLeft = 80; });
+  await page.locator('#detail-panel .code-scroll').focus();
   await page.evaluate(() => {
-    const text = document.querySelector('#conversation .chat-message.user .message-body')!.firstChild!;
+    const text = document.querySelector('#detail-panel .source-code code')!.firstChild!;
     const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 7);
     getSelection()!.removeAllRanges(); getSelection()!.addRange(range);
   });
-  const eventNodes = { user: '#conversation .chat-message.user', userAttachment: '#conversation .message-attachment',
-    userAttachmentIcon: '#conversation .message-attachment svg',
-    assistant: '#conversation .chat-message.assistant', timeline: '#conversation .research-timeline',
-    firstTimelineRow: '#conversation .timeline-event:first-child', detailHeading: '#run-detail > .detail-heading',
-    sourceCode: '#detail-panel .code-scroll code' };
-  Object.assign(eventNodes, Object.fromEntries(Array.from({ length: await page.locator('#conversation .timeline-event').count() }, (_, index) =>
-    [`timelineRow${index + 1}`, `#conversation .timeline-event:nth-child(${index + 1})`])));
   for (let index = 1; index <= 3; index++) {
-    await begin(page, `event-append-${index}`, eventNodes, '#conversation-scroll');
+    await begin(page, `event-append-source-${index}`, runNodes, '#detail-panel .code-scroll');
     const message = `Measured research update ${index}`;
     control.progress(message);
-    await page.waitForFunction(message => document.querySelector('#conversation')?.textContent?.includes(message), message);
+    await announced(message);
     const sample = await end(page);
-    retains(sample, Object.keys(eventNodes), ['sourceCode']);
+    retains(sample, Object.keys(runNodes), ['sourceCode']);
     assert.equal(sample.selection.before.length, 7);
     assert.equal(sample.selection.after, sample.selection.before, 'an event append must preserve selected text');
   }
-  mark('Event appends retain old messages, timeline rows, source text, focused attachment, selection and reading position');
-  const latestPosition = await page.locator('#latest-message').evaluate(button => {
-    const latest = button.getBoundingClientRect();
-    const input = document.querySelector('#run-form')!.getBoundingClientRect();
-    const conversation = document.querySelector('#conversation-scroll')!.getBoundingClientRect();
-    return { top: latest.top, bottom: latest.bottom, formTop: input.top, conversationTop: conversation.top };
-  });
-  assert.ok(latestPosition.top >= latestPosition.conversationTop && latestPosition.bottom < latestPosition.formTop,
-    'the latest-message control must sit above preparation hints and the composer');
+  mark('Event appends retain the run header, tabs, source text, focus, selection and reading position');
   await screenshot(page, 'events.png');
 
-  await page.setViewportSize({ width: 375, height: 812 });
-  await showChat(page);
-  const conversation = page.locator('#conversation-scroll');
-  await conversation.evaluate(scroll => { scroll.scrollTop = scroll.scrollHeight; });
-  await page.waitForFunction(() => {
-    const scroll = document.querySelector('#conversation-scroll')!;
-    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 2;
-  });
-  const mobileNodes = { user: '#conversation .chat-message.user', timeline: '#conversation .research-timeline' };
-  await begin(page, 'mobile-hidden-bottom-follow', mobileNodes, '#conversation-scroll');
-  await showArtifacts(page);
-  assert.equal(await page.locator('#compose-panel').isVisible(), false);
-  const followingMessage = 'Activity received while the mobile conversation follows the latest message';
-  const followingList = listedActivity(page, followingMessage);
-  control.progress(followingMessage);
-  await followingList;
-  await nextPaint(page);
-  await showChat(page);
-  await page.waitForFunction(message => document.querySelector('#conversation')?.textContent?.includes(message), followingMessage);
-  await page.waitForFunction(() => {
-    const scroll = document.querySelector('#conversation-scroll')!;
-    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 2;
-  });
-  const followingSample = await end(page);
-  assert.equal(followingSample.retained.user, true);
-  assert.equal(followingSample.retained.timeline, true);
-  await page.locator('#latest-message').waitFor({ state: 'hidden' });
-  mark('Returning to a mobile conversation that was at the bottom continues following hidden activity');
-  await screenshot(page, 'mobile-following.png');
+  await page.locator('#detail-tab-result').click();
+  await page.locator('#detail-panel .result-proof').waitFor();
+  const resultNodes = { detailHeading: '#run-detail > .detail-heading', detailTabs: '#run-detail > .detail-tabs', panel: '#detail-panel',
+    verdict: '#detail-panel .result-verdict', proof: '#detail-panel .result-proof', proofScroll: '#detail-panel .result-proof-code',
+    task: '#detail-panel .task-content' };
+  await page.locator('#detail-panel [data-action="copy-proof"]').focus();
+  await page.locator('#detail-panel').evaluate(panel => { panel.scrollTop = 80; });
+  await page.waitForFunction(() => Math.abs(document.querySelector('#detail-panel')!.scrollTop - 80) < 1);
+  for (let index = 1; index <= 2; index++) {
+    await begin(page, `event-append-result-${index}`, resultNodes, '#detail-panel');
+    const message = `Measured result update ${index}`;
+    control.progress(message);
+    await page.waitForFunction(message => document.querySelector('#detail-panel .result-latest')?.textContent?.includes(message), message);
+    const sample = await end(page);
+    retains(sample, Object.keys(resultNodes), ['task']);
+  }
+  mark('Event appends update the result verdict in place, keeping the proof, focus and reading position');
+  await screenshot(page, 'result.png');
 
-  await conversation.evaluate(scroll => { scroll.scrollTop = 120; });
-  await page.waitForFunction(() => Math.abs(document.querySelector('#conversation-scroll')!.scrollTop - 120) < 1);
-  await page.locator('#latest-message').waitFor();
-  await begin(page, 'mobile-hidden-reading-position', mobileNodes, '#conversation-scroll');
+  await page.setViewportSize({ width: 375, height: 812 });
   await showArtifacts(page);
-  const readingMessage = 'Activity received while the mobile reader reviews earlier messages';
-  const readingList = listedActivity(page, readingMessage);
-  control.progress(readingMessage);
-  await readingList;
-  await nextPaint(page);
-  await showChat(page);
-  await page.waitForFunction(message => document.querySelector('#conversation')?.textContent?.includes(message), readingMessage);
-  const readingSample = await end(page);
-  assert.equal(readingSample.retained.user, true);
-  assert.equal(readingSample.retained.timeline, true);
-  assert.deepEqual(readingSample.scroll.after, readingSample.scroll.before, 'hidden mobile activity must retain the earlier reading position');
-  await page.locator('#latest-message').waitFor();
-  mark('Returning to a mobile conversation being read earlier preserves its scroll position');
-  await screenshot(page, 'mobile-reading.png');
+  await page.locator('#detail-panel').evaluate(panel => { panel.scrollTop = 160; });
+  await page.waitForFunction(() => Math.abs(document.querySelector('#detail-panel')!.scrollTop - 160) < 1);
+  await begin(page, 'mobile-result-reading-position', resultNodes, '#detail-panel');
+  const mobileMessage = 'Activity received while the phone reader is further down the result';
+  control.progress(mobileMessage);
+  await page.waitForFunction(message => document.querySelector('#detail-panel .result-latest')?.textContent?.includes(message), mobileMessage);
+  const mobileSample = await end(page);
+  retains(mobileSample, Object.keys(resultNodes), ['task']);
+  mark('On a phone, activity keeps the result document and the reader\'s position');
+  await screenshot(page, 'mobile-result.png');
   await page.setViewportSize({ width: 1440, height: 900 });
+
+  // The panes split only on the new-research page, between the composer and the draft preview.
+  await showChat(page);
+  await page.locator('#draft-preview').waitFor();
 
   const separator = page.locator('#pane-resizer');
   const bounds = await separator.boundingBox();

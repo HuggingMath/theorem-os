@@ -163,7 +163,7 @@ const section = '.collab-math-changes', select = '[data-math-category]', taskFil
 const list = '[data-math-list]', detail = '[data-math-detail]', inspector = '[data-collab-inspector]';
 const choice = (page: Page, receipt: ObligationProgressReceipt) => page.locator(`${list} [data-math-key=${JSON.stringify(key(receipt))}]`);
 async function create(h: Harness) {
-  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id);
+  const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id, 'collaboration');
   await h.page.locator(section).waitFor(); await choice(h.page, mixed).waitFor(); return run;
 }
 async function choose(page: Page, receipt: ObligationProgressReceipt) {

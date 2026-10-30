@@ -1,4 +1,4 @@
-import type { WebCoordination, WebEffort, WebEnvironment } from '../shared';
+import type { WebContinuation, WebCoordination, WebEffort, WebEnvironment } from '../shared';
 import { researchModulePlanDraftSchema, type ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { t } from '../i18n';
 
@@ -18,9 +18,13 @@ export type TaskDraft = {
   effort: WebEffort;
   environment: WebEnvironment;
   coordination: WebCoordination;
+  /** 先审计划: hold the Agents until the plan is approved. Only `true` is stored; it applies to cooperative runs of 2+ Agents. */
+  planApproval?: true;
   templateId: string;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
+  /** A version of one of this account's runs to start from; archives never carry one, it names a run of their owner. */
+  continueFrom?: WebContinuation;
 };
 
 const archiveSchema = 'theorem-os.web-export.v1';
@@ -64,6 +68,24 @@ function enumeration<T extends string>(record: Record<string, unknown>, key: str
   return value as T;
 }
 
+/** An optional switch that is stored only when on. */
+function flag<K extends string>(record: Record<string, unknown>, key: K): Partial<Record<K, true>> {
+  if (!Object.hasOwn(record, key)) return {};
+  const value = record[key];
+  if (typeof value !== 'boolean') invalid();
+  return value ? { [key]: true } as Record<K, true> : {};
+}
+
+function continuation(value: unknown): WebContinuation {
+  const record = object(value);
+  if (Object.keys(record).some(key => !['runId', 'taskId', 'commit', 'label'].includes(key))) invalid();
+  const result = { runId: text(record, 'runId', 36), taskId: text(record, 'taskId', 200), commit: text(record, 'commit', 128),
+    label: text(record, 'label', 200) };
+  if (!/^[a-f0-9-]{36}$/u.test(result.runId) || !result.taskId || !/^[A-Za-z0-9]{1,128}$/u.test(result.commit)
+    || !result.label.trim() || /\p{Cc}/u.test(result.label)) invalid();
+  return result;
+}
+
 function validatedDraft(value: unknown): TaskDraft {
   const draft = object(value);
   return {
@@ -74,9 +96,11 @@ function validatedDraft(value: unknown): TaskDraft {
     effort: enumeration(draft, 'effort', ['low', 'medium', 'high', 'xhigh', 'max']),
     environment: enumeration(draft, 'environment', ['standard', 'mathlib']),
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
+    ...flag(draft, 'planApproval'),
     templateId: text(draft, 'templateId', 64),
     ...(Object.hasOwn(draft, 'knowledgeDigest') ? { knowledgeDigest: text(draft, 'knowledgeDigest', 256) } : {}),
     ...(Object.hasOwn(draft, 'modulePlan') ? { modulePlan: researchModulePlanDraftSchema.parse(draft.modulePlan) as ResearchModulePlan } : {}),
+    ...(Object.hasOwn(draft, 'continueFrom') ? { continueFrom: continuation(draft.continueFrom) } : {}),
   };
 }
 
@@ -102,6 +126,7 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
       maxTurns: archiveBudget(run, 'maxTurns'), maxRunSeconds: archiveBudget(run, 'maxRunSeconds'), workers: archiveBudget(run, 'workers'),
       ...(Object.hasOwn(run, 'maxTotalTokens') ? { maxTotalTokens: archiveBudget(run, 'maxTotalTokens') } : {}),
       effort: own(run, 'effort'), environment: own(run, 'environment'), coordination: own(run, 'coordination'), templateId: '',
+      ...(Object.hasOwn(run, 'planApproval') ? { planApproval: run.planApproval } : {}),
       ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),
       ...(Object.hasOwn(run, 'modulePlan') ? { modulePlan: run.modulePlan } : {}),
     });

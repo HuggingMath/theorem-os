@@ -8,7 +8,7 @@ import { readWebConfig, webLimits, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeHistory, closeSettings, discardSourceEditor, openHistory, openSettings, showArtifacts, withSettings } from './web-ui-controls';
+import { closeDialog, closeHistory, closeSettings, discardSourceEditor, historyDocked, openHistory, openSettings, showArtifacts, showChat, withSettings } from './web-ui-controls';
 import { freePort, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -53,7 +53,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   });
 async function open(h: Harness) {
   await h.page.goto(origin);
-  await h.page.locator('#submit-run:enabled').waitFor();
+  await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await h.page.locator('#submission-readiness[data-state="missing"]').waitFor();
 }
 async function readiness(page: Page, state: string) {
@@ -173,8 +173,9 @@ try {
     assert.equal(await page.locator('#prepare-run').evaluate(button => button === document.activeElement), true,
       'Native closing must return to the preparation button that opened the dialog');
     await readiness(page, 'ready');
-    assert.match(await page.locator('#submission-readiness').innerText(), /提交配置已填写/);
-    assert.match(await page.locator('#submission-readiness').innerText(), /可用性将在提交时确认/);
+    // Ready is one quiet line; nothing is checked against the provider before the user submits.
+    assert.match(await page.locator('#readiness-title').innerText(), /^可以提交/);
+    assert.equal(await page.locator('#readiness-detail').isVisible(), false);
     assert.equal((await page.locator('#submission-readiness').innerText()).includes(credential), false);
     assert.equal(h.requests.filter(request => request.method !== 'GET').length, 0);
     assert.equal(workerStarts, 0);
@@ -184,11 +185,14 @@ try {
       'Closing settings opened from the composer must restore the composer trigger');
     await page.locator('#composer-settings').click();
     await doesNotStealFocus(page, '#run-settings');
-    await openHistory(page);
-    await closeHistory(page);
-    assert.equal(await page.locator('#open-history').evaluate(button => button === document.activeElement), true);
-    await openHistory(page);
-    await doesNotStealFocus(page, '#history-dialog');
+    // Wide screens dock the history beside the workspace, so only the phone dialog hands focus back.
+    if (!historyDocked(page)) {
+      await openHistory(page);
+      await closeHistory(page);
+      assert.equal(await page.locator('#open-history').evaluate(button => button === document.activeElement), true);
+      await openHistory(page);
+      await doesNotStealFocus(page, '#history-dialog');
+    }
   }, width);
 
   for (const width of widths) await scenario(`Settings navigation keeps sections reachable and preserves the draft at ${width}px`, async h => {
@@ -253,6 +257,29 @@ try {
       assert.equal(h.requests.filter(request => request.method === 'POST').length, 0);
       await corrected(page, id, good);
     }
+    await closeSettings(page);
+    await readiness(page, 'ready');
+  });
+
+  await scenario('A number out of range shows its error as soon as the field is left, before 开始研究', async h => {
+    const { page } = h;
+    await open(h);
+    await openSettings(page);
+    await page.locator('#api-key').fill(credential);
+    for (const { id, value, good } of [{ id: 'max-turns', value: '0', good: '3' }, { id: 'max-seconds', value: '29', good: '90' },
+      { id: 'workers', value: String(webLimits.maxWorkers + 1), good: '1' }]) {
+      await page.locator(`#${id}`).fill(value);
+      assert.equal(await page.locator(`#${id}-validation`).isVisible(), false, `${id} must not complain while it is being typed`);
+      await page.locator(`#${id}`).press('Tab');
+      assert.equal(await page.locator(`#${id}-validation`).isVisible(), true, `${id} must show its error once left`);
+      assert.equal(await page.locator(`#${id}`).getAttribute('aria-invalid'), 'true');
+      await corrected(page, id, good);
+    }
+    // Leaving a valid field untouched shows nothing.
+    await page.locator('#max-turns').focus();
+    await page.locator('#max-turns').press('Tab');
+    assert.equal(await page.locator('#max-turns-validation').isVisible(), false);
+    assert.equal(h.requests.filter(request => request.method === 'POST').length, 0);
     await closeSettings(page);
     await readiness(page, 'ready');
   });
@@ -692,7 +719,9 @@ try {
     release();
     assert.equal((await response).status(), 201);
     await page.waitForFunction(() => (document.querySelector('#api-key') as HTMLInputElement).value === '');
-    // The emptied task is shown as the next step, not as a fault; the Key is still required once a task is written.
+    // The new run opens in place of the composer. Back on the new-research page the emptied task is shown as the next step,
+    // not as a fault; the Key is still required once a task is written.
+    await showChat(page);
     await readiness(page, 'compose');
     assert.equal(await page.locator('#readiness-title').innerText(), '写下研究任务');
     await page.locator('#task').fill('The next research task');

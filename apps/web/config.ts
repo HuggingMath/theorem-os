@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import type { WebEnvironment, WebEnvironmentOption, WebProvider, WebTemplate } from './shared';
+import { webLimits, type WebEnvironment, type WebEnvironmentOption, type WebProvider, type WebTemplate } from './shared';
 import { allowlistFile, normalizeEmail, type WebAuthConfig } from './auth';
 
 const providerSchema = z.object({
@@ -105,8 +105,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   };
 }
 
-export const webLimits = Object.freeze({ maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4, maxTotalTokens: 100_000_000,
-  maxSourceBytes: 32_768, maxTaskBytes: 8_000 });
+export { webLimits };
 // The first provider is the host's deployed sub2api gateway, reached from isolated Docker workers.
 export const webDefaults = Object.freeze({ model: 'deepseek-flash', effort: 'max' as const,
   environment: 'mathlib' as const, maxTurns: 5, maxRunSeconds: 300, workers: 1, coordination: 'cooperative' as const });

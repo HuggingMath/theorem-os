@@ -47,7 +47,7 @@ async function finished(page: Page, id: string) {
 }
 async function open(page: Page, id: string) {
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await selectHistoryRun(page, id);
 }
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
@@ -60,7 +60,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 
   const rejected: WebRun = await postRun({ page }, input('rejected'));
   await finished(page, rejected.id);
@@ -99,6 +99,13 @@ try {
   assert.equal(await reader.locator('meta[name="robots"]').getAttribute('content'), 'noindex, nofollow');
   await reader.locator('[data-share-view="source"]').click();
   assert.match(await reader.locator('#share-code').innerText(), /sorry/u);
+  // Both downloads are named after the theorem, like the workbench's; the original problem says so.
+  for (const [view, name] of [['source', 'fixture-problem.lean'], ['proof', 'fixture.lean']] as const) {
+    await reader.locator(`[data-share-view="${view}"]`).click();
+    const [file] = await Promise.all([reader.waitForEvent('download'), reader.locator('#share-download').click()]);
+    assert.equal(file.suggestedFilename(), name);
+  }
+  await reader.locator('[data-share-view="source"]').click();
   assert.deepEqual(await audit(reader), [], 'Share page accessibility');
   await reader.screenshot({ path: path.join(output, 'share-page-1440.png'), fullPage: true });
   for (const width of [375, 320]) {

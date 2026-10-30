@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { refresh, refreshHistory, selectHistoryRun } from './web-ui-controls';
+import { openRunMenu, refresh, refreshHistory, runMenu, selectHistoryRun, showArtifacts } from './web-ui-controls';
 import { deferred, freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -95,13 +95,13 @@ async function createRun(h: Harness, title: string, completed: WebResult | null 
   if (completed) controls.get(run.id)!.finish(completed);
   return h.page.evaluate(async id => (await (await fetch(`/api/runs/${id}`)).json()).run as WebRun, run.id);
 }
-async function select(h: Harness, id: string, report = false) {
+async function select(h: Harness, id: string) {
   await selectHistoryRun(h.page, id);
-  await h.page.locator(report ? '#detail-tab-report' : '#detail-tab-overview').click();
+  await h.page.locator('#detail-tab-result').click();
 }
 async function showDelete(h: Harness, id: string) {
   await select(h, id);
-  await h.page.locator('[data-action="delete-run"]').click();
+  await runMenu(h.page, 'delete-run');
   await h.page.locator('#delete-run-dialog[open]').waitFor();
 }
 async function deleteSelected(h: Harness, id: string) {
@@ -117,6 +117,7 @@ async function screenshot(page: Page, name: string) {
 }
 async function assertNoResultArchive(h: Harness, run: WebRun, status: 'cancelled' | 'error') {
   async function downloadArchive(selector: string, from: 'header' | 'confirmation') {
+    if (from === 'header') await openRunMenu(h.page);
     const link = h.page.locator(selector);
     await link.waitFor({ state: 'visible' });
     const pending = h.page.waitForEvent('download');
@@ -161,19 +162,26 @@ try {
 
   await scenario('Candidate acceptance stays separate from failed independent evaluation; diagnostics and JSON remain intact', async h => {
     const run = await createRun(h, 'Failed independent evaluation', result(failedReport, 'evaluated_failed'));
-    await refresh(h); await select(h, run.id, true);
+    await refresh(h); await select(h, run.id);
     await h.page.locator('.report-summary').waitFor();
     assert.equal(await h.page.locator('[data-report-view="summary"]').getAttribute('aria-pressed'), 'true');
     assert.equal(await h.page.locator('[data-check-stage="candidate"] .report-check-heading .badge.passed').count(), 1);
     assert.equal(await h.page.locator('[data-check-stage="evaluation"] .report-check-heading .badge.failed').count(), 1);
-    assert.equal(await h.page.locator('.report-summary > .result-banner.passed').count(), 0);
-    assert.equal(await h.page.locator('.report-summary > .result-banner.failed').count(), 1);
+    assert.equal(await h.page.locator('#detail-panel .result-verdict.passed').count(), 0);
+    assert.equal(await h.page.locator('#detail-panel .result-verdict.failed').count(), 1);
+    // The candidate was checked and failed: its card says so rather than 尚未验收, which reads as never checked.
+    assert.equal((await h.page.locator('#detail-panel .result-proof h3 .badge.failed').innerText()).trim(), '验收未通过');
+    assert.equal(await h.page.locator('#detail-panel .result-proof h3 .badge.warning').count(), 0);
     const target = h.page.locator('[data-check-stage="evaluation"] .verification-target').first();
     assert.ok((await target.innerText()).includes(theoremName));
     assert.equal(await target.locator('.target-diagnostics[open]').count(), 1);
     assert.ok((await target.locator('.target-diagnostics').innerText()).includes(diagnostic));
     await assertNoInjection(h.page);
     await screenshot(h.page, 'results-desktop-1440-summary.png');
+    // The copied file is the rejected candidate, and the toast says so rather than calling it a proof.
+    await h.page.locator('#detail-panel .result-proof [data-action="copy-proof"]').click();
+    assert.equal(await h.page.evaluate(() => navigator.clipboard.readText()), source);
+    await h.page.locator('#toast').filter({ hasText: '候选源码已复制' }).waitFor();
     await h.page.locator('[data-report-view="json"]').click();
     assert.equal(await h.page.locator('.code-scroll.report code').textContent(), JSON.stringify(failedReport, null, 2));
     await h.page.locator('[data-action="copy-report"]').click();
@@ -194,10 +202,10 @@ try {
         stdoutPreview: `${prefix}different-tail`, stderrPreview: 'Short stderr remains visible' },
     ] } };
     const run = await createRun(h, 'Clipped report fixture', result(report, 'evaluated_failed'));
-    await refresh(h); await select(h, run.id, true);
+    await refresh(h); await select(h, run.id);
     for (const width of widths) {
       await h.page.setViewportSize({ width, height: width > 850 ? 900 : 812 });
-      if (width <= 850) await h.page.locator('#mobile-runs').click();
+      await showArtifacts(h.page);
       await h.page.locator('[data-report-view="summary"]').click();
       assert.equal(await h.page.locator('.diagnostic-entry').count(), 3, 'diagnostics with different tails must remain separate');
       assert.equal(await h.page.locator('.diagnostic-limit').count(), 2, 'only clipped diagnostics show the notice');
@@ -216,8 +224,10 @@ try {
       assert.deepEqual(JSON.parse((await h.page.locator('.code-scroll.report code').textContent())!), report);
       assert.equal(await h.page.locator('[data-report-view="json"]').evaluate(button => button === document.activeElement), true,
         'opening the original report must leave focus on the JSON view control');
-      assert.equal(await h.page.locator('#detail-panel').evaluate(panel => panel.scrollTop), 0,
-        'switching reports must return the outer panel to the beginning');
+      assert.ok(await h.page.locator('#detail-panel').evaluate(panel => {
+        const report = panel.querySelector('.result-report')!.getBoundingClientRect().top - panel.getBoundingClientRect().top;
+        return Math.abs(report) <= 2 || (report > 0 && panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1);
+      }), 'switching reports must return the result tab to the beginning of the report');
       assert.equal(await h.page.locator('.code-scroll.report').evaluate(report => report.scrollTop), 0);
       const jsonButton = await h.page.locator('[data-report-view="json"]').boundingBox();
       assert.ok(jsonButton && jsonButton.y >= 0 && jsonButton.y + jsonButton.height <= h.page.viewportSize()!.height,
@@ -238,9 +248,9 @@ try {
       solveWallMs: '1000', usage: { totalTokens: '999', inputTokens: -2 }, custom: markup }];
     for (const [index, report] of reports.entries()) {
       const run = await createRun(h, `Compatibility report ${index}`, result(report));
-      await refresh(h); await select(h, run.id, true);
+      await refresh(h); await select(h, run.id);
       await h.page.locator('.report-summary').waitFor();
-      assert.equal(await h.page.locator('.report-summary > .result-banner.passed').count(), 0);
+      assert.equal(await h.page.locator('#detail-panel .result-verdict.passed').count(), 0);
       assert.equal(await h.page.locator('.report-check-heading .badge.passed').count(), 0);
       await assertNoInjection(h.page);
       await h.page.locator('[data-report-view="json"]').click();
@@ -248,15 +258,18 @@ try {
     }
     const broken = await createRun(h, 'Error without a result', null);
     controls.get(broken.id)!.fail(new Error(`Fixture worker error ${markup}`));
-    await refresh(h); await select(h, broken.id, true);
+    await refresh(h); await select(h, broken.id);
+    // The verdict explains the failure; the worker's text stays folded until asked for.
+    assert.equal(await h.page.locator('.result-diagnostics details').getAttribute('open'), null);
+    await h.page.locator('.result-diagnostics summary').click();
     await h.page.locator('.diagnostic-output').waitFor();
     assert.ok((await h.page.locator('#detail-panel').innerText()).includes('Fixture worker error'));
     await assertNoInjection(h.page);
     await assertNoResultArchive(h, broken, 'error');
     const cancelled = await createRun(h, 'Cancelled without a result', null);
     await refresh(h); await select(h, cancelled.id);
-    await h.page.locator('[data-action="cancel"]').click();
-    await h.page.locator('.result-banner').filter({ hasText: '运行已取消' }).waitFor();
+    await h.page.locator('[data-action="cancel"]').click(); await h.page.locator('#confirm-cancel-run').click();
+    await h.page.locator('#detail-panel .result-verdict').filter({ hasText: '运行已取消' }).waitFor();
     await assertNoResultArchive(h, cancelled, 'cancelled');
   });
 
@@ -264,17 +277,17 @@ try {
     const run = await createRun(h, 'Running worker with an early result', null);
     const early = result({ candidateCheck: { passed: true }, evaluator: { status: 'passed' } }, 'evaluated_passed');
     controls.get(run.id)!.emit(early);
-    await refresh(h); await select(h, run.id, true);
+    await refresh(h); await select(h, run.id);
     await h.page.locator('.report-summary').waitFor();
     assert.equal(await h.page.locator('.run-row.selected .badge.passed').count(), 0);
-    assert.equal(await h.page.locator('.report-summary > .result-banner.passed').count(), 0);
+    assert.equal(await h.page.locator('#detail-panel .result-verdict.passed').count(), 0);
     assert.equal(await h.page.locator('[data-action="delete-run"]').count(), 0);
     await h.page.locator('#detail-tab-source').click();
     assert.equal(await h.page.locator('[data-source-view="proof"]').innerText(), '候选源码');
     controls.get(run.id)!.finish();
     await refresh(h);
     await h.page.locator('.run-row.selected .badge.passed').waitFor({ state: 'attached' });
-    await h.page.locator('[data-action="delete-run"]').waitFor();
+    await h.page.locator('[data-action="delete-run"]').waitFor({ state: 'attached' });
   });
 
   await scenario('Cancel, close and Escape dismiss deletion without issuing DELETE', async h => {
@@ -303,6 +316,12 @@ try {
     assert.equal(deleteCount(h, middle.id), 1);
     const selected = await h.page.locator('.run-row.selected').getAttribute('data-run-id');
     assert.ok(selected === first.id || selected === last.id, 'deletion must select a neighboring record');
+    // The keyboard lands on the run now shown, so it can be read or deleted next, and the address names it. The dialog's
+    // close event, which moves it, comes a task after the dialog hides.
+    await h.page.waitForFunction(id => (document.activeElement as HTMLElement | null)?.closest('#run-list')
+      && (document.activeElement as HTMLElement).dataset.runId === id, selected, { timeout: 3_000 })
+      .catch(() => assert.fail('focus moves to the newly selected run'));
+    assert.equal(new URL(h.page.url()).search, `?run=${selected}`);
     await refresh(h);
     assert.equal(await h.page.locator(`[data-run-id="${middle.id}"]`).count(), 0);
     await deleteSelected(h, selected!);
@@ -403,10 +422,10 @@ try {
 
   await scenario('Report summaries, raw JSON and native deletion dialogs fit 320, 375 and 1440 pixel viewports', async h => {
     const run = await createRun(h, `${'Long deletion title '.repeat(5)}${markup}`, result(failedReport, 'evaluated_failed'));
-    await refresh(h); await select(h, run.id, true);
+    await refresh(h); await select(h, run.id);
     for (const width of widths) {
       await h.page.setViewportSize({ width, height: width > 850 ? 900 : 812 });
-      if (width <= 850) await h.page.locator('#mobile-runs').click();
+      await showArtifacts(h.page);
       await h.page.locator('[data-report-view="summary"]').click();
       await assertHorizontalFit(h.page, '.report-summary', width);
       const headingsFit = await h.page.locator('.target-heading').evaluateAll(headings => headings.every(heading => {
@@ -419,7 +438,7 @@ try {
       await h.page.locator('[data-report-view="json"]').click();
       await assertHorizontalFit(h.page, '.code-scroll.report', width);
       assert.deepEqual(JSON.parse((await h.page.locator('.code-scroll.report code').textContent())!), failedReport);
-      await h.page.locator('[data-action="delete-run"]').click();
+      await runMenu(h.page, 'delete-run');
       await h.page.locator('#delete-run-dialog[open]').waitFor();
       await assertHorizontalFit(h.page, '#delete-run-dialog', width);
       assert.equal(await h.page.locator('#delete-run-dialog').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth), true, `dialog contents overflow at ${width}px`);

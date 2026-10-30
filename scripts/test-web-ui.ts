@@ -8,9 +8,10 @@ import { readWebConfig, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WorkerInput } from '../apps/web/shared';
-import { closeHistory, closeSettings, discardSourceEditor, fillConfig, openHistory, openSettings, selectConfig, selectHistoryRun,
-  showArtifacts, showChat, withSettings } from './web-ui-controls';
+import { closeHistory, closeSettings, discardSourceEditor, fillConfig, openHistory, openSettings, openTab, selectConfig, selectHistoryRun,
+  showArtifacts, showChat, stageLabelsReadable, withSettings } from './web-ui-controls';
 import { freePort, startBrowser } from './web-scenario';
+import { readableDuration } from '../apps/web/presentation';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -60,7 +61,7 @@ try {
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/runs' && request.method() === 'POST') creationRequests++; });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   assert.equal(await page.locator('#environment').inputValue(), 'mathlib');
   const template = webTemplates.find(template => template.id === 'polynomial')!;
   assert.equal(await page.locator('#source').inputValue(), template.source);
@@ -76,9 +77,8 @@ try {
     const environment = await page.locator('#environment option:checked').innerText();
     assert.ok((await previewValue('environment').innerText()).includes(environment));
     const seconds = await page.locator('#max-seconds').inputValue();
-    const formatted = `${String(Math.floor(Number(seconds) / 60)).padStart(2, '0')}:${String(Number(seconds) % 60).padStart(2, '0')}`;
     const budget = await previewValue('budget').innerText();
-    assert.ok(budget.includes(seconds) || budget.includes(formatted), 'preview budget must match the entered seconds');
+    assert.equal(budget, readableDuration(Number(seconds) * 1000), 'preview budget must read the entered seconds as a duration');
     assert.ok((await previewValue('workers').innerText()).includes(await page.locator('#workers').inputValue()));
   }
   await page.locator('#draft-preview').waitFor();
@@ -151,7 +151,8 @@ try {
     const panes = await page.locator('#compose-panel,#runs-panel').evaluateAll(nodes => nodes.map(node => {
       const bounds = node.getBoundingClientRect(); return { left: bounds.left, right: bounds.right, width: bounds.width };
     }));
-    assert.ok(panes[0].right <= panes[1].left && panes[0].width >= 340 && panes[1].width >= 350);
+    // The workspace's own minimums (300px each); the docked history takes its share of the width first.
+    assert.ok(panes[0].right <= panes[1].left && panes[0].width >= 300 && panes[1].width >= 300, `${key}: ${JSON.stringify(panes)}`);
   }
   await page.keyboard.press('Home');
   for (let index = 0; index < 6; index++) await page.keyboard.press('ArrowRight');
@@ -266,12 +267,15 @@ try {
     assert.equal(JSON.stringify(payload).includes(credential), false);
     await page.waitForFunction(() => (document.querySelector('#api-key') as HTMLInputElement).value === '');
     assert.equal(await page.locator('#task').inputValue(), '', 'a successful send must clear the chat input');
+    // A sent task opens as its own run, on every width.
+    await page.locator(`[data-run-id="${payload.run.id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+    await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });
     if ((page.viewportSize()?.width ?? 1440) <= 850) {
-      assert.equal(await page.locator('#mobile-compose').getAttribute('aria-selected'), 'true', 'mobile send must retain the conversation');
-      assert.equal(await page.locator('#conversation .chat-message.user .message-body').innerText(), payload.run.task);
+      assert.equal(await page.locator('body').getAttribute('data-mobile-view'), 'runs', 'mobile send must show the new run');
+      assert.equal(await page.locator('#history-dialog[open]').count(), 0);
     }
-    await showArtifacts(page);
-    await page.locator('#detail-tab-overview').click();
+    await openTab(page, 'result');
+    assert.equal(await page.locator('#detail-panel .result-task .task-content').innerText(), payload.run.task);
     return payload.run;
   }
   async function screenshot(name: string) {
@@ -281,9 +285,11 @@ try {
     screenshots.push(name);
   }
   async function stage(label: string) {
-    // The label's first text node; the acceptance step also carries a term hint button.
-    await page.waitForFunction(label => document.querySelector('.progress-step.active .step-label')?.firstChild?.textContent === label, label);
+    await page.waitForFunction(label => document.querySelector('.artifact-stages li[data-stage="active"] .stage-label')?.textContent === label, label);
   }
+  /** 构造证明's duration in the run header, kept on its stage (shown only while it runs); empty until solving starts. */
+  const solvingStage = '.artifact-stages li:nth-child(3)';
+  const solvingClock = async () => await page.locator(solvingStage).getAttribute('data-elapsed') ?? '';
   await page.setViewportSize({ width: 375, height: 812 });
   await fillConfig(page, 'api-key', credential);
   await page.locator('#task').dispatchEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true });
@@ -295,25 +301,28 @@ try {
   await page.locator('#task').fill(task);
   const primary = await submit('enter');
   await page.setViewportSize({ width: 1440, height: 900 });
-  mark('IME Enter and Shift+Enter never submit; Enter sends once, clears the input and keeps the mobile conversation visible');
+  mark('IME Enter and Shift+Enter never submit; Enter sends once, clears the input and opens the new run on mobile');
   await stage('准备环境');
-  assert.equal(await page.locator('[data-solving-clock]').innerText(), '尚未开始');
-  const before = await page.locator('#detail-panel [data-total-clock]').innerText();
-  await page.waitForFunction(before => document.querySelector('#detail-panel [data-total-clock]')?.textContent !== before, before);
-  assert.equal(await page.locator('[data-solving-clock]').innerText(), '尚未开始');
+  assert.equal(await solvingClock(), '');
+  const before = await page.locator('[data-header-clock]').innerText();
+  await page.waitForFunction(before => document.querySelector('[data-header-clock]')?.textContent !== before, before);
+  assert.equal(await solvingClock(), '');
+  assert.equal(await page.locator('.artifact-stages .stage-clock').count(), 1, 'only the stage in progress shows a clock');
   await screenshot('desktop-preparing.png');
   mark('Mathlib preparation has a live total clock and leaves the solving clock unstarted');
 
+  await showChat(page);
   await page.locator('#task').fill(task);
   const queued = await submit();
   await stage('排队');
   assert.equal(controls.has(queued.id), false);
-  await page.locator('[data-action="cancel"]').click();
-  await page.locator('.result-banner').filter({ hasText: '运行已取消' }).waitFor();
-  assert.equal(await page.locator('.progress-step.skipped').count(), 3);
+  await page.locator('.detail-actions [data-action="cancel"]').click();
+  assert.match(await page.locator('#cancel-run-description').innerText(), /还在排队.*不会调用模型/);
+  await page.locator('#confirm-cancel-run').click();
+  await page.locator('#detail-panel .result-verdict').filter({ hasText: '运行已取消' }).waitFor();
+  assert.equal(await page.locator('.artifact-stages li[data-stage="skipped"]').count(), 3);
   assert.equal(controls.has(queued.id), false);
   await selectHistoryRun(page, primary.id);
-  await page.locator('#detail-tab-overview').click();
   await stage('准备环境');
   mark('queued cancellation skips all unexecuted phases and never starts a worker');
 
@@ -342,48 +351,50 @@ try {
   await showArtifacts(page);
   await screenshot('mobile-320-live-candidate.png');
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.locator('#detail-tab-overview').click();
   mark('live worker snapshots update candidate Lean code without implying acceptance or changing the frozen original source');
   for (let index = 0; index < 30; index++) control.progress('worker_activity', `Research step ${index + 1}: inspect the current candidate`);
-  await page.waitForFunction(() => (document.querySelectorAll('#conversation .timeline-event').length >= 30));
-  // The thread folds older steps; reading earlier activity starts by expanding them.
-  assert.equal(await page.locator('#conversation .timeline-event:visible').count(), 3, 'the thread shows only the newest steps');
-  await page.locator('#conversation [data-timeline-fold]').click();
-  assert.equal(await page.locator('#conversation [data-timeline-fold]').getAttribute('aria-expanded'), 'true');
-  const conversation = page.locator('#conversation-scroll');
-  assert.equal(await conversation.evaluate(scroll => scroll.scrollHeight > scroll.clientHeight + 240), true);
-  await conversation.evaluate(scroll => { scroll.scrollTop = 120; });
-  await page.waitForFunction(() => Math.abs(document.querySelector('#conversation-scroll')!.scrollTop - 120) < 1);
-  await page.locator('#latest-message').waitFor();
+  await openTab(page, 'events');
+  const activity = page.locator('#detail-panel .activity-scroll');
+  await page.waitForFunction(() => document.querySelectorAll('#detail-panel .activity-table tbody tr').length >= 30);
+  assert.equal(await activity.evaluate(scroll => scroll.scrollHeight > scroll.clientHeight + 240), true);
+  // Newest first: reading earlier activity means scrolling down, which pauses following.
+  await activity.evaluate(scroll => { scroll.scrollTop = 120; });
+  await page.locator('#activity-latest').waitFor();
+  assert.equal(await page.locator('#activity-follow').getAttribute('aria-pressed'), 'false');
+  /** The first row under the table header, and its offset in the scroll frame. */
+  const readingRow = () => activity.evaluate(scroll => {
+    const header = scroll.querySelector('thead th')!.getBoundingClientRect().bottom, frame = scroll.getBoundingClientRect().top;
+    const row = Array.from(scroll.querySelectorAll<HTMLElement>('tbody tr')).find(row => row.getBoundingClientRect().bottom > header + 1)!;
+    return { sequence: row.dataset.sequence, offset: row.getBoundingClientRect().top - frame };
+  });
+  const reading = await readingRow();
   control.progress('worker_activity', 'Research update while reading earlier activity');
-  await page.waitForFunction(() => document.querySelector('#conversation')?.textContent?.includes('Research update while reading earlier activity'));
-  assert.ok(Math.abs(await conversation.evaluate(scroll => scroll.scrollTop) - 120) < 1,
-    'new activity must preserve the reading position while scrolled up');
-  await page.locator('#latest-message').click();
-  await page.waitForFunction(() => {
-    const scroll = document.querySelector('#conversation-scroll')!;
-    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 2;
-  });
-  await page.locator('#latest-message').waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => document.querySelector('#detail-panel .activity-table')?.textContent?.includes('Research update while reading earlier activity'));
+  const kept = await readingRow();
+  assert.equal(kept.sequence, reading.sequence, 'new activity must keep the row being read');
+  assert.ok(Math.abs(kept.offset - reading.offset) <= 1, 'new activity must preserve the reading position while scrolled down');
+  assert.ok((await page.locator('#activity-latest').innerText()).includes('1 条新活动'));
+  await page.locator('#activity-latest').click();
+  await page.waitForFunction(() => document.querySelector('#detail-panel .activity-scroll')!.scrollTop < 1);
+  await page.locator('#activity-latest').waitFor({ state: 'hidden' });
   control.progress('worker_activity', 'Research update while following the latest activity');
-  await page.waitForFunction(() => document.querySelector('#conversation')?.textContent?.includes('Research update while following the latest activity'));
-  await page.waitForFunction(() => {
-    const scroll = document.querySelector('#conversation-scroll')!;
-    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 2;
-  });
-  mark('live activity preserves earlier reading positions; the latest-message control returns to the bottom and resumes following updates');
+  await page.waitForFunction(() => document.querySelector('#detail-panel .activity-table tbody tr td:last-child')?.textContent
+    ?.includes('Research update while following the latest activity'));
+  assert.ok(await activity.evaluate(scroll => scroll.scrollTop) < 1, 'following must keep the newest activity in view');
+  await openTab(page, 'result');
+  mark('live activity preserves earlier reading positions; returning to the latest resumes following updates');
   for (let index = 0; index < 210; index++) control.progress('worker_activity');
   await stage('构造证明');
-  await page.waitForFunction(() => !['尚未开始', '00:00', '--:--', ''].includes(document.querySelector('[data-solving-clock]')?.textContent ?? ''));
+  await page.waitForFunction(selector => !['00:00', '--:--', ''].includes(document.querySelector<HTMLElement>(selector)?.dataset.elapsed ?? ''), solvingStage);
   control.progress('evaluation_started');
   await stage('独立验收');
-  const solvingTime = await page.locator('[data-solving-clock]').innerText();
+  const solvingTime = await solvingClock();
+  assert.equal(await page.locator(`${solvingStage} .stage-clock`).count(), 0, 'a finished stage keeps its duration in the tooltip');
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await selectHistoryRun(page, primary.id);
-  await page.locator('#detail-tab-overview').click();
   await stage('独立验收');
-  assert.equal(await page.locator('[data-solving-clock]').innerText(), solvingTime);
+  assert.equal(await solvingClock(), solvingTime);
   const stored = await page.evaluate(async id => (await (await fetch(`/api/runs/${id}`)).json()).run as WebRun, primary.id);
   assert.equal(stored.events.some(event => event.type === 'solve_started'), false);
   assert.ok(stored.timings?.preparing && stored.timings.solving && stored.timings.evaluating);
@@ -392,14 +403,14 @@ try {
   const proof = primary.source.replace('by sorry', 'by ring');
   assert.notEqual(proof, primary.source);
   control.finish({ status: 'evaluated_passed', proof, report: { status: 'evaluated_passed', fixture: true, environment: 'mathlib' } });
-  await page.locator('.result-banner.passed').waitFor();
+  await page.locator('#detail-panel .result-verdict.passed').waitFor();
   control.artifact('-- Late snapshot must not override the final proof\n');
-  await page.locator('[data-action="cancel"]').waitFor({ state: 'hidden' });
-  await page.waitForFunction(() => document.querySelector('.facts')?.textContent?.includes('结束时间'));
-  assert.equal(await page.locator('.progress-step.done').count(), 4);
-  const completedTime = await page.locator('#detail-panel [data-total-clock]').innerText();
+  await page.locator('.detail-actions [data-action="cancel"]').waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => document.querySelector('#detail-panel .result-task .facts')?.textContent?.includes('结束时间'));
+  assert.equal(await page.locator('.artifact-stages li[data-stage="done"]').count(), 4);
+  const completedTime = await page.locator('[data-header-clock]').innerText();
   await page.waitForTimeout(1100);
-  assert.equal(await page.locator('#detail-panel [data-total-clock]').innerText(), completedTime);
+  assert.equal(await page.locator('[data-header-clock]').innerText(), completedTime);
   await screenshot('desktop-completed.png');
   mark('completed phase clocks freeze and successful acceptance remains explicit');
 
@@ -417,12 +428,64 @@ try {
   await page.locator('[data-action="download-proof"]').click();
   const downloaded = await download;
   assert.equal(await fs.readFile((await downloaded.path())!, 'utf8'), proof);
+  assert.equal(downloaded.suggestedFilename(), `${/theorem\s+(\S+)/.exec(primary.source)![1]}.lean`, 'the proof file is named after the theorem, not the run ID');
   await screenshot('desktop-proof.png');
+  await page.locator('#detail-tab-result').click();
+  await page.locator('#detail-panel .result-proof [data-action="copy-proof"]').click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), proof);
+  await page.locator('#toast').filter({ hasText: '验收证明已复制' }).waitFor();
+  await page.locator('#detail-tab-source').click();
   mark('proof and immutable input switch independently; copy and Lean download match the displayed proof');
+
+  // The palette finds a run by the theorem it proves, which the Chinese task never names, and lists each group once.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+  await page.locator('#command-palette[open]').waitFor();
+  const groups = await page.locator('#command-palette .palette-group').allInnerTexts();
+  assert.deepEqual(groups, [...new Set(groups)], 'every palette group heading appears once');
+  await page.locator('#command-palette[open] input').fill(/theorem\s+(\S+)/.exec(primary.source)![1]);
+  assert.equal(await page.locator(`#palette-run-${primary.id}`).isVisible(), true);
+  await page.locator('#command-palette[open] input').fill('api key');
+  assert.equal(await page.locator('#palette-options [role="option"]').first().getAttribute('id'), 'palette-open-settings');
+  await page.keyboard.press('Escape');
+  await page.locator('#command-palette').waitFor({ state: 'hidden' });
+  mark('the command palette finds a run by its theorem name and the settings by "api key", with one heading per group');
+
+  // The open run's actions are in the palette too, found by what they do.
+  async function paletteFind(query: string) {
+    if (!await page.locator('#command-palette[open]').count()) await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    await page.locator('#command-palette[open] input').fill(query);
+    return page.locator('#palette-options [role="option"]').evaluateAll(nodes => nodes.map(node => node.id));
+  }
+  assert.deepEqual(await paletteFind('下载'), ['palette-run-download-proof', 'palette-run-download-archive']);
+  const paletteDownload = page.waitForEvent('download');
+  await page.keyboard.press('Enter');
+  const fromPalette = await paletteDownload;
+  assert.equal(fromPalette.suggestedFilename(), downloaded.suggestedFilename());
+  assert.equal(await fs.readFile((await fromPalette.path())!, 'utf8'), proof);
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  assert.equal((await paletteFind('复制'))[0], 'palette-run-copy-proof');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), proof);
+  assert.ok((await paletteFind('分享')).includes('palette-run-share'));
+  assert.ok((await paletteFind('删除')).includes('palette-run-delete'));
+  // Within a group, a command whose name holds the query comes before one that only lists it as a keyword,
+  // and a view is found by what it holds: 报告 finds 结果.
+  const sourceMatches = (await paletteFind('源码')).filter(id => /^palette-(run-copy-proof|tab-source)$/u.test(id));
+  assert.deepEqual(sourceMatches, ['palette-tab-source', 'palette-run-copy-proof']);
+  assert.equal((await paletteFind('报告'))[0], 'palette-tab-result');
+  await page.keyboard.press('Escape');
+  await page.locator('#command-palette').waitFor({ state: 'hidden' });
+  // Choosing a run from the palette leaves the keyboard on that run, not on the control the palette was opened from.
+  await paletteFind(/theorem\s+(\S+)/.exec(primary.source)![1]);
+  await page.locator(`#palette-run-${primary.id}`).click();
+  await page.waitForFunction(() => document.activeElement?.id.startsWith('detail-tab-'));
+  mark('the palette downloads, copies, shares and deletes the open run, and choosing a run focuses its tabs');
 
   await selectConfig(page, 'environment', 'standard');
   await page.locator('#task').fill('Changed draft');
   await fillConfig(page, 'api-key', credential);
+  // Reuse lives in the run header, so leave the edited draft for the run.
+  await selectHistoryRun(page, primary.id);
   await page.locator('[data-action="reuse-run"]').click();
   await closeSettings(page);
   assert.equal(await page.locator('#environment').inputValue(), 'mathlib');
@@ -527,9 +590,9 @@ try {
   controls.get(incomplete.id)!.progress('solve_started');
   controls.get(incomplete.id)!.finish({ status: 'incomplete', proof: incomplete.source,
     report: { status: 'incomplete', fixture: true, environment: 'standard' } });
-  await page.locator('.result-banner.warning').waitFor();
-  assert.equal(await page.locator('.progress-step').nth(3).getAttribute('class'), 'progress-step skipped');
-  assert.equal(await page.locator('.result-banner.passed').count(), 0);
+  await page.locator('#detail-panel .result-verdict.warning').waitFor();
+  assert.equal(await page.locator('.artifact-stages li').nth(3).getAttribute('data-stage'), 'skipped');
+  assert.equal(await page.locator('#detail-panel .result-verdict.passed').count(), 0);
   await page.locator('#detail-tab-source').click();
   assert.equal(await page.locator('[data-source-view="proof"]').innerText(), '候选源码');
   mark('an incomplete standard-library attempt stays unaccepted and leaves evaluation unexecuted');
@@ -539,7 +602,7 @@ try {
   assert.equal(await page.locator('[data-run-id]').count(), 1);
   assert.equal(await page.locator('#run-count').innerText(), '1/3');
   assert.equal(await page.locator('[data-run-id]').getAttribute('data-run-id'), primary.id);
-  assert.ok((await page.locator('.detail-identifier').innerText()).includes(incomplete.id));
+  assert.equal(await page.locator('.detail-heading').getAttribute('data-run'), incomplete.id);
   await page.locator('#run-search').fill(`MATHLIB ${primary.model.toUpperCase()}`);
   assert.equal(await page.locator('[data-run-id]').count(), 1);
   await page.locator('#run-search').fill('no-matching-run');
@@ -566,8 +629,7 @@ try {
   mark('history combines status and text, retains hidden selection, distinguishes accepted results and navigates only filtered rows');
 
   await selectHistoryRun(page, primary.id);
-  await page.locator('#detail-tab-overview').click();
-  await page.locator('.result-banner.passed').waitFor();
+  await page.locator('#detail-panel .result-verdict.passed').waitFor();
   const widths = [1440, 1250, 1024, 851, 850, 375, 320];
   for (const width of widths) {
     const height = width > 850 ? 640 : 812;
@@ -578,22 +640,21 @@ try {
       const submit = await page.locator('#submit-run').boundingBox();
       assert.ok(submit && submit.y >= 0 && submit.y + submit.height <= height, `submit outside ${width}x${height}`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true, `desktop page scrolls at ${width}`);
-    } else {
+    }
+    await selectHistoryRun(page, primary.id);
+    if (width <= 850) {
       await openHistory(page);
       const selected = await page.locator('.run-row.selected').boundingBox();
       assert.ok(selected && selected.x >= 0 && selected.x + selected.width <= width, `selected history item hidden at ${width}`);
       await closeHistory(page);
     }
-    await showArtifacts(page);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `detail overflow at ${width}`);
-    const positions = await page.locator('.step-label').evaluateAll(labels => labels.map(label => {
-      const rect = label.getBoundingClientRect(); return { left: rect.left, right: rect.right };
-    }));
-    positions.slice(1).forEach((position, index) => assert.ok(position.left >= positions[index].right, `step labels overlap at ${width}`));
+    // The run has ended, so phones name every stage too instead of showing four bare check marks.
+    await stageLabelsReadable(page, `${width}px`);
     await page.locator('#detail-tab-source').click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `source overflow at ${width}`);
     if (width === 320) await screenshot('mobile-320-proof.png');
-    await page.locator('#detail-tab-overview').click();
+    await openTab(page, 'result');
     if (width === 1024) await screenshot('desktop-1024-completed.png');
     if (width === 375 || width === 320) {
       await screenshot(`mobile-${width}-completed.png`);
@@ -612,8 +673,6 @@ try {
       await page.locator('#cancel-editor').click();
       await page.locator('#run-settings[open]').waitFor();
       await closeSettings(page);
-      await selectHistoryRun(page, primary.id);
-      await page.locator('#detail-tab-overview').click();
     }
   }
   assert.deepEqual(errors, []);

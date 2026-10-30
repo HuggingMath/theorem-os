@@ -83,6 +83,7 @@ const runner: WebRunner = {
     const control = controls.get(runId)!;
     if (command.type === 'capture') return { id: 'capture', status: 'captured', observation: control.observation };
     if (command.type === 'guidance') throw new Error('Plan recovery must not send guidance');
+    if (command.type === 'plan-approval') throw new Error('Plan recovery must not approve a plan');
     if (command.proposal.baseVersion !== control.observation.plan!.baseVersion) throw new Error('math_edit_version_conflict');
     if (command.type === 'edit-preview') return { id: command.proposal.id, status: 'validated', affectedTaskIds: ['base'],
       changes: [{ taskId: 'base', fields: ['objective'] }] };
@@ -107,7 +108,7 @@ const edits = (h: Harness, id: string) => h.calls.filter(call => call.method ===
 const reads = (h: Harness, id: string) => h.calls.filter(call => call.method === 'GET' && call.pathname.startsWith(`/api/runs/${id}/commands/`));
 const delivered = (id: string) => commands.filter(item => item.runId === id && item.command.type === 'edit');
 async function select(h: Harness, id: string) {
-  await selectHistoryRun(h.page, id); await h.page.locator('.collab-surface').waitFor();
+  await selectHistoryRun(h.page, id, 'collaboration'); await h.page.locator('.collab-surface').waitFor();
   await h.page.locator('[data-collab-task="base"]:visible').first().waitFor();
 }
 async function create(h: Harness) {

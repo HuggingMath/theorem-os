@@ -64,6 +64,20 @@ describe('static workbench files', () => {
     expect(head.status).toBe(200); expect(head.body.length).toBe(0); expect(Number(head.headers['content-length'])).toBeGreaterThan(0);
   });
 
+  it('sends the build\'s Brotli file only while it still matches', async () => {
+    const name = 'built.js', file = path.join(directory, name), body = 'console.log("built");\n'.repeat(300);
+    fs.writeFileSync(file, body);
+    // Any valid encoding of the same bytes works; quality 1 makes it recognisably different from the server's own.
+    const built = zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 1 } });
+    fs.writeFileSync(`${file}.br`, built);
+    expect((await get(name, { 'Accept-Encoding': 'br' })).body.equals(built)).toBe(true);
+    // The file changed after the build: the old .br is ignored and the server compresses the new bytes itself.
+    const changed = body.replace('built', 'edited');
+    fs.writeFileSync(file, changed); fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+    const fresh = await get(name, { 'Accept-Encoding': 'br' });
+    expect(fresh.body.equals(built)).toBe(false); expect(zlib.brotliDecompressSync(fresh.body).toString()).toBe(changed);
+  });
+
   it('serves a rebuilt file on the next request', async () => {
     const before = await get('app.js');
     fs.writeFileSync(path.join(directory, 'app.js'), 'console.log("rebuilt");');

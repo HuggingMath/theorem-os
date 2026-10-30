@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../src/runtime/codexSession';
+import { createCodexMathSession, mathWorkerPermissionConfig, type MathAgentOptions, type MathAgentSession } from '../src/runtime/codexSession';
 import { deepSeekProfileDigest, prepareDeepSeekProfile } from '../src/runtime/deepseek';
 import { prepareWestlakeProfile, westlakeProfileDigest } from '../src/runtime/westlake';
 import { prepareSub2apiProfile, sub2apiProfileDigest } from '../src/runtime/sub2api';
@@ -48,6 +48,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     result({ thread: { id: settings.developerInstructions === 'wrong-thread' ? 'wrong-thread' : settings.threadId || 'thread-fixture' },
       model: settings.developerInstructions === 'mismatch' ? 'wrong-model' : settings.model,
       modelProvider: settings.developerInstructions === 'wrong-provider' ? 'wrong-provider' : settings.config.model_provider,
+      ...(settings.developerInstructions === 'ignore-permissions' ? {} : { activePermissionProfile: { id: settings.config.default_permissions } }),
       approvalPolicy: settings.approvalPolicy, reasoningEffort: settings.config.model_reasoning_effort });
   }
   if (call.method === 'mcpServerStatus/list') result({ data: Object.keys(settings.config.mcp_servers)
@@ -286,8 +287,38 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(Object.keys(start.config.mcp_servers)).toEqual(['unrelated']);
     expect(calls.some(call => call.method === 'mcpServerStatus/list')).toBe(false);
     const turn = calls.find(call => call.method === 'turn/start').params;
-    expect(turn).toMatchObject({ model: 'gpt-6.1-sol', effort: 'xhigh', approvalPolicy: 'never',
-      sandboxPolicy: { type: 'workspaceWrite', writableRoots: [root] } });
+    expect(turn).toMatchObject({ model: 'gpt-6.1-sol', effort: 'xhigh', approvalPolicy: 'never' });
+    // The thread's named profile is the only sandbox; a turn policy would replace it with host network access.
+    expect(turn).not.toHaveProperty('sandboxPolicy');
+    expect(start).not.toHaveProperty('sandbox');
+    expect(start.config).toMatchObject({
+      default_permissions: 'math-worker',
+      'permissions.math-worker.filesystem': { '/': 'read', [root]: 'write', '/run': 'none' },
+      'permissions.math-worker.network.enabled': true,
+      'features.network_proxy': { enabled: true, domains: {}, dangerously_allow_all_unix_sockets: true },
+    });
+    expect(start.config).not.toHaveProperty('sandbox_workspace_write.network_access');
+  });
+
+  it('hides host socket roots unless they hold the workspace', () => {
+    expect(mathWorkerPermissionConfig('/home/user/work')['permissions.math-worker.filesystem'])
+      .toEqual({ '/': 'read', '/home/user/work': 'write', '/run': 'none', '/tmp': 'none' });
+    expect(mathWorkerPermissionConfig('/tmp/work')['permissions.math-worker.filesystem'])
+      .toEqual({ '/': 'read', '/tmp/work': 'write', '/run': 'none' });
+    expect(mathWorkerPermissionConfig('/tmpfs/work')['permissions.math-worker.filesystem'])
+      .toMatchObject({ '/tmp': 'none' });
+    expect(mathWorkerPermissionConfig('/work/run/a', ['/opt/app', '/work'])['permissions.math-worker.filesystem'])
+      .toEqual({ '/': 'read', '/work/run/a': 'write', '/run': 'none', '/tmp': 'none', '/opt/app': 'none' });
+  });
+
+  it('refuses a new thread whose app-server did not adopt the worker profile', async () => {
+    await expect(createCodexMathSession({ ...options, instructions: 'ignore-permissions' }))
+      .rejects.toThrow('math_codex_sandbox_profile_mismatch');
+    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8');
+    expect(calls).not.toContain('turn/start');
+    // A resumed thread keeps the sandbox it started with, so its response is not evidence either way.
+    session = await createCodexMathSession({ ...options, threadId: 'retained-thread', instructions: 'ignore-permissions' });
+    expect(session.threadId).toBe('retained-thread');
   });
 
   it.each(['oversized-frame', 'invalid-frame', 'invalid-result'])('rejects %s before a complete valid RPC frame', async message => {
@@ -308,6 +339,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     ]);
     expect(JSON.stringify(activities)).not.toMatch(/secret|private reasoning/);
     expect(options.onUsage).toHaveBeenCalledOnce();
+  });
+
+  it('passes each item of its own thread to onItem, and a failing observer never stops the turn', async () => {
+    const items: [string, unknown][] = [];
+    session = await createCodexMathSession({ ...options, onItem: (phase, item) => { items.push([phase, item]); throw new Error('observer failed'); } });
+    expect(await session.run('activity', 'activity-turn', root, () => {})).toBe('completed');
+    expect(items).toEqual([['started', { id: 'tool', type: 'commandExecution', command: 'secret' }],
+      ['completed', { id: 'tool', type: 'commandExecution', aggregatedOutput: 'secret' }]]);
   });
 
   it('rejects an invalid proof environment before launching the app-server', async () => {
@@ -332,9 +371,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(calls.filter(call => call.method === 'thread/start').at(-1).params.config['shell_environment_policy.set'])
         .toEqual({ TMPDIR: temporaryDirectory, LANG: 'C.UTF-8' });
-      expect(calls.filter(call => call.method === 'turn/start').at(-1).params.sandboxPolicy).toEqual({
-        type: 'workspaceWrite', writableRoots: [workspace], networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true,
-      });
+      expect(calls.filter(call => call.method === 'thread/start').at(-1).params.config['permissions.math-worker.filesystem'])
+        .toMatchObject({ [workspace]: 'write' });
+      expect(calls.filter(call => call.method === 'turn/start').at(-1).params).not.toHaveProperty('sandboxPolicy');
       await session.close();
       session = undefined;
     }

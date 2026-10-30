@@ -61,7 +61,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   routes: { local: 'activity inspection must not contact external sites or model providers' }, timeout: { label: 'Activity', seconds: 50 },
   open: async ({ page }) => {
     await page.goto(origin);
-    await page.locator('#submit-run:enabled').waitFor();
+    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     draft = await page.locator('#source').inputValue(), task = await page.locator('#task').inputValue();
   },
   verify: async ({ page, requests, runIds }, elapsedMs) => {
@@ -83,16 +83,12 @@ async function createRun(h: Harness, title = 'Inspect local activity fixture') {
   h.runIds.push(run.id); assert.ok(controls.has(run.id), 'the local worker fixture must start');
   return run;
 }
-async function showWorkspace(page: Page) {
-  if (page.viewportSize()!.width <= 850) await page.locator('#mobile-runs').click();
-}
 async function selectActivity(h: Harness, id: string) {
   await openHistory(h.page); await h.page.locator('#refresh-runs:enabled').waitFor();
   const refreshed = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
   await h.page.locator('#refresh-runs').click(); await refreshed;
   await h.page.locator('#refresh-runs:enabled').waitFor(); await closeHistory(h.page);
-  await selectHistoryRun(h.page, id); await showWorkspace(h.page);
-  await h.page.locator('#detail-tab-events').click(); await h.page.locator('.activity-workspace').waitFor();
+  await selectHistoryRun(h.page, id, 'events'); await h.page.locator('.activity-workspace').waitFor();
 }
 async function rowCount(page: Page, expected: number) {
   await page.waitForFunction(({ selector, expected }) => document.querySelectorAll(selector).length === expected, { selector: rowSelector, expected });
@@ -312,27 +308,73 @@ try {
     await screenshot(page, 'different-run-reset.png');
   });
 
-  for (const width of widths) await scenario(`Activity controls fit and preserve visible or hidden reading at ${width}px`, async h => {
+  // Event times come from the server clock, so the poll answer is rewritten to move the first two events one and two days back.
+  await scenario('A log reaching past one day dates the newest row of each day; a one-day log shows times alone', async h => {
+    const { page } = h, run = await createRun(h), control = controls.get(run.id)!;
+    control.progress('worker_activity', 'first day of a long run'); control.progress('worker_activity', 'second day of a long run');
+    await selectActivity(h, run.id); await listed(page, 'second day of a long run');
+    const dates = () => page.locator(`${rowSelector} .activity-date:not([hidden])`).evaluateAll(labels => labels.map(label => {
+      const row = label.closest('tr')!, at = new Date(row.querySelector('time')!.dateTime);
+      return { sequence: Number(row.dataset.sequence), label: label.textContent ?? '', day: [at.getMonth() + 1, at.getDate()] };
+    }));
+    assert.deepEqual(await dates(), [], 'a log within one day shows times alone');
+    const snapshot = await readRun(h, run.id), [oldest, older] = snapshot.events;
+    const day = 24 * 60 * 60 * 1000, back = new Map([[oldest!.sequence, 2 * day], [older!.sequence, day]]);
+    await page.route(url => url.pathname === '/api/runs', async route => {
+      if (route.request().method() !== 'GET') { await route.fallback(); return; }
+      const response = await route.fetch(), payload = await response.json() as { runs: WebRun[] };
+      for (const event of payload.runs.find(item => item.id === run.id)?.events ?? []) {
+        const shift = back.get(event.sequence);
+        if (shift) event.at = new Date(Date.parse(event.at) - shift).toISOString();
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    control.progress('worker_activity', 'third day of a long run');
+    await listed(page, 'third day of a long run');
+    await page.waitForFunction(selector => document.querySelectorAll(selector).length === 3, `${rowSelector} .activity-date:not([hidden])`);
+    const labelled = await dates(), newest = Number(await page.locator(rowSelector).first().getAttribute('data-sequence'));
+    assert.deepEqual(labelled.map(item => item.sequence), [newest, older!.sequence, oldest!.sequence],
+      'newest first: the latest row, then the newest row of each earlier day');
+    for (const item of labelled) assert.deepEqual(item.label.match(/\d+/gu)?.map(Number), item.day, `the label is the row's local month and day: ${item.label}`);
+    assert.match(await page.locator(rowSelector).first().locator('time').innerText(), /^\d\d:\d\d:\d\d$/u, 'the time keeps its own line under the date');
+    await screenshot(page, 'activity-across-days.png');
+    await page.unrouteAll();
+    control.progress('worker_activity', 'back to one day');
+    await listed(page, 'back to one day');
+    await page.waitForFunction(selector => document.querySelectorAll(selector).length === 0, `${rowSelector} .activity-date:not([hidden])`);
+  });
+
+  for (const width of widths) await scenario(`Activity controls fit and preserve covered or resized reading at ${width}px`, async h => {
     const { page } = h, run = await createRun(h), control = controls.get(run.id)!;
     for (let index = 0; index < 60; index++) control.progress('worker_activity', `inspect responsive activity ${index + 1}\nA second diagnostic line`);
     await selectActivity(h, run.id); await listed(page, 'inspect responsive activity 60\nA second diagnostic line');
     await page.locator('#activity-search').fill('inspect'); await rowCount(page, 60); await pauseByScrolling(page);
     for (const selector of ['.activity-workspace', '#activity-search', '#activity-type', '#clear-activity-search', '#activity-count', '#activity-follow', '#activity-latest', '#download-activity', '.activity-scroll']) await fit(page, selector);
     await screenshot(page, `activity-${width}.png`);
-    if (width <= 850) {
+    if (width > 850) {
+      // Folding the docked history widens the table and rewraps its rows; the reader stays on the same row.
       const before = await anchor(page);
-      await page.locator('#mobile-compose').click();
-      const matching = `inspect hidden mobile arrival at ${width}px\n${'Additional diagnostic line\n'.repeat(9)}`;
+      await page.locator('#open-history').click(); await page.locator('body[data-history-collapsed="true"]').waitFor({ state: 'attached' });
+      await preservesAnchor(page, 'history folded beside the activity', before);
+      const folded = await anchor(page);
+      await page.locator('#open-history').click(); await page.locator('#history-sidebar .run-history').waitFor();
+      await preservesAnchor(page, 'history unfolded beside the activity', folded);
+    }
+    if (width <= 850) {
+      // On a phone the history dialog covers the run; activity arriving underneath must not move the reader.
+      const before = await anchor(page);
+      await openHistory(page);
+      const matching = `inspect covered mobile arrival at ${width}px\n${'Additional diagnostic line\n'.repeat(9)}`;
       const arrived = pollContains(page, run.id, matching);
       control.progress('worker_activity', matching); await arrived;
-      await page.locator('#mobile-runs').click(); await listed(page, matching); await follow(page, false);
-      await preservesAnchor(page, `hidden ${width}px workspace`, before);
+      await closeHistory(page); await listed(page, matching); await follow(page, false);
+      await preservesAnchor(page, `covered ${width}px workspace`, before);
       await page.locator('#activity-latest').click(); await follow(page, true);
-      await page.locator('#mobile-compose').click();
-      const latest = `inspect followed hidden mobile arrival ${width}px`, followed = pollContains(page, run.id, latest);
+      await openHistory(page);
+      const latest = `inspect followed covered mobile arrival ${width}px`, followed = pollContains(page, run.id, latest);
       control.progress('worker_activity', latest); await followed;
-      await page.locator('#mobile-runs').click(); await listed(page, latest); await follow(page, true);
-      assert.ok(await page.locator('.activity-scroll').evaluate(scroll => scroll.scrollTop) <= 1, 'a followed hidden workspace must return at its latest activity');
+      await closeHistory(page); await listed(page, latest); await follow(page, true);
+      assert.ok(await page.locator('.activity-scroll').evaluate(scroll => scroll.scrollTop) <= 1, 'a followed covered workspace must return at its latest activity');
       await page.locator('#activity-search').fill('zero matching mobile result'); await rowCount(page, 0);
       await fit(page, '#clear-activity-filters'); await page.locator('#clear-activity-filters').click();
       assert.equal(await page.locator('#activity-search').inputValue(), '');
@@ -348,15 +390,15 @@ try {
         }, visible.sequence);
         await settled(page);
         const beforeResize = await anchor(page);
-        await page.locator('#mobile-compose').click();
-        const resizedArrival = 'inspect arrival before resizing a hidden mobile workspace';
+        await openHistory(page);
+        const resizedArrival = 'inspect arrival before resizing a covered mobile workspace';
         const received = pollContains(page, run.id, resizedArrival);
         control.progress('worker_activity', resizedArrival); await received;
         await page.setViewportSize({ width: 1440, height: 900 });
         await listed(page, resizedArrival); await follow(page, false);
         assert.equal(await page.locator('#activity-search').inputValue(), 'inspect');
         assert.equal(await page.locator('#activity-type').inputValue(), 'worker_activity');
-        await preservesAnchor(page, 'hidden mobile workspace resized directly to desktop', beforeResize);
+        await preservesAnchor(page, 'covered mobile workspace resized directly to desktop', beforeResize);
         await fit(page, '.activity-workspace');
         await screenshot(page, 'activity-hidden-mobile-to-desktop.png');
       }

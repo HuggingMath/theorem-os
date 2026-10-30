@@ -13,7 +13,7 @@ describe('web sample run', () => {
     expect(sample.observations.every(observation => observation.webRunId === webSampleRunId)).toBe(true);
     expect(sample.events.map(event => event.sequence)).toEqual([...sample.events.map(event => event.sequence)].sort((a, b) => a - b));
     const text = fs.readFileSync(file, 'utf8');
-    for (const leak of ['/home/', '/data/', 'theorem-os-worker', 'sha256:', '127.0.0.1', 'host.docker.internal', 'apiKey', 'WEB_COOPERATIVE_SMOKE'])
+    for (const leak of ['/home/', '/data/', 'theorem-os-worker', 'sha256:', '127.0.0.1', 'host.docker.internal', 'apiKey', 'WEB_COOPERATIVE_', 'Lean/S3'])
       expect(text, leak).not.toContain(leak);
   });
 

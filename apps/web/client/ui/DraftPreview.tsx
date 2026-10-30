@@ -27,11 +27,12 @@ function DraftPreview(props: DraftPreviewProps) {
       <div class="detail-actions"><span class="badge preview-status">{fill(t('{0}未提交'), <Icon name="file-code-2" />)}</span>
         <button type="button" class="icon-button" data-draft-action="edit" aria-label={t('编辑原始题目')} title={t('编辑原始题目')}><Icon name="square-pen" /></button>
         <button type="button" class="icon-button" data-draft-action="settings" aria-label={t('配置证明环境')} title={t('配置证明环境')}><Icon name="sliders-horizontal" /></button></div></header>
-    <dl class="preview-facts">{props.facts.map(([id, label, value, mono]) => <div key={id}><dt>{label}</dt><dd data-preview-value={id} class={mono ? 'mono' : undefined}>{value}</dd></div>)}</dl>
+    <dl class="preview-facts">{props.facts.map(([id, label, value, mono]) => <div key={id}><dt>{label}</dt><dd data-preview-value={id} class={mono ? 'mono' : undefined} title={value}>{value}</dd></div>)}</dl>
     <div class="preview-view-tabs" role="tablist" aria-label={t('草稿工作区视图')}>
       {tab('source', 'draft-tab-source', 'draft-source-panel', t('{0}Lean 源码'), 'file-code-2')}{tab('modules', 'draft-tab-modules', 'draft-module-panel', t('{0}模块'), 'network')}</div>
     <section class="preview-source" id="draft-source-panel" role="tabpanel" aria-labelledby="draft-tab-source" hidden={modules}>
-      <div class="preview-source-heading"><h3 id="preview-source-heading"><Icon name="file-code-2" />Submission.lean</h3><span data-truncated={props.truncated ? '' : undefined}>{props.size}</span></div>
+      {/* The tab already says this is the Lean source; the heading only appears to say that a long file is shown in part. */}
+      <div class="preview-source-heading" hidden={!props.truncated}><h3 id="preview-source-heading"><Icon name="file-code-2" />{t('原始题目')}</h3><span data-truncated={props.truncated ? '' : undefined}>{props.size}</span></div>
       <div class="source-reader" />
       <div class="draft-source-scroll" tabIndex={0} aria-label={t('原始题目草稿')}><pre class="preview-line-numbers" aria-hidden="true" /><pre id="draft-preview-code"><code /></pre></div>
     </section>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyWebError, classifyWebResult } from '../apps/web/failure';
-import { failureGuide, queueDescription, resultDescription } from '../apps/web/presentation';
+import { checkReason, failureGuide, queueDescription, reportReason, resultDescription, stoppedLabel } from '../apps/web/presentation';
 import { parseWebFailure, type WebRun } from '../apps/web/shared';
 import { webIncompleteReason } from '../apps/web/worker';
 
@@ -83,6 +83,47 @@ describe('web failure and queue presentation', () => {
       expect(incomplete(legacy).title).toBe('没有得到完整证明');
       expect(incomplete(legacy).kind).toBeUndefined();
     }
+  });
+
+  it('names the solve budget, and offers a longer one only below the highest allowed', () => {
+    const timed = (maxRunSeconds: number) => failureGuide(run({ maxRunSeconds, result: { status: 'limit_reached', proof: '', report: {} },
+      failure: { kind: 'time_limit', reason: 'math_run_stopped' } }))!;
+    expect(timed(300).detail).toContain('5 分钟的解题预算用完时');
+    expect(timed(300).actions.map(action => action.id)).toEqual(['budget', 'report']);
+    expect(timed(900).detail).toContain('15 分钟的解题预算（已是上限）');
+    expect(timed(900).actions.map(action => action.id)).toEqual(['task', 'report']);
+    // Older runs had no solve budget; their stop is described without a length.
+    expect(timed(0).detail).toBe('运行在解题预算内没有完成，已检查的成果保存在报告中。可以提高解题预算后重新运行。');
+    const turns = (maxTurns: number) => failureGuide(run({ maxTurns, result: { status: 'incomplete', proof: '', report: { stopReason: 'math_turn_limit_reached' } } }))!;
+    expect(turns(20).actions.map(action => action.id)).toEqual(['task', 'report']);
+  });
+
+  it('keeps the preparation time apart from the solve budget', () => {
+    for (const value of [run({ environment: 'mathlib', result: { status: 'limit_reached', proof: '', report: {} }, failure: { kind: 'time_limit', reason: 'math_preparation_stopped' } }),
+      // Records from before failures were classified name the stop only in the report.
+      run({ environment: 'mathlib', result: { status: 'limit_reached', proof: '', report: { reason: 'math_preparation_stopped' } } })]) {
+      const guide = failureGuide(value)!;
+      expect(guide).toMatchObject({ kind: 'environment', title: '证明环境准备超时' });
+      expect(guide.detail).toContain('10 分钟的准备时限');
+      expect(guide.detail).toContain('提高解题预算不会改变它');
+      expect(guide.actions.map(action => action.id)).toEqual(['retry', 'report']);
+      expect(stoppedLabel(value)).toBe('环境准备超时');
+    }
+    expect(failureGuide(run({ result: { status: 'limit_reached', proof: '', report: {} }, failure: { kind: 'time_limit', reason: 'math_preparation_stopped' } }))!.detail)
+      .toContain('2 分钟的准备时限');
+  });
+
+  it('says report reasons in words, leaves out what the verdict explains and folds unknown codes', () => {
+    expect(reportReason('math_run_stopped')).toEqual({});
+    expect(reportReason('math_preparation_stopped')).toEqual({});
+    expect(reportReason(undefined)).toEqual({});
+    expect(reportReason('proof_incomplete')).toEqual({ text: '没有通过 Lean 检查的完整候选证明，所以没有进行独立验收。' });
+    expect(reportReason('math_build_source_changed')).toEqual({ code: 'math_build_source_changed' });
+    expect(reportReason('worker unavailable')).toEqual({ text: 'worker unavailable' });
+    expect(checkReason({ skipped: true, reason: 'proof_incomplete' })).toBe('没有通过 Lean 检查的完整候选证明，所以没有进行独立验收。');
+    expect(checkReason({ skipped: true })).toBe('运行在独立验收之前停止，没有进行独立验收。');
+    expect(checkReason({ reason: 'known failure' })).toBe('known failure');
+    expect(checkReason({})).toBeUndefined();
   });
 
   it('keeps legacy and non-failure runs on their existing wording', () => {

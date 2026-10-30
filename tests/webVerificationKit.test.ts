@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebSession } from '../apps/web/shared';
 import type { WebObservation } from '../apps/web/collaboration';
 import { loadWebSample, webSampleRunId } from '../apps/web/sample';
-import { summarizeStuck } from '../apps/web/report';
+import { goalStates, groupGoals, nextSteps, summarizeGoals, summarizeStuck, type GoalRow, type GoalState } from '../apps/web/report';
 import { proofOutline, verificationKit, zip } from '../apps/web/verificationKit';
 
 const sample = loadWebSample()!.run;
@@ -151,6 +151,102 @@ describe('summarizeStuck', () => {
     expect(summarizeStuck(stuckRun(open, { status: 'running' }))).toBeUndefined();
     expect(summarizeStuck(stuckRun({ ...open, progress: { ...open.progress, openProofTasks: [] }, tasks: [] }))).toBeUndefined();
     expect(summarizeStuck({ ...sample, status: 'completed', observation: undefined, result: { status: 'limit_reached', proof: '', report: {} } })).toBeUndefined();
+  });
+});
+
+describe('summarizeGoals', () => {
+  const targets = (...names: string[]) => names.map(theoremName => ({ proofPath: 'Submission.lean', theoremName }));
+  const inspection = (extra: Partial<Inspection> = {}) => ({ problem: { targets: targets('A.main', 'A.other') },
+    tasks: [task('g1', { kind: 'goal', theorem: 'A.main', plannedDependencies: ['bridge'], status: 'conditional',
+      proof: { status: 'conditional', conditions: [{ taskId: 'bridge', taskDigest: 'bridge-v1' }] } }),
+      task('bridge', { theorem: 'A.bridge', plannedDependencies: ['leaf'] }), task('leaf', { theorem: 'A.leaf', status: 'integrated', proof: { status: 'checked' } }),
+      task('dropped', { theorem: 'A.dropped', control: 'stopped' }), task('g2', { kind: 'goal', theorem: 'A.other', plannedDependencies: ['dropped'] })],
+    mathematics: { snapshot: { goals: [goal('g1', ['bridge']), goal('g2', ['g2'])], blockers: [] } } as unknown as Inspection['mathematics'], ...extra });
+  it('marks each original target proved, conditional on named premises, or unsolved, with its planned subgoals', () => {
+    const summary = summarizeGoals(stuckRun(inspection()))!;
+    expect(summary.goals.map(goal => [goal.name, goal.state, goal.status, goal.waiting])).toEqual([
+      ['A.main', 'conditional', '有条件', ['A.bridge']], ['A.other', 'open', '未解决', []]]);
+    expect(summary.goals[0].subgoals).toEqual([{ id: 'bridge', name: 'A.bridge', state: 'open' }, { id: 'leaf', name: 'A.leaf', state: 'proved' }]);
+    expect(summary.goals[1].subgoals).toEqual([]);
+    expect(summary).toMatchObject({ proved: 0, conditional: 1, open: 1, omitted: 0 });
+  });
+  it('lets the independent check decide and reads the axioms it recorded', () => {
+    const rows = [{ theoremName: 'A.main', status: 'kernel_verified', axioms: ['propext', 'Bad.axiom'] }, { theoremName: 'A.other', status: 'failed' }];
+    const summary = summarizeGoals(stuckRun(inspection(), { result: { status: 'evaluated_failed', proof: 'x', report: verified(rows) } }))!;
+    expect(summary.goals[0]).toMatchObject({ state: 'proved', waiting: [], axioms: ['propext', 'Bad.axiom'], nonstandardAxioms: ['Bad.axiom'] });
+    expect(summary.goals[1]).toMatchObject({ state: 'open' });
+    expect(summary.goals[1].axioms).toBeUndefined();
+    const failedWithAxioms = summarizeGoals(stuckRun(inspection(), { result: { status: 'evaluated_failed', proof: 'x',
+      report: verified([{ theoremName: 'A.other', status: 'failed', axioms: [] }]) } }))!;
+    expect(failedWithAxioms.goals[1]).toMatchObject({ state: 'open' });
+    expect(failedWithAxioms.goals[1].axioms, 'a failed check does not say the target needs no axioms').toBeUndefined();
+    const accepted = summarizeGoals(run(verified([{ theoremName: 'A.main', status: 'kernel_verified', axioms: [] }]), { observation: stuckRun(inspection()).observation }))!;
+    expect(accepted.goals.map(goal => goal.state)).toEqual(['proved', 'proved']);
+    expect(accepted.goals[0].axioms).toEqual([]);
+  });
+  it('shows targets still being proved while the run is active, and closed goals as checked until the acceptance', () => {
+    const closed = inspection({ mathematics: { snapshot: { goals: [goal('g1', [], true), goal('g2', ['g2'])], blockers: [] } } as unknown as Inspection['mathematics'] });
+    const summary = summarizeGoals(stuckRun(closed, { status: 'running', result: undefined }))!;
+    expect(summary.goals.map(goal => [goal.state, goal.status, goal.tone])).toEqual([['checked', 'Lean 已检查', 'passed'], ['working', '证明中', 'running']]);
+    expect(summary).toMatchObject({ proved: 0, checked: 1, open: 1 });
+    expect(summary.goals[0].waiting).toEqual([]);
+    // A run that ends without the acceptance never turns a solver-checked goal into a proved one.
+    const ended = summarizeGoals(stuckRun(closed, { status: 'error', result: undefined }))!;
+    expect(ended.goals.map(goal => goal.state)).toEqual(['checked', 'open']);
+    const accepted = summarizeGoals(run(verified([{ theoremName: 'A.main', status: 'kernel_verified', axioms: [] }]), { observation: stuckRun(closed).observation }))!;
+    expect(accepted).toMatchObject({ proved: 2, checked: 0 });
+  });
+  it('shows open targets waiting for the plan approval instead of being proved, until the owner approves it', () => {
+    const gated = (status: string) => summarizeGoals(stuckRun(inspection({ planApproval: { required: true, status, planVersion: 'plan-v1',
+      rejections: [], leadRevising: false } } as unknown as Partial<Inspection>), { status: 'running', result: undefined }))!;
+    const pending = gated('pending');
+    expect(pending.goals.map(goal => [goal.state, goal.status, goal.tone])).toEqual([['conditional', '有条件', 'warning'], ['planned', '等计划批准', 'muted']]);
+    expect(pending.goals[0].subgoals.map(item => item.state)).toEqual(['planned', 'proved']);
+    expect(pending.open).toBe(1);
+    expect(gated('awaiting-plan').goals[1].state).toBe('planned');
+    const approved = gated('approved');
+    expect(approved.goals[1].state).toBe('working');
+    expect(approved.goals[0].subgoals.map(item => item.state)).toEqual(['working', 'proved']);
+  });
+  it('falls back to the report without an observation, and stays out when nothing names a target', () => {
+    const summary = summarizeGoals({ ...sample, observation: undefined, result: { status: 'evaluated_failed', proof: 'x', report: verified([{ theoremName: 'A.main', status: 'failed' }]) } })!;
+    expect(summary.goals).toMatchObject([{ name: 'A.main', state: 'open', waiting: [], subgoals: [] }]);
+    expect(summarizeGoals({ ...sample, observation: undefined, result: undefined })).toBeUndefined();
+  });
+});
+
+describe('groupGoals', () => {
+  const row = (name: string, state: GoalState): GoalRow => ({ name, state, ...goalStates[state], waiting: [], subgoals: [], omittedSubgoals: 0 });
+  const grouped = (rows: GoalRow[]) => groupGoals(rows)?.map(group => [group.id, group.label, group.goals.map(goal => goal.name), group.folded]);
+  it('keeps short or single-state lists flat', () => {
+    expect(groupGoals([row('a', 'proved'), row('b', 'open'), row('c', 'working')])).toBeUndefined();
+    expect(groupGoals(['a', 'b', 'c', 'd'].map(name => row(name, 'open')))).toBeUndefined();
+    expect(groupGoals([row('a', 'open'), row('b', 'conditional'), row('c', 'open'), row('d', 'conditional')]), 'conditional goals are unsolved too').toBeUndefined();
+  });
+  it('orders unfinished goals first, keeps problem order inside a group, and folds what is finished while work remains', () => {
+    expect(grouped([row('a', 'proved'), row('b', 'open'), row('c', 'working'), row('d', 'checked'), row('e', 'conditional'), row('f', 'proved')])).toEqual([
+      ['underway', '证明中', ['c'], false], ['open', '未解决', ['b', 'e'], false], ['checked', 'Lean 已检查', ['d'], true], ['proved', '已证明', ['a', 'f'], true]]);
+    expect(grouped([row('a', 'planned'), row('b', 'planned'), row('c', 'checked'), row('d', 'open')])?.[0]).toEqual(['underway', '等计划批准', ['a', 'b'], false]);
+    expect(grouped([row('a', 'proved'), row('b', 'checked'), row('c', 'proved'), row('d', 'checked')]), 'nothing is folded once every goal is finished')
+      .toEqual([['checked', 'Lean 已检查', ['b', 'd'], false], ['proved', '已证明', ['a', 'c'], false]]);
+  });
+});
+
+describe('nextSteps', () => {
+  const steps = (value: WebRun) => nextSteps(value, summarizeGoals(value)).map(step => [step.id, step.label, step.tasks]);
+  const tasks = [task('g1', { kind: 'goal', theorem: 'A.main', status: 'integrated', proof: { status: 'checked' } }),
+    task('bridge', { theorem: 'A.bridge', proof: { status: 'failed' } }), task('g2', { kind: 'goal', theorem: 'A.other', proof: { status: 'failed' } }),
+    task('dropped', { theorem: 'A.dropped', control: 'stopped', proof: { status: 'failed' } })];
+  const inspection = { problem: { targets: [{ proofPath: 'Submission.lean', theoremName: 'A.main' }, { proofPath: 'Submission.lean', theoremName: 'A.other' }] }, tasks,
+    mathematics: { snapshot: { goals: [goal('g1', [], true), goal('g2', ['g2'])], blockers: [] } } as unknown as Inspection['mathematics'] } as Partial<Inspection>;
+  it('offers the checked code, the latest failed check (goals first, stopped routes left out) and the failure\'s own recovery', () => {
+    expect(steps(stuckRun(inspection))).toEqual([['continue-checked', '从已检查的代码继续', ['g1']], ['ask-failed', '问为什么没通过', ['g2', 'bridge']],
+      ['budget', '提高解题预算', undefined]]);
+  });
+  it('falls back to a plain rerun when the stop has no recovery of its own, and offers nothing while running or once accepted', () => {
+    expect(steps(stuckRun({ ...inspection, tasks: [], mathematics: undefined }, { status: 'cancelled', result: undefined }))).toEqual([['retry', '复用配置重新研究', undefined]]);
+    expect(steps(stuckRun(inspection, { status: 'running', result: undefined }))).toEqual([]);
+    expect(steps(run(verified([{ theoremName: 'A.main', status: 'kernel_verified', axioms: [] }]), { observation: stuckRun(inspection).observation }))).toEqual([]);
   });
 });
 

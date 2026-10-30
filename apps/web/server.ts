@@ -7,13 +7,13 @@ import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import type { WebAdminOverview, WebEffort, WebEnvironment, WebExplanationLanguage, WebExplanationOverview, WebProvider, WebRun, WebRunInput,
-  WebSession } from './shared';
+import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEffort, type WebEnvironment,
+  type WebExplanationLanguage, type WebExplanationOverview, type WebProvider, type WebRun, type WebRunInput, type WebSession } from './shared';
 import { researchModulePlanSchema } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
 import { WebModuleRegistry } from './moduleRegistry';
-import { webGuidanceSchema, webPlanProposalSchema } from './collaborationValidation';
+import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
 import { WebAuth, WebAuthError, type WebMailer, type WebMilestone } from './auth';
 import { shareSnapshot, webShareToken, type WebShareLink } from './share';
 import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
@@ -21,8 +21,10 @@ import { PrecheckSuperseded, WebPrechecker } from './precheck';
 import { proofOutline, verificationKit } from './verificationKit';
 import { sendStatic } from './staticFiles';
 import { webFunnel } from './funnel';
-import { completionMail, mailsCompletion } from './completionMail';
+import { completionMail, mailsCompletion, planApprovalMail } from './completionMail';
 import { WebKeyVault } from './keyVault';
+import { trajectoryQuery, trajectoryVersionQuery, WebTrajectories } from './trajectory';
+import { explainInput, failedFeedback, WebExplainError, WebExplainer, webExplainLimits, type WebExplainTurn } from './explain';
 import { explanationMarkdownFilename, verifyExplanationEvidence } from './explanation';
 import { explanationKey, WebExplanations } from './explanations';
 import { SUB2API_PROVIDER } from '../../src/runtime/sub2api';
@@ -41,8 +43,21 @@ const inputSchema = z.object({
   maxTotalTokens: z.number().int().min(10_000).max(webLimits.maxTotalTokens).optional(),
   workers: z.number().int().min(1).max(webLimits.maxWorkers),
   coordination: z.enum(['cooperative', 'independent']),
+  planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  // Names a version of one of the account's runs; its saved file is looked up here, never taken from the request.
+  continueFrom: z.object({ runId: z.string().regex(/^[a-f0-9-]{36}$/u), taskId: z.string().min(1).max(200),
+    commit: z.string().regex(/^[A-Za-z0-9]{1,128}$/u),
+    label: z.string().trim().min(1).max(webContinuationLabelMax).regex(/^[^\p{Cc}]*$/u) }).strict().optional(),
+}).strict();
+// A question about one recorded version; its code and Lean's output are read here, never taken from the request.
+const explainSchema = z.object({
+  taskId: z.string().min(1).max(200), commit: z.string().regex(/^[A-Za-z0-9]{1,128}$/u),
+  question: z.string().trim().min(1).max(webExplainLimits.question),
+  turns: z.array(z.object({ question: z.string().min(1).max(webExplainLimits.question),
+    answer: z.string().min(1).max(webExplainLimits.answer) }).strict()).max(webExplainLimits.turns).default([]),
+  apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
 }).strict();
 const precheckSchema = z.object({
   environment: z.enum(['standard', 'mathlib']),
@@ -126,6 +141,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   // Each account reads and replaces only its own saved keys.
   const vault = auth && config.keySecret ? new WebKeyVault(config.keySecret, storage) : undefined;
   const savedKeysFor = (session: Session) => vault && session.account ? vault.list(session.account.id, config.providers) : [];
+  // What an empty key field stands for: the account's saved key, then the server's key for admins.
+  const heldKey = (session: Session, provider: WebProvider) =>
+    (vault && session.account ? vault.get(session.account.id, provider.id, provider.baseUrl) : undefined)
+      ?? (serverKeysFor(session)?.includes(provider.id) ? config.adminKeys![provider.id] : undefined);
   const ownerOf = (session: Session) => auth ? session.account && `account:${session.account.id}` : session.id;
   /** Original theorems of the proof, each with an upper bound on the declarations its explanation covers (all of them). */
   const explanationTargets = (run: WebRun) => {
@@ -150,14 +169,19 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     if (auth && owner.startsWith('account:')) try { auth.markMilestone(owner.slice(8), name); } catch { /* A milestone never fails a run. */ }
   };
   // The owner's mail goes out after the run is saved; a failed delivery is logged by run and never changes the run.
-  const tellOwner = (owner: string, run: WebRun) => {
-    if (!auth || !owner.startsWith('account:') || !mailsCompletion(run)) return;
+  // The same preference covers the one mail asking to approve a plan.
+  const mailOwner = (owner: string, run: WebRun, kind: string, message: (run: WebRun, publicUrl: string) => { subject: string; text: string }) => {
+    if (!auth || !owner.startsWith('account:')) return;
     const to = auth.completionRecipient(owner.slice(8));
-    if (to) auth.sendCompletion(to, completionMail(run, config.publicUrl)).catch(() => console.error(`[completion mail] run ${run.id}: delivery failed`));
+    if (to) auth.sendCompletion(to, message(run, config.publicUrl)).catch(() => console.error(`[${kind} mail] run ${run.id}: delivery failed`));
   };
-  const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt'), onFinished: tellOwner });
+  const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt'),
+    onFinished: (owner, run) => { if (mailsCompletion(run)) mailOwner(owner, run, 'completion', completionMail); },
+    onPlanWaiting: (owner, run) => mailOwner(owner, run, 'plan approval', planApprovalMail) });
+  const trajectories = new WebTrajectories(storage);
   const explanations = new WebExplanations(runner, storage);
   const prechecker = runner.check ? new WebPrechecker(runner.check.bind(runner)) : undefined;
+  const explainer = new WebExplainer();
   const rates = new Map<string, { count: number; expiresAt: number }>();
   const runStreams = new Map<string, Set<() => void>>();
   const origin = new URL(config.publicUrl);
@@ -177,7 +201,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   /** Ends one browser session. Anonymous records go with it; account records stay with the account. */
   const endSession = (id: string) => {
     for (const stop of runStreams.get(id) ?? []) stop();
-    if (!auth) { explanations.forget(id); jobs.forget(id); storage.deleteOwner(id); }
+    if (!auth) { explanations.forget(id); jobs.forget(id); storage.deleteOwner(id); trajectories.forgetOwner(id); }
     sessions.delete(id); storage.deleteSession(id);
   };
   const prune = () => {
@@ -188,6 +212,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     }
     for (const [ip, rate] of rates) if (rate.expiresAt <= Date.now()) rates.delete(ip);
     prechecker?.prune();
+    explainer.prune();
     auth?.prune();
   };
   const maintenance = setInterval(prune, 60_000).unref();
@@ -286,7 +311,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
-            explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); vault?.forgetAccount(account.id); auth.deleteAccount(account.email);
+            explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
+            auth.deleteAccount(account.email);
             for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
           }
@@ -422,17 +448,22 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
           const { saveKey, ...input } = parsed.data;
+          if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
+            throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
+          if (!input.planApproval) delete input.planApproval;
           // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
           const typed = input.apiKey;
           if (!typed) {
-            const saved = vault && session.account ? vault.get(session.account.id, provider.id, provider.baseUrl) : undefined;
-            const held = saved ?? (serverKeysFor(session)?.includes(provider.id) ? config.adminKeys![provider.id] : undefined);
+            const held = heldKey(session, provider);
             if (!held) throw new HttpError(400, '请填写 API Key。');
             input.apiKey = held;
           }
           if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
+          const from = input.continueFrom as WebContinuation | undefined;
+          const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
+          if (from && !saved) throw new HttpError(404, '这个版本的代码没有记录或已超出保留范围。');
           try {
-            const run = jobs.create(owner, input as WebRunInput, provider);
+            const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined);
             milestone(owner, 'firstRunAt');
             if (saveKey && typed && vault && session.account) vault.save(session.account.id, provider.id, provider.baseUrl, typed);
             json(response, 201, { run, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) });
@@ -544,10 +575,52 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (operation === 'events' && request.method === 'GET') {
           const after = Number(url.searchParams.get('after') ?? 0);
           if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '事件游标无效。');
-          const events = storage.getEvents(owner, run.id);
-          const firstSequence = events[0]?.sequence ?? 0, lastSequence = events.at(-1)?.sequence ?? 0;
-          json(response, 200, { events: events.filter(event => event.sequence > after).slice(0, 200),
+          // Pages read only their own records, so a reader can walk a long run's whole history.
+          const { first: firstSequence, last: lastSequence } = storage.eventRange(owner, run.id);
+          json(response, 200, { events: storage.listEventsAfter(owner, run.id, after, 200),
             firstSequence, lastSequence, droppedBefore: firstSequence > 1 ? firstSequence : null }); return;
+        }
+        if (operation === 'trajectory' && request.method === 'GET') {
+          const query = trajectoryQuery(url.searchParams);
+          if (!query) throw new HttpError(400, '轨迹游标无效。');
+          json(response, 200, { trajectory: trajectories.page(owner, run.id, query) }); return;
+        }
+        if (operation === 'actions' && request.method === 'GET') {
+          const after = Number(url.searchParams.get('after') ?? 0);
+          if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '动作游标无效。');
+          const actions = storage.listActionsAfter(owner, run.id, after, webAgentActionLimits.page);
+          json(response, 200, { actions, count: run.actions?.count ?? 0, dropped: run.actions?.dropped ?? 0 }); return;
+        }
+        if (operation === 'trajectory/version' && request.method === 'GET') {
+          const query = trajectoryVersionQuery(url.searchParams);
+          if (!query) throw new HttpError(400, '版本参数无效。');
+          const version = trajectories.version(owner, run.id, query.taskId, query.commit);
+          if (!version) throw new HttpError(404, '这个版本没有记录或已超出保留范围。');
+          json(response, 200, { version }); return;
+        }
+        if (operation === 'explain' && request.method === 'POST') {
+          const parsed = explainSchema.safeParse(await readJson(request));
+          if (!parsed.success) throw new HttpError(400, '请检查问题、版本与 API Key。');
+          const provider = config.providers.find(item => item.id === run.providerId);
+          if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
+          const apiKey = parsed.data.apiKey || heldKey(session, provider);
+          if (!apiKey) throw new HttpError(400, '请填写 API Key。');
+          const version = trajectories.version(owner, run.id, parsed.data.taskId, parsed.data.commit);
+          if (!version) throw new HttpError(404, '这个版本没有记录或已超出保留范围。');
+          const feedback = failedFeedback(version.checks);
+          if (!feedback) throw new HttpError(409, '这个版本没有未通过的 Lean 检查可以解释。');
+          const objective = run.observation?.plan?.tasks.find(task => task.id === version.taskId)?.objective;
+          const input = explainInput(run, version, feedback, parsed.data.turns as WebExplainTurn[], parsed.data.question, objective);
+          // Closing the panel or the tab stops the call; the provider bills what it already produced.
+          const gone = new AbortController();
+          response.once('close', () => { if (!response.writableFinished) gone.abort(); });
+          try { json(response, 200, await explainer.ask(owner, { baseUrl: provider.baseUrl, apiKey, model: run.model, input }, gone.signal)); }
+          catch (error) {
+            if (!(error instanceof WebExplainError)) throw error;
+            if (gone.signal.aborted) return;
+            throw new HttpError(error.status, error.message);
+          }
+          return;
         }
         const sourceMatch = /^tasks\/([^/]+)\/source$/u.exec(operation ?? '');
         if (sourceMatch && request.method === 'GET') {
@@ -578,6 +651,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'guidance', guidance: parsed.data }) }); }
           catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '指导未能提交。'); }
+          return;
+        }
+        if (operation === 'plan-approval' && request.method === 'POST') {
+          const parsed = webPlanApprovalSchema.safeParse(await readJson(request));
+          if (!parsed.success) throw new HttpError(400, '请重新读取当前计划后再批准。');
+          try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'plan-approval', approval: parsed.data }) }); }
+          catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '计划批准未能提交。'); }
           return;
         }
         if (['edits/preview', 'edits'].includes(operation ?? '') && request.method === 'POST') {
@@ -624,6 +704,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const removed = jobs.remove(owner, run.id);
           if (removed === 'active') throw new HttpError(409, '排队中或运行中的任务不能删除，请先取消或等待结束。');
           if (removed === 'missing') throw new HttpError(404, '运行不存在或不属于当前会话。');
+          trajectories.forget(owner, run.id);
           json(response, 200, { deletedId: run.id }); return;
         }
         if (match[2] === 'download' && request.method === 'GET') {

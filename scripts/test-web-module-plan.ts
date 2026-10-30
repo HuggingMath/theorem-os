@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebEventDetails, WebRun, WebRunInput } from '../apps/web/shared';
 import type { CustomResearchModule, ResearchModulePlan } from '../src/solver/modules/policy';
 import { modulePlanLibraryStorageKey, type SavedModulePlan } from '../apps/web/client/modulePlanLibrary';
-import { closeDialog, closeSettings, openSettings, selectModules, showArtifacts, showChat } from './web-ui-controls';
+import { closeDialog, closeSettings, newResearch, openSettings, selectModules, showArtifacts, showChat } from './web-ui-controls';
 import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,7 +70,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [], runIds: [], uiCreates: 0 }),
   routes: { local: 'module configuration must not contact external sites or model providers' }, timeout: { label: 'Module plan', seconds: 50 },
   open: async ({ page }) => {
-    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor();
+    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     draft = await page.locator('#source').inputValue(), task = await page.locator('#task').inputValue();
   },
   verify: async (h, elapsedMs) => {
@@ -301,7 +301,7 @@ try {
     assert.equal((await libraryPlans(page)).length, 1); assert.deepEqual(await editorPlan(page), updatedPlan);
     await libraryAction(page, 'undo');
     assert.deepEqual(await libraryPlans(page), entries); assert.deepEqual(await editorPlan(page), updatedPlan);
-    await saved(page, updatedPlan); await page.reload(); await page.locator('#submit-run:enabled').waitFor();
+    await saved(page, updatedPlan); await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await openLibrary(page);
     assert.equal(await page.locator('#module-library-select option').count(), 3);
     assert.deepEqual(await editorPlan(page), updatedPlan);
@@ -318,7 +318,7 @@ try {
     const second = await saveLibraryPlan(page, 'New default workflow');
     assert.notEqual(second.id, first.id); assert.equal((await libraryPlans(page)).length, 2);
     assert.deepEqual((await libraryPlans(page)).find(entry => entry.id === first.id), first);
-    await closeSettings(page); await page.locator('#new-research').click();
+    await closeSettings(page); await newResearch(page);
     await openLibrary(page);
     assert.equal(await page.locator('#module-library-select').inputValue(), '');
     const third = await saveLibraryPlan(page, 'Another research workflow');
@@ -329,7 +329,7 @@ try {
     const { page, context } = h;
     await configure(page, [enabledRule]);
     const first = await saveLibraryPlan(page, 'Shared workflow');
-    const other = await context.newPage(); await other.goto(origin); await other.locator('#submit-run:enabled').waitFor();
+    const other = await context.newPage(); await other.goto(origin); await other.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await openLibrary(other); await other.locator('#module-library-select').selectOption(first.id);
     const second = await saveLibraryPlan(page, 'Updated in first tab');
     await other.locator('#module-library-name').fill('A stale update');
@@ -375,7 +375,7 @@ try {
     await libraryAction(page, 'delete');
     assert.match(await page.locator('[data-module-library-notice]').innerText(), /写入失败/);
     assert.equal(await page.locator('#module-library-select').inputValue(), first.id);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor();
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await page.evaluate(key => localStorage.setItem(key, 'corrupt-library-fixture'), modulePlanLibraryStorageKey);
     await openLibrary(page);
     assert.match(await page.locator('[data-module-library-notice]').innerText(), /格式无效/);
@@ -387,7 +387,7 @@ try {
   await scenario('Simultaneous tab saves hold an origin lock and pending work cannot rebind a reset research draft', async h => {
     const { page, context } = h;
     const plan = await configure(page, [enabledRule]); await openLibrary(page);
-    const other = await context.newPage(); await other.goto(origin); await other.locator('#submit-run:enabled').waitFor();
+    const other = await context.newPage(); await other.goto(origin); await other.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     await openLibrary(other);
     await Promise.all([page.locator('#module-library-name').fill('First simultaneous save'), other.locator('#module-library-name').fill('Second simultaneous save')]);
     await Promise.all([libraryAction(page, 'save'), libraryAction(other, 'save')]);
@@ -507,7 +507,7 @@ try {
     assert.equal(plan.custom.length, 8);
     assert.equal(new Set(plan.custom.map(module => module.id)).size, 8);
     assert.deepEqual((await exportDraft(page)).draft.modulePlan, plan);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor(); await openSettings(page);
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await openSettings(page);
     assert.deepEqual(await editorPlan(page), plan);
     assert.equal(h.requests.filter(request => request.method === 'POST').length, 0, 'duplicating policies must stay local');
   });
@@ -546,7 +546,7 @@ try {
     await saved(page, plan); await noInjection(page);
     await closeSettings(page); await showArtifacts(page); await page.locator('#draft-tab-modules').click();
     assert.deepEqual(await page.locator('[data-module-custom-id]').evaluateAll(items => items.map(item => (item as HTMLElement).dataset.moduleCustomId)), plan.custom.map(module => module.id));
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor();
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
     assert.deepEqual(await editorPlan(page), plan);
     assert.equal(await page.locator('#api-key').inputValue(), '');
     await openSettings(page);
@@ -627,7 +627,7 @@ try {
     await page.locator('[data-module-plan-collapse-all]').click();
     assert.equal(await page.locator(`${rows}[data-expanded="false"]`).count(), 3);
     assert.equal(await rule(page, first.id).locator('.module-plan-summary-name').innerText(), first.name);
-    assert.match(await rule(page, first.id).locator('.module-plan-summary-meta').innerText(), /M1.*替换/);
+    assert.match(await rule(page, first.id).locator('.module-plan-summary-meta').innerText(), /证明构造.*替换/);
     assert.deepEqual(await editorPlan(page), initial, 'folding must only change the reading state');
     const disclosure = rule(page, first.id).locator('[data-module-plan-disclosure]');
     await disclosure.focus(); await disclosure.press('Enter');
@@ -670,7 +670,7 @@ try {
     assert.deepEqual(await page.locator('[data-module-custom-id]').evaluateAll(items => items.map(item => (item as HTMLElement).dataset.moduleCustomId)), plan.custom.map(item => item.id));
     await page.locator('[data-module-id="M1"]').click();
     assert.deepEqual(await page.locator('[data-module-policy-id]').evaluateAll(items => items.map(item => (item as HTMLElement).dataset.modulePolicyId)), [first.id, third.id]);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor(); await openSettings(page);
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await openSettings(page);
     assert.deepEqual(await editorPlan(page), plan, 'refresh must preserve the edited policy order');
     assert.equal(h.requests.filter(request => request.method === 'POST').length, 0, 'folding, ordering and validation must stay local');
   });
@@ -835,7 +835,7 @@ try {
       assert.deepEqual(await editorPlan(page), plan);
       assert.deepEqual(submittedRun!.modulePlan, plan); assert.deepEqual(received.get(submittedRun!.id)!.modulePlan, plan);
     } finally { release(); }
-    await page.locator('#return-to-draft').waitFor(); h.expectedTask = ''; h.intercept = undefined;
+    await page.locator('body[data-view="run"]').waitFor({ state: 'attached' }); h.expectedTask = ''; h.intercept = undefined;
     await selectModules(h, submittedRun!.id);
     for (const module of plan.custom) {
       const frozen = graphToggle(page, module.id);
@@ -886,7 +886,7 @@ try {
     const plan = await configure(page, [enabledRule, { ...disabledRule, name: '<img data-plan-injection src=x>', instructions: markup }], 'continuation');
     await page.locator('#api-key').fill(credential); await saved(page, plan); await noStoredKey(page);
     const exported = await exportDraft(page); assert.deepEqual(exported.draft.modulePlan, plan);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor(); await openSettings(page);
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await openSettings(page);
     assert.deepEqual(await editorPlan(page), plan); assert.equal(await page.locator('#api-key').inputValue(), '');
     await page.locator('#module-plan-scheduler').selectOption('plan'); await page.locator('#api-key').fill(credential);
     await importFile(page, exported, 'module-plan-draft.json'); await openSettings(page);
@@ -911,7 +911,7 @@ try {
     await rule(page, plan.custom[1]!.id).locator('[data-module-plan-move="up"]').click(); plan = await editorPlan(page);
     await page.locator('#api-key').fill(credential);
     const run = await submitRun(h); assert.deepEqual(run.modulePlan, plan); assert.deepEqual(received.get(run.id)!.modulePlan, plan);
-    await showChat(page); await page.locator('#return-to-draft').click(); await openSettings(page);
+    await showChat(page); await openSettings(page);
     await rule(page, plan.custom[0]!.id).locator('[data-module-plan-field="name"]').fill('Changed later draft');
     await rule(page, plan.custom[0]!.id).locator('[data-module-plan-field="enabled"]').uncheck();
     await page.locator('#module-plan-scheduler').selectOption('plan'); await page.locator('#api-key').fill(credential);
@@ -928,7 +928,7 @@ try {
     await saved(page, plan);
   });
 
-  await scenario('Submitting from a mobile policy editor opens the conversation without a delayed workspace return', async h => {
+  await scenario('Submitting from a mobile policy editor opens the new run without a delayed workspace return', async h => {
     const { page } = h;
     const plan = await configure(page, [enabledRule]), policy = plan.custom[0]!;
     const disposable = await addRule(page, { ...disabledRule, name: 'Deleted before submission' });
@@ -943,10 +943,12 @@ try {
     const response = await submitted; assert.equal(response.status(), 201);
     const run = (await response.json() as { run: WebRun }).run;
     h.runIds.push(run.id); h.uiCreates++; h.expectedTask = '';
-    await page.locator('#return-to-draft').waitFor();
-    assert.equal(await page.locator('body').getAttribute('data-mobile-view'), 'compose');
-    assert.equal(await page.locator('#compose-panel').isVisible(), true);
-    assert.equal(await page.locator('#runs-panel').isVisible(), false);
+    await page.locator(`[data-run-id="${run.id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('body').getAttribute('data-view'), 'run');
+    assert.equal(await page.locator('body').getAttribute('data-mobile-view'), 'runs');
+    assert.equal(await page.locator('#runs-panel').isVisible(), true);
+    assert.equal(await page.locator('#compose-panel').isVisible(), false);
     assert.deepEqual(run.modulePlan, plan); assert.deepEqual(received.get(run.id)!.modulePlan, plan);
     assert.equal(await page.locator('#api-key').inputValue(), '');
     await openSettings(page);
@@ -975,7 +977,7 @@ try {
     assert.equal(snapshot.events.length, 200); assert.equal(snapshot.events.some(event => event.type === 'custom_module_applied'), false);
     assert.equal(snapshot.moduleApplications!.custom_construct!.eventCount, 2); assert.equal(snapshot.moduleApplications!.custom_review!.eventCount, 1);
     assert.equal(snapshot.moduleApplications?.custom_disabled, undefined);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor(); await selectModules(h, run.id);
+    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await selectModules(h, run.id);
     await customState(page, 'custom_construct', 2, '已应用 2 次'); await customState(page, 'custom_review', 1, '已应用 1 次');
     await page.locator('[data-module-custom-id="custom_construct"]').click();
     await page.locator('#module-inspector[data-module="M1"]').waitFor();
