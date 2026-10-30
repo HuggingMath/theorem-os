@@ -65,6 +65,19 @@ export const taskVersion = (task: CooperativeTask) => {
     informalProof: _proof, citations: _citations, ...mathematics } = task;
   return mathDigest(canonicalMathJson(mathematics));
 };
+const objectiveWords = (objective: string) => objective.replace(/\s+/gu, ' ').trim();
+/**
+ * A revised plan that only re-spaces an accepted objective keeps the accepted wording, so the task keeps its version and
+ * its running assignment; any other change, a bumped revision included, still produces a new version.
+ */
+export function keepRespacedObjectives(tasks: readonly CooperativeTask[], accepted: ReadonlyMap<string, CooperativeTask>) {
+  return tasks.map(task => {
+    const previous = accepted.get(task.id);
+    if (!previous || previous.objective === task.objective || objectiveWords(previous.objective) !== objectiveWords(task.objective)) return task;
+    const kept = { ...task, objective: previous.objective };
+    return taskVersion(kept) === taskVersion(previous) ? kept : task;
+  });
+}
 /** Planning revisions still supersede assignments; checked sources can be revalidated separately. */
 export const taskProofContractVersion = (task: CooperativeTask) => {
   if (isAdvisoryTask(task)) return taskVersion(task);

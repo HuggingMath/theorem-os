@@ -116,6 +116,19 @@ describe('plan synchronization with concurrent host control', () => {
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
 
+  it('keeps a running assignment when a revision only re-spaces its objective, and supersedes it for new wording', async () => {
+    const running = node('a'), version = state.cooperation!.planVersion;
+    const action: TaskAction = { kind: 'task', task: running.task, assignment: running.assignment! };
+    await edit('respace-a', task => task.id === 'a' ? { ...task, objective: ' Prove  a.\n' } : task);
+    expect(state.cooperation!.edits?.at(-1)).toMatchObject({ status: 'applied', affectedTasks: [] });
+    expect(node('a')).toMatchObject({ status: 'running', task: { objective: 'Prove a.' }, assignment: { assignmentId: 'a-dispatch' } });
+    expect(state.cooperation!.planVersion).toBe(version);
+    expect(cooperative.current(action)).toBe(true);
+    await edit('reword-a', task => task.id === 'a' ? { ...task, objective: 'Prove a directly.' } : task);
+    expect(node('a').task.objective).toBe('Prove a directly.');
+    expect(cooperative.current(action)).toBe(false);
+  });
+
   it('advances the edit cursor and allows independent work while keeping a revalidated dependency unavailable', async () => {
     await integrateA();
     const gate = gateCheck();
