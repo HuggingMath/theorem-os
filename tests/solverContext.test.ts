@@ -50,6 +50,19 @@ it('deduplicates repeated findings and progress while preserving exact Lean type
   expect(JSON.parse(graph)[0].type).toBe(exactType);
 });
 
+it('names the bundled Agent commands instead of the application when the shell cannot read it', () => {
+  const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
+    baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
+  const access = { root: '/opt/app', worktree: '/proof', environment: {}, taskText: 'Prove the target', retrievalRoot: '/library',
+    frozenContexts: { 'Submission.lean': 'theorem target : True := by sorry' } };
+  const instructions = (tools?: string) => buildResearchContext(problem, {} as SolverRunState, { ...access, ...(tools ? { tools } : {}) }).instructions;
+  expect(instructions()).toContain("bun '/opt/app/bin/math.ts' check-lean --workspace");
+  const bundled = instructions('/opt/agent-tools/math.mjs');
+  expect(bundled).toContain("bun '/opt/agent-tools/math.mjs' check-lean --workspace");
+  expect(bundled).toContain("bun '/opt/agent-tools/math.mjs' check-finite --json");
+  expect(bundled).not.toContain('/opt/app');
+});
+
 it.each([false, true])('asks the Lead to return executable work promptly on every decision (existing graph: %s)', existing => {
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
     baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;

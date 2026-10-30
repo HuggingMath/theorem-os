@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { Icon } from './Icon';
+import { revealViewer } from '../motion';
 import { t } from '../../i18n';
 
 /** Below this width of its host the viewer covers the screen; at or above it, it is a column beside the host's content. */
@@ -35,6 +36,8 @@ export function SideViewer(props: SideViewerProps) {
       }
     };
     place();
+    // Only opening moves it; switching between a column and a dialog as the host resizes does not.
+    if (dialog.open) revealViewer(dialog, dialog.matches(':modal'));
     const observer = new ResizeObserver(place);
     observer.observe(host);
     if (scroller) observer.observe(scroller);

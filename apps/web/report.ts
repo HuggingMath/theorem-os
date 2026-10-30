@@ -19,6 +19,8 @@ export type ReportCheck = {
   tone: ReportTone;
   method?: string;
   reason?: string;
+  /** Acceptance did not run at all. */
+  skipped?: boolean;
   targets: ReportTarget[];
   omittedTargets: number;
 };
@@ -132,7 +134,7 @@ export function summarizeReport(run: WebRun): ReportSummary {
   if (evaluationStatus || method || evaluationReason || evaluationTimedOut || evaluationTargets.targets.length) {
     const evaluationState: Status = evaluationTimedOut ? { status: t('验收超时'), tone: 'failed' }
       : status(evaluationStatus, evaluationStatuses);
-    checks.push({ id: 'evaluation', label: t('独立验收'), ...evaluationState,
+    checks.push({ id: 'evaluation', label: t('独立验收'), ...evaluationState, ...(evaluationStatus === 'skipped' ? { skipped: true } : {}),
       ...(method ? { method: evaluationMethods.get(method) ?? method } : {}),
       ...(evaluationReason ? { reason: evaluationReason } : {}), ...evaluationTargets });
   }

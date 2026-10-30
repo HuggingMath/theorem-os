@@ -1,27 +1,31 @@
-import type { WebEffort, WebFailureKind, WebRun } from './shared';
-import { locale, localeTag, localizeText, t } from './i18n';
+import { webLimits, webPreparationSeconds, type WebEffort, type WebFailureKind, type WebRun } from './shared';
+import { locale, localeTag, localizeMessage, localizeText, t } from './i18n';
 
 export const isAcceptedRun = (run: WebRun) => run.status === 'completed' && run.result?.status === 'evaluated_passed';
 export const isRejectedRun = (run: WebRun) => ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '');
 /** A run that ended on an error or on a classified failure the user has to act on; running out of time or usage is an expected end. */
 export const isFaultedRun = (run: WebRun) => run.status === 'error'
   || run.status === 'completed' && !isAcceptedRun(run) && Boolean(run.failure) && !['budget', 'time_limit'].includes(run.failure!.kind);
-export type StopCause = 'time' | 'budget' | 'turns' | 'routes';
+/** The proof environment was not ready within its own preparation time, so solving never began; older records name it only in the report. */
+const preparationStopped = (run: WebRun) => (run.failure?.reason ?? run.result?.report.reason) === 'math_preparation_stopped';
+export type StopCause = 'preparation' | 'time' | 'budget' | 'turns' | 'routes';
 /** Which limit ended a run that reached no acceptance verdict, if the run recorded one. */
 export function stopCause(run: WebRun): StopCause | undefined {
   const stop = typeof run.result?.report.stopReason === 'string' ? run.result.report.stopReason : undefined;
+  if (run.result && preparationStopped(run)) return 'preparation';
   if (run.failure?.kind === 'time_limit' || stop === 'math_run_stopped' || !run.failure && run.result?.status === 'limit_reached') return 'time';
   if (run.failure?.kind === 'budget') return 'budget';
   if (stop === 'math_turn_limit_reached') return 'turns';
   if (stop === 'math_research_routes_exhausted') return 'routes';
 }
-const stopLabels: Record<StopCause, string> = { time: t('解题时间用完'), budget: t('用量到达上限'), turns: t('研究轮次用完'), routes: t('研究路线用尽') };
+const stopLabels: Record<StopCause, string> = { preparation: t('环境准备超时'), time: t('解题时间用完'), budget: t('用量到达上限'), turns: t('研究轮次用完'), routes: t('研究路线用尽') };
 /** Why a run that reached no acceptance verdict stopped, said in a few words for its badges; the result page explains it. */
 export function stoppedLabel(run: WebRun): string {
   const cause = stopCause(run);
   return cause ? stopLabels[cause] : t('运行结束');
 }
 const endedSummaries: Record<StopCause, string> = {
+  preparation: t('研究已结束：证明环境没有在准备时限内就绪，解题没有开始。'),
   time: t('研究已结束：解题时间用完，没有得到通过验收的完整证明。'), budget: t('研究已结束：用量到达上限，没有得到通过验收的完整证明。'),
   turns: t('研究已结束：研究轮次用完，没有得到通过验收的完整证明。'), routes: t('研究已结束：研究路线用尽，没有得到通过验收的完整证明。'),
 };
@@ -138,8 +142,8 @@ export function stalledMinutes(run: WebRun, now = Date.now()): number | undefine
   return minutes >= stallMinutes ? minutes : undefined;
 }
 
-/** Recovery opens a copy of the run's settings at the field to change; the API key is always re-entered. */
-export type RecoveryAction = { id: 'retry' | 'key' | 'budget' | 'tokens' | 'turns' | 'workers' | 'source' | 'report'; label: string };
+/** Recovery opens a copy of the run's settings at the field to change (the task in the composer); the API key is always re-entered. */
+export type RecoveryAction = { id: 'retry' | 'key' | 'budget' | 'tokens' | 'turns' | 'workers' | 'source' | 'task' | 'report'; label: string };
 export type FailureGuide = { title: string; detail: string; actions: RecoveryAction[]; kind?: WebFailureKind };
 const retry: RecoveryAction = { id: 'retry', label: t('重新运行') };
 const report: RecoveryAction = { id: 'report', label: t('查看报告') };
@@ -167,8 +171,25 @@ const guides: Record<WebFailureKind, FailureGuide> = {
 };
 const reasonDetails: Record<string, string> = {
   math_model_usage_unavailable: t('服务商没有返回完整的用量回执，为避免超出用量上限，后续调用已停止。已检查的成果保存在报告中。'),
-  math_preparation_stopped: t('准备证明环境时用完了预算，解题尚未开始。Mathlib 环境首次准备较慢，可以提高解题预算后重新运行。'),
 };
+/** The solve budget ran out: say how long it was, and offer a longer one only while the run is below the highest allowed. */
+function timeGuide(run: WebRun): FailureGuide {
+  const seconds = run.maxRunSeconds;
+  if (!(seconds > 0)) return { ...guides.time_limit, kind: 'time_limit' };
+  if (seconds < webLimits.maxRunSeconds) return { ...guides.time_limit, kind: 'time_limit',
+    detail: t('{0}的解题预算用完时，还没有得到通过验收的完整证明。已检查的成果保存在报告中，可以提高解题预算后重新运行。', readableDuration(seconds * 1000)) };
+  return { ...guides.time_limit, kind: 'time_limit', actions: [{ id: 'task', label: t('补充研究任务') }, report],
+    detail: t('{0}的解题预算（已是上限）用完时，还没有得到通过验收的完整证明。已检查的成果保存在报告中。可以在研究任务里补充证明思路，或换一个模型后重新运行。', readableDuration(seconds * 1000)) };
+}
+/**
+ * The environment had its own fixed preparation time, apart from the solve budget, and solving never began. The
+ * guide is filed under `environment` so the result page offers feedback; the run itself still counts as an expected stop.
+ */
+function preparationGuide(run: WebRun): FailureGuide {
+  const minutes = readableDuration((webPreparationSeconds[run.environment] ?? webPreparationSeconds.mathlib) * 1000);
+  return { kind: 'environment', title: t('证明环境准备超时'), actions: [retry, report],
+    detail: t('准备证明环境超过了 {0}的准备时限，解题没有开始。准备时限是固定的，和解题预算无关，提高解题预算不会改变它。Mathlib 环境第一次准备较慢，可以直接重新运行；反复出现时请点「反馈问题」。', minutes) };
+}
 
 /** What went wrong and how to recover, for runs that ended without an accepted proof or a rejected candidate. */
 export function failureGuide(run: WebRun): FailureGuide | undefined {
@@ -176,7 +197,8 @@ export function failureGuide(run: WebRun): FailureGuide | undefined {
   const kind = run.failure?.kind ?? (run.phase === 'interrupted' ? 'interrupted' : run.status === 'error' ? 'unknown'
     : run.result?.status === 'limit_reached' ? 'time_limit' : undefined);
   if (kind) {
-    const guide = guides[kind], detail = run.failure?.reason && reasonDetails[run.failure.reason];
+    if (kind === 'time_limit' && preparationStopped(run)) return preparationGuide(run);
+    const guide = kind === 'time_limit' ? timeGuide(run) : guides[kind], detail = run.failure?.reason && reasonDetails[run.failure.reason];
     // The budget ran out while the plan still waited for its owner: say so rather than blame the Agents.
     const unapproved = kind === 'time_limit' && run.observation?.inspection.planApproval?.status === 'pending'
       && t('研究计划直到解题时间用完都没有批准，Agent 还没有开始工作。可以重新运行并在计划出来后及时批准，或者不勾选「先审计划」。');
@@ -186,10 +208,10 @@ export function failureGuide(run: WebRun): FailureGuide | undefined {
   if (run.result?.status === 'incomplete') {
     const stop = run.result.report.stopReason;
     if (stop === 'math_turn_limit_reached') return { title: t('研究轮次已用完'), detail: t('Agent 用完了全部研究轮次，还没有得到完整证明。已检查的成果保存在报告中。可以提高轮次上限、增加 Agent，或在任务说明里补充思路。'),
-      actions: [{ id: 'turns', label: t('提高轮次上限') }, report] };
+      actions: [run.maxTurns < webLimits.maxTurns ? { id: 'turns', label: t('提高轮次上限') } : { id: 'task', label: t('补充研究任务') }, report] };
     if (stop === 'math_research_routes_exhausted') return { title: t('没有可以继续的研究路线'), detail: t('轮次还有剩余，但计划中的研究路线都已停滞或用尽。已检查的成果保存在报告中。可以在任务说明里补充思路，或换一个模型后重新运行。'),
       actions: [retry, report] };
-    if (stop === 'math_run_stopped') return { ...guides.time_limit, kind: 'time_limit' };
+    if (stop === 'math_run_stopped') return timeGuide(run);
     return { title: t('没有得到完整证明'), detail: t('Agent 用完了轮次，或没有可以继续的研究路线。已检查的成果保存在报告中。可以提高轮次上限、增加 Agent，或在任务说明里补充思路。'),
       actions: [{ id: 'turns', label: t('提高轮次上限') }, report] };
   }
@@ -206,6 +228,27 @@ export const formatTokens = (value: number) => locale === 'en'
   : value >= 1e8 ? `${(value / 1e8).toFixed(1)} 亿` : value >= 1e4 ? `${Math.round(value / 1e4)} 万` : String(value);
 /** Tokens the whole run used, every Agent's turns included: as its report states once it has one, else the latest observation. */
 export const runTokens = (run: WebRun) => reportedTokens(run.result?.report?.usage) ?? reportedTokens(run.observation?.inspection.usage);
+
+// Stop codes the verdict at the top of the result already explains in words.
+const explainedStops = new Set(['math_run_stopped', 'math_preparation_stopped', 'math_total_token_limit', 'math_model_usage_unavailable', 'math_turn_limit_reached']);
+const checkReasons: Record<string, string> = {
+  proof_incomplete: t('没有通过 Lean 检查的完整候选证明，所以没有进行独立验收。'),
+  math_evaluation_timeout: t('独立验收没有在时限内完成。'),
+};
+/**
+ * The report's own reason, for its summary: a sentence a reader can use, or a code kept folded as a diagnostic.
+ * Stop codes the verdict already explains are left out; free text from the run is shown as written.
+ */
+export function reportReason(reason: string | undefined): { text?: string; code?: string } {
+  if (!reason || explainedStops.has(reason)) return {};
+  if (checkReasons[reason]) return { text: checkReasons[reason] };
+  return /^[a-z][a-z0-9_]*$/u.test(reason) ? { code: reason } : { text: reason };
+}
+/** Why an acceptance check has no result, in words: nothing complete was ready to check, or it ran out of time. */
+export function checkReason(check: { skipped?: boolean; reason?: string }): string | undefined {
+  if (check.reason) return checkReasons[check.reason] ?? check.reason;
+  return check.skipped ? t('运行在独立验收之前停止，没有进行独立验收。') : undefined;
+}
 
 /** Expected ceiling from this account's own finished runs on the same model; turns are shared by all Agents. */
 export function usageEstimate(runs: readonly WebRun[], model: string, maxTurns: number) {
@@ -229,12 +272,12 @@ export function queueDescription(run: WebRun): string {
 export function resultDescription(run: WebRun): string {
   const guide = failureGuide(run);
   if (guide) return guide.detail;
-  if (run.error) return run.error;
+  if (run.error) return localizeMessage(run.error);
   if (run.status === 'cancelled') return t('任务已停止。');
   if (run.status === 'queued') return queueDescription(run);
   if (run.status === 'running') {
     const stage = runProgress(run).index;
-    if (stage === 1) return t('{0}准备中，解题尚未开始。', run.environment === 'mathlib' ? t('Mathlib 依赖') : t('Lean 环境'));
+    if (stage === 1) return t('{0}准备中，解题尚未开始；解题预算从构造证明开始计时。', run.environment === 'mathlib' ? t('Mathlib 依赖') : t('Lean 环境'));
     if (stage === 3) return t('正在独立验证完整原题。');
     const approval = planAwaitingApproval(run);
     if (approval) return approval.leadRevising ? t('Lead 正在按你的留言修改研究计划，改完后再请你批准。')

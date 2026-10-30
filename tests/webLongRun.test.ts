@@ -19,7 +19,7 @@ const draft: TaskDraft = { providerId: 'openai', model: 'deepseek-flash', source
   maxTurns: '5', maxRunSeconds: '300', workers: '1', effort: 'max', environment: 'standard', coordination: 'cooperative', templateId: '' };
 const session = { providers: [{ id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' }],
   environments: [{ id: 'standard', name: 'Lean', description: '', toolchain: 'v4' }],
-  limits: { maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4, maxTotalTokens: 100_000_000, maxSourceBytes: 32_768, maxTaskBytes: 8_000 } } as unknown as WebSession;
+  limits: { maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4, maxTotalTokens: 100_000_000, maxSourceBytes: 32_768, maxTaskBytes: 8_000, maxRuns: 20 } } as unknown as WebSession;
 
 describe('usage estimate and token cap before submission', () => {
   it('estimates from this account\'s finished runs on the same model, by reported tokens per turn', () => {
@@ -80,6 +80,14 @@ describe('returning to long runs', () => {
     expect(documentTitle('TheoremOS', 2, 0)).toBe('2 项进行中 · TheoremOS');
     expect(documentTitle('TheoremOS', 2, 1)).toBe('(1) 研究已结束 · TheoremOS');
     expect(documentTitle('TheoremOS', 2, 1, 1)).toBe('(1) 等你批准计划 · TheoremOS');
+  });
+
+  it('names the tab after the open run, shortened, with the counts still first', () => {
+    expect(documentTitle('TheoremOS · 研究工作台', 0, 0, 0, '证明费马小定理')).toBe('证明费马小定理 · TheoremOS');
+    expect(documentTitle('TheoremOS · 研究工作台', 1, 0, 0, '证明费马小定理')).toBe('1 项进行中 · 证明费马小定理 · TheoremOS');
+    expect(documentTitle('TheoremOS · 研究工作台', 0, 0, 0, '  ')).toBe('TheoremOS · 研究工作台');
+    const long = '证明：对任意正整数 n，前 n 个奇数之和等于 n 的平方；先用数学归纳法';
+    expect(documentTitle('TheoremOS', 0, 0, 0, long)).toBe(`${[...long].slice(0, 29).join('')}… · TheoremOS`);
   });
 
   it('finds plans that just started waiting for the owner, not ones being revised or already waiting', () => {

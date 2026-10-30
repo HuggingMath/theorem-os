@@ -52,6 +52,7 @@ try {
   // The sample opens without a key, says it is read-only, and offers no destructive or sharing action.
   await page.locator('.welcome-sample').click();
   await page.locator('[data-sample-badge]').waitFor();
+  assert.equal(new URL(page.url()).search, '?sample', 'The sample has its own address');
   assert.match(await page.locator('[data-sample-note]').innerText(), /离线脚本[\s\S]*独立验收都是真实执行的/u);
   assert.equal(await page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
   for (const action of ['delete-run', 'cancel', 'share-run']) assert.equal(await page.locator(`[data-action="${action}"]`).count(), 0, `Sample offers ${action}`);
@@ -100,7 +101,7 @@ try {
   await tip.getByRole('button', { name: '全部术语' }).click();
   await page.locator('#glossary-dialog[open]').waitFor();
   assert.equal(await page.locator('#term-plan').getAttribute('data-current'), 'true');
-  assert.match(await page.locator('#glossary-dialog').innerText(), /独立验收[\s\S]*S3/u);
+  assert.match(await page.locator('#glossary-dialog').innerText(), /独立验收[\s\S]*隔离/u);
   const glossaryFeedback = new URL((await page.locator('#glossary-dialog a[data-feedback]').getAttribute('href'))!);
   assert.equal(glossaryFeedback.pathname, '/feedback.html');
   assert.equal(glossaryFeedback.searchParams.get('area'), 'workbench');
@@ -165,6 +166,40 @@ try {
   assert.match(opened.searchParams.get('environment')!, /^TheoremOS workbench · .+ · zh$/u);
   await feedbackTab.close();
   mark('the top bar opens the glossary, and the palette opens the sample and the feedback form');
+
+  // Back from a new draft returns to the sample, and a reload of its address keeps it.
+  await newResearch(page);
+  await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
+  await page.goBack();
+  await page.locator('[data-sample-badge]').waitFor();
+  assert.equal(new URL(page.url()).search, '?sample');
+  await page.reload();
+  await page.locator('[data-sample-badge]').waitFor();
+  assert.equal(new URL(page.url()).search, '?sample');
+  mark('the sample keeps its ?sample address through Back and a reload');
+
+  // A phone turned sideways (812×375): the run page scrolls as a whole with its tabs pinned, and 提交 is reachable on the draft.
+  await page.setViewportSize({ width: 812, height: 375 });
+  await settled(page);
+  const pinned = await page.evaluate(() => {
+    const detail = document.querySelector<HTMLElement>('#run-detail')!;
+    detail.scrollTop = 400;
+    const tabs = document.querySelector<HTMLElement>('#run-detail > .detail-tabs')!.getBoundingClientRect();
+    const panel = document.querySelector<HTMLElement>('#detail-panel')!.getBoundingClientRect();
+    return { scrolled: detail.scrollTop, tabsTop: tabs.top, detailTop: detail.getBoundingClientRect().top, panel: Math.min(innerHeight, panel.bottom) - Math.max(tabs.bottom, panel.top) };
+  });
+  assert.ok(pinned.scrolled > 0 && Math.abs(pinned.tabsTop - pinned.detailTop) <= 1 && pinned.panel > 200, `short run page: ${JSON.stringify(pinned)}`);
+  await page.screenshot({ path: path.join(output, 'onboarding-sample-812x375.png') });
+  await newResearch(page);
+  // The wheel, as a finger would: a composer cut off by overflow:hidden only scrolls for focus, never for the reader.
+  await page.mouse.move(400, 200);
+  for (let step = 0; step < 6; step++) await page.mouse.wheel(0, 200);
+  await page.waitForFunction(() => { const box = document.querySelector('#submit-run')!.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; },
+    undefined, { timeout: 2000 }).catch(() => { throw new Error('提交 cannot be scrolled into a short window'); });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goBack();
+  await page.locator('[data-sample-badge]').waitFor();
+  mark('in a short landscape window the run page scrolls with pinned tabs and the draft scrolls to 提交');
 
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 760 });

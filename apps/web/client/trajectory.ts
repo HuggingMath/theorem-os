@@ -280,6 +280,27 @@ export function stepTasks(step: TrajectoryStep): string[] {
   return [];
 }
 
+/**
+ * The list with each task's consecutive attempts as one entry: attempts of the same task with nothing else about that
+ * task between them (other tasks' steps and short notices may come between). An entry of several attempts stands where
+ * its last attempt does, the one that settled or replaced the earlier ones; a lone attempt is an entry of its own.
+ */
+export function retryRuns<T extends { step: TrajectoryStep }>(items: readonly T[]): T[][] {
+  const open = new Map<string, T[]>(), runOf = new Map<T, T[]>();
+  for (const item of items) {
+    const step = item.step;
+    if (step.kind === 'attempt') {
+      let run = open.get(step.taskId);
+      if (!run) open.set(step.taskId, run = []);
+      run.push(item); runOf.set(item, run);
+    } else if (step.kind !== 'notice') for (const id of stepTasks(step)) open.delete(id);
+  }
+  return items.flatMap(item => {
+    const run = runOf.get(item);
+    return !run ? [[item]] : run.at(-1) === item ? [run] : [];
+  });
+}
+
 /** A task as the trajectory names it: its theorem's last name, from the latest plan that names it, or else from its own
  * checks when every one of them is about the same single theorem (a run without a plan). */
 export function trajectoryTaskNames(data: TrajectoryData): Map<string, string> {
@@ -294,4 +315,61 @@ export function trajectoryTaskNames(data: TrajectoryData): Map<string, string> {
     checked.set(version.taskId, (checked.get(version.taskId) ?? new Set()).add(check.theorems[0]!));
   for (const [taskId, theorems] of checked) if (!names.has(taskId) && theorems.size === 1) names.set(taskId, [...theorems][0]!.split('.').at(-1)!);
   return names;
+}
+
+/** One Agent's share of a run: the tasks it tried, how its last try of each came out and how many task checks it took, and its other steps. */
+export type AgentTally = { id: string; tasks: string[]; passed: number; conditional: number; attempts: number;
+  proofs: number; provedProofs: number; assembled: number; plans: number; reports: number };
+/** The run's closing account. `partial`: a retention limit dropped records, so the counts are lower bounds. */
+export type TrajectoryTally = { checks: number; attempts: number; partial: boolean; agents: AgentTally[] };
+
+/**
+ * Counts a run's Lean checks and attempts from its steps. A check is one verification: the copies of an assembled
+ * check stored under each goal task (same commit, same time) are one, and a step whose check was not recorded still
+ * stands for one. An attempt is a task check or a whole proof an Agent submitted; a reused check and the host's
+ * assembly are not attempts. Each Agent's tasks are judged by its own last try of them.
+ */
+export function trajectoryTally(steps: readonly TrajectoryStep[], data: TrajectoryData): TrajectoryTally {
+  const seen = new Set<string>();
+  let checks = 0, partial = Object.values(data.dropped).some(Boolean) || data.versions.size >= trajectoryLimits.versions;
+  for (const version of data.versions.values()) {
+    if (version.checks.length >= trajectoryLimits.checks) partial = true;
+    for (const check of version.checks) {
+      const key = `${version.commit}\u0000${check.at}`;
+      if (!seen.has(key)) { seen.add(key); checks++; }
+    }
+  }
+  const agents = new Map<string, AgentTally & { last: Map<string, TrajectoryOutcome> }>();
+  const agent = (id: string) => {
+    let item = agents.get(id);
+    if (!item) agents.set(id, item = { id, tasks: [], passed: 0, conditional: 0, attempts: 0, proofs: 0, provedProofs: 0, assembled: 0, plans: 0, reports: 0, last: new Map() });
+    return item;
+  };
+  let attempts = 0;
+  for (const step of steps) {
+    if ((step.kind === 'attempt' || step.kind === 'proof') && !step.ref && !(step.kind === 'attempt' && step.reused)) checks++;
+    if (step.kind === 'recheck' || step.kind === 'edit') checks += step.results.filter(result => !result.ref).length;
+    if (step.kind === 'attempt' && !step.reused) {
+      attempts++;
+      if (!step.workerId) continue;
+      const item = agent(step.workerId);
+      item.attempts++;
+      if (!item.last.has(step.taskId)) item.tasks.push(step.taskId);
+      item.last.set(step.taskId, step.outcome);
+    } else if (step.kind === 'proof') {
+      if (!step.assembled) attempts++;
+      if (!step.workerId) continue;
+      const item = agent(step.workerId);
+      if (step.assembled) item.assembled++;
+      else { item.proofs++; if (step.outcome === 'passed') item.provedProofs++; }
+    } else if (step.kind === 'plan' && step.workerId) agent(step.workerId).plans++;
+    else if (step.kind === 'delivery' && step.delivery.producer) agent(step.delivery.producer).reports++;
+  }
+  // In the run's own order of Agents; one it does not list follows, in the order it first appears.
+  const order = data.context.workers.map(worker => worker.id), rank = (id: string) => { const at = order.indexOf(id); return at < 0 ? order.length : at; };
+  const listed = [...agents.values()].sort((a, b) => rank(a.id) - rank(b.id));
+  return { checks, attempts, partial, agents: listed.map(({ last, ...item }) => {
+    for (const outcome of last.values()) if (outcome === 'passed') item.passed++; else if (outcome === 'conditional') item.conditional++;
+    return item;
+  }) };
 }

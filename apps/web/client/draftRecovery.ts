@@ -1,7 +1,7 @@
 import { decodeTaskDraft, encodeTaskDraft, type TaskDraft } from './draft';
 
 export const draftRecoveryStorageKey = 'theorem-os.web-draft-recovery.v1';
-export const replacementReasons = ['template', 'reset', 'reuse', 'import', 'source', 'edit'] as const;
+export const replacementReasons = ['template', 'reset', 'reuse', 'import', 'source', 'edit', 'paste'] as const;
 export type ReplacementReason = typeof replacementReasons[number];
 type Recovery = { draft: TaskDraft; reason: ReplacementReason; persisted: boolean };
 type RecoveryStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;

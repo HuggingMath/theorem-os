@@ -159,10 +159,13 @@ try {
     await outline.locator('.outline-item').first().waitFor();
     assert.equal(await outline.locator('h3').innerText(), '证明结构');
     const text = await outline.innerText();
-    for (const value of ['2 个原题目标，求解过程新增了 2 个辅助声明。', 'Fixture.main', '∀ (n : ℕ), n + 0 = n', '用到：Fixture.helper',
+    // Names the file declares read as it writes them (main, helper); trustMe is not declared there, so it stays in full.
+    for (const value of ['2 个原题目标，求解过程新增了 2 个辅助声明。', '∀ (n : ℕ), n + 0 = n', '用到：helper',
       '依赖公理：propext、Fixture.trustMe', 'Fixture.trustMe 不在 Lean 的三个标准公理之内', '直接证明，没有用到新增的辅助声明', '不依赖任何公理',
-      '被 Fixture.main 用到', '没有被任何目标用到', '新增辅助声明', '定义'])
+      '被 main 用到', '没有被任何目标用到', '新增辅助声明', '定义'])
       assert.ok(text.includes(value), `outline shows ${value}`);
+    assert.ok(!text.includes('Fixture.main') && !text.includes('Fixture.helper'), 'the namespace is not repeated on every name');
+    assert.equal(await outline.locator('.outline-item code[title="Fixture.main"]').first().innerText(), 'main', 'the full name stays in the tooltip');
     assert.equal(await outline.locator('.badge.warning').count(), 1, 'only the target with a nonstandard axiom is flagged');
     await outline.locator('.local-check-guide summary').click();
     const guide = await outline.locator('.local-check-steps').innerText();
@@ -180,6 +183,35 @@ try {
     assert.equal(h.requests.filter(item => item.pathname === `/api/runs/${run.id}/outline`).length, reads, 'the outline is read once per run');
   });
 
+  await scenario('each declaration of the proof structure opens the source at its line, and 目录 lists them there', async h => {
+    const { page } = h;
+    await open(h, 'Prove with a helper');
+    const outline = page.locator('#detail-panel .report-outline');
+    await outline.locator('.outline-item').first().waitFor();
+    const jumps = await outline.locator('[data-action="jump-declaration"]').evaluateAll(buttons => buttons.map(button => [button.querySelector('code')!.textContent, button.getAttribute('data-line')]));
+    assert.deepEqual(Object.fromEntries(jumps), { main: '7', side: '9', helper: '3', unused: '5' });
+    const marked = () => page.evaluate(() => [...CSS.highlights.get('source-line') ?? []].map(range => range.toString()).join(''));
+    await outline.locator('[data-action="jump-declaration"]').filter({ hasText: 'helper' }).click();
+    await page.locator('#detail-tab-source[aria-selected="true"]').waitFor();
+    assert.equal(await marked(), 'lemma helper (n : Nat) : n + 0 = n := rfl', 'the source marks the declaration\'s line');
+    assert.equal(await page.locator('#detail-panel .code-scroll').evaluate(scroll => scroll === document.activeElement), true, 'the code takes focus');
+    const toggle = page.locator('#open-source-outline');
+    assert.equal(await toggle.locator('.field-count').innerText(), '4');
+    await toggle.click();
+    const items = page.locator('#source-outline .source-outline-item');
+    assert.deepEqual(await items.evaluateAll(list => list.map(item => [item.querySelector('code')!.textContent, item.querySelector('.source-outline-kind')!.textContent,
+      item.querySelector('.source-outline-line')!.textContent])), [['helper', '引理', '3'], ['unused', '定义', '5'], ['main', '定理', '7'], ['side', '定理', '9']]);
+    assert.equal(await items.filter({ hasText: 'helper' }).evaluate(item => item.getAttribute('aria-current') === 'location' && item === document.activeElement), true,
+      '目录 opens at the declaration being read');
+    await page.screenshot({ path: path.join(output, 'source-outline-desktop.png') }); screenshots.push('source-outline-desktop.png');
+    await items.filter({ hasText: 'side' }).click();
+    await page.locator('#source-outline').waitFor({ state: 'hidden' });
+    assert.equal(await marked(), 'theorem side : True := trivial');
+    await toggle.click(); await page.keyboard.press('Escape');
+    await page.locator('#source-outline').waitFor({ state: 'hidden' });
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  });
+
   await scenario('an outline read that fails offers a retry, and unrecorded references are not guessed', async h => {
     const { page } = h;
     let failures = 1;
@@ -194,7 +226,7 @@ try {
     await outline.locator('.outline-item').first().waitFor();
     const text = await outline.innerText();
     assert.ok(text.includes('这次运行没有记录引用关系'), 'says references were not recorded');
-    assert.ok(!text.includes('用到：') && !text.includes('被 Fixture.main 用到') && !text.includes('没有被任何目标用到'), 'no usage is inferred');
+    assert.ok(!text.includes('用到：') && !text.includes('被 main 用到') && !text.includes('没有被任何目标用到'), 'no usage is inferred');
   });
 
   await scenario('a stuck run names the open subgoal and opens it in collaboration', async h => {
@@ -301,7 +333,7 @@ try {
     const outline = page.locator('#detail-panel .report-outline');
     await outline.locator('.outline-item').first().waitFor();
     const text = await outline.innerText();
-    for (const value of ['Proof structure', '2 original targets; the solver added 2 helper declarations.', 'Uses: Fixture.helper', 'Used by Fixture.main',
+    for (const value of ['Proof structure', '2 original targets; the solver added 2 helper declarations.', 'Uses: helper', 'Used by main',
       'Download verification kit', 'How to re-check on your own computer']) assert.ok(text.includes(value), `English outline shows ${value}`);
   }, { locale: 'en' });
 
@@ -313,7 +345,7 @@ try {
     await open(h, 'Prove with a helper');
     const outline = page.locator('#detail-panel .report-outline');
     await outline.locator('.outline-item').first().waitFor(); await outline.locator('.local-check-guide summary').click();
-    await fits(page, ['#detail-panel .report-outline', '#detail-panel .outline-item', '#detail-panel .local-check .button', '#detail-panel .local-check-steps']);
+    await fits(page, ['#detail-panel .report-outline', '#detail-panel .outline-item', '#detail-panel .outline-jump', '#detail-panel .local-check .button', '#detail-panel .local-check-steps']);
     await outline.scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(output, `outline-${width}.png`) }); screenshots.push(`outline-${width}.png`);
   }, { width });
 

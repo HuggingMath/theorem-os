@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
 import type { WebEvent, WebEventDetails, WebProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
-import { isProgressEvent, parseWebFailure } from './shared';
+import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
@@ -26,6 +26,8 @@ export class WebJobs {
   private revisions = new Map<string, number>();
   private listeners = new Map<string, Set<(version: string) => void>>();
   private pendingNotifications = new Set<string>();
+  /** Runs whose action count changed since they were last saved; see actionsChanged. */
+  private pendingActions = new Map<string, ReturnType<typeof setTimeout>>();
   readonly storage: WebStorage;
   readonly knowledge: WebKnowledgeService;
   private readonly onAccepted?: (owner: string) => void;
@@ -79,7 +81,8 @@ export class WebJobs {
     const active = count('running'), waiting = count('queued');
     if (active + waiting >= this.config.queueLimit)
       throw new Error(`运行队列已满：${active} 个任务正在运行，${waiting} 个在排队。草稿已保留，请等几分钟后再提交。`);
-    if (this.list(owner).length >= 20) throw new Error('已达到 20 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。');
+    if (this.list(owner).length >= webLimits.maxRuns)
+      throw new Error(`已达到 ${webLimits.maxRuns} 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。`);
     const now = new Date().toISOString();
     const { apiKey, ...visible } = input;
     const environment = input.environment ?? 'standard';
@@ -129,6 +132,8 @@ export class WebJobs {
   }
   async close() {
     this.closing = true;
+    for (const timer of this.pendingActions.values()) clearTimeout(timer);
+    this.pendingActions.clear();
     for (const job of this.jobs.values()) this.cancel(job.owner, job.run.id);
     while (this.running) await new Promise(resolve => setTimeout(resolve, 25));
     this.jobs.clear();
@@ -136,7 +141,19 @@ export class WebJobs {
   }
   private persist(run: WebRun) {
     const job = this.jobs.get(run.id);
+    const pending = this.pendingActions.get(run.id);
+    if (pending) { clearTimeout(pending); this.pendingActions.delete(run.id); }
     if (job) { this.storage.saveRun(job.owner, run); this.changed(job.owner); }
+  }
+  /**
+   * An Agent acts several times a second, and each save tells every open page to reload its run list; the action
+   * itself is already stored, so the run with its new count is saved at most every two seconds, or with its next event.
+   */
+  private actionsChanged(run: WebRun) {
+    if (this.pendingActions.has(run.id)) return;
+    const timer = setTimeout(() => { this.pendingActions.delete(run.id); if (this.jobs.get(run.id)?.run === run) this.persist(run); }, 2_000);
+    timer.unref?.();
+    this.pendingActions.set(run.id, timer);
   }
   private changed(owner: string) {
     this.revisions.set(owner, (this.revisions.get(owner) ?? 0) + 1);
@@ -289,6 +306,15 @@ export class WebJobs {
         // The solver asks once per run, when its first plan is accepted; the owner may be away from the page.
         if (message.event === 'plan_approval_requested')
           try { this.onPlanWaiting?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }
+      } else if (message.type === 'action') {
+        // Kept apart from the 200-event activity log; past the per-run limit only the count grows.
+        const tally = job.run.actions ??= { count: 0 };
+        if (tally.count >= webAgentActionLimits.perRun) tally.dropped = (tally.dropped ?? 0) + 1;
+        else {
+          tally.count++;
+          this.storage.saveAction(job.owner, job.run.id, { ...message.action, sequence: tally.count, at: new Date().toISOString() });
+        }
+        this.actionsChanged(job.run);
       } else if (message.type === 'artifact') {
         if (job.run.result) return;
         job.run.artifact = message.artifact;

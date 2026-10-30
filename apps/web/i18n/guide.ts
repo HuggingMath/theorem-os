@@ -18,8 +18,8 @@ export const guide: Record<string, string> = {
   "先看示例": "Look at the sample first",
   "首页的「先看一次完整运行」是一次录制好的运行，不需要 API Key。可以逐个标签页浏览，了解一次研究从拆分任务到验收的全过程。":
     "\"See a complete run first\" on the start page is a recorded run that needs no API key. Browse its tabs to see a whole research run, from splitting the work to acceptance.",
-  "点输入框上方的 Submission.lean 打开源码编辑器，或用回形针附加 .lean 文件，也可以直接选一道示例题目。要证明的定理用 sorry 留空；定理的声明在研究过程中不会被改动。":
-    "Click Submission.lean above the input to open the source editor, attach a .lean file with the paperclip, or pick one of the sample problems. Leave each theorem to prove as sorry; theorem statements are never changed during the research.",
+  "点输入框上方的「原始题目」打开源码编辑器，或用回形针附加 .lean 文件，也可以直接选一道示例题目。要证明的定理用 sorry 留空；定理的声明在研究过程中不会被改动。":
+    "Click “Original problem” above the input to open the source editor, attach a .lean file with the paperclip, or pick one of the sample problems. Leave each theorem to prove as sorry; theorem statements are never changed during the research.",
   "确认原题能提交": "Make sure the problem can be submitted",
   "修改源码后，工作台会自动用 Lean 检查一遍原题，输入框上方显示结果。语法错误或缺少待证定理时会标出位置，改好之后才能提交。":
     "After you edit the source, the workbench checks the problem with Lean and shows the result above the input. Syntax errors or a missing theorem to prove are marked in place and must be fixed before you can submit.",

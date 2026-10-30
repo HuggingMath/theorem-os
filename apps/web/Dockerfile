@@ -48,8 +48,10 @@ ENV TMPDIR=/tmp \
     DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS=/opt/theoremos-mathlib/.lake/packages
 COPY --from=source /opt/theorem-os /opt/theorem-os
 # Use the installed binaries directly: the verifier mounts the toolchain read-only.
+# Agent shells cannot read /opt/theorem-os or /opt/runtime-state; they run the bundled commands instead.
 RUN bun scripts/build.ts --state-root /opt/runtime-state > /opt/theoremos-build.json \
-    && chmod -R a+rX /opt/runtime-state \
+    && bun scripts/build-agent-tools.ts --out /opt/theoremos-agent-tools > /dev/null \
+    && chmod -R a+rX /opt/runtime-state /opt/theoremos-agent-tools \
     && chmod 0555 apps/web/worker-entrypoint.sh
 USER 10001:10001
 ENTRYPOINT ["/opt/theorem-os/apps/web/worker-entrypoint.sh"]

@@ -104,7 +104,7 @@ export class ResearchProgressView {
     if (snapshot) this.overview.dataset.empty = String(!snapshot.goals.length && !snapshot.blockers.length);
     const openBlockers = snapshot?.blockers.filter(blocker => !['parked', 'superseded'].includes(blocker.status)).length ?? 0;
     renderSection(this.overview, <>
-      <div class="collab-section-heading"><span class="term-heading"><h3>{t('证明前沿')}</h3><TermHint id="frontier" /></span><span class="collab-help">{t('记录的局部闭合不代表原题通过 S3 验收')}</span></div>
+      <div class="collab-section-heading"><span class="term-heading"><h3>{t('证明前沿')}</h3><TermHint id="frontier" /></span><span class="collab-help">{t('记录的局部闭合不代表原题通过独立验收')}</span></div>
       <div data-research-frontier class="collab-frontier-list">{observation && this.frontier(observation)}</div>
       <div data-research-waiting>{waiting && <div class="collab-research-waiting"><strong>{t('研究正在等待新的数学输入')}</strong><p>{waiting.reason}</p>
         <Facts facts={[[t('等待任务'), waiting.taskIds.join(', ') || t('未记录')], [t('关联目标'), waiting.goalIds.join(', ') || t('未记录')]]} /></div>}</div>

@@ -11,6 +11,7 @@ import type { WebResult, WebRun, WorkerInput } from '../apps/web/shared';
 import { closeHistory, closeSettings, discardSourceEditor, fillConfig, openHistory, openSettings, openTab, selectConfig, selectHistoryRun,
   showArtifacts, showChat, stageLabelsReadable, withSettings } from './web-ui-controls';
 import { freePort, startBrowser } from './web-scenario';
+import { readableDuration } from '../apps/web/presentation';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -76,9 +77,8 @@ try {
     const environment = await page.locator('#environment option:checked').innerText();
     assert.ok((await previewValue('environment').innerText()).includes(environment));
     const seconds = await page.locator('#max-seconds').inputValue();
-    const formatted = `${String(Math.floor(Number(seconds) / 60)).padStart(2, '0')}:${String(Number(seconds) % 60).padStart(2, '0')}`;
     const budget = await previewValue('budget').innerText();
-    assert.ok(budget.includes(seconds) || budget.includes(formatted), 'preview budget must match the entered seconds');
+    assert.equal(budget, readableDuration(Number(seconds) * 1000), 'preview budget must read the entered seconds as a duration');
     assert.ok((await previewValue('workers').innerText()).includes(await page.locator('#workers').inputValue()));
   }
   await page.locator('#draft-preview').waitFor();
@@ -428,8 +428,58 @@ try {
   await page.locator('[data-action="download-proof"]').click();
   const downloaded = await download;
   assert.equal(await fs.readFile((await downloaded.path())!, 'utf8'), proof);
+  assert.equal(downloaded.suggestedFilename(), `${/theorem\s+(\S+)/.exec(primary.source)![1]}.lean`, 'the proof file is named after the theorem, not the run ID');
   await screenshot('desktop-proof.png');
+  await page.locator('#detail-tab-result').click();
+  await page.locator('#detail-panel .result-proof [data-action="copy-proof"]').click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), proof);
+  await page.locator('#toast').filter({ hasText: '验收证明已复制' }).waitFor();
+  await page.locator('#detail-tab-source').click();
   mark('proof and immutable input switch independently; copy and Lean download match the displayed proof');
+
+  // The palette finds a run by the theorem it proves, which the Chinese task never names, and lists each group once.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+  await page.locator('#command-palette[open]').waitFor();
+  const groups = await page.locator('#command-palette .palette-group').allInnerTexts();
+  assert.deepEqual(groups, [...new Set(groups)], 'every palette group heading appears once');
+  await page.locator('#command-palette[open] input').fill(/theorem\s+(\S+)/.exec(primary.source)![1]);
+  assert.equal(await page.locator(`#palette-run-${primary.id}`).isVisible(), true);
+  await page.locator('#command-palette[open] input').fill('api key');
+  assert.equal(await page.locator('#palette-options [role="option"]').first().getAttribute('id'), 'palette-open-settings');
+  await page.keyboard.press('Escape');
+  await page.locator('#command-palette').waitFor({ state: 'hidden' });
+  mark('the command palette finds a run by its theorem name and the settings by "api key", with one heading per group');
+
+  // The open run's actions are in the palette too, found by what they do.
+  async function paletteFind(query: string) {
+    if (!await page.locator('#command-palette[open]').count()) await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    await page.locator('#command-palette[open] input').fill(query);
+    return page.locator('#palette-options [role="option"]').evaluateAll(nodes => nodes.map(node => node.id));
+  }
+  assert.deepEqual(await paletteFind('下载'), ['palette-run-download-proof', 'palette-run-download-archive']);
+  const paletteDownload = page.waitForEvent('download');
+  await page.keyboard.press('Enter');
+  const fromPalette = await paletteDownload;
+  assert.equal(fromPalette.suggestedFilename(), downloaded.suggestedFilename());
+  assert.equal(await fs.readFile((await fromPalette.path())!, 'utf8'), proof);
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  assert.equal((await paletteFind('复制'))[0], 'palette-run-copy-proof');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), proof);
+  assert.ok((await paletteFind('分享')).includes('palette-run-share'));
+  assert.ok((await paletteFind('删除')).includes('palette-run-delete'));
+  // Within a group, a command whose name holds the query comes before one that only lists it as a keyword,
+  // and a view is found by what it holds: 报告 finds 结果.
+  const sourceMatches = (await paletteFind('源码')).filter(id => /^palette-(run-copy-proof|tab-source)$/u.test(id));
+  assert.deepEqual(sourceMatches, ['palette-tab-source', 'palette-run-copy-proof']);
+  assert.equal((await paletteFind('报告'))[0], 'palette-tab-result');
+  await page.keyboard.press('Escape');
+  await page.locator('#command-palette').waitFor({ state: 'hidden' });
+  // Choosing a run from the palette leaves the keyboard on that run, not on the control the palette was opened from.
+  await paletteFind(/theorem\s+(\S+)/.exec(primary.source)![1]);
+  await page.locator(`#palette-run-${primary.id}`).click();
+  await page.waitForFunction(() => document.activeElement?.id.startsWith('detail-tab-'));
+  mark('the palette downloads, copies, shares and deletes the open run, and choosing a run focuses its tabs');
 
   await selectConfig(page, 'environment', 'standard');
   await page.locator('#task').fill('Changed draft');

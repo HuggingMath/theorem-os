@@ -51,8 +51,13 @@ export function newlyWaiting(previous: readonly WebRun[], current: readonly WebR
   return current.filter(run => waitsForOwner(run) && before.has(run.id) && !waitsForOwner(before.get(run.id)!));
 }
 
-/** A plan waiting for approval holds its run, so it comes before finished runs and the active count. */
-export function documentTitle(base: string, active: number, unseen: number, waiting = 0): string {
-  return waiting ? t('({0}) 等你批准计划 · {1}', waiting, base) : unseen ? t('({0}) 研究已结束 · {1}', unseen, base)
-    : active ? t('{0} 项进行中 · {1}', active, base) : base;
+/**
+ * A plan waiting for approval holds its run, so it comes before finished runs and the active count. With a run open the
+ * tab is named after it (shortened), so two tabs on different runs can be told apart.
+ */
+export function documentTitle(base: string, active: number, unseen: number, waiting = 0, open = ''): string {
+  const characters = [...open.trim()];
+  const name = characters.length ? `${characters.length > 30 ? `${characters.slice(0, 29).join('')}…` : characters.join('')} · TheoremOS` : base;
+  return waiting ? t('({0}) 等你批准计划 · {1}', waiting, name) : unseen ? t('({0}) 研究已结束 · {1}', unseen, name)
+    : active ? t('{0} 项进行中 · {1}', active, name) : name;
 }

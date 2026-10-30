@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { animateEntrance } from '../motion';
 import { Icon } from './Icon';
 import { t } from '../../i18n';
@@ -12,11 +12,25 @@ const matches = (command: PaletteCommand, query: string) => {
   const text = `${command.label} ${command.hint ?? ''} ${command.keywords ?? ''}`.toLowerCase();
   return query.toLowerCase().split(/\s+/).filter(Boolean).every(word => text.includes(word));
 };
+/** 2 when the label holds the whole query as typed, 1 when the hint or keywords do, 0 when only its words match apart. */
+const closeness = (command: PaletteCommand, query: string) => {
+  const whole = query.trim().toLowerCase();
+  if (!whole || command.label.toLowerCase().includes(whole)) return whole ? 2 : 0;
+  return `${command.hint ?? ''} ${command.keywords ?? ''}`.toLowerCase().includes(whole) ? 1 : 0;
+};
 
 function Palette({ commands, session }: { commands: readonly PaletteCommand[]; session: number }) {
   const [query, setQuery] = useState(''), [index, setIndex] = useState(0);
   const dialog = useRef<HTMLDialogElement>(null), input = useRef<HTMLInputElement>(null), list = useRef<HTMLUListElement>(null);
-  const shown = commands.filter(command => matches(command, query));
+  // One heading per group, in the order the groups first appear, however the commands were pushed. Within a group the
+  // commands that hold the whole query come first, so 「第 17 题」 opens that run rather than the first with a 1 and a 7.
+  const shown = useMemo(() => {
+    const order = new Map<string, number>();
+    for (const command of commands) if (!order.has(command.group)) order.set(command.group, order.size);
+    return commands.filter(command => matches(command, query)).map((command, position) => ({ command, position, close: closeness(command, query) }))
+      .sort((a, b) => order.get(a.command.group)! - order.get(b.command.group)! || b.close - a.close || a.position - b.position)
+      .map(item => item.command);
+  }, [commands, query]);
   const selected = Math.min(index, Math.max(0, shown.length - 1));
   useLayoutEffect(() => {
     const target = dialog.current!;

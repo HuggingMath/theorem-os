@@ -7,6 +7,9 @@ export const mailsCompletion = (run: WebRun) => run.status === 'completed' || (r
 type Outcome = { zh: string; en: string; detailZh: string; detailEn: string };
 // A run that stopped on a limit says which one, as its badge in the workbench does.
 const stopped: Record<StopCause, Outcome> = {
+  preparation: { zh: '证明环境准备超时', en: 'timed out preparing its proof environment',
+    detailZh: '证明环境没有在准备时限内就绪，解题没有开始。准备时限和解题预算无关，可以直接重新运行。',
+    detailEn: 'The proof environment was not ready within its preparation limit, so solving never started. That limit is separate from the solve budget; you can simply run again.' },
   time: { zh: '解题时间用完', en: 'used up its solve time', detailZh: '在解题预算内没有得到通过验收的完整证明，已检查的成果保存在报告中。',
     detailEn: 'No accepted full proof within the solve budget; the checked results are saved in the report.' },
   budget: { zh: '用量到达上限', en: 'reached its usage limit', detailZh: '模型用量到达上限，后续调用已停止；已检查的成果保存在报告中。',
@@ -16,10 +19,8 @@ const stopped: Record<StopCause, Outcome> = {
   routes: { zh: '研究路线用尽', en: 'ran out of research routes', detailZh: '计划中的研究路线都已停滞或用尽，还没有得到完整证明；已检查的成果保存在报告中。',
     detailEn: 'Every planned research route stalled or ran out before a full proof; the checked results are saved in the report.' },
 };
-// Two stops have a more exact cause than their limit, as the result page's failure guide also says.
+// One stop has a more exact cause than its limit, as the result page's failure guide also says.
 const stoppedReasons: Record<string, Pick<Outcome, 'detailZh' | 'detailEn'>> = {
-  math_preparation_stopped: { detailZh: '准备证明环境时用完了预算，解题尚未开始。Mathlib 环境首次准备较慢，可以提高解题预算后重新运行。',
-    detailEn: 'The budget ran out while preparing the proof environment, before solving began. Mathlib is slow to prepare the first time; raise the solve budget and run again.' },
   math_model_usage_unavailable: { detailZh: '服务商没有返回完整的用量回执，为避免超出用量上限，后续调用已停止。已检查的成果保存在报告中。',
     detailEn: 'The provider did not return a complete usage receipt, so further calls stopped to avoid exceeding the usage cap. Checked results are saved in the report.' },
 };

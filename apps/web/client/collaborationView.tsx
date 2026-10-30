@@ -17,7 +17,8 @@ import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
 import { revealGraph } from './motion';
 import { renderAgentCards } from './ui/AgentCards';
 import { renderCollaborationNow } from './ui/CollaborationNow';
-import { agentRoutes, taskNames } from './agentRoute';
+import { taskNames } from './agentRoute';
+import { AgentActivity } from './agentActivity';
 import { renderAgentRoute } from './ui/AgentRoute';
 import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 import { renderTaskInspector } from './ui/TaskInspector';
@@ -71,7 +72,8 @@ export class CollaborationView {
   private planEditor: TaskPlanEditor;
   // The workbench-wide choice (./detailLevel): new readers start with the simple layer, and opening any expert section keeps it full.
   private detail = detailLevel();
-  constructor(private api: WebApi, private observed: (observation: WebObservation) => void, private openReport: () => void = () => undefined) {
+  constructor(private api: WebApi, private observed: (observation: WebObservation) => void, private openReport: () => void = () => undefined,
+    private activity = new AgentActivity(url => api(url))) {
     this.planEditor = new TaskPlanEditor(api, observation => this.receive(observation));
     onDetailLevel(level => this.applyLevel(level));
   }
@@ -412,7 +414,9 @@ export class CollaborationView {
     const routes = (observation.plan?.proofRoutes ?? []).filter(route => !view.route || route.id === view.route);
     const routeSelect = view.element.querySelector<HTMLSelectElement>('[data-collab-route]')!;
     const missingRoute = Boolean(view.route && !routes.length);
-    renderOptions(routeSelect, [['', t('全部路线')], ...(observation.plan?.proofRoutes ?? []).map(route => [route.id, `${route.id} → ${route.targetTaskId}`] as const),
+    // Tasks are named by the lemma they prove, as on the cards; a task without one keeps its plan id.
+    const theorems = taskNames(observation.inspection.tasks), named = (ids: readonly string[]) => ids.map(id => theorems.get(id) ?? id).join(t('、'));
+    renderOptions(routeSelect, [['', t('全部路线')], ...(observation.plan?.proofRoutes ?? []).map(route => [route.id, `${route.id} → ${named([route.targetTaskId])}`] as const),
       ...(missingRoute ? [[view.route, t('{0} · 已移除', view.route)] as const] : [])], view.route);
     const count = view.element.querySelector('[data-collab-task-count]')!, countText = t('显示 {0} / {1} 个任务', tasks.length, observation.inspection.tasks.length);
     if (count.textContent !== countText) count.textContent = countText;
@@ -424,12 +428,16 @@ export class CollaborationView {
       : <><strong>{t('尚无数学任务')}</strong><p>{t('运行生成任务计划后会显示在这里。')}</p></>);
     view.element.querySelector<HTMLElement>('.collab-map')!.dataset.taskEmpty = String(!tasks.length);
     this.renderTaskSelection(view, tasks, observation.inspection.tasks);
-    renderSection(view.element.querySelector('[data-collab-routes]')!, missingRoute ? <span>{t('所选路线 {0} 已从当前计划移除，请选择其他路线或清除筛选。', view.route)}</span>
+    // Routes read as a chain of lemma names; a plan without alternative routes needs no line here (the graph shows its dependencies).
+    const routeSummary = view.element.querySelector<HTMLElement>('[data-collab-routes]')!;
+    routeSummary.hidden = !missingRoute && !routes.length;
+    renderSection(routeSummary, missingRoute ? <span>{t('所选路线 {0} 已从当前计划移除，请选择其他路线或清除筛选。', view.route)}</span>
       : routes.length ? <>{routes.map(route => {
         const recorded = observation.inspection.mathematics.snapshot.routes.find(item => item.routeId === route.id);
-        const progress = recorded ? ` · ${recorded.ready ? t('前置已就绪') : t('等待 {0}', recorded.remainingPrerequisiteTaskIds.join(', ') || label(recorded.closingStatus))} · ${routeConnectionLabel[recorded.connection] ?? t('连接 {0}', recorded.connection)}` : '';
-        return <span key={route.id}><strong>OR {route.id}</strong>{t('：({0}) → {1} → {2}{3}', route.prerequisiteTaskIds.join(' AND ') || t('无额外前置'), route.closingTaskId, route.targetTaskId, progress)}</span>;
-      })}</> : <span>{t('当前计划按任务的 AND 前置依赖推进')}</span>);
+        const progress = recorded ? ` · ${recorded.ready ? t('前置已就绪') : t('等待 {0}', named(recorded.remainingPrerequisiteTaskIds) || label(recorded.closingStatus))} · ${routeConnectionLabel[recorded.connection] ?? t('连接 {0}', recorded.connection)}` : '';
+        const chain = [...(route.prerequisiteTaskIds.length ? [named(route.prerequisiteTaskIds)] : []), named([route.closingTaskId]), named([route.targetTaskId])].join(' → ');
+        return <span key={route.id}><strong>{t('路线 {0}', route.id)}</strong>{t('：{0}{1}', chain, progress)}</span>;
+      })}</> : null);
     this.renderTaskCards(view, tasks, mode);
   }
   private renderTaskSelection(view: ViewState, tasks: readonly Task[], currentTasks: readonly Task[]) {
@@ -446,8 +454,9 @@ export class CollaborationView {
   private renderTaskCards(view: ViewState, tasks: readonly Task[], mode: TaskView) {
     const observation = view.observation!;
     if (mode === 'list') {
+      const theorems = taskNames(observation.inspection.tasks);
       renderTaskList(view.element.querySelector<HTMLElement>('[data-collab-task-list]')!,
-        tasks.map(task => ({ ...this.taskCard(view, task, this.peakTokens(observation)), dependencies: t('AND 前置：{0}', task.plannedDependencies.join(', ') || t('无')) })));
+        tasks.map(task => ({ ...this.taskCard(view, task, this.peakTokens(observation)), dependencies: task.plannedDependencies.length ? t('需先完成：{0}', task.plannedDependencies.map(id => theorems.get(id) ?? id).join(t('、'))) : '' })));
       return;
     }
     const allTasks = observation.inspection.tasks;
@@ -578,7 +587,7 @@ export class CollaborationView {
     const facts: [string, unknown][] = [
       ...(!historical ? [[t('负责人'),task.owner],[t('任务状态'),`${label(task.status)} / ${label(task.control)}`],[t('尝试次数'),task.attempts]] as [string, unknown][] : []),
       ...(!historical && totalTokens(task.usage) !== undefined ? [[t('Token 用量'),[tokenText(totalTokens(task.usage)!), usageDetail(task.usage!)].filter(Boolean).join(' · ')]] as [string, unknown][] : []),
-      [t('记录的证明状态'),label(task.proof.status)],[t('本版本计划依赖 AND'),task.plannedDependencies.join(', ')||t('无')],
+      [t('记录的证明状态'),label(task.proof.status)],[t('本版本需先完成'),task.plannedDependencies.join(', ')||t('无')],
       ...(!historical ? [[t('计划消费者'),plannedConsumers.join(', ')||t('无')]] as [string, unknown][] : []),
     ];
     const detail = (title: string, value: unknown, id: string) => ({ title, value, id: `${id}-${task.id}-${task.version}` });
@@ -602,16 +611,17 @@ export class CollaborationView {
       hasChecks: checks.length > 0,
     } });
   }
-  /** Re-rendered on new events as well as new observations; the key skips polls that changed neither. */
+  /** Re-rendered on new events, actions and observations; the key skips polls that changed none. The map reads new actions itself. */
   private renderRoute(view: ViewState, run: WebRun) {
     const observation = view.observation, ended = run.status !== 'queued' && run.status !== 'running';
-    const key = [run.events.length, run.events.at(-1)?.sequence, run.status, ended ? endedSummary(run) : '', observation?.sequence].join('|');
+    const key = [run.events.length, run.events.at(-1)?.sequence, run.actions?.count ?? 0, run.status, ended ? endedSummary(run) : '', observation?.sequence].join('|');
     if (view.routeKey === key) return;
     view.routeKey = key;
-    const names = workerNames(observation?.inspection.workers);
+    const inspection = observation?.inspection;
     renderAgentRoute(view.element.querySelector<HTMLElement>('[data-agent-route]')!, {
-      routes: agentRoutes(run.events).map(route => ({ ...route, name: names.get(route.workerId) })), running: run.status === 'running', tasks: taskNames(observation?.inspection.tasks ?? []),
-      ...(ended ? { ended: endedSummary(run) } : {}), planned: observation?.inspection.tasks.length ?? 0, time: clockTime,
+      source: { store: this.activity, run, lead: inspection?.workers.find(worker => worker.role === 'lead')?.id },
+      names: workerNames(inspection?.workers), running: run.status === 'running', tasks: taskNames(inspection?.tasks ?? []),
+      ...(ended ? { ended: endedSummary(run) } : {}), planned: inspection?.tasks.length ?? 0, time: clockTime,
     });
   }
   private renderNow(view: ViewState, run: WebRun) {

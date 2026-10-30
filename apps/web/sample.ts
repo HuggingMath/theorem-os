@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import type { WebObservation } from './collaboration';
-import { webSampleRunId, type WebEvent, type WebRun } from './shared';
+import { webAgentActionLimits, webSampleRunId, type WebAgentAction, type WebEvent, type WebRun } from './shared';
 import { recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersion, trajectoryVersionDetail, trajectoryVersionQuery, type TrajectoryIndex } from './trajectory';
 
 export { webSampleRunId };
 
 /** A recorded, accepted run every visitor can open without an API key. It is read-only and never counts as one of theirs. */
 export const webSampleSchema = 'theorem-os.web-sample.v1';
-export type WebSampleFile = { schema: typeof webSampleSchema; recordedAt: string; run: WebRun; observations: WebObservation[]; events: WebEvent[] };
+export type WebSampleFile = { schema: typeof webSampleSchema; recordedAt: string; run: WebRun; observations: WebObservation[]; events: WebEvent[];
+  /** What the scripted Agents did, ordered with `events`; `run.actions.count` says how many. */ actions?: WebAgentAction[] };
 export type WebSampleResponse = { status: number; body: unknown; filename?: string };
 
 const trajectories = new WeakMap<WebSampleFile, TrajectoryIndex>();
@@ -40,6 +41,12 @@ export function webSampleResponse(sample: WebSampleFile, operation: string | und
     if (!Number.isSafeInteger(after) || after < 0) return { status: 400, body: { error: '事件游标无效。' } };
     return { status: 200, body: { events: sample.events.filter(event => event.sequence > after).slice(0, 200),
       firstSequence: sample.events[0]?.sequence ?? 0, lastSequence: sample.events.at(-1)?.sequence ?? 0, droppedBefore: null } };
+  }
+  if (operation === 'actions') {
+    const after = Number(query.get('after') ?? 0);
+    if (!Number.isSafeInteger(after) || after < 0) return { status: 400, body: { error: '动作游标无效。' } };
+    const actions = sample.actions ?? [];
+    return { status: 200, body: { actions: actions.filter(action => action.sequence > after).slice(0, webAgentActionLimits.page), count: actions.length, dropped: 0 } };
   }
   if (operation === 'trajectory') {
     const trajectory = trajectoryQuery(query);

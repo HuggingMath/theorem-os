@@ -7,6 +7,7 @@ import type { WebConfig } from './config';
 import type { WorkerInput, WorkerMessage } from './shared';
 import { webArtifactMaxBytes, webFailureKinds, webFailureReason } from './shared';
 import { isWebEventDetails } from './moduleTelemetry';
+import { isWebAgentActionBody } from './agentActions';
 import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
@@ -21,6 +22,11 @@ export type WebRunner = {
 };
 const execute = promisify(execFile);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+/**
+ * The worker image's own code and build state. A statement check needs only Lean and the prebuilt Mathlib, and its
+ * `#eval` can read any file it sees and throw the text back as an error the editor shows, so these are covered.
+ */
+export const webPrivateImagePaths = ['/opt/theorem-os', '/opt/runtime-state'] as const;
 /** Inspect only a projection emitted by the worker, never accept arbitrary checkpoint objects. */
 export function isWebObservation(value: unknown): value is WebObservation {
   if (!object(value) || value.schema !== 'theorem-os.web-observation.v1' ||
@@ -60,6 +66,8 @@ export function parseWorkerMessage(line: string): WorkerMessage | undefined {
       return { type: 'observation', observation: value.observation };
     if (object(value) && value.type === 'catalog' && Object.keys(value).length === 2)
       return { type: 'catalog', catalog: validateTheoremKnowledge(value.catalog) };
+    if (object(value) && value.type === 'action')
+      return Object.keys(value).length === 2 && isWebAgentActionBody(value.action) ? { type: 'action', action: value.action } : undefined;
     const message = workerMessageSchema.safeParse(value);
     return message.success ? message.data as WorkerMessage : undefined;
   } catch { return undefined; }
@@ -118,6 +126,7 @@ export class DockerWebRunner implements WebRunner {
       await execute('docker', ['create', '--interactive', '--pull=never', '--name', name, '--network=none', '--log-driver=none',
         '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--cpus=2', `--memory=${memory}`, `--memory-swap=${memory}`,
         '--pids-limit=128', '--ulimit', 'nofile=1024:1024', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777',
+        ...webPrivateImagePaths.flatMap(hidden => ['--tmpfs', `${hidden}:ro,noexec,nosuid,nodev,size=4096,mode=0555`]),
         '--entrypoint', 'sh', this.config.workerImage, '-c', script], { timeout: 30_000, maxBuffer: 8_192 });
     } catch (error) { await remove(); throw error; }
     try {

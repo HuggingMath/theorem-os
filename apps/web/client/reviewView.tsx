@@ -68,7 +68,7 @@ export class ReviewView {
   private readonly clear = () => { this.task = ''; this.state = ''; this.query = ''; this.filter(); };
   private readonly choose = (key: string) => { this.selected = key; this.render(); };
   private selectionStatus(review: WebStatementReview) {
-    return t('所选声明审阅状态：{0}。{1} 完整原题以 S3 独立验收为准。', status(review.status), review.status === 'superseded' ? t('此审阅已被替代，保留供追溯。') : review.status === 'accepted' ? t('已接受的是此声明快照；新任务版本只有在原意和形式声明快照不变时才能沿用审阅。') : review.status === 'changes_requested' ? t('此记录请求修改；具体原因见保存的摘要。') : ['pending', 'translating', 'translated', 'reviewing'].includes(review.status) ? t('当前状态尚未接受审阅。{0}', review.summary ? t('恢复后可能保留先前摘要。') : '') : t('回译保存后仍需完成声明比较。'));
+    return t('所选声明审阅状态：{0}。{1} 完整原题以独立验收为准。', status(review.status), review.status === 'superseded' ? t('此审阅已被替代，保留供追溯。') : review.status === 'accepted' ? t('已接受的是此声明快照；新任务版本只有在原意和形式声明快照不变时才能沿用审阅。') : review.status === 'changes_requested' ? t('此记录请求修改；具体原因见保存的摘要。') : ['pending', 'translating', 'translated', 'reviewing'].includes(review.status) ? t('当前状态尚未接受审阅。{0}', review.summary ? t('恢复后可能保留先前摘要。') : '') : t('回译保存后仍需完成声明比较。'));
   }
   private choices(items: WebStatementReview[]) {
     if (!items.length) return help(this.records().length ? t('没有匹配的声明审阅') : t('本次观察尚无声明审阅记录；无法据此判断是否需要审阅。'));
@@ -143,7 +143,7 @@ export class ReviewView {
       <div class="collab-section-heading"><h3 tabIndex={-1} data-review-heading>{t('审阅与验收')}</h3><span class="collab-help" data-review-count>{t('{0} / {1} 条声明审阅', items.length, this.records().length)}</span></div>
       <div class="collab-review-verdicts">
         <article><p class="collab-help" data-review-candidate-status role="status">{candidate.status}</p><div data-review-candidate>{candidate.view}</div></article>
-        <article data-review-acceptance><h4>{t('完整原题 · 独立验收 S3')}</h4><strong class={`collab-review-verdict${accepted ? ' collab-accepted' : rejected ? ' collab-rejected' : ''}`}>{accepted ? t('验收通过') : rejected ? t('验收未通过') : ended ? t('没有验收结果') : t('尚未验收通过')}</strong>
+        <article data-review-acceptance><h4>{t('完整原题 · 独立验收')}</h4><strong class={`collab-review-verdict${accepted ? ' collab-accepted' : rejected ? ' collab-rejected' : ''}`}>{accepted ? t('验收通过') : rejected ? t('验收未通过') : ended ? t('没有验收结果') : t('尚未验收通过')}</strong>
           <p>{this.run ? resultDescription(this.run) : t('等待运行结果。')}</p>{help(t('声明审阅与候选 Reviewer 接受均不替代完整原题的独立 Lean 验收。此处沿用运行的最终验收结果。'))}</article>
       </div>
       <div class="collab-review-statements"><h4>{t('声明与原意对照')}</h4>{help(t('独立回译后比较原意与形式声明。审阅可在声明快照不变时复用到新任务版本；接受结论本身不表示重新审阅。'))}</div>
@@ -171,14 +171,14 @@ export class ReviewView {
   private referenceStatement() {
     const review = this.selectedReview(); if (!review || !this.observation) return;
     const { id, taskId, version, snapshotDigest, environmentDigest, commit, status } = review;
-    const added = this.appendReference(t('声明审阅引用（记录材料，完整原题以 S3 独立验收为准）\n{0}', JSON.stringify({ ...this.provenance(),
+    const added = this.appendReference(t('声明审阅引用（记录材料，完整原题以独立验收为准）\n{0}', JSON.stringify({ ...this.provenance(),
       review: { id, taskId, version, snapshotDigest, environmentDigest, commit, status, summaryExcerpt: review.summary?.slice(0, 180) } }, null, 2)));
     this.referenceNotice(added, t('声明审阅'));
   }
   private referenceCandidate() {
     const review = this.observation?.inspection.review; if (!review) return;
     const { commit, sourceDigest, status, assignmentId } = review;
-    const added = this.appendReference(t('固定候选审阅引用（结论只属于所列 commit 与源码摘要，完整原题以 S3 独立验收为准）\n{0}', JSON.stringify({ ...this.provenance(),
+    const added = this.appendReference(t('固定候选审阅引用（结论只属于所列 commit 与源码摘要，完整原题以独立验收为准）\n{0}', JSON.stringify({ ...this.provenance(),
       review: { commit, sourceDigest, status, assignmentId, summaryExcerpt: review.summary?.slice(0, 180) } }, null, 2)));
     this.referenceNotice(added, t('候选审阅'));
   }

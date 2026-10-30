@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import { webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEnvironment, type WebProvider, type WebRun, type WebRunInput, type WebSession } from './shared';
+import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEnvironment, type WebProvider, type WebRun, type WebRunInput, type WebSession } from './shared';
 import { researchModulePlanSchema } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
@@ -464,15 +464,21 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (operation === 'events' && request.method === 'GET') {
           const after = Number(url.searchParams.get('after') ?? 0);
           if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '事件游标无效。');
-          const events = storage.getEvents(owner, run.id);
-          const firstSequence = events[0]?.sequence ?? 0, lastSequence = events.at(-1)?.sequence ?? 0;
-          json(response, 200, { events: events.filter(event => event.sequence > after).slice(0, 200),
+          // Pages read only their own records, so a reader can walk a long run's whole history.
+          const { first: firstSequence, last: lastSequence } = storage.eventRange(owner, run.id);
+          json(response, 200, { events: storage.listEventsAfter(owner, run.id, after, 200),
             firstSequence, lastSequence, droppedBefore: firstSequence > 1 ? firstSequence : null }); return;
         }
         if (operation === 'trajectory' && request.method === 'GET') {
           const query = trajectoryQuery(url.searchParams);
           if (!query) throw new HttpError(400, '轨迹游标无效。');
           json(response, 200, { trajectory: trajectories.page(owner, run.id, query) }); return;
+        }
+        if (operation === 'actions' && request.method === 'GET') {
+          const after = Number(url.searchParams.get('after') ?? 0);
+          if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '动作游标无效。');
+          const actions = storage.listActionsAfter(owner, run.id, after, webAgentActionLimits.page);
+          json(response, 200, { actions, count: run.actions?.count ?? 0, dropped: run.actions?.dropped ?? 0 }); return;
         }
         if (operation === 'trajectory/version' && request.method === 'GET') {
           const query = trajectoryVersionQuery(url.searchParams);

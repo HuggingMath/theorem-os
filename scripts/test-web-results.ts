@@ -178,6 +178,10 @@ try {
     assert.ok((await target.locator('.target-diagnostics').innerText()).includes(diagnostic));
     await assertNoInjection(h.page);
     await screenshot(h.page, 'results-desktop-1440-summary.png');
+    // The copied file is the rejected candidate, and the toast says so rather than calling it a proof.
+    await h.page.locator('#detail-panel .result-proof [data-action="copy-proof"]').click();
+    assert.equal(await h.page.evaluate(() => navigator.clipboard.readText()), source);
+    await h.page.locator('#toast').filter({ hasText: '候选源码已复制' }).waitFor();
     await h.page.locator('[data-report-view="json"]').click();
     assert.equal(await h.page.locator('.code-scroll.report code').textContent(), JSON.stringify(failedReport, null, 2));
     await h.page.locator('[data-action="copy-report"]').click();
@@ -312,6 +316,12 @@ try {
     assert.equal(deleteCount(h, middle.id), 1);
     const selected = await h.page.locator('.run-row.selected').getAttribute('data-run-id');
     assert.ok(selected === first.id || selected === last.id, 'deletion must select a neighboring record');
+    // The keyboard lands on the run now shown, so it can be read or deleted next, and the address names it. The dialog's
+    // close event, which moves it, comes a task after the dialog hides.
+    await h.page.waitForFunction(id => (document.activeElement as HTMLElement | null)?.closest('#run-list')
+      && (document.activeElement as HTMLElement).dataset.runId === id, selected, { timeout: 3_000 })
+      .catch(() => assert.fail('focus moves to the newly selected run'));
+    assert.equal(new URL(h.page.url()).search, `?run=${selected}`);
     await refresh(h);
     assert.equal(await h.page.locator(`[data-run-id="${middle.id}"]`).count(), 0);
     await deleteSelected(h, selected!);

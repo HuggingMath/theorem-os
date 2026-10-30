@@ -7,6 +7,7 @@ import { classifyWebError, classifyWebResult } from './failure';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { mathDigest, readMathJson, readMathText } from '../../src/math/mathRuntimeIo';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
+import { isMathPathWithin } from '../../src/math/paths';
 import { createCodexMathSession } from '../../src/runtime/codexSession';
 import { sub2apiModelCatalog } from '../../src/runtime/sub2api';
 import type { SolverModules } from '../../src/solver/modules';
@@ -18,7 +19,8 @@ import { runSolver } from '../../src/solver/run';
 import { readKnowledgeCatalog } from '../../src/solver/theoremKnowledgeStore';
 import { createWebProgressForwarder } from './progress';
 import { withoutCheckMarkers } from './report';
-import { webArtifactMaxBytes, type WebArtifact, type WorkerInput, type WorkerMessage } from './shared';
+import { webArtifactMaxBytes, webPreparationSeconds, type WebAgentActionBody, type WebArtifact, type WorkerInput, type WorkerMessage } from './shared';
+import { sanitizeAgentItem } from './agentActions';
 import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './workerBridge';
 import { webByokModuleIdentity } from './webModuleIdentity';
 
@@ -160,13 +162,36 @@ export function writeWebContinuation(directory: string, continuation: NonNullabl
   return manifestFile;
 }
 
-export function webSolverModules(request: WorkerInput): SolverModules {
+/**
+ * Agent shells in this container cannot read the application or its build state; they run the bundled commands from
+ * scripts/build-agent-tools.ts instead, which the image installs here.
+ */
+export const webAgentToolsDefault = '/opt/theoremos-agent-tools/math.mjs';
+export type WebAgentIsolation = { tools: string; hiddenRoots: readonly string[] };
+
+export function webSolverModules(request: WorkerInput, actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[] },
+  isolation?: WebAgentIsolation): SolverModules {
   const base = configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
   const identity = webByokModuleIdentity(solverModuleConfiguration(base));
+  let sessions = 0;
   return { ...base, id: identity.id,
+    ...(isolation ? { M4: { ...base.M4, build: (problem, state, access) => base.M4.build(problem, state, { ...access, tools: isolation.tools }) } } : {}),
     M1: { ...base.M1, version: identity.versions.M1!,
-      open: options => createCodexMathSession({ ...options,
-        environment: { ...options.environment, THEOREMOS_PROVIDER_API_KEY: request.input.apiKey } }) } };
+      open: options => {
+        const workerId = options.environment?.DEEPSCIENTIST_MATH_WORKER_ID;
+        // Each item is sanitized here, inside the container, before it is written to the host.
+        const context = actions && workerId ? { workerId, worktree: options.workspace, hidden: actions.hidden,
+          tool: isolation?.tools ?? path.join(root, 'bin/math.ts'), apiKey: request.input.apiKey } : undefined;
+        // Item ids are only unique within one Codex thread; a restarted session numbers its own.
+        const session = ++sessions;
+        return createCodexMathSession({ ...options,
+          ...(isolation ? { hiddenRoots: isolation.hiddenRoots } : {}),
+          environment: { ...options.environment, THEOREMOS_PROVIDER_API_KEY: request.input.apiKey },
+          ...(context ? { onItem: (phase, item) => {
+            const action = sanitizeAgentItem(phase, { ...item, id: typeof item.id === 'string' ? `${session}:${item.id}` : item.id }, context);
+            if (action) actions!.sink(action);
+          } } : {}) });
+      } } };
 }
 
 async function main() {
@@ -220,7 +245,8 @@ async function main() {
     const environment = getLeanTaskEnvironment(request.input.environment ?? 'standard');
     const receipt = bootstrapLeanTask(path.join(directory, 'workspace'), {
       source: request.input.source, task: request.input.task, environment: environment.id });
-    const buildIndex = readMathJson(process.env.THEOREMOS_WORKER_BUILD || '/opt/theoremos-build.json') as { buildManifestRef: string };
+    const buildFile = process.env.THEOREMOS_WORKER_BUILD || '/opt/theoremos-build.json';
+    const buildIndex = readMathJson(buildFile) as { buildManifestRef: string };
     readMathBuildManifest(buildIndex.buildManifestRef, root, path.join(root, 'out/main'));
     const taskFile = path.join(directory, 'task.md');
     fs.writeFileSync(taskFile, request.input.task + '\nPreserve all original declarations. Prove every target in generated/problem/Submission.lean.\n', { mode: 0o600 });
@@ -238,7 +264,15 @@ async function main() {
       } });
     artifactTimer = setInterval(sampleArtifact, 1_500);
     observationTimer = setInterval(() => { void capture(); }, 1_500);
-    const modules = webSolverModules(request);
+    const buildState = path.dirname(path.dirname(path.dirname(buildIndex.buildManifestRef)));
+    const tools = process.env.THEOREMOS_WORKER_AGENT_TOOLS || webAgentToolsDefault;
+    // Without the bundle the shells would need the application itself, so the run stops rather than expose it.
+    if (!fs.existsSync(tools) || isMathPathWithin(root, fs.realpathSync(tools))) throw new Error('math_agent_tools_unavailable');
+    const modules = webSolverModules(request, { sink: action => send({ type: 'action', action }),
+      // The application, its build state (…/builds/<id>/manifest.json) and this run's directory: the other Agents' worktrees,
+      // the Codex profile and the solver's state. An Agent's own worktree inside the run directory is shown relative.
+      hidden: [root, buildState, buildFile, directory, path.join(workspaceRoot, 'active-run.json')] },
+      { tools, hiddenRoots: [root, buildState] });
     await runSolver(['--workspace', receipt.workspaceRoot, '--task-file', taskFile, '--output', output,
       '--receipt-file', receipt.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
       '--model', request.input.model, '--effort', request.input.effort, '--workers', String(request.input.workers),
@@ -248,7 +282,7 @@ async function main() {
       ...(continuationFile ? ['--continuation-manifest', continuationFile] : []),
       '--max-run-seconds', String(request.input.maxRunSeconds), '--max-turn-seconds', '120',
       ...(request.input.maxTotalTokens ? ['--max-total-tokens', String(request.input.maxTotalTokens)] : []),
-      '--prepare-timeout-seconds', environment.id === 'mathlib' ? '600' : '120',
+      '--prepare-timeout-seconds', String(webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
       '--evaluator-timeout-seconds', '120'], root, modules);
     sampleArtifact();
     clearInterval(artifactTimer);

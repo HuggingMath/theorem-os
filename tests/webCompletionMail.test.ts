@@ -58,7 +58,10 @@ describe('completion mail content', () => {
     expect(subject(ended({}))).toContain('已结束');
     const text = (value: WebRun) => completionMail(value, 'https://app.theoremos.top').text;
     expect(text(ended({ status: 'limit_reached' }))).toContain('Your research "Infinitely many primes" used up its solve time.');
-    expect(text(ended({ status: 'limit_reached' }, { failure: { kind: 'time_limit', reason: 'math_preparation_stopped' } }))).toContain('解题尚未开始');
+    const preparation = ended({ status: 'limit_reached' }, { failure: { kind: 'time_limit', reason: 'math_preparation_stopped' } });
+    expect(text(preparation)).toContain('解题没有开始');
+    expect(text(preparation)).not.toContain('提高解题预算');
+    expect(completionMail(preparation, 'https://app.theoremos.top').subject).toContain('证明环境准备超时');
     // The owner was mailed when the plan was ready; the stop mail says the wait is what used the time.
     const unapproved = ended({ status: 'limit_reached' }, { observation: { inspection: { planApproval: { status: 'pending' } } } as unknown as WebRun['observation'] });
     expect(text(unapproved)).toContain('研究计划直到解题时间用完都没有批准');

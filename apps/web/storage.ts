@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
-import type { WebEvent, WebRun } from './shared';
+import type { WebAgentAction, WebEvent, WebRun } from './shared';
 import type { WebShareSnapshot } from './share';
 
 export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
@@ -192,9 +192,28 @@ export class WebStorage {
     return bySequence(this.listRecords(directory).map(file => this.getRecord<WebEvent>([...directory, file])!));
   }
   getEvents(owner: string, runId: string): WebEvent[] { return this.listEvents(owner, runId); }
+  /** The first and last stored event sequence, read from the record names alone. */
+  eventRange(owner: string, runId: string): { first: number; last: number } {
+    let first = 0, last = 0;
+    for (const file of this.listRecords([...this.runPath(owner, runId), 'events'])) {
+      if (!/^\d+\.json$/u.test(file)) continue;
+      const sequence = Number.parseInt(file, 10);
+      if (!first || sequence < first) first = sequence;
+      if (sequence > last) last = sequence;
+    }
+    return { first, last };
+  }
   /** Events after a sequence, oldest first, at most `limit`; for incremental readers such as the trajectory index. */
   listEventsAfter(owner: string, runId: string, after: number, limit: number): WebEvent[] {
     return this.recordsAfter<WebEvent>([...this.runPath(owner, runId), 'events'], after, limit);
+  }
+  saveAction(owner: string, runId: string, action: WebAgentAction): void {
+    if (!Number.isSafeInteger(action.sequence) || action.sequence < 1) throw new Error('web_storage_invalid_action_sequence');
+    this.saveRecord([...this.runPath(owner, runId), 'actions', `${action.sequence}.json`], action, true);
+  }
+  /** Agent actions after a sequence, oldest first, at most `limit`. */
+  listActionsAfter(owner: string, runId: string, after: number, limit: number): WebAgentAction[] {
+    return this.recordsAfter<WebAgentAction>([...this.runPath(owner, runId), 'actions'], after, limit);
   }
   listObservationsAfter(owner: string, runId: string, after: number, limit: number): WebObservation[] {
     return this.recordsAfter<WebObservation>([...this.runPath(owner, runId), 'observations'], after, limit);

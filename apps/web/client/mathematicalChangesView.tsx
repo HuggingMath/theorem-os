@@ -180,7 +180,7 @@ export class MathematicalChangesView {
   private details(receipt: WebMathematicalChange) {
     const key = mathematicalChangeKey(receipt);
     // Keyed by receipt: another selection remounts, so its details start closed unless their keys were open.
-    return <Fragment key={key}><h4>{summary(receipt)}</h4>{help(t('局部闭合、研究完成和路线就绪均不代替完整原题的 S3 验收。任务入口打开所保留的合同。'))}
+    return <Fragment key={key}><h4>{summary(receipt)}</h4>{help(t('局部闭合、研究完成和路线就绪均不代替完整原题的独立验收。任务入口打开所保留的合同。'))}
       <Facts facts={[[t('记录时间'), time(receipt.at)], [t('记录性质'), receipt.kind === 'baseline' ? t('观察基线') : t('快照差异')], [t('变化前快照'), receipt.beforeDigest], [t('变化后快照'), receipt.afterDigest], [t('环境变化'), receipt.environmentChanged ? t('已记录变化，未保存两侧环境摘要') : t('未记录环境变化')]]} />
       {receipt.kind === 'baseline' ? <p class="collab-notice">{t('此条建立观察基线，不将当时已有的证明计为新闭合。')}</p> : <>
         {this.pairs(t('证明义务'), sides(receipt.obligations, { new: t('新增义务'), closed: t('局部闭合'), reopened: t('义务重开'), removed: t('移除义务'), changed: t('义务记录变化') }), (item, key) => this.obligation(item, key), `${key}-obligations`)}

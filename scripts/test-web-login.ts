@@ -108,7 +108,7 @@ try {
   await page.goto(`${origin}/login.html`);
   await page.waitForURL(`${origin}/`);
   await page.locator(`#run-list [data-run-id="${older}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
-  assert.equal(new URL(page.url()).search, '', 'The run link stays in the address bar');
+  assert.equal(new URL(page.url()).search, `?run=${older}`, 'The address bar names the run the link opened');
   mark('a completion mail links to its run, and the link still opens that run after the login page');
 
   await page.click('#open-account');

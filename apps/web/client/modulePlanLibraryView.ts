@@ -73,7 +73,7 @@ export class ModulePlanLibraryView {
   sync(): void {
     const plan = this.current();
     if (this.undo?.type === 'load' && !samePlan(plan, this.undo.applied)) this.undo = undefined;
-    this.control('[data-module-library-count]').textContent = `${this.entries.length} / ${modulePlanLibraryLimit}`;
+    this.control('[data-module-library-count]').textContent = this.entries.length ? `${this.entries.length} / ${modulePlanLibraryLimit}` : '';
     const selected = this.selected;
     const different = Boolean(selected && !samePlan(plan, selected.plan));
     this.select.disabled = this.busy; this.name.disabled = this.busy;

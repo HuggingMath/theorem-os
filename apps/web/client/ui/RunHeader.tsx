@@ -1,10 +1,12 @@
 import { render } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
-import { animateEntrance } from '../motion';
+import { rollDigits, rollStatus } from '../motion';
 import { Icon, Spinner } from './Icon';
+import { fill } from './Section';
 import { t } from '../../i18n';
 
-export type HeaderStage = { label: string; state: 'done' | 'active' | 'stopped' | 'error' | 'pending' | 'skipped'; clock: string };
+export type HeaderStage = { label: string; state: 'done' | 'active' | 'stopped' | 'error' | 'pending' | 'skipped'; clock: string;
+  /** The solve budget, on the stage it counts in; that stage's clock reads against it while it runs. */ budget?: string };
 export type RunHeaderProps = {
   title: string; id: string; /** ISO time of the last recorded change; kept on the heading, not shown. */ updated: string; error: string;
   status: { key: string; label: string; tone: string; symbol: string };
@@ -26,14 +28,42 @@ export type PlanApprovalProps = {
 };
 
 function StatusBadge({ status }: { status: RunHeaderProps['status'] }) {
-  const ref = useRef<HTMLSpanElement>(null), shown = useRef(status.key);
+  const ref = useRef<HTMLSpanElement>(null), shown = useRef({ key: status.key, label: status.label }), width = useRef(0);
+  // The width the badge is drawn at, part-way through a roll included, so the next roll starts from there.
+  useLayoutEffect(() => {
+    const observer = new ResizeObserver(([entry]) => { width.current = entry!.borderBoxSize[0]?.inlineSize ?? width.current; });
+    observer.observe(ref.current!);
+    return () => observer.disconnect();
+  }, []);
   // Before paint, so the changed badge is never shown at full strength first.
   useLayoutEffect(() => {
-    if (shown.current === status.key) return;
-    shown.current = status.key;
-    animateEntrance(ref.current!, 'status');
+    if (shown.current.key === status.key) return;
+    const from = { label: shown.current.label, width: width.current };
+    shown.current = { key: status.key, label: status.label };
+    rollStatus(ref.current!, from);
   }, [status.key]);
-  return <span ref={ref} class={`badge ${status.tone}`} data-status={status.key}><Icon name={status.symbol} />{status.label}</span>;
+  return <span ref={ref} class={`badge ${status.tone}`} data-status={status.key}><Icon name={status.symbol} /><span class="badge-label">{status.label}</span></span>;
+}
+
+/** A formatted count whose changed digits roll to their new value; the text is the count throughout. */
+function Ticker({ value }: { value: string }) {
+  const ref = useRef<HTMLSpanElement>(null), shown = useRef(value);
+  useLayoutEffect(() => {
+    const before = shown.current;
+    if (before === value) return;
+    shown.current = value;
+    // Digits are compared from the right; a count that changed shape (another unit, another length) is simply replaced.
+    const shape = (text: string) => text.replace(/\d/gu, '0');
+    if (shape(before) !== shape(value)) return;
+    const cells = [...ref.current!.querySelectorAll<HTMLElement>('[data-digit]')].flatMap(cell => {
+      const at = Number(cell.dataset.at), from = Number(before[before.length - 1 - at]), to = Number(cell.dataset.digit);
+      return from !== to ? [{ cell, from, to }] : [];
+    });
+    rollDigits(ref.current!, cells);
+  }, [value]);
+  const characters = [...value];
+  return <span ref={ref} class="ticker">{characters.map((character, index) => /\d/u.test(character)
+    ? <span key={characters.length - index} class="ticker-digit" data-digit={character} data-at={characters.length - 1 - index}>{character}</span> : character)}</span>;
 }
 
 const stageSymbol = { done: 'check', error: 'x', active: '', stopped: 'square', pending: '', skipped: '' } as const;
@@ -44,7 +74,8 @@ function StageTrack({ stages }: { stages: HeaderStage[] }) {
     <ol class="artifact-stages" data-ended={stages.every(stage => stage.state !== 'active') || undefined}>{stages.map(stage => <li key={stage.label} class={stage.state} data-stage={stage.state} data-elapsed={stage.clock}
       title={stage.clock && stage.state !== 'active' ? t('{0} · 用时 {1}', stage.label, stage.clock) : undefined} aria-current={stage.state === 'active' ? 'step' : undefined}>
       <span class="stage-marker" aria-hidden="true">{stageSymbol[stage.state] && <Icon name={stageSymbol[stage.state]} />}</span>
-      <span class="stage-copy"><span class="stage-label">{stage.label}</span>{stage.state === 'active' && stage.clock && <span class="stage-clock mono">{stage.clock}</span>}</span>
+      <span class="stage-copy"><span class="stage-label">{stage.label}</span>{stage.state === 'active' && stage.clock && <span class="stage-clock mono"
+        title={stage.budget ? t('解题预算 {0}，从构造证明开始计时', stage.budget) : undefined}>{stage.budget ? `${stage.clock} / ${stage.budget}` : stage.clock}</span>}</span>
     </li>)}</ol>
   </section>;
 }
@@ -135,7 +166,7 @@ function RunHeader(props: RunHeaderProps) {
           {props.sample && <span class="badge sample-badge" data-sample-badge><Icon name="eye" />{t('示例 · 只读')}</span>}
           <span class="detail-elapsed" title={t('总用时')}><Icon name="clock-3" /><span class="mono" data-header-clock>{props.elapsed}</span></span>
           {props.tokens && <span class="detail-elapsed" data-header-tokens title={props.tokens.cap ? t('这次运行所有 Agent 用掉的 Token；到达上限 {0} 后停止新的调用', props.tokens.cap) : t('这次运行所有 Agent 用掉的 Token')}>
-            <Icon name="gauge" /><span class="mono">{props.tokens.cap ? t('Token {0} / {1}', props.tokens.used, props.tokens.cap) : t('Token {0}', props.tokens.used)}</span></span>}
+            <Icon name="gauge" /><span class="mono">{props.tokens.cap ? fill(t('Token {0} / {1}'), <Ticker value={props.tokens.used} />, props.tokens.cap) : fill(t('Token {0}'), <Ticker value={props.tokens.used} />)}</span></span>}
         </div>
       </div>
       <Actions {...props} />

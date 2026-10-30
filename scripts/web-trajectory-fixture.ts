@@ -48,6 +48,9 @@ export async function replaySample(sample: WebSampleFile, runId: string, send: (
     // Shifted when sent, so a hold just before it moves its own times too.
     ...sample.observations.map(observation => ({ at: Date.parse(observation.observedAt),
       message: () => ({ type: 'observation', observation: { ...shift(observation) as typeof observation, webRunId: runId } }) as WorkerMessage })),
+    // The worker reports an action without a place or time; the server gives it both when it arrives.
+    ...(sample.actions ?? []).map(({ sequence: _sequence, at, ...action }) => ({ at: Date.parse(at),
+      message: () => ({ type: 'action', action }) as WorkerMessage })),
   ].sort((a, b) => a.at - b.at);
   for (const step of steps) {
     const wait = moved(step.at) - Date.now();

@@ -6,10 +6,10 @@ import {
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import type { WebExplainAnswer } from '../explain';
 import type { WebShareLink } from '../share';
-import { effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
+import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
-import { filterRuns, type RunFilter } from './history';
-import { readLeanFile } from './sourceFile';
+import { continuationsOf, filterRuns, ownerFirst, type RunFilter } from './history';
+import { looksLikeLeanSource, readLeanFile } from './sourceFile';
 import { sourceIndentEdit, type IndentDirection } from './sourceIndent';
 import type { SourceSelection } from './sourceText';
 import { EditorNavigation, revealOffset } from './editorNavigation';
@@ -36,13 +36,15 @@ import { renderTopbar } from './ui/Topbar';
 import { renderRunMonitor as drawRunMonitor, type MonitorItem } from './ui/RunMonitor';
 import { renderRunHeader as drawRunHeader, unmountRunHeader, type RunHeaderProps } from './ui/RunHeader';
 import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
-import { renderFacts, renderGlyph, renderGlyphLabel, renderHistoryEmpty, renderHistoryRow } from './ui/Controls';
+import { renderFacts, renderGlyph, renderGlyphLabel, renderHistoryEmpty, renderHistoryGroup, renderHistoryRow } from './ui/Controls';
 import { renderConnecting, renderDraftPreview as drawDraftPreview } from './ui/DraftPreview';
 import { renderOptions } from './ui/Section';
-import { renderDetailPanel, type OutlineState, type ReportPanelProps, type ResultPanelProps, type SourcePanelProps } from './ui/DetailPanel';
+import { renderDetailPanel, type CompareProps, type OutlineState, type ReportPanelProps, type ResultPanelProps, type SourcePanelProps } from './ui/DetailPanel';
+import { leanFileName, leanOutline, writtenNames, type LeanHeading } from './leanOutline';
 import { renderConversation as drawConversation } from './ui/Conversation';
-import { renderAgentRoute } from './ui/AgentRoute';
+import { renderAgentRoute, unmountAgentRoute } from './ui/AgentRoute';
 import { agentRoutes, taskNames } from './agentRoute';
+import { AgentActivity } from './agentActivity';
 import { clockTime, commandId, workerNames } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, newlyWaiting, notifyStorageKey, readResume, saveResume, waitsForOwner } from './runAwareness';
 import { forgetKey, hasRememberedKey, rememberKey, rememberedKey } from './keyMemory';
@@ -51,7 +53,7 @@ import { installTermHints, renderGlossary } from './termHints';
 import { renderAdminPanel } from './ui/AdminPanel';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
-import { localeTag, localizeText, otherLocale, switchLocale, t } from '../i18n';
+import { localeTag, localizeMessage, localizeText, otherLocale, switchLocale, t } from '../i18n';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -95,6 +97,7 @@ const state = {
   /** The owner's approval of a run's plan (先审计划), by run, from sending it until the run records it; `error` once it did not take effect. */
   approving: new Map<string, { id: string; planVersion: string; error?: string }>(),
   /** The run whose 完整源码 is open beside its result. */ proofViewer: '',
+  /** 对比代码 open beside a run's result: the run, and the later run compared with it. */ compare: undefined as { runId: string; laterId: string } | undefined,
   detailError: '', listGeneration: 0, runsEtag: '',
   listSignature: '', panelSignature: '',
   connected: false, refreshing: false, connectionEpoch: 0,
@@ -106,12 +109,15 @@ const state = {
   sample: undefined as WebRun | undefined,
 };
 const baseTitle = document.title;
-// A link from the completion mail (/?run=<id>) opens that run, also after the login page sends the reader back.
+// A link from the completion mail or the address bar (/?run=<id>) opens that run, also after the login page sends the reader back.
+// The address then follows the open run (syncAddress), so it can be bookmarked and Back returns to the run before.
+const runIdPattern = /^[a-f0-9-]{1,36}$/u;
 const linkedRun = new URLSearchParams(location.search).get('run');
-if (linkedRun !== null) {
-  if (/^[a-f0-9-]{1,36}$/u.test(linkedRun)) saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
-  history.replaceState(null, '', location.pathname + location.hash);
-}
+// The sample has an address of its own (/?sample), so Back from a run returns to it and a reload keeps it open.
+const sampleAddress = '?sample';
+let sampleLink = location.search === sampleAddress;
+if (linkedRun !== null && runIdPattern.test(linkedRun))
+  saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
 const notificationsSupported = () => typeof Notification === 'function';
 const notifyWanted = () => { try { return localStorage.getItem(notifyStorageKey) === 'on'; } catch { return false; } };
 function notifyState(): 'on' | 'off' | 'blocked' | 'unsupported' {
@@ -171,6 +177,14 @@ const draftRecovery = new DraftRecovery(() => sessionStorage);
 let taskImportSequence = 0;
 let pendingImport: { draft: TaskDraft; revision: number } | undefined;
 let sourceComparison: { runId: string; before: string; after: string; folded: boolean; result: SourceComparison } | undefined;
+/** 对比代码 between a run and a later one, kept while their code and the folding stay the same. */
+let runComparison: { before: string; after: string; folded: boolean; result: SourceComparison } | undefined;
+let proofHeadings: { source: string; headings: LeanHeading[] } | undefined;
+/** The declarations of the proof the result tab shows, read once per proof. */
+function headingsOf(source: string) {
+  if (proofHeadings?.source !== source) proofHeadings = { source, headings: leanOutline(source) };
+  return proofHeadings.headings;
+}
 let draftPreviewSignature = '';
 let draftSourceExpanded = false;
 /** The recorded version the next run starts from (「从这一版继续」); one submission uses it. */
@@ -184,11 +198,13 @@ const activityReader = new ActivityReader(at => timestamp(at, true),
   (filename, text) => download(filename, text, 'application/json'));
 const moduleView = new ModuleView();
 const modulePlanEditor = new ModulePlanEditor(element('#module-plan'), icons, () => draftChanged());
+// Each run's events and Agent actions for the route maps of the result and collaboration tabs, read once for both.
+const agentActivity = new AgentActivity(url => api(url));
 const collaborationView = new CollaborationView(api, receiveRunObservation, () => {
   state.tab = 'result'; renderDetail(true);
   document.querySelector('#detail-panel .result-report')?.scrollIntoView({ block: 'start', behavior: 'instant' });
   document.getElementById('detail-tab-result')?.focus({ preventScroll: true });
-});
+}, agentActivity);
 // The trajectory's line "+" adds that line to the run's guidance draft, addressed to the attempt's task, in 协作.
 const trajectoryView = new TrajectoryView(api, (run, text, taskId) => openGuidance(run, text, t('代码行已加入本地指导草稿，尚未发送'), taskId),
   { allowed: run => !isSample(run), start: (run, from) => reuseRun(run, 'retry', from), explain: { key: explainKey,
@@ -243,12 +259,15 @@ function jumpToSourceDiagnostic(diagnostic: WebPrecheckDiagnostic) {
 let chatWidth = 40;
 const conversationScroll = { top: 0 };
 const historyQuery = window.matchMedia('(max-width:850px)');
+// A touch screen's keyboard covers half the page: focus moves into a text field only when the reader is about to type.
+const touchQuery = window.matchMedia('(pointer: coarse)');
 const historyStorageKey = 'theoremos-history-collapsed-v1';
 let historyCriteria = '';
 let historyReading: { top: number; anchors: Array<{ id: string; offset: number }> } = { top: 0, anchors: [] };
 
+/** `message` is what the reader sees; `reason` keeps the server's own text for checks such as sessionFailure. */
 class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
+  constructor(readonly reason: string, readonly status: number) { super(localizeMessage(reason)); }
 }
 type ApiInit = RequestInit & { timeoutMs?: number };
 function api<T>(url: string, init?: ApiInit): Promise<T>;
@@ -260,9 +279,11 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
   if (!init.method || init.method === 'GET') signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
   try {
+    // fetch rejects with a TypeError when the server cannot be reached; its text ("Failed to fetch") means nothing to a reader.
     const response = await fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.any(signals),
       headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } });
+        ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } })
+      .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('无法连接服务器')) : error; });
     if (etag && response.status === 304) { etag(response.headers.get('ETag')); return; }
     const payload: unknown = await response.json().catch(error => {
       if (timeout.signal.aborted) throw timeout.signal.reason;
@@ -285,11 +306,14 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
   }
 }
 const message = (error: unknown) => error instanceof Error ? error.message : t('请求失败，请重试');
+/** A manual popover, shown again each time so it lands in the top layer above any open dialog instead of under its backdrop. */
 function toast(text: string) {
-  const target = element('#toast');
+  const target = element('#toast'), layered = 'showPopover' in target;
+  if (layered && target.matches(':popover-open')) target.hidePopover();
   target.textContent = text; target.hidden = false;
+  if (layered) target.showPopover();
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { target.hidden = true; }, 3000);
+  toastTimer = setTimeout(() => { if (layered && target.matches(':popover-open')) target.hidePopover(); target.hidden = true; }, 3000);
 }
 function setGlobalNotice(text: string) {
   element('#global-notice-text').textContent = text;
@@ -321,6 +345,13 @@ function setMobileView(view: 'compose' | 'runs', focus = false) {
   restoreConversationScroll();
   if (changed && window.matchMedia('(max-width:850px)').matches) {
     animateEntrance(element(view === 'compose' ? '.composer' : '#runs-panel'), 'workspace');
+  }
+}
+/** Focuses the first usable control in the order given (not the page's order, where the top bar comes first). */
+function focusFirst(selectors: readonly string[]) {
+  for (const selector of selectors) {
+    const control = Array.from(document.querySelectorAll<HTMLElement>(selector)).find(item => item.getClientRects().length && !item.matches(':disabled'));
+    if (control) { control.focus({ preventScroll: true }); return; }
   }
 }
 function showDialog(dialog: HTMLDialogElement) {
@@ -383,6 +414,8 @@ function currentSubmissionIssues(): SubmissionIssue[] {
   issues.splice(index < 0 ? issues.length : index, 0, issue);
   return issues;
 }
+const recordsFull = () => Boolean(state.session && state.runs.length >= state.session.limits.maxRuns);
+let readinessFull = false;
 function renderPreparation(issues = currentSubmissionIssues()) {
   for (const id of submissionFields) {
     const issue = issues.find(issue => issue.field === id);
@@ -406,26 +439,34 @@ function renderPreparation(issues = currentSubmissionIssues()) {
   const environmentReady = Boolean(state.session?.runtime.ready && state.session.providers.length);
   // An empty task nobody has tried to submit yet (a fresh page, or right after a submission) is the next step, not a fault.
   const composing = issue?.field === 'task' && !validationShown.has('task') && !field('task').value.trim();
+  // At the record limit the server refuses any new run, so that comes before the draft's own gaps.
+  const full = readinessFull = recordsFull();
   const phase = state.submitting ? 'submitting' : pending ? 'pending' : offline || !environmentReady ? 'offline'
-    : composing ? 'compose' : issue ? 'missing' : 'ready';
+    : full ? 'full' : composing ? 'compose' : issue ? 'missing' : 'ready';
   const target = element('#submission-readiness');
   if (target.dataset.state !== phase) target.dataset.state = phase;
   // A Key nobody has been asked for yet is the next step, as an empty task is: one quiet line, the storage notes stay in the settings.
   const firstKey = phase === 'missing' && issue?.field === 'api-key' && !validationShown.has('api-key');
   target.toggleAttribute('data-quiet', firstKey);
+  // Ready says what the run will work on; a statement Lean already accepts without sorry leaves the Agents nothing to prove.
+  const checked = phase === 'ready' ? sourceCheck.current() : undefined, settled = checked?.status === 'complete';
+  target.toggleAttribute('data-settled', settled);
   patchText(element('#readiness-title'), state.submitting ? t('正在提交研究') : pending ? t('正在读取提交配置')
     : offline ? t('连接中断，草稿可继续编辑') : !environmentReady ? t('运行环境未就绪')
-      : composing ? t('写下研究任务') : issue?.message ?? t('提交配置已填写'));
+      : full ? t('研究记录已满 {0} 条', state.session?.limits.maxRuns) : composing ? t('写下研究任务') : issue?.message ?? (settled ? t('原题里没有 sorry')
+        : checked?.status === 'ready' ? t('可以提交 · {0} 处 sorry 待证明', checked.sorries) : t('可以提交')));
   patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? t('连接后可编辑研究任务。')
-    : offline || !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
+    // Offline, the notice at the top already says the draft is kept.
+    : offline ? '' : !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
+      : full ? t('删除一条已结束的记录后才能提交新的研究；需要的档案请先下载。草稿会保留。')
       : firstKey ? '' : issue?.field === 'api-key' ? (state.session?.account?.keyVault ? t('勾选「保存到我的账号」后，下次不用再填。') : t('每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。'))
         : issue?.field === 'task' ? t('说明要证明的目标与约束。')
           : issue?.check ? t('原题需要先能编译；点击右侧定位到出错位置。')
           : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
-            : issue ? t('补全配置后即可提交当前题目。') : t('Key 与模型可用性将在提交时确认。'));
-  patchText(element('#readiness-action'), issue?.check ? t('查看错误') : issue ? labels[issue.field] : t('查看配置'));
-  element('#readiness-detail').hidden = firstKey;
-  renderGlyph(element('#readiness-icon'), state.submitting ? 'spinner' : phase === 'ready' ? 'circle-check' : phase === 'compose' ? 'square-pen' : firstKey ? 'key-round' : 'circle-alert');
+            : issue ? t('补全配置后即可提交当前题目。') : settled ? t('提交只会验收现有证明；要让 Agent 研究，把待证部分写成 sorry。') : '');
+  patchText(element('#readiness-action'), full ? t('整理研究记录') : issue?.check ? t('查看错误') : issue ? labels[issue.field] : settled ? t('编辑源码') : t('查看配置'));
+  element('#readiness-detail').hidden = !element('#readiness-detail').textContent;
+  renderGlyph(element('#readiness-icon'), state.submitting ? 'spinner' : phase === 'ready' && !settled ? 'circle-check' : phase === 'compose' ? 'square-pen' : firstKey ? 'key-round' : 'circle-alert');
   const action = element<HTMLButtonElement>('#prepare-run');
   if (action.disabled !== (pending || state.submitting)) action.disabled = pending || state.submitting;
   renderBudgetEstimate();
@@ -465,7 +506,6 @@ function renderTemplateSelection() {
 }
 function renderComposerSummary() {
   patchText(element('#composer-environment'), environmentName(field('environment').value));
-  patchText(element('#attached-lines'), t('{0} 行', field('source').value.split(/\r\n|\r|\n/).length));
   element('#draft-continuation').hidden = !draftContinuation;
   if (draftContinuation) patchText(element('#draft-continuation-label'), t('从「{0}」继续', draftContinuation.label));
   renderPreparation();
@@ -503,8 +543,13 @@ function renderAnnouncement() {
   const announcement = run ? t('{0}。{1}', status(run).label, activeRun(run) ? localizeText(run.events.at(-1)?.message ?? '') : resultDescription(run)) : '';
   patchText(element('#conversation-announcement'), announcement);
 }
+/** Where a provider's requests go, in a reader's terms: a public service by its host (the full address in the tooltip); the server's own gateway is not an address anyone can use. */
 function providerAddress() {
-  element('#provider-address').textContent = state.session?.providers.find(provider => provider.id === field('provider').value)?.baseUrl ?? '';
+  const address = element('#provider-address'), baseUrl = state.session?.providers.find(provider => provider.id === field('provider').value)?.baseUrl;
+  // The server only accepts absolute HTTPS addresses or its own gateway (config.ts).
+  const host = baseUrl ? new URL(baseUrl).hostname : '', gateway = host === 'host.docker.internal';
+  address.textContent = !baseUrl ? '' : gateway ? t('经工作台服务器转发') : host;
+  address.title = baseUrl && !gateway ? baseUrl : '';
   restoreKey();
   // A key this account saved, or for an admin one the server holds, lets the field stay empty.
   const account = state.session?.account, providerId = field('provider').value, key = element<HTMLInputElement>('#api-key');
@@ -562,13 +607,11 @@ const environmentName = (id: WebEnvironment | string) => environmentInfo(id)?.na
 const leanVersion = (toolchain: string) => toolchain.replace(/^leanprover\/lean4:/, '');
 function updateEnvironment() {
   const environment = environmentInfo(field('environment').value);
-  element('#lean-scope').textContent = environment ? leanVersion(environment.toolchain) : '';
   const details = element('#environment-details');
-  details.textContent = environment
-    ? `Lean ${leanVersion(environment.toolchain)}${environment.mathlibRevision ? ` · Mathlib ${environment.mathlibRevision.slice(0, 8)}` : t(' · 标准库')}`
-    : t('请选择证明环境');
+  // What the environment offers; its exact versions are for reproducing a run, so they stay in the tooltip and the run's 全部配置.
+  details.textContent = environment ? localizeText(environment.description) : t('请选择证明环境');
   details.title = environment
-    ? `${environment.description} · Lean ${leanVersion(environment.toolchain)}${environment.mathlibRevision ? ` · Mathlib ${environment.mathlibRevision}` : ''}`
+    ? `${localizeText(environment.description)} · Lean ${leanVersion(environment.toolchain)}${environment.mathlibRevision ? ` · Mathlib ${environment.mathlibRevision}` : ''}`
     : t('请选择证明环境');
   details.setAttribute('aria-label', details.title);
 }
@@ -621,7 +664,7 @@ function renderDraftRecovery() {
   if (!recovery) return;
   const labels: Record<ReplacementReason, string> = {
     template: t('已切换示例'), reset: t('已重置草稿'), reuse: t('已复用任务'), import: t('已载入任务文件'),
-    source: t('已导入 Lean 文件'), edit: t('已应用源码编辑'),
+    source: t('已导入 Lean 文件'), edit: t('已应用源码编辑'), paste: t('粘贴的 Lean 代码已设为原始题目'),
   };
   patchText(element('#draft-recovery-text'), labels[recovery.reason]);
   element('#draft-recovery-local').hidden = recovery.persisted;
@@ -936,6 +979,7 @@ function renderRuntime() {
   element<HTMLButtonElement>('#submit-run').disabled = !ready || state.submitting;
   renderGlyph(element('#submit-run'), state.submitting ? 'spinner' : 'arrow-up');
   element('#submit-run').setAttribute('aria-label', state.submitting ? t('正在提交') : t('发送研究任务'));
+  element('#submit-run').setAttribute('title', state.submitting ? t('正在提交') : touchQuery.matches ? t('发送研究任务') : t('发送研究任务（Enter；Shift+Enter 换行）'));
   element<HTMLButtonElement>('#settings-submit').disabled = !ready || state.submitting;
   element<HTMLFieldSetElement>('#form-fields').disabled = !session || state.submitting;
   element<HTMLButtonElement>('#reset-form').disabled = !session || state.submitting;
@@ -1022,12 +1066,17 @@ function closeHistoryDialog() {
 }
 function renderRunList(force = false) {
   renderRunMonitor();
-  const runs = visibleRuns();
+  // The readiness line warns at the record limit, so it follows the record count too.
+  if (recordsFull() !== readinessFull) renderPreparation();
+  // Plans waiting for the owner's approval stand in their own group above the rest; nothing in them runs until approved.
+  const groups = ownerFirst(filterRuns(state.runs, state.query, state.filter)), runs = [...groups.waiting, ...groups.others];
   const filtered = Boolean(state.query.trim() || state.filter !== 'all');
   const criteria = JSON.stringify([state.query, state.filter]);
-  const signature = JSON.stringify([state.selectedId, criteria, runs.map(run => [run.id, run.title, run.model, run.createdAt, environmentName(run.environment), status(run)])]);
+  const signature = JSON.stringify([state.selectedId, criteria, groups.waiting.length, runs.map(run => [run.id, run.title, run.model, run.createdAt, environmentName(run.environment), status(run)])]);
   patchText(element('#run-count'), filtered ? `${runs.length}/${state.runs.length}` : String(state.runs.length));
   element('#clear-run-search').hidden = !state.query;
+  // The phone list repeats model and environment under every title; when every run used the same pair it says nothing.
+  element('#run-list').toggleAttribute('data-uniform', new Set(state.runs.map(run => `${run.model}\n${run.environment}`)).size <= 1);
   if (!force && signature === state.listSignature) return;
   state.listSignature = signature;
   if (criteria === historyCriteria) rememberHistoryScroll();
@@ -1038,12 +1087,26 @@ function renderRunList(force = false) {
   const rows = new Map(Array.from(list.querySelectorAll<HTMLElement>(':scope > [data-history-id]'), row => [row.dataset.historyId!, row]));
   const focusedIndex = Array.from(rows.keys()).indexOf(focused?.dataset.runId ?? '');
   const ids = new Set(runs.map(run => run.id));
+  const headed = groups.waiting.length > 0;
+  const headings = new Map(Array.from(list.querySelectorAll<HTMLElement>(':scope > [data-history-group]'), row => [row.dataset.historyGroup!, row]));
   for (const child of Array.from(list.children)) {
     const row = child as HTMLElement;
-    if (!ids.has(row.dataset.historyId ?? '') && (runs.length || !row.hasAttribute('data-history-empty'))) row.remove();
+    if (row.hasAttribute('data-history-group') ? !headed || row.dataset.historyGroup === 'others' && !groups.others.length
+      : !ids.has(row.dataset.historyId ?? '') && (runs.length || !row.hasAttribute('data-history-empty'))) row.remove();
   }
   let cursor = list.firstElementChild;
+  const heading = (group: 'waiting' | 'others', label: string, count?: number) => {
+    let row = headings.get(group);
+    if (!row) { row = document.createElement('div'); row.className = 'history-group'; row.dataset.historyGroup = group; row.setAttribute('aria-hidden', 'true'); }
+    renderHistoryGroup(row, label, count);
+    if (row !== cursor) list.insertBefore(row, cursor);
+    cursor = row.nextElementSibling;
+  };
+  const tabbable = runs.some(run => run.id === state.selectedId) ? state.selectedId : runs[0]?.id;
   for (const run of runs) {
+    // The headings only repeat what each row's badge says, so screen readers keep the plain list of runs.
+    if (headed && run === groups.waiting[0]) heading('waiting', t('等你处理'), groups.waiting.length);
+    if (headed && run === groups.others[0]) heading('others', t('其他运行'));
     let row = rows.get(run.id);
     if (!row) {
       row = document.createElement('div'); row.setAttribute('role', 'listitem'); row.dataset.historyId = run.id;
@@ -1051,7 +1114,7 @@ function renderRunList(force = false) {
     }
     const value = status(run);
     renderHistoryRow(row, { id: run.id, title: run.title, model: run.model, environment: environmentName(run.environment), selected: run.id === state.selectedId,
-      tone: value.tone, symbol: value.symbol, label: value.label, createdAt: run.createdAt, time: timestamp(run.createdAt) });
+      tabbable: run.id === tabbable, tone: value.tone, symbol: value.symbol, label: value.label, createdAt: run.createdAt, time: timestamp(run.createdAt) });
     if (row !== cursor) list.insertBefore(row, cursor);
     cursor = row.nextElementSibling;
   }
@@ -1069,7 +1132,8 @@ function renderRunList(force = false) {
     (focused.isConnected ? focused : fallback ?? field('run-search')).focus({ preventScroll: true });
   }
 }
-const visibleRuns = () => filterRuns(state.runs, state.query, state.filter);
+/** The runs the history lists, in its order: the group waiting for the owner first, so arrow keys follow the rows. */
+const visibleRuns = () => { const { waiting, others } = ownerFirst(filterRuns(state.runs, state.query, state.filter)); return [...waiting, ...others]; };
 function clearFilters() {
   state.query = ''; state.filter = 'all';
   field('run-search').value = ''; field('run-filter').value = 'all';
@@ -1080,6 +1144,10 @@ const sampleSelected = () => Boolean(state.selectedId && state.selectedId === st
 const currentRun = () => state.selectedRun?.id === state.selectedId ? state.selectedRun
   : sampleSelected() ? state.sample : state.runs.find(run => run.id === state.selectedId);
 const downloadUrl = (id: string) => `/api/runs/${encodeURIComponent(id)}/download`;
+/** A run keeps going on the server; say so, and how its end reaches the reader (the account's mail, else this list). */
+const awayNote = () => state.session?.account && state.session.account.completionEmail !== false
+  ? t('可以关闭页面，运行会在服务器上继续；结束后会发邮件到 {0}。', state.session.account.email)
+  : t('可以关闭页面，运行会在服务器上继续；结束后回到研究记录查看结果。');
 function resultTitle(run: WebRun) {
   const guide = failureGuide(run);
   if (guide) return guide.title;
@@ -1096,17 +1164,25 @@ function resultProps(run: WebRun): ResultPanelProps {
   const environment = environmentInfo(run.environment);
   const item = (label: string, value: unknown, mono = false) => ({ label, value: String(value), mono });
   const latest = working ? run.events.at(-1) : undefined;
-  const proof = candidateSource(run), goals = summarizeGoals(run), approval = planAwaitingApproval(run);
+  const proof = candidateSource(run), goals = summarizeGoals(run), approval = planAwaitingApproval(run), later = continuationsOf(state.runs, run.id);
+  const compare = compareProps(run, later);
   return {
     // The plan waiting on its owner has nothing running: no spinner, unless the Lead is revising it from their note.
-    verdict: { tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: resultDescription(run),
+    verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: resultDescription(run),
       active: working && (!approval || approval.leadRevising), candidate: Boolean(run.artifact && working),
-      ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}) },
+      ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}),
+      ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
     recovery: isSample(run) ? [] : nextSteps(run, goals), ...(working ? { notify: notifyState() } : {}),
     ...(['environment', 'unknown', 'interrupted'].includes(guide?.kind ?? '') ? { feedback: feedbackUrl({ failure: guide!.kind }) } : {}),
     ...(proof ? { proof: { source: proof, verified: Boolean(run.result?.proof && passed(run)), rejected: isRejectedRun(run) } } : {}), ...(goals ? { goals } : {}),
     ...(proof && state.proofViewer === run.id ? { viewer: { onClose: closeProofViewer } } : {}),
+    ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom!.label, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
+      comparable: Boolean(proof && candidateSource(item)) })) } : {}),
+    ...(compare ? { compare } : {}),
     active: working, report: reportProps(run), task: run.task,
+    // Helpers are declared in the proof, the original targets in both; before a proof exists the problem names them.
+    written: writtenNames(headingsOf(run.result?.proof ?? proof ?? run.source)),
+    route: working || (run.observation?.inspection.tasks.length ?? 0) > 0 || Boolean(run.actions?.count) || agentRoutes(run.events).length > 0,
     facts: [item(t('证明环境'), environmentName(run.environment)), item(t('模型'), run.model, true),
       run.finishedAt ? item(t('结束时间'), timestamp(run.finishedAt)) : item(t('创建时间'), timestamp(run.createdAt))],
     // Versions, limits and budgets matter for reproducing the run, not for reading its result.
@@ -1121,13 +1197,31 @@ function resultProps(run: WebRun): ResultPanelProps {
       ...(environment?.mathlibRevision ? [item(t('Mathlib 版本'), environment.mathlibRevision, true)] : [])],
   };
 }
-/** The route map in the result tab, drawn from the recorded progress events like the collaboration tab's. */
+/** 对比代码 for the later run the reader opened beside this one's result, while both still have code. */
+function compareProps(run: WebRun, later: readonly WebRun[]): CompareProps | undefined {
+  const other = state.compare?.runId === run.id ? later.find(item => item.id === state.compare!.laterId) : undefined;
+  const before = candidateSource(run), after = other ? candidateSource(other) : '';
+  if (!other || !before || !after) return;
+  if (runComparison?.before !== before || runComparison.after !== after || runComparison.folded !== state.foldUnchanged)
+    runComparison = { before, after, folded: state.foldUnchanged, result: compareSources(before, after, state.foldUnchanged) };
+  return { id: other.id, label: other.continueFrom!.label, comparison: runComparison.result, folded: state.foldUnchanged, onClose: closeCompare };
+}
+function closeCompare() {
+  const id = state.compare?.laterId;
+  state.compare = undefined; renderPanel(true);
+  if (id) document.querySelector<HTMLElement>(`#detail-panel [data-action="compare-continued"][data-run-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+}
+let resultRouteHost: HTMLElement | undefined;
+/** The route map in the result tab, drawn from the run's events and its Agents' actions like the collaboration tab's. */
 function renderResultRoute(run: WebRun) {
-  const host = document.querySelector<HTMLElement>('#detail-panel [data-result-route]');
+  const host = document.querySelector<HTMLElement>('#detail-panel [data-result-route]') ?? undefined;
+  // A replaced host takes its map with it; unmounting stops that map's reading.
+  if (resultRouteHost && resultRouteHost !== host) unmountAgentRoute(resultRouteHost);
+  resultRouteHost = host;
   if (!host) return;
   const inspection = run.observation?.inspection;
-  const names = workerNames(inspection?.workers);
-  renderAgentRoute(host, { routes: agentRoutes(run.events).map(route => ({ ...route, name: names.get(route.workerId) })), running: run.status === 'running',
+  renderAgentRoute(host, { source: { store: agentActivity, run, lead: inspection?.workers.find(worker => worker.role === 'lead')?.id },
+    names: workerNames(inspection?.workers), running: run.status === 'running',
     tasks: taskNames(inspection?.tasks ?? []), planned: inspection?.tasks.length ?? 0, graph: 'elsewhere', time: clockTime });
 }
 let stallSignature = '';
@@ -1194,12 +1288,17 @@ function updateDiffNavigation(move = 0, align = false) {
   }
 }
 function reportProps(run: WebRun): ReportPanelProps {
-  if (!run.result) return run.error ? { kind: 'error', error: run.error } : { kind: 'empty', active: activeRun(run) };
-  if (state.reportMode === 'json') return { kind: 'json', report: run.result.report };
+  if (!run.result) return run.error ? { kind: 'error', error: localizeMessage(run.error) } : { kind: 'empty', active: activeRun(run) };
   const stuck = summarizeStuck(run);
-  const summary = summarizeReport(run);
-  return { kind: 'summary', summary: { ...summary, metrics: summary.metrics.map(readableMetric) }, accepted: passed(run), ...(stuck ? { stuck } : {}),
-    ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`,
+  const summary = summarizeReport(run), reason = reportReason(summary.reason);
+  // A run stopped before any check (a refused Key, say) has nothing to summarize; the verdict says why, the raw report stays folded.
+  if (!reason.text && !reason.code && !stuck && !summary.checks.length && !summary.metrics.length && !summary.identity.length && !run.result.proof)
+    return { kind: 'error', error: JSON.stringify(run.result.report, null, 2) };
+  if (state.reportMode === 'json') return { kind: 'json', report: run.result.report };
+  return { kind: 'summary', summary: { ...(reason.text ? { reason: reason.text } : {}), ...(reason.code ? { diagnostic: reason.code } : {}),
+    checks: summary.checks.map(check => { const why = checkReason(check); return { ...check, ...(why ? { reason: why } : {}) }; }),
+    metrics: summary.metrics.map(readableMetric), identity: summary.identity }, accepted: passed(run), ...(stuck ? { stuck } : {}),
+    ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`, headings: headingsOf(run.result.proof),
       mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib') } } : {}) };
 }
 const outlines = new Map<string, OutlineState>();
@@ -1219,7 +1318,9 @@ function renderPanel(force = false) {
   if (state.tab === 'result' && state.reportMode === 'summary') loadOutline(run);
   const content = state.tab === 'source' ? sourceContent(run) : undefined;
   const signature = JSON.stringify([run.id, state.tab, content ? [state.foldUnchanged, content.source, content.props]
-    : state.tab === 'result' ? [state.reportMode, run, outlines.get(run.id), notifyState(), state.proofViewer === run.id] : state.tab === 'events' ? run.events
+    : state.tab === 'result' ? [state.reportMode, run, outlines.get(run.id), notifyState(), state.proofViewer === run.id,
+      continuationsOf(state.runs, run.id).map(item => [item.id, status(item), Boolean(candidateSource(item))]),
+      state.compare?.runId === run.id ? [state.compare.laterId, state.foldUnchanged, candidateSource(state.runs.find(item => item.id === state.compare!.laterId) ?? run)] : ''] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
   if (!force && signature === state.panelSignature) {
     if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected, isSample(run));
@@ -1277,7 +1378,8 @@ function renderPanel(force = false) {
   if (state.tab === 'modules') moduleView.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
   if (state.tab === 'result') renderResultRoute(run);
   updateDiffNavigation(0, !sameView);
-  if (navigating) animateEntrance(panel, 'panel');
+  // Only on arriving at the result tab: switching the report keeps the reader where they were.
+  if (navigating) animateEntrance(panel, 'panel', switchingTab);
   updateSourceReader();
 }
 function moduleInput(run?: WebRun): ModuleViewInput {
@@ -1303,8 +1405,8 @@ function renderDraftPreview(force = false) {
   const facts = [
     ['environment', t('证明环境'), environment?.name ?? t('未选择'), false],
     ['model', t('模型'), field('model').value || t('未设置'), true],
-    ['budget', t('解题预算'), numericLabel('max-seconds', value => t('{0} 秒', value)), true],
-    ['workers', t('Agent 数量'), numericLabel('workers', value => t('{0} 个 Agent', value)), true],
+    ['budget', t('解题预算'), numericLabel('max-seconds', value => readableDuration(value * 1000)), false],
+    ['workers', t('Agent 数量'), numericLabel('workers', value => t('{0} 个 Agent', value)), false],
   ] as const;
   const title = template?.name ?? t('自定义研究');
   const signature = JSON.stringify([title, source, task, facts, draftSourceExpanded, state.draftView, state.connected,
@@ -1339,7 +1441,7 @@ function syncView() {
   restoreConversationScroll();
 }
 function renderDetail(force = false) {
-  syncView();
+  syncView(); syncAddress();
   renderConversation();
   const run = currentRun();
   if (sourceComparison && sourceComparison.runId !== run?.id) sourceComparison = undefined;
@@ -1385,7 +1487,8 @@ function renderRunHeader(run: WebRun) {
   drawRunHeader(element('#run-detail'), {
     title: run.title, id: run.id, updated: run.updatedAt, error: state.detailError,
     status: { key: `${run.status}:${run.phase}:${value.label}`, ...value },
-    stages: progress.steps.map(step => ({ label: step.label, state: step.state, clock: step.elapsed === null ? '' : formatDuration(step.elapsed) })),
+    stages: progress.steps.map(step => ({ label: step.label, state: step.state, clock: step.elapsed === null ? '' : formatDuration(step.elapsed),
+      ...(step.id === 'solving' && run.maxRunSeconds > 0 ? { budget: formatDuration(run.maxRunSeconds * 1000) } : {}) })),
     elapsed: formatDuration(progress.elapsed), tabs: detailTabs(), tab: state.tab,
     active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
     download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && Boolean(run.result?.proof),
@@ -1442,13 +1545,24 @@ function openGuidance(run: WebRun, text?: string, notice?: string, taskId?: stri
   state.tab = 'collaboration'; renderDetail(true);
   if (!collaborationView.guide(run.id, text, notice, taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
 }
-function selectRun(id: string, closeHistory = true) {
+/** How the next address change is recorded: a run the reader chose adds a history entry, anything automatic replaces it. */
+let addressMode: 'push' | 'replace' = 'replace';
+function syncAddress() {
+  const mode = addressMode; addressMode = 'replace';
+  // Until the first list arrives the selection is not known yet, and a ?run= or ?sample link must survive until it is.
+  if (!state.resumed || sampleLink) return;
+  const run = currentRun(), search = !run ? '' : isSample(run) ? sampleAddress : `?run=${encodeURIComponent(run.id)}`;
+  if (location.search === search) return;
+  history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search + location.hash);
+}
+function selectRun(id: string, closeHistory = true, address: 'push' | 'replace' = 'push') {
   if (!state.runs.some(run => run.id === id)) return;
+  addressMode = address;
   state.composing = false;
   state.selectedId = id; state.selectedRun = state.runs.find(run => run.id === id);
   saveResume(() => localStorage, { selectedId: id, seenAt: new Date().toISOString() });
   state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
-  state.diffChange = 0;
+  state.diffChange = 0; state.compare = undefined;
   renderRunList(); renderDetail(true);
   if (closeHistory) closeHistoryDialog();
 }
@@ -1460,26 +1574,28 @@ function localizeSession(session: WebSession): WebSession {
     ...(session.sample ? { sample: { ...session.sample, title: localizeText(session.sample.title) } } : {}) };
 }
 /** Opens the recorded sample run; it needs no API key and does not change the saved position in the user's own runs. */
-async function openSample() {
+async function openSample(address: 'push' | 'replace' = 'push') {
   const sample = state.session?.sample;
   if (!sample) return;
   if (!state.sample) {
+    const before = [state.selectedId, state.composing];
     try {
       const run = (await api<{ run: WebRun }>(`/api/runs/${encodeURIComponent(sample.id)}`))?.run;
       state.sample = run && { ...run, title: localizeText(run.title), task: localizeText(run.task), model: localizeText(run.model) };
     }
     catch (error) { toast(t('无法打开示例运行：{0}', message(error))); return; }
-    if (!state.sample) return;
+    // An address the page followed by itself gives way to whatever the reader opened meanwhile.
+    if (!state.sample || address === 'replace' && (before[0] !== state.selectedId || before[1] !== state.composing)) return;
   }
-  state.composing = false;
+  state.composing = false; addressMode = address;
   state.selectedId = sample.id; state.selectedRun = state.sample;
   state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
-  state.diffChange = 0;
+  state.diffChange = 0; state.compare = undefined;
   renderRunList(); renderDetail(true); renderShell();
   closeHistoryDialog(); setMobileView('runs');
 }
-function startDraft(reset = false) {
-  state.composing = true;
+function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
+  state.composing = true; addressMode = address;
   state.selectedId = ''; state.selectedRun = undefined;
   state.tab = 'source'; state.sourceView = 'proof'; state.detailError = '';
   state.draftView = 'source';
@@ -1490,7 +1606,7 @@ function startDraft(reset = false) {
 }
 const currentConnection = (epoch: number) => pageActive && epoch === state.connectionEpoch;
 const sessionFailure = (error: unknown) => error instanceof ApiError
-  && (error.status === 401 || error.status === 403 && error.message.includes('会话校验'));
+  && (error.status === 401 || error.status === 403 && error.reason.includes('会话校验'));
 function invalidateReads() {
   runUpdates.stop();
   liveRefreshPending = false;
@@ -1559,6 +1675,9 @@ async function refreshRuns(epoch: number, force = false) {
     const away = resume ? finishedSince(state.runs, resume.seenAt) : [];
     for (const run of away) if (run.id !== state.selectedId) state.finishedRuns.add(run.id);
     if (away.length) toast(away.length === 1 ? t('离开期间「{0}」已结束', away[0].title) : t('离开期间有 {0} 项研究已结束', away.length));
+    // Until the sample has loaded, the page shows the run below it and keeps the sample's address.
+    if (sampleLink && state.session?.sample) void openSample('replace').finally(() => { sampleLink = false; renderDetail(); });
+    else sampleLink = false;
   }
   // Nothing to resume until the account has a run; an empty history leaves storage untouched.
   // The sample is not a run to come back to; keep the last real selection but still record when the user was here.
@@ -1666,7 +1785,7 @@ const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 function renderShell() {
   const session = state.session, ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
   const run = currentRun(), running = state.runs.filter(activeRun);
-  const title = documentTitle(baseTitle, running.length, state.unseenRuns.size, running.filter(waitsForOwner).length);
+  const title = documentTitle(baseTitle, running.length, state.unseenRuns.size, running.filter(waitsForOwner).length, run?.title);
   if (document.title !== title) document.title = title;
   const live = run && activeRun(run)
     ? { label: state.cancelling.has(run.id) ? t('正在取消') : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }
@@ -1783,7 +1902,7 @@ function openHistory() {
   if (historyDocked()) { if (historyCollapsed()) setHistoryCollapsed(false); }
   else showDialog(element<HTMLDialogElement>('#history-dialog'));
   restoreHistoryScroll();
-  field('run-search').focus();
+  if (!touchQuery.matches) field('run-search').focus();
 }
 /** Opens the new-research page with the current draft; 清空草稿 on that page starts it over. */
 function openDraft() {
@@ -1799,13 +1918,13 @@ function paletteCommands(): PaletteCommand[] {
   const commands: PaletteCommand[] = [
     { id: 'open-draft', group: t('操作'), label: t('新建研究'), icon: 'square-pen', keywords: t('new draft 草稿 新研究'), run: openDraft },
     { id: 'open-history', group: t('操作'), label: t('打开研究记录'), icon: 'panel-left', keywords: 'history runs', run: openHistory },
-    { id: 'open-settings', group: t('操作'), label: t('研究配置'), hint: field('model').value, icon: 'sliders-horizontal', keywords: t('settings model 模型'), run: click('#open-settings') },
+    { id: 'open-settings', group: t('操作'), label: t('研究配置'), hint: field('model').value, icon: 'sliders-horizontal', keywords: t('settings model provider api key 模型 服务商 密钥 预算 轮次'), run: click('#open-settings') },
   ].filter(command => usable(`#${command.id}`));
-  commands.push({ id: 'switch-locale', group: t('帮助'), label: otherLocale.label, lang: otherLocale.lang, hint: otherLocale.title, icon: 'languages', keywords: 'language locale english chinese 语言 中文 英文', run: changeLocale });
   const preference = readThemePreference(localStorage), themeIcons: Record<ThemePreference, string> = { system: 'sun-moon', light: 'sun', dark: 'moon' };
   for (const option of ['system', 'light', 'dark'] as const) if (option !== preference)
     commands.push({ id: `theme-${option}`, group: t('外观'), label: t('外观：{0}', themeLabels[option]), icon: themeIcons[option],
       keywords: t('theme appearance dark light 外观 主题 深色 浅色 夜间'), run: () => chooseTheme(option) });
+  commands.push({ id: 'switch-locale', group: t('帮助'), label: otherLocale.label, lang: otherLocale.lang, hint: otherLocale.title, icon: 'languages', keywords: 'language locale english chinese 语言 中文 英文', run: changeLocale });
   commands.push({ id: 'open-glossary', group: t('帮助'), label: t('术语说明'), icon: 'book-open', keywords: t('glossary help 术语 帮助'), run: () => openGlossary() });
   if (state.session?.account?.admin) commands.push({ id: 'open-admin', group: t('操作'), label: t('管理'), hint: t('白名单与内测漏斗'), icon: 'shield-check',
     keywords: t('admin allowlist manage 管理 白名单 账号'), run: () => void openAdmin() });
@@ -1814,14 +1933,43 @@ function paletteCommands(): PaletteCommand[] {
   commands.push({ id: 'send-feedback', group: t('帮助'), label: t('反馈问题或建议'), hint: t('在官网填写，确认后发布到 GitHub'), icon: 'message-square',
     keywords: t('feedback bug report issue 反馈 问题 建议'), run: () => { window.open(feedbackUrl(), '_blank', 'noopener'); } });
   if (state.session?.sample && !sampleSelected()) commands.push({ id: 'open-sample', group: t('帮助'), label: t('查看示例运行'), hint: t('无需 API Key'), icon: 'eye', keywords: t('sample demo example 示例'), run: () => void openSample() });
+  // What the open run's own buttons do, under the same conditions, so 下载 or 分享 finds them from any tab.
+  if (run) {
+    const proof = candidateSource(run), verified = Boolean(run.result?.proof && passed(run)), sample = isSample(run);
+    const proofLabel = verified ? t('验收证明') : t('候选源码');
+    const actions: (PaletteCommand | false)[] = [
+      Boolean(proof) && { id: 'run-copy-proof', group: t('当前研究'), label: t('复制{0}', proofLabel), icon: 'copy', keywords: t('copy proof lean 复制 证明 源码'),
+        run: () => void copyText(proof, verified ? t('验收证明已复制') : t('候选源码已复制')) },
+      Boolean(proof) && { id: 'run-download-proof', group: t('当前研究'), label: t('下载 Lean'), hint: proofFileName(run), icon: 'download', keywords: t('download proof lean file 下载 证明 文件'),
+        run: () => download(proofFileName(run), proof, 'text/plain;charset=utf-8') },
+      !sample && verified && state.connected && { id: 'run-share', group: t('当前研究'), label: t('分享研究成果'), icon: 'share-2', keywords: t('share link public 分享 链接'),
+        run: () => void openSharing(run) },
+      Boolean(state.session) && !state.submitting && { id: 'run-reuse', group: t('当前研究'), label: sample ? t('用这道题开始研究') : t('复用任务配置'), icon: 'copy-plus',
+        keywords: t('reuse retry again rerun 复用 再试 重新 配置'), run: () => reuseRun(run) },
+      Boolean(run.result || !activeRun(run)) && { id: 'run-download-archive', group: t('当前研究'), label: t('下载运行档案'), icon: 'download', keywords: t('download archive zip run 下载 档案 记录'),
+        run: () => { const link = document.createElement('a'); link.href = downloadUrl(run.id); link.download = ''; document.body.append(link); link.click(); link.remove(); } },
+      !sample && activeRun(run) && state.connected && !state.cancelling.has(run.id) && { id: 'run-cancel', group: t('当前研究'), label: t('取消运行'), icon: 'square',
+        keywords: t('cancel stop 取消 停止'), run: () => openCancellation(run) },
+      !sample && !activeRun(run) && state.connected && !state.deleting.has(run.id) && { id: 'run-delete', group: t('当前研究'), label: t('删除运行记录'), icon: 'trash-2',
+        keywords: t('delete remove 删除 记录'), run: () => openDeletion(run) },
+    ];
+    for (const action of actions) if (action) commands.push(action);
+  }
   const tabIcons: Record<DetailTab, string> = { result: 'circle-check', trajectory: 'route', collaboration: 'network', source: 'file-code-2', events: 'activity', modules: 'blocks' };
   const paletteTabs: readonly (readonly [DetailTab, string])[] = [...baseTabs, ['modules', t('模块方案')]];
+  // What each view holds, so 报告 or json finds the result view.
+  const tabKeywords: Record<DetailTab, string> = { result: t('result report verdict json 报告 验收报告 验收 证明'),
+    trajectory: t('trajectory steps timeline 轨迹 步骤 过程'), collaboration: t('collaboration agents plan tasks 协作 计划 任务 分工'),
+    source: t('source code lean diff 源码 代码 对比'), events: t('events activity log 活动 日志 事件'), modules: t('modules plan 模块 方案') };
   if (run) for (const [tab, label] of paletteTabs) commands.push({ id: `tab-${tab}`, group: t('当前研究'), label, hint: tab === state.tab ? t('当前视图') : undefined, icon: tabIcons[tab],
-    keywords: tab, run: () => { state.tab = tab; setMobileView('runs'); renderDetail(true); element(`#detail-tab-${tab}`).focus({ preventScroll: true }); } });
+    keywords: `${tab} ${tabKeywords[tab]}`, run: () => { state.tab = tab; setMobileView('runs'); renderDetail(true); element(`#detail-tab-${tab}`).focus({ preventScroll: true }); } });
   for (const item of state.runs.toReversed().slice(0, 30)) {
     const value = status(item);
-    commands.push({ id: `run-${item.id}`, group: t('研究记录'), label: item.title, hint: value.label, icon: value.symbol, keywords: `${item.id} ${item.model}`,
-      run: () => { selectRun(item.id); setMobileView('runs'); } });
+    // The theorem names find a run by its problem (fermat_little), whatever language the task is written in.
+    const theorems = leanOutline(item.source).filter(heading => heading.kind === 'theorem').map(heading => heading.name);
+    commands.push({ id: `run-${item.id}`, group: t('研究记录'), label: item.title, hint: value.label, icon: value.symbol,
+      keywords: [item.task, ...theorems, item.id, item.model].join(' '),
+      run: () => { selectRun(item.id); setMobileView('runs'); element(`#detail-tab-${state.tab}`).focus({ preventScroll: true }); } });
   }
   return commands;
 }
@@ -1838,7 +1986,8 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
   if (!session || !state.connected || state.submitting || !session.runtime.ready || !session.providers.length) return;
   const errorBox = element('#form-error'); errorBox.hidden = true;
   const epoch = state.connectionEpoch;
-  let sent = false;
+  const returnFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : field('task');
+  let sent = false, failed = false;
   const issues = currentSubmissionIssues();
   if (issues.length) {
     for (const issue of issues) validationShown.add(issue.field);
@@ -1884,7 +2033,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     state.runs = [run, ...state.runs.filter(item => item.id !== run.id)];
     state.composing = false;
     state.selectedId = run.id; state.selectedRun = run; state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';
-    clearFilters();
+    addressMode = 'push'; clearFilters();
     field('task').value = ''; draftContinuation = undefined; updateCounts(); draftChanged();
     state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('runs');
     schedulePoll();
@@ -1900,7 +2049,16 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       disconnected(t('连接需要恢复，未提交内容已保留。'));
       void initialize();
     }
-  } finally { state.submitting = false; renderRuntime(); }
+    failed = true;
+  } finally {
+    state.submitting = false; renderRuntime();
+    // The form was disabled while the request ran, which drops focus to the page; after a refusal it goes back where the reader was.
+    // A send from the settings dialog left with the dialog, so the task takes it then.
+    if (failed && document.activeElement === document.body) {
+      returnFocus.focus({ preventScroll: true });
+      if (document.activeElement === document.body) field('task').focus({ preventScroll: true });
+    }
+  }
 });
 const runById = (id: string) => state.selectedRun?.id === id ? state.selectedRun : state.runs.find(run => run.id === id);
 function renderCancelState() {
@@ -2081,6 +2239,8 @@ async function changeSharing(method: 'POST' | 'DELETE') {
     if (sharing === target) { target.busy = false; renderShareState(message(error)); }
   }
 }
+// A downloaded proof is named after the theorem it proves (the first one the problem left open), not the run's ID.
+const proofFileName = (run: WebRun) => leanFileName(run.source);
 function download(name: string, content: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const link = document.createElement('a'); link.href = url; link.download = name;
@@ -2094,7 +2254,9 @@ async function copyText(text: string, success: string) {
   } catch { toast(t('无法访问剪贴板')); }
 }
 const recoveryFields: Record<Exclude<RecoveryAction['id'], 'report'>, string> = {
-  retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'workers', source: 'source' };
+  retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'workers', source: 'source', task: 'task' };
+/** 提高: twice the run's own limit, up to what a run may ask for. */
+const raised = (value: number, highest: number) => Math.min(highest, Math.max(1, value) * 2);
 /** Loads `run`'s problem and settings into a new draft; with `from`, the new run also starts from that recorded version. */
 /** 从已检查的代码继续: a new draft from the latest code the run's own Lean check passed, read from its trajectory. */
 async function continueChecked(run: WebRun, taskIds: readonly string[], button: HTMLButtonElement) {
@@ -2124,6 +2286,11 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
     for (const [id, value] of Object.entries({ ...connection, source: run.source, task: run.task,
       'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers,
       'max-tokens': run.maxTotalTokens ? run.maxTotalTokens / 10_000 : '' })) field(id).value = String(value);
+    // 提高解题预算 / 提高轮次上限 open with the limit already doubled (up to the highest allowed); the field stays open to change it.
+    const limit = recovery === 'budget' ? { id: 'max-seconds', value: run.maxRunSeconds, highest: session.limits.maxRunSeconds, say: (value: number) => readableDuration(value * 1000) }
+      : recovery === 'turns' ? { id: 'max-turns', value: run.maxTurns, highest: session.limits.maxTurns, say: String } : undefined;
+    const raise = limit && limit.value > 0 && limit.value < limit.highest ? { ...limit, to: raised(limit.value, limit.highest) } : undefined;
+    if (raise) field(raise.id).value = String(raise.to);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
     element<HTMLInputElement>('#plan-approval').checked = Boolean(run.planApproval);
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(run.modulePlan);
@@ -2133,9 +2300,18 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
     updateKeyToggle(); providerAddress(); updateEnvironment(); sourceChanged();
     element('#form-error').hidden = true;
     startDraft();
+    if (recovery === 'task') {
+      // The task is in the composer, outside the settings dialog: put the caret at its end to add to it.
+      const task = element<HTMLTextAreaElement>('#task');
+      task.focus(); task.setSelectionRange(task.value.length, task.value.length);
+      toast(t('已载入原始题目与执行配置；在研究任务里补充思路，再输入 API Key 提交'));
+      return;
+    }
     openSettings(recoveryFields[recovery]);
     toast(from ? t('已载入原始题目、执行配置和「{0}」的代码，请输入 API Key', from.label)
-      : recovery === 'retry' || recovery === 'key' ? t('已载入原始题目与执行配置，请输入 API Key') : t('已载入原始配置，修改后请重新输入 API Key'));
+      : raise ? recovery === 'budget' ? t('已载入原始配置，并把解题预算从 {0} 提高到 {1}；请输入 API Key', raise.say(raise.value), raise.say(raise.to))
+        : t('已载入原始配置，并把轮次上限从 {0} 提高到 {1}；请输入 API Key', raise.value, raise.to)
+        : recovery === 'retry' || recovery === 'key' ? t('已载入原始题目与执行配置，请输入 API Key') : t('已载入原始配置，修改后请重新输入 API Key'));
   });
 }
 element('#run-detail').addEventListener('change', event => {
@@ -2210,7 +2386,8 @@ element('#run-detail').addEventListener('click', event => {
   if (target.dataset.action === 'share-run') void openSharing(run);
   if (target.dataset.action === 'copy-id') void copyText(run.id, t('运行 ID 已复制'));
   if (target.dataset.action === 'copy-source') void copyText(displayedSource(run), t('Lean 源码已复制'));
-  if (target.dataset.action === 'copy-proof' && candidateSource(run)) void copyText(candidateSource(run), t('Lean 源码已复制'));
+  if (target.dataset.action === 'copy-proof' && candidateSource(run))
+    void copyText(candidateSource(run), run.result?.proof && passed(run) ? t('验收证明已复制') : t('候选源码已复制'));
   if (target.dataset.action === 'notify') void toggleNotifications();
   if (target.dataset.action === 'recover') {
     const action = target.dataset.recovery, step = nextSteps(run, summarizeGoals(run)).find(item => item.id === action);
@@ -2223,7 +2400,7 @@ element('#run-detail').addEventListener('click', event => {
     return;
   }
   if (target.dataset.action === 'show-modules' || target.dataset.action === 'open-source') {
-    state.proofViewer = '';
+    state.proofViewer = ''; state.compare = undefined;
     state.tab = target.dataset.action === 'show-modules' ? 'modules' : 'source';
     if (state.tab === 'source') state.sourceView = candidateSource(run) ? 'proof' : 'input';
     renderDetail(true); element(`#detail-tab-${state.tab}`).focus({ preventScroll: true }); return;
@@ -2238,7 +2415,17 @@ element('#run-detail').addEventListener('click', event => {
   if (target.dataset.action === 'retry-outline' && loadOutline(run, true)) renderPanel(true);
   if (target.dataset.action === 'view-proof') {
     if (state.proofViewer === run.id) { closeProofViewer(); return; }
-    state.proofViewer = run.id; renderPanel(true); return;
+    // One viewer at a time beside the result.
+    state.proofViewer = run.id; state.compare = undefined; renderPanel(true); return;
+  }
+  if (target.dataset.action === 'compare-continued' && target.dataset.runId) {
+    if (state.compare?.runId === run.id && state.compare.laterId === target.dataset.runId) { closeCompare(); return; }
+    state.compare = { runId: run.id, laterId: target.dataset.runId }; state.proofViewer = ''; renderPanel(true); return;
+  }
+  // A declaration in the proof structure opens the source tab at its line.
+  if (target.dataset.action === 'jump-declaration' && target.dataset.line && candidateSource(run)) {
+    state.proofViewer = ''; state.compare = undefined; state.tab = 'source'; state.sourceView = 'proof';
+    renderDetail(true); sourceReader.goToLine(Number(target.dataset.line)); return;
   }
   if (target.dataset.action === 'guide-run') { openGuidance(run); return; }
   if (target.dataset.action === 'approve-plan') { void approvePlan(run); return; }
@@ -2263,10 +2450,13 @@ element('#run-detail').addEventListener('click', event => {
   }
   if (target.dataset.action === 'diff-prev') updateDiffNavigation(-1);
   if (target.dataset.action === 'diff-next') updateDiffNavigation(1);
-  if (target.dataset.action === 'download-proof' && candidateSource(run)) download(`${run.id}-Submission.lean`, candidateSource(run), 'text/plain;charset=utf-8');
+  if (target.dataset.action === 'download-proof' && candidateSource(run)) download(proofFileName(run), candidateSource(run), 'text/plain;charset=utf-8');
   if (target.dataset.action === 'download-report' && run.result) download(`${run.id}-report.json`, JSON.stringify(run.result.report, null, 2) + '\n', 'application/json');
 });
 element('#run-detail').addEventListener('change', event => {
+  if ((event.target as HTMLElement).dataset.action === 'compare-folded') {
+    state.foldUnchanged = (event.target as HTMLInputElement).checked; renderPanel(true); return;
+  }
   if ((event.target as HTMLElement).id !== 'diff-changes-only') return;
   state.foldUnchanged = (event.target as HTMLInputElement).checked;
   renderPanel(true); updateDiffNavigation(0, true);
@@ -2310,7 +2500,7 @@ document.addEventListener('keydown', event => {
     event.preventDefault();
     const index = runs.findIndex(run => run.id === target.dataset.runId);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? runs.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : runs.length - 1)) % runs.length;
-    selectRun(runs[next].id, false);
+    selectRun(runs[next].id, false, 'replace');
     Array.from(document.querySelectorAll<HTMLButtonElement>('[data-run-id]')).find(button => button.dataset.runId === state.selectedId)?.focus();
   }
 });
@@ -2341,6 +2531,10 @@ for (const type of ['input', 'change']) element('#run-form').addEventListener(ty
   if (type === 'input' && ['environment', 'template'].includes(target.id)) return;
   if (target.id !== 'source') draftChanged(target.id !== 'api-key');
 });
+// A number out of range says so when the reader leaves the field, not only after 开始研究 behind the dialog.
+for (const id of ['max-turns', 'max-seconds', 'workers', 'max-tokens'] as const) field(id).addEventListener('change', () => {
+  validationShown.add(id); renderPreparation();
+});
 window.addEventListener('storage', event => {
   if (event.key === modulePlanLibraryStorageKey || event.key === null) modulePlanLibrary.refresh();
 });
@@ -2349,10 +2543,14 @@ for (const id of ['source', 'task']) field(id).addEventListener('input', () => {
   if (id === 'source') sourceChanged(); else updateCounts();
 });
 element('#import-source').addEventListener('click', () => element<HTMLInputElement>('#source-file').click());
-element<HTMLInputElement>('#source-file').addEventListener('change', async event => {
+element<HTMLInputElement>('#source-file').addEventListener('change', event => {
   const input = event.target as HTMLInputElement, file = input.files?.[0];
   input.value = '';
-  if (!file || !state.session || state.submitting) return;
+  if (file) void loadSourceFile(file);
+});
+/** A chosen or dropped .lean file becomes the original problem; a wrong file is explained beside the source in the settings. */
+async function loadSourceFile(file: File) {
+  if (!state.session || state.submitting) return;
   const revision = ++sourceRevision;
   element('#source-error').hidden = true;
   try {
@@ -2365,6 +2563,41 @@ element<HTMLInputElement>('#source-file').addEventListener('change', async event
     element('#source-error').textContent = message(error); element('#source-error').hidden = false;
     openSettings('source');
   }
+}
+// The browser opens a file dropped anywhere it is not handled, in place of the workbench and its draft; here it is the
+// same as attaching it. A page-wide hint shows while a file is held over the page; dragover repeats every few hundred
+// milliseconds while the pointer is still, so the timer only clears it once the drag has ended without a drop.
+let fileDragTimer: ReturnType<typeof setTimeout> | undefined;
+const draggingFiles = (event: DragEvent) => Boolean(event.dataTransfer?.types.includes('Files'));
+function endFileDrag() { clearTimeout(fileDragTimer); document.body.removeAttribute('data-file-drag'); }
+// Another dialog (the source editor with its own edits, a confirmation) keeps the draft as it is.
+const fileDropBlocked = () => !state.session || state.submitting
+  || [...document.querySelectorAll<HTMLDialogElement>('dialog[open]')].some(dialog => dialog.id !== 'run-settings');
+document.addEventListener('dragover', event => {
+  if (!draggingFiles(event)) return;
+  event.preventDefault();
+  const blocked = fileDropBlocked();
+  event.dataTransfer!.dropEffect = blocked ? 'none' : 'copy';
+  if (!blocked) document.body.dataset.fileDrag = 'true';
+  clearTimeout(fileDragTimer); fileDragTimer = setTimeout(endFileDrag, 1000);
+});
+document.addEventListener('dragleave', event => { if (!event.relatedTarget) endFileDrag(); });
+document.addEventListener('drop', event => {
+  if (!draggingFiles(event)) return;
+  event.preventDefault();
+  endFileDrag();
+  const file = event.dataTransfer!.files[0];
+  if (!file || fileDropBlocked()) return;
+  if (!state.composing) startDraft();
+  void loadSourceFile(file);
+});
+// A whole Lean file pasted into the task is the problem, not a description of it: it replaces the original problem, with
+// the usual undo, the same as an imported file (a template's task gives way to the generic one).
+element<HTMLTextAreaElement>('#task').addEventListener('paste', event => {
+  const text = event.clipboardData?.getData('text/plain') ?? '';
+  if (!state.session || state.submitting || !looksLikeLeanSource(text) || byteSize(text) > state.session.limits.maxSourceBytes) return;
+  event.preventDefault();
+  replaceDraft('paste', () => setCustomSource(text.replace(/\r\n?/gu, '\n')));
 });
 element('#expand-source').addEventListener('click', () => openEditor());
 element('#import-task').addEventListener('click', () => element<HTMLInputElement>('#task-file').click());
@@ -2446,9 +2679,7 @@ element('#cancel-run-dialog').addEventListener('close', () => {
   const active = document.activeElement;
   if (document.querySelector('dialog[open]') || (active && active !== document.body && !element('#cancel-run-dialog').contains(active))) return;
   // The stop button is disabled while the request runs, so focus falls back to the run menu.
-  const focus = Array.from(document.querySelectorAll<HTMLElement>('.detail-actions [data-action="cancel"],[data-run-menu]>summary,#open-draft,#open-history'))
-    .find(control => control.getClientRects().length && !control.matches(':disabled'));
-  focus?.focus({ preventScroll: true });
+  focusFirst(['.detail-actions [data-action="cancel"]', '[data-run-menu]>summary', '#open-draft', '#open-history']);
 });
 for (const id of ['cancel-delete', 'close-delete']) element(`#${id}`).addEventListener('click', () => {
   if (!deletionTarget || !state.deleting.has(deletionTarget.id)) element<HTMLDialogElement>('#delete-run-dialog').close();
@@ -2462,9 +2693,8 @@ element('#delete-run-dialog').addEventListener('close', () => {
   deletionTarget = undefined;
   const active = document.activeElement;
   if (document.querySelector('dialog[open]') || (active && active !== document.body && !dialog.contains(active))) return;
-  const focus = Array.from(document.querySelectorAll<HTMLElement>('[data-run-menu]>summary,#open-draft,#open-history'))
-    .find(control => control.getClientRects().length && !control.matches(':disabled'));
-  focus?.focus({ preventScroll: true });
+  // The run now selected in its place, so the next one can be read or deleted straight away.
+  focusFirst(['#run-list [aria-pressed="true"]', '[data-run-menu]>summary', '#open-draft', '#open-history']);
 });
 element('#source-editor').addEventListener('input', event => {
   if (event.target !== field('expanded-source')) return;
@@ -2504,8 +2734,11 @@ element('.settings-content').addEventListener('scroll', () => {
 }, { passive: true });
 element('#prepare-run').addEventListener('click', () => {
   if (!state.session || state.submitting) return;
+  if (element('#submission-readiness').dataset.state === 'full') { openHistory(); return; }
   const issue = currentSubmissionIssues()[0];
-  if (issue) focusSubmissionIssue(issue); else openSettings();
+  if (issue) focusSubmissionIssue(issue);
+  else if (element('#submission-readiness').hasAttribute('data-settled')) openEditor();
+  else openSettings();
 });
 for (const id of ['close-settings', 'apply-settings']) element(`#${id}`).addEventListener('click', () => closeSettings());
 element('#run-settings').addEventListener('close', () => {
@@ -2552,13 +2785,15 @@ element('#conversation').addEventListener('click', event => {
   if (template) {
     field('environment').value = template.environment;
     renderTemplates(template.id); applyTemplate(template.id); updateEnvironment();
-    field('task').focus(); return;
+    if (!touchQuery.matches) field('task').focus();
+    return;
   }
   if (target.dataset.chatAction === 'sample') { void openSample(); return; }
   if (target.dataset.chatAction === 'glossary') openGlossary();
 });
+// Enter sends from a hardware keyboard; a phone keyboard has no Shift, so there its Enter starts a new line and the button sends.
 element<HTMLTextAreaElement>('#task').addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !event.altKey) {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !event.altKey && !touchQuery.matches) {
     event.preventDefault();
     if (!element<HTMLButtonElement>('#submit-run').disabled) element<HTMLFormElement>('#run-form').requestSubmit(element<HTMLButtonElement>('#submit-run'));
   }
@@ -2647,6 +2882,16 @@ async function resumeConnection() {
   if (pageActive && !state.connected) await initialize();
 }
 window.addEventListener('online', () => void resumeConnection());
+// Back and Forward open the run the address names, or the new-research page; they never add entries themselves.
+window.addEventListener('popstate', () => {
+  if (!state.resumed || state.submitting) return;
+  const id = new URLSearchParams(location.search).get('run') ?? '';
+  if (id && runIdPattern.test(id) && state.runs.some(run => run.id === id)) {
+    if (id !== state.selectedId || state.composing) { selectRun(id, true, 'replace'); setMobileView('runs'); }
+  } else if (location.search === sampleAddress && state.session?.sample) { if (!sampleSelected()) void openSample('replace'); }
+  else if (!id && currentRun() && !isSample(currentRun())) startDraft(false, 'replace');
+  else renderDetail();
+});
 window.addEventListener('pagehide', () => {
   saveDraft();
   pageActive = false; invalidateReads(); state.connected = false;

@@ -137,7 +137,8 @@ async function downloadProof(page: Page, run: WebRun, proof: string) {
   const pending = page.waitForEvent('download');
   await page.locator('[data-action="download-proof"]').click();
   const downloaded = await pending;
-  assert.equal(downloaded.suggestedFilename(), `${run.id}-Submission.lean`);
+  // Named after the problem's theorem, or Submission.lean when the source has none.
+  assert.equal(downloaded.suggestedFilename(), `${/theorem\s+(\S+)/.exec(run.source)?.[1] ?? 'Submission'}.lean`);
   const bytes = await fs.readFile((await downloaded.path())!);
   assert.deepEqual(bytes, Buffer.from(proof), 'Lean download must preserve original bytes');
   downloads.push({ status: run.result?.status ?? 'missing', bytes: bytes.length });

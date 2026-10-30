@@ -34,6 +34,8 @@ import { leadPlanningEvidence, leadPlanningEvidenceText } from '../planningEvide
 
 export type ContextAccess = Readonly<{
   root: string;
+  /** The bundled Agent commands (scripts/build-agent-tools.ts) for shells that cannot read `root`; default `root`/bin/math.ts. */
+  tools?: string;
   worktree: string;
   environment: NodeJS.ProcessEnv;
   taskText: string;
@@ -89,7 +91,7 @@ export function buildStatementReviewContext(review: StatementReview, action: Sta
 
 /** M4 builds prompts from the host's scoped cooperation view; hints remain advisory. */
 export function buildResearchContext(task: SolverProblem, state: Readonly<SolverRunState>, access: ContextAccess): ContextBundle {
-  const command = `bun ${shellArgument(path.join(access.root, 'bin/math.ts'))}`;
+  const command = `bun ${shellArgument(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   if (Boolean(access.continuation) !== Boolean(state.continuationDigest)) throw new Error('math_continuation_identity_missing');
   if (access.continuation && access.continuation.digest !== state.continuationDigest)
     throw new Error('math_continuation_identity_changed');

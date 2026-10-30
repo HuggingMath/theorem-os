@@ -11,7 +11,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import type { WebInspection, WebObservation, WebPlanApproval } from '../apps/web/collaboration';
 import { audit } from './web-a11y';
-import { closeSettings, openSettings, openTab, refreshHistory, selectHistoryRun } from './web-ui-controls';
+import { closeSettings, openHistory, openSettings, openTab, refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, ready, settled, startBrowser } from './web-scenario';
 
 /**
@@ -122,6 +122,9 @@ async function poll(page: Page) {
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await response; await settled(page);
 }
+/** The history list top to bottom: each group heading with its count, then the IDs of its runs. */
+const historyOrder = (page: Page) => page.locator('#run-list > *').evaluateAll(rows => rows.map(row => (row as HTMLElement).dataset.historyGroup !== undefined
+  ? [...row.children].map(part => part.textContent).join(' ') : (row as HTMLElement).dataset.historyId));
 const fits = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1
   && [...document.querySelectorAll('[data-run-approval], [data-run-approval] *')].every(node => node.getBoundingClientRect().right <= innerWidth + 1));
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
@@ -202,7 +205,7 @@ try {
   assert.deepEqual(await audit(page, { scope: '[data-run-approval]' }), [], 'approval banner');
   // Nothing runs yet: the verdict has no spinner, and the goals wait for the plan instead of being proved.
   assert.equal(await page.locator('#result-verdict-heading').innerText(), '证明尚未开始');
-  assert.equal(await page.locator('.result-verdict-mark .spinner').count(), 0);
+  assert.equal(await page.locator('.result-verdict-mark .pulse-dot').count(), 0);
   assert.deepEqual(await page.locator('.result-goals .goal-row').evaluateAll(rows => rows.map(row =>
     [(row as HTMLElement).dataset.goalState, row.querySelector('.badge')?.textContent])), [['planned', '等计划批准'], ['planned', '等计划批准']]);
   await shot(page, 'pending-1440.png');
@@ -246,7 +249,7 @@ try {
   assert.deepEqual(approvals.map(item => item.planVersion), ['plan-v1', 'plan-v2']);
   assert.equal(control.approval.approvedId, approvals[1].id);
   assert.equal(await page.locator('#result-verdict-heading').innerText(), '研究正在运行');
-  assert.equal(await page.locator('.result-verdict-mark .spinner').count(), 1);
+  assert.equal(await page.locator('.result-verdict-mark .pulse-dot').count(), 1);
   assert.deepEqual(await page.locator('.result-goals .goal-row').evaluateAll(rows => rows.map(row => (row as HTMLElement).dataset.goalState)), ['working', 'working']);
   mark('approving the current version releases the run');
   // While the Lead revises the plan from a note, nothing can be approved; the solver may still reject an approval
@@ -261,7 +264,7 @@ try {
   assert.match(await page.locator('#detail-panel').innerText(), /Lead 正在按你的留言修改研究计划，改完后再请你批准/u);
   // The Lead is working on the plan, so the verdict spins while the goals still wait.
   assert.equal(await page.locator('#result-verdict-heading').innerText(), '证明尚未开始');
-  assert.equal(await page.locator('.result-verdict-mark .spinner').count(), 1);
+  assert.equal(await page.locator('.result-verdict-mark .pulse-dot').count(), 1);
   assert.equal(await page.locator('.result-goals .goal-row[data-goal-state="planned"]').count(), 2);
   await shot(page, 'revising-1440.png');
   revise(revising, 'plan-v2'); revising.approval.leadRevising = false; revising.emit(); await poll(page);
@@ -325,14 +328,33 @@ try {
     assert.match(shown[0].body, /证明两个加零的等式\nLead 已经拟好研究计划/u);
     await setHidden(page, false);
     await selectHistoryRun(page, second);
+    // Both waiting plans stand in their own group above the run that already works, and the arrow keys follow that order.
+    assert.deepEqual(await historyOrder(page), ['等你处理 2', third, second, '其他运行', first]);
+    assert.deepEqual(await audit(page, { scope: '.run-history' }), [], 'history with a waiting group');
+    await shot(page, 'history-waiting-1440.png');
+    await page.locator(`[data-run-id="${second}"]`).focus();
+    await page.keyboard.press('ArrowDown');
+    await page.locator(`[data-run-id="${first}"][aria-pressed="true"]:focus`).waitFor();
+    await page.keyboard.press('ArrowUp');
+    await page.locator(`[data-run-id="${second}"][aria-pressed="true"]:focus`).waitFor();
+    for (const [width, locale] of [[375, 'zh'], [1440, 'en']] as const) {
+      const other = await open(width, locale);
+      await openHistory(other.page);
+      assert.deepEqual(await historyOrder(other.page), locale === 'en' ? ['Waiting for you 2', third, second, 'Other runs', first]
+        : ['等你处理 2', third, second, '其他运行', first], `${width}/${locale} history groups`);
+      await shot(other.page, `history-waiting-${locale === 'en' ? 'en-' : ''}${width}.png`);
+      await other.context.close();
+    }
     later.approval.leadRevising = true; later.emit(); await poll(page);
     await page.waitForFunction(() => document.title.startsWith('(1) 等你批准计划'));
+    assert.deepEqual(await historyOrder(page), ['等你处理 1', second, '其他运行', third, first], 'a plan the Lead revises leaves the group');
     later.approval.leadRevising = false; later.emit(); await poll(page);
     await page.locator('#toast:not([hidden])').getByText('「证明两个加零的等式」的研究计划等你批准').waitFor();
     assert.equal((await notifications(page)).length, 1, 'a visible tab gets a toast, not a desktop notification');
     later.finish(); await context.close();
   }
   mark('a plan that becomes ready sends one desktop notification from a hidden tab, a toast in a visible one, and counts in the tab title');
+  mark('the history lists the plans waiting for approval first, under a heading with their count');
   assert.deepEqual(errors, []);
   console.log('Plan-approval browser checks passed');
 } finally {

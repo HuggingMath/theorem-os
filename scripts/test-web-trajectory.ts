@@ -37,7 +37,10 @@ const runner: WebRunner = {
   async readiness() { return { ready: true, message: '本地轨迹验证环境' }; },
   run: async (input, send, signal) => {
     // A run started from a recorded version only has to show what reached the worker.
-    if (input.continuation) { continued.push(input); send({ type: 'result', result: { status: 'incomplete', proof: '', report: {} } }); return; }
+    if (input.continuation) {
+      continued.push(input);
+      send({ type: 'result', result: { status: 'incomplete', proof: input.continuation.source.replace('exact Nat.zero_add n', 'simp'), report: {} } }); return;
+    }
     let observations = 0;
     return replaySample(recording, input.id, send, signal, { hold: message => {
       if (message.type !== 'observation') return undefined;
@@ -70,6 +73,8 @@ const input: WebRunInput = { providerId: 'openai', apiKey: 'sk-theoremos-traject
   effort: 'low', environment: 'standard', source: sample.run.source, task: sample.run.task, maxTurns: 12, maxRunSeconds: 300,
   workers: 3, coordination: 'cooperative' };
 const mark = (check: string) => console.log(`PASS ${check}`);
+/** The account's line for each Agent, as one line of text. */
+const tallyAgents = (page: Page) => page.locator('[data-tally-agent]').evaluateAll(rows => rows.map(row => (row as HTMLElement).innerText.replace(/\s+/gu, ' ').trim()));
 const steps = (page: Page) => page.locator('#detail-panel .trajectory-step');
 const kinds = (page: Page) => steps(page).evaluateAll(items => items.map(item => item.getAttribute('data-kind')));
 const step = (page: Page, selector: string) => page.locator(`#detail-panel .trajectory-step${selector}`);
@@ -132,6 +137,9 @@ try {
   assert.equal(await viewer(page).locator('.trajectory-gutter').count(), 0, 'a finished run has no line guidance');
   assert.equal(await page.locator('#detail-panel [data-trajectory-continue]').count(), 0, 'the sample has no version of the visitor\'s own to continue from');
   assert.equal(await page.locator('#detail-panel [data-trajectory-mode="ask"]').count(), 0, 'nor one to ask about');
+  // The finished run closes with its account: in 简洁 one line, without the Agents.
+  assert.match(await page.locator('[data-tally-line]').innerText(), /^用时 .+ · Lean 检查 6 次 · 尝试 2 次 · 任务 2 个$/u);
+  assert.equal(await page.locator('[data-tally-agent]').count(), 0, '简洁 leaves the Agents out of the account');
   assert.deepEqual(await audit(page, { scope: '#detail-panel' }), [], 'Sample trajectory accessibility');
   await shot(page, 'trajectory-sample-1440.png');
   await page.keyboard.press('Escape');
@@ -142,6 +150,9 @@ try {
   await page.locator('[data-trajectory-detail="full"]').click();
   await page.locator('#detail-panel .trajectory-overview').waitFor();
   assert.match(await step(page, '[data-kind="plan"]').innerText(), /Lead/u, '详细 names the Agents');
+  // 详细 adds what each Agent did: the Lead's plan and assembly, the Researcher's report, the Engineer's tasks.
+  assert.deepEqual(await tallyAgents(page), ['Lead 写了 1 版计划 · 组装完整证明 1 次', 'Researcher 提交 1 份报告',
+    'Engineer 做了 add_zero zero_add · 通过 2 个 · 尝试 2 次']);
   await openTab(page, 'collaboration');
   assert.equal(await page.locator('.collab-detail-toggle [data-collab-detail="full"]').getAttribute('aria-pressed'), 'true', 'one detail level for both tabs');
   await page.locator('.collab-detail-toggle [data-collab-detail="simple"]').click();
@@ -174,6 +185,7 @@ try {
   if (worker) assert.doesNotMatch(await liveLatest.innerText(), new RegExp(` · ${worker}$`, 'u'), 'the Agent is named, not its id');
   assert.ok(await page.locator('#detail-panel').evaluate(panel => panel.scrollHeight > panel.clientHeight + 100), 'the live steps overflow');
   await atBottom(page, 'a live run follows its latest step');
+  assert.equal(await page.locator('[data-trajectory-tally]').count(), 0, 'a running run has no account yet');
   await shot(page, 'trajectory-live-1440.png');
   mark('a live run shows its Agents at work under its newest message, and keeps its latest step in view');
 
@@ -230,24 +242,33 @@ try {
   await waitForRun({ page }, run.id, run => run.status === 'completed');
   await live.waitFor({ state: 'detached' });
   await page.waitForTimeout(2_000);
+  // Once the run ends its account counts the failed try too: one more Lean check and one more attempt than the sample.
+  assert.match(await page.locator('[data-tally-line]').innerText(), /^用时 .+ · Lean 检查 7 次 · 尝试 3 次 · 任务 2 个$/u);
   const liveSeconds = (Date.now() - liveStart) / 1000;
   assert.equal(await page.locator('#detail-panel .trajectory-latest').count(), 0);
   assert.deepEqual(await kinds(page), ['problem', 'plan', 'guidance', 'attempt', 'edit', 'attempt', 'proof', 'guidance', 'delivery', 'evaluation'],
     '简洁 leaves out the attempt a later one replaced');
   await page.locator('[data-trajectory-detail="full"]').click();
+  // 详细 has zero_add's two attempts as one line, folded once the second passed, and opening to both.
+  const retries = step(page, '[data-kind="retries"]');
+  await retries.waitFor();
+  assert.deepEqual(await kinds(page), ['problem', 'plan', 'guidance', 'attempt', 'edit', 'retries', 'proof', 'guidance', 'delivery', 'evaluation']);
+  assert.equal(await retries.getAttribute('data-open'), 'false', 'the attempts fold once the last one passed');
+  assert.equal((await retries.locator('h4').innerText()).replace(/\s+/gu, ' ').trim(), 'zero_add Engineer 试了 2 次 第 2 次通过 已集成 通过', 'one line, with the tone spoken for a screen reader');
+  await retries.locator('.trajectory-fold').first().click();
   await step(page, '[data-kind="attempt"][data-tone="failed"]').waitFor();
-  assert.deepEqual(await kinds(page), ['problem', 'plan', 'guidance', 'attempt', 'edit', 'attempt', 'attempt', 'proof', 'guidance', 'delivery', 'evaluation']);
+  assert.deepEqual(await kinds(page), ['problem', 'plan', 'guidance', 'attempt', 'edit', 'retries', 'attempt', 'attempt', 'proof', 'guidance', 'delivery', 'evaluation']);
   const reads = trajectoryReads(requests).filter(url => url.pathname.includes(run.id));
   assert.ok(reads.length >= 2 && reads.length <= liveSeconds / 1.5 + 8, `trajectory reads during ${liveSeconds.toFixed(0)} s: ${reads.length}`);
   assert.ok(reads.slice(1).every(url => url.searchParams.get('instance') && Number(url.searchParams.get('after')) > 0), 'later reads ask only for what is new');
   assert.ok(Number(reads.at(-1)!.searchParams.get('since')) > 0, 'later reads skip versions already held');
-  mark(`the finished run settles into the same steps; 详细 adds the failed attempt (${reads.length} incremental reads in ${liveSeconds.toFixed(0)} s)`);
+  mark(`the finished run settles into the same steps; 详细 has zero_add's two attempts as one folded line that opens to both (${reads.length} incremental reads in ${liveSeconds.toFixed(0)} s)`);
 
   await page.setViewportSize({ width: 1440, height: 900 });
   const failed = step(page, '[data-kind="attempt"][data-tone="failed"]');
-  assert.equal(await failed.getAttribute('data-open'), 'true', 'a failed step stays open');
+  assert.equal(await failed.getAttribute('data-open'), 'false', 'a failed attempt a later one replaced is folded in its run');
   const failedText = await failed.innerText();
-  for (const text of ['zero_add', '第 1 次', '未通过：The rfl tactic failed.']) assert.ok(failedText.includes(text), `failed attempt shows ${text}`);
+  for (const text of ['第 1 次', '未通过：The rfl tactic failed.']) assert.ok(failedText.includes(text), `failed attempt shows ${text}`);
   assert.equal(await failed.locator('.trajectory-marker').evaluate(marker => getComputedStyle(marker, '::after').backgroundColor !== 'rgba(0, 0, 0, 0)'), true,
     'a failure is marked by a red dot');
   assert.doesNotMatch(await page.locator('#detail-panel .trajectory').innerText(), /goal_\d|Possible reasons/u);
@@ -259,7 +280,34 @@ try {
   assert.match(await viewer(page).locator('.trajectory-feedback').innerText(), /The rfl tactic failed[\s\S]*⊢ 0 \+ n = n/u);
   assert.equal(await viewer(page).locator('.trajectory-gutter').count(), 0, 'line guidance ends with the run');
   await shot(page, 'trajectory-feedback-1440.png');
-  const second = steps(page).filter({ hasText: '第 2 次' });
+  // Lean's message sits under the line it is about, and its location in the output is a link to that line.
+  const location = viewer(page).locator('.lean-location');
+  assert.deepEqual(await location.allInnerTexts(), ['Submission.lean:4:44']);
+  await location.click();
+  const marks = viewer(page).locator('.trajectory-code-text .lean-marks');
+  await marks.waitFor();
+  assert.equal(await failed.locator('[data-trajectory-mode="code"]').getAttribute('aria-expanded'), 'true', 'the link opens the code');
+  assert.equal(await marks.evaluate(item => item === document.activeElement), true, 'the link brings the line\'s message into focus');
+  assert.deepEqual(await viewer(page).locator('.trajectory-code-text [data-marked]').evaluateAll(lines => lines.map(line => line.getAttribute('data-line'))), ['4']);
+  assert.match(await marks.innerText(), /^第 4 行 · Lean 报错\nThe rfl tactic failed\.[\s\S]*\n⊢ 0 \+ n = n$/u);
+  assert.deepEqual(await viewer(page).locator('[data-marks-line]').allInnerTexts(), ['第 4 行']);
+  // Each number stays level with its line: the column has blank rows beside the message.
+  const level = await viewer(page).locator('.trajectory-code').evaluate(box => {
+    const numbers = box.querySelector<HTMLElement>('pre.trajectory-line-numbers')!, range = document.createRange(), rows: number[] = [];
+    const walker = document.createTreeWalker(numbers, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) for (const found of (node.textContent ?? '').matchAll(/\d+/gu)) {
+      range.setStart(node, found.index!); range.setEnd(node, found.index! + found[0].length);
+      const rect = range.getBoundingClientRect(); rows[Number(found[0]) - 1] = rect.top + rect.height / 2;
+    }
+    return [...box.querySelectorAll('.trajectory-code-text .lean-line')].map((line, index) => {
+      const rect = line.getClientRects()[0]!;
+      return Math.abs(rect.top + rect.height / 2 - rows[index]!);
+    });
+  });
+  assert.ok(level.length === 6 && level.every(distance => distance <= 1), `the numbers stay beside their lines: ${level.join(', ')}`);
+  assert.deepEqual(await audit(page, { scope: '#detail-panel' }), [], 'Lean messages accessibility');
+  await shot(page, 'trajectory-marks-1440.png');
+  const second = step(page, '[data-kind="attempt"]').filter({ hasText: '第 2 次' });
   assert.equal(await second.count(), 1);
   await open(page, second, 'diff');
   await viewer(page).locator('.trajectory-diff').waitFor();
@@ -275,12 +323,13 @@ try {
   await modes.filter({ hasText: '看代码' }).click();
   await viewer(page).locator('.trajectory-code-text').waitFor();
   assert.match(await viewer(page).locator('.trajectory-code-text').innerText(), /exact Nat\.zero_add n/u);
+  assert.equal(await viewer(page).locator('.lean-marks, [data-marks-summary]').count(), 0, 'a passed attempt\'s code has no messages under its lines');
   assert.equal(await second.locator('[data-trajectory-mode="code"]').getAttribute('aria-expanded'), 'true', 'the viewer\'s modes are the step\'s buttons');
   await modes.filter({ hasText: '对比上一版' }).click();
   await viewer(page).locator('.trajectory-diff').waitFor();
   assert.deepEqual(await audit(page, { scope: '#detail-panel' }), [], 'Finished trajectory accessibility');
   await shot(page, 'trajectory-diff-1440.png');
-  mark('the failed attempt opens Lean\'s feedback beside the steps, and the next attempt compares its code with the failed one');
+  mark('the failed attempt opens Lean\'s feedback beside the steps, its message under line 4 of its code, and the next attempt compares its code with the failed one');
 
   const overview = page.locator('#detail-panel .trajectory-overview');
   assert.deepEqual(await overview.locator('.trajectory-lane-name').allInnerTexts(), ['Lead', 'Engineer']);
@@ -308,24 +357,27 @@ try {
   await chip.waitFor();
   await page.keyboard.press('Escape');
   await chip.waitFor({ state: 'detached' });
+  // The failed attempt sits in its folded run, which the block opens.
+  await retries.locator('.trajectory-fold').first().click();
+  await failed.waitFor({ state: 'detached' });
   await overview.locator('.trajectory-block.failed').click();
-  assert.equal(await failed.evaluate(item => item === document.activeElement), true, 'a block opens its step');
+  assert.equal(await failed.evaluate(item => item === document.activeElement), true, 'a block opens its step, and the run of attempts it is in');
   mark('详细\'s time overview shows each Agent\'s work, a dragged or keyed stretch limits the steps, and a block opens its step');
 
-  const attemptTasks = () => steps(page).evaluateAll(items => items.filter(item => item.getAttribute('data-kind') === 'attempt')
-    .map(item => item.querySelector('.trajectory-task')?.textContent));
+  const attemptTasks = () => steps(page).evaluateAll(items => items.filter(item => ['attempt', 'retries'].includes(item.getAttribute('data-kind')!) && !item.closest('.trajectory-retries'))
+    .map(item => `${item.querySelector('.trajectory-task')?.textContent}×${item.getAttribute('data-retries') ?? 1}`));
   await page.locator('#detail-panel .trajectory-filter select').selectOption({ label: 'zero_add' });
-  assert.deepEqual(await attemptTasks(), ['zero_add', 'zero_add']);
+  assert.deepEqual(await attemptTasks(), ['zero_add×2']);
   await openTab(page, 'result');
   await openTab(page, 'trajectory');
   assert.equal(await page.locator('#detail-panel .trajectory-filter select option:checked').innerText(), 'zero_add');
-  assert.deepEqual(await attemptTasks(), ['zero_add', 'zero_add']);
+  assert.deepEqual(await attemptTasks(), ['zero_add×2']);
   const idle = trajectoryReads(requests).length;
   await page.waitForTimeout(4_000);
   assert.equal(trajectoryReads(requests).length, idle, 'a finished run is not polled');
   mark('the task filter keeps only that task\'s attempts across tab switches, and a finished run is not polled');
 
-  await open(page, steps(page).filter({ hasText: '第 2 次' }), 'diff');
+  await open(page, step(page, '[data-kind="attempt"]').filter({ hasText: '第 2 次' }), 'diff');
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 812 });
     await settled(page);
@@ -339,7 +391,7 @@ try {
   await viewer(page).waitFor({ state: 'detached' });
   assert.equal(await focused(page), 'diff');
   // A finished run's code wraps on a phone: each line under its own number, nothing to scroll sideways, the text unchanged.
-  await open(page, steps(page).filter({ hasText: '第 2 次' }), 'code');
+  await open(page, step(page, '[data-kind="attempt"]').filter({ hasText: '第 2 次' }), 'code');
   const wrapped = await viewer(page).locator('.trajectory-code.lean-wrap').evaluate(code => {
     const text = code.querySelector<HTMLElement>('.trajectory-code-text')!, lines = [...text.querySelectorAll<HTMLElement>('.lean-line')];
     return { sideways: code.scrollWidth - code.clientWidth, column: getComputedStyle(code.querySelector('.trajectory-line-numbers')!).display,
@@ -354,7 +406,7 @@ try {
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await settled(page);
-  await steps(page).filter({ hasText: '第 2 次' }).locator('[data-trajectory-continue]').click();
+  await step(page, '[data-kind="attempt"]').filter({ hasText: '第 2 次' }).locator('[data-trajectory-continue]').click();
   await page.locator('#run-settings[open]').waitFor();
   assert.equal(await page.locator('#api-key').evaluate(field => field === document.activeElement), true, 'continuing asks for the key first');
   assert.equal(await page.locator('#draft-continuation').isHidden(), false);
@@ -381,9 +433,47 @@ try {
   assert.equal(await page.locator('#draft-continuation').isHidden(), true, 'one submission uses the continuation');
   assert.deepEqual(await audit(page, { scope: '#run-detail' }), [], 'Continued run accessibility');
   await shot(page, 'trajectory-continued-1440.png');
+  const continuedId = (await page.locator('.detail-heading').getAttribute('data-run'))!;
   await note.getByRole('button', { name: '看原运行' }).click();
   await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor();
-  mark('从这一版继续 starts a new run on the same problem with that version\'s code for the worker, and the new run links back to it');
+  // The original lists what came of it: the later run, the version it started from, and its own status.
+  const later = page.locator('#detail-panel [data-result-later]');
+  await later.waitFor();
+  assert.equal(await later.locator('h3').innerText(), '后来的运行\n1');
+  const row = later.locator('[data-action="open-continued"]');
+  assert.equal(await row.getAttribute('data-run-id'), continuedId);
+  assert.match(await row.innerText(), /^基于「zero_add · 第 2 次」\s+\S/u);
+  assert.deepEqual(await audit(page, { scope: '#detail-panel [data-result-later]' }), [], 'Later runs accessibility');
+  await later.scrollIntoViewIfNeeded();
+  await shot(page, 'trajectory-later-1440.png');
+  // 对比代码 sets this run's code beside the later run's.
+  const compare = later.locator('[data-action="compare-continued"]');
+  assert.equal(await compare.getAttribute('aria-pressed'), 'false');
+  await compare.click();
+  const comparison = page.locator('#result-compare[open]');
+  await comparison.waitFor();
+  assert.equal(await compare.getAttribute('aria-pressed'), 'true');
+  assert.equal(await comparison.locator('h4').innerText(), '对比代码');
+  assert.match(await comparison.locator('.side-viewer-title>p').innerText(), /基于「zero_add · 第 2 次」的运行/u);
+  assert.match((await comparison.locator('tr.diff-added').allInnerTexts()).join('\n'), /by simp/u, 'the later run\'s change is shown as added');
+  assert.match((await comparison.locator('tr.diff-removed').allInnerTexts()).join('\n'), /exact Nat\.zero_add n/u);
+  const folded = comparison.locator('[data-action="compare-folded"]');
+  const wasFolded = await folded.isChecked();
+  await folded.click();
+  await page.waitForFunction(folded => document.querySelector<HTMLInputElement>('#result-compare [data-action="compare-folded"]')?.checked === folded, !wasFolded);
+  assert.deepEqual(await audit(page, { scope: '#result-compare' }), [], 'Compare viewer accessibility');
+  await shot(page, 'trajectory-compare-1440.png');
+  await page.keyboard.press('Escape');
+  await page.locator('#result-compare').waitFor({ state: 'detached' });
+  assert.equal(await compare.evaluate(button => button === document.activeElement && button.getAttribute('aria-pressed') === 'false'), true,
+    'closing the comparison returns to its button');
+  mark('对比代码 on a later run sets the two runs\' code side by side, folds unchanged lines on request, and Esc returns to its button');
+  await row.click();
+  await page.locator(`.detail-heading[data-run="${continuedId}"]`).waitFor();
+  assert.equal(await page.locator('#detail-panel [data-result-later]').count(), 0, 'the later run has none of its own');
+  await note.getByRole('button', { name: '看原运行' }).click();
+  await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor();
+  mark('从这一版继续 starts a new run on the same problem with that version\'s code for the worker, the new run links back to it, and the original lists it under 后来的运行');
 
   await openTab(page, 'trajectory');
   const asking = step(page, '[data-kind="attempt"][data-tone="failed"]');

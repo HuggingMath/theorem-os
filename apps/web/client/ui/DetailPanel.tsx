@@ -1,10 +1,12 @@
-import { Fragment, render, type ComponentChildren } from 'preact';
-import { useMemo } from 'preact/hooks';
+import { createContext, Fragment, render, type ComponentChildren } from 'preact';
+import { useContext, useLayoutEffect, useMemo, useRef } from 'preact/hooks';
 import type { WebProofOutline, WebProofOutlineDeclaration } from '../../shared';
 import { goalStates, groupGoals, type GoalChecklist, type GoalRow, type GoalState, type ReportCheck, type ReportDiagnostic, type ReportSummary, type ReportTarget, type StuckSummary, type StuckTask } from '../../report';
 import type { SourceComparison } from '../sourceDiff';
+import { headingLine, type LeanHeading } from '../leanOutline';
+import { sealVerdict } from '../motion';
 import { leanLineTokens, leanTokens } from '../sourceText';
-import { Icon, Spinner } from './Icon';
+import { Icon } from './Icon';
 import { DiffRows, fill } from './Section';
 import { SideViewer } from './SideViewer';
 import { TermHint } from './TermHint';
@@ -22,13 +24,14 @@ export type ReportPanelProps =
   | { kind: 'empty'; active: boolean }
   | { kind: 'error'; error: string }
   | { kind: 'json'; report: unknown }
-  | { kind: 'summary'; summary: ReportSummary; stuck?: StuckSummary; accepted: boolean;
-    outline?: { state?: OutlineState; kitUrl: string; mathlib: boolean } };
+  | { kind: 'summary'; summary: ReportSummary & { /** A reason code with no wording of its own, kept folded for a feedback report. */ diagnostic?: string }; stuck?: StuckSummary; accepted: boolean;
+    outline?: { state?: OutlineState; kitUrl: string; mathlib: boolean; /** The proof's declarations, so each name opens its line. */ headings: readonly LeanHeading[] } };
 /** The result tab: the verdict, the proof, who did what, the acceptance report, then the task and its configuration. */
 type ResultFact = { label: string; value: string; mono: boolean };
 export type ResultPanelProps = {
-  verdict: Banner & { active: boolean; candidate: boolean;
-    /** The newest progress message while the run is active. */ latest?: { at: string; time: string; message: string } };
+  verdict: Banner & { /** The run it is about: a verdict reached while its reader watches is sealed, one shown later is not. */ run: string; active: boolean; candidate: boolean;
+    /** The newest progress message while the run is active. */ latest?: { at: string; time: string; message: string };
+    /** While Agents work: the page can be closed, and how the reader hears the run has ended. */ away?: string };
   /** Next steps for a run that ended without an accepted proof (report.ts nextSteps). */ recovery: { id: string; label: string }[];
   /** Desktop notification preference, offered while the run is active. */ notify?: 'on' | 'off' | 'blocked' | 'unsupported';
   /** Prefilled feedback form for failures on our side, which the visitor cannot fix by changing the run. */ feedback?: string;
@@ -38,9 +41,17 @@ export type ResultPanelProps = {
   /** 完整源码 opened beside the result (or over it on a narrow screen). */ viewer?: { onClose: () => void };
   /** One row per original target: proved, conditional or unsolved, and what it rests on. */ goals?: GoalChecklist;
   active: boolean; report: ReportPanelProps;
+  /** Whether there is a route to draw: a run that ended before any Agent step or plan has no route map at all. */ route: boolean;
+  /** Runs started later from a version of this one, oldest first, each with its own status. */
+  later?: { id: string; label: string; status: { label: string; tone: string; symbol: string }; createdAt: string; time: string;
+    /** Both runs have code, so the later one can be compared with this one. */ comparable: boolean }[];
+  /** 对比代码 open beside the result: how a later run's code differs from this run's. */ compare?: CompareProps;
   /** What a reader asks first (environment, model, when); `config` is the rest of the run's settings, folded. */
   task: string; facts: ResultFact[]; config: ResultFact[];
+  /** A declaration's name as the Lean file writes it (leanOutline writtenNames), so a namespace is not repeated on every row. */
+  written: (name: string) => string;
 };
+export type CompareProps = { id: string; label: string; comparison: SourceComparison; folded: boolean; onClose: () => void };
 /** The run detail tab. Imperative views own their workspace host; the source text and diff navigation are filled in after rendering. */
 export type DetailView = { tab: 'source'; source: SourcePanelProps } | { tab: 'result'; result: ResultPanelProps }
   | { tab: 'events' | 'modules' | 'collaboration' | 'trajectory' };
@@ -93,26 +104,58 @@ function SourceDiff(props: { comparison: SourceComparison; folded: boolean; acce
 const Fact = (props: { label: string; value: string }) => <div><dt>{props.label}</dt><dd class="mono">{props.value}</dd></div>;
 const FactList = (props: { facts: ResultFact[] }) => <dl class="facts">{props.facts.map(fact => <div key={fact.label}><dt>{fact.label}</dt><dd class={fact.mono ? 'mono' : undefined}>{fact.value}</dd></div>)}</dl>;
 
-const recoveryIcons: Record<string, string> = { 'continue-checked': 'git-branch-plus', 'ask-failed': 'message-circle-question', retry: 'refresh-cw', key: 'key-round', budget: 'clock-3', tokens: 'gauge', turns: 'list', workers: 'users', source: 'square-pen' };
+const recoveryIcons: Record<string, string> = { 'continue-checked': 'git-branch-plus', 'ask-failed': 'message-circle-question', retry: 'refresh-cw', key: 'key-round', budget: 'clock-3', tokens: 'gauge', turns: 'list', workers: 'users', source: 'square-pen', task: 'square-pen' };
 const notifyLabels = { on: t('结束时通知我 · 已开启'), off: t('结束时通知我'), blocked: t('通知已被浏览器阻止'), unsupported: '' };
 // The result tab previews the start of the proof; the source tab reads the whole file.
 const previewLines = 80;
 
+const Written = createContext((name: string) => name);
+/** A Lean name the way the file writes it; the full name stays in the tooltip. */
+function LeanName(props: { name: string }) {
+  const shown = useContext(Written)(props.name);
+  return <code translate={false} title={shown === props.name ? undefined : props.name}>{shown}</code>;
+}
 function ResultPanel(props: ResultPanelProps) {
-  return <div class="result-layout" data-viewer-host>
+  return <Written.Provider value={props.written}><div class="result-layout" data-viewer-host>
     <ResultDocument {...props} />
-    {props.viewer && props.proof && <ProofViewer {...props.proof} onClose={props.viewer.onClose} />}
-  </div>;
+    {props.viewer && props.proof ? <ProofViewer {...props.proof} onClose={props.viewer.onClose} /> : props.compare && <CompareViewer key={props.compare.id} {...props.compare} />}
+  </div></Written.Provider>;
+}
+/** The runs continued from this one, so the original says what became of the problem; each opens its run. */
+function Later(props: { runs: NonNullable<ResultPanelProps['later']>; comparing?: string }) {
+  return <section class="result-section result-later" aria-labelledby="result-later-heading" data-result-later>
+    <div class="result-section-heading"><h3 id="result-later-heading"><Icon name="git-branch" />{t('后来的运行')}<span class="count">{props.runs.length}</span></h3></div>
+    <ul class="result-later-list">{props.runs.map(run => <li key={run.id}>
+      <button type="button" class="result-later-row" data-action="open-continued" data-run-id={run.id}>
+        <span class="result-later-label">{t('基于「{0}」', run.label)}</span>
+        <span class={`badge ${run.status.tone}`}><Icon name={run.status.symbol} />{run.status.label}</span>
+        <time dateTime={run.createdAt}>{run.time}</time>
+      </button>
+      {run.comparable && <button type="button" class="text-button result-later-compare" data-action="compare-continued" data-run-id={run.id}
+        aria-pressed={props.comparing === run.id} aria-controls={props.comparing === run.id ? 'result-compare' : undefined}
+        title={t('对比这次和后来那次运行的代码')}><Icon name="git-compare" />{t('对比代码')}</button>}</li>)}</ul>
+  </section>;
+}
+/** While the run works the mark breathes; when it ends in front of the reader, the outcome is sealed into it. */
+function VerdictMark(props: { run: string; active: boolean; symbol: string; tone: string }) {
+  const ref = useRef<HTMLSpanElement>(null), shown = useRef({ run: props.run, active: props.active });
+  useLayoutEffect(() => {
+    const before = shown.current;
+    shown.current = { run: props.run, active: props.active };
+    if (before.run === props.run && before.active && !props.active) sealVerdict(ref.current!, props.tone === 'passed');
+  }, [props.run, props.active]);
+  return <span ref={ref} class="result-verdict-mark" aria-hidden="true">{props.active ? <span class="pulse-dot" /> : <Icon name={props.symbol} />}</span>;
 }
 function ResultDocument(props: ResultPanelProps) {
   const { verdict } = props;
   return <div class="result-document">
     <section class={`result-verdict ${verdict.tone}`} aria-labelledby="result-verdict-heading">
-      <span class="result-verdict-mark" aria-hidden="true">{verdict.active ? <Spinner /> : <Icon name={verdict.symbol} />}</span>
+      <VerdictMark run={verdict.run} active={verdict.active} symbol={verdict.symbol} tone={verdict.tone} />
       <div class="result-verdict-copy">
         <h3 id="result-verdict-heading">{verdict.title}</h3><p>{verdict.description}<TermHint id="acceptance" /></p>
         {verdict.latest && <p class="result-latest"><time dateTime={verdict.latest.at}>{verdict.latest.time}</time><span>{verdict.latest.message}</span></p>}
         {verdict.candidate && <span class="candidate-notice">{t('候选源码已更新 · 尚未验收')}</span>}
+        {verdict.away && <p class="result-away" data-result-away>{verdict.away}</p>}
         {(props.recovery.length > 0 || props.notify && props.notify !== 'unsupported' || props.feedback) && <div class="result-verdict-actions">
           {props.recovery.map(action => <button key={action.id} type="button" class="button recovery-action" data-action="recover" data-recovery={action.id}>
             <Icon name={recoveryIcons[action.id] ?? 'refresh-cw'} />{action.label}</button>)}
@@ -122,16 +165,17 @@ function ResultDocument(props: ResultPanelProps) {
         </div>}
       </div>
     </section>
+    {props.later && <Later runs={props.later} comparing={props.compare?.id} />}
     {props.goals && <Goals {...props.goals} active={props.active} />}
     {props.proof ? <ProofPreview {...props.proof} open={Boolean(props.viewer)} />
       : <section class="result-section result-proof-empty"><h3>{t('证明')}</h3>
         <p class="result-note">{props.active ? t('Agent 写出候选证明后显示在这里。') : t('这次运行没有产出候选证明。')}</p>
         <button type="button" class="text-button" data-action="open-source"><Icon name="file-code-2" />{t('查看原始题目')}</button></section>}
-    <section class="result-section result-route" aria-labelledby="result-route-heading">
+    {props.route && <section class="result-section result-route" aria-labelledby="result-route-heading">
       <div class="result-section-heading"><h3 id="result-route-heading">{t('Agent 路线图')}</h3>
         <button type="button" class="text-button" data-action="show-agents">{t('研究协作')}<Icon name="arrow-up-right" /></button></div>
       <div class="agent-route" data-result-route />
-    </section>
+    </section>}
     <ReportPanel {...props.report} />
     <section class="result-section result-task">
       <div class="result-task-copy"><h3>{t('研究任务')}</h3><p class="task-content" translate={false}>{props.task}</p></div>
@@ -176,13 +220,13 @@ function GoalItem(goal: GoalRow) {
   return <li class="goal-row" data-goal-state={goal.state}>
     <span class={`goal-mark ${goal.tone}`} aria-hidden="true"><Icon name={goalIcons[goal.state]} /></span>
     <div class="goal-copy">
-      <div class="item-heading"><code translate={false}>{goal.name}</code><span class={`badge ${goal.tone}`}>{goal.status}</span></div>
+      <div class="item-heading"><LeanName name={goal.name} /><span class={`badge ${goal.tone}`}>{goal.status}</span></div>
       {goal.waiting.length > 0 && <p class="goal-detail" data-goal-waiting>{fill(goal.state === 'conditional' ? t('前提尚未证明：{0}') : t('还差这些子目标：{0}'), <Names names={goal.waiting} />)}</p>}
       {goal.axioms && <p class="goal-detail" data-goal-axioms>{goal.axioms.length ? fill(t('依赖公理：{0}'), <Names names={goal.axioms} />) : t('不依赖任何公理')}
         {nonstandard.length > 0 && <> <span class="outline-warning">{fill(t('{0} 不在 Lean 的三个标准公理之内，请逐一核对'), <Names names={nonstandard} />)}</span></>}</p>}
       {goal.subgoals.length > 0 && <details class="target-diagnostics goal-subgoals"><summary>{t('子目标 {0} 个 · 已证明 {1} 个', goal.subgoals.length + goal.omittedSubgoals, provedSubgoals)}</summary>
         <ul>{goal.subgoals.map(item => <li key={item.id} data-goal-state={item.state}><span class={`goal-mark ${goalStates[item.state].tone}`} aria-hidden="true"><Icon name={goalIcons[item.state]} /></span>
-          <code translate={false}>{item.name}</code><span class="goal-subgoal-status">{goalStates[item.state].status}</span></li>)}</ul>
+          <LeanName name={item.name} /><span class="goal-subgoal-status">{goalStates[item.state].status}</span></li>)}</ul>
         {goal.omittedSubgoals > 0 && <p class="report-method">{t('另有 {0} 个子目标，见协作页任务图', goal.omittedSubgoals)}</p>}</details>}
       {/* A goal the run's own Lean check closed has code to read even though the run was not accepted; open goals are read in collaboration. */}
       {goal.state === 'checked' && goal.taskId ? <button type="button" class="report-detail-link" data-action="show-checked-code" data-task-id={goal.taskId}>{fill(t('{0}查看通过检查的代码'), <Icon name="file-code-2" />)}</button>
@@ -205,10 +249,12 @@ export function leanParts(text: string): ComponentChildren[] {
 }
 /**
  * Lean text as coloured spans, one `.lean-line` per line with the line breaks between them, so a `.lean-wrap` block can
- * number the lines itself and wrap them on a phone instead of running off the screen.
+ * number the lines itself and wrap them on a phone instead of running off the screen. With `below`, each line carries
+ * its number, and what `below` has for a line (such as Lean's messages about it) follows that line, which is marked.
  */
-export function leanLines(text: string): ComponentChildren[] {
+export function leanLines(text: string, below?: ReadonlyMap<number, ComponentChildren>): ComponentChildren[] {
   const rows: ComponentChildren[] = [];
+  let marked = false;
   for (const [index, line] of leanLineTokens(text).entries()) {
     const parts: ComponentChildren[] = [];
     let offset = line.start;
@@ -218,11 +264,15 @@ export function leanLines(text: string): ComponentChildren[] {
       offset = token.end;
     }
     if (offset < line.end) parts.push(text.slice(offset, line.end));
-    if (index) rows.push('\n');
-    rows.push(<span key={index} class="lean-line">{parts}</span>);
+    // A marked line and what follows it are blocks, which end their own rows.
+    if (index && !marked) rows.push('\n');
+    const after = below?.get(index + 1);
+    marked = after !== undefined;
+    rows.push(<span key={index} class="lean-line" data-line={below ? index + 1 : undefined} data-marked={marked || undefined}>{parts}</span>);
+    if (marked) rows.push(after);
   }
   // A final line break stays in the text, so copying the code keeps it.
-  if (text.endsWith('\n')) rows.push('\n');
+  if (text.endsWith('\n') && !marked) rows.push('\n');
   return rows;
 }
 
@@ -268,6 +318,22 @@ function ProofViewer(props: NonNullable<ResultPanelProps['proof']> & { onClose: 
   </SideViewer>;
 }
 
+/** 对比代码: what a run continued from this one changed, line by line, beside the result. */
+function CompareViewer(props: CompareProps) {
+  const { comparison } = props;
+  const body = comparison.status === 'identical' ? <p class="trajectory-note">{comparison.lineEndingsChanged ? t('仅换行格式不同') : t('两次运行的代码相同')}</p>
+    : comparison.status === 'unavailable' ? <p class="trajectory-note">{t('差异过多，无法生成对比')}</p>
+      : <><div class="diff-toolbar"><div class="diff-counts"><span class="diff-count-added" aria-label={t('新增 {0} 行', comparison.added)}>+{comparison.added}</span><span class="diff-count-removed" aria-label={t('删除 {0} 行', comparison.removed)}>-{comparison.removed}</span></div>
+        <label class="diff-toggle"><input type="checkbox" data-action="compare-folded" checked={props.folded} /><span>{t('折叠未改动')}</span></label></div>
+        <div class="trajectory-diff result-compare-diff" tabIndex={0} aria-label={t('两次运行代码的差异')}><table class="diff-table">
+          <caption class="sr-only">{t('这次运行与「{0}」的逐行差异', props.label)}</caption>
+          <thead><tr><th scope="col">{t('这次')}</th><th scope="col">{t('后来')}</th><th scope="col">{t('源码')}</th></tr></thead>
+          <tbody><DiffRows rows={comparison.rows} /></tbody></table></div>
+        {comparison.omittedLines > 0 && <p class="diff-truncated" role="status">{t('另有 {0} 行未展示', comparison.omittedLines)}</p>}</>;
+  return <SideViewer id="result-compare" title={t('对比代码')} subtitle={t('这次运行的代码 → 基于「{0}」的运行', props.label)} focusKey="result-compare" onClose={props.onClose}
+    actions={<button type="button" class="text-button" data-action="open-continued" data-run-id={props.id}>{t('打开那次运行')}<Icon name="arrow-up-right" /></button>}>{body}</SideViewer>;
+}
+
 function ReportPanel(props: ReportPanelProps) {
   // While the run is active there is nothing to accept yet; the verdict above says so.
   if (props.kind === 'empty') return props.active ? null : <section class="result-section"><h3>{t('验收报告')}</h3><p class="result-note">{t('暂无结果报告')}</p></section>;
@@ -288,7 +354,9 @@ function ReportPanel(props: ReportPanelProps) {
     {summary.metrics.length > 0 && <dl class="report-metrics">{summary.metrics.map(item => <Fact key={item.label} {...item} />)}</dl>}
     {props.outline && <section class="report-section report-outline" aria-labelledby="report-outline-heading"><div class="report-check-heading"><h3 id="report-outline-heading">{props.accepted ? t('证明结构') : t('候选证明结构')}</h3></div>
       <div class="outline-body" aria-live="polite"><Outline {...props.outline} /></div></section>}
-    {summary.checks.length ? summary.checks.map(check => <Check key={check.id} {...check} />) : <div class="empty-state compact"><p>{t('暂无结构化验收记录')}</p></div>}
+    {summary.checks.length ? summary.checks.map(check => <Check key={check.id} {...check} />) : <p class="result-note">{t('这次运行没有留下验收记录。')}</p>}
+    {summary.diagnostic && <details class="target-diagnostics report-diagnostic"><summary>{t('运行诊断')}</summary>
+      <pre class="diagnostic-output" tabIndex={0}>{summary.diagnostic}</pre></details>}
     {/* Commits and digests let someone reproduce the check; they stay folded for everyone else. */}
     {summary.identity.length > 0 && <details class="target-diagnostics report-credentials"><summary>{t('验收凭据')}</summary>
       <dl class="facts report-identity">{summary.identity.map(item => <Fact key={item.label} {...item} />)}</dl></details>}
@@ -296,15 +364,20 @@ function ReportPanel(props: ReportPanelProps) {
 }
 
 function Check(check: ReportCheck) {
-  return <section class="report-section" data-check-stage={check.id}><div class="report-check-heading"><h3>{check.label}</h3><span class={`badge ${check.tone}`}>{check.status}</span></div>
-    {check.method && <p class="report-method">{check.method}</p>}{check.reason && <p class="report-reason-text">{check.reason}</p>}
-    {check.targets.length > 0 && <ul class="verification-targets">{check.targets.map((target, index) => <Target key={`${index}:${target.name}`} {...target} />)}</ul>}
+  const list = <ul class="verification-targets">{check.targets.map((target, index) => <Target key={`${index}:${target.name}`} {...target} />)}</ul>;
+  // A clean pass repeats the heading's status once per target, so the list folds behind one line; anything else stays open to read.
+  const clean = check.targets.every(target => target.tone === 'passed' && !target.sorryCount && !target.admitCount);
+  // The candidate check and the acceptance both fold the same line; the heading tells a keyboard or screen reader which one this is.
+  const heading = `report-check-${check.id}`;
+  return <section class="report-section" data-check-stage={check.id}><div class="report-check-heading"><h3 id={heading}>{check.label}</h3><span class={`badge ${check.tone}`}>{check.status}</span></div>
+    {check.method && <p class="report-method">{check.method}</p>}{check.reason && <p class={check.skipped ? 'report-method' : 'report-reason-text'}>{check.reason}</p>}
+    {check.targets.length > 0 && (clean ? <details class="target-diagnostics check-targets"><summary aria-describedby={heading}>{check.targets.length === 1 ? t('目标已通过') : t('{0} 个目标都已通过', check.targets.length)}</summary>{list}</details> : list)}
     {check.omittedTargets > 0 && <p class="report-method">{t('另有 {0} 个目标，详见原始报告', check.omittedTargets)}</p>}</section>;
 }
 function Target(target: ReportTarget) {
   // Only a placeholder left in the proof is worth a number; zero is what the status already says.
   const counts = [target.sorryCount ? `sorry ${target.sorryCount}` : '', target.admitCount ? `admit ${target.admitCount}` : ''].filter(Boolean).join(' · ');
-  return <li class="verification-target"><div class="target-heading"><code>{target.name}</code><span class={`badge ${target.tone}`}>{target.status}</span></div>
+  return <li class="verification-target"><div class="target-heading"><LeanName name={target.name} /><span class={`badge ${target.tone}`}>{target.status}</span></div>
     {counts && <p class="target-counts mono">{counts}</p>}
     {/* Open only on first render, so a live update keeps what the reader expanded or collapsed. */}
     {target.diagnostics.length > 0 && <details class="target-diagnostics" open={target.tone === 'failed'}><summary>{t('诊断记录')} <span class="field-count">{target.diagnostics.length}</span></summary>
@@ -323,25 +396,26 @@ function Stuck(stuck: StuckSummary) {
     {stuck.omitted > 0 && <p class="report-method">{t('另有 {0} 个未完成子目标，见协作页任务图', stuck.omitted)}</p>}</section>;
 }
 function StuckItem(task: StuckTask) {
-  return <li class="stuck-task"><div class="item-heading"><span class="stuck-name">{task.goal && <span class="stuck-kind">{t('原题目标')}</span>}<code translate={false}>{task.theorem ?? task.id}</code></span><span class={`badge ${task.tone}`}>{task.status}</span></div>
+  return <li class="stuck-task"><div class="item-heading"><span class="stuck-name">{task.goal && <span class="stuck-kind">{t('原题目标')}</span>}{task.theorem ? <LeanName name={task.theorem} /> : <code translate={false}>{task.id}</code>}</span><span class={`badge ${task.tone}`}>{task.status}</span></div>
     {task.type && <pre class="stuck-type" translate={false}>{task.type}</pre>}
-    <p class="stuck-facts">{[t('已尝试 {0} 次', task.attempts), task.failure].filter(Boolean).join(' · ')}</p>
+    <p class="stuck-facts">{[task.attempts ? t('已尝试 {0} 次', task.attempts) : t('还没有尝试'), task.failure].filter(Boolean).join(' · ')}</p>
     {task.blockers.length > 0 && <ul class="stuck-blockers">{task.blockers.map((text, index) => <li key={index}><Icon name="triangle-alert" /><span>{text}</span></li>)}</ul>}
     {task.feedback && <details class="target-diagnostics"><summary>{t('最近反馈')}</summary><pre class="diagnostic-output" tabIndex={0}>{task.feedback}</pre></details>}
     <button type="button" class="report-detail-link" data-action="inspect-task" data-task-id={task.id}>{fill(t('{0}在协作中查看'), <Icon name="network" />)}</button></li>;
 }
 
-function Outline(props: { state?: OutlineState; kitUrl: string; mathlib: boolean }) {
+function Outline(props: { state?: OutlineState; kitUrl: string; mathlib: boolean; headings: readonly LeanHeading[] }) {
   const { state } = props;
-  if (!state || state.status === 'loading') return <p class="report-method"><Spinner />{t('正在整理证明结构…')}</p>;
+  if (!state || state.status === 'loading') return <div class="skeleton-block" aria-busy="true"><span class="skeleton-lines" aria-hidden="true">{[48, 72, 60].map(width => <i key={width} style={{ width: `${width}%` }} />)}</span>
+    <p class="report-method">{t('正在整理证明结构…')}</p></div>;
   if (state.status === 'failed') return <><p class="report-reason-text">{state.error}</p><button type="button" class="report-detail-link" data-action="retry-outline">{fill(t('{0}重新整理'), <Icon name="rotate-ccw" />)}</button></>;
   const { outline } = state, targets = outline.declarations.filter(item => item.role === 'target'), helpers = outline.declarations.filter(item => item.role === 'helper');
   if (!targets.length) return <p class="report-method">{t('候选证明中没有找到原题的目标定理，无法整理结构或生成复核包。')}</p>;
   return <>
     <p class="report-method">{helpers.length ? t('{0} 个原题目标，求解过程新增了 {1} 个辅助声明。', targets.length, helpers.length) : t('{0} 个原题目标，没有新增辅助声明。', targets.length)}
       {outline.references === 'unrecorded' && helpers.length > 0 && ` ${t('这次运行没有记录引用关系，未标出各目标用到哪些辅助声明。')}`}</p>
-    <h4 class="outline-heading">{t('原题目标')}</h4><ul class="verification-targets">{targets.map(item => <Declaration key={item.name} item={item} />)}</ul>
-    {helpers.length > 0 && <><h4 class="outline-heading">{t('新增辅助声明')}</h4><ul class="verification-targets">{helpers.map(item => <Declaration key={item.name} item={item} />)}</ul></>}
+    <h4 class="outline-heading">{t('原题目标')}</h4><ul class="verification-targets">{targets.map(item => <Declaration key={item.name} item={item} line={headingLine(props.headings, item.name)} />)}</ul>
+    {helpers.length > 0 && <><h4 class="outline-heading">{t('新增辅助声明')}</h4><ul class="verification-targets">{helpers.map(item => <Declaration key={item.name} item={item} line={headingLine(props.headings, item.name)} />)}</ul></>}
     {outline.omitted > 0 && <p class="report-method">{t('另有 {0} 个声明未列出', outline.omitted)}</p>}
     <div class="local-check"><a class="button" href={props.kitUrl} download>{fill(t('{0}下载本地复核包'), <Icon name="download" />)}</a>
       <span class="report-method">{t('包含原题、证明、固定版本的 Lean 工程文件和公理检查脚本。')}</span></div>
@@ -349,12 +423,15 @@ function Outline(props: { state?: OutlineState; kitUrl: string; mathlib: boolean
   </>;
 }
 function Names(props: { names: string[] }) {
-  return <>{props.names.map((name, index) => <Fragment key={index}>{index > 0 && t('、')}<code translate={false}>{name}</code></Fragment>)}</>;
+  return <>{props.names.map((name, index) => <Fragment key={index}>{index > 0 && t('、')}<LeanName name={name} /></Fragment>)}</>;
 }
-function Declaration({ item }: { item: WebProofOutlineDeclaration }) {
+/** A declaration of the proof; where its line is known, its name opens the source tab there (the line number is in the tooltip). */
+function Declaration({ item, line }: { item: WebProofOutlineDeclaration; line?: number }) {
   const nonstandard = item.nonstandardAxioms ?? [];
   const kind = item.kind === 'definition' ? t('定义') : item.kind === 'instance' ? t('实例') : t('引理');
-  return <li class="outline-item"><div class="item-heading"><code translate={false}>{item.name}</code>
+  const name = <LeanName name={item.name} />;
+  return <li class="outline-item"><div class="item-heading">{line ? <button type="button" class="outline-jump" data-action="jump-declaration" data-line={line}
+    title={t('在源码中查看（第 {0} 行）', line)}>{name}<Icon name="arrow-up-right" /></button> : name}
     {item.role === 'target' ? nonstandard.length > 0 && <span class="badge warning">{t('含非标准公理')}</span> : <span class="badge muted">{kind}</span>}</div>
     <pre class="stuck-type" translate={false}>{item.type}{item.typeTruncated ? '\n…' : ''}</pre>
     {item.role === 'target' ? <>

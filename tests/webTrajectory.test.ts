@@ -3,7 +3,7 @@ import { loadWebSample, webSampleResponse, type WebSampleFile } from '../apps/we
 import { WebStorage } from '../apps/web/storage';
 import type { WebEvent, WebRun } from '../apps/web/shared';
 import { checkHeadline, recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersionQuery, WebTrajectories, type TrajectoryPage } from '../apps/web/trajectory';
-import { buildTrajectory, emptyTrajectory, mergeTrajectory, stepTasks, trajectoryTaskNames, type TrajectoryStep } from '../apps/web/client/trajectory';
+import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, stepTasks, trajectoryTally, trajectoryTaskNames, type TrajectoryStep } from '../apps/web/client/trajectory';
 import { withFailedAttempt } from '../scripts/web-trajectory-fixture';
 
 const sample = loadWebSample()!;
@@ -119,6 +119,43 @@ describe('web trajectory steps', () => {
     expect(failed!.ref!.check).toMatchObject({ passed: false, headline: 'The rfl tactic failed.', receiptIds: ['lean-failed-attempt'] });
     expect(passed).toMatchObject({ taskId: 'goal_2', number: 2, outcome: 'passed', integrated: true });
     expect(passed!.previous?.commit).toBe(failed!.ref!.version.commit);
+  });
+
+  it('takes a task\'s consecutive attempts as one entry, where the last of them stands', () => {
+    const items = steps(withFailedAttempt(sample)).map((step, index) => ({ step, index }));
+    const runs = retryRuns(items);
+    expect(runs.map(run => run.map(item => item.step.kind === 'attempt' ? `${item.step.kind}:${item.step.number}` : item.step.kind))).toEqual([
+      ['problem'], ['plan'], ['guidance'], ['attempt:1'], ['edit'], ['attempt:1', 'attempt:2'], ['proof'], ['guidance'], ['delivery'], ['evaluation']]);
+    expect(runs.flat().map(item => item.index).sort((a, b) => a - b)).toEqual(items.map(item => item.index));
+    // Another task's steps and notices may come between; a step about the task itself ends the run.
+    const attempt = (taskId: string, number: number, at: number): TrajectoryStep => ({ kind: 'attempt', at, taskId, number, outcome: 'failed', reused: false, integrated: false });
+    const notice = (taskId: string, at: number): TrajectoryStep => ({ kind: 'notice', at, count: 1, event: { sequence: at, at: new Date(at).toISOString(), type: 'task_blocked', message: '', details: { taskId } } });
+    const guidance = (id: string, at: number): TrajectoryStep => ({ kind: 'guidance', at, guidance: { id: `g${at}`, at: new Date(at).toISOString(), recipient: { kind: 'task', id }, text: 'hint', status: 'delivered', revision: 1 } as never });
+    const mixed = [attempt('a', 1, 1), attempt('b', 1, 2), notice('a', 3), attempt('a', 2, 4), guidance('b', 5), attempt('b', 2, 6), attempt('a', 3, 7)]
+      .map((step, index) => ({ step, index }));
+    expect(retryRuns(mixed).map(run => run.map(item => item.index))).toEqual([[1], [2], [4], [5], [0, 3, 6]]);
+  });
+
+  it('closes with the run\'s Lean checks, attempts and each Agent\'s share', () => {
+    const tally = (file: WebSampleFile) => {
+      const data = mergeTrajectory(emptyTrajectory(), first(recordedTrajectory(file.events, file.observations)));
+      return trajectoryTally(buildTrajectory({ data, status: file.run.status, createdAt: file.run.createdAt, finishedAt: file.run.finishedAt }), data);
+    };
+    // Five task checks and one assembled check, stored once under each goal; the assembly is the Lead's, not an attempt.
+    const passed = tally(sample);
+    expect(passed).toMatchObject({ checks: 6, attempts: 2, partial: false });
+    expect(passed.agents).toEqual([
+      expect.objectContaining({ id: 'solver', plans: 1, assembled: 1, tasks: [], attempts: 0 }),
+      expect.objectContaining({ id: 'researcher-1', reports: 1, tasks: [] }),
+      expect.objectContaining({ id: 'engineer', tasks: ['goal_1', 'goal_2'], passed: 2, conditional: 0, attempts: 2 })]);
+    // A failed try is one more check and attempt; the task still counts as passed, by the Agent's last try of it.
+    expect(tally(withFailedAttempt(sample))).toMatchObject({ checks: 7, attempts: 3,
+      agents: expect.arrayContaining([expect.objectContaining({ id: 'engineer', tasks: ['goal_1', 'goal_2'], passed: 2, attempts: 3 })]) });
+    // A whole proof without a recorded check still stands for one; a dropped record makes the counts lower bounds.
+    const data = { ...emptyTrajectory(), dropped: { ...emptyTrajectory().dropped, events: 4 } };
+    const proof: TrajectoryStep = { kind: 'proof', at: 1, assembled: false, workerId: 'w', number: 1, outcome: 'failed' };
+    expect(trajectoryTally([proof, { ...proof, at: 2, outcome: 'passed', number: 2 }], data)).toEqual({ checks: 2, attempts: 2, partial: true,
+      agents: [{ id: 'w', tasks: [], passed: 0, conditional: 0, attempts: 0, proofs: 2, provedProofs: 1, assembled: 0, plans: 0, reports: 0 }] });
   });
 
   it('still lists checked versions whose events are gone, and closes a run that stopped without a stop event', () => {

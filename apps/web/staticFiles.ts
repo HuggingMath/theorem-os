@@ -9,10 +9,20 @@ import zlib from 'node:zlib';
  * 304 instead of downloading again, and a rebuilt file is picked up on the next request without a restart.
  */
 type Entry = { mtimeMs: number; size: number; etag: string; identity: Buffer; br?: Buffer; gzip?: Buffer };
-const compressible = new Set(['.html', '.js', '.css', '.svg', '.txt']);
+export const compressible = new Set(['.html', '.js', '.css', '.svg', '.txt']);
 // Quality 9 is within 10% of the maximum here at a fraction of its time; the first request after a rebuild pays it once.
 const brotli = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } };
+/** The build writes `<file>.br` at the maximum quality, about 8% smaller than quality 9, which is too slow to run per request. */
+export const precompressed = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY } };
 const cache = new Map<string, Entry>();
+
+/** The build's `<file>.br`, only when it still decodes to this file; a stale or broken one is ignored. */
+function builtBrotli(file: string, identity: Buffer) {
+  try {
+    const br = fs.readFileSync(`${file}.br`);
+    return zlib.brotliDecompressSync(br).equals(identity) ? br : undefined;
+  } catch { return undefined; }
+}
 
 function entry(file: string, extension: string): Entry {
   const stat = fs.statSync(file), cached = cache.get(file);
@@ -20,7 +30,10 @@ function entry(file: string, extension: string): Entry {
   const identity = fs.readFileSync(file);
   const fresh: Entry = { mtimeMs: stat.mtimeMs, size: stat.size, identity, etag: `"${crypto.createHash('sha256').update(identity).digest('base64url').slice(0, 27)}"` };
   // Tiny files gain nothing from an encoding header.
-  if (compressible.has(extension) && identity.length > 1024) { fresh.br = zlib.brotliCompressSync(identity, brotli); fresh.gzip = zlib.gzipSync(identity, { level: 9 }); }
+  if (compressible.has(extension) && identity.length > 1024) {
+    fresh.br = builtBrotli(file, identity) ?? zlib.brotliCompressSync(identity, brotli);
+    fresh.gzip = zlib.gzipSync(identity, { level: 9 });
+  }
   cache.set(file, fresh);
   return fresh;
 }

@@ -627,7 +627,7 @@ try {
     await page.locator('[data-module-plan-collapse-all]').click();
     assert.equal(await page.locator(`${rows}[data-expanded="false"]`).count(), 3);
     assert.equal(await rule(page, first.id).locator('.module-plan-summary-name').innerText(), first.name);
-    assert.match(await rule(page, first.id).locator('.module-plan-summary-meta').innerText(), /M1.*替换/);
+    assert.match(await rule(page, first.id).locator('.module-plan-summary-meta').innerText(), /证明构造.*替换/);
     assert.deepEqual(await editorPlan(page), initial, 'folding must only change the reading state');
     const disclosure = rule(page, first.id).locator('[data-module-plan-disclosure]');
     await disclosure.focus(); await disclosure.press('Enter');

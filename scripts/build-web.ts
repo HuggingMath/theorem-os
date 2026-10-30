@@ -2,7 +2,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 import { build } from 'esbuild';
+import { compressible, precompressed } from '../apps/web/staticFiles';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web');
@@ -22,4 +24,11 @@ fs.mkdirSync(path.join(output, 'assets/licenses'), { recursive: true });
 fs.copyFileSync(path.join(root, 'node_modules/diff/LICENSE'), path.join(output, 'assets/licenses/diff-LICENSE.txt'));
 fs.copyFileSync(path.join(root, 'docs/assets/licenses/gsap-NOTICE.txt'), path.join(output, 'assets/licenses/gsap-NOTICE.txt'));
 fs.copyFileSync(path.join(root, 'LICENSE'), path.join(output, 'LICENSE.txt'));
+// Brotli at the maximum quality once here, so the server sends the smaller form without paying for it per request.
+for (const file of fs.readdirSync(output, { recursive: true, encoding: 'utf8' }).map(name => path.join(output, name))) {
+  if (file.endsWith('.br') || !fs.statSync(file).isFile()) continue;
+  const content = fs.readFileSync(file);
+  if (compressible.has(path.extname(file)) && content.length > 1024) fs.writeFileSync(`${file}.br`, zlib.brotliCompressSync(content, precompressed));
+  else fs.rmSync(`${file}.br`, { force: true });
+}
 console.log('Built research workbench in out/web');

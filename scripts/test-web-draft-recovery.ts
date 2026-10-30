@@ -323,6 +323,42 @@ try {
     await restore(page, imported, true); await closeSettings(page);
   });
 
+  await scenario('Lean code pasted into the task or a .lean file dropped on the page replaces the original problem with one undo; prose stays in the task', async h => {
+    const { page } = h; await open(h); await cleanDraft(page); await fillConfig(page, 'api-key', credential);
+    const paste = (text: string) => page.locator('#task').evaluate((task, text) => {
+      const data = new DataTransfer(); data.setData('text/plain', text);
+      const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+      task.dispatchEvent(event); return event.defaultPrevented;
+    }, text);
+    // Plain text, even naming a lemma, is the task's own: the browser inserts it and nothing is backed up.
+    assert.equal(await paste('先证明 theorem helper 再推出主定理'), false);
+    await assertDraft(page, original); assert.equal(await recovery(page), null);
+    const pasted = 'import Mathlib\r\ntheorem pasted_recovery (a b : Nat) : a + b = b + a := by\r\n  sorry\r\n';
+    assert.equal(await paste(pasted), true);
+    await assertDraft(page, { ...original, source: pasted.replace(/\r\n/gu, '\n') });
+    await assertBackup(page, original, 'paste');
+    assert.match(await page.locator('#draft-recovery').innerText(), /粘贴的 Lean 代码已设为原始题目/);
+    await restore(page, original);
+    const drop = (selector: string, text: string) => page.locator(selector).evaluate((target, text) => {
+      const data = new DataTransfer(); data.items.add(new File([text], 'Dropped.lean', { type: 'text/plain' }));
+      const over = new DragEvent('dragover', { dataTransfer: data, bubbles: true, cancelable: true }); target.dispatchEvent(over);
+      const lit = document.body.hasAttribute('data-file-drag');
+      const event = new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }); target.dispatchEvent(event);
+      return { over: over.defaultPrevented, lit, drop: event.defaultPrevented, after: document.body.hasAttribute('data-file-drag') };
+    }, text);
+    const dropped = 'theorem dropped_recovery : True := by sorry\n';
+    // Unhandled, the browser would open the file in place of the workbench.
+    assert.deepEqual(await drop('#draft-preview', dropped), { over: true, lit: true, drop: true, after: false });
+    await page.waitForFunction(source => (document.querySelector('#source') as HTMLTextAreaElement).value === source, dropped);
+    await assertBackup(page, original, 'source');
+    await restore(page, original);
+    // The source editor holds its own revision; a drop there leaves the draft as it is and does not offer to.
+    await openSettings(page); await page.locator('#expand-source').click(); await page.locator('#source-editor[open]').waitFor();
+    assert.deepEqual(await drop('#expanded-source', dropped), { over: true, lit: false, drop: true, after: false });
+    await closeDialog(page, '#source-editor', () => page.locator('#cancel-editor').click()); await closeSettings(page);
+    await assertDraft(page, original); assert.equal(await recovery(page), null);
+  });
+
   await scenario('A persisted backup survives refresh, stays independent of autosave and is not shared with a fresh tab', async h => {
     const { page } = h; await open(h);
     const unfinished = { ...original, maxTurns: '', maxRunSeconds: '', workers: '' };

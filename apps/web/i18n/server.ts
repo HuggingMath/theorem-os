@@ -183,4 +183,11 @@ export const server: Record<string, string> = {
   "Lead 正在按你的留言修改计划": "The Lead is revising the plan from your note",
   "运行结束时研究计划仍未批准": "The run ended before the research plan was approved",
   "计划批准已提交；运行确认后 Agent 才开始工作，未生效会另行记录。": "Approval sent; the Agents start once the run confirms it, and a rejection is recorded separately.",
+  "有界证明研究": "Bounded proof research",
+  "Lean 局部检查": "Local Lean checks",
+  "计划顺序": "Plan order",
+  "关键路径": "Critical path",
+  "必要证明上下文": "Essential proof context",
+  "角色分工与交付": "Roles and handoffs",
+  "完整原题独立验收": "Independent acceptance of the complete problem",
 };

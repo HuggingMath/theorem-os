@@ -24,7 +24,7 @@ try {
     const text = readMathText(corpus);
     if (digest && mathDigest(text) !== digest) throw new Error('math_corpus_identity_changed');
     const library = JSON.parse(text);
-    const secret = path.extname(process.argv[1] ?? '') === '.js' ? readMathematicsReceiptSecret() : undefined;
+    const secret = ['.js', '.mjs'].includes(path.extname(process.argv[1] ?? '')) ? readMathematicsReceiptSecret() : undefined;
     const cache = secret ? { directory: path.join(path.dirname(corpus), 'retrieval-index'),
       implementation: mathDigest(fs.readFileSync(process.argv[1])), secret } : undefined;
     console.log(JSON.stringify(values.query.length === 1

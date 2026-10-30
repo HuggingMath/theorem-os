@@ -11,3 +11,12 @@ export async function readLeanFile(file: Pick<File, 'name' | 'size' | 'arrayBuff
   if (source.includes('\0')) throw new Error(t('源码文件包含无效字符'));
   return source;
 }
+/**
+ * Text pasted into the research task that is a Lean file rather than a description of one: it opens with an import
+ * or declares a theorem or lemma with a body. A sentence that mentions a lemma by name stays a task.
+ */
+export function looksLikeLeanSource(text: string) {
+  const body = text.trim();
+  if (/^import\s+[\w.]+/u.test(body)) return true;
+  return /^\s*(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+)?(?:theorem|lemma)\s+\S+[\s\S]*?:=/mu.test(body);
+}

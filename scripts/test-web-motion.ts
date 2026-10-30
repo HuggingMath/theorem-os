@@ -140,7 +140,7 @@ async function immediate(page: Page, reduced = true) {
     const starts = (window as unknown as { __motionProbe: MotionProbe }).__motionProbe.starts;
     const nodes = Array.from(new Set([...starts.map(item => item.node), ...Array.from(document.querySelectorAll('#detail-panel,.detail-statusline .badge,dialog[open]'))]))
       .filter(node => node.isConnected && node.getClientRects().length);
-    return { marked: document.querySelectorAll('[data-motion]').length,
+    return { marked: document.querySelectorAll('[data-motion]').length, rolling: document.querySelectorAll('[data-roll-to],[data-rolling]').length,
       cssAnimations: document.getAnimations().filter(animation => animation.playState === 'running').length,
       unfinished: nodes.filter(node => {
         const style = getComputedStyle(node);
@@ -148,6 +148,7 @@ async function immediate(page: Page, reduced = true) {
       }).map(node => node.id || node.getAttribute('class') || node.tagName) };
   });
   assert.equal(result.marked, 0, 'reduced or inactive pages must have no active marked tweens');
+  assert.equal(result.rolling, 0, 'a finished or cancelled roll must leave no copy of a label or digit behind');
   if (reduced) assert.equal(result.cssAnimations, 0, 'reduced motion must have no running CSS animations');
   assert.deepEqual(result.unfinished, [], 'cancelled motion must leave its content fully visible');
 }
@@ -313,6 +314,7 @@ try {
     const entered = await record(h.page, 'terminal-status', since);
     assert.equal(entered.filter(entry => entry.status).length, 1, 'the changed status must receive one cue');
     assert.equal(entered.some(entry => entry.code || entry.panel), false, 'a status change animated the source');
+    assert.equal(await h.page.locator('[data-roll-to],[data-rolling]').count(), 0, 'the status roll leaves only the new label');
     const next = await offset(h.page);
     const listed = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
     await h.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await listed;

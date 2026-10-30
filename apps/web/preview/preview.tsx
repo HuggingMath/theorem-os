@@ -72,13 +72,13 @@ const config = [{ label: t('Agent 数量'), value: '3', mono: false }, { label: 
 const proofText = lean('  induction b with\n  | zero => simp\n  | succ n ih =>\n    -- T2 closes the step\n    rw [Nat.add_succ, ih]\n    rfl');
 /** The result tab of an accepted run, a live run with a candidate and a run stopped by its provider. */
 const result = (kind: 'passed' | 'live' | 'failed'): ResultPanelProps => ({
-  verdict: kind === 'passed' ? { tone: 'passed', symbol: 'circle-check', title: t('完整原题已通过独立验收'), description: t('完整原题通过独立 Lean 验收。'), active: false, candidate: false }
-    : kind === 'live' ? { tone: 'running', symbol: 'refresh-cw', title: t('研究正在运行'), description: t('正在构造与检查候选证明。'), active: true, candidate: true,
+  verdict: kind === 'passed' ? { run: 'run-7c1d0e2a', tone: 'passed', symbol: 'circle-check', title: t('完整原题已通过独立验收'), description: t('完整原题通过独立 Lean 验收。'), active: false, candidate: false }
+    : kind === 'live' ? { run: 'run-7c1d0e2a', tone: 'running', symbol: 'refresh-cw', title: t('研究正在运行'), description: t('正在构造与检查候选证明。'), active: true, candidate: true,
       latest: { at, time: '09:34:12', message: 'Lead split the goal into T1 and T2.' } }
-      : { tone: 'failed', symbol: 'circle-alert', title: t('API Key 未通过认证'), description: 'The provider rejected the API key.', active: false, candidate: false },
+      : { run: 'run-7c1d0e2a', tone: 'failed', symbol: 'circle-alert', title: t('API Key 未通过认证'), description: 'The provider rejected the API key.', active: false, candidate: false },
   recovery: kind === 'failed' ? [{ id: 'key', label: t('更换 API Key') }] : [], ...(kind === 'live' ? { notify: 'off' as const } : {}), ...(kind === 'failed' ? { feedback: '#' } : {}),
   ...(kind === 'failed' ? {} : { proof: { source: proofText, verified: kind === 'passed' } }),
-  active: kind === 'live',
+  active: kind === 'live', route: true, written: name => name,
   report: kind === 'passed' ? { kind: 'summary', accepted: true, summary: { metrics: [{ label: 'Turns', value: '14' }], identity: [], checks: [
     { id: 'evaluation', label: t('独立验收'), status: t('通过'), tone: 'passed', targets: [{ name: 'add_comm\'', status: t('通过'), tone: 'passed', sorryCount: 0, diagnostics: [] }], omittedTargets: 0 }] } }
     : kind === 'live' ? { kind: 'empty', active: true } : { kind: 'error', error: '401 Unauthorized' },
@@ -89,8 +89,8 @@ function drawResult(kind: 'passed' | 'live' | 'failed') {
     renderDetailPanel(root, { tab: 'result', result: result(kind) });
     renderAgentRoute(root.querySelector<HTMLElement>('[data-result-route]')!, { running: kind === 'live', planned: kind === 'failed' ? 0 : 2, graph: 'elsewhere', time: () => '09:34',
       tasks: new Map([['T2', 'add_succ']]),
-      routes: kind === 'failed' ? [] : [{ workerId: 'lead', name: 'Lead', steps: [{ kind: 'read', at, count: 1 }, { kind: 'write', at, count: 2 }] },
-        { workerId: 'prover-2', name: 'Prover', steps: [{ kind: 'read', at, count: 1, taskId: 'T2' }, { kind: 'check', at, count: 3, outcome: kind === 'passed' ? 'passed' : undefined }] }] });
+      routes: kind === 'failed' ? [] : [{ workerId: 'lead', name: 'Lead', steps: [{ kind: 'read', at, count: 1, items: [] }, { kind: 'write', at, count: 2, items: [] }] },
+        { workerId: 'prover-2', name: 'Prover', steps: [{ kind: 'read', at, count: 1, taskId: 'T2', items: [] }, { kind: 'check', at, count: 3, outcome: kind === 'passed' ? 'passed' : undefined, items: [] }] }] });
   };
 }
 

@@ -4,11 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
-import { readWebConfig } from '../apps/web/config';
+import { readWebConfig, webLimits } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { selectHistoryRun } from './web-ui-controls';
+import { newResearch, selectHistoryRun, withSettings } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -80,6 +80,36 @@ try {
   assert.match(full.error, /运行队列已满：1 个任务正在运行，2 个在排队。草稿已保留/u);
   mark('a queued run shows its position and slot use, and a full queue says how many runs are ahead');
 
+  // Sent from the page, the refusal shows under the composer; the draft stays and the keyboard is back on 提交, not lost on the page.
+  await page.reload();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await newResearch(page);
+  await page.locator('#task').fill('排队已满时提交的草稿');
+  await withSettings(page, () => page.locator('#api-key').fill('sk-theoremos-failure-fixture'));
+  await page.locator('#submit-run').click();
+  await page.locator('#form-error:not([hidden])').filter({ hasText: '运行队列已满' }).waitFor();
+  assert.equal(await page.locator('#task').inputValue(), '排队已满时提交的草稿');
+  await page.waitForFunction(() => document.activeElement?.id === 'submit-run');
+  // An English reader gets the same refusal in English, with the server's numbers kept.
+  const englishContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' });
+  const englishPage = await englishContext.newPage();
+  englishPage.on('pageerror', error => errors.push(error.message));
+  await englishPage.goto(origin);
+  await englishPage.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await englishPage.locator('#task').fill('A draft sent while the queue is full');
+  await withSettings(englishPage, () => englishPage.locator('#api-key').fill('sk-theoremos-failure-fixture'));
+  await englishPage.locator('#submit-run').click();
+  assert.equal(await englishPage.locator('#form-error:not([hidden])').innerText(),
+    'The run queue is full: 1 running, 2 waiting. Your draft was kept; submit again in a few minutes.');
+  await englishPage.waitForFunction(() => document.activeElement?.id === 'submit-run');
+  // A server that cannot be reached is named as such, not as the browser's "Failed to fetch".
+  await englishPage.route('**/api/**', route => route.abort('connectionrefused'));
+  await englishPage.evaluate(() => document.querySelector<HTMLButtonElement>('#refresh-runs')!.click());
+  await englishPage.locator('#global-notice:not([hidden])').waitFor();
+  assert.equal(await englishPage.locator('#global-notice-text').innerText(), 'Cannot reach the server. Unsubmitted work was kept.');
+  await englishContext.close();
+  mark('a refused submission keeps the draft and returns focus to 提交, in English too, and an unreachable server says so');
+
   for (const run of (await page.evaluate(async () => (await (await fetch('/api/runs')).json()).runs as WebRun[]))) await page.evaluate(async id => {
     const session = await (await fetch('/api/session')).json();
     await fetch(`/api/runs/${id}/cancel`, { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken } });
@@ -108,8 +138,10 @@ try {
   await page.locator('#run-settings[open]').waitFor();
   await settled(page);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'max-seconds');
-  assert.equal(await page.locator('#max-seconds').inputValue(), '120');
-  mark('a time-limited run focuses the time budget');
+  // The budget that ran out is doubled (up to the server's cap), and the toast over the dialog says from what to what.
+  assert.equal(await page.locator('#max-seconds').inputValue(), '240');
+  await page.locator('#toast:not([hidden])').filter({ hasText: '把解题预算从 2 分钟 提高到 4 分钟' }).waitFor();
+  mark('a time-limited run focuses the time budget, already doubled');
 
   const crash = await postRun({ page }, input('crash'));
   await settledRun(page, crash.id, run => run.status === 'error');
@@ -136,8 +168,38 @@ try {
     await page.screenshot({ path: path.join(output, `failure-auth-${width}.png`) });
   }
   mark('the failure card fits 375 and 320 pixel screens');
+
+  // At the server's record limit the composer says so before sending, and its action opens the history to tidy up.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const kept = (await page.evaluate(async () => (await (await fetch('/api/runs')).json()).runs as WebRun[])).length;
+  for (let count = kept; count < webLimits.maxRuns; count++) {
+    const run = await postRun({ page }, input('auth'));
+    await settledRun(page, run.id, item => item.status === 'completed');
+  }
+  await page.reload();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await newResearch(page);
+  await page.locator('#task').fill('记录已满时写下的草稿');
+  await page.locator('#submission-readiness[data-state="full"]').waitFor();
+  assert.equal(await page.locator('#readiness-title').innerText(), `研究记录已满 ${webLimits.maxRuns} 条`);
+  assert.equal(await page.locator('#readiness-action').innerText(), '整理研究记录');
+  await page.locator('#prepare-run').click();
+  await page.waitForFunction(() => document.activeElement?.id === 'run-search');
+  await withSettings(page, () => page.locator('#api-key').fill('sk-theoremos-failure-fixture'));
+  await page.locator('#submit-run').click();
+  await page.locator('#form-error:not([hidden])').filter({ hasText: `已达到 ${webLimits.maxRuns} 条运行记录的上限` }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.id === 'submit-run');
+  assert.equal(await page.locator('#task').inputValue(), '记录已满时写下的草稿');
+  // Deleting one finished record lifts the warning at the next list read.
+  await page.evaluate(async id => {
+    const session = await (await fetch('/api/session')).json();
+    await fetch(`/api/runs/${id}`, { method: 'DELETE', headers: { 'X-CSRF-Token': session.csrfToken } });
+  }, time.id);
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('#refresh-runs')!.click());
+  await page.locator('#submission-readiness[data-state="ready"]').waitFor();
+  mark('a full record list is announced before sending, opens the history, and clears once a record is deleted');
   assert.deepEqual(errors, []);
-  console.log('Failure checks passed: queue position, full queue, authentication, time budget, runner crash and narrow layouts.');
+  console.log('Failure checks passed: queue position, full queue (also sent from the page, in English), unreachable server, authentication, time budget, runner crash, narrow layouts and the record limit.');
 } finally {
   await browser?.close();
   await service.close();

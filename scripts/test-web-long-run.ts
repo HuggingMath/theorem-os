@@ -100,7 +100,8 @@ try {
   assert.match(shown[0].title, /TheoremOS · 运行结束/u);
   assert.match(shown[0].body, /capped/u);
   await setHidden(page, false);
-  await page.waitForFunction(() => document.title === 'TheoremOS · 研究工作台');
+  // The count goes once the tab is seen again; the tab keeps the open run's name.
+  await page.waitForFunction(() => document.title.endsWith(' · TheoremOS') && !/^\(|项进行中/u.test(document.title));
   mark('a run that ends in a hidden tab sends one desktop notification and marks the tab title until the tab is shown');
 
   assert.match(await estimate(page), /按你最近 1 次 deepseek-flash 运行的平均每轮 10 万 Token，本次约 50 万 Token 以内/u);

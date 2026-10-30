@@ -377,6 +377,11 @@ try {
     assert.equal(await page.locator('#run-search').inputValue(), 'even');
     assert.equal(await page.locator('#run-count').innerText(), '8/16');
     await retained(page, 'filtered keyboard wrap retains all nodes');
+    // The list is one Tab stop, on the open run's row; the arrow keys above move inside it.
+    assert.deepEqual(await page.locator('#run-list [data-run-id][tabindex="0"]').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.runId)), [matching[0]!.id]);
+    await page.locator('#run-filter').focus(); await page.keyboard.press('Tab'); await focused(page, button(matching[0]!.id));
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => Boolean(document.activeElement?.closest('#run-list'))), false, 'Tab leaves the history after one row');
   });
 
   await scenario('Unchanged polling preserves populated rows and stable empty states including the focused clear button', async h => {
@@ -413,8 +418,43 @@ try {
     await screenshot(page, 'history-reordered-focus.png');
   });
 
+  for (const width of [1440, 375]) await scenario(`The address and tab title follow the open run; Back and Forward move between runs and the new-research page at ${width}px`, async h => {
+    const { page } = h; await open(h);
+    const seeded = await seed(h, 2);
+    const runs = [await createRun(h, 'History run whose task needs two lines on a phone', 3), ...seeded]; await show(h, runs);
+    const titled = (title: string) => { const name = [...title.trim()]; return `${name.length > 30 ? `${name.slice(0, 29).join('')}…` : name.join('')} · TheoremOS`; };
+    async function at(run: WebRun) {
+      await page.waitForFunction(id => document.querySelector('.detail-heading')?.getAttribute('data-run') === id, run.id);
+      assert.equal(new URL(page.url()).search, `?run=${run.id}`, 'the address names the open run');
+      assert.ok((await page.title()).endsWith(titled(run.title)), `the tab is named after the open run: ${await page.title()}`);
+      assert.equal(await page.locator('#history-dialog[open]').count(), 0, 'Back and Forward never leave the history dialog over the run');
+    }
+    await choose(page, runs[2]!.id); await choose(page, runs[0]!.id); await closeHistory(page); await at(runs[0]!);
+    if (width <= 850) {
+      const heading = await page.locator('.detail-heading h2').evaluate(node => ({ text: node.textContent, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth,
+        scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, lineHeight: getComputedStyle(node).lineHeight }));
+      assert.ok(heading.scrollWidth <= heading.clientWidth + 1 && heading.scrollHeight <= heading.clientHeight + 1
+        && heading.clientHeight > parseFloat(heading.lineHeight) * 1.5, `a phone shows a title too long for one line whole, on two lines: ${JSON.stringify(heading)}`);
+    }
+    await page.goBack(); await at(runs[2]!);
+    await page.goForward(); await at(runs[0]!);
+    await showChat(page);
+    await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
+    assert.ok((await page.title()).includes('研究工作台'), 'the new-research page keeps the workbench name');
+    await page.goBack(); await at(runs[0]!);
+    if (width <= 850) assert.equal(await page.locator('body[data-mobile-view="runs"]').count(), 1, 'Back on a phone shows the run, not the composer');
+    await page.goForward(); await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
+    // A pasted or bookmarked address opens its run, and a reload keeps it.
+    await page.goto(`${origin}/?run=${runs[1]!.id}`); await at(runs[1]!);
+    await page.reload(); await at(runs[1]!);
+    // An address naming a run that is not in this list falls back to an available run and corrects the address.
+    await page.goto(`${origin}/?run=${crypto.randomUUID()}`);
+    await page.waitForFunction(ids => ids.includes(document.querySelector('.detail-heading')?.getAttribute('data-run') ?? '') && location.search === `?run=${document.querySelector('.detail-heading')!.getAttribute('data-run')}`, runs.map(run => run.id));
+    await screenshot(page, `history-${width}-address.png`);
+  }, width);
+
   await writeReport('passed');
-  console.log(`History checks passed: ${checks.length} scenarios; stable row nodes and selection, active-filter focus recovery, visible and hidden reading anchors, keyboard navigation and no unexpected API writes.`);
+  console.log(`History checks passed: ${checks.length} scenarios; stable row nodes and selection, active-filter focus recovery, visible and hidden reading anchors, keyboard navigation, the run address with Back and Forward, and no unexpected API writes.`);
   console.log(`Report: ${path.relative(root, reportFile)}`);
 } catch (error) { await writeReport('failed', error); throw error; }
 finally { try { await browser?.close(); } finally { await service.close(); } }

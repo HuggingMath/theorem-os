@@ -173,8 +173,9 @@ try {
     assert.equal(await page.locator('#prepare-run').evaluate(button => button === document.activeElement), true,
       'Native closing must return to the preparation button that opened the dialog');
     await readiness(page, 'ready');
-    assert.match(await page.locator('#submission-readiness').innerText(), /提交配置已填写/);
-    assert.match(await page.locator('#submission-readiness').innerText(), /可用性将在提交时确认/);
+    // Ready is one quiet line; nothing is checked against the provider before the user submits.
+    assert.match(await page.locator('#readiness-title').innerText(), /^可以提交/);
+    assert.equal(await page.locator('#readiness-detail').isVisible(), false);
     assert.equal((await page.locator('#submission-readiness').innerText()).includes(credential), false);
     assert.equal(h.requests.filter(request => request.method !== 'GET').length, 0);
     assert.equal(workerStarts, 0);
@@ -256,6 +257,29 @@ try {
       assert.equal(h.requests.filter(request => request.method === 'POST').length, 0);
       await corrected(page, id, good);
     }
+    await closeSettings(page);
+    await readiness(page, 'ready');
+  });
+
+  await scenario('A number out of range shows its error as soon as the field is left, before 开始研究', async h => {
+    const { page } = h;
+    await open(h);
+    await openSettings(page);
+    await page.locator('#api-key').fill(credential);
+    for (const { id, value, good } of [{ id: 'max-turns', value: '0', good: '3' }, { id: 'max-seconds', value: '29', good: '90' },
+      { id: 'workers', value: String(webLimits.maxWorkers + 1), good: '1' }]) {
+      await page.locator(`#${id}`).fill(value);
+      assert.equal(await page.locator(`#${id}-validation`).isVisible(), false, `${id} must not complain while it is being typed`);
+      await page.locator(`#${id}`).press('Tab');
+      assert.equal(await page.locator(`#${id}-validation`).isVisible(), true, `${id} must show its error once left`);
+      assert.equal(await page.locator(`#${id}`).getAttribute('aria-invalid'), 'true');
+      await corrected(page, id, good);
+    }
+    // Leaving a valid field untouched shows nothing.
+    await page.locator('#max-turns').focus();
+    await page.locator('#max-turns').press('Tab');
+    assert.equal(await page.locator('#max-turns-validation').isVisible(), false);
+    assert.equal(h.requests.filter(request => request.method === 'POST').length, 0);
     await closeSettings(page);
     await readiness(page, 'ready');
   });

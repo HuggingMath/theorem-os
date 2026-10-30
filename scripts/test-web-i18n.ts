@@ -109,7 +109,13 @@ try {
   }
   await page.locator('#open-settings').click();
   await page.locator('#run-settings[open]').waitFor();
+  // The registered module implementations, named by the server, read in English too once their sections are opened.
+  for (const selector of ['[data-server-module-library]', '[data-module-registry] details'])
+    await page.locator(`#run-settings ${selector}`).evaluate(details => { (details as HTMLDetailsElement).open = true; });
+  assert.match((await page.locator('#run-settings .collab-registry-entry strong').allInnerTexts()).join('\n'), /M1 · Bounded proof research/u);
   await english(page, 'settings', '#run-settings');
+  for (const selector of ['[data-module-registry] details', '[data-server-module-library]'])
+    await page.locator(`#run-settings ${selector}`).evaluate(details => { (details as HTMLDetailsElement).open = false; });
   await page.locator('#close-settings').click();
   await page.locator('#open-glossary').click();
   await page.locator('#glossary-dialog[open]').waitFor();
@@ -211,7 +217,7 @@ try {
   await browser?.close();
   await service.close();
 }
-// The login page is English for an English browser, with the switch in its footer; server errors stay Chinese by design.
+// The login page is English for an English browser, with the switch in its footer, and the server's refusals read in English too.
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-web-i18n-'));
 const loginPort = await freePort(), loginOrigin = `http://127.0.0.1:${loginPort}`;
 const login = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(loginPort), THEOREMOS_WEB_PUBLIC_URL: loginOrigin,
@@ -229,6 +235,13 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en-US');
   await english(page, 'login page');
   assert.equal(await page.locator('.locale-switch-separator').isVisible(), true);
+  await page.fill('#login-email', 'mallory@example.org');
+  await page.fill('#login-captcha', '24680');
+  await page.click('#send-code');
+  await page.locator('#login-error:not([hidden])').waitFor();
+  assert.equal(await page.locator('#login-error').innerText(), 'This email does not have beta access yet. Apply for the beta, then log in once you are accepted.');
+  await page.locator('#send-code:enabled').waitFor();
+  await english(page, 'login page after a refusal');
   await page.screenshot({ path: path.join(output, 'i18n-login-1440.png') });
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 760 });

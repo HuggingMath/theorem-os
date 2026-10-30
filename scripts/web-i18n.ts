@@ -4,8 +4,9 @@ import ts from 'typescript';
 
 /**
  * Lists the Chinese interface text the English dictionary (apps/web/i18n/en.ts) must cover: t() keys in the browser
- * bundles, static page markup, and the server text the client shows through localizeText. Server error messages and
- * Agent output stay as written. `bun scripts/web-i18n.ts` prints keys without an English entry.
+ * bundles, static page markup, the server text the client shows through localizeText, and the server's error messages,
+ * which it shows through localizeMessage. Agent output stays as written. `bun scripts/web-i18n.ts` prints keys without
+ * an English entry.
  */
 const root = path.resolve(import.meta.dirname, '..');
 export const han = /[　-〿一-鿿＀-￯]/u;
@@ -68,11 +69,12 @@ export function pageKeys() {
 
 /**
  * Chinese text the server stores or sends that the client passes through localizeText: event messages, runtime status,
- * template and environment names, share labels, module-plan validation, and the sample run. Thrown errors are skipped.
+ * template and environment names, share labels, module names, module-plan validation, and the sample run. Errors are
+ * left to errorKeys.
  */
 export function serverKeys() {
   const keys = new Map<string, string>();
-  const files = ['apps/web/progress.ts', 'apps/web/jobs.ts', 'apps/web/runner.ts', 'apps/web/config.ts', 'apps/web/share.ts', 'src/solver/modules/policy.ts', 'scripts/build-web-sample.ts'];
+  const files = ['apps/web/progress.ts', 'apps/web/jobs.ts', 'apps/web/runner.ts', 'apps/web/config.ts', 'apps/web/share.ts', 'apps/web/moduleRegistry.ts', 'src/solver/modules/policy.ts', 'scripts/build-web-sample.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
     const visit = (node: ts.Node) => {
@@ -88,9 +90,46 @@ export function serverKeys() {
   return keys;
 }
 
+/**
+ * Error messages the server sends as `{ error }` or stores as a run's error, which the client shows through
+ * localizeMessage. A template literal becomes a key with {0}, {1}… in place of its values; a message that only passes
+ * on another error's text adds nothing.
+ */
+export function errorKeys() {
+  const keys = new Map<string, string>();
+  const files = ['apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts',
+    'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts'];
+  for (const relative of files) {
+    const source = parse(path.join(root, relative));
+    const add = (node: ts.Node, text: string) => {
+      if (han.test(text) && !keys.has(text)) keys.set(text, `${relative}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
+    };
+    const collect = (node: ts.Node) => {
+      if (ts.isStringLiteralLike(node)) add(node, node.text);
+      else if (ts.isTemplateExpression(node))
+        add(node, node.head.text + node.templateSpans.map((span, index) => `{${index}}${span.literal.text}`).join(''));
+      else ts.forEachChild(node, collect);
+    };
+    // Besides error constructors, `.error =` and `error:`: the worker's `{ type: 'error', message }` and the explain
+    // service's table of provider statuses.
+    const visit = (node: ts.Node) => {
+      if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(source))) node.arguments?.forEach(collect);
+      else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && /\.error$/u.test(node.left.getText(source))) collect(node.right);
+      else if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'error') collect(node.initializer);
+      else if (ts.isObjectLiteralExpression(node) && node.properties.some(item => ts.isPropertyAssignment(item) && item.name.getText(source) === 'type'
+        && item.initializer.getText(source) === "'error'")) {
+        for (const item of node.properties) if (ts.isPropertyAssignment(item) && item.name.getText(source) === 'message') collect(item.initializer);
+      } else if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'upstreamStatus' && node.initializer) collect(node.initializer);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return keys;
+}
+
 export function requiredKeys() {
   const { keys, stray } = scanBundle();
-  return { keys: new Map([...serverKeys(), ...pageKeys(), ...keys]), stray };
+  return { keys: new Map([...errorKeys(), ...serverKeys(), ...pageKeys(), ...keys]), stray };
 }
 
 if (import.meta.main) {

@@ -4,7 +4,9 @@ import { isAcceptedRun, runProgress } from '../presentation';
 import { defaultResearchModulePlan, type CustomResearchModule, type ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { render, type ComponentChildren } from 'preact';
 import { Icon } from './ui/Icon';
-import { localeTag, localizeText, t } from '../i18n';
+import { localeTag, t } from '../i18n';
+import { readableMessage } from './activityReader';
+import { workerNames } from './collaborationUi';
 
 const modules = [
   { id: 'M5', name: t('协作与复用'), subject: t('任务分配 · 审阅 · 集成'), icon: 'network' },
@@ -14,6 +16,8 @@ const modules = [
   { id: 'M1', name: t('证明构造'), subject: t('模型生成候选'), icon: 'cpu' },
   { id: 'S3', name: t('独立验收'), subject: t('完整原题 · 固定验收'), icon: 'shield-check' },
 ] as const;
+/** What the reader calls a module; its code is only an internal key. */
+export const moduleName = (id: string) => modules.find(module => module.id === id)?.name ?? id;
 type ModuleTone = 'pending' | 'active' | 'observed' | 'feedback' | 'passed' | 'failed' | 'stopped';
 type ModuleState = { tone: ModuleTone; label: string };
 export type ModuleViewInput = {
@@ -98,7 +102,8 @@ const operations = { direct: t('直接证明'), decompose: t('分解任务'), br
 function Node({ id }: { id: WebModuleId }) {
   const module = modules.find(module => module.id === id)!;
   return <button type="button" class="module-node" data-module-id={id} data-tone="pending" aria-pressed="false" aria-controls="module-inspector">
-    <span class="module-node-top"><span class="module-code mono">{id}</span><Icon name={module.icon} /><span class="module-node-selected" aria-hidden="true"><Icon name="eye" />{t('查看中')}</span>
+    {/* The module is told apart by its icon and name; its internal code (M1…S3) stays in data-module-id. */}
+    <span class="module-node-top"><span class="module-code" aria-hidden="true"><Icon name={module.icon} /></span><span class="module-node-selected" aria-hidden="true"><Icon name="eye" />{t('查看中')}</span>
       <span class="module-node-state"><span class="module-state-dot" aria-hidden="true" /><span data-module-state>{t('未运行')}</span></span></span>
     <span class="module-node-name">{module.name}</span><span class="module-node-subject">{module.subject}</span>
   </button>;
@@ -124,7 +129,7 @@ function Scaffold() {
       <p class="module-live-event"><strong data-module-live-name /><span data-module-live-message /></p>
     </section>
     <div class="module-layout">
-      <div class="module-graph" role="group" aria-label={t('M3 搜索、M4 上下文、M1 构造、M2 检查组成研究循环，M5 协调，S3 独立验收')} aria-describedby="module-graph-note">
+      <div class="module-graph" role="group" aria-label={t('搜索决策、上下文选择、证明构造、检查与反馈组成研究循环，协作与复用负责协调，最后独立验收')} aria-describedby="module-graph-note">
         <Node id="M5" /><Edge from="M5" to="research" direction="down" class="module-coordination-edge" />
         <div class="module-research"><div class="module-cycle"><Node id="M3" /><Edge from="M3" to="M4" direction="right" class="module-edge-context" /><Node id="M4" /><Edge from="M2" to="M3" direction="up" class="module-edge-retry" />
           <span class="module-cycle-label"><Icon name="refresh-cw" /><span>{t('研究循环')}</span></span><Edge from="M4" to="M1" direction="down" class="module-edge-construction" /><Node id="M2" />
@@ -136,7 +141,7 @@ function Scaffold() {
         <section class="module-customizations" aria-labelledby="module-customizations-title" hidden><header><h4 id="module-customizations-title">{t('自定义策略')}</h4><span data-module-custom-count /></header><ol /></section>
       </div>
       <section class="module-inspector" id="module-inspector" aria-labelledby="module-inspector-title" tabIndex={-1}>
-        <header><span class="module-inspector-code mono" /><h4 id="module-inspector-title" /><span class="module-inspector-state" role="status" aria-atomic="true" />
+        <header><h4 id="module-inspector-title" /><span class="module-inspector-state" role="status" aria-atomic="true" />
           <button type="button" class="icon-button module-policy-add" data-module-policy-add aria-haspopup="dialog" aria-controls="run-settings" hidden><Icon name="plus" /></button>
           <button type="button" class="icon-button module-graph-return" data-module-return title={t('返回模块图')} aria-label={t('返回模块图')}><Icon name="arrow-up" /></button></header>
         <p class="module-output" /><section class="module-policies" aria-label={t('当前模块的自定义策略')} hidden><div /></section><dl class="module-facts" />
@@ -240,6 +245,8 @@ export class ModuleView {
     else this.selectedPolicy = undefined;
     const snapshots = run ? webModuleSnapshots(run) : {};
     const latest = latestModuleActivity(snapshots);
+    // Agents by role, as in the activity tab; an Agent the observation does not list keeps its id.
+    const names = workerNames(run?.observation?.inspection.workers);
     const live = Boolean(run && (run.status === 'running' || run.status === 'queued'));
     if (!live) this.following = false;
     if (this.following && input.connected && latest) { this.selected = latest.id; this.selectedPolicy = undefined; }
@@ -252,9 +259,9 @@ export class ModuleView {
     const latestTime = activity.querySelector('time')!;
     latestTime.dateTime = latest?.event.at ?? '';
     text(latestTime, latest ? timestamp(latest.event.at) : '');
-    text(activity.querySelector('[data-module-live-name]')!, latest ? `${latest.id} · ${modules.find(module => module.id === latest.id)!.name}` : '');
-    text(activity.querySelector('[data-module-live-message]')!, (latest ? localizeText(latest.event.message) : t('等待模块活动')));
-    activity.querySelector<HTMLElement>('.module-live-event')!.title = latest ? localizeText(latest.event.message) : '';
+    text(activity.querySelector('[data-module-live-name]')!, latest ? moduleName(latest.id) : '');
+    text(activity.querySelector('[data-module-live-message]')!, (latest ? readableMessage(latest.event, names) : t('等待模块活动')));
+    activity.querySelector<HTMLElement>('.module-live-event')!.title = latest ? readableMessage(latest.event, names) : '';
     const configuredWorkers = Number.isSafeInteger(input.workers) && input.workers > 0 ? input.workers : t('未设置');
     text(root.querySelector('[data-module-configuration]')!, t('5 个研究模块 · {0} 个 Agent · {1}', configuredWorkers, input.coordination === 'cooperative' ? t('任务协作') : t('独立并行')));
     root.querySelector<HTMLButtonElement>('[data-module-configure]')!.hidden = Boolean(run);
@@ -280,13 +287,12 @@ export class ModuleView {
     const value = moduleState(this.selected, run, snapshot);
     const inspector = root.querySelector<HTMLElement>('.module-inspector')!;
     inspector.dataset.module = this.selected; inspector.dataset.tone = value.tone;
-    text(inspector.querySelector('.module-inspector-code')!, module.id);
     text(inspector.querySelector('h4')!, module.name);
     text(inspector.querySelector('.module-inspector-state')!, value.label);
     const add = inspector.querySelector<HTMLButtonElement>('[data-module-policy-add]')!;
     add.hidden = Boolean(run) || !['M1', 'M3', 'M4', 'M5'].includes(this.selected);
     add.dataset.modulePolicyAdd = this.selected; add.disabled = plan.custom.length >= 8;
-    add.title = add.disabled ? t('最多保存 8 个自定义策略') : t('新增 {0} 策略', this.selected);
+    add.title = add.disabled ? t('最多保存 8 个自定义策略') : t('为「{0}」新增策略', module.name);
     add.setAttribute('aria-label', add.title);
     const outputs: Record<WebModuleId, string> = { M1: t('输出：候选源码与研究进展'), M2: t('输出：候选检查结果与 Lean 反馈'), M3: t('输出：下一步研究动作'), M4: t('输出：当前尝试的研究上下文'), M5: t('输出：任务分配、审阅与集成记录'), S3: t('验收范围：固定的完整原题') };
     text(inspector.querySelector('.module-output')!, outputs[this.selected]);
@@ -303,22 +309,22 @@ export class ModuleView {
     if (this.selected === 'M4' && details?.usedBytes !== undefined)
       facts.push([t('上下文大小'), `${bytes(details.usedBytes)}${details.maxBytes !== undefined ? ` / ${bytes(details.maxBytes)}` : ''}`]);
     if (this.selected === 'M5') facts.push([t('运行模式'), input.coordination === 'cooperative' ? t('任务协作') : t('独立并行')], [t('Agent 配置'), String(configuredWorkers)]);
-    if (details?.workerId) facts.push([t('最近 Agent'), details.workerId]);
+    if (details?.workerId) facts.push([t('最近 Agent'), names.get(details.workerId) ?? details.workerId]);
     if (details?.turn !== undefined) facts.push([t('最近轮次'), String(details.turn)]);
     if (snapshot) facts.push([t('最近记录'), timestamp(snapshot.lastEvent.at)]);
     this.renderFacts(facts);
     this.renderCustomizations(plan.custom);
     this.renderPolicies(plan.custom.filter(rule => rule.slot === this.selected));
-    this.renderWorkers(value.tone === 'active' ? snapshot?.activeWorkers ?? [] : []);
+    this.renderWorkers(value.tone === 'active' ? snapshot?.activeWorkers ?? [] : [], names);
     const events = run?.events.filter(event => webEventModule(event.type) === this.selected).slice(-6).reverse() ?? [];
-    this.renderEvents(events);
+    this.renderEvents(events, names);
     const cumulative = Boolean(run?.modules?.[this.selected]);
     text(inspector.querySelector('.module-retention')!, events.length
       ? t('显示最近 {0} 条{1}', events.length, snapshot && snapshot.eventCount > events.length ? t(' · {0} {1} 条', cumulative ? t('累计') : t('保留窗口内'), snapshot.eventCount) : '')
       : snapshot ? t('累计 {0} 条 · 较早活动已移出保留范围', snapshot.eventCount) : '');
     const empty = inspector.querySelector<HTMLElement>('.module-events-empty')!;
     empty.hidden = Boolean(events.length);
-    text(empty, run ? snapshot ? localizeText(snapshot.lastEvent.message) : t('该模块暂无活动记录') : t('提交后记录真实模块活动'));
+    text(empty, run ? snapshot ? readableMessage(snapshot.lastEvent, names) : t('该模块暂无活动记录') : t('提交后记录真实模块活动'));
     inspector.querySelector<HTMLButtonElement>('[data-module-destination="events"]')!.hidden = !run;
     const destination = inspector.querySelector<HTMLButtonElement>('.module-destination')!;
     destination.dataset.moduleDestination = this.selected === 'S3' && run ? 'report' : 'source';
@@ -338,7 +344,7 @@ export class ModuleView {
       let button = rows.get(rule.id);
       if (!button) {
         const row = skeleton('li', <><label class="module-custom-toggle"><input type="checkbox" data-module-custom-enabled /></label>
-          <button type="button" class="module-customization" aria-controls="module-inspector"><span class="module-custom-slot mono" /><span class="module-custom-name" /><span class="module-custom-mode" /><span data-module-custom-state /><Icon name="arrow-up-right" /></button></>);
+          <button type="button" class="module-customization" aria-controls="module-inspector"><span class="module-custom-name" /><span class="module-custom-mode" /><span data-module-custom-state /><Icon name="arrow-up-right" /></button></>);
         row.className = 'module-customization-row';
         button = row.querySelector('button')!; button.dataset.moduleCustomId = rule.id;
       }
@@ -356,13 +362,12 @@ export class ModuleView {
       button.dataset.moduleSlot = rule.slot;
       button.dataset.enabled = String(rule.enabled);
       button.dataset.appliedCount = String(applications[rule.id]?.eventCount ?? 0);
-      button.setAttribute('aria-label', `${rule.name || t('未命名策略')} · ${rule.slot} · ${state}`);
+      button.setAttribute('aria-label', `${rule.name || t('未命名策略')} · ${moduleName(rule.slot)} · ${state}`);
       button.title = rule.name || t('未命名策略');
       if (this.selectedPolicy === rule.id) button.setAttribute('aria-current', 'true');
       else button.removeAttribute('aria-current');
-      text(button.querySelector('.module-custom-slot')!, rule.slot);
       text(button.querySelector('.module-custom-name')!, rule.name || t('未命名策略'));
-      text(button.querySelector('.module-custom-mode')!, rule.mode === 'replace' ? t('替换建议') : t('补充建议'));
+      text(button.querySelector('.module-custom-mode')!, `${moduleName(rule.slot)} · ${rule.mode === 'replace' ? t('替换建议') : t('补充建议')}`);
       text(button.querySelector('[data-module-custom-state]')!, state);
       if (row !== cursor) target.insertBefore(row, cursor);
       cursor = row.nextElementSibling;
@@ -399,7 +404,7 @@ export class ModuleView {
     }
   }
 
-  private renderWorkers(workers: string[]) {
+  private renderWorkers(workers: string[], names: ReadonlyMap<string, string>) {
     const section = this.root!.querySelector<HTMLElement>('.module-workers')!;
     section.hidden = !workers.length;
     text(section.querySelector('[data-module-worker-count]')!, String(workers.length));
@@ -410,7 +415,7 @@ export class ModuleView {
     for (const id of workers) {
       let row = rows.get(id);
       if (!row) { row = skeleton('li', <><span aria-hidden="true" /><code /></>); row.dataset.workerId = id; }
-      text(row.querySelector('code')!, id);
+      text(row.querySelector('code')!, names.get(id) ?? id);
       if (row !== cursor) target.insertBefore(row, cursor);
       cursor = row.nextElementSibling;
     }
@@ -430,7 +435,7 @@ export class ModuleView {
     }
   }
 
-  private renderEvents(events: WebEvent[]) {
+  private renderEvents(events: WebEvent[], names: ReadonlyMap<string, string>) {
     const target = this.root!.querySelector('.module-events')!;
     const rows = new Map(Array.from(target.querySelectorAll<HTMLElement>('[data-sequence]')).map(row => [Number(row.dataset.sequence), row]));
     for (const [sequence, row] of rows) if (!events.some(event => event.sequence === sequence)) row.remove();
@@ -442,7 +447,7 @@ export class ModuleView {
       }
       const time = row.querySelector('time')!;
       time.dateTime = event.at; text(time, timestamp(event.at));
-      text(row.querySelector('p')!, localizeText(event.message));
+      text(row.querySelector('p')!, readableMessage(event, names));
       if (row !== cursor) target.insertBefore(row, cursor);
       cursor = row.nextElementSibling;
     }

@@ -271,11 +271,11 @@ try {
     control.progress('context_compiled', 'Latest context evidence', { workerId: 'worker1', usedBytes: 1024 });
     await sync(h, run.id); await page.locator('#module-inspector[data-module="M4"]').waitFor();
     assert.equal(await follow.evaluate(element => document.activeElement === element), true, 'following must retain checkbox focus');
-    assert.equal(await page.locator('[data-module-live-name]').innerText(), 'M4 · 上下文选择');
+    assert.equal(await page.locator('[data-module-live-name]').innerText(), '上下文选择');
     await selectModule(page, 'M4'); assert.equal(await follow.isChecked(), false, 'selecting the current module must also pause following');
     control.progress('turn_started', 'A new candidate starts', { workerId: 'worker1', turn: 1 });
     await sync(h, run.id); await page.locator('#module-inspector[data-module="M4"]').waitFor();
-    assert.equal(await page.locator('[data-module-live-name]').innerText(), 'M1 · 证明构造');
+    assert.equal(await page.locator('[data-module-live-name]').innerText(), '证明构造');
     await page.locator('[data-module-latest]').click(); await page.locator('#module-inspector[data-module="M1"]').waitFor();
     assert.equal(await follow.isChecked(), false, 'locating an event is a single navigation');
     await follow.check();
@@ -294,7 +294,7 @@ try {
     await follow.check(); await page.locator('#module-inspector[data-module="M4"]').waitFor();
     controls.get(other.id)!.finish(); await pollSnapshot(page, other.id, { status: 'completed' });
     assert.equal(await follow.isChecked(), false); assert.equal(await follow.isDisabled(), true);
-    assert.equal(await page.locator('[data-module-live-name]').innerText(), 'M4 · 上下文选择', 'terminal events are not module events');
+    assert.equal(await page.locator('[data-module-live-name]').innerText(), '上下文选择', 'terminal events are not module events');
     await page.locator('[data-module-latest]').click(); await page.locator('#module-inspector[data-module="M4"]').waitFor();
   });
 

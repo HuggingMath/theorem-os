@@ -1,4 +1,5 @@
 import { en } from './i18n/en';
+import { errors } from './i18n/errors';
 
 /**
  * Interface language for the workbench, login and share pages. Chinese strings are the keys and the default;
@@ -47,6 +48,23 @@ export function localizeText(text: string): string {
   if (en[text]) return en[text];
   const match = detail.exec(text);
   return match && en[match[1]] ? `${en[match[1]]}${match[2]}` : text;
+}
+
+let templates: Array<[RegExp, string]> | undefined;
+/**
+ * Translates an error message the server sent. Besides exact keys, an error key with {0}, {1}… matches the message with
+ * those parts filled in, and the English keeps the filled values. Anything else is returned unchanged.
+ */
+export function localizeMessage(text: string): string {
+  if (locale === 'zh' || !text || en[text]) return localizeText(text);
+  templates ??= Object.keys(errors).filter(key => /\{\d+\}/u.test(key)).map(key => [new RegExp(`^${key.split(/\{\d+\}/u)
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('(.+?)')}$`, 'u'), key]);
+  // Error keys come from template literals, so their slots are numbered in order (scripts/web-i18n.ts errorKeys).
+  for (const [pattern, key] of templates) {
+    const match = pattern.exec(text);
+    if (match) return t(key, ...match.slice(1));
+  }
+  return text;
 }
 
 /** Saves the choice and reloads; callers save drafts first. */

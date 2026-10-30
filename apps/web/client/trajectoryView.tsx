@@ -4,11 +4,12 @@ import type { WebExplainAnswer, WebExplainTurn } from '../explain';
 import { diagnostics, summarizeGoals, type ReportDiagnostic } from '../report';
 import { formatDuration, readableDuration, stoppedLabel } from '../presentation';
 import type { TrajectoryPage, TrajectoryPlan, TrajectoryPlanItem, TrajectoryVersion, TrajectoryVersionDetail } from '../trajectory';
-import { buildTrajectory, emptyTrajectory, mergeTrajectory, stepTasks, trajectoryTaskNames, type RecheckResult, type TrajectoryData,
+import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, stepTasks, trajectoryTally, trajectoryTaskNames, type RecheckResult, type TrajectoryData,
   type TrajectoryOutcome, type TrajectoryStep } from './trajectory';
 import { readableMessage } from './activityReader';
 import { taskNames } from './agentRoute';
 import { kindLabel as taskKindLabel, tokenText, totalTokens } from './collaborationView';
+import { leanMarks, leanMessages, sameLeanFile, type LeanMark, type LeanMarks } from './leanMessages';
 import { detailLevel, onDetailLevel, setDetailLevel } from './detailLevel';
 import { clockTime, errorText, workerNames, workerPhaseLabel, type WebApi } from './collaborationUi';
 import { statusLabels } from './researchProgressView';
@@ -16,6 +17,7 @@ import { compareSources, type SourceComparison } from './sourceDiff';
 import { DiffRows, fill, renderSection } from './ui/Section';
 import { leanLines, leanParts } from './ui/DetailPanel';
 import { Icon, Spinner } from './ui/Icon';
+import { revealSteps } from './motion';
 import { SideViewer } from './ui/SideViewer';
 import { localizeText, t } from '../i18n';
 
@@ -58,8 +60,12 @@ const modeLabels: Record<Mode, string> = { code: t('看代码'), diff: t('对比
 const kindIcons: Partial<Record<TrajectoryStep['kind'], string>> = { problem: 'book-open', plan: 'list-ordered' };
 function Marker(props: { step: TrajectoryStep; tone: Tone }) {
   const icon = toneIcons[props.tone] ?? kindIcons[props.step.kind];
-  return <span class="trajectory-marker" aria-hidden="true">{props.tone === 'running' ? <Spinner /> : icon ? <Icon name={icon} /> : null}</span>;
+  return <span class="trajectory-marker" aria-hidden="true">{props.tone === 'running' ? <span class="pulse-dot" /> : icon ? <Icon name={icon} /> : null}</span>;
 }
+/** The shape of a few steps while the trajectory is first read. */
+const StepsLoading = () => <div class="skeleton-block" aria-busy="true">
+  <ol class="skeleton-steps" aria-hidden="true">{[58, 76, 44].map(width => <li key={width}><i class="skeleton-dot" /><i style={{ width: `${width}%` }} /></li>)}</ol>
+  <p class="trajectory-loading">{t('正在读取…')}</p></div>;
 type Mode = 'code' | 'diff' | 'feedback' | 'ask' | 'finding';
 type Panel = { key: string; mode: Mode };
 /** One stretch of an Agent's work in the time overview: from taking the task (or finishing its last one) to the check. */
@@ -85,7 +91,9 @@ type RunState = {
   data: TrajectoryData; loaded: boolean; error?: string; inFlight: boolean; lastFetch: number; fetchedFor?: string; timer?: ReturnType<typeof setTimeout>;
   /** The read in flight, for a caller that needs its result. */ pending?: Promise<void>;
   task: string; all: boolean; folded: boolean; panel?: Panel; versions: Map<string, Loaded>; asks: Map<string, AskThread>; built?: Built;
-  code?: { key: string; lines: string[]; numbers: string; parts: ComponentChildren[] }; comparison?: { key: string; value: SourceComparison };
+  /** The open version's code: its lines, the number column (blank rows where Lean's messages sit) and the coloured text. */
+  code?: { key: string; lines: string[]; numbers: ComponentChildren[]; gaps: Map<number, number>; parts: ComponentChildren[] };
+  comparison?: { key: string; value: SourceComparison };
   /** Steps the reader opened or closed, against the default (open unless passed). */ open: Map<string, boolean>;
   /** While the run goes on: whether new steps keep the view at the bottom, and what it was last pinned to. */
   follow: boolean; pinned?: string; seen: Set<string>;
@@ -94,10 +102,47 @@ type RunState = {
 };
 type Ctx = { run: WebRun; state: RunState; names: Map<string, string>; tasks: Map<string, string>; key: string; index: number;
   lastProof?: TrajectoryStep; proofs: number; candidate: boolean; simple: boolean;
-  /** Token use of each task, shown on its latest attempt in the detailed view. */ usage: Map<string, number> };
+  /** Token use of each task, shown on its latest attempt in the detailed view. */ usage: Map<string, number>;
+  /** For an attempt inside its task's run of consecutive attempts: whether it is the last of them. */ retry?: { latest: boolean } };
 type Content = { title: ComponentChildren; meta?: string[]; badge?: [string, Tone]; body?: ComponentChildren };
 
 const shortName = (name: string) => name.split('.').at(-1) || name;
+/** The Lean output of a version's check (`ids`, its receipts; none means all), failed receipts first, each output once. */
+function checkEntries(detail: TrajectoryVersionDetail, ids: readonly string[]) {
+  const wanted = new Set(ids), checks = detail.checks.filter(check => !wanted.size || wanted.has(check.id))
+    .sort((a, b) => Number(a.record.passed === true) - Number(b.record.passed === true));
+  const seen = new Set<string>(), entries: (ReportDiagnostic & { theorem?: string })[] = [];
+  for (const check of checks) for (const entry of diagnostics(check.record)) {
+    if (seen.has(entry.text)) continue;
+    seen.add(entry.text);
+    entries.push({ ...entry, ...(typeof check.record.theoremName === 'string' ? { theorem: check.record.theoremName } : {}) });
+  }
+  return entries;
+}
+/** Lean's messages on the lines of a version's saved code, from its check's output. */
+function versionMarks(detail: TrajectoryVersionDetail, ids: readonly string[]): LeanMarks | undefined {
+  const source = detail.source;
+  if (!source) return;
+  const text = source.source.replace(/\r\n?/gu, '\n'), count = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+  return leanMarks(checkEntries(detail, ids).map(entry => entry.text), source.file, count);
+}
+/**
+ * The number column beside `count` lines: after a line with messages under it (`gaps`, rows by line), as many blank
+ * rows as the messages take, and that line's number marked. Blank rows hold a space, so the column ends on its last row.
+ */
+function lineNumbers(count: number, gaps: ReadonlyMap<number, number>): ComponentChildren[] {
+  const parts: ComponentChildren[] = [];
+  let text = '';
+  for (let line = 1; line <= count; line++) {
+    if (line > 1) text += '\n';
+    const rows = gaps.get(line);
+    if (rows === undefined) { text += line; continue; }
+    parts.push(text, <span key={line} class="trajectory-line-marked">{line}</span>);
+    text = '\n '.repeat(rows);
+  }
+  parts.push(text);
+  return parts.filter(part => part !== '');
+}
 const planName = (item: TrajectoryPlanItem, tasks: Map<string, string>) => item.name ? shortName(item.name) : tasks.get(item.id) ?? item.id;
 const toneClass = (tone: Tone) => tone === 'running' || tone === 'passed' || tone === 'failed' || tone === 'warning' ? tone : '';
 const elapsed = (ms: number) => `+${formatDuration(Math.max(0, ms))}`;
@@ -136,6 +181,36 @@ function EndGoals({ run }: { run: WebRun }) {
   if (!rows.length) return null;
   return <>{rows.map(([label, ids, tone]) => <p key={label} class={`trajectory-result ${tone}`} data-end-goals={tone || 'open'}>
     {fill(label, <Chips ids={ids} label={shortName} />)}</p>)}</>;
+}
+/**
+ * The finished run's account under its steps: time, Lean checks, attempts and tasks, then in 详细 one line per Agent on
+ * what it did (简洁 leaves out who). It counts the whole run, whatever the task filter or time window shows.
+ */
+function Tally(props: { run: WebRun; steps: readonly TrajectoryStep[]; data: TrajectoryData; names: Map<string, string>; tasks: Map<string, string>;
+  order: readonly string[]; simple: boolean }) {
+  const { run } = props, tally = trajectoryTally(props.steps, props.data);
+  if (!tally.checks && !tally.attempts) return null;
+  const took = time(run.finishedAt) - time(run.createdAt), planned = run.observation?.inspection.tasks.length ?? props.order.length;
+  const line = [Number.isFinite(took) ? t('用时 {0}', readableDuration(took)) : '',
+    tally.partial ? t('Lean 检查至少 {0} 次', tally.checks) : t('Lean 检查 {0} 次', tally.checks),
+    tally.partial ? t('尝试至少 {0} 次', tally.attempts) : t('尝试 {0} 次', tally.attempts),
+    planned ? t('任务 {0} 个', planned) : ''].filter(Boolean).join(' · ');
+  const rows = props.simple ? [] : tally.agents.map(agent => {
+    const parts: ComponentChildren[] = [];
+    if (agent.plans) parts.push(t('写了 {0} 版计划', agent.plans));
+    if (agent.tasks.length) parts.push(fill(t('做了 {0}'), <Chips ids={agent.tasks} label={id => props.tasks.get(id) ?? id} />),
+      t('通过 {0} 个', agent.passed), ...(agent.conditional ? [t('有条件通过 {0} 个', agent.conditional)] : []), t('尝试 {0} 次', agent.attempts));
+    if (agent.proofs) parts.push(t('交了 {0} 份完整证明，通过 {1} 份', agent.proofs, agent.provedProofs));
+    if (agent.assembled) parts.push(t('组装完整证明 {0} 次', agent.assembled));
+    if (agent.reports) parts.push(t('提交 {0} 份报告', agent.reports));
+    return parts.length ? <li key={agent.id} data-tally-agent={agent.id}><strong>{props.names.get(agent.id) ?? agent.id}</strong>{' '}
+      {parts.flatMap((part, index) => [...index ? [' · '] : [], <span key={index} class="trajectory-tally-part">{part}</span>])}</li> : null;
+  }).filter(Boolean);
+  return <section class="trajectory-tally" data-trajectory-tally aria-labelledby="trajectory-tally-heading">
+    <h4 id="trajectory-tally-heading">{t('全程合计')}</h4>
+    <p class="trajectory-tally-line" data-tally-line>{line}</p>
+    {rows.length > 0 && <ul class="trajectory-tally-agents">{rows}</ul>}
+  </section>;
 }
 /** The first rows, then the rest folded. */
 function Limited(props: { rows: ComponentChildren[]; detailKey: string; class: string }) {
@@ -295,6 +370,8 @@ export class TrajectoryView {
   private run?: WebRun;
   private viewport?: HTMLElement;
   private lastTop = 0;
+  /** The steps last drawn, and where: which of them are new to a reader following the run. */
+  private drawn?: { root: HTMLElement; run: string; keys: Set<string>; data?: string };
   /** A key typed in the ask panel, by provider, for the next questions on this page; never stored. */
   private readonly typedKeys = new Map<string, string>();
   /** The step the result tab asked for, shown once the run's trajectory is read: a task's checked code, or why the latest failed check failed. */
@@ -452,6 +529,26 @@ export class TrajectoryView {
       viewport.scrollTop = viewport.scrollHeight;
       this.lastTop = viewport.scrollTop;
     }
+    this.cueSteps(state);
+  }
+  /**
+   * The first steps drawn in a host cascade in; after that only steps new to the data move, and only for a reader
+   * following a live run. Reading choices (detail, filters, folds, earlier steps) show steps in place. The step in
+   * progress changes every moment and never counts as new; a run of attempts that only regrouped old ones does not either.
+   */
+  private cueSteps(state: RunState) {
+    const root = this.root!, run = this.run!, steps = [...root.querySelectorAll<HTMLElement>('.trajectory-step[data-step]')];
+    const keys = new Set(steps.filter(step => step.dataset.kind !== 'live').map(step => step.dataset.step!));
+    const before = this.drawn, data = state.built?.key;
+    const first = !before || before.root !== root || before.run !== run.id || !before.keys.size;
+    this.drawn = { root, run: run.id, keys, data };
+    if (!keys.size) return;
+    if (first) { revealSteps(root, steps, this.viewport, false); return; }
+    if (!live(run) || !state.follow || state.window || data === before.data) return;
+    const fresh = steps.slice(-20).filter(step => step.dataset.kind !== 'live' && !before.keys.has(step.dataset.step!)
+      && [...step.querySelectorAll<HTMLElement>('.trajectory-step[data-step]')].every(inner => !before.keys.has(inner.dataset.step!)));
+    const outer = fresh.filter(step => !fresh.some(other => other !== step && other.contains(step)));
+    if (outer.length) revealSteps(root, outer, this.viewport, true);
   }
 
   /** Steps are rebuilt only when the data, the run's status or its live Agents change. */
@@ -481,7 +578,7 @@ export class TrajectoryView {
     const failure = state.error && <p class="trajectory-error" role="status">{t('读取失败：{0}', state.error)}
       <button type="button" class="text-button" data-focus-key="trajectory-retry" onClick={retry}>{t('重试')}</button></p>;
     if (!state.loaded) return <section class="trajectory" aria-busy={!state.error}>{heading()}
-      {failure || <p class="trajectory-loading"><Spinner />{t('正在读取…')}</p>}</section>;
+      {failure || <StepsLoading />}</section>;
 
     const built = this.built(run, state), names = workerNames(state.data.context.workers.length ? state.data.context.workers : run.observation?.inspection.workers);
     // The latest observation names tasks the fetched plans do not reach yet, such as the one an Agent just took.
@@ -518,7 +615,11 @@ export class TrajectoryView {
     if (!live(run) || state.follow) state.seen = new Set(items.filter(item => item.step.kind !== 'live').map(item => item.key));
     const unseen = counted.filter(item => !state.seen.has(item.key)).length;
     const latest = `${counted.at(-1)?.key ?? ''}\u0000${counted.length}\u0000${tail?.kind === 'live' ? `${tail.workers.map(item => `${item.id}/${item.phase}/${item.task ?? ''}`).join(',')}/${run.events.at(-1)?.sequence ?? ''}` : ''}`;
-    const origin = time(run.createdAt);
+    const origin = time(run.createdAt), now = built.steps.at(-1);
+    // The tasks an Agent is on right now: their runs of attempts stay open.
+    const working = new Set(now?.kind === 'live' ? now.workers.flatMap(item => item.task ? [item.task] : []) : []);
+    // The account waits for a complete read made after the run ended, so it never counts a run still being read.
+    const settled = !live(run) && !state.inFlight && !state.error && state.fetchedFor?.startsWith(`${run.status}\u0000`);
     return <div class="trajectory-layout" data-viewer-host>
       <section class="trajectory">
         {heading(summary)}
@@ -538,8 +639,10 @@ export class TrajectoryView {
           onClick={() => { state.all = true; this.render(); this.root?.querySelector<HTMLElement>('.trajectory-step')?.focus({ preventScroll: true }); }}>
           {t('显示更早的 {0} 步', hidden)}</button>}
         {!hidden && Object.values(state.data.dropped).some(Boolean) && <p class="trajectory-note">{t('这次运行很长，最早的一部分记录超出保留范围，没有显示。')}</p>}
-        {shown.length ? <ol class="trajectory-steps" data-latest={latest}>{shown.map(item => this.step({ ...ctx, key: item.key, index: item.index }, item.step))}</ol>
+        {shown.length ? <ol class="trajectory-steps" data-latest={latest}>{simple ? shown.map(item => this.step({ ...ctx, key: item.key, index: item.index }, item.step))
+          : retryRuns(shown).map(run => run.length > 1 ? this.retries(ctx, run, working) : this.step({ ...ctx, key: run[0]!.key, index: run[0]!.index }, run[0]!.step))}</ol>
           : <p class="trajectory-empty">{span ? t('这段时间里没有步骤。') : live(run) ? t('还没有可显示的步骤，Agent 开始工作后会出现在这里。') : t('这次运行没有记录到解题步骤。')}</p>}
+        {settled && <Tally run={run} steps={built.steps} data={state.data} names={names} tasks={tasks} order={order} simple={simple} />}
         {live(run) && !state.follow && shown.length > 0 && <button type="button" class="trajectory-latest" data-focus-key="trajectory-latest" onClick={() => this.latest()}>
           <Icon name="arrow-down" />{unseen ? t('回到最新 · 新增 {0} 步', unseen) : t('回到最新')}</button>}
       </section>
@@ -550,7 +653,9 @@ export class TrajectoryView {
     const tone = stepTone(step), content = this.content(ctx, step);
     const at = Number.isFinite(step.at) ? new Date(step.at) : undefined, origin = time(ctx.run.createdAt);
     // Settled steps fold to their title line; running and failed ones stay open. The reader's own choice wins.
-    const foldable = Boolean(content.body), open = !foldable || (ctx.state.open.get(ctx.key) ?? !settledStep(step)), body = `trajectory-body-${ctx.index}`;
+    // Inside a run of attempts only the last stays open by default, and only while it has not passed.
+    const unsettled = !settledStep(step) && (!ctx.retry || ctx.retry.latest);
+    const foldable = Boolean(content.body), open = !foldable || (ctx.state.open.get(ctx.key) ?? unsettled), body = `trajectory-body-${ctx.index}`;
     const title = <>{content.title}{content.meta?.filter(Boolean).map((item, index) => <span key={index} class="trajectory-meta">{item}</span>)}
       {content.badge && <span class={`badge ${toneClass(content.badge[1])}`}>{content.badge[0]}</span>}
       {!open && toneText[tone] && <span class="sr-only">{toneText[tone]}</span>}</>;
@@ -563,6 +668,39 @@ export class TrajectoryView {
           {at && step.kind !== 'live' && <time dateTime={at.toISOString()} title={clockTime(at.toISOString())}>{elapsed(step.at - origin)}</time>}
         </div>
         {open && foldable && <div class="trajectory-body" id={body}>{content.body}</div>}
+      </div>
+    </li>;
+  }
+  /**
+   * 详细: a task's consecutive attempts as one line, 「zero_add · 第 1–3 次 · 第 3 次通过」, opening to each attempt. The run
+   * folds once its last attempt passed, unless an Agent is on the task again; the reader's own choice wins.
+   */
+  private retries(ctx: Omit<Ctx, 'key' | 'index'>, run: readonly Item[], working: ReadonlySet<string>) {
+    const last = run.at(-1)!, step = last.step as StepOf<'attempt'>, first = run[0]!.step as StepOf<'attempt'>, tone = stepTone(step);
+    const key = `retry-${run[0]!.key}`, body = `trajectory-body-retry-${run[0]!.index}`;
+    const open = ctx.state.open.get(key) ?? (!settledStep(step) || working.has(step.taskId) && live(ctx.run));
+    const workers = new Set(run.map(item => (item.step as StepOf<'attempt'>).workerId));
+    const worker = !ctx.simple && workers.size === 1 && step.workerId ? ctx.names.get(step.workerId) ?? step.workerId : '';
+    const span = first.number === 1 ? t('试了 {0} 次', run.length) : t('第 {0}–{1} 次', first.number, step.number);
+    const result = step.outcome === 'passed' ? t('第 {0} 次通过', step.number) : step.outcome === 'conditional' ? t('第 {0} 次有条件通过', step.number)
+      : step.outcome === 'running' ? t('第 {0} 次检查中', step.number)
+        : run.every(item => (item.step as StepOf<'attempt'>).outcome === 'failed') ? t('都没通过') : t('第 {0} 次没通过', step.number);
+    const badge: Content['badge'] = step.integrated ? [t('已集成'), 'passed'] : step.reused ? [t('沿用上次检查'), 'muted'] : undefined;
+    const at = Number.isFinite(step.at) ? new Date(step.at) : undefined, origin = time(ctx.run.createdAt);
+    const title = <><code class="trajectory-task">{ctx.tasks.get(step.taskId) ?? step.taskId}</code>
+      {[worker, span, result].filter(Boolean).map((item, index) => <span key={index} class="trajectory-meta">{item}</span>)}
+      {badge && <span class={`badge ${toneClass(badge[1])}`}>{badge[0]}</span>}
+      {!open && toneText[tone] && <span class="sr-only">{toneText[tone]}</span>}</>;
+    return <li key={key} class="trajectory-step" data-kind="retries" data-tone={tone} data-step={key} data-open={String(open)} data-retries={run.length} tabIndex={-1}>
+      <Marker step={step} tone={tone} />
+      <div class="trajectory-main">
+        <div class="trajectory-line">
+          <h4><button type="button" class="trajectory-fold" aria-expanded={open} aria-controls={open ? body : undefined}
+            data-focus-key={`${key}-fold`} onClick={() => this.fold(key, !open)}>{title}<Icon name="chevron-right" /></button></h4>
+          {at && <time dateTime={at.toISOString()} title={clockTime(at.toISOString())}>{elapsed(step.at - origin)}</time>}
+        </div>
+        {open && <ol class="trajectory-steps trajectory-retries" id={body}>
+          {run.map(item => this.step({ ...ctx, key: item.key, index: item.index, retry: { latest: item === last } }, item.step))}</ol>}
       </div>
     </li>;
   }
@@ -595,6 +733,11 @@ export class TrajectoryView {
     if (state.window && (step.at < state.window.start || step.at > state.window.end)) state.window = undefined;
     if (state.task && !general.has(step.kind) && !stepTasks(step).includes(state.task)) state.task = '';
     state.all = true; state.follow = false; state.open.set(key, true);
+    // In 详细 the step may sit inside its task's run of attempts, which opens with it.
+    if (detailLevel() === 'full') {
+      const run = retryRuns(built.steps.map((item, index) => ({ step: item, key: built.keys[index]! }))).find(items => items.length > 1 && items.some(item => item.key === key));
+      if (run) state.open.set(`retry-${run[0]!.key}`, true);
+    }
     this.render();
     const item = this.root?.querySelector<HTMLElement>(`.trajectory-step[data-step="${CSS.escape(key)}"]`);
     item?.scrollIntoView({ block: 'center' }); item?.focus({ preventScroll: true });
@@ -607,7 +750,12 @@ export class TrajectoryView {
       case 'problem': return { title: t('读题'), body: step.targets.length > 0 && <p class="trajectory-result">{fill(t('要证明 {0}'), <Chips ids={step.targets} label={shortName} />)}</p> };
       case 'plan': return { title: step.first ? t('拟定计划') : t('调整计划'), meta: [worker(step.workerId) ?? ''],
         body: step.first ? <PlanItems items={step.plan.added} tasks={tasks} detailKey={`${ctx.key}-plan`} /> : <PlanDiff plan={step.plan} tasks={tasks} detailKey={`${ctx.key}-plan`} /> };
-      case 'attempt': return { title: <code class="trajectory-task">{task(step.taskId)}</code>,
+      // Inside its run the task is named once, on the run's line; each attempt is its number and how it went.
+      case 'attempt': if (ctx.retry) return { title: t('第 {0} 次', step.number),
+        meta: [worker(step.workerId) ?? '', outcomeText(step.outcome, step.ref?.check?.headline), ctx.usage.has(ctx.key) ? t('Token {0}', tokenText(ctx.usage.get(ctx.key)!)) : ''],
+        badge: step.integrated ? [t('已集成'), 'passed'] : step.reused ? [t('沿用上次检查'), 'muted'] : undefined,
+        body: <>{step.note && <p class="trajectory-quote">{step.note}</p>}{this.actions(ctx, step)}</> };
+        return { title: <code class="trajectory-task">{task(step.taskId)}</code>,
         meta: [worker(step.workerId) ?? '', ctx.simple && step.number === 1 ? '' : t('第 {0} 次', step.number),
           ctx.usage.has(ctx.key) ? t('Token {0}', tokenText(ctx.usage.get(ctx.key)!)) : ''],
         badge: step.integrated ? [t('已集成'), 'passed'] : step.reused ? [t('沿用上次检查'), 'muted'] : undefined,
@@ -732,7 +880,9 @@ export class TrajectoryView {
       const version = step.ref!.version;
       title = step.kind === 'attempt' ? <code class="trajectory-task">{base.tasks.get(step.taskId) ?? step.taskId}</code> : step.assembled ? t('组装完整证明') : t('完整证明');
       subtitle = [step.kind === 'attempt' ? t('第 {0} 次', step.number) : '', outcomeText(step.outcome, step.ref?.check?.headline), elapsed(step.at - origin)].filter(Boolean).join(' · ');
-      body = panel.mode === 'code' ? this.code(ctx, version, step.kind === 'attempt' ? step.taskId : undefined)
+      // A failed step's code carries Lean's messages under their lines.
+      const failed = step.outcome === 'failed' ? step.ref?.check?.receiptIds ?? [] : undefined;
+      body = panel.mode === 'code' ? this.code(ctx, version, step.kind === 'attempt' ? step.taskId : undefined, failed)
         : panel.mode === 'diff' && step.kind === 'attempt' && step.previous ? this.diff(ctx, step.previous, version)
           : panel.mode === 'ask' ? this.ask(ctx, version)
             : this.feedback(ctx, version, step.ref?.check?.receiptIds ?? [], modes.includes('ask'));
@@ -831,7 +981,8 @@ export class TrajectoryView {
     return { status: 'loading' };
   }
   private pending(ctx: Ctx, loaded: Loaded, version: TrajectoryVersion) {
-    if (loaded.status === 'loading') return <p class="trajectory-loading"><Spinner />{t('正在读取…')}</p>;
+    if (loaded.status === 'loading') return <div class="skeleton-block" aria-busy="true"><span class="skeleton-code" aria-hidden="true">{[86, 62, 74, 40, 68].map(width => <i key={width} style={{ width: `${width}%` }} />)}</span>
+      <p class="trajectory-loading">{t('正在读取…')}</p></div>;
     if (loaded.status === 'failed') return <p class="trajectory-error" role="status">{t('读取失败：{0}', loaded.error)}
       <button type="button" class="text-button" data-focus-key={`${ctx.key}-retry`}
         onClick={() => { ctx.state.versions.delete(version.key); this.render(); }}>{t('重试')}</button></p>;
@@ -839,17 +990,26 @@ export class TrajectoryView {
 
   /**
    * A version's code with its line numbers. While the run goes on, each number is a button that adds its line to the
-   * guidance draft (to `taskId`'s Agent); the numbers are one tab stop, moved through with the arrow keys.
+   * guidance draft (to `taskId`'s Agent); the numbers are one tab stop, moved through with the arrow keys. A failed
+   * step's code (`failed`, the receipts of its check) has Lean's messages under the lines they are about, and above the
+   * code a link to each of those lines.
    */
-  private code(ctx: Ctx, version: TrajectoryVersion, taskId?: string) {
+  private code(ctx: Ctx, version: TrajectoryVersion, taskId?: string, failed?: readonly string[]) {
     const loaded = this.need(ctx, version);
     if (loaded.status !== 'ready') return this.pending(ctx, loaded, version);
     const source = loaded.detail.source;
     if (!source) return <p class="trajectory-note">{t('这一版的代码没有保存')}</p>;
-    const key = `${version.key}\u0000${source.sourceDigest}`;
+    const marks = failed ? versionMarks(loaded.detail, failed) : undefined;
+    const signature = marks ? JSON.stringify([...marks.lines]) : '';
+    const key = `${version.key}\u0000${source.sourceDigest}\u0000${signature}`;
     if (ctx.state.code?.key !== key) {
-      const text = source.source.replace(/\r\n?/gu, '\n'), lines = text.split('\n');
-      ctx.state.code = { key, lines, numbers: Array.from({ length: lines.length }, (_, index) => index + 1).join('\n'), parts: leanLines(text) };
+      const text = source.source.replace(/\r\n?/gu, '\n'), lines = text.split('\n'), gaps = new Map<number, number>();
+      const below = new Map<number, ComponentChildren>();
+      for (const [line, items] of marks?.lines ?? []) {
+        gaps.set(line, items.reduce((sum, item) => sum + 1 + item.lines.length + (item.more ? 1 : 0), 0));
+        below.set(line, this.marks(line, items));
+      }
+      ctx.state.code = { key, lines, gaps, numbers: lineNumbers(lines.length, gaps), parts: leanLines(text, below) };
     }
     const code = ctx.state.code, guiding = Boolean(this.guide) && ctx.run.status === 'running';
     const add = (line: number) => {
@@ -868,17 +1028,72 @@ export class TrajectoryView {
     const firstLine = code.lines.findIndex(line => line.trim());
     return <>
       <p class="trajectory-file"><Icon name="file-code-2" /><span>{source.file}</span></p>
+      {marks && this.markSummary(ctx, marks)}
       {guiding && <p class="trajectory-note">{t('点行号把这一行加入指导草稿')}</p>}
       {/* Line guidance needs its column of line buttons; otherwise a phone wraps the lines under their own numbers. */}
       <div class={`trajectory-code${guiding ? '' : ' lean-wrap'}`} tabIndex={0} aria-label={source.file}>
         {guiding ? <div class="trajectory-line-numbers trajectory-gutter" role="group" aria-label={t('行号：把一行加入指导')} onKeyDown={rove}>
-          {code.lines.map((line, index) => line.trim() ? <button key={index} type="button" tabIndex={index === firstLine ? 0 : -1} data-line={index + 1}
-            title={t('把第 {0} 行加入指导', index + 1)} aria-label={t('把第 {0} 行加入指导', index + 1)} onClick={() => add(index + 1)}>{index + 1}</button>
-            : <span key={index} aria-hidden="true">{index + 1}</span>)}</div>
+          {code.lines.flatMap((line, index) => [line.trim() ? <button key={index} type="button" tabIndex={index === firstLine ? 0 : -1} data-line={index + 1}
+            data-marked={code.gaps.has(index + 1) || undefined} title={t('把第 {0} 行加入指导', index + 1)} aria-label={t('把第 {0} 行加入指导', index + 1)}
+            onClick={() => add(index + 1)}>{index + 1}</button>
+            : <span key={index} aria-hidden="true" data-marked={code.gaps.has(index + 1) || undefined}>{index + 1}</span>,
+          ...Array.from({ length: code.gaps.get(index + 1) ?? 0 }, (_, row) => <span key={`${index}-${row}`} aria-hidden="true" />)])}</div>
           : <pre class="trajectory-line-numbers" aria-hidden="true">{code.numbers}</pre>}
         <pre class="trajectory-code-text" translate={false}><code>{code.parts}</code></pre>
       </div>
     </>;
+  }
+  /** Lean's messages about one line, under it in the code; each row is one line high, so the numbers stay beside their lines. */
+  private marks(line: number, items: readonly LeanMark[]) {
+    return <span key={`marks-${line}`} class="lean-marks" data-marks={line} tabIndex={-1}>{items.map((item, index) => <span key={index} class="lean-mark" data-severity={item.severity}>
+      <span class="lean-mark-title"><Icon name={item.severity === 'error' ? 'circle-alert' : 'triangle-alert'} />
+        {item.severity === 'error' ? t('第 {0} 行 · Lean 报错', line) : t('第 {0} 行 · Lean 警告', line)}</span>
+      {item.lines.map((text, row) => <span key={row} class="lean-mark-row">{text || ' '}</span>)}
+      {item.more > 0 && <span class="lean-mark-row lean-mark-more">{t('还有 {0} 行', item.more)} <button type="button" class="text-button"
+        data-marks-feedback onClick={() => this.showFeedback()}>{modeLabels.feedback}</button></span>}
+    </span>)}</span>;
+  }
+  /** Above a failed step's code: a link to each line Lean has a message about, and how many errors are about no line of it. */
+  private markSummary(ctx: Ctx, marks: LeanMarks) {
+    const lines = [...marks.lines.keys()], shown = lines.slice(0, limits.chips), warning = [...marks.lines.values()][0]?.[0]?.severity === 'warning';
+    if (!lines.length && !marks.elsewhere) return null;
+    return <div class="trajectory-marks-summary" data-marks-summary>
+      {lines.length > 0 && <p><Icon name={warning ? 'triangle-alert' : 'circle-alert'} /><span>{warning ? t('Lean 警告在') : t('Lean 报错在')}</span>
+        {shown.map(line => <button key={line} type="button" class="text-button" data-marks-line={line} data-focus-key={`${ctx.key}-marks-${line}`}
+          onClick={() => this.jump(line)}>{t('第 {0} 行', line)}</button>)}
+        {lines.length > shown.length && <span>{t('等 {0} 行', lines.length)}</span>}</p>}
+      {marks.elsewhere > 0 && <p class="trajectory-note">{t('另有 {0} 条报错对不上这一版的代码行，在完整反馈里', marks.elsewhere)}
+        <button type="button" class="text-button" data-marks-feedback onClick={() => this.showFeedback()}>{modeLabels.feedback}</button></p>}
+    </div>;
+  }
+  /** Brings a line of the open code into view, its messages in focus. */
+  private jump(line: number) {
+    const viewer = this.root?.querySelector<HTMLElement>('#trajectory-viewer'), target = viewer?.querySelector<HTMLElement>(`.trajectory-code-text [data-line="${line}"]`);
+    if (!viewer || !target) return;
+    const box = target.closest<HTMLElement>('.trajectory-code'), scroller = target.closest<HTMLElement>('.side-viewer-body');
+    if (box) box.scrollLeft = 0;
+    // The code scrolls inside the viewer's body, or inside its own box when the body does not.
+    for (const area of [box, scroller]) if (area && area.scrollHeight > area.clientHeight + 1) {
+      area.scrollTop += target.getBoundingClientRect().top - area.getBoundingClientRect().top - area.clientHeight / 3;
+    }
+    const focus = target.nextElementSibling instanceof HTMLElement && target.nextElementSibling.dataset.marks ? target.nextElementSibling : box;
+    focus?.focus({ preventScroll: true });
+  }
+  /** From Lean's output to its line in the open step's code. */
+  private showLine(line: number) {
+    if (!this.run) return;
+    const state = this.state(this.run.id);
+    if (!state.panel) return;
+    state.panel = { key: state.panel.key, mode: 'code' };
+    this.render();
+    this.jump(line);
+  }
+  private showFeedback() {
+    if (!this.run) return;
+    const state = this.state(this.run.id);
+    if (!state.panel) return;
+    state.panel = { key: state.panel.key, mode: 'feedback' };
+    this.render();
   }
 
   private diff(ctx: Ctx, before: TrajectoryVersion, after: TrajectoryVersion) {
@@ -903,26 +1118,34 @@ export class TrajectoryView {
     </>;
   }
 
-  /** The Lean output of the step's check, failed receipts first; identical outputs of several theorems are shown once. */
+  /**
+   * The Lean output of the step's check, failed receipts first; identical outputs of several theorems are shown once.
+   * Where a message names a line the code view marks, its location is a link to that line.
+   */
   private feedback(ctx: Ctx, version: TrajectoryVersion, ids: readonly string[], askable = false) {
     const loaded = this.need(ctx, version);
     if (loaded.status !== 'ready') return this.pending(ctx, loaded, version);
-    const wanted = new Set(ids), checks = loaded.detail.checks.filter(check => !wanted.size || wanted.has(check.id))
-      .sort((a, b) => Number(a.record.passed === true) - Number(b.record.passed === true));
-    const seen = new Set<string>(), entries: (ReportDiagnostic & { theorem?: string })[] = [];
-    for (const check of checks) for (const entry of diagnostics(check.record)) {
-      if (seen.has(entry.text)) continue;
-      seen.add(entry.text);
-      entries.push({ ...entry, ...(typeof check.record.theoremName === 'string' ? { theorem: check.record.theoremName } : {}) });
-    }
+    const entries = checkEntries(loaded.detail, ids), source = loaded.detail.source, marks = source ? versionMarks(loaded.detail, ids) : undefined;
     // Lean's wording is often the hard part; the panel offers to have the run's model explain it.
     const hint = askable && <p class="trajectory-ask-hint"><span>{t('看不懂这段输出？')}</span>
       <button type="button" class="text-button" data-focus-key={`${ctx.key}-ask-hint`} data-trajectory-ask-hint onClick={() => this.openAsk(ctx)}>
         <Icon name="message-circle-question" />{t('问问这一步为什么没通过')}</button></p>;
     if (!entries.length) return <><p class="trajectory-note">{t('没有保存 Lean 输出')}</p>{hint}</>;
+    const linked = (text: string) => {
+      if (!source || !marks?.lines.size) return text;
+      const parts: ComponentChildren[] = [];
+      let offset = 0;
+      for (const message of leanMessages(text)) {
+        if (!sameLeanFile(message.file, source.file) || !marks.lines.has(message.line)) continue;
+        parts.push(text.slice(offset, message.start), <button key={message.start} type="button" class="lean-location" data-location-line={message.line}
+          title={t('在代码里看第 {0} 行', message.line)} onClick={() => this.showLine(message.line)}>{text.slice(message.start, message.end)}</button>);
+        offset = message.end;
+      }
+      return parts.length ? [...parts, text.slice(offset)] : text;
+    };
     return <div class="trajectory-feedback">{entries.map((entry, index) => <div key={index} class="diagnostic-entry">
       <h5>{entry.theorem ? `${entry.label} · ${shortName(entry.theorem)}` : entry.label}</h5>
-      <pre class="diagnostic-output" tabIndex={0}>{entry.text}</pre>
+      <pre class="diagnostic-output" tabIndex={0}>{linked(entry.text)}</pre>
       {entry.truncated && <p class="diagnostic-limit">{t('仅显示前 4000 字符')}</p>}
     </div>)}{hint}</div>;
   }

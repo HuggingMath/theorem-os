@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { webSampleRunId, webSampleSchema, type WebSampleFile } from '../apps/web/sample';
+import { sampleActions } from './web-sample-actions';
 import type { StoredWebArchive } from '../apps/web/storage';
 
 const input = path.resolve(process.argv[2] ?? 'out/web-cooperative-smoke/archive.json');
@@ -41,6 +42,8 @@ const sample: WebSampleFile = {
   observations: data.observations,
   events: data.events,
 };
+sample.actions = sampleActions(sample);
+sample.run.actions = { count: sample.actions.length };
 for (const leak of [/\/home\//u, /\/data\//u, /theorem-os-worker/u, /sha256:/u, /127\.0\.0\.1/u, /host\.docker\.internal/u, /apiKey/u, /WEB_COOPERATIVE_/u, /Lean\/S3/u]) {
   if (leak.test(JSON.stringify(sample))) throw new Error(`sample still contains ${leak}`);
 }

@@ -345,6 +345,42 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(runner.calls[0].value.input.apiKey).toBe('');
   });
 
+  it('pages a run\'s Agent actions and its whole event history to its owner only, and keeps actions off shared pages', async () => {
+    const alice = await session(), bob = await session();
+    const { run } = await (await request('/api/runs', alice, { body: input() })).json() as { run: WebRun };
+    await tick();
+    for (let index = 1; index <= 3; index++) runner.calls[0].send({ type: 'action', action: { workerId: 'solver', itemId: `1:item-${index}`,
+      phase: 'completed', kind: 'command', status: 'done', command: `cat private-notes-${index}.md`, output: `${key} private output` } });
+    for (let index = 0; index < 250; index++) runner.calls[0].send({ type: 'progress', event: 'worker_activity', message: 'Working', details: { workerId: 'solver' } });
+    const route = `/api/runs/${run.id}`;
+    const first = await (await request(`${route}/actions?after=0`, alice)).json();
+    expect(first).toMatchObject({ count: 3, dropped: 0 });
+    expect(first.actions.map((action: { sequence: number; command: string }) => [action.sequence, action.command])).toEqual(
+      [[1, 'cat private-notes-1.md'], [2, 'cat private-notes-2.md'], [3, 'cat private-notes-3.md']]);
+    expect(JSON.stringify(first)).not.toContain(key);
+    expect((await (await request(`${route}/actions?after=2`, alice)).json()).actions).toHaveLength(1);
+    for (const cursor of ['-1', '1.5', 'x']) expect((await request(`${route}/actions?after=${cursor}`, alice)).status).toBe(400);
+    expect((await request(`${route}/actions?after=0`, bob)).status).toBe(404);
+    // The run keeps its last 200 events; every stored one stays readable, a page at a time.
+    const events: { sequence: number }[] = [];
+    for (let after = 0, page; (page = await (await request(`${route}/events?after=${after}`, alice)).json()).events.length; after = page.events.at(-1).sequence) {
+      expect(page.events.length).toBeLessThanOrEqual(200);
+      expect(page).toMatchObject({ firstSequence: 1, droppedBefore: null });
+      events.push(...page.events);
+    }
+    expect(events.map(event => event.sequence)).toEqual(Array.from({ length: events.length }, (_, index) => index + 1));
+    expect(events.length).toBeGreaterThan(250);
+    expect(events.at(-1)!.sequence).toBe((await (await request(`${route}/events?after=0`, alice)).json()).lastSequence);
+    runner.calls[0].finish({ status: 'evaluated_passed', proof: 'theorem example : True := trivial', report: {} });
+    await tick();
+    const { share } = await (await request(`${route}/share`, alice, { method: 'POST' })).json();
+    expect(await (await request(`/api/share/${share.token}`)).text()).not.toMatch(/private-notes|private output|"actions"/u);
+    const sample = await (await request(`/api/runs/${webSampleRunId}/actions?after=0`, alice)).json();
+    expect(sample.count).toBe(sample.actions.length);
+    expect(sample.actions.map((action: { workerId: string; kind: string }) => `${action.workerId}:${action.kind}`)).toEqual(
+      ['solver:edit', 'engineer:edit', 'solver:edit', 'engineer:edit', 'researcher-1:edit']);
+  });
+
   it('redacts provider failures and exports their archive without inventing a result', async () => {
     const alice = await session();
     const response = await request('/api/runs', alice, { body: input() });

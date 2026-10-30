@@ -96,6 +96,10 @@ export class SourceCheck {
   latest() {
     return this.state.phase === 'done' ? this.state.result : this.state.phase === 'checking' ? this.state.previous : undefined;
   }
+  /** The finished result for exactly the text in the editor, if there is one. */
+  current() {
+    return this.state.phase === 'done' && !this.stale() ? this.state.result : undefined;
+  }
   /** True when the shown result no longer describes the text in the editor. */
   stale() {
     if (this.scheduled) return true;

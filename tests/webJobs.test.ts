@@ -404,6 +404,36 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     expect(runner.calls[0].input.input.apiKey).toBe('');
   });
 
+  it('stores Agent actions apart from the activity log and saves the run\'s count at most every two seconds', async () => {
+    const { jobs, runner } = setup();
+    const key = 'sk-test-action-secret';
+    const run = jobs.create('owner', input(key), provider);
+    await tick();
+    const action = (itemId: string) => ({ type: 'action' as const, action: { workerId: 'solver', itemId, phase: 'completed' as const,
+      kind: 'command' as const, status: 'done' as const, command: `echo ${key}` } });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      for (let index = 1; index <= 3; index++) runner.calls[0].send(action(`1:item-${index}`));
+      expect(run.actions).toEqual({ count: 3 });
+      expect(run.events.some(event => event.message.includes('echo'))).toBe(false);
+      expect(jobs.storage.getRun('owner', run.id)?.actions).toBeUndefined();
+      vi.advanceTimersByTime(2_000);
+      expect(jobs.storage.getRun('owner', run.id)?.actions).toEqual({ count: 3 });
+      const stored = jobs.storage.listActionsAfter('owner', run.id, 1, 10);
+      expect(stored.map(item => [item.sequence, item.itemId, item.command])).toEqual([[2, '1:item-2', 'echo [REDACTED]'], [3, '1:item-3', 'echo [REDACTED]']]);
+      expect(stored[0].at).toMatch(/^\d{4}-\d\d-\d\dT/u);
+      // A progress event saves the run at once, and with it the newest count.
+      runner.calls[0].send(action('1:item-4'));
+      runner.calls[0].send({ type: 'progress', event: 'solve_started', message: 'Solving' });
+      expect(jobs.storage.getRun('owner', run.id)?.actions).toEqual({ count: 4 });
+      for (let index = 5; index <= 3_005; index++) runner.calls[0].send(action(`1:item-${index}`));
+      expect(run.actions).toEqual({ count: 3_000, dropped: 5 });
+      expect(jobs.storage.listActionsAfter('owner', run.id, 2_999, 10).map(item => item.sequence)).toEqual([3_000]);
+    } finally { vi.useRealTimers(); }
+    runner.calls[0].finish();
+    await tick();
+  });
+
   it('redacts a long key pasted into task text before deriving its truncated public title', async () => {
     const { jobs } = setup();
     const key = 'sk-long-credential-' + '1234567890abcdef'.repeat(10);
