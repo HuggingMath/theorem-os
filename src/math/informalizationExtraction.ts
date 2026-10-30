@@ -180,6 +180,90 @@ export function informalizationExtractionQuery(input: { nonce: string; rootModul
   ].join('\n');
   return { query, resultFile: output };
 }
+
+export const INFORMALIZATION_GOALS_PROTOCOL = 'lean-tactic-goals-v1';
+const goalLimits = { maxGoals: 4, maxGoalText: 3000, maxRecords: 20_000, maxFileText: 16_000_000, maxUnitBytes: 48_000, maxTactic: 200 };
+// Nodes that group or focus tactics (sequences, `by`, `·`, `case`, rewrite rules); their goals repeat those of the
+// tactics inside them, and a bullet's goals list the cases it does not focus.
+const GOAL_WRAPPERS = ['null', 'Lean.Parser.Term.byTactic', 'Lean.Parser.Tactic.tacticSeq', 'Lean.Parser.Tactic.tacticSeq1Indented',
+  'Lean.Parser.Tactic.tacticSeqBracketed', 'Lean.cdot', 'Lean.cdotTk', 'Lean.Parser.Tactic.case', 'Lean.calcSteps'];
+
+/**
+ * One command that elaborates a proof file again, with info trees on, and records the goals before and after each
+ * tactic as written. The header is processed as the frontend processes it. The command exits after writing, because
+ * the nested import registers linters and environment extensions that the query's own environment lacks.
+ */
+export function informalizationGoalsQuery(input: { nonce: string; module: string; file: string; index: number }) {
+  const { nonce, module, file, index } = input;
+  if (!/^[a-f0-9]{32}$/u.test(nonce)) throw new Error('informalization_extraction_nonce_invalid');
+  if (!isSimpleLeanName(module) || !/^[^/\0"\\][^\0"\\]*\.lean$/u.test(file) || file.split('/').includes('..') ||
+      !Number.isSafeInteger(index) || index < 0)
+    throw new Error('informalization_extraction_name_invalid');
+  const output = `.lake/informalization-goals-${nonce}-${index}.json`;
+  const query = [
+    'import Lean', '',
+    `namespace TheoremOSInformalizationGoals_${nonce}`,
+    'open Lean Elab Meta', '',
+    'def tosClip (text : String) (limit : Nat) : String :=',
+    '  if text.length ≤ limit then text else (text.take limit).toString ++ " …"', '',
+    'def tosGoals (ci : ContextInfo) (mctx : MetavarContext) (goals : List MVarId) : IO (Array String) := do',
+    '  let ci := { ci with mctx }',
+    '  let mut out := #[]',
+    `  for goal in goals.take ${goalLimits.maxGoals} do`,
+    '    let text ← try ci.runMetaM {} (do return (← ppGoal goal).pretty 100) catch _ => pure "<unprintable goal>"',
+    `    out := out.push (tosClip text ${goalLimits.maxGoalText})`,
+    '  return out', '',
+    `def tosWrappers : List Name := [${GOAL_WRAPPERS.map(kind => '`' + kind).join(', ')}]`, '',
+    'def tosTactics (trees : Array InfoTree) : Array (ContextInfo × TacticInfo) :=',
+    '  trees.foldl (init := #[]) fun acc tree => tree.foldInfo (init := acc) fun ci info acc =>',
+    '    match info with',
+    '    | .ofTacticInfo ti => if ti.stx.isAtom || tosWrappers.contains ti.stx.getKind then acc else acc.push (ci, ti)',
+    '    | _ => acc', '',
+    'def tosRun (nonce module file output : String) : IO Unit := do',
+    '  let base := [("nonce", toJson nonce), ("module", toJson module)]',
+    '  try',
+    '    let input ← IO.FS.readFile file',
+    '    let inputCtx := Parser.mkInputContext input file',
+    '    let (header, parserState, messages) ← Parser.parseHeader inputCtx',
+    '    unsafe enableInitializersExecution',
+    '    let (env, messages) ← processHeader header {} messages inputCtx (trustLevel := 1024) (mainModule := module.toName)',
+    '    let commandState := { Command.mkState env messages {} with infoState := { enabled := true } }',
+    '    let state ← IO.processCommands inputCtx parserState commandState',
+    '    let messages := state.commandState.messages',
+    '    if messages.hasErrors then',
+    '      let text ← match messages.toList.find? (fun message => message.severity == .error) with',
+    '        | some message => message.toString',
+    '        | none => pure ""',
+    '      throw <| IO.userError s!"the proof did not elaborate again: {text}"',
+    '    let mut records : Array Json := #[]',
+    '    let mut size := 0',
+    '    let mut truncated := false',
+    '    for (ci, ti) in tosTactics state.commandState.infoState.trees.toArray do',
+    '      let some start := ti.stx.getPos? (canonicalOnly := true) | continue',
+    '      let some stop := ti.stx.getTailPos? (canonicalOnly := true) | continue',
+    `      if records.size ≥ ${goalLimits.maxRecords} || size > ${goalLimits.maxFileText} then`,
+    '        truncated := true',
+    '        break',
+    '      let before ← tosGoals ci ti.mctxBefore ti.goalsBefore',
+    '      let after ← tosGoals ci ti.mctxAfter ti.goalsAfter',
+    '      size := size + before.foldl (· + ·.length) 0 + after.foldl (· + ·.length) 0',
+    '      let p := inputCtx.fileMap.toPosition start',
+    '      let q := inputCtx.fileMap.toPosition stop',
+    '      records := records.push <| Json.mkObj [',
+    '        ("range", Json.mkObj [("line", toJson p.line), ("column", toJson p.column),',
+    '          ("endLine", toJson q.line), ("endColumn", toJson q.column)]),',
+    '        ("before", toJson before), ("beforeCount", toJson ti.goalsBefore.length),',
+    '        ("after", toJson after), ("afterCount", toJson ti.goalsAfter.length)]',
+    '    IO.FS.writeFile output (Json.mkObj (base ++ [("truncated", toJson truncated), ("tactics", Json.arr records)])).compress',
+    '  catch error =>',
+    '    IO.FS.writeFile output (Json.mkObj (base ++ [("error", toJson (tosClip (toString error) 4000))])).compress',
+    '  IO.Process.exit 0', '',
+    'set_option maxHeartbeats 0 in',
+    `#eval tosRun ${[nonce, module, file, output].map(leanString).join(' ')}`, '',
+    `end TheoremOSInformalizationGoals_${nonce}`, '',
+  ].join('\n');
+  return { query, resultFile: output };
+}
 const name = z.string().min(1).max(4096);
 const range = z.object({ line: z.number().int().positive(), column: z.number().int().nonnegative(),
   endLine: z.number().int().positive(), endColumn: z.number().int().nonnegative() }).strict();
@@ -196,13 +280,31 @@ const reportSchema = z.object({
     module: name.nullable(), signature: z.string().min(1).max(4096) }).strict()).max(limits.maxLibrary),
   libraryTruncated: z.boolean(),
 }).strict();
-
+// Lean clips by codepoints; a codepoint is at most two UTF-16 units.
+const utf16Bound = (codepoints: number) => 2 * (codepoints + 2);
+const goalText = z.string().max(utf16Bound(goalLimits.maxGoalText));
+/** A goals query wrote either an error or its tactics. */
+const goalsReportSchema = z.object({ nonce: z.string(), module: name, error: z.string().max(utf16Bound(4000)).optional(),
+  truncated: z.boolean().optional(),
+  tactics: z.array(z.object({ range, before: z.array(goalText).max(goalLimits.maxGoals), beforeCount: z.number().int().nonnegative(),
+    after: z.array(goalText).max(goalLimits.maxGoals), afterCount: z.number().int().nonnegative() }).strict())
+    .max(goalLimits.maxRecords).optional(),
+}).strict().refine(value => value.error === undefined ? value.tactics !== undefined && value.truncated !== undefined :
+  value.tactics === undefined && value.truncated === undefined);
+const unitGoalsSchema = z.object({
+  /** Entries were dropped for size, nested tactics first, or the file's query stopped early. */ truncated: z.boolean(),
+  /** One entry per tactic as written, in source order; at most 4 goals per state, beforeCount/afterCount give all. */
+  tactics: z.array(z.object({ range, tactic: z.string(), before: z.array(z.string()), beforeCount: z.number().int().nonnegative(),
+    after: z.array(z.string()), afterCount: z.number().int().nonnegative() }).strict()),
+}).strict();
 const unitSchema = z.object({
   /** User-facing full name (private prefixes removed); the protocol identifier. */
   name, leanName: name, kind: informalizationUnitKindSchema, module: name, file: name, range,
   source: z.string().min(1), signature: z.string().min(1),
   statementDependencies: z.array(name), proofDependencies: z.array(name),
   external: z.array(name), externalTruncated: z.boolean(),
+  /** Present when the goals query covered this unit's file; absent in outlines made before it existed. */
+  goals: unitGoalsSchema.optional(),
 }).strict();
 export const informalizationOutlineSchema = z.object({
   schema: z.literal('theorem-os.informalization-outline.v1'), protocol: z.literal(INFORMALIZATION_EXTRACTION_PROTOCOL),
@@ -210,17 +312,24 @@ export const informalizationOutlineSchema = z.object({
   /** Dependency order (ties in source order); the target is last. */
   units: z.array(unitSchema).min(1),
   library: reportSchema.shape.library, libraryTruncated: z.boolean(),
+  /** Advisory goal states; a failed goals query never fails the extraction. */
+  goalStates: z.object({ protocol: z.literal(INFORMALIZATION_GOALS_PROTOCOL), status: z.enum(['complete', 'truncated', 'unavailable']),
+    reason: z.string().max(utf16Bound(4000)).optional() }).strict().optional(),
 }).strict();
 export type InformalizationOutline = z.infer<typeof informalizationOutlineSchema>;
 export type InformalizationUnit = InformalizationOutline['units'][number];
 
 /** Lean columns count codepoints; Lean reads sources with normalized line endings. */
-export function leanSourceSlice(text: string, value: z.infer<typeof range>): string {
-  const lines = text.replaceAll('\r\n', '\n').split('\n').map(line => [...line]);
+const sourceLines = (text: string) => text.replaceAll('\r\n', '\n').split('\n').map(line => [...line]);
+function rangeLines(lines: readonly string[][], value: z.infer<typeof range>) {
   const first = lines[value.line - 1], last = lines[value.endLine - 1];
   if (!first || !last || value.endLine < value.line || value.column > first.length || value.endColumn > last.length ||
       value.line === value.endLine && value.endColumn < value.column)
     throw new Error('informalization_declaration_range_invalid');
+  return { first, last };
+}
+export function leanSourceSlice(text: string, value: z.infer<typeof range>): string {
+  const lines = sourceLines(text), { first, last } = rangeLines(lines, value);
   if (value.line === value.endLine) return first.slice(value.column, value.endColumn).join('');
   return [first.slice(value.column).join(''), ...lines.slice(value.line, value.endLine - 1).map(line => line.join('')),
     last.slice(0, value.endColumn).join('')].join('\n');
@@ -295,6 +404,86 @@ export function informalizationOutline(report: unknown, input: { nonce: string; 
     target: target.displayName, axioms: parsed.axioms, cyclic,
     units: [...ordered.filter(unit => unit !== targetUnit), targetUnit],
     library: parsed.library, libraryTruncated: parsed.libraryTruncated };
+}
+
+type GoalRange = z.infer<typeof range>;
+const rangeOrder = (a: GoalRange, b: GoalRange) => a.line - b.line || a.column - b.column;
+const rangeKey = (value: GoalRange) => `${value.line}:${value.column}-${value.endLine}:${value.endColumn}`;
+const encloses = (outer: GoalRange, inner: GoalRange) =>
+  (outer.line < inner.line || outer.line === inner.line && outer.column <= inner.column) &&
+  (inner.endLine < outer.endLine || inner.endLine === outer.endLine && inner.endColumn <= outer.endColumn);
+/** One file's goals query: the report it wrote, or why there is none. */
+export type InformalizationGoalsResult = { module: string; report: unknown } | { module: string; failure: string };
+
+/**
+ * Attach each file's tactic goals to the smallest unit enclosing them. A unit of a file whose query failed has no goals;
+ * a unit over the size budget keeps its outermost tactics first, so a long proof keeps its top-level steps.
+ */
+export function attachInformalizationGoals(outline: InformalizationOutline, results: readonly InformalizationGoalsResult[],
+  input: { nonce: string; sources: readonly { module: string; text: string }[] }): InformalizationOutline {
+  const failures: string[] = [], tactics = new Map<string, Map<InformalizationUnit, z.infer<typeof unitGoalsSchema>['tactics']>>();
+  const stopped = new Set<string>();
+  for (const source of input.sources) {
+    const result = results.find(item => item.module === source.module);
+    if (!result) { failures.push(`${source.module}: informalization_goals_not_run`); continue; }
+    if ('failure' in result) { failures.push(`${source.module}: ${result.failure}`); continue; }
+    const parsed = goalsReportSchema.safeParse(result.report);
+    if (!parsed.success || parsed.data.nonce !== input.nonce || parsed.data.module !== source.module) {
+      failures.push(`${source.module}: informalization_goals_report_invalid`); continue;
+    }
+    const report = parsed.data;
+    if (report.error !== undefined || !report.tactics) { failures.push(`${source.module}: ${report.error}`); continue; }
+    const lines = sourceLines(source.text), units = outline.units.filter(unit => unit.module === source.module);
+    const assigned = new Map(units.map(unit => [unit, [] as z.infer<typeof unitGoalsSchema>['tactics']]));
+    try {
+      for (const record of report.tactics) {
+        if (record.before.length !== Math.min(record.beforeCount, goalLimits.maxGoals) ||
+            record.after.length !== Math.min(record.afterCount, goalLimits.maxGoals)) throw new Error('informalization_goals_report_invalid');
+        const { first } = rangeLines(lines, record.range);
+        let owner: InformalizationUnit | undefined;
+        for (const unit of units)
+          if (encloses(unit.range, record.range) && (!owner || encloses(owner.range, unit.range))) owner = unit;
+        if (!owner) continue;
+        const line = first.slice(record.range.column, record.range.line === record.range.endLine ? record.range.endColumn : undefined);
+        const text = [...line.join('').trim()];
+        const tactic = text.length > goalLimits.maxTactic ? text.slice(0, goalLimits.maxTactic).join('') + ' …' : text.join('');
+        assigned.get(owner)!.push({ range: record.range, tactic, before: record.before, beforeCount: record.beforeCount,
+          after: record.after, afterCount: record.afterCount });
+      }
+    } catch { failures.push(`${source.module}: informalization_goals_report_invalid`); continue; }
+    if (report.truncated) stopped.add(source.module);
+    tactics.set(source.module, assigned);
+  }
+  const reason = () => [...failures.join('\n')].slice(0, 4000).join('');
+  if (!tactics.size)
+    return { ...outline, goalStates: { protocol: INFORMALIZATION_GOALS_PROTOCOL, status: 'unavailable', reason: reason() } };
+  let truncated = failures.length > 0 || stopped.size > 0;
+  const units = outline.units.map(unit => {
+    const records = tactics.get(unit.module)?.get(unit);
+    if (!records) return unit;
+    // Outer tactics first by nesting depth, then source order; identical ranges (`t <;> s` runs s once per goal) once.
+    const ordered = records.toSorted((a, b) => rangeOrder(a.range, b.range) ||
+      b.range.endLine - a.range.endLine || b.range.endColumn - a.range.endColumn)
+      .filter((item, index, all) => !index || rangeKey(all[index - 1]!.range) !== rangeKey(item.range));
+    const stack: GoalRange[] = [], depth = ordered.map(item => {
+      while (stack.length && !encloses(stack.at(-1)!, item.range)) stack.pop();
+      stack.push(item.range);
+      return stack.length - 1;
+    });
+    const rank = ordered.map((_, index) => index).toSorted((a, b) => depth[a]! - depth[b]! || a - b);
+    const keep = new Set<number>();
+    let bytes = 0;
+    for (const index of rank) {
+      const item = ordered[index]!, size = Buffer.byteLength(JSON.stringify(item));
+      if (bytes + size > goalLimits.maxUnitBytes) continue;
+      keep.add(index); bytes += size;
+    }
+    const cut = keep.size < ordered.length || stopped.has(unit.module);
+    truncated ||= cut;
+    return { ...unit, goals: { truncated: cut, tactics: ordered.filter((_, index) => keep.has(index)) } };
+  });
+  return { ...outline, units, goalStates: { protocol: INFORMALIZATION_GOALS_PROTOCOL, status: truncated ? 'truncated' : 'complete',
+    ...(failures.length ? { reason: reason() } : {}) } };
 }
 
 // Tactic and metaprogramming internals that automation leaves in proof terms; they are

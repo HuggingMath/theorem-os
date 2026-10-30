@@ -26,6 +26,14 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('informalizat
     expect(byName.get('double')!.source).toBe('/-- Twice a number. -/\ndef double (n : Nat) : Nat := n + n');
     expect(byName.get('double_add_zero')!.signature).toBe('double_add_zero (n : Nat) : double (n + 0) = 2 * n');
     expect(outline.axioms).not.toContain('sorryAx');
+    // Goals Lean printed around each tactic as written.
+    expect(outline.goalStates).toEqual({ protocol: 'lean-tactic-goals-v1', status: 'complete' });
+    expect(byName.get('lib_fact')!.goals).toEqual({ truncated: false, tactics: [] });
+    const tactics = (name: string) => byName.get(name)!.goals!.tactics.map(item => [item.tactic, item.before, item.after]);
+    expect(tactics('double_eq')).toEqual([['unfold double', ['n : Nat\n⊢ double n = 2 * n'], ['n : Nat\n⊢ n + n = 2 * n']],
+      ['omega', ['n : Nat\n⊢ n + n = 2 * n'], []]]);
+    expect(tactics('double_add_zero')).toEqual([['rw [lib_fact]', ['n : Nat\n⊢ double (n + 0) = 2 * n'], ['n : Nat\n⊢ double n = 2 * n']],
+      ['exact double_eq n', ['n : Nat\n⊢ double n = 2 * n'], []]]);
   }, 600_000);
 
   it('refuses a proof with sorry and a proof that does not compile', async () => {

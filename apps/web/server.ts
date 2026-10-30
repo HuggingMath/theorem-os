@@ -4,10 +4,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { getWebEnvironments, readWebConfig, webDefaults, webLimits, webTemplates, type WebConfig } from './config';
+import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import type { WebAdminOverview, WebEnvironment, WebRun, WebRunInput, WebSession } from './shared';
+import type { WebAdminOverview, WebEffort, WebEnvironment, WebExplanationLanguage, WebExplanationOverview, WebProvider, WebRun, WebRunInput,
+  WebSession } from './shared';
 import { researchModulePlanSchema } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
@@ -22,6 +23,10 @@ import { sendStatic } from './staticFiles';
 import { webFunnel } from './funnel';
 import { completionMail, mailsCompletion } from './completionMail';
 import { WebKeyVault } from './keyVault';
+import { explanationMarkdownFilename, verifyExplanationEvidence } from './explanation';
+import { explanationKey, WebExplanations } from './explanations';
+import { SUB2API_PROVIDER } from '../../src/runtime/sub2api';
+import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 
 const inputSchema = z.object({
   // Empty asks for the key this account saved, then the one the server holds for admins (THEOREMOS_WEB_ADMIN_KEYS).
@@ -43,6 +48,20 @@ const precheckSchema = z.object({
   environment: z.enum(['standard', 'mathlib']),
   source: z.string().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
 }).strict();
+const explanationLanguage = z.enum(['zh', 'en']);
+const explanationSchema = z.object({
+  target: z.string().min(1).max(512), language: explanationLanguage,
+  // Empty uses the account's saved key, then the server's key for admins, as for runs.
+  apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
+}).strict();
+// Explanation roles accept only these Codex efforts (src/runtime/sub2api.ts).
+const explanationEffort = (effort: WebEffort): 'low' | 'high' | 'max' =>
+  effort === 'low' ? 'low' : effort === 'medium' || effort === 'high' ? 'high' : 'max';
+const gatewayProvider = (provider: WebProvider | undefined) => {
+  if (provider?.id !== SUB2API_PROVIDER.id) return false;
+  const url = new URL(provider.baseUrl);
+  return url.protocol === 'http:' && url.pathname.replace(/\/$/u, '') === '/v1';
+};
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -108,6 +127,24 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const vault = auth && config.keySecret ? new WebKeyVault(config.keySecret, storage) : undefined;
   const savedKeysFor = (session: Session) => vault && session.account ? vault.list(session.account.id, config.providers) : [];
   const ownerOf = (session: Session) => auth ? session.account && `account:${session.account.id}` : session.id;
+  /** Original theorems of the proof, each with an upper bound on the declarations its explanation covers (all of them). */
+  const explanationTargets = (run: WebRun) => {
+    const declarations = inspectScopedLeanDeclarations(run.result?.proof ?? '').length;
+    return (proofOutline(run)?.declarations ?? []).filter(item => item.role === 'target').map(item => ({ name: item.name, declarations }));
+  };
+  const explanationGeneration = (session: Session, run: WebRun, isSample: boolean): WebExplanationOverview['generation'] => {
+    if (isSample) return { available: false, reason: 'sample' };
+    if (run.status !== 'completed' || run.result?.status !== 'evaluated_passed') return { available: false, reason: 'not_accepted' };
+    const provider = config.providers.find(item => item.id === run.providerId);
+    if (!gatewayProvider(provider)) return { available: false, reason: 'provider' };
+    if (run.model !== SUB2API_PROVIDER.defaultModel) return { available: false, reason: 'model' };
+    if (!runner.explain) return { available: false, reason: 'runtime' };
+    const key = savedKeysFor(session).some(item => item.providerId === provider!.id) ? 'saved'
+      : serverKeysFor(session)?.includes(provider!.id) ? 'server' : 'required';
+    return { available: true, model: run.model, effort: explanationEffort(run.effort), key,
+      maxRunSeconds: webExplanationLimits.maxRunSeconds, maxTotalTokens: webExplanationLimits.maxTotalTokens,
+      reference: { ...webExplanationLimits.reference } };
+  };
   // Beta funnel milestones exist only for accounts; anonymous loopback previews record nothing.
   const milestone = (owner: string, name: WebMilestone) => {
     if (auth && owner.startsWith('account:')) try { auth.markMilestone(owner.slice(8), name); } catch { /* A milestone never fails a run. */ }
@@ -119,6 +156,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     if (to) auth.sendCompletion(to, completionMail(run, config.publicUrl)).catch(() => console.error(`[completion mail] run ${run.id}: delivery failed`));
   };
   const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt'), onFinished: tellOwner });
+  const explanations = new WebExplanations(runner, storage);
   const prechecker = runner.check ? new WebPrechecker(runner.check.bind(runner)) : undefined;
   const rates = new Map<string, { count: number; expiresAt: number }>();
   const runStreams = new Map<string, Set<() => void>>();
@@ -139,7 +177,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   /** Ends one browser session. Anonymous records go with it; account records stay with the account. */
   const endSession = (id: string) => {
     for (const stop of runStreams.get(id) ?? []) stop();
-    if (!auth) { jobs.forget(id); storage.deleteOwner(id); }
+    if (!auth) { explanations.forget(id); jobs.forget(id); storage.deleteOwner(id); }
     sessions.delete(id); storage.deleteSession(id);
   };
   const prune = () => {
@@ -248,7 +286,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
-            jobs.forget(owner); storage.deleteOwner(owner); vault?.forgetAccount(account.id); auth.deleteAccount(account.email);
+            explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); vault?.forgetAccount(account.id); auth.deleteAccount(account.email);
             for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
           }
@@ -420,6 +458,78 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             'Content-Disposition': `attachment; filename="${kit.filename}"`, 'Cache-Control': 'no-store' });
           response.end(kit.content); return;
         }
+        if (match[2] === 'explanations' || match[2]?.startsWith('explanations/')) {
+          const isSample = Boolean(sample && match[1] === webSampleRunId);
+          const run = isSample ? sample!.run : jobs.get(owner, match[1]);
+          if (!run) throw new HttpError(404, '运行不存在或不属于当前会话。');
+          if (!run.result?.proof) throw new HttpError(409, '这次运行没有可讲解的候选证明。');
+          const targets = explanationTargets(run);
+          if (match[2] === 'explanations' && request.method === 'GET') {
+            const overview: WebExplanationOverview = {
+              run: { id: run.id, title: run.title, environment: run.environment, providerId: run.providerId, model: run.model,
+                effort: run.effort, proof: run.result.proof },
+              targets, explanations: isSample ? [] : explanations.list(owner, run.id),
+              generation: explanationGeneration(session, run, isSample) };
+            json(response, 200, overview); return;
+          }
+          if (match[2] === 'explanations' && request.method === 'POST') {
+            const parsed = explanationSchema.safeParse(await readJson(request));
+            if (!parsed.success) throw new HttpError(400, '请检查讲解的目标定理、语言与 API Key。');
+            const generation = explanationGeneration(session, run, isSample);
+            if ('reason' in generation) throw new HttpError(409, {
+              sample: '示例运行只读，不能生成讲解。', not_accepted: '只有通过独立验收的运行可以生成讲解。',
+              provider: '证明讲解目前只支持 Sub2API 模型服务。', model: '证明讲解目前只支持 deepseek-flash 模型。',
+              runtime: '当前服务不提供证明讲解。' }[generation.reason]);
+            if (!targets.some(item => item.name === parsed.data.target)) throw new HttpError(400, '目标定理不在原题中。');
+            const provider = config.providers.find(item => item.id === run.providerId)!;
+            let apiKey = parsed.data.apiKey;
+            if (!apiKey) {
+              const saved = vault && session.account ? vault.get(session.account.id, provider.id, provider.baseUrl) : undefined;
+              const held = saved ?? (serverKeysFor(session)?.includes(provider.id) ? config.adminKeys![provider.id] : undefined);
+              if (!held) throw new HttpError(400, '请填写 API Key。');
+              apiKey = held;
+            }
+            if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
+            json(response, 201, { explanation: explanations.create(owner, run, { target: parsed.data.target,
+              language: parsed.data.language as WebExplanationLanguage, apiKey, provider, model: generation.model,
+              effort: generation.effort }) });
+            return;
+          }
+          const target = url.searchParams.get('target') ?? '';
+          const language = explanationLanguage.safeParse(url.searchParams.get('language'));
+          if (!language.success || !targets.some(item => item.name === target)) throw new HttpError(400, '请检查讲解的目标定理与语言。');
+          const lang = language.data as WebExplanationLanguage;
+          if (match[2] === 'explanations/item' && request.method === 'GET') {
+            const explanation = isSample ? undefined : explanations.read(owner, run, target, lang);
+            if (!explanation) throw new HttpError(404, '这份讲解还没有生成。');
+            json(response, 200, { explanation }); return;
+          }
+          if (match[2] === 'explanations/item' && request.method === 'DELETE') {
+            const removed = isSample ? 'missing' : explanations.remove(owner, run.id, target, lang);
+            if (removed === 'active') throw new HttpError(409, '讲解正在生成，请先取消。');
+            if (removed === 'missing') throw new HttpError(404, '这份讲解还没有生成。');
+            json(response, 200, { deleted: true }); return;
+          }
+          if (match[2] === 'explanations/cancel' && request.method === 'POST') {
+            const explanation = isSample ? undefined : explanations.cancel(owner, run.id, target, lang);
+            if (!explanation) throw new HttpError(404, '这份讲解还没有生成。');
+            json(response, 200, { explanation }); return;
+          }
+          if (match[2] === 'explanations/markdown' && request.method === 'GET') {
+            const stored = isSample ? undefined : explanations.get(owner, run.id, target, lang);
+            const evidence = stored?.status === 'approved' ? storage.getExplanationEvidence(owner, run.id, explanationKey(target, lang)) : undefined;
+            if (!evidence) throw new HttpError(404, '这份讲解还没有生成。');
+            let markdown: string;
+            // Checked again on every download: the evidence must still match this run's proof and environment.
+            try { ({ markdown } = verifyExplanationEvidence(evidence, { proof: run.result.proof, target, language: lang, environment: run.environment })); }
+            catch { throw new HttpError(409, '已保存的讲解与这次运行的证明不一致。'); }
+            const body = Buffer.from(markdown, 'utf8');
+            response.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Length': body.length,
+              'Content-Disposition': `attachment; filename="${explanationMarkdownFilename(run.id, target, lang)}"`, 'Cache-Control': 'no-store' });
+            response.end(body); return;
+          }
+          throw new HttpError(405, '请求方法不受支持。');
+        }
         if (sample && match[1] === webSampleRunId) {
           const answer = webSampleResponse(sample, match[2], request.method || 'GET', url.searchParams);
           if (answer.filename) response.setHeader('Content-Disposition', `attachment; filename="${answer.filename}"`);
@@ -510,6 +620,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         if (match[2] === 'cancel' && request.method === 'POST') { json(response, 200, { run: jobs.cancel(owner, run.id) }); return; }
         if (!match[2] && request.method === 'DELETE') {
+          if (explanations.active(owner, run.id)) throw new HttpError(409, '这次运行的证明讲解正在生成，请先取消或等待结束。');
           const removed = jobs.remove(owner, run.id);
           if (removed === 'active') throw new HttpError(409, '排队中或运行中的任务不能删除，请先取消或等待结束。');
           if (removed === 'missing') throw new HttpError(404, '运行不存在或不属于当前会话。');
@@ -550,9 +661,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
-    await Promise.all([jobs.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    await Promise.all([jobs.close(), explanations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
   };
-  return { server, jobs, storage, knowledge, registry, auth, close };
+  return { server, jobs, explanations, storage, knowledge, registry, auth, close };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

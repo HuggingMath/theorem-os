@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { informalizationExtractionQuery, informalizationLibraryContext, informalizationOutline, leanSourceSlice,
+import { attachInformalizationGoals, informalizationExtractionQuery, informalizationGoalsQuery, informalizationLibraryContext,
+  informalizationOutline, informalizationOutlineSchema, leanSourceSlice, type InformalizationGoalsResult,
   type InformalizationOutline } from '../src/math/informalizationExtraction';
 import { INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS, assertInformalizationEvidence,
   informalizationAuditApproved, informalizationAuditFeedback, informalizationAuditInput, informalizationAuditRejections,
@@ -14,8 +15,8 @@ import { mathDigest, readMathText } from '../src/math/mathRuntimeIo';
 import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { readInformalizationState, runInformalization } from '../src/solver/informalization';
 import { informalize } from '../scripts/mathematics/informalize';
-import { INFORMALIZATION_NONCE, LIB_SOURCE, PROOF_SOURCE, informalizationFixture, informalizationReport,
-  informalizationSources } from './helpers/informalizationFixture';
+import { INFORMALIZATION_NONCE, LIB_SOURCE, PROOF_SOURCE, informalizationFixture, informalizationGoalsReport, informalizationReport,
+  informalizationSources, sourceRange } from './helpers/informalizationFixture';
 
 // Protocol and host-check fixtures with preset roles; these are not model or Lean accuracy measurements.
 const forbidden = vi.hoisted(() => ({ model: vi.fn(async () => { throw new Error('model_must_not_open'); }) }));
@@ -283,6 +284,134 @@ describe('host checks', () => {
   });
 });
 
+type GoalsReport = ReturnType<typeof informalizationGoalsReport>;
+const goalResults = (edit?: (report: GoalsReport) => void): InformalizationGoalsResult[] => ['Lib', 'Proof'].map(module => {
+  const report = informalizationGoalsReport(module); if (module === 'Proof') edit?.(report);
+  return { module, report };
+});
+const withGoals = (results = goalResults(), base = outline) =>
+  attachInformalizationGoals(base, results, { nonce: INFORMALIZATION_NONCE, sources: informalizationSources() });
+const tacticsOf = (value: InformalizationOutline) => value.units.map(unit => unit.goals?.tactics.map(tactic => tactic.tactic));
+// A tactic record of `double_add_zero` with this many codepoints of goal text in each of 4 printed goals.
+const heavy = (snippet: string, size: number) => ({ range: sourceRange(PROOF_SOURCE, snippet), before: Array(4).fill('x'.repeat(size)),
+  beforeCount: 4, after: [], afterCount: 0 });
+
+describe('goal states', () => {
+  it('binds the goals query to a host nonce and its own result file, and refuses unsafe names', () => {
+    const { query, resultFile } = informalizationGoalsQuery({ nonce: INFORMALIZATION_NONCE, module: 'Proof', file: 'Proof.lean', index: 1 });
+    expect(query.startsWith('import Lean\n')).toBe(true);
+    expect(query).toContain(`namespace TheoremOSInformalizationGoals_${INFORMALIZATION_NONCE}`);
+    expect(query).toContain(`#eval tosRun "${INFORMALIZATION_NONCE}" "Proof" "Proof.lean" "${resultFile}"`);
+    expect(query).toContain('IO.Process.exit 0');
+    expect(resultFile).toBe(`.lake/informalization-goals-${INFORMALIZATION_NONCE}-1.json`);
+    for (const input of [{ nonce: 'NOT-HEX' }, { module: 'x" #eval 1' }, { file: '/abs/Proof.lean' }, { file: 'Sub/../Proof.lean' },
+      { file: 'Proof".lean' }, { file: 'Proof.olean' }, { index: -1 }, { index: 1.5 }])
+      expect(() => informalizationGoalsQuery({ nonce: INFORMALIZATION_NONCE, module: 'Proof', file: 'Proof.lean', index: 0, ...input }))
+        .toThrow(/informalization_extraction_(?:nonce|name)_invalid/u);
+  });
+
+  it('attaches each tactic to the declaration that contains it and drops tactics outside every declaration', () => {
+    const attached = withGoals();
+    expect(attached.goalStates).toEqual({ protocol: 'lean-tactic-goals-v1', status: 'complete' });
+    expect(tacticsOf(attached)).toEqual([[], [], ['unfold double', 'omega'], ['rw [lib_fact]', 'exact double_eq n']]);
+    expect(attached.units[3]!.goals).toEqual({ truncated: false, tactics: [
+      { range: { line: 11, column: 2, endLine: 11, endColumn: 15 }, tactic: 'rw [lib_fact]', before: ['n : Nat\n⊢ double (n + 0) = 2 * n'],
+        beforeCount: 1, after: ['n : Nat\n⊢ double n = 2 * n'], afterCount: 1 },
+      { range: { line: 12, column: 2, endLine: 12, endColumn: 19 }, tactic: 'exact double_eq n', before: ['n : Nat\n⊢ double n = 2 * n'],
+        beforeCount: 1, after: [], afterCount: 0 }] });
+    expect(outline.units.some(unit => 'goals' in unit)).toBe(false);
+    expect(outline).not.toHaveProperty('goalStates');
+  });
+
+  it('prefers the smallest enclosing declaration', () => {
+    // A widened target that also covers double_eq, listed before it.
+    const nested = { ...outline, units: outline.units.map(unit => unit.name !== 'double_add_zero' ? unit :
+      { ...unit, range: { ...unit.range, line: 6, column: 0 } }).reverse() };
+    expect(tacticsOf(withGoals(goalResults(), nested))).toEqual([['rw [lib_fact]', 'exact double_eq n'], ['unfold double', 'omega'], [], []]);
+  });
+
+  it('keeps one entry per range, in source order', () => {
+    const attached = withGoals(goalResults(report => {
+      report.tactics.push({ ...report.tactics[2]!, before: ['case dup\nn : Nat\n⊢ n + n = 2 * n'] });
+      report.tactics.reverse();
+    }));
+    expect(tacticsOf(attached)[2]).toEqual(['unfold double', 'omega']);
+    expect(attached.units[2]!.goals!.tactics[1]!.before).toEqual(['case dup\nn : Nat\n⊢ n + n = 2 * n']);
+  });
+  it('names a tactic by its first line, clipped to 200 codepoints', () => {
+    const long = 'exact ' + '𝔽'.repeat(300);
+    const text = `theorem big (n : Nat) : n = n := by\n  ${long}\n`;
+    const report = { nonce: INFORMALIZATION_NONCE, target: 'big', axioms: [], library: [], libraryTruncated: false,
+      units: [{ name: 'big', displayName: 'big', kind: 'theorem', module: 'Big', range: sourceRange(text, text.trimEnd()),
+        signature: 'big (n : Nat) : n = n', statementDependencies: [], proofDependencies: [], external: [], externalTruncated: false }] };
+    const sources = [{ module: 'Big', file: 'Big.lean', text }];
+    const big = informalizationOutline(report, { nonce: INFORMALIZATION_NONCE, target: 'big', sources });
+    const attached = attachInformalizationGoals(big, [{ module: 'Big', report: { nonce: INFORMALIZATION_NONCE, module: 'Big', truncated: false,
+      tactics: [{ range: sourceRange(text, long), before: [], beforeCount: 0, after: [], afterCount: 0 }] } }], { nonce: INFORMALIZATION_NONCE, sources });
+    expect(attached.units[0]!.goals!.tactics[0]!.tactic).toBe('exact ' + '𝔽'.repeat(194) + ' …');
+    const multiline = withGoals(goalResults(report => {
+      report.tactics.push({ ...report.tactics[1]!, range: sourceRange(PROOF_SOURCE, 'unfold double\n  omega') });
+    }));
+    expect(tacticsOf(multiline)[2]).toEqual(['unfold double', 'unfold double', 'omega']);
+  });
+
+  it('drops nested tactics before outer ones when a declaration exceeds its budget', () => {
+    // Each record is about 16 KB, so two of the three fit in 48 KB; the nested rewrite rule goes, though it precedes `exact`.
+    const attached = withGoals(goalResults(report => {
+      report.tactics = [heavy('rw [lib_fact]', 4000), heavy('lib_fact]', 4000), heavy('exact double_eq n', 4000)];
+      report.tactics[1]!.range.endColumn -= 1;
+    }));
+    expect(attached.units[3]!.goals!.tactics.map(tactic => tactic.tactic)).toEqual(['rw [lib_fact]', 'exact double_eq n']);
+    expect(attached.units[3]!.goals!.truncated).toBe(true);
+    expect(attached.units[2]!.goals).toEqual({ truncated: false, tactics: [] });
+    expect(attached.goalStates).toEqual({ protocol: 'lean-tactic-goals-v1', status: 'truncated' });
+  });
+
+  it.each([
+    ['a goal count that disagrees with the printed goals', (r: GoalsReport) => { r.tactics[1]!.beforeCount = 2; }],
+    ['a range past the line', (r: GoalsReport) => { r.tactics[2]!.range.endColumn = 500; }],
+    ['another module', (r: GoalsReport) => { r.module = 'Lib'; }],
+    ['another nonce', (r: GoalsReport) => { r.nonce = 'f'.repeat(32); }],
+    ['an extra key', (r: GoalsReport) => { Object.assign(r.tactics[1]!, { kind: 'unfold' }); }],
+    ['more than 4 printed goals', (r: GoalsReport) => { r.tactics[1]!.before = Array(5).fill('⊢ True'); r.tactics[1]!.beforeCount = 5; }],
+  ])('drops the goals of a file whose report has %s', (_name, edit) => {
+    const attached = withGoals(goalResults(edit));
+    expect(attached.goalStates).toEqual({ protocol: 'lean-tactic-goals-v1', status: 'truncated', reason: 'Proof: informalization_goals_report_invalid' });
+    expect(attached.units.map(unit => unit.goals)).toEqual([{ truncated: false, tactics: [] }, undefined, undefined, undefined]);
+  });
+
+  it('marks goal states unavailable when no file has them, with each reason', () => {
+    const attached = withGoals([{ module: 'Proof', failure: 'informalization_goals_timeout' }]);
+    expect(attached.goalStates).toEqual({ protocol: 'lean-tactic-goals-v1', status: 'unavailable',
+      reason: 'Lib: informalization_goals_not_run\nProof: informalization_goals_timeout' });
+    expect(attached.units).toEqual(outline.units);
+    const astral = withGoals(['Lib', 'Proof'].map(module => ({ module, failure: '𝕜'.repeat(3000) })));
+    expect([...astral.goalStates!.reason!]).toHaveLength(4000);
+    expect(informalizationOutlineSchema.parse(astral)).toEqual(astral);
+  });
+
+  it('marks the units of a file whose query stopped early', () => {
+    const attached = withGoals(goalResults(report => { report.truncated = true; }));
+    expect(attached.goalStates).toEqual({ protocol: 'lean-tactic-goals-v1', status: 'truncated' });
+    expect(attached.units.map(unit => unit.goals!.truncated)).toEqual([false, true, true, true]);
+  });
+
+  it('gives both roles the recorded goals and leaves inputs without goals unchanged', () => {
+    const attached = withGoals(), batch = batchesOf()[1]!, sources = informalizationSources();
+    const context = { batch, accepted: new Map(), sources, language: 'zh' as const };
+    const writer = informalizationWriterInput({ ...context, outline: attached, round: 1, problemStatement: 'Show that double (n + 0) is 2n.',
+      feedback: null, previousOutput: null });
+    expect(writer.units.map(unit => unit.goals?.tactics.map(tactic => tactic.tactic))).toEqual([['unfold double', 'omega'],
+      ['rw [lib_fact]', 'exact double_eq n']]);
+    expect(informalizationWriterRejections(writer, explain(writer))).toEqual([]);
+    const audit = informalizationAuditInput({ ...context, outline: attached, explanation: explain(writer) });
+    expect(audit.units[1]!.goals).toEqual(attached.units[3]!.goals);
+    expect(writerInput(1).units.some(unit => 'goals' in unit)).toBe(false);
+    const unavailable = withGoals([]);
+    expect(informalizationWriterInput({ ...context, outline: unavailable, round: 1, problemStatement: 'Show that double (n + 0) is 2n.',
+      feedback: null, previousOutput: null }).inputDigest).toBe(writerInput(1).inputDigest);
+  });
+});
 const provenance = { sources: [{ origin: 'Lib.lean', sha256: 'a'.repeat(64) }, { origin: 'Proof.lean', sha256: 'b'.repeat(64) }],
   toolchain: 'leanprover/lean4:v4.33.0', mathlibRevision: null };
 const allSections = () => batchesOf().flatMap((_batch, index) => explain(writerInput(index)).sections);

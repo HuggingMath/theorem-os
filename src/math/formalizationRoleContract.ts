@@ -118,7 +118,7 @@ export function deriveFormalizationRoleOutputJsonSchema(schema: z.ZodTypeAny): F
       if (value === null) result = { type: 'null', const: null };
       else if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value))
         result = { type: typeof value as 'string' | 'boolean' | 'number', const: value };
-      else unsupported('literal');
+      else return unsupported('literal');
       break;
     }
     default: return unsupported(String(kind));

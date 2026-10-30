@@ -1171,7 +1171,8 @@ function reportProps(run: WebRun): ReportPanelProps {
   const stuck = summarizeStuck(run);
   return { kind: 'summary', banner: banner(run), summary: summarizeReport(run), accepted: passed(run), ...(stuck ? { stuck } : {}),
     ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`,
-      mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib') } } : {}) };
+      mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib'),
+      ...(isAcceptedRun(run) && !isSample(run) ? { explainRun: run.id } : {}) } } : {}) };
 }
 const outlines = new Map<string, OutlineState>();
 /** Starts loading the proof outline; the report re-renders when it arrives. Returns whether a request started. */

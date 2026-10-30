@@ -171,6 +171,80 @@ export type WorkerMessage =
   | { type: 'catalog'; catalog: unknown }
   | { type: 'result'; result: WebResult }
   | { type: 'error'; message: string; failure?: WebFailure };
+/**
+ * A natural-language proof of one accepted target (docs/informalization.md), written and audited by models from the
+ * Lean proof. Lines count from 1 in the run's proof file; a section covers one declaration, a step the lines it quotes.
+ */
+export type WebExplanationLanguage = 'zh' | 'en';
+export type WebExplanationStatus = 'queued' | 'running' | 'approved' | 'exhausted' | 'cancelled' | 'error';
+export const webExplanationPhases = ['queued', 'preparing', 'extracting', 'writing', 'auditing', 'revising', 'retrying', 'finishing'] as const;
+export type WebExplanationPhase = typeof webExplanationPhases[number];
+export type WebExplanationLines = { start: number; end: number };
+/** Where in the proof file a cited name is written: a line and its UTF-16 columns, end exclusive. */
+export type WebExplanationSpan = { line: number; start: number; end: number };
+/**
+ * A cited declaration and where it is written: in the step's own quoted Lean, elsewhere in the declaration, or nowhere,
+ * as when notation (`^`, `ℂ`) or automation (simp) uses it. Every cited name is a dependency Lean checked.
+ */
+export type WebExplanationUse = { name: string; place: 'step' | 'declaration' | 'implicit'; spans: WebExplanationSpan[] };
+/** Auditor explanations of a statement or step; empty ones are left out. */
+export type WebExplanationStep = { text: string; uses: WebExplanationUse[]; lines: WebExplanationLines[]; reviews: string[];
+  /** Lean's goals around the tactics the step quotes, when the evidence recorded goal states. */ goals?: WebExplanationGoals };
+/**
+ * Goals before the first and after the last of the outermost tactics a step quotes, as Lean printed them (at most 4 per
+ * state; the counts give all). An empty `after` means those tactics closed their goal. `lines` are the tactics' lines.
+ */
+export type WebExplanationGoals = { before: string[]; beforeCount: number; after: string[]; afterCount: number; lines: WebExplanationLines };
+export type WebExplanationSection = {
+  name: string; kind: 'theorem' | 'definition' | 'instance' | 'opaque' | 'axiom' | 'inductive' | 'structure' | 'class';
+  /** Marks the main theorem; sections follow the proof file's order. */ target: boolean;
+  title: string; statement: string; lines: WebExplanationLines;
+  /** The lines the statement explains: a theorem's signature, or the whole of any other declaration. */ signature: WebExplanationLines;
+  /** Proof-body lines with code that no step quotes. */ unexplained: number[];
+  statementReviews: string[]; steps: WebExplanationStep[];
+};
+export type WebExplanationDocument = {
+  schema: 'theorem-os.web-explanation.v1'; target: string; language: WebExplanationLanguage;
+  toolchain: string; mathlibRevision: string | null; overview: string; axioms: string[];
+  sections: WebExplanationSection[];
+  /**
+   * proofLines counts theorem body lines with code, explainedLines those some step quotes; ambiguousExcerpts counts
+   * excerpts that occur more than once in their declaration (placed in step order).
+   */
+  metrics: { declarations: number; steps: number; citations: number; excerptCoverage: number; proofLines: number; explainedLines: number;
+    ambiguousExcerpts: number };
+  /** Writer and auditor configurations, without profiles or executables. */
+  model: string; effort: string; auditors: number; rounds: number; tokens: number | null;
+};
+export type WebExplanationProgress = { phase: WebExplanationPhase; batches?: number; approvedBatches?: number; round?: number;
+  tokens?: number; updatedAt: string };
+export type WebExplanation = {
+  id: string; runId: string; target: string; language: WebExplanationLanguage; status: WebExplanationStatus;
+  createdAt: string; updatedAt: string; finishedAt?: string; model: string; effort: 'low' | 'high' | 'max';
+  maxRunSeconds: number; maxTotalTokens: number; progress?: WebExplanationProgress;
+  /** An `explanation_*` or `informalization_*` code, never model or provider text. */ reason?: string;
+  /** Present while queued: explanations generating or waiting before this one, from every account. */
+  queue?: { position: number; ahead: number };
+  /** Derived from the verified evidence each time one approved explanation is read; never stored or listed. */
+  document?: WebExplanationDocument;
+};
+/** What the explanation page reads first: the proof, its targets and what can be generated. */
+export type WebExplanationOverview = {
+  run: { id: string; title: string; environment: WebEnvironment; providerId: string; model: string; effort: WebEffort; proof: string };
+  targets: { name: string; declarations: number }[];
+  explanations: WebExplanation[];
+  generation: { available: true; model: string; effort: 'low' | 'high' | 'max'; key: 'saved' | 'server' | 'required';
+    maxRunSeconds: number; maxTotalTokens: number; reference: { declarations: number; seconds: number; tokens: number } }
+    | { available: false; reason: 'sample' | 'not_accepted' | 'provider' | 'model' | 'runtime' };
+};
+export type WorkerExplanationInput = { id: string; proof: string; target: string; language: WebExplanationLanguage;
+  environment: WebEnvironment; model: string; effort: 'low' | 'high' | 'max'; apiKey: string; provider: WebProvider;
+  maxRunSeconds: number; maxTotalTokens: number; maxRoundsPerBatch: number; auditors: number };
+export type WorkerExplanationMessage =
+  | { type: 'progress'; progress: Omit<WebExplanationProgress, 'updatedAt'> }
+  | { type: 'result'; status: 'approved'; evidence: unknown }
+  | { type: 'result'; status: 'exhausted' | 'error'; reason: string };
+export const webExplanationReason = /^(?:explanation|informalization)_[a-z0-9_]{1,80}$/u;
 /** The id of the read-only sample run (apps/web/sample.ts); fixed so links and saved positions never collide with real runs. */
 export const webSampleRunId = '00000000-0000-4000-8000-00000000a001';
 

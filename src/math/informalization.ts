@@ -212,7 +212,9 @@ function batchContext({ outline, batch, accepted, sources }: BatchContextInput) 
     units: members.map(unit => ({ declaration: unit.name, kind: unit.kind, file: unit.file, signature: unit.signature,
       source: unit.source, statementDependencies: unit.statementDependencies, proofDependencies: unit.proofDependencies,
       mustCite: informalizationRequiredCitations(outline, unit),
-      citableLibrary: unit.external.filter(name => !incidentalLibraryName(name)), externalTruncated: unit.externalTruncated })),
+      citableLibrary: unit.external.filter(name => !incidentalLibraryName(name)), externalTruncated: unit.externalTruncated,
+      // Absent in outlines without goal states, so their inputs and digests are unchanged.
+      ...unit.goals ? { goals: unit.goals } : {} })),
     // A dependency in a mutually recursive group may not have an accepted section yet.
     dependencies: outside.map(name => {
       const unit = byName.get(name)!, section = accepted.get(name);
@@ -525,20 +527,22 @@ export function readInformalizationArtifact(artifact: string): InformalizationEv
 }
 const SHARED_INSTRUCTIONS = [
   'The Lean files of the proof are in proof/ (INPUT.files lists them, dependencies first). Lean has checked them. Never edit proof/.',
-  'To inspect an intermediate goal, copy the files to a scratch directory, add trace_state or a temporary have, and run lean there. A file that imports a local module needs that module compiled first: lean -o build/<Module/Path>.olean <file>, with build added to LEAN_PATH.',
+  'When a unit has goals, goals.tactics lists each tactic as written, in source order: its range in the proof file, its first line (tactic), and the goals before and after it as Lean printed them (hypotheses, then ⊢ and the target). At most 4 goals are printed per state; beforeCount and afterCount give the number. An empty after means the tactic closed its goal. goals.truncated means some entries were dropped for size, nested tactics first.',
+  'To inspect a goal that goals does not show, copy the files to a scratch directory, add trace_state or a temporary have, and run lean there. A file that imports a local module needs that module compiled first: lean -o build/<Module/Path>.olean <file>, with build added to LEAN_PATH.',
   'Installed Lean sources are in /opt/lean/src/lean; pinned Mathlib and dependencies are in /opt/lean-packages (Mathlib: /opt/lean-packages/mathlib/Mathlib). LEAN_PATH is already configured.',
   'OUTPUT.schema.json describes the exact output structure. Write your complete JSON atomically (write a temporary file, then rename it to OUTPUT.json).',
   'The first complete schema-valid OUTPUT.json is your submission: the host ends this role and checks it. Stop after submitting.',
   'Do not change INPUT.json, ROLE.md or OUTPUT.schema.json. Read only this role input, the proof files and installed libraries; other tasks and prior sessions are unavailable.',
 ];
 export const INFORMALIZATION_WRITER_INSTRUCTIONS = [
-  'Write a natural-language proof that explains the given Lean proof. INPUT.json holds one batch of its declarations in dependency order, with their Lean source and elaborated signatures, the accepted statements of earlier declarations they use (dependencies), and the library theorems their terms use (library).',
+  'Write a natural-language proof that explains the given Lean proof. INPUT.json holds one batch of its declarations in dependency order, with their Lean source, elaborated signatures and, when recorded, the goals around each tactic (goals), the accepted statements of earlier declarations they use (dependencies), and the library theorems their terms use (library).',
   'Write exactly one strict JSON object to OUTPUT.json with inputDigest (copied from INPUT), sections and overview.',
   'sections has one item per INPUT.units entry, in the same order, with declaration equal to its name. title is a short descriptive name. statement translates the Lean signature exactly: every hypothesis, quantifier, domain, type and coercion, nothing added and nothing dropped.',
   'The Lean source is the only authority. proof follows the structure of the Lean proof: its case splits, inductions, intermediate claims and lemma applications, in Lean order. Do not substitute a different or shorter argument, and do not claim a step the Lean proof does not take.',
   'Each step has text, uses and lean. lean quotes 1 to 8 verbatim excerpts of that declaration\'s Lean source that the step explains. uses names each declaration the step relies on: owned declarations (statementDependencies, proofDependencies) and library theorems from citableLibrary, by exact name.',
   'Cite every name in mustCite in the step that applies it. Name a library theorem when the step depends on its content; routine rewriting and arithmetic closed by automation need no citation, but the step must still say what was shown.',
   'When automation such as simp, ring, linarith, omega, norm_num, decide or positivity closes a goal, state the goal it closes and the reason it holds. "By simp" alone is not an explanation.',
+  'Where goals are recorded, state intermediate claims and the goals automation closes as Lean has them; do not claim a goal that differs from the recorded one.',
   'A definition, instance or structure needs proof steps only for content that needs explaining, such as a recursion, a proof field or a termination argument; its statement describes what it defines. A theorem needs at least one step.',
   'Use the dependency statements as proved results; do not prove them again. Write mathematics in LaTeX ($...$). Write prose in INPUT.language (zh: Chinese, en: English); keep Lean names unchanged.',
   'overview is null unless INPUT.batch.final is true. In the final batch it explains how the declarations combine to prove the target.',
@@ -553,6 +557,7 @@ export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = [
   'sections has one item per INPUT.explanation.sections entry, in the same order and with the same declaration.',
   'statement.verdict is faithful if the prose states exactly the Lean signature: hypotheses, quantifiers, domains, types and coercions. It is mismatch if anything is added, dropped, weakened or strengthened, and unclear if you cannot tell.',
   'steps has one verdict per explanation step, in order. justified: the claim is true and the quoted Lean supports it as stated. gap: a needed reason or case is missing. invented: the step claims something the Lean proof does not do, or cites a declaration for something it does not provide. unclear: you cannot tell. Explain every verdict other than justified.',
+  'Where goals are recorded, check each claim about an intermediate goal, or about what remains to be shown, against them. A claim that disagrees mathematically with the recorded goal is invented; a different notation is not.',
   'omissions lists substantive parts of the Lean proof that no step explains, such as a case, an induction step, an applied lemma or a nontrivial side condition. Quote the Lean text verbatim in lean. Bookkeeping such as intro, rfl or a cast-only rewrite is not an omission.',
   'overview.verdict is absent when INPUT.explanation.overview is null; otherwise consistent if it describes how these declarations prove the target, and inconsistent if not.',
   'Judge mathematical correctness and fidelity to the Lean proof, not style or language. summary states the main problems, or that there are none.',

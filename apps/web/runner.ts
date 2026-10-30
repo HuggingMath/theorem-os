@@ -4,8 +4,8 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { WebConfig } from './config';
-import type { WorkerInput, WorkerMessage } from './shared';
-import { webArtifactMaxBytes, webFailureKinds, webFailureReason } from './shared';
+import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from './shared';
+import { webArtifactMaxBytes, webExplanationPhases, webExplanationReason, webFailureKinds, webFailureReason } from './shared';
 import { isWebEventDetails } from './moduleTelemetry';
 import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
@@ -18,6 +18,8 @@ export type WebRunner = {
   command?(id: string, command: WebCommand): Promise<WebCommandResult>;
   /** Compiles a statement on its own, without a model or a workspace; absent when the service cannot. */
   check?: WebPrecheckRunner;
+  /** Writes and audits a proof explanation in its own container; absent when the service cannot. */
+  explain?(input: WorkerExplanationInput, onMessage: (message: WorkerExplanationMessage) => void, signal: AbortSignal): Promise<void>;
 };
 const execute = promisify(execFile);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -62,6 +64,21 @@ export function parseWorkerMessage(line: string): WorkerMessage | undefined {
       return { type: 'catalog', catalog: validateTheoremKnowledge(value.catalog) };
     const message = workerMessageSchema.safeParse(value);
     return message.success ? message.data as WorkerMessage : undefined;
+  } catch { return undefined; }
+}
+
+const count = z.number().int().nonnegative().max(1e12);
+const explanationMessageSchema = z.union([
+  z.object({ type: z.literal('progress'), progress: z.object({ phase: z.enum(webExplanationPhases), batches: count.optional(),
+    approvedBatches: count.optional(), round: count.optional(), tokens: count.optional() }).strict() }).strict(),
+  // The server re-derives every check from the evidence; here it only has to be an object.
+  z.object({ type: z.literal('result'), status: z.literal('approved'), evidence: z.record(z.unknown()) }).strict(),
+  z.object({ type: z.literal('result'), status: z.enum(['exhausted', 'error']), reason: z.string().regex(webExplanationReason) }).strict(),
+]);
+export function parseExplanationMessage(line: string): WorkerExplanationMessage | undefined {
+  try {
+    const message = explanationMessageSchema.safeParse(JSON.parse(line));
+    return message.success ? message.data as WorkerExplanationMessage : undefined;
   } catch { return undefined; }
 }
 
@@ -241,5 +258,59 @@ export class DockerWebRunner implements WebRunner {
       this.active.delete(input.id);
       await execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).catch(() => {});
     }
+  }
+
+  /**
+   * One container per explanation, built like a run: the proof and key travel over stdin, model calls go to the host
+   * gateway, and the disk volume holds the pinned environment while roles compile. Errors are reason codes only.
+   */
+  async explain(input: WorkerExplanationInput, onMessage: (message: WorkerExplanationMessage) => void, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    const name = `theoremos-explain-${input.id}`, mathlib = input.environment === 'mathlib';
+    const memory = mathlib ? '12g' : '4g';
+    const remove = () => execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).then(() => {}, () => {});
+    try {
+      await execute('docker', ['create', '--interactive', '--pull=never', '--name', name,
+        '--add-host=host.docker.internal:host-gateway',
+        '--log-driver=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+        '--security-opt=seccomp=unconfined', '--security-opt=apparmor=unconfined', '--security-opt=systempaths=unconfined',
+        '--cpus=2', `--memory=${memory}`, `--memory-swap=${memory}`, '--pids-limit=512',
+        '--tmpfs', '/work:rw,nosuid,nodev,size=67108864,uid=10001,gid=10001,mode=0700',
+        '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=134217728,mode=1777',
+        '--ulimit', 'nofile=4096:4096', '--mount', 'type=volume,destination=/var/tmp',
+        ...(mathlib ? ['--device=/dev/fuse:/dev/fuse:rw'] : []),
+        this.config.workerImage, input.environment, 'explain'], { timeout: 30_000, maxBuffer: 8_192 });
+    } catch { await remove(); throw new Error('explanation_container_failed'); }
+    try {
+      signal.throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
+        let buffer = '', finished = false, received = false;
+        const finish = (error?: Error) => {
+          if (finished) return;
+          finished = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+          if (error) { child.kill('SIGKILL'); reject(error); } else resolve();
+        };
+        const abort = () => finish(new Error('explanation_cancelled'));
+        const timer = setTimeout(() => finish(new Error('explanation_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
+        signal.addEventListener('abort', abort, { once: true });
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', chunk => {
+          buffer += chunk;
+          for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+            const message = parseExplanationMessage(buffer.slice(0, newline));
+            buffer = buffer.slice(newline + 1);
+            if (message?.type === 'result') received = true;
+            if (message && !finished) onMessage(message);
+          }
+          if (buffer.length > 32 * 1024 * 1024) finish(new Error('explanation_output_too_large'));
+        });
+        child.stdin.on('error', () => {});
+        child.once('error', () => finish(new Error('explanation_container_failed')));
+        child.once('close', () => finish(received ? undefined : new Error('explanation_worker_exited')));
+        // Credentials travel over the private input pipe, never Docker args, env or logs.
+        child.stdin.end(JSON.stringify(input) + '\n');
+      });
+    } finally { await remove(); }
   }
 }

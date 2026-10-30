@@ -47,6 +47,20 @@ export function informalizationReport(nonce = INFORMALIZATION_NONCE) {
 export const informalizationSources = () => [{ module: 'Lib', file: 'Lib.lean', text: LIB_SOURCE },
   { module: 'Proof', file: 'Proof.lean', text: PROOF_SOURCE }];
 
+const goal = (target: string) => 'n : Nat\n⊢ ' + target;
+/** A handwritten goals report in the shape the goals query writes; the first record lies outside every declaration. */
+export function informalizationGoalsReport(module: string, nonce = INFORMALIZATION_NONCE) {
+  const record = (snippet: string, before: string[], after: string[]) => ({ range: sourceRange(PROOF_SOURCE, snippet),
+    before, beforeCount: before.length, after, afterCount: after.length });
+  return { nonce, module, truncated: false, tactics: module === 'Lib' ? [] : [
+    record('import Lib', [], []),
+    record('unfold double', [goal('double n = 2 * n')], [goal('n + n = 2 * n')]),
+    record('omega', [goal('n + n = 2 * n')], []),
+    record('rw [lib_fact]', [goal('double (n + 0) = 2 * n')], [goal('double n = 2 * n')]),
+    record('exact double_eq n', [goal('double n = 2 * n')], []),
+  ] };
+}
+
 export function informalizationFixture(roots: string[], overrides: Partial<InformalizationPreparation> = {},
   files: Record<string, string> = { 'Lib.lean': LIB_SOURCE, 'Proof.lean': PROOF_SOURCE }) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'informalization-'))); roots.push(base);
