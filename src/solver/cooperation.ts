@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, readMathText, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
-import { committedSource, git, solverSourceConstraints } from './problem';
+import { committedSource, git, originalDeclarationRegions, solverSourceConstraints } from './problem';
 import { solverProofFeedback, solverSourceFeedback } from './feedback';
 import { assessTaskResponsibility, assignSharedResearchTask, independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
 import type { DispatchWaitObservation } from './archive';
@@ -737,11 +737,11 @@ export class CooperativeResearch extends CooperationInputs {
         // Library modules are byte-frozen as a whole; their declarations need no per-task bodies.
         if (problem.frozenFiles && Object.hasOwn(problem.frozenFiles, file)) return [file, originals];
         const source = committedSource(worker.worktree, node.assignment!.seedCommit, `${problem.projectRelative}/${file}`);
-        const regions = inspectLeanDeclarationRegions(source);
+        const matching = originalDeclarationRegions(source);
         return [file, originals.map(original => {
           if (original.body || file === node.task.proofPath &&
               original.name.split('.').at(-1) === node.task.theoremName?.split('.').at(-1)) return original;
-          const region = regions.find(item => item.name === original.name)!;
+          const region = matching(original)[0]!;
           return { ...original, body: mathDigest(source.slice(region.bodyOffset, region.endOffset).trim()) };
         })];
       }));

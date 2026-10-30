@@ -34,7 +34,7 @@ function unsupportedScope(source: string, offset: number): boolean {
   for (const match of clean.slice(0, offset).matchAll(/^.*$/gmu)) {
     if (regions.some(region => match.index! >= region.startOffset && match.index! < region.endOffset)) continue;
     const line = match[0].trim();
-    if (/^(?:namespace|section)\b/u.test(line)) frames.push(false);
+    if (/^(?:(?:noncomputable|public|private|meta)\s+)*(?:namespace|section|mutual)\b/u.test(line)) frames.push(false);
     else if (/^end(?:\s|$)/u.test(line) && frames.length > 1) frames.pop();
     else if (/^(?:variables?|universes?|include|omit|local|scoped|attribute|set_option)\b/u.test(line) ||
         /^@\[[^\]]*\blocal\b/u.test(line)) frames[frames.length - 1] = true;

@@ -3,7 +3,7 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarations, inspectLeanDeclarationRegions } from '../math/leanSource';
 import type { CooperationState } from './cooperation';
 import { deliveryFinding, type DeliveryRecord } from './deliveries';
-import type { SolverProblem } from './problem';
+import { originalDeclarationRegions, type SolverProblem } from './problem';
 import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
 import { buildProofContinuation } from './progress';
 import { contextTaskConsumers } from './taskConsumers';
@@ -57,8 +57,9 @@ const sourcePath = (problem: SolverProblem, file: string) => path.posix.join(pro
 /** Preserve source-level variables, scopes, instances and fixed definitions; never copy an existing proof body. */
 export function frozenSourceContext(problem: SolverProblem, file: string, source: string): string {
   const regions = inspectLeanDeclarationRegions(source), originals = problem.declarations[file] ?? [];
+  const matching = originalDeclarationRegions(source, regions);
   if (originals.some(original => {
-    const found = regions.filter(region => region.name === original.name);
+    const found = matching(original);
     return found.length !== 1 || found[0].declarationType !== original.header || (original.body &&
       mathDigest(source.slice(found[0].bodyOffset, found[0].endOffset).trim()) !== original.body);
   })) return stale(`frozen-source:${file}`);

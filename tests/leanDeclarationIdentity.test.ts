@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
 import { inspectLeanDeclarationRegions } from '../src/math/leanSource';
 import { applyTaskChanges, createTaskSourceProjector, declarationStartWithDoc, omitTaskHelpers, taskChanges } from '../src/solver/cooperativeProof';
-import { commitSolverSources, readSolverProblem, type SolverProblem } from '../src/solver/problem';
+import { assertSolverSources, commitSolverSources, readSolverProblem, type SolverProblem } from '../src/solver/problem';
+import { frozenSourceContext } from '../src/solver/contextCompiler';
 import { captureProofReferences, proofReferencesUnchanged } from '../src/solver/proofReferences';
 import type { CooperativeTask } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
@@ -176,5 +177,89 @@ describe('attribute and in-command prefixes of cooperative declarations', () => 
     expect(start('d')).toBe(source.indexOf('theorem d'));
     expect(declarationStartWithDoc(source, source.indexOf('theorem c'), source.indexOf('[DecidableEq')))
       .toBe(source.indexOf('theorem c'));
+  });
+});
+
+describe('statements that repeat a final name component', () => {
+  // 2026-10-30: 52 of 416 OpenAI challenge statements repeat names such as `Literal.eval`/`Clause.eval`
+  // or `A.step`/`B.step`; preparation rejected all of them.
+  let directory: string, workspace: string, file: string, problem: SolverProblem;
+  const original = 'namespace Submission\n' +
+    'namespace A\nstructure State where\n  n : Nat\ndef step (s : State) : Nat := s.n + 1\ndef Literal.eval : Nat := 0\nend A\n' +
+    'namespace B\nstructure State where\n  n : Nat\ndef step (s : State) : Nat := s.n + 2\ndef Clause.eval : Nat := 0\n' +
+    'def size : Nat := 3\nend B\n' +
+    'theorem goal : B.step ⟨0⟩ = 2 := by sorry\nend Submission\n';
+  const solved = original.replace('= 2 := by sorry', '= 2 := rfl');
+  const goal: CooperativeTask = { id: 'goal', kind: 'goal', objective: 'Prove the goal', dependsOn: [], revision: 0,
+    proofPath: 'Submission.lean', theoremName: 'Submission.goal' };
+  const helper = (name: string): CooperativeTask => ({ id: 'helper', kind: 'lemma', revision: 0, objective: 'Prove the helper',
+    proofPath: 'Submission.lean', theoremName: `Submission.B.${name}`, type: 'True', dependsOn: [] });
+  const save = (source: string) => { fs.writeFileSync(file, source); return commitSolverSources(problem, workspace); };
+
+  beforeEach(() => {
+    directory = temporaryDirectory('lean-repeated-names-');
+    workspace = path.join(directory, 'workspace');
+    const receipt = bootstrapLeanTask(workspace, { source: original, task: 'Prove the goal.' });
+    problem = readSolverProblem(workspace, receipt.activeProblemPath);
+    file = path.join(receipt.projectRoot, 'Submission.lean');
+  });
+  afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  it('freezes each repeated written name by its qualified name', () => {
+    expect(problem.declarations['Submission.lean']!.map(item => item.qualifiedName ?? item.name))
+      .toEqual(['Submission.A.step', 'Literal.eval', 'Submission.B.step', 'Clause.eval', 'size', 'goal']);
+    expect(() => assertSolverSources(problem, workspace)).not.toThrow();
+    save(solved);
+    expect(frozenSourceContext(problem, 'Submission.lean', solved)).toContain('s.n + 2');
+    fs.writeFileSync(file, solved.replace('s.n + 2', 's.n + 3'));
+    expect(() => assertSolverSources(problem, workspace)).toThrow('math_original_declaration_changed');
+    expect(() => frozenSourceContext(problem, 'Submission.lean', solved.replace('s.n + 2', 's.n + 3')))
+      .toThrow('math_context_stale_required');
+  });
+
+  it('projects, collects and replays a goal proof and a helper beside repeated names', () => {
+    const source = solved.replace('def size', 'lemma helper : True := trivial\ndef size');
+    const commit = save(source);
+    const projected = createTaskSourceProjector(problem, workspace, commit)(goal, []).get('Submission.lean')!;
+    expect(projected).toBe(source);
+    const compact = createTaskSourceProjector(problem, workspace, commit, { compact: true })(goal, []).get('Submission.lean')!;
+    expect(compact).toContain('s.n + 1');
+    expect(compact).toContain('s.n + 2');
+    const changes = taskChanges(problem, workspace, commit, goal, { seedCommit: problem.baseCommit });
+    expect(changes).toMatchObject([{ name: 'goal' }, { name: 'helper', beforeName: 'size' }]);
+    fs.writeFileSync(file, original);
+    applyTaskChanges(problem, workspace, changes);
+    expect(fs.readFileSync(file, 'utf8')).toBe(source);
+  });
+
+  it('replays a move past a repeated declaration by its qualified identity', () => {
+    const seeded = original.replace('end A', 'lemma probe : True := trivial\nend A');
+    const seedCommit = save(seeded);
+    const source = seeded.replace('lemma probe : True := trivial\n', '')
+      .replace('def step (s : State) : Nat := s.n + 1', 'lemma probe : True := trivial\ndef step (s : State) : Nat := s.n + 1');
+    const commit = save(source);
+    const changes = taskChanges(problem, workspace, commit, undefined, { seedCommit });
+    expect(changes).toContainEqual(expect.objectContaining({ name: 'Submission.A.step', afterName: 'probe' }));
+    fs.writeFileSync(file, seeded);
+    applyTaskChanges(problem, workspace, changes);
+    expect(fs.readFileSync(file, 'utf8')).toBe(source);
+  });
+
+  it.each([
+    ['a third copy of a repeated name', 'lemma C.step : True := trivial\n'],
+    ['a new repeat of a unique name', 'lemma Other.size : True := trivial\n'],
+  ])('rejects %s', (_, declaration) => {
+    const commit = save(solved.replace('def size', `${declaration}def size`));
+    expect(() => taskChanges(problem, workspace, commit, helper('step'), { seedCommit: problem.baseCommit }))
+      .toThrow('math_task_ambiguous_declaration');
+  });
+
+  it.each([
+    ['a repeated target name', 'namespace A\ntheorem goal : True := by sorry\nend A\ntheorem goal : True := by sorry\n',
+      'lean_task_target_name_ambiguous: A.goal'],
+    ['a repeated qualified name', 'def A.x : Nat := 0\nnamespace A\ndef x : Nat := 1\nend A\ntheorem goal : True := by sorry\n',
+      'lean_task_declaration_names_ambiguous'],
+  ])('refuses to prepare %s', (_, source, code) => {
+    expect(() => bootstrapLeanTask(path.join(directory, 'refused'), { source, task: 'Prove it.' })).toThrow(code);
   });
 });

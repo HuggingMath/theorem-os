@@ -283,7 +283,7 @@ function searchableDeclarations(source: string) {
     while (!command.done && command.value.index < declaration.startOffset) {
       const [, kind, rest] = command.value;
       const name = rest?.trim();
-      if (kind === 'namespace' || kind === 'section') { updateLeanScopes(scopes, kind, name); context.push([]); }
+      if (kind === 'namespace' || kind === 'section' || kind === 'mutual') { updateLeanScopes(scopes, kind, name); context.push([]); }
       else if (kind === 'end') { updateLeanScopes(scopes, kind, name); if (context.length > 1) context.pop(); }
       else if (kind === 'variable' || (kind === 'open' && name && !/\bin\s*$/u.test(name))) {
         let text = command.value[0].trim();

@@ -4,8 +4,9 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { maskLeanComments, maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import { mathConstructionImports } from '../math/mathConstructionSources';
 import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectScopedLeanDeclarations,
-  leanDeclarationContextCommands } from '../math/leanSource';
-import { assertSolverSources, committedSource, commitSolverProjection, git, solverProofImports, withSolverWorktree, type SolverProblem } from './problem';
+  leanDeclarationContextCommands, leanDeclarationKeys, repeatedLeanLocalNames } from '../math/leanSource';
+import { assertSolverSources, committedSource, commitSolverProjection, git, originalDeclarationRegions, solverProofImports,
+  withSolverWorktree, type SolverProblem } from './problem';
 import { attributeProofEvidence, checkProjectedDeclarations, type ProofCheck } from './modules/evidence';
 import { assumableLemma, isDefinitionTask, taskVersion, type CooperativeTask, type TaskAssignment } from './tasks';
 import { captureProofReferences, type ProofReferences } from './proofReferences';
@@ -47,6 +48,11 @@ export function trustedTaskProjectionReuse(proof: TaskProof): TaskProjectionReus
 }
 
 const local = (name: string) => name.split('.').at(-1)!;
+/** Regions with the identity a DeclarationChange records: the written name, or the qualified name of a repeated final component. */
+const keyedRegions = (source: string) => {
+  const keys = leanDeclarationKeys(source);
+  return inspectLeanDeclarationRegions(source).map(region => ({ ...region, key: keys.get(region.startOffset)! }));
+};
 
 export { committedSource } from './problem';
 
@@ -79,50 +85,56 @@ export function taskChanges(problem: SolverProblem, worktree: string, sourceComm
     if (Object.hasOwn(problem.frozenFiles ?? {}, file))
       throw new Error(`math_library_module_changed\nFile: ${problem.projectRelative}/${file}\n` +
         `This Submission/Library module is a frozen host library. Restore it with git show ${assignment.seedCommit}:${problem.projectRelative}/${file}, import it and add new helpers in another owned file.`);
-    const originals = inspectLeanDeclarationRegions(before), updated = inspectLeanDeclarationRegions(after);
-    if (new Set(updated.map(region => local(region.name))).size !== updated.length)
+    const originals = keyedRegions(before), updated = keyedRegions(after);
+    // Only the statement's own repeated final components may repeat; each copy keeps its qualified identity.
+    if (new Set(updated.map(region => region.key)).size !== updated.length ||
+        repeatedLeanLocalNames(updated.map(region => region.name)) !==
+          repeatedLeanLocalNames((problem.declarations[file] ?? []).map(item => item.name)))
       throw new Error('math_task_ambiguous_declaration');
     const text = (source: string, region: typeof originals[number]) => {
       const line = source.lastIndexOf('\n', region.startOffset - 1) + 1;
       return source.slice(line, region.endOffset).trimEnd() + '\n';
     };
+    const statement = originalDeclarationRegions(before, originals);
+    const fromStatement = new Set((problem.declarations[file] ?? []).flatMap(item => statement(item)).map(region => region.startOffset));
     for (const region of originals) {
-      const current = updated.find(item => item.name === region.name);
+      const current = updated.find(item => item.key === region.key);
       if (!current) throw new Error('math_task_existing_declaration_removed');
       const oldText = text(before, region), newText = text(after, current);
       if (oldText === newText) continue;
       const assigned = file === task?.proofPath && local(region.name) === local(task.theoremName!);
-      const proofRepair = !problem.declarations[file]?.some(item => item.name === region.name) &&
+      const proofRepair = !fromStatement.has(region.startOffset) &&
         /^(?:theorem|lemma)\s/u.test(before.slice(region.startOffset, region.bodyOffset)) &&
         /^(?:theorem|lemma)\s/u.test(after.slice(current.startOffset, current.bodyOffset)) &&
         region.declarationType === current.declarationType;
       if (task && !assigned && !proofRepair)
-        throw new Error(`math_task_existing_declaration_changed\nFile: ${problem.projectRelative}/${file}\nDeclaration: ${region.name}\n` +
+        throw new Error(`math_task_existing_declaration_changed\nFile: ${problem.projectRelative}/${file}\nDeclaration: ${region.key}\n` +
           `Restore this declaration's exact name, parameters, proof and namespace/section placement from git show ${assignment.seedCommit}:${problem.projectRelative}/${file}. ` +
           'Proof-only repairs to solver-created lemmas are allowed; preserve their statements. Add a differently named helper if different parameters are needed. Do not reset the worktree.');
-      changes.push({ file, name: region.name, before: oldText, after: newText });
+      changes.push({ file, name: region.key, before: oldText, after: newText });
     }
-    const inherited = updated.filter(region => originals.some(original => original.name === region.name));
-    if (inherited.some((region, index) => region.name !== originals[index].name)) {
+    const kept = new Set(originals.map(original => original.key));
+    const inherited = updated.filter(region => kept.has(region.key));
+    if (inherited.some((region, index) => region.key !== originals[index].key)) {
       // Replay declaration order as well as proof edits; Lean cannot reference a later theorem.
       for (let index = 1; index < inherited.length; index++) {
         const region = inherited[index], previous = inherited[index - 1];
-        if (canonicalMathJson(leanDeclarationContextCommands(after, region.name)) !==
-            canonicalMathJson(leanDeclarationContextCommands(after, previous.name))) continue;
-        changes.push({ file, name: region.name, before: text(before, originals.find(item => item.name === region.name)!),
-          after: text(after, region), afterName: previous.name });
+        if (canonicalMathJson(leanDeclarationContextCommands(after, region.key)) !==
+            canonicalMathJson(leanDeclarationContextCommands(after, previous.key))) continue;
+        changes.push({ file, name: region.key, before: text(before, originals.find(item => item.key === region.key)!),
+          after: text(after, region), afterName: previous.key });
       }
     }
     const contexts = new Map<string, string>();
     const context = (name: string) => contexts.get(name) ??
       contexts.set(name, canonicalMathJson(leanDeclarationContextCommands(after, name))).get(name)!;
-    for (const region of updated.filter(item => !originals.some(original => original.name === item.name))) {
-      const next = updated.find(item => item.startOffset > region.startOffset && originals.some(original => original.name === item.name));
+    for (const region of updated.filter(item => !kept.has(item.key))) {
+      const next = updated.find(item => item.startOffset > region.startOffset && kept.has(item.key));
       // An anchor in another namespace/section block would rename the helper; follow its nearest same-scope sibling instead.
-      const previous = next && context(next.name) !== context(region.name) ?
-        updated.findLast(item => item.startOffset < region.startOffset && context(item.name) === context(region.name)) : undefined;
-      if (previous) { changes.push({ file, name: region.name, after: text(after, region), afterName: previous.name }); continue; }
-      changes.push({ file, name: region.name, after: text(after, region), beforeName: next?.name,
+      const previous = next && context(next.key) !== context(region.key) ?
+        updated.findLast(item => item.startOffset < region.startOffset && context(item.key) === context(region.key)) : undefined;
+      if (previous) { changes.push({ file, name: region.key, after: text(after, region), afterName: previous.key }); continue; }
+      changes.push({ file, name: region.key, after: text(after, region), beforeName: next?.key,
         tail: next ? undefined : originals.length ? before.slice(originals.at(-1)!.endOffset) : after.slice(updated.at(-1)!.endOffset) });
     }
   }
@@ -488,8 +500,8 @@ function docCommentStart(source: string, lineStart: number): number {
 /** Discharge saved assumptions against declarations that may have arrived after the old insertion anchor. */
 function orderConditionalChanges(source: string, file: string, changes: readonly DeclarationChange[],
   conditions: readonly CooperativeTask[]): string {
-  const names = new Set(changes.filter(change => change.file === file).map(change => change.name));
-  const ordered = inspectScopedLeanDeclarations(source).filter(declaration => names.has(declaration.name));
+  const names = new Set(changes.filter(change => change.file === file).map(change => change.name)), keys = leanDeclarationKeys(source);
+  const ordered = inspectScopedLeanDeclarations(source).filter(declaration => names.has(keys.get(declaration.startOffset)!));
   const previous = new Map<string, string>();
   for (const original of ordered) {
     const declarations = inspectScopedLeanDeclarations(source), regions = inspectLeanDeclarationRegions(source);
@@ -532,14 +544,16 @@ export function applyTaskChanges(problem: SolverProblem, worktree: string, chang
   for (const change of changes) {
     if (!problem.ownedFiles.includes(change.file)) throw new Error('math_task_source_outside_scope');
     let source = files.get(change.file) ?? fs.readFileSync(path.join(worktree, problem.projectRelative, change.file), 'utf8');
-    const regions = inspectLeanDeclarationRegions(source);
-    const existing = regions.find(region => region.name === change.name);
+    const regions = keyedRegions(source);
+    const named = (items: typeof regions, name: string) =>
+      items.find(region => region.key === name) ?? items.find(region => region.name === name);
+    const existing = named(regions, change.name);
     if (existing) {
       const start = source.lastIndexOf('\n', existing.startOffset - 1) + 1;
       const actual = source.slice(start, existing.endOffset).trimEnd() + '\n';
       if (actual !== change.after && (!change.before || actual !== change.before)) throw new Error('math_task_integration_conflict');
       if (change.afterName && change.before) {
-        const anchor = regions.find(region => region.name === change.afterName);
+        const anchor = named(regions, change.afterName);
         if (!anchor || canonicalMathJson(leanDeclarationContextCommands(source, change.name)) !==
             canonicalMathJson(leanDeclarationContextCommands(source, change.afterName)))
           throw new Error('math_task_integration_missing_context');
@@ -547,7 +561,7 @@ export function applyTaskChanges(problem: SolverProblem, worktree: string, chang
         const documentation = source.slice(moveStart, start);
         if (actual === change.after && anchor.endOffset === moveStart) continue;
         source = source.slice(0, moveStart) + source.slice(existing.endOffset);
-        const offset = inspectLeanDeclarationRegions(source).find(region => region.name === change.afterName)!.endOffset;
+        const offset = named(keyedRegions(source), change.afterName)!.endOffset;
         source = source.slice(0, offset) + documentation + change.after + source.slice(offset);
       } else {
         if (actual === change.after) continue;
@@ -555,8 +569,8 @@ export function applyTaskChanges(problem: SolverProblem, worktree: string, chang
       }
     } else {
       if (change.before) throw new Error('math_task_integration_missing_declaration');
-      const anchor = change.beforeName && regions.find(region => region.name === change.beforeName);
-      const sibling = change.afterName && regions.find(region => region.name === change.afterName);
+      const anchor = change.beforeName && named(regions, change.beforeName);
+      const sibling = change.afterName && named(regions, change.afterName);
       const offset = anchor ? declarationStartWithDoc(source, anchor.startOffset) : sibling ? sibling.endOffset :
         change.tail !== undefined && source.endsWith(change.tail) ? source.length - change.tail.length : -1;
       if (offset < 0) throw new Error('math_task_integration_missing_context');

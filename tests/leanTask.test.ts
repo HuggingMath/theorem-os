@@ -292,6 +292,17 @@ end User
     expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('math_path_invalid');
   });
 
+  it('keeps the plain declaration identity of a frozen library module that repeats a name', () => {
+    // 2026-10-30: DensityMatrix.lean has IsDensity.kronecker and IsPure.kronecker. Frozen modules are compared
+    // byte for byte, and their declaration lists enter continuation-seed policy digests.
+    const repeated = 'namespace TheoremOS\ntheorem A.kronecker : True := trivial\ntheorem B.kronecker : True := trivial\nend TheoremOS\n';
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source, task,
+      libraryPack: libraryPack({ [libraryModule]: repeated }) });
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    expect(problem.declarations[libraryModule]!.map(item => Object.keys(item).sort().join(','))).toEqual(['header,name', 'header,name']);
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
+  });
+
   it.skipIf(!newestLeanBinary())('compiles a proof that imports an installed library module', () => {
     const root = rootDirectory(), lean = newestLeanBinary()!;
     const statement = 'namespace User\n\ntheorem left (n : Nat) : n + 0 = n := by sorry\n\nend User\n';

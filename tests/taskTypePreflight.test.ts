@@ -313,6 +313,13 @@ describe('content-bound typed helper preflight', () => {
     expect((await cache.check(request())).result.status).toBe('elaborated');
   });
 
+  it.each(['noncomputable section\nend', 'mutual\ndef even : Nat → Bool\n  | 0 => true\n  | n + 1 => odd n\n' +
+    'def odd : Nat → Bool\n  | 0 => false\n  | n + 1 => even n\nend'])
+  ('keeps a namespace scope limitation after a closed block: %s', async block => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('theorem original', `variable (P : Prop)\n${block}\ntheorem original`));
+    expect((await cache.check(request())).result).toMatchObject({ status: 'deferred', reason: 'declaration-scope-not-reproducible' });
+  });
+
   it('defers multiple original anchors with different open scopes in the same namespace', async () => {
     fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('end Geometry',
       'section\nopen Nat\ntheorem other : True := by sorry\nend\nend Geometry'));

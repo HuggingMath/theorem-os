@@ -57,11 +57,16 @@ function inspectInput(input: LeanTaskInput) {
     throw new Error('lean_task_input_invalid');
   const declarations = inspectScopedLeanDeclarations(parsed.source);
   if (declarations.length > 256) throw new Error('lean_task_declarations_limit');
-  // Existing solver declaration guards require unambiguous local names within a file.
-  const names = declarations.map(item => item.name.split('.').at(-1));
-  if (new Set(names).size !== names.length) throw new Error('lean_task_declaration_names_ambiguous');
+  // Declarations repeating a final name component are identified by qualified name (leanDeclarationKeys);
+  // targets are still found by their final component, which must therefore be unique.
+  if (new Set(declarations.map(item => item.qualifiedName)).size !== declarations.length)
+    throw new Error('lean_task_declaration_names_ambiguous');
   const targets = declarations.filter(item => item.kind === 'theorem');
   if (!targets.length) throw new Error('lean_task_targets_missing');
+  const local = (name: string) => name.split('.').at(-1)!;
+  const repeated = new Set(declarations.map(item => local(item.name)).filter((name, index, names) => names.indexOf(name) !== index));
+  const target = targets.find(item => repeated.has(local(item.name)));
+  if (target) throw new Error(`lean_task_target_name_ambiguous: ${target.qualifiedName}`);
   const targetOffsets = new Set(targets.map(item => item.startOffset));
   const keywords = maskLeanCommentsAndStrings(parsed.source).matchAll(
     /(?<![\p{L}\p{M}\p{N}_'.?!])(?:theorem|lemma)(?![\p{L}\p{M}\p{N}_'.?!])/gu);
