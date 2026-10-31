@@ -422,6 +422,63 @@ function linkRejections(unit: InformalizationWriterInput['units'][number], secti
   return problems;
 }
 
+/**
+ * The formulas of prose as the explanation page reads them: `$…$`, `$$…$$`, `\(…\)` and `\[…\]` outside inline code, with
+ * `\$` an escaped dollar sign and `**…**` read on its own (apps/web/client/explainText.ts).
+ */
+function proseFormulas(text: string): string[] {
+  const formulas: string[] = [], fence = /`+/y;
+  for (let index = 0; index < text.length;) {
+    if (text.startsWith('\\$', index)) { index += 2; continue; }
+    fence.lastIndex = index;
+    const ticks = fence.exec(text)?.[0];
+    if (ticks) { const end = text.indexOf(ticks, index + ticks.length); index = end > 0 ? end + ticks.length : index + ticks.length; continue; }
+    const bold = text.startsWith('**', index) ? text.indexOf('**', index + 2) : -1;
+    if (bold > index + 2) { formulas.push(...proseFormulas(text.slice(index + 2, bold))); index = bold + 2; continue; }
+    const delimiter = ([['$$', '$$'], ['\\[', '\\]'], ['\\(', '\\)'], ['$', '$']] as const).find(([open]) => text.startsWith(open, index));
+    let end = -1;
+    if (delimiter) for (let at = index + delimiter[0].length; at < text.length; at++) {
+      if (text.startsWith(delimiter[1], at)) { end = at; break; }
+      if (text[at] === '\\') at++;
+    }
+    if (delimiter && end > index + delimiter[0].length) { formulas.push(text.slice(index + delimiter[0].length, end)); index = end + delimiter[1].length; }
+    else index++;
+  }
+  return formulas;
+}
+/**
+ * Lean names written inside a formula, where TeX reads `_` as a subscript and drops spaces (`$Nat.two_mul n$` draws
+ * "Nat.two" with a subscript m). Only exact names this batch can cite, with a `.` or `_`, count, so `$a_n$` is mathematics.
+ */
+function formulaNameRejections(input: InformalizationWriterInput, output: InformalizationWriterOutput): string[] {
+  const lean = (list: readonly string[]) => list.flatMap(name => [name, name.split('.').at(-1)!]).filter(name => /[._]/u.test(name));
+  const names = (unit: InformalizationWriterInput['units'][number]) =>
+    lean([unit.declaration, ...unit.statementDependencies, ...unit.proofDependencies, ...unit.citableLibrary]);
+  const problems: string[] = [];
+  const check = (where: string, text: string, known: ReadonlySet<string>) => {
+    for (const formula of proseFormulas(text)) {
+      const found = [...formula.matchAll(/[\p{L}_][\p{L}\p{N}_'.]*/gu)].map(match => match[0].replace(/\.+$/u, '')).filter(name => known.has(name));
+      if (found.length) problems.push(`${where}: write the Lean name ${[...new Set(found)].join(', ')} as \`code\`, not inside $...$: ${formula.slice(0, 200)}`);
+    }
+  };
+  output.sections.forEach((section, index) => {
+    const known = new Set(names(input.units[index]!)), where = section.declaration;
+    check(`${where} title`, section.title, known);
+    check(`${where} statement`, section.statement, known);
+    section.proof.forEach((step, stepIndex) => check(`${where} step ${stepIndex + 1}`, step.text, new Set([...known, ...lean(step.uses)])));
+  });
+  if (output.overview !== null) check('overview', output.overview, new Set(input.units.flatMap(names)));
+  return problems;
+}
+/**
+ * What the runner asks of a writer before audit: the host checks, then no Lean names inside formulas. The formula rule
+ * is not part of the evidence check, so explanations approved before it stay valid.
+ */
+export function informalizationWriterSubmissionRejections(input: InformalizationWriterInput, value: unknown): string[] {
+  const problems = informalizationWriterRejections(input, value);
+  return problems.length ? problems : formulaNameRejections(input, value as InformalizationWriterOutput);
+}
+
 /** Structural checks of an audit; a malformed audit is not a verdict. */
 export function informalizationAuditRejections(input: InformalizationAuditInput, value: unknown): string[] {
   const parsed = auditOutputSchema(input.alignment).safeParse(value);
@@ -699,7 +756,7 @@ const WRITER_LINES = [
   'When automation such as simp, ring, linarith, omega, norm_num, decide or positivity closes a goal, state the goal it closes and the reason it holds. "By simp" alone is not an explanation.',
   'Where goals are recorded, state intermediate claims and the goals automation closes as Lean has them; do not claim a goal that differs from the recorded one.',
   'A definition, instance or structure needs proof steps only for content that needs explaining, such as a recursion, a proof field or a termination argument; its statement describes what it defines. A theorem needs at least one step.',
-  'Use the dependency statements as proved results; do not prove them again. Write mathematics in LaTeX ($...$). Write prose in INPUT.language (zh: Chinese, en: English); keep Lean names unchanged.',
+  'Use the dependency statements as proved results; do not prove them again. Write mathematics in LaTeX ($...$). Write Lean names, tactics and Lean expressions as inline code (`Nat.two_mul`), never inside $...$, where TeX reads _ as a subscript and drops spaces. Write prose in INPUT.language (zh: Chinese, en: English); keep Lean names unchanged.',
   'overview is null unless INPUT.batch.final is true. In the final batch it explains how the declarations combine to prove the target.',
   'problemStatement, when present, is the informal problem the proof was written for; use it only for vocabulary. If it differs from the Lean statement, follow Lean.',
   'When INPUT.feedback is present it lists host check failures or auditor findings about previousOutput. Check each against the Lean source, fix the explanation and keep the parts that were not challenged.',

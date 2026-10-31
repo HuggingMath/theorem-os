@@ -11,7 +11,8 @@ import { attachInformalizationGoals, informalizationExtractionQuery, informaliza
 import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS,
   assertInformalizationEvidence, informalizationAuditApproved, informalizationAuditFeedback, informalizationAuditInput,
   informalizationAuditRejections, informalizationBatches, informalizationExcerptCoverage, informalizationRoleInstructions,
-  informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterRejections, readInformalizationArtifact,
+  informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterRejections, informalizationWriterSubmissionRejections,
+  readInformalizationArtifact,
   readInformalizationRequest, renderInformalization, type InformalizationAlignedAuditOutput, type InformalizationAlignedSection,
   type InformalizationAuditInput, type InformalizationAuditOutput, type InformalizationSection,
   type InformalizationWriterInput, type InformalizationWriterOutput } from '../src/math/informalization';
@@ -247,6 +248,44 @@ describe('host checks', () => {
     const input = writerInput(0);
     expect(informalizationWriterRejections(input, { ...explain(input), overview: 'Too early.' }))
       .toEqual(['overview must be null before the final batch']);
+  });
+
+  it.each([
+    ['a step', (o: InformalizationWriterOutput) => { o.sections[0]!.proof[0]!.text = '由 $Nat.two_mul n$ 得 $2n = n + n$。'; },
+      'double_eq step 1: write the Lean name Nat.two_mul as `code`, not inside $...$: Nat.two_mul n'],
+    ['a title', (o: InformalizationWriterOutput) => { o.sections[0]!.title = '引理 $double\\_eq$ 与 $two_mul$'; },
+      'double_eq title: write the Lean name two_mul as `code`, not inside $...$: two_mul'],
+    ['a statement', (o: InformalizationWriterOutput) => { o.sections[1]!.statement = '\\[double\\ (n + 0) = 2n \\text{ by } double_eq\\]'; },
+      'double_add_zero statement: write the Lean name double_eq as `code`, not inside $...$: double\\ (n + 0) = 2n \\text{ by } double_eq'],
+    ['a display formula', (o: InformalizationWriterOutput) => { o.sections[1]!.proof[0]!.text = '用 $$Eq.mpr$$ 改写。'; },
+      'double_add_zero step 1: write the Lean name Eq.mpr as `code`, not inside $...$: Eq.mpr'],
+    ['the overview', (o: InformalizationWriterOutput) => { o.overview = '先证 $lib_fact.$，再合并。'; },
+      'overview: write the Lean name lib_fact as `code`, not inside $...$: lib_fact.'],
+  ])('asks for a Lean name inside a formula in %s to be written as code', (_name, edit, problem) => {
+    const input = writerInput(1), output = explain(input); edit(output);
+    expect(informalizationWriterSubmissionRejections(input, output)).toEqual([problem]);
+    // Not part of the evidence check: explanations approved before the rule stay valid.
+    expect(informalizationWriterRejections(input, output)).toEqual([]);
+  });
+
+  it('leaves mathematics, inline code and escaped dollars in prose alone', () => {
+    const input = writerInput(1);
+    expect(informalizationWriterSubmissionRejections(input, explain(input, sections => {
+      sections[0]!.title = '$a_n$ 与 `Nat.two_mul`';
+      sections[0]!.statement = '对 $n : \\mathbb{N}$，$double\\ n = 2n$（`double n = 2 * n`）。';
+      sections[0]!.proof[0]!.text = '由 ``$Nat.two_mul n$`` 即 $2 \\cdot n = n + n$；价格 \\$3 与 Nat.two_mul 和 \\$4。';
+      sections[1]!.proof[0]!.text = '**由 $n + 0 = n$ 得** Eq.mpr 之后 $f_{k}$ 与 $\\mathrm{Nat.two\\_mul}$。';
+    }))).toEqual([]);
+    // Bold text is read on its own, as on the page, so its dollar sign does not pair with one after it.
+    expect(informalizationWriterSubmissionRejections(input, explain(input, sections => {
+      sections[0]!.proof[0]!.text = '**价格 $5** 用 Nat.two_mul 和 $3';
+    }))).toEqual([]);
+  });
+
+  it('reports the host checks before the formula rule', () => {
+    const input = writerInput(1), output = explain(input, sections => { sections[0]!.proof[0]!.text = '$Nat.two_mul$'; });
+    output.inputDigest = '0'.repeat(64);
+    expect(informalizationWriterSubmissionRejections(input, output)).toEqual(['inputDigest must equal INPUT.inputDigest']);
   });
 
   it('shows auditors the Lean proof and the explanation only', () => {
@@ -730,6 +769,16 @@ describe('informalization runner', () => {
     expect(writes[3]!.input.feedback).toContain('double_add_zero: the Lean proof uses double_eq; cite each in the step that uses it');
     expect((writes[3]!.input.previousOutput as InformalizationWriterOutput).sections[1]!.proof[0]!.uses).toEqual(['lib_fact']);
     // Rejected outputs are not audited.
+    expect(agent.calls.filter(call => call.role === 'audit')).toHaveLength(4);
+  });
+
+  it('returns a Lean name inside a formula to the writer before audit', async () => {
+    const r = runner(), agent = presetAgent({ write: (input, count) => count === 2 ?
+      explain(input, sections => { sections[0]!.proof[0]!.text = 'By $Nat.two_mul n$.'; }) : explain(input) });
+    expect(await r.run(agent)).toMatchObject({ status: 'approved', approvedBatches: 2, rounds: 3 });
+    const writes = agent.calls.filter(call => call.role === 'write');
+    expect(writes.map(call => [call.batch, call.round])).toEqual([[0, 1], [1, 1], [1, 2]]);
+    expect(writes[2]!.input.feedback).toContain('double_eq step 1: write the Lean name Nat.two_mul as `code`, not inside $...$: Nat.two_mul n');
     expect(agent.calls.filter(call => call.role === 'audit')).toHaveLength(4);
   });
 

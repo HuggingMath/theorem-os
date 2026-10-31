@@ -18,7 +18,7 @@ import { informalizationAlignedAuditOutputSchema, informalizationAlignedWriterOu
   informalizationAuditFeedback, informalizationAuditInput, informalizationAuditOutputSchema, informalizationAuditRejections,
   informalizationBatches, informalizationDigest, informalizationEvidence, informalizationRejectionFeedback,
   informalizationRoleInstructions, informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterOutputSchema,
-  informalizationWriterOutputSchemaFor, informalizationWriterRejections,
+  informalizationWriterOutputSchemaFor, informalizationWriterSubmissionRejections,
   readInformalizationArtifact, readInformalizationRequest, writeInformalizationArtifact,
   type InformalizationAuditOutput, type InformalizationEvidence, type InformalizationRequest, type InformalizationRole,
   type InformalizationSection, type InformalizationWriterOutput } from '../math/informalization';
@@ -324,9 +324,9 @@ export async function runInformalization(directory: string, root: string, option
             const writerInput = informalizationWriterInput({ ...context, round, problemStatement: request.statement,
               feedback: record.feedback ?? null, previousOutput: record.previous ?? null });
             const written = await dispatch({ role: 'write', batch: batch.index, round, attempt: 1 }, writerInput,
-              value => informalizationWriterRejections(writerInput, value));
+              value => informalizationWriterSubmissionRejections(writerInput, value));
             const problems = written === undefined ? ['OUTPUT.json was not written as complete JSON'] :
-              informalizationWriterRejections(writerInput, written);
+              informalizationWriterSubmissionRejections(writerInput, written);
             if (problems.length) {
               const parsed = informalizationWriterOutputSchemaFor(request.alignment).safeParse(written);
               record.feedback = informalizationRejectionFeedback(problems);
