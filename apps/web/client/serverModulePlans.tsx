@@ -1,6 +1,6 @@
 import type { ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { createElement, errorText, type WebApi } from './collaborationUi';
-import type { KnowledgeCatalog } from './knowledgeView';
+import { catalogLabel, type KnowledgeCatalog } from './knowledgeView';
 import { renderSection } from './ui/Section';
 import { localizeText, t } from '../i18n';
 
@@ -105,7 +105,7 @@ export class ServerModulePlans {
     finally { this.loading = false; this.render(); }
   }
   private catalogOptions() {
-    const options = (this.catalogs ?? []).map(catalog => <option key={catalog.digest} value={catalog.digest}>{t('{0} · {1} 定理', catalog.digest.slice(0, 16), catalog.entries)}</option>);
+    const options = (this.catalogs ?? []).map(catalog => <option key={catalog.digest} value={catalog.digest} title={catalog.digest}>{catalogLabel(catalog)}</option>);
     if (this.digest && !this.catalogs?.some(catalog => catalog.digest === this.digest)) options.push(<option key={this.digest} value={this.digest}>{t('{0} · 待核对目录', this.digest)}</option>);
     return options;
   }
