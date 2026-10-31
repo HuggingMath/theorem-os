@@ -2,9 +2,6 @@
 export const app: Record<string, string> = {
   "在当前编辑内容中定位；Esc 返回编辑，查找时 Enter / Shift+Enter 切换下一个 / 上一个匹配。Ctrl / ⌘ H 打开替换，替换框中 Enter 替换当前匹配。查找和替换均按字面文本处理。": "Navigate the current edit. Esc returns to editing; while finding, Enter / Shift+Enter move to the next / previous match. Ctrl / ⌘ H opens replace, and Enter in the replace box replaces the current match. Find and replace use literal text.",
   "研究协作": "Collaboration",
-  "模块": "Modules",
-  "概览": "Overview",
-  "报告": "Report",
   "活动": "Activity",
   "协作": "Collaboration",
   "证明": "Proof",
