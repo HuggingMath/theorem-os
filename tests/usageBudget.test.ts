@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateUsage, attributeTaskUsage, beginRequestUsage, buildTokenBudget, initializeRequestUsageAccounting, initializeUsageAccounting,
+import { aggregateUsage, allowanceReached, attributeTaskUsage, beginRequestUsage, buildTokenBudget, initializeRequestUsageAccounting, initializeUsageAccounting,
   modelDispatchAllowed, recordThreadUsage, reportedTotalTokens, type RequestUsageAccounting, type UsageAccounting } from '../src/solver/usageBudget';
 import type { SolverRunState } from '../src/solver/archive';
 import { ResearchUsage } from '../src/solver/researchUsage';
@@ -64,6 +64,13 @@ describe('provider observed token dispatch budget', () => {
     expect(modelDispatchAllowed(reached)).toBe(false);
     records[1].usage.totalTokens = 75;
     expect(buildTokenBudget(100, records)).toMatchObject({ reportedTotalTokens: 135, overrunTokens: 35 });
+  });
+
+  it('counts only reported totals when deciding to stop turns in flight', () => {
+    const records = [{ turns: 1, usage: { totalTokens: 60 } }, { turns: 1, usage: {} }, { turns: 1, usage: { totalTokens: -5 } }];
+    expect(allowanceReached(61, records)).toBe(false);
+    expect(allowanceReached(60, records)).toBe(true);
+    expect(allowanceReached(0, records)).toBe(false);
   });
 
   it('allows parallel in-flight requests before telemetry arrives, then fails closed for missing completed usage', () => {

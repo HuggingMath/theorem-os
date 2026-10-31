@@ -12,6 +12,7 @@ import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } f
 import { readFormalizationState, runFormalization } from '../src/solver/formalization';
 import { compareFormalizationReference } from '../src/solver/formalizationReference';
 import { buildFixture, candidateFixture, fixtureStatement, semanticReviewFixture, syntheticElaboration } from './helpers/formalizationFixture';
+import { longTurns } from './helpers/longTurn';
 
 // Disposable protocol/continuation fixtures; these are not model or Lean accuracy measurements.
 const roots: string[] = [];
@@ -206,6 +207,27 @@ describe('formalization stage recovery', () => {
     expect(agent.seen).toHaveLength(1); expect(waitForRetry).not.toHaveBeenCalled();
     expect(readFormalizationState(f.directory)!.sessions[0]).toMatchObject({ usage: { totalTokens: 1 },
       usageAccounting: { startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false } });
+  });
+
+  it('interrupts a turn whose own requests reach the token cap', async () => {
+    const f = fixture(3), agent = longTurns(recoveryAgent(undefined, upstream).open, name => name === 'plan-1');
+    const waitForRetry = vi.fn(async () => {});
+    expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate: f.elaborate, waitForRetry }))
+      .toMatchObject({ status: 'stopped', candidatesTried: 0, error: 'math_total_token_limit',
+        tokenBudget: { status: 'exhausted', reportedTotalTokens: 3 } });
+    expect(agent.stopped).toEqual(['plan-1']); expect(waitForRetry).not.toHaveBeenCalled();
+    expect(readFormalizationState(f.directory)!.sessions.map(item => item.status)).toEqual(['interrupted']);
+  });
+
+  it('interrupts every parallel reviewer once their combined usage reaches the cap', async () => {
+    const f = fixture(10), agent = longTurns(recoveryAgent(undefined, upstream).open, name => name.startsWith('compare-'));
+    expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate: f.elaborate, waitForRetry: async () => {} }))
+      .toMatchObject({ status: 'stopped', candidatesTried: 1, error: 'math_total_token_limit',
+        tokenBudget: { status: 'exhausted', reportedTotalTokens: 10 } });
+    expect(agent.stopped.sort()).toEqual(['compare-reviewer-1', 'compare-reviewer-2']);
+    expect(readFormalizationState(f.directory)!.sessions.map(item => item.status))
+      .toEqual(['completed', 'completed', 'completed', 'interrupted', 'interrupted']);
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
   });
 
   it('resumes the active finite round, reusing completed roles and compilation without recounting the candidate', async () => {

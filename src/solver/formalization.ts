@@ -38,7 +38,7 @@ import { parseLeanStatementContexts } from '../math/leanStatementContext';
 import { allowsOmittedLibraryContext, hasStructureContext } from '../math/leanStatementSemantic';
 import { assertFormalizationRetrieval, formalizationRetrievalSchema, retrieveFormalizationPlan } from '../math/formalizationRetrieval';
 import type { lookupLeanLibrarySymbols } from '../math/leanLibrarySymbols';
-import { buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed, reportedTotalTokens, type UsageAccounting } from './usageBudget';
+import { allowanceReached, buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed, reportedTotalTokens, type UsageAccounting } from './usageBudget';
 import { acquireMathModelSlot, configuredMathModelSlots, type MathModelSlot } from '../math/mathModelSlot';
 import { FORMALIZATION_FALSIFICATION_AUTHOR_INSTRUCTIONS, FORMALIZATION_FALSIFICATION_REVIEW_INSTRUCTIONS,
   FORMALIZATION_REFUTE_INSTRUCTIONS, formalizationRefutationInput, formalizationRefutationOutputSchema,
@@ -247,6 +247,9 @@ export async function runFormalization(directory: string, root: string, options:
       };
       const summary = () => summarizeRun(directory, request, state);
       const event = (name: string, role?: Role, error?: string) => options.onEvent?.({ event: name, round: state.rounds, role, error });
+      // Roles in flight; reported usage reaching the allowance stops all of them, not only the next dispatch.
+      const running = new Set<() => void>();
+      const spent = () => allowanceReached(request.maxTotalTokens, state.sessions);
       const dispatchOnce = async (role: Role, roundDirectory: string, input: unknown, inputDigest: string,
         slot?: { reviewerId?: string; name?: string; requireCached?: boolean }) => {
         lease.signal.throwIfAborted();
@@ -358,9 +361,11 @@ export async function runFormalization(directory: string, root: string, options:
         // The advisory refuter may have its own, shorter turn bound.
         const turnTimeout = Math.min(stageTimeout(request.maxTurnSeconds),
           role === 'refute' && request.falsification?.maxTurnSeconds ? request.falsification.maxTurnSeconds * 1000 : Infinity);
-        let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined;
+        let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined, stopped = false;
         const interrupt = () => { void session?.interrupt().catch(() => {}); void session?.close().catch(() => {}); };
+        const stop = () => { stopped = true; interrupt(); };
         lease.signal.addEventListener('abort', interrupt, { once: true });
+        running.add(stop);
         try {
           // Host-side admission control across every process sharing the model
           // gateway. Preset sessions neither open a model nor consume a slot.
@@ -377,23 +382,30 @@ export async function runFormalization(directory: string, root: string, options:
             turnTimeoutMs: Number.isFinite(turnTimeout) ? turnTimeout : undefined,
             ...(request.execution === 'model' ? { readIsolation: { environment: request.environment } } : {}),
             completedOutput: { file: outputFile, validate: value => { validateOutput(value); } },
-            onUsage: usage => { record.usage = usage; save(); }, onUsageIncomplete: () => { incomplete = true; },
+            onUsage: usage => {
+              record.usage = usage; save();
+              if (spent()) for (const stopRole of running) stopRole();
+            }, onUsageIncomplete: () => { incomplete = true; },
           });
           if (session.isolationReceipt) record.isolationReceipt = session.isolationReceipt;
           if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
+          if (stopped || spent()) throw new Error('math_total_token_limit');
           record.threadId = session.threadId;
           if (state.sessions.some(item => item !== record && item.threadId === record.threadId))
             throw new Error('formalization_role_thread_reused');
           record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true;
           record.status = 'running'; save();
-          record.status = await session.run(request.fidelityPolicy ?
+          const ran = session.run(request.fidelityPolicy ?
             'Follow the complete role protocol in the developer instructions. Read OUTPUT.schema.json and INPUT.json, write OUTPUT.json atomically using that contract, then stop. ROLE.md is the same protocol and need not be reread.' :
             'Read ROLE.md, OUTPUT.schema.json and INPUT.json in the current directory. Produce OUTPUT.json using that exact contract. The complete protocol is in these files; no runtime source search or theorem proof is required.',
             crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
+          // A turn stopped at the allowance ends the run; one that still finished keeps its output.
+          record.status = await ran.catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });
           lease.signal.throwIfAborted();
           if (record.status === 'submitted') record.completionReason = 'validated-output';
           if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
             if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
+            if (stopped) throw new Error('math_total_token_limit');
             throw new FormalizationRoleFailure(record.status, session.lastFailureDiagnostic);
           }
           // Stop the writer before parsing or binding a submitted output.
@@ -410,8 +422,9 @@ export async function runFormalization(directory: string, root: string, options:
         } finally {
           await session?.close();
           await modelSlot?.release();
-          if (['opening', 'running'].includes(record.status)) record.status = lease.signal.aborted ? 'interrupted' : 'failed';
+          if (['opening', 'running'].includes(record.status)) record.status = lease.signal.aborted || stopped ? 'interrupted' : 'failed';
           lease.signal.removeEventListener('abort', interrupt);
+          running.delete(stop);
           record.usageAccounting.pending = false;
           record.usageAccounting.reportedTurns = reportedTotalTokens(record.usage) !== null && !incomplete ? 1 : 0;
           record.usageAccounting.incomplete = incomplete || (record.usageAccounting.startedTurns > record.usageAccounting.reportedTurns);

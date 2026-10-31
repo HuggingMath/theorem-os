@@ -11,7 +11,7 @@ import { assertMathCanonicalPath, isMathPathWithin, repositoryRelativePath } fro
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { formalizationModelConfigurationDigest } from '../math/formalizationWorkflow';
-import { buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed, reportedTotalTokens, type UsageAccounting } from './usageBudget';
+import { allowanceReached, buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed, reportedTotalTokens, type UsageAccounting } from './usageBudget';
 import { acquireMathModelSlot, configuredMathModelSlots, type MathModelSlot } from '../math/mathModelSlot';
 import { informalizationOutlineSchema, type InformalizationOutline } from '../math/informalizationExtraction';
 import { informalizationAlignedAuditOutputSchema, informalizationAlignedWriterOutputSchema, informalizationAuditApproved,
@@ -154,6 +154,9 @@ export async function runInformalization(directory: string, root: string, option
       const event = (name: string, detail: { batch?: number; round?: number; role?: InformalizationRole; error?: string } = {}) =>
         options.onEvent?.({ event: name, ...detail });
       type Slot = { role: InformalizationRole; batch: number; round: number; attempt: number; auditorId?: string };
+      // Roles in flight; reported usage reaching the allowance stops all of them, not only the next dispatch.
+      const running = new Set<() => void>();
+      const spent = () => allowanceReached(request.maxTotalTokens, state.sessions);
       const dispatchOnce = async (slot: Slot, input: { inputDigest: string }, check: (value: unknown) => string[]): Promise<unknown> => {
         lease.signal.throwIfAborted();
         if (remaining() <= 0) throw new Error('informalization_time_limit');
@@ -208,9 +211,11 @@ export async function runInformalization(directory: string, root: string, option
           turns: 0, usage: {}, usageAccounting: { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false } };
         state.sessions.push(record); save(); event('informalization_role_started', slot);
         const turnTimeout = stageTimeout(request.maxTurnSeconds);
-        let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined;
+        let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined, stopped = false;
         const interrupt = () => { void session?.interrupt().catch(() => {}); void session?.close().catch(() => {}); };
+        const stop = () => { stopped = true; interrupt(); };
         lease.signal.addEventListener('abort', interrupt, { once: true });
+        running.add(stop);
         try {
           // Host-side admission control across every process sharing the model gateway.
           const slotConfiguration = options.openSession ? undefined : configuredMathModelSlots();
@@ -226,18 +231,25 @@ export async function runInformalization(directory: string, root: string, option
             completedOutput: { file: outputFile,
               validate: value => { const problems = check(value); if (problems.length) throw new OutputRejected(problems); },
               validationFeedback: error => informalizationRejectionFeedback(error instanceof OutputRejected ? error.problems : [errorText(error)]) },
-            onUsage: usage => { record.usage = usage; save(); }, onUsageIncomplete: () => { incomplete = true; },
+            onUsage: usage => {
+              record.usage = usage; save();
+              if (spent()) for (const stopRole of running) stopRole();
+            }, onUsageIncomplete: () => { incomplete = true; },
           });
           if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
+          if (stopped || spent()) throw new Error('math_total_token_limit');
           record.threadId = session.threadId;
           if (state.sessions.some(item => item !== record && item.threadId === record.threadId))
             throw new Error('informalization_role_thread_reused');
           record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true;
           record.status = 'running'; save();
-          record.status = await session.run(ROLE_PROMPT, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
+          // A turn stopped at the allowance ends the run; one that still finished keeps its output.
+          record.status = await session.run(ROLE_PROMPT, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); })
+            .catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });
           lease.signal.throwIfAborted();
           if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
             if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
+            if (stopped) throw new Error('math_total_token_limit');
             throw new InformalizationRoleFailure(record.status, session.lastFailureDiagnostic);
           }
           await session.close();
@@ -252,8 +264,9 @@ export async function runInformalization(directory: string, root: string, option
         } finally {
           await session?.close();
           await modelSlot?.release();
-          if (['opening', 'running'].includes(record.status)) record.status = lease.signal.aborted ? 'interrupted' : 'failed';
+          if (['opening', 'running'].includes(record.status)) record.status = lease.signal.aborted || stopped ? 'interrupted' : 'failed';
           lease.signal.removeEventListener('abort', interrupt);
+          running.delete(stop);
           record.usageAccounting.pending = false;
           record.usageAccounting.reportedTurns = reportedTotalTokens(record.usage) !== null && !incomplete ? 1 : 0;
           record.usageAccounting.incomplete = incomplete || (record.usageAccounting.startedTurns > record.usageAccounting.reportedTurns);

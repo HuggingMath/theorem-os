@@ -24,6 +24,7 @@ import { INFORMALIZATION_NONCE, LIB_SOURCE, PROOF_SOURCE, informalizationFixture
   informalizationSources, sourceRange } from './helpers/informalizationFixture';
 import { ADDITION_PROOF, approvedFormalization } from './helpers/approvedFormalizationFixture';
 import { fixtureStatement } from './helpers/formalizationFixture';
+import { longTurns } from './helpers/longTurn';
 
 // Protocol and host-check fixtures with preset roles; these are not model or Lean accuracy measurements.
 const forbidden = vi.hoisted(() => ({ model: vi.fn(async () => { throw new Error('model_must_not_open'); }) }));
@@ -922,6 +923,14 @@ describe('informalization runner', () => {
     expect(await r.run(agent)).toMatchObject({ status: 'stopped', error: 'math_total_token_limit',
       tokenBudget: { status: 'exhausted', reportedTotalTokens: 1 } });
     expect(agent.calls).toHaveLength(1);
+  });
+
+  it('interrupts both auditors once their combined usage reaches the token limit', async () => {
+    const r = runner({ maxTotalTokens: 8 }), agent = presetAgent(), long = longTurns(agent.open, name => name.startsWith('audit-'));
+    expect(await r.run({ ...agent, open: long.open })).toMatchObject({ status: 'stopped', error: 'math_total_token_limit',
+      tokenBudget: { status: 'exhausted', reportedTotalTokens: 8 } });
+    expect(long.stopped.sort()).toEqual(['audit-auditor-1-1', 'audit-auditor-2-1']);
+    expect(readInformalizationState(r.directory)!.sessions.map(item => item.status)).toEqual(['completed', 'interrupted', 'interrupted']);
   });
 });
 

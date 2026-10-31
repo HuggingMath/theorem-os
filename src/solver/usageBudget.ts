@@ -176,3 +176,11 @@ export function buildTokenBudget(maxTotalTokens: number, records: readonly Usage
 
 export const modelDispatchAllowed = (budget: TokenBudget): boolean =>
   budget.status === 'unlimited' || budget.status === 'available';
+
+/** Whether reported consumption has reached a finite allowance, for stopping turns already in flight; unreported usage adds nothing. */
+export function allowanceReached(maxTotalTokens: number, records: readonly UsageRecord[]): boolean {
+  if (!maxTotalTokens) return false;
+  let total = 0;
+  for (const record of records) total += reportedTotalTokens(record.usage) ?? 0;
+  return total >= maxTotalTokens;
+}
