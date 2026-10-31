@@ -1,5 +1,6 @@
 import type { WebFormalizationCorrespondence } from '../shared';
 import { t } from '../i18n';
+import { wholeQuotes } from './explainText';
 import { Rich, type RichLink } from './richText';
 import { Icon } from './ui/Icon';
 
@@ -19,9 +20,20 @@ const relationTone: Record<WebFormalizationCorrespondence['relation'], string> =
   direct: 'passed', equivalent: 'passed', mismatch: 'failed', unresolved: 'warning',
 };
 
+/**
+ * The correspondences marked in the original: those found in it, less any quoting the whole problem when a finer
+ * fragment is marked, since a mark over everything would cover the others.
+ */
+export function originalMarks(original: string, correspondences: readonly WebFormalizationCorrespondence[]): Set<number> {
+  const found = correspondences.map(item => item.originalStart === null ? null : item.original);
+  const whole = wholeQuotes(original, found);
+  return new Set(found.flatMap((quote, index) => quote !== null && !whole.has(index) ? [index] : []));
+}
+
 /** The original problem with the fragments the reviewers matched marked; pointing at one marks its Lean. */
 export function OriginalText(props: { original: string; correspondences: readonly WebFormalizationCorrespondence[] }) {
-  const links: RichLink[] = props.correspondences.flatMap((item, index) => item.originalStart === null || item.originalEnd === null ? [] : [{
+  const marks = originalMarks(props.original, props.correspondences);
+  const links: RichLink[] = props.correspondences.flatMap((item, index) => !marks.has(index) || item.originalStart === null || item.originalEnd === null ? [] : [{
     start: item.originalStart, end: item.originalEnd, attributes: { 'data-action': 'correspondence', 'data-correspondence': index },
     className: `is-${item.relation}`, title: `${aspectLabels[item.aspect]} · ${relationLabels[item.relation]}` }]);
   return <p class="explain-rich formal-original"><Rich text={props.original} links={links} /></p>;
@@ -51,7 +63,7 @@ export function Correspondences(props: { correspondences: readonly WebFormalizat
 
 /** The explanation page's 「原题」 card: the original problem, and the reviewed correspondences folded below it. */
 export function ProblemCard(props: { problemId: string; original: string; correspondences: readonly WebFormalizationCorrespondence[] }) {
-  const located = props.correspondences.some(item => item.originalStart !== null);
+  const located = originalMarks(props.original, props.correspondences).size > 0;
   return <section class="explain-section formal-problem" aria-labelledby="explain-problem-heading">
     <header class="explain-section-head">
       <div class="explain-section-meta"><span class="badge">{t('形式化')}</span><code translate={false}>{props.problemId}</code></div>
@@ -59,7 +71,7 @@ export function ProblemCard(props: { problemId: string; original: string; corres
     </header>
     <OriginalText original={props.original} correspondences={props.correspondences} />
     <p class="formal-note"><Icon name="shield-check" /><span>{located
-      ? t('主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。点原文中划线的片段，左边标出对应的 Lean。')
+      ? t('主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。点原文中划线的片段，标出对应的 Lean。')
       : t('主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。')}</span></p>
     {props.correspondences.length > 0 && <details class="explain-reviews formal-problem-details">
       <summary>{t('原题与 Lean 陈述的对照 ({0})', props.correspondences.length)}</summary>

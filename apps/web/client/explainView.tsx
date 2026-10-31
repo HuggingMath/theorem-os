@@ -150,7 +150,7 @@ function DocumentView({ document, active, gap }: { document: WebExplanationDocum
     <section class="explain-overview" aria-labelledby="explain-overview-heading"><h3 id="explain-overview-heading">{t('证明思路')}</h3>
       <p class="explain-rich"><Rich text={document.overview} /></p>
       {linkedDocument(document) && <p class="formal-note"><Icon name="locate-fixed" />
-        <span>{t('讲解中划虚线的短语逐个对应一段 Lean，点它在左边标出；审核模型核对过每一对。')}</span></p>}</section>
+        <span>{t('讲解中划虚线的短语逐个对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</span></p>}</section>
     {document.sections.map((section, index) => <SectionView key={section.name} section={section} index={index} owned={owned}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
     <Footer document={document} />

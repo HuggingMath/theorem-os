@@ -32,10 +32,13 @@ const reviewsOf = (evidence: FormalizationEvidence): Review[] => evidence.workfl
   : [{ reviewer: 'reviewer', review: evidence.review }];
 const relationRank = { direct: 0, equivalent: 1, unresolved: 2, mismatch: 3 } as const;
 const position = (value: number | null) => value ?? Number.MAX_SAFE_INTEGER;
+/** A statement fragment's trailing proof hole (`:= by sorry`), which a proof of that statement replaces. */
+const PROOF_HOLE = /\s*:=\s*(?:by\s+)?sorry\s*$/u;
 
 /**
  * The structured reviews' fragment correspondences, one per distinct (aspect, original, Lean) triple with the weakest
  * relation any reviewer gave it, and where its Lean fragment is written inside `regions` of `source` (comments skipped).
+ * A fragment that ends in the statement's proof hole is found without it, since a proof's header stops at `:=`.
  */
 export function formalizationCorrespondences(evidence: FormalizationEvidence, source: string,
   regions: readonly SourceOffsets[]): WebFormalizationCorrespondence[] {
@@ -52,7 +55,9 @@ export function formalizationCorrespondences(evidence: FormalizationEvidence, so
         if (explanation && !found.explanations.includes(explanation)) found.explanations.push(explanation);
         continue;
       }
-      const at = original.indexOf(item.originalFragment), place = findWithin(masked, item.candidateFragment, regions);
+      const at = original.indexOf(item.originalFragment), header = item.candidateFragment.replace(PROOF_HOLE, '');
+      const place = findWithin(masked, item.candidateFragment, regions) ?? (header && header !== item.candidateFragment
+        ? findWithin(masked, header, regions) : undefined);
       merged.set(key, { aspect: item.aspect, relation: item.relation, original: item.originalFragment,
         originalStart: at < 0 ? null : at, originalEnd: at < 0 ? null : at + item.originalFragment.length,
         leanText: item.candidateFragment, lean: place ? fileSpans(text, place) : [], reviewers: 1,

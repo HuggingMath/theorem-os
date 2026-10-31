@@ -210,6 +210,23 @@ export function linkedProse(text: string, links: readonly { start: number; end: 
     return segments.length ? [run.link === undefined ? { segments } : { segments, link: run.link }] : [];
   });
 }
+
+const collapse = (text: string) => text.replace(/\s+/gu, ' ').trim();
+/**
+ * Which quotes cover all of `whole` (nothing but spaces and punctuation outside them), when some other quote marks a
+ * smaller part. A reviewer quoting the whole problem or the whole Lean file says nothing about where its Lean is, and
+ * marking it would cover every finer fragment; `null` is a quote that is not placed in `whole`.
+ */
+export function wholeQuotes(whole: string, quotes: readonly (string | null)[]): Set<number> {
+  const text = collapse(whole);
+  const covers = (quote: string) => {
+    const at = text.indexOf(collapse(quote));
+    return at >= 0 && !/[^\s\p{P}]/u.test(text.slice(0, at) + text.slice(at + collapse(quote).length));
+  };
+  const found = quotes.map(quote => quote !== null && covers(quote));
+  if (!quotes.some((quote, index) => quote !== null && !found[index])) return new Set();
+  return new Set(found.flatMap((value, index) => value ? [index] : []));
+}
 /** A parsed `$…$` formula; the page renders it with plain elements and falls back to the source text on anything odd. */
 export type MathStyle = 'text' | 'roman' | 'italic' | 'bold';
 export type MathNode =

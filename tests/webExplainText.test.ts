@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorSpan, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, refLines, stepAtLine, type MathNode } from '../apps/web/client/explainText';
+import { anchorSpan, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
 import type { WebExplanationDocument, WebExplanationSection } from '../apps/web/shared';
 
 // The explanation page's pure helpers: Lean line split, line ↔ step mapping, estimate, prose and TeX reading.
@@ -142,6 +142,26 @@ describe('linked prose', () => {
     for (const links of [[], [at('自然数')], [at('+ 0', 3), at('\\$5'), at('不变')], [{ start: 0, end: PROSE.length }]])
       expect(flatten(linkedProse(PROSE, links))).toEqual(proseSegments(PROSE));
     expect(linkedProse('', [{ start: 0, end: 1 }])).toEqual([]);
+  });
+});
+
+describe('whole quotes', () => {
+  const PROBLEM = 'For a natural number n, let S(n) = 0 + 1 + ... + n.\nProve that 2 * S(n) = n * (n + 1).';
+  const LEAN = 'import Mathlib\n\ntheorem gauss : ∀ n : ℕ, 2 * S n = n * (n + 1) := by sorry\n';
+
+  it('finds a quote of all the text, up to spacing and punctuation, when a finer one is placed', () => {
+    // Missing the final period, its lines joined by a space: still the whole problem.
+    const whole = 'For a natural number n, let S(n) = 0 + 1 + ... + n. Prove that 2 * S(n) = n * (n + 1)';
+    expect(wholeQuotes(PROBLEM, [whole, '2 * S(n) = n * (n + 1).', null, PROBLEM])).toEqual(new Set([0, 3]));
+    expect(wholeQuotes(LEAN, ['import Mathlib theorem gauss : ∀ n : ℕ, 2 * S n = n * (n + 1) := by sorry', '∀ n : ℕ'])).toEqual(new Set([0]));
+  });
+
+  it('keeps them when nothing finer is placed, and a quote leaving any letter out is not whole', () => {
+    expect(wholeQuotes(PROBLEM, [PROBLEM, null, PROBLEM])).toEqual(new Set());
+    expect(wholeQuotes(PROBLEM, [PROBLEM.slice(1), 'Prove that'])).toEqual(new Set());
+    expect(wholeQuotes(LEAN, ['theorem gauss : ∀ n : ℕ, 2 * S n = n * (n + 1) := by sorry', '∀ n : ℕ'])).toEqual(new Set());
+    expect(wholeQuotes(PROBLEM, ['not in the problem', 'Prove that'])).toEqual(new Set());
+    expect(wholeQuotes('', [])).toEqual(new Set());
   });
 });
 
