@@ -6,8 +6,9 @@ import { t } from '../i18n';
 /** Structural findings carry a code; Lean's own diagnostics keep Lean's wording. */
 const codeMessages: Record<string, () => string> = {
   lean_task_input_invalid: () => t('这里有控制字符或无法编码的字符，提交时会被拒绝'),
-  lean_task_declarations_limit: () => t('声明超过 256 个，请拆分题目'),
-  lean_task_declaration_names_ambiguous: () => t('与前面的声明同名；不同命名空间里的同名声明也会被拒绝'),
+  lean_task_declarations_limit: () => t('声明超过 1024 个，请拆分题目'),
+  lean_task_declaration_names_ambiguous: () => t('与前面的声明完整名称相同（含命名空间）'),
+  lean_task_target_name_ambiguous: () => t('定理名的最后一段与另一个声明相同；即使在不同命名空间里，待证定理的名字也必须唯一'),
   lean_task_targets_missing: () => t('没有找到 theorem 或 lemma，题目至少需要一个待证定理'),
   lean_task_declaration_invalid: () => t('这里的 theorem/lemma 没有被识别为顶层定理声明，请检查名称写法，且不要用它作标识符'),
 };

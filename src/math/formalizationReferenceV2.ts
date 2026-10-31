@@ -1,7 +1,6 @@
 // Frozen bounded-binder-correspondence-v2 generator and validator for saved receipts.
 import { z } from 'zod';
-import { eraseFormalizationProofs, formalizationTargets } from './formalizationSource';
-import { LEAN_TASK_SOURCE_MAX_BYTES } from './leanTask';
+import { eraseFormalizationProofs, FORMALIZATION_SOURCE_MAX_BYTES, formalizationTargets } from './formalizationSource';
 import { getLeanTaskEnvironment } from './leanTaskEnvironment';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from './leanSource';
 import { isSimpleLeanName, leanScopeCommands, maskLeanCommentsAndStrings } from './leanSyntax';
@@ -11,13 +10,13 @@ import { LAKE_CONFIGURATION_FILES } from './mathConstructionSources';
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const target = z.string().max(1000).refine(isSimpleLeanName);
 export const formalizationReferenceInputSchema = z.object({
-  candidateSource: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
-  referenceSource: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
+  candidateSource: z.string().min(1).max(FORMALIZATION_SOURCE_MAX_BYTES),
+  referenceSource: z.string().min(1).max(FORMALIZATION_SOURCE_MAX_BYTES),
   environment: z.enum(['standard', 'mathlib']),
   pairs: z.array(z.object({ candidateTarget: target, referenceTarget: target }).strict()).min(1).max(16),
 }).strict().superRefine((input, context) => {
-  if (Buffer.byteLength(input.candidateSource) > LEAN_TASK_SOURCE_MAX_BYTES ||
-      Buffer.byteLength(input.referenceSource) > LEAN_TASK_SOURCE_MAX_BYTES ||
+  if (Buffer.byteLength(input.candidateSource) > FORMALIZATION_SOURCE_MAX_BYTES ||
+      Buffer.byteLength(input.referenceSource) > FORMALIZATION_SOURCE_MAX_BYTES ||
       new Set(input.pairs.map(pair => pair.candidateTarget)).size !== input.pairs.length ||
       new Set(input.pairs.map(pair => pair.referenceTarget)).size !== input.pairs.length)
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'reference_input_invalid' });

@@ -1,4 +1,3 @@
-import { LEAN_TASK_SOURCE_MAX_BYTES } from './leanTask';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from './leanSource';
 import { isSimpleLeanName, maskLeanComments, maskLeanCommentsAndStrings } from './leanSyntax';
 import { mathDigest } from './mathRuntimeIo';
@@ -69,8 +68,11 @@ function assertSupportedCommands(cleaned: string, regions: ReturnType<typeof ins
   if (binders.length) throw new Error('formalization_unsupported_declaration');
 }
 
+/** Generated and reference statements stay at 128 KiB; the Lean task limit (leanTask.ts) is 1 MiB for prepared statements. */
+export const FORMALIZATION_SOURCE_MAX_BYTES = 128 * 1024;
+
 function inspectFormalizationSource(source: string) {
-  if (!source || Buffer.byteLength(source, 'utf8') > LEAN_TASK_SOURCE_MAX_BYTES ||
+  if (!source || Buffer.byteLength(source, 'utf8') > FORMALIZATION_SOURCE_MAX_BYTES ||
       Buffer.from(source, 'utf8').toString('utf8') !== source || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(source))
     throw new Error('formalization_source_invalid');
   const statement = maskLeanComments(source), cleaned = admissionText(source);

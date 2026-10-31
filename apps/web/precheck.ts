@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
+import { LEAN_TASK_DECLARATIONS_MAX } from '../../src/math/leanTask';
 import { maskLeanCommentsAndStrings } from '../../src/math/leanSyntax';
 import type { WebEnvironment, WebPrecheck, WebPrecheckDiagnostic } from './shared';
 
@@ -26,15 +27,23 @@ export function inspectStatement(source: string): WebPrecheckDiagnostic[] {
   const invalid = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]/u.exec(source);
   if (invalid) { add('lean_task_input_invalid', invalid.index); return found; }
   const declarations = inspectScopedLeanDeclarations(source);
-  if (declarations.length > 256) { add('lean_task_declarations_limit', declarations[256].startOffset); return found; }
-  const seen = new Set<string>();
-  for (const declaration of declarations) {
-    const name = declaration.name.split('.').at(-1)!;
-    if (seen.has(name)) add('lean_task_declaration_names_ambiguous', declaration.startOffset, name);
-    seen.add(name);
+  if (declarations.length > LEAN_TASK_DECLARATIONS_MAX) {
+    add('lean_task_declarations_limit', declarations[LEAN_TASK_DECLARATIONS_MAX].startOffset); return found;
+  }
+  const seen = new Set<string>(), repeats = new Set<number>();
+  for (const { qualifiedName, startOffset } of declarations) {
+    if (seen.has(qualifiedName)) { add('lean_task_declaration_names_ambiguous', startOffset, qualifiedName); repeats.add(startOffset); }
+    seen.add(qualifiedName);
   }
   const targets = new Set(declarations.filter(item => item.kind === 'theorem').map(item => item.startOffset));
   if (!targets.size) add('lean_task_targets_missing', 0);
+  // Targets are found by their final name component, which a theorem may not share with a differently named declaration.
+  const local = (name: string) => name.split('.').at(-1)!, full = new Map<string, Set<string>>();
+  for (const { name, qualifiedName } of declarations) full.set(local(name), (full.get(local(name)) ?? new Set()).add(qualifiedName));
+  const shared = new Set(declarations.filter(item => item.kind === 'theorem' && full.get(local(item.name))!.size > 1)
+    .map(item => local(item.name)));
+  for (const { name, qualifiedName, startOffset } of declarations)
+    if (shared.has(local(name)) && !repeats.has(startOffset)) add('lean_task_target_name_ambiguous', startOffset, qualifiedName);
   for (const keyword of maskLeanCommentsAndStrings(source).matchAll(
     /(?<![\p{L}\p{M}\p{N}_'.?!])(?:theorem|lemma)(?![\p{L}\p{M}\p{N}_'.?!])/gu))
     if (!targets.has(keyword.index)) add('lean_task_declaration_invalid', keyword.index);

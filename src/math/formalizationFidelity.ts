@@ -1,10 +1,9 @@
 import { z } from 'zod';
 import type { FormalizationReferenceInput } from './formalizationReference';
 import { formalizationReferenceInputSchema } from './formalizationReference';
-import { eraseFormalizationProofs, formalizationTargets, hasErasedFormalizationProofs } from './formalizationSource';
+import { eraseFormalizationProofs, FORMALIZATION_SOURCE_MAX_BYTES, formalizationTargets, hasErasedFormalizationProofs } from './formalizationSource';
 import type { LeanStatementBindings } from './leanStatementContext';
 import type { LeanTaskEnvironment } from './leanTaskEnvironment';
-import { LEAN_TASK_SOURCE_MAX_BYTES } from './leanTask';
 import { isSimpleLeanName } from './leanSyntax';
 
 const text = z.string().min(1).refine(value => value.trim().length > 0);
@@ -20,7 +19,7 @@ export const formalizationFidelitySchema = z.object({
     binderIds: z.array(binderId), conclusionDependencies: z.array(binderId),
   }).strict()),
   sourceContract: z.object({
-    source: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
+    source: z.string().min(1).max(FORMALIZATION_SOURCE_MAX_BYTES),
     pairs: z.array(z.object({ candidateTarget: targetName, referenceTarget: targetName }).strict()),
   }).strict().nullable(),
 }).strict();

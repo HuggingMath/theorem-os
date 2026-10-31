@@ -3,7 +3,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { bootstrapLeanTask } from '../src/math/leanTask';
+import { bootstrapLeanTask, LEAN_TASK_DECLARATIONS_MAX } from '../src/math/leanTask';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
@@ -27,7 +27,8 @@ describe('statement structure, as bootstrapLeanTask sees it', () => {
   // An existing directory makes bootstrapLeanTask stop right after its input checks, without writing anything.
   const bootstrapCode = (source: string) => {
     try { bootstrapLeanTask(root, { source, task: 'Prove it.' }); return 'passed'; }
-    catch (error) { const text = (error as Error).message; return /^lean_task_/u.test(text) ? text : 'passed'; }
+    // A target name conflict appends the qualified name (`lean_task_target_name_ambiguous: X.a`); the editor shows the code.
+    catch (error) { const text = (error as Error).message; return /^lean_task_/u.test(text) ? text.split(':')[0] : 'passed'; }
   };
   const cases = [
     'theorem a : True := by sorry',
@@ -35,12 +36,16 @@ describe('statement structure, as bootstrapLeanTask sees it', () => {
     'def a := 1',
     'example : True := trivial',
     'theorem a : True := trivial\nnamespace X\ntheorem a : True := by sorry\nend X',
+    'theorem a : True := trivial\ntheorem a : True := by sorry',
+    'def a := 1\nnamespace X\ntheorem a : True := by sorry\nend X',
+    'def a := 1\nnamespace X\ndef a := 2\nend X\ntheorem b : True := by sorry',
     'theorem a : True := by\n  have lemma := 1\n  trivial',
     'theorem «a b» : True := trivial',
     'theorem a : True := by sorry\n-- lemma in a comment\n/- theorem -/',
     'theorem a : True := by\x07 sorry',
     'theorem a : True := by sorry -- \ud800',
     Array.from({ length: 257 }, (_, index) => `theorem t${index} : True := trivial`).join('\n'),
+    Array.from({ length: LEAN_TASK_DECLARATIONS_MAX + 1 }, (_, index) => `theorem t${index} : True := trivial`).join('\n'),
   ];
   it.each(cases)('reports the same first code for %j', source => {
     const found = inspectStatement(source);
@@ -48,8 +53,11 @@ describe('statement structure, as bootstrapLeanTask sees it', () => {
   });
 
   it('points at the offending declaration in Lean coordinates', () => {
-    expect(inspectStatement('theorem a : True := trivial\nnamespace X\n  theorem a : True := by sorry\nend X'))
-      .toEqual([{ severity: 'error', code: 'lean_task_declaration_names_ambiguous', line: 3, column: 2, name: 'a' }]);
+    expect(inspectStatement('theorem a : True := trivial\nnamespace X\n  theorem a : True := by sorry\nend X')).toEqual([
+      { severity: 'error', code: 'lean_task_target_name_ambiguous', line: 1, column: 0, name: 'a' },
+      { severity: 'error', code: 'lean_task_target_name_ambiguous', line: 3, column: 2, name: 'X.a' }]);
+    expect(inspectStatement('theorem a : True := trivial\n  theorem a : True := by sorry'))
+      .toEqual([{ severity: 'error', code: 'lean_task_declaration_names_ambiguous', line: 2, column: 2, name: 'a' }]);
     // Columns count code points, so the astral character before the control character counts once.
     expect(inspectStatement('theorem a : True := by sorry\n-- 𝔽\x07')[0]).toMatchObject({ line: 2, column: 4 });
   });
