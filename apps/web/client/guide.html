@@ -44,23 +44,22 @@
 
       <section class="share-card" id="watch" aria-labelledby="watch-heading">
         <h2 id="watch-heading">运行时看什么</h2>
-        <p class="guide-lead">左侧对话显示进展时间线，右侧工作区有六个标签页。运行中随时可以点输入框右下角的停止按钮取消。</p>
+        <p class="guide-lead">左栏是研究记录，打开一次运行后，右侧有结果、轨迹、协作、源码和活动五个标签页。运行中随时可以点右上角的「取消运行」停下。</p>
         <dl class="guide-terms">
-          <div><dt>研究协作</dt><dd>谁在做哪个子任务、在等什么。默认是简洁视图；点「完整」可以看任务图、合同和阻塞，并给 Lead、任务或 Agent 写指导。</dd></div>
-          <div><dt>Lean 源码</dt><dd>原始题目和当前证明，可以切换查看与原题的差异。</dd></div>
-          <div><dt>模块</dt><dd>本次运行使用的搜索策略和上下文策略。</dd></div>
-          <div><dt>概览</dt><dd>阶段进度、轮次、耗时和 Token 用量。</dd></div>
-          <div><dt>报告</dt><dd>结论、每个目标定理的检查记录、卡住的地方，以及证明结构。</dd></div>
+          <div><dt>结果</dt><dd>结论和下一步、目标清单、验收证明、Agent 路线图和验收报告。运行中这里显示最新进展。</dd></div>
+          <div><dt>轨迹</dt><dd>每个目标的每次尝试和 Lean 的反馈，按时间排列。可以打开某一步的代码、问它为什么失败，或从这一版继续研究。</dd></div>
+          <div><dt>协作</dt><dd>谁在做哪个子任务、在等什么。默认是简洁视图；点「详细」可以看任务图、合同和阻塞，并给 Lead、任务或 Agent 写指导。</dd></div>
+          <div><dt>源码</dt><dd>原始题目和当前证明，可以切换查看与原题的差异。</dd></div>
           <div><dt>活动</dt><dd>按时间排列的完整事件记录。</dd></div>
         </dl>
-        <p class="guide-note">运行时间较长时，可以开启「结束时通知我」，研究结束时浏览器会提醒你；开了「先审计划」的研究，计划拟好等你批准时也会提醒。手机上用顶部的「对话 / 工作区」切换两栏。</p>
+        <p class="guide-note">运行时间较长时，可以在「结果」里开启「结束时通知我」，研究结束时浏览器会提醒你；开了「先审计划」的研究，计划拟好等你批准时也会提醒。手机上新建研究时，用顶部的「编写 / 预览」在输入框和 Lean 工作区之间切换。</p>
       </section>
       <section class="share-card" id="results" aria-labelledby="results-heading">
         <h2 id="results-heading">看懂结果</h2>
         <dl class="guide-terms guide-status">
           <div><dt><span class="badge passed">完整原题通过</span></dt><dd>所有目标定理都通过了独立验收。这是唯一算数的结论。</dd></div>
           <div><dt><span class="badge failed">验收未通过</span></dt><dd>Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。</dd></div>
-          <div><dt><span class="badge warning">运行结束</span></dt><dd>到达轮次、时间或用量上限时还没有完成证明。已检查的成果保留在报告里，可以提高预算后重新运行。</dd></div>
+          <div><dt><span class="badge warning">运行结束</span></dt><dd>到达轮次、时间或用量上限时还没有完成证明，标签会写明原因，例如「解题时间用完」。已检查的成果保留在报告里，可以提高预算后重新运行。</dd></div>
           <div><dt><span class="badge failed">运行失败</span></dt><dd>Key 无效、服务商限流或环境故障等原因让运行无法继续。对话里会给出对应的处理按钮，例如「更换 API Key」或「减少 Agent 数量」。</dd></div>
           <div><dt><span class="badge">已取消</span></dt><dd>你主动停止了这次运行。</dd></div>
         </dl>
@@ -70,11 +69,11 @@
       <section class="share-card" id="after" aria-labelledby="after-heading">
         <h2 id="after-heading">运行结束以后</h2>
         <dl class="guide-terms">
-          <div><dt>本地复核</dt><dd>在「报告」标签下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。</dd></div>
+          <div><dt>本地复核</dt><dd>在「结果」的验收报告里下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。</dd></div>
           <div><dt>分享</dt><dd>验收通过的运行可以创建只读分享链接。链接不包含 API Key、服务地址、运行日志和 Agent 对话，可以随时停止分享。</dd></div>
           <div><dt>继续研究</dt><dd>用运行详情右上角的「复用任务配置」把题目和配置填进新草稿，调整后再提交。</dd></div>
-          <div><dt>保存与搬运</dt><dd>对话区右上角可以导出任务草稿，或导入草稿和运行档案 JSON。导入后需要重新填写 API Key。</dd></div>
-          <div><dt>研究记录</dt><dd>左上角打开全部运行，可以搜索、按状态筛选，也可以删除不需要的记录。</dd></div>
+          <div><dt>保存与搬运</dt><dd>「新建研究」右上角可以导出任务草稿，或导入草稿和运行档案 JSON；运行详情的「更多操作」里可以下载运行档案。导入后需要重新填写 API Key。</dd></div>
+          <div><dt>研究记录</dt><dd>左栏列出全部运行，可以搜索、按状态筛选；不需要的记录在运行详情的「更多操作」里删除。</dd></div>
         </dl>
       </section>
 

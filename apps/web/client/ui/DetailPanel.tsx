@@ -10,6 +10,7 @@ import { Icon } from './Icon';
 import { DiffRows, fill } from './Section';
 import { SideViewer } from './SideViewer';
 import { TermHint } from './TermHint';
+import { shownLines } from '../../presentation';
 import { t } from '../../i18n';
 
 export type Banner = { tone: string; symbol: string; title: string; description: string };
@@ -280,7 +281,7 @@ export function leanLines(text: string, below?: ReadonlyMap<number, ComponentChi
 /** The first lines of the proof, coloured like the source tab, which keeps the whole file and its search. */
 function ProofPreview(props: NonNullable<ResultPanelProps['proof']> & { open: boolean }) {
   const preview = useMemo(() => {
-    const lines = props.source.replace(/\r\n?/g, '\n').split('\n');
+    const lines = shownLines(props.source);
     const shown = lines.slice(0, previewLines).join('\n');
     return { shown, omitted: lines.length - Math.min(lines.length, previewLines), numbers: Array.from({ length: Math.min(lines.length, previewLines) }, (_, index) => index + 1).join('\n') };
   }, [props.source]);
@@ -306,7 +307,7 @@ function ProofPreview(props: NonNullable<ResultPanelProps['proof']> & { open: bo
 /** The whole proof file, numbered and coloured; searching, jumping to a line and the comparison stay in the source tab. */
 function ProofViewer(props: NonNullable<ResultPanelProps['proof']> & { onClose: () => void }) {
   const view = useMemo(() => {
-    const text = props.source.replace(/\r\n?/g, '\n'), lines = text.split('\n').length;
+    const text = props.source.replace(/\r\n?/g, '\n'), lines = shownLines(text).length;
     return { lines, numbers: Array.from({ length: lines }, (_, index) => index + 1).join('\n'), parts: leanLines(text) };
   }, [props.source]);
   const label = props.verified ? t('验收证明') : t('候选源码');

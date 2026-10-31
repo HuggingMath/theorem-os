@@ -31,10 +31,19 @@ describe('agent routes', () => {
       steps: ['read:1::bridge:', 'write:2:::', 'check:2:passed:bridge:', 'deliver:1::bridge:'] }]);
   });
 
-  test('a reviewer writes a review until it is given a task', () => {
+  test('a reviewer takes and writes a review until it is given a task', () => {
     expect(shape([event('review_assigned', { workerId: 'researcher-1', role: 'reviewer' }), event('turn_started', { workerId: 'researcher-1', turn: 1 }),
       event('review_completed', { workerId: 'researcher-1' }), event('task_assigned', { workerId: 'researcher-1', taskId: 'base' }),
-      event('turn_started', { workerId: 'researcher-1', turn: 2 })])[0].steps).toEqual(['read:1:::', 'write:1:::review', 'deliver:1:::', 'read:1::base:', 'write:1:::']);
+      event('turn_started', { workerId: 'researcher-1', turn: 2 })])[0].steps).toEqual(['read:1:::review', 'write:1:::review', 'deliver:1:::', 'read:1::base:', 'write:1:::']);
+  });
+
+  test('work for a replaced assignment is marked, and taking the same task again says so', () => {
+    const routes = agentRoutes([event('task_assigned', { workerId: 'engineer', taskId: 'goal' }), event('turn_started', { workerId: 'engineer', turn: 1 }),
+      event('plan_updated'), event('task_delivery_superseded', { workerId: 'engineer', taskId: 'goal' }), event('assignment_superseded', { workerId: 'engineer' }),
+      event('context_restarted', { workerId: 'engineer' }), event('task_assigned', { workerId: 'engineer', taskId: 'goal' }),
+      event('turn_started', { workerId: 'engineer', turn: 2 }), event('task_checked', { taskId: 'goal', passed: true })]);
+    expect(routes[0]!.steps.map(step => [step.kind, step.superseded ? 'superseded' : '', step.again ? 'again' : ''].join(':')))
+      .toEqual(['read::', 'write:superseded:', 'read::again', 'write::', 'check::']);
   });
 
   test('the shipped sample has a lane for each of its three Agents', () => {

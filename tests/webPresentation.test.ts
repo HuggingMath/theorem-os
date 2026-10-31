@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { endedSummary, formatDuration, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel } from '../apps/web/presentation';
+import { endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes, stoppedLabel } from '../apps/web/presentation';
 import type { WebRun } from '../apps/web/shared';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16) + seconds * 1000).toISOString();
@@ -127,9 +127,22 @@ describe('workbench phase and elapsed-time presentation', () => {
   it('says finished durations and report metrics the way a reader does', () => {
     expect([26_302, 60_000, 378_000, 3_600_000, 3_900_000].map(readableDuration)).toEqual(['26 秒', '1 分钟', '6 分 18 秒', '1 小时', '1 小时 5 分']);
     expect(readableMetric({ label: '求解耗时', value: '26.302 秒' })).toEqual({ label: '求解耗时', value: '26 秒' });
-    expect(readableMetric({ label: '总 Token', value: '48000' })).toEqual({ label: '总 Token', value: '5 万' });
+    expect(readableMetric({ label: '总 Token', value: '48000' })).toEqual({ label: '总 Token', value: '4.8 万' });
     expect(readableMetric({ label: '研究轮次', value: '2' })).toEqual({ label: '研究轮次', value: '2' });
     expect(readableMetric({ label: '总 Token', value: 'unknown' })).toEqual({ label: '总 Token', value: 'unknown' });
+  });
+
+  it('keeps one decimal of 万 below 100 万, so a task and its run total read in the same units', () => {
+    expect([800, 9_999, 10_000, 48_000, 64_211, 207_455, 999_900, 1_230_000, 250_000_000].map(formatTokens))
+      .toEqual(['800', '9999', '1 万', '4.8 万', '6.4 万', '20.7 万', '100 万', '123 万', '2.5 亿']);
+  });
+
+  it('numbers the lines a reader sees: a final newline ends the last line rather than starting an empty one', () => {
+    expect(shownLines('a\nb\n')).toEqual(['a', 'b']);
+    expect(shownLines('a\r\nb')).toEqual(['a', 'b']);
+    expect(shownLines('a\n\n')).toEqual(['a', '']);
+    expect(shownLines('')).toEqual(['']);
+    expect(shownLines('\n')).toEqual(['']);
   });
 
   it('counts a solving run as stuck after ten minutes without progress, from its last passing check', () => {

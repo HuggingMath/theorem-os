@@ -1268,7 +1268,7 @@ function sourceDiff(run: WebRun): SourcePanelProps['diff'] {
   const before = run.source, after = candidateSource(run);
   const sourceChanged = sourceComparison?.runId !== run.id || sourceComparison.before !== before || sourceComparison.after !== after;
   if (sourceChanged || sourceComparison?.folded !== state.foldUnchanged) {
-    sourceComparison = { runId: run.id, before, after, folded: state.foldUnchanged, result: compareSources(before, after, state.foldUnchanged) };
+    sourceComparison = { runId: run.id, before, after, folded: state.foldUnchanged, result: compareSources(before, after, state.foldUnchanged, false) };
     if (sourceChanged) state.diffChange = 0;
   }
   return { comparison: sourceComparison!.result, folded: state.foldUnchanged, accepted: passed(run) };
@@ -1960,7 +1960,7 @@ function paletteCommands(): PaletteCommand[] {
   const paletteTabs: readonly (readonly [DetailTab, string])[] = [...baseTabs, ['modules', t('模块方案')]];
   // What each view holds, so 报告 or json finds the result view.
   const tabKeywords: Record<DetailTab, string> = { result: t('result report verdict json 报告 验收报告 验收 证明'),
-    trajectory: t('trajectory steps timeline 轨迹 步骤 过程'), collaboration: t('collaboration agents plan tasks 协作 计划 任务 分工'),
+    trajectory: t('trajectory steps timeline 轨迹 步骤 过程'), collaboration: t('collaboration agents plan tasks route map 协作 计划 任务 分工 路线图 Agent 路线'),
     source: t('source code lean diff 源码 代码 对比'), events: t('events activity log 活动 日志 事件'), modules: t('modules plan 模块 方案') };
   if (run) for (const [tab, label] of paletteTabs) commands.push({ id: `tab-${tab}`, group: t('当前研究'), label, hint: tab === state.tab ? t('当前视图') : undefined, icon: tabIcons[tab],
     keywords: `${tab} ${tabKeywords[tab]}`, run: () => { state.tab = tab; setMobileView('runs'); renderDetail(true); element(`#detail-tab-${tab}`).focus({ preventScroll: true }); } });

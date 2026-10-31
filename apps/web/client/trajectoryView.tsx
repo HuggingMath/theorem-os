@@ -4,7 +4,7 @@ import type { WebExplainAnswer, WebExplainTurn } from '../explain';
 import { diagnostics, summarizeGoals, type ReportDiagnostic } from '../report';
 import { formatDuration, readableDuration, stoppedLabel } from '../presentation';
 import type { TrajectoryPage, TrajectoryPlan, TrajectoryPlanItem, TrajectoryVersion, TrajectoryVersionDetail } from '../trajectory';
-import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, stepTasks, trajectoryTally, trajectoryTaskNames, type RecheckResult, type TrajectoryData,
+import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, sameWords, stepTasks, trajectoryTally, trajectoryTaskNames, type RecheckResult, type TrajectoryData,
   type TrajectoryOutcome, type TrajectoryStep } from './trajectory';
 import { readableMessage } from './activityReader';
 import { taskNames } from './agentRoute';
@@ -239,7 +239,10 @@ function changes(before: TrajectoryPlanItem, after: TrajectoryPlanItem, tasks: M
     ? fill(t('改为依赖 {0}'), <Chips ids={after.dependsOn} label={name} />) : t('不再依赖其他任务'));
   if ((before.status ?? 'active') !== (after.status ?? 'active')) parts.push(planStatus[after.status ?? ''] ?? t('恢复'));
   if (before.kind !== after.kind) parts.push(t('改为{0}', taskKindLabel[after.kind] ?? after.kind));
-  if (before.objective !== after.objective) parts.push(t('改写目标'));
+  if (before.objective !== after.objective) {
+    const same = sameWords(before.objective, after.objective);
+    parts.push(same === 'whole' ? t('目标仅改了空白') : same === 'shown' ? t('目标显示部分仅改了空白') : t('改写目标'));
+  }
   return parts.length ? parts : [t('调整细节')];
 }
 function PlanDiff(props: { plan: TrajectoryPlan; tasks: Map<string, string>; detailKey: string }) {
@@ -252,7 +255,7 @@ function PlanDiff(props: { plan: TrajectoryPlan; tasks: Map<string, string>; det
   const rows = [
     ...plan.added.map(item => row(`added-${item.id}`, t('新增'), item, item.dependsOn.length ? [fill(t('依赖 {0}'), <Chips ids={item.dependsOn} label={name} />)] : [], item.objective)),
     ...plan.changed.map(({ before, after }) => row(`changed-${after.id}`, t('修改'), after, changes(before, after, tasks),
-      before.objective !== after.objective ? after.objective : undefined)),
+      sameWords(before.objective, after.objective) ? undefined : after.objective)),
     ...plan.removed.map(item => row(`removed-${item.id}`, t('已移除'), item, [])),
   ];
   return <>

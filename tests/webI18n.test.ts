@@ -77,4 +77,17 @@ describe('server error messages in an English browser', () => {
       expect(localizeMessage(filled(key)), key).toBe(filled(errors[key]!));
     }
   });
+
+  it('counts one thing in the singular, after a describing word and in the sentence it starts', async () => {
+    const { t: say } = await english();
+    expect(say('{0} 个原题目标，没有新增辅助声明。', 1)).toBe('1 original target, no added helper declarations.');
+    expect(say('另有 {0} 个 Agent 空闲、准备中或已停止。', 1)).toBe('1 more Agent is idle, preparing or stopped.');
+    expect(say('另有 {0} 条消息没有显示。', 1)).toBe('1 more message is not shown.');
+    // "are" belongs to "Changes" here, not to the counted file.
+    expect(say('另有 {0} 个文件的改动没有显示。', 1)).toBe('Changes to 1 more file are not shown.');
+    expect([say('修改 {0} 个文件', 1), say('{0} 个错误', 1), say('约 {0} 小时', 1)]).toEqual(['Edited 1 file', '1 error', 'about 1 hour']);
+    expect([say('{0} / {1} 条声明审阅', 1, 4), say('{0} / {1} 条声明审阅', 0, 1)]).toEqual(['1 / 4 statement reviews', '0 / 1 statement review']);
+    expect([say('{0} 个错误', 21), say('约 {0} 小时', 1.5), say('{0} 个原题目标，没有新增辅助声明。', 2)])
+      .toEqual(['21 errors', 'about 1.5 hours', '2 original targets, no added helper declarations.']);
+  });
 });

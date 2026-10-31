@@ -1,6 +1,7 @@
 import type { ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { createElement, errorText, type WebApi } from './collaborationUi';
-import type { KnowledgeCatalog } from './knowledgeView';
+import { catalogLabel, type KnowledgeCatalog } from './knowledgeView';
+import { Icon } from './ui/Icon';
 import { renderSection } from './ui/Section';
 import { localizeText, t } from '../i18n';
 
@@ -105,7 +106,7 @@ export class ServerModulePlans {
     finally { this.loading = false; this.render(); }
   }
   private catalogOptions() {
-    const options = (this.catalogs ?? []).map(catalog => <option key={catalog.digest} value={catalog.digest}>{t('{0} · {1} 定理', catalog.digest.slice(0, 16), catalog.entries)}</option>);
+    const options = (this.catalogs ?? []).map(catalog => <option key={catalog.digest} value={catalog.digest} title={catalog.digest}>{catalogLabel(catalog)}</option>);
     if (this.digest && !this.catalogs?.some(catalog => catalog.digest === this.digest)) options.push(<option key={this.digest} value={this.digest}>{t('{0} · 待核对目录', this.digest)}</option>);
     return options;
   }
@@ -114,7 +115,7 @@ export class ServerModulePlans {
     this.root.setAttribute('aria-busy', String(busy));
     const registry = this.registry;
     renderSection(this.root, <>
-      <details class="collab-detail" data-server-module-library><summary>{t('服务器方案与已注册实现')}</summary><div class="server-plan-content">
+      <details class="collab-detail" data-server-module-library><summary><Icon name="server" /><span>{t('服务器方案与已注册实现')}</span><Icon name="chevron-down" /></summary><div class="server-plan-content">
         <p class="collab-help">{t('方案保存到服务器。搜索策略和上下文策略选用下方已注册的实现；自定义内容作为模块建议。配置在新运行中固定。')}</p>
         <div class="server-plan-selection">
           <label>{t('已保存方案')}<select data-server-plan-select disabled={busy} value={this.selected} onChange={event => this.choose(event.currentTarget.value)}>

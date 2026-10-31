@@ -26,7 +26,7 @@ const shownSteps = 24;
 const stepLabel = (step: RouteStep, tasks: AgentRouteProps['tasks']) => {
   const task = step.taskId && tasks.get(step.taskId) ? ` ${tasks.get(step.taskId)}` : '';
   switch (step.kind) {
-    case 'read': return step.taskId ? t('接任务{0}', task) : t('读题');
+    case 'read': return step.reviewing ? t('接审阅') : step.taskId ? step.again ? t('重新接任务{0}', task) : t('接任务{0}', task) : t('读题');
     case 'write': return step.reviewing ? t('审阅候选') : step.planning ? t('制定计划') : step.count > 1 ? t('写证明 ×{0}', step.count) : t('写证明');
     case 'check': return step.count > 1 ? t('Lean 检查 ×{0}', step.count) : t('Lean 检查');
     case 'deliver': return t('交付{0}', task);
@@ -323,6 +323,8 @@ function Inspector({ lane, index, live, ctx }: { lane: Lane; index: number; live
       {items.map(item => <ItemRow key={itemKey(item)} item={item} ctx={ctx} />)}
     </ol> : <p class="route-item-note">{t('这一步没有这类记录。')}
       <button type="button" class="text-button" onClick={() => { memory.filter = undefined; ctx.refresh(); }}>{t('显示全部')}</button></p>}
+    {step.superseded && <p class="route-item-note">{t('研究计划随后调整，这一步所做的任务分配被新版本取代，成果没有用上。')}</p>}
+    {step.again && <p class="route-item-note">{t('计划调整后，这个任务按新版本重新分给了 {0}。', nameOf(lane))}</p>}
     {!actions && <p class="route-item-note">{!ctx.recorded ? t('这次运行没有记录 Agent 的具体动作，只有平台记录。')
       : live && index === lane.steps.length - 1 ? t('Agent 的动作会在发生时出现在这里。') : t('这一步是平台的记录，Agent 没有在其中动作。')}</p>}
   </section>;
@@ -341,13 +343,14 @@ function LaneView({ lane, laneIndex, from, selected, ctx }: { lane: Lane; laneIn
       {steps.slice(from).map((step, offset) => {
         const index = from + offset, key = `${lane.workerId}|${stepKey(step)}`, current = live && index === steps.length - 1;
         const count = actionsOf(step).length, open = selected === index;
-        return <li key={stepKey(step)} class="agent-route-step" data-kind={step.kind} data-outcome={step.outcome} data-current={current || undefined}>
+        return <li key={stepKey(step)} class="agent-route-step" data-kind={step.kind} data-outcome={step.outcome} data-superseded={step.superseded || undefined} data-current={current || undefined}>
           <button type="button" class="agent-route-label" data-route-step={key} tabIndex={ctx.focus === key ? 0 : -1}
             aria-expanded={open} aria-controls={open ? `route-inspector-${lane.workerId}` : undefined} data-selected={open || undefined}
             title={`${ctx.time(step.at)}${count ? ` · ${t('{0} 个动作', count)}` : ''}`}
             onClick={() => ctx.select(lane, index, { toggle: true })} onFocus={() => { memory.focus = key; }}>
             {current ? <Spinner /> : <span class="agent-route-mark" aria-hidden="true" />}{stepLabel(step, ctx.tasks)}
             {step.outcome && <span class="agent-route-outcome">{outcomeLabel[step.outcome]}</span>}
+            {step.superseded && <span class="agent-route-outcome agent-route-superseded">{t('已被取代')}</span>}
             {count > 0 && <span class="agent-route-count" aria-hidden="true">{count}</span>}
             {count > 0 && <span class="sr-only">{t('，{0} 个动作', count)}</span>}
           </button>
@@ -451,6 +454,7 @@ function AgentRouteMap(props: AgentRouteProps) {
   const recorded = total > 0 || Boolean(source?.run.actions?.count);
   const ctx: Context = { memory, tasks: props.tasks, time: props.time, running: props.running, recorded, refresh, select, close, focus };
   const summary = !lanes.length ? (props.running ? t('Agent 开始工作后，这里按时间画出每个 Agent 走过的步骤。') : t('这次运行没有记录 Agent 步骤。'))
+    : props.planned === 1 ? props.graph === 'elsewhere' ? t('研究计划只有 1 个任务，详情见「协作」。') : t('研究计划只有 1 个任务，见下方「数学任务」。')
     : props.planned ? props.graph === 'elsewhere' ? t('研究计划有 {0} 个任务，依赖关系见「协作」。', props.planned) : t('研究计划有 {0} 个任务，下方显示它们之间的依赖关系。', props.planned)
     : lanes.length === 1 ? t('{0} 独自处理整道题，没有拆分任务。', nameOf(lanes[0]!)) : t('{0} 个 Agent 参与，没有拆分任务。', lanes.length);
   const hint = !lanes.length ? '' : recorded ? t('点一步，看 Agent 在这一步的思考、命令、改动和 Lean 检查。') : t('点一步，看这一步的平台记录。');

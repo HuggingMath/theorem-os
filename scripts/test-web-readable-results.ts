@@ -263,7 +263,7 @@ try {
     await goals.locator('[data-goal-group="checked"] .goal-row[data-goal-state="checked"]').first().waitFor();
     await settled(page); await goals.scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(output, 'goals-grouped.png') }); screenshots.push('goals-grouped.png');
     const tokens = page.locator('.detail-statusline [data-header-tokens]');
-    assert.equal(await tokens.innerText(), 'Token 13 万 / 50 万', 'the run\'s own total, from its report, beside its cap');
+    assert.equal(await tokens.innerText(), 'Token 13.1 万 / 50 万', 'the run\'s own total, from its report, beside its cap');
     assert.match(await tokens.getAttribute('title') ?? '', /所有 Agent.*上限 50 万/u);
     await page.locator('.detail-heading').screenshot({ path: path.join(output, 'header-tokens.png') }); screenshots.push('header-tokens.png');
     await open(h, 'Stop when stuck');

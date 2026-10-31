@@ -1,5 +1,5 @@
 import { Fragment } from 'preact';
-import { createElement, errorText, jsonText, type WebApi } from './collaborationUi';
+import { createElement, errorText, jsonText, observedTime, type WebApi } from './collaborationUi';
 import { Code, renderSection } from './ui/Section';
 import { t } from '../i18n';
 
@@ -8,6 +8,10 @@ const record = (value: unknown): Packet => value && typeof value === 'object' &&
 const records = (value: unknown): Packet[] => Array.isArray(value) ? value.map(record) : [];
 const text = (value: unknown) => String(value ?? '');
 export type KnowledgeCatalog = { digest: string; createdAt: string; entries: number; routeFindings: number };
+/** A catalog named by when it was saved and what it holds; its digest stays the option's value and title. */
+export const catalogLabel = (catalog: KnowledgeCatalog, findings = false) => findings
+  ? t('{0} · {1} 定理 / {2} 发现', observedTime(catalog.createdAt), catalog.entries, catalog.routeFindings)
+  : t('{0} · {1} 定理', observedTime(catalog.createdAt), catalog.entries);
 export type KnowledgeResearchContext = {
   environmentDigest?: string;
   problemId?: string;
@@ -67,7 +71,7 @@ export class KnowledgeView {
     try {
       const { catalogs, latestDigest } = await this.api<{ catalogs: KnowledgeCatalog[]; latestDigest: string | null }>('/api/knowledge/catalogs');
       this.loadedCatalogs = new Set(catalogs.map(catalog => catalog.digest));
-      for (const catalog of catalogs) this.catalogs.set(catalog.digest, t('{0} · {1} 定理 / {2} 发现', catalog.digest.slice(0, 14), catalog.entries, catalog.routeFindings));
+      for (const catalog of catalogs) this.catalogs.set(catalog.digest, catalogLabel(catalog, true));
       if (!catalogs.length) this.status = t('尚无已归档知识目录');
       else if (!this.selectedDigest && latestDigest !== this.digest && this.query.trim()) { this.render(); await this.search(); }
       else if (!this.digest) this.status = t('已加载 {0} 个知识目录', catalogs.length);
@@ -179,7 +183,7 @@ export class KnowledgeView {
         <input id="knowledge-search" type="search" placeholder={t('定理、类型、路线发现')} maxLength={2000} value={this.draft} onInput={event => { this.draft = event.currentTarget.value; }} />
         <label class="sr-only" htmlFor="knowledge-catalog-search">{t('知识目录')}</label>
         <select id="knowledge-catalog-search" value={this.selectedDigest} onChange={event => { this.selectedDigest = event.currentTarget.value; void this.search(); }}>
-          <option value="">{t('最新知识目录')}</option>{[...this.catalogs].map(([digest, label]) => <option key={digest} value={digest}>{label}</option>)}
+          <option value="">{t('最新知识目录')}</option>{[...this.catalogs].map(([digest, label]) => <option key={digest} value={digest} title={digest}>{label}</option>)}
         </select>
         <button class="button" type="submit">{t('搜索')}</button>
       </form>

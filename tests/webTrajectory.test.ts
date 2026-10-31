@@ -3,7 +3,7 @@ import { loadWebSample, webSampleResponse, type WebSampleFile } from '../apps/we
 import { WebStorage } from '../apps/web/storage';
 import type { WebEvent, WebRun } from '../apps/web/shared';
 import { checkHeadline, recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersionQuery, WebTrajectories, type TrajectoryPage } from '../apps/web/trajectory';
-import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, stepTasks, trajectoryTally, trajectoryTaskNames, type TrajectoryStep } from '../apps/web/client/trajectory';
+import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, sameWords, stepTasks, trajectoryTally, trajectoryTaskNames, type TrajectoryStep } from '../apps/web/client/trajectory';
 import { withFailedAttempt } from '../scripts/web-trajectory-fixture';
 
 const sample = loadWebSample()!;
@@ -176,5 +176,15 @@ describe('web trajectory steps', () => {
     expect(other.instance).toBe('other-1');
     expect(other.versions.size).toBe(0);
     expect(other.events.length).toBeLessThan(count);
+  });
+});
+
+describe('objective revisions that only move whitespace', () => {
+  it('reads the same words as unchanged, and over clipped objectives only as far as both are shown', () => {
+    expect(sameWords('Prove it. First expand.', 'Prove it.  First\nexpand. ')).toBe('whole');
+    expect(sameWords('Prove it. First expand the le…', 'Prove it.  First expand t…')).toBe('shown');
+    expect(sameWords('Prove it. First expand the le…', 'Prove it. Then expand t…')).toBeUndefined();
+    expect(sameWords('Prove it.', 'Prove it…')).toBeUndefined();
+    expect(sameWords('Prove it directly.', 'Prove it by cases.')).toBeUndefined();
   });
 });

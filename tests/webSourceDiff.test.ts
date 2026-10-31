@@ -148,6 +148,14 @@ describe('line-based source comparison', () => {
     },
   );
 
+  it('reads a missing terminal newline as formatting when asked, as for trimmed run input against its proof', () => {
+    expect(compareSources('a', 'a\n', false, false)).toMatchObject({ status: 'identical', lineEndingsChanged: true });
+    const comparison = compareSources('a\nb', 'a\nc\n', false, false);
+    expect(comparison).toMatchObject({ status: 'ready', added: 1, removed: 1, lineEndingsChanged: false });
+    expect(lineRows(comparison).every(row => !row.noNewline)).toBe(true);
+    expect(compareSources('', 'a', false, false).rows).toEqual([{ kind: 'added', text: 'a', newLine: 1, noNewline: false, changeId: 0 }]);
+  });
+
   it('keeps literal spaces, tabs, Unicode and HTML without trimming or escaping them', () => {
     const before = '\t  α <script>alert("x")</script>  ', after = '\t α <img src=x onerror=alert(1)> ';
     const comparison = compareSources(before, after, false);

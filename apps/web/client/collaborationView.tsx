@@ -1,6 +1,6 @@
 import type { WebRun } from '../shared';
 import type { WebObservation, WebTaskSource, WebCheckReceipt, WebArchive } from '../collaboration';
-import { endedSummary, isAcceptedRun, isRejectedRun } from '../presentation';
+import { endedSummary, formatTokens, isAcceptedRun, isRejectedRun } from '../presentation';
 import { Fragment, render, type ComponentChildren, type VNode } from 'preact';
 import { clockTime, createElement, errorText, observedTime, coverageLabel, roleLabel, schedulingLabel, workerNames, workerPhaseLabel, dispatchWaitLabel, editStatusLabel, type WebApi } from './collaborationUi';
 import { TaskPlanEditor } from './taskPlanEditor';
@@ -24,7 +24,7 @@ import { renderProgressSummary, type Meter } from './ui/ProgressSummary';
 import { renderTaskInspector } from './ui/TaskInspector';
 import { CollaborationSurface } from './ui/CollaborationSurface';
 import { Code, Detail, Facts, Host, renderOptions, renderSection } from './ui/Section';
-import { localizeText, t } from '../i18n';
+import { locale, localizeText, t } from '../i18n';
 
 type Task = WebObservation['inspection']['tasks'][number];
 type TaskView = 'graph' | 'list';
@@ -48,8 +48,9 @@ const usageCount = (value: unknown) => typeof value === 'number' && Number.isSaf
 // Same rule as the runtime budget: cached input and reasoning output are subsets of input and output.
 export const totalTokens = (usage?: Record<string, number>) => usageCount(usage?.totalTokens) ??
   (usageCount(usage?.inputTokens) !== undefined && usageCount(usage?.outputTokens) !== undefined ? usage!.inputTokens + usage!.outputTokens : undefined);
-export const tokenText = (value: number) => value >= 1e6 ? `${(value / 1e6).toFixed(value >= 1e8 ? 0 : value >= 1e7 ? 1 : 2)}M` :
-  value >= 1e3 ? `${Math.round(value / 1e3)}K` : String(value);
+/** Chinese reads 万/亿 as the header does; English keeps the finer K/M a task card needs. */
+export const tokenText = (value: number) => locale !== 'en' ? formatTokens(value)
+  : value >= 1e6 ? `${(value / 1e6).toFixed(value >= 1e8 ? 0 : value >= 1e7 ? 1 : 2)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}K` : String(value);
 const usageDetail = (usage: Record<string, number>) => {
   const input = usageCount(usage.inputTokens), cached = usageCount(usage.cachedInputTokens), output = usageCount(usage.outputTokens);
   return [input !== undefined && t('输入 {0}{1}', tokenText(input), cached ? t('（缓存命中 {0}）', tokenText(cached)) : ''),
@@ -475,6 +476,9 @@ export class CollaborationView {
     if (graph.style.width !== `${width}px`) graph.style.width = `${width}px`;
     if (graph.style.height !== `${height}px`) graph.style.height = `${height}px`;
     graph.dataset.density = compact ? 'compact' : 'comfortable';
+    // A plan without dependencies has no edges to explain and needs no canvas taller than its cards.
+    const frame = graph.closest<HTMLElement>('.collab-graph-frame');
+    if (frame && frame.dataset.edgeless !== String(!edges.length)) frame.dataset.edgeless = String(!edges.length);
     this.applyGraphZoom(view);
     const peak = this.peakTokens(observation);
     this.renderUsageLegend(view, observation);

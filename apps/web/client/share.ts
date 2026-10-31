@@ -4,6 +4,7 @@ import { webShareToken, type WebShareSnapshot } from '../share';
 import { localizeMessage, localizeText, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 import { leanFileName } from './leanOutline';
+import { leanLineTokens } from './sourceText';
 
 createIcons({ icons: { Copy, Download, ShieldCheck }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -31,9 +32,32 @@ function missing(text?: string) {
   if (text) $('#share-missing-text').textContent = text;
   $('#share-missing').hidden = false;
 }
+/** The code numbered and coloured like the result tab's, one `.lean-line` per line so a phone can wrap it under its number. */
+function drawCode(text: string) {
+  const rows: (Node | string)[] = [], lines = leanLineTokens(text);
+  for (const [index, line] of lines.entries()) {
+    const row = document.createElement('span');
+    let offset = line.start;
+    row.className = 'lean-line';
+    for (const token of line.tokens) {
+      if (token.start > offset) row.append(text.slice(offset, token.start));
+      const part = document.createElement('span');
+      part.className = `lean-${token.kind}`; part.textContent = text.slice(token.start, token.end);
+      row.append(part);
+      offset = token.end;
+    }
+    if (offset < line.end) row.append(text.slice(offset, line.end));
+    if (index) rows.push('\n');
+    rows.push(row);
+  }
+  // A final line break stays in the text, so copying the code keeps it.
+  if (text.endsWith('\n')) rows.push('\n');
+  $('#share-code').replaceChildren(...rows);
+  $('#share-line-numbers').textContent = Array.from(lines, (_, index) => index + 1).join('\n');
+}
 function showCode() {
   if (!snapshot) return;
-  $('#share-code').textContent = view === 'proof' ? snapshot.proof : snapshot.source;
+  drawCode(view === 'proof' ? snapshot.proof : snapshot.source);
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-share-view]'))
     button.setAttribute('aria-pressed', String(button.dataset.shareView === view));
 }

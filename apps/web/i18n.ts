@@ -23,12 +23,20 @@ export const locale: Locale = detect();
 /** The tag Intl formatters and the html lang attribute use. */
 export const localeTag = locale === 'en' ? 'en-US' : 'zh-CN';
 
-/** English counts in the dictionary are written plural; a count of exactly 1 takes the singular noun. */
-const singulars: Record<string, string> = { agents: 'agent', lines: 'line', theorems: 'theorem', tasks: 'task', tokens: 'token',
-  findings: 'finding', strategies: 'strategy', runs: 'run', records: 'record', minutes: 'minute', entries: 'entry', bytes: 'byte',
-  times: 'time', matches: 'match', characters: 'character', goals: 'goal', declarations: 'declaration', auditors: 'auditor' };
-const countedPlural = new RegExp(`(^|[^\\d.,])1 ((?:more |research )?)(${Object.keys(singulars).join('|')})\\b`, 'gu');
-const singular = (text: string) => text.replace(countedPlural, (_match, before: string, middle: string, noun: string) => `${before}1 ${middle}${singulars[noun]}`);
+/**
+ * English counts in the dictionary are written plural; a count of exactly 1 takes the singular noun, also after a word
+ * such as "more" or "original", and a sentence it starts takes "is". A denominator counts too: "0 / 1 statement review".
+ */
+const singulars: Record<string, string> = { agents: 'agent', Agents: 'Agent', lines: 'line', theorems: 'theorem', tasks: 'task',
+  tokens: 'token', findings: 'finding', strategies: 'strategy', runs: 'run', records: 'record', minutes: 'minute', hours: 'hour',
+  entries: 'entry', bytes: 'byte', times: 'time', matches: 'match', characters: 'character', goals: 'goal', subgoals: 'subgoal',
+  targets: 'target', declarations: 'declaration', auditors: 'auditor', actions: 'action', attempts: 'attempt', steps: 'step',
+  changes: 'change', errors: 'error', warnings: 'warning', results: 'result', messages: 'message', files: 'file',
+  catalogs: 'catalog', turns: 'turn', reviews: 'review', slots: 'slot', modules: 'module' };
+const modifiers = 'more|research|original|helper|open|unchanged|new|custom|platform|route|knowledge|model|run|statement';
+const countedPlural = new RegExp(`(?<![\\w.,])1 ((?:(?:${modifiers}) ){0,2})(${Object.keys(singulars).join('|')})\\b( are\\b)?`, 'gu');
+const singular = (text: string) => text.replace(countedPlural, (_match, middle: string, noun: string, are: string | undefined, offset: number) =>
+  `1 ${middle}${singulars[noun]}${are ? /^$|[.;:!?]\s*$/u.test(text.slice(0, offset)) ? ' is' : are : ''}`);
 
 /** Translates a Chinese key; {0}, {1}… are replaced by the arguments in order. A key without an entry stays Chinese. */
 export function t(key: string, ...values: unknown[]): string {

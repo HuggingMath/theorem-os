@@ -37,7 +37,7 @@ function Topbar(props: TopbarProps) {
       <button type="button" id="locale-switch" class="locale-switch topbar-locale" lang={otherLocale.lang} translate={false} title={otherLocale.title} onClick={props.onLocale}>
         <Icon name="languages" /><span class="locale-switch-label">{otherLocale.label}</span>
       </button>
-      <span id="connection-status" class={`connection-status ${props.connection.tone}`} role="status"><span class="status-dot" />{props.connection.label}</span>
+      <span id="connection-status" class={`connection-status ${props.connection.tone}`} role="status" title={props.connection.label}><span class="status-dot" />{props.connection.label}</span>
       {props.account && <button type="button" id="open-account" class="account-trigger" title={props.account} aria-label={t('账号：{0}', props.account)} aria-haspopup="dialog" onClick={props.onAccount}>
         <Icon name="user-round" /><span>{props.account}</span>
       </button>}

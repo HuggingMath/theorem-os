@@ -28,37 +28,40 @@ export const guide: Record<string, string> = {
   "设定预算并发送": "Set a budget and send",
   "「执行配置」里的轮次上限、解题预算和用量上限，到达任一项运行就会停止。不确定时保持默认，在输入框写下研究任务后点发送。":
     "Under Execution, the run stops at whichever comes first: the turn limit, the solving budget or the usage cap. If unsure, keep the defaults, write the research task in the input and send it.",
-  "左侧对话显示进展时间线，右侧工作区有六个标签页。运行中随时可以点输入框右下角的停止按钮取消。":
-    "The chat on the left shows a progress timeline, and the workspace on the right has six tabs. You can cancel at any time with the stop button at the bottom right of the input.",
-  "谁在做哪个子任务、在等什么。默认是简洁视图；点「完整」可以看任务图、合同和阻塞，并给 Lead、任务或 Agent 写指导。":
-    "Who is working on which subtask and what they are waiting for. It opens in the simple view; choose Full for the task graph, contracts and blockers, and to write guidance for the Lead, a task or an Agent.",
+  "左栏是研究记录，打开一次运行后，右侧有结果、轨迹、协作、源码和活动五个标签页。运行中随时可以点右上角的「取消运行」停下。":
+    "The left column lists your research runs. Open one and the right side has five tabs: Result, Trajectory, Collaboration, Source and Activity. Stop a run at any time with \"Cancel run\" at the top right.",
+  "谁在做哪个子任务、在等什么。默认是简洁视图；点「详细」可以看任务图、合同和阻塞，并给 Lead、任务或 Agent 写指导。":
+    "Who is working on which subtask and what they are waiting for. It opens in the simple view; choose Detailed for the task graph, contracts and blockers, and to write guidance for the Lead, a task or an Agent.",
+  "结论和下一步、目标清单、验收证明、Agent 路线图和验收报告。运行中这里显示最新进展。":
+    "The verdict and what to do next, the goal list, the accepted proof, the Agent route map and the acceptance report. While a run is going, its latest progress shows here.",
+  "每个目标的每次尝试和 Lean 的反馈，按时间排列。可以打开某一步的代码、问它为什么失败，或从这一版继续研究。":
+    "Every attempt at every goal with Lean's feedback, in time order. Open a step's code, ask why it failed, or continue the research from that version.",
   "原始题目和当前证明，可以切换查看与原题的差异。": "The original problem and the current proof, with a view of the differences from the original.",
-  "本次运行使用的搜索策略和上下文策略。": "The search and context strategies this run uses.",
-  "阶段进度、轮次、耗时和 Token 用量。": "Stage progress, turns, time and token usage.",
-  "结论、每个目标定理的检查记录、卡住的地方，以及证明结构。": "The verdict, the checks for each target theorem, where the work got stuck, and the proof outline.",
   "按时间排列的完整事件记录。": "Every event in time order.",
-  "运行时间较长时，可以开启「结束时通知我」，研究结束时浏览器会提醒你；开了「先审计划」的研究，计划拟好等你批准时也会提醒。手机上用顶部的「对话 / 工作区」切换两栏。":
-    "For a long run, turn on \"Notify me when done\" and the browser will tell you when the research finishes, and for a run with \"Review plan first\" also when its plan is ready for your approval. On a phone, switch between the two panes with Chat / Workspace at the top.",
+  "运行时间较长时，可以在「结果」里开启「结束时通知我」，研究结束时浏览器会提醒你；开了「先审计划」的研究，计划拟好等你批准时也会提醒。手机上新建研究时，用顶部的「编写 / 预览」在输入框和 Lean 工作区之间切换。":
+    "For a long run, turn on \"Notify me when done\" in Result and the browser will tell you when the research finishes, and for a run with \"Review plan first\" also when its plan is ready for your approval. On a phone, while writing new research, switch between the input and the Lean workspace with Compose / Preview at the top.",
   "所有目标定理都通过了独立验收。这是唯一算数的结论。": "Every target theorem passed independent acceptance. This is the only verdict that counts.",
   "Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。": "The Agents submitted a candidate proof, but independent acceptance rejected it. The report says which check failed.",
-  "到达轮次、时间或用量上限时还没有完成证明。已检查的成果保留在报告里，可以提高预算后重新运行。":
-    "The turn, time or usage limit was reached before the proof was complete. Checked work stays in the report, and you can rerun with a larger budget.",
+  "到达轮次、时间或用量上限时还没有完成证明，标签会写明原因，例如「解题时间用完」。已检查的成果保留在报告里，可以提高预算后重新运行。":
+    "The turn, time or usage limit was reached before the proof was complete, and the badge names it, such as \"Solve time used up\". Checked work stays in the report, and you can rerun with a larger budget.",
   "Key 无效、服务商限流或环境故障等原因让运行无法继续。对话里会给出对应的处理按钮，例如「更换 API Key」或「减少 Agent 数量」。":
     "Something such as an invalid key, provider rate limits or an environment fault stopped the run. The chat offers a matching action, such as \"Change API key\" or \"Use fewer Agents\".",
   "你主动停止了这次运行。": "You stopped this run.",
   "「候选证明」和「有条件结果」都不算完成：前者还没经过验收，后者依赖一条尚未证明的引理。":
     "Neither a candidate proof nor a conditional result counts as done: the first has not been accepted yet, and the second depends on a lemma that is still unproved.",
   "本地复核": "Check it locally",
-  "在「报告」标签下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。": "Download the verification kit from the Report tab and follow its instructions to recheck the proof with Lean on your own computer.",
+  "在「结果」的验收报告里下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。":
+    "Download the verification kit from the acceptance report in Result and follow its instructions to recheck the proof with Lean on your own computer.",
   "分享": "Share",
   "验收通过的运行可以创建只读分享链接。链接不包含 API Key、服务地址、运行日志和 Agent 对话，可以随时停止分享。":
     "An accepted run can get a read-only share link. It leaves out the API key, service address, run logs and Agent conversations, and you can stop sharing at any time.",
   "继续研究": "Keep researching",
   "用运行详情右上角的「复用任务配置」把题目和配置填进新草稿，调整后再提交。": "\"Reuse task settings\" at the top right of the run details fills a new draft with the problem and settings; adjust them and submit again.",
   "保存与搬运": "Save and move work",
-  "对话区右上角可以导出任务草稿，或导入草稿和运行档案 JSON。导入后需要重新填写 API Key。":
-    "At the top right of the chat you can export the task draft, or import a draft or run archive JSON. After an import, enter the API key again.",
-  "左上角打开全部运行，可以搜索、按状态筛选，也可以删除不需要的记录。": "The top left opens every run, where you can search, filter by status and delete records you no longer need.",
+  "「新建研究」右上角可以导出任务草稿，或导入草稿和运行档案 JSON；运行详情的「更多操作」里可以下载运行档案。导入后需要重新填写 API Key。":
+    "At the top right of New research you can export the task draft, or import a draft or run archive JSON; More actions in a run's details downloads its run archive. After an import, enter the API key again.",
+  "左栏列出全部运行，可以搜索、按状态筛选；不需要的记录在运行详情的「更多操作」里删除。":
+    "The left column lists every run, where you can search and filter by status; delete a record you no longer need from More actions in its details.",
   "Mac 上用 ⌘ 代替 Ctrl。编辑器快捷键在源码编辑器里使用。": "On a Mac use ⌘ instead of Ctrl. Editor shortcuts work inside the source editor.",
   "打开命令面板：跳转到运行或标签页，切换语言和外观。": "Open the command palette: jump to a run or tab, switch language and appearance.",
   "在源码编辑器里查找；Enter / Shift+Enter 切换下一个 / 上一个匹配。": "Find in the source editor; Enter / Shift+Enter moves to the next / previous match.",

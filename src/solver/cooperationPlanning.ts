@@ -10,7 +10,7 @@ import { statementSnapshot } from './statementReview';
 import { proofReferencesUnchanged } from './proofReferences';
 import { captureObligationSnapshot } from './obligationProgress';
 import { taskConnectionCheckCurrent } from './taskConnections';
-import { taskGroup, taskVersion, taskProofContractVersion, taskReferenceDependencies, invalidatedTaskIds, type TaskRecord,
+import { keepRespacedObjectives, taskGroup, taskVersion, taskProofContractVersion, taskReferenceDependencies, invalidatedTaskIds, type TaskRecord,
   type CooperativeAction } from './tasks';
 import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan,
   type LeadPlan } from './cooperationShared';
@@ -240,6 +240,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       receipt: Omit<InitialPlanPublication, 'planVersion'> },
     leadAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
     const plan = planInput ?? this.readLeadPlan(leadAction);
+    plan.tasks = keepRespacedObjectives(plan.tasks, new Map(this.archive.tasks.map(node => [node.task.id, node.task])));
     this.includeCapacityExplorations(plan);
     const { tasks, groups, proofRoutes } = plan;
     const publicationResponseDigest = publication ? this.proposedPlanDigest(
