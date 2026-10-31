@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, quotePieces, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
+import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, quotePieces, quoteRange, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
 import type { WebExplanationDocument, WebExplanationSection } from '../apps/web/shared';
 
 // The explanation page's pure helpers: Lean line split, line ↔ step mapping, estimate, prose and TeX reading.
@@ -139,9 +139,20 @@ describe('linked prose', () => {
   });
 
   it('gives back exactly the unlinked segments', () => {
-    for (const links of [[], [at('自然数')], [at('+ 0', 3), at('\\$5'), at('不变')], [{ start: 0, end: PROSE.length }]])
+    for (const links of [[], [at('自然数')], [at('+ 0', 3), at('\\$5'), at('不变')], [{ start: 0, end: PROSE.length }]]) {
       expect(flatten(linkedProse(PROSE, links))).toEqual(proseSegments(PROSE));
+      expect(flatten(linkedProse(PROSE, links, [at('是自然'), at('$5 与')]))).toEqual(proseSegments(PROSE));
+    }
     expect(linkedProse('', [{ start: 0, end: 1 }])).toEqual([]);
+  });
+
+  it('splits runs where marks begin and end, inside a link too, and marks a formula a mark touches whole', () => {
+    const runs = linkedProse(PROSE, [at('自然数')], [at('是自然'), at('+ 0', 3)]);
+    expect(runs.filter(run => run.marked)).toEqual([
+      { segments: [{ kind: 'text', text: '是' }], marked: true },
+      { segments: [{ kind: 'text', text: '自然' }], link: 0, marked: true },
+      { segments: [{ kind: 'math', text: 'n + 0 = n' }], marked: true }]);
+    expect(runs.filter(run => run.link === 0).map(run => run.segments[0]!.text)).toEqual(['自然', '数']);
   });
 });
 
@@ -209,6 +220,38 @@ describe('quote pieces', () => {
     const text = 'For every natural number n, n + 0 = n.';
     expect(shown(text, [at(text, 'n + 0 = n'), at(text, 'For every natural number n'), at(text, 'n + 0 = n.'), at(text, 'natural number n'),
       at(text, 'For every natural number n,', false)])).toEqual(['1+4:For every', '3:natural number n', '0+2:n + 0 = n']);
+  });
+
+  // Each piece as `quotes:text`, then each longer quote around it after `>`, shortest first.
+  const stepped = (text: string, quotes: Parameters<typeof quotePieces>[1]) => quotePieces(text, quotes)
+    .map(piece => [`${piece.quotes.join('+')}:${text.slice(piece.start, piece.end)}`, ...piece.wider.map(level => level.join('+'))].join('>'));
+
+  it('lists the longer quotes around each piece, shortest first, also those left with no words or crossing a kept one', () => {
+    const text = 'For a natural number n, let S(n) = 0 + ... + n be the sum.';
+    expect(stepped(text, [at(text, 'a natural number n, let S(n)'), at(text, 'natural number n'), at(text, 'number')]))
+      .toEqual(['0:a', '1:natural>0', '2:number>1>0', '1:n>0', '0:let S(n)']);
+    // 'For every natural number n' has no words of its own left; 'x = y, for all' crosses 'that x = y' and loses.
+    const scope = 'For every natural number n, n + 0 = n.';
+    expect(stepped(scope, [at(scope, 'For every natural number n'), at(scope, 'For every'), at(scope, 'natural number n'),
+      at(scope, 'For every natural number n,')])).toEqual(['1:For every>0+3', '2:natural number n>0+3']);
+    const crossing = 'Prove that x = y, for all x.';
+    expect(stepped(crossing, [at(crossing, 'that x = y'), at(crossing, 'x = y, for all'), at(crossing, 'x = y')]))
+      .toEqual(['0:that', '2:x = y>0>1']);
+  });
+
+  it('never draws a hidden quote but counts it around the quotes inside it', () => {
+    const text = 'Prove that x = y for all x.';
+    expect(stepped(text, [{ ...at(text, text), hidden: true }, at(text, 'x = y')])).toEqual(['1:x = y>0']);
+    expect(stepped(text, [{ ...at(text, text), hidden: true }])).toEqual([]);
+    expect(stepped(text, [at(text, text), at(text, 'x = y')])).toEqual(['0:Prove that', '1:x = y>0', '0:for all x']);
+  });
+
+  it('gives the text a quote covers as pieces count it', () => {
+    const text = 'Show $x + 1 = 2$. Then stop.';
+    const formula = text.indexOf('$x');
+    expect(quoteRange(text, text.indexOf('1 = 2'), text.indexOf('1 = 2') + 5)).toEqual({ start: formula, end: formula + 11 });
+    expect(quoteRange(text, text.indexOf('. Then'), text.indexOf('. Then') + 7)).toEqual({ start: text.indexOf('Then'), end: text.indexOf('Then') + 4 });
+    expect(quoteRange(text, 4, 5)).toBeUndefined();
   });
 });
 

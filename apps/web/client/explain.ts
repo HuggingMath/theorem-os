@@ -4,7 +4,7 @@ import type { WebEffort, WebExplanation, WebExplanationDocument, WebExplanationL
 import { locale, mountLocaleSwitch, t } from '../i18n';
 import { anchorSpan, leanGutter, proseAt, refLines, stepAtLine, type StepRef } from './explainText';
 import { renderExplain, type ExplainView } from './explainView';
-import { correspondenceIndices, correspondenceSpans } from './correspondence';
+import { correspondenceSpans, fragmentLadder } from './correspondence';
 import { buildLeanRows, highlightSpans, reportData, spanScrollLeft } from './leanPane';
 
 /**
@@ -105,6 +105,8 @@ function markLean(explained?: WebExplanationDocument) {
 // Where a cited name or a linked phrase's Lean is written: its row is marked, and the text itself where the browser can
 // highlight text ranges.
 let pinned: WebExplanationSpan[] = [];
+// How far out the last clicks on one 原题 fragment have stepped.
+const ladder = fragmentLadder();
 /** Marks the spans being pointed at; with none, the spans last clicked. */
 function markUse(spans: readonly WebExplanationSpan[] | undefined) {
   const shown = spans ?? pinned;
@@ -118,7 +120,7 @@ const useSpans = (element: HTMLElement): WebExplanationSpan[] => {
 /** Where a linked phrase's Lean is written, or the Lean statement fragments of an original-problem fragment's pairs. */
 const linkSpans = (element: HTMLElement): WebExplanationSpan[] => {
   const explained = currentDocument();
-  if (element.dataset.correspondence !== undefined) return correspondenceSpans(explained?.problem?.correspondences ?? [], correspondenceIndices(element));
+  if (element.dataset.correspondence !== undefined) return correspondenceSpans(explained?.problem?.correspondences ?? [], ladder.shown(element));
   const section = explained?.sections[Number(element.dataset.section)], index = Number(element.dataset.link);
   const links = element.dataset.statement !== undefined ? section?.statementLinks : section?.steps[Number(element.dataset.step)]?.links;
   return links?.[index]?.lean ?? [];
@@ -211,7 +213,7 @@ function revealStep(ref: StepRef) {
 function select(ref: StepRef, show: 'lean' | 'prose', options: { gap?: number; spans?: WebExplanationSpan[] } = {}) {
   const explained = currentDocument();
   if (!explained) return;
-  state.active = ref; state.gap = options.gap; state.chosen = new Set();
+  state.active = ref; state.gap = options.gap; state.chosen = new Set(); ladder.reset();
   pinned = options.spans ?? [];
   markUse(undefined);
   if (narrow()) state.pane = show;
@@ -264,13 +266,16 @@ function alignProse(explained: WebExplanationDocument) {
 const refOf = (element: HTMLElement): StepRef => ({ section: Number(element.dataset.section ?? element.dataset.anchor),
   ...(element.dataset.step ? { step: Number(element.dataset.step) } : {}), ...(element.dataset.statement !== undefined ? { statement: true as const } : {}) });
 const selecting = () => !(getSelection()?.isCollapsed ?? true);
-/** An original-problem fragment or pair: its Lean statement fragments are marked and shown, the chosen step kept. */
+/**
+ * An original-problem fragment or pair: its pairs are chosen (another click on the same fragment steps out to a longer
+ * one) and their Lean statement fragments marked and shown, the chosen step kept.
+ */
 function point(element: HTMLElement) {
-  const spans = linkSpans(element);
-  if (!spans.length) { toast(t('Lean 源码里没有原样写出这一段；审核模型可能引用了 Lean 展开后的类型')); return; }
-  pinned = spans; state.chosen = new Set(correspondenceIndices(element));
-  if (narrow()) state.pane = 'lean';
+  const chosen = ladder.climb(element), spans = correspondenceSpans(currentDocument()?.problem?.correspondences ?? [], chosen);
+  pinned = spans; state.chosen = new Set(chosen);
+  if (narrow() && spans.length) state.pane = 'lean';
   draw(); markUse(undefined);
+  if (!spans.length) { toast(t('Lean 源码里没有原样写出这一段；审核模型可能引用了 Lean 展开后的类型')); return; }
   requestAnimationFrame(() => revealLine(spans[0]!.line, spans[0]));
 }
 document.addEventListener('click', event => {
@@ -361,13 +366,13 @@ const stop = () => act(async () => {
 const remove = () => act(async () => {
   await call(`${base()}/item?${query()}`, 'DELETE');
   store(undefined);
-  state.active = undefined; state.gap = undefined; state.chosen = new Set(); pinned = [];
+  state.active = undefined; state.gap = undefined; state.chosen = new Set(); pinned = []; ladder.reset();
   toast(t('讲解已删除'));
 });
 
 function choose(target: string, language: 'zh' | 'en') {
   state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined;
-  state.chosen = new Set(); pinned = [];
+  state.chosen = new Set(); pinned = []; ladder.reset();
   if (!report) history.replaceState(null, '', `?${new URLSearchParams({ run: state.runId, target, language })}`);
   proseScroll.scrollTop = 0;
   draw(); void loadDocument(); schedule();

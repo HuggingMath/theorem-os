@@ -1,5 +1,5 @@
 import { Fragment } from 'preact';
-import { linkedProse, parseMath, proseSegments, type MathNode, type ProseSegment } from './explainText';
+import { linkedProse, parseMath, proseSegments, type MathNode, type ProseRun, type ProseSegment } from './explainText';
 
 /**
  * A linked phrase of model prose: UTF-16 offsets into its text and what the page needs to find its Lean again. The
@@ -7,15 +7,27 @@ import { linkedProse, parseMath, proseSegments, type MathNode, type ProseSegment
  */
 export type RichLink = { start: number; end: number; attributes: Record<`data-${string}`, string | number>; className?: string; title: string };
 
-/** Model prose as text nodes: inline code, bold and `$…$` mathematics; a formula that does not parse is shown as written. */
-export function Rich(props: { text: string; links?: readonly RichLink[] }) {
-  const { links } = props;
-  if (!links?.length) return <Segments segments={proseSegments(props.text)} />;
-  return <>{linkedProse(props.text, links).map((run, index) => {
-    if (run.link === undefined) return <Segments key={index} segments={run.segments} />;
-    const link = links[run.link]!;
+/**
+ * Model prose as text nodes: inline code, bold and `$…$` mathematics; a formula that does not parse is shown as written.
+ * Text in `marks` (UTF-16 ranges, linked or not) is drawn in a <mark>.
+ */
+export function Rich(props: { text: string; links?: readonly RichLink[]; marks?: readonly { start: number; end: number }[] }) {
+  const { links = [], marks = [] } = props;
+  if (!links.length && !marks.length) return <Segments segments={proseSegments(props.text)} />;
+  // A link split by a mark is still one focusable span.
+  const groups: ProseRun[][] = [];
+  for (const run of linkedProse(props.text, links, marks)) {
+    const last = groups.at(-1);
+    if (last && run.link !== undefined && last[0]!.link === run.link) last.push(run); else groups.push([run]);
+  }
+  const content = (runs: readonly ProseRun[]) => runs.map((run, index) => run.marked
+    ? <mark key={index} class="explain-chosen"><Segments segments={run.segments} /></mark> : <Segments key={index} segments={run.segments} />);
+  return <>{groups.map((runs, index) => {
+    const at = runs[0]!.link;
+    if (at === undefined) return <Fragment key={index}>{content(runs)}</Fragment>;
+    const link = links[at]!;
     return <span key={index} class={`explain-link${link.className ? ` ${link.className}` : ''}`} role="button" tabIndex={0}
-      title={link.title} {...link.attributes}><Segments segments={run.segments} /></span>;
+      title={link.title} {...link.attributes}>{content(runs)}</span>;
   })}</>;
 }
 function Segments({ segments }: { segments: readonly ProseSegment[] }) {

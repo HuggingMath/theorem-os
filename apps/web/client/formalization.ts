@@ -2,7 +2,7 @@ import type { WebExplanationLines, WebExplanationSpan, WebFormalizationReport } 
 import { mountLocaleSwitch, t } from '../i18n';
 import { wholeQuotes } from './explainText';
 import { renderFormalization } from './formalizationView';
-import { correspondenceIndices, correspondenceSpans } from './correspondence';
+import { correspondenceSpans, fragmentLadder } from './correspondence';
 import { buildLeanRows, highlightSpans, reportData, spanScrollLeft } from './leanPane';
 
 /**
@@ -46,10 +46,12 @@ const offsetIn = (scroll: HTMLElement, element: HTMLElement) => element.getBound
 function reveal(scroll: HTMLElement, element: HTMLElement | undefined | null, share = 3, left?: number) {
   if (element) scroll.scrollTo({ top: Math.max(0, offsetIn(scroll, element) - scroll.clientHeight / share), left, behavior: smooth() });
 }
-const spansOf = (element: HTMLElement) => correspondenceSpans(report?.correspondences ?? [], correspondenceIndices(element));
+// How far out the last clicks on one 原题 fragment have stepped.
+const ladder = fragmentLadder();
+const spansOf = (element: HTMLElement) => correspondenceSpans(report?.correspondences ?? [], ladder.shown(element));
 /**
- * Correspondences (a pair, or every pair of one original fragment): their Lean is marked and brought into view, across
- * to the first fragment; with no Lean in the source, the first is shown in the list.
+ * Correspondences (a pair, every pair of one original fragment, or of a longer fragment around it): their Lean is marked
+ * and brought into view, across to the first fragment; with no Lean in the source, the first is shown in the list.
  */
 function choose(indices: readonly number[]) {
   const spans = correspondenceSpans(report?.correspondences ?? [], indices);
@@ -67,7 +69,7 @@ function chooseLine(line: number) {
   if (!report) return;
   const on = report.correspondences.flatMap((item, index) => item.lean.some(span => span.line === line) ? [index] : []);
   const finer = on.filter(index => !wholeLean.has(index)), found = finer.length ? finer : on;
-  state.active = new Set(found); state.pinned = found.flatMap(index => report.correspondences[index]!.lean);
+  state.active = new Set(found); state.pinned = found.flatMap(index => report.correspondences[index]!.lean); ladder.reset();
   if (narrow() && found.length) state.pane = 'prose';
   draw(); point(undefined); mark('active', [{ start: line, end: line }]);
   if (found.length) requestAnimationFrame(() => reveal(proseScroll, proseScroll.querySelector<HTMLElement>(`[data-item="${found[0]}"]`), 4));
@@ -79,7 +81,7 @@ document.addEventListener('click', event => {
   const row = target.closest<HTMLElement>('.lean-row');
   if (row) { chooseLine(Number(row.dataset.line)); return; }
   const action = target.closest<HTMLElement>('[data-action]');
-  if (action?.dataset.action === 'correspondence') choose(correspondenceIndices(action));
+  if (action?.dataset.action === 'correspondence') choose(ladder.climb(action));
   else if (action?.dataset.action === 'pane') { state.pane = action.dataset.pane === 'lean' ? 'lean' : 'prose'; draw(); }
 });
 const pointed = (target: HTMLElement) => {
