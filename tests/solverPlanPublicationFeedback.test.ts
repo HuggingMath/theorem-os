@@ -214,6 +214,26 @@ describe('live Lead publication correction feedback', () => {
       expect(state.cooperation!.planPublicationRejection).toBeUndefined();
     });
 
+  it.each(['initial', 'replacement'] as const)(
+    'keeps an accepted %s when its log is rewritten below the cursor and keeps reading later events', async kind => {
+      prepare(kind);
+      const action = await start();
+      await publish(action, event(action, kind));
+      const accepted = structuredClone(state.cooperation), file = path.join(workers[0].worktree, log(action));
+      notify.mockClear();
+      fs.writeFileSync(file, JSON.stringify({ ...event(action, kind), groups: [] }) + '\n');
+      await expect(cooperative.pulse()).resolves.toBeUndefined();
+      expect(rejected().map(item => item.details!.reason)).toEqual(['math_delivery_log_rewritten']);
+      expect(state.cooperation!.cursors![cursor(action)]).toBe(fs.statSync(file).size);
+      expect(state.cooperation!.tasks).toEqual(accepted!.tasks);
+      expect(state.cooperation!.planPublication).toEqual(accepted!.planPublication);
+      expect(events.some(item => item.event === 'cooperation_poll_failed')).toBe(false);
+      await publish(action, '{broken JSON');
+      expect(rejected()).toHaveLength(2);
+      expect(rejected()[1].details!.reason).toMatch(/invalid_json$/u);
+      expect(notify).not.toHaveBeenCalled();
+    });
+
   it('keeps later rejected events audit-only once the replacement dispatch has succeeded', async () => {
       const kind = 'replacement';
       prepare(kind);

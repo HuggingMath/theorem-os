@@ -262,6 +262,26 @@ function readFrozenContexts(problem: SolverProblem, access: ContextAccess): Read
   return contexts;
 }
 
+// The Lead's one-line-per-task view, so a revision decision does not start by parsing COOPERATION.json.
+// One observed Lead spent 26 of its 80 commands parsing COOPERATION.json with ad hoc scripts.
+const LEAD_TASK_TABLE_ROWS = 60;
+function leadTaskTable(cooperation: CooperationState): string {
+  const nodes = cooperation.tasks.filter(node => !node.capacityExploration);
+  if (!nodes.length) return '';
+  const done = (status: string) => ['integrated', 'completed'].includes(status);
+  const statusById = new Map(nodes.map(node => [node.task.id, node.status]));
+  const open = nodes.filter(node => !done(node.status)), checked = nodes.filter(node => done(node.status));
+  const rows = [...open, ...checked].slice(0, LEAD_TASK_TABLE_ROWS).map(node => {
+    const unmet = node.task.dependsOn.filter(id => !done(statusById.get(id) ?? ''));
+    return [node.task.id, node.task.kind, node.status + (node.task.status && node.task.status !== 'active' ? '/' + node.task.status : ''),
+      'owner=' + (node.assignment?.workerId ?? node.task.ownerId ?? '-'), 'attempts=' + node.attempts,
+      'waitsOn=' + (unmet.length ? unmet.join(',') : '-')].join(' ');
+  });
+  const omitted = nodes.length - rows.length;
+  return 'Current tasks (id kind status[/planStatus] owner attempts unmet dependencies; host status, not proof acceptance):\n' +
+    rows.join('\n') + (omitted ? `\n${omitted} more tasks (unfinished tasks are listed first) are in COOPERATION.json.` : '');
+}
+
 /** Add role rules; the compiler selects a scoped, versioned mathematical context for dispatch. */
 function buildCooperativeContext(problem: SolverProblem, cooperation: CooperationState, context: ContextBundle,
   action: CooperativeAction, compilation: Omit<TaskContextInput, 'instructions'>,
@@ -293,10 +313,12 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     ? `This lemma is one member of family task ${action.task.familyMember}. Prove only its own index range; the host proves the family from its members, so leave the family theorem and sibling members alone.\n`
     : '';
   const initialPlanningRules = action.kind === 'lead' && cooperation.tasks.length === 0
-    ? 'Initial planning shares the proof budget. Batch a focused inspection and save the smallest useful task graph promptly; delegate unresolved mathematical questions as research tasks. Save useful route notes early so a host planning checkpoint can hand work to peers.\n'
+    ? 'Initial planning shares the proof budget. Batch a focused inspection and save the smallest useful task graph promptly; delegate unresolved mathematical questions as research tasks. Save useful route notes early so a host planning checkpoint can hand work to peers. ' +
+      'Unless the original goal is direct, the graph is a blueprint: typed lemma tasks whose dependsOn edges lead to each original goal, each lemma needing at most one or two new inferences once its dependencies are given.\n'
     : '';
   const leadDeliveryRules = action.kind === 'lead'
-    ? 'Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it. Delegate unresolved library or mathematical searches as research tasks to eligible Researchers or the Engineer. For new, unstarted helpers that need no worker-specific context, omit ownerId so eligible peers can claim them. Keep explicit reservations when needed; removing ownerId never releases a saved assignment. Before adding work, inspect ready tasks reserved by ownerId to a busy worker while an eligible generalist is idle. Explicitly reassign an unstarted, unassigned task through the plan when useful, preserving its mathematical contract. Preserve route gates, group scope, independent reviewer eligibility and running assignments; an idle Engineer can do research while its original goal waits on a genuine route prerequisite. Apply this on every decision, including later replanning. Include every original target and preserve checked task contracts and active independent task definitions; write the plan or revision in the single math-plan JSON fence in RESEARCH.md. Add only mathematically useful executable tasks.\n'
+    ? 'Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it. Delegate unresolved library or mathematical searches as research tasks to eligible Researchers or the Engineer. For new, unstarted helpers that need no worker-specific context, omit ownerId so eligible peers can claim them. Keep explicit reservations when needed; removing ownerId never releases a saved assignment. Before adding work, inspect ready tasks reserved by ownerId to a busy worker while an eligible generalist is idle. Explicitly reassign an unstarted, unassigned task through the plan when useful, preserving its mathematical contract. Preserve route gates, group scope, independent reviewer eligibility and running assignments; an idle Engineer can do research while its original goal waits on a genuine route prerequisite. Apply this on every decision, including later replanning. Include every original target and preserve checked task contracts and active independent task definitions; write the plan or revision in the single math-plan JSON fence in RESEARCH.md. Add only mathematically useful executable tasks. ' +
+      'The delivery, plan and checkpoint formats in these instructions are complete; do not read the TheoremOS runtime source or docs to learn them.\n'
     : '';
   // A revision states only changed tasks; the host expands it against the accepted graph and validates the result.
   const planRevisionRules = action.kind === 'lead' && cooperation.tasks.length
@@ -333,7 +355,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
         `Use {"kind":"plan","baseVersion":${JSON.stringify(action.kind === 'lead' ? action.planVersion : '')},` +
         (action.kind === 'lead' && action.planNonce ? `"dispatchNonce":${JSON.stringify(action.planNonce)},` : '') +
         '"summary":"mathematical route and intended consumers","tasks":[...],"groups":[...],"proofRoutes":[...]}. ' +
-        'Inline the complete valid graph covering every original target exactly once, or replace tasks with a revision of the accepted graph (upsert/remove as described for RESEARCH.md); optional groups and proofRoutes may be omitted. The host freezes the line and can start peers before you return. ' +
+        'Inline the complete valid graph covering every original target exactly once as the tasks array, or omit tasks and put a revision of the accepted graph (upsert/remove as described for RESEARCH.md) at the top level of the same line; optional groups and proofRoutes may be omitted. The host freezes the line and can start peers before you return. ' +
         'Only the first valid publication in this dispatch is accepted. A partial line, ordinary RESEARCH.md save, or an external file reference does not publish a plan. Do not truncate the log. ' +
         'Use the exact dispatch nonce and base version; a human edit or another accepted revision supersedes stale work. Preserve checked contracts and unrelated active assignments. ' +
         'After publication, return promptly; a notes-only final keeps the published graph. Further changes in this dispatch use the normal final response, as a revision against this dispatch baseVersion that may repeat the published changes. The next Lead dispatch may publish its own revision.\n' : '';
@@ -445,9 +467,10 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     : 'No new deliveries, task status changes or idle peers since your previous Lead turn.';
   const continuationMessage = action.kind === 'lead' ? [
     'Continue the current Lead responsibility in this saved thread. The original problem and unchanged task graph are already in its history.',
-    'Before further investigation, update worktree-root RESEARCH.md with the current argument and precise unresolved inference. Read the latest COOPERATION.json for new findings, lemma proposals, blockers and active peers; read their referenced saved evidence as needed. Keep the host-synced accepted graph in RESEARCH.md and write changes as a math-plan revision.',
+    'This turn is one planning decision: from the changes and task table below, revise the accepted graph or return it unchanged. Read COOPERATION.json only for the specific records you need, and delegate open searches as research tasks. Record the current argument and precise unresolved inference in worktree-root RESEARCH.md together with the decision.',
     'Current cooperative assignment (replaces every previous dispatch nonce and receipt):\n' + JSON.stringify(action),
     leadInboxText,
+    leadTaskTable(cooperation),
     'Current host work contract:\n' + JSON.stringify(workContract),
     planningEvidence ? leadPlanningEvidenceText(planningEvidence) : '',
     compilation.feedback ? 'Current host feedback:\n' + compilation.feedback : '',

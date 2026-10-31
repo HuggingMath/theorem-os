@@ -40,6 +40,17 @@ export type MathematicsLeanSourceDeclaration = Readonly<{
 const isLeanNameCharacter = (value: string | undefined): boolean =>
   Boolean(value && /[\p{L}\p{M}\p{N}_'.?!]/u.test(value));
 
+/** `instance` inside `@[…]` or `attribute […]`, or after `deriving`, names an attribute or a derive handler.
+ * Read as a declaration, `attribute [instance 1001] a` swallowed the next command up to its `:=`. */
+function isInstanceAttributeOrDeriving(source: string, offset: number): boolean {
+  const before = source.slice(Math.max(0, offset - 256), offset);
+  if (/(?<![\p{L}\p{M}\p{N}_'.?!])deriving\s+$/u.test(before)) return true;
+  const open = before.lastIndexOf('[');
+  if (open < 0 || before.slice(open).includes(']')) return false;
+  return /(?:@|(?<![\p{L}\p{M}\p{N}_'.?!])attribute\s*)$/u.test(before.slice(0, open)) &&
+    /^\[(?:[^[\]"]*,)?\s*(?:(?:local|scoped)\s+|-\s*)?$/u.test(before.slice(open));
+}
+
 export function inspectScopedLeanDeclarations(source: string) {
   const scopes: LeanScope[] = [], commands = leanScopeCommands(maskLeanCommentsAndStrings(source));
   let command = commands.next();
@@ -55,11 +66,32 @@ export function inspectScopedLeanDeclarations(source: string) {
   });
 }
 
+/** Statements may repeat a final name component in different namespaces (`Literal.eval`, `Clause.eval`). Such
+ * declarations are identified by their qualified name, every other one by its written name. Keyed by start offset. */
+export function leanDeclarationKeys(source: string): Map<number, string> {
+  const declarations = inspectScopedLeanDeclarations(source), counts = new Map<string, number>();
+  const local = (name: string) => name.split('.').at(-1)!;
+  for (const item of declarations) counts.set(local(item.name), (counts.get(local(item.name)) ?? 0) + 1);
+  return new Map(declarations.map(item => [item.startOffset, counts.get(local(item.name))! > 1 ? item.qualifiedName : item.name]));
+}
+
+/** Final name components that repeat, with their counts; a valid edit keeps exactly the original repeats. */
+export function repeatedLeanLocalNames(names: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const name of names) counts.set(name.split('.').at(-1)!, (counts.get(name.split('.').at(-1)!) ?? 0) + 1);
+  return JSON.stringify([...counts].filter(([, count]) => count > 1).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** The declaration a closed type query reopens; a same-named declaration in another namespace is not it. */
+export function findLeanTypeQueryDeclaration(source: string, theoremName: string) {
+  const declarations = inspectScopedLeanDeclarations(source);
+  return declarations.find(declaration => declaration.qualifiedName === theoremName) ??
+    declarations.find(declaration => declaration.name === theoremName);
+}
+
 /** Reopen a declaration's namespaces and active lookup scopes for a closed type query. */
 export function leanDeclarationContextCommands(source: string, theoremName: string) {
-  const declarations = inspectScopedLeanDeclarations(source);
-  const target = declarations.find(declaration => declaration.qualifiedName === theoremName) ??
-    declarations.find(declaration => declaration.name === theoremName);
+  const target = findLeanTypeQueryDeclaration(source, theoremName);
   if (!target) throw new Error('Lean type query declaration was not found.');
   const regions = inspectLeanDeclarationRegions(source);
   const frames: string[][] = [[]];
@@ -70,10 +102,12 @@ export function leanDeclarationContextCommands(source: string, theoremName: stri
     const kind = command[1];
     if (kind === 'namespace' || kind === 'section') {
       frames.push([command[0].trim()]); ends.push(`end${command[2]?.trim() ? ' ' + command[2].trim() : ''}`);
-    } else if (kind === 'end') { if (frames.length > 1) { frames.pop(); ends.pop(); } }
+    } else if (kind === 'mutual') { frames.push([]); ends.push(''); }
+    else if (kind === 'end') { if (frames.length > 1) { frames.pop(); ends.pop(); } }
     else if (kind === 'open') frames.at(-1)!.push(command[0].trim());
   }
-  return { before: frames.flat(), after: ends.reverse() };
+  // An unclosed `mutual` before the target is not reopened.
+  return { before: frames.flat(), after: ends.filter(Boolean).reverse() };
 }
 
 /**
@@ -286,7 +320,8 @@ function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaratio
       !keyword ||
       !source.startsWith(keyword, index) ||
       isLeanNameCharacter(codePointBefore(index)) ||
-      isLeanNameCharacter(codePointAt(index + keyword.length))
+      isLeanNameCharacter(codePointAt(index + keyword.length)) ||
+      keyword === 'instance' && isInstanceAttributeOrDeriving(source, index)
     ) {
       index += 1;
       continue;

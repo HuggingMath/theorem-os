@@ -1,9 +1,10 @@
 import path from 'node:path';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarations, inspectLeanDeclarationRegions } from '../math/leanSource';
+import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import type { CooperationState } from './cooperation';
 import { deliveryFinding, type DeliveryRecord } from './deliveries';
-import type { SolverProblem } from './problem';
+import { originalDeclarationRegions, type SolverProblem } from './problem';
 import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
 import { buildProofContinuation } from './progress';
 import { contextTaskConsumers } from './taskConsumers';
@@ -13,6 +14,11 @@ import { contextCheckpointRejectionFeedback } from './contextCheckpoint';
 
 export const DEFAULT_TASK_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES = 64 * 1024;
+/** Above this size a source is shown compactly: definition bodies are omitted and the statement is cited, not repeated. */
+export const COMPACT_CONTEXT_SOURCE_BYTES = 64 * 1024;
+/** A compact source keeps definition bodies up to this size inline. */
+const COMPACT_INLINE_BODY_BYTES = 32;
+const COMPACT_BODY_MARKER = '\n/- body omitted -/\n';
 export type ContextItemKind = 'problem' | 'assignment' | 'interfaces' | 'sources' | 'feedback' | 'delivery' |
   'finding' | 'history' | 'blocker' | 'routes' | 'continuation' | 'statement-review' | 'checkpoint' | 'groups';
 export type ContextOmissionReason = 'budget' | 'superseded' | 'stale-version' | 'duplicate' | 'selection-limit' |
@@ -54,22 +60,51 @@ const present = (value: unknown): value is string => typeof value === 'string' &
 const localName = (name: string) => name.split('.').at(-1);
 const sourcePath = (problem: SolverProblem, file: string) => path.posix.join(problem.projectRelative.replaceAll('\\', '/'), file);
 
-/** Preserve source-level variables, scopes, instances and fixed definitions; never copy an existing proof body. */
+/**
+ * Preserve source-level variables, scopes, instances and fixed definitions; never copy an existing proof body.
+ * A source above COMPACT_CONTEXT_SOURCE_BYTES also omits definition and instance bodies, which stay in the frozen file.
+ */
 export function frozenSourceContext(problem: SolverProblem, file: string, source: string): string {
   const regions = inspectLeanDeclarationRegions(source), originals = problem.declarations[file] ?? [];
+  const bytes = Buffer.byteLength(source), compact = bytes > COMPACT_CONTEXT_SOURCE_BYTES;
+  const masked = compact ? maskLeanCommentsAndStrings(source) : '';
+  const matching = originalDeclarationRegions(source, regions);
   if (originals.some(original => {
-    const found = regions.filter(region => region.name === original.name);
+    const found = matching(original);
     return found.length !== 1 || found[0].declarationType !== original.header || (original.body &&
       mathDigest(source.slice(found[0].bodyOffset, found[0].endOffset).trim()) !== original.body);
   })) return stale(`frozen-source:${file}`);
   const kinds = new Map(inspectLeanDeclarations(source).map(item => [item.startOffset, item.kind]));
-  for (const region of [...regions].reverse()) {
+  for (const [index, region] of [...regions.entries()].reverse()) {
     const isTarget = problem.targets.some(target => target.proofPath === file &&
       localName(target.theoremName) === localName(region.name));
-    if (kinds.get(region.startOffset) === 'theorem' || isTarget)
-      source = source.slice(0, region.bodyOffset) + '\n/- Proof body omitted by the host context compiler. -/\n' + source.slice(region.endOffset);
+    if (kinds.get(region.startOffset) === 'theorem' || isTarget) {
+      // A mutual block can extend a region over the next declaration; a compact cut stops before it.
+      const end = compact ? Math.min(region.endOffset, regions[index + 1]?.startOffset ?? Infinity) : region.endOffset;
+      source = source.slice(0, region.bodyOffset) + '\n/- Proof body omitted by the host context compiler. -/\n' + source.slice(end);
+    } else if (compact) {
+      // Structure-instance fields follow `where`; the first `:=` would sit inside them.
+      const where = /(?<![\p{L}\p{M}\p{N}_'.?!])where(?![\p{L}\p{M}\p{N}_'.?!])/u.exec(masked.slice(region.startOffset, region.bodyOffset));
+      const start = where ? region.startOffset + where.index + where[0].length : region.bodyOffset;
+      const end = Math.min(region.endOffset, regions[index + 1]?.startOffset ?? Infinity);
+      if (Buffer.byteLength(source.slice(start, end)) > COMPACT_INLINE_BODY_BYTES)
+        source = source.slice(0, start) + COMPACT_BODY_MARKER + source.slice(end);
+    }
   }
-  return source;
+  return compact ? `/- Host context note: this ${bytes}-byte source is shown compactly. Definition and instance bodies ` +
+    `over ${COMPACT_INLINE_BODY_BYTES} bytes appear as "body omitted"; read them with git show COMMIT:PATH from this file's frozen-sources entry. -/\n` + source : source;
+}
+
+/** A large statement that is a frozen file is cited by commit and path instead of being repeated. */
+function originalProblemSection(input: TaskContextInput): ContextSection {
+  const { problem } = input, statement = problem.contract.formalStatement, bytes = Buffer.byteLength(statement);
+  const title = `${input.taskText}\n\nOriginal problem:`, digest = mathDigest(statement);
+  const file = bytes > COMPACT_CONTEXT_SOURCE_BYTES && present(problem.baseCommit)
+    ? Object.keys(problem.trustedFiles ?? {}).sort().find(file => problem.trustedFiles[file] === digest) : undefined;
+  if (!file) return section('original-problem', 'problem', title, statement);
+  return section('original-problem', 'problem', title, { commit: problem.baseCommit, path: sourcePath(problem, file), bytes, sha256: digest,
+    retrieval: 'This statement is large, so it is cited rather than repeated. Read the complete text with git show COMMIT:PATH in this isolated worktree. ' +
+      'The frozen source context below shows the same declarations, scopes and headers with proof and long definition bodies omitted.' });
 }
 
 function frozenHeader(problem: SolverProblem, node: Pick<TaskRecord, 'task'>): string | undefined {
@@ -411,7 +446,7 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     ...(node.task.kind === 'goal' ? { exactFrozenHeader: frozenHeader(problem, node) } : {}),
     evidence: references.encode(sharedEvidence(evidence(node, input.environmentDigest))), source: proofSources(problem, node) }));
   const mandatory: ContextSection[] = [
-    section('original-problem', 'problem', `${input.taskText}\n\nOriginal problem:`, problem.contract.formalStatement),
+    originalProblemSection(input),
     section('original-assumptions', 'problem', 'Frozen assumptions and problem identity:', { problemReceiptDigest: problem.receiptDigest,
       statementHash: problem.contract.statementHash, leanStatementHash: problem.contract.leanStatementHash,
       informalStatement: problem.contract.informalStatement, assumptions: problem.contract.assumptions }),

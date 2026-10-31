@@ -187,13 +187,19 @@ export const planError = (code: string, detail: Record<string, unknown>, hint = 
   new Error(`${code}: ${JSON.stringify(detail)}${hint ? '. ' + hint : ''}`);
 const optionalFields = (value: any, keys: readonly string[]) =>
   Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
+/** A null field means "unset", as it does in a revision upsert; Leads write `"ownerId": null` for an unowned task. */
+const withoutNulls = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+  ? Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null)) : value;
 
 export function parseCooperationPlan(problem: SolverProblem, value: any): { tasks: CooperativeTask[]; groups: RouteGroup[]; proofRoutes?: ProofRoute[] } {
+  if (value?.tasks && typeof value.tasks === 'object' && !Array.isArray(value.tasks))
+    throw planError('math_plan_invalid', { field: 'tasks' },
+      'tasks must be the complete array of task objects; a revision omits tasks and puts baseVersion, upsert and remove at the top level');
   if (!value || !Array.isArray(value.tasks) || value.tasks.length < 1)
     throw new Error('math_plan_invalid');
   // Leads routinely serialize an empty explicit list; it carries the same meaning as omitting it.
   const rawGroups = !Array.isArray(value.groups) || !value.groups.length
-    ? [{ id: 'main', objective: 'Prove the original problem' }] : value.groups;
+    ? [{ id: 'main', objective: 'Prove the original problem' }] : value.groups.map(withoutNulls);
   const groups: RouteGroup[] = rawGroups.map((group: any, index: number) => {
     const field = !group || typeof group !== 'object' ? 'group' : !validId(group.id) ? 'id' :
       typeof group.objective !== 'string' || !group.objective.trim() ? 'objective' :
@@ -208,7 +214,7 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
   });
   const duplicateGroup = groups.find((group, index) => groups.findIndex(item => item.id === group.id) !== index);
   if (duplicateGroup) throw planError('math_plan_duplicate_group', { groupId: duplicateGroup.id });
-  const tasks: CooperativeTask[] = expandTaskFamilies(value.tasks, planError).map((value: any) => {
+  const tasks: CooperativeTask[] = expandTaskFamilies(value.tasks.map(withoutNulls), planError).map((value: any) => {
     // A research request with an exact proof target is proof work, regardless of its label.
     if (value && ['research', 'sketch'].includes(value.kind) && value.theoremName &&
         typeof value.type === 'string' && value.type.trim())

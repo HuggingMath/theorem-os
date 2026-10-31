@@ -18,7 +18,7 @@ import type { ProofReadyRecord } from './proofReady';
 import type { ProofImportRecord } from './proofImportRecord';
 import type { ResearchRecord } from './researchRecords';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
-import { expandPlanPatch, isPlanPatch, type PlanPatchBase } from './planPatch';
+import { expandPlanPatch, isPlanPatch, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
 import { applyGoalPathDecisions, type GoalPathDecisions } from './goalPathDecisions';
 import type { GoalPathReview } from './goalPathReview';
 import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
@@ -98,6 +98,13 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   /** Human approval of the first accepted plan, when the run requires it (state.planApproval). */
   planApproval?: import('./planApproval').PlanApprovalRecord;
   /**
+   * Last wake for peers left without work while others run; a peer idle since then can wake the Lead again. `count`
+   * counts consecutive wakes no deciding Lead turn answered; it sets the backoff before the same peers are re-owed.
+   */
+  idlePeerWake?: { at: number; workerIds: string[]; count?: number };
+  /** Inbox basis time of the last Lead turn that decided (accepted or published a plan); undecided turns leave it. */
+  leadDecisionBasisAt?: number;
+  /**
    * Latest original-goal path stall (no runnable frontier input). `answeredAt` once a Lead turn shown it adopted or declined
    * every presented input, or the stall changed; after MAX_UNANSWERED_GOAL_PATH_TURNS turns that did neither, it is
    * recorded as `ignoredAt` instead. `declined` keeps the Lead's reasons for this stall.
@@ -157,7 +164,7 @@ type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: Goal
  */
 export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
   const { goalPath, ...patchOptions } = options;
-  const answered = applyGoalPathDecisions(value, goalPath, base);
+  const answered = applyGoalPathDecisions(liftNestedPlanPatch(value), goalPath, base);
   const decisions = answered.decisions ? { goalPathDecisions: answered.decisions } : {};
   if (!isPlanPatch(answered.value)) return { ...parseCooperationPlan(problem, answered.value), ...decisions };
   return { ...parseCooperationPlan(problem, expandPlanPatch(answered.value, base, patchOptions)), fromPatch: true, ...decisions };

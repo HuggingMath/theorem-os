@@ -7,7 +7,7 @@ import { readLeanEvalBootstrapReceipt } from '../math/leanEvalBootstrap';
 import { resolveLeanEvalSubmissionName } from '../math/leanEvalSubmission';
 import { canonicalMathJson, mathDigest, readMathJson } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
-import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanDeclarations } from '../math/leanSource';
+import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanDeclarations, inspectScopedLeanDeclarations } from '../math/leanSource';
 import { mathConstructionImports, mathLocalModuleBuildOrder } from '../math/mathConstructionSources';
 import { isAllowedMathProofSource } from '../math/mathProofSourcePolicy';
 import type { MathProblemContract } from '../math/contracts';
@@ -41,6 +41,18 @@ export class SolverSourceError extends Error {
       : `Restore the original name, parameters, type and any frozen proof or definition body${this.declarationName ? ` of ${this.declarationName}` : ''} from the seed commit. Preserve new proof work.`;
   }
 }
+/** `qualifiedName` is set only when the statement repeats the written name in another namespace. */
+export type OriginalDeclaration = Readonly<{ name: string; qualifiedName?: string; header: string; body?: string }>;
+
+/** Regions of `source` holding an original: the same written name and, for a repeated one, the same qualified name. */
+export function originalDeclarationRegions(source: string, regions = inspectLeanDeclarationRegions(source)) {
+  let qualified: Map<number, string> | undefined;
+  const qualifiedName = (offset: number) => (qualified ??= new Map(inspectScopedLeanDeclarations(source)
+    .map(item => [item.startOffset, item.qualifiedName]))).get(offset);
+  return (original: Pick<OriginalDeclaration, 'name' | 'qualifiedName'>) => regions.filter(region => region.name === original.name &&
+    (original.qualifiedName === undefined || qualifiedName(region.startOffset) === original.qualifiedName));
+}
+
 export type SolverProblem = Readonly<{
   kind: 'imo2026' | 'lean-eval' | 'example' | 'lean-task';
   workspace: string;
@@ -53,7 +65,7 @@ export type SolverProblem = Readonly<{
   ownedFiles: readonly string[];
   activeProblemPath: string;
   sourceRepository?: string;
-  declarations: Readonly<Record<string, readonly { name: string; header: string; body?: string }[]>>;
+  declarations: Readonly<Record<string, readonly OriginalDeclaration[]>>;
   sourceStructure: Readonly<Record<string, string>>;
   sourceImports?: Readonly<Record<string, readonly string[]>>;
   /** Owned library-pack modules whose bytes are frozen (file → digest); proofs import them and never edit them. */
@@ -118,16 +130,18 @@ function isInstanceQuery(line: string): boolean {
   return depth === 0 && validBare();
 }
 
-function sourceStructure(source: string, originalNames: ReadonlySet<string>, originalImports?: readonly string[], allowedImports = solverMathlibImports(source)): string {
+function sourceStructure(source: string, originals: readonly Pick<OriginalDeclaration, 'name' | 'qualifiedName'>[],
+  originalImports?: readonly string[], allowedImports = solverMathlibImports(source)): string {
   const addedImports = new Set(originalImports === undefined ? [] :
     allowedImports.filter(module => !originalImports.includes(module)));
-  const regions = inspectLeanDeclarationRegions(source);
+  const regions = inspectLeanDeclarationRegions(source), matching = originalDeclarationRegions(source, regions);
+  const original = new Set(originals.flatMap(item => matching(item)).map(region => region.startOffset));
   let frozen = '';
   let cursor = 0;
   for (const region of regions) {
     const context = source.slice(cursor, region.startOffset);
-    frozen += originalNames.has(region.name) ? context : context.replace(/\bnoncomputable[ \t]+$/u, '');
-    if (originalNames.has(region.name)) frozen += `${region.declarationType}\n`;
+    frozen += original.has(region.startOffset) ? context : context.replace(/\bnoncomputable[ \t]+$/u, '');
+    if (original.has(region.startOffset)) frozen += `${region.declarationType}\n`;
     cursor = region.endOffset;
   }
   frozen += source.slice(cursor);
@@ -179,19 +193,27 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
   const originalSource = (file: string) => receipt.schema === 'theorem-os.lean-task.v1'
     ? committedSource(workspace, receipt.baseCommit, path.join(projectRelative, file))
     : fs.readFileSync(path.join(receipt.projectRoot, file), 'utf8');
+  // Library-pack modules keep the exact bytes the bootstrap recorded.
+  const libraryPack = 'libraryPack' in receipt ? receipt.libraryPack : undefined;
   const declarations = Object.fromEntries(receipt.solverOwnedFiles.filter(file => file.endsWith('.lean')).map(file => {
-    const source = originalSource(file);
-    const kinds = new Map(inspectLeanDeclarations(source).map(item => [item.name, item.kind]));
-    return [file, inspectLeanDeclarationRegions(source).map(item => ({ name: item.name, header: item.declarationType,
-      ...(kinds.get(item.name) !== 'theorem' && !targetNames.has(item.name.split('.').at(-1))
+    const source = originalSource(file), regions = inspectLeanDeclarationRegions(source);
+    const kinds = new Map(inspectLeanDeclarations(source).map(item => [item.startOffset, item.kind]));
+    // Frozen library modules are compared as whole files, never by declaration.
+    const written = new Map<string, number>();
+    if (!libraryPack || !Object.hasOwn(libraryPack.files, file))
+      for (const item of regions) written.set(item.name, (written.get(item.name) ?? 0) + 1);
+    const repeated = (name: string) => (written.get(name) ?? 0) > 1;
+    const qualified = regions.some(item => repeated(item.name)) ?
+      new Map(inspectScopedLeanDeclarations(source).map(item => [item.startOffset, item.qualifiedName])) : undefined;
+    return [file, regions.map((item): OriginalDeclaration => ({ name: item.name,
+      ...(repeated(item.name) ? { qualifiedName: qualified!.get(item.startOffset)! } : {}), header: item.declarationType,
+      ...(kinds.get(item.startOffset) !== 'theorem' && !targetNames.has(item.name.split('.').at(-1))
         ? { body: mathDigest(source.slice(item.bodyOffset, item.endOffset).trim()) } : {}) }))];
   }));
   const structures = Object.fromEntries(Object.entries(declarations).map(([file, originals]) =>
-    [file, sourceStructure(originalSource(file), new Set(originals.map(item => item.name)))]));
+    [file, sourceStructure(originalSource(file), originals)]));
   const sourceImports = Object.fromEntries(Object.keys(declarations).map(file =>
     [file, mathConstructionImports(originalSource(file))]));
-  // Library-pack modules keep the exact bytes the bootstrap recorded.
-  const libraryPack = 'libraryPack' in receipt ? receipt.libraryPack : undefined;
   const frozenFiles = libraryPack && Object.fromEntries(Object.entries(libraryPack.files).map(([file, digest]) => {
     const target = path.join(receipt.projectRoot, file);
     assertMathCanonicalPath(target);
@@ -232,18 +254,18 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
     assertMathCanonicalPath(file);
     const source = fs.readFileSync(file, 'utf8');
     ownedSources[relative] = source;
-    const regions = inspectLeanDeclarationRegions(source);
+    const matching = originalDeclarationRegions(source);
     for (const original of originals) {
-      const matches = regions.filter(item => item.name === original.name);
+      const matches = matching(original);
       const current = matches[0];
       if (matches.length !== 1 || current.declarationType !== original.header ||
           (original.body && mathDigest(source.slice(current.bodyOffset, current.endOffset).trim()) !== original.body))
-        throw new SolverSourceError(relative, 'math_original_declaration_changed', original.name);
+        throw new SolverSourceError(relative, 'math_original_declaration_changed', original.qualifiedName ?? original.name);
     }
     const allowedImports = solverProofImports(problem, source);
     if (allowedImports.some(module => !module.startsWith('Mathlib.') && !problem.sourceImports?.[relative]?.includes(module)))
       addedLocalImportFile = relative;
-    if (sourceStructure(source, new Set(originals.map(item => item.name)), problem.sourceImports?.[relative], allowedImports) !== problem.sourceStructure[relative])
+    if (sourceStructure(source, originals, problem.sourceImports?.[relative], allowedImports) !== problem.sourceStructure[relative])
       throw new SolverSourceError(relative, 'math_original_context_changed');
   }
   const conflict = Object.keys(frozenSources).length ? libraryDeclarationConflict(frozenSources, ownedSources) : undefined;
@@ -280,6 +302,35 @@ function isUntrackedSolverScratch(problem: SolverProblem, worktree: string, rela
 }
 const solverGitPaths = (worktree: string, args: string[]): string[] => mathGitBytes(worktree, args,
   { timeout: 30_000, maxBuffer: 1024 * 1024, errorMessage: `math_git_failed:${args[0]}` }).toString('utf8').split('\0').filter(Boolean);
+
+/**
+ * Advisory progress inside the worker's own scratch roots: numerical probes, search scripts and
+ * command output live there while a research assignment is still being explored, so a scheduling
+ * clock that only reads committed notes reports no progress for genuine work. Reading scratch can
+ * never accept anything; this digest is scheduling evidence only and is bounded so a large probe
+ * output cannot turn the checkpoint into a bulk read.
+ */
+export function solverScratchDigest(problem: SolverProblem, worktree: string): string | undefined {
+  try {
+    const untracked = new Set(solverGitPaths(worktree, ['ls-files', '--others', '--exclude-standard', '-z']));
+    const scratch = [...untracked].filter(relative => solverScratch(problem, relative)).sort().slice(0, 256);
+    if (!scratch.length) return undefined;
+    let budget = 4 * 1024 * 1024;
+    const entries: [string, string][] = [];
+    for (const relative of scratch) {
+      const file = path.join(worktree, relative);
+      try {
+        assertMathCanonicalPath(file);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile()) { entries.push([relative, 'non-file']); continue; }
+        if (stat.size > budget) { entries.push([relative, `large:${stat.size}`]); continue; }
+        budget -= stat.size;
+        entries.push([relative, mathDigest(fs.readFileSync(file))]);
+      } catch { continue; }
+    }
+    return entries.length ? mathDigest(canonicalMathJson(entries)) : undefined;
+  } catch { return undefined; }
+}
 
 /** Changed paths outside the owned sources, journals and advisory scratch roots. */
 function solverPathsOutsideOwnership(problem: SolverProblem, worktree: string) {

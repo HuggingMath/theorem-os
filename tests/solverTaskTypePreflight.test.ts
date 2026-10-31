@@ -62,6 +62,20 @@ describe('typed helper dispatch admission', () => {
     expect(state.cooperation!.tasks[0].proof).toBeUndefined();
   });
 
+  it('quotes the parser stop in the Lead feedback and names whose worktree holds the diagnostics', async () => {
+    const task = state.cooperation!.tasks[0].task;
+    task.type = '∃ λ : Nat, λ = λ';
+    vi.mocked(TaskTypePreflightCache.prototype.check).mockResolvedValue({ current: () => true, result: { status: 'invalid',
+      inputDigest: 'fixed-input', reason: "TypeDiagnostic.lean:9:1: error: <input>:1:2: expected '(', '_' or identifier",
+      taskDigest: taskVersion(task), artifact: { path: '.lake/type-diagnostics/x/manifest.json', digest: 'd'.repeat(64) },
+      evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' } });
+    expect(typeof await peer()).toBe('symbol');
+    const feedback = state.cooperation!.tasks[0].feedback!;
+    expect(feedback).toContain('∃ ⟦λ⟧ : Nat, λ = λ');
+    expect(feedback).toContain('`λ` is a reserved Lean token, not an identifier');
+    expect(feedback).toContain("Advisory type diagnostics in proof's worktree: .lake/type-diagnostics/x/manifest.json");
+  });
+
   it('blocks an exact invalid interface without charging a model attempt and gives Lead precise feedback', async () => {
     vi.mocked(TaskTypePreflightCache.prototype.check).mockResolvedValue(result('invalid'));
     expect(typeof await peer()).toBe('symbol');

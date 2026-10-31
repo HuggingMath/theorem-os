@@ -4,12 +4,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, readMathText, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
-import { committedSource, git, solverSourceConstraints } from './problem';
+import { committedSource, git, originalDeclarationRegions, solverSourceConstraints } from './problem';
 import { solverProofFeedback, solverSourceFeedback } from './feedback';
 import { assessTaskResponsibility, assignSharedResearchTask, independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
 import type { DispatchWaitObservation } from './archive';
 import { CAPACITY_EXPLORATION_FOCUSES, capacityExplorationInput, createCapacityExploration,
-  currentCapacityExploration } from './capacityExploration';
+  currentCapacityExploration, TIMED_EXPLORATION_FOCUSES, TIMED_EXPLORATION_IDLE_MS, TIMED_EXPLORATION_MIN_REMAINING_MS,
+  TIMED_EXPLORATION_UNANSWERED_WAKES, timedExplorationTargets } from './capacityExploration';
 import { hasFreshSolverCheck, proofReceiptsMatch, type ProofCheck } from './modules/evidence';
 import { originalGoalTaskFocus, readyResearchTasks, researchCanAdvance, routeAllowsTask, taskCanStart, taskDependenciesReady, selectedTaskRoute } from './modules/search';
 import { deliveryDetails, reviewVerdict, readMathResponse as block, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
@@ -25,10 +26,10 @@ import { deliverHumanGuidance, readHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
-import { taskTypePreflightEnvironmentIdentity, type TaskTypePreflight } from './taskTypePreflight';
+import { taskTypePreflightEnvironmentIdentity, typeDiagnosticExcerpt, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
-import { consumeLeadWakes, dropLeadWakes, leadWakePending, settleLeadWakes } from './leadWakes';
-import { leadInbox, leadInboxBasis, type LeadInboxBasis } from './leadInbox';
+import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
+import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
@@ -65,10 +66,15 @@ export class CooperativeResearch extends CooperationInputs {
       this.input.emit('human_guidance_unavailable', { reason: error instanceof Error ? error.message : 'math_guidance_unavailable' });
     }).finally(() => { this.guidancePulse = undefined; });
   }
-  /** Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. */
+  /**
+   * Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. A small team with a
+   * solving deadline gets the same supply only through a narrow gate (timedExplorationDue), on its crux consumer.
+   */
   private async requestCapacityExploration(worker: ResearchWorker, budget: DispatchBudget, previousReady: readonly TaskRecord[]) {
-    if (!this.input.continuousResearch || this.input.workers.length <= 4 ||
-        !['prover', 'researcher', 'engineer'].includes(worker.role) || budget.maxTurns !== Infinity || budget.remainingMs !== Infinity) return false;
+    const expanded = this.input.workers.length > 4 && budget.remainingMs === Infinity;
+    const timed = this.input.workers.length <= 4 && Number.isFinite(budget.remainingMs);
+    if (!this.input.continuousResearch || !expanded && !timed ||
+        !['prover', 'researcher', 'engineer'].includes(worker.role) || budget.maxTurns !== Infinity) return false;
     return this.input.exclusiveCheck(async () => {
       if (this.stopping || this.failure || this.input.signal.aborted || this.input.modelDispatchAllowed?.() === false ||
           !this.liveWorkers.has(this.lead.id) || !this.allocationPeers.some(peer => peer.id === worker.id) ||
@@ -81,11 +87,16 @@ export class CooperativeResearch extends CooperationInputs {
       // A peer may have published real work while this request waited for the archive transaction.
       const newlyReady = assignSharedResearchTask(ready, worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers);
       if (newlyReady) return !previousReady.includes(newlyReady);
+      if (timed && !this.timedExplorationDue(worker, budget)) return false;
       const focus = originalGoalTaskFocus(this.plannedTasks(), this.archive.groups, this.input.state.environmentDigest);
       const targets = [...focus.frontier].map(id => this.node(id)).filter(node => node &&
         ['lemma', 'goal'].includes(node.task.kind) && !['integrated', 'completed', 'delivered'].includes(node.status) &&
         !this.synchronizationBlocked(node.task) && routeAllowsTask(node.task, this.archive.tasks, this.archive.groups));
-      for (const method of CAPACITY_EXPLORATION_FOCUSES) for (const target of targets) {
+      // Expanded teams spread each method across the frontier; the timed gate stays on the crux first.
+      const plan = timed ? timedExplorationTargets(targets).flatMap(target =>
+        TIMED_EXPLORATION_FOCUSES.map(method => ({ method, target })))
+        : CAPACITY_EXPLORATION_FOCUSES.flatMap(method => targets.map(target => ({ method, target })));
+      for (const { method, target } of plan) {
         const inputDigest = capacityExplorationInput(target.task, this.archive.tasks, this.explorationIdentity);
         if (this.archive.capacityExplorationInputs?.some(input => input.targetTaskId === target.task.id &&
             input.inputDigest === inputDigest && input.focus === method)) continue;
@@ -98,11 +109,36 @@ export class CooperativeResearch extends CooperationInputs {
           targetTaskId: target.task.id, taskId: node.task.id });
         this.archive.tasks.push(node);
         this.input.emit('capacity_exploration_requested', { workerId: worker.id, taskId: node.task.id,
-          targetTaskId: target.task.id, inputDigest, focus: method, evidenceStatus: 'advisory' });
+          targetTaskId: target.task.id, inputDigest, focus: method, evidenceStatus: 'advisory',
+          ...(timed ? { gate: 'timed-idle' } : {}) });
         this.changed(); return true;
       }
       return false;
     });
+  }
+  private explorationTimer?: { at: number; timer: NodeJS.Timeout };
+  /**
+   * The narrow gate for a team of at most four with a solving deadline. This peer has waited at least
+   * TIMED_EXPLORATION_IDLE_MS with nothing it can start; since the last deciding Lead turn the Lead was woken for idle
+   * peers at least twice while this peer was idle, and no Lead turn is running now; and enough solving time remains.
+   * Only the wait itself matures with time, so a peer that is otherwise eligible is re-dispatched when it does.
+   */
+  private timedExplorationDue(worker: ResearchWorker, budget: DispatchBudget): boolean {
+    const scheduling = this.input.state.workers?.find(record => record.id === worker.id)?.scheduling;
+    const wait = scheduling?.wait, wake = this.archive.idlePeerWake;
+    if (budget.remainingMs < TIMED_EXPLORATION_MIN_REMAINING_MS || this.active.has(this.lead.id) ||
+        scheduling?.status !== 'idle' || !wait || wait.endedAt !== undefined || !NO_WORK_STAGES.has(wait.stage) ||
+        !wake || wake.at <= (this.archive.leadDecisionBasisAt ?? 0) || (wake.count ?? 1) < TIMED_EXPLORATION_UNANSWERED_WAKES ||
+        wake.at < scheduling.since) return false;
+    const dueAt = scheduling.since + TIMED_EXPLORATION_IDLE_MS, now = Date.now();
+    if (dueAt <= now) return true;
+    // One timer serves every waiting peer: the earliest one re-dispatches all, and later peers re-arm it.
+    if (dueAt - now <= budget.remainingMs - TIMED_EXPLORATION_MIN_REMAINING_MS && !(this.explorationTimer && this.explorationTimer.at <= dueAt)) {
+      clearTimeout(this.explorationTimer?.timer);
+      const timer = setTimeout(() => { this.explorationTimer = undefined; if (!this.stopping) this.wake(); }, dueAt - now);
+      timer.unref(); this.explorationTimer = { at: dueAt, timer };
+    }
+    return false;
   }
   /** A normal advisory checkpoint preserves the draft before the new typed task takes priority. */
   shouldYieldCapacityExploration(worker: ResearchWorker, action: CooperativeAction): boolean {
@@ -117,6 +153,33 @@ export class CooperativeResearch extends CooperationInputs {
   }
   private leadPauseInputs = new WeakMap<CooperativeAction, string>();
   private pendingLeadInboxBases = new WeakMap<CooperativeAction, LeadInboxBasis>();
+  private idlePeerTimer?: NodeJS.Timeout;
+  /**
+   * Busy peers never return the Lead's turn, so a peer left without startable work would wait for them. One wake per
+   * idle peer no deciding Lead turn has seen idle: the inbox already lists idle workers, and a turn that decides (or
+   * this wake) moves the basis past them. A turn cut or paused without a decision has not answered them, so a peer
+   * an earlier wake named is re-owed a turn on the Lead's backoff schedule. Nothing running is the ordinary
+   * idle-Lead path, not this one.
+   */
+  private wakeForIdlePeers() {
+    clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
+    if (this.stopping || !this.active.size || this.active.has(this.lead.id) || !this.archive.tasks.length) return;
+    const decidedAt = this.archive.leadDecisionBasisAt ?? 0, previous = this.archive.idlePeerWake;
+    const unanswered = previous && previous.at > decidedAt ? previous : undefined;
+    const retry = unanswered && { at: unanswered.at,
+      notBefore: unanswered.at + IDLE_PEER_WAKE_MS * 2 ** Math.min(unanswered.count ?? 1, LEAD_MAX_BACKOFF) };
+    const { due, dueAt } = idlePeersAwaitingLead(this.input.state.workers ?? [], this.lead.id, decidedAt, Date.now(), retry);
+    if (due.length) {
+      this.archive.idlePeerWake = { at: Date.now(), workerIds: due, ...(unanswered ? { count: (unanswered.count ?? 1) + 1 } : {}) };
+      this.wakeLead('peers-idle');
+      this.input.emit('lead_woken_for_idle_peers', { workerIds: due, idleWakeMs: IDLE_PEER_WAKE_MS });
+      this.input.save();
+    } else if (dueAt !== undefined) {
+      this.idlePeerTimer = setTimeout(() => { this.idlePeerTimer = undefined; if (!this.stopping) this.wake(); },
+        Math.max(0, dueAt - Date.now()));
+      this.idlePeerTimer.unref();
+    }
+  }
   private leadResponsibilityDigest(): string {
     const focus = originalGoalTaskFocus(this.archive.tasks, this.archive.groups, this.input.state.environmentDigest);
     return mathDigest(canonicalMathJson({ schema: 'theorem-os.lead-responsibility.v1', ...this.explorationIdentity,
@@ -161,6 +224,8 @@ export class CooperativeResearch extends CooperationInputs {
   async stop() {
     this.stopping = true;
     if (this.planApprovalPending()) this.input.emit('plan_approval_unanswered', { planVersion: this.archive.planVersion });
+    clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
+    clearTimeout(this.explorationTimer?.timer); this.explorationTimer = undefined;
     for (const worker of this.input.workers) this.clearDispatchWait(worker, 'stopped');
     this.wake();
     clearInterval(this.timer);
@@ -333,9 +398,12 @@ export class CooperativeResearch extends CooperationInputs {
     if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, running);
     if (!running && !this.livePeers.length) return;
     if (this.archive.review && ['pending', 'running'].includes(this.archive.review.status)) return this.waitForDispatch();
+    this.wakeForIdlePeers();
     const wakes = this.archive.leadWakes!, through = wakes.requested;
     // Conditions recomputed from durable state; only one-shot events are saved wake-ups.
     let wake = leadWakePending(wakes);
+    // Idle peers are not in the planning digests, so their unconsumed wake must not be deduplicated away.
+    const owedIdle = (wakes.recent ?? []).some(item => item.reason === 'peers-idle' && item.seq > wakes.consumed && item.seq <= through);
     const rejection = this.archive.planRejection;
     if (rejection?.stalled) {
       if (rejection.inputDigest === this.planningInputDigest() && rejection.proposalDigest === this.proposedPlanDigest()) {
@@ -392,11 +460,11 @@ export class CooperativeResearch extends CooperationInputs {
     if (wake || (!running && (!this.livePeers.length || !this.hasAssignableTask()))) {
       const inputDigest = this.planningInputDigest();
       // The previous decision (or pause) already answers these inputs; drop the wake-ups without a turn.
-      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall) {
+      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall && !owedIdle) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask() ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : RETRY_DISPATCH;
       }
-      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall) {
+      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall && !owedIdle) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask()
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
@@ -587,8 +655,9 @@ export class CooperativeResearch extends CooperationInputs {
           this.invalidTaskTypes.set(node, { canonical: seed, environment, taskDigest, dependencies, project, workerId: worker.id,
             environmentIdentity: taskTypePreflightEnvironmentIdentity(project, workerAccess!.environment) });
           this.moveTask(node, 'blocked', 'rejected');
-          node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) +
-            (checked.result.artifact ? `\nAdvisory type diagnostics: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
+          const excerpt = typeDiagnosticExcerpt(task.type!, checked.result.reason);
+          node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) + (excerpt ? `\n${excerpt}` : '') +
+            (checked.result.artifact ? `\nAdvisory type diagnostics in ${worker.id}'s worktree: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
             '\nRevise the closed helper type or its context before proving it. This is not proof acceptance or a mathematical refutation.';
           this.wakeLead('task-type-invalid'); this.changed(); return RETRY_DISPATCH;
         }
@@ -737,11 +806,11 @@ export class CooperativeResearch extends CooperationInputs {
         // Library modules are byte-frozen as a whole; their declarations need no per-task bodies.
         if (problem.frozenFiles && Object.hasOwn(problem.frozenFiles, file)) return [file, originals];
         const source = committedSource(worker.worktree, node.assignment!.seedCommit, `${problem.projectRelative}/${file}`);
-        const regions = inspectLeanDeclarationRegions(source);
+        const matching = originalDeclarationRegions(source);
         return [file, originals.map(original => {
           if (original.body || file === node.task.proofPath &&
               original.name.split('.').at(-1) === node.task.theoremName?.split('.').at(-1)) return original;
-          const region = regions.find(item => item.name === original.name)!;
+          const region = matching(original)[0]!;
           return { ...original, body: mathDigest(source.slice(region.bodyOffset, region.endOffset).trim()) };
         })];
       }));

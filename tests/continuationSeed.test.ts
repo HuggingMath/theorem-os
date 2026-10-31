@@ -17,6 +17,7 @@ import { readContinuationPage, readContinuationSnapshot } from '../src/solver/co
 import { committedSource, git, readSolverProblem } from '../src/solver/problem';
 import { theoryModuleSource } from '../src/math/theoryModules';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { expandTaskFamilies } from '../src/solver/taskFamilies';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import * as taskProofs from '../src/solver/cooperativeProof';
 import { hasTaskConnectionCheck } from '../src/solver/taskConnections';
@@ -396,6 +397,24 @@ describe('explicit prepared-run continuation initialization', () => {
     const draft = JSON.parse(readContinuationPage(path.join(f.directory, 'continuation.json'), state.continuationDigest, 'draft-prover-1').text);
     expect(draft.assignment.taskId).toBe('second');
     await expect(f.seed()).resolves.toMatchObject({ stage: 'complete', failed: [] });
+  });
+
+  it('hands off definition and family tasks with their exact identities', async () => {
+    const f = fixture(), lemma = { kind: 'lemma' as const, revision: 0, dependsOn: [], proofPath: 'Submission/Helpers.lean' };
+    const tasks = expandTaskFamilies([
+      { ...lemma, id: 'colouring', objective: 'Define the colouring', declaration: 'definition',
+        theoremName: 'Submission.Helpers.Colouring', type: 'Type' },
+      { ...lemma, id: 'cases', objective: 'Check each case', theoremName: 'Submission.Helpers.cases',
+        family: { lo: 0, hi: 4, chunk: 2, predicate: 'Submission.Helpers.Good' } }], code => new Error(code))
+      .map(task => ({ revision: 0, ...task as CooperativeTask }));
+    expect(tasks.map(task => task.familyMember)).toEqual([undefined, undefined, 'cases', 'cases']);
+    f.oldState.cooperation!.tasks.splice(2, 0, ...tasks.map(task => ({ task, status: 'pending' as const, attempts: 0 })));
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report.stage).toBe('complete'); expect(report.failed).toEqual([]);
+    expect(state.cooperation.tasks.slice(2, 6).map(node => node.task)).toEqual(tasks);
+    expect(state.cooperation.tasks.map(node => taskVersion(node.task)))
+      .toEqual(f.oldState.cooperation!.tasks.map(node => taskVersion(node.task)));
   });
 
   it('rechecks a conditional declaration absent from canonical source with its exact typed obligation', async () => {

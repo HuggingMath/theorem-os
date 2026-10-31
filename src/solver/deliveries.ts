@@ -152,10 +152,13 @@ export function deliveryDetails(value: any): Pick<DeliveryRecord, 'summary' | 'e
     ...(value.mathematicalGap === undefined ? {} : { mathematicalGap: mathematicalGapSchema.parse(value.mathematicalGap) }) };
 }
 
-type DeliveryLogEntry = { line?: string; error?: 'math_delivery_line_too_large'; offset: number; discardingOversized: boolean };
+type DeliveryLogEntry = { line?: string; error?: 'math_delivery_line_too_large' | 'math_delivery_log_rewritten'; offset: number;
+  discardingOversized: boolean };
 type DeliveryLogBatch = { lines: string[]; offset: number; entries?: DeliveryLogEntry[]; discardingOversized?: boolean };
 
-/** Read complete appended lines only. The durable cursor survives restarts and partial writes. */
+/** Read complete appended lines only. The durable cursor survives restarts and partial writes. With recovery state,
+ * a log rewritten below the cursor is reported once, its current contents are skipped, and reading resumes with the
+ * next appended line. */
 export function readDeliveryLines(file: string, offset: number,
   recovery?: { discardingOversized: boolean }): DeliveryLogBatch {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('math_delivery_log_invalid');
@@ -165,11 +168,21 @@ export function readDeliveryLines(file: string, offset: number,
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size < offset) throw new Error('math_delivery_log_invalid');
+    if (!stat.isFile() || stat.nlink !== 1 || (stat.size < offset && !recovery)) throw new Error('math_delivery_log_invalid');
+    const entries: DeliveryLogEntry[] = [];
+    let discarding = recovery?.discardingOversized ?? false;
+    if (stat.size < offset) {
+      // Each complete line, and a trailing fragment, was either read already or is a rewritten copy: never replay them.
+      const tail = Buffer.alloc(Math.min(stat.size, MAX_DELIVERY_LINE_BYTES + 1));
+      const read = fs.readSync(fd, tail, 0, tail.length, stat.size - tail.length);
+      const newline = tail.subarray(0, read).lastIndexOf(10);
+      offset = newline < 0 ? stat.size : stat.size - read + newline + 1;
+      discarding = offset < stat.size || (newline < 0 && stat.size > 0);
+      entries.push({ error: 'math_delivery_log_rewritten', offset, discardingOversized: discarding });
+    }
     const buffer = Buffer.alloc(Math.min(stat.size - offset, MAX_DELIVERY_LINE_BYTES + 1));
     const size = fs.readSync(fd, buffer, 0, buffer.length, offset);
-    const entries: DeliveryLogEntry[] = [];
-    let start = 0, discarding = recovery?.discardingOversized ?? false;
+    let start = 0;
     // A rejected long line may span several polls; never parse its trailing fragment.
     if (discarding) {
       const newline = buffer.subarray(0, size).indexOf(10);

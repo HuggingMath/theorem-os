@@ -24,6 +24,18 @@ describe('Lead plan revisions', () => {
     expect(() => isPlanPatch({ tasks: [], upsert: [] })).toThrow('math_plan_patch_invalid');
   });
 
+  it('lifts a revision nested under tasks and rejects a conflicting or non-revision tasks object', () => {
+    const nested = parseLeadPlan(problem, { baseVersion: 'v1', summary: 'Pause side.',
+      tasks: { baseVersion: 'v1', upsert: [{ id: 'side', status: 'paused' }] } }, base);
+    expect(nested.fromPatch).toBe(true);
+    expect(nested.tasks[1]).toMatchObject({ id: 'side', status: 'paused' });
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', tasks: { baseVersion: 'v0', remove: ['side'] } }, base))
+      .toThrow(/^math_plan_patch_invalid: baseVersion appears both at the top level and inside tasks/u);
+    expect(() => parseLeadPlan(problem, { tasks: { goal: lemma('goal') } }))
+      .toThrow(/^math_plan_invalid: \{"field":"tasks"\}\. tasks must be the complete array/u);
+    expect(() => parseLeadPlan(problem, { tasks: [] })).toThrow(/^math_plan_invalid$/u);
+  });
+
   it('merges supplied fields into an existing task, deletes null fields and appends new tasks', () => {
     const plan = parseLeadPlan(problem, { baseVersion: 'v1', upsert: [
       { id: 'core', status: 'paused' }, { id: 'side', ownerId: 'researcher-1' }, lemma('bridge', ['side']),
@@ -36,6 +48,19 @@ describe('Lead plan revisions', () => {
     const cleared = parseLeadPlan(problem, { baseVersion: 'v1', upsert: [{ id: 'side', ownerId: null }] },
       { ...base, tasks: plan.tasks });
     expect(cleared.tasks[1].ownerId).toBeUndefined();
+  });
+
+  it('reads a null field of a complete plan as unset, as a revision does', () => {
+    const goal = { id: 'goal', kind: 'goal', objective: 'Prove the frozen target.', theoremName: 'Submission.main', dependsOn: ['core'] };
+    const plan = parseLeadPlan(problem, { tasks: [{ ...lemma('core'), ownerId: null, status: null, family: null }, { ...goal, ownerId: null }],
+      groups: [{ id: 'main', objective: 'Main.', engineerId: null }] });
+    expect(plan.tasks).toEqual(parseCooperationPlan(problem, { tasks: [lemma('core'), goal],
+      groups: [{ id: 'main', objective: 'Main.' }] }).tasks);
+    expect(plan.tasks[0]).not.toHaveProperty('ownerId');
+    expect(plan.groups[0]).not.toHaveProperty('engineerId');
+    expect(() => parseCooperationPlan(problem, { tasks: [null, goal] })).toThrow('math_plan_invalid_task: {"field":"task"}');
+    expect(() => parseCooperationPlan(problem, { tasks: [{ ...lemma('core'), ownerId: 7 }, goal] }))
+      .toThrow('math_plan_invalid_task: {"taskId":"core","field":"ownerId"}');
   });
 
   it('replaces a task whose kind changes instead of keeping stale typed fields', () => {

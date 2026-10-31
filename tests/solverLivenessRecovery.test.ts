@@ -5,6 +5,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { CooperativeResearch } from '../src/solver/cooperation';
+import { IDLE_PEER_WAKE_MS } from '../src/solver/leadInbox';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { runResearchWorkers } from '../src/solver/research';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction } from '../src/solver/tasks';
@@ -15,6 +16,8 @@ import { leadWorker, localExample, peerWorker, solverState } from './helpers/sol
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 
 const SEEDED_DECISION = 'The exact route choice needs a Lead decision.';
+// A Lead revision turn has one fixed decision slice.
+const LEAD_REVISION_MS = 10 * 60_000;
 
 describe('Lead planning liveness across checkpoints and restore', () => {
   let directory: string;
@@ -63,7 +66,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     };
     const start = (behavior: { saveResearchProgress?: boolean; saveLeadProgress?: boolean } = {}) => {
       const controller = new AbortController(); controllers.push(controller);
-      const events: { event: string; details?: Record<string, unknown> }[] = [];
+      const events: { event: string; details?: Record<string, unknown>; at: number }[] = [];
       const messages: { assignment: CooperativeAction; inbox: string[]; threadId: string }[] = [];
       const notifications: { workerId: string; message: string }[] = [];
       const sessionInterrupts: { workerId: string; threadId: string }[] = [], sessionCloses: typeof sessionInterrupts = [];
@@ -103,6 +106,9 @@ describe('Lead planning liveness across checkpoints and restore', () => {
             const parsed = JSON.parse(message) as (typeof messages)[number];
             messages.push({ ...parsed, threadId }); active = deferred<string>();
             onStarted(`offline-turn-${messages.length}`);
+            // The advisory clock measures mathematical work, so a turn arms it once the model produces
+            // its first item. This offline writer produces one immediately; only provider latency waits.
+            options.onActivity?.({ event: 'reasoning' });
             if (parsed.assignment.kind === 'lead') firstLead.resolve();
             else if (parsed.assignment.kind === 'task' && parsed.assignment.task.id === 'investigate') firstResearch.resolve();
             else throw new Error('fixture_unexpected_assignment');
@@ -121,7 +127,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         access: workerAccess(workers, directory), root: directory, buildFile: path.join(directory, 'unused-build.json'),
         taskText: 'Prove the frozen original targets.', executable: 'offline-fixture', profile: 'offline-fixture',
         signal: controller.signal, deadline: Infinity, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0,
-        save: () => {}, emit: (event, details) => events.push({ event, details }) });
+        save: () => {}, emit: (event, details) => events.push({ event, details, at: Date.now() }) });
       running.push(completion); void completion.catch(() => {});
       const leads = () => messages.filter(message => message.assignment.kind === 'lead');
       const latestLead = () => {
@@ -184,7 +190,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(lead.previousThreadIds).toContain('legacy-mathematical-coordination');
     expect(lead.sessionLeadMode).toBe('planning');
     expect(fs.readFileSync(draft, 'utf8')).toContain('Saved mathematical construction');
-    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    await vi.advanceTimersByTimeAsync(3.5 * LEAD_REVISION_MS);
     expect(run.leads().length).toBeGreaterThanOrEqual(4);
     expect(new Set(run.leads().map(item => item.threadId))).toEqual(new Set([first]));
     expect(new Set(run.leads().map(item => (item.assignment as Extract<CooperativeAction, { kind: 'lead' }>).planNonce)).size)
@@ -204,28 +210,31 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     await resumed.stop();
   });
 
-  it('keeps ordinary Lead planning with new saved inferences on its two-minute cadence and reuses a legacy planning thread', async () => {
+  it('keeps ordinary Lead planning with new saved inferences on its fixed decision slice and reuses a legacy planning thread', async () => {
     const fixtureState = fixture(), lead = fixtureState.state.workers![0];
     lead.threadId = 'legacy-planning'; lead.sessionRole = 'lead';
     const run = fixtureState.start({ saveLeadProgress: true }); await run.ready();
-    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    await vi.advanceTimersByTimeAsync(3 * LEAD_REVISION_MS);
     expect(run.leads()).toHaveLength(4);
     expect(new Set(run.leads().map(item => item.threadId))).toEqual(new Set(['legacy-planning']));
     expect(lead.previousThreadIds ?? []).toEqual([]); expect(lead.sessionLeadMode).toBe('planning');
     const slices = run.events.filter(item => item.event === 'cooperative_checkpoint_scheduled' &&
       item.details?.workerId === lead.id).map(item => item.details!.checkpointAfterMs);
-    expect(slices).toEqual([120_000, 120_000, 120_000, 120_000]);
+    expect(slices).toEqual(Array(4).fill(LEAD_REVISION_MS));
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   });
 
   it('waits for hours after an unchanged checkpoint, then wakes for new evidence until a plan answers it', async () => {
     const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
-    await vi.advanceTimersByTimeAsync(8 * 60_000);
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS + 60_000);
     const pausedTurns = run.leads().length;
     expect(fixtureState.state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBeUndefined();
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
-    expect(run.leads()).toHaveLength(pausedTurns);
+    // The only further turns answer the idle prover, on the Lead's backoff schedule; the pause itself wakes nothing.
+    const idleWakes = run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
+    expect(idleWakes.length).toBeLessThanOrEqual(4);
+    expect(run.leads()).toHaveLength(pausedTurns + idleWakes.length);
     const nonces = run.leads().map(message => (message.assignment as Extract<CooperativeAction, { kind: 'lead' }>).planNonce);
     expect(new Set(nonces).size).toBe(nonces.length);
     expect(fixtureState.state.cooperation!.tasks.find(node => node.task.id === 'investigate')!.status).toBe('running');
@@ -248,6 +257,42 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     await run.stop();
   });
 
+  it('re-owes a paused Lead idle peers on its backoff schedule until a deciding turn answers them', async () => {
+    const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
+    const lead = fixtureState.state.workers![0], cooperation = () => fixtureState.state.cooperation!;
+    const idleWakes = () => run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
+    // Let the unchanged Lead slices settle into a pause while the researcher keeps working.
+    for (let minute = 0; minute < 60 && !(lead.scheduling?.status === 'idle' && cooperation().lastLeadPauseInputDigest); minute++)
+      await vi.advanceTimersByTimeAsync(60_000);
+    expect(cooperation().lastLeadPauseInputDigest).toBeTruthy();
+    // The prover has had nothing ready since before the Lead's first turn, but that turn was cut without a decision,
+    // so it has not answered the idle peer: the paused Lead is owed one turn once the peer has waited.
+    const prover = fixtureState.state.workers!.find(worker => worker.id === 'idle-prover')!;
+    expect(prover.scheduling).toMatchObject({ status: 'idle', wait: { stage: 'm3-no-ready' } });
+    expect(cooperation().leadDecisionBasisAt).toBeUndefined();
+    expect(idleWakes()).toHaveLength(0);
+    const oldNonce = run.latestLead().assignment.planNonce;
+    await vi.advanceTimersByTimeAsync(IDLE_PEER_WAKE_MS + 60_000);
+    expect(idleWakes().map(item => item.details?.workerIds)).toEqual([['idle-prover']]);
+    expect(run.latestLead().assignment.planNonce).not.toBe(oldNonce);
+    // Each woken turn is cut unchanged again; the same peer is re-owed after a doubling delay, never sooner.
+    for (let minute = 0; minute < 120 && idleWakes().length < 3; minute++) await vi.advanceTimersByTimeAsync(60_000);
+    const at = idleWakes().map(item => item.at);
+    expect(at).toHaveLength(3);
+    expect(at[1] - at[0]).toBeGreaterThanOrEqual(2 * IDLE_PEER_WAKE_MS);
+    expect(at[2] - at[1]).toBeGreaterThanOrEqual(4 * IDLE_PEER_WAKE_MS);
+    expect(cooperation().idlePeerWake).toMatchObject({ workerIds: ['idle-prover'], count: 3 });
+    expect(run.current(run.latestLead().assignment)).toBe(true);
+    // A deciding turn answers the peer it was shown: no further wakes while its idle episode lasts.
+    await run.answer();
+    expect(cooperation().leadDecisionBasisAt).toBeGreaterThanOrEqual(at[2]);
+    const answeredTurns = run.leads().length;
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
+    expect(run.leads()).toHaveLength(answeredTurns);
+    expect(idleWakes()).toHaveLength(3);
+    expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
+  });
+
   it('routes a needs-decision finding arriving during a Lead plan to the next Lead slice instead of letting that plan swallow it', async () => {
     const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
     const running = run.latestLead().assignment;
@@ -258,8 +303,8 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     await run.answer(running);
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(running.planningInputDigest);
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).not.toBe(run.planningInputDigest());
-    // The next slice starts when the answered turn reaches its ordinary two-minute checkpoint.
-    await vi.advanceTimersByTimeAsync(120_000);
+    // The next slice starts when the answered turn reaches its fixed decision checkpoint.
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS);
     await run.waitForLead(running.planNonce);
     expect(run.latestLead().inbox).toContain(summary);
     await run.answer();

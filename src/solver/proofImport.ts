@@ -112,7 +112,7 @@ function insertionOffset(source: string, theoremName: string): number {
   const scopes: LeanScope[] = [];
   let offset = -1;
   for (const command of leanScopeCommands(maskLeanCommentsAndStrings(source))) {
-    if (command[1] === 'end' && leanScopeNamespace(scopes) === namespace) offset = command.index;
+    if (command[1] === 'end' && scopes.at(-1)?.kind !== 'mutual' && leanScopeNamespace(scopes) === namespace) offset = command.index;
     updateLeanScopes(scopes, command[1], command[2]?.trim());
   }
   if (leanScopeNamespace(scopes) === namespace) offset = source.length;

@@ -16,7 +16,7 @@ import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, Dispat
   type LeadPlan } from './cooperationShared';
 import { formatPlanJson, type PlanPatchBase } from './planPatch';
 import { collapseTaskFamilies } from './taskFamilies';
-import { dropLeadWakes } from './leadWakes';
+import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
@@ -90,7 +90,12 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       ? committedSource(this.lead.worktree, commit, 'RESEARCH.md') : '') :
       (fs.existsSync(path.join(this.lead.worktree, 'RESEARCH.md'))
         ? readMathText(path.join(this.lead.worktree, 'RESEARCH.md'), MAX_RESEARCH_NOTES_BYTES) : '');
-    return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest(true), planVersion: this.planVersion(),
+    // New peer evidence must release the pause, because a plan input drops any delivery whose task version
+    // has since advanced and would otherwise hide the finding that alone can wake the Lead. The immutable
+    // content of peer publications is that evidence; a peer saving its notes mid-slice is work this Lead
+    // already dispatched and must not re-open the turn on every checkpoint.
+    return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest(true),
+      evidenceDigest: this.planningEvidenceDigest(), planVersion: this.planVersion(),
       sourceDigest, notesDigest: mathDigest(notes) }));
   }
   /** A completed decision covers its own bookkeeping, but never evidence arriving during that dispatch. */
@@ -99,6 +104,8 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.lastLeadInputDigest = this.leadEvidence.get(action) === this.planningEvidenceDigest()
         ? this.planningInputDigest() : action.planningInputDigest;
       this.archive.lastLeadPauseInputDigest = undefined;
+      // Idle peers this deciding turn was shown are answered; only one Lead turn runs at a time.
+      this.archive.leadDecisionBasisAt = this.archive.leadInboxBasis?.at ?? Date.now();
     }
   }
   protected activeGoalFrontier() {
@@ -363,15 +370,34 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     if (this.archive.tasks.length) return;
     const reason = this.archive.error ?? 'math_initial_plan_checkpoint';
     const researchers = this.input.workers.filter(worker => worker.role === 'researcher' && this.liveWorkers.has(worker.id));
+    const engineer = this.input.workers.find(worker => worker.role === 'engineer' && this.liveWorkers.has(worker.id));
     const targets = this.input.state.problem.targets;
-    const tasks = [
-      ...targets.map((target, index) => ({ id: `initial_goal_${index + 1}`, kind: 'goal',
-        objective: `Prove the frozen original target ${target.theoremName}; use researcher findings as advisory guidance.`,
-        proofPath: target.proofPath, theoremName: target.theoremName })),
-      ...researchers.map((worker, index) => ({ id: `initial_research_${index + 1}`, kind: 'research', ownerId: worker.id,
-        objective: `Investigate proof routes and difficult library connections for ${targets.filter((_, i) => i % researchers.length === index)
-          .map(target => target.theoremName).join(', ') || 'the original targets'}. Report concrete evidence and unresolved gaps; findings are advisory.` })),
+    // The fallback is a coordination scaffold, not a mathematical plan. An original goal is proof work,
+    // so pin it to a live Engineer: one unowned goal would otherwise be taken by the first ready
+    // Researcher, which strands that Researcher's own investigation and leaves the Engineer with nothing.
+    const goals = targets.map((target, index) => ({ id: `initial_goal_${index + 1}`, kind: 'goal' as const,
+      objective: `Prove the frozen original target ${target.theoremName}; use researcher findings as advisory guidance.`,
+      ...(engineer ? { ownerId: engineer.id } : {}),
+      proofPath: target.proofPath, theoremName: target.theoremName }));
+    // Identical investigation text makes two Researchers ask one question; each gets a distinct angle.
+    const angles = [
+      'the central construction or quantitative estimate, with its exact assumptions and the missing inference',
+      'library connections: the exact existing lemmas or definitions that could discharge a step, with pinned versions and searches',
+      'the hardest substantive inference: whether it holds as stated, with a counterexample search or a concrete reduction',
+      'a concrete end-to-end proof route, naming the remaining gaps in order',
     ];
+    const tasks = [...goals, ...researchers.map((worker, index) => {
+      // Round-robin coverage, but never an empty assignment: one target belongs to every Researcher.
+      const primary = targets.filter((_, targetIndex) => targetIndex % researchers.length === index);
+      const covered = (primary.length ? primary : targets).map(target => target.theoremName).join(', ');
+      return { id: `initial_research_${index + 1}`, kind: 'research' as const, ownerId: worker.id,
+        // The goal is an inspection input, never a proof dependency: a parked advisory review must not
+        // make the original goal unstartable (advisory tasks may depend on the consumer, not the reverse).
+        dependsOn: goals.map(goal => goal.id),
+        objective: `Investigate ${angles[index % angles.length]} for ${covered}` +
+          `${researchers.length > 1 ? ` (investigation ${index + 1} of ${researchers.length})` : ''}. ` +
+          'Report concrete evidence and unresolved gaps; findings are advisory.' };
+    })];
     await this.acceptPlan(parseCooperationPlan(this.input.state.problem, { tasks }));
     dropLeadWakes(this.archive.leadWakes!);
     this.archive.initialPlanFallback = { at: Date.now(), reason };
@@ -385,10 +411,26 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       groups: this.archive.groups?.map(route => route.group),
       ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}) }));
   }
+  /**
+   * A checkpoint cut is not a Lead decision. When nothing else runs, the cut draft is the only possible input,
+   * so the Lead continues it on its backoff schedule; only a pause past the backoff cap, unchanged, ends the run.
+   */
+  protected resumePausedLead() {
+    if (!this.archive.lastLeadPauseInputDigest || this.active.size) return false;
+    const research = this.input.state.workers?.find(record => record.id === this.lead.id) ?? this.input.state;
+    const streak = research.advisoryCheckpoint?.noProgressStreak ?? 0;
+    if (streak > LEAD_MAX_BACKOFF) return false;
+    this.archive.lastLeadPauseInputDigest = undefined;
+    this.wakeLead('lead-pause-idle');
+    this.input.emit('lead_pause_resumed', { noProgressStreak: streak });
+    this.changed();
+    return true;
+  }
   /** Nothing runs and the Lead already decided on these inputs: no process input can arrive, so the run ends. */
   protected async idleFrontier(frontier: ReturnType<CooperationPlanning['activeGoalFrontier']>, inputDigest: string): Promise<DispatchResult> {
     if (this.preparingTaskTypes.size) return this.waitForDispatch();
     if (this.resumeUnattemptedFrontier(frontier)) return RETRY_DISPATCH;
+    if (this.resumePausedLead()) return RETRY_DISPATCH;
     this.input.emit('routes_idle', { groups: this.archive.groups,
       goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], frontier,
       reason: frontier.length ? 'unchanged-mathematical-input' : 'no-active-goal-frontier', inputDigest });

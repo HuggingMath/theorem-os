@@ -187,6 +187,23 @@ describe('worker delivery log recovery', () => {
     expect(events.map(event => event.reason)).toEqual(['math_delivery_line_too_large']);
   });
 
+  it('reports a rewritten log once, never replays its contents and keeps reading appended lines across resume', async () => {
+    append({ summary: 'First progress.' }); append({ summary: 'Second progress.' });
+    await poll();
+    const file = path.join(directory, log());
+    fs.writeFileSync(file, JSON.stringify({ summary: 'Rewritten copy.' }) + '\n{"summary":"Unfin');
+    await expect(poll()).resolves.toBeUndefined();
+    expect(events).toEqual([{ event: 'delivery_rejected', workerId: 'peer', reason: 'math_delivery_log_rewritten' }]);
+    expect(cursors[key()]).toBe(fs.statSync(file).size);
+    expect(snapshots.at(-1)?.[`${key()}/discardingOversized`]).toBe(1);
+    cursors = JSON.parse(JSON.stringify(cursors)); cooperative = create();
+    fs.appendFileSync(file, 'ished rewrite."}\n'); append({ summary: 'Appended progress.' });
+    await poll(); await poll();
+    expect(records.map(record => record.summary)).toEqual(['First progress.', 'Second progress.', 'Appended progress.']);
+    expect(events).toHaveLength(1);
+    expect(cursors[`${key()}/discardingOversized`]).toBe(0);
+  });
+
   it('keeps the existing strict line reader behavior for callers without recovery state', () => {
     const file = path.join(directory, log()); fs.writeFileSync(file, 'x'.repeat(MAX_DELIVERY_LINE_BYTES + 1));
     expect(() => readDeliveryLines(file, 0)).toThrow('math_delivery_line_too_large');

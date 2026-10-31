@@ -1,13 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import { bootstrapLeanTask, readLeanTaskReceipt, LEAN_TASK_SOURCE_MAX_BYTES } from '../src/math/leanTask';
+import { bootstrapLeanTask, readLeanTaskReceipt, LEAN_TASK_DECLARATIONS_MAX, LEAN_TASK_SOURCE_MAX_BYTES } from '../src/math/leanTask';
 import { LOCAL_EXAMPLE_TOOLCHAIN } from '../src/math/localExample';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { canonicalMathProblemStatementPayloads } from '../src/math/contracts';
-import { mathDigest } from '../src/math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
+import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack } from '../src/math/libraryPacks';
 import { assertSolverSources, git, readSolverProblem } from '../src/solver/problem';
+import { newestLeanBinary } from './helpers/lean';
 
 const source = [
   'namespace User',
@@ -38,6 +41,11 @@ function fixture(environment?: LeanTaskEnvironment) {
   const submission = path.join(receipt.projectRoot, 'Submission.lean');
   return { root, receipt, submission };
 }
+const libraryModule = 'Submission/Library/TheoremOS/Arith.lean';
+const librarySource = 'namespace TheoremOS\n\ntheorem add_zero_right (n : Nat) : n + 0 = n := rfl\n\nend TheoremOS\n';
+const libraryPack = (modules: Record<string, string> = { [libraryModule]: librarySource }) => parseLibraryPack({
+  schema: LIBRARY_PACK_SCHEMA, modules: Object.entries(modules).map(([file, text]) => ({ file, source: text,
+    origin: { kind: 'upstream', repository: 'theorem-os-library', commit: 'a'.repeat(40), file: 'TheoremOSLib/Arith.lean' } })) });
 function saveReceipt(receipt: ReturnType<typeof bootstrapLeanTask>, changes: Record<string, unknown>) {
   fs.writeFileSync(receipt.activeProblemPath, JSON.stringify({ ...receipt, ...changes }));
 }
@@ -195,6 +203,22 @@ end User
     expect(fs.existsSync(workspace)).toBe(false);
   });
 
+  it('prepares a statement above the earlier 128 KiB and 256-declaration limits and stops at 1024 declarations', () => {
+    const large = (count: number) => [`/- ${'x'.repeat(140 * 1024)} -/`, 'namespace Large',
+      ...Array.from({ length: count - 1 }, (_, index) => `def value${index} : Nat := ${index}`),
+      'theorem goal : value0 = 0 := by sorry', 'end Large', ''].join('\n');
+    const accepted = large(LEAN_TASK_DECLARATIONS_MAX);
+    expect(Buffer.byteLength(accepted)).toBeGreaterThan(128 * 1024);
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source: accepted, task });
+    expect(readLeanTaskReceipt(receipt.activeProblemPath).declarations).toHaveLength(LEAN_TASK_DECLARATIONS_MAX);
+    expect(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath).targets.map(target => target.theoremName))
+      .toEqual(['Large.goal']);
+    const workspace = path.join(rootDirectory(), 'workspace');
+    expect(() => bootstrapLeanTask(workspace, { source: large(LEAN_TASK_DECLARATIONS_MAX + 1), task }))
+      .toThrow('lean_task_declarations_limit');
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
   it('refuses an existing or symlinked workspace', () => {
     const { root, receipt } = fixture();
     expect(() => bootstrapLeanTask(receipt.workspaceRoot, { source, task })).toThrow('already exists');
@@ -265,6 +289,124 @@ end User
     fs.writeFileSync(submission, source.replace('n + 0 = n', 'True'));
     expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
     expect(() => readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath)).toThrow('math_problem_target_file_ambiguous');
+  });
+
+  it('installs a frozen library pack as solver-owned seed files that proofs import but never edit', () => {
+    const root = rootDirectory(), pack = libraryPack();
+    const receipt = bootstrapLeanTask(path.join(root, 'workspace'), { source, task, libraryPack: pack });
+    expect(receipt.solverOwnedFiles).toEqual(['Submission.lean', libraryModule]);
+    expect(receipt.libraryPack).toEqual({ digest: libraryPackDigest(pack), files: { [libraryModule]: mathDigest(librarySource) } });
+    expect(fs.readFileSync(path.join(receipt.projectRoot, libraryModule), 'utf8')).toBe(librarySource);
+    expect(git(receipt.workspaceRoot, ['status', '--porcelain'])).toBe('');
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    expect(problem.frozenFiles).toEqual({ [libraryModule]: mathDigest(librarySource) });
+    expect(problem.targets.map(item => item.proofPath)).toEqual(['Submission.lean', 'Submission.lean']);
+    const submission = path.join(receipt.projectRoot, 'Submission.lean'), library = path.join(receipt.projectRoot, libraryModule);
+    fs.writeFileSync(submission, `import Submission.Library.TheoremOS.Arith\n${source
+      .replace('by sorry', 'TheoremOS.add_zero_right n').replace('by sorry', 'Nat.zero_add n')}`);
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
+    fs.writeFileSync(submission, `theorem TheoremOS.add_zero_right : True := trivial\n\n${source}`);
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_library_declaration_redeclared');
+    fs.writeFileSync(submission, source);
+    fs.appendFileSync(library, '\n');
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_library_module_changed');
+    expect(() => readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath)).toThrow('math_library_pack_changed');
+    fs.writeFileSync(library, librarySource);
+    const original = path.join(root, 'Arith.lean');
+    fs.writeFileSync(original, librarySource);
+    fs.unlinkSync(library);
+    fs.symlinkSync(original, library);
+    expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('math_path_invalid');
+  });
+
+  it('keeps the plain declaration identity of a frozen library module that repeats a name', () => {
+    // 2026-10-30: DensityMatrix.lean has IsDensity.kronecker and IsPure.kronecker. Frozen modules are compared
+    // byte for byte, and their declaration lists enter continuation-seed policy digests.
+    const repeated = 'namespace TheoremOS\ntheorem A.kronecker : True := trivial\ntheorem B.kronecker : True := trivial\nend TheoremOS\n';
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source, task,
+      libraryPack: libraryPack({ [libraryModule]: repeated }) });
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    expect(problem.declarations[libraryModule]!.map(item => Object.keys(item).sort().join(','))).toEqual(['header,name', 'header,name']);
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
+  });
+
+  it.skipIf(!newestLeanBinary())('compiles a proof that imports an installed library module', () => {
+    const root = rootDirectory(), lean = newestLeanBinary()!;
+    const statement = 'namespace User\n\ntheorem left (n : Nat) : n + 0 = n := by sorry\n\nend User\n';
+    const receipt = bootstrapLeanTask(path.join(root, 'workspace'), { source: statement, task, libraryPack: libraryPack() });
+    const project = receipt.projectRoot, build = path.join(root, 'build');
+    fs.writeFileSync(path.join(project, 'Submission.lean'),
+      `import Submission.Library.TheoremOS.Arith\n${statement.replace('by sorry', 'TheoremOS.add_zero_right n')}`);
+    for (const file of [libraryModule, 'Submission.lean']) {
+      const output = path.join(build, file.replace(/\.lean$/u, '.olean'));
+      fs.mkdirSync(path.dirname(output), { recursive: true });
+      const result = spawnSync(lean, ['-R', project, '-o', output, path.join(project, file)],
+        { cwd: project, env: { ...process.env, LEAN_PATH: build }, encoding: 'utf8', timeout: 120_000 });
+      expect(`${file}: ${result.stdout}${result.stderr}`).toBe(`${file}: `);
+      expect(result.status).toBe(0);
+    }
+    expect(() => assertSolverSources(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), receipt.workspaceRoot)).not.toThrow();
+  });
+
+  it.each([
+    ['imports the statement', { [libraryModule]: 'import Challenge\n' + librarySource }, 'lean_task_library_pack_import_invalid'],
+    ['imports proof work', { [libraryModule]: 'import Submission\n' + librarySource }, 'math_library_pack_import_outside_pack'],
+    ['redeclares a statement name', { [libraryModule]: 'namespace User\ndef marker : Nat := 1\nend User\n' },
+      'lean_task_library_pack_declaration_conflict: User.marker'],
+    ['contains a proof gap', { [libraryModule]: 'theorem gap : False := sorry\n' }, 'math_library_pack_forbidden_token'],
+  ])('rejects a library pack that %s without creating a workspace', (_label, modules, error) => {
+    const workspace = path.join(rootDirectory(), 'workspace');
+    expect(() => bootstrapLeanTask(workspace, { source, task, libraryPack: libraryPack(modules) })).toThrow(error);
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  it('rejects library requirements and malformed packs without creating a workspace', () => {
+    const workspace = path.join(rootDirectory(), 'workspace');
+    const required = { ...libraryPack(), requires: [{ file: 'Deps.lean', digest: mathDigest('') }] };
+    expect(() => bootstrapLeanTask(workspace, { source, task, libraryPack: required })).toThrow('lean_task_library_pack_requirement_invalid');
+    expect(() => bootstrapLeanTask(workspace, { source, task, libraryPack: { schema: LIBRARY_PACK_SCHEMA } as never }))
+      .toThrow('math_library_pack_invalid');
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  it('binds the library pack to the seed commit and message', () => {
+    const { receipt: plain } = fixture();
+    const pack = libraryPack(), files = { [libraryModule]: mathDigest(librarySource) };
+    saveReceipt(plain, { libraryPack: { digest: libraryPackDigest(pack), files }, solverOwnedFiles: ['Submission.lean', libraryModule] });
+    expect(() => readLeanTaskReceipt(plain.activeProblemPath)).toThrow('lean_task_identity_changed');
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source, task, libraryPack: pack });
+    for (const changes of [{ libraryPack: undefined }, { solverOwnedFiles: ['Submission.lean'] },
+      { libraryPack: { ...receipt.libraryPack, files: { [libraryModule]: '0'.repeat(64) } } },
+      { libraryPack: { ...receipt.libraryPack, digest: '0'.repeat(64) } }]) {
+      saveReceipt(receipt, changes);
+      expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_identity_changed');
+    }
+    // Replacing the committed module bytes under the original seed message breaks the recorded digest.
+    fs.writeFileSync(path.join(receipt.projectRoot, libraryModule), librarySource.replace('rfl', 'Nat.add_zero n'));
+    git(receipt.workspaceRoot, ['add', '--', `generated/problem/${libraryModule}`]);
+    git(receipt.workspaceRoot, ['-c', 'user.name=Test', '-c', 'user.email=test@localhost',
+      'commit', '--amend', '--no-gpg-sign', '--quiet', '--cleanup=verbatim', '--reuse-message=HEAD']);
+    saveReceipt(receipt, { baseCommit: git(receipt.workspaceRoot, ['rev-parse', 'HEAD']) });
+    expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_identity_changed');
+  });
+
+  it('rejects a rewritten seed whose library lists no files or files outside Submission/Library', () => {
+    const { receipt } = fixture();
+    const prefix = 'TheoremOS Lean task seed\n\n', other = 'Other.lean';
+    const seed = JSON.parse(git(receipt.workspaceRoot, ['show', '-s', '--format=%B', 'HEAD']).trim().slice(prefix.length));
+    for (const files of [{}, { [other]: mathDigest(librarySource) }]) {
+      if (Object.keys(files).length) {
+        fs.writeFileSync(path.join(receipt.projectRoot, other), librarySource);
+        git(receipt.workspaceRoot, ['add', '--', `generated/problem/${other}`]);
+      }
+      const libraryPack = { digest: '0'.repeat(64), files };
+      git(receipt.workspaceRoot, ['-c', 'user.name=Test', '-c', 'user.email=test@localhost', 'commit', '--amend', '--no-gpg-sign',
+        '--quiet', '--cleanup=verbatim', '-m', prefix + canonicalMathJson({ ...seed, libraryPack })]);
+      saveReceipt(receipt, { baseCommit: git(receipt.workspaceRoot, ['rev-parse', 'HEAD']), libraryPack,
+        solverOwnedFiles: ['Submission.lean', ...Object.keys(files)] });
+      expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_identity_changed');
+    }
   });
 
   it.each([

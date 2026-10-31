@@ -6,6 +6,8 @@ import {
   inspectLeanDeclarations,
   inspectScopedLeanDeclarations,
   leanDeclarationContextCommands,
+  leanDeclarationKeys,
+  repeatedLeanLocalNames,
 } from '../src/math/leanSource';
 
 describe('Lean declaration names with punctuation', () => {
@@ -182,5 +184,55 @@ def matched : match true with
     expect(source.slice(regions[0].bodyOffset, regions[0].endOffset)).toBe('| 0 => n\n  | k + 1 => k\n');
     expect(regions[1].declarationType).toBe('matched : match true with | true => Nat | false => Nat');
     expect(source.slice(regions[1].bodyOffset, regions[1].endOffset).trim()).toBe('0');
+  });
+});
+
+describe('instance attributes and derive handlers', () => {
+  it('does not read attribute instance names or deriving clauses as declarations', () => {
+    // 2026-10-30: `attribute [local instance 2000] inst` was read as `instance 2000`, swallowing the next def up to its `:=`.
+    const source = [
+      'attribute [local instance 2000] instPolynormableSpace',
+      'def frequencyLattice : Nat := 1',
+      'attribute [-instance] CStarAlgebra.toNormedRing CommCStarAlgebra.toNormedCommRing',
+      'attribute [instance] Coarsening.topology',
+      'def flattenVector : Nat := 2',
+      '@[simp, instance 100] def bundled : Nat := 3',
+      'inductive Shape | a | b',
+      '  deriving DecidableEq',
+      'deriving instance DecidableEq for Shape',
+      'def ampleIsometry : Nat := 4',
+      'instance real : Inhabited Shape := ⟨Shape.a⟩',
+      '',
+    ].join('\n');
+    expect(inspectLeanDeclarationRegions(source).map(region => region.name))
+      .toEqual(['frequencyLattice', 'flattenVector', 'bundled', 'ampleIsometry', 'real']);
+    expect(inspectLeanDeclarations(source).map(item => item.kind))
+      .toEqual(['definition', 'definition', 'definition', 'definition', 'instance']);
+  });
+});
+
+describe('repeated final name components', () => {
+  it('keys only the repeated declarations by qualified name', () => {
+    const source = 'namespace A\ndef step : Nat := 1\ndef Literal.eval : Nat := 0\nend A\n' +
+      'namespace B\ndef step : Nat := 2\ndef Clause.eval : Nat := 0\nend B\ndef unique : Nat := 3\n';
+    expect([...leanDeclarationKeys(source).values()]).toEqual(['A.step', 'A.Literal.eval', 'B.step', 'B.Clause.eval', 'unique']);
+    expect(repeatedLeanLocalNames(inspectLeanDeclarationRegions(source).map(region => region.name)))
+      .toBe('[["eval",2],["step",2]]');
+    expect(repeatedLeanLocalNames(['unique', 'other'])).toBe('[]');
+  });
+});
+
+describe('mutual blocks', () => {
+  it('closes a mutual block without closing the enclosing namespace', () => {
+    const source = 'namespace OAI\nnoncomputable section\nnamespace W\nmutual\n' +
+      'def even : Nat → Bool\n  | 0 => true\n  | n + 1 => odd n\n' +
+      'def odd : Nat → Bool\n  | 0 => false\n  | n + 1 => even n\n' +
+      'end\ntheorem even_zero : even 0 = true := rfl\nend W\ntheorem main : W.even 0 = true := by\n  sorry\nend\nend OAI\n';
+    expect(inspectScopedLeanDeclarations(source).map(item => item.qualifiedName))
+      .toEqual(['OAI.W.even', 'OAI.W.odd', 'OAI.W.even_zero', 'OAI.main']);
+    expect(leanDeclarationContextCommands(source, 'OAI.main'))
+      .toEqual({ before: ['namespace OAI', 'noncomputable section'], after: ['end', 'end OAI'] });
+    expect(leanDeclarationContextCommands(source, 'OAI.W.odd'))
+      .toEqual({ before: ['namespace OAI', 'noncomputable section', 'namespace W'], after: ['end W', 'end', 'end OAI'] });
   });
 });

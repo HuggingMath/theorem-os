@@ -11,7 +11,10 @@ export type LeadWakeReason =
   | 'integration-blocked' | 'conditional-recheck-failed' | 'research-finding' | 'progress-decision-requested'
   | 'route-blocker-recorded' | 'route-reopened' | 'review-changes-requested' | 'statement-review-rejected'
   | 'assembly-failed' | 'plan-rejected' | 'lead-draft-preserved' | 'lead-checkpoint-unchanged'
-  | 'lead-turn-superseded' | 'lead-turn-interrupted' | 'lead-turn-rejected';
+  | 'lead-turn-superseded' | 'lead-turn-interrupted' | 'lead-turn-rejected' | 'lead-pause-idle' | 'peers-idle';
+
+/** Unchanged checkpoints after which an unfinished Lead slice stops doubling; a pause past it is final. */
+export const LEAD_MAX_BACKOFF = 3;
 
 /**
  * `requested` numbers wake-ups; `consumed` is the last one a dispatch took or a dedupe gate answered;

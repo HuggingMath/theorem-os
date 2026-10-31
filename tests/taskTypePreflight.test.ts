@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
+import { TaskTypePreflightCache, typeDiagnosticExcerpt } from '../src/solver/taskTypePreflight';
 import { leanTypeDiagnosticProjection } from '../src/math/leanTypeDiagnostics';
 import { mathLocalModuleBuildOrder } from '../src/math/mathConstructionSources';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
@@ -313,6 +313,13 @@ describe('content-bound typed helper preflight', () => {
     expect((await cache.check(request())).result.status).toBe('elaborated');
   });
 
+  it.each(['noncomputable section\nend', 'mutual\ndef even : Nat → Bool\n  | 0 => true\n  | n + 1 => odd n\n' +
+    'def odd : Nat → Bool\n  | 0 => false\n  | n + 1 => even n\nend'])
+  ('keeps a namespace scope limitation after a closed block: %s', async block => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('theorem original', `variable (P : Prop)\n${block}\ntheorem original`));
+    expect((await cache.check(request())).result).toMatchObject({ status: 'deferred', reason: 'declaration-scope-not-reproducible' });
+  });
+
   it('defers multiple original anchors with different open scopes in the same namespace', async () => {
     fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('end Geometry',
       'section\nopen Nat\ntheorem other : True := by sorry\nend\nend Geometry'));
@@ -349,5 +356,31 @@ describe('content-bound typed helper preflight', () => {
     await cache.check(request()); expect(check).toHaveBeenCalledTimes(2);
     environment.mockReturnValue({ env: {}, reusable: false });
     expect((await cache.check(request())).result).toMatchObject({ status: 'deferred', reason: 'proof-environment-not-frozen' });
+  });
+});
+
+describe('type parser diagnostic excerpt', () => {
+  // Lean's runParserCategory column is a 0-based codepoint offset into the type string (ℝ and → are one each).
+  const reason = (column: number) => `TypeDiagnostic.lean:9:1: error: <input>:1:${column}: expected '(', '_' or identifier`;
+  it('quotes the reserved token a bound variable used and says to rename it', () => {
+    const type = '∀ (ε : ℝ), 0 < ε → ∃ λ : ℝ, 0 < λ ∧ λ ≤ 48 * ε';
+    const excerpt = typeDiagnosticExcerpt(type, reason(Array.from(type).indexOf('λ')))!;
+    expect(excerpt).toContain('<input>:1:21, 0-based codepoint column): ∀ (ε : ℝ), 0 < ε → ∃ ⟦λ⟧ : ℝ, 0 < λ ∧ λ ≤ 48 * ε');
+    expect(excerpt).toContain('`λ` is a reserved Lean token, not an identifier; rename that bound variable');
+    // 𝕜 is outside the BMP: one codepoint, two UTF-16 units.
+    const astral = '∀ (x : 𝕜), ∃ λ : 𝕜, λ = x';
+    expect(typeDiagnosticExcerpt(astral, reason(Array.from(astral).indexOf('λ')))).toContain('∃ ⟦λ⟧ : 𝕜, λ = x');
+    expect(typeDiagnosticExcerpt('∀ fun : ℕ, fun = fun', reason(2))).toContain('⟦fun⟧ : ℕ');
+    expect(typeDiagnosticExcerpt('∀ fun : ℕ, fun = fun', reason(2))).toContain('`fun` is a reserved Lean token');
+  });
+  it('quotes other stops without a reserved-token claim and ignores positions it cannot place', () => {
+    const type = `∀ ${'x'.repeat(80)} : ℕ, x = (x`;
+    const excerpt = typeDiagnosticExcerpt(type, reason(83))!;
+    expect(excerpt).toMatch(/^Type text where the parser stopped \(<input>:1:83, 0-based codepoint column\): …x+ ⟦:⟧ ℕ, x = \(x$/u);
+    expect(excerpt).not.toContain('reserved');
+    expect(typeDiagnosticExcerpt('∀ fun_x : ℕ, True', reason(2))).not.toContain('reserved');
+    expect(typeDiagnosticExcerpt('True', reason(4))).toBeUndefined();
+    expect(typeDiagnosticExcerpt('True', `TypeDiagnostic.lean:9:1: error: <input>:2:0: expected term`)).toBeUndefined();
+    expect(typeDiagnosticExcerpt('True', 'unknown identifier Foo')).toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { compileTaskContext, DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES, DEFAULT_TASK_CONTEXT_BYTES,
+import { COMPACT_CONTEXT_SOURCE_BYTES, compileTaskContext, DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES, DEFAULT_TASK_CONTEXT_BYTES,
   frozenSourceContext, type TaskContextInput } from '../src/solver/contextCompiler';
 import { buildResearchContext } from '../src/solver/modules/context';
 import { cooperativeWorkContract } from '../src/solver/modules/contracts';
@@ -681,6 +681,67 @@ it('preserves source variables, scopes, instances and frozen definitions while r
   expect(projected).not.toContain('ORIGINAL_TARGET_BODY');
   expect(projected).not.toContain('exact 99');
   expect(projected).toContain('end WithVariables\nend Frozen');
+});
+
+describe('compact context for a source above 64 KiB', () => {
+  const proofMarker = '\n/- Proof body omitted by the host context compiler. -/\n', bodyMarker = '\n/- body omitted -/\n';
+  const frozenProblem = { ...problem, declarations: {}, targets: [{ proofPath: 'Submission.lean',
+    theoremName: 'Frozen.previous', declarationHash: 'frozen-target' }] } as unknown as SolverProblem;
+  // A UTF-8 comment pads the source to an exact byte size.
+  const padded = (bytes: number, body: string) => {
+    const pad = bytes - Buffer.byteLength(body) - 7;
+    return `/- ${'é'.repeat(pad >> 1)}${'x'.repeat(pad & 1)} -/\n${body}`;
+  };
+  const body = ['namespace Frozen', 'def short : Nat := 17',
+    `def long : Nat :=\n  ${Array.from({ length: 12 }, (_, index) => index).join(' + ')} -- LONG_BODY`,
+    'instance fields : Inhabited Nat where\n  default := 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 -- FIELD_BODY',
+    'theorem previous : True := by\n  trivial -- ORIGINAL_PROOF_BODY', 'end Frozen', ''].join('\n');
+  const note = (bytes: number) => `/- Host context note: this ${bytes}-byte source is shown compactly. Definition and instance bodies ` +
+    'over 32 bytes appear as "body omitted"; read them with git show COMMIT:PATH from this file\'s frozen-sources entry. -/\n';
+
+  it('keeps a 64 KiB source unchanged apart from proof bodies', () => {
+    const source = padded(COMPACT_CONTEXT_SOURCE_BYTES, body);
+    expect(Buffer.byteLength(source)).toBe(COMPACT_CONTEXT_SOURCE_BYTES);
+    expect(frozenSourceContext(frozenProblem, 'Submission.lean', source))
+      .toBe(source.slice(0, source.indexOf(' by\n  trivial')) + proofMarker + 'end Frozen\n');
+  });
+
+  it('omits long definition and instance bodies one byte above it, keeping short ones and every header', () => {
+    const source = padded(COMPACT_CONTEXT_SOURCE_BYTES + 1, body);
+    expect(Buffer.byteLength(source)).toBe(COMPACT_CONTEXT_SOURCE_BYTES + 1);
+    expect(frozenSourceContext(frozenProblem, 'Submission.lean', source)).toBe(note(COMPACT_CONTEXT_SOURCE_BYTES + 1) +
+      source.slice(0, source.indexOf('namespace Frozen')) + 'namespace Frozen\ndef short : Nat := 17\ndef long : Nat :=' + bodyMarker +
+      'instance fields : Inhabited Nat where' + bodyMarker + 'theorem previous : True :=' + proofMarker + 'end Frozen\n');
+  });
+
+  it('stops each cut before the next declaration of a mutual block', () => {
+    const block = 'mutual\n\ndef Term.size : Nat → Nat\n    | 0 => 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0\n    | n + 1 => Formula.size n + 1\n' +
+      '  def Formula.size : Nat → Nat\n    | 0 => 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1\n    | n + 1 => Term.size n + 1\n\nend\n';
+    const source = padded(COMPACT_CONTEXT_SOURCE_BYTES + 1, block);
+    expect(frozenSourceContext(frozenProblem, 'Submission.lean', source)).toBe(note(COMPACT_CONTEXT_SOURCE_BYTES + 1) +
+      source.slice(0, source.indexOf('mutual')) + 'mutual\n\ndef Term.size : Nat → Nat\n    ' + bodyMarker +
+      'def Formula.size : Nat → Nat\n    ' + bodyMarker + 'end\n');
+  });
+
+  it('cites a large statement by its frozen file instead of repeating it', () => {
+    const compile = (statement: string, trusted: boolean) => {
+      const large = { ...problem, contract: { ...problem.contract, formalStatement: statement },
+        trustedFiles: trusted ? { 'lakefile.lean': mathDigest('other'), 'Challenge.lean': mathDigest(statement) } : {} } as SolverProblem;
+      return compileTaskContext({ ...input([]), problem: large,
+        frozenContexts: { 'Submission.lean': frozenSourceContext(large, 'Submission.lean', statement) } }).message;
+    };
+    const copies = (message: string, statement: string) => message.split(statement.slice(0, 200)).length - 1;
+    const atLimit = padded(COMPACT_CONTEXT_SOURCE_BYTES, formal), above = padded(COMPACT_CONTEXT_SOURCE_BYTES + 1, formal);
+    expect(compile(atLimit, true)).toContain(`Original problem:\n${atLimit}\n\nFrozen assumptions and problem identity:`);
+    expect(copies(compile(atLimit, true), atLimit)).toBe(2);
+    const cited = compile(above, true);
+    expect(JSON.parse(cited.split('Original problem:\n')[1].split('\n')[0])).toEqual({ commit: baseCommit,
+      path: 'generated/p/Challenge.lean', bytes: COMPACT_CONTEXT_SOURCE_BYTES + 1, sha256: mathDigest(above),
+      retrieval: expect.stringContaining('git show COMMIT:PATH') });
+    expect(copies(cited, above)).toBe(1);
+    // Without a frozen copy to cite, the statement stays inline.
+    expect(compile(above, false)).toContain(`Original problem:\n${above}\n\nFrozen assumptions and problem identity:`);
+  });
 });
 
 it('requires the selected alternative route closing and prerequisite interfaces beyond ordinary dependsOn', () => {
