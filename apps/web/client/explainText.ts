@@ -183,14 +183,19 @@ function joinAtoms(atoms: readonly ProseAtom[]): ProseSegment[] {
 }
 export const proseSegments = (text: string): ProseSegment[] => joinAtoms(proseAtoms(text));
 
-/** Prose segments grouped by the linked phrase they belong to (`link` indexes the links given), unlinked runs between. */
-export type ProseRun = { segments: ProseSegment[]; link?: number };
+/**
+ * Prose segments grouped by the linked phrase they belong to (`link` indexes the links given), unlinked runs between;
+ * `marked` when the run lies in a marked range.
+ */
+export type ProseRun = { segments: ProseSegment[]; link?: number; marked?: true };
 /**
  * Splits prose at linked phrases (UTF-16 offsets into the raw text, end exclusive). A phrase that cuts into a formula,
  * inline code or bold text takes all of it, so a formula is never drawn in pieces; a phrase overlapping an earlier
- * one (in start order) is dropped.
+ * one (in start order) is dropped. Runs are also split where `marks` (ranges that may overlap anything) begin and end;
+ * a formula touched by a mark is marked whole.
  */
-export function linkedProse(text: string, links: readonly { start: number; end: number }[]): ProseRun[] {
+export function linkedProse(text: string, links: readonly { start: number; end: number }[],
+  marks: readonly { start: number; end: number }[] = []): ProseRun[] {
   const atoms = proseAtoms(text);
   const spans = links.map((link, index) => {
     const touched = link.end > link.start ? atoms.filter(atom => atom.start < link.end && atom.end > link.start) : [];
@@ -199,15 +204,17 @@ export function linkedProse(text: string, links: readonly { start: number; end: 
     .sort((a, b) => a.start - b.start || a.index - b.index);
   const kept: typeof spans = [];
   for (const item of spans) if (!kept.some(other => item.start < other.end && item.end > other.start)) kept.push(item);
-  const runs: { atoms: ProseAtom[]; link?: number }[] = [];
+  const runs: { atoms: ProseAtom[]; link?: number; marked: boolean }[] = [];
   for (const atom of atoms) {
     const link = kept.find(item => atom.start >= item.start && atom.end <= item.end)?.index, last = runs.at(-1);
-    if (last && last.link === link) last.atoms.push(atom);
-    else runs.push(link === undefined ? { atoms: [atom] } : { atoms: [atom], link });
+    const marked = marks.some(range => atom.start < range.end && atom.end > range.start);
+    if (last && last.link === link && last.marked === marked) last.atoms.push(atom);
+    else runs.push(link === undefined ? { atoms: [atom], marked } : { atoms: [atom], link, marked });
   }
   return runs.flatMap(run => {
     const segments = joinAtoms(run.atoms);
-    return segments.length ? [run.link === undefined ? { segments } : { segments, link: run.link }] : [];
+    if (!segments.length) return [];
+    return [{ segments, ...run.link === undefined ? {} : { link: run.link }, ...run.marked ? { marked: true as const } : {} }];
   });
 }
 
@@ -230,21 +237,14 @@ export function wholeQuotes(whole: string, quotes: readonly (string | null)[]): 
 
 /**
  * A run of text to underline for quote `quote` (UTF-16 offsets, end exclusive); `quotes` is it and every other quote of
- * the same text, which one click on the run finds together.
+ * the same text, which one click on the run finds together, and `wider` the quotes around that text, each list one
+ * longer text, shortest first, which further clicks on the run step out to.
  */
-export type QuotePiece = { start: number; end: number; quote: number; quotes: number[] };
+export type QuotePiece = { start: number; end: number; quote: number; quotes: number[]; wider: number[][] };
 // Latin and CJK sentence punctuation, written as escapes so the source holds no interface text.
 const EDGE = /[\s.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001]/u;
-/**
- * Where to underline quotes of one text, each a range or `null`, and `placed` when its counterpart was found. A quote
- * inside another takes its own text and the outer one keeps the rest, so the more specific quote is the one a click
- * finds; of two quotes that cross, the earlier keeps its text. Quotes differing only by spaces or sentence punctuation at
- * their ends are one, drawn for the first whose counterpart was found and carrying the others in `quotes`, and a quote
- * whose counterpart was not found yields to one whose was. Like linkedProse, a quote that cuts into a formula, inline
- * code or bold text takes all of it. Underlines leave out spaces and sentence punctuation at their ends, and a remainder
- * of only spaces and punctuation is not underlined.
- */
-export function quotePieces(text: string, quotes: readonly ({ start: number; end: number; placed: boolean } | null)[]): QuotePiece[] {
+/** Ranges of `text` moved onto whole formulas, inline code and bold text, less spaces and sentence punctuation at their ends. */
+function snapper(text: string) {
   const atoms = proseAtoms(text), bounds = new Set(atoms.flatMap(atom => [atom.start, atom.end]));
   // Every range stays on atom boundaries, so linkedProse draws the pieces as given.
   const trim = (start: number, end: number) => {
@@ -252,34 +252,66 @@ export function quotePieces(text: string, quotes: readonly ({ start: number; end
     while (end > start && EDGE.test(text[end - 1]!) && bounds.has(end - 1)) end--;
     return { start, end };
   };
-  const items = quotes.flatMap((quote, index) => {
-    const touched = quote ? atoms.filter(atom => atom.start < quote.end && atom.end > quote.start) : [];
-    if (!quote || !touched.length) return [];
+  const snap = (start: number, end: number) => {
+    const touched = atoms.filter(atom => atom.start < end && atom.end > start);
+    if (!touched.length) return undefined;
     const range = trim(touched[0]!.start, touched.at(-1)!.end);
-    return range.end > range.start ? [{ ...range, placed: quote.placed, index }] : [];
-  }).sort((a, b) => Number(b.placed) - Number(a.placed) || a.start - b.start || b.end - a.end || a.index - b.index);
-  const kept: typeof items = [], same = new Map<number, number[]>();
+    return range.end > range.start ? range : undefined;
+  };
+  return { trim, snap };
+}
+/** The text a quote of `text` covers, as quotePieces counts it. */
+export const quoteRange = (text: string, start: number, end: number) => snapper(text).snap(start, end);
+/**
+ * Where to underline quotes of one text, each a range or `null`, and `placed` when its counterpart was found. A quote
+ * inside another takes its own text and the outer one keeps the rest, so the more specific quote is the one a click
+ * finds; of two quotes that cross, the earlier keeps its text. Quotes differing only by spaces or sentence punctuation at
+ * their ends are one, drawn for the first whose counterpart was found and carrying the others in `quotes`, and a quote
+ * whose counterpart was not found yields to one whose was. A `hidden` quote is never drawn but counts as around the
+ * quotes inside it. Like linkedProse, a quote that cuts into a formula, inline code or bold text takes all of it.
+ * Underlines leave out spaces and sentence punctuation at their ends, and a remainder of only spaces and punctuation is
+ * not underlined.
+ */
+export function quotePieces(text: string,
+  quotes: readonly ({ start: number; end: number; placed: boolean; hidden?: boolean } | null)[]): QuotePiece[] {
+  const { trim, snap } = snapper(text);
+  const ranges = quotes.flatMap((quote, index) => {
+    const range = quote && snap(quote.start, quote.end);
+    return range ? [{ ...range, placed: quote.placed, hidden: quote.hidden === true, index }] : [];
+  });
+  const items = ranges.filter(item => !item.hidden)
+    .sort((a, b) => Number(b.placed) - Number(a.placed) || a.start - b.start || b.end - a.end || a.index - b.index);
+  const kept: typeof items = [];
   for (const item of items) {
     // Sorted placed first, so the copy kept for a text is placed whenever any copy is.
-    const twin = kept.find(other => item.start === other.start && item.end === other.end);
-    if (twin) { same.get(twin.index)!.push(item.index); continue; }
+    if (kept.some(other => item.start === other.start && item.end === other.end)) continue;
     const conflict = kept.some(other => {
       const inside = other.start <= item.start && item.end <= other.end, around = item.start <= other.start && other.end <= item.end;
       if (inside) return !item.placed && other.placed;
       if (around) return false;
       return item.start < other.end && other.start < item.end;
     });
-    if (!conflict) { kept.push(item); same.set(item.index, [item.index]); }
+    if (!conflict) kept.push(item);
   }
+  // Every quote of one text, the kept copy first, then the others in the order given.
+  const same = (range: { start: number; end: number }, first?: number) => {
+    const found = ranges.filter(other => other.start === range.start && other.end === range.end).map(other => other.index)
+      .sort((a, b) => a - b);
+    return first === undefined ? found : [first, ...found.filter(index => index !== first)];
+  };
   return kept.flatMap(item => {
+    const around = ranges.filter(other => other.start <= item.start && item.end <= other.end && other.end - other.start > item.end - item.start)
+      .sort((a, b) => a.end - a.start - (b.end - b.start) || a.start - b.start);
+    const wider = around.filter((other, index) => !around.slice(0, index).some(prior => prior.start === other.start && prior.end === other.end))
+      .map(other => same(other));
     const inner = kept.filter(other => other !== item && item.start <= other.start && other.end <= item.end)
       .sort((a, b) => a.start - b.start);
-    const pieces: QuotePiece[] = [];
+    const pieces: QuotePiece[] = [], quotes = same(item, item.index);
     let at = item.start;
     for (const other of [...inner, { start: item.end, end: item.end }]) {
       const piece = trim(at, other.start);
       if (piece.end > piece.start && /[^\s\p{P}]/u.test(text.slice(piece.start, piece.end)))
-        pieces.push({ ...piece, quote: item.index, quotes: same.get(item.index)! });
+        pieces.push({ ...piece, quote: item.index, quotes, wider });
       at = Math.max(at, other.end);
     }
     return pieces;

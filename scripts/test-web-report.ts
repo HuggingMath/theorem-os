@@ -84,6 +84,19 @@ const highlighted = (page: Page, name: string) => page.evaluate(key => {
   CSS.highlights.get(key)?.forEach(range => { texts.push((range as Range).toString()); });
   return texts;
 }, name);
+/** The tinted text of the original problem, one entry per stretch of marked text, spacing collapsed. */
+const tinted = (page: Page) => page.locator('.formal-original').first().evaluate(original => {
+  const stretches: string[] = [];
+  let open = false;
+  const walker = document.createTreeWalker(original, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const marked = Boolean(node.parentElement?.closest('mark.explain-chosen'));
+    if (marked && open) stretches[stretches.length - 1] += node.textContent ?? '';
+    else if (marked) stretches.push(node.textContent ?? '');
+    if (marked || (node.textContent ?? '').length) open = marked;
+  }
+  return stretches.map(text => text.replace(/\s+/gu, ' ').trim());
+});
 /** Proof lines carrying a row class, as 1-based numbers. */
 const rowsWith = (page: Page, code: string, kind: string) => page.locator(`${code} .lean-row.${kind}`)
   .evaluateAll(rows => rows.map(row => Number((row as HTMLElement).dataset.line)));
@@ -121,22 +134,36 @@ try {
   // keeps what '+' does not take, and instanceCoherence, whose Lean is not in the proof, yields to the conclusion.
   assert.deepEqual(await aspects(marks), ['assumptions', 'domains', 'conclusions', 'definitions', 'conclusions']);
   assert.deepEqual(await marks.allInnerTexts(), ['For every', 'natural number n', 'n', '+', '0 = n']);
-  // The chosen fragment is tinted in every piece of its pair: the conclusion's words on both sides of '+'.
+  // The chosen pair's text is tinted, '+' inside it too, and the pieces standing for it are underlined solid.
   const chosen = problem.locator('.formal-original .explain-link.is-active');
   await marks.filter({ hasText: '0 = n' }).click();
   await page.locator('#explain-lean-code .lean-row.is-use').first().waitFor();
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-use'), [3]);
   assert.deepEqual(await highlighted(page, 'explain-use'), ['n + 0 = n']);
   assert.deepEqual(await chosen.allInnerTexts(), ['n', '0 = n']);
+  assert.deepEqual(await tinted(page), ['n + 0 = n']);
   await marks.filter({ hasText: /^\+$/u }).click();
   assert.deepEqual(await highlighted(page, 'explain-use'), ['+']);
   assert.deepEqual(await chosen.allInnerTexts(), ['+']);
+  assert.deepEqual(await tinted(page), ['+']);
+  // quantifierScope has no words of its own left: a second click on a fragment inside it steps out to it, a third back.
+  const every = marks.filter({ hasText: 'For every' });
+  assert.equal(await every.getAttribute('title'), '假设 · 直接对应\n再点一次，选中包含它的更长片段');
+  await every.click();
+  assert.deepEqual(await highlighted(page, 'explain-use'), ['addition (n : Nat) :']);
+  await every.click();
+  assert.deepEqual(await highlighted(page, 'explain-use'), ['theorem addition (n : Nat)']);
+  assert.deepEqual(await tinted(page), ['For every natural number n']);
+  assert.equal(await chosen.count(), 0, 'no piece is its own fragment');
+  await every.click();
+  assert.deepEqual(await tinted(page), ['For every']);
   await problem.locator('.formal-problem-details > summary').click();
   assert.equal(await problem.locator('.formal-correspondence').count(), correspondences.length);
   assert.deepEqual(await problem.locator('.formal-lean.is-unplaced').allInnerTexts(), ['forall (n : Nat), n + 0 = n']);
   await problem.locator(`button.formal-lean[data-correspondence="${correspondences.findIndex(item => item.aspect === 'domains')}"]`).click();
   assert.deepEqual(await highlighted(page, 'explain-use'), ['(n : Nat)']);
   assert.deepEqual(await chosen.allInnerTexts(), ['natural number n']);
+  assert.deepEqual(await tinted(page), ['natural number n']);
   assert.equal(await problem.locator('.formal-correspondence.is-active').count(), 1);
   mark('原题 marks the reviewers\' fragments; each, and each placed pair in the list, marks its Lean in the proof and is shown as chosen');
   // Linked phrases: each chooses its statement or step and marks where its Lean is written.
@@ -151,6 +178,7 @@ try {
   assert.deepEqual(await highlighted(page, 'explain-use'), ['(n : Nat)']);
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-active'), [3]);
   assert.equal(await chosen.count(), 0, 'choosing a statement clears the chosen 原题 fragment');
+  assert.deepEqual(await tinted(page), []);
   const formula = helper.locator('.explain-statement [data-action="link"]');
   assert.equal(await formula.locator('.math').getAttribute('title'), 'n + 0 = n', 'a link into a formula takes the whole formula');
   await formula.click();
@@ -236,10 +264,21 @@ try {
   assert.deepEqual(await highlighted(fpage, 'explain-use'), ['n + 0 = n']);
   assert.deepEqual(await rowsWith(fpage, '#formal-lean-code', 'is-active'), [1]);
   assert.deepEqual(await fchosen.allInnerTexts(), ['n', '0 = n']);
-  // A Lean line tints, in the original, every fragment whose pair is written on it.
+  assert.deepEqual(await tinted(fpage), ['n + 0 = n']);
+  // A second click on a fragment inside quantifierScope steps out to it; a Lean line then starts again.
+  const fevery = fmarks.filter({ hasText: 'For every' });
+  await fevery.click();
+  await fevery.click();
+  assert.deepEqual(await active(), [formalData.correspondences.findIndex(item => item.aspect === 'quantifierScope')]);
+  assert.deepEqual(await highlighted(fpage, 'explain-use'), ['theorem addition (n : Nat)']);
+  assert.deepEqual(await tinted(fpage), ['For every natural number n']);
+  // A Lean line tints, in the original, all the text of the pairs written on it.
   await fpage.locator('#formal-lean-code .lean-row[data-line="1"]').click();
   assert.deepEqual(await active(), formalData.correspondences.flatMap((item, index) => item.lean.length ? [index] : []));
   assert.deepEqual(await fchosen.allInnerTexts(), await fmarks.allInnerTexts());
+  assert.deepEqual(await tinted(fpage), ['For every natural number n', 'n + 0 = n']);
+  await fevery.click();
+  assert.deepEqual(await tinted(fpage), ['For every'], 'after a Lean line a fragment starts from its own pair');
   assert.deepEqual(await fpage.locator('.formal-lean.is-unplaced').allInnerTexts(), ['forall (n : Nat), n + 0 = n']);
   const scope = formalData.correspondences.findIndex(item => item.aspect === 'quantifierScope');
   await fpage.locator(`button.formal-lean[data-correspondence="${scope}"]`).click();
@@ -284,16 +323,19 @@ try {
   await formalEnglish.context.close();
   mark('on a phone a fragment opens the statement and a line returns to its pairs; English chrome is English');
 
-  // A derived page: a statement line wider than a phone, two aspects quoting the same words, and a pair quoting the
-  // whole problem. One click on the words finds both pairs and scrolls the pane across to their Lean.
+  // A derived page: a statement line wider than a phone, two aspects quoting the same words, a pair quoting the whole
+  // problem and one quoting a long elaborated type. One click on the words finds both pairs and scrolls the pane across.
   const long = structuredClone(formalization), at = fixtureStatement.indexOf('n + 0 = n');
+  const elaborated = 'forall (n : Nat),\n  Eq.{1} Nat\n    (HAdd.hAdd.{0, 0, 0} Nat Nat Nat (instHAdd.{0} Nat instAddNat) n\n'
+    + '      (OfNat.ofNat.{0} Nat 0 (instOfNatNat 0)))\n    n';
   long.candidate.source = 'theorem addition (a b c d e f g h i j k l m : Nat) (n : Nat) : n + 0 = n := by sorry\n';
   const reviewed = long.workflow!.reviews[0]!.review;
   assert.ok('correspondences' in reviewed);
   const template = reviewed.correspondences[0]!;
   reviewed.correspondences.push({ ...template, aspect: 'instanceCoherence', originalFragment: 'n + 0 = n.', candidateFragment: '0' },
     { ...template, aspect: 'conclusions', originalFragment: fixtureStatement, candidateFragment: 'n + 0 = n' },
-    { ...template, aspect: 'quantifierScope', originalFragment: 'For every natural number n', candidateFragment: long.candidate.source.trim() });
+    { ...template, aspect: 'quantifierScope', originalFragment: 'For every natural number n', candidateFragment: long.candidate.source.trim() },
+    { ...template, aspect: 'definitions', originalFragment: 'prove', candidateFragment: elaborated });
   const longData = formalizationReport(long);
   const pair = [longData.correspondences.findIndex(item => item.aspect === 'conclusions' && item.original === 'n + 0 = n'),
     longData.correspondences.findIndex(item => item.aspect === 'instanceCoherence' && item.leanText === '0')];
@@ -304,7 +346,7 @@ try {
     await lpage.locator('#formal-content:not([hidden])').waitFor();
     const words = lpage.locator('.formal-original [data-action="correspondence"]').filter({ hasText: '0 = n' });
     assert.equal(await words.getAttribute('data-correspondence'), pair.join(' '));
-    assert.equal(await words.getAttribute('title'), '结论 · 直接对应\n类型类实例 · 直接对应');
+    assert.equal(await words.getAttribute('title'), '结论 · 直接对应\n类型类实例 · 直接对应\n再点一次，选中包含它的更长片段');
     await words.click();
     assert.deepEqual(await lpage.locator('.formal-correspondence.is-active').evaluateAll(items =>
       items.map(item => Number((item as HTMLElement).dataset.item))), pair);
@@ -318,10 +360,36 @@ try {
     if (width === 390) assert.ok(await lpage.locator('#formal-lean').evaluate(pane => pane.scrollLeft) > 0, 'the phone pane scrolled across');
     else assert.equal(await lpage.locator('#formal-lean').evaluate(pane => pane.scrollLeft), 0, 'a fragment in view does not scroll');
     assert.deepEqual(await lpage.locator('.formal-whole').allInnerTexts(), ['整段原题']);
+    if (width === 1440) {
+      // The pair quoting the whole problem is not underlined, but a second click on words inside it reaches it.
+      await words.click();
+      const whole = longData.correspondences.findIndex(item => item.aspect === 'conclusions' && item.original === fixtureStatement);
+      assert.deepEqual(await lpage.locator('.formal-correspondence.is-active').evaluateAll(items =>
+        items.map(item => Number((item as HTMLElement).dataset.item))), [whole]);
+      assert.deepEqual(await tinted(lpage), [fixtureStatement.replace(/\.$/u, '')]);
+    }
     assert.equal(await lpage.locator('.formal-lean').filter({ hasText: '整份 Lean 陈述' }).count(), 1);
+    // A long Lean fragment the source does not write is folded to its first line and says so in words.
+    if (width === 390) await lpage.locator('[data-action="pane"][data-pane="prose"]').click();
+    const fold = lpage.locator('details.formal-unplaced'), folded = fold.locator('summary');
+    assert.equal(await fold.count(), 1);
+    assert.equal(await folded.innerText(), 'forall (n : Nat), …\n源码里没有原样写出\n展开');
+    assert.ok((await fold.boundingBox())!.height < 64, 'the folded fragment takes at most two short lines');
+    await folded.click();
+    assert.equal(await fold.locator('.formal-lean.is-unplaced').innerText(), elaborated);
+    assert.equal(await fold.locator('.formal-lean.is-preview').isVisible(), false);
+    assert.equal(await fold.locator('.formal-unplaced-toggle').innerText(), '收起');
+    assert.equal(await lpage.locator('.formal-correspondence.is-active').count(), width === 1440 ? 1 : 2, 'opening it chooses nothing');
+    assert.deepEqual(await audit(lpage), [], 'accessibility problems with the fold open');
+    assert.deepEqual(await contrastProblems(lpage), [], 'contrast problems with the fold open');
     await opened.context.close();
   }
-  mark('one click on words several pairs quote finds them all and scrolls across to their Lean; whole-problem and whole-statement quotes are named');
+  const longDark = await open(browser, longFile, { locale: 'zh', theme: 'dark' });
+  await longDark.page.locator('#formal-content:not([hidden])').waitFor();
+  await longDark.page.locator('details.formal-unplaced > summary').click();
+  assert.deepEqual(await contrastProblems(longDark.page), [], 'contrast problems with the fold open, dark');
+  await longDark.context.close();
+  mark('one click on words several pairs quote finds them all and scrolls across to their Lean, a second the whole problem; whole-problem and whole-statement quotes are named; a long unwritten Lean fragment is folded');
 
   assert.deepEqual(errors, [], 'no page errors or console errors');
   console.log('Report checks passed: both offline pages load nothing from outside, 原题 fragments, linked phrases, goal checks, '
