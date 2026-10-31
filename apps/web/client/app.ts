@@ -453,7 +453,8 @@ function renderPreparation(issues = currentSubmissionIssues()) {
   target.toggleAttribute('data-settled', settled);
   patchText(element('#readiness-title'), state.submitting ? t('正在提交研究') : pending ? t('正在读取提交配置')
     : offline ? t('连接中断，草稿可继续编辑') : !environmentReady ? t('运行环境未就绪')
-      : full ? t('研究记录已满 {0} 条', state.session?.limits.maxRuns) : composing ? t('写下研究任务') : issue?.message ?? (settled ? t('原题里没有 sorry')
+      : full ? t('研究记录已满 {0} 条', state.session?.limits.maxRuns) : composing ? t('写下研究任务') : firstKey ? t('连接模型后即可提交')
+        : issue?.message ?? (settled ? t('原题里没有 sorry')
         : checked?.status === 'ready' ? t('可以提交 · {0} 处 sorry 待证明', checked.sorries) : t('可以提交')));
   patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? t('连接后可编辑研究任务。')
     // Offline, the notice at the top already says the draft is kept.

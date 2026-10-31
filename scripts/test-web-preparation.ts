@@ -726,7 +726,9 @@ try {
     assert.equal(await page.locator('#readiness-title').innerText(), '写下研究任务');
     await page.locator('#task').fill('The next research task');
     await readiness(page, 'missing');
-    assert.equal(await page.locator('#readiness-title').innerText(), '请填写 API Key');
+    // Nobody has been asked for the Key yet, so the quiet line says why it is needed and the action says what to do.
+    assert.equal(await page.locator('#readiness-title').innerText(), '连接模型后即可提交');
+    assert.equal(await page.locator('#readiness-action').innerText(), '填写 API Key');
     assert.equal(await page.locator('#api-key').getAttribute('type'), 'password');
     assert.equal(workerStarts, 1, 'only the explicit valid submission may start the local fixture');
     assert.equal((await page.locator('#submission-readiness').innerText()).includes(credential), false);
