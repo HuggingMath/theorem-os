@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ee">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>形式化对照 · TheoremOS</title>
+  <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="app.css">
+</head>
+<!-- An offline report page: formalize --phase report embeds the payload and inlines the bundle; the server never serves it. -->
+<body class="explain-page formal-page">
+  <header class="topbar explain-topbar">
+    <a class="brand" aria-label="TheoremOS"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
+    <span class="topbar-divider" aria-hidden="true"></span>
+    <span class="explain-kind">形式化对照</span>
+    <span id="formal-problem-id" class="workspace-name" translate="no"></span>
+    <div class="topbar-actions">
+      <button type="button" id="locale-switch" class="text-button locale-switch" hidden></button>
+    </div>
+  </header>
+  <main class="explain-shell" id="main">
+    <p id="formal-loading" class="explain-state" role="status">正在读取形式化…</p>
+    <section id="formal-missing" class="share-card share-state-card explain-missing" hidden aria-labelledby="formal-missing-heading">
+      <h1 id="formal-missing-heading">无法打开形式化对照</h1>
+      <p>这个页面由 theorem-os formalize --phase report 生成，单独打开没有内容。</p>
+    </section>
+    <div id="formal-content" class="explain-content" hidden>
+      <div id="formal-toolbar" class="explain-toolbar"></div>
+      <div id="formal-split" class="explain-split" data-pane="prose">
+        <section class="explain-pane explain-pane-lean" aria-labelledby="formal-lean-heading">
+          <header class="explain-pane-head"><h2 id="formal-lean-heading">Lean 陈述</h2><span id="formal-lean-count" class="mono explain-count"></span></header>
+          <p class="explain-legend"><span class="explain-legend-item"><span class="lean-mark-sample is-statement" aria-hidden="true"></span>目标定理</span>
+            <span class="explain-legend-item"><span class="formal-matched-sample" aria-hidden="true">abc</span>审核模型对照过的片段</span></p>
+          <div id="formal-lean" class="explain-scroll explain-lean" tabindex="0" aria-labelledby="formal-lean-heading"><div id="formal-lean-code" class="lean-code" translate="no"></div></div>
+        </section>
+        <section class="explain-pane explain-pane-prose" aria-labelledby="formal-prose-heading">
+          <header class="explain-pane-head"><h2 id="formal-prose-heading">原题与审核</h2></header>
+          <div id="formal-prose" class="explain-scroll explain-prose" tabindex="0" aria-labelledby="formal-prose-heading"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <noscript><div class="no-script">需要启用 JavaScript 才能查看形式化对照。</div></noscript>
+  <script src="formalization.js" defer></script>
+</body>
+</html>

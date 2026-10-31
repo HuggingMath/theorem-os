@@ -7,12 +7,15 @@ import { canonicalMathJson, mathDigest, readMathFile, readMathText, syncMathDire
 import { assertMathCanonicalPath } from './paths';
 import { getLeanTaskEnvironment } from './leanTaskEnvironment';
 import { isSimpleLeanName, maskLeanComments } from './leanSyntax';
+import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from './leanSource';
+import { formalizationDigest, readFormalizationArtifact, type FormalizationEvidence } from './formalization';
 import { localModuleFile, mathLocalModuleGraph } from './mathConstructionSources';
 import { isAllowedMathProofSource } from './mathProofSourcePolicy';
 import { formalizationModelConfigurationSchema } from './formalizationWorkflow';
 import { deriveFormalizationRoleOutputJsonSchema } from './formalizationRoleContract';
 import { incidentalLibraryName, informalizationLibraryContext, informalizationOutlineSchema,
   type InformalizationOutline, type InformalizationUnit } from './informalizationExtraction';
+import { findWithin, lineEnds, placeExcerpts, sectionStepGoals, statementRegion } from './informalizationAlignment';
 
 /**
  * Proof-level informalization (lean-proof-informalization-v1): a Lean-checked proof
@@ -29,6 +32,13 @@ import { incidentalLibraryName, informalizationLibraryContext, informalizationOu
  * The Lean proof is the authority. The prose is model-written and model-reviewed.
  */
 export const INFORMALIZATION_PROTOCOL = 'lean-proof-informalization-v1';
+/**
+ * Phrase alignment (lean-phrase-alignment-v1), opted into per request: the writer also pairs phrases of its prose with
+ * the Lean text they translate (links), the host checks each pair is verbatim on both sides and inside the Lean the
+ * statement or step explains, and auditors judge the pairs and each step against the goals the page shows beside it.
+ * Requests without it keep their inputs, schemas, instructions and digests.
+ */
+export const INFORMALIZATION_ALIGNMENT = 'lean-phrase-alignment-v1';
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = z.string().min(1).max(32_000).refine(value => value.trim().length > 0);
 // Zero removes the corresponding execution limit.
@@ -49,6 +59,13 @@ export const informalizationRequestSchema = z.object({
     bytes: z.number().int().positive() }).strict()).min(1).max(256),
   /** Optional vocabulary context for the writer; never shown to the auditors. */
   statement: statement.nullable(), statementSha256: hash.nullable(),
+  /**
+   * The approved formalization the proof proves, copied to formalization/ (a formalization artifact); statement is then
+   * its original problem. Absent for a proof without one.
+   */
+  formalization: z.object({ problemId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), evidenceSha256: hash,
+    statementSha256: hash, originalSha256: hash }).strict().optional(),
+  alignment: z.literal(INFORMALIZATION_ALIGNMENT).optional(),
   language: z.enum(['zh', 'en']),
   writer: formalizationModelConfigurationSchema,
   auditors: z.array(auditorSchema).min(1).max(5),
@@ -64,7 +81,34 @@ const MAX_SOURCE_BYTES = 16_000_000;
 const MODULE_HEADER = /^\s*module(?=\s|$)/u;
 
 export type InformalizationPreparation = Omit<InformalizationRequest, 'schema' | 'protocol' | 'environmentDigest' | 'toolchain' |
-  'mathlibRevision' | 'rootModule' | 'sources' | 'statementSha256' | 'buildDigest'> & { proofFile: string; projectRoot: string };
+  'mathlibRevision' | 'rootModule' | 'sources' | 'statementSha256' | 'buildDigest' | 'formalization'> & { proofFile: string;
+  projectRoot: string;
+  /** A formalization artifact directory; its original problem becomes the statement, so `statement` must be null. */
+  formalizationArtifact?: string };
+const FORMALIZATION_FILES = ['Statement.lean', 'original.txt', 'evidence.json'] as const;
+
+/**
+ * The proof keeps every declaration of the approved statement: the same qualified name and kind, a theorem the same
+ * header (the solver's acceptance check) and a definition or instance the same text. It may add declarations.
+ */
+export function assertInformalizationFormalizationBinding(formalization: FormalizationEvidence,
+  binding: { target: string; environment: InformalizationRequest['environment']; environmentDigest: string; root: string }): void {
+  if (formalization.request.environment !== binding.environment || formalization.request.environmentDigest !== binding.environmentDigest)
+    throw new Error('informalization_formalization_environment_mismatch');
+  if (!formalization.targets.some(item => item.name === binding.target)) throw new Error('informalization_formalization_target_missing');
+  const declarations = (source: string) => {
+    const masked = maskLeanComments(source), regions = inspectLeanDeclarationRegions(masked);
+    return new Map(inspectScopedLeanDeclarations(masked).map((item, index) => [item.qualifiedName, { kind: item.kind,
+      header: item.declarationType, text: masked.slice(item.startOffset, regions[index]!.endOffset).replace(/\s+/gu, ' ').trim() }]));
+  };
+  const proof = declarations(binding.root);
+  for (const [name, expected] of declarations(formalization.candidate.source)) {
+    const found = proof.get(name);
+    if (!found || found.kind !== expected.kind || found.header !== expected.header ||
+        expected.kind !== 'theorem' && found.text !== expected.text)
+      throw new Error('informalization_formalization_declaration_changed: ' + name);
+  }
+}
 
 /** Freeze the proof's project-local import closure; the run never reads the source project again. */
 export function prepareInformalization(directory: string, input: InformalizationPreparation): InformalizationRequest {
@@ -91,13 +135,24 @@ export function prepareInformalization(directory: string, input: Informalization
     throw new Error('informalization_source_graph_invalid');
   const environment = getLeanTaskEnvironment(input.environment);
   const manifest = path.resolve(input.buildManifestRef);
+  let formalization: FormalizationEvidence | undefined, statement = input.statement;
+  if (input.formalizationArtifact !== undefined) {
+    if (statement !== null) throw new Error('informalization_formalization_statement_conflict');
+    formalization = readFormalizationArtifact(input.formalizationArtifact);
+    statement = formalization.request.statement;
+    assertInformalizationFormalizationBinding(formalization, { target: input.target, environment: input.environment,
+      environmentDigest: environment.dependencyDigest, root: sources.at(-1)!.contents });
+  }
   const request = informalizationRequestSchema.parse({
     schema: 'theorem-os.informalization-request.v1', protocol: INFORMALIZATION_PROTOCOL,
     proofId: input.proofId, target: input.target, environment: input.environment,
     environmentDigest: environment.dependencyDigest, toolchain: environment.toolchain,
     mathlibRevision: environment.mathlibRevision ?? null, rootModule: sources.at(-1)!.module,
     sources: sources.map(({ contents: _, ...item }) => item),
-    statement: input.statement, statementSha256: input.statement === null ? null : mathDigest(input.statement),
+    statement, statementSha256: statement === null ? null : mathDigest(statement),
+    ...formalization ? { formalization: { problemId: formalization.request.problemId, evidenceSha256: formalizationDigest(formalization),
+      statementSha256: formalization.sourceSha256, originalSha256: formalization.request.statementSha256 } } : {},
+    ...input.alignment ? { alignment: input.alignment } : {},
     language: input.language, writer: input.writer, auditors: input.auditors, batching: input.batching,
     maxRoundsPerBatch: input.maxRoundsPerBatch, maxRunSeconds: input.maxRunSeconds, maxTurnSeconds: input.maxTurnSeconds,
     maxCompileSeconds: input.maxCompileSeconds, maxTotalTokens: input.maxTotalTokens,
@@ -111,13 +166,23 @@ export function prepareInformalization(directory: string, input: Informalization
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     writeMathFrozen(file, source.contents);
   }
+  if (input.formalizationArtifact !== undefined) {
+    // Byte copies, so the copy is read and checked exactly as the formalization wrote it.
+    fs.mkdirSync(path.join(directory, 'formalization'), { mode: 0o700 });
+    for (const name of FORMALIZATION_FILES) {
+      const { bytes } = readMathFile(path.join(path.resolve(input.formalizationArtifact), name), 16_000_000);
+      writeMathFrozen(path.join(directory, 'formalization', name), new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes));
+    }
+    readFormalizationArtifact(path.join(directory, 'formalization'));
+  }
   writeMathJsonDurable(path.join(directory, 'request.json'), request, 0o400);
   syncMathDirectory(directory);
   return request;
 }
 
-/** The frozen request and its sources, each checked against its recorded digest. */
-export function readInformalizationRequest(directory: string): { request: InformalizationRequest; sources: InformalizationSource[] } {
+/** The frozen request and its sources, each checked against its recorded digest, and the formalization when it has one. */
+export function readInformalizationRequest(directory: string): { request: InformalizationRequest; sources: InformalizationSource[];
+  formalization?: FormalizationEvidence } {
   const file = path.join(path.resolve(directory), 'request.json'); assertMathCanonicalPath(file);
   const request = informalizationRequestSchema.parse(JSON.parse(readMathText(file, 16_000_000)));
   const environment = getLeanTaskEnvironment(request.environment);
@@ -136,7 +201,21 @@ export function readInformalizationRequest(directory: string): { request: Inform
     if (mathDigest(bytes) !== source.sha256 || bytes.length !== source.bytes) throw new Error('informalization_source_changed: ' + source.file);
     return { module: source.module, file: source.file, text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) };
   });
-  return { request, sources };
+  if (!request.formalization) return { request, sources };
+  const formalization = readFormalizationArtifact(path.join(path.resolve(directory), 'formalization'));
+  assertInformalizationFormalizationRecord(request, formalization);
+  assertInformalizationFormalizationBinding(formalization, { target: request.target, environment: request.environment,
+    environmentDigest: request.environmentDigest, root: sources.at(-1)!.text });
+  return { request, sources, formalization };
+}
+/** The request's formalization record names exactly this evidence, and its statement is that evidence's original. */
+export function assertInformalizationFormalizationRecord(request: Pick<InformalizationRequest, 'formalization' | 'statement' |
+  'statementSha256'>, formalization: FormalizationEvidence): void {
+  const record = request.formalization;
+  if (!record || record.evidenceSha256 !== formalizationDigest(formalization) || record.problemId !== formalization.request.problemId ||
+      record.statementSha256 !== formalization.sourceSha256 || record.originalSha256 !== formalization.request.statementSha256 ||
+      request.statement !== formalization.request.statement || request.statementSha256 !== record.originalSha256)
+    throw new Error('informalization_formalization_mismatch');
 }
 const declaration = z.string().min(1).max(4096);
 const prose = (max: number) => z.string().min(1).max(max).refine(value => value.trim().length > 0);
@@ -170,12 +249,37 @@ export const informalizationAuditOutputSchema = z.object({
 }).strict();
 export type InformalizationAuditOutput = z.infer<typeof informalizationAuditOutputSchema>;
 
+/** A phrase of the prose (verbatim) and the Lean text it translates (verbatim, whitespace runs collapsed). */
+const informalizationLinkSchema = z.object({ text: prose(400), lean: z.string().min(1).max(2000) }).strict();
+export type InformalizationLink = z.infer<typeof informalizationLinkSchema>;
+const links = z.array(informalizationLinkSchema).max(24);
+export const informalizationAlignedWriterOutputSchema = informalizationWriterOutputSchema.extend({
+  sections: z.array(z.object({ declaration, title: prose(400), statement: prose(16_000), statementLinks: links,
+    proof: z.array(informalizationStepSchema.extend({ links }).strict()).max(200) }).strict()).min(1).max(64),
+}).strict();
+export type InformalizationAlignedWriterOutput = z.infer<typeof informalizationAlignedWriterOutputSchema>;
+export type InformalizationAlignedSection = InformalizationAlignedWriterOutput['sections'][number];
+const auditSectionShape = informalizationAuditOutputSchema.shape.sections.element.shape;
+export const informalizationAlignedAuditOutputSchema = informalizationAuditOutputSchema.extend({
+  sections: z.array(z.object({ ...auditSectionShape,
+    /** Whether the step agrees with the goals INPUT.stepGoals records for it. */
+    steps: z.array(auditSectionShape.steps.element.extend({ goals: z.enum(['consistent', 'inconsistent', 'unrecorded']) }).strict()).max(200),
+  }).strict()).min(1).max(64),
+}).strict();
+export type InformalizationAlignedAuditOutput = z.infer<typeof informalizationAlignedAuditOutputSchema>;
+type Alignment = InformalizationRequest['alignment'];
+const writerOutputSchema = (alignment: Alignment) => alignment ? informalizationAlignedWriterOutputSchema : informalizationWriterOutputSchema;
+const auditOutputSchema = (alignment: Alignment) => alignment ? informalizationAlignedAuditOutputSchema : informalizationAuditOutputSchema;
+/** The writer output a request's alignment requires. */
+export const informalizationWriterOutputSchemaFor = writerOutputSchema;
+
 export type InformalizationRole = 'write' | 'audit';
 /** A fresh serializable guide for OUTPUT.schema.json; the host validators and checks remain authoritative. */
-export function informalizationRoleOutputSchema(role: InformalizationRole) {
-  const schema = deriveFormalizationRoleOutputJsonSchema(role === 'write' ? informalizationWriterOutputSchema : informalizationAuditOutputSchema);
+export function informalizationRoleOutputSchema(role: InformalizationRole, alignment?: Alignment) {
+  const schema = deriveFormalizationRoleOutputJsonSchema(role === 'write' ? writerOutputSchema(alignment) : auditOutputSchema(alignment));
   return { ...schema, $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'TheoremOS informalization ' + role + ' OUTPUT.json',
-    $comment: 'The host also checks the input digest, the declaration order, citations and verbatim Lean excerpts.' };
+    $comment: 'The host also checks the input digest, the declaration order, citations and verbatim Lean excerpts' +
+      (alignment ? ', and that both sides of each link are verbatim.' : '.') };
 }
 
 export type InformalizationBatch = { index: number; count: number; final: boolean; declarations: string[] };
@@ -229,22 +333,32 @@ export type InformalizationWriterInput = ReturnType<typeof informalizationWriter
 export type InformalizationAuditInput = ReturnType<typeof informalizationAuditInput>;
 
 export function informalizationWriterInput(context: BatchContextInput & { language: InformalizationRequest['language'];
-  round: number; problemStatement: string | null; feedback: string | null; previousOutput: InformalizationWriterOutput | null }) {
+  alignment?: Alignment; round: number; problemStatement: string | null; feedback: string | null;
+  previousOutput: InformalizationWriterOutput | null }) {
   const body = { schema: 'theorem-os.informalization-write-input.v1' as const, protocol: INFORMALIZATION_PROTOCOL,
-    language: context.language, round: context.round,
+    ...context.alignment ? { alignment: context.alignment } : {}, language: context.language, round: context.round,
     batch: { index: context.batch.index, count: context.batch.count, final: context.batch.final },
     problemStatement: context.problemStatement, ...batchContext(context),
     feedback: context.feedback, previousOutput: context.previousOutput };
   return { ...body, inputDigest: informalizationDigest(body) };
 }
 
-/** Auditors see the Lean proof and the explanation, never the problem statement or the writer's feedback. */
+/**
+ * Auditors see the Lean proof and the explanation, never the problem statement or the writer's feedback. With alignment
+ * they also get, per step, the goals the explanation page shows beside it (null when none are recorded).
+ */
 export function informalizationAuditInput(context: BatchContextInput & { language: InformalizationRequest['language'];
-  explanation: InformalizationWriterOutput }) {
+  alignment?: Alignment; explanation: InformalizationWriterOutput }) {
+  const byName = new Map(context.outline.units.map(unit => [unit.name, unit]));
+  const stepGoals = context.alignment ? { stepGoals: context.explanation.sections.map(section => {
+    const unit = byName.get(section.declaration);
+    return { declaration: section.declaration,
+      steps: unit ? sectionStepGoals(unit, section.proof.map(step => step.lean)) : section.proof.map(() => null) };
+  }) } : {};
   const body = { schema: 'theorem-os.informalization-audit-input.v1' as const, protocol: INFORMALIZATION_PROTOCOL,
-    language: context.language,
+    ...context.alignment ? { alignment: context.alignment } : {}, language: context.language,
     batch: { index: context.batch.index, count: context.batch.count, final: context.batch.final }, ...batchContext(context),
-    explanation: { sections: context.explanation.sections, overview: context.explanation.overview } };
+    explanation: { sections: context.explanation.sections, overview: context.explanation.overview }, ...stepGoals };
   return { ...body, inputDigest: informalizationDigest(body) };
 }
 
@@ -252,7 +366,7 @@ const normalized = (value: string) => value.replace(/\s+/gu, ' ').trim();
 const issues = (error: z.ZodError) => error.issues.slice(0, 8).map(issue => (issue.path.join('.') || 'output') + ': ' + issue.message);
 /** Host checks of a writer output; an empty list accepts it for audit. */
 export function informalizationWriterRejections(input: InformalizationWriterInput, value: unknown): string[] {
-  const parsed = informalizationWriterOutputSchema.safeParse(value);
+  const parsed = writerOutputSchema(input.alignment).safeParse(value);
   if (!parsed.success) return issues(parsed.error);
   const output = parsed.data, problems: string[] = [];
   if (output.inputDigest !== input.inputDigest) problems.push('inputDigest must equal INPUT.inputDigest');
@@ -278,15 +392,39 @@ export function informalizationWriterRejections(input: InformalizationWriterInpu
     });
     const missing = unit.mustCite.filter(name => !cited.has(name));
     if (missing.length) problems.push(`${where}: the Lean proof uses ${missing.join(', ')}; cite each in the step that uses it`);
+    if (input.alignment) problems.push(...linkRejections(unit, section as InformalizationAlignedSection));
   });
   if (input.batch.final !== (output.overview !== null))
     problems.push(input.batch.final ? 'overview is required in the final batch' : 'overview must be null before the final batch');
   return problems;
 }
 
+/**
+ * Each link's phrase is in its own statement or step text, exactly as written, and its Lean is inside what that
+ * statement or step explains: a theorem's signature (any other declaration's whole source) or the step's quoted excerpts,
+ * at the place the page shows them. A theorem's statement needs at least one link.
+ */
+function linkRejections(unit: InformalizationWriterInput['units'][number], section: InformalizationAlignedSection): string[] {
+  const problems: string[] = [], source = lineEnds(unit.source), where = section.declaration;
+  const check = (place: string, link: InformalizationLink, prose: string, regions: readonly { start: number; end: number }[]) => {
+    if (!prose.includes(link.text)) problems.push(`${where} ${place}: link text is not verbatim text of it: ${link.text.slice(0, 200)}`);
+    if (!findWithin(source, link.lean, regions))
+      problems.push(`${where} ${place}: link lean is not verbatim text of the Lean it explains: ${link.lean.slice(0, 200)}`);
+  };
+  if (unit.kind === 'theorem' && !section.statementLinks.length)
+    problems.push(`${where} statement: link at least one phrase to the Lean signature`);
+  const signature = [statementRegion(unit)];
+  for (const link of section.statementLinks) check('statement', link, section.statement, signature);
+  const { places } = placeExcerpts(source, section.proof.map(step => step.lean));
+  section.proof.forEach((step, index) => {
+    for (const link of step.links) check(`step ${index + 1}`, link, step.text, places[index]!);
+  });
+  return problems;
+}
+
 /** Structural checks of an audit; a malformed audit is not a verdict. */
 export function informalizationAuditRejections(input: InformalizationAuditInput, value: unknown): string[] {
-  const parsed = informalizationAuditOutputSchema.safeParse(value);
+  const parsed = auditOutputSchema(input.alignment).safeParse(value);
   if (!parsed.success) return issues(parsed.error);
   const output = parsed.data, problems: string[] = [];
   if (output.inputDigest !== input.inputDigest) problems.push('inputDigest must equal INPUT.inputDigest');
@@ -302,6 +440,12 @@ export function informalizationAuditRejections(input: InformalizationAuditInput,
     section.steps.forEach((step, stepIndex) => {
       if (step.verdict !== 'justified' && !step.explanation.trim())
         problems.push(`${where} step ${stepIndex + 1}: a ${step.verdict} verdict needs an explanation`);
+      if (!input.stepGoals || !('goals' in step)) return;
+      const recorded = input.stepGoals[index]?.steps[stepIndex] ?? null;
+      if ((step.goals === 'unrecorded') !== (recorded === null))
+        problems.push(`${where} step ${stepIndex + 1}: goals must be ${recorded === null ? 'unrecorded' : 'consistent or inconsistent'}`);
+      if (step.goals === 'inconsistent' && !step.explanation.trim())
+        problems.push(`${where} step ${stepIndex + 1}: inconsistent goals need an explanation`);
     });
     for (const omission of section.omissions)
       if (!normalized(omission.lean) || !source.includes(normalized(omission.lean)))
@@ -314,9 +458,11 @@ export function informalizationAuditRejections(input: InformalizationAuditInput,
   return problems;
 }
 
+const goalsInconsistent = (step: InformalizationAuditOutput['sections'][number]['steps'][number]) =>
+  'goals' in step && step.goals === 'inconsistent';
 export const informalizationAuditApproved = (audit: InformalizationAuditOutput) => audit.overview.verdict !== 'inconsistent' &&
   audit.sections.every(section => section.statement.verdict === 'faithful' && !section.omissions.length &&
-    section.steps.every(step => step.verdict === 'justified'));
+    section.steps.every(step => step.verdict === 'justified' && !goalsInconsistent(step)));
 const clip = (value: string, max: number) => value.length > max ? value.slice(0, max) + '…' : value;
 /** Writer feedback from every non-approving finding, attributed to its auditor. */
 export function informalizationAuditFeedback(audits: readonly { auditorId: string; output: InformalizationAuditOutput }[]): string {
@@ -326,7 +472,9 @@ export function informalizationAuditFeedback(audits: readonly { auditorId: strin
       if (section.statement.verdict !== 'faithful')
         lines.push(`${auditorId}, ${section.declaration}, statement ${section.statement.verdict}: ${section.statement.explanation}`);
       section.steps.forEach((step, index) => {
-        if (step.verdict !== 'justified') lines.push(`${auditorId}, ${section.declaration}, step ${index + 1} ${step.verdict}: ${step.explanation}`);
+        const goals = goalsInconsistent(step) ? step.verdict === 'justified' ? 'goals inconsistent' : `${step.verdict}, goals inconsistent` : '';
+        if (step.verdict !== 'justified' || goals)
+          lines.push(`${auditorId}, ${section.declaration}, step ${index + 1} ${goals || step.verdict}: ${step.explanation}`);
       });
       for (const omission of section.omissions)
         lines.push(`${auditorId}, ${section.declaration}, unexplained Lean ${JSON.stringify(omission.lean.slice(0, 400))}: ${omission.explanation}`);
@@ -440,12 +588,16 @@ export const informalizationEvidenceSchema = z.object({
   proofCompiledByHost: z.literal(true), humanReviewed: z.literal(false),
   requestDigest: hash, target: leanName, language: z.enum(['zh', 'en']),
   toolchain: text, mathlibRevision: text.nullable(), statementSha256: hash.nullable(),
+  /** The request's records: the approved formalization this proof proves, and phrase alignment. */
+  formalization: informalizationRequestSchema.shape.formalization, alignment: informalizationRequestSchema.shape.alignment,
   sources: informalizationRequestSchema.shape.sources, batching: informalizationRequestSchema.shape.batching,
   writer: formalizationModelConfigurationSchema, auditors: informalizationRequestSchema.shape.auditors,
   outlineDigest: hash, outline: informalizationOutlineSchema,
   batches: z.array(z.object({ index: z.number().int().nonnegative(), declarations: z.array(declaration).min(1),
-    rounds: z.number().int().positive(), writerInputDigest: hash, writer: informalizationWriterOutputSchema,
-    audits: z.array(z.object({ auditorId: z.string(), output: informalizationAuditOutputSchema }).strict()).min(1) }).strict()).min(1),
+    rounds: z.number().int().positive(), writerInputDigest: hash,
+    writer: z.union([informalizationAlignedWriterOutputSchema, informalizationWriterOutputSchema]),
+    audits: z.array(z.object({ auditorId: z.string(),
+      output: z.union([informalizationAlignedAuditOutputSchema, informalizationAuditOutputSchema]) }).strict()).min(1) }).strict()).min(1),
   sessions: z.array(sessionEvidenceSchema), metrics: metricsSchema, proofMarkdownSha256: hash,
 }).strict();
 export type InformalizationEvidence = z.infer<typeof informalizationEvidenceSchema>;
@@ -459,7 +611,8 @@ const evidenceMetrics = (outline: InformalizationOutline, sections: readonly Inf
 export function assertInformalizationEvidence(value: unknown): { evidence: InformalizationEvidence; markdown: string } {
   const evidence = informalizationEvidenceSchema.parse(value), { outline } = evidence;
   if (informalizationDigest(outline) !== evidence.outlineDigest || outline.target !== evidence.target ||
-      new Set(evidence.auditors.map(item => item.id)).size !== evidence.auditors.length)
+      new Set(evidence.auditors.map(item => item.id)).size !== evidence.auditors.length ||
+      evidence.formalization && evidence.statementSha256 !== evidence.formalization.originalSha256)
     throw new Error('informalization_evidence_invalid');
   const batches = informalizationBatches(outline, evidence.batching), accepted = new Map<string, InformalizationSection>();
   const files = evidence.sources.map(source => ({ module: source.module, file: source.file, text: '' }));
@@ -469,8 +622,9 @@ export function assertInformalizationEvidence(value: unknown): { evidence: Infor
     if (record.index !== index || canonicalMathJson(record.declarations) !== canonicalMathJson(batch.declarations))
       throw new Error('informalization_evidence_invalid');
     const audit = informalizationAuditInput({ outline, batch, accepted, sources: files, language: evidence.language,
-      explanation: record.writer });
-    const writerCheck = { units: audit.units, batch: audit.batch, inputDigest: record.writerInputDigest } as InformalizationWriterInput;
+      alignment: evidence.alignment, explanation: record.writer });
+    const writerCheck = { units: audit.units, batch: audit.batch, alignment: evidence.alignment,
+      inputDigest: record.writerInputDigest } as InformalizationWriterInput;
     if (informalizationWriterRejections(writerCheck, record.writer).length ||
         canonicalMathJson(record.audits.map(item => item.auditorId)) !== canonicalMathJson(evidence.auditors.map(item => item.id)) ||
         record.audits.some(item => informalizationAuditRejections(audit, item.output).length || !informalizationAuditApproved(item.output)))
@@ -497,6 +651,7 @@ export function informalizationEvidence(input: { request: InformalizationRequest
     status: 'approved', authority: 'model', proofCompiledByHost: true, humanReviewed: false,
     requestDigest: informalizationDigest(request), target: outline.target, language: request.language,
     toolchain: request.toolchain, mathlibRevision: request.mathlibRevision, statementSha256: request.statementSha256,
+    ...request.formalization ? { formalization: request.formalization } : {}, ...request.alignment ? { alignment: request.alignment } : {},
     sources: request.sources, batching: request.batching, writer: request.writer, auditors: request.auditors,
     outlineDigest: informalizationDigest(outline), outline, batches: input.batches, sessions: input.sessions,
     metrics: evidenceMetrics(outline, sections), proofMarkdownSha256: mathDigest(markdown) };
@@ -534,7 +689,7 @@ const SHARED_INSTRUCTIONS = [
   'The first complete schema-valid OUTPUT.json is your submission: the host ends this role and checks it. Stop after submitting.',
   'Do not change INPUT.json, ROLE.md or OUTPUT.schema.json. Read only this role input, the proof files and installed libraries; other tasks and prior sessions are unavailable.',
 ];
-export const INFORMALIZATION_WRITER_INSTRUCTIONS = [
+const WRITER_LINES = [
   'Write a natural-language proof that explains the given Lean proof. INPUT.json holds one batch of its declarations in dependency order, with their Lean source, elaborated signatures and, when recorded, the goals around each tactic (goals), the accepted statements of earlier declarations they use (dependencies), and the library theorems their terms use (library).',
   'Write exactly one strict JSON object to OUTPUT.json with inputDigest (copied from INPUT), sections and overview.',
   'sections has one item per INPUT.units entry, in the same order, with declaration equal to its name. title is a short descriptive name. statement translates the Lean signature exactly: every hypothesis, quantifier, domain, type and coercion, nothing added and nothing dropped.',
@@ -548,9 +703,13 @@ export const INFORMALIZATION_WRITER_INSTRUCTIONS = [
   'overview is null unless INPUT.batch.final is true. In the final batch it explains how the declarations combine to prove the target.',
   'problemStatement, when present, is the informal problem the proof was written for; use it only for vocabulary. If it differs from the Lean statement, follow Lean.',
   'When INPUT.feedback is present it lists host check failures or auditor findings about previousOutput. Check each against the Lean source, fix the explanation and keep the parts that were not challenged.',
-  ...SHARED_INSTRUCTIONS,
-].join('\n');
-export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = [
+];
+const WRITER_ALIGNMENT_LINES = [
+  'INPUT.alignment is lean-phrase-alignment-v1: also link phrases of your prose to the Lean text they translate. Each section has statementLinks and each step links, lists of {text, lean}. text is a phrase copied exactly from that statement or step text (the first occurrence is the one linked); lean is the Lean text it translates, copied verbatim (whitespace runs may differ).',
+  'A statementLinks lean must lie in the declaration\'s signature (for a theorem the source before its :=; for any other declaration anywhere in its source). A step link\'s lean must lie inside that step\'s own lean excerpts. Every theorem needs at least one statement link.',
+  'Link what a reader would look up: each hypothesis, quantified variable, domain and the conclusion of a statement; in a step, the formula or claim and the Lean expression or tactic that establishes it. Prefer whole formulas ($...$) or whole clauses as text, and the smallest Lean term that carries the same meaning as lean. Keep each pair to the same mathematical content; do not link a phrase to Lean that means something else.',
+];
+const AUDITOR_LINES = [
   'Audit a natural-language explanation of a Lean proof. Judge it only against the Lean declarations in INPUT.units. You are not given the informal problem; the explanation is model-written and may be wrong.',
   'The explanation is written in batches (INPUT.batch). Declarations in proof/ that are not in INPUT.units belong to other batches and are audited there; their absence is not an omission.',
   'Write exactly one strict JSON object to OUTPUT.json with inputDigest (copied from INPUT), sections, overview and summary.',
@@ -561,5 +720,15 @@ export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = [
   'omissions lists substantive parts of the Lean proof that no step explains, such as a case, an induction step, an applied lemma or a nontrivial side condition. Quote the Lean text verbatim in lean. Bookkeeping such as intro, rfl or a cast-only rewrite is not an omission.',
   'overview.verdict is absent when INPUT.explanation.overview is null; otherwise consistent if it describes how these declarations prove the target, and inconsistent if not.',
   'Judge mathematical correctness and fidelity to the Lean proof, not style or language. summary states the main problems, or that there are none.',
-  ...SHARED_INSTRUCTIONS,
-].join('\n');
+];
+const AUDITOR_ALIGNMENT_LINES = [
+  'INPUT.alignment is lean-phrase-alignment-v1: statements and steps carry links pairing a phrase of the prose with the Lean text it translates. A statement link whose phrase means something other than its Lean makes the statement a mismatch; such a step link makes the step invented. Explain which link is wrong.',
+  'INPUT.stepGoals gives, for each explanation step, the goals before the first and after the last tactic it quotes, as the explanation page shows them beside the step (null when none are recorded). Each step verdict also has goals: consistent if what the step says it starts from and shows agrees mathematically with those goals, inconsistent if it does not (explain how), unrecorded exactly when its stepGoals entry is null.',
+];
+const instructions = (lines: readonly string[], alignment: Alignment, extra: readonly string[]) =>
+  [...lines, ...alignment ? extra : [], ...SHARED_INSTRUCTIONS].join('\n');
+export const INFORMALIZATION_WRITER_INSTRUCTIONS = instructions(WRITER_LINES, undefined, WRITER_ALIGNMENT_LINES);
+export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = instructions(AUDITOR_LINES, undefined, AUDITOR_ALIGNMENT_LINES);
+/** ROLE.md for a role; alignment adds its rules, and without it the text is unchanged. */
+export const informalizationRoleInstructions = (role: InformalizationRole, alignment?: Alignment) => role === 'write' ?
+  instructions(WRITER_LINES, alignment, WRITER_ALIGNMENT_LINES) : instructions(AUDITOR_LINES, alignment, AUDITOR_ALIGNMENT_LINES);

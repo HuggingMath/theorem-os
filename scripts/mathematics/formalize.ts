@@ -12,6 +12,8 @@ import { mathDigest, readMathText } from '../../src/math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin } from '../../src/math/paths';
 import { leanStatementContextProtocolSchema } from '../../src/math/leanStatementSemantic';
 import { defaultFormalizationWorkflow, formalizationReviewConfigurationSchema } from '../../src/math/formalizationWorkflow';
+import { formalizationReport } from '../../apps/web/formalizationReport';
+import { writeStaticReport } from '../../apps/web/staticReport';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
@@ -205,10 +207,25 @@ function inspect(directory: string) {
     modelInvoked: false, requestDigest, request: requestSummary(request), state, artifact };
 }
 
+/** The approved statement beside the original problem and its reviews, as one offline HTML page. */
+function writeReport(directory: string, output: string) {
+  const request = readFormalizationRequest(directory), requestDigest = formalizationDigest(request);
+  const artifactDirectory = path.join(directory, 'artifact');
+  assertMathCanonicalPath(artifactDirectory);
+  if (!fs.existsSync(artifactDirectory)) throw new Error('formalization_artifact_missing');
+  const evidence = readFormalizationArtifact(artifactDirectory);
+  if (evidence.requestDigest !== requestDigest) throw new Error('formalization_artifact_request_mismatch');
+  const data = formalizationReport(evidence), file = writeStaticReport(root, output, { page: 'formalization', data });
+  return { schema: 'theorem-os.formalization-cli.v1', phase: 'report', directory, modelInvoked: false, requestDigest,
+    output: file, bytes: fs.statSync(file).size, targets: data.targets.map(item => item.name),
+    correspondences: data.correspondences.length,
+    locatedCorrespondences: data.correspondences.filter(item => item.lean.length).length };
+}
+
 export async function formalize(argv: string[]): Promise<number> {
-  const flags = parseFlags(argv, ['phase', 'directory', ...configurationFlags]);
+  const flags = parseFlags(argv, ['phase', 'directory', 'output', ...configurationFlags]);
   if (flags.has('help')) {
-    console.log('Usage: theorem-os formalize --phase prepare|run|inspect|replay --directory DIR [options]\n'
+    console.log('Usage: theorem-os formalize --phase prepare|run|inspect|replay|report --directory DIR [options]\n'
       + 'prepare (offline): --problem ID --task-file FILE --build-manifest FILE\n'
       + '  or --first-proof-problem first_proof_batch3_01 [--source-root DIR] --build-manifest FILE\n'
       + '  [--environment mathlib|standard] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE]\n'
@@ -225,6 +242,8 @@ export async function formalize(argv: string[]): Promise<number> {
       + 'run: use the frozen request; starts or resumes model generation, Lean elaboration and independent statement review.\n'
       + 'inspect (offline): read a bounded summary and validate the approved artifact; never starts or resumes a run.\n'
       + 'replay (no model): --build-manifest FILE; new directory only, preset tutorial candidate checked by real Lean.\n'
+      + 'report (offline): --output FILE.html; the approved statement beside the original problem and what its reviewers matched,\n'
+      + '  as one self-contained page (needs bun run build:web).\n'
       + 'All directories must be outside the source repository. Existing requests are never overwritten.\n'
       + 'New v3 requests plan definitions/dependencies and require every reviewer to approve six evidence-backed checks. Legacy v1/v2 requests remain readable.\n'
       + 'New requests freeze kernel-v2 raw types, kernel expressions, local definitions and structure fields; saved requests retain their context protocol.\n'
@@ -233,13 +252,15 @@ export async function formalize(argv: string[]): Promise<number> {
     return 0;
   }
   const phase = required(flags, 'phase');
-  const phases: Record<string, readonly string[]> = { prepare: configurationFlags, run: [], inspect: [], replay: ['build-manifest'] };
+  const phases: Record<string, readonly string[]> = { prepare: configurationFlags, run: [], inspect: [], replay: ['build-manifest'],
+    report: ['output'] };
   if (!Object.hasOwn(phases, phase)) throw new Error('Unknown formalization phase.');
   for (const name of flags.keys()) if (!['phase', 'directory', ...phases[phase]!].includes(name))
     throw new Error(`--${name} is not valid for --phase ${phase}`);
   const directory = externalDirectory(required(flags, 'directory'));
   let report: unknown, code = 0;
   if (phase === 'prepare') report = prepare(flags, directory);
+  else if (phase === 'report') report = writeReport(directory, required(flags, 'output'));
   else if (phase === 'inspect') {
     const result = inspect(directory);
     report = result; if (result.artifact.status === 'invalid') code = 2;

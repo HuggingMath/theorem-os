@@ -31,6 +31,7 @@
     "test:web-trajectory": "bun scripts/test-web-trajectory.ts",
     "test:web-agent-route": "bun scripts/test-web-agent-route.ts",
     "test:web-explain": "bun scripts/test-web-explain.ts",
+    "test:web-report": "bun scripts/test-web-report.ts",
     "test:web-onboarding": "bun scripts/test-web-onboarding.ts",
     "test:web-i18n": "bun scripts/test-web-i18n.ts",
     "test:web-collaboration": "bun scripts/test-web-collaboration.ts",

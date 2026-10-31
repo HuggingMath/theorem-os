@@ -1,5 +1,6 @@
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { informalizationAuditInput, informalizationBatches, informalizationEvidence, informalizationWriterInput,
+import { formalizationDigest, type FormalizationEvidence } from '../../src/math/formalization';
+import { INFORMALIZATION_ALIGNMENT, informalizationAuditInput, informalizationBatches, informalizationEvidence, informalizationWriterInput,
   type InformalizationEvidence, type InformalizationRequest, type InformalizationSection } from '../../src/math/informalization';
 import { attachInformalizationGoals, informalizationOutline } from '../../src/math/informalizationExtraction';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
@@ -14,12 +15,23 @@ export type FixtureUnit = { name: string; kind: 'theorem' | 'definition'; snippe
   /** Prose of each step; default `Step i of name.` */ texts?: string[];
   /** Names each step cites; default the required citations, all in the first step. */ cites?: string[][];
   /** Tactics as snippets of this declaration with their goals; the evidence has goal states when any unit has some. */
-  goals?: { snippet: string; before: string[]; after: string[] }[] };
+  goals?: { snippet: string; before: string[]; after: string[] }[];
+  /** Prose of the statement; default `Statement of name.` */ statement?: string;
+  /** With alignment: the statement's and each step's linked phrases (a theorem needs a statement link). */
+  statementLinks?: Link[]; links?: Link[][] };
+type Link = { text: string; lean: string };
 const preset = { model: 'deepseek-flash', effort: 'max', profile: '/preset-only', executable: '/no-model' };
 
+/**
+ * `aligned` uses phrase alignment: links from the units, and auditors that find every step consistent with its recorded
+ * goals. `formalization` binds the proof to that approved formalization, whose original problem is the statement.
+ */
 export function webExplanationEvidence(input: { proof: string; target: string; units: FixtureUnit[];
-  language?: WebExplanationLanguage; environment?: WebEnvironment; maxUnits?: number }): InformalizationEvidence {
+  language?: WebExplanationLanguage; environment?: WebEnvironment; maxUnits?: number; aligned?: boolean;
+  formalization?: FormalizationEvidence }): InformalizationEvidence {
   const language = input.language ?? 'zh', environment = getLeanTaskEnvironment(input.environment ?? 'standard');
+  const { formalization } = input;
+  const alignment: typeof INFORMALIZATION_ALIGNMENT | undefined = input.aligned ? INFORMALIZATION_ALIGNMENT : undefined;
   const sources = [{ module: 'Submission', file: 'Submission.lean', text: input.proof }];
   const report = { nonce: NONCE, target: input.target, axioms: ['propext'], library: [], libraryTruncated: false,
     units: input.units.map(unit => ({ name: unit.name, displayName: unit.name, kind: unit.kind, module: 'Submission',
@@ -35,31 +47,42 @@ export function webExplanationEvidence(input: { proof: string; target: string; u
   }));
   if (goals.length) outline = attachInformalizationGoals(outline, [{ module: 'Submission', report: { nonce: NONCE, module: 'Submission',
     truncated: false, tactics: goals } }], { nonce: NONCE, sources });
+  const statement = formalization?.request.statement ?? null;
   const request = { language, toolchain: environment.toolchain, mathlibRevision: environment.mathlibRevision ?? null,
-    statementSha256: null, batching: { maxUnits: input.maxUnits ?? 12, maxSourceBytes: 60_000 },
+    ...statement === null ? {} : { statement }, statementSha256: statement === null ? null : mathDigest(statement),
+    ...formalization ? { formalization: { problemId: formalization.request.problemId, evidenceSha256: formalizationDigest(formalization),
+      statementSha256: formalization.sourceSha256, originalSha256: formalization.request.statementSha256 } } : {},
+    ...alignment ? { alignment } : {}, batching: { maxUnits: input.maxUnits ?? 12, maxSourceBytes: 60_000 },
     sources: [{ module: 'Submission', file: 'Submission.lean', origin: 'Submission.lean', sha256: mathDigest(input.proof),
       bytes: Buffer.byteLength(input.proof) }],
     writer: preset, auditors: [{ ...preset, id: 'auditor-1' }, { ...preset, id: 'auditor-2' }] } as unknown as InformalizationRequest;
   const byName = new Map(input.units.map(unit => [unit.name, unit]));
   const accepted = new Map<string, InformalizationSection>(), batches: InformalizationEvidence['batches'] = [];
   for (const batch of informalizationBatches(outline, request.batching)) {
-    const context = { outline, batch, accepted, sources, language };
-    const writerInput = informalizationWriterInput({ ...context, round: 1, problemStatement: null, feedback: null, previousOutput: null });
+    const context = { outline, batch, accepted, sources, language, ...alignment ? { alignment } : {} };
+    const writerInput = informalizationWriterInput({ ...context, round: 1, problemStatement: statement, feedback: null, previousOutput: null });
     const sections = writerInput.units.map(unit => {
       const fixture = byName.get(unit.declaration)!;
       const steps = fixture.steps ?? (unit.kind === 'theorem' ? [[unit.source]] : []);
-      return { declaration: unit.declaration, title: 'Title of ' + unit.declaration, statement: 'Statement of ' + unit.declaration,
+      const links = (items: Link[] | undefined) => alignment ? { links: items ?? [] } : {};
+      return { declaration: unit.declaration, title: 'Title of ' + unit.declaration,
+        statement: fixture.statement ?? 'Statement of ' + unit.declaration,
+        ...alignment ? { statementLinks: fixture.statementLinks ?? [] } : {},
         proof: steps.map((lean, index) => ({ text: fixture.texts?.[index] ?? `Step ${index + 1} of ${unit.declaration}.`,
-          uses: fixture.cites?.[index] ?? (index === 0 ? unit.mustCite : []), lean })) };
+          uses: fixture.cites?.[index] ?? (index === 0 ? unit.mustCite : []), lean, ...links(fixture.links?.[index]) })) };
     });
     const writer = { inputDigest: writerInput.inputDigest, sections, overview: batch.final ? 'Combine the lemmas.' : null };
     const auditInput = informalizationAuditInput({ ...context, explanation: writer });
-    // The first auditor explains its verdicts, the second leaves them blank (allowed for faithful and justified).
+    // The first auditor explains its verdicts, the second leaves them blank (allowed for faithful and justified). With
+    // alignment, each step is consistent with the goals recorded for it.
+    const goalsOf = (section: number, step: number) => alignment
+      ? { goals: auditInput.stepGoals?.[section]?.steps[step] ? 'consistent' as const : 'unrecorded' as const } : {};
     const audit = (auditorId: string) => ({ auditorId, output: { inputDigest: auditInput.inputDigest,
-      sections: sections.map(section => ({ declaration: section.declaration, statement: { verdict: 'faithful' as const,
+      sections: sections.map((section, sectionIndex) => ({ declaration: section.declaration, statement: { verdict: 'faithful' as const,
         explanation: auditorId === 'auditor-1' ? `The statement matches the signature of ${section.declaration}.` : '' },
         steps: section.proof.map((_, index) => ({ verdict: 'justified' as const,
-          explanation: auditorId === 'auditor-1' ? `Step ${index + 1} is what the quoted Lean does.` : '' })), omissions: [] })),
+          explanation: auditorId === 'auditor-1' ? `Step ${index + 1} is what the quoted Lean does.` : '', ...goalsOf(sectionIndex, index) })),
+        omissions: [] })),
       overview: { verdict: batch.final ? 'consistent' as const : 'absent' as const, explanation: '' }, summary: 'No problems.' } });
     batches.push({ index: batch.index, declarations: batch.declarations, rounds: 1, writerInputDigest: writerInput.inputDigest,
       writer, audits: [audit('auditor-1'), audit('auditor-2')] });

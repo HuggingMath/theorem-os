@@ -4,12 +4,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formalize } from '../scripts/mathematics/formalize';
-import { formalizationDigest, readFormalizationRequest } from '../src/math/formalization';
+import { formalizationReport } from '../apps/web/formalizationReport';
+import type { StaticReportPage } from '../apps/web/staticReport';
+import { formalizationDigest, readFormalizationArtifact, readFormalizationRequest } from '../src/math/formalization';
 import { readFirstProofCatalog } from '../src/math/firstProof';
 import { readMathBuildManifest } from '../src/math/mathBuildManifest';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { createMathRetrievalCorpus } from '../src/math/mathRetrievalCorpus';
+import { approvedFormalization } from './helpers/approvedFormalizationFixture';
 
 // Build identity is tested separately by mathBuildManifest tests. These CLI tests use a disposable
 // stand-in, create no providers or Lean processes, and never claim semantic or benchmark success.
@@ -17,10 +20,19 @@ vi.mock('../src/math/mathBuildManifest', async importOriginal => ({
   ...await importOriginal<typeof import('../src/math/mathBuildManifest')>(),
   readMathBuildManifest: vi.fn((file: string) => JSON.parse(fs.readFileSync(file, 'utf8'))),
 }));
+// The report phase's page payload, written as JSON; tests/staticReport.test.ts covers the page itself, which needs a web build.
+const pages = vi.hoisted(() => ({ written: [] as { output: string; report: StaticReportPage }[] }));
+vi.mock('../apps/web/staticReport', async original => ({ ...await original<typeof import('../apps/web/staticReport')>(),
+  writeStaticReport: (_root: string, output: string, report: StaticReportPage) => {
+    pages.written.push({ output, report });
+    fs.writeFileSync(output, JSON.stringify(report));
+    return output;
+  } }));
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const roots: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  pages.written.length = 0;
   for (const directory of roots.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 function fixture() {
@@ -268,6 +280,21 @@ describe('formalize offline CLI', () => {
     expect(fs.existsSync(path.join(f.directory, 'workspace'))).toBe(false);
   });
 
+  it('writes the offline comparison page of an approved run without a model', async () => {
+    const run = await approvedFormalization(roots), output = path.join(path.dirname(run), 'addition.html');
+    const evidence = readFormalizationArtifact(path.join(run, 'artifact'));
+    expect(await invoke(['--phase', 'report', '--directory', run, '--output', output])).toMatchObject({ code: 0, report: {
+      schema: 'theorem-os.formalization-cli.v1', phase: 'report', directory: run, modelInvoked: false,
+      requestDigest: formalizationDigest(readFormalizationRequest(run)), output, bytes: fs.statSync(output).size,
+      targets: ['addition'], correspondences: 6, locatedCorrespondences: 5 } });
+    expect(pages.written).toEqual([{ output, report: { page: 'formalization', data: formalizationReport(evidence) } }]);
+    const f = fixture(); await invoke(f.args);
+    await expect(invoke(['--phase', 'report', '--directory', f.directory, '--output', output])).rejects.toThrow('formalization_artifact_missing');
+    await expect(invoke(['--phase', 'report', '--directory', run])).rejects.toThrow('--output is required');
+    await expect(invoke([...f.args, '--output', output])).rejects.toThrow('--output is not valid for --phase prepare');
+    expect(pages.written).toHaveLength(1);
+  });
+
   it('reports an invalid stored artifact as invalid and rejects state belonging to another request', async () => {
     const f = fixture(); await invoke(f.args);
     const artifact = path.join(f.directory, 'artifact'); fs.mkdirSync(artifact);
@@ -332,7 +359,8 @@ describe('formalize offline CLI', () => {
   it('prints useful help without requiring inputs or loading a model', async () => {
     const result = await invoke(['--help']);
     expect(result.code).toBe(0);
-    expect(result.output).toContain('prepare|run|inspect|replay');
+    expect(result.output).toContain('prepare|run|inspect|replay|report');
+    expect(result.output).toContain('report (offline): --output FILE.html');
     expect(result.output).toContain('independent statement review');
     expect(result.output).toContain('--retrieval-symbols lean-exact-names-v1');
     expect(result.output).toContain('--retrieval-queries lean-resolved-objects-v1');

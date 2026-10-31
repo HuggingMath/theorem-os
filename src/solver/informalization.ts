@@ -14,10 +14,11 @@ import { formalizationModelConfigurationDigest } from '../math/formalizationWork
 import { buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed, reportedTotalTokens, type UsageAccounting } from './usageBudget';
 import { acquireMathModelSlot, configuredMathModelSlots, type MathModelSlot } from '../math/mathModelSlot';
 import { informalizationOutlineSchema, type InformalizationOutline } from '../math/informalizationExtraction';
-import { INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS, informalizationAuditApproved,
+import { informalizationAlignedAuditOutputSchema, informalizationAlignedWriterOutputSchema, informalizationAuditApproved,
   informalizationAuditFeedback, informalizationAuditInput, informalizationAuditOutputSchema, informalizationAuditRejections,
   informalizationBatches, informalizationDigest, informalizationEvidence, informalizationRejectionFeedback,
-  informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterOutputSchema, informalizationWriterRejections,
+  informalizationRoleInstructions, informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterOutputSchema,
+  informalizationWriterOutputSchemaFor, informalizationWriterRejections,
   readInformalizationArtifact, readInformalizationRequest, writeInformalizationArtifact,
   type InformalizationAuditOutput, type InformalizationEvidence, type InformalizationRequest, type InformalizationRole,
   type InformalizationSection, type InformalizationWriterOutput } from '../math/informalization';
@@ -36,15 +37,17 @@ const sessionSchema = z.object({
   usageAccounting: z.object({ startedTurns: z.number().int().nonnegative(), reportedTurns: z.number().int().nonnegative(),
     pending: z.boolean(), incomplete: z.boolean() }).strict(),
 }).strict();
+const writerOutput = z.union([informalizationAlignedWriterOutputSchema, informalizationWriterOutputSchema]);
+const auditOutput = z.union([informalizationAlignedAuditOutputSchema, informalizationAuditOutputSchema]);
 const stateSchema = z.object({
   schema: z.literal('theorem-os.informalization-state.v1'), requestDigest: hash, environmentDigest: hash, profileDigest: hash,
   status: z.enum(['running', 'approved', 'exhausted', 'stopped']),
   outline: z.object({ file: relative, digest: hash }).strict().optional(),
   batches: z.array(z.object({ index: z.number().int().nonnegative(), declarations: z.array(z.string()).min(1),
     status: z.enum(['pending', 'approved']), rounds: z.number().int().nonnegative(), open: z.boolean(),
-    feedback: z.string().optional(), previous: informalizationWriterOutputSchema.optional(),
-    accepted: z.object({ writer: informalizationWriterOutputSchema, writerInputDigest: hash,
-      audits: z.array(z.object({ auditorId: z.string(), output: informalizationAuditOutputSchema }).strict()) }).strict().optional(),
+    feedback: z.string().optional(), previous: writerOutput.optional(),
+    accepted: z.object({ writer: writerOutput, writerInputDigest: hash,
+      audits: z.array(z.object({ auditorId: z.string(), output: auditOutput }).strict()) }).strict().optional(),
   }).strict()),
   sessions: z.array(sessionSchema), elapsedMs: z.number().int().nonnegative(),
   activeSince: z.number().int().nonnegative().optional(), error: z.string().optional(),
@@ -158,8 +161,8 @@ export async function runInformalization(directory: string, root: string, option
         const config = slot.role === 'write' ? request.writer : request.auditors.find(item => item.id === slot.auditorId)!;
         const inputText = canonicalMathJson(input);
         if (Buffer.byteLength(inputText) > 8_000_000) throw new Error('informalization_role_input_too_large');
-        const instructionsText = slot.role === 'write' ? INFORMALIZATION_WRITER_INSTRUCTIONS : INFORMALIZATION_AUDITOR_INSTRUCTIONS;
-        const schemaText = canonicalMathJson(informalizationRoleOutputSchema(slot.role));
+        const instructionsText = informalizationRoleInstructions(slot.role, request.alignment);
+        const schemaText = canonicalMathJson(informalizationRoleOutputSchema(slot.role, request.alignment));
         const roleContract = { roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) };
         const configurationDigest = formalizationModelConfigurationDigest(config);
         // Only closed sessions whose output was read can be reused; bind the actual input and protocol bytes.
@@ -316,7 +319,8 @@ export async function runInformalization(directory: string, root: string, option
               }
               record.rounds++; record.open = true; save();
             }
-            const round = record.rounds, context = { outline, batch, accepted, sources, language: request.language };
+            const round = record.rounds, context = { outline, batch, accepted, sources, language: request.language,
+              alignment: request.alignment };
             const writerInput = informalizationWriterInput({ ...context, round, problemStatement: request.statement,
               feedback: record.feedback ?? null, previousOutput: record.previous ?? null });
             const written = await dispatch({ role: 'write', batch: batch.index, round, attempt: 1 }, writerInput,
@@ -324,7 +328,7 @@ export async function runInformalization(directory: string, root: string, option
             const problems = written === undefined ? ['OUTPUT.json was not written as complete JSON'] :
               informalizationWriterRejections(writerInput, written);
             if (problems.length) {
-              const parsed = informalizationWriterOutputSchema.safeParse(written);
+              const parsed = informalizationWriterOutputSchemaFor(request.alignment).safeParse(written);
               record.feedback = informalizationRejectionFeedback(problems);
               if (parsed.success) record.previous = parsed.data;
               record.open = false; save();

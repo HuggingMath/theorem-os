@@ -1,17 +1,21 @@
 import { createIcons, ArrowLeft } from 'lucide';
-import type { WebExplanation, WebExplanationDocument, WebExplanationLines, WebExplanationOverview, WebExplanationSpan, WebSession } from '../shared';
+import type { WebEffort, WebExplanation, WebExplanationDocument, WebExplanationLines, WebExplanationOverview, WebExplanationReport,
+  WebExplanationSpan, WebSession } from '../shared';
 import { locale, mountLocaleSwitch, t } from '../i18n';
-import { anchorSpan, leanGutter, leanLines, proseAt, refLines, stepAtLine, type StepRef } from './explainText';
+import { anchorSpan, leanGutter, proseAt, refLines, stepAtLine, type StepRef } from './explainText';
 import { renderExplain, type ExplainView } from './explainView';
+import { buildLeanRows, highlightSpans, reportData } from './leanPane';
 
 /**
  * The explanation page (explain.html?run=…&target=…): the accepted Lean proof on the left, its natural-language proof on
  * the right. Choosing a step marks its Lean lines; choosing a Lean line finds its step; the panes can scroll together.
+ * An offline report (informalize --phase report) embeds one approved explanation and never calls the server.
  */
 createIcons({ icons: { ArrowLeft }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
 const params = new URLSearchParams(location.search);
+const report = reportData<WebExplanationReport>();
 const hosts = { toolbar: $('#explain-toolbar'), head: $('#explain-prose-head'), prose: $('#explain-prose'), dialog: $('#explain-dialog'),
   legend: $('#explain-lean-legend') };
 const leanScroll = $('#explain-lean'), proseScroll = $('#explain-prose'), dialog = $<HTMLDialogElement>('#explain-dialog');
@@ -22,7 +26,7 @@ const state = {
   loading: new Set<string>(), documentError: undefined as string | undefined, active: undefined as StepRef | undefined,
   gap: undefined as number | undefined, pane: 'prose' as 'lean' | 'prose', sync: true, dialog: undefined as ExplainView['dialog'], busy: false, error: undefined as string | undefined,
 };
-let toastTimer: ReturnType<typeof setTimeout> | undefined;
+let toastTimer: ReturnType<typeof setTimeout> | undefined, reportLink: { href: string; filename: string } | undefined;
 
 class RequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -61,25 +65,10 @@ let leanRows: HTMLElement[] = [], drawnProof: string | undefined;
 function drawLean(proof: string) {
   if (drawnProof === proof) return;
   drawnProof = proof;
-  const code = $('#explain-lean-code'), fragment = document.createDocumentFragment();
-  leanRows = leanLines(proof).map((segments, index) => {
-    const row = document.createElement('div'), number = document.createElement('span'), gutter = document.createElement('span'),
-      text = document.createElement('span');
-    row.className = 'lean-row'; row.dataset.line = String(index + 1);
-    number.className = 'lean-line-number'; number.textContent = String(index + 1); number.setAttribute('aria-hidden', 'true');
-    gutter.className = 'lean-mark'; gutter.setAttribute('aria-hidden', 'true');
-    text.className = 'lean-text';
-    for (const segment of segments) {
-      if (!segment.kind) { text.append(segment.text); continue; }
-      const token = document.createElement('span');
-      token.className = `lean-tok-${segment.kind}`; token.textContent = segment.text;
-      text.append(token);
-    }
-    row.append(number, gutter, text);
-    fragment.append(row);
-    return row;
-  });
-  code.replaceChildren(fragment);
+  const fragment = document.createDocumentFragment();
+  leanRows = buildLeanRows(proof);
+  fragment.append(...leanRows);
+  $('#explain-lean-code').replaceChildren(fragment);
   $('#explain-lean-count').textContent = t('{0} 行', leanRows.length);
   marked.clear(); painted = undefined;
 }
@@ -112,33 +101,32 @@ function markLean(explained?: WebExplanationDocument) {
   mark('active', explained && state.active ? state.gap !== undefined ? [{ start: state.gap, end: state.gap }] : refLines(explained, state.active) : []);
   if (!explained) { pinned = []; markUse(undefined); }
 }
-// Where a cited name is written: its row is marked, and the name itself where the browser can highlight text ranges.
-const canHighlight = () => typeof CSS !== 'undefined' && Boolean(CSS.highlights) && typeof Highlight !== 'undefined';
+// Where a cited name or a linked phrase's Lean is written: its row is marked, and the text itself where the browser can
+// highlight text ranges.
 let pinned: WebExplanationSpan[] = [];
-function rangeOf(span: WebExplanationSpan): Range | undefined {
-  const text = leanRows[span.line - 1]?.children[2];
-  if (!text) return undefined;
-  const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT), range = document.createRange();
-  let offset = 0, started = false;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const length = node.textContent!.length;
-    if (!started && span.start < offset + length) { range.setStart(node, span.start - offset); started = true; }
-    if (started && span.end <= offset + length) { range.setEnd(node, span.end - offset); return range; }
-    offset += length;
-  }
-  return undefined;
-}
-/** Marks the spans of the name being pointed at; with none, the spans of the name last clicked. */
+/** Marks the spans being pointed at; with none, the spans last clicked. */
 function markUse(spans: readonly WebExplanationSpan[] | undefined) {
   const shown = spans ?? pinned;
   mark('use', shown.map(span => ({ start: span.line, end: span.line })));
-  if (!canHighlight()) return;
-  const ranges = shown.flatMap(span => { const range = rangeOf(span); return range ? [range] : []; });
-  if (ranges.length) CSS.highlights.set('explain-use', new Highlight(...ranges)); else CSS.highlights.delete('explain-use');
+  highlightSpans('explain-use', leanRows, shown);
 }
 const useSpans = (element: HTMLElement): WebExplanationSpan[] => {
   const explained = currentDocument();
   return explained?.sections[Number(element.dataset.section)]?.steps[Number(element.dataset.step)]?.uses[Number(element.dataset.use)]?.spans ?? [];
+};
+/** Where a linked phrase's Lean is written, or an original-problem fragment's Lean statement fragment. */
+const linkSpans = (element: HTMLElement): WebExplanationSpan[] => {
+  const explained = currentDocument();
+  if (element.dataset.correspondence !== undefined) return explained?.problem?.correspondences[Number(element.dataset.correspondence)]?.lean ?? [];
+  const section = explained?.sections[Number(element.dataset.section)], index = Number(element.dataset.link);
+  const links = element.dataset.statement !== undefined ? section?.statementLinks : section?.steps[Number(element.dataset.step)]?.links;
+  return links?.[index]?.lean ?? [];
+};
+const pointed = (target: HTMLElement) => {
+  const use = target.closest<HTMLElement>('.explain-use[data-use]');
+  if (use) return useSpans(use);
+  const link = target.closest<HTMLElement>('[data-action="link"], [data-action="correspondence"]');
+  return link ? linkSpans(link) : undefined;
 };
 
 function draw() {
@@ -146,6 +134,7 @@ function draw() {
   if (!overview) return;
   const explanation = current(), explained = currentDocument();
   renderExplain(hosts, { overview, target: state.target, language: state.language, pane: state.pane, sync: state.sync,
+    ...(reportLink ? { report: reportLink } : {}),
     ...(explanation ? { explanation } : {}), ...(explained ? { document: explained } : {}), ...(state.documentError ? { documentError: state.documentError } : {}),
     ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}),
     ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
@@ -271,6 +260,13 @@ function alignProse(explained: WebExplanationDocument) {
 const refOf = (element: HTMLElement): StepRef => ({ section: Number(element.dataset.section ?? element.dataset.anchor),
   ...(element.dataset.step ? { step: Number(element.dataset.step) } : {}), ...(element.dataset.statement !== undefined ? { statement: true as const } : {}) });
 const selecting = () => !(getSelection()?.isCollapsed ?? true);
+/** An original-problem fragment: its Lean statement fragment is marked and shown, the chosen step kept. */
+function point(spans: WebExplanationSpan[]) {
+  if (!spans.length) { toast(t('Lean 源码里没有原样写出这一段；审核模型可能引用了 Lean 展开后的类型')); return; }
+  pinned = spans; markUse(undefined);
+  if (narrow()) { state.pane = 'lean'; draw(); }
+  requestAnimationFrame(() => revealLine(spans[0]!.line));
+}
 document.addEventListener('click', event => {
   const target = event.target as HTMLElement;
   const row = target.closest<HTMLElement>('.lean-row');
@@ -281,9 +277,10 @@ document.addEventListener('click', event => {
     if (ref) select(ref, 'prose', gap === undefined ? {} : { gap });
     return;
   }
+  const action = target.closest<HTMLElement>('[data-action]');
+  if (action?.dataset.action === 'correspondence') { if (!selecting()) point(linkSpans(action)); return; }
   // Opening the auditors' notes or the goals is reading, not choosing a step.
   if (target.closest('.explain-reviews')) return;
-  const action = target.closest<HTMLElement>('[data-action]');
   if (!action) {
     // A click on a step's or statement's text marks its Lean lines, unless the reader is selecting text.
     const step = target.closest<HTMLElement>('.explain-steps > li[data-step]');
@@ -295,6 +292,8 @@ document.addEventListener('click', event => {
   }
   const name = action.dataset.action;
   if (name === 'lines') select(refOf(action), 'lean');
+  // A linked phrase chooses its step or statement and marks where its Lean is written.
+  else if (name === 'link') { if (!selecting()) select(refOf(action), 'lean', { spans: linkSpans(action) }); }
   else if (name === 'use') select({ section: Number(action.dataset.target) }, 'prose');
   else if (name === 'use-lean') select(refOf(action), 'lean', { spans: useSpans(action) });
   else if (name === 'generate' || name === 'cancel' || name === 'delete') { state.dialog = name; state.error = undefined; draw(); }
@@ -309,21 +308,25 @@ document.addEventListener('change', event => {
   if (target instanceof HTMLSelectElement && target.id === 'explain-target-select') choose(target.value, state.language);
   if (target instanceof HTMLInputElement && target.id === 'explain-sync') { state.sync = target.checked; draw(); }
 });
-// Pointing at a step or statement previews its Lean lines; at a cited name, where the name is written.
+// Pointing at a step or statement previews its Lean lines; at a cited name or a linked phrase, where its Lean is written.
 proseScroll.addEventListener('mouseover', event => {
   const target = event.target as HTMLElement, explained = currentDocument();
   const step = target.closest<HTMLElement>('.explain-steps > li[data-step]'), statement = !step && target.closest<HTMLElement>('.explain-statement-block');
   const ref = step ? refOf(step) : statement ? { section: Number(statement.dataset.anchor), statement: true as const } : undefined;
   mark('hover', ref && explained ? refLines(explained, ref) : []);
-  const use = target.closest<HTMLElement>('.explain-use[data-use]');
-  markUse(use ? useSpans(use) : undefined);
+  markUse(pointed(target));
 });
 proseScroll.addEventListener('mouseleave', () => { mark('hover', []); markUse(undefined); });
 proseScroll.addEventListener('focusin', event => {
-  const use = (event.target as HTMLElement).closest<HTMLElement>('.explain-use[data-use]');
-  if (use) markUse(useSpans(use));
+  const spans = pointed(event.target as HTMLElement);
+  if (spans) markUse(spans);
 });
 proseScroll.addEventListener('focusout', () => markUse(undefined));
+// Linked phrases are focusable spans (a formula cannot sit in a button); Enter and Space choose them like a click.
+proseScroll.addEventListener('keydown', event => {
+  const target = event.target as HTMLElement;
+  if ((event.key === 'Enter' || event.key === ' ') && target.matches('[role="button"][data-action]')) { event.preventDefault(); target.click(); }
+});
 dialog.addEventListener('submit', event => {
   event.preventDefault();
   const key = (event.target as HTMLFormElement).querySelector<HTMLInputElement>('[name="apiKey"]');
@@ -359,7 +362,7 @@ const remove = () => act(async () => {
 function choose(target: string, language: 'zh' | 'en') {
   state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined;
   pinned = [];
-  history.replaceState(null, '', `?${new URLSearchParams({ run: state.runId, target, language })}`);
+  if (!report) history.replaceState(null, '', `?${new URLSearchParams({ run: state.runId, target, language })}`);
   proseScroll.scrollTop = 0;
   draw(); void loadDocument(); schedule();
 }
@@ -368,7 +371,29 @@ function missing(text: string) {
   $('#explain-missing-text').textContent = text;
   $('#explain-missing').hidden = false;
 }
+/** An offline report: the embedded explanation shown as an approved one, with nothing to fetch, generate or delete. */
+function openReport(data: WebExplanationReport) {
+  const { document: explained } = data, id = 'report';
+  const explanation: WebExplanation = { id, runId: id, target: explained.target, language: explained.language, status: 'approved',
+    createdAt: '', updatedAt: '', model: explained.model, effort: explained.effort as WebExplanation['effort'], maxRunSeconds: 0, maxTotalTokens: 0 };
+  state.overview = { run: { id, title: data.title, environment: data.environment, providerId: '', model: explained.model,
+    effort: explained.effort as WebEffort, proof: data.proof },
+    targets: [{ name: explained.target, declarations: explained.metrics.declarations }], explanations: [explanation],
+    generation: { available: false, reason: 'runtime' } };
+  state.documents.set(id, explained);
+  state.target = explained.target; state.language = explained.language;
+  reportLink = { href: URL.createObjectURL(new Blob([data.markdown], { type: 'text/markdown;charset=utf-8' })), filename: data.filename };
+  $('#explain-back').hidden = true;
+  $('.brand').removeAttribute('href');
+  document.title = `${data.title} · ${t('证明讲解')} · TheoremOS`;
+  $('#explain-run-title').textContent = data.title;
+  drawLean(data.proof);
+  $('#explain-loading').hidden = true;
+  $('#explain-content').hidden = false;
+  choose(state.target, state.language);
+}
 async function start() {
+  if (report) { openReport(report); return; }
   if (!/^[a-f0-9-]{36}$/u.test(state.runId)) { missing(t('链接不完整，请从工作台的验收报告重新打开证明讲解。')); return; }
   $<HTMLAnchorElement>('#explain-back').href = `./?run=${encodeURIComponent(state.runId)}`;
   try {

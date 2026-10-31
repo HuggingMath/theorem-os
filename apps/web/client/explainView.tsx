@@ -1,9 +1,11 @@
-import { Fragment, render } from 'preact';
-import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationOverview, WebExplanationSection,
-  WebExplanationUse } from '../shared';
+import { render } from 'preact';
+import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationLink, WebExplanationOverview,
+  WebExplanationSection, WebExplanationUse } from '../shared';
 import { effortLabels, formatDuration, formatTokens } from '../presentation';
 import { t } from '../i18n';
-import { explanationEstimate, parseMath, proseSegments, type MathNode, type StepRef } from './explainText';
+import { explanationEstimate, type StepRef } from './explainText';
+import { ProblemCard } from './correspondence';
+import { Rich, type RichLink } from './richText';
 import { Icon, Spinner } from './ui/Icon';
 import { fill } from './ui/Section';
 
@@ -13,6 +15,7 @@ export type ExplainView = {
   explanation?: WebExplanation; document?: WebExplanationDocument; documentError?: string; active?: StepRef;
   /** A Lean proof line the reader chose that no step quotes. */ gap?: number;
   dialog?: 'generate' | 'cancel' | 'delete'; busy: boolean; error?: string; now: number;
+  /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
 };
 
 const reasons: Record<string, string> = {
@@ -41,44 +44,6 @@ export const linesLabel = (lines: readonly WebExplanationLines[]) =>
   t('第 {0} 行', lines.map(item => item.start === item.end ? String(item.start) : `${item.start}–${item.end}`).join(', '));
 const Fact = (props: { label: string; value: string; mono?: boolean; wide?: boolean }) => <div class={props.wide ? 'explain-fact-wide' : undefined}><dt>{props.label}</dt><dd class={props.mono ? 'mono' : undefined}>{props.value}</dd></div>;
 
-/** Model prose as text nodes: inline code, bold and `$…$` mathematics; a formula that does not parse is shown as written. */
-export function Rich(props: { text: string }) {
-  return <>{proseSegments(props.text).map((segment, index) => {
-    if (segment.kind === 'code') return <code key={index} class="explain-code" translate={false}>{segment.text}</code>;
-    if (segment.kind === 'strong') return <strong key={index}><Rich text={segment.text} /></strong>;
-    if (segment.kind === 'text') return <Fragment key={index}>{segment.text}</Fragment>;
-    return <Formula key={index} source={segment.text} display={segment.kind === 'display'} />;
-  })}</>;
-}
-function Formula(props: { source: string; display: boolean }) {
-  const node = parseMath(props.source), kind = props.display ? 'math math-display' : 'math';
-  if (!node) return <span class={`${kind} math-source`} translate={false}>{props.source}</span>;
-  return <span class={kind} title={props.source} translate={false}><MathView node={node} /></span>;
-}
-const textClass = (node: Extract<MathNode, { type: 'text' }>) => [node.style ? `math-${node.style}` : '', node.role ? `math-${node.role}` : ''].filter(Boolean).join(' ') || undefined;
-function MathView({ node }: { node: MathNode }): preact.JSX.Element {
-  switch (node.type) {
-    case 'text': return node.style === 'italic' ? <var class="math-italic">{node.text}</var> : <span class={textClass(node)}>{node.text}</span>;
-    case 'row': return <span class={node.style ? `math-${node.style}` : undefined}>{node.children.map((child, index) => <MathView key={index} node={child} />)}</span>;
-    case 'script': {
-      const scripts = node.sup && node.sub ? <span class="math-scripts"><sup><MathView node={node.sup} /></sup><sub><MathView node={node.sub} /></sub></span>
-        : node.sup ? <sup><MathView node={node.sup} /></sup> : node.sub ? <sub><MathView node={node.sub} /></sub> : null;
-      const operator = node.base.type === 'text' && (node.base.role === 'big' || node.base.role === 'fn');
-      return <span class={operator ? 'math-script math-operator-script' : 'math-script'}><MathView node={node.base} />{scripts}</span>;
-    }
-    case 'frac': return <span class={node.bar ? 'math-frac' : 'math-frac math-frac-plain'}><span><MathView node={node.top} /></span><span><MathView node={node.bottom} /></span></span>;
-    case 'sqrt': return <span class="math-sqrt">{node.index && <sup class="math-root-index"><MathView node={node.index} /></sup>}<span class="math-radical">√</span><span class="math-radicand"><MathView node={node.body} /></span></span>;
-    case 'accent': return <span class="math-accent" data-mark={node.mark}><MathView node={node.body} /></span>;
-    case 'line': return <span class={`math-${node.position}line`}><MathView node={node.body} /></span>;
-    case 'stack': return <span class={`math-stack math-stack-${node.position}`}><span class="math-stack-note"><MathView node={node.note} /></span><span><MathView node={node.base} /></span></span>;
-    case 'table': return <span class={`math-table-wrap${node.open || node.close ? ' math-fenced' : ''}`}>
-      {node.open && <span class="math-fence">{node.open}</span>}
-      <span class={`math-table math-table-${node.align}`}>{node.rows.map((row, index) => <span key={index} class="math-table-row">
-        {row.map((cell, column) => <span key={column} class="math-table-cell"><MathView node={cell} /></span>)}</span>)}</span>
-      {node.close && <span class="math-fence">{node.close}</span>}</span>;
-  }
-}
-
 /** The target, the explanation language, and on phones which pane is shown. */
 function Toolbar(view: ExplainView) {
   const { targets } = view.overview;
@@ -89,7 +54,7 @@ function Toolbar(view: ExplainView) {
       ? <><label for="explain-target-select">{t('目标定理')}</label><select id="explain-target-select" translate={false} value={view.target}>
         {targets.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></>
       : <><span class="explain-target-label">{t('目标定理')}</span><code translate={false}>{view.target}</code></>}</div>
-    <div class="source-switch" role="group" aria-label={t('讲解语言')}>{language('zh', t('中文'))}{language('en', t('英文'))}</div>
+    {!view.report && <div class="source-switch" role="group" aria-label={t('讲解语言')}>{language('zh', t('中文'))}{language('en', t('英文'))}</div>}
     <div class="source-switch explain-pane-switch" role="group" aria-label={t('显示内容')}>{pane('lean', 'Lean')}{pane('prose', t('讲解'))}</div>
   </>;
 }
@@ -102,9 +67,11 @@ function ProseHead(view: ExplainView) {
     <h2 id="explain-prose-heading">{t('自然语言证明')}</h2>
     <div class="explain-head-actions">
       {view.document && <label class="explain-sync"><input type="checkbox" id="explain-sync" checked={view.sync} /><span>{t('同步滚动')}</span></label>}
-      {approved && <a class="icon-button" href={`/api/runs/${encodeURIComponent(view.overview.run.id)}/explanations/markdown?${query}`} download
+      {view.report ? <a class="icon-button" href={view.report.href} download={view.report.filename}
+        aria-label={t('下载 Markdown')} title={t('下载 Markdown')}><Icon name="download" /></a>
+        : approved && <a class="icon-button" href={`/api/runs/${encodeURIComponent(view.overview.run.id)}/explanations/markdown?${query}`} download
         aria-label={t('下载 Markdown')} title={t('下载 Markdown')}><Icon name="download" /></a>}
-      {view.explanation && !['queued', 'running'].includes(view.explanation.status) &&
+      {view.explanation && !view.report && !['queued', 'running'].includes(view.explanation.status) &&
         <button type="button" class="icon-button" data-action="delete" aria-label={t('删除讲解')} title={t('删除讲解')}><Icon name="trash-2" /></button>}
     </div>
   </>;
@@ -168,13 +135,22 @@ function StoppedView({ explanation }: { explanation: WebExplanation }) {
 }
 
 /** The approved explanation: overview, then one section per declaration in file order, each step tied to its Lean lines. */
+const linkedDocument = (document: WebExplanationDocument) =>
+  document.sections.some(section => section.statementLinks?.length || section.steps.some(step => step.links?.length));
+/** A statement's or step's linked phrases, each pointing back at it so explain.ts finds the Lean spans. */
+const richLinks = (links: readonly WebExplanationLink[] | undefined, at: Record<`data-${string}`, string | number>): RichLink[] =>
+  (links ?? []).map((link, index) => ({ start: link.start, end: link.end, attributes: { 'data-action': 'link', ...at, 'data-link': index },
+    title: t('在 Lean 中标出') }));
 function DocumentView({ document, active, gap }: { document: WebExplanationDocument; active?: StepRef; gap?: number }) {
   const owned = new Map(document.sections.map((section, index) => [section.name, index]));
   return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
     <p class="explain-notice"><Icon name="triangle-alert" />
       <span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
+    {document.problem && <ProblemCard {...document.problem} />}
     <section class="explain-overview" aria-labelledby="explain-overview-heading"><h3 id="explain-overview-heading">{t('证明思路')}</h3>
-      <p class="explain-rich"><Rich text={document.overview} /></p></section>
+      <p class="explain-rich"><Rich text={document.overview} /></p>
+      {linkedDocument(document) && <p class="formal-note"><Icon name="locate-fixed" />
+        <span>{t('讲解中划虚线的短语逐个对应一段 Lean，点它在左边标出；审核模型核对过每一对。')}</span></p>}</section>
     {document.sections.map((section, index) => <SectionView key={section.name} section={section} index={index} owned={owned}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
     <Footer document={document} />
@@ -193,7 +169,8 @@ function SectionView(props: { section: WebExplanationSection; index: number; own
           <button type="button" class="explain-lines" data-action="lines" data-section={index} title={t('在 Lean 中定位')}>{linesLabel([section.lines])}</button></div>
         <h3 id={`explain-section-${index}`}><Rich text={section.title} /></h3>
       </header>
-      <p class="explain-rich explain-statement"><Rich text={section.statement} /></p>
+      <p class="explain-rich explain-statement"><Rich text={section.statement}
+        links={richLinks(section.statementLinks, { 'data-section': index, 'data-statement': '' })} /></p>
       {split && <div class="explain-step-meta">
         <button type="button" class="explain-lines" data-action="lines" data-section={index} data-statement="" title={t('在 Lean 中定位定理的陈述')}>
           {t('陈述 · {0}', linesLabel([section.signature]))}</button></div>}
@@ -203,23 +180,25 @@ function SectionView(props: { section: WebExplanationSection; index: number; own
       <span>{t('第 {0} 行没有单独的讲解步骤。审核模型检查过这个声明：一行实质的证明内容如果没有被讲到，就不会通过；没有单独讲到的通常是 intro、rfl 这类记账步骤。', props.gap)}</span></p>}
     {section.steps.length > 0 && <ol class="explain-steps">{section.steps.map((step, stepIndex) =>
       <li key={stepIndex} class={active?.step === stepIndex ? 'is-active' : undefined} data-anchor={index} data-step={stepIndex}>
-        <p class="explain-rich"><Rich text={step.text} /></p>
+        <p class="explain-rich"><Rich text={step.text} links={richLinks(step.links, { 'data-section': index, 'data-step': stepIndex })} /></p>
         <div class="explain-step-meta">
           <button type="button" class="explain-lines" data-action="lines" data-section={index} data-step={stepIndex} title={t('在 Lean 中定位')}>
             {step.lines.length ? linesLabel(step.lines) : t('整个声明')}</button>
           {step.uses.length > 0 && <Uses uses={step.uses} owned={props.owned} section={index} step={stepIndex} />}
         </div>
         <Reviews notes={step.reviews} />
-        {step.goals && <Goals goals={step.goals} />}
+        {step.goals && <Goals goals={step.goals} checked={step.goalsChecked} />}
       </li>)}</ol>}
   </section>;
 }
-/** Lean's goals around the quoted tactics, folded; Lean's text, so never translated. */
-function Goals({ goals }: { goals: WebExplanationGoals }) {
+/** Lean's goals around the quoted tactics, folded; Lean's text, so never translated. `checked` auditors compared the step with them. */
+function Goals({ goals, checked }: { goals: WebExplanationGoals; checked?: number }) {
   const state = (items: string[], total: number) => total === 0 ? <p class="explain-goal-none">{t('没有剩余目标')}</p> : <>
     {items.map((goal, index) => <pre key={index} class="explain-goal" tabIndex={0} translate={false}>{goal}</pre>)}
     {total > items.length && <p class="explain-goal-none">{t('另有 {0} 个目标没有显示', total - items.length)}</p>}</>;
-  return <details class="explain-reviews explain-goals"><summary>{fill(t('{0}Lean 目标 · {1}'), <Icon name="locate-fixed" />, linesLabel([goals.lines]))}</summary>
+  return <details class="explain-reviews explain-goals"><summary>{fill(t('{0}Lean 目标 · {1}'), <Icon name="locate-fixed" />, linesLabel([goals.lines]))}
+    {checked ? <span class="explain-goal-checked" title={t('审核模型把这一步的讲解和这些目标逐个对照过，判断一致')}>
+      {fill(t('{0}{1} 个审核模型对照过'), <Icon name="check" />, String(checked))}</span> : null}</summary>
     <p class="explain-goal-label">{t('之前')}</p>{state(goals.before, goals.beforeCount)}
     <p class="explain-goal-label">{t('之后')}</p>{state(goals.after, goals.afterCount)}</details>;
 }

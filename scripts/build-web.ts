@@ -8,11 +8,17 @@ import { compressible, precompressed } from '../apps/web/staticFiles';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web');
+// Offline report pages that the server must not serve (apps/web/staticReport.ts inlines them into one file).
+const reports = path.join(root, 'out/web-report');
 fs.mkdirSync(output, { recursive: true });
-for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'explain'])
-  await build({ entryPoints: [path.join(root, `apps/web/client/${entry}.ts`)], outfile: path.join(output, `${entry}.js`),
+fs.mkdirSync(reports, { recursive: true });
+const bundle = (entry: string, directory: string) =>
+  build({ entryPoints: [path.join(root, `apps/web/client/${entry}.ts`)], outfile: path.join(directory, `${entry}.js`),
     bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
     jsx: 'automatic', jsxImportSource: 'preact' });
+for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'explain']) await bundle(entry, output);
+await bundle('formalization', reports);
+fs.copyFileSync(path.join(root, 'apps/web/client/formalization.html'), path.join(reports, 'formalization.html'));
 for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['explain.html', 'explain.html'], ['app.css', 'app.css']])
   fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
@@ -31,4 +37,4 @@ for (const file of fs.readdirSync(output, { recursive: true, encoding: 'utf8' })
   if (compressible.has(path.extname(file)) && content.length > 1024) fs.writeFileSync(`${file}.br`, zlib.brotliCompressSync(content, precompressed));
   else fs.rmSync(`${file}.br`, { force: true });
 }
-console.log('Built research workbench in out/web');
+console.log('Built research workbench in out/web and report pages in out/web-report');
