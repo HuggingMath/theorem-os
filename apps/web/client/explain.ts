@@ -4,7 +4,8 @@ import type { WebEffort, WebExplanation, WebExplanationDocument, WebExplanationL
 import { locale, mountLocaleSwitch, t } from '../i18n';
 import { anchorSpan, leanGutter, proseAt, refLines, stepAtLine, type StepRef } from './explainText';
 import { renderExplain, type ExplainView } from './explainView';
-import { buildLeanRows, highlightSpans, reportData } from './leanPane';
+import { correspondenceIndices, correspondenceSpans } from './correspondence';
+import { buildLeanRows, highlightSpans, reportData, spanScrollLeft } from './leanPane';
 
 /**
  * The explanation page (explain.html?run=…&target=…): the accepted Lean proof on the left, its natural-language proof on
@@ -24,7 +25,7 @@ const state = {
   language: (params.get('language') === 'en' || params.get('language') === 'zh' ? params.get('language') : locale) as 'zh' | 'en',
   csrf: '', overview: undefined as WebExplanationOverview | undefined, documents: new Map<string, WebExplanationDocument>(),
   loading: new Set<string>(), documentError: undefined as string | undefined, active: undefined as StepRef | undefined,
-  gap: undefined as number | undefined, pane: 'prose' as 'lean' | 'prose', sync: true, dialog: undefined as ExplainView['dialog'], busy: false, error: undefined as string | undefined,
+  gap: undefined as number | undefined, chosen: new Set<number>(), pane: 'prose' as 'lean' | 'prose', sync: true, dialog: undefined as ExplainView['dialog'], busy: false, error: undefined as string | undefined,
 };
 let toastTimer: ReturnType<typeof setTimeout> | undefined, reportLink: { href: string; filename: string } | undefined;
 
@@ -114,10 +115,10 @@ const useSpans = (element: HTMLElement): WebExplanationSpan[] => {
   const explained = currentDocument();
   return explained?.sections[Number(element.dataset.section)]?.steps[Number(element.dataset.step)]?.uses[Number(element.dataset.use)]?.spans ?? [];
 };
-/** Where a linked phrase's Lean is written, or an original-problem fragment's Lean statement fragment. */
+/** Where a linked phrase's Lean is written, or the Lean statement fragments of an original-problem fragment's pairs. */
 const linkSpans = (element: HTMLElement): WebExplanationSpan[] => {
   const explained = currentDocument();
-  if (element.dataset.correspondence !== undefined) return explained?.problem?.correspondences[Number(element.dataset.correspondence)]?.lean ?? [];
+  if (element.dataset.correspondence !== undefined) return correspondenceSpans(explained?.problem?.correspondences ?? [], correspondenceIndices(element));
   const section = explained?.sections[Number(element.dataset.section)], index = Number(element.dataset.link);
   const links = element.dataset.statement !== undefined ? section?.statementLinks : section?.steps[Number(element.dataset.step)]?.links;
   return links?.[index]?.lean ?? [];
@@ -136,7 +137,7 @@ function draw() {
   renderExplain(hosts, { overview, target: state.target, language: state.language, pane: state.pane, sync: state.sync,
     ...(reportLink ? { report: reportLink } : {}),
     ...(explanation ? { explanation } : {}), ...(explained ? { document: explained } : {}), ...(state.documentError ? { documentError: state.documentError } : {}),
-    ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}),
+    ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), chosen: state.chosen,
     ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
     ...(state.error ? { error: state.error } : {}), now: Date.now() });
   $('#explain-split').dataset.pane = state.pane;
@@ -189,11 +190,13 @@ const anchorOf = (ref: StepRef) => proseScroll.querySelector<HTMLElement>(ref.st
   ? `[data-anchor="${ref.section}"]:not([data-step])` : `[data-anchor="${ref.section}"][data-step="${ref.step}"]`);
 // A programmatic reveal scrolls both panes itself; scroll sync stays out of the way until it settles.
 let holdUntil = 0;
-function revealLine(line: number) {
+/** Brings a line into view, and across to `span` on it when given (else to the start of the lines). */
+function revealLine(line: number, span?: WebExplanationSpan) {
   const row = leanRows[line - 1];
   if (!row) return;
   holdUntil = performance.now() + 700;
-  leanScroll.scrollTo({ top: Math.max(0, offsetIn(leanScroll, row) - leanScroll.clientHeight / 3), behavior: smooth() });
+  leanScroll.scrollTo({ top: Math.max(0, offsetIn(leanScroll, row) - leanScroll.clientHeight / 3),
+    left: spanScrollLeft(leanScroll, leanRows, span), behavior: smooth() });
 }
 function revealStep(ref: StepRef) {
   const anchor = anchorOf(ref);
@@ -208,14 +211,15 @@ function revealStep(ref: StepRef) {
 function select(ref: StepRef, show: 'lean' | 'prose', options: { gap?: number; spans?: WebExplanationSpan[] } = {}) {
   const explained = currentDocument();
   if (!explained) return;
-  state.active = ref; state.gap = options.gap;
+  state.active = ref; state.gap = options.gap; state.chosen = new Set();
   pinned = options.spans ?? [];
   markUse(undefined);
   if (narrow()) state.pane = show;
   draw();
   // The pane may have just become visible; positions are only meaningful after layout.
   requestAnimationFrame(() => {
-    if (show === 'lean') revealLine(options.spans?.[0]?.line ?? options.gap ?? refLines(explained, ref)[0]?.start ?? 1);
+    const span = options.spans?.[0];
+    if (show === 'lean') revealLine(span?.line ?? options.gap ?? refLines(explained, ref)[0]?.start ?? 1, span);
     else revealStep(ref);
   });
 }
@@ -260,12 +264,14 @@ function alignProse(explained: WebExplanationDocument) {
 const refOf = (element: HTMLElement): StepRef => ({ section: Number(element.dataset.section ?? element.dataset.anchor),
   ...(element.dataset.step ? { step: Number(element.dataset.step) } : {}), ...(element.dataset.statement !== undefined ? { statement: true as const } : {}) });
 const selecting = () => !(getSelection()?.isCollapsed ?? true);
-/** An original-problem fragment: its Lean statement fragment is marked and shown, the chosen step kept. */
-function point(spans: WebExplanationSpan[]) {
+/** An original-problem fragment or pair: its Lean statement fragments are marked and shown, the chosen step kept. */
+function point(element: HTMLElement) {
+  const spans = linkSpans(element);
   if (!spans.length) { toast(t('Lean 源码里没有原样写出这一段；审核模型可能引用了 Lean 展开后的类型')); return; }
-  pinned = spans; markUse(undefined);
-  if (narrow()) { state.pane = 'lean'; draw(); }
-  requestAnimationFrame(() => revealLine(spans[0]!.line));
+  pinned = spans; state.chosen = new Set(correspondenceIndices(element));
+  if (narrow()) state.pane = 'lean';
+  draw(); markUse(undefined);
+  requestAnimationFrame(() => revealLine(spans[0]!.line, spans[0]));
 }
 document.addEventListener('click', event => {
   const target = event.target as HTMLElement;
@@ -278,7 +284,7 @@ document.addEventListener('click', event => {
     return;
   }
   const action = target.closest<HTMLElement>('[data-action]');
-  if (action?.dataset.action === 'correspondence') { if (!selecting()) point(linkSpans(action)); return; }
+  if (action?.dataset.action === 'correspondence') { if (!selecting()) point(action); return; }
   // Opening the auditors' notes or the goals is reading, not choosing a step.
   if (target.closest('.explain-reviews')) return;
   if (!action) {
@@ -355,13 +361,13 @@ const stop = () => act(async () => {
 const remove = () => act(async () => {
   await call(`${base()}/item?${query()}`, 'DELETE');
   store(undefined);
-  state.active = undefined; state.gap = undefined; pinned = [];
+  state.active = undefined; state.gap = undefined; state.chosen = new Set(); pinned = [];
   toast(t('讲解已删除'));
 });
 
 function choose(target: string, language: 'zh' | 'en') {
   state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined;
-  pinned = [];
+  state.chosen = new Set(); pinned = [];
   if (!report) history.replaceState(null, '', `?${new URLSearchParams({ run: state.runId, target, language })}`);
   proseScroll.scrollTop = 0;
   draw(); void loadDocument(); schedule();

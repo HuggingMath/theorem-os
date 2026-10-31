@@ -40,6 +40,20 @@ export function spanRange(rows: readonly HTMLElement[], span: WebExplanationSpan
 }
 
 export const canHighlight = () => typeof CSS !== 'undefined' && Boolean(CSS.highlights) && typeof Highlight !== 'undefined';
+
+/**
+ * The horizontal scroll of the Lean pane `scroll` that shows `span` beside the sticky line numbers: unchanged when it is
+ * in view, else the nearest that shows all of it, or its start when it is wider than the pane. Without a span, 0.
+ */
+export function spanScrollLeft(scroll: HTMLElement, rows: readonly HTMLElement[], span: WebExplanationSpan | undefined): number {
+  const range = span && spanRange(rows, span), gutter = rows[0]?.children[1];
+  if (!range || !gutter) return 0;
+  const box = range.getBoundingClientRect(), pane = scroll.getBoundingClientRect(), room = 16;
+  const left = gutter.getBoundingClientRect().right + room, right = pane.left + scroll.clientWidth - room;
+  if (box.left >= left && box.right <= right) return scroll.scrollLeft;
+  const target = box.left < left || box.width > right - left ? left : right - box.width;
+  return Math.max(0, scroll.scrollLeft + box.left - target);
+}
 /** Highlights the spans' text under `name`, or clears it. */
 export function highlightSpans(name: string, rows: readonly HTMLElement[], spans: readonly WebExplanationSpan[]) {
   if (!canHighlight()) return;

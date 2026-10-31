@@ -269,6 +269,8 @@ export type WebExplanationSection = {
   statementReviews: string[]; steps: WebExplanationStep[]; statementLinks?: WebExplanationLink[];
 };
 export const webFormalizationAspects = ['domains', 'assumptions', 'conclusions', 'definitions', 'quantifierScope', 'instanceCoherence'] as const;
+/** Relations from strongest to weakest; merged or grouped correspondences show the weakest. */
+export const webFormalizationRelationRank = { direct: 0, equivalent: 1, unresolved: 2, mismatch: 3 } as const;
 /**
  * How a fragment of the original problem corresponds to the Lean statement, as the formalization reviewers recorded it
  * (merged when several quote the same pair). `lean` is where the Lean fragment is written; empty when it was quoted from

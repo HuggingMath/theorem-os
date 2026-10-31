@@ -14,6 +14,7 @@ export type ExplainView = {
   overview: WebExplanationOverview; target: string; language: 'zh' | 'en'; pane: 'lean' | 'prose'; sync: boolean;
   explanation?: WebExplanation; document?: WebExplanationDocument; documentError?: string; active?: StepRef;
   /** A Lean proof line the reader chose that no step quotes. */ gap?: number;
+  /** The 原题 pairs the reader last chose (a fragment or a pair in its list). */ chosen?: ReadonlySet<number>;
   dialog?: 'generate' | 'cancel' | 'delete'; busy: boolean; error?: string; now: number;
   /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
 };
@@ -82,7 +83,7 @@ function Prose(view: ExplainView) {
   const { generation } = view.overview, explanation = view.explanation;
   const declarations = view.overview.targets.find(item => item.name === view.target)?.declarations ?? 1;
   if (explanation?.status === 'approved') {
-    if (view.document) return <DocumentView document={view.document} active={view.active} gap={view.gap} />;
+    if (view.document) return <DocumentView document={view.document} active={view.active} gap={view.gap} chosen={view.chosen} />;
     return view.documentError ? <div class="inline-error" role="alert">{view.documentError}</div>
       : <p class="explain-state" role="status"><Spinner />{t('正在读取讲解…')}</p>;
   }
@@ -141,12 +142,13 @@ const linkedDocument = (document: WebExplanationDocument) =>
 const richLinks = (links: readonly WebExplanationLink[] | undefined, at: Record<`data-${string}`, string | number>): RichLink[] =>
   (links ?? []).map((link, index) => ({ start: link.start, end: link.end, attributes: { 'data-action': 'link', ...at, 'data-link': index },
     title: t('在 Lean 中标出') }));
-function DocumentView({ document, active, gap }: { document: WebExplanationDocument; active?: StepRef; gap?: number }) {
+function DocumentView({ document, active, gap, chosen }: { document: WebExplanationDocument; active?: StepRef; gap?: number;
+  chosen?: ReadonlySet<number> }) {
   const owned = new Map(document.sections.map((section, index) => [section.name, index]));
   return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
     <p class="explain-notice"><Icon name="triangle-alert" />
       <span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
-    {document.problem && <ProblemCard {...document.problem} />}
+    {document.problem && <ProblemCard {...document.problem} active={chosen} />}
     <section class="explain-overview" aria-labelledby="explain-overview-heading"><h3 id="explain-overview-heading">{t('证明思路')}</h3>
       <p class="explain-rich"><Rich text={document.overview} /></p>
       {linkedDocument(document) && <p class="formal-note"><Icon name="locate-fixed" />

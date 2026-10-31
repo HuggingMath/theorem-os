@@ -155,6 +155,8 @@ export const explain: Record<string, string> = {
   "主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。点原文中划线的片段，标出对应的 Lean。": "The main theorem's statement comes from an approved formalization; reviewer models compared the original problem with the Lean statement item by item. Click an underlined fragment of the original to mark its Lean.",
   "主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。": "The main theorem's statement comes from an approved formalization; reviewer models compared the original problem with the Lean statement item by item.",
   "原题与 Lean 陈述的对照 ({0})": "Original problem and Lean statement ({0})",
+  "整段原题": "The whole problem",
+  "整份 Lean 陈述": "The whole Lean statement",
   "讲解中划虚线的短语逐个对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。": "Each phrase with a dotted underline stands for a piece of Lean; click it to mark that Lean. The auditors checked every pair.",
   "审核模型把这一步的讲解和这些目标逐个对照过，判断一致": "The auditors compared this step's explanation with these goals and found them consistent",
   "{0}{1} 个审核模型对照过": "{0}checked by {1} auditors",

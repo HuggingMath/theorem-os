@@ -3,7 +3,7 @@ import { count, findWithin, lineEnds, offsetSpans, type SourceOffsets } from '..
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { maskLeanComments } from '../../src/math/leanSyntax';
-import { webFormalizationAspects, type WebExplanationSpan, type WebFormalizationCorrespondence, type WebFormalizationReport } from './shared';
+import { webFormalizationAspects, webFormalizationRelationRank, type WebExplanationSpan, type WebFormalizationCorrespondence, type WebFormalizationReport } from './shared';
 
 /** Spans (lines from 1, UTF-16 columns) of `text[start, end)` in a whole file. */
 export const fileSpans = (text: string, place: SourceOffsets): WebExplanationSpan[] =>
@@ -30,7 +30,6 @@ type Review = { reviewer: string; review: FormalizationEvidence['review'] };
 const reviewsOf = (evidence: FormalizationEvidence): Review[] => evidence.workflow
   ? evidence.workflow.reviews.map(item => ({ reviewer: item.reviewerId, review: item.review }))
   : [{ reviewer: 'reviewer', review: evidence.review }];
-const relationRank = { direct: 0, equivalent: 1, unresolved: 2, mismatch: 3 } as const;
 const position = (value: number | null) => value ?? Number.MAX_SAFE_INTEGER;
 /** A statement fragment's trailing proof hole (`:= by sorry`), which a proof of that statement replaces. */
 const PROOF_HOLE = /\s*:=\s*(?:by\s+)?sorry\s*$/u;
@@ -51,7 +50,7 @@ export function formalizationCorrespondences(evidence: FormalizationEvidence, so
       const explanation = item.explanation.trim();
       if (found) {
         found.reviewers++;
-        if (relationRank[item.relation] > relationRank[found.relation]) found.relation = item.relation;
+        if (webFormalizationRelationRank[item.relation] > webFormalizationRelationRank[found.relation]) found.relation = item.relation;
         if (explanation && !found.explanations.includes(explanation)) found.explanations.push(explanation);
         continue;
       }

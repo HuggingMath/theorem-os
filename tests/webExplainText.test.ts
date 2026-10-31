@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorSpan, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
+import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, quotePieces, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
 import type { WebExplanationDocument, WebExplanationSection } from '../apps/web/shared';
 
 // The explanation page's pure helpers: Lean line split, line ↔ step mapping, estimate, prose and TeX reading.
@@ -162,6 +162,61 @@ describe('whole quotes', () => {
     expect(wholeQuotes(LEAN, ['theorem gauss : ∀ n : ℕ, 2 * S n = n * (n + 1) := by sorry', '∀ n : ℕ'])).toEqual(new Set());
     expect(wholeQuotes(PROBLEM, ['not in the problem', 'Prove that'])).toEqual(new Set());
     expect(wholeQuotes('', [])).toEqual(new Set());
+  });
+});
+
+describe('quote pieces', () => {
+  const at = (text: string, quote: string, placed = true, from = 0) => {
+    const start = text.indexOf(quote, from);
+    return { start, end: start + quote.length, placed };
+  };
+  // Each piece as `quotes:text`, the drawn quote first and the others of the same text after `+`.
+  const shown = (text: string, quotes: Parameters<typeof quotePieces>[1]) =>
+    quotePieces(text, quotes).map(piece => `${piece.quotes.join('+')}:${text.slice(piece.start, piece.end)}`);
+
+  it('gives a quote inside another its own words and the outer one the rest, without edge spaces or periods', () => {
+    const text = 'For a natural number n, let S(n) = 0 + ... + n be the sum.';
+    expect(shown(text, [at(text, text), at(text, 'S(n) = 0 + ... + n be the sum')]))
+      .toEqual(['0:For a natural number n, let', '1:S(n) = 0 + ... + n be the sum']);
+    // Three deep: each level keeps only what the levels inside it leave.
+    expect(shown(text, [at(text, 'a natural number n, let S(n)'), at(text, 'natural number n'), at(text, 'number')]))
+      .toEqual(['0:a', '1:natural', '2:number', '1:n', '0:let S(n)']);
+  });
+
+  it('keeps the earlier of two crossing quotes, merges quotes that differ only at their ends, and prefers placed ones', () => {
+    const text = 'Prove that x = y, for all x.';
+    expect(shown(text, [at(text, 'that x = y'), at(text, 'x = y, for all'), at(text, 'x = y'), at(text, 'x = y,')]))
+      .toEqual(['0:that', '2+3:x = y']);
+    // An unplaced quote yields: inside a placed one it is dropped, and of two copies the placed one is drawn.
+    expect(shown(text, [at(text, 'x = y', false), at(text, 'that x = y'), at(text, 'for all x', false), at(text, 'for all x.')]))
+      .toEqual(['1:that x = y', '3+2:for all x']);
+    // A remainder of only spaces and punctuation is not underlined.
+    expect(shown(text, [at(text, 'x = y, for'), at(text, 'x = y'), at(text, 'for')])).toEqual(['1:x = y', '2:for']);
+    expect(shown(text, [null, at(text, ', '), at(text, 'Prove that', false)])).toEqual(['2:Prove that']);
+    const chinese = '设 n 是自然数，证明 n + 0 = n。';
+    expect(shown(chinese, [at(chinese, '设 n 是自然数，'), at(chinese, 'n + 0 = n。')])).toEqual(['0:设 n 是自然数', '1:n + 0 = n']);
+  });
+
+  it('takes a whole formula when a quote cuts into one, and leaves a period after it out', () => {
+    const text = 'Show $x + 1 = 2$. Then stop.';
+    expect(shown(text, [at(text, '1 = 2'), at(text, '$x + 1 = 2$.'), at(text, 'Show $x')]))
+      .toEqual(['2:Show', '0+1:$x + 1 = 2$']);
+    expect(shown(text, [at(text, 'x + 1'), at(text, 'Then')])).toEqual(['0:$x + 1 = 2$', '1:Then']);
+  });
+
+  it('gives every quote of one text to its pieces, also when another quote splits it', () => {
+    // Several reviewers' aspects quoting the same words: one click finds all of them.
+    const text = 'For every natural number n, n + 0 = n.';
+    expect(shown(text, [at(text, 'n + 0 = n'), at(text, 'For every natural number n'), at(text, 'n + 0 = n.'), at(text, 'natural number n'),
+      at(text, 'For every natural number n,', false)])).toEqual(['1+4:For every', '3:natural number n', '0+2:n + 0 = n']);
+  });
+});
+
+describe('whole quotes', () => {
+  it('is the whole text up to spacing and outer punctuation', () => {
+    expect(coversAll('Prove that\n x = y.', 'Prove that x = y')).toBe(true);
+    expect(coversAll('Prove that x = y.', 'that x = y')).toBe(false);
+    expect(coversAll('Prove that x = y.', 'Prove that x = z')).toBe(false);
   });
 });
 

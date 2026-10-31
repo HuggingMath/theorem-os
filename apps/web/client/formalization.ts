@@ -2,7 +2,8 @@ import type { WebExplanationLines, WebExplanationSpan, WebFormalizationReport } 
 import { mountLocaleSwitch, t } from '../i18n';
 import { wholeQuotes } from './explainText';
 import { renderFormalization } from './formalizationView';
-import { buildLeanRows, highlightSpans, reportData } from './leanPane';
+import { correspondenceIndices, correspondenceSpans } from './correspondence';
+import { buildLeanRows, highlightSpans, reportData, spanScrollLeft } from './leanPane';
 
 /**
  * The formalization comparison page (formalize --phase report): the approved Lean statement on the left, the original
@@ -42,18 +43,21 @@ function draw() {
 const narrow = () => matchMedia('(max-width: 900px)').matches;
 const smooth = () => matchMedia('(prefers-reduced-motion: no-preference)').matches ? 'smooth' as const : 'auto' as const;
 const offsetIn = (scroll: HTMLElement, element: HTMLElement) => element.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
-function reveal(scroll: HTMLElement, element: HTMLElement | undefined | null, share = 3) {
-  if (element) scroll.scrollTo({ top: Math.max(0, offsetIn(scroll, element) - scroll.clientHeight / share), behavior: smooth() });
+function reveal(scroll: HTMLElement, element: HTMLElement | undefined | null, share = 3, left?: number) {
+  if (element) scroll.scrollTo({ top: Math.max(0, offsetIn(scroll, element) - scroll.clientHeight / share), left, behavior: smooth() });
 }
-const spansOf = (element: HTMLElement) => report?.correspondences[Number(element.dataset.correspondence)]?.lean ?? [];
-/** A correspondence: its Lean is marked and brought into view; one with no Lean in the source is shown in the list. */
-function choose(index: number) {
-  const spans = report?.correspondences[index]?.lean ?? [];
-  state.active = new Set([index]); state.pinned = spans;
+const spansOf = (element: HTMLElement) => correspondenceSpans(report?.correspondences ?? [], correspondenceIndices(element));
+/**
+ * Correspondences (a pair, or every pair of one original fragment): their Lean is marked and brought into view, across
+ * to the first fragment; with no Lean in the source, the first is shown in the list.
+ */
+function choose(indices: readonly number[]) {
+  const spans = correspondenceSpans(report?.correspondences ?? [], indices);
+  state.active = new Set(indices); state.pinned = spans;
   if (narrow()) state.pane = spans.length ? 'lean' : 'prose';
   draw(); point(undefined); mark('active', linesOf(spans));
-  requestAnimationFrame(() => spans.length ? reveal(leanScroll, rows[spans[0]!.line - 1])
-    : reveal(proseScroll, proseScroll.querySelector<HTMLElement>(`[data-item="${index}"]`), 4));
+  requestAnimationFrame(() => spans.length ? reveal(leanScroll, rows[spans[0]!.line - 1], 3, spanScrollLeft(leanScroll, rows, spans[0]))
+    : reveal(proseScroll, proseScroll.querySelector<HTMLElement>(`[data-item="${indices[0]}"]`), 4));
 }
 /**
  * A Lean line: the correspondences whose Lean is written on it are marked in the list, the first brought into view.
@@ -75,7 +79,7 @@ document.addEventListener('click', event => {
   const row = target.closest<HTMLElement>('.lean-row');
   if (row) { chooseLine(Number(row.dataset.line)); return; }
   const action = target.closest<HTMLElement>('[data-action]');
-  if (action?.dataset.action === 'correspondence') choose(Number(action.dataset.correspondence));
+  if (action?.dataset.action === 'correspondence') choose(correspondenceIndices(action));
   else if (action?.dataset.action === 'pane') { state.pane = action.dataset.pane === 'lean' ? 'lean' : 'prose'; draw(); }
 });
 const pointed = (target: HTMLElement) => {

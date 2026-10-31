@@ -2,7 +2,7 @@ import { render } from 'preact';
 import type { WebFormalizationReport } from '../shared';
 import { effortLabels, formatDateTime } from '../presentation';
 import { t } from '../i18n';
-import { Correspondences, OriginalText, originalMarks } from './correspondence';
+import { Correspondences, OriginalText, originalPieces } from './correspondence';
 import { Rich } from './richText';
 import { Icon } from './ui/Icon';
 
@@ -31,19 +31,19 @@ function Toolbar({ report, pane }: FormalizationView) {
 
 /** The right pane: the original with its matched fragments, each correspondence, the blind back-translation, plan and reviews. */
 function Report({ report, active }: FormalizationView) {
-  const located = [...originalMarks(report.original, report.correspondences)].some(index => report.correspondences[index]!.lean.length);
+  const located = originalPieces(report.original, report.correspondences).some(piece => report.correspondences[piece.quote]!.lean.length);
   return <article class="explain-document">
     <p class="explain-notice"><Icon name="triangle-alert" />
       <span>{t('这份 Lean 陈述由模型写出，经 {0} 个审核模型盲回译、逐项对照后通过，未经人工审阅。Lean 只检查了陈述能编译，没有检查它是否忠实于原题。', report.reviews.length)}</span></p>
     <section class="explain-section formal-problem" aria-labelledby="formal-original-heading">
       <header class="explain-section-head"><div class="explain-section-meta"><code translate={false}>{report.problemId}</code></div>
         <h3 id="formal-original-heading">{t('原题')}</h3></header>
-      <OriginalText original={report.original} correspondences={report.correspondences} />
+      <OriginalText original={report.original} correspondences={report.correspondences} active={active} />
       {located && <p class="formal-note"><Icon name="locate-fixed" /><span>{t('点原文中划线的片段，标出审核模型对应的 Lean；点 Lean 的一行，找到写在这一行的对照。')}</span></p>}
     </section>
     {report.correspondences.length > 0 && <section class="explain-section" aria-labelledby="formal-correspondence-heading">
       <header class="explain-section-head"><h3 id="formal-correspondence-heading">{t('原题与 Lean 陈述的对照 ({0})', report.correspondences.length)}</h3></header>
-      <Correspondences correspondences={report.correspondences} active={active} /></section>}
+      <Correspondences original={report.original} statement={report.statement} correspondences={report.correspondences} active={active} /></section>}
     <Backtranslation report={report} />
     {report.plan && <Plan plan={report.plan} />}
     {report.coverage.length > 0 && <Coverage report={report} />}

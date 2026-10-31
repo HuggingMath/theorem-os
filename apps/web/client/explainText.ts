@@ -212,20 +212,78 @@ export function linkedProse(text: string, links: readonly { start: number; end: 
 }
 
 const collapse = (text: string) => text.replace(/\s+/gu, ' ').trim();
+/** Whether `quote` is all of `whole`, up to spacing, with nothing but spaces and punctuation left outside it. */
+export function coversAll(whole: string, quote: string): boolean {
+  const text = collapse(whole), part = collapse(quote), at = text.indexOf(part);
+  return at >= 0 && !/[^\s\p{P}]/u.test(text.slice(0, at) + text.slice(at + part.length));
+}
 /**
  * Which quotes cover all of `whole` (nothing but spaces and punctuation outside them), when some other quote marks a
  * smaller part. A reviewer quoting the whole problem or the whole Lean file says nothing about where its Lean is, and
  * marking it would cover every finer fragment; `null` is a quote that is not placed in `whole`.
  */
 export function wholeQuotes(whole: string, quotes: readonly (string | null)[]): Set<number> {
-  const text = collapse(whole);
-  const covers = (quote: string) => {
-    const at = text.indexOf(collapse(quote));
-    return at >= 0 && !/[^\s\p{P}]/u.test(text.slice(0, at) + text.slice(at + collapse(quote).length));
-  };
-  const found = quotes.map(quote => quote !== null && covers(quote));
+  const found = quotes.map(quote => quote !== null && coversAll(whole, quote));
   if (!quotes.some((quote, index) => quote !== null && !found[index])) return new Set();
   return new Set(found.flatMap((value, index) => value ? [index] : []));
+}
+
+/**
+ * A run of text to underline for quote `quote` (UTF-16 offsets, end exclusive); `quotes` is it and every other quote of
+ * the same text, which one click on the run finds together.
+ */
+export type QuotePiece = { start: number; end: number; quote: number; quotes: number[] };
+// Latin and CJK sentence punctuation, written as escapes so the source holds no interface text.
+const EDGE = /[\s.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001]/u;
+/**
+ * Where to underline quotes of one text, each a range or `null`, and `placed` when its counterpart was found. A quote
+ * inside another takes its own text and the outer one keeps the rest, so the more specific quote is the one a click
+ * finds; of two quotes that cross, the earlier keeps its text. Quotes differing only by spaces or sentence punctuation at
+ * their ends are one, drawn for the first whose counterpart was found and carrying the others in `quotes`, and a quote
+ * whose counterpart was not found yields to one whose was. Like linkedProse, a quote that cuts into a formula, inline
+ * code or bold text takes all of it. Underlines leave out spaces and sentence punctuation at their ends, and a remainder
+ * of only spaces and punctuation is not underlined.
+ */
+export function quotePieces(text: string, quotes: readonly ({ start: number; end: number; placed: boolean } | null)[]): QuotePiece[] {
+  const atoms = proseAtoms(text), bounds = new Set(atoms.flatMap(atom => [atom.start, atom.end]));
+  // Every range stays on atom boundaries, so linkedProse draws the pieces as given.
+  const trim = (start: number, end: number) => {
+    while (start < end && EDGE.test(text[start]!) && bounds.has(start + 1)) start++;
+    while (end > start && EDGE.test(text[end - 1]!) && bounds.has(end - 1)) end--;
+    return { start, end };
+  };
+  const items = quotes.flatMap((quote, index) => {
+    const touched = quote ? atoms.filter(atom => atom.start < quote.end && atom.end > quote.start) : [];
+    if (!quote || !touched.length) return [];
+    const range = trim(touched[0]!.start, touched.at(-1)!.end);
+    return range.end > range.start ? [{ ...range, placed: quote.placed, index }] : [];
+  }).sort((a, b) => Number(b.placed) - Number(a.placed) || a.start - b.start || b.end - a.end || a.index - b.index);
+  const kept: typeof items = [], same = new Map<number, number[]>();
+  for (const item of items) {
+    // Sorted placed first, so the copy kept for a text is placed whenever any copy is.
+    const twin = kept.find(other => item.start === other.start && item.end === other.end);
+    if (twin) { same.get(twin.index)!.push(item.index); continue; }
+    const conflict = kept.some(other => {
+      const inside = other.start <= item.start && item.end <= other.end, around = item.start <= other.start && other.end <= item.end;
+      if (inside) return !item.placed && other.placed;
+      if (around) return false;
+      return item.start < other.end && other.start < item.end;
+    });
+    if (!conflict) { kept.push(item); same.set(item.index, [item.index]); }
+  }
+  return kept.flatMap(item => {
+    const inner = kept.filter(other => other !== item && item.start <= other.start && other.end <= item.end)
+      .sort((a, b) => a.start - b.start);
+    const pieces: QuotePiece[] = [];
+    let at = item.start;
+    for (const other of [...inner, { start: item.end, end: item.end }]) {
+      const piece = trim(at, other.start);
+      if (piece.end > piece.start && /[^\s\p{P}]/u.test(text.slice(piece.start, piece.end)))
+        pieces.push({ ...piece, quote: item.index, quotes: same.get(item.index)! });
+      at = Math.max(at, other.end);
+    }
+    return pieces;
+  }).sort((a, b) => a.start - b.start);
 }
 /** A parsed `$…$` formula; the page renders it with plain elements and falls back to the source text on anything odd. */
 export type MathStyle = 'text' | 'roman' | 'italic' | 'bold';

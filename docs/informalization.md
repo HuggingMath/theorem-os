@@ -77,7 +77,7 @@ Lean establishes that the proof compiles and that the target uses no `sorryAx`. 
 Current limitations:
 
 - Steps follow the source text. Recorded goals cover tactics only, not term-mode proofs, at most 4 goals per state. In a declaration over the 48 KB budget, nested tactics have no goals.
-- Phrase alignment and the formalization binding have so far run only with preset role outputs. How often real writers produce admissible links, and how many more tokens and rounds alignment costs, is not measured; the workbench estimate still comes from an unaligned run.
+- Phrase alignment and the formalization binding have run with a real model only on small proofs: a two-step workbench proof (approved in round 1, 200 s, 51,240 tokens, 9 links) and a three-declaration Mathlib proof bound to an approved formalization (round 1, 907 s, 316,819 tokens, 24 links), every link on the right Lean. How often writers produce admissible links on larger proofs, and how many more tokens and rounds alignment costs there, is not measured; the workbench estimate still comes from an unaligned run.
 - `report` needs every explained declaration in the proof file itself.
 - The proof must compile in the runtime's pinned toolchain (`leanprover/lean4:v4.33.0`, and for `mathlib` the pinned Mathlib). Module-system files are refused.
 - `omega`, `simp` and similar automation leave many library lemmas in proof terms. They are listed as citable but not required.
