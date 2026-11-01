@@ -385,7 +385,14 @@ function openSettings(focusId?: string) {
     setMobileView('compose');
   }
   showDialog(dialog);
-  if (focusId) element(`#${focusId}`).focus();
+  if (focusId) {
+    // The field's section starts at the top of the pane, so the end of the section above does not show over it.
+    const control = element(`#${focusId}`), section = control.closest<HTMLElement>('.settings-content .form-section');
+    section?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    control.focus({ preventScroll: Boolean(section) });
+    const pane = element('.settings-content').getBoundingClientRect(), box = control.getBoundingClientRect();
+    if (box.bottom > pane.bottom) control.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  }
   syncSettingsNavigation();
 }
 function closeSettings(restoreWorkspace = true) {
@@ -1076,6 +1083,8 @@ function renderRunList(force = false) {
   const signature = JSON.stringify([state.selectedId, criteria, groups.waiting.length, runs.map(run => [run.id, run.title, run.model, run.createdAt, environmentName(run.environment), status(run)])]);
   patchText(element('#run-count'), filtered ? `${runs.length}/${state.runs.length}` : String(state.runs.length));
   element('#clear-run-search').hidden = !state.query;
+  // With no records at all there is nothing to search or filter; a search that matches nothing keeps its tools.
+  element('.history-tools').hidden = !state.runs.length && !filtered;
   // The phone list repeats model and environment under every title; when every run used the same pair it says nothing.
   element('#run-list').toggleAttribute('data-uniform', new Set(state.runs.map(run => `${run.model}\n${run.environment}`)).size <= 1);
   if (!force && signature === state.listSignature) return;
@@ -1158,6 +1167,8 @@ function resultTitle(run: WebRun) {
         : run.status === 'error' ? t('运行发生错误')
           : isRejectedRun(run) ? t('完整原题验收未通过') : t('运行已结束，完整原题尚未验收通过');
 }
+/** Under the accepted title, what the acceptance checked, as the glossary entry for 独立验收 states it. */
+const acceptedDescription = () => t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。');
 /** The result tab of one run: verdict, proof, route, report, then the task and how it was run. */
 function resultProps(run: WebRun): ResultPanelProps {
   const progress = runProgress(run), value = status(run), working = activeRun(run), guide = failureGuide(run);
@@ -1169,7 +1180,7 @@ function resultProps(run: WebRun): ResultPanelProps {
   const compare = compareProps(run, later);
   return {
     // The plan waiting on its owner has nothing running: no spinner, unless the Lead is revising it from their note.
-    verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: resultDescription(run),
+    verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: passed(run) && !guide ? acceptedDescription() : resultDescription(run),
       active: working && (!approval || approval.leadRevising), candidate: Boolean(run.artifact && working),
       ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}),
       ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
@@ -1676,7 +1687,9 @@ async function refreshRuns(epoch: number, force = false) {
     state.resumed = true;
     const away = resume ? finishedSince(state.runs, resume.seenAt) : [];
     for (const run of away) if (run.id !== state.selectedId) state.finishedRuns.add(run.id);
-    if (away.length) toast(away.length === 1 ? t('离开期间「{0}」已结束', away[0].title) : t('离开期间有 {0} 项研究已结束', away.length));
+    // A ?run= address for a record this account does not have (deleted, or someone else's) opens the latest one instead.
+    if (linkedRun && !state.runs.some(run => run.id === linkedRun)) toast(t('没有找到链接里的研究记录'));
+    else if (away.length) toast(away.length === 1 ? t('离开期间「{0}」已结束', away[0].title) : t('离开期间有 {0} 项研究已结束', away.length));
     // Until the sample has loaded, the page shows the run below it and keeps the sample's address.
     if (sampleLink && state.session?.sample) void openSample('replace').finally(() => { sampleLink = false; renderDetail(); });
     else sampleLink = false;
@@ -1904,7 +1917,7 @@ function openHistory() {
   if (historyDocked()) { if (historyCollapsed()) setHistoryCollapsed(false); }
   else showDialog(element<HTMLDialogElement>('#history-dialog'));
   restoreHistoryScroll();
-  if (!touchQuery.matches) field('run-search').focus();
+  if (!touchQuery.matches && state.runs.length) field('run-search').focus();
 }
 /** Opens the new-research page with the current draft; 清空草稿 on that page starts it over. */
 function openDraft() {
@@ -2692,11 +2705,13 @@ element('#delete-run-dialog').addEventListener('cancel', event => {
 element('#delete-run-dialog').addEventListener('close', () => {
   const dialog = element<HTMLDialogElement>('#delete-run-dialog');
   if (dialog.open) return;
+  const kept = Boolean(deletionTarget && state.runs.some(run => run.id === deletionTarget!.id));
   deletionTarget = undefined;
   const active = document.activeElement;
   if (document.querySelector('dialog[open]') || (active && active !== document.body && !dialog.contains(active))) return;
-  // The run now selected in its place, so the next one can be read or deleted straight away.
-  focusFirst(['#run-list [aria-pressed="true"]', '[data-run-menu]>summary', '#open-draft', '#open-history']);
+  // A kept run returns to its menu; a deleted one moves on to the run now selected in its place, so the next can be read or deleted straight away.
+  focusFirst(kept ? ['[data-run-menu]>summary', '#run-list [aria-pressed="true"]', '#open-draft', '#open-history']
+    : ['#run-list [aria-pressed="true"]', '[data-run-menu]>summary', '#open-draft', '#open-history']);
 });
 element('#source-editor').addEventListener('input', event => {
   if (event.target !== field('expanded-source')) return;
@@ -2736,10 +2751,14 @@ element('.settings-content').addEventListener('scroll', () => {
 }, { passive: true });
 element('#prepare-run').addEventListener('click', () => {
   if (!state.session || state.submitting) return;
-  if (element('#submission-readiness').dataset.state === 'full') { openHistory(); return; }
+  const readiness = element('#submission-readiness');
+  if (readiness.dataset.state === 'full') { openHistory(); return; }
   const issue = currentSubmissionIssues()[0];
-  if (issue) focusSubmissionIssue(issue);
-  else if (element('#submission-readiness').hasAttribute('data-settled')) openEditor();
+  // An empty task or a Key nobody has been asked for yet is the next step, not a fault: the field opens without an error under it.
+  if (readiness.dataset.state === 'compose') { closeSettings(false); setMobileView('compose'); field('task').focus(); }
+  else if (issue?.field === 'api-key' && readiness.hasAttribute('data-quiet')) openSettings('api-key');
+  else if (issue) focusSubmissionIssue(issue);
+  else if (readiness.hasAttribute('data-settled')) openEditor();
   else openSettings();
 });
 for (const id of ['close-settings', 'apply-settings']) element(`#${id}`).addEventListener('click', () => closeSettings());

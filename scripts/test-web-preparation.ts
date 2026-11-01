@@ -168,6 +168,9 @@ try {
     await page.locator('#prepare-run').click();
     await page.locator('#run-settings[open]').waitFor();
     assert.equal(await page.locator('#api-key').evaluate(field => field === document.activeElement), true);
+    // Asked for the Key, not refused yet: no error under the field until a submit is tried.
+    assert.equal(await page.locator('#api-key-validation').isVisible(), false);
+    assert.notEqual(await page.locator('#api-key').getAttribute('aria-invalid'), 'true');
     await page.locator('#api-key').fill(credential);
     await closeSettings(page);
     assert.equal(await page.locator('#prepare-run').evaluate(button => button === document.activeElement), true,

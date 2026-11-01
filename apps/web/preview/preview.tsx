@@ -72,7 +72,7 @@ const config = [{ label: t('Agent 数量'), value: '3', mono: false }, { label: 
 const proofText = lean('  induction b with\n  | zero => simp\n  | succ n ih =>\n    -- T2 closes the step\n    rw [Nat.add_succ, ih]\n    rfl');
 /** The result tab of an accepted run, a live run with a candidate and a run stopped by its provider. */
 const result = (kind: 'passed' | 'live' | 'failed'): ResultPanelProps => ({
-  verdict: kind === 'passed' ? { run: 'run-7c1d0e2a', tone: 'passed', symbol: 'circle-check', title: t('完整原题已通过独立验收'), description: t('完整原题通过独立 Lean 验收。'), active: false, candidate: false }
+  verdict: kind === 'passed' ? { run: 'run-7c1d0e2a', tone: 'passed', symbol: 'circle-check', title: t('完整原题已通过独立验收'), description: t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。'), active: false, candidate: false }
     : kind === 'live' ? { run: 'run-7c1d0e2a', tone: 'running', symbol: 'refresh-cw', title: t('研究正在运行'), description: t('正在构造与检查候选证明。'), active: true, candidate: true,
       latest: { at, time: '09:34:12', message: 'Lead split the goal into T1 and T2.' } }
       : { run: 'run-7c1d0e2a', tone: 'failed', symbol: 'circle-alert', title: t('API Key 未通过认证'), description: 'The provider rejected the API key.', active: false, candidate: false },

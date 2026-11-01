@@ -450,6 +450,8 @@ try {
     // An address naming a run that is not in this list falls back to an available run and corrects the address.
     await page.goto(`${origin}/?run=${crypto.randomUUID()}`);
     await page.waitForFunction(ids => ids.includes(document.querySelector('.detail-heading')?.getAttribute('data-run') ?? '') && location.search === `?run=${document.querySelector('.detail-heading')!.getAttribute('data-run')}`, runs.map(run => run.id));
+    // It also says so, rather than silently showing another run.
+    await page.locator('#toast').filter({ hasText: '没有找到链接里的研究记录' }).waitFor();
     await screenshot(page, `history-${width}-address.png`);
   }, width);
 

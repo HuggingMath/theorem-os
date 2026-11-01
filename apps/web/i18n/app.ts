@@ -345,6 +345,8 @@ export const app: Record<string, string> = {
   "模型名称须以字母或数字开头，只能包含字母、数字及 . _ : / -": "Model names must start with a letter or digit and contain only letters, digits and . _ : / -",
   "请填写 API Key": "Enter an API key",
   "连接模型后即可提交": "Connect a model to submit",
+  "没有找到链接里的研究记录": "The run in this link was not found",
+  "目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。": "The target statements are unchanged, with no sorry or extra axioms, and the Lean kernel confirmed them in an isolated environment.",
   "API Key 长度须为 8–4096 个字符": "API keys must be 8–4096 characters long",
   "API Key 只能包含英文可见字符，不能包含空格或换行": "API keys may contain only printable ASCII characters, with no spaces or line breaks",
   "{0}须为 {1}–{2} 的整数": "{0} must be a whole number from {1} to {2}",

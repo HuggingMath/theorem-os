@@ -291,8 +291,10 @@ try {
   });
 
   await scenario('Cancellation asks once, then stays busy in both places and sends only one request while switching views', async h => {
-    const { page } = h; await open(h); const before = await prepareDraft(page);
-    const run = await createRun(h, 'Cancel once while returning to a draft'); await refresh(h); await openMonitored(page, run.id);
+    // The history filter is set once there are records to filter; an empty history has no search or filter.
+    const { page } = h; await open(h);
+    const run = await createRun(h, 'Cancel once while returning to a draft'); await refresh(h);
+    const before = await prepareDraft(page); await openMonitored(page, run.id);
     const seen = deferred(), release = deferred(); h.releases.push(release.resolve);
     h.intercept = async route => {
       if (route.request().method() === 'POST' && new URL(route.request().url()).pathname === `/api/runs/${run.id}/cancel`) {
@@ -367,9 +369,10 @@ try {
   }, 1440, 1);
 
   for (const width of widths) await scenario(`Monitor navigation and return preserve the draft, Key, backup and filters at ${width}px`, async h => {
-    const { page } = h; await open(h); const before = await prepareDraft(page);
+    const { page } = h; await open(h);
     const foreground = await createRun(h, `Active mathematical task ${injection}`), background = await createRun(h, 'Background task completing during draft editing');
-    await refresh(h); await monitorItems(page, [foreground.id, background.id]); await preserved(page, before);
+    await refresh(h); const before = await prepareDraft(page);
+    await monitorItems(page, [foreground.id, background.id]); await preserved(page, before);
     assert.equal(await page.evaluate(() => document.body.dataset.view), 'draft');
     for (const selector of ['#run-monitor', '#run-monitor-summary', '#run-monitor-list']) await fit(page, selector);
     for (const id of [foreground.id, background.id]) {

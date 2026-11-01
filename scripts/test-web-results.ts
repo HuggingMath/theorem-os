@@ -302,6 +302,9 @@ try {
       if (action === 'escape') await h.page.keyboard.press('Escape');
       else await h.page.locator(action === 'cancel' ? '#cancel-delete' : '#close-delete').click();
       await h.page.locator('#delete-run-dialog[open]').waitFor({ state: 'hidden' });
+      // The kept run's menu, where the dialog was opened, gets the keyboard back.
+      await h.page.waitForFunction(() => document.activeElement?.matches('[data-run-menu]>summary'), undefined, { timeout: 3_000 })
+        .catch(() => assert.fail(`focus returns to the run menu after ${action}`));
     }
     assert.equal(deleteCount(h), 0);
     assert.equal(await h.page.locator(`[data-run-id="${run.id}"]`).count(), 1);
@@ -330,6 +333,8 @@ try {
     await deleteSelected(h, finalId);
     assert.equal(await h.page.locator('[data-run-id]').count(), 0);
     assert.equal(await h.page.locator('#run-count').innerText(), '0');
+    // Nothing is left to search or filter.
+    assert.equal(await h.page.locator('.history-tools').isHidden(), true);
     assert.equal(await h.page.locator('.detail-empty').count(), 1);
     assert.equal(deleteCount(h), 3);
   });
