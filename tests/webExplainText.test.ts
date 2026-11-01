@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, parseMath, proseAt, proseSegments, quotePieces, quoteRange, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
+import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, mathPieces, parseMath, proseAt, proseSegments, quotePieces, quoteRange, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
 import type { WebExplanationDocument, WebExplanationSection } from '../apps/web/shared';
 
 // The explanation page's pure helpers: Lean line split, line ↔ step mapping, estimate, prose and TeX reading.
@@ -190,17 +190,18 @@ describe('quote pieces', () => {
     expect(shown(text, [at(text, text), at(text, 'S(n) = 0 + ... + n be the sum')]))
       .toEqual(['0:For a natural number n, let', '1:S(n) = 0 + ... + n be the sum']);
     // Three deep: each level keeps only what the levels inside it leave.
-    expect(shown(text, [at(text, 'a natural number n, let S(n)'), at(text, 'natural number n'), at(text, 'number')]))
-      .toEqual(['0:a', '1:natural', '2:number', '1:n', '0:let S(n)']);
+    expect(shown(text, [at(text, 'For a natural number n, let S(n)'), at(text, 'natural number n'), at(text, 'natural')]))
+      .toEqual(['0:For a', '2:natural', '1:number n', '0:let S(n)']);
   });
 
-  it('keeps the earlier of two crossing quotes, merges quotes that differ only at their ends, and prefers placed ones', () => {
+  it('gives each word to the shortest quote around it, also where quotes cross, merges quotes that differ only at their ends, and prefers placed ones', () => {
     const text = 'Prove that x = y, for all x.';
+    // 'x = y, for all' crosses 'that x = y' and keeps the words only it covers.
     expect(shown(text, [at(text, 'that x = y'), at(text, 'x = y, for all'), at(text, 'x = y'), at(text, 'x = y,')]))
-      .toEqual(['0:that', '2+3:x = y']);
-    // An unplaced quote yields: inside a placed one it is dropped, and of two copies the placed one is drawn.
+      .toEqual(['0:that', '2+3:x = y', '1:for all']);
+    // An unplaced quote inside a placed one goes with it, so a click on its text finds both; of two copies the placed one is drawn.
     expect(shown(text, [at(text, 'x = y', false), at(text, 'that x = y'), at(text, 'for all x', false), at(text, 'for all x.')]))
-      .toEqual(['1:that x = y', '3+2:for all x']);
+      .toEqual(['1+0:that x = y', '3+2:for all x']);
     // A remainder of only spaces and punctuation is not underlined.
     expect(shown(text, [at(text, 'x = y, for'), at(text, 'x = y'), at(text, 'for')])).toEqual(['1:x = y', '2:for']);
     expect(shown(text, [null, at(text, ', '), at(text, 'Prove that', false)])).toEqual(['2:Prove that']);
@@ -226,17 +227,40 @@ describe('quote pieces', () => {
   const stepped = (text: string, quotes: Parameters<typeof quotePieces>[1]) => quotePieces(text, quotes)
     .map(piece => [`${piece.quotes.join('+')}:${text.slice(piece.start, piece.end)}`, ...piece.wider.map(level => level.join('+'))].join('>'));
 
-  it('lists the longer quotes around each piece, shortest first, also those left with no words or crossing a kept one', () => {
+  it('lists the other quotes around each piece, shortest first, also those left with no words or crossing another', () => {
     const text = 'For a natural number n, let S(n) = 0 + ... + n be the sum.';
-    expect(stepped(text, [at(text, 'a natural number n, let S(n)'), at(text, 'natural number n'), at(text, 'number')]))
-      .toEqual(['0:a', '1:natural>0', '2:number>1>0', '1:n>0', '0:let S(n)']);
-    // 'For every natural number n' has no words of its own left; 'x = y, for all' crosses 'that x = y' and loses.
+    expect(stepped(text, [at(text, 'For a natural number n, let S(n)'), at(text, 'natural number n'), at(text, 'natural')]))
+      .toEqual(['0:For a', '2:natural>1>0', '1:number n>0', '0:let S(n)']);
+    // 'For every natural number n' has no words of its own left; 'x = y, for all' crosses 'that x = y'.
     const scope = 'For every natural number n, n + 0 = n.';
     expect(stepped(scope, [at(scope, 'For every natural number n'), at(scope, 'For every'), at(scope, 'natural number n'),
       at(scope, 'For every natural number n,')])).toEqual(['1:For every>0+3', '2:natural number n>0+3']);
     const crossing = 'Prove that x = y, for all x.';
     expect(stepped(crossing, [at(crossing, 'that x = y'), at(crossing, 'x = y, for all'), at(crossing, 'x = y')]))
-      .toEqual(['0:that', '2:x = y>0>1']);
+      .toEqual(['0:that', '2:x = y>0>1', '1:for all']);
+    // Every quote is reached: an unplaced one inside a placed one by a click on its words, a crossing one past the other.
+    const nested = 'Show that if $R$ is an integral domain, then $R[x]$ is one.';
+    const reached = (pieces: ReturnType<typeof quotePieces>) => new Set(pieces.flatMap(piece => [...piece.quotes, ...piece.wider.flat()]));
+    const nestedPieces = quotePieces(nested, [at(nested, 'if $R$ is an integral domain'), at(nested, '$R$ is an integral domain', false)]);
+    expect(stepped(nested, [at(nested, 'if $R$ is an integral domain'), at(nested, '$R$ is an integral domain', false)]))
+      .toEqual(['0+1:if $R$ is an integral domain']);
+    expect(reached(nestedPieces)).toEqual(new Set([0, 1]));
+    const order = 'Prove that no group of order $p^2 q$, where $p$ and $q$ are prime, is simple.';
+    const fragments = ['no group of order $p^2 q$, where $p$ and $q$ are prime, is simple', 'group of order $p^2 q$',
+      '$p^2 q$, where $p$ and $q$ are prime', 'of order $p^2 q$, where $p$ and $q$ are prime'].map(quote => at(order, quote));
+    expect(stepped(order, fragments)).toEqual(['1:group of order $p^2 q$>0', '2:where $p$ and $q$ are prime>3>0', '0:is simple']);
+    expect(reached(quotePieces(order, fragments))).toEqual(new Set([0, 1, 2, 3]));
+  });
+
+  it('leaves a word of one or two letters between finer quotes out, reached by clicking a finer quote again', () => {
+    const text = 'Prove that if a prime integer p has the form 2^r + 1, then r is a power of 2.';
+    expect(stepped(text, [at(text, 'if a prime integer p has the form'), at(text, 'a prime integer p'), at(text, 'prime integer p')]))
+      .toEqual(['2:prime integer p>1>0', '0:has the form']);
+    // A short quote of its own is kept; an East Asian character counts twice.
+    expect(shown(text, [at(text, 'if')])).toEqual(['0:if']);
+    const chinese = '证明若 p 是素数，则 p 是奇数或 2。';
+    expect(shown(chinese, [at(chinese, '若 p 是素数'), at(chinese, 'p 是素数')])).toEqual(['1:p 是素数']);
+    expect(shown(chinese, [at(chinese, '则 p 是奇数'), at(chinese, '奇数')])).toEqual(['0:则 p 是', '1:奇数']);
   });
 
   it('never draws a hidden quote but counts it around the quotes inside it', () => {
@@ -297,6 +321,20 @@ describe('TeX reader', () => {
 
   it('reads ordinary nesting', () => {
     expect(parseMath(`${'\\frac{'.repeat(10)}a${'}{b}'.repeat(10)}`)).toBeDefined();
+  });
+
+  it.each([
+    ['a + b = c', ['a+', 'b=', 'c']],
+    ['-a = b', ['−a=', 'b']],
+    ['a := -b', ['a:=−b']],
+    ['f(a + b) = c, d', ['f(a+b)=', 'c,', 'd']],
+    ['\\{x \\mid x > 0\\} \\subseteq \\mathbb{N}', ['{x∣x>0}⊆', 'ℕ']],
+    ['\\left( a + b \\right)^2 = \\sum_{k} x_k', ['(a+b)2=', '∑kxk']],
+    ['x', ['x']],
+  ])('lets %s wrap only after a relation, operator or comma between operands outside brackets', (source, pieces) => {
+    const flat = (node: MathNode): string => node.type === 'text' ? node.text : node.type === 'row' ? node.children.map(flat).join('')
+      : node.type === 'script' ? [node.base, node.sub, node.sup].map(part => part ? flat(part) : '').join('') : '';
+    expect(mathPieces(parseMath(source)!).map(piece => piece.map(flat).join(''))).toEqual(pieces);
   });
 
   it('gives up on malformed, unbalanced or oversized input so the page shows the source', () => {

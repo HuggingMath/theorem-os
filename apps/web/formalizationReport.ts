@@ -1,5 +1,5 @@
 import { formalizationDigest, type FormalizationEvidence } from '../../src/math/formalization';
-import { count, findWithin, lineEnds, offsetSpans, type SourceOffsets } from '../../src/math/informalizationAlignment';
+import { collapsed, count, identifierChar, lineEnds, offsetSpans, type SourceOffsets } from '../../src/math/informalizationAlignment';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { maskLeanComments } from '../../src/math/leanSyntax';
@@ -33,11 +33,55 @@ const reviewsOf = (evidence: FormalizationEvidence): Review[] => evidence.workfl
 const position = (value: number | null) => value ?? Number.MAX_SAFE_INTEGER;
 /** A statement fragment's trailing proof hole (`:= by sorry`), which a proof of that statement replaces. */
 const PROOF_HOLE = /\s*:=\s*(?:by\s+)?sorry\s*$/u;
+/** Whether `source[start, end)` starts or ends inside a name, as `x` does in `exp` or `x₁`. */
+function cutsName(source: string, start: number, end: number) {
+  const name = (char: string | undefined) => char !== undefined && identifierChar.test(char);
+  return name([...source.slice(start, start + 2)][0]) && name([...source.slice(Math.max(0, start - 2), start)].at(-1))
+    || name([...source.slice(Math.max(start, end - 2), end)].at(-1)) && name([...source.slice(end, end + 2)][0]);
+}
+/**
+ * Every place inside `regions` where `value` is written, matched as the host's findWithin matches (whitespace runs
+ * collapsed) but never inside a name, copies not overlapping, at most 64: a definition or domain is often written more
+ * than once.
+ */
+function writtenWithin(source: string, value: string, regions: readonly SourceOffsets[]): SourceOffsets[] {
+  const { text, offsets } = collapsed(source), needle = collapsed(value).text, found: SourceOffsets[] = [];
+  if (!needle) return found;
+  for (let at = text.indexOf(needle); at >= 0 && found.length < 64; at = text.indexOf(needle, at + 1)) {
+    const start = offsets[at]!, end = offsets[at + needle.length - 1]! + 1;
+    if (cutsName(source, start, end) || !regions.some(region => start >= region.start && end <= region.end)) continue;
+    found.push({ start, end });
+    at += needle.length - 1;
+  }
+  return found;
+}
 
 /**
+ * Where an original fragment written more than once is quoted: the copy inside a longer fragment that is around no other
+ * copy and whose Lean overlaps its own, else the first. In "spanned by a countably infinite set … is finite or countably
+ * infinite", "countably infinite" matched with `Set.Countable T ∧ Set.Infinite T` is the second.
+ */
+function placeRepeats(original: string, items: readonly WebFormalizationCorrespondence[]) {
+  const first = items.map(item => item.originalStart);
+  const overlap = (a: WebExplanationSpan, b: WebExplanationSpan) => a.line === b.line && a.start < b.end && b.start < a.end;
+  for (const item of items) {
+    if (item.originalStart === null || original.indexOf(item.original, item.originalStart + 1) < 0) continue;
+    const copies: number[] = [], length = item.original.length;
+    for (let at = item.originalStart; at >= 0 && copies.length < 16; at = original.indexOf(item.original, at + 1)) copies.push(at);
+    const agreed = copies.find(copy => items.some((other, index) => {
+      const start = first[index];
+      if (other === item || start === null || !other.lean.some(span => item.lean.some(own => overlap(span, own)))) return false;
+      const inside = (at: number) => start <= at && at + length <= start + other.original.length;
+      return inside(copy) && copies.filter(inside).length === 1;
+    }));
+    if (agreed !== undefined) { item.originalStart = agreed; item.originalEnd = agreed + length; }
+  }
+}
+/**
  * The structured reviews' fragment correspondences, one per distinct (aspect, original, Lean) triple with the weakest
- * relation any reviewer gave it, and where its Lean fragment is written inside `regions` of `source` (comments skipped).
- * A fragment that ends in the statement's proof hole is found without it, since a proof's header stops at `:=`.
+ * relation any reviewer gave it, and every place its Lean fragment is written inside `regions` of `source` (comments
+ * skipped), and where its original fragment is quoted (see placeRepeats). A fragment that ends in the statement's proof
+ * hole is found without it, since a proof's header stops at `:=`.
  */
 export function formalizationCorrespondences(evidence: FormalizationEvidence, source: string,
   regions: readonly SourceOffsets[]): WebFormalizationCorrespondence[] {
@@ -55,14 +99,15 @@ export function formalizationCorrespondences(evidence: FormalizationEvidence, so
         continue;
       }
       const at = original.indexOf(item.originalFragment), header = item.candidateFragment.replace(PROOF_HOLE, '');
-      const place = findWithin(masked, item.candidateFragment, regions) ?? (header && header !== item.candidateFragment
-        ? findWithin(masked, header, regions) : undefined);
+      const written = writtenWithin(masked, item.candidateFragment, regions);
+      const places = written.length || !header || header === item.candidateFragment ? written : writtenWithin(masked, header, regions);
       merged.set(key, { aspect: item.aspect, relation: item.relation, original: item.originalFragment,
         originalStart: at < 0 ? null : at, originalEnd: at < 0 ? null : at + item.originalFragment.length,
-        leanText: item.candidateFragment, lean: place ? fileSpans(text, place) : [], reviewers: 1,
+        leanText: item.candidateFragment, lean: places.flatMap(place => fileSpans(text, place)), reviewers: 1,
         explanations: explanation ? [explanation] : [] });
     }
   }
+  placeRepeats(original, [...merged.values()]);
   const order = (aspect: string) => webFormalizationAspects.indexOf(aspect as typeof webFormalizationAspects[number]);
   return [...merged.values()].sort((a, b) => order(a.aspect) - order(b.aspect) || position(a.originalStart) - position(b.originalStart));
 }

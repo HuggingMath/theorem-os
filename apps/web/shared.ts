@@ -319,6 +319,8 @@ export type WebExplanationDocument = {
   /** Present when the explanation used phrase alignment. */ alignment?: string;
   /** Present when the proof was bound to an approved formalization. */ problem?: WebExplanationProblem;
 };
+/** The proof id `informalize` uses when none is given: the target with every other character run as `_`. */
+export const defaultProofId = (target: string) => target.replace(/[^A-Za-z0-9_-]+/gu, '_').slice(0, 128);
 /** The payload of an offline explanation report (informalize --phase report): the page with nothing to fetch. */
 export type WebExplanationReport = { schema: 'theorem-os.web-explanation-report.v1'; title: string; environment: WebEnvironment;
   proof: string; document: WebExplanationDocument; markdown: string; filename: string };

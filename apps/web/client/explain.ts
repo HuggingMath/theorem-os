@@ -1,6 +1,6 @@
 import { createIcons, ArrowLeft } from 'lucide';
-import type { WebEffort, WebExplanation, WebExplanationDocument, WebExplanationLines, WebExplanationOverview, WebExplanationReport,
-  WebExplanationSpan, WebSession } from '../shared';
+import { defaultProofId, type WebEffort, type WebExplanation, type WebExplanationDocument, type WebExplanationLines, type WebExplanationOverview,
+  type WebExplanationReport, type WebExplanationSpan, type WebSession } from '../shared';
 import { locale, mountLocaleSwitch, t } from '../i18n';
 import { anchorSpan, leanGutter, proseAt, refLines, stepAtLine, type StepRef } from './explainText';
 import { renderExplain, type ExplainView } from './explainView';
@@ -18,7 +18,7 @@ mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
 const params = new URLSearchParams(location.search);
 const report = reportData<WebExplanationReport>();
 const hosts = { toolbar: $('#explain-toolbar'), head: $('#explain-prose-head'), prose: $('#explain-prose'), dialog: $('#explain-dialog'),
-  legend: $('#explain-lean-legend') };
+  legend: $('#explain-lean-legend'), chosen: $('#explain-chosen') };
 const leanScroll = $('#explain-lean'), proseScroll = $('#explain-prose'), dialog = $<HTMLDialogElement>('#explain-dialog');
 const state = {
   runId: params.get('run') ?? '', target: params.get('target') ?? '',
@@ -135,13 +135,14 @@ const pointed = (target: HTMLElement) => {
 function draw() {
   const overview = state.overview;
   if (!overview) return;
-  const explanation = current(), explained = currentDocument();
+  const explanation = current(), explained = currentDocument(), step = ladder.step();
   renderExplain(hosts, { overview, target: state.target, language: state.language, pane: state.pane, sync: state.sync,
     ...(reportLink ? { report: reportLink } : {}),
     ...(explanation ? { explanation } : {}), ...(explained ? { document: explained } : {}), ...(state.documentError ? { documentError: state.documentError } : {}),
     ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), chosen: state.chosen,
+    ...(step ? { step } : {}),
     ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
-    ...(state.error ? { error: state.error } : {}), now: Date.now() });
+    ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now() });
   $('#explain-split').dataset.pane = state.pane;
   markLean(explained);
   // The heading exists only while a dialog is drawn, so the name points at it only then.
@@ -226,6 +227,56 @@ function select(ref: StepRef, show: 'lean' | 'prose', options: { gap?: number; s
   });
 }
 
+/**
+ * Following a cited lemma is a jump the reader may want to undo: the entry it leaves remembers where the reader was, and
+ * the browser's Back (or the head's button) returns there. Entries keep the address, so an offline report keeps its file.
+ */
+type Place = { prose: number; lean: number; pane: 'lean' | 'prose'; active?: StepRef; gap?: number; use: { section: string; step: string; use: string } };
+type Entry = { explain: 'place' | 'jump'; target: string; language: 'zh' | 'en'; depth: number; place?: Place; section?: number };
+// How many jumps the current entry is from the reader's first; the head offers the way back while it is above zero.
+let depth = 0, returning = false;
+const entryOf = (value: unknown) => (value as Partial<Entry> | null)?.explain ? value as Entry : undefined;
+function jump(action: HTMLElement, keyboard: boolean) {
+  const section = Number(action.dataset.target), { section: from = '', step = '', use = '' } = action.dataset;
+  const place: Place = { prose: proseScroll.scrollTop, lean: leanScroll.scrollTop, pane: state.pane,
+    ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), use: { section: from, step, use } };
+  const at = { target: state.target, language: state.language };
+  try {
+    history.replaceState({ explain: 'place', ...at, depth, place } satisfies Entry, '');
+    history.pushState({ explain: 'jump', ...at, depth: depth + 1, section } satisfies Entry, '');
+    depth += 1;
+  } catch { /* A copy opened without history still jumps; there is just no way back. */ }
+  select({ section }, 'prose');
+  // From the keyboard, focus follows the jump (after select's frame, so the smooth scroll is not cut short).
+  if (keyboard) requestAnimationFrame(() => document.getElementById(`explain-section-${section}`)?.focus({ preventScroll: true }));
+}
+/** Back at an entry the reader left: the same step, pane and scroll, and focus on the cited name unless it is elsewhere. */
+function restore(place: Place) {
+  state.active = place.active; state.gap = place.gap; state.chosen = new Set(); pinned = []; ladder.reset();
+  if (narrow()) state.pane = place.pane;
+  draw(); markUse(undefined);
+  const refocus = returning;
+  requestAnimationFrame(() => {
+    holdUntil = performance.now() + 700;
+    proseScroll.scrollTop = place.prose; leanScroll.scrollTop = place.lean;
+    const focused = document.activeElement, cited = proseScroll.querySelector<HTMLElement>(
+      `[data-action="use"][data-section="${place.use.section}"][data-step="${place.use.step}"][data-use="${place.use.use}"]`);
+    if (refocus || !focused || focused === document.body || proseScroll.contains(focused)) cited?.focus({ preventScroll: true });
+  });
+}
+addEventListener('popstate', event => {
+  const entry = entryOf(event.state), address = new URLSearchParams(location.search);
+  // An entry of another target or language (the reader switched since) opens that explanation first.
+  const target = entry?.target ?? (report ? state.target : address.get('target') ?? state.target);
+  const language = entry?.language ?? (report ? state.language : address.get('language') === 'en' ? 'en' : 'zh');
+  if (state.overview && (target !== state.target || language !== state.language)) openExplanation(target, language);
+  depth = entry?.depth ?? 0;
+  if (entry?.place) restore(entry.place);
+  else if (entry?.section !== undefined) select({ section: entry.section }, 'prose');
+  else draw();
+  returning = false;
+});
+
 // Scroll sync: the pane the reader is moving leads, the other follows; a programmatic scroll never leads.
 let driver: 'lean' | 'prose' | undefined, frame = 0;
 for (const [pane, element] of [['lean', leanScroll], ['prose', proseScroll]] as const)
@@ -248,7 +299,10 @@ function alignLean(explained: WebExplanationDocument) {
   if (proseScroll.scrollTop <= 0) { leanScroll.scrollTop = 0; return; }
   const top = proseScroll.getBoundingClientRect().top;
   const anchors = [...proseScroll.querySelectorAll<HTMLElement>('[data-anchor]')];
-  const anchor = anchors.find(item => item.getBoundingClientRect().bottom > top + 8) ?? anchors.at(-1);
+  // Anchors stack in reading order, so the first one still below the top is found by halving, also in a long proof.
+  let low = 0, high = anchors.length;
+  while (low < high) { const middle = (low + high) >> 1; if (anchors[middle]!.getBoundingClientRect().bottom > top + 8) high = middle; else low = middle + 1; }
+  const anchor = anchors[low] ?? anchors.at(-1);
   if (!anchor) return;
   const ref: StepRef = { section: Number(anchor.dataset.anchor), ...(anchor.dataset.step ? { step: Number(anchor.dataset.step) } : {}) };
   const span = anchorSpan(explained, ref), box = anchor.getBoundingClientRect();
@@ -267,11 +321,11 @@ const refOf = (element: HTMLElement): StepRef => ({ section: Number(element.data
   ...(element.dataset.step ? { step: Number(element.dataset.step) } : {}), ...(element.dataset.statement !== undefined ? { statement: true as const } : {}) });
 const selecting = () => !(getSelection()?.isCollapsed ?? true);
 /**
- * An original-problem fragment or pair: its pairs are chosen (another click on the same fragment steps out to a longer
- * one) and their Lean statement fragments marked and shown, the chosen step kept.
+ * Pairs chosen by an original-problem fragment or pair (another click on the same fragment, or the phone's button above
+ * the Lean, steps out to a longer one): their Lean statement fragments are marked and shown, the chosen step kept.
  */
-function point(element: HTMLElement) {
-  const chosen = ladder.climb(element), spans = correspondenceSpans(currentDocument()?.problem?.correspondences ?? [], chosen);
+function point(chosen: readonly number[]) {
+  const spans = correspondenceSpans(currentDocument()?.problem?.correspondences ?? [], chosen);
   pinned = spans; state.chosen = new Set(chosen);
   if (narrow() && spans.length) state.pane = 'lean';
   draw(); markUse(undefined);
@@ -289,7 +343,8 @@ document.addEventListener('click', event => {
     return;
   }
   const action = target.closest<HTMLElement>('[data-action]');
-  if (action?.dataset.action === 'correspondence') { if (!selecting()) point(action); return; }
+  if (action?.dataset.action === 'correspondence') { if (!selecting()) point(ladder.climb(action)); return; }
+  if (action?.dataset.action === 'wider') { const next = ladder.next(); if (next) point(next); return; }
   // Opening the auditors' notes or the goals is reading, not choosing a step.
   if (target.closest('.explain-reviews')) return;
   if (!action) {
@@ -305,7 +360,8 @@ document.addEventListener('click', event => {
   if (name === 'lines') select(refOf(action), 'lean');
   // A linked phrase chooses its step or statement and marks where its Lean is written.
   else if (name === 'link') { if (!selecting()) select(refOf(action), 'lean', { spans: linkSpans(action) }); }
-  else if (name === 'use') select({ section: Number(action.dataset.target) }, 'prose');
+  else if (name === 'use') jump(action, event.detail === 0);
+  else if (name === 'return') { returning = true; history.back(); }
   else if (name === 'use-lean') select(refOf(action), 'lean', { spans: useSpans(action) });
   else if (name === 'generate' || name === 'cancel' || name === 'delete') { state.dialog = name; state.error = undefined; draw(); }
   else if (name === 'close-dialog') { state.dialog = undefined; draw(); }
@@ -370,12 +426,18 @@ const remove = () => act(async () => {
   toast(t('讲解已删除'));
 });
 
-function choose(target: string, language: 'zh' | 'en') {
+/** Shows a target's explanation in a language from the top; `choose` also writes it into the address. */
+function openExplanation(target: string, language: 'zh' | 'en') {
   state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined;
   state.chosen = new Set(); pinned = []; ladder.reset();
-  if (!report) history.replaceState(null, '', `?${new URLSearchParams({ run: state.runId, target, language })}`);
   proseScroll.scrollTop = 0;
   draw(); void loadDocument(); schedule();
+}
+function choose(target: string, language: 'zh' | 'en') {
+  // The entry now holds the new explanation; jumps before it stay behind Back, with their own target and language.
+  if (!report) history.replaceState(null, '', `?${new URLSearchParams({ run: state.runId, target, language })}`);
+  depth = 0;
+  openExplanation(target, language);
 }
 function missing(text: string) {
   $('#explain-loading').hidden = true;
@@ -396,8 +458,11 @@ function openReport(data: WebExplanationReport) {
   reportLink = { href: URL.createObjectURL(new Blob([data.markdown], { type: 'text/markdown;charset=utf-8' })), filename: data.filename };
   $('#explain-back').hidden = true;
   $('.brand').removeAttribute('href');
-  document.title = `${data.title} · ${t('证明讲解')} · TheoremOS`;
-  $('#explain-run-title').textContent = data.title;
+  // A proof id derived from the target repeats the name the toolbar shows, so only a chosen one goes in the top bar.
+  const named = data.title !== defaultProofId(explained.target);
+  document.title = `${named ? data.title : explained.target} · ${t('证明讲解')} · TheoremOS`;
+  $('#explain-run-title').textContent = named ? data.title : '';
+  $('#explain-run-title').hidden = !named;
   drawLean(data.proof);
   $('#explain-loading').hidden = true;
   $('#explain-content').hidden = false;

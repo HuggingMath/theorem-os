@@ -15,7 +15,7 @@ import { formalizationModelConfigurationSchema } from './formalizationWorkflow';
 import { deriveFormalizationRoleOutputJsonSchema } from './formalizationRoleContract';
 import { incidentalLibraryName, informalizationLibraryContext, informalizationOutlineSchema,
   type InformalizationOutline, type InformalizationUnit } from './informalizationExtraction';
-import { findWithin, lineEnds, placeExcerpts, sectionStepGoals, statementRegion } from './informalizationAlignment';
+import { findWithin, lineEnds, placeExcerpts, sectionStepGoals, statementRegion, type StepGoalsOptions } from './informalizationAlignment';
 
 /**
  * Proof-level informalization (lean-proof-informalization-v1): a Lean-checked proof
@@ -33,12 +33,17 @@ import { findWithin, lineEnds, placeExcerpts, sectionStepGoals, statementRegion 
  */
 export const INFORMALIZATION_PROTOCOL = 'lean-proof-informalization-v1';
 /**
- * Phrase alignment (lean-phrase-alignment-v1), opted into per request: the writer also pairs phrases of its prose with
- * the Lean text they translate (links), the host checks each pair is verbatim on both sides and inside the Lean the
- * statement or step explains, and auditors judge the pairs and each step against the goals the page shows beside it.
- * Requests without it keep their inputs, schemas, instructions and digests.
+ * Phrase alignment, opted into per request: the writer also pairs phrases of its prose with the Lean text they translate
+ * (links), the host checks each pair is verbatim on both sides and inside the Lean the statement or step explains, and
+ * auditors judge the pairs and each step against the goals the page shows beside it. Requests without it keep their
+ * inputs, schemas, instructions and digests. v2 differs from v1 only in those goals for a step that quotes just the head
+ * of a block tactic (StepGoalsOptions); new requests use v2, and v1 evidence keeps the goals its auditors saw.
  */
-export const INFORMALIZATION_ALIGNMENT = 'lean-phrase-alignment-v1';
+export const INFORMALIZATION_ALIGNMENTS = ['lean-phrase-alignment-v1', 'lean-phrase-alignment-v2'] as const;
+export const INFORMALIZATION_ALIGNMENT = INFORMALIZATION_ALIGNMENTS[1];
+/** The step goals an alignment's auditors judged against; unaligned explanations get the current ones. */
+export const informalizationStepGoalsOptions = (alignment: InformalizationRequest['alignment']): StepGoalsOptions =>
+  ({ blockHeads: alignment !== INFORMALIZATION_ALIGNMENTS[0] });
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = z.string().min(1).max(32_000).refine(value => value.trim().length > 0);
 // Zero removes the corresponding execution limit.
@@ -65,7 +70,7 @@ export const informalizationRequestSchema = z.object({
    */
   formalization: z.object({ problemId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), evidenceSha256: hash,
     statementSha256: hash, originalSha256: hash }).strict().optional(),
-  alignment: z.literal(INFORMALIZATION_ALIGNMENT).optional(),
+  alignment: z.enum(INFORMALIZATION_ALIGNMENTS).optional(),
   language: z.enum(['zh', 'en']),
   writer: formalizationModelConfigurationSchema,
   auditors: z.array(auditorSchema).min(1).max(5),
@@ -353,7 +358,8 @@ export function informalizationAuditInput(context: BatchContextInput & { languag
   const stepGoals = context.alignment ? { stepGoals: context.explanation.sections.map(section => {
     const unit = byName.get(section.declaration);
     return { declaration: section.declaration,
-      steps: unit ? sectionStepGoals(unit, section.proof.map(step => step.lean)) : section.proof.map(() => null) };
+      steps: unit ? sectionStepGoals(unit, section.proof.map(step => step.lean), informalizationStepGoalsOptions(context.alignment))
+        : section.proof.map(() => null) };
   }) } : {};
   const body = { schema: 'theorem-os.informalization-audit-input.v1' as const, protocol: INFORMALIZATION_PROTOCOL,
     ...context.alignment ? { alignment: context.alignment } : {}, language: context.language,
@@ -761,8 +767,8 @@ const WRITER_LINES = [
   'problemStatement, when present, is the informal problem the proof was written for; use it only for vocabulary. If it differs from the Lean statement, follow Lean.',
   'When INPUT.feedback is present it lists host check failures or auditor findings about previousOutput. Check each against the Lean source, fix the explanation and keep the parts that were not challenged.',
 ];
-const WRITER_ALIGNMENT_LINES = [
-  'INPUT.alignment is lean-phrase-alignment-v1: also link phrases of your prose to the Lean text they translate. Each section has statementLinks and each step links, lists of {text, lean}. text is a phrase copied exactly from that statement or step text (the first occurrence is the one linked); lean is the Lean text it translates, copied verbatim (whitespace runs may differ).',
+const writerAlignmentLines = (alignment: NonNullable<Alignment>) => [
+  `INPUT.alignment is ${alignment}: also link phrases of your prose to the Lean text they translate. Each section has statementLinks and each step links, lists of {text, lean}. text is a phrase copied exactly from that statement or step text (the first occurrence is the one linked); lean is the Lean text it translates, copied verbatim (whitespace runs may differ).`,
   'A statementLinks lean must lie in the declaration\'s signature (for a theorem the source before its :=; for any other declaration anywhere in its source). A step link\'s lean must lie inside that step\'s own lean excerpts. Every theorem needs at least one statement link.',
   'Link what a reader would look up: each hypothesis, quantified variable, domain and the conclusion of a statement; in a step, the formula or claim and the Lean expression or tactic that establishes it. Prefer whole formulas ($...$) or whole clauses as text, and the smallest Lean term that carries the same meaning as lean. Keep each pair to the same mathematical content; do not link a phrase to Lean that means something else.',
 ];
@@ -778,14 +784,16 @@ const AUDITOR_LINES = [
   'overview.verdict is absent when INPUT.explanation.overview is null; otherwise consistent if it describes how these declarations prove the target, and inconsistent if not.',
   'Judge mathematical correctness and fidelity to the Lean proof, not style or language. summary states the main problems, or that there are none.',
 ];
-const AUDITOR_ALIGNMENT_LINES = [
-  'INPUT.alignment is lean-phrase-alignment-v1: statements and steps carry links pairing a phrase of the prose with the Lean text it translates. A statement link whose phrase means something other than its Lean makes the statement a mismatch; such a step link makes the step invented. Explain which link is wrong.',
-  'INPUT.stepGoals gives, for each explanation step, the goals before the first and after the last tactic it quotes, as the explanation page shows them beside the step (null when none are recorded). Each step verdict also has goals: consistent if what the step says it starts from and shows agrees mathematically with those goals, inconsistent if it does not (explain how), unrecorded exactly when its stepGoals entry is null.',
+const auditorAlignmentLines = (alignment: NonNullable<Alignment>) => [
+  `INPUT.alignment is ${alignment}: statements and steps carry links pairing a phrase of the prose with the Lean text it translates. A statement link whose phrase means something other than its Lean makes the statement a mismatch; such a step link makes the step invented. Explain which link is wrong.`,
+  'INPUT.stepGoals gives, for each explanation step, the goals before the first and after the last tactic it quotes, as the explanation page shows them beside the step (null when none are recorded). '
+    + (alignment === INFORMALIZATION_ALIGNMENTS[0] ? '' : 'When a step quotes only the head of a block tactic, such as `induction n with` or `have h : P := by`, and none of the tactics inside it, the goals after are those the head leaves to the tactics inside, in order, then the goals after the whole block. ')
+    + 'Each step verdict also has goals: consistent if what the step says it starts from and shows agrees mathematically with those goals, inconsistent if it does not (explain how), unrecorded exactly when its stepGoals entry is null.',
 ];
-const instructions = (lines: readonly string[], alignment: Alignment, extra: readonly string[]) =>
-  [...lines, ...alignment ? extra : [], ...SHARED_INSTRUCTIONS].join('\n');
-export const INFORMALIZATION_WRITER_INSTRUCTIONS = instructions(WRITER_LINES, undefined, WRITER_ALIGNMENT_LINES);
-export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = instructions(AUDITOR_LINES, undefined, AUDITOR_ALIGNMENT_LINES);
+const instructions = (lines: readonly string[], alignment: Alignment, extra: (alignment: NonNullable<Alignment>) => readonly string[]) =>
+  [...lines, ...alignment ? extra(alignment) : [], ...SHARED_INSTRUCTIONS].join('\n');
+export const INFORMALIZATION_WRITER_INSTRUCTIONS = instructions(WRITER_LINES, undefined, writerAlignmentLines);
+export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = instructions(AUDITOR_LINES, undefined, auditorAlignmentLines);
 /** ROLE.md for a role; alignment adds its rules, and without it the text is unchanged. */
 export const informalizationRoleInstructions = (role: InformalizationRole, alignment?: Alignment) => role === 'write' ?
-  instructions(WRITER_LINES, alignment, WRITER_ALIGNMENT_LINES) : instructions(AUDITOR_LINES, alignment, AUDITOR_ALIGNMENT_LINES);
+  instructions(WRITER_LINES, alignment, writerAlignmentLines) : instructions(AUDITOR_LINES, alignment, auditorAlignmentLines);

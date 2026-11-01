@@ -1,7 +1,7 @@
 import { webFormalizationRelationRank, type WebExplanationSpan, type WebFormalizationCorrespondence } from '../shared';
 import { t } from '../i18n';
 import { coversAll, quotePieces, quoteRange, wholeQuotes, type QuotePiece } from './explainText';
-import { Rich, type RichLink } from './richText';
+import { LeanName, Rich, type RichLink } from './richText';
 import { Icon } from './ui/Icon';
 
 /**
@@ -11,7 +11,7 @@ import { Icon } from './ui/Icon';
  * own), which the page handles through fragmentLadder.
  */
 export const aspectLabels: Record<WebFormalizationCorrespondence['aspect'], string> = {
-  domains: t('对象与取值范围'), assumptions: t('假设'), conclusions: t('结论'), definitions: t('定义'),
+  domains: t('对象与取值范围'), assumptions: t('假设'), conclusions: t('结论'), definitions: t('用到的定义'),
   quantifierScope: t('量词范围'), instanceCoherence: t('类型类实例'),
 };
 export const relationLabels: Record<WebFormalizationCorrespondence['relation'], string> = {
@@ -24,7 +24,7 @@ const relationTone: Record<WebFormalizationCorrespondence['relation'], string> =
 /**
  * Where the original is underlined, one run per piece: the correspondences found in it, less any quoting the whole
  * problem when a finer fragment is found, since a mark over everything would cover the others; those still count as
- * around every piece. A fragment inside another underlines its own words and the outer one the rest (see quotePieces).
+ * around every piece. Each word goes to the shortest fragment around it whose Lean is found (see quotePieces).
  */
 export function originalPieces(original: string, correspondences: readonly WebFormalizationCorrespondence[]): QuotePiece[] {
   const whole = wholeQuotes(original, correspondences.map(item => item.originalStart === null ? null : item.original));
@@ -66,22 +66,55 @@ const levelKey = (element: HTMLElement) => `${element.dataset.correspondence ?? 
  * next longer fragment (wrapping round to its own pairs), any other click starts again.
  */
 export function fragmentLadder() {
-  let last: { key: string; level: number } | undefined;
+  let last: { key: string; level: number; levels: number[][] } | undefined;
   return {
     /** The pairs a click on `element` chooses. */
     climb(element: HTMLElement): number[] {
       const levels = fragmentLevels(element), key = levelKey(element);
       const level = last?.key === key ? (last.level + 1) % levels.length : 0;
-      last = { key, level };
+      last = { key, level, levels };
       return levels[level]!;
+    },
+    /** The next step out from the fragment last clicked, as another click on it would take. */
+    next(): number[] | undefined {
+      if (!last) return undefined;
+      last = { ...last, level: (last.level + 1) % last.levels.length };
+      return last.levels[last.level]!;
     },
     /** The pairs `element` stands for now: the step last chosen from it, or its own pairs. */
     shown(element: HTMLElement): number[] {
       const levels = fragmentLevels(element);
       return levels[last?.key === levelKey(element) ? last.level : 0] ?? levels[0]!;
     },
+    /** Where the last click on a fragment or pair stands, until another kind of choice. */
+    step(): FragmentStep | undefined {
+      return last && { indices: last.levels[last.level]!, level: last.level, levels: last.levels.length };
+    },
     reset() { last = undefined; },
   };
+}
+/** The pairs a fragment click has reached, and how far out among the fragments around it. */
+export type FragmentStep = { indices: readonly number[]; level: number; levels: number };
+/**
+ * Above the Lean on a phone, where the original is out of sight: the original fragment whose Lean is marked, its
+ * aspects and relations (a title there is not seen), and a button stepping out as another click on the fragment would.
+ */
+export function ChosenBar(props: { original: string; correspondences: readonly WebFormalizationCorrespondence[]; step: FragmentStep }) {
+  const items = props.step.indices.map(index => props.correspondences[index]!).filter(Boolean), first = items[0];
+  if (!first) return null;
+  // One line per relation, naming its aspects: a longer fragment often stands for every aspect at once.
+  const aspects = new Map<WebFormalizationCorrespondence['relation'], Set<string>>();
+  for (const item of items) aspects.set(item.relation, (aspects.get(item.relation) ?? new Set()).add(aspectLabels[item.aspect]));
+  const out = props.step.level + 1 < props.step.levels;
+  return <>
+    <span class="formal-chosen-label">{t('原题')}</span>
+    <span class="formal-chosen-quote">{coversAll(props.original, first.original)
+      ? <span class="formal-whole">{t('整段原题')}</span> : <span class="explain-rich"><Rich text={first.original} /></span>}</span>
+    <div class="formal-chosen-foot">{[...aspects].map(([relation, names]) =>
+      <span key={relation}>{t('{0}：{1}', relationLabels[relation], [...names].join(t('、')))}</span>)}
+      {props.step.levels > 1 && <button type="button" class="text-button formal-chosen-wider" data-action="wider">
+        {out ? t('选中更长的片段') : t('回到最短的片段')}</button>}</div>
+  </>;
 }
 /** Where their Lean is written, each place once, in file order. */
 export function correspondenceSpans(correspondences: readonly WebFormalizationCorrespondence[], indices: readonly number[]): WebExplanationSpan[] {
@@ -149,7 +182,7 @@ export function ProblemCard(props: { problemId: string; original: string; corres
   const pieces = originalPieces(props.original, props.correspondences), wider = pieces.some(piece => piece.wider.length);
   return <section class="explain-section formal-problem" aria-labelledby="explain-problem-heading">
     <header class="explain-section-head">
-      <div class="explain-section-meta"><span class="badge">{t('形式化')}</span><code translate={false}>{props.problemId}</code></div>
+      <div class="explain-section-meta"><span class="badge">{t('形式化')}</span><code translate={false}><LeanName name={props.problemId} /></code></div>
       <h3 id="explain-problem-heading">{t('原题')}</h3>
     </header>
     <OriginalText original={props.original} correspondences={props.correspondences} active={props.active} />

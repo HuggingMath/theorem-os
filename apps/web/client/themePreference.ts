@@ -1,7 +1,8 @@
 /**
  * Light or dark interface. The reader's choice lives in localStorage and applies to the workbench, login and share
  * pages; without a choice the page follows the system. The resolved theme is written to <html data-theme>, which is
- * the only thing the stylesheet reads, so the dark tokens never depend on a media query and a choice always wins.
+ * the only thing the stylesheet reads, so the dark tokens never depend on the system's colour scheme and a choice always
+ * wins. They apply on screens only; a printed page uses the light tokens.
  */
 export type ThemePreference = 'system' | 'light' | 'dark';
 export type Theme = 'light' | 'dark';

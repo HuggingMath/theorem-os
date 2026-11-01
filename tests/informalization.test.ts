@@ -594,7 +594,7 @@ describe('phrase alignment', () => {
       expect(plain).not.toContain(INFORMALIZATION_ALIGNMENT);
       const added = aligned.split('\n').filter(line => !plain.split('\n').includes(line));
       expect(added).toHaveLength(extra[role]);
-      expect(added[0]).toMatch(/^INPUT\.alignment is lean-phrase-alignment-v1: /u);
+      expect(added[0]).toMatch(/^INPUT\.alignment is lean-phrase-alignment-v2: /u);
       expect(aligned.split('\n').filter(line => !added.includes(line)).join('\n')).toBe(plain);
       const field = role === 'write' ? 'statementLinks' : 'unrecorded';
       const schema = informalizationRoleOutputSchema(role, INFORMALIZATION_ALIGNMENT);
@@ -602,6 +602,13 @@ describe('phrase alignment', () => {
       expect(JSON.stringify(schema)).toContain(field);
       expect(schema.$comment).toContain('both sides of each link are verbatim');
       expect(JSON.stringify(informalizationRoleOutputSchema(role))).not.toContain(field);
+      // v1 keeps its own id and goals rule: apart from the id, v2 only adds one sentence on block heads to the auditors' goals line.
+      const v1 = informalizationRoleInstructions(role, 'lean-phrase-alignment-v1');
+      const head = /When a step quotes only the head of a block tactic[^.]*\. /u;
+      expect(v1).not.toMatch(head);
+      expect(aligned.replace(head, '').replaceAll(INFORMALIZATION_ALIGNMENT, 'lean-phrase-alignment-v1')).toBe(v1);
+      expect(aligned !== v1.replaceAll('lean-phrase-alignment-v1', INFORMALIZATION_ALIGNMENT)).toBe(role === 'audit');
+      expect(informalizationRoleOutputSchema(role, 'lean-phrase-alignment-v1')).toEqual(schema);
     }
   });
 });

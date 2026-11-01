@@ -13,6 +13,7 @@ import { mathDigest, readMathText } from '../../src/math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin } from '../../src/math/paths';
 import { explanationDocument } from '../../apps/web/explanation';
 import { writeStaticReport } from '../../apps/web/staticReport';
+import { defaultProofId } from '../../apps/web/shared';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
@@ -88,7 +89,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const auditorCount = integerFlag(flags, 'auditors', 2);
   if (auditorCount < 1 || auditorCount > 5) throw new Error('--auditors must be between 1 and 5');
   const request = prepareInformalization(directory, {
-    proofId: flags.get('proof-id') ?? target.replace(/[^A-Za-z0-9_-]+/gu, '_').slice(0, 128),
+    proofId: flags.get('proof-id') ?? defaultProofId(target),
     proofFile, projectRoot: path.resolve(flags.get('project-root') ?? path.dirname(proofFile)),
     target, environment, statement, language, writer,
     ...flags.has('formalization') ? { formalizationArtifact: formalizationArtifact(required(flags, 'formalization')) } : {},
@@ -170,7 +171,7 @@ export async function informalize(argv: string[]): Promise<number> {
       + '  [--proof-id ID] [--environment mathlib|standard] [--statement-file FILE] (writer vocabulary only; auditors never see it)\n'
       + '  [--formalization DIR] (an approved formalization run or its artifact; its original problem becomes the statement and\n'
       + '    the proof must keep its declarations; excludes --statement-file)\n'
-      + '  [--alignment lean-phrase-alignment-v1|none] (default lean-phrase-alignment-v1: phrases paired with Lean, steps checked against goals)\n'
+      + `  [--alignment ${INFORMALIZATION_ALIGNMENT}|none] (default ${INFORMALIZATION_ALIGNMENT}: phrases paired with Lean, steps checked against goals)\n`
       + '  [--language zh|en] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE] [--auditors 2]\n'
       + '  [--max-rounds-per-batch 6] [--max-units-per-batch 12] [--max-batch-source-bytes 60000]\n'
       + '  [--max-run-seconds 0] [--max-turn-seconds 0] [--max-compile-seconds 0] [--max-total-tokens 0] (0 = unlimited)\n'

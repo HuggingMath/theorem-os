@@ -170,7 +170,7 @@ export const editor: Record<string, string> = {
   "检查服务暂不可用": "The check service is unavailable",
   "仍可提交。": "You can still submit.",
   "检查结果": "Check results",
-  "第 {0} 行": "Line {0}",
+  "第 {0} 行": "Lines {0}",
   "警告": "Warning",
   "忽略检查结果，仍然提交": "Ignore the check and submit anyway",
   "原题检查：{0}": "Statement check: {0}",

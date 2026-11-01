@@ -14,6 +14,7 @@ import { leanGutter, refLines, stepAtLine } from '../apps/web/client/explainText
 import { webExplanationEvidence, type FixtureUnit } from '../tests/helpers/webExplanationFixture';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
+import { printedPages, printLayout } from './web-print';
 import { selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
 
@@ -41,7 +42,8 @@ const units: FixtureUnit[] = [
   { name: 'target_thm', kind: 'theorem', snippet: target, uses: helpers.map((_, index) => `step_${index + 1}`),
     steps: [target.split('\n').slice(1, 4), target.split('\n').slice(5)],
     texts: ['先用 **前三个引理** 得到 $\\sum_{i=1}^{3} (a + b + i) = \\sum_{i=1}^{3} (b + a + i)$，其中 `step_1` 给出第一项。',
-      '其余引理同理；未闭合的 $x^{$ 按原文显示，最后由 `omega` 结束。'] },
+      '其余引理同理；未闭合的 $x^{$ 按原文显示，最后由 `omega` 结束：'
+        + '$a + b + 1 = \\mathrm{succ}\\,(a + b) = \\mathrm{succ}\\,(b + a) = b + a + 1$。'] },
 ];
 // Lean's goals around each tactic of the target: `have k<i>` adds a hypothesis, `omega` closes the goal.
 const goalAfter = (count: number) => ['a b : Nat', ...Array.from({ length: count }, (_, index) =>
@@ -204,12 +206,77 @@ try {
   await until(() => shown(page, '.explain-steps > li.is-active'), 'the prose pane scrolls to the step of the clicked line');
   mark('a step and its Lean lines select each other and each brings the other into view');
 
-  // A cited lemma jumps to its own section.
-  await page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] [data-action="use"]`).filter({ hasText: 'step_3' }).click();
-  await page.locator('.explain-section.is-active').filter({ hasText: 'step_3' }).waitFor();
-  await until(async () => JSON.stringify(await marked(page, 'active')) === JSON.stringify(range(sections[2]!.lines.start, sections[2]!.lines.end)), 'the cited declaration is marked');
-  await until(() => shown(page, '.explain-section.is-active header'), 'the cited section scrolls into view');
+  // A cited lemma jumps to its own section; Back, the head's button or the browser's, returns to the citation.
+  const cite = page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] [data-action="use"]`).filter({ hasText: 'step_3' });
+  const back = page.locator('#explain-prose-head [data-action="return"]'), address = page.url();
+  // Where the reader is: both panes' scroll, once settled, and the chosen step.
+  const place = async () => {
+    let previous = '';
+    for (;;) {
+      const now = JSON.stringify(await page.evaluate(() => [document.querySelector('#explain-prose')!.scrollTop, document.querySelector('#explain-lean')!.scrollTop,
+        [...document.querySelectorAll<HTMLElement>('.explain-steps > li.is-active, .explain-section.is-active > .explain-statement-block')].map(item => `${item.dataset.anchor}:${item.dataset.step ?? ''}`)]));
+      if (now === previous) return now;
+      previous = now;
+      await page.waitForTimeout(150);
+    }
+  };
+  const citedSection = async () => {
+    await page.locator('.explain-section.is-active').filter({ hasText: 'step_3' }).waitFor();
+    await until(async () => JSON.stringify(await marked(page, 'active')) === JSON.stringify(range(sections[2]!.lines.start, sections[2]!.lines.end)), 'the cited declaration is marked');
+    await until(() => shown(page, '.explain-section.is-active header'), 'the cited section scrolls into view');
+  };
+  await cite.scrollIntoViewIfNeeded();
+  const before = await place();
+  assert.equal(await back.count(), 0, 'nothing to go back to before a jump');
+  await cite.click();
+  await citedSection();
+  assert.equal(await back.innerText(), '回到引用处');
+  assert.notEqual(await place(), before, 'the jump moved the prose');
+  // The reader looks around the cited lemma's Lean before going back.
+  await page.locator('#explain-lean').evaluate(pane => { pane.scrollTop += 240; });
   mark('a cited lemma jumps to its section and marks the whole declaration');
+  await back.click();
+  await back.waitFor({ state: 'detached' });
+  assert.equal(await place(), before, 'the button returns to the same scroll and step');
+  assert.ok(await cite.evaluate(node => node === document.activeElement), 'focus is back on the cited name');
+  assert.equal(page.url(), address, 'the address never changes');
+  await cite.click();
+  await citedSection();
+  await page.evaluate(() => history.back());
+  await back.waitFor({ state: 'detached' });
+  assert.equal(await place(), before, 'the browser\'s Back returns the same way');
+  await page.evaluate(() => history.forward());
+  await citedSection();
+  await back.waitFor();
+  await page.evaluate(() => history.back());
+  await back.waitFor({ state: 'detached' });
+  assert.equal(await place(), before);
+  // From the keyboard, focus follows the jump to the section's heading and comes back with Back.
+  await cite.focus();
+  await page.keyboard.press('Enter');
+  await citedSection();
+  await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-2'), 'focus moves to the cited section');
+  await page.evaluate(() => history.back());
+  await back.waitFor({ state: 'detached' });
+  assert.equal(await place(), before);
+  await until(() => cite.evaluate(node => node === document.activeElement), 'focus returns to the cited name');
+  assert.equal(page.url(), address);
+  // Two jumps deep, each press of the button undoes one, the button staying until the first citation.
+  const second = page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] [data-action="use"]`).filter({ hasText: 'step_1' });
+  await cite.click();
+  await citedSection();
+  await second.scrollIntoViewIfNeeded();
+  const middle = await place();
+  await second.click();
+  await page.locator('.explain-section.is-active').filter({ hasText: 'step_1' }).waitFor();
+  await back.click();
+  await until(async () => await place() === middle, 'the first press returns to the second citation');
+  assert.ok(await second.evaluate(node => node === document.activeElement), 'focus is on the second citation');
+  await back.click();
+  await back.waitFor({ state: 'detached' });
+  assert.equal(await place(), before, 'the second press returns to the first citation');
+  assert.ok(await cite.evaluate(node => node === document.activeElement));
+  mark('back from a cited lemma (the button, the browser\'s Back and Forward, or the keyboard, one jump at a time) restores the scroll, step and focus');
 
   // The margin beside the line numbers: each step's number on its first line, a bar for the statement, a ring where no step quotes the line.
   const gutter = await page.locator('#explain-lean-code .lean-row').evaluateAll(rows => rows.flatMap(row => {
@@ -270,6 +337,23 @@ try {
   await first.locator('summary').click();
   await panel.screenshot({ path: path.join(output, 'explain-goals-1440.png') });
   mark('a target step shows the Lean goals around its quoted tactics, folded, without changing the selection');
+
+  // Choices within one section each redraw it: the whole declaration drops the gap note, then its statement, then each step.
+  const own = (selector: string) => page.locator(`.explain-section:has(#explain-section-${last}) ${selector}`);
+  await own('.explain-section-meta [data-action="lines"]').click();
+  await own('.explain-gap-note').waitFor({ state: 'detached' });
+  await page.locator('.explain-section.is-active').filter({ has: page.locator(`#explain-section-${last}`) }).waitFor();
+  assert.deepEqual(await marked(page, 'active'), range(sections[last]!.lines.start, sections[last]!.lines.end));
+  await own('.explain-statement-block [data-action="lines"][data-statement]').click();
+  await page.locator(`.explain-statement-block.is-active[data-anchor="${last}"]`).waitFor();
+  assert.equal(await page.locator('.explain-section.is-active').count(), 0, 'the statement replaces the whole declaration');
+  for (const step of [0, 1]) {
+    await own(`.explain-steps > li[data-step="${step}"] [data-action="lines"]`).click();
+    await page.locator(`.explain-steps > li.is-active[data-anchor="${last}"][data-step="${step}"]`).waitFor();
+    assert.equal(await page.locator('.explain-steps > li.is-active, .explain-statement-block.is-active').count(), 1, `only step ${step + 1} is chosen`);
+    assert.deepEqual(await marked(page, 'active'), sections[last]!.steps[step]!.lines.flatMap(item => range(item.start, item.end)));
+  }
+  mark('choosing the declaration, its statement and each of its steps in turn redraws the section each time');
 
   // A cited library name is marked where the Lean writes it; one the Lean does not write stays plain text.
   const written = sections[0]!.steps[0]!.uses[0]!;
@@ -361,8 +445,12 @@ try {
   await dark.page.waitForTimeout(800);
   assert.deepEqual(await contrastProblems(dark.page, '#explain-content'), [], 'explanation contrast below WCAG AA (dark)');
   await dark.page.screenshot({ path: path.join(output, 'explain-document-dark-1440.png') });
+  // Printed, the served page drops its own controls too (back, language, sync, download, delete) and prints in light colours.
+  assert.deepEqual(await printLayout(dark.page), { clipped: [], panes: ['prose', 'lean'], leanBreak: 'page', wrap: 'pre-wrap', lines: 1, wide: 0,
+    controls: [], paper: 'rgb(245, 244, 238)' }, 'the explanation printed (dark)');
+  assert.ok(await printedPages(dark.page) >= 2, 'the Lean prints on a page of its own');
   await dark.context.close();
-  mark('the dark theme passes the contrast check');
+  mark('the dark theme passes the contrast check and prints as one light document without controls');
 
   // Phones show one pane at a time; a step's line chip switches to the proof.
   const phone = await open(browser, url, { width: 390, height: 844, storageState });
@@ -371,6 +459,20 @@ try {
   assert.equal(await phone.page.locator('#explain-lean').isVisible(), false, 'the proof pane waits behind the switch');
   assert.equal(await phone.page.locator('#explain-sync').isVisible(), false, 'sync has no meaning with one pane');
   await phone.page.screenshot({ path: path.join(output, 'explain-prose-390.png') });
+  // A long inline formula wraps only after its relations and operators: it stays inside the phone's width, and in a step
+  // too narrow for anything it takes every break it has, one line per piece, without splitting a piece. Chromium also breaks
+  // at the margins of operators, so the <wbr>s, which every browser honors, are counted rather than seen.
+  const formulas = await phone.page.locator('#explain-prose').evaluate(pane => {
+    const lines = (element: Element) => new Set([...element.getClientRects()].map(rect => Math.round(rect.top))).size;
+    const right = pane.getBoundingClientRect().left + pane.clientWidth - parseFloat(getComputedStyle(pane).paddingRight);
+    const all = [...pane.querySelectorAll('.math')], long = all.find(item => item.getAttribute('title')?.includes('succ'))!, step = long.closest('li')!;
+    const over = all.filter(item => Math.max(...[...item.getClientRects()].map(rect => rect.right)) > right + 1).length;
+    step.style.width = '1px';
+    const pieces = [...long.querySelectorAll('.math-piece')], narrow = { lines: lines(long), pieces: pieces.length, split: pieces.filter(piece => lines(piece) > 1).length };
+    step.style.width = '';
+    return { over, ...narrow, breaks: long.querySelectorAll(':scope > wbr').length, wraps: getComputedStyle(long).whiteSpace, text: long.textContent!.replace(/\s/gu, '') === 'a+b+1=succ(a+b)=succ(b+a)=b+a+1' };
+  });
+  assert.deepEqual(formulas, { over: 0, lines: 8, pieces: 8, split: 0, breaks: 7, wraps: 'normal', text: true });
   const phoneGoals = phone.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] .explain-goals`);
   await phoneGoals.locator('summary').click();
   assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'open goals do not widen the phone page');
@@ -379,6 +481,11 @@ try {
   await phone.page.locator('#explain-split[data-pane="lean"]').waitFor();
   await until(() => shown(phone.page, `.lean-row[data-line="${quoted[0]}"]`), 'the phone proof pane shows the step');
   assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'nothing widens the phone page');
+  // Long lines wrap rather than run off the pane, and each row's indentation reaches the style under the page's policy.
+  assert.equal(await phone.page.locator('#explain-lean').evaluate(pane => pane.scrollWidth <= pane.clientWidth + 1), true, 'the phone Lean pane wraps');
+  const hangs = await phone.page.locator('#explain-lean-code .lean-row:is([data-line="1"],[data-line="2"]) .lean-text').evaluateAll(texts =>
+    texts.map(text => -parseFloat(getComputedStyle(text).textIndent)));
+  assert.ok(hangs[0]! > 0 && Math.abs(hangs[1]! / hangs[0]! - 1.5) < 0.01, `hangs ${hangs.join(', ')}`);
   await phone.page.screenshot({ path: path.join(output, 'explain-lean-390.png') });
   // A cited name opens the proof at the line that writes it.
   await phone.page.locator('[data-action="pane"][data-pane="prose"]').click();
@@ -388,8 +495,19 @@ try {
   assert.deepEqual(await audit(phone.page), [], 'accessibility problems on the phone layout');
   await phone.page.locator('[data-action="pane"][data-pane="prose"]').click();
   await phone.page.locator('#explain-split[data-pane="prose"]').waitFor();
+  // Back after a cited lemma (the phone's back gesture) returns to the citation, even from the proof pane.
+  const phoneCite = phone.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] [data-action="use"]`).filter({ hasText: 'step_3' });
+  const phoneProse = () => phone.page.locator('#explain-prose').evaluate(pane => Math.round(pane.scrollTop));
+  await phoneCite.scrollIntoViewIfNeeded();
+  const phoneBefore = await phoneProse();
+  await phoneCite.click();
+  await phone.page.locator('#explain-prose-head [data-action="return"]').waitFor();
+  await phone.page.locator('[data-action="pane"][data-pane="lean"]').click();
+  await phone.page.evaluate(() => history.back());
+  await phone.page.locator('#explain-split[data-pane="prose"]').waitFor();
+  await until(async () => await phoneProse() === phoneBefore, 'the phone explanation is back at the citation');
   await phone.context.close();
-  mark('on a 390 pixel phone the panes switch, and a line chip or a cited name opens the proof there');
+  mark('on a 390 pixel phone the panes switch, long Lean lines and formulas wrap, a line chip or a cited name opens the proof there, and Back after a cited lemma returns to the citation from either pane');
 
   // In English the page chrome is English; the explanation keeps its own language and English has its own empty card.
   const english = await open(browser, url, { locale: 'en', storageState });
@@ -409,19 +527,34 @@ try {
   assert.deepEqual(chrome, [], 'English chrome has no Chinese text');
   assert.doesNotMatch(await english.page.locator('#explain-lean-legend').innerText(), /\p{Script=Han}/u, 'the margin legend is English');
   const englishGoals = english.page.locator('.explain-goals').first();
-  assert.match(await englishGoals.locator('summary').evaluate(node => node.textContent ?? ''), /^Lean goals · Line \d+–\d+$/u);
+  assert.match(await englishGoals.locator('summary').evaluate(node => node.textContent ?? ''), /^Lean goals · Lines \d+–\d+$/u);
   await englishGoals.locator('summary').click();
   assert.deepEqual(await englishGoals.locator('.explain-goal-label').allTextContents(), ['Before', 'After']);
   // The report's link names no language: it opens the explanation that exists, here the Chinese one.
   await english.page.goto(`${origin}/${href}`);
   await english.page.locator('#explain-prose .explain-document').waitFor();
   assert.equal(new URL(english.page.url()).searchParams.get('language'), 'zh');
+  // Back after a cited lemma and a language switch opens the language it was cited in; Forward, the switched one.
+  const englishCite = english.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] [data-action="use"]`).filter({ hasText: 'step_3' });
+  await englishCite.click();
+  await english.page.locator('#explain-prose-head [data-action="return"]').waitFor();
+  await english.page.locator('[data-action="language"][data-language="en"]').click();
+  await english.page.locator('#explain-prose [data-action="generate"]').waitFor();
+  await english.page.evaluate(() => history.back());
+  await english.page.locator('[data-action="language"][data-language="zh"][aria-pressed="true"]').waitFor();
+  await englishCite.waitFor();
+  assert.equal(new URL(english.page.url()).searchParams.get('language'), 'zh');
+  await english.page.evaluate(() => history.forward());
+  await english.page.locator('#explain-prose [data-action="generate"]').waitFor();
+  assert.equal(new URL(english.page.url()).searchParams.get('language'), 'en');
+  await english.page.evaluate(() => history.back());
+  await englishCite.waitFor();
   await english.page.locator('[data-action="language"][data-language="en"]').click();
   await english.page.locator('#explain-prose [data-action="generate"]').waitFor();
   assert.equal(new URL(english.page.url()).searchParams.get('language'), 'en');
   await english.page.screenshot({ path: path.join(output, 'explain-english-empty-1440.png') });
   await english.context.close();
-  mark('English chrome is English, a link without a language opens the existing explanation, and English is a separate one');
+  mark('English chrome is English, a link without a language opens the existing explanation, English is a separate one, and Back after a cited lemma crosses a language switch');
 
   // Deleting asks first and leaves the page ready to generate again.
   await page.locator('#explain-prose-head [data-action="delete"]').click();
@@ -441,7 +574,7 @@ try {
 
   const unexpected = errors.filter(text => !/status of 404/u.test(text));
   assert.deepEqual(unexpected, [], 'no page or console errors (CSP included)');
-  console.log('Explanation checks passed: report link, generate/stop/regenerate, approved document, formulas, two-way selection, line margin, statement and signature, unexplained line, auditor notes, Lean goals, cited names in Lean, scroll sync, download, a11y, contrast in both themes, phone panes, English, delete and foreign access.');
+  console.log('Explanation checks passed: report link, generate/stop/regenerate, approved document, formulas, two-way selection, line margin, statement and signature, unexplained line, auditor notes, Lean goals, cited names in Lean, back from cited lemmas, scroll sync, download, a11y, contrast in both themes, printing, phone panes, English, delete and foreign access.');
 } finally {
   await browser?.close();
   await service.close();

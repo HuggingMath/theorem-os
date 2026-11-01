@@ -32,11 +32,13 @@ const singulars: Record<string, string> = { agents: 'agent', Agents: 'Agent', li
   entries: 'entry', bytes: 'byte', times: 'time', matches: 'match', characters: 'character', goals: 'goal', subgoals: 'subgoal',
   targets: 'target', declarations: 'declaration', auditors: 'auditor', actions: 'action', attempts: 'attempt', steps: 'step',
   changes: 'change', errors: 'error', warnings: 'warning', results: 'result', messages: 'message', files: 'file',
-  catalogs: 'catalog', turns: 'turn', reviews: 'review', slots: 'slot', modules: 'module' };
+  catalogs: 'catalog', turns: 'turn', reviews: 'review', reviewers: 'reviewer', slots: 'slot', modules: 'module' };
 const modifiers = 'more|research|original|helper|open|unchanged|new|custom|platform|route|knowledge|model|run|statement';
 const countedPlural = new RegExp(`(?<![\\w.,])1 ((?:(?:${modifiers}) ){0,2})(${Object.keys(singulars).join('|')})\\b( are\\b)?`, 'gu');
 const singular = (text: string) => text.replace(countedPlural, (_match, middle: string, noun: string, are: string | undefined, offset: number) =>
-  `1 ${middle}${singulars[noun]}${are ? /^$|[.;:!?]\s*$/u.test(text.slice(0, offset)) ? ' is' : are : ''}`);
+  `1 ${middle}${singulars[noun]}${are ? /^$|[.;:!?]\s*$/u.test(text.slice(0, offset)) ? ' is' : are : ''}`)
+  // "Lines {0}" names one line unless a range or a list follows.
+  .replace(/\bLines (\d+)(?![\d–,-])/gu, 'Line $1');
 
 /** Translates a Chinese key; {0}, {1}… are replaced by the arguments in order. A key without an entry stays Chinese. */
 export function t(key: string, ...values: unknown[]): string {

@@ -1,5 +1,5 @@
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { assertInformalizationEvidence, type InformalizationEvidence } from '../../src/math/informalization';
+import { assertInformalizationEvidence, informalizationStepGoalsOptions, type InformalizationEvidence } from '../../src/math/informalization';
 import { leanSourceSlice, type InformalizationUnit } from '../../src/math/informalizationExtraction';
 import { codeOnly, count, findWithin, identifierChar, lineEnds, lineStart, offsetSpans, placeExcerpts, signatureEnd,
   statementRegion, stepGoals, type SourceOffsets as Offsets } from '../../src/math/informalizationAlignment';
@@ -110,6 +110,7 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
   const target = evidence.outline.units.at(-1)!;
   const units = [...evidence.outline.units].sort((a, b) => a.range.line - b.range.line || a.range.column - b.range.column);
   const totals = evidence.sessions.map(session => reportedTotalTokens(session.usage)).filter((value): value is number => value !== null);
+  const auditedGoals = informalizationStepGoalsOptions(evidence.alignment);
   let proofLines = 0, explainedLines = 0, ambiguousExcerpts = 0;
   const sections = units.map(unit => {
     const { section, batch } = written.get(unit.name)!;
@@ -134,9 +135,10 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
     const reviews = (pick: (audit: NonNullable<typeof audits[number]>) => string | undefined) =>
       audits.flatMap(audit => { const text = audit && pick(audit)?.trim(); return text ? [text] : []; });
     const steps = section.proof.map((step, index) => {
-      const goals = stepGoals(unit, source, places[index]!);
+      // The page shows the current goals; auditors of an older alignment saw other goals for some steps, which they did not check.
+      const goals = stepGoals(unit, source, places[index]!), audited = stepGoals(unit, source, places[index]!, auditedGoals);
       const links = linked(step.text, 'links' in step ? step.links : undefined, places[index]!);
-      const goalsChecked = evidence.alignment && goals ? audits.filter(audit => {
+      const goalsChecked = evidence.alignment && goals && JSON.stringify(audited) === JSON.stringify(goals) ? audits.filter(audit => {
         const verdict = audit?.steps[index];
         return verdict && 'goals' in verdict && verdict.goals === 'consistent';
       }).length : 0;

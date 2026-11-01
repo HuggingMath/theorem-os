@@ -145,7 +145,8 @@ describe('informalize offline CLI', () => {
     fs.writeFileSync(statement, 'Show that double (n + 0) is 2n.\n');
     await expect(invoke([...f.args, '--statement-file', statement, '--formalization', f.base]))
       .rejects.toThrow('--statement-file and --formalization are exclusive');
-    await expect(invoke([...f.args, '--alignment', 'lean-phrase-alignment-v2'])).rejects.toThrow('--alignment must be lean-phrase-alignment-v1 or none');
+    for (const old of ['lean-phrase-alignment-v1', 'lean-phrase-alignment-v3'])
+      await expect(invoke([...f.args, '--alignment', old])).rejects.toThrow('--alignment must be lean-phrase-alignment-v2 or none');
     await expect(invoke([...f.args, '--formalization', f.base])).rejects.toThrow('--formalization must name an approved formalization run or its artifact');
     expect(fs.existsSync(f.directory)).toBe(false);
   });
@@ -154,7 +155,7 @@ describe('informalize offline CLI', () => {
     const result = await invoke(['--help']);
     expect(result.code).toBe(0);
     for (const text of ['prepare|run|inspect|report', '--max-rounds-per-batch 6', '--max-units-per-batch 12', '--auditors 2',
-      'auditors never see it', '--formalization DIR', 'excludes --statement-file', '--alignment lean-phrase-alignment-v1|none',
+      'auditors never see it', '--formalization DIR', 'excludes --statement-file', '--alignment lean-phrase-alignment-v2|none',
       'report (offline): --output FILE.html', 'not human-reviewed', 'docs/informalization.md']) expect(result.output).toContain(text);
   });
 });

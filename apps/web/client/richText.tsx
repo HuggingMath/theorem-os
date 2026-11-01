@@ -1,11 +1,15 @@
 import { Fragment } from 'preact';
-import { linkedProse, parseMath, proseSegments, type MathNode, type ProseRun, type ProseSegment } from './explainText';
+import { linkedProse, mathPieces, parseMath, proseSegments, type MathNode, type ProseRun, type ProseSegment } from './explainText';
 
 /**
  * A linked phrase of model prose: UTF-16 offsets into its text and what the page needs to find its Lean again. The
  * attributes go on a focusable span; explain.ts and formalization.ts handle its data-action.
  */
 export type RichLink = { start: number; end: number; attributes: Record<`data-${string}`, string | number>; className?: string; title: string };
+
+/** A Lean name that may wrap only after a `.` or `_`, so a narrow screen never splits a word of it. */
+export const LeanName = ({ name }: { name: string }) => <>{name.split(/(?<=[._])/u).map((part, index) =>
+  <Fragment key={index}>{index > 0 && <wbr />}{part}</Fragment>)}</>;
 
 /**
  * Model prose as text nodes: inline code, bold and `$…$` mathematics; a formula that does not parse is shown as written.
@@ -41,6 +45,10 @@ function Segments({ segments }: { segments: readonly ProseSegment[] }) {
 function Formula(props: { source: string; display: boolean }) {
   const node = parseMath(props.source), kind = props.display ? 'math math-display' : 'math';
   if (!node) return <span class={`${kind} math-source`} translate={false}>{props.source}</span>;
+  // An inline formula wraps only where TeX would break it, so a long one stays inside a phone's width.
+  const pieces = props.display ? [] : mathPieces(node);
+  if (pieces.length > 1) return <span class="math math-wraps" title={props.source} translate={false}>{pieces.map((piece, index) =>
+    <Fragment key={index}>{index > 0 && <wbr />}<span class="math-piece">{piece.map((child, at) => <MathView key={at} node={child} />)}</span></Fragment>)}</span>;
   return <span class={kind} title={props.source} translate={false}><MathView node={node} /></span>;
 }
 const textClass = (node: Extract<MathNode, { type: 'text' }>) => [node.style ? `math-${node.style}` : '', node.role ? `math-${node.role}` : ''].filter(Boolean).join(' ') || undefined;

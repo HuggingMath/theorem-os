@@ -13,7 +13,7 @@ import { buildLeanRows, highlightSpans, reportData, spanScrollLeft } from './lea
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
 const report = reportData<WebFormalizationReport>();
-const hosts = { toolbar: $('#formal-toolbar'), prose: $('#formal-prose') };
+const hosts = { toolbar: $('#formal-toolbar'), chosen: $('#formal-chosen'), prose: $('#formal-prose') };
 const leanScroll = $('#formal-lean'), proseScroll = $('#formal-prose');
 const state = { pane: 'prose' as 'lean' | 'prose', active: new Set<number>(), pinned: [] as WebExplanationSpan[] };
 let rows: HTMLElement[] = [];
@@ -37,7 +37,8 @@ function point(spans: readonly WebExplanationSpan[] | undefined) {
 }
 function draw() {
   if (!report) return;
-  renderFormalization(hosts, { report, pane: state.pane, active: state.active });
+  const step = ladder.step();
+  renderFormalization(hosts, { report, pane: state.pane, active: state.active, ...step ? { step } : {} });
   $('#formal-split').dataset.pane = state.pane;
 }
 const narrow = () => matchMedia('(max-width: 900px)').matches;
@@ -82,6 +83,7 @@ document.addEventListener('click', event => {
   if (row) { chooseLine(Number(row.dataset.line)); return; }
   const action = target.closest<HTMLElement>('[data-action]');
   if (action?.dataset.action === 'correspondence') choose(ladder.climb(action));
+  else if (action?.dataset.action === 'wider') { const next = ladder.next(); if (next) choose(next); }
   else if (action?.dataset.action === 'pane') { state.pane = action.dataset.pane === 'lean' ? 'lean' : 'prose'; draw(); }
 });
 const pointed = (target: HTMLElement) => {
