@@ -31,7 +31,7 @@ import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibr
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
-import { animateEntrance, finishHiddenMotion, finishMotion } from './motion';
+import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSelection, revealTheme, selectionBox } from './motion';
 import { renderTopbar } from './ui/Topbar';
 import { renderRunMonitor as drawRunMonitor, type MonitorItem } from './ui/RunMonitor';
 import { renderRunHeader as drawRunHeader, unmountRunHeader, type RunHeaderProps } from './ui/RunHeader';
@@ -48,7 +48,7 @@ import { AgentActivity } from './agentActivity';
 import { clockTime, commandId, workerNames } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, newlyWaiting, notifyStorageKey, readResume, saveResume, waitsForOwner } from './runAwareness';
 import { forgetKey, hasRememberedKey, rememberKey, rememberedKey } from './keyMemory';
-import { applyTheme, followThemeChanges, readThemePreference, saveThemePreference, type ThemePreference } from './themePreference';
+import { applyTheme, followThemeChanges, readThemePreference, resolveTheme, saveThemePreference, type ThemePreference } from './themePreference';
 import { installTermHints, renderGlossary } from './termHints';
 import { renderAdminPanel } from './ui/AdminPanel';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
@@ -265,6 +265,8 @@ const historyQuery = window.matchMedia('(max-width:850px)');
 // A touch screen's keyboard covers half the page: focus moves into a text field only when the reader is about to type.
 const touchQuery = window.matchMedia('(pointer: coarse)');
 let historyCriteria = '';
+/** Runs that reached the list since it was last drawn (submitted here, or by another tab); they unfold into it. */
+const arrivals = new Set<string>();
 let historyReading: { top: number; anchors: Array<{ id: string; offset: number }> } = { top: 0, anchors: [] };
 
 /** `message` is what the reader sees; `reason` keeps the server's own text for checks such as sessionFailure. */
@@ -1092,10 +1094,13 @@ function renderRunList(force = false) {
   element('#run-list').toggleAttribute('data-uniform', new Set(state.runs.map(run => `${run.model}\n${run.environment}`)).size <= 1);
   if (!force && signature === state.listSignature) return;
   state.listSignature = signature;
-  if (criteria === historyCriteria) rememberHistoryScroll();
+  const list = element('#run-list'), sameCriteria = criteria === historyCriteria;
+  if (sameCriteria) rememberHistoryScroll();
   else historyReading = { top: 0, anchors: [] };
   historyCriteria = criteria;
-  const list = element('#run-list');
+  // Where the selection was, so it can slide to the row chosen now; a changed search or filter moves every row instead.
+  const chosen = sameCriteria ? list.querySelector<HTMLElement>(':scope > [data-history-id] > .run-row.selected') : null;
+  const chosenBox = selectionBox(chosen), chosenId = chosen?.dataset.runId;
   const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : undefined;
   const rows = new Map(Array.from(list.querySelectorAll<HTMLElement>(':scope > [data-history-id]'), row => [row.dataset.historyId!, row]));
   const focusedIndex = Array.from(rows.keys()).indexOf(focused?.dataset.runId ?? '');
@@ -1140,6 +1145,12 @@ function renderRunList(force = false) {
     renderHistoryEmpty(empty, filtered);
   }
   restoreHistoryScroll();
+  // A record that just arrived unfolds into a list read from its top; further down, rows stay where the reader left them.
+  const unfolding = sameCriteria && list.scrollTop === 0 ? runs.filter(run => arrivals.has(run.id)) : [];
+  arrivals.clear();
+  for (const run of unfolding) arriveRow(rows.get(run.id)!);
+  const selected = rows.get(state.selectedId)?.querySelector<HTMLElement>('.run-row');
+  if (chosenBox && chosenId !== state.selectedId && selected && !unfolding.length) glideSelection(list, chosenBox, selected);
   if (focused && document.activeElement !== focused && list.getClientRects().length) {
     const fallback = rows.get(runs[Math.min(Math.max(focusedIndex, 0), runs.length - 1)]?.id ?? '')?.querySelector<HTMLButtonElement>('button');
     (focused.isConnected ? focused : fallback ?? field('run-search')).focus({ preventScroll: true });
@@ -1584,6 +1595,8 @@ function syncAddress() {
 }
 function selectRun(id: string, closeHistory = true, address: 'push' | 'replace' = 'push') {
   if (!state.runs.some(run => run.id === id)) return;
+  // Opened deliberately (not browsed with the arrow keys or Back), another run's document is set down in place of the last.
+  const switching = address === 'push' && (id !== state.selectedId || state.composing);
   addressMode = address;
   state.composing = false;
   state.selectedId = id; state.selectedRun = state.runs.find(run => run.id === id);
@@ -1592,6 +1605,8 @@ function selectRun(id: string, closeHistory = true, address: 'push' | 'replace' 
   state.diffChange = 0; state.compare = undefined;
   renderRunList(); renderDetail(true);
   if (closeHistory) closeHistoryDialog();
+  // Phones move between their own views.
+  if (switching && !historyQuery.matches) animateEntrance(element('#run-detail'), 'panel', true);
 }
 /** The server names templates, environments and the sample in Chinese; known names are shown in the interface language. */
 function localizeSession(session: WebSession): WebSession {
@@ -1622,6 +1637,7 @@ async function openSample(address: 'push' | 'replace' = 'push') {
   closeHistoryDialog(); setMobileView('runs');
 }
 function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
+  const leaving = !state.composing;
   state.composing = true; addressMode = address;
   state.selectedId = ''; state.selectedRun = undefined;
   state.tab = 'source'; state.sourceView = 'proof'; state.detailError = '';
@@ -1630,6 +1646,7 @@ function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
   state.panelSignature = ''; draftPreviewSignature = '';
   if (reset) resetForm();
   renderRunList(); renderDetail(true); setMobileView('compose');
+  if (leaving && !historyQuery.matches) animateEntrance(element('.workspace'), 'workspace');
 }
 const currentConnection = (epoch: number) => pageActive && epoch === state.connectionEpoch;
 const sessionFailure = (error: unknown) => error instanceof ApiError
@@ -1685,6 +1702,8 @@ async function refreshRuns(epoch: number, force = false, listed?: WebSession['ru
   const previous = state.runs;
   const byId = new Map(previous.map(run => [run.id, run]));
   state.runs = result.runs.map(run => retainLatestObservation(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // The first list is the history as it stands; only later ones bring arrivals.
+  if (state.resumed) for (const run of state.runs) if (!byId.has(run.id)) arrivals.add(run.id);
   const resume = state.resumed ? undefined : readResume(() => localStorage);
   if (!state.resumed && !state.composing && !state.selectedId && resume && state.runs.some(run => run.id === resume.selectedId)) {
     state.selectedId = resume.selectedId;
@@ -1895,9 +1914,21 @@ function showThemeChoice() {
   const preference = readThemePreference(localStorage);
   document.querySelectorAll<HTMLInputElement>('input[name="theme"]').forEach(input => { input.checked = input.value === preference; });
 }
+/** Where the reader last chose something: the pointer, or the control a key was pressed in (the palette's search for its commands). */
+let chosenAt: { x: number; y: number } | Element | null = null;
+document.addEventListener('pointerdown', event => { chosenAt = { x: event.clientX, y: event.clientY }; }, { capture: true, passive: true });
+// Measured only when a theme is chosen, so typing costs no layout.
+document.addEventListener('keydown', event => { chosenAt = event.target instanceof Element ? event.target : null; }, { capture: true, passive: true });
 function chooseTheme(preference: ThemePreference) {
   if (!saveThemePreference(localStorage, preference)) toast(t('浏览器不允许保存，外观只在此页面生效'));
-  applyTheme(preference); showThemeChoice();
+  if (resolveTheme(preference, matchMedia('(prefers-color-scheme: dark)').matches) === document.documentElement.dataset.theme) applyTheme(preference);
+  else {
+    const box = chosenAt instanceof Element && chosenAt !== document.body ? chosenAt.getBoundingClientRect() : undefined;
+    const origin = chosenAt && !(chosenAt instanceof Element) ? chosenAt
+      : box?.width ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : { x: innerWidth / 2, y: innerHeight / 2 };
+    revealTheme(() => applyTheme(preference), origin.x, origin.y);
+  }
+  showThemeChoice();
 }
 followThemeChanges(showThemeChoice);
 showThemeChoice();
@@ -1921,7 +1952,11 @@ function placeHistory() {
   host.append(history);
   restoreHistoryScroll();
 }
+let historyFolding: ReturnType<typeof setTimeout> | undefined;
 function setHistoryCollapsed(collapsed: boolean) {
+  // Marks the change so the column folds over 320 ms (app.css) rather than at once; a first paint never animates.
+  document.body.dataset.historyFolding = ''; clearTimeout(historyFolding);
+  historyFolding = setTimeout(() => { delete document.body.dataset.historyFolding; }, 400);
   if (!collapsed) document.body.removeAttribute('data-history-collapsed'); else document.body.dataset.historyCollapsed = 'true';
   markHistoryCollapsed(collapsed);
   try { localStorage.setItem(historyStorageKey, String(collapsed)); } catch { /* The choice lasts for this page only. */ }
@@ -2064,6 +2099,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       void poll(); return;
     }
     state.listGeneration++;
+    if (!state.runs.some(item => item.id === run.id)) arrivals.add(run.id);
     state.runs = [run, ...state.runs.filter(item => item.id !== run.id)];
     state.composing = false;
     state.selectedId = run.id; state.selectedRun = run; state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';

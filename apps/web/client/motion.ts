@@ -4,11 +4,13 @@ import { gsap } from 'gsap';
 export const easeExpo = 'cubic-bezier(.16,1,.3,1)';
 const easeReel = 'cubic-bezier(.19,1,.22,1)';
 const easeSpring = 'cubic-bezier(.34,1.56,.64,1)';
-type MotionKind = 'workspace' | 'panel' | 'dialog' | 'status' | 'count' | 'steps' | 'seal' | 'viewer';
+type MotionKind = 'workspace' | 'panel' | 'dialog' | 'status' | 'count' | 'steps' | 'seal' | 'viewer' | 'glide' | 'row';
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 /** The motion running on each marked target: how to end it at once, back to the element's own styles. */
 const active = new Map<HTMLElement, () => void>();
 let pageActive = true;
+/** The theme change spreading over the page, if one is. */
+let themeReveal: ViewTransition | undefined;
 
 function finish(target: HTMLElement) {
   const stop = active.get(target);
@@ -19,6 +21,7 @@ function finish(target: HTMLElement) {
 const allowed = (target: Element) => pageActive && !document.hidden && !reducedMotion.matches && target.getClientRects().length > 0;
 
 export function finishMotion(root?: Element) {
+  if (!root) themeReveal?.skipTransition();
   for (const target of active.keys()) if (!root || root === target || root.contains(target)) finish(target);
   for (const animation of document.getAnimations()) {
     const target = (animation.effect as KeyframeEffect | null)?.target;
@@ -162,6 +165,63 @@ export function revealViewer(viewer: HTMLElement, modal: boolean) {
     ? [{ opacity: 0, transform: 'scale(.98)' }, { opacity: 1, transform: 'none' }]
     : [{ opacity: 0, clipPath: 'inset(0 0 0 100% round 14px)' }, { opacity: 1, clipPath: 'inset(0 0 0 0 round 14px)' }], { duration: modal ? 320 : 440, easing: easeExpo })]);
 }
+type Box = { left: number; top: number; width: number; height: number };
+const boxOf = (row: HTMLElement): Box => ({ left: row.offsetLeft, top: row.offsetTop, width: row.offsetWidth, height: row.offsetHeight });
+/**
+ * The history's selection moved: a card slides from the row chosen before to the one chosen now, the way the tab
+ * underline does, and the new row takes it over when it lands. `from` was measured before the list changed; a slide
+ * still under way starts from where its card is.
+ */
+export function glideSelection(list: HTMLElement, from: Box, to: HTMLElement) {
+  let start = from;
+  if (active.has(list)) {
+    const style = getComputedStyle(list, '::before'), [left = 0, top = 0] = style.translate.split(' ').map(parseFloat);
+    if (parseFloat(style.width) > 0) start = { left, top, width: parseFloat(style.width), height: parseFloat(style.height) };
+  }
+  finish(list);
+  if (!allowed(to)) return;
+  const end = boxOf(to);
+  if (Math.abs(end.top - start.top) < 1 && Math.abs(end.left - start.left) < 1) return;
+  list.dataset.gliding = '';
+  const frame = (box: Box) => ({ width: `${box.width}px`, height: `${box.height}px`, translate: `${box.left}px ${box.top}px` });
+  track(list, 'glide', [list.animate([frame(start), frame(end)], { duration: 380, easing: easeExpo, fill: 'both', pseudoElement: '::before' })],
+    () => { delete list.dataset.gliding; });
+}
+export const selectionBox = (row: HTMLElement | null | undefined) => row?.getClientRects().length ? boxOf(row) : undefined;
+
+/** A record that has just arrived opens its place in the list and keeps a clay wash for a moment, then settles. */
+export function arriveRow(item: HTMLElement) {
+  finish(item);
+  const row = item.querySelector<HTMLElement>('.run-row');
+  if (!row || !allowed(item)) return;
+  const style = getComputedStyle(row), wash = getComputedStyle(document.documentElement).getPropertyValue('--accent-soft').trim();
+  track(item, 'row', [
+    item.animate([{ height: '0px', opacity: 0, overflow: 'clip' }, { height: `${item.offsetHeight}px`, opacity: 1, overflow: 'clip' }], { duration: 420, easing: easeExpo }),
+    row.animate([{ backgroundColor: wash, offset: 0 }, { backgroundColor: wash, offset: .35 }, { backgroundColor: style.backgroundColor }], { duration: 1500, easing: 'ease-out' }),
+  ]);
+}
+
+/**
+ * A theme chosen by the reader spreads over the old one in a circle from (x, y), like ink taking to paper. `apply`
+ * changes the theme; without view transitions, or with reduced motion, it simply runs.
+ */
+export function revealTheme(apply: () => void, x: number, y: number) {
+  const root = document.documentElement;
+  if (!document.startViewTransition || !pageActive || document.hidden || reducedMotion.matches) { apply(); return; }
+  themeReveal?.skipTransition();
+  root.dataset.themeReveal = '';
+  const transition = themeReveal = document.startViewTransition(apply);
+  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  void transition.ready.then(() => {
+    root.animate({ clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+      { duration: 620, easing: easeExpo, pseudoElement: '::view-transition-new(root)' });
+  }, () => undefined);
+  void transition.finished.finally(() => {
+    if (themeReveal !== transition) return;
+    themeReveal = undefined; delete root.dataset.themeReveal;
+  }).catch(() => undefined);
+}
+
 /** Grow a freshly shown task graph: cards appear column by column, then each edge draws from its source. */
 export function revealGraph(graph: HTMLElement) {
   if (!allowed(graph)) return;

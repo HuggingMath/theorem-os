@@ -237,12 +237,13 @@ async function writeReport(status: 'passed' | 'failed', error?: unknown) {
 try {
   browser = await startBrowser(service.server, port);
 
-  await scenario('Opening a new run cues only its status; ordinary list polling never replays an entrance', async h => {
+  await scenario('Opening a new run cues only its status and its arriving history row; ordinary list polling never replays an entrance', async h => {
     const since = await offset(h.page);
     await createRun(h);
     await settled(h.page);
     const entered = (await record(h.page, 'run-opened', since)).filter(entry => !entry.dialog);
-    assert.equal(entered.every(entry => entry.status), true, 'opening a run may only cue its status change');
+    assert.equal(entered.every(entry => entry.status || entry.kind === 'row'), true, 'opening a run may only cue its status change and its new history row');
+    assert.ok(entered.some(entry => entry.kind === 'row'), 'the new run did not arrive in the history');
     const afterEntrance = await offset(h.page);
     const listed = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
     await h.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await listed; await nextPaint(h.page); await settled(h.page);
