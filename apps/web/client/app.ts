@@ -53,7 +53,7 @@ import { installTermHints, renderGlossary } from './termHints';
 import { renderAdminPanel } from './ui/AdminPanel';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
-import { localeTag, localizeMessage, localizeText, otherLocale, switchLocale, t } from '../i18n';
+import { localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -488,7 +488,7 @@ function renderBudgetEstimate() {
   const limits = t('最长约 {0} 分钟，全部 Agent 合计最多 {1} 轮模型调用。', Math.ceil(seconds / 60), turns);
   const usage = estimate ? t('按你最近 {0} 次 {1} 运行的平均每轮 {2} Token，本次约 {3} Token 以内。', estimate.samples, model, formatTokens(estimate.perTurn), formatTokens(estimate.ceiling))
     : t('还没有这个模型的用量记录，费用按服务商实际计费。');
-  patchText(element('#budget-estimate'), `${limits}${usage}${cap ? t('达到 {0} Token 后停止新的调用。', formatTokens(cap)) : ''}`);
+  patchText(element('#budget-estimate'), sentences(limits, usage, cap ? t('达到 {0} Token 后停止新的调用。', formatTokens(cap)) : ''));
 }
 function focusSubmissionIssue(issue: SubmissionIssue) {
   validationShown.add(issue.field);

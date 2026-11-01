@@ -176,7 +176,7 @@ export const pages: Record<string, string> = {
   "运行详情": "Run details",
   "刷新运行记录": "Refresh runs",
   "关闭研究记录": "Close research runs",
-  "搜索运行": "Search runs",
+  "搜索运行": "Search",
   "清除搜索": "Clear search",
   "运行记录": "Runs",
   "关闭源码编辑器": "Close the source editor",

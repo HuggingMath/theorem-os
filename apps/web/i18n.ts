@@ -46,6 +46,9 @@ export function t(key: string, ...values: unknown[]): string {
   return locale === 'en' ? singular(filled) : filled;
 }
 
+/** Joins translated sentences: Chinese runs them together after their 。, English needs a space between them. */
+export const sentences = (...parts: string[]) => parts.filter(Boolean).join(locale === 'en' ? ' ' : '');
+
 const detail = /^(.*?)( · [^·]+)$/u;
 /**
  * Translates text produced elsewhere in Chinese, such as stored event messages and share labels, when it matches a key

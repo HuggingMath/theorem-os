@@ -21,7 +21,7 @@ function Welcome({ templates, sample, firstRun }: ConversationProps) {
       <Icon name="play" /><span><strong>{t('先看一次完整运行')}</strong><span>{t('{0} · 无需 API Key', sample.title)}</span></span><Icon name="arrow-right" /></button>}
     <div class="chat-suggestions" aria-label={t('示例题目')}><span class="suggestions-label">{t('示例题目')}</span>
       {templates.map(template => <button key={template.id} type="button" class="template-suggestion" data-chat-template={template.id}>
-        <Icon name="file-code-2" /><span>{template.name}</span><span class="suggestion-environment">{template.environment}</span><Icon name="arrow-up-right" />
+        <Icon name="file-code-2" /><span class="suggestion-copy"><span class="suggestion-name">{template.name}</span><span class="suggestion-environment">{template.environment}</span></span><Icon name="arrow-up-right" />
       </button>)}</div>
     {/* Something to click comes before reading: the steps follow the sample problems, which then stay above the fold. */}
     {firstRun && <ol class="welcome-steps" aria-label={t('使用步骤')}>{steps.map((step, index) =>

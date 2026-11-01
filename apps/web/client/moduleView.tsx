@@ -354,10 +354,11 @@ export class ModuleView {
       toggle.dataset.moduleCustomEnabled = rule.id;
       if (toggle.checked !== rule.enabled) toggle.checked = rule.enabled;
       toggle.disabled = Boolean(this.input!.run) || this.input!.editable === false;
-      toggle.setAttribute('aria-label', t('启用{0}', rule.name || t('未命名策略')));
+      const ruleName = rule.name || t('未命名策略');
+      toggle.setAttribute('aria-label', t('启用{0}', ruleName));
       const label = toggle.closest<HTMLLabelElement>('label')!;
       label.hidden = Boolean(this.input!.run);
-      label.title = `${rule.enabled ? t('停用') : t('启用')}${rule.name || t('未命名策略')}`;
+      label.title = rule.enabled ? t('停用{0}', ruleName) : t('启用{0}', ruleName);
       const state = customModuleState(rule, this.input!, applications[rule.id]);
       button.dataset.moduleSlot = rule.slot;
       button.dataset.enabled = String(rule.enabled);

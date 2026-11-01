@@ -538,12 +538,13 @@ export class CollaborationView {
     for (const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-graph-zoom="in"],[data-collab-graph-zoom="out"]'))
       button.disabled = button.dataset.collabGraphZoom === 'in' ? view.graphZoom >= 1.6 : view.graphZoom <= minGraphZoom;
   }
+  // A card's footer shares its width with the token count, so a checked proof uses the meter legend's shorter word.
   private taskCard(view: ViewState, task: Task, peak: number): TaskCard {
     const state = taskState(task), tokens = totalTokens(task.usage);
     const owner = task.owner && workerNames(view.observation?.inspection.workers).get(task.owner);
     return { id: task.id, version: task.version, kind: task.kind, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), objective: localizeText(task.objective),
       name: task.theorem?.split('.').at(-1) || task.id,
-      owner: owner || task.owner || t('待分配'), proof: task.proof.status, proofLabel: label(task.proof.status),
+      owner: owner || task.owner || t('待分配'), proof: task.proof.status, proofLabel: task.proof.status === 'checked' ? t('已检查') : label(task.proof.status),
       ...(tokens !== undefined ? { tokens: { label: tokenText(tokens), share: peak ? tokens / peak : 0, detail: usageDetail(task.usage!) } } : {}),
       selected: view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version) };
   }

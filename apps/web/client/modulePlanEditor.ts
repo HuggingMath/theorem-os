@@ -342,7 +342,7 @@ export class ModulePlanEditor {
   private setExpanded(row: ModuleRow, expanded: boolean) {
     row.body.hidden = !expanded; row.element.dataset.expanded = String(expanded);
     row.disclosure.setAttribute('aria-expanded', String(expanded));
-    row.disclosure.title = `${expanded ? t('收起') : t('展开')}${row.name.textContent}`;
+    row.disclosure.title = expanded ? t('收起{0}', row.name.textContent) : t('展开{0}', row.name.textContent);
     row.disclosure.setAttribute('aria-label', `${row.disclosure.title} · ${row.meta.textContent}`);
   }
 

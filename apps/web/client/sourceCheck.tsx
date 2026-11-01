@@ -1,7 +1,7 @@
 import { render } from 'preact';
 import type { WebEnvironment, WebPrecheck, WebPrecheckDiagnostic } from '../shared';
 import { Icon, Spinner } from './ui/Icon';
-import { t } from '../i18n';
+import { sentences, t } from '../i18n';
 
 /** Structural findings carry a code; Lean's own diagnostics keep Lean's wording. */
 const codeMessages: Record<string, () => string> = {
@@ -131,9 +131,9 @@ function summary(check: SourceCheck): { tone: Tone; title: string; detail: strin
   const extra = warnings ? t('另有 {0} 条警告。', warnings) : '';
   switch (result.status) {
     case 'invalid': return { tone: 'bad', title: t('原题不符合提交要求'), detail: t('修改下列位置后才能提交。'), chip: t('不符合要求') };
-    case 'errors': return { tone: 'bad', title: t('Lean 报告 {0} 处错误', errors), detail: t('原题需要先能编译，Agent 才能开始证明。') + extra, chip: t('{0} 处错误', errors) };
-    case 'ready': return { tone: 'good', title: t('原题可以编译'), detail: t('{0} 处 sorry 待证明。', result.sorries) + extra, chip: t('可编译') };
-    case 'complete': return { tone: 'neutral', title: t('原题可以编译，且没有 sorry'), detail: t('没有需要证明的部分；如需研究，请把待证部分写成 sorry。') + extra, chip: t('无 sorry') };
+    case 'errors': return { tone: 'bad', title: t('Lean 报告 {0} 处错误', errors), detail: sentences(t('原题需要先能编译，Agent 才能开始证明。'), extra), chip: t('{0} 处错误', errors) };
+    case 'ready': return { tone: 'good', title: t('原题可以编译'), detail: sentences(t('{0} 处 sorry 待证明。', result.sorries), extra), chip: t('可编译') };
+    case 'complete': return { tone: 'neutral', title: t('原题可以编译，且没有 sorry'), detail: sentences(t('没有需要证明的部分；如需研究，请把待证部分写成 sorry。'), extra), chip: t('无 sorry') };
     case 'timeout': return { tone: 'warn', title: t('检查超时'), detail: t('运行时有更长的时间预算，仍可提交。'), chip: t('未检查') };
     case 'busy': return { tone: 'warn', title: t('检查服务繁忙，本次未检查'), detail: t('仍可提交，或稍后重新检查。'), chip: t('未检查') };
     default: return { tone: 'warn', title: t('检查服务暂不可用'), detail: t('仍可提交。'), chip: t('未检查') };
