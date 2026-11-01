@@ -48,7 +48,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
     'max-total-tokens': { type: 'string', default: '0' },
     'prepare-timeout-seconds': { type: 'string', default: '1800' }, 'max-turn-seconds': { type: 'string', default: '180' },
     'evaluator-command': { type: 'string' }, 'evaluator-timeout-seconds': { type: 'string', default: '1800' },
-    'proof-environment-cache-dir': { type: 'string' }, 'startup-only': { type: 'boolean' }, help: { type: 'boolean' },
+    'proof-environment-cache-dir': { type: 'string' }, 'startup-only': { type: 'boolean' }, 'check-statement': { type: 'boolean' },
+    help: { type: 'boolean' },
     'knowledge-base': { type: 'string' }, 'continuation-manifest': { type: 'string' },
     'continuation-source-run': { type: 'string' },
     method: { type: 'string', default: 'direct' }, workers: { type: 'string', default: '4' },
@@ -57,10 +58,11 @@ export async function runSolver(args: string[], root: string, customModules?: So
     'plan-approval': { type: 'boolean' },
   } });
   if (values.help) {
-    console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --max-run-seconds, --max-turns, --max-turn-seconds or --evaluator-timeout-seconds to disable that limit. Unlimited total solving time also disables proof verification deadlines.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
+    console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --max-run-seconds, --max-turns, --max-turn-seconds or --evaluator-timeout-seconds to disable that limit. Unlimited total solving time also disables proof verification deadlines.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
     console.log('--knowledge-base FILE attaches an immutable saved-theorem catalog. Resume requires the same catalog digest. Historical knowledge never grants proof acceptance.');
     console.log('--continuation-manifest FILE attaches explicit historical sources and notes without changing the verbatim task file. Resume retains the frozen attachment identity; historical material remains advisory.');
     console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. Use --resume to retry an interrupted zero-turn initialization; combine with --startup-only to retain a prepared checkpoint.');
+    console.log('--check-statement also elaborates the target files at startup (theorem bodies may still be sorry) and fails with math_statement_check_failed on a Lean error; statement-diagnostics.json keeps the messages.');
     console.log('--plan-approval holds every worker after the first accepted plan until a person approves that exact plan version (queuePlanApproval, the web workbench). The Lead takes a revision turn only for Lead guidance written while it waits. Waiting counts toward --max-run-seconds. Requires cooperative coordination and at least 2 workers; resume requires the same setting.');
     console.log('Lead planning and ordinary research first yield a resumable scheduling checkpoint after 120 seconds, with a reminder after 90 seconds. Lead planning keeps 120-second slices; ordinary research backs off to at most 960 seconds. Saved threads and drafts survive resume. Proof turns and total solving budgets are unchanged.');
     return 0;
@@ -315,6 +317,17 @@ export async function runSolver(args: string[], root: string, customModules?: So
           emit('preparation_failed', { workerId: 'solver', timedOut: library.timedOut, diagnostics: (sorry ? `${sorry.file ?? ''} ${sorry.message}`
             : library.stderr || library.stdout || 'Library-pack check did not finish.').slice(0, 2000) });
           throw new Error('math_library_pack_failed');
+        }
+      }
+      // A generated statement (auto-library spec) must elaborate before any model turn tries to prove it.
+      if (values['check-statement']) {
+        const statement = await runLeanDiagnostics({ projectRoot: project, files: [...new Set(problem.targets.map(target => target.proofPath))],
+          env, signal, timeoutMs: preparationMs - (Date.now() - preparationStarted), onProgress: file => emit('statement_check', { file }) });
+        writeMathJsonDurable(path.join(directory, 'statement-diagnostics.json'), statement);
+        if (statement.exitCode !== 0 || statement.timedOut) {
+          emit('preparation_failed', { workerId: 'solver', timedOut: statement.timedOut,
+            diagnostics: (statement.stderr || statement.stdout || 'Statement check did not finish.').slice(0, 2000) });
+          throw new Error('math_statement_check_failed');
         }
       }
       let corpusCreated = false;

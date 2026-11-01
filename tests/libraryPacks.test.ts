@@ -170,6 +170,23 @@ describe('library packs from saved runs and upstream checkouts', () => {
       .toBe('import ChallengeDeps\nnamespace Submission.Helpers\nend Submission.Helpers\n');
   });
 
+  it('keeps a spec run\'s own proved theorems under the module paths it is published at', () => {
+    const modulePaths = { 'Submission.lean': 'Submission/Library/Auto/Spec.lean', 'Submission/Helpers.lean': 'Submission/Library/Auto/SpecHelpers.lean' };
+    const extracted = extractRunLibraryModules({ stateFile, files: ['Submission.lean', 'Submission/Helpers.lean'], dropUnproved: true,
+      keepOriginals: true, modulePaths });
+    const [main, helper] = extracted.modules;
+    expect(extracted.modules.map(module => module.file)).toEqual(Object.values(modulePaths));
+    expect(lines(main!.source)).toEqual(['import ChallengeDeps', 'import Submission.Library.Auto.SpecHelpers', 'namespace Submission',
+      'theorem target : ChallengeDeps.deps + ChallengeDeps.deps = 4 := Helpers.twice',
+      'theorem kept : ChallengeDeps.deps + ChallengeDeps.deps = 4 := Submission.Helpers.twice', 'end Submission']);
+    expect(main!.origin).toMatchObject({ dropped: [{ name: 'from_bad', reason: 'dependent' }] });
+    expect(helper!.source).toContain('def seedValue : Nat := 0\n');
+    expect(helper!.origin).toMatchObject({ dropped: [{ name: 'bad', reason: 'unproved' }, { name: 'uses_bad', reason: 'dependent' }] });
+    for (const paths of [{ 'Submission/Other.lean': 'Submission/Library/Auto/Other.lean' }, { 'Submission.lean': 'Submission/Theory/T01.lean' }])
+      expect(() => extractRunLibraryModules({ stateFile, files: ['Submission.lean', 'Submission/Helpers.lean'], modulePaths: paths }))
+        .toThrow(`math_library_extract_module_path_invalid: ${Object.keys(paths)[0]}`);
+  });
+
   it('rejects unselected owned imports, foreign files, missing commits and invalid destinations', () => {
     expect(() => extractRunLibraryModules({ stateFile, files: ['Submission.lean'], dropUnproved: true }))
       .toThrow('math_library_extract_import_not_selected: Submission.lean imports Submission.Helpers');

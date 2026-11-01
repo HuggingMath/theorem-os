@@ -28,6 +28,11 @@ const plainName = (name: string) => name.replaceAll('«', '').replaceAll('»', '
 
 /** Proof-trust escapes after masking comments and strings; the final axiom check still decides acceptance. */
 const FORBIDDEN = /(?<![\p{L}\p{M}\p{N}_'])(sorry|sorryAx|admit|native_decide|axiom|unsafe|implemented_by|extern|trustCompiler|ofReduceBool|ofReduceNat|skipKernelTC|addDecl|addAndCompile|run_cmd|run_elab|run_meta|run_tac)(?![\p{L}\p{M}\p{N}_'])|#eval\b/u;
+/** The first trust escape in source whose comments and strings are already masked. */
+export const libraryForbiddenToken = (masked: string): { index: number; token: string } | undefined => {
+  const match = FORBIDDEN.exec(masked);
+  return match ? { index: match.index, token: match[0] } : undefined;
+};
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), oid = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 const relative = z.string().min(1).max(512).refine(value => repositoryRelativePath(value) === value);
@@ -197,7 +202,11 @@ const optionalHash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]
  * digest requirements. `base` supplies an earlier pack whose frozen modules the selected files import.
  */
 export function extractRunLibraryModules(input: { stateFile: string; files: readonly string[]; commit?: string; into?: string;
-  dropUnproved?: boolean; base?: LibraryPack }): LibraryPack {
+  dropUnproved?: boolean; base?: LibraryPack;
+  /** Keep the problem's own declarations: a library spec run, whose targets are the module's theorems. */
+  keepOriginals?: boolean;
+  /** Pack file per selected file instead of Submission/Library/<into>/…. */
+  modulePaths?: Readonly<Record<string, string>> }): LibraryPack {
   const state = JSON.parse(readMathText(path.resolve(input.stateFile), 64 * 1024 * 1024)) as RunStateView;
   const problem = state.problem;
   if (!problem || typeof problem.projectRelative !== 'string' || !Array.isArray(problem.ownedFiles) ||
@@ -221,9 +230,12 @@ export function extractRunLibraryModules(input: { stateFile: string; files: read
     if (!owned.includes(file) || !file.endsWith('.lean')) throw new Error(`math_library_extract_not_owned: ${file}`);
     if (Object.hasOwn(frozen, file)) throw new Error(`math_library_extract_frozen: ${file} is already a library module; pass its pack as --base`);
   }
-  const destination = (file: string) => `${LIBRARY_PACK_DIRECTORY}/${into}/${file === 'Submission.lean' ? 'Submission.lean' : file.replace(/^Submission\//u, '')}`;
+  for (const [file, target] of Object.entries(input.modulePaths ?? {}))
+    if (!selected.includes(file) || !isLibraryPackFile(target)) throw new Error(`math_library_extract_module_path_invalid: ${file}`);
+  const destination = (file: string) => input.modulePaths?.[file] ??
+    `${LIBRARY_PACK_DIRECTORY}/${into}/${file === 'Submission.lean' ? 'Submission.lean' : file.replace(/^Submission\//u, '')}`;
   const renamed = new Map(selected.map(file => [moduleName(file), moduleName(destination(file))]));
-  const originalNames = new Set(Object.entries(originals).filter(([file]) => !Object.hasOwn(frozen, file))
+  const originalNames = new Set(input.keepOriginals ? [] : Object.entries(originals).filter(([file]) => !Object.hasOwn(frozen, file))
     .flatMap(([, items]) => items.map(item => localName(item.name))));
   const requires = new Map<string, string>(), removed = new Set<string>();
   const require = (file: string): void => {
