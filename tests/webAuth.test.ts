@@ -95,6 +95,7 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     expect(blocked.status).toBe(401);
     expect((await blocked.json()).error).toBe('请先登录。');
     expect((await request('/api/runs', visitor, input())).status).toBe(401);
+    expect(((await (await request('/api/session?runs', visitor)).json()) as WebSession).runs).toBeUndefined();
 
     const { id } = await (await request('/api/auth/captcha', visitor, {})).json();
     expect((await request('/api/auth/code', visitor, { email: 'alice@example.org', captchaId: id, captcha: '00000' })).status).toBe(400);

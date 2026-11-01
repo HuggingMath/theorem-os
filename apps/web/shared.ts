@@ -161,6 +161,8 @@ export type WebSession = {
   sample?: { id: string; title: string };
   /** Set when the service can compile a statement before submission (POST /api/precheck). */
   precheck?: boolean;
+  /** With `?runs`, the run list and its ETag (as GET /api/runs), so a first load needs one round trip; absent without an owner. */
+  runs?: { runs: WebRun[]; version: string };
 };
 /**
  * One finding from the statement check. `code` marks a structural check (shown in the interface language); otherwise

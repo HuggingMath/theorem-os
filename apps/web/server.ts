@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import zlib from 'node:zlib';
 import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
@@ -19,7 +20,7 @@ import { shareSnapshot, webShareToken, type WebShareLink } from './share';
 import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
 import { PrecheckSuperseded, WebPrechecker } from './precheck';
 import { proofOutline, verificationKit } from './verificationKit';
-import { sendStatic } from './staticFiles';
+import { acceptedEncoding, sendStatic } from './staticFiles';
 import { webFunnel } from './funnel';
 import { completionMail, mailsCompletion, planApprovalMail } from './completionMail';
 import { WebKeyVault } from './keyVault';
@@ -83,9 +84,22 @@ class HttpError extends Error {
 }
 const equal = (left: string, right: string) => /^[a-f0-9]{64}$/.test(left) &&
   /^[a-f0-9]{64}$/.test(right) && crypto.timingSafeEqual(Buffer.from(left), Buffer.from(right));
+/** The coding each request accepts, so JSON bodies can be compressed without passing the request along. */
+const jsonEncodings = new WeakMap<ServerResponse, 'br' | 'gzip'>();
+// A run carries its sources and report, so the list and the Agents' actions run to tens of KB each. no-transform keeps
+// Cloudflare from compressing them, so the server does: a fast brotli level costs a few ms even for MBs of JSON.
+const jsonBrotli = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } };
 function json(response: ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
+  const text = JSON.stringify(body), encoding = text.length >= 2048 ? jsonEncodings.get(response) : undefined;
+  if (!encoding) {
+    response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+    response.end(text);
+    return;
+  }
+  const compressed = encoding === 'br' ? zlib.brotliCompressSync(text, jsonBrotli) : zlib.gzipSync(text, { level: 6 });
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': encoding,
+    'Content-Length': compressed.length, Vary: 'Accept-Encoding' });
+  response.end(compressed);
 }
 function readJson(request: IncomingMessage): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || ''))
@@ -217,6 +231,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   };
   const maintenance = setInterval(prune, 60_000).unref();
   const server = http.createServer(async (request, response) => {
+    const encoding = acceptedEncoding(request.headers['accept-encoding']);
+    if (encoding) jsonEncodings.set(response, encoding);
     response.setHeader('Cache-Control', 'no-store, no-transform');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
@@ -272,6 +288,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers, environments: getWebEnvironments(),
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
             ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
+          const owner = url.searchParams.has('runs') ? ownerOf(session) : undefined;
+          if (owner) body.runs = { runs: jobs.list(owner), version: jobs.version(owner) };
           json(response, 200, body); return;
         }
         if (!session) throw new HttpError(401, '会话已过期，请刷新页面。');

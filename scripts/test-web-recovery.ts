@@ -147,8 +147,14 @@ try {
     let listFails = true;
     const sessionGate = deferred(), sessionSeen = deferred(), listGate = deferred(), listSeen = deferred();
     h.releases.push(sessionGate.resolve, listGate.resolve);
-    let holdRecovery = false;
+    let holdRecovery = false, firstSession = true;
     h.intercept = async route => {
+      // The first load takes its list from the session reply; without ?runs it reads the list itself, which fails here.
+      if (isSession(route) && firstSession) {
+        firstSession = false;
+        const url = new URL(route.request().url()); url.search = '';
+        await route.continue({ url: url.href }); return true;
+      }
       if (isSession(route) && holdRecovery) { sessionSeen.resolve(); await sessionGate.promise; }
       if (isList(route)) {
         if (listFails) { await route.fulfill({ status: 500, json: { error: 'List unavailable fixture' } }); return true; }

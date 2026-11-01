@@ -54,6 +54,7 @@ import { renderAdminPanel } from './ui/AdminPanel';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
 import { localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
+import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -101,6 +102,8 @@ const state = {
   detailError: '', listGeneration: 0, runsEtag: '',
   listSignature: '', panelSignature: '',
   connected: false, refreshing: false, connectionEpoch: 0,
+  /** The connection failed since the page loaded; until then, not being connected only means it is still connecting. */
+  lost: false,
   composing: false, conversationSignature: '',
   finishedRuns: new Set<string>(),
   /** Runs that ended while the tab was hidden; shown in the tab title until the tab is visible again. */
@@ -261,7 +264,6 @@ const conversationScroll = { top: 0 };
 const historyQuery = window.matchMedia('(max-width:850px)');
 // A touch screen's keyboard covers half the page: focus moves into a text field only when the reader is about to type.
 const touchQuery = window.matchMedia('(pointer: coarse)');
-const historyStorageKey = 'theoremos-history-collapsed-v1';
 let historyCriteria = '';
 let historyReading: { top: number; anchors: Array<{ id: string; offset: number }> } = { top: 0, anchors: [] };
 
@@ -441,7 +443,8 @@ function renderPreparation(issues = currentSubmissionIssues()) {
     provider: t('选择服务商'), environment: t('选择环境'), source: t('编辑源码'), task: t('填写任务'), model: t('填写模型'),
     'api-key': t('填写 API Key'), 'max-turns': t('调整轮次'), 'max-seconds': t('调整预算'), workers: t('调整 Agent'), 'max-tokens': t('调整用量上限'), 'module-plan': t('检查模块方案'),
   };
-  const pending = !state.session;
+  // The first connection is still reading the records after the session arrived: that is loading, not a lost connection.
+  const pending = !state.session || !state.connected && !state.lost;
   const offline = !pending && !state.connected;
   const environmentReady = Boolean(state.session?.runtime.ready && state.session.providers.length);
   // An empty task nobody has tried to submit yet (a fresh page, or right after a submission) is the next step, not a fault.
@@ -463,7 +466,7 @@ function renderPreparation(issues = currentSubmissionIssues()) {
       : full ? t('研究记录已满 {0} 条', state.session?.limits.maxRuns) : composing ? t('写下研究任务') : firstKey ? t('连接模型后即可提交')
         : issue?.message ?? (settled ? t('原题里没有 sorry')
         : checked?.status === 'ready' ? t('可以提交 · {0} 处 sorry 待证明', checked.sorries) : t('可以提交')));
-  patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? t('连接后可编辑研究任务。')
+  patchText(element('#readiness-detail'), state.submitting ? t('请稍候，提交结果将在对话中显示。') : pending ? state.session ? '' : t('连接后可编辑研究任务。')
     // Offline, the notice at the top already says the draft is kept.
     : offline ? '' : !environmentReady ? t('环境恢复后可提交，当前草稿会保留。')
       : full ? t('删除一条已结束的记录后才能提交新的研究；需要的档案请先下载。草稿会保留。')
@@ -981,7 +984,7 @@ function updateKeyToggle() {
 function renderRuntime() {
   const session = state.session;
   const ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
-  element('#runtime-note').textContent = !state.connected ? t('连接恢复后可提交') : session
+  element('#runtime-note').textContent = !state.connected ? state.lost ? t('连接恢复后可提交') : t('正在检查环境') : session
     ? !session.providers.length ? t('未配置可用服务商') : localizeText(session.runtime.message) || (ready ? t('环境就绪') : t('环境未就绪'))
     : t('等待连接');
   element<HTMLButtonElement>('#submit-run').disabled = !ready || state.submitting;
@@ -1404,7 +1407,7 @@ function moduleInput(run?: WebRun): ModuleViewInput {
     modulePlan: run ? run.modulePlan : captureDraft().modulePlan };
 }
 function renderDraftPreview(force = false) {
-  if (currentRun() || !state.session) return;
+  if (currentRun() || !state.session || opening()) return;
   const detail = element('#run-detail');
   // Hidden panes cannot restore scroll offsets; refresh them when they become visible.
   if (!detail.getClientRects().length) return;
@@ -1444,13 +1447,24 @@ function renderDraftPreview(force = false) {
   if (showingModules) moduleView.update(detail.querySelector<HTMLElement>('.module-workspace')!, moduleInput());
   updateSourceReader();
 }
+/**
+ * Until the first records arrive the page does not know whether it opens a run (it does whenever the account has one)
+ * or the new-research page, so it keeps the run layout's connecting card instead of showing the composer for a moment.
+ * A failed connection, or the reader starting a draft, settles it on the new-research page.
+ */
+function opening() { return !state.resumed && !state.lost && !state.composing || sampleLink && !state.lost; }
+let viewSettled = false;
 /** A selected run fills the workspace as one document; without one the workspace is the new-research page. */
 function syncView() {
-  const view = currentRun() ? 'run' : 'draft';
+  const waiting = opening(), view = currentRun() || waiting ? 'run' : 'draft';
+  // The page starts on the run layout; when it settles on the new-research page, a phone shows the composer.
+  const settling = !waiting && !viewSettled;
+  if (settling) viewSettled = true;
   if (document.body.dataset.view === view) return;
   rememberConversationScroll();
   document.body.dataset.view = view;
   if (view === 'run' && document.body.dataset.mobileView !== 'runs') setMobileView('runs');
+  if (view === 'draft' && settling) setMobileView('compose');
   restoreConversationScroll();
 }
 function renderDetail(force = false) {
@@ -1462,8 +1476,8 @@ function renderDetail(force = false) {
     collaborationView.update();
     activityReader.update();
     state.panelSignature = '';
-    if (state.session) renderDraftPreview();
-    else {
+    if (state.session && !opening()) renderDraftPreview();
+    else if (!element('#run-detail').querySelector(':scope > .detail-connecting')) {
       const detail = element('#run-detail');
       unmountRunHeader(detail); detail.textContent = '';
       renderConnecting(detail); sourceReader.update();
@@ -1631,7 +1645,7 @@ function invalidateReads() {
   state.refreshing = false;
 }
 function disconnected(text: string) {
-  state.connected = false;
+  state.connected = false; state.lost = true;
   runUpdates.stop();
   liveRefreshPending = false;
   setGlobalNotice(text);
@@ -1657,10 +1671,11 @@ function receiveRunObservation(observation: WebObservation) {
   for (const waiting of newlyWaiting([previous], [run])) announceWaiting(waiting);
   renderRunList(); renderDetail();
 }
-async function refreshRuns(epoch: number, force = false) {
+/** `listed` is the list the session reply carried (first connection); without it the list is read, as a 304 when unchanged. */
+async function refreshRuns(epoch: number, force = false, listed?: WebSession['runs']) {
   const generation = ++state.listGeneration;
-  let etag: string | null = null;
-  const result = await api<{ runs: WebRun[] }>('/api/runs', {
+  let etag: string | null = listed?.version ?? null;
+  const result = listed ?? await api<{ runs: WebRun[] }>('/api/runs', {
     headers: !force && state.runsEtag ? { 'If-None-Match': state.runsEtag } : {},
   }, value => { etag = value; });
   if (generation !== state.listGeneration || !currentConnection(epoch)) return;
@@ -1746,7 +1761,10 @@ function initialize(): Promise<void> {
   connectionRequest = (async () => {
     try {
       if (!navigator.onLine) throw new Error(t('网络已断开'));
-      const session = localizeSession(await api<WebSession>('/api/session'));
+      // The first connection takes the run list in the session reply, one round trip instead of two. A reconnect may bring
+      // another session (and account), and reads the list itself, as a 304 when nothing changed.
+      const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs');
+      const session = localizeSession(reply);
       if (!currentConnection(epoch)) return;
       if (session.auth === 'email' && !session.account) { saveDraft(); forgetKey(keyStorage); location.replace('login.html'); return; }
       const firstLoad = !state.session;
@@ -1774,9 +1792,9 @@ function initialize(): Promise<void> {
       element<HTMLInputElement>('#workers').max = String(session.limits.maxWorkers);
       if (firstLoad) { resetForm(); restoreDraft(); draftReady = true; draftRecovery.load(); renderDraftRecovery(); }
       providerAddress(); updateEnvironment(); updateCounts(); renderRuntime();
-      await refreshRuns(epoch);
+      await refreshRuns(epoch, false, listed);
       if (!currentConnection(epoch)) return;
-      state.connected = true;
+      state.connected = true; state.lost = false;
       setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
       if (currentConnection(epoch)) {
@@ -1905,6 +1923,7 @@ function placeHistory() {
 }
 function setHistoryCollapsed(collapsed: boolean) {
   if (!collapsed) document.body.removeAttribute('data-history-collapsed'); else document.body.dataset.historyCollapsed = 'true';
+  markHistoryCollapsed(collapsed);
   try { localStorage.setItem(historyStorageKey, String(collapsed)); } catch { /* The choice lasts for this page only. */ }
   renderShell();
   if (!collapsed) restoreHistoryScroll();
@@ -2935,7 +2954,7 @@ field('account-confirm').addEventListener('input', () => {
 });
 element('#delete-account').addEventListener('click', event => void leaveAccount(() => api('/api/auth/account',
   { method: 'DELETE', body: JSON.stringify({ email: field('account-confirm').value.trim() }) }), event.currentTarget as HTMLButtonElement));
-try { if (localStorage.getItem(historyStorageKey) === 'true') document.body.dataset.historyCollapsed = 'true'; } catch { /* Docked by default. */ }
+if (readHistoryCollapsed(() => localStorage)) document.body.dataset.historyCollapsed = 'true';
 placeHistory();
 icons();
 localizeSiteLinks();

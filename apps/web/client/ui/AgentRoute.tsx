@@ -458,9 +458,11 @@ function AgentRouteMap(props: AgentRouteProps) {
     : props.planned ? props.graph === 'elsewhere' ? t('研究计划有 {0} 个任务，依赖关系见「协作」。', props.planned) : t('研究计划有 {0} 个任务，下方显示它们之间的依赖关系。', props.planned)
     : lanes.length === 1 ? t('{0} 独自处理整道题，没有拆分任务。', nameOf(lanes[0]!)) : t('{0} 个 Agent 参与，没有拆分任务。', lanes.length);
   const hint = !lanes.length ? '' : recorded ? t('点一步，看 Agent 在这一步的思考、命令、改动和 Lean 检查。') : t('点一步，看这一步的平台记录。');
+  // While the actions load, the line says so in the hint's place, so the lanes below do not move when they arrive.
+  const reading = Boolean(state?.loading && !total && recorded);
   return <>
-    <p class="collab-help agent-route-summary" ref={anchor}>{summary}{hint && ` ${hint}`}</p>
-    {state?.loading && !total && recorded && <p class="agent-route-state" role="status"><Spinner />{t('正在读取 Agent 的动作…')}</p>}
+    <p class="collab-help agent-route-summary" ref={anchor}>{summary}{reading
+      ? <> <span class="agent-route-reading" role="status"><Spinner />{t('正在读取 Agent 的动作…')}</span></> : hint && ` ${hint}`}</p>
     {state?.failed && <p class="agent-route-state" role="status">{t('Agent 的动作没有读取成功。')}
       <button type="button" class="text-button" onClick={() => source!.store.retry(source!.run)}>{t('重试')}</button></p>}
     {state?.dropped ? <p class="agent-route-state">{t('这次运行的 Agent 动作超过 {0} 条，之后的 {1} 条没有保存。', webAgentActionLimits.perRun, state.dropped)}</p> : null}

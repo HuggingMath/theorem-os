@@ -1,7 +1,9 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig, type WebConfig } from '../apps/web/config';
@@ -116,6 +118,52 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0].value).toMatchObject({ provider,
       input: { providerId: provider.id, model: 'deepseek-flash', effort: 'max' } });
+    runner.calls[0].finish();
+  });
+
+  it('compresses JSON bodies for clients that accept it and leaves small ones and other clients plain', async () => {
+    const alice = await session();
+    const source = `-- ${'padding '.repeat(1_000)}\ntheorem example : True := by sorry`;
+    expect((await request('/api/runs', alice, { body: { ...input(), source } })).status).toBe(201);
+    await tick();
+    const raw = (route: string, encoding?: string) => new Promise<{ headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+      http.get(`${baseUrl}${route}`, { headers: { Cookie: alice.cookie, ...(encoding ? { 'Accept-Encoding': encoding } : {}) } }, response => {
+        const chunks: Buffer[] = []; response.on('data', chunk => chunks.push(chunk));
+        response.on('end', () => resolve({ headers: response.headers, body: Buffer.concat(chunks) }));
+      }).on('error', reject);
+    });
+    const plain = await raw('/api/runs');
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    const listed = JSON.parse(plain.body.toString('utf8'));
+    expect(listed.runs[0].source).toContain('padding');
+    const brotli = await raw('/api/runs', 'gzip, deflate, br');
+    expect(brotli.headers).toMatchObject({ 'content-encoding': 'br', vary: 'Accept-Encoding', 'content-length': String(brotli.body.length) });
+    expect(brotli.body.length).toBeLessThan(plain.body.length / 4);
+    expect(JSON.parse(zlib.brotliDecompressSync(brotli.body).toString('utf8'))).toEqual(listed);
+    const gzip = await raw('/api/runs', 'gzip');
+    expect(gzip.headers['content-encoding']).toBe('gzip');
+    expect(JSON.parse(zlib.gunzipSync(gzip.body).toString('utf8'))).toEqual(listed);
+    // The list's validator still answers 304 without a body, whatever the coding.
+    const etag = brotli.headers.etag!;
+    const unchanged = await request('/api/runs', alice, { headers: { 'If-None-Match': etag } });
+    expect(unchanged.status).toBe(304);
+    const small = await raw('/healthz', 'br');
+    expect(small.headers['content-encoding']).toBeUndefined();
+    expect(JSON.parse(small.body.toString('utf8'))).toEqual({ ok: true });
+    runner.calls[0].finish();
+  });
+
+  it('carries the run list in the session reply only when asked, with the ETag GET /api/runs answers 304 to', async () => {
+    const alice = await session();
+    expect(alice.session.runs).toBeUndefined();
+    expect((await request('/api/runs', alice, { body: input() })).status).toBe(201);
+    await tick();
+    const listed = await request('/api/runs', alice);
+    const withRuns = await (await request('/api/session?runs', alice)).json() as WebSession;
+    expect(withRuns.csrfToken).toBe(alice.csrf);
+    expect(withRuns.runs).toEqual({ runs: (await listed.json()).runs, version: listed.headers.get('etag') });
+    expect((await request('/api/runs', alice, { headers: { 'If-None-Match': withRuns.runs!.version } })).status).toBe(304);
+    expect(((await (await request('/api/session', alice)).json()) as WebSession).runs).toBeUndefined();
     runner.calls[0].finish();
   });
 

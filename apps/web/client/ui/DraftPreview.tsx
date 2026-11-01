@@ -13,9 +13,9 @@ export type DraftPreviewProps = {
  * written by the caller (SourceReader decorates them), and the module workspace and reader toolbar belong to their views.
  */
 export function renderDraftPreview(root: HTMLElement, props: DraftPreviewProps) { render(<DraftPreview {...props} />, root); }
-/** Shown in #run-detail until the session loads. */
+/** Shown in #run-detail until the page knows whether it opens a run or the new-research page. */
 export function renderConnecting(root: HTMLElement) {
-  render(<div class="empty-state detail-empty"><Spinner /><h2>{t('正在连接工作台')}</h2></div>, root);
+  render(<div class="empty-state detail-empty detail-connecting"><Spinner /><h2>{t('正在连接工作台')}</h2></div>, root);
 }
 
 function DraftPreview(props: DraftPreviewProps) {
