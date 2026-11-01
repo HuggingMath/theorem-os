@@ -2,10 +2,11 @@ import { parse as parseToml } from 'smol-toml';
 import { z } from 'zod';
 import mathlibResource from '../../resources/mathlib/environment.json';
 import mathlib48Resource from '../../resources/mathlib/environment-4.8.json';
+import openaiMathResource from '../../resources/openai-math/environment.json';
 import { canonicalMathJson, mathDigest } from './mathRuntimeIo';
 import { LOCAL_EXAMPLE_TOOLCHAIN } from './localExample';
 
-export type LeanTaskEnvironment = 'standard' | 'mathlib' | 'mathlib-4.8';
+export type LeanTaskEnvironment = 'standard' | 'mathlib' | 'mathlib-4.8' | 'openai-math';
 export type LeanTaskEnvironmentConfig = Readonly<{
   id: LeanTaskEnvironment;
   toolchain: string;
@@ -41,15 +42,18 @@ const packageSchema = z.object({
   manifestFile: z.literal('lake-manifest.json'), inputRev: z.string().min(1), inherited: z.boolean(),
   configFile: z.enum(['lakefile.toml', 'lakefile.lean']),
 }).strict();
-const resource = z.object({
-  schema: z.literal('theorem-os.lean-task-mathlib.v1'), id: z.literal('mathlib'),
-  toolchain: z.literal(LOCAL_EXAMPLE_TOOLCHAIN), mathlibRevision: gitRevision,
+const pinnedResource = <Id extends 'mathlib' | 'openai-math', Toolchain extends string>(id: Id, toolchain: Toolchain) => z.object({
+  schema: z.literal('theorem-os.lean-task-mathlib.v1'), id: z.literal(id),
+  toolchain: z.literal(toolchain), mathlibRevision: gitRevision,
   lakefile: z.string().min(1), manifest: z.object({
     version: z.literal('1.2.0'), packagesDir: z.literal('.lake/packages'),
     packages: z.array(packageSchema.extend({ scope: z.string().min(1) }).strict()).min(1),
     name: z.literal('theorem_os_problem'), lakeDir: z.literal('.lake'), fixedToolchain: z.literal(true),
   }).strict(),
-}).strict().parse(mathlibResource);
+}).strict();
+const resource = pinnedResource('mathlib', LOCAL_EXAMPLE_TOOLCHAIN).parse(mathlibResource);
+// The OpenAI math comparator challenges pin their own Lean release and Mathlib revision.
+const resourceOpenaiMath = pinnedResource('openai-math', 'leanprover/lean4:v4.34.1').parse(openaiMathResource);
 const resource48 = z.object({
   schema: z.literal('theorem-os.lean-task-mathlib.v1'), id: z.literal('mathlib-4.8'),
   toolchain: z.literal('leanprover/lean4:v4.8.0'),
@@ -61,7 +65,7 @@ const resource48 = z.object({
   }).strict(),
 }).strict().parse(mathlib48Resource);
 
-function mathlibConfiguration(selected: typeof resource | typeof resource48): LeanTaskEnvironmentConfig {
+function mathlibConfiguration(selected: typeof resource | typeof resource48 | typeof resourceOpenaiMath): LeanTaskEnvironmentConfig {
   const rootPackage = selected.manifest.packages.find(item => item.name === 'mathlib');
   const lakefile = parseToml(selected.lakefile);
   const requirements = lakefile.require as { name?: unknown; git?: unknown; rev?: unknown }[] | undefined;
@@ -79,11 +83,15 @@ function mathlibConfiguration(selected: typeof resource | typeof resource48): Le
   }), selected.mathlibRevision, selected.id === 'mathlib-4.8' ? '.lake/build/lib' : undefined);
 }
 const mathlib = mathlibConfiguration(resource), mathlib48 = mathlibConfiguration(resource48);
+const openaiMath = mathlibConfiguration(resourceOpenaiMath);
+if (openaiMath.mathlibRevision !== 'd13f23b723b8a846827a245b89c10fc7d3f11612')
+  throw new Error('openai_math_revision_changed');
 
 /** Dependency choices are supplied by this runtime, never by task source or a caller URL. */
 export function getLeanTaskEnvironment(id: LeanTaskEnvironment = 'standard'): LeanTaskEnvironmentConfig {
   if (id === 'standard') return standard;
   if (id === 'mathlib') return mathlib;
   if (id === 'mathlib-4.8') return mathlib48;
+  if (id === 'openai-math') return openaiMath;
   throw new Error('lean_task_environment_unavailable');
 }

@@ -137,7 +137,7 @@ end User
     expect(() => assertSolverSources(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), receipt.workspaceRoot)).not.toThrow();
   });
 
-  it.each(['standard', 'mathlib', 'mathlib-4.8'] as const)('binds %s receipt selection and digest to the committed environment', environment => {
+  it.each(['standard', 'mathlib', 'mathlib-4.8', 'openai-math'] as const)('binds %s receipt selection and digest to the committed environment', environment => {
     const { receipt } = fixture(environment);
     const replacement = environment === 'standard' ? 'mathlib' : 'standard';
     saveReceipt(receipt, { environment: replacement,
@@ -146,6 +146,40 @@ end User
     expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_environment_changed');
     saveReceipt(receipt, { environmentDigest: '0'.repeat(64) });
     expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_environment_changed');
+  });
+
+  it('keeps the OpenAI challenge toolchain and dependency identities frozen', () => {
+    const { receipt } = fixture('openai-math');
+    const environment = getLeanTaskEnvironment('openai-math');
+    expect(environment.toolchain).toBe('leanprover/lean4:v4.34.1');
+    expect(environment.mathlibRevision).toBe('d13f23b723b8a846827a245b89c10fc7d3f11612');
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
+    const manifestFile = path.join(receipt.projectRoot, 'lake-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest.packages.find((item: { name: string }) => item.name === 'mathlib').rev = '0'.repeat(40);
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_protected_file_changed');
+  });
+
+  it('allows designated construction holes while protecting other definitions and target types', () => {
+    const root = rootDirectory();
+    const sourceWithConstruction = 'def fixed : Nat := 1\n\nnamespace User\ndef witness : Nat := by sorry\nend User\n';
+    const receipt = bootstrapLeanTask(path.join(root, 'workspace'), {
+      source: sourceWithConstruction, task: 'Construct the required witness.', environment: 'openai-math',
+      definitionTargets: ['User.witness'],
+    });
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    expect(problem.targets.map(item => item.theoremName)).toEqual(['User.witness']);
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
+    const submission = path.join(receipt.projectRoot, 'Submission.lean');
+    fs.writeFileSync(submission, sourceWithConstruction.replace('by sorry', '2'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
+    fs.writeFileSync(submission, sourceWithConstruction.replace('fixed : Nat := 1', 'fixed : Nat := 2'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
+    fs.writeFileSync(submission, sourceWithConstruction.replace('witness : Nat', 'witness : Bool'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
+    saveReceipt(receipt, { publicObligations: [] });
+    expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_identity_changed');
   });
 
   it('rejects replacing pinned Mathlib dependencies while preserving their config paths', () => {

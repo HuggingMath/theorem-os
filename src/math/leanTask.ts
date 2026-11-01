@@ -23,7 +23,8 @@ const hash = z.string().regex(/^[0-9a-f]{64}$/u);
 const inputSchema = z.object({
   source: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
   task: z.string().trim().min(1).max(LEAN_TASK_DESCRIPTION_MAX_LENGTH),
-  environment: z.enum(['standard', 'mathlib', 'mathlib-4.8']).optional(),
+  environment: z.enum(['standard', 'mathlib', 'mathlib-4.8', 'openai-math']).optional(),
+  definitionTargets: z.array(z.string().min(1)).max(LEAN_TASK_DECLARATIONS_MAX).optional(),
   libraryPack: z.unknown().optional(),
 }).strict();
 const libraryPackSchema = z.object({ digest: hash, files: z.record(z.string(), hash) }).strict();
@@ -43,11 +44,11 @@ const receiptSchema = z.object({
 const seedSchema = z.object({
   schema: z.literal('theorem-os.lean-task-seed.v1'), task: inputSchema.shape.task, sourceHash: hash,
   environment: inputSchema.shape.environment, environmentDigest: hash.optional(),
-  libraryPack: libraryPackSchema.optional(),
+  definitionTargets: inputSchema.shape.definitionTargets, libraryPack: libraryPackSchema.optional(),
 }).strict();
 
 export type LeanTaskReceipt = Omit<z.infer<typeof receiptSchema>, 'contract'> & { contract: MathProblemContract };
-export type LeanTaskInput = { source: string; task: string; environment?: LeanTaskEnvironment;
+export type LeanTaskInput = { source: string; task: string; environment?: LeanTaskEnvironment; definitionTargets?: string[];
   /** Frozen Submission/Library modules (see libraryPacks.ts) installed beside Submission.lean. */
   libraryPack?: LibraryPack };
 
@@ -63,7 +64,11 @@ function inspectInput(input: LeanTaskInput) {
   // targets are still found by their final component, which must therefore be unique.
   if (new Set(declarations.map(item => item.qualifiedName)).size !== declarations.length)
     throw new Error('lean_task_declaration_names_ambiguous');
-  const targets = declarations.filter(item => item.kind === 'theorem');
+  const definitionTargets = new Set(parsed.definitionTargets ?? []);
+  if (definitionTargets.size !== (parsed.definitionTargets?.length ?? 0) || [...definitionTargets].some(name =>
+      !declarations.some(item => item.qualifiedName === name && item.kind !== 'theorem')))
+    throw new Error('lean_task_definition_target_invalid');
+  const targets = declarations.filter(item => item.kind === 'theorem' || definitionTargets.has(item.qualifiedName));
   if (!targets.length) throw new Error('lean_task_targets_missing');
   const local = (name: string) => name.split('.').at(-1)!;
   const repeated = new Set(declarations.map(item => local(item.name)).filter((name, index, names) => names.indexOf(name) !== index));
@@ -144,6 +149,7 @@ export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): Lean
   gitText(workspace, ['add', '--', 'generated']);
   const message = seedPrefix + canonicalMathJson({ schema: 'theorem-os.lean-task-seed.v1', task: inspected.task,
     sourceHash: mathDigest(inspected.source), environment: environment.id, environmentDigest: environment.dependencyDigest,
+    ...(inspected.definitionTargets ? { definitionTargets: inspected.definitionTargets } : {}),
     ...(library ? { libraryPack: library } : {}) });
   gitText(workspace, ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=TheoremOS', '-c', 'user.email=theoremos@localhost',
     'commit', '--no-gpg-sign', '--quiet', '--cleanup=verbatim', '-m', message]);
@@ -206,7 +212,7 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
   const blob = (relative: string) => blobBytes(relative).toString('utf8');
   const source = blob('Challenge.lean');
   if (mathDigest(source) !== seed.sourceHash) throw new Error('lean_task_seed_invalid');
-  const inspected = inspectInput({ source, task: seed.task, environment: environment.id });
+  const inspected = inspectInput({ source, task: seed.task, environment: environment.id, definitionTargets: seed.definitionTargets });
   const sources = trustedSources(source, environment.id);
   if (canonicalMathJson(parsed.contract) !== canonicalMathJson(contractFor(source, inspected.task)) ||
       canonicalMathJson(parsed.publicObligations) !== canonicalMathJson(inspected.publicObligations) ||
