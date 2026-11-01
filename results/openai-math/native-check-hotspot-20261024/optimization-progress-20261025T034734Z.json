@@ -1,0 +1,145 @@
+{
+  "schema": "theorem-os.progress.v1",
+  "observedAt": "2026-10-25T03:47:34.377893+00:00",
+  "nativeFinalPassedCount": 7,
+  "countScope": "Complete formal target tasks; SnakyCertificate and SnakyConditional are separate targets of manuscript 187-01.",
+  "openAIHostedAcceptance": false,
+  "snaky": {
+    "runId": "e2b78e94-e26d-4b02-a8e5-53375547ef4d",
+    "status": "evaluated_passed",
+    "phase": "finished",
+    "solutionCommit": "14d49c0f2bb94a8973471120f675554798126117",
+    "resultSHA256": "7c7ac917b28831d350503d1bbe4650c11564509a551e1659235ed3e0bf3b89c8",
+    "finishedAtUTC": "2026-10-24T20:37:08.772000+00:00",
+    "finishedAtAsiaShanghai": "2026-10-25T04:37:08.772000+08:00",
+    "fixedEvaluator": {
+      "aborted": false,
+      "durationMs": 15982088,
+      "exitCode": 0,
+      "sandboxBackend": "bwrap",
+      "signal": null,
+      "started": true,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutSha256": "66e35dd741f1a16dc4c318296f8c15d968f8b88f430222586e2fbcd325ad1061",
+      "timedOut": false
+    },
+    "runtimeOfficial": false,
+    "acceptanceMessagesPresent": true,
+    "finalReport": "snaky-native-final-20261025/README.md"
+  },
+  "honeycomb": {
+    "runId": "8bd4a613-c70e-4e96-b298-c9d22cfafaf3",
+    "phase": "running",
+    "turns": 892,
+    "stateSHA256": "2bcc13446825bdb656f0475406ca6befcb516c2c5d12cc2b128f88d6d5bb5681",
+    "canonicalCommit": "5d2165a5ca78f10d630ae578127b9396f6c2ac33",
+    "heightOneThroughFiveIntegrated": true,
+    "originalGoalSolved": false,
+    "nativeTasksIntegrated": 9,
+    "taskCounts": {
+      "blocked": 1,
+      "integrated": 9,
+      "conditional": 1,
+      "running": 3,
+      "pending": 6
+    },
+    "growthTask": {
+      "status": "blocked",
+      "attempts": 10,
+      "feedback": "math_task_repeated_failed_input\nThe same Lean source and mathematical inputs already failed. Save a changed proof or supply new premises, checked dependency evidence, or verifier inputs before retrying.\nmath_task_missing_declaration\nFile: generated/problem/Submission.lean\nTarget: OAI.PolynomialVacuumBridge.Corridor.strip_growth_below_mu\nThe assigned theorem is absent. Save it with the requested name and type, or report supporting results and the remaining gap as progress. No Lean proof check has started."
+    },
+    "pendingFormalTasks": [
+      {
+        "id": "finite_box_zero_mass_reference",
+        "theoremName": null,
+        "type": null
+      },
+      {
+        "id": "bridge_length_le_columnSet_researcher2_v1",
+        "theoremName": "OAI.PolynomialVacuumBridge.Corridor.bridgeLength_le_columnSet",
+        "type": "∀ {h : ℕ} (p : OAI.PolynomialVacuumBridge.Corridor.BridgePath h) (columns : Finset ℤ), (∀ v ∈ p.vertices, (match v with | .up i j => 2 * i + j | .down i j => 2 * i + j + 1) ∈ columns) → p.vertices.length ≤ h * columns.card"
+      },
+      {
+        "id": "finite_matrix_green_moment_a566b958",
+        "theoremName": "OAI.PolynomialVacuumBridge.Corridor.finiteMatrixGreen_moment_summable",
+        "type": "∀ (ι : Type) [Fintype ι] [DecidableEq ι] (A : Matrix ι ι ℝ) (u v : ι → ℝ), (∀ i j, 0 ≤ A i j) → (∀ i, 0 ≤ u i) → (∀ i, 0 ≤ v i) → Summable (fun k : ℕ => ∑ i, ∑ j, u i * (A ^ k) i j * v j) → (∀ i, ∃ a : ℕ, 0 < ∑ p, u p * (A ^ a) p i) → (∀ j, ∃ b : ℕ, 0 < ∑ q, (A ^ b) j q * v q) → Summable (fun k : ℕ => (k : ℝ) * ∑ i, ∑ j, u i * (A ^ k) i j * v j)"
+      },
+      {
+        "id": "bridge_adjacent_layer_cases_researcher1_v1",
+        "theoremName": "OAI.PolynomialVacuumBridge.Corridor.bridgeAdjacent_layer_cases",
+        "type": "∀ {a b : OAI.PolynomialVacuumBridge.Corridor.Vertex}, OAI.PolynomialVacuumBridge.Corridor.adjacent a b → OAI.PolynomialVacuumBridge.Corridor.layer b = OAI.PolynomialVacuumBridge.Corridor.layer a ∨ OAI.PolynomialVacuumBridge.Corridor.layer b = OAI.PolynomialVacuumBridge.Corridor.layer a - 1 ∨ OAI.PolynomialVacuumBridge.Corridor.layer b = OAI.PolynomialVacuumBridge.Corridor.layer a + 1"
+      },
+      {
+        "id": "bridge_adjacent_slabStep_researcher2_v1",
+        "theoremName": "OAI.PolynomialVacuumBridge.Corridor.bridgeAdjacent_slabStep",
+        "type": "∀ {a b : OAI.PolynomialVacuumBridge.Corridor.Vertex}, OAI.PolynomialVacuumBridge.Corridor.adjacent a b → (OAI.PolynomialVacuumBridge.Corridor.layer b = OAI.PolynomialVacuumBridge.Corridor.layer a ∧ (OAI.PolynomialVacuumBridge.Corridor.bridgeBoxColumn b = OAI.PolynomialVacuumBridge.Corridor.bridgeBoxColumn a - 1 ∨ OAI.PolynomialVacuumBridge.Corridor.bridgeBoxColumn b = OAI.PolynomialVacuumBridge.Corridor.bridgeBoxColumn a + 1)) ∨ (OAI.PolynomialVacuumBridge.Corridor.bridgeBoxColumn b = OAI.PolynomialVacuumBridge.Corridor.bridgeBoxColumn a ∧ (OAI.PolynomialVacuumBridge.Corridor.layer b = OAI.PolynomialVacuumBridge.Corridor.layer a - 1 ∨ OAI.PolynomialVacuumBridge.Corridor.layer b = OAI.PolynomialVacuumBridge.Corridor.layer a + 1))"
+      },
+      {
+        "id": "bridge_two_down_top_layer_witness_v1",
+        "theoremName": "OAI.PolynomialVacuumBridge.Corridor.bridge_two_down_top_layer_witness",
+        "type": "∃ p : OAI.PolynomialVacuumBridge.Corridor.BridgePath 2, OAI.PolynomialVacuumBridge.Corridor.Vertex.down 0 1 ∈ p.vertices ∧ OAI.PolynomialVacuumBridge.Corridor.Vertex.down 2 1 ∈ p.vertices ∧ OAI.PolynomialVacuumBridge.Corridor.Vertex.down 0 1 ≠ OAI.PolynomialVacuumBridge.Corridor.Vertex.down 2 1"
+      }
+    ],
+    "noNewNativeIntegrationSinceHeightFive": true,
+    "workers": [
+      {
+        "id": "solver",
+        "phase": "running",
+        "sessionRole": "lead",
+        "sessionTaskId": null,
+        "turns": 486
+      },
+      {
+        "id": "researcher-1",
+        "phase": "running",
+        "sessionRole": "researcher",
+        "sessionTaskId": "initial_research_1",
+        "turns": 98
+      },
+      {
+        "id": "researcher-2",
+        "phase": "running",
+        "sessionRole": "researcher",
+        "sessionTaskId": "initial_research_2",
+        "turns": 156
+      },
+      {
+        "id": "engineer",
+        "phase": "running",
+        "sessionRole": "researcher",
+        "sessionTaskId": "frontier_input_a566b95879bcff8e245ce923826d7c6ed33fcb51",
+        "turns": 152
+      }
+    ]
+  },
+  "campaign": {
+    "status": "running",
+    "currentTier": "C",
+    "currentTarget": "HoneycombBridgeFiniteness",
+    "historicalCampaignCounts": {
+      "accepted": 3,
+      "blocked": 2,
+      "running": 1,
+      "pending": 410
+    },
+    "countBoundary": "Historical main-campaign counters exclude separate accepted follow-up runs; they are not the global final-pass count.",
+    "budgetCaps": {
+      "maxRunSeconds": 0,
+      "maxTurns": 0,
+      "maxTurnSeconds": 0,
+      "maxTotalTokens": 0,
+      "evaluatorTimeoutSeconds": 0
+    },
+    "service": [
+      "NRestarts=0",
+      "ActiveState=active",
+      "SubState=running"
+    ]
+  },
+  "intervention": {
+    "runtimeModified": false,
+    "activeSourceOrStateDirectlyModified": false,
+    "leanOrComparatorInvoked": false,
+    "queueEdited": false
+  }
+}

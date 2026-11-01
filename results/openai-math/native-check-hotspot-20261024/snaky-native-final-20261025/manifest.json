@@ -1,0 +1,182 @@
+{
+  "schema": "theorem-os.snaky-native-final-manifest.v1",
+  "frozenAt": "2026-10-25T03:49:38.099846+00:00",
+  "archiveRoot": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/validation/native-check-hotspot-20261024/snaky-native-final-20261025",
+  "files": [
+    {
+      "name": "README.md",
+      "bytes": 5137,
+      "sha256": "e334b13e282a2c1eefa336a979bff7f0c40324691d52c7c09091e7c81a229462"
+    },
+    {
+      "name": "accepted-source/Challenge.lean",
+      "bytes": 2069,
+      "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea"
+    },
+    {
+      "name": "accepted-source/Submission.lean",
+      "bytes": 967683,
+      "sha256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae"
+    },
+    {
+      "name": "accepted-source/current-source-identities.json",
+      "bytes": 768,
+      "sha256": "05343acf342a7dad1b67f5a34893a7e37de1ea0b0990217c0a3bad91c2d1c880"
+    },
+    {
+      "name": "accepted-source/git-capture.json",
+      "bytes": 2355,
+      "sha256": "0e53f83961b7e05b8291c08281cf50145064c4e0546f0d0551cc015f4cada790"
+    },
+    {
+      "name": "accepted-source/lake-manifest.json",
+      "bytes": 3571,
+      "sha256": "56b918a082b3903ef9071b7a550747f47221eceaece153c346310cfe38408829"
+    },
+    {
+      "name": "accepted-source/lakefile.toml",
+      "bytes": 321,
+      "sha256": "5626031b96b817d4ed6b2615ac3ebddeb0f1856208d6363bddea8b64cfe6e6b6"
+    },
+    {
+      "name": "accepted-source/lean-toolchain",
+      "bytes": 25,
+      "sha256": "d5edba4e4b8faad9c1baeadb265716d20d03be4d1a2647dc5e35b0c0325bea7b"
+    },
+    {
+      "name": "archive-origins.json",
+      "bytes": 14462,
+      "sha256": "014f18257615802ce2a2fbb452bc606c2e77a74e2b542dba98c982332288ef90"
+    },
+    {
+      "name": "events/acceptance-index.json",
+      "bytes": 6354,
+      "sha256": "3f75db9313f10ca73d2919d895dc79868b3502faff6a3aae432d321e83227997"
+    },
+    {
+      "name": "events/acceptance.raw-lines.jsonl",
+      "bytes": 1930,
+      "sha256": "c52f5b180af733e7080e20b5d7b4cf1723afbaa3665e7adfe9775e60b49eb372"
+    },
+    {
+      "name": "fixed-evaluator/command.sh",
+      "bytes": 2407,
+      "sha256": "7cb9c632ad7e9a8890d64357fe178bf996f28ada0cbc6fe50f32e1f4d01d766f"
+    },
+    {
+      "name": "fixed-evaluator/comparator.runtime-config.json",
+      "bytes": 304,
+      "sha256": "6f57fd04134fde866b0d0babcdcf0a2f09f2c81690c72395a0f92196129bbcdc"
+    },
+    {
+      "name": "fixed-evaluator/record.json",
+      "bytes": 12668,
+      "sha256": "091cd5ebb08db9166c992a8bd175fac63870bad6f2fb58e6d3e42c885389edfd"
+    },
+    {
+      "name": "fixed-evaluator/stderr-captured.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "fixed-evaluator/stdout-captured.txt",
+      "bytes": 12000,
+      "sha256": "0e0baeb41497b64dcedb5c3b41d6b3a4b864b22ab164bfa2f44dcdb0ed055f7b"
+    },
+    {
+      "name": "fixed-review/review.json",
+      "bytes": 1462,
+      "sha256": "f62e504ffb054daa953d3ce780ffee7f3ac959ee585c8551df5aeff4a328d792"
+    },
+    {
+      "name": "implementation/evaluation.ts",
+      "bytes": 3693,
+      "sha256": "2ae89fd28e8cc553370fa3cf6aca18545080e90637c3721037c902c26cec5006"
+    },
+    {
+      "name": "implementation/mathProcess.ts",
+      "bytes": 9454,
+      "sha256": "7bcd06cc307b09022723444cd63d026cdd93e8b8e65694d85da8874ab10a4188"
+    },
+    {
+      "name": "native-verification/batch.json",
+      "bytes": 33878,
+      "sha256": "f7f7c0c51bc0c4f1494f041026811d0cc13015ed92dd5321f2c5c60cabf53f91"
+    },
+    {
+      "name": "native-verification/check.json",
+      "bytes": 34388,
+      "sha256": "0df8a1b821b6b7807e4e06be952dca17ae2b1e9124483823a5a95ef853e7d583"
+    },
+    {
+      "name": "native-verification/receipt.json",
+      "bytes": 15724,
+      "sha256": "c832217429e0ce0c2de7e4c1c87f8a07d9e01c7347fb9d3cbde710b2ea1e4a75"
+    },
+    {
+      "name": "native-verification/stderr-preview.txt",
+      "bytes": 11999,
+      "sha256": "402369b039c6860a30ab1e17efc5b23dfd96617d7db28deb518e2e732bf71e62"
+    },
+    {
+      "name": "native-verification/stdout-preview.txt",
+      "bytes": 1392,
+      "sha256": "0564fcb63a2bde159a695cb54bce6d214fd98ab82d22acacadc5af8c8b45cdda"
+    },
+    {
+      "name": "official/SnakyConditional.json",
+      "bytes": 358,
+      "sha256": "2e6949771d8f090de4dc7811d9fe2fe78ee983052c27144b562841b7f8c6c20d"
+    },
+    {
+      "name": "official/SnakyConditional.lean",
+      "bytes": 2069,
+      "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea"
+    },
+    {
+      "name": "official/target-map-entry.json",
+      "bytes": 2562,
+      "sha256": "366de27768923dc028bab6035780d49afb906d79de61b6aa40af44aaef3367cd"
+    },
+    {
+      "name": "raw/active-problem.json",
+      "bytes": 6534,
+      "sha256": "3e69bf97a26ad47386a2ad2e5dd7c4b1aef642c6149bb82133b248273c2c50bb"
+    },
+    {
+      "name": "raw/build-manifest.json",
+      "bytes": 50168,
+      "sha256": "3cf310891edf8cb396f218531e1eb6c5a997622adb6d835e4b368ffa1c8e637d"
+    },
+    {
+      "name": "raw/build.json",
+      "bytes": 406,
+      "sha256": "72c130ff2c0c01a05dfb8db66ca7abf154432ad2a1a23912df9605da9ce793c4"
+    },
+    {
+      "name": "raw/launch.json",
+      "bytes": 4621,
+      "sha256": "7ece53853e37a39f69a41a4814c60041c16c65c1c285495f7661592a4e6180c1"
+    },
+    {
+      "name": "raw/result.json",
+      "bytes": 14291,
+      "sha256": "7c7ac917b28831d350503d1bbe4650c11564509a551e1659235ed3e0bf3b89c8"
+    },
+    {
+      "name": "raw/terminal-state-metadata.json",
+      "bytes": 1446,
+      "sha256": "32b8a4faf05f68e87a87c6db0c7b5267f628b8cf67660991be14dc6899140371"
+    },
+    {
+      "name": "raw/tools-manifest.json",
+      "bytes": 758,
+      "sha256": "7eded4a0ed533eaf6b1520ed6d5b8f2187d995586164abfd00a6f6177f31360e"
+    },
+    {
+      "name": "verification.json",
+      "bytes": 6335,
+      "sha256": "bd898893f29c1792bf94bf038d5ace412c5271747dcdfcb0feb8f384acc52196"
+    }
+  ]
+}

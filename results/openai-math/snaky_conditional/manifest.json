@@ -1,6 +1,6 @@
 {
   "schema": "theorem-os.result-file-manifest.v1",
-  "generatedAt": "2026-10-22T21:22:48.429065+00:00",
+  "generatedAt": "2026-10-24T09:22:20.681488+00:00",
   "algorithm": "sha256",
   "excludes": [
     "manifest.json"
@@ -98,8 +98,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 1591,
-      "sha256": "53fde041b4341b33d70ecc59d026fe3e6749f77d187b6a559965656d19367184"
+      "bytes": 4373,
+      "sha256": "24440062c1efb612a8db53b0353cc301aa5a110676de78d496dd21703cd44636"
     },
     {
       "path": "evidence/CertificateData.receipt.json",
@@ -182,6 +182,41 @@
       "sha256": "00dbeb959b3d605f06119871fa033add8e1d32eb9492582cfdb4582c57496ff2"
     },
     {
+      "path": "evidence/canonical-v6/host-full-result.json",
+      "bytes": 34871,
+      "sha256": "4e2c874d8ed0f1373609d542922422f39bcb40e83c46b3295431dc859972d575"
+    },
+    {
+      "path": "evidence/canonical-v6/original-comparator-receipt.json",
+      "bytes": 312812,
+      "sha256": "21930de4ad74c9137799542ebbeee174c86d5521e65b8c11509677e074f76009"
+    },
+    {
+      "path": "evidence/canonical-v6/publisher-pass-summary.json",
+      "bytes": 6547,
+      "sha256": "803a7e4cdb98748b681b4fbafc0a3fc1cb216624e083753debae8646b679caaf"
+    },
+    {
+      "path": "evidence/canonical-v7/goal-pass-integration-error-summary.json",
+      "bytes": 3084,
+      "sha256": "a31f7ace37c621aceb899b32d74371cf18421c6840a30d3ce4829d6ac8d5c8e8"
+    },
+    {
+      "path": "evidence/canonical-v7/native-goal-proof.json",
+      "bytes": 1459289,
+      "sha256": "914145109374697f75654605038c67e785d214a7a3224d7d8e6f120fa1564fec"
+    },
+    {
+      "path": "evidence/canonical-v7/native-terminal-result.json",
+      "bytes": 1474,
+      "sha256": "b46a1f9a49466dd1031c79fb8f06b608f0c854b4de0f38cda6a0d6b0af6da961"
+    },
+    {
+      "path": "evidence/canonical-v7/native-terminal-snapshot-manifest.json",
+      "bytes": 4643,
+      "sha256": "f304e7690102b73fec731eb3cb2831e687d1805b2fae2b22cc57a37127ae7e1a"
+    },
+    {
       "path": "lake-manifest.json",
       "bytes": 3551,
       "sha256": "9423cd5ba63b06d018d6955536ed03a4ce4087742d5cb7539c29c753729d42e8"
@@ -207,6 +242,16 @@
       "sha256": "8dd110e4598e770b2bfad531a6199c166175a71aa3d0becef27387ae5551b167"
     },
     {
+      "path": "single-file/SubmissionCanonicalV6.lean",
+      "bytes": 968086,
+      "sha256": "94e1154db63070c8dd4b2344a5f040200fe9174937e578d95f327cd803cc9f77"
+    },
+    {
+      "path": "single-file/SubmissionCanonicalV7.lean",
+      "bytes": 968236,
+      "sha256": "2edd54515230fd886561c1a79a37155c90162f85611567f2fbb63db9ea5284a3"
+    },
+    {
       "path": "verification.json",
       "bytes": 845,
       "sha256": "d0e3539b7c556e8b6dd7c0b337dc20d677857474e1f46415435665526df41ac9"
@@ -216,5 +261,6 @@
       "bytes": 1303,
       "sha256": "ae1cfb1f730048e2d3576e2411f1f5a7a1869d2cc490daa59dc851b8286ef127"
     }
-  ]
+  ],
+  "readmeUpdatedAt": "2026-10-25T03:48:27.880877+00:00"
 }

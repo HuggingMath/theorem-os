@@ -1,0 +1,115 @@
+{
+  "observedAt": "2026-10-25T04:04:34.311619+00:00",
+  "phase": "running",
+  "turns": 906,
+  "edit": {
+    "affectedTasks": [],
+    "appliedAt": 1792901055379,
+    "baseVersion": "62b57e1798bdc6a8c707745047871025f79e3806ac87d4da4c4c83241801d27f",
+    "id": "honeycomb-bounded-typed-priority-20261025",
+    "planVersion": "9794f656e278f3dc8df72dcbaa7362d700d8d3531ed8214181a06e4caeb4b058",
+    "receivedAt": 1792901055234,
+    "recheck": {
+      "status": "not-required",
+      "tasks": []
+    },
+    "status": "applied"
+  },
+  "allTaskContractsUnchanged": true,
+  "expectedInvalidatedTasks": [],
+  "canonicalCommit": "5d2165a5ca78f10d630ae578127b9396f6c2ac33",
+  "tasks": [
+    {
+      "id": "strip_growth_below_mu",
+      "status": "blocked",
+      "attempts": 10,
+      "workerId": "researcher-1"
+    },
+    {
+      "id": "initial_goal_1",
+      "status": "conditional",
+      "attempts": 3,
+      "workerId": "engineer"
+    },
+    {
+      "id": "bridge_adjacent_layer_cases_researcher1_v1",
+      "status": "pending",
+      "attempts": 0,
+      "workerId": null
+    },
+    {
+      "id": "bridge_adjacent_slabStep_researcher2_v1",
+      "status": "pending",
+      "attempts": 0,
+      "workerId": null
+    },
+    {
+      "id": "bridge_two_down_top_layer_witness_v1",
+      "status": "pending",
+      "attempts": 0,
+      "workerId": null
+    },
+    {
+      "id": "bridge_length_le_columnSet_researcher2_v1",
+      "status": "pending",
+      "attempts": 0,
+      "workerId": null
+    },
+    {
+      "id": "finite_matrix_green_moment_a566b958",
+      "status": "pending",
+      "attempts": 0,
+      "workerId": null
+    },
+    {
+      "id": "initial_research_1",
+      "status": "running",
+      "attempts": 88,
+      "workerId": "researcher-1"
+    },
+    {
+      "id": "initial_research_2",
+      "status": "running",
+      "attempts": 144,
+      "workerId": "researcher-2"
+    },
+    {
+      "id": "frontier_input_a566b95879bcff8e245ce923826d7c6ed33fcb51",
+      "status": "running",
+      "attempts": 148,
+      "workerId": "engineer"
+    },
+    {
+      "id": "finite_box_zero_mass_reference",
+      "status": "pending",
+      "attempts": 0,
+      "workerId": null
+    }
+  ],
+  "workers": [
+    {
+      "id": "solver",
+      "phase": "running",
+      "sessionTaskId": null,
+      "sessionRole": "lead"
+    },
+    {
+      "id": "researcher-1",
+      "phase": "running",
+      "sessionTaskId": "initial_research_1",
+      "sessionRole": "researcher"
+    },
+    {
+      "id": "researcher-2",
+      "phase": "running",
+      "sessionTaskId": "initial_research_2",
+      "sessionRole": "researcher"
+    },
+    {
+      "id": "engineer",
+      "phase": "running",
+      "sessionTaskId": "frontier_input_a566b95879bcff8e245ce923826d7c6ed33fcb51",
+      "sessionRole": "researcher"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "observedAt": "2026-10-25T04:06:57.575159+00:00",
+  "stateSHA256": "209d8ab3bd70dd2e92417b0d0e2c13690c3485728bfbfa01c7fc7333fb8b2ebf",
+  "phase": "running",
+  "turns": 908,
+  "task": {
+    "id": "bridge_adjacent_layer_cases_researcher1_v1",
+    "status": "running",
+    "attempts": 1,
+    "assignment": {
+      "assignmentId": "44a5357e-27fa-47cb-80fe-85170e121c4c",
+      "canonicalCommit": "5d2165a5ca78f10d630ae578127b9396f6c2ac33",
+      "dependencies": [],
+      "groupId": "main",
+      "researchBasis": {
+        "dependencies": [],
+        "environmentDigest": "8bb02b80b9a30617b8d03aeaa67465db33534491566f19301f3ae51ac494093d",
+        "problemReceiptDigest": "288f5d5aa511a456e7c9b4e2b2bed14521b39e76f27c1fbf51c9ac980cc0d37c",
+        "retrievalDigest": "f5fa7f00d04e495a9eb0089943ca9e6764e56ca67c96253410933e210be6dfad",
+        "schema": "theorem-os.research-basis.v1",
+        "sourceDigest": "e8901256b03ed65cc596cad7dcfdf48b0f517f4369023145f1adea671beb4a56",
+        "taskDigest": "ef8c19db5b8c79072e034f7bd1d3bc46cdee28072ab214fefbf3d16864301b41",
+        "taskId": "bridge_adjacent_layer_cases_researcher1_v1"
+      },
+      "seedCommit": "9367ac86028acc948eb3559d36238160b6cd5588",
+      "taskDigest": "ef8c19db5b8c79072e034f7bd1d3bc46cdee28072ab214fefbf3d16864301b41",
+      "taskId": "bridge_adjacent_layer_cases_researcher1_v1",
+      "workerId": "engineer"
+    },
+    "proofPresent": false,
+    "integrationPresent": false
+  },
+  "workers": [
+    {
+      "id": "solver",
+      "sessionRole": "lead",
+      "sessionTaskId": null,
+      "phase": "running"
+    },
+    {
+      "id": "researcher-1",
+      "sessionRole": "researcher",
+      "sessionTaskId": "initial_research_1",
+      "phase": "running"
+    },
+    {
+      "id": "researcher-2",
+      "sessionRole": "researcher",
+      "sessionTaskId": "initial_research_2",
+      "phase": "running"
+    },
+    {
+      "id": "engineer",
+      "sessionRole": "prover",
+      "sessionTaskId": "bridge_adjacent_layer_cases_researcher1_v1",
+      "phase": "running"
+    }
+  ],
+  "canonicalCommit": "5d2165a5ca78f10d630ae578127b9396f6c2ac33",
+  "newLemmaAssignmentObserved": true,
+  "newNativeAcceptanceObserved": false,
+  "eventIndex": [
+    {
+      "line": 67659,
+      "event": "task_assigned",
+      "at": 1792901100578,
+      "rawLineSHA256": "00eefd042d0ecc5f13e0ea1afe4a2211dc37b5e9d4595133b9476f8e55dec8e6"
+    }
+  ],
+  "claimBoundary": "Task dispatch is verified; this does not establish the pending lemma or all-height original theorem."
+}

@@ -1,0 +1,79 @@
+{
+  "id": "SnakyConditional",
+  "tier": "C",
+  "tiers": [
+    "C"
+  ],
+  "mixed_tiers": false,
+  "manuscript_ids": [
+    "187-01"
+  ],
+  "family_manuscript_ids": [
+    "187-01"
+  ],
+  "families": [
+    "187"
+  ],
+  "result_labels": [
+    "Conditional winning templates from finite partial positions"
+  ],
+  "mapping_status": "scope_reviewed",
+  "mapping_by_manuscript": {
+    "187-01": "scope_paragraph_and_result_label_reviewed"
+  },
+  "review_required": false,
+  "mapping_ambiguous": false,
+  "aggregate_spans_multiple_papers": false,
+  "imports": [
+    "Mathlib"
+  ],
+  "proof_holes_count": 1,
+  "theorem_names": [
+    "OAI.SnakyConditional.snaky_winning_strategy_with_legal_states"
+  ],
+  "definition_names": [],
+  "official_config": {
+    "challenge_module": "ComparatorChallenges.SnakyConditional",
+    "solution_module": "OAI.GameTheory.SnakyConditional.Main",
+    "theorem_names": [
+      "OAI.SnakyConditional.snaky_winning_strategy_with_legal_states"
+    ],
+    "definition_names": [],
+    "permitted_axioms": [
+      "propext",
+      "Quot.sound",
+      "Classical.choice"
+    ],
+    "enable_nanoda": false
+  },
+  "source": {
+    "lean": {
+      "url": "https://raw.githubusercontent.com/openai/math/1581d4cbdd69a0faf34b2089614fe2a814316a6a/lean/ComparatorChallenges/SnakyConditional.lean",
+      "status": 200,
+      "path": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/metadata/challenges/SnakyConditional.lean",
+      "source_path": "lean/ComparatorChallenges/SnakyConditional.lean",
+      "sha256": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea",
+      "bytes": 2069
+    },
+    "config": {
+      "url": "https://raw.githubusercontent.com/openai/math/1581d4cbdd69a0faf34b2089614fe2a814316a6a/lean/ComparatorChallenges/SnakyConditional.json",
+      "status": 200,
+      "path": "/home/lzh/theorem-os-runs/openai-math-d-to-s-20261022/metadata/challenges/SnakyConditional.json",
+      "source_path": "lean/ComparatorChallenges/SnakyConditional.json",
+      "sha256": "2e6949771d8f090de4dc7811d9fe2fe78ee983052c27144b562841b7f8c6c20d",
+      "bytes": 358
+    }
+  },
+  "isolation": {
+    "mathlib_only": true,
+    "requires_oai_dependency_review": false,
+    "oai_imports": [],
+    "published_solution_import_allowed": false,
+    "statement_snapshot_only": true
+  },
+  "download_errors": [],
+  "notes": [],
+  "explicit_axiom_declarations": [],
+  "proof_holes_count_method": "Lexical occurrences of sorry in the official statement, not a parsed guarantee of proof-hole boundaries.",
+  "placeholder_review_required": false
+}
