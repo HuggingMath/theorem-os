@@ -23,6 +23,7 @@ const commands: Readonly<Record<string, string>> = {
   'check-finite': 'scripts/mathematics/checkFinite.ts',
   'kernel-certificate': 'scripts/mathematics/kernelCertificate.ts',
   'library-pack': 'scripts/mathematics/libraryPack.ts',
+  'auto-library': 'scripts/mathematics/autoLibrary.ts',
   continuation: 'scripts/mathematics/readContinuation.ts',
   'continuation-seed': 'scripts/mathematics/seedContinuation.ts',
   inspect: 'scripts/mathematics/inspectMathRun.ts',
@@ -57,6 +58,7 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   check-finite         Replay finite Boolean constraints and return witnesses
   kernel-certificate   Generate chunked decide +kernel certificate modules
   library-pack         Extract checked run modules or backport upstream files as a frozen library
+  auto-library         Plan, prove and publish the library modules a problem needs, before solving it
   continuation         Read or search frozen continuation attachments in bounded pages
   continuation-seed    Initialize a new prepared run from advisory sources and fresh helper checks
   inspect              Read a research report or export a versioned task plan
