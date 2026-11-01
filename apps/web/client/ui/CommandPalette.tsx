@@ -60,7 +60,8 @@ function Palette({ commands, session }: { commands: readonly PaletteCommand[]; s
         aria-controls="palette-options" aria-activedescendant={shown[selected] ? `palette-${shown[selected]!.id}` : undefined} autocomplete="off" spellcheck={false}
         onInput={event => { setQuery((event.target as HTMLInputElement).value); setIndex(0); }} onKeyDown={keydown} />
       <kbd>Esc</kbd></div>
-    <ul ref={list} id="palette-options" class="palette-options" role="listbox" aria-label={t('可用命令')}>
+    {/* The search box owns the keys (aria-activedescendant), so the scrolling list is not a Tab stop of its own. */}
+    <ul ref={list} id="palette-options" class="palette-options" role="listbox" aria-label={t('可用命令')} tabIndex={-1}>
       {shown.map((command, position) => {
         const heading = command.group !== group ? (group = command.group) : '';
         return <li key={command.id} role="presentation">
