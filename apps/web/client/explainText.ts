@@ -236,9 +236,9 @@ export function wholeQuotes(whole: string, quotes: readonly (string | null)[]): 
 }
 
 /**
- * A run of text to underline for quote `quote` (UTF-16 offsets, end exclusive); `quotes` is it and every other quote of
- * the same text, which one click on the run finds together, and `wider` the quotes around that text, each list one
- * longer text, shortest first, which further clicks on the run step out to.
+ * A run of text to underline for quote `quote` (UTF-16 offsets, end exclusive); `quotes` is it, every other quote of the
+ * same text and the shorter quotes there whose counterpart was not found, which one click on the run finds together, and
+ * `wider` the other quotes around that text, each list one text, shortest first, which further clicks step out to.
  */
 export type QuotePiece = { start: number; end: number; quote: number; quotes: number[]; wider: number[][] };
 // Latin and CJK sentence punctuation, written as escapes so the source holds no interface text.
@@ -263,59 +263,56 @@ function snapper(text: string) {
 /** The text a quote of `text` covers, as quotePieces counts it. */
 export const quoteRange = (text: string, start: number, end: number) => snapper(text).snap(start, end);
 /**
- * Where to underline quotes of one text, each a range or `null`, and `placed` when its counterpart was found. A quote
- * inside another takes its own text and the outer one keeps the rest, so the more specific quote is the one a click
- * finds; of two quotes that cross, the earlier keeps its text. Quotes differing only by spaces or sentence punctuation at
- * their ends are one, drawn for the first whose counterpart was found and carrying the others in `quotes`, and a quote
- * whose counterpart was not found yields to one whose was. A `hidden` quote is never drawn but counts as around the
+ * Where to underline quotes of one text, each a range or `null`, and `placed` when its counterpart was found. Each word
+ * goes to the shortest quote around it whose counterpart was found, else the shortest, so a click finds the most specific
+ * quote of those words, also where two quotes cross; a shorter quote there whose counterpart was not found goes with it,
+ * so the click still marks a counterpart and lists both. Quotes differing only by spaces or sentence punctuation at their ends are one, drawn for the first whose
+ * counterpart was found and carrying the others in `quotes`. A `hidden` quote is never drawn but counts as around the
  * quotes inside it. Like linkedProse, a quote that cuts into a formula, inline code or bold text takes all of it.
- * Underlines leave out spaces and sentence punctuation at their ends, and a remainder of only spaces and punctuation is
- * not underlined.
+ * Underlines leave out spaces and sentence punctuation at their ends, and a remainder of only spaces and punctuation, or
+ * a word of one or two letters left between finer quotes, is not underlined; clicking a finer quote again reaches it.
  */
+// A word left between finer quotes this short ("a", "if", "is") is too narrow to tap; an East Asian character counts twice.
+const tiny = (words: string) => [...words.replace(/[\s$]/gu, '')]
+  .reduce((sum, char) => sum + (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(char) ? 2 : 1), 0) <= 2;
 export function quotePieces(text: string,
   quotes: readonly ({ start: number; end: number; placed: boolean; hidden?: boolean } | null)[]): QuotePiece[] {
-  const { trim, snap } = snapper(text);
-  const ranges = quotes.flatMap((quote, index) => {
+  const atoms = proseAtoms(text), { trim, snap } = snapper(text);
+  // Quotes of one text (as snapped) are one group, drawn when one of them is and placed when a drawn one is.
+  type Group = { start: number; end: number; members: number[]; shown: boolean; placed: boolean };
+  const groups: Group[] = [];
+  quotes.forEach((quote, index) => {
     const range = quote && snap(quote.start, quote.end);
-    return range ? [{ ...range, placed: quote.placed, hidden: quote.hidden === true, index }] : [];
+    if (!range) return;
+    let group = groups.find(item => item.start === range.start && item.end === range.end);
+    if (!group) groups.push(group = { ...range, members: [], shown: false, placed: false });
+    group.members.push(index);
+    if (!quote.hidden) { group.shown = true; group.placed ||= quote.placed; }
   });
-  const items = ranges.filter(item => !item.hidden)
-    .sort((a, b) => Number(b.placed) - Number(a.placed) || a.start - b.start || b.end - a.end || a.index - b.index);
-  const kept: typeof items = [];
-  for (const item of items) {
-    // Sorted placed first, so the copy kept for a text is placed whenever any copy is.
-    if (kept.some(other => item.start === other.start && item.end === other.end)) continue;
-    const conflict = kept.some(other => {
-      const inside = other.start <= item.start && item.end <= other.end, around = item.start <= other.start && other.end <= item.end;
-      if (inside) return !item.placed && other.placed;
-      if (around) return false;
-      return item.start < other.end && other.start < item.end;
-    });
-    if (!conflict) kept.push(item);
+  groups.sort((a, b) => a.end - a.start - (b.end - b.start) || a.start - b.start);
+  const lead = (group: Group) => group.members.find(index => quotes[index]!.placed && !quotes[index]!.hidden)
+    ?? group.members.find(index => !quotes[index]!.hidden) ?? group.members[0]!;
+  const listed = (group: Group) => { const first = lead(group); return [first, ...group.members.filter(index => index !== first)]; };
+  // Runs of atoms with the same owner, the shortest drawn group around them that is placed (else the shortest drawn),
+  // each with the shorter unplaced groups inside it, which add pairs to a click but no Lean.
+  const runs: { start: number; end: number; owner: Group; merged: Set<Group> }[] = [];
+  for (const atom of atoms) {
+    const around = groups.filter(group => group.shown && group.start <= atom.start && atom.end <= group.end);
+    const owner = around.find(group => group.placed) ?? around[0];
+    if (!owner) continue;
+    const merged = around.slice(0, around.indexOf(owner)), last = runs.at(-1);
+    if (last && last.end === atom.start && last.owner === owner) { last.end = atom.end; for (const group of merged) last.merged.add(group); }
+    else runs.push({ start: atom.start, end: atom.end, owner, merged: new Set(merged) });
   }
-  // Every quote of one text, the kept copy first, then the others in the order given.
-  const same = (range: { start: number; end: number }, first?: number) => {
-    const found = ranges.filter(other => other.start === range.start && other.end === range.end).map(other => other.index)
-      .sort((a, b) => a - b);
-    return first === undefined ? found : [first, ...found.filter(index => index !== first)];
-  };
-  return kept.flatMap(item => {
-    const around = ranges.filter(other => other.start <= item.start && item.end <= other.end && other.end - other.start > item.end - item.start)
-      .sort((a, b) => a.end - a.start - (b.end - b.start) || a.start - b.start);
-    const wider = around.filter((other, index) => !around.slice(0, index).some(prior => prior.start === other.start && prior.end === other.end))
-      .map(other => same(other));
-    const inner = kept.filter(other => other !== item && item.start <= other.start && other.end <= item.end)
-      .sort((a, b) => a.start - b.start);
-    const pieces: QuotePiece[] = [], quotes = same(item, item.index);
-    let at = item.start;
-    for (const other of [...inner, { start: item.end, end: item.end }]) {
-      const piece = trim(at, other.start);
-      if (piece.end > piece.start && /[^\s\p{P}]/u.test(text.slice(piece.start, piece.end)))
-        pieces.push({ ...piece, quote: item.index, quotes, wider });
-      at = Math.max(at, other.end);
-    }
-    return pieces;
-  }).sort((a, b) => a.start - b.start);
+  return runs.flatMap(run => {
+    const merged = groups.filter(group => run.merged.has(group)), own = new Set([run.owner, ...merged]);
+    const piece = trim(run.start, run.end), words = text.slice(piece.start, piece.end);
+    const finer = groups.some(group => group.shown && !own.has(group) && run.owner.start <= group.start && group.end <= run.owner.end &&
+      group.end - group.start < run.owner.end - run.owner.start);
+    if (piece.end <= piece.start || !/[^\s\p{P}]/u.test(words) || finer && tiny(words)) return [];
+    const wider = groups.filter(group => !own.has(group) && group.start <= piece.start && piece.end <= group.end).map(group => group.members);
+    return [{ ...piece, quote: lead(run.owner), quotes: [run.owner, ...merged].flatMap(listed), wider }];
+  });
 }
 /** A parsed `$…$` formula; the page renders it with plain elements and falls back to the source text on anything odd. */
 export type MathStyle = 'text' | 'roman' | 'italic' | 'bold';
@@ -605,4 +602,25 @@ export function parseMath(source: string): MathNode | undefined {
     const parser = new TexParser(source), children = parser.list();
     return parser.index >= source.length ? { type: 'row', children } : undefined;
   } catch { return undefined; }
+}
+const openBrackets = new Set('([{⟨⌈⌊'), closeBrackets = new Set(')]}⟩⌉⌋');
+/**
+ * Where an inline formula may wrap, as TeX lets it: after a relation, an operator or a comma outside brackets, between
+ * two operands (so not after a leading sign or inside `:=`). The top-level nodes of `formula`, cut into pieces at those
+ * places; one piece when there are none.
+ */
+export function mathPieces(formula: MathNode): MathNode[][] {
+  const nodes = formula.type === 'row' ? formula.children : [formula], pieces: MathNode[][] = [[]];
+  const role = (node: MathNode | undefined) => node?.type === 'text' ? node.role : undefined;
+  const breaks = (node: MathNode | undefined) => role(node) === 'op' || role(node) === 'punct';
+  // A bracket is plain text, or the base of the scripts after it, as in `(a + b)^2`.
+  const bracket = (node: MathNode) => { const base = node.type === 'script' ? node.base : node; return base.type === 'text' && !base.role ? base.text : ''; };
+  let depth = 0;
+  nodes.forEach((node, index) => {
+    pieces.at(-1)!.push(node);
+    depth = Math.max(0, depth + (openBrackets.has(bracket(node)) ? 1 : closeBrackets.has(bracket(node)) ? -1 : 0));
+    const before = nodes[index - 1], after = nodes[index + 1];
+    if (depth === 0 && breaks(node) && before && !breaks(before) && after && !breaks(after)) pieces.push([]);
+  });
+  return pieces;
 }

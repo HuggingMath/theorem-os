@@ -3,13 +3,15 @@ import { leanLines } from './explainText';
 
 /**
  * The Lean pane shared by the explanation and formalization pages: one row per line (number, margin mark, highlighted
- * text), built once; pages change only row classes and text-range highlights.
+ * text), built once; pages change only row classes and text-range highlights. Each row carries its indentation (at most
+ * 8 spaces) as `--indent`, so a line wrapped on a phone hangs under its own text.
  */
 export function buildLeanRows(source: string): HTMLElement[] {
   return leanLines(source).map((segments, index) => {
     const row = document.createElement('div'), number = document.createElement('span'), gutter = document.createElement('span'),
-      text = document.createElement('span');
+      text = document.createElement('span'), line = segments.map(segment => segment.text).join('');
     row.className = 'lean-row'; row.dataset.line = String(index + 1);
+    row.style.setProperty('--indent', String(Math.min(8, line.length - line.trimStart().length)));
     number.className = 'lean-line-number'; number.textContent = String(index + 1); number.setAttribute('aria-hidden', 'true');
     gutter.className = 'lean-mark'; gutter.setAttribute('aria-hidden', 'true');
     text.className = 'lean-text';

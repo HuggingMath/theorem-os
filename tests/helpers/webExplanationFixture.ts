@@ -23,15 +23,16 @@ type Link = { text: string; lean: string };
 const preset = { model: 'deepseek-flash', effort: 'max', profile: '/preset-only', executable: '/no-model' };
 
 /**
- * `aligned` uses phrase alignment: links from the units, and auditors that find every step consistent with its recorded
- * goals. `formalization` binds the proof to that approved formalization, whose original problem is the statement.
+ * `aligned` uses phrase alignment (true: the current version): links from the units, and auditors that find every step
+ * consistent with its recorded goals. `formalization` binds the proof to that approved formalization, whose original
+ * problem is the statement.
  */
 export function webExplanationEvidence(input: { proof: string; target: string; units: FixtureUnit[];
-  language?: WebExplanationLanguage; environment?: WebEnvironment; maxUnits?: number; aligned?: boolean;
-  formalization?: FormalizationEvidence }): InformalizationEvidence {
+  language?: WebExplanationLanguage; environment?: WebEnvironment; maxUnits?: number;
+  aligned?: boolean | NonNullable<InformalizationRequest['alignment']>; formalization?: FormalizationEvidence }): InformalizationEvidence {
   const language = input.language ?? 'zh', environment = getLeanTaskEnvironment(input.environment ?? 'standard');
   const { formalization } = input;
-  const alignment: typeof INFORMALIZATION_ALIGNMENT | undefined = input.aligned ? INFORMALIZATION_ALIGNMENT : undefined;
+  const alignment = input.aligned === true ? INFORMALIZATION_ALIGNMENT : input.aligned || undefined;
   const sources = [{ module: 'Submission', file: 'Submission.lean', text: input.proof }];
   const report = { nonce: NONCE, target: input.target, axioms: ['propext'], library: [], libraryTruncated: false,
     units: input.units.map(unit => ({ name: unit.name, displayName: unit.name, kind: unit.kind, module: 'Submission',

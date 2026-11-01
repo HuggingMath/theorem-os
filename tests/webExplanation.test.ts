@@ -2,6 +2,7 @@ import net from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { excerptLines, explanationDocument, explanationMarkdownFilename, verifyExplanationEvidence } from '../apps/web/explanation';
 import { explanationKey, WebExplanations } from '../apps/web/explanations';
+import { informalizationAuditInput, informalizationBatches } from '../src/math/informalization';
 import { explanationStopReason, startGatewayForwarder } from '../apps/web/explanationWorker';
 import { parseExplanationMessage, type WebRunner } from '../apps/web/runner';
 import type { WebExplanation, WebRun, WorkerExplanationInput, WorkerExplanationMessage } from '../apps/web/shared';
@@ -102,6 +103,37 @@ describe('web explanation projection', () => {
     expect(sections[1]!.steps.every(step => !('goals' in step))).toBe(true);
     const old = explanationDocument(verifyExplanationEvidence(roundTrip(evidence()), binding).evidence, PROOF);
     expect(old.sections.flatMap(section => section.steps).some(step => 'goals' in step)).toBe(false);
+  });
+
+  it('shows a quoted `induction … with` the cases it opens, and counts auditors only for goals they were given', () => {
+    const proof = ['theorem two_mul_self (n : Nat) : 2 * n = n + n := by', '  induction n with', '  | zero => rfl', '  | succ k ih => omega', ''].join('\n');
+    const main = 'n : Nat\n⊢ 2 * n = n + n', zero = 'case zero\n⊢ 2 * 0 = 0 + 0', succ = 'case succ\nk : Nat\nih : 2 * k = k + k\n⊢ 2 * (k + 1) = k + 1 + (k + 1)';
+    const units: FixtureUnit[] = [{ name: 'two_mul_self', kind: 'theorem', snippet: proof.trimEnd(),
+      steps: [['induction n with'], ['| zero => rfl'], ['| succ k ih => omega']], statement: 'For every n, 2n = n + n.',
+      statementLinks: [{ text: '2n = n + n', lean: '2 * n = n + n' }],
+      goals: [{ snippet: 'induction n with\n  | zero => rfl\n  | succ k ih => omega', before: [main], after: [] },
+        { snippet: 'rfl', before: [zero], after: [] }, { snippet: 'omega', before: [succ], after: [] }] }];
+    const page = (aligned: 'lean-phrase-alignment-v1' | 'lean-phrase-alignment-v2') => {
+      const value = webExplanationEvidence({ proof, target: 'two_mul_self', units, aligned });
+      const verified = verifyExplanationEvidence(roundTrip(value), { ...binding, proof, target: 'two_mul_self' }).evidence;
+      return { value, steps: explanationDocument(verified, proof).sections[0]!.steps };
+    };
+    const current = page('lean-phrase-alignment-v2'), v1 = page('lean-phrase-alignment-v1');
+    for (const { steps } of [current, v1]) expect(steps[0]!.goals).toEqual({ before: [main], beforeCount: 1, after: [zero, succ], afterCount: 2,
+      lines: { start: 2, end: 2 } });
+    expect(current.steps.map(step => step.goalsChecked)).toEqual([2, 2, 2]);
+    // v1 auditors saw the closed block for the first step, so the page does not claim they checked these goals.
+    expect(v1.steps.map(step => step.goalsChecked)).toEqual([undefined, 2, 2]);
+    // What each version's auditors were given for that step: v1 the closed block (lines 2-4), v2 the cases it opens.
+    const given = ({ value }: typeof v1) => informalizationAuditInput({ outline: value.outline,
+      batch: informalizationBatches(value.outline, value.batching)[0]!, accepted: new Map(), language: 'zh', alignment: value.alignment,
+      sources: [{ module: 'Submission', file: 'Submission.lean', text: proof }], explanation: value.batches[0]!.writer });
+    expect(given(v1).inputDigest).toBe(v1.value.batches[0]!.audits[0]!.output.inputDigest);
+    expect(given(v1).stepGoals![0]!.steps[0]).toEqual({ before: [main], beforeCount: 1, after: [], afterCount: 0, lines: { start: 2, end: 4 } });
+    expect(given(current).stepGoals![0]!.steps[0]).toEqual(current.steps[0]!.goals);
+    const relabelled = roundTrip(v1.value);
+    relabelled.alignment = 'lean-phrase-alignment-v2';
+    expect(() => verifyExplanationEvidence(relabelled, { ...binding, proof, target: 'two_mul_self' })).toThrow('explanation_evidence_invalid');
   });
 
   it('sums rounds and reported tokens across batches', () => {

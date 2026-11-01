@@ -26,9 +26,12 @@ export const localeTag = locale === 'en' ? 'en-US' : 'zh-CN';
 /** English counts in the dictionary are written plural; a count of exactly 1 takes the singular noun. */
 const singulars: Record<string, string> = { agents: 'agent', lines: 'line', theorems: 'theorem', tasks: 'task', tokens: 'token',
   findings: 'finding', strategies: 'strategy', runs: 'run', records: 'record', minutes: 'minute', entries: 'entry', bytes: 'byte',
-  times: 'time', matches: 'match', characters: 'character', goals: 'goal', declarations: 'declaration', auditors: 'auditor' };
+  times: 'time', matches: 'match', characters: 'character', goals: 'goal', declarations: 'declaration', auditors: 'auditor',
+  reviewers: 'reviewer' };
 const countedPlural = new RegExp(`(^|[^\\d.,])1 ((?:more |research )?)(${Object.keys(singulars).join('|')})\\b`, 'gu');
-const singular = (text: string) => text.replace(countedPlural, (_match, before: string, middle: string, noun: string) => `${before}1 ${middle}${singulars[noun]}`);
+const singular = (text: string) => text.replace(countedPlural, (_match, before: string, middle: string, noun: string) => `${before}1 ${middle}${singulars[noun]}`)
+  // "Lines {0}" names one line unless a range or a list follows.
+  .replace(/\bLines (\d+)(?![\d–,-])/gu, 'Line $1');
 
 /** Translates a Chinese key; {0}, {1}… are replaced by the arguments in order. A key without an entry stays Chinese. */
 export function t(key: string, ...values: unknown[]): string {

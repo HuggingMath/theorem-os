@@ -121,11 +121,18 @@ export function statementRegion(unit: Pick<InformalizationUnit, 'kind' | 'source
 export type InformalizationStepGoals = { before: string[]; beforeCount: number; after: string[]; afterCount: number;
   lines: { start: number; end: number } };
 /**
+ * `blockHeads` (lean-phrase-alignment-v2 and unaligned pages): a step that quotes only the head of a block tactic
+ * (`induction n with`, `have h : P := by`, `classical`) gets as `after` what the head leaves to the tactics inside it,
+ * then the goals after the block, and the head's lines. Without it (lean-phrase-alignment-v1, which its auditors saw)
+ * such a step gets the whole block's goals, so a block that closes its goal reads as if the head had closed it.
+ */
+export type StepGoalsOptions = { blockHeads: boolean };
+/**
  * Goals around the tactics a step quotes: the outermost recorded tactics inside its placed excerpts, or, when the excerpts
  * are part of one tactic (the first line of a `have … := by`), the smallest tactic they overlap.
  */
 export function stepGoals(unit: Pick<InformalizationUnit, 'range' | 'goals'>, source: string,
-  places: readonly SourceOffsets[]): InformalizationStepGoals | undefined {
+  places: readonly SourceOffsets[], options: StepGoalsOptions = { blockHeads: true }): InformalizationStepGoals | undefined {
   if (!unit.goals?.tactics.length || !places.length) return undefined;
   const lines = source.split('\n'), starts: number[] = [];
   let at = 0;
@@ -145,6 +152,9 @@ export function stepGoals(unit: Pick<InformalizationUnit, 'range' | 'goals'>, so
   if (!chosen.length) {
     const overlapping = tactics.filter(tactic => places.some(place => tactic.start < place.end && place.start < tactic.end));
     chosen = overlapping.toSorted((a, b) => a.end - a.start - (b.end - b.start)).slice(0, 1);
+    const head = chosen.length && options.blockHeads && !unit.goals.truncated ? blockHead(chosen[0]!, tactics, places) : undefined;
+    if (head) return { before: chosen[0]!.item.before, beforeCount: chosen[0]!.item.beforeCount, after: head.after,
+      afterCount: head.afterCount, lines: { start: chosen[0]!.item.range.line, end: unit.range.line + count(source, head.end - 1) } };
   }
   if (!chosen.length) return undefined;
   chosen.sort((a, b) => a.start - b.start);
@@ -152,11 +162,40 @@ export function stepGoals(unit: Pick<InformalizationUnit, 'range' | 'goals'>, so
   return { before: first.before, beforeCount: first.beforeCount, after: last.after, afterCount: last.afterCount,
     lines: { start: first.range.line, end: Math.max(...chosen.map(tactic => tactic.item.range.endLine)) } };
 }
+type PlacedTactic = { item: NonNullable<InformalizationUnit['goals']>['tactics'][number]; start: number; end: number };
+/**
+ * When the excerpts quote `block` from its start and none of the tactics inside it (`stepGoals` chose the block as the
+ * smallest tactic they overlap): the goals its head leaves to those tactics, in order, followed by the goals after the
+ * block, and where the quotation ends. Each alternative (`| zero =>`, or the body of `have … := by`) starts with the
+ * first inner tactic met while no inner goal is open; a bullet or a later tactic of the same alternative works on goals
+ * still open. Undefined unless every inner goal closes, as Lean requires.
+ */
+function blockHead(block: PlacedTactic, tactics: readonly PlacedTactic[], places: readonly SourceOffsets[]) {
+  const quoted = places.filter(place => place.start < block.end && block.start < place.end);
+  if (!quoted.some(place => block.start >= place.start && block.start < place.end)) return undefined;
+  const inner = tactics.filter(tactic => tactic !== block && tactic.start >= block.start && tactic.end <= block.end &&
+    tactic.end - tactic.start < block.end - block.start);
+  const outermost = inner.filter(tactic => !inner.some(other => other !== tactic && other.start <= tactic.start &&
+    other.end >= tactic.end && other.end - other.start > tactic.end - tactic.start)).toSorted((a, b) => a.start - b.start);
+  if (!outermost.length) return undefined;
+  const opened: { goals: string[]; count: number }[] = [];
+  let open = 0;
+  for (const tactic of outermost) {
+    if (!open) opened.push({ goals: tactic.item.before, count: tactic.item.beforeCount });
+    open += tactic.item.afterCount - (open ? tactic.item.beforeCount : 0);
+    if (open < 0) return undefined;
+  }
+  if (open) return undefined;
+  // A state Lean printed in part lists 4 goals, so the first 4 of the concatenation are still the first 4 in order.
+  return { after: [...opened.flatMap(state => state.goals), ...block.item.after].slice(0, 4),
+    afterCount: opened.reduce((sum, state) => sum + state.count, 0) + block.item.afterCount,
+    end: Math.min(Math.max(...quoted.map(place => place.end)), block.end) };
+}
 /** Each step's recorded goals (null when none apply), as the explanation page shows them; `steps` are their Lean excerpts. */
 export function sectionStepGoals(unit: Pick<InformalizationUnit, 'range' | 'goals' | 'source'>,
-  steps: readonly (readonly string[])[]): (InformalizationStepGoals | null)[] {
+  steps: readonly (readonly string[])[], options?: StepGoalsOptions): (InformalizationStepGoals | null)[] {
   const source = lineEnds(unit.source), { places } = placeExcerpts(source, steps);
-  return places.map(place => stepGoals(unit, source, place) ?? null);
+  return places.map(place => stepGoals(unit, source, place, options) ?? null);
 }
 
 /** Per-line pieces of `text[start, end)` with the whitespace at their edges trimmed; lines from 0, UTF-16 columns. */

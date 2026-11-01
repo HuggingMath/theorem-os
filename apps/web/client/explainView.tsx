@@ -1,11 +1,11 @@
-import { render } from 'preact';
+import { Component, render } from 'preact';
 import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationLink, WebExplanationOverview,
   WebExplanationSection, WebExplanationUse } from '../shared';
 import { effortLabels, formatDuration, formatTokens } from '../presentation';
 import { t } from '../i18n';
 import { explanationEstimate, type StepRef } from './explainText';
-import { ProblemCard } from './correspondence';
-import { Rich, type RichLink } from './richText';
+import { ChosenBar, ProblemCard, type FragmentStep } from './correspondence';
+import { LeanName, Rich, type RichLink } from './richText';
 import { Icon, Spinner } from './ui/Icon';
 import { fill } from './ui/Section';
 
@@ -15,8 +15,10 @@ export type ExplainView = {
   explanation?: WebExplanation; document?: WebExplanationDocument; documentError?: string; active?: StepRef;
   /** A Lean proof line the reader chose that no step quotes. */ gap?: number;
   /** The 原题 pairs the reader last chose (a fragment or a pair in its list). */ chosen?: ReadonlySet<number>;
+  /** Where the last click on a 原题 fragment or pair stands, shown above the Lean on a phone. */ step?: FragmentStep;
   dialog?: 'generate' | 'cancel' | 'delete'; busy: boolean; error?: string; now: number;
   /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
+  /** The reader followed a cited lemma and can go back to where they cited it. */ canReturn?: boolean;
 };
 
 const reasons: Record<string, string> = {
@@ -54,19 +56,21 @@ function Toolbar(view: ExplainView) {
     <div class="explain-target">{targets.length > 1
       ? <><label for="explain-target-select">{t('目标定理')}</label><select id="explain-target-select" translate={false} value={view.target}>
         {targets.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></>
-      : <><span class="explain-target-label">{t('目标定理')}</span><code translate={false}>{view.target}</code></>}</div>
-    {!view.report && <div class="source-switch" role="group" aria-label={t('讲解语言')}>{language('zh', t('中文'))}{language('en', t('英文'))}</div>}
-    <div class="source-switch explain-pane-switch" role="group" aria-label={t('显示内容')}>{pane('lean', 'Lean')}{pane('prose', t('讲解'))}</div>
+      : <><span class="explain-target-label">{t('目标定理')}</span><code translate={false}><LeanName name={view.target} /></code></>}</div>
+    {!view.report && <div class="source-switch explain-language-switch" role="group" aria-label={t('讲解语言')}>{language('zh', t('中文'))}{language('en', t('英文'))}</div>}
+    <div class="source-switch explain-pane-switch" role="group" aria-label={t('显示的一侧')}>{pane('lean', 'Lean')}{pane('prose', t('讲解'))}</div>
   </>;
 }
 
-/** The right pane's heading: scroll sync and, once approved, download and delete. */
+/** The right pane's heading: the way back from a cited lemma, scroll sync and, once approved, download and delete. */
 function ProseHead(view: ExplainView) {
   const approved = view.explanation?.status === 'approved';
   const query = new URLSearchParams({ target: view.target, language: view.language }).toString();
   return <>
     <h2 id="explain-prose-heading">{t('自然语言证明')}</h2>
     <div class="explain-head-actions">
+      {view.canReturn && <button type="button" class="text-button explain-return" data-action="return" title={t('回到跳转前的位置，和浏览器的后退一样')}>
+        {fill(t('{0}回到引用处'), <Icon name="arrow-left" />)}</button>}
       {view.document && <label class="explain-sync"><input type="checkbox" id="explain-sync" checked={view.sync} /><span>{t('同步滚动')}</span></label>}
       {view.report ? <a class="icon-button" href={view.report.href} download={view.report.filename}
         aria-label={t('下载 Markdown')} title={t('下载 Markdown')}><Icon name="download" /></a>
@@ -142,9 +146,12 @@ const linkedDocument = (document: WebExplanationDocument) =>
 const richLinks = (links: readonly WebExplanationLink[] | undefined, at: Record<`data-${string}`, string | number>): RichLink[] =>
   (links ?? []).map((link, index) => ({ start: link.start, end: link.end, attributes: { 'data-action': 'link', ...at, 'data-link': index },
     title: t('在 Lean 中标出') }));
+// Which section explains each declaration, once per document, so a section's props stay the same between draws.
+const ownedBy = new WeakMap<WebExplanationDocument, Map<string, number>>();
 function DocumentView({ document, active, gap, chosen }: { document: WebExplanationDocument; active?: StepRef; gap?: number;
   chosen?: ReadonlySet<number> }) {
-  const owned = new Map(document.sections.map((section, index) => [section.name, index]));
+  let owned = ownedBy.get(document);
+  if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
   return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
     <p class="explain-notice"><Icon name="triangle-alert" />
       <span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
@@ -152,13 +159,26 @@ function DocumentView({ document, active, gap, chosen }: { document: WebExplanat
     <section class="explain-overview" aria-labelledby="explain-overview-heading"><h3 id="explain-overview-heading">{t('证明思路')}</h3>
       <p class="explain-rich"><Rich text={document.overview} /></p>
       {linkedDocument(document) && <p class="formal-note"><Icon name="locate-fixed" />
-        <span>{t('讲解中划虚线的短语逐个对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</span></p>}</section>
-    {document.sections.map((section, index) => <SectionView key={section.name} section={section} index={index} owned={owned}
+        <span>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</span></p>}</section>
+    {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
     <Footer document={document} />
   </article>;
 }
-function SectionView(props: { section: WebExplanationSection; index: number; owned: Map<string, number>; active?: StepRef; gap?: number }) {
+type SectionProps = { section: WebExplanationSection; index: number; owned: Map<string, number>; active?: StepRef; gap?: number };
+/**
+ * A section drawn again only when its props change: a click changes the active step, so a long proof redraws the
+ * section it leaves and the one it reaches, not all of them.
+ */
+class CachedSection extends Component<SectionProps> {
+  override shouldComponentUpdate(next: SectionProps) {
+    const { section, index, owned, active, gap } = this.props;
+    return next.section !== section || next.index !== index || next.owned !== owned || next.gap !== gap
+      || next.active?.section !== active?.section || next.active?.step !== active?.step || next.active?.statement !== active?.statement;
+  }
+  override render() { return <SectionView {...this.props} />; }
+}
+function SectionView(props: SectionProps) {
   const { section, index, active } = props;
   const whole = active && active.step === undefined && !active.statement;
   // A theorem's statement explains its signature; any other declaration's statement explains all of it.
@@ -167,9 +187,9 @@ function SectionView(props: { section: WebExplanationSection; index: number; own
     <div class={`explain-statement-block${active?.statement ? ' is-active' : ''}`} data-anchor={index}>
       <header class="explain-section-head">
         <div class="explain-section-meta">{section.target ? <span class="badge passed">{t('主定理')}</span> : <span class="badge">{kinds[section.kind]}</span>}
-          <code translate={false}>{section.name}</code>
+          <code translate={false}><LeanName name={section.name} /></code>
           <button type="button" class="explain-lines" data-action="lines" data-section={index} title={t('在 Lean 中定位')}>{linesLabel([section.lines])}</button></div>
-        <h3 id={`explain-section-${index}`}><Rich text={section.title} /></h3>
+        <h3 id={`explain-section-${index}`} tabIndex={-1}><Rich text={section.title} /></h3>
       </header>
       <p class="explain-rich explain-statement"><Rich text={section.statement}
         links={richLinks(section.statementLinks, { 'data-section': index, 'data-statement': '' })} /></p>
@@ -179,7 +199,7 @@ function SectionView(props: { section: WebExplanationSection; index: number; own
       <Reviews notes={section.statementReviews} />
     </div>
     {props.gap !== undefined && <p class="explain-gap-note" role="status"><Icon name="circle-help" />
-      <span>{t('第 {0} 行没有单独的讲解步骤。审核模型检查过这个声明：一行实质的证明内容如果没有被讲到，就不会通过；没有单独讲到的通常是 intro、rfl 这类记账步骤。', props.gap)}</span></p>}
+      <span>{t('第 {0} 行没有单独的讲解步骤。审核模型检查的是整个声明，有实质证明内容没讲到就不会通过；没有单独一步的行，通常是 intro、rfl 这类记账步骤。', props.gap)}</span></p>}
     {section.steps.length > 0 && <ol class="explain-steps">{section.steps.map((step, stepIndex) =>
       <li key={stepIndex} class={active?.step === stepIndex ? 'is-active' : undefined} data-anchor={index} data-step={stepIndex}>
         <p class="explain-rich"><Rich text={step.text} links={richLinks(step.links, { 'data-section': index, 'data-step': stepIndex })} /></p>
@@ -297,10 +317,12 @@ function LeanLegend({ document }: { document?: WebExplanationDocument }) {
   </>;
 }
 
-export function renderExplain(hosts: { toolbar: HTMLElement; head: HTMLElement; prose: HTMLElement; dialog: HTMLElement; legend: HTMLElement },
-  view: ExplainView) {
+export function renderExplain(hosts: { toolbar: HTMLElement; head: HTMLElement; prose: HTMLElement; dialog: HTMLElement; legend: HTMLElement;
+  chosen: HTMLElement }, view: ExplainView) {
   render(<LeanLegend document={view.document} />, hosts.legend);
   hosts.legend.hidden = !view.document;
+  const problem = view.document?.problem;
+  render(problem && view.step ? <ChosenBar original={problem.original} correspondences={problem.correspondences} step={view.step} /> : null, hosts.chosen);
   render(<Toolbar {...view} />, hosts.toolbar);
   render(<ProseHead {...view} />, hosts.head);
   render(<Prose {...view} />, hosts.prose);
