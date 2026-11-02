@@ -103,7 +103,7 @@ try {
     if (tab === 'modules') await openModulesTab(page);
     else await page.locator(`#detail-tab-${tab}`).click();
     await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor();
-    if (tab === 'trajectory') await page.locator('#detail-panel .trajectory-steps').waitFor();
+    if (tab === 'trajectory') await page.locator('#detail-panel .research-roadmap').waitFor();
     await settled(page);
     await english(page, `sample ${tab} tab`);
   }

@@ -297,6 +297,7 @@ try {
   await scenario('a run stopped by its budget ends its trajectory with where its targets stood', async h => {
     const { page } = h; await open(h, 'Stop when stuck');
     await page.locator('#detail-tab-trajectory').click();
+    await page.locator('[data-trajectory-view="steps"]').click();
     const end = page.locator('#detail-panel .trajectory-step[data-kind="end"]');
     await end.waitFor();
     assert.match(await end.locator('h4').innerText(), /解题时间用完/u);

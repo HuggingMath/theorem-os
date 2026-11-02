@@ -20,6 +20,8 @@ import { Icon, Spinner } from './ui/Icon';
 import { revealSteps } from './motion';
 import { SideViewer } from './ui/SideViewer';
 import { localizeText, t } from '../i18n';
+import { buildResearchRoadmap } from './researchRoadmap';
+import { ResearchRoadmap } from './ui/ResearchRoadmap';
 
 // A running run is re-read at most this often; each read only fetches what changed since the last one.
 const pollMs = 1_500;
@@ -99,6 +101,7 @@ type RunState = {
   follow: boolean; pinned?: string; seen: Set<string>;
   /** A stretch of the time overview the steps are limited to, and the block the keyboard is on. */
   window?: { start: number; end: number }; cursor?: string;
+  mode: 'roadmap' | 'steps'; mapNode?: string;
 };
 type Ctx = { run: WebRun; state: RunState; names: Map<string, string>; tasks: Map<string, string>; key: string; index: number;
   lastProof?: TrajectoryStep; proofs: number; candidate: boolean; simple: boolean;
@@ -371,6 +374,8 @@ export class TrajectoryView {
   private states = new Map<string, RunState>();
   private root?: HTMLElement;
   private run?: WebRun;
+  /** Result-page overview shares this reader and its per-run cache with the dedicated roadmap tab. */
+  private overviewAction?: (nodeId: string) => void;
   private viewport?: HTMLElement;
   private lastTop = 0;
   /** The steps last drawn, and where: which of them are new to a reader following the run. */
@@ -391,17 +396,31 @@ export class TrajectoryView {
   }
 
   /** Shows `run` in `root`; without them the view stops drawing but keeps each run's trajectory for the next visit. */
-  update(root?: HTMLElement, run?: WebRun) {
+  update(root?: HTMLElement, run?: WebRun, overviewAction?: (nodeId: string) => void) {
     // The panel drops a tab's host without unmounting what was drawn into it; its effects (the viewer's observers) end here.
     if (this.root && this.root !== root) render(null, this.root);
     // A request for a step is for the view it was made in.
     if (this.wanted && this.wanted.runId !== run?.id) this.wanted = undefined;
+    this.overviewAction = overviewAction;
     if (!root || !run) { this.root = undefined; this.run = undefined; return; }
     // A fresh host (another tab, another run) starts again at the latest step while the run goes on.
     if (this.root !== root || this.run?.id !== run.id) { const state = this.state(run.id); state.pinned = undefined; state.follow = true; }
     this.root = root; this.run = run;
     this.watch(root);
     this.schedule(run);
+    this.render();
+  }
+
+  /** A result-page node opens this same run and its saved details in the roadmap tab. */
+  showNode(runId: string, nodeId: string) {
+    if (this.run?.id !== runId) return;
+    const state = this.state(runId);
+    state.mode = 'roadmap'; state.mapNode = nodeId; state.panel = undefined;
+    const built = this.built(this.run, state), tasks = new Map([...taskNames(this.run.observation?.inspection.tasks ?? []), ...built.names]);
+    const node = buildResearchRoadmap({ data: state.data, steps: built.steps, status: this.run.status, tasks,
+      taskDetails: this.run.observation?.inspection.tasks, originalSource: this.run.source }).nodes.find(item => item.id === nodeId);
+    const index = node?.stepIndexes.at(-1);
+    if (index !== undefined && built.keys[index]) state.open.set(built.keys[index]!, true);
     this.render();
   }
 
@@ -417,8 +436,9 @@ export class TrajectoryView {
   }
   private settleWanted(run: WebRun, state: RunState) {
     const wanted = this.wanted;
-    if (!wanted || wanted.runId !== run.id || !state.loaded || state.inFlight) return;
+    if (!wanted || wanted.runId !== run.id || !state.loaded || state.inFlight || state.fetchedFor !== this.mark(run)) return;
     this.wanted = undefined;
+    state.mode = 'steps';
     const outcome = wanted.target === 'checked' ? 'passed' : 'failed';
     const built = this.built(run, state), index = built.steps.findLastIndex(step => step.kind === 'attempt' && wanted.taskIds.includes(step.taskId)
       && step.outcome === outcome && !step.reused);
@@ -460,7 +480,7 @@ export class TrajectoryView {
       const top = viewport.scrollTop, up = top < this.lastTop - 1;
       this.lastTop = top;
       const run = this.run;
-      if (!run || !live(run) || !this.root || !viewport.contains(this.root)) return;
+      if (!run || !live(run) || !this.root || !viewport.contains(this.root) || this.overviewAction || this.state(run.id).mode === 'roadmap') return;
       const state = this.state(run.id), follow = atEnd(viewport) || state.follow && !up;
       if (follow === state.follow) return;
       state.follow = follow;
@@ -473,7 +493,7 @@ export class TrajectoryView {
     let state = this.states.get(id);
     if (state) { this.states.delete(id); this.states.set(id, state); return state; }
     state = { data: emptyTrajectory(), loaded: false, inFlight: false, lastFetch: 0, task: '', all: false, folded: true, versions: new Map(),
-      asks: new Map(), open: new Map(), follow: true, seen: new Set() };
+      asks: new Map(), open: new Map(), follow: true, seen: new Set(), mode: 'roadmap' };
     this.states.set(id, state);
     for (const [old, item] of this.states) { if (this.states.size <= limits.runs) break; clearTimeout(item.timer); this.states.delete(old); }
     return state;
@@ -527,7 +547,7 @@ export class TrajectoryView {
     renderSection(this.root, this.view(this.run, state));
     // While following, each new step brings the view to the bottom; a reader's own changes (opening a step) do not.
     const viewport = this.viewport, mark = this.root.querySelector<HTMLElement>('.trajectory-steps')?.dataset.latest;
-    if (viewport && live(this.run) && state.follow && !state.window && mark && mark !== state.pinned) {
+    if (viewport && !this.overviewAction && state.mode === 'steps' && live(this.run) && state.follow && !state.window && mark && mark !== state.pinned) {
       state.pinned = mark;
       viewport.scrollTop = viewport.scrollHeight;
       this.lastTop = viewport.scrollTop;
@@ -540,6 +560,7 @@ export class TrajectoryView {
    * progress changes every moment and never counts as new; a run of attempts that only regrouped old ones does not either.
    */
   private cueSteps(state: RunState) {
+    if (state.mode === 'roadmap' || this.overviewAction) return;
     const root = this.root!, run = this.run!, steps = [...root.querySelectorAll<HTMLElement>('.trajectory-step[data-step]')];
     const keys = new Set(steps.filter(step => step.dataset.kind !== 'live').map(step => step.dataset.step!));
     const before = this.drawn, data = state.built?.key;
@@ -571,16 +592,22 @@ export class TrajectoryView {
   }
 
   private view(run: WebRun, state: RunState) {
-    const retry = () => { state.fetchedFor = undefined; state.lastFetch = 0; state.error = undefined; this.update(this.root, this.run); };
+    const retry = () => { state.fetchedFor = undefined; state.lastFetch = 0; state.error = undefined; this.update(this.root, this.run, this.overviewAction); };
     const simple = detailLevel() === 'simple';
     // The same 简洁/详细 choice as the collaboration surface (./detailLevel); switching here switches both.
     const level = <div class="collab-detail-toggle trajectory-detail-toggle" role="group" aria-label={t('信息详略')} title={t('简洁和详细对协作与轨迹同时生效')}>
       {(['simple', 'full'] as const).map(value => <button key={value} type="button" aria-pressed={(value === 'simple') === simple} data-trajectory-detail={value}
         data-focus-key={`trajectory-detail-${value}`} onClick={() => setDetailLevel(value)}>{value === 'simple' ? t('简洁') : t('详细')}</button>)}</div>;
-    const heading = (summary?: string) => <div class="trajectory-heading"><h3>{t('解题轨迹')}</h3>{summary && <span class="trajectory-summary">{summary}</span>}{level}</div>;
+    const heading = (summary?: string) => <div class="trajectory-heading"><h3>{state.mode === 'roadmap' ? t('解题路线图') : t('解题轨迹')}</h3>
+      {summary && <span class="trajectory-summary">{summary}</span>}
+      <div class="trajectory-view-toggle" role="group" aria-label={t('显示方式')}>
+        {(['roadmap', 'steps'] as const).map(mode => <button key={mode} type="button" data-trajectory-view={mode}
+          aria-pressed={state.mode === mode} onClick={() => { state.mode = mode; state.panel = undefined; state.pinned = undefined; this.render(); }}>
+          <Icon name={mode === 'roadmap' ? 'git-branch' : 'list-ordered'} />{mode === 'roadmap' ? t('路线图') : t('事件明细')}</button>)}</div>
+      {state.mode === 'steps' && level}</div>;
     const failure = state.error && <p class="trajectory-error" role="status">{t('读取失败：{0}', state.error)}
       <button type="button" class="text-button" data-focus-key="trajectory-retry" onClick={retry}>{t('重试')}</button></p>;
-    if (!state.loaded) return <section class="trajectory" aria-busy={!state.error}>{heading()}
+    if (!state.loaded) return <section class="trajectory" aria-busy={!state.error}>{!this.overviewAction && heading()}
       {failure || <StepsLoading />}</section>;
 
     const built = this.built(run, state), names = workerNames(state.data.context.workers.length ? state.data.context.workers : run.observation?.inspection.workers);
@@ -623,6 +650,33 @@ export class TrajectoryView {
     const working = new Set(now?.kind === 'live' ? now.workers.flatMap(item => item.task ? [item.task] : []) : []);
     // The account waits for a complete read made after the run ended, so it never counts a run still being read.
     const settled = !live(run) && !state.inFlight && !state.error && state.fetchedFor?.startsWith(`${run.status}\u0000`);
+    if (state.mode === 'roadmap' || this.overviewAction) {
+      const model = buildResearchRoadmap({ data: state.data, steps: built.steps, status: run.status, tasks,
+        taskDetails: run.observation?.inspection.tasks, originalSource: run.source });
+      const selected = model.nodes.find(node => node.id === state.mapNode);
+      const details = (selected?.stepIndexes ?? []).map(index => items[index]).filter((item): item is Item => Boolean(item));
+      return <div class="trajectory-layout" data-mode="roadmap" data-viewer-host>
+        <section class="trajectory trajectory-roadmap">
+          {!this.overviewAction && heading()}{failure}
+          <ResearchRoadmap key={run.id} model={model} names={names} selected={selected?.id} onSelect={id => {
+            if (this.overviewAction) this.overviewAction(id); else this.showNode(run.id, id);
+          }} />
+          {!this.overviewAction && selected && <section class="roadmap-detail" aria-label={t('节点详情')}>
+            <header><div><span>{t('节点详情')}</span><h4>{selected.theoremName ?? selected.title}</h4></div>
+              <button type="button" class="icon-button" aria-label={t('关闭节点详情')}
+                onClick={() => { state.mapNode = undefined; state.panel = undefined; this.render(); }}><Icon name="x" /></button></header>
+            {selected.kind === 'task' && (selected.statement || selected.type || selected.objective) && <div class="roadmap-detail-summary">
+              {selected.statement && <p>{localizeText(selected.statement)}</p>}
+              {selected.type && <code class="roadmap-node-type">{selected.type}</code>}
+              {selected.objective && selected.objective !== selected.statement && <p>{localizeText(selected.objective)}</p>}
+            </div>}
+            {details.length > 0 ? <ol class="trajectory-steps">{details.map(item => this.step({ ...ctx, key: item.key, index: item.index }, item.step))}</ol>
+              : <p class="trajectory-note">{selected.detail || t('这个节点还没有检查记录。')}</p>}
+          </section>}
+        </section>
+        {!this.overviewAction && this.viewer({ ...ctx, key: '', index: -1 }, built)}
+      </div>;
+    }
     return <div class="trajectory-layout" data-viewer-host>
       <section class="trajectory">
         {heading(summary)}
@@ -733,6 +787,7 @@ export class TrajectoryView {
     if (!this.run) return;
     const state = this.state(this.run.id), built = state.built, step = built?.steps[built.keys.indexOf(key)];
     if (!step) return;
+    state.mode = 'steps';
     if (state.window && (step.at < state.window.start || step.at > state.window.end)) state.window = undefined;
     if (state.task && !general.has(step.kind) && !stepTasks(step).includes(state.task)) state.task = '';
     state.all = true; state.follow = false; state.open.set(key, true);

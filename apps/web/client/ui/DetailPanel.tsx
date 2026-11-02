@@ -176,7 +176,8 @@ function ResultDocument(props: ResultPanelProps) {
     {props.route && <section class="result-section result-route" aria-labelledby="result-route-heading">
       <div class="result-section-heading"><h3 id="result-route-heading">{t('Agent 路线图')}</h3>
         <button type="button" class="text-button" data-action="show-agents">{t('研究协作')}<Icon name="arrow-up-right" /></button></div>
-      <div class="agent-route" data-result-route />
+      <div data-result-roadmap />
+      <details class="result-agent-actions"><summary>{t('Agent 操作明细')}</summary><div class="agent-route" data-result-route /></details>
     </section>}
     <ReportPanel {...props.report} />
     <section class="result-section result-task">

@@ -158,7 +158,7 @@ try {
     for (const tab of ['result', 'trajectory', 'collaboration', 'source', 'events', 'modules']) {
       if (tab === 'modules') await openModulesTab(page);
       else await page.locator(`#detail-tab-${tab}`).click();
-      if (tab === 'trajectory') await page.locator('#detail-panel .trajectory-steps').waitFor();
+      if (tab === 'trajectory') await page.locator('#detail-panel .research-roadmap').waitFor();
       await settled(page);
       if (tab === 'collaboration') {
         await page.locator('.collab-detail-toggle [data-collab-detail="full"]').click(); await settled(page);

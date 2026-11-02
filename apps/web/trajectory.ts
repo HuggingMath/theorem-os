@@ -17,6 +17,7 @@ export const trajectoryEventTypes = new Set([
   'task_assigned', 'task_checked', 'task_check_reused', 'task_failure_check_reused', 'task_integrated',
   'task_recheck_finished', 'task_conditional_recheck_finished', 'task_recheck_dependency_invalidated',
   'assembly_started', 'proof_checked', 'evaluation_started', 'evaluation_finished',
+  'review_assigned', 'review_completed',
   'route_parked', 'routes_idle', 'plan_stalled', 'goal_path_stalled', 'task_mathematical_gap_blocked', 'task_repeated_input_blocked',
   'worker_failed', 'model_budget_stopped', 'planning_budget_stopped',
   'error', 'cancelled', 'interrupted',

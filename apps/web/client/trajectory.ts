@@ -195,7 +195,7 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     if (type === 'proof_checked') return proof(event, at);
     if (type === 'evaluation_started' || type === 'evaluation_finished') return evaluate(event, at);
     // Reading the problem opens the trajectory; plan events only date the plan revisions.
-    if (type === 'ready' || type === 'solve_started' || planEvents.has(type)) return;
+    if (type === 'ready' || type === 'solve_started' || type === 'review_assigned' || type === 'review_completed' || planEvents.has(type)) return;
     if (stopEvents.has(type)) { add({ kind: 'stop', at, event }); return; }
     if (approvalEvents.has(type)) { add({ kind: 'approval', at, event }); return; }
     notice(event, at);

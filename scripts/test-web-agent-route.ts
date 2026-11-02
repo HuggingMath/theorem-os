@@ -83,6 +83,7 @@ try {
   // The finished sample: one lane per Agent, and each step's badge counts the actions in it.
   await page.goto(`${origin}/?sample`);
   await ready(page);
+  await page.locator('.result-agent-actions>summary').click();
   await lane(page, 'researcher-1').waitFor();
   const expected = agentRoutes(sample.events, { actions: mergeAgentActions(sample.actions!), lead });
   assert.deepEqual(await page.locator(`${map} .agent-route-lane`).evaluateAll(items => items.map(item => item.getAttribute('data-worker-id'))),
@@ -193,6 +194,7 @@ try {
   await chips(page, 'engineer', collab).nth(1).click();
   assert.equal(await inspector(page, 'engineer', collab).locator('h4').innerText(), 'Engineer · 写证明');
   await openTab(page, 'result');
+  await page.locator('.result-agent-actions>summary').click();
   assert.equal(await inspector(page, 'engineer').locator('h4').innerText(), 'Engineer · 写证明', 'the result tab opens the same step');
   mark('the collaboration tab draws the same map and keeps the open step across tabs');
 
@@ -202,6 +204,7 @@ try {
   small.on('pageerror', error => errors.push(`390: ${error.message}`));
   await small.goto(`${origin}/?sample`);
   await ready(small);
+  await small.locator('.result-agent-actions>summary').click();
   await chips(small, 'engineer').nth(1).click();
   await inspector(small, 'engineer').getByRole('button', { name: '全部展开' }).click();
   assert.ok(await fits(small), 'the open step fits a 390 px screen');
@@ -215,6 +218,7 @@ try {
   await page.goto(`${origin}/?run=${live.id}`);
   // A running run may hold the submit button back, so only wait for the page to be there.
   await page.locator('#submit-run').waitFor({ state: 'attached' });
+  await page.locator('.result-agent-actions>summary').click();
   await lane(page, 'engineer').locator('.agent-route-count').first().waitFor();
   const current = lane(page, 'engineer').locator('.agent-route-step[data-current] [data-route-step]');
   assert.match(await current.innerText(), /接任务 zero_add/u);
@@ -257,6 +261,7 @@ try {
   await waitForRun({ page }, long.id, run => run.status !== 'running' && run.status !== 'queued', 20_000);
   await page.goto(`${origin}/?run=${long.id}`);
   await ready(page);
+  await page.locator('.result-agent-actions>summary').click();
   await lane(page, 'solver').waitFor();
   assert.equal(await chips(page, 'solver').count(), 24);
   await lane(page, 'solver').getByRole('button', { name: '显示更早的 36 步' }).click();

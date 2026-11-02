@@ -85,7 +85,7 @@ const byteSize = (text: string) => new TextEncoder().encode(text).length;
 const byteLabel = (bytes: number) => bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
 type DetailTab = 'result' | 'trajectory' | 'collaboration' | 'source' | 'events' | 'modules';
 // The module plan is opened from the run menu; it joins the tabs only while it is the open one.
-const baseTabs = [['result', t('结果')], ['trajectory', t('轨迹')], ['collaboration', t('协作')], ['source', t('源码')], ['events', t('活动')]] as const;
+const baseTabs = [['result', t('结果')], ['trajectory', t('路线图')], ['collaboration', t('协作')], ['source', t('源码')], ['events', t('活动')]] as const;
 const detailTabs = (): readonly (readonly [DetailTab, string])[] => state.tab === 'modules' ? [...baseTabs, ['modules', t('模块方案')]] : baseTabs;
 const state = {
   session: undefined as WebSession | undefined,
@@ -1238,17 +1238,28 @@ function closeCompare() {
   if (id) document.querySelector<HTMLElement>(`#detail-panel [data-action="compare-continued"][data-run-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
 }
 let resultRouteHost: HTMLElement | undefined;
-/** The route map in the result tab, drawn from the run's events and its Agents' actions like the collaboration tab's. */
+/** The result's recorded roadmap shares its reader with the dedicated tab; the Agent action lanes open on demand. */
 function renderResultRoute(run: WebRun) {
+  const roadmapHost = document.querySelector<HTMLElement>('#detail-panel [data-result-roadmap]');
+  if (roadmapHost) trajectoryView.update(roadmapHost, run, nodeId => {
+    state.tab = 'trajectory'; renderDetail(true); trajectoryView.showNode(run.id, nodeId);
+  });
+  else trajectoryView.update();
   const host = document.querySelector<HTMLElement>('#detail-panel [data-result-route]') ?? undefined;
   // A replaced host takes its map with it; unmounting stops that map's reading.
   if (resultRouteHost && resultRouteHost !== host) unmountAgentRoute(resultRouteHost);
   resultRouteHost = host;
   if (!host) return;
-  const inspection = run.observation?.inspection;
-  renderAgentRoute(host, { source: { store: agentActivity, run, lead: inspection?.workers.find(worker => worker.role === 'lead')?.id },
-    names: workerNames(inspection?.workers), running: run.status === 'running',
-    tasks: taskNames(inspection?.tasks ?? []), planned: inspection?.tasks.length ?? 0, graph: 'elsewhere', time: clockTime });
+  const details = host.closest<HTMLDetailsElement>('details')!;
+  const draw = () => {
+    if (!details.open) { unmountAgentRoute(host); return; }
+    const inspection = run.observation?.inspection;
+    renderAgentRoute(host, { source: { store: agentActivity, run, lead: inspection?.workers.find(worker => worker.role === 'lead')?.id },
+      names: workerNames(inspection?.workers), running: run.status === 'running',
+      tasks: taskNames(inspection?.tasks ?? []), planned: inspection?.tasks.length ?? 0, graph: 'elsewhere', time: clockTime });
+  };
+  details.ontoggle = draw;
+  draw();
 }
 let stallSignature = '';
 function updateClocks() {
@@ -1379,7 +1390,7 @@ function renderPanel(force = false) {
   if (!samePanel || state.tab !== 'events') activityReader.update(undefined, run);
   if (!samePanel || state.tab !== 'modules') moduleView.update(undefined, moduleInput(run));
   if (!samePanel || state.tab !== 'collaboration') collaborationView.update();
-  if (!samePanel || state.tab !== 'trajectory') trajectoryView.update();
+  if (!samePanel || state.tab !== 'trajectory' && state.tab !== 'result') trajectoryView.update();
   const tab = state.tab;
   renderDetailPanel(panel, content ? { tab: 'source', source: content.diff ? { ...content.props, diff: sourceDiff(run) } : content.props }
     : tab === 'result' ? { tab, result: resultProps(run) } : { tab: tab as Exclude<DetailTab, 'source' | 'result'> });
@@ -1485,6 +1496,7 @@ function renderDetail(force = false) {
   if (sourceComparison && sourceComparison.runId !== run?.id) sourceComparison = undefined;
   if (!run) {
     collaborationView.update();
+    trajectoryView.update();
     activityReader.update();
     state.panelSignature = '';
     if (state.session && !opening()) renderDraftPreview();

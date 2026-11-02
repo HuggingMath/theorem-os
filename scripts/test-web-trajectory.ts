@@ -11,12 +11,17 @@ import { createWebService } from '../apps/web/server';
 import { loadWebSample } from '../apps/web/sample';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerInput } from '../apps/web/shared';
-import { closeSettings, openSettings, openTab, selectHistoryRun } from './web-ui-controls';
+import { closeSettings, openSettings, openTab as openRunTab, selectHistoryRun } from './web-ui-controls';
 import { audit } from './web-a11y';
 import { freePort, postRun, readRun, ready, settled, startBrowser, waitForRun } from './web-scenario';
 import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// This suite exercises the retained version/event reader; test-web-roadmap covers the default visual view.
+const openTab = async (page: Page, tab: string) => {
+  await openRunTab(page, tab);
+  if (tab === 'trajectory') await page.locator('[data-trajectory-view="steps"]').click();
+};
 const output = path.join(root, 'out/web-ui-smoke');
 await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error('Run bun run build:web before the trajectory check.'); });
 await fs.mkdir(output, { recursive: true });
@@ -168,6 +173,7 @@ try {
   await page.reload();
   await ready(page);
   await selectHistoryRun(page, run.id, 'trajectory');
+  await openTab(page, 'trajectory');
   const live = step(page, '[data-kind="live"]');
   await live.waitFor();
   assert.match(await live.innerText(), /进行中/u);
