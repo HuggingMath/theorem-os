@@ -150,7 +150,8 @@ export type WebSession = {
   /** `completionEmail: false` means the account turned off the mail sent when one of its runs ends; absent means on. */
   /** `serverKeys` lists the providers whose key the server fills in for this admin account when the field is left empty. */
   /** `keyVault` means this account may save its own keys; `savedKeys` names them by provider and last four characters. */
-  account?: { email: string; admin?: boolean; completionEmail?: boolean; serverKeys?: string[]; keyVault?: boolean; savedKeys?: WebSavedKey[] };
+  account?: { email: string; admin?: boolean; completionEmail?: boolean; passwordSet?: boolean; passwordResetAllowed?: boolean;
+    serverKeys?: string[]; keyVault?: boolean; savedKeys?: WebSavedKey[] };
   providers: WebProvider[];
   environments: WebEnvironmentOption[];
   templates: WebTemplate[];

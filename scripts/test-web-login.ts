@@ -29,7 +29,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  page.on('console', message => { if (message.type() === 'error' && !/status of 40[03]/u.test(message.text())) errors.push(message.text()); });
+  page.on('console', message => { if (message.type() === 'error' && !/status of 40[013]/u.test(message.text())) errors.push(message.text()); });
 
   await page.goto(origin);
   await page.waitForURL(/\/login\.html$/u);
@@ -135,11 +135,31 @@ try {
   await page.fill('#account-confirm', '');
   assert.deepEqual(await audit(page, { scope: '#account-dialog' }), [], 'Account dialog accessibility');
   await page.screenshot({ path: path.join(output, 'login-account-1440.png') });
+  const password = 'WebLoginStrong2026!';
+  await page.fill('#account-new-password', password);
+  await page.fill('#account-repeat-password', password);
+  await page.click('#save-password');
+  await page.locator('#toast').filter({ hasText: '密码已更新' }).waitFor();
+  assert.equal((await (await page.request.get(origin + '/api/session')).json()).account.passwordSet, true);
+  await page.click('#logout');
+  await page.waitForURL(/\/login\.html$/u);
+  await page.click('#use-password');
+  await page.fill('#password-email', 'alice@example.org');
+  await page.fill('#login-password', 'wrong-password');
+  await page.click('#password-submit');
+  await page.locator('#login-error:not([hidden])').waitFor();
+  assert.equal(await page.locator('#login-error').innerText(), '邮箱或密码不正确。');
+  await page.fill('#login-password', password);
+  await page.click('#password-submit');
+  await page.waitForURL(origin + '/');
+  await page.click('#open-account');
+  await page.locator('#account-dialog[open]').waitFor();
+  assert.equal(await page.locator('#account-current-wrap').isVisible(), true);
   await page.click('#logout');
   await page.waitForURL(/\/login\.html$/u);
   await page.goto(origin);
   await page.waitForURL(/\/login\.html$/u);
-  mark('the account dialog only enables deletion after the email is typed, and logout returns to the login page');
+  mark('the account dialog sets a password; a wrong password fails and the right one opens the same account');
 
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 760 });
@@ -150,7 +170,7 @@ try {
   }
   mark('the login page fits 375 and 320 pixel screens');
   assert.deepEqual(errors, []);
-  console.log('Login checks passed: redirect, captcha, allowlist refusal, code entry and errors, run links from completion mail, completion mail setting, account menu, logout and narrow layouts.');
+  console.log('Login checks passed: email and password login, account password setup, run links, account menu, logout and narrow layouts.');
 } finally {
   await browser?.close();
   await service.close();

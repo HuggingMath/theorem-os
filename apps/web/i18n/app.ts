@@ -1,5 +1,12 @@
 /** The workbench shell: composer, settings, run list, overview, source and report views, dialogs and toasts. */
 export const app: Record<string, string> = {
+  "请输入密码。": "Enter your password.",
+  "刚通过邮箱验证，可在 10 分钟内设置或重设密码。": "Your email was just verified. Set or reset your password within 10 minutes.",
+  "输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。": "Enter your current password and a new one of at least 12 characters. If you forgot it, sign in again with an email code.",
+  "请用邮箱验证码重新登录，在 10 分钟内设置至少 12 位的密码。": "Sign in again with an email code, then set a password of at least 12 characters within 10 minutes.",
+  "修改密码": "Change password",
+  "两次输入的密码不一致。": "The passwords do not match.",
+  "密码已更新；其他设备需要重新登录": "Password updated; other devices need to sign in again",
   "在当前编辑内容中定位；Esc 返回编辑，查找时 Enter / Shift+Enter 切换下一个 / 上一个匹配。Ctrl / ⌘ H 打开替换，替换框中 Enter 替换当前匹配。查找和替换均按字面文本处理。": "Navigate the current edit. Esc returns to editing; while finding, Enter / Shift+Enter move to the next / previous match. Ctrl / ⌘ H opens replace, and Enter in the replace box replaces the current match. Find and replace use literal text.",
   "研究协作": "Collaboration",
   "活动": "Activity",

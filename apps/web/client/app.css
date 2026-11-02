@@ -1979,6 +1979,14 @@ body.login-page{overflow:auto}
 .account-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .account-trigger:hover{background:var(--gray-50)}
 .account-email{font-weight:500;overflow-wrap:anywhere;margin-bottom:14px}
+.account-password{border-top:1px solid var(--line);margin:16px 0;padding-top:16px}
+.account-password h3{font-size:var(--text-sm);margin-bottom:6px}
+.account-password form,.account-password #account-current-wrap{display:grid;gap:8px}
+.account-password #account-current-wrap[hidden]{display:none}
+.account-password form{margin-top:12px}
+.account-password input{width:100%}
+.account-password .inline-error{margin:0}
+.account-password button{justify-self:start}
 .theme-choice{margin:0 0 16px}
 .theme-choice legend{margin-bottom:7px}
 .theme-choice .segmented{grid-template-columns:repeat(3,1fr)}

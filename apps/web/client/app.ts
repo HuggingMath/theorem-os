@@ -1875,6 +1875,14 @@ function openAccount() {
   element('#account-email').textContent = state.session?.account?.email ?? '';
   element<HTMLInputElement>('#completion-email').checked = state.session?.account?.completionEmail !== false;
   element('#open-admin').hidden = !state.session?.account?.admin;
+  const account = state.session?.account, recentCode = account?.passwordResetAllowed;
+  element('#account-current-wrap').hidden = !account?.passwordSet || Boolean(recentCode);
+  element('#account-password-note').textContent = recentCode ? t('刚通过邮箱验证，可在 10 分钟内设置或重设密码。')
+    : account?.passwordSet ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
+      : t('请用邮箱验证码重新登录，在 10 分钟内设置至少 12 位的密码。');
+  element<HTMLButtonElement>('#save-password').textContent = account?.passwordSet ? t('修改密码') : t('设置密码');
+  for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
+  element('#account-password-error').hidden = true;
   field('account-confirm').value = ''; element<HTMLButtonElement>('#delete-account').disabled = true;
   element('#account-error').hidden = true;
   showDialog(element<HTMLDialogElement>('#account-dialog'));
@@ -1902,6 +1910,30 @@ async function changeCompletionEmail(input: HTMLInputElement) {
     toast(wanted ? t('研究结束时会发邮件到登录邮箱') : t('已关闭结束邮件'));
   } catch (error) { input.checked = !wanted; toast(message(error)); }
   finally { input.disabled = false; }
+}
+async function changePassword(event: Event) {
+  event.preventDefault();
+  const error = element('#account-password-error'), button = element<HTMLButtonElement>('#save-password');
+  const password = field('account-new-password').value, repeat = field('account-repeat-password').value;
+  error.hidden = true;
+  if (password.length < 12 || new TextEncoder().encode(password).length > 256) {
+    error.textContent = t('密码至少 12 位且不超过 256 字节。'); error.hidden = false; return;
+  }
+  if (password !== repeat) { error.textContent = t('两次输入的密码不一致。'); error.hidden = false; return; }
+  button.disabled = true;
+  try {
+    await api('/api/auth/password', { method: 'PATCH', body: JSON.stringify({ password,
+      currentPassword: field('account-current-password').value }) });
+    if (state.session?.account) { state.session.account.passwordSet = true; state.session.account.passwordResetAllowed = false; }
+    element('#account-current-wrap').hidden = false;
+    element('#account-password-note').textContent = t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。');
+    button.textContent = t('修改密码');
+    toast(t('密码已更新；其他设备需要重新登录'));
+  } catch (cause) { error.textContent = message(cause); error.hidden = false; }
+  finally {
+    for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
+    button.disabled = false;
+  }
 }
 async function changeAllowlist(method: 'POST' | 'DELETE', email: string): Promise<boolean> {
   admin.busy = email; admin.error = undefined; renderAdmin();
@@ -1946,6 +1978,7 @@ followThemeChanges(showThemeChoice);
 showThemeChoice();
 document.querySelectorAll<HTMLInputElement>('input[name="theme"]').forEach(input => input.addEventListener('change', () => chooseTheme(input.value as ThemePreference)));
 element('#completion-email').addEventListener('change', event => void changeCompletionEmail(event.currentTarget as HTMLInputElement));
+element('#account-password-form').addEventListener('submit', event => void changePassword(event));
 function openGlossary(id?: TermId) {
   const dialog = element<HTMLDialogElement>('#glossary-dialog');
   renderGlossary(dialog, id);

@@ -135,7 +135,7 @@ function adminOverview(auth: WebAuth): WebAdminOverview {
   };
 }
 
-type Session = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
+type Session = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string }; passwordResetUntil?: number };
 const objectBody = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
 export function createWebService(config: WebConfig, runner: WebRunner = new DockerWebRunner(config),
   options: { mailer?: WebMailer; captchaAnswer?: () => string; sample?: WebSampleFile | null } = {}) {
@@ -206,9 +206,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const clearSessionCookie = (response: ServerResponse) => {
     response.setHeader('Set-Cookie', `theoremos_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`);
   };
-  const startSession = (account?: Session['account']) => {
+  const startSession = (account?: Session['account'], verifiedByEmail = false) => {
     const session: Session = { id: crypto.randomBytes(32).toString('hex'), csrf: crypto.randomBytes(32).toString('hex'), touchedAt: Date.now(),
-      ...(account ? { account } : {}) };
+      ...(account ? { account } : {}), ...(verifiedByEmail ? { passwordResetUntil: Date.now() + 10 * 60_000 } : {}) };
     sessions.set(session.id, session);
     return session;
   };
@@ -283,6 +283,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           storage.saveSession(session);
           const body: WebSession = { csrfToken: session.csrf, auth: auth ? 'email' : 'none',
             ...(session.account ? { account: { email: session.account.email, ...(auth?.isAdmin(session.account.email) ? { admin: true } : {}),
+              ...(auth ? { passwordSet: auth.hasPassword(session.account.email), passwordResetAllowed: Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()) } : {}),
               ...(serverKeysFor(session) ? { serverKeys: serverKeysFor(session) } : {}),
               ...(vault ? { keyVault: true, ...(savedKeysFor(session).length ? { savedKeys: savedKeysFor(session) } : {}) } : {}),
               ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers, environments: getWebEnvironments(),
@@ -308,6 +309,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const account = auth.verifyCode(objectBody(await readJson(request)));
             // A fresh identifier and CSRF token after login; the pre-login cookie stops working.
             endSession(session.id);
+            const next = startSession({ id: account.id, email: account.email }, true);
+            storage.saveSession(next); setSessionCookie(response, next);
+            json(response, 200, { account: { email: account.email }, csrfToken: next.csrf }); return;
+          }
+          if (url.pathname === '/api/auth/password/login' && request.method === 'POST') {
+            const account = await auth.loginPassword(ip, objectBody(await readJson(request)));
+            endSession(session.id);
             const next = startSession({ id: account.id, email: account.email });
             storage.saveSession(next); setSessionCookie(response, next);
             json(response, 200, { account: { email: account.email }, csrfToken: next.csrf }); return;
@@ -321,6 +329,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (typeof completionEmail !== 'boolean') throw new HttpError(400, '设置格式不正确。');
             auth.setCompletionEmail(session.account.email, completionEmail);
             json(response, 200, { completionEmail }); return;
+          }
+          if (url.pathname === '/api/auth/password' && request.method === 'PATCH') {
+            if (!session.account) throw new HttpError(401, '请先登录。');
+            const body = objectBody(await readJson(request));
+            await auth.setPassword(session.account.email, body.password, body.currentPassword,
+              Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()));
+            session.passwordResetUntil = undefined;
+            storage.saveSession(session);
+            for (const [id, other] of sessions) if (id !== session.id && other.account?.id === session.account.id) endSession(id);
+            json(response, 200, { passwordSet: true }); return;
           }
           if (url.pathname === '/api/auth/account' && request.method === 'DELETE') {
             const account = session.account;

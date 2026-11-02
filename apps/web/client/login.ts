@@ -7,9 +7,11 @@ createIcons({ icons: { LogIn, MailCheck, RefreshCw }, attrs: { 'aria-hidden': 't
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
 localizeSiteLinks();
-const emailStep = $<HTMLFormElement>('#email-step'), codeStep = $<HTMLFormElement>('#code-step');
+const emailStep = $<HTMLFormElement>('#email-step'), codeStep = $<HTMLFormElement>('#code-step'), passwordStep = $<HTMLFormElement>('#password-step');
 const email = $<HTMLInputElement>('#login-email'), captcha = $<HTMLInputElement>('#login-captcha'), code = $<HTMLInputElement>('#login-code');
 const sendCode = $<HTMLButtonElement>('#send-code'), verify = $<HTMLButtonElement>('#verify-code'), resend = $<HTMLButtonElement>('#resend-code');
+const passwordEmail = $<HTMLInputElement>('#password-email'), password = $<HTMLInputElement>('#login-password');
+const passwordSubmit = $<HTMLButtonElement>('#password-submit');
 let csrf = '', captchaId = '', sentTo = '', resendTimer: ReturnType<typeof setInterval> | undefined;
 
 /** `message` is what the visitor sees; `reason` keeps the server's own text for the session check. */
@@ -53,9 +55,14 @@ async function guarded(action: () => Promise<void>) {
   }
 }
 function showEmailStep(focus: HTMLInputElement) {
-  codeStep.hidden = true; emailStep.hidden = false;
+  codeStep.hidden = true; passwordStep.hidden = true; emailStep.hidden = false;
   clearInterval(resendTimer);
   void guarded(loadCaptcha).then(() => focus.focus());
+}
+function showPasswordStep() {
+  emailStep.hidden = true; codeStep.hidden = true; passwordStep.hidden = false;
+  passwordEmail.value = email.value || sentTo;
+  showError(); passwordEmail.focus();
 }
 
 emailStep.addEventListener('submit', event => {
@@ -98,9 +105,25 @@ codeStep.addEventListener('submit', event => {
     } finally { verify.disabled = false; }
   });
 });
+passwordStep.addEventListener('submit', event => {
+  event.preventDefault();
+  if (passwordSubmit.disabled) return;
+  if (!passwordEmail.checkValidity() || !passwordEmail.value.trim()) { showError(t('请输入有效的邮箱地址。')); passwordEmail.focus(); return; }
+  if (!password.value) { showError(t('请输入密码。')); password.focus(); return; }
+  passwordSubmit.disabled = true;
+  void guarded(async () => {
+    try {
+      await call('/api/auth/password/login', { email: passwordEmail.value, password: password.value });
+      password.value = '';
+      location.replace('./');
+    } finally { passwordSubmit.disabled = false; }
+  });
+});
 code.addEventListener('input', () => { code.value = code.value.replace(/\D/gu, '').slice(0, 6); });
 captcha.addEventListener('input', () => { captcha.value = captcha.value.replace(/\D/gu, '').slice(0, 5); });
 $('#refresh-captcha').addEventListener('click', () => void guarded(loadCaptcha).then(() => captcha.focus()));
 $('#change-email').addEventListener('click', () => showEmailStep(email));
 resend.addEventListener('click', () => showEmailStep(captcha));
+$('#use-password').addEventListener('click', showPasswordStep);
+$('#use-code').addEventListener('click', () => { email.value = passwordEmail.value; showEmailStep(email); });
 void guarded(start);

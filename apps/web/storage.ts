@@ -6,7 +6,7 @@ import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, Web
 import type { WebAgentAction, WebEvent, WebExplanation, WebRun } from './shared';
 import type { WebShareSnapshot } from './share';
 
-export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string } };
+export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string }; passwordResetUntil?: number };
 export type StoredWebArchive = {
   schema: 'theorem-os.web-archive.v1';
   summary: WebArchive;
@@ -104,7 +104,8 @@ export class WebStorage {
 
   saveSession(session: StoredWebSession): void {
     this.saveRecord(['sessions', `${digestKey(session.id)}.json`], { id: session.id, csrf: session.csrf, touchedAt: session.touchedAt,
-      ...(session.account ? { account: session.account } : {}) });
+      ...(session.account ? { account: session.account } : {}),
+      ...(session.passwordResetUntil ? { passwordResetUntil: session.passwordResetUntil } : {}) });
   }
   getSession(id: string): StoredWebSession | undefined { return this.getRecord(['sessions', `${digestKey(id)}.json`]); }
   listSessions(): StoredWebSession[] {
