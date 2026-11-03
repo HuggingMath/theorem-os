@@ -1,0 +1,10 @@
+PASS Offline polling disables submission, keeps drafts editable, and online restores the draft
+PASS A 401 recovers with GET requests only and keeps the existing draft
+PASS A session response alone cannot enable submission; recovery is single-flight until list success
+PASS CSRF 403 refreshes the session without replaying the rejected POST
+PASS An accepted POST with a lost response is reconciled by GET without a duplicate worker
+PASS Full list responses update selected run results while the detail endpoint is unavailable
+PASS A fallback poll settling after pagehide cannot restart the stopped polling timer
+PASS A late 401 from before pagehide cannot disconnect a successfully restored page
+PASS A hung GET times out within the request limit and permits subsequent recovery
+Recovery report: <repository>/out/web-ui-smoke/recovery-report.json

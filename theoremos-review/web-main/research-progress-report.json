@@ -1,0 +1,311 @@
+{
+  "status": "passed",
+  "checkedAt": "2026-11-03T14:28:44.279Z",
+  "mode": "local-real-http-research-progress",
+  "paidModelCalls": false,
+  "checks": [
+    {
+      "name": "frontier shows alternative routes, local blockers and no S3 acceptance",
+      "elapsedMs": 735,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/a77d71d7-3196-48da-a7bb-31059cd6c5ae/trajectory"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        }
+      ]
+    },
+    {
+      "name": "delivery links require full source identities and explicitly claimed check receipts",
+      "elapsedMs": 1150,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/90a40086-7766-4213-9723-17d02bb0a06b/trajectory"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/90a40086-7766-4213-9723-17d02bb0a06b/checks/check-current"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/90a40086-7766-4213-9723-17d02bb0a06b/checks/check-current"
+        }
+      ]
+    },
+    {
+      "name": "delivery filters, worker and task entry points survive polling with reading and focus intact",
+      "elapsedMs": 642,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/5b3f0f65-f5d6-45e5-af2c-f8d7e03396ec/trajectory"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        }
+      ]
+    },
+    {
+      "name": "a delivery opens its historical task contract after the task is revised",
+      "elapsedMs": 611,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/562bc332-1f34-42da-9758-4acf249c4ddc/trajectory"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        }
+      ]
+    },
+    {
+      "name": "research frontier and delivery evidence fit 375px",
+      "elapsedMs": 616,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/7b28074a-b6f9-48d5-9267-8a104d3af16d/trajectory"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        }
+      ]
+    },
+    {
+      "name": "research frontier and delivery evidence fit 320px",
+      "elapsedMs": 617,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/6995ae97-8618-440c-98cf-0f18a486eba8/trajectory"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        }
+      ]
+    }
+  ],
+  "simulatedProofReceipts": true,
+  "leanProcesses": 0,
+  "deliveryCount": 17,
+  "screenshots": [
+    "frontier-desktop.png",
+    "deliveries-desktop.png",
+    "frontier-375.png",
+    "deliveries-375.png",
+    "frontier-320.png",
+    "deliveries-320.png"
+  ]
+}

@@ -1,0 +1,7 @@
+PASS frontier shows alternative routes, local blockers and no S3 acceptance
+PASS delivery links require full source identities and explicitly claimed check receipts
+PASS delivery filters, worker and task entry points survive polling with reading and focus intact
+PASS a delivery opens its historical task contract after the task is revised
+PASS research frontier and delivery evidence fit 375px
+PASS research frontier and delivery evidence fit 320px
+Research progress browser checks passed
