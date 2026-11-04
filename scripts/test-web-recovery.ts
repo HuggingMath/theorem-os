@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun } from '../apps/web/shared';
-import { fillConfig, refreshHistory, withSettings } from './web-ui-controls';
+import { enterLean, fillConfig, refreshHistory, showArtifacts, withSettings } from './web-ui-controls';
 import { deferred, freePort, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -71,8 +71,10 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>) => webScenar
 });
 async function draft(page: Page) {
   const values = { source: 'theorem recovery_draft : True := by\n  trivial\n', task: 'Recovery draft\nKeep this exact task.', model: 'fixture-recovery-model', 'max-turns': '3', 'max-seconds': '90', workers: '2' };
+  // The source and task are written in the Lean composer; the rest are run settings.
+  await fillConfig(page, 'source', values.source);
   await withSettings(page, async () => {
-    for (const [id, value] of Object.entries(values)) if (id !== 'task') await page.locator(`#${id}`).fill(value);
+    for (const [id, value] of Object.entries(values)) if (id !== 'task' && id !== 'source') await page.locator(`#${id}`).fill(value);
   });
   await page.locator('#task').fill(values.task);
   return values;
@@ -81,6 +83,8 @@ async function assertDraft(page: Page, values: Record<string, string>) {
   for (const [id, value] of Object.entries(values)) assert.equal(await page.locator(`#${id}`).inputValue(), value, `draft field ${id} changed`);
 }
 async function post(page: Page): Promise<WebRun> {
+  // New drafts start without a source.
+  if (!await page.locator('#source').inputValue()) await fillConfig(page, 'source', 'theorem recovery_post (a b : Nat) : a + b = b + a := by sorry\n');
   await fillConfig(page, 'api-key', credential);
   const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'POST');
   await page.locator('#submit-run').click();
@@ -89,6 +93,7 @@ async function post(page: Page): Promise<WebRun> {
   const { run } = await result.json() as { run: WebRun };
   // A submitted run opens on its 结果 tab.
   await page.locator(`[data-run-id="${run.id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+  await showArtifacts(page);
   await page.locator('#detail-panel[data-tab="result"]').waitFor();
   return run;
 }
@@ -163,6 +168,9 @@ try {
       return false;
     };
     await h.page.goto(origin);
+    // The page opens on the natural-language chat; 提交 belongs to the Lean editor.
+    await h.page.locator('.chat-lean-entry').waitFor();
+    await enterLean(h.page);
     await disconnected(h.page);
     const values = await draft(h.page);
     listFails = false; holdRecovery = true;

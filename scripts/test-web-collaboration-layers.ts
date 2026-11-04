@@ -13,7 +13,7 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
-import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-collaboration-layers');
@@ -147,7 +147,7 @@ try {
     assert.equal(await focused(page), 'full', 'focus stays on the toggle');
     for (const selector of ['.collab-now', '.collab-expand']) assert.equal(await hidden(page, selector), true, `${selector} leaves the full layer`);
     assert.equal(await stored(page), 'full');
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await ready(page);
     await selectHistoryRun(page, run.id); await page.locator('#detail-tab-collaboration').click();
     await page.locator(`${surface} .collab-layout`).waitFor();
     assert.equal(await page.locator(surface).getAttribute('data-detail'), 'full');

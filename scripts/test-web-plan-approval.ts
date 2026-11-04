@@ -11,7 +11,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import type { WebInspection, WebObservation, WebPlanApproval } from '../apps/web/collaboration';
 import { audit } from './web-a11y';
-import { closeSettings, openHistory, openSettings, openTab, refreshHistory, selectHistoryRun } from './web-ui-controls';
+import { closeSettings, openHistory, openSettings, openTab, refreshHistory, selectHistoryRun, showArtifacts } from './web-ui-controls';
 import { freePort, postRun, ready, settled, startBrowser } from './web-scenario';
 
 /**
@@ -191,6 +191,9 @@ try {
   await page.locator('#submit-run:enabled').click();
   const body = JSON.parse((await request).postData() ?? '{}');
   assert.equal(body.planApproval, true, 'the option is submitted');
+  // The new run opens on its chat, whose card names the wait; the banner and its actions are in the run panel.
+  await page.locator('body[data-view="run"] .detail-heading[data-run]').waitFor({ state: 'attached' });
+  await showArtifacts(page);
   await banner(page).waitFor({ timeout: 15_000 });
   assert.equal(started.at(-1)?.planApproval, true, 'the option reaches the worker');
   const first = [...controls.keys()].at(-1)!, control = controls.get(first)!;
@@ -200,7 +203,8 @@ try {
   assert.match(await banner(page).innerText(), /Lead 把题目拆成了 2 项任务。批准后 Agent 才开始工作[\s\S]*等待批准的时间也计入解题预算/u);
   assert.equal(await page.locator('.detail-statusline [data-status]').innerText(), '等你批准计划');
   assert.match(await page.locator('#detail-panel').innerText(), /Lead 已经拟好研究计划，等你批准后 Agent 才开始工作/u);
-  assert.equal(await page.locator(`[data-run-id="${first}"] .badge`).first().innerText(), '等你批准计划');
+  // The history sits folded under 证明任务 beside the chat.
+  assert.equal(await page.locator(`[data-run-id="${first}"] .badge`).first().textContent(), '等你批准计划');
   assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isEnabled(), true);
   assert.deepEqual(await audit(page, { scope: '[data-run-approval]' }), [], 'approval banner');
   // Nothing runs yet: the verdict has no spinner, and the goals wait for the plan instead of being proved.

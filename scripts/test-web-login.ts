@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { audit } from './web-a11y';
-import { freePort, settled, startBrowser } from './web-scenario';
+import { freePort, settled, startBrowser, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -22,6 +22,8 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_AUTH: 'email', THEOREMOS_WEB_SMTP_URL: 'log:',
   THEOREMOS_WEB_ALLOWLIST: 'alice@example.org', THEOREMOS_WEB_DATA_ROOT: data }), runner,
 { mailer: async message => { mail.push(message); }, captchaAnswer: () => '24680' });
+// The workbench at the root address; it may already name the run it reopened (?run= or ?chat=) when the load event fires.
+const workbench = (url: URL) => url.origin === origin && url.pathname === '/';
 const mark = (check: string) => console.log(`PASS ${check}`);
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
@@ -73,10 +75,10 @@ try {
   assert.equal(await page.locator('#login-error').innerText(), '验证码不正确。');
   await page.fill('#login-code', code);
   await page.click('#verify-code');
-  await page.waitForURL(`${origin}/`);
+  await page.waitForURL(workbench);
   await page.locator('#open-account').waitFor();
   assert.equal(await page.locator('#open-account').innerText(), 'alice@example.org');
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   mark('a wrong code is reported, the right code opens the workbench with the account in the top bar');
 
   // Signed in, the account button joins the top bar; on phones the model name truncates so the button stays on screen.
@@ -106,9 +108,12 @@ try {
   await page.waitForURL(/\/login\.html$/u);
   await page.context().addCookies(cookies);
   await page.goto(`${origin}/login.html`);
-  await page.waitForURL(`${origin}/`);
+  await page.waitForURL(workbench);
   await page.locator(`#run-list [data-run-id="${older}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
-  assert.equal(new URL(page.url()).search, `?run=${older}`, 'The address bar names the run the link opened');
+  // The open run is addressed by its run id or, once its conversation opens beside it, by that conversation; either reopens it.
+  assert.match(new URL(page.url()).search, new RegExp(`^\\?(?:run=${older}|chat=[\\w-]+)$`, 'u'), 'The address bar names the run the link opened');
+  await page.reload();
+  await page.locator(`#run-list [data-run-id="${older}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
   mark('a completion mail links to its run, and the link still opens that run after the login page');
 
   await page.click('#open-account');
@@ -151,7 +156,7 @@ try {
   assert.equal(await page.locator('#login-error').innerText(), '邮箱或密码不正确。');
   await page.fill('#login-password', password);
   await page.click('#password-submit');
-  await page.waitForURL(origin + '/');
+  await page.waitForURL(workbench);
   await page.click('#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   assert.equal(await page.locator('#account-current-wrap').isVisible(), true);

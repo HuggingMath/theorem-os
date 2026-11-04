@@ -83,6 +83,8 @@ try {
   // The finished sample: one lane per Agent, and each step's badge counts the actions in it.
   await page.goto(`${origin}/?sample`);
   await ready(page);
+  // A run opens on its chat; the result is in the run panel beside it.
+  await openTab(page, 'result');
   await page.locator('.result-agent-actions>summary').click();
   await lane(page, 'researcher-1').waitFor();
   const expected = agentRoutes(sample.events, { actions: mergeAgentActions(sample.actions!), lead });
@@ -204,6 +206,7 @@ try {
   small.on('pageerror', error => errors.push(`390: ${error.message}`));
   await small.goto(`${origin}/?sample`);
   await ready(small);
+  await openTab(small, 'result');
   await small.locator('.result-agent-actions>summary').click();
   await chips(small, 'engineer').nth(1).click();
   await inspector(small, 'engineer').getByRole('button', { name: '全部展开' }).click();
@@ -218,6 +221,8 @@ try {
   await page.goto(`${origin}/?run=${live.id}`);
   // A running run may hold the submit button back, so only wait for the page to be there.
   await page.locator('#submit-run').waitFor({ state: 'attached' });
+  await page.locator('body[data-view="run"] .detail-heading[data-run]').waitFor({ state: 'attached' });
+  await openTab(page, 'result');
   await page.locator('.result-agent-actions>summary').click();
   await lane(page, 'engineer').locator('.agent-route-count').first().waitFor();
   const current = lane(page, 'engineer').locator('.agent-route-step[data-current] [data-route-step]');
@@ -261,6 +266,7 @@ try {
   await waitForRun({ page }, long.id, run => run.status !== 'running' && run.status !== 'queued', 20_000);
   await page.goto(`${origin}/?run=${long.id}`);
   await ready(page);
+  await openTab(page, 'result');
   await page.locator('.result-agent-actions>summary').click();
   await lane(page, 'solver').waitFor();
   assert.equal(await chips(page, 'solver').count(), 24);

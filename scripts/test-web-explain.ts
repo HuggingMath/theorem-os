@@ -15,8 +15,8 @@ import { webExplanationEvidence, type FixtureUnit } from '../tests/helpers/webEx
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { printedPages, printLayout } from './web-print';
-import { selectHistoryRun } from './web-ui-controls';
-import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
+import { openTab, selectHistoryRun } from './web-ui-controls';
+import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
 
 // The proof explanation page against a fake runner: preset proof and preset approved evidence, no model or container.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -108,13 +108,13 @@ try {
   browser = await startBrowser(service.server, port);
   const owner = await open(browser, `${origin}/`);
   const { page } = owner;
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   const run = await postRun({ page }, input);
   await until(async () => (await readRun({ page }, run.id)).status === 'completed', 'the fixture run finishes');
 
   // Open directly from the proof, without depending on the report's outline or display mode.
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   // The acceptance report, with the proof's structure, is part of 结果, where a run opens.
   await selectHistoryRun(page, run.id);
   const proofLink = page.locator('#detail-panel .result-proof [data-proof-explanation]');
@@ -143,6 +143,8 @@ try {
 
   // Sample readers can discover the page too; opening it never starts generation and Back returns to the sample.
   const sample = await open(browser, `${origin}/?sample`);
+  await sample.page.locator('body[data-view="run"] .detail-heading[data-run]').waitFor({ state: 'attached' });
+  await openTab(sample.page, 'result');
   const sampleLink = sample.page.locator('#detail-panel .result-proof [data-proof-explanation]');
   await sampleLink.waitFor();
   assert.equal(await sampleLink.getAttribute('href'), `explain.html?${new URLSearchParams({ run: webSampleRunId })}`);
@@ -156,6 +158,9 @@ try {
   assert.equal(explains.length, 0, 'opening an explanation does not start the runner');
   assert.equal(await sampleExplanation.locator('#explain-back').getAttribute('href'), './?sample');
   await sampleExplanation.locator('#explain-back').click();
+  // The sample reopens on its chat; the proof with its explanation link is in the run panel's 结果.
+  await sampleExplanation.locator('body[data-view="run"] .detail-heading[data-run]').waitFor({ state: 'attached' });
+  await openTab(sampleExplanation, 'result');
   await sampleExplanation.locator('#detail-panel .result-proof [data-proof-explanation]').waitFor();
   await sample.context.close();
   mark('the sample exposes the explanation entry, stays read-only and returns to the sample');

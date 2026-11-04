@@ -15,7 +15,8 @@ type Options = {
   draftScope: string;
   keyRequired(providerId: string): boolean;
   onSelection(run?: WebRun): void;
-  onNavigate(id: string, mode: 'push' | 'replace'): void;
+  /** `attached` names the conversation of a run already on screen, which the reader may still be browsing to from the history. */
+  onNavigate(id: string, mode: 'push' | 'replace', attached?: boolean): void;
   onArtifact(kind: 'roadmap' | 'original' | 'source', target?: { taskId?: string; messageId?: string }): void;
   onLean(): void;
   onGuidance(run: WebRun): void;
@@ -159,7 +160,7 @@ export class ChatSession {
       const { conversation } = await this.post<{ conversation: WebConversation }>('/api/conversations', { runId: run.id });
       if (generation !== this.generation) return;
       this.draft = this.restoredDraft(conversation.id); this.setConversation(conversation);
-      this.options.onNavigate(conversation.id, 'replace');
+      this.options.onNavigate(conversation.id, 'replace', true);
       await this.loadTask(generation); await this.refreshHistory();
     } catch (error) { if (generation === this.generation) this.error = reason(error); }
     finally { if (generation === this.generation) { this.loading = false; this.draw(); this.schedule(); } }

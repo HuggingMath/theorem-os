@@ -9,8 +9,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun } from '../apps/web/shared';
-import { closeHistory, closeSettings, historyDocked, openHistory, openSettings, selectHistoryRun, showArtifacts, showChat, withSettings } from './web-ui-controls';
-import { freePort, type RequestRecord, scenarioFailure, type ScenarioSuite, startBrowser, webScenario } from './web-scenario';
+import { closeHistory, closeSettings, fillConfig, historyDocked, openHistory, openSettings, selectConfig, selectHistoryRun, showArtifacts, showChat, withSettings } from './web-ui-controls';
+import { freePort, type RequestRecord, scenarioFailure, type ScenarioSuite, startBrowser, webScenario, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-motion');
@@ -167,12 +167,12 @@ async function fits(page: Page, dialog?: string) {
     && result.bounds.bottom <= result.height + 1, `${dialog} leaves the ${result.width}x${result.height} viewport during motion`);
 }
 
-async function createRun(h: Harness) {
-  await withSettings(h.page, async () => {
-    await h.page.locator('#environment').selectOption('standard');
-    await h.page.locator('#source').fill(source);
-    await h.page.locator('#api-key').fill(credential);
-  });
+/** Submits the fixture run; `open` then opens its result from the chat (a deliberate panel entrance of its own). */
+async function createRun(h: Harness, open = true) {
+  // The environment and source are chosen in the Lean composer; the Key is a run setting.
+  await selectConfig(h.page, 'environment', 'standard');
+  await fillConfig(h.page, 'source', source);
+  await withSettings(h.page, () => h.page.locator('#api-key').fill(credential));
   await h.page.locator('#task').fill('Inspect the original motion fixture declaration.');
   const posted = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'POST');
   await h.page.locator('#submit-run').click();
@@ -181,7 +181,10 @@ async function createRun(h: Harness) {
   const { run } = await response.json() as { run: WebRun };
   h.runIds.push(run.id);
   await h.page.locator(`[data-run-id="${run.id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
-  await h.page.locator('body[data-view="run"] #detail-panel').waitFor();
+  if (open) {
+    await showArtifacts(h.page);
+    await h.page.locator('body[data-view="run"] #detail-panel').waitFor();
+  }
   assert.ok(controls.has(run.id));
   await h.page.waitForFunction(() => document.querySelector('#conversation-announcement')?.textContent?.includes('Motion fixture solving started'));
   return { run, control: controls.get(run.id)! };
@@ -219,7 +222,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, reducedMotio
       (window as unknown as { __motionProbe: MotionProbe }).__motionProbe = { starts, observer };
     }),
     harness: (page, context) => ({ page, context, requests: [], runIds: [] }), routes: 'observe',
-    open: async ({ page }) => { await page.goto(origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await settled(page); },
+    open: async ({ page }) => { await page.goto(origin); await ready(page); await settled(page); },
     timeout: { label: 'Motion', seconds: 40 }, failure: { capture: screenshot },
     cleanup: ({ runIds }) => { for (const id of runIds) controls.get(id)?.finish({ status: 'incomplete', proof: source, report: { reason: 'Local fixture cleanup' } }); },
   });
@@ -239,16 +242,17 @@ try {
 
   await scenario('Opening a new run cues only its status and its arriving history row; ordinary list polling never replays an entrance', async h => {
     const since = await offset(h.page);
-    await createRun(h);
+    await createRun(h, false);
     await settled(h.page);
     const entered = (await record(h.page, 'run-opened', since)).filter(entry => !entry.dialog);
-    assert.equal(entered.every(entry => entry.status || entry.kind === 'row'), true, 'opening a run may only cue its status change and its new history row');
+    assert.equal(entered.every(entry => entry.status || entry.kind === 'row'), true, `opening a run may only cue its status change and its new history row: ${JSON.stringify(entered)}`);
     assert.ok(entered.some(entry => entry.kind === 'row'), 'the new run did not arrive in the history');
     const afterEntrance = await offset(h.page);
     const listed = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
     await h.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await listed; await nextPaint(h.page); await settled(h.page);
     assert.deepEqual(await record(h.page, 'unchanged-poll', afterEntrance), [], 'an unchanged poll replayed an entrance or status animation');
-    assert.equal(h.requests.filter(request => request.method === 'POST').length, 1);
+    assert.equal(h.requests.filter(request => request.method === 'POST' && request.pathname === '/api/runs').length, 1);
+    await showArtifacts(h.page); await settled(h.page);
     await screenshot(h.page, 'desktop-run.png');
   });
 

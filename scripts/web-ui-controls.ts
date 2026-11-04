@@ -39,6 +39,17 @@ export async function closeHistory(page: Page) {
   }
 }
 
+/** The workbench opens on the natural-language chat. Its Lean link lives in the chat composer on the new-research page and in
+ * the input-mode switch above a shown run; the switch is hidden on the new-research page. */
+export async function enterLean(page: Page) {
+  if (!await page.locator('body[data-entry="natural"]').count()) return;
+  const toggle = page.locator('#entry-lean');
+  await (await toggle.isVisible() ? toggle : page.locator('.chat-lean-entry')).click();
+  await page.locator('body[data-entry="lean"]').waitFor({ state: 'attached' });
+  // The suites type proof instructions directly; the product keeps them in a collapsed section.
+  await page.locator('#proof-instructions').evaluate(node => { (node as HTMLDetailsElement).open = true; });
+}
+
 /** The new-research page: the composer, and on phones its 编写 tab. A selected run is left through 新建研究. */
 export async function showChat(page: Page) {
   await closeSettings(page);
@@ -49,20 +60,43 @@ export async function showChat(page: Page) {
   }
   await closeHistory(page);
   // These helpers exercise the optional Lean editor; natural-language onboarding has its own suite.
-  if (await page.locator('body[data-entry="natural"]').count()) await page.locator('#entry-lean').click();
+  await enterLean(page);
   if (await page.locator('#mobile-compose').isVisible()) await page.locator('#mobile-compose').click();
   if (await page.locator('#close-draft-preview').isVisible()) await page.locator('#close-draft-preview').click();
   await page.locator('.lean-input-options').evaluate(node => { (node as HTMLDetailsElement).open = true; });
   await page.locator('#proof-instructions').evaluate(node => { (node as HTMLDetailsElement).open = true; });
 }
 
+/** The Lean editor's 研究例题 panel: research examples, template suggestions and the sample run. */
+export async function showExamples(page: Page) {
+  await showChat(page);
+  if (await page.locator('#research-examples-panel[hidden]').count()) await page.locator('#open-research-examples').click();
+  await page.locator('#research-examples-panel:not([hidden])').waitFor({ state: 'attached' });
+}
+
+/** Opens the read-only sample from the 研究例题 panel and shows its run panel, where the sample badge and tabs live. */
+export async function openSample(page: Page) {
+  await showExamples(page);
+  await page.locator('.welcome-sample').click();
+  await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });
+  await showArtifacts(page);
+  await page.locator('[data-sample-badge]').waitFor();
+}
+
 /** The selected run, or the draft preview on the new-research page (its 预览 tab on phones). */
 export async function showArtifacts(page: Page) {
   await closeSettings(page);
   await closeHistory(page);
-  if (await page.locator('body[data-view="run"]').count() && !await page.locator('#runs-panel').isVisible())
+  if (await page.locator('body[data-view="run"]').count() && !await page.locator('#runs-panel').isVisible()) {
+    // The chat's 路线图 link opens the run panel on its trajectory; the tab the run had selected is selected again.
+    const tab = await page.evaluate(() => document.querySelector<HTMLElement>('[data-detail-tab][aria-selected="true"]')?.dataset.detailTab);
     await page.locator('[data-research-artifact="roadmap"]').click();
-  else if (await page.locator('body[data-view="draft"]').count() && await page.locator('#open-draft-preview').isVisible())
+    await page.locator('#runs-panel').waitFor();
+    if (tab && tab !== 'trajectory') {
+      await page.locator(`#detail-tab-${tab}`).click();
+      await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor({ state: 'attached' });
+    }
+  } else if (await page.locator('body[data-view="draft"]').count() && await page.locator('#open-draft-preview').isVisible())
     await page.locator('#open-draft-preview').click();
 }
 
@@ -140,7 +174,7 @@ export async function openTab(page: Page, tab: string) {
 export async function newResearch(page: Page) {
   await showChat(page);
   await page.locator('#new-research').click();
-  await page.locator('#entry-lean').click();
+  await enterLean(page);
   await page.locator('#proof-instructions').evaluate(node => { (node as HTMLDetailsElement).open = true; });
 }
 

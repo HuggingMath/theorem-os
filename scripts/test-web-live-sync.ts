@@ -9,9 +9,9 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
 import type { WebRunInput } from '../apps/web/shared';
-import { fillConfig, openTab } from './web-ui-controls';
+import { fillConfig, openTab, selectHistoryRun } from './web-ui-controls';
 import { deferred, freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport,
-  type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+  type ScenarioHarness, type ScenarioSuite, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), output = path.join(root, 'out/web-live-sync');
 await fs.mkdir(output, { recursive: true });
@@ -73,9 +73,10 @@ async function sequence(page: Page, value: number, timeout = 10_000) {
   await page.waitForFunction(value => document.querySelector('[data-collab-observation]')?.textContent?.includes(`观察 #${value} ·`), value, { timeout });
 }
 async function live(page: Page) { await page.waitForFunction(() => (window as unknown as { __liveSync: Probe }).__liveSync.events > 0); }
-/** A new run opens on 结果; these checks read the task graph, so they move to 协作 once it is selected. */
+/** A run created through the API is opened from the history (the root address stays on a new problem); these checks read the task graph on 协作. */
 async function collaboration(page: Page, id: string) {
-  await page.locator(`[data-run-id="${id}"][aria-pressed="true"]`).waitFor({ state: 'attached' }); await openTab(page, 'collaboration');
+  if (!await page.locator(`[data-run-id="${id}"][aria-pressed="true"]`).count()) await selectHistoryRun(page, id);
+  await openTab(page, 'collaboration');
 }
 async function create(h: Harness) {
   const run = await postRun(h, input); h.runIds.push(run.id); await collaboration(h.page, run.id);
@@ -205,12 +206,12 @@ try {
     assert.equal(h.requests.filter(r => r.pathname === '/api/runs/stream').length, 2);
     assert.equal((await probe(page)).opened, initial.opened, 'the browser reconnects the existing EventSource');
     assert.equal((await probe(page)).closed, initial.closed, 'a stream interruption does not rebuild the application connection');
-    assert.equal(h.requests.filter(r => r.method !== 'GET').length, 1, 'reconnection does not replay the run creation');
+    assert.equal(h.requests.filter(runtimeWrite).length, 1, 'reconnection does not replay the run creation');
   }, { interruptFirst: true });
 
   await scenario('hidden and restored pages close old streams and reconcile missed changes without replaying writes', async h => {
     const { page } = h; await live(page); const run = await create(h), control = controls.get(run.id)!;
-    const initial = await probe(page), writes = h.requests.filter(r => r.method !== 'GET').length;
+    const initial = await probe(page), writes = h.requests.filter(runtimeWrite).length;
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { configurable: true, value: true });
       document.dispatchEvent(new Event('visibilitychange'));
@@ -227,11 +228,12 @@ try {
     await page.evaluate(() => (window as unknown as { __liveSync: Probe }).__liveSync.sources[0]!.dispatchEvent(
       new MessageEvent('runs-changed', { data: JSON.stringify({ version: 'closed-stream-message' }) })));
     await settled(page); assert.equal(lists(h), beforeOldMessage, 'closed stream callbacks cannot refresh a new connection');
-    assert.equal(h.requests.filter(r => r.method !== 'GET').length, writes);
+    assert.equal(h.requests.filter(runtimeWrite).length, writes);
   });
 
   await scenario('a delayed creation response keeps the newer run already received through the stream', async h => {
-    const { page } = h; await live(page); await page.locator('#task').fill('Create a run with a delayed response');
+    const { page } = h; await live(page);
+    await fillConfig(page, 'source', input.source); await page.locator('#task').fill('Create a run with a delayed response');
     await fillConfig(page, 'api-key', input.apiKey);
     const held = deferred(), release = deferred(); let createdId = '';
     h.effect = async route => {

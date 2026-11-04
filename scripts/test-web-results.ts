@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
 import { openRunMenu, refresh, refreshHistory, runMenu, selectHistoryRun, showArtifacts } from './web-ui-controls';
-import { deferred, freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { deferred, freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -218,7 +218,7 @@ try {
         'the original-report entry must be tested from a scrolled diagnostic');
       await screenshot(h.page, `results-${width}-clipped-diagnostic.png`);
       await assertHorizontalFit(h.page, '.diagnostic-entry:first-of-type .report-detail-link', width);
-      const before = h.requests.filter(request => request.method !== 'GET').length;
+      const before = h.requests.filter(runtimeWrite).length;
       await link.click();
       assert.equal(await h.page.locator('[data-report-view="json"]').getAttribute('aria-pressed'), 'true');
       assert.deepEqual(JSON.parse((await h.page.locator('.code-scroll.report code').textContent())!), report);
@@ -233,7 +233,7 @@ try {
       assert.ok(jsonButton && jsonButton.y >= 0 && jsonButton.y + jsonButton.height <= h.page.viewportSize()!.height,
         'the focused JSON view control must be visible');
       await screenshot(h.page, `results-${width}-original-report.png`);
-      assert.equal(h.requests.filter(request => request.method !== 'GET').length, before, 'opening the report must not write to the API');
+      assert.equal(h.requests.filter(runtimeWrite).length, before, 'opening the report must not write to the API');
       await h.page.locator('[data-action="copy-report"]').click();
       assert.deepEqual(JSON.parse(await h.page.evaluate(() => navigator.clipboard.readText())), report);
     }
@@ -324,7 +324,8 @@ try {
     await h.page.waitForFunction(id => (document.activeElement as HTMLElement | null)?.closest('#run-list')
       && (document.activeElement as HTMLElement).dataset.runId === id, selected, { timeout: 3_000 })
       .catch(() => assert.fail('focus moves to the newly selected run'));
-    assert.equal(new URL(h.page.url()).search, `?run=${selected}`);
+    // The run's own address, or that of its conversation once it opens beside the run.
+    await h.page.waitForFunction(id => location.search === `?run=${id}` || location.search.startsWith('?chat='), selected);
     await refresh(h);
     assert.equal(await h.page.locator(`[data-run-id="${middle.id}"]`).count(), 0);
     await deleteSelected(h, selected!);
@@ -332,10 +333,12 @@ try {
     await h.page.locator(`[data-run-id="${finalId}"].selected`).waitFor({ state: 'attached' });
     await deleteSelected(h, finalId);
     assert.equal(await h.page.locator('[data-run-id]').count(), 0);
-    assert.equal(await h.page.locator('#run-count').innerText(), '0');
+    assert.equal(await h.page.locator('#run-count').textContent(), '0');
     // Nothing is left to search or filter.
     assert.equal(await h.page.locator('.history-tools').isHidden(), true);
-    assert.equal(await h.page.locator('.detail-empty').count(), 1);
+    // With the last run gone, its chat returns to a new problem at the root address.
+    await h.page.locator('.chat-lean-entry').waitFor({ state: 'attached' });
+    await h.page.waitForFunction(() => location.search === '');
     assert.equal(deleteCount(h), 3);
   });
 

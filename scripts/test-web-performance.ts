@@ -9,8 +9,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun } from '../apps/web/shared';
-import { closeSettings, fillConfig, openSettings, showArtifacts, showChat, withSettings } from './web-ui-controls';
-import { freePort, startBrowser } from './web-scenario';
+import { closeSettings, fillConfig, openSettings, showArtifacts, showChat, selectConfig } from './web-ui-controls';
+import { freePort, startBrowser, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-performance');
@@ -158,39 +158,46 @@ try {
   page = await context.newPage();
   page.setDefaultTimeout(12_000);
   page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') apiWrites++; });
+  page.on('request', request => {
+    const { pathname } = new URL(request.url());
+    if (pathname.startsWith('/api/') && runtimeWrite({ method: request.method(), pathname })) apiWrites++;
+  });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   const source = Array.from({ length: 150 }, (_, index) => `-- source line ${index + 1} ${'long_identifier_'.repeat(12)}`).join('\n')
     + '\n\ntheorem performance_fixture : True := by\n  sorry\n';
-  await withSettings(page, async () => {
-    await page.locator('#environment').selectOption('standard');
-    await page.locator('#source').fill(source);
-  });
+  await selectConfig(page, 'environment', 'standard');
+  await fillConfig(page, 'source', source);
   await page.locator('#task').fill('Inspect the original declaration.');
-  await sourceMatches(page, '#draft-preview-code code', source);
-  await page.locator('.draft-source-scroll').evaluate(scroll => { scroll.scrollTop = 120; scroll.scrollLeft = 80; });
+  // In the Lean editor the preview replaces the composer, so typing is measured on the composer that stays on screen:
+  // the source keeps its node and reading position, and the preview shows every typed value once it opens.
+  await page.locator('#source').evaluate(scroll => { scroll.scrollTop = 120; scroll.scrollLeft = 80; });
   await page.locator('#task').focus();
-  const draftNodes = { preview: '#draft-preview', heading: '.preview-heading', sourceScroll: '.draft-source-scroll', sourceCode: '#draft-preview-code code' };
-  await begin(page, 'draft-task-typing-5-characters', draftNodes, '.draft-source-scroll');
+  const draftNodes = { form: '#run-form', fields: '#inline-problem-fields', source: '#source', task: '#task' };
+  await begin(page, 'draft-task-typing-5-characters', draftNodes, '#source');
   await page.locator('#task').pressSequentially(' beta', { delay: 15 });
-  await page.waitForFunction(() => document.querySelector('#draft-preview-task')?.textContent?.endsWith(' beta'));
+  await page.waitForFunction(() => (document.querySelector('#task') as HTMLTextAreaElement).value.endsWith(' beta'));
   const taskSample = await end(page);
-  retains(taskSample, Object.keys(draftNodes), ['sourceCode']);
+  retains(taskSample, Object.keys(draftNodes));
   assert.equal(taskSample.mutations['#conversation']!.childLists, 0, 'task typing must not rebuild the new-research page');
-  mark('Task typing keeps the unchanged source nodes, focus and both scroll positions');
+  mark('Task typing keeps the source node, focus and its scroll position');
   await openSettings(page);
   await page.locator('#model').focus();
-  await begin(page, 'draft-model-typing-5-characters', draftNodes, '.draft-source-scroll');
+  await begin(page, 'draft-model-typing-5-characters', draftNodes, '#source');
   await page.locator('#model').pressSequentially('-perf', { delay: 15 });
   const model = await page.locator('#model').inputValue();
-  await sourceMatches(page, '[data-preview-value="model"]', model);
   const modelSample = await end(page);
-  retains(modelSample, Object.keys(draftNodes), ['sourceCode']);
+  retains(modelSample, Object.keys(draftNodes));
   assert.equal(modelSample.mutations['#conversation']!.childLists, 0, 'model typing must not rebuild the new-research page');
-  mark('Model typing patches metadata without replacing the source or losing focus');
+  mark('Model typing keeps the draft fields and focus');
   await closeSettings(page);
+  await showArtifacts(page);
+  await sourceMatches(page, '#draft-preview-code code', source);
+  await page.waitForFunction(() => document.querySelector('#draft-preview-task')?.textContent?.endsWith(' beta'));
+  await sourceMatches(page, '[data-preview-value="model"]', model);
+  mark('The preview shows the typed source, task and model');
   await screenshot(page, 'draft.png');
+  await showChat(page);
 
   await fillConfig(page, 'api-key', credential);
   const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'POST');
@@ -203,7 +210,7 @@ try {
   for (let index = 0; index < 24; index++) control.progress(`Initial research step ${index + 1}`);
   const firstCandidate = run.source.replace('  sorry', '  trivial') + '\n-- Candidate version 0\n';
   control.artifact(firstCandidate);
-  await page.locator('#detail-tab-source').click();
+  await showArtifacts(page); await page.locator('#detail-tab-source').click();
   await sourceMatches(page, '#detail-panel .code-scroll code', firstCandidate);
   const runNodes = { detailHeading: '#run-detail > .detail-heading', detailTabs: '#run-detail > .detail-tabs',
     panel: '#detail-panel', sourceScroll: '#detail-panel .code-scroll', sourceCode: '#detail-panel .code-scroll code' };
@@ -276,69 +283,7 @@ try {
   await screenshot(page, 'mobile-result.png');
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  // The panes split only on the new-research page, between the composer and the draft preview.
-  await showChat(page);
-  await page.locator('#draft-preview').waitFor();
-
-  const separator = page.locator('#pane-resizer');
-  const bounds = await separator.boundingBox();
-  assert.ok(bounds);
-  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-  await page.mouse.down();
-  const resize = await page.evaluate(async () => {
-    const workspace = document.querySelector<HTMLElement>('.workspace')!;
-    const separator = document.querySelector<HTMLElement>('#pane-resizer')!;
-    const original = CSSStyleDeclaration.prototype.setProperty;
-    let writes = 0;
-    CSSStyleDeclaration.prototype.setProperty = function(name, value, priority) {
-      if (this === workspace.style && name === '--chat-width') writes++;
-      return original.call(this, name, value, priority);
-    };
-    try {
-      const bounds = workspace.getBoundingClientRect();
-      for (let index = 0; index < 80; index++) separator.dispatchEvent(new PointerEvent('pointermove', {
-        pointerId: 1, pointerType: 'mouse', buttons: 1, bubbles: true, clientX: bounds.left + bounds.width * (0.38 + index / 1000),
-      }));
-      const synchronousWrites = writes;
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      return { name: 'resize-pointer-burst', pointerEvents: 80, synchronousWrites, writesAfterTwoFrames: writes };
-    } finally { CSSStyleDeclaration.prototype.setProperty = original; }
-  });
-  await page.mouse.up();
-  measurements.push(resize);
-  console.log(JSON.stringify(resize));
-  assert.equal(resize.synchronousWrites, 0, 'pointer handlers must defer layout writes to an animation frame');
-  assert.ok(resize.writesAfterTwoFrames > 0 && resize.writesAfterTwoFrames <= 2, 'a pointer burst must be coalesced into frame updates');
-  mark('Eighty pointer moves coalesce into frame updates instead of synchronous layout writes');
-
-  const commitBounds = await separator.boundingBox();
-  assert.ok(commitBounds);
-  await page.mouse.move(commitBounds.x + commitBounds.width / 2, commitBounds.y + commitBounds.height / 2);
-  await page.mouse.down();
-  const commit = await page.evaluate(async () => {
-    const workspace = document.querySelector<HTMLElement>('.workspace')!;
-    const separator = document.querySelector<HTMLElement>('#pane-resizer')!;
-    const bounds = workspace.getBoundingClientRect();
-    const targetPercent = 52;
-    const snapshot = (): ResizeSnapshot => ({ width: Number(separator.getAttribute('aria-valuenow')),
-      stored: sessionStorage.getItem('theoremos-pane-width-v1'), resizing: document.body.classList.contains('resizing') });
-    const pointer = { pointerId: 1, pointerType: 'mouse', bubbles: true, clientX: bounds.left + bounds.width * targetPercent / 100 };
-    separator.dispatchEvent(new PointerEvent('pointermove', { ...pointer, buttons: 1 }));
-    separator.dispatchEvent(new PointerEvent('pointerup', { ...pointer, buttons: 0 }));
-    const immediately = snapshot();
-    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-    return { name: 'resize-pointerup-commits-pending-width', targetPercent, immediately, afterTwoFrames: snapshot() };
-  });
-  await page.mouse.up();
-  measurements.push(commit);
-  console.log(JSON.stringify(commit));
-  assert.ok(Math.abs(commit.immediately.width - commit.targetPercent) < 0.001, 'pointerup must immediately flush the last queued width');
-  assert.ok(commit.immediately.stored !== null && Math.abs(Number(commit.immediately.stored) - commit.targetPercent) < 0.001,
-    'pointerup must persist the last queued width before the next frame');
-  assert.equal(commit.immediately.resizing, false, 'pointerup must clear the resizing state');
-  assert.deepEqual(commit.afterTwoFrames, commit.immediately, 'a stale animation frame must not undo the committed width');
-  mark('Immediate pointerup commits and persists the last queued width without reverting on later frames');
+  // The chat-first layout shows no pane separator (#pane-resizer is hidden in every view), so no resize is measured.
   assert.deepEqual(errors, []);
   assert.equal(apiWrites, 1);
   await writeReport('passed');

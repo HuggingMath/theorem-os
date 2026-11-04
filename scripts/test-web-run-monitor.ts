@@ -9,8 +9,8 @@ import type { TaskDraft } from '../apps/web/client/draft';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
-import { closeHistory, fitViewport, newResearch, openHistory, withSettings } from './web-ui-controls';
-import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, waitForRun, webScenario, writeScenarioReport } from './web-scenario';
+import { closeHistory, fitViewport, newResearch, openHistory, openTab, withSettings, showExamples, showArtifacts, enterLean } from './web-ui-controls';
+import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, waitForRun, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-run-monitor'), reportFile = path.join(output, 'report.json');
@@ -60,6 +60,7 @@ const dismiss = (id: string) => `[data-dismiss-run-notice="${id}"]`;
 const stop = '.detail-actions [data-action="cancel"]';
 const cancelDialog = '#cancel-run-dialog[open]';
 async function confirmStop(page: Page) {
+  await showArtifacts(page);
   await page.locator(stop).click(); await page.locator(cancelDialog).waitFor();
   await page.locator('#confirm-cancel-run').click(); await page.locator(cancelDialog).waitFor({ state: 'detached' });
 }
@@ -73,7 +74,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
     harness: (page, context) => ({ page, context, requests: [], creates: 0, deletes: 0, owners: new Set(), releases: [] }),
     routes: { local: 'monitor operations must remain local' }, timeout: { label: 'Run monitor', seconds: 50 },
     verify: async (h, elapsedMs) => {
-      const writes = h.requests.filter(request => request.method !== 'GET');
+      const writes = h.requests.filter(runtimeWrite);
       const cancels = writes.filter(request => request.method === 'POST' && /^\/api\/runs\/[^/]+\/cancel$/.test(request.pathname)).length;
       assert.equal(count(h, 'POST', '/api/runs'), h.creates, 'monitor navigation must not submit a research task');
       assert.equal(writes.filter(request => request.method === 'DELETE').length, h.deletes);
@@ -93,7 +94,7 @@ async function collectOwner(h: Harness) {
   const cookie = (await h.context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session');
   if (cookie) h.owners.add(cookie.value);
 }
-async function open(h: Harness) { await h.page.goto(origin); await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await collectOwner(h); }
+async function open(h: Harness) { await h.page.goto(origin); await ready(h.page); await collectOwner(h); }
 async function refresh(h: Harness) {
   await openHistory(h.page); await h.page.locator('#refresh-runs:enabled').waitFor();
   const loaded = h.page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET');
@@ -131,6 +132,8 @@ async function openMonitored(page: Page, id: string) {
   assert.equal(await page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
   assert.equal(await page.evaluate(() => document.body.dataset.view), 'run');
   if (page.viewportSize()!.width <= 850) assert.equal(await page.evaluate(() => document.body.dataset.mobileView), 'runs');
+  // The run header (stop, notices) sits in the run panel, which opens beside the chat.
+  await showArtifacts(page);
 }
 async function editable(page: Page): Promise<Editable> {
   return page.evaluate(key => {
@@ -149,22 +152,23 @@ async function returnToDraft(page: Page, before: Editable) {
   await page.locator('#open-draft').click();
   await page.locator('body[data-view="draft"]').waitFor({ state: 'attached' }); await page.locator('#history-dialog[open]').waitFor({ state: 'detached' });
   await preserved(page, before);
-  assert.equal(await page.locator('#task').evaluate(input => input === document.activeElement), true);
+  // 新建研究 opens the chat with its input focused; the unsent Lean draft waits behind the Lean link.
+  await page.waitForFunction(() => document.activeElement?.closest('#natural-research') !== null && document.activeElement?.tagName === 'TEXTAREA');
   if (page.viewportSize()!.width <= 850) assert.equal(await page.evaluate(() => document.body.dataset.mobileView), 'compose');
-  else assert.equal(await page.locator('#draft-preview').count(), 1);
+  await enterLean(page); await preserved(page, before);
   restorations.push({ width: page.viewportSize()!.width, keyPreserved: true, backupPreserved: true });
 }
 async function prepareDraft(page: Page) {
   await newResearch(page);
+  await page.locator('#environment').selectOption('standard'); await page.locator('#template').selectOption('');
+  await page.locator('#source').fill(`-- ${injection}\ntheorem unsent_monitor_draft : True := by sorry\n`);
   await withSettings(page, async () => {
-    await page.locator('#environment').selectOption('standard'); await page.locator('#template').selectOption('');
-    await page.locator('#source').fill(`-- ${injection}\ntheorem unsent_monitor_draft : True := by sorry\n`);
     await page.locator('#model').fill('fixture-unsent-model'); await page.locator('#effort').selectOption('medium');
     await page.locator('#max-turns').fill('4'); await page.locator('#max-seconds').fill('120'); await page.locator('#workers').fill('2');
     await page.locator('input[name="coordination"][value="independent"]').check();
   });
   await page.locator('#task').fill(`Unsent task ${injection}`);
-  await page.locator('[data-chat-template="logic"]').click();
+  await showExamples(page); await page.locator('[data-chat-template="logic"]').click();
   await withSettings(page, () => page.locator('#api-key').fill(credential));
   await openHistory(page); await page.locator('#run-filter').selectOption('passed'); await page.locator('#run-search').fill('no matching fixture task');
   await closeHistory(page);
@@ -200,7 +204,7 @@ try {
     h.intercept = async route => { if (isList(route) && hold) { hold = false; firstList.resolve(); await release.promise; } return false; };
     await h.page.goto(origin); await firstList.promise;
     const old = await createRun(h, 'Already completed before the initial list'); controls.get(old.id)!.finish(); await waitTerminal(h, old.id);
-    release.resolve(); await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await settled(h.page); await monitorItems(h.page, []);
+    release.resolve(); await ready(h.page); await settled(h.page); await monitorItems(h.page, []);
     await newResearch(h.page);
     const a = await createRun(h, 'Running task A'), b = await createRun(h, 'Running task B'), queued = await createRun(h, 'Queued task C');
     assert.equal((await readRun(h, queued.id)).status, 'queued'); assert.equal(controls.has(queued.id), false);
@@ -234,7 +238,7 @@ try {
     controls.get(run.id)!.finish(); await waitTerminal(h, run.id); await refresh(h);
     assert.equal(await page.locator(dismiss(run.id)).isVisible(), true);
     const session = page.waitForResponse(response => new URL(response.url()).pathname === '/api/session' && response.status() === 200);
-    await h.context.clearCookies(); await refresh(h); await session; await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await h.context.clearCookies(); await refresh(h); await session; await ready(page);
     await monitorItems(page, []); assert.equal(await page.locator(`[data-run-id="${run.id}"]`).count(), 0);
   });
 
@@ -246,7 +250,7 @@ try {
     const control = controls.get(runs[0]!.id)!;
     for (let index = 0; index < 85; index++) control.progress('worker_activity', `Activity reading record ${index + 1}`);
     await page.waitForFunction(() => document.querySelector('#conversation-announcement')?.textContent?.includes('Activity reading record 85'));
-    await page.locator('#detail-tab-events').click(); await page.locator('#detail-panel .activity-scroll').waitFor();
+    await openTab(page, 'events'); await page.locator('#detail-panel .activity-scroll').waitFor();
     await page.locator('#detail-panel .activity-scroll').evaluate(scroll => { scroll.scrollTop = 120; scroll.dispatchEvent(new Event('scroll')); }); await settled(page);
     assert.ok(await page.locator('#detail-panel .activity-scroll').evaluate(scroll => scroll.scrollTop) > 30, 'the activity fixture must actually pause reading');
     await page.evaluate(id => {

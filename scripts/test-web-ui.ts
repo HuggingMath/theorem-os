@@ -8,9 +8,9 @@ import { readWebConfig, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WorkerInput } from '../apps/web/shared';
-import { closeHistory, closeSettings, discardSourceEditor, fillConfig, openHistory, openSettings, openTab, selectConfig, selectHistoryRun,
+import { closeDialog, closeHistory, closeSettings, discardSourceEditor, fillConfig, openHistory, openSettings, openTab, selectConfig, selectHistoryRun,
   showArtifacts, showChat, stageLabelsReadable, withSettings } from './web-ui-controls';
-import { freePort, startBrowser } from './web-scenario';
+import { freePort, startBrowser, ready } from './web-scenario';
 import { readableDuration } from '../apps/web/presentation';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -61,18 +61,24 @@ try {
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/runs' && request.method() === 'POST') creationRequests++; });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
+  // A new Lean draft starts blank in Mathlib; the suite then loads the polynomial template.
   assert.equal(await page.locator('#environment').inputValue(), 'mathlib');
+  assert.equal(await page.locator('#source').inputValue(), '');
   const template = webTemplates.find(template => template.id === 'polynomial')!;
+  await selectConfig(page, 'template', template.id);
   assert.equal(await page.locator('#source').inputValue(), template.source);
   const initialWidths = [1440, 375, 320];
   const previewValue = (name: string) => page.locator(`#draft-preview [data-preview-value="${name}"]`);
+  // The preview renders only while it is open, so each check opens it with the source read first.
   async function assertPreviewSource() {
     const source = await page.locator('#source').inputValue();
+    await showArtifacts(page);
     await page.waitForFunction(source => Array.from(document.querySelectorAll('#draft-preview-code code'))
       .map(code => code.textContent ?? '').join('\n') === source, source);
   }
   async function assertPreviewConnection() {
+    await showArtifacts(page);
     assert.equal(await previewValue('model').innerText(), await page.locator('#model').inputValue());
     const environment = await page.locator('#environment option:checked').innerText();
     assert.ok((await previewValue('environment').innerText()).includes(environment));
@@ -81,6 +87,8 @@ try {
     assert.equal(budget, readableDuration(Number(seconds) * 1000), 'preview budget must read the entered seconds as a duration');
     assert.ok((await previewValue('workers').innerText()).includes(await page.locator('#workers').inputValue()));
   }
+  // The Lean editor is one centred column; its preview opens from 预览 in place of the composer.
+  await showArtifacts(page);
   await page.locator('#draft-preview').waitFor();
   assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '未提交');
   await assertPreviewSource();
@@ -89,27 +97,17 @@ try {
     const height = width > 850 ? 900 : 812;
     await page.setViewportSize({ width, height });
     await showChat(page);
-    const compose = await page.evaluate(() => {
-      const task = document.querySelector('#task')!.getBoundingClientRect();
-      const submit = document.querySelector('#submit-run')!.getBoundingClientRect();
-      const chat = document.querySelector('#compose-panel')!.getBoundingClientRect();
-      const artifacts = document.querySelector('#runs-panel')!.getBoundingClientRect();
-      return { overflow: document.documentElement.scrollWidth > innerWidth, task: { top: task.top, bottom: task.bottom },
-        submit: { top: submit.top, bottom: submit.bottom }, chat: { left: chat.left, right: chat.right },
-        artifacts: { left: artifacts.left, right: artifacts.right } };
-    });
-    assert.equal(compose.overflow, false, `initial composer overflows ${width}px`);
-    assert.ok(compose.task.top >= 0 && compose.task.bottom <= height, `chat input is outside the initial ${width}x${height} viewport`);
-    assert.ok(compose.submit.top >= 0 && compose.submit.bottom <= height, `send control is outside the initial ${width}x${height} viewport`);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `initial composer overflows ${width}px`);
     assert.equal(await page.locator('#run-settings').isVisible(), false, 'configuration must start collapsed');
-    if (width > 850) {
-      assert.ok(compose.chat.right <= compose.artifacts.left + 1, 'desktop chat must sit to the left of the Lean workspace');
-      assert.ok(compose.chat.right - compose.chat.left >= 300, 'desktop chat must retain a readable width');
-      assert.ok(compose.artifacts.right - compose.artifacts.left >= 400, 'desktop source must retain a readable width');
-    } else {
-      assert.equal(await page.locator('#mobile-compose').getAttribute('aria-selected'), 'true');
-      assert.equal(await page.locator('#runs-panel').isVisible(), false);
+    assert.equal(await page.locator('#runs-panel').isVisible(), false, 'the composer stands alone until the preview opens');
+    for (const selector of ['#source', '#task', '#submit-run']) {
+      // The column scrolls; each control comes into view inside the viewport.
+      await page.locator(selector).scrollIntoViewIfNeeded();
+      const box = await page.locator(selector).boundingBox();
+      assert.ok(box && box.x >= 0 && box.x + box.width <= width + 1 && box.y >= 0 && box.y + box.height <= height + 1,
+        `${selector} is outside the ${width}x${height} viewport: ${JSON.stringify(box)}`);
     }
+    if (width > 850) assert.ok((await page.locator('#source').boundingBox())!.width >= 400, 'desktop source must retain a readable width');
     await screenshot(width === 1440 ? 'desktop-initial-preview.png' : `mobile-${width}-initial.png`);
     await openSettings(page);
     const settings = await page.locator('#run-settings').boundingBox();
@@ -120,6 +118,7 @@ try {
     assert.equal(await page.locator('#open-settings').evaluate(node => node === document.activeElement), true);
     await showArtifacts(page);
     await page.locator('#draft-preview').waitFor();
+    assert.equal(await page.locator('#compose-panel').isVisible(), false, 'the preview replaces the composer');
     for (const selector of ['#draft-preview', '#draft-preview .preview-source', '#draft-preview .draft-source-scroll']) {
       const bounds = await page.locator(selector).boundingBox();
       assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width + 1, `${selector} overflows initial ${width}px view`);
@@ -128,35 +127,11 @@ try {
     assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '未提交');
     await assertPreviewSource();
     await screenshot(width === 1440 ? 'desktop-initial-source.png' : `mobile-${width}-initial-source.png`);
-    if (width <= 850) {
-      assert.equal(await page.locator('#mobile-runs').getAttribute('aria-selected'), 'true');
-      assert.equal(await page.locator('#compose-panel').isVisible(), false);
-    }
     await showChat(page);
   }
   await page.setViewportSize({ width: 1440, height: 900 });
-  mark('desktop shows chat left and Lean source right; mobile chat/workspace tabs, first-screen sending and settings dialogs fit 1440, 375 and 320px views');
-
-  const separator = page.locator('#pane-resizer');
-  await separator.focus();
-  const originalPaneWidth = Number(await separator.getAttribute('aria-valuenow'));
-  await page.keyboard.press('ArrowRight');
-  assert.ok(Number(await separator.getAttribute('aria-valuenow')) > originalPaneWidth);
-  await page.keyboard.press('ArrowLeft');
-  assert.equal(Number(await separator.getAttribute('aria-valuenow')), originalPaneWidth);
-  for (const key of ['Home', 'End']) {
-    await page.keyboard.press(key);
-    const value = Number(await separator.getAttribute('aria-valuenow'));
-    assert.equal(value, Number(await separator.getAttribute(key === 'Home' ? 'aria-valuemin' : 'aria-valuemax')));
-    const panes = await page.locator('#compose-panel,#runs-panel').evaluateAll(nodes => nodes.map(node => {
-      const bounds = node.getBoundingClientRect(); return { left: bounds.left, right: bounds.right, width: bounds.width };
-    }));
-    // The workspace's own minimums (300px each); the docked history takes its share of the width first.
-    assert.ok(panes[0].right <= panes[1].left && panes[0].width >= 300 && panes[1].width >= 300, `${key}: ${JSON.stringify(panes)}`);
-  }
-  await page.keyboard.press('Home');
-  for (let index = 0; index < 6; index++) await page.keyboard.press('ArrowRight');
-  mark('keyboard resizing changes the desktop pane width within readable limits and exposes its current value accessibly');
+  mark('the Lean composer and its preview fit 1440, 375 and 320px views, the preview opens in place of the composer, and settings dialogs fit');
+  // The chat-first layout shows no pane separator (#pane-resizer is hidden in every view), so no keyboard resizing is checked.
 
   const previewSource = 'namespace Preview\n\n-- α preview\ntheorem preview : True := by\n  trivial\nend Preview\n';
   const previewTask = '预览更新任务\n保留原始 Lean 声明。';
@@ -178,6 +153,7 @@ try {
     : `-- source line ${index + 1}`);
   const longPreviewSource = longPreviewLines.join('\n');
   await fillConfig(page, 'source', longPreviewSource);
+  await showArtifacts(page);
   await page.waitForFunction(source => document.querySelector('#draft-preview-code code')?.textContent === source,
     longPreviewLines.slice(0, 160).join('\n'));
   assert.equal(await page.locator('#source').inputValue(), longPreviewSource);
@@ -211,6 +187,7 @@ try {
   const resizedModel = 'fixture-preview-desktop-resize';
   await fillConfig(page, 'model', resizedModel);
   await page.setViewportSize({ width: 1440, height: 900 });
+  await showArtifacts(page);
   await page.waitForFunction(model => document.querySelector('[data-preview-value="model"]')?.textContent === model, resizedModel);
   await assertPreviewConnection();
   mark('a draft edited in the 320px composer updates its preview when resizing directly to desktop');
@@ -221,25 +198,32 @@ try {
     await page.locator('#api-key').fill(credential);
     await page.locator('#toggle-key').click();
   });
+  await showArtifacts(page);
   assert.equal((await page.locator('#draft-preview').innerHTML()).includes(credential), false);
   await withSettings(page, async () => {
     for (const id of ['max-turns', 'max-seconds', 'workers']) await page.locator(`#${id}`).fill('');
   });
+  await showArtifacts(page);
   assert.equal(await previewValue('budget').innerText(), '未设置');
   assert.equal(await previewValue('workers').innerText(), '未设置');
   assert.equal((await page.locator('#draft-preview').innerText()).includes('NaN'), false);
   assert.equal((await page.locator('#draft-preview').innerHTML()).includes(credential), false);
   await withSettings(page, () => page.locator('#reset-form').click());
-  assert.equal(await page.locator('#source').inputValue(), template.source);
+  // 重置 returns to the blank Mathlib draft; the suite loads the polynomial template again for the runs below.
+  assert.equal(await page.locator('#source').inputValue(), '');
   assert.equal(await page.locator('#environment').inputValue(), 'mathlib');
   assert.equal(await page.locator('#api-key').inputValue(), '');
   assert.equal(await page.locator('#api-key').getAttribute('type'), 'password');
+  await selectConfig(page, 'template', template.id);
+  assert.equal(await page.locator('#source').inputValue(), template.source);
+  await showArtifacts(page);
   assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '未提交');
   await assertPreviewSource();
   await assertPreviewConnection();
   assert.equal(creationRequests, 0, 'preview changes and reset must not submit runs');
   assert.equal(received.length, 0, 'preview changes must not start a worker');
-  assert.equal(await page.locator('#run-count').innerText(), '0');
+  assert.equal(await page.locator('#run-count').textContent(), '0');
+  await showChat(page);
   await page.locator('#submit-run').click();
   await page.locator('#run-settings[open]').waitFor();
   assert.equal(await page.locator('#api-key').evaluate(node => node === document.activeElement), true,
@@ -271,7 +255,8 @@ try {
     await page.locator(`[data-run-id="${payload.run.id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
     await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });
     if ((page.viewportSize()?.width ?? 1440) <= 850) {
-      assert.equal(await page.locator('body').getAttribute('data-mobile-view'), 'runs', 'mobile send must show the new run');
+      // A run opens on its conversation; its results open from the chat's artifacts.
+      await page.locator('#research-conversation-panel').waitFor();
       assert.equal(await page.locator('#history-dialog[open]').count(), 0);
     }
     await openTab(page, 'result');
@@ -391,7 +376,7 @@ try {
   const solvingTime = await solvingClock();
   assert.equal(await page.locator(`${solvingStage} .stage-clock`).count(), 0, 'a finished stage keeps its duration in the tooltip');
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await selectHistoryRun(page, primary.id);
   await stage('独立验收');
   assert.equal(await solvingClock(), solvingTime);
@@ -499,7 +484,7 @@ try {
   assert.equal(await page.locator('#api-key').getAttribute('type'), 'password');
   assert.equal(await page.locator('#template').inputValue(), '');
   assert.equal(received.length, 1);
-  assert.equal(await page.locator('#run-count').innerText(), '2');
+  assert.equal(await page.locator('#run-count').textContent(), '2');
   mark('reuse restores original task, environment and budget, clears the key and does not submit a run');
 
   const requestsBeforeEditing = creationRequests;
@@ -539,22 +524,19 @@ try {
   assert.equal(await page.locator('#source').inputValue(), newerDraft);
   mark('Lean import stays local, preserves environment and custom task, rejects invalid files and cannot overwrite a newer draft');
 
-  await openSettings(page);
+  // The full-screen source editor opens from the Lean composer and returns there.
+  await showChat(page);
   await page.locator('#expand-source').click();
   await page.locator('#source-editor[open]').waitFor();
   assert.equal(await page.locator('#expanded-source').evaluate(node => node === document.activeElement), true);
   await page.locator('#expanded-source').fill('discarded');
   await discardSourceEditor(page);
-  await page.locator('#run-settings[open]').waitFor();
   assert.equal(await page.locator('#source').inputValue(), newerDraft);
-  await openSettings(page);
   await page.locator('#expand-source').click();
   await page.locator('#expanded-source').fill('discarded by Escape');
   await discardSourceEditor(page, () => page.keyboard.press('Escape'));
-  await page.locator('#run-settings[open]').waitFor();
   assert.equal(await page.locator('#source').inputValue(), newerDraft);
   assert.equal(await page.locator('#expand-source').evaluate(node => node === document.activeElement), true);
-  await openSettings(page);
   await page.locator('#expand-source').click();
   await page.locator('#expanded-source').fill(' ');
   await page.locator('#apply-editor').click();
@@ -566,8 +548,7 @@ try {
   const edited = newerDraft + '\n-- Applied in expanded editor';
   await page.locator('#expanded-source').fill(edited);
   await screenshot('desktop-source-editor.png');
-  await page.locator('#apply-editor').click();
-  await page.locator('#run-settings[open]').waitFor();
+  await closeDialog(page, '#source-editor', () => page.locator('#apply-editor').click());
   assert.equal(await page.locator('#source').inputValue(), edited);
   assert.equal(creationRequests, requestsBeforeEditing);
   assert.equal(await page.locator('#api-key').inputValue(), '');
@@ -600,7 +581,7 @@ try {
   await openHistory(page);
   await page.locator('#run-filter').selectOption('passed');
   assert.equal(await page.locator('[data-run-id]').count(), 1);
-  assert.equal(await page.locator('#run-count').innerText(), '1/3');
+  assert.equal(await page.locator('#run-count').textContent(), '1/3');
   assert.equal(await page.locator('[data-run-id]').getAttribute('data-run-id'), primary.id);
   assert.equal(await page.locator('.detail-heading').getAttribute('data-run'), incomplete.id);
   await page.locator('#run-search').fill(`MATHLIB ${primary.model.toUpperCase()}`);
@@ -637,6 +618,8 @@ try {
     await showChat(page);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `compose overflow at ${width}`);
     if (width > 850) {
+      // The Lean editor is one scrolling column; 提交 at its foot scrolls into view and the page itself never scrolls.
+      await page.locator('#submit-run').scrollIntoViewIfNeeded();
       const submit = await page.locator('#submit-run').boundingBox();
       assert.ok(submit && submit.y >= 0 && submit.y + submit.height <= height, `submit outside ${width}x${height}`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true, `desktop page scrolls at ${width}`);
@@ -659,7 +642,7 @@ try {
     if (width === 375 || width === 320) {
       await screenshot(`mobile-${width}-completed.png`);
       await page.locator('[data-action="reuse-run"]').click();
-      await openSettings(page);
+      await showChat(page);
       assert.equal(await page.locator('#source').isVisible(), true);
       assert.equal(await page.locator('#api-key').inputValue(), '');
       assert.equal(await page.locator('#environment').inputValue(), 'mathlib');
@@ -670,14 +653,12 @@ try {
       assert.ok(apply && apply.y >= 0 && apply.y + apply.height <= height && apply.x + apply.width <= width);
       assert.equal(await page.locator('#source-editor').evaluate(node => node.scrollWidth <= node.clientWidth), true);
       await screenshot(`mobile-${width}-source-editor.png`);
-      await page.locator('#cancel-editor').click();
-      await page.locator('#run-settings[open]').waitFor();
-      await closeSettings(page);
+      await closeDialog(page, '#source-editor', () => page.locator('#cancel-editor').click());
     }
   }
   assert.deepEqual(errors, []);
   assert.equal(await page.evaluate(key => JSON.stringify(localStorage).includes(key) || JSON.stringify(sessionStorage).includes(key), credential), false);
-  mark('320–1440px views fit; desktop submission stays visible at 640px height; mobile reuse and source controls work');
+  mark('320–1440px views fit; desktop submission scrolls into view at 640px height without page scroll; mobile reuse and source controls work');
   const report = { status: 'passed', checkedAt: new Date().toISOString(), mode: 'Real HTTP service and Chromium; controlled worker fixture. No Docker, Lean or model provider is called.',
     paidModelCalls: false, checks, widths, initialWidths, screenshots };
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');

@@ -10,7 +10,8 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebPrecheckOutput } from '../apps/web/precheck';
 import { audit } from './web-a11y';
-import { freePort, settled, startBrowser } from './web-scenario';
+import { freePort, settled, startBrowser, ready } from './web-scenario';
+import { enterLean, showChat } from './web-ui-controls';
 
 /**
  * The statement check in the composer and inline editor, against a fixture compiler (no Docker, no model): it runs by
@@ -89,8 +90,8 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
     await page.locator('#new-research:enabled').waitFor({ state: 'attached' });
-    await page.locator('#entry-lean').click();
-    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await enterLean(page);
+    await ready(page);
     await page.locator('#inline-problem-fields').waitFor();
 
     // A statement that compiles: the composer says so once the edit settles, and the list stays empty.
@@ -141,6 +142,8 @@ try {
     mark(`dismissing the check lets the same statement be submitted (${locale})`);
 
     // Structural failures need no compile and are not dismissible, since the server rejects them too.
+    // The submission opened its run; 新建研究 returns to the Lean composer.
+    await showChat(page);
     const compiles = compiled.length;
     await setSource(page, 'def fixture_only := 1\n');
     await chipTone(page, 'bad');

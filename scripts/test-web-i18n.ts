@@ -9,8 +9,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput } from '../apps/web/shared';
-import { newResearch, openHistory, openModulesTab, selectHistoryRun, stageLabelsReadable } from './web-ui-controls';
-import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
+import { newResearch, openHistory, openModulesTab, selectHistoryRun, stageLabelsReadable, enterLean, showExamples, openSample, openSettings } from './web-ui-controls';
+import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -94,9 +94,9 @@ try {
   assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true);
   await english(page, 'natural-language connection settings', '#formalize-settings');
   await page.locator('#formalize-settings > summary').click();
-  await page.locator('#entry-lean').click();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
-  await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
+  await enterLean(page);
+  await ready(page);
+  await showExamples(page); await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en-US');
   assert.deepEqual(await page.locator('.welcome-steps strong').allInnerTexts(), ['Write the problem', 'Connect a model', 'Wait for acceptance']);
   assert.equal(await page.locator('#locale-switch').innerText(), '中文');
@@ -106,8 +106,7 @@ try {
   mark('an English browser opens the English workbench, with a switch labelled in Chinese');
 
   // The sample run, every tab, settings, the glossary and the palette read in English; stored Chinese event text is translated.
-  await page.locator('.welcome-sample').click();
-  await page.locator('[data-sample-badge]').waitFor();
+  await openSample(page);
   await english(page, 'sample result');
   for (const tab of ['trajectory', 'collaboration', 'source', 'events', 'modules']) {
     if (tab === 'modules') await openModulesTab(page);
@@ -117,8 +116,8 @@ try {
     await settled(page);
     await english(page, `sample ${tab} tab`);
   }
-  await page.locator('#open-settings').click();
-  await page.locator('#run-settings[open]').waitFor();
+  // In a run, 设置 opens the chat's connection settings; the run settings belong to the Lean editor.
+  await openSettings(page);
   // The registered module implementations, named by the server, read in English too once their sections are opened.
   for (const selector of ['[data-server-module-library]', '[data-module-registry] details'])
     await page.locator(`#run-settings ${selector}`).evaluate(details => { (details as HTMLDetailsElement).open = true; });
@@ -127,7 +126,9 @@ try {
   for (const selector of ['[data-module-registry] details', '[data-server-module-library]'])
     await page.locator(`#run-settings ${selector}`).evaluate(details => { (details as HTMLDetailsElement).open = false; });
   await page.locator('#close-settings').click();
-  await page.locator('#open-glossary').click();
+  // The top bar has no glossary button; the command palette opens it.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+  await page.locator('#palette-open-glossary').click();
   await page.locator('#glossary-dialog[open]').waitFor();
   await english(page, 'glossary', '#glossary-dialog');
   await page.screenshot({ path: path.join(output, 'i18n-glossary-1440.png') });

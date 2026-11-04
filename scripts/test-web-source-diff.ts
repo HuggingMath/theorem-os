@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
 import { fillConfig, refresh, selectHistoryRun, showArtifacts } from './web-ui-controls';
-import { freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -67,7 +67,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>) => webScenar
   },
   timeout: { label: 'Source diff', seconds: 35 },
   verify: async ({ page, requests, runIds, savedDraft }, elapsedMs) => {
-    const writes = requests.filter(request => request.method !== 'GET');
+    const writes = requests.filter(runtimeWrite);
     assert.equal(writes.length, runIds.length, 'only explicit fixture creation may write the API');
     assert.equal(writes.every(request => request.method === 'POST' && request.pathname === '/api/runs'), true);
     const history = await page.evaluate(async () => (await (await fetch('/api/runs')).json()).runs as WebRun[]);

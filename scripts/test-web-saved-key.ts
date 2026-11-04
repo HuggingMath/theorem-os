@@ -12,8 +12,8 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
-import { freePort, settled, startBrowser } from './web-scenario';
-import { closeSettings, newResearch, openSettings } from './web-ui-controls';
+import { freePort, settled, startBrowser, ready } from './web-scenario';
+import { closeSettings, fillConfig, newResearch, openSettings } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-saved-key');
@@ -54,12 +54,14 @@ async function signedIn(browser: Browser, email: string, options: { locale?: 'zh
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/runs') posted.push(request.postData() ?? ''); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   return { context, page, errors, posted };
 }
 async function submit(page: Page, posted: string[], task: string, key?: string) {
   const before = posted.length;
   await newResearch(page);
+  // New research starts without a source.
+  await fillConfig(page, 'source', 'theorem saved_key_fixture : True := by\n  sorry\n');
   await page.locator('#task').fill(task);
   await openSettings(page);
   if (key !== undefined) await page.locator('#api-key').fill(key);
@@ -99,7 +101,7 @@ try {
   mark('ticked by default, the key is saved to the account on submission, the field empties and shows only the last four characters');
 
   await first.page.reload();
-  await first.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(first.page);
   const reused = await submit(first.page, first.posted, 'Reuse after reload');
   assert.equal(reused.apiKey, ''); assert.equal(reused.saveKey, undefined);
   const second = await signedIn(browser, 'alice@example.org');

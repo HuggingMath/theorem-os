@@ -704,10 +704,12 @@ export class CollaborationView {
       if(request!==view.artifactRequest)return;
       if (source.taskId !== taskId || source.taskVersion !== version || snapshotKey && taskSourceKey(source) !== snapshotKey) throw new Error(t('读取结果与所选源码快照身份不同，未展示替代材料。'));
       view.sourceComparison = new TaskSourceComparison(source, view.observation?.sources ?? [], view.observation?.inspection.tasks.find(task => task.id === taskId)?.version ?? t('当前计划已无此任务'));
+      // A reader who moved on while the source loaded keeps their place.
+      const waiting = document.activeElement === view.element.querySelector('[data-collab-artifact-heading]');
       show(<Host node={view.sourceComparison.element} data-task-source-host />);
       // The loaded snapshot adds its identity fields above the code; reveal the code after that layout exists.
       const code = view.sourceComparison.element.querySelector<HTMLElement>('[data-task-source-code]');
-      if (code && this.current === view) { view.navigation.reveal(code); code.focus({ preventScroll: true }); }
+      if (code && waiting && this.current === view) { view.navigation.reveal(code); code.focus({ preventScroll: true }); }
     }
     catch(error){if(request!==view.artifactRequest)return;show(<p class="collab-error">{errorText(error)}</p>);}
   }

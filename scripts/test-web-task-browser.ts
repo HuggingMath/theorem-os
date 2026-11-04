@@ -13,7 +13,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { taskVersion } from '../src/solver/tasks';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport,
-  type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+  type ScenarioHarness, type ScenarioSuite, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-task-browser');
@@ -173,7 +173,7 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440
     routes: { local: 'Task browser checks must remain on the local HTTP fixture' }, open: true,
     timeout: { label: 'Task browser', seconds: 60 },
     verify: (h, elapsedMs) => {
-      assert.equal(h.requests.some(r => r.method !== 'GET' && r.pathname !== '/api/runs'), false, 'local task browsing does not submit runtime commands');
+      assert.equal(h.requests.some(r => runtimeWrite(r) && r.pathname !== '/api/runs'), false, 'local task browsing does not submit runtime commands');
       return { name, elapsedMs: elapsedMs(), requests: h.requests };
     }, cleanup: h => { for (const id of h.runIds) controls.get(id)?.finish(); },
   });

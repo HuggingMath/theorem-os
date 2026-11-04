@@ -6,6 +6,7 @@ import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page, type Route } from 'playwright';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
 import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
+import { enterLean } from './web-ui-controls';
 
 export type RequestRecord = { method: string; pathname: string };
 export type ScenarioHarness = { page: Page; context: BrowserContext; requests: RequestRecord[]; intercept?: (route: Route) => Promise<boolean> };
@@ -96,7 +97,7 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
   });
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    if (options.open === true) { await page.goto(suite.origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); }
+    if (options.open === true) { await page.goto(suite.origin); await ready(page); }
     else await options.open?.(h);
     const { label, seconds } = options.timeout;
     await Promise.race([run(h), new Promise<never>((_, reject) => {
@@ -123,14 +124,23 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
 export const preferFullCollaboration = (context: BrowserContext) => context.addInitScript(key => {
   try { if (localStorage.getItem(key) === null) localStorage.setItem(key, 'full'); } catch { /* Storage is blocked; the page uses its default. */ }
 }, collaborationDetailStorageKey);
+/** A write other than opening a run's chat: `POST /api/conversations` returns the run's existing conversation or records one,
+ * and sends no runtime command. Read-only inspection checks count only these. */
+export const runtimeWrite = (request: RequestRecord) => request.method !== 'GET' && !(request.method === 'POST' && request.pathname === '/api/conversations');
 export const normalize = (source: string) => source.replace(/\r\n?/g, '\n');
-/** The workbench opens on the natural-language chat; suites written for the Lean editor enter it through the composer's Lean link
+/** The workbench opens on the natural-language chat; suites written for the Lean editor enter the Lean editor
  * (an address naming a run or chat keeps its own view), then wait for an enabled submit button. */
 export async function ready(page: Page) {
   const submit = page.locator('#submit-run:enabled');
-  const lean = page.locator('.chat-lean-entry');
-  await submit.or(lean).first().waitFor({ state: 'attached' });
-  if (!await submit.count() && !/[?&](?:run|chat)=/u.test(page.url())) await lean.click();
+  const run = page.locator('body[data-view="run"] .detail-heading[data-run]');
+  if (/[?&](?:run|chat)=|[?]sample$/u.test(page.url())) {
+    // A run's own address reopens that run beside the chat, where 提交 belongs to the hidden Lean editor; once the run
+    // is gone (deleted), the page is back on the new-research page.
+    await submit.or(run).or(page.locator('body[data-view="draft"] .chat-lean-entry')).first().waitFor({ state: 'attached' });
+    if (await run.count()) return;
+  }
+  await submit.or(page.locator('.chat-lean-entry')).first().waitFor({ state: 'attached' });
+  if (!await submit.count()) await enterLean(page);
   await submit.waitFor({ state: 'attached' });
 }
 export function deferred() {

@@ -15,7 +15,7 @@ import { taskVersion } from '../src/solver/tasks';
 import { readBacktranslation } from '../src/solver/statementReview';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser, webScenario, writeScenarioReport,
-  type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+  type ScenarioHarness, type ScenarioSuite, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-reviews');
@@ -169,7 +169,7 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440
     harness: (page, context) => ({ page, context, requests: [], runIds: [] }),
     routes: { local: 'Saved review browser checks must stay local' }, open: true, timeout: { label: 'Review inspection', seconds: 60 },
     verify: (h, elapsedMs) => {
-      assert.equal(h.requests.some(item => item.method !== 'GET' && item.pathname !== '/api/runs'), false, 'review browsing/references must stay read-only');
+      assert.equal(h.requests.some(item => runtimeWrite(item) && item.pathname !== '/api/runs'), false, 'review browsing/references must stay read-only');
       return { name, elapsedMs: elapsedMs(), requests: h.requests };
     }, cleanup: h => { for (const id of h.runIds) controls.get(id)?.finish(); },
   });
@@ -335,7 +335,7 @@ try {
       await validateGuidanceDraft(page, control);
     }
     assert.deepEqual(control.observation.inspection.tasks.map(task => [task.id, task.version]), originalVersions);
-    assert.equal(h.requests.some(request => request.method !== 'GET' && request.pathname !== '/api/runs'), false);
+    assert.equal(h.requests.some(request => runtimeWrite(request) && request.pathname !== '/api/runs'), false);
   });
 
   await scenario('an accepted fixed candidate stays distinct from S3 until the completed run has evaluated_passed', async h => {

@@ -8,8 +8,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebEventDetails, WebModuleId, WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { closeHistory, openHistory, openModulesTab, selectHistoryRun, selectModules } from './web-ui-controls';
-import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeHistory, openHistory, openModulesTab, selectHistoryRun, selectModules, showArtifacts } from './web-ui-controls';
+import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-modules');
@@ -67,14 +67,14 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [], runIds: [], fixtureCancels: 0 }),
   routes: { local: 'module inspection must not contact external sites or model providers' }, timeout: { label: 'Module', seconds: 50 },
   open: async ({ page }) => {
-    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.goto(origin); await ready(page);
     draft = await page.locator('#source').inputValue(), task = await page.locator('#task').inputValue();
   },
   verify: async (h, elapsedMs) => {
     assert.equal(await h.page.locator('#source').inputValue(), draft, 'module inspection must preserve the draft source');
     assert.equal(await h.page.locator('#task').inputValue(), task, 'module inspection must preserve the draft task');
     assert.equal(await h.page.locator('#api-key').inputValue(), '', 'module inspection must not populate a credential');
-    const writes = h.requests.filter(request => request.method !== 'GET');
+    const writes = h.requests.filter(runtimeWrite);
     assert.equal(writes.length, h.runIds.length, 'only explicit fixture creation may write to the API');
     assert.ok(writes.every(request => request.method === 'POST' && request.pathname === '/api/runs'));
     return { name, elapsedMs: elapsedMs(), fixtureCreates: h.runIds.length, fixtureCancels: h.fixtureCancels,
@@ -197,6 +197,8 @@ try {
   browser = await startBrowser(service.server, port);
 
   await scenario('Draft modules support selection and keyboard navigation without starting a run', async ({ page }) => {
+    // The draft's modules live in its preview, opened from the Lean editor.
+    await showArtifacts(page);
     await page.locator('#draft-tab-source').focus(); await page.keyboard.press('ArrowRight');
     await page.locator('#draft-tab-modules[aria-selected="true"]').waitFor();
     assert.equal(await page.locator('#draft-tab-modules').evaluate(element => document.activeElement === element), true);
@@ -443,7 +445,7 @@ try {
     assert.equal(await page.locator('.module-events li').count(), 0);
     assert.equal(await page.locator('.module-events-empty').innerText(), diagnostic.replaceAll(credential, '[REDACTED]'));
     assert.match(await page.locator('.module-retention').innerText(), /较早活动已移出保留范围/); await noInjection(page);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await selectModules(h, run.id);
+    await page.reload(); await ready(page); await selectModules(h, run.id);
     await selectModule(page, 'M4'); assert.equal((await facts(page))['活动事件'], '1');
     assert.equal((await facts(page))['上下文大小'], '1.0 KB / 8.0 KB'); await noInjection(page);
     await selectModule(page, 'M1'); assert.equal((await facts(page))['活动事件'], '25'); await state(page, 'M1', 'active');

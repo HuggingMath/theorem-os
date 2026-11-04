@@ -12,7 +12,7 @@ import type { WebCheckReceipt, WebDelivery, WebInspectedTask, WebObservation, We
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport,
-  type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+  type ScenarioHarness, type ScenarioSuite, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-research-progress');
@@ -186,7 +186,7 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440
     context: { viewport: { width, height: width > 850 ? 1000 : 812 }, reducedMotion: 'reduce' },
     harness: (page, context) => ({ page, context, requests: [], runIds: [] }), routes: { local: 'Research inspection must stay local' }, open: true,
     timeout: { label: 'Research progress', seconds: 50 },
-    verify: (h, elapsedMs) => { assert.equal(h.requests.some(item => item.method !== 'GET' && item.pathname !== '/api/runs'), false);
+    verify: (h, elapsedMs) => { assert.equal(h.requests.some(item => runtimeWrite(item) && item.pathname !== '/api/runs'), false);
       return { name, elapsedMs: elapsedMs(), requests: h.requests }; },
     cleanup: h => { for (const id of h.runIds) controls.get(id)?.finish(); },
   });

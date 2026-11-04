@@ -184,6 +184,8 @@ body[data-view=draft][data-output-open=true] .research-output-close{display:bloc
 }
 
 .chat-task-history{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+/* Open, the proof tasks take the rest of the column and their run list scrolls inside it, as the docked history did before. */
+.chat-task-history[open],.chat-task-history[open]::details-content{display:flex;flex-direction:column;flex:1;min-height:0}
 .chat-task-history>summary{padding:10px 12px;cursor:pointer;color:var(--muted);font-size:12px}
 
 .chat-latest{align-self:center;flex:none;z-index:2;position:relative;margin:-42px auto 8px;padding:6px 14px;min-height:34px;border:1px solid var(--line);border-radius:20px;background:var(--card);box-shadow:0 2px 12px #00000010;color:var(--ink);font-size:12px}

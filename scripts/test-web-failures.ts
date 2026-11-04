@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
 import { newResearch, selectHistoryRun, withSettings } from './web-ui-controls';
-import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
+import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -47,7 +47,7 @@ async function settledRun(page: Page, id: string, done: (run: WebRun) => boolean
 }
 async function open(page: Page, id: string) {
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await selectHistoryRun(page, id);
 }
 /** The verdict at the top of the run's 结果 tab. */
@@ -60,7 +60,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of 429/u.test(message.text())) errors.push(message.text()); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
 
   const holding = await postRun({ page }, input('hold'));
   const queued = await postRun({ page }, input('hold'));
@@ -82,8 +82,10 @@ try {
 
   // Sent from the page, the refusal shows under the composer; the draft stays and the keyboard is back on 提交, not lost on the page.
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await newResearch(page);
+  // A new draft starts blank, so the statement is typed in before 提交 can reach the server.
+  await page.locator('#source').fill(input('').source);
   await page.locator('#task').fill('排队已满时提交的草稿');
   await withSettings(page, () => page.locator('#api-key').fill('sk-theoremos-failure-fixture'));
   await page.locator('#submit-run').click();
@@ -95,7 +97,8 @@ try {
   const englishPage = await englishContext.newPage();
   englishPage.on('pageerror', error => errors.push(error.message));
   await englishPage.goto(origin);
-  await englishPage.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(englishPage);
+  await englishPage.locator('#source').fill(input('').source);
   await englishPage.locator('#task').fill('A draft sent while the queue is full');
   await withSettings(englishPage, () => englishPage.locator('#api-key').fill('sk-theoremos-failure-fixture'));
   await englishPage.locator('#submit-run').click();
@@ -177,8 +180,9 @@ try {
     await settledRun(page, run.id, item => item.status === 'completed');
   }
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await newResearch(page);
+  await page.locator('#source').fill(input('').source);
   await page.locator('#task').fill('记录已满时写下的草稿');
   await page.locator('#submission-readiness[data-state="full"]').waitFor();
   assert.equal(await page.locator('#readiness-title').innerText(), `研究记录已满 ${webLimits.maxRuns} 条`);

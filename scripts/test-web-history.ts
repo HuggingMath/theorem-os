@@ -8,8 +8,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
-import { closeDialog, closeHistory, fitViewport, historyDocked, openHistory, showChat } from './web-ui-controls';
-import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeDialog, closeHistory, fitViewport, historyDocked, openHistory, showArtifacts, showChat } from './web-ui-controls';
+import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-history'), reportFile = path.join(output, 'report.json');
@@ -78,7 +78,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [], creates: 0, removals: 0, owner: '', owners: new Set() }),
   routes: { local: 'history checks must not contact an external site or model provider' }, timeout: { label: 'History', seconds: 50 },
   verify: async (h, elapsedMs) => {
-    const writes = h.requests.filter(request => request.method !== 'GET');
+    const writes = h.requests.filter(runtimeWrite);
     const creates = writes.filter(request => request.method === 'POST' && request.pathname === '/api/runs').length;
     assert.equal(creates, h.creates, 'only explicit fixture setup may submit a run');
     assert.equal(writes.length, h.creates, 'history refresh, filtering, selection and focus recovery must not write to the API');
@@ -98,7 +98,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
 });
 async function open(h: Harness) {
   await h.page.goto(origin);
-  await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(h.page);
   await collectOwner(h);
   assert.ok(h.owner, 'the fixture requires a real local session');
 }
@@ -206,7 +206,10 @@ async function retained(page: Page, name: string, options: { focus?: boolean; se
   retentionChecks.push({ name, width: page.viewportSize()!.width, rows: evidence.rows, focus: evidence.focus, selection: evidence.selection });
 }
 async function focused(page: Page, selector: string) {
-  assert.equal(await page.locator(selector).evaluate(node => node === document.activeElement), true, `${selector} must receive focus`);
+  // Selecting a run from the history loads its conversation, which hands focus back to the selected row once it arrives.
+  await page.waitForFunction(selector => document.querySelector(selector) === document.activeElement, selector, { timeout: 2_000 }).catch(() => undefined);
+  assert.equal(await page.locator(selector).evaluate(node => node === document.activeElement), true,
+    `${selector} must receive focus, not ${await page.evaluate(() => { const a = document.activeElement as HTMLElement | null; return a ? `${a.tagName}#${a.id}.${a.className} in ${a.closest('[id]')?.id}` : 'none'; })}`);
 }
 async function scroll(page: Page, top = 520) {
   await page.locator('#run-list').evaluate((list, top) => { list.scrollTop = top; }, top);
@@ -311,7 +314,7 @@ try {
     await finish(h, runs[0]!); await poll(h); await rows(page, []);
     await focused(page, '#run-search'); await selected(page, runs[2]!.id);
     assert.equal(await page.locator('#run-filter').inputValue(), 'active');
-    assert.equal(await page.locator('#run-count').innerText(), '0/3');
+    assert.equal(await page.locator('#run-count').textContent(), '0/3');
     await page.locator('[data-clear-filters]').waitFor();
     await screenshot(page, 'active-empty-search-focus.png');
   });
@@ -375,7 +378,7 @@ try {
     await page.keyboard.press('ArrowDown'); await selected(page, matching[0]!.id);
     assert.equal(await page.locator('#run-filter').inputValue(), 'unproved');
     assert.equal(await page.locator('#run-search').inputValue(), 'even');
-    assert.equal(await page.locator('#run-count').innerText(), '8/16');
+    assert.equal(await page.locator('#run-count').textContent(), '8/16');
     await retained(page, 'filtered keyboard wrap retains all nodes');
     // The list is one Tab stop, on the open run's row; the arrow keys above move inside it.
     assert.deepEqual(await page.locator('#run-list [data-run-id][tabindex="0"]').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.runId)), [matching[0]!.id]);
@@ -409,6 +412,8 @@ try {
   await scenario('Reordering an existing focused history row retains its button and restores focus after its DOM move', async h => {
     const { page } = h; await open(h);
     const runs = await seed(h, 6); await show(h, runs);
+    // The root address opens a new problem, so a run is opened first; the reordered row is another one.
+    await choose(page, runs[0]!.id);
     const moved = runs.at(-1)!; await bookmark(page, moved.id);
     const selection = (await page.locator('.detail-heading').getAttribute('data-run'))!;
     service.jobs.get(h.owner, moved.id)!.createdAt = orderedAt(100);
@@ -424,13 +429,18 @@ try {
     const runs = [await createRun(h, 'History run whose task needs two lines on a phone', 3), ...seeded]; await show(h, runs);
     const titled = (title: string) => { const name = [...title.trim()]; return `${name.length > 30 ? `${name.slice(0, 29).join('')}…` : name.join('')} · TheoremOS`; };
     async function at(run: WebRun) {
-      await page.waitForFunction(id => document.querySelector('.detail-heading')?.getAttribute('data-run') === id, run.id);
-      assert.equal(new URL(page.url()).search, `?run=${run.id}`, 'the address names the open run');
+      // A conversation address reopens its chat asynchronously; the hidden heading of the last run may already be in place.
+      await page.waitForFunction(id => document.body.dataset.view === 'run' && document.querySelector('.detail-heading')?.getAttribute('data-run') === id, run.id);
+      await page.waitForFunction(name => document.title.endsWith(name), titled(run.title), { timeout: 2_000 }).catch(() => undefined);
+      // The run's own address, or that of its conversation once it opens beside the run.
+      assert.match(new URL(page.url()).search, new RegExp(`^\\?(?:run=${run.id}|chat=[\\w-]+)$`, 'u'), 'the address names the open run');
       assert.ok((await page.title()).endsWith(titled(run.title)), `the tab is named after the open run: ${await page.title()}`);
       assert.equal(await page.locator('#history-dialog[open]').count(), 0, 'Back and Forward never leave the history dialog over the run');
     }
     await choose(page, runs[2]!.id); await choose(page, runs[0]!.id); await closeHistory(page); await at(runs[0]!);
     if (width <= 850) {
+      // The run header is in the run panel, opened from the chat.
+      await showArtifacts(page);
       const heading = await page.locator('.detail-heading h2').evaluate(node => ({ text: node.textContent, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth,
         scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, lineHeight: getComputedStyle(node).lineHeight }));
       assert.ok(heading.scrollWidth <= heading.clientWidth + 1 && heading.scrollHeight <= heading.clientHeight + 1
@@ -442,14 +452,16 @@ try {
     await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
     assert.ok((await page.title()).includes('研究工作台'), 'the new-research page keeps the workbench name');
     await page.goBack(); await at(runs[0]!);
-    if (width <= 850) assert.equal(await page.locator('body[data-mobile-view="runs"]').count(), 1, 'Back on a phone shows the run, not the composer');
+    // A run opens on its conversation, on phones too, rather than on the new-research composer.
+    if (width <= 850) assert.equal(await page.locator('body[data-view="run"] #research-conversation-panel').isVisible(), true, 'Back on a phone shows the run, not the composer');
     await page.goForward(); await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
     // A pasted or bookmarked address opens its run, and a reload keeps it.
     await page.goto(`${origin}/?run=${runs[1]!.id}`); await at(runs[1]!);
     await page.reload(); await at(runs[1]!);
     // An address naming a run that is not in this list falls back to an available run and corrects the address.
     await page.goto(`${origin}/?run=${crypto.randomUUID()}`);
-    await page.waitForFunction(ids => ids.includes(document.querySelector('.detail-heading')?.getAttribute('data-run') ?? '') && location.search === `?run=${document.querySelector('.detail-heading')!.getAttribute('data-run')}`, runs.map(run => run.id));
+    await page.waitForFunction(ids => ids.includes(document.querySelector('.detail-heading')?.getAttribute('data-run') ?? '')
+      && (location.search === `?run=${document.querySelector('.detail-heading')!.getAttribute('data-run')}` || location.search.startsWith('?chat=')), runs.map(run => run.id));
     // It also says so, rather than silently showing another run.
     await page.locator('#toast').filter({ hasText: '没有找到链接里的研究记录' }).waitFor();
     await screenshot(page, `history-${width}-address.png`);

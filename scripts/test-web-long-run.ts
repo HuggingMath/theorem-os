@@ -8,8 +8,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput, WorkerInput } from '../apps/web/shared';
-import { fillConfig, selectHistoryRun, withSettings } from './web-ui-controls';
-import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
+import { fillConfig, selectHistoryRun, showArtifacts, withSettings } from './web-ui-controls';
+import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -70,9 +70,11 @@ try {
   };
   watch(page);
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
 
   assert.match(await estimate(page), /还没有这个模型的用量记录/u);
+  // New drafts start without a source; the token cap is then the first thing submission stops at.
+  await fillConfig(page, 'source', 'theorem long_run_fixture : True := by\n  sorry\n');
   await fillConfig(page, 'max-tokens', '0');
   await page.locator('#task').fill('capped');
   await fillConfig(page, 'api-key', credential);
@@ -83,6 +85,8 @@ try {
   assert.match(await page.locator('#budget-estimate').innerText(), /最长约 5 分钟，全部 Agent 合计最多 5 轮模型调用。.*达到 50 万 Token 后停止新的调用/u);
   await page.screenshot({ path: path.join(output, 'long-run-budget-1440.png') });
   await page.locator('#settings-submit').click();
+  await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });
+  await showArtifacts(page);
   await page.locator('body[data-view="run"] #detail-panel .result-task').waitFor();
   await page.waitForFunction(() => document.title.startsWith('1 项进行中'));
   const capped = inputs.at(-1)!;
@@ -110,10 +114,10 @@ try {
   const older = await postRun({ page }, input('older')), away = await postRun({ page }, input('away'));
   await until(page, away.id, run => run.status === 'running');
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await selectHistoryRun(page, older.id);
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await page.locator(`.run-row.selected[data-run-id="${older.id}"]`).waitFor({ state: 'attached' });
   mark('a reload reopens the run that was open, not the newest one');
 

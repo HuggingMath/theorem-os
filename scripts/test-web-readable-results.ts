@@ -286,6 +286,8 @@ try {
     await page.waitForFunction(() => document.activeElement?.hasAttribute('data-ask-question'));
     assert.equal(h.requests.filter(item => item.pathname.endsWith('/explain')).length, 0, 'opening the question asks nothing yet');
     await page.screenshot({ path: path.join(output, 'next-steps-ask.png') }); screenshots.push('next-steps-ask.png');
+    // Beside the chat the run panel is narrower than a viewer column, so the question opens as a dialog over the tabs.
+    await page.keyboard.press('Escape'); await viewer.waitFor({ state: 'hidden' });
     await page.locator('#detail-tab-result').click(); await actions.first().waitFor();
     await actions.filter({ hasText: '从已检查的代码继续' }).click();
     await page.locator('#run-settings[open]').waitFor();

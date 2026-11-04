@@ -8,8 +8,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeSettings, discardSourceEditor, type EditorSnapshot, fitViewport, openSettings, selectEditorRange as select, snapshot, text, value } from './web-ui-controls';
-import { freePort, normalize, type RequestRecord, scenarioFailure, type ScenarioSuite, settled, startBrowser, webScenario } from './web-scenario';
+import { closeDialog, closeSettings, discardSourceEditor, type EditorSnapshot, fitViewport, selectEditorRange as select, snapshot, text, value, showChat } from './web-ui-controls';
+import { freePort, normalize, type RequestRecord, scenarioFailure, type ScenarioSuite, settled, startBrowser, webScenario, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-editor-navigation'), reportFile = path.join(output, 'report.json');
@@ -44,7 +44,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'editor navigation must remain local' }, open: true,
   timeout: { label: 'Editor navigation', seconds: 45 },
   verify: (h, elapsedMs) => {
-    const writes = h.requests.filter(request => request.method !== 'GET');
+    const writes = h.requests.filter(runtimeWrite);
     assert.deepEqual(writes, [], 'find, line navigation, typing and applying drafts must not POST, cancel or DELETE a run');
     assert.equal(workerStarts, 0, 'editor checks must not start a solver');
     return { name, width, elapsedMs: elapsedMs(), unexpectedWrites: writes.length, requests: h.requests };
@@ -59,7 +59,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   },
 });
 async function editSource(page: Page, source: string) {
-  await openSettings(page);
+  await showChat(page);
   await page.locator('#template').selectOption('');
   await page.locator('#source').fill(source);
   await page.locator('#expand-source').click();

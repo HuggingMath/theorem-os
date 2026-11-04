@@ -8,8 +8,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeSettings, discardSourceEditor, type EditorSnapshot, fitViewport, focused, openSettings, selectEditorRange as select, snapshot, value } from './web-ui-controls';
-import { freePort, normalize, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeDialog, closeSettings, discardSourceEditor, type EditorSnapshot, fitViewport, focused, selectEditorRange as select, snapshot, value, showChat } from './web-ui-controls';
+import { freePort, normalize, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-editor-review'), reportFile = path.join(output, 'report.json');
@@ -46,7 +46,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [], releases: [] }),
   routes: { local: 'review must remain local', blockWrites: true }, open: true, timeout: { label: 'Editor review', seconds: 50 },
   verify: (h, elapsedMs) => {
-    const writes = h.requests.filter(request => request.method !== 'GET');
+    const writes = h.requests.filter(runtimeWrite);
     assert.deepEqual(writes, [], 'review and applying a local draft must not create, change, cancel or delete runs');
     assert.equal(workerStarts, 0, 'review checks must not start a solver');
     return { name, width, elapsedMs: elapsedMs(), unexpectedWrites: writes.length, requests: h.requests };
@@ -68,7 +68,7 @@ async function sameBuffer(page: Page) {
     'review must retain the exact native textarea node and its undo history');
 }
 async function editSource(page: Page, source: string) {
-  await openSettings(page); await page.locator('#environment').selectOption('standard');
+  await showChat(page); await page.locator('#environment').selectOption('standard');
   await page.locator('#template').selectOption(''); await page.locator('#source').fill(source);
   await page.locator('#expand-source').click(); await page.locator('#source-editor[open]').waitFor();
   await value(page, normalize(source)); await focused(page, '#expanded-source'); await rememberBuffer(page);
@@ -498,7 +498,7 @@ try {
   await scenario('A delayed Lean import cannot replace the frozen review baseline or bypass stale-draft validation', async h => {
     const { page } = h, source = '-- original baseline\ntheorem late_review : True := by sorry';
     const imported = '-- imported baseline\ntheorem imported_review : True := by trivial';
-    await openSettings(page); await page.locator('#environment').selectOption('standard'); await page.locator('#template').selectOption(''); await page.locator('#source').fill(source);
+    await showChat(page); await page.locator('#environment').selectOption('standard'); await page.locator('#template').selectOption(''); await page.locator('#source').fill(source);
     const release = await delayedLean(h, imported); await page.locator('#expand-source').click(); await page.locator('#source-editor[open]').waitFor(); await rememberBuffer(page);
     const scratch = source.replace('sorry', 'trivial'); await replaceBuffer(page, scratch); await release();
     await page.waitForFunction(source => (document.querySelector('#source') as HTMLTextAreaElement).value === source, imported);

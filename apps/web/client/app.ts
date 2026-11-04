@@ -1,5 +1,5 @@
 import {
-  createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
+  createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
@@ -63,7 +63,7 @@ import { localeTag, localizeMessage, localizeText, otherLocale, sentences, switc
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
 import { classicLibraryUrl } from './classicLibrary';
 
-const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
+const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X };
 function icons(root: Element | Document | DocumentFragment = document) {
@@ -149,17 +149,19 @@ async function loadNaturalResearch() {
     request: api,
     draftScope: state.session?.account?.email ?? 'anonymous',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
-    onNavigate: (id, mode) => {
+    onNavigate: (id, mode, attached) => {
       chatArtifacts.clear();
       researchEntry = 'natural'; document.body.dataset.entry = 'natural'; placeInputMode();
       const search = id ? `?chat=${encodeURIComponent(id)}` : '';
       if (location.search !== search) history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search);
       document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false';
-      closeHistoryDialog();
+      // Arrow keys in the phone history open each run in turn; its conversation arriving must not close the list.
+      if (!attached) closeHistoryDialog();
     },
     onSelection: run => {
       const changed = currentRun()?.id !== run?.id;
-      if (run) state.runs = [run, ...state.runs.filter(item => item.id !== run.id)];
+      // A known run is refreshed where it stands, so the history keeps its order; a new one joins at the top.
+      if (run) state.runs = state.runs.some(item => item.id === run.id) ? state.runs.map(item => item.id === run.id ? run : item) : [run, ...state.runs];
       state.composing = !run; state.selectedId = run?.id ?? ''; state.selectedRun = run;
       if (changed) { chatArtifacts.clear(); state.tab = 'result'; state.panelSignature = ''; }
       renderRunList(); renderDetail(changed); renderShell();
@@ -230,8 +232,13 @@ const linkedRun = new URLSearchParams(location.search).get('run');
 const sampleAddress = '?sample';
 let sampleLink = location.search === sampleAddress;
 let formalizationLink = new URLSearchParams(location.search).get('formalization');
+// A run link opened while signed out goes through the login page, which returns to the root address; the run comes back with it.
+const loginReturnKey = 'theorem-os.web-login-run.v1';
+const returnedRun = (() => {
+  try { const id = sessionStorage.getItem(loginReturnKey); sessionStorage.removeItem(loginReturnKey); return id; } catch { return null; }
+})();
 // The root address opens a new problem; explicit run and sample links still open their records.
-state.composing = !linkedRun && !sampleLink;
+state.composing = !linkedRun && !sampleLink && !(returnedRun && runIdPattern.test(returnedRun));
 if (linkedRun !== null && runIdPattern.test(linkedRun))
   saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
 const notificationsSupported = () => typeof Notification === 'function';
@@ -319,7 +326,7 @@ let draftSourceExpanded = false;
 let draftContinuation: WebContinuation | undefined;
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
-let settingsWorkspaceReturn: { focus?: HTMLElement } | undefined;
+let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefined;
 const sourceReader = new SourceReader(() => {
   if (!currentRun() && !draftSourceExpanded) { draftSourceExpanded = true; renderDraftPreview(); }
 });
@@ -533,11 +540,18 @@ function openSettings(focusId?: string) {
   }
   // The configuration belongs to the next research, so it opens on the new-research page.
   if (currentRun()) startDraft();
+  const dialog = element<HTMLDialogElement>('#run-settings');
+  // The preview replaces the composer that holds this dialog, so it closes first (otherwise the modal opens unseen) and
+  // comes back when the dialog closes.
+  const preview = document.body.dataset.draftPreview === 'true';
+  if (preview) {
+    document.body.dataset.draftPreview = 'false';
+    element('#open-draft-preview').setAttribute('aria-expanded', 'false');
+  }
   modulePlanLibrary.refresh();
   void serverModulePlans.refresh();
-  const dialog = element<HTMLDialogElement>('#run-settings');
-  if (!dialog.open && document.body.dataset.mobileView === 'runs') {
-    settingsWorkspaceReturn = { focus: document.activeElement instanceof HTMLElement ? document.activeElement : undefined };
+  if (!dialog.open && (preview || document.body.dataset.mobileView === 'runs')) {
+    settingsWorkspaceReturn = { focus: document.activeElement instanceof HTMLElement ? document.activeElement : undefined, preview };
     setMobileView('compose');
   }
   showDialog(dialog);
@@ -1961,6 +1975,8 @@ async function refreshRuns(epoch: number, force = false, listed?: WebSession['ru
     state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.panelSignature = '';
   }
   state.selectedRun = sampleSelected() ? state.sample : state.runs.find(run => run.id === state.selectedId);
+  // A run deleted elsewhere, or whose DELETE response was lost, leaves the list here.
+  if (chatWorkspace?.runId && byId.has(chatWorkspace.runId)) leaveDeletedChat(chatWorkspace.runId);
   rememberFinishedRuns(previous);
   for (const run of newlyFinished(previous, state.runs)) announceFinished(run);
   for (const run of newlyWaiting(previous, state.runs)) announceWaiting(run);
@@ -2032,7 +2048,11 @@ function initialize(): Promise<void> {
       const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs');
       const session = localizeSession(reply);
       if (!currentConnection(epoch)) return;
-      if (session.auth === 'email' && !session.account) { saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace('login.html'); return; }
+      if (session.auth === 'email' && !session.account) {
+        saveDraft(); draftReady = false; forgetKey(keyStorage);
+        if (linkedRun && runIdPattern.test(linkedRun)) try { sessionStorage.setItem(loginReturnKey, linkedRun); } catch { /* The run is still in the resume record. */ }
+        location.replace('login.html'); return;
+      }
       const ownerChanged = Boolean(state.session && ownerOfSession(state.session) !== ownerOfSession(session));
       const firstLoad = !state.session || ownerChanged;
       if (ownerChanged) { clearOwnedDrafts(); state.submitting = false; }
@@ -2529,6 +2549,10 @@ function openDeletion(run: WebRun) {
   showDialog(element<HTMLDialogElement>('#delete-run-dialog'));
   element('#cancel-delete').focus();
 }
+/** The chat of a deleted run has nothing left to show; with no other run to move on to, it returns to a new problem. */
+function leaveDeletedChat(id: string | undefined) {
+  if (id && chatWorkspace?.runId === id && !state.selectedRun && !state.runs.some(run => run.id === id)) chatWorkspace.home(true);
+}
 function removeLocalRun(id: string) {
   const index = visibleRuns().findIndex(run => run.id === id);
   state.listGeneration++;
@@ -2539,6 +2563,7 @@ function removeLocalRun(id: string) {
     state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
   }
   state.selectedRun = state.runs.find(run => run.id === state.selectedId);
+  leaveDeletedChat(id);
   renderRunList(); renderDetail();
   requestRunsRefresh();
   if (document.body.dataset.mobileView === 'runs') setMobileView('runs');
@@ -3151,7 +3176,12 @@ element('#run-settings').addEventListener('close', () => {
   const policy = moduleSettingsPolicy; moduleSettingsPolicy = undefined;
   const workspace = settingsWorkspaceReturn; settingsWorkspaceReturn = undefined;
   if (!state.submitting && (workspace || policy && !currentRun() && state.draftView === 'modules')) {
+    if (workspace?.preview && !currentRun()) {
+      document.body.dataset.draftPreview = 'true';
+      element('#open-draft-preview').setAttribute('aria-expanded', 'true');
+    }
     setMobileView('runs');
+    if (workspace?.preview && !currentRun()) renderDraftPreview(true);
     if (workspace?.focus?.getClientRects().length) workspace.focus.focus({ preventScroll: true });
   }
   if (policy && !currentRun() && !state.submitting && state.draftView === 'modules') moduleView.focusPolicy(policy);

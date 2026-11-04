@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebPrecheckOutput } from '../apps/web/precheck';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import { freePort, ready } from './web-scenario';
-import { withSettings, showChat, selectHistoryRun } from './web-ui-controls';
+import { withSettings, showChat, selectHistoryRun, fillConfig } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-review-regressions');
@@ -88,10 +88,8 @@ async function harness(concurrency: number, queueLimit = 8) {
 }
 async function form(page: Page, task: string) {
   await showChat(page);
-  await withSettings(page, async () => {
-    await page.locator('#source').fill(input(task).source);
-    await page.locator('#api-key').fill(fixtureKey);
-  });
+  await page.locator('#source').fill(input(task).source);
+  await withSettings(page, () => page.locator('#api-key').fill(fixtureKey));
   await page.locator('#task').fill(task);
 }
 try {
@@ -99,9 +97,9 @@ try {
   const alice = await h.login(), sameAccount = await h.login(), bob = await h.login('bob@example.org');
   const a = await alice.context.newPage(), b = await sameAccount.context.newPage();
   await a.goto(h.origin); await ready(a); await b.goto(h.origin); await ready(b);
-  await withSettings(a, () => a.locator('#source').fill(input('review_hold_A').source));
+  await fillConfig(a, 'source', input('review_hold_A').source);
   await until(() => h.compiles.has(input('review_hold_A').source), 'A compile starts');
-  await withSettings(b, () => b.locator('#source').fill(input('review_hold_B').source));
+  await fillConfig(b, 'source', input('review_hold_B').source);
   await until(() => h.compiles.has(input('review_hold_B').source), 'B compile starts');
   assert.equal(h.compiles.get(input('review_hold_A').source)!.signal.aborted, false);
   h.compiles.get(input('review_hold_B').source)!.finish();
@@ -109,11 +107,11 @@ try {
   await b.locator('#source-check-status').getByText('可编译', { exact: true }).waitFor();
   await a.locator('#source-check-status').getByText('可编译', { exact: true }).waitFor();
   await a.route('**/api/precheck', route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: '检查已被更新的版本取代。' }) }));
-  await withSettings(a, async () => {
-    await a.locator('#recheck-source').click();
-    await a.locator('#source-check').getByText('检查未完成', { exact: true }).waitFor();
-    assert.equal(await a.locator('#recheck-source').isEnabled(), true);
-  });
+  // The compile check sits under the Lean source in the composer.
+  await showChat(a);
+  await a.locator('#recheck-source').click();
+  await a.locator('#source-check').getByText('检查未完成', { exact: true }).waitFor();
+  assert.equal(await a.locator('#recheck-source').isEnabled(), true);
   await a.unroute('**/api/precheck');
   checks.push({ name: 'Independent account tabs finish both checks; a 409 leaves a retryable state', result: 'passed' });
 

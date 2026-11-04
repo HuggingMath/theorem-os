@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebEvent, WebRun, WebRunInput } from '../apps/web/shared';
 import { closeHistory, fitViewport, openHistory, selectHistoryRun } from './web-ui-controls';
-import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-activity');
@@ -61,14 +61,14 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   routes: { local: 'activity inspection must not contact external sites or model providers' }, timeout: { label: 'Activity', seconds: 50 },
   open: async ({ page }) => {
     await page.goto(origin);
-    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await ready(page);
     draft = await page.locator('#source').inputValue(), task = await page.locator('#task').inputValue();
   },
   verify: async ({ page, requests, runIds }, elapsedMs) => {
     assert.equal(await page.locator('#source').inputValue(), draft, 'activity inspection must preserve the composer source');
     assert.equal(await page.locator('#task').inputValue(), task, 'activity inspection must preserve the composer task');
     assert.equal(await page.locator('#api-key').inputValue(), '', 'activity inspection must not populate a credential');
-    const writes = requests.filter(request => request.method !== 'GET');
+    const writes = requests.filter(runtimeWrite);
     assert.equal(writes.length, runIds.length, 'only explicit fixture creation may write to the API');
     assert.equal(writes.every(request => request.method === 'POST' && request.pathname === '/api/runs'), true);
     assert.equal(requests.some(request => request.pathname.endsWith('/download')), false, 'activity export must use the local snapshot, including while running');

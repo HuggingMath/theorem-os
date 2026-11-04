@@ -8,8 +8,8 @@ import { readWebConfig, webLimits } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeSettings, discardSourceEditor, fitViewport, focused, openSettings, selectEditorRange, snapshot, text, value } from './web-ui-controls';
-import { freePort, normalize, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeDialog, closeSettings, discardSourceEditor, fitViewport, focused, selectEditorRange, snapshot, text, value, showChat } from './web-ui-controls';
+import { freePort, normalize, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-editor-replace'), reportFile = path.join(output, 'report.json');
@@ -42,7 +42,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   // No scenario needs a write. Block mistakes before they can reach the local service.
   routes: { local: 'replacement must remain local', blockWrites: true }, open: true, timeout: { label: 'Editor replacement', seconds: 45 },
   verify: (h, elapsedMs) => {
-    const writes = h.requests.filter(request => request.method !== 'GET');
+    const writes = h.requests.filter(runtimeWrite);
     assert.deepEqual(writes, [], 'scratch replacement and applying drafts must not create, change, cancel or delete a run');
     assert.equal(workerStarts, 0, 'replacement checks must not start a solver');
     return { name, width, elapsedMs: elapsedMs(), unexpectedWrites: writes.length, requests: h.requests };
@@ -57,7 +57,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   },
 });
 async function editSource(page: Page, source: string) {
-  await openSettings(page); await page.locator('#template').selectOption(''); await page.locator('#source').fill(source);
+  await showChat(page); await page.locator('#template').selectOption(''); await page.locator('#source').fill(source);
   await page.locator('#expand-source').click(); await page.locator('#source-editor[open]').waitFor();
   await value(page, normalize(source)); await focused(page, '#expanded-source');
 }

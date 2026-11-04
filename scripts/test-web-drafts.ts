@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun } from '../apps/web/shared';
 import { fillConfig, refreshHistory, selectConfig, showChat, withSettings } from './web-ui-controls';
-import { deferred, freePort, ready, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { deferred, freePort, ready, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -57,8 +57,8 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>) => webScenar
   // Storage must stay empty here, so collaboration keeps its unstored default.
   collaborationDetail: 'simple',
   verify: async ({ page, requests }, elapsedMs) => {
-    assert.equal(requests.filter(request => request.method !== 'GET').length, 0, 'draft workflow must only read API endpoints');
-    assert.equal(await page.locator('#run-count').innerText(), '0', 'import must not populate run history');
+    assert.equal(requests.filter(runtimeWrite).length, 0, 'draft workflow must only read API endpoints');
+    assert.equal(await page.locator('#run-count').textContent(), '0', 'import must not populate run history');
     return { name, elapsedMs: elapsedMs(), requests };
   },
   failure: { prefix: 'drafts-', fullPage: true }, cleanup: ({ releases }) => { for (const release of releases) release(); },
@@ -72,13 +72,12 @@ async function snapshot(page: Page): Promise<Draft> {
 async function fill(page: Page, value: Draft) {
   await withSettings(page, async () => {
     await page.locator('#provider').selectOption(value.providerId);
-    await page.locator('#environment').selectOption(value.environment);
-    await page.locator('#template').selectOption('');
     await page.locator('#effort').selectOption(value.effort);
     for (const key of ['model', 'maxTurns', 'maxRunSeconds', 'workers'] as const) await page.locator(`#${ids[key]}`).fill(value[key]);
     await page.locator(`input[name="coordination"][value="${value.coordination}"]`).check();
   });
-  // The Lean source sits in the composer, behind the settings dialog.
+  // Environment, template and source sit in the composer, behind the settings dialog.
+  await selectConfig(page, 'environment', value.environment); await selectConfig(page, 'template', '');
   await fillConfig(page, 'source', value.source);
   await page.locator('#task').fill(value.task);
   if (value.templateId) await selectConfig(page, 'template', value.templateId);
@@ -207,10 +206,8 @@ try {
   await scenario('Template identity follows exact source and task matches; reset removes the old saved draft', async h => {
     await open(h);
     const defaults = await snapshot(h.page);
-    const initial = webTemplates.find(template => template.id === defaults.templateId)!;
-    assert.ok(initial);
-    assert.equal(defaults.source, initial.source);
-    assert.equal(defaults.task, initial.task);
+    // A new draft starts with an empty source and no template; the task keeps its standing instruction.
+    assert.deepEqual([defaults.templateId, defaults.source], ['', '']);
     const addition = webTemplates.find(template => template.id === 'addition')!;
     await selectConfig(h.page, 'environment', 'standard');
     await selectConfig(h.page, 'template', 'addition');

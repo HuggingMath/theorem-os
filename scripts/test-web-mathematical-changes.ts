@@ -19,7 +19,7 @@ import type { RouteBlocker } from '../src/solver/routeControl';
 import { integratedProof } from '../tests/helpers/taskProof';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport,
-  type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+  type ScenarioHarness, type ScenarioSuite, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-mathematical-changes');
@@ -196,7 +196,7 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440
     harness: (page, context) => ({ page, context, requests: [], runIds: [] }),
     routes: { local: 'Mathematical changes must remain local' }, open: true, timeout: { label: 'Mathematical changes', seconds: 60 },
     verify: (h, elapsedMs) => {
-      assert.equal(h.requests.some(item => item.method !== 'GET' && item.pathname !== '/api/runs'), false, 'inspection must not send runtime commands');
+      assert.equal(h.requests.some(item => runtimeWrite(item) && item.pathname !== '/api/runs'), false, 'inspection must not send runtime commands');
       return { name, elapsedMs: elapsedMs(), requests: h.requests };
     }, cleanup: h => { for (const id of h.runIds) controls.get(id)?.finish(); },
   });
@@ -315,7 +315,7 @@ try {
     assert.deepEqual(JSON.parse((await (await rawReceipt(page)).textContent())!), mixed);
     assert.equal(await page.locator(`${section} img,${section} script,${section} a[href]`).count(), 0);
     assert.equal(await page.evaluate(() => '__mathChangeXss' in globalThis), false);
-    assert.equal(h.requests.some(request => request.method === 'POST' && request.pathname !== '/api/runs'), false);
+    assert.equal(h.requests.some(request => runtimeWrite(request) && request.pathname !== '/api/runs'), false);
   });
 
   for (const width of [375, 320]) await scenario(`mathematical change filters, history and raw evidence fit ${width}px`, async h => {

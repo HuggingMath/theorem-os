@@ -11,7 +11,7 @@ import { createWebService } from '../apps/web/server';
 import { loadWebSample } from '../apps/web/sample';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerInput } from '../apps/web/shared';
-import { closeSettings, openSettings, openTab as openRunTab, selectHistoryRun } from './web-ui-controls';
+import { closeSettings, openSettings, openTab as openRunTab, selectHistoryRun, openSample, showArtifacts } from './web-ui-controls';
 import { audit } from './web-a11y';
 import { freePort, postRun, readRun, ready, settled, startBrowser, waitForRun } from './web-scenario';
 import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
@@ -21,6 +21,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const openTab = async (page: Page, tab: string) => {
   await openRunTab(page, tab);
   if (tab === 'trajectory') await page.locator('[data-trajectory-view="steps"]').click();
+};
+/** Beside the chat the run panel is narrower than a viewer column; 展开成果 gives it the width the side viewer needs. */
+const expandResults = async (page: Page) => {
+  if (await page.locator('body[data-results-expanded="true"]').count()) return;
+  await page.locator('#expand-research-output').click();
+  await page.locator('body[data-results-expanded="true"]').waitFor({ state: 'attached' });
 };
 const output = path.join(root, 'out/web-ui-smoke');
 await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error('Run bun run build:web before the trajectory check.'); });
@@ -119,9 +125,9 @@ try {
   page.on('request', request => { const url = new URL(request.url()); if (url.pathname.startsWith('/api/')) requests.push(url); });
   await page.goto(origin);
   await ready(page);
-  await page.locator('.welcome-sample').click();
-  await page.locator('[data-sample-badge]').waitFor();
+  await openSample(page);
   await openTab(page, 'trajectory');
+  await expandResults(page);
   await step(page, '[data-kind="evaluation"]').waitFor();
   assert.deepEqual(await kinds(page), ['problem', 'plan', 'guidance', 'attempt', 'edit', 'attempt', 'proof', 'guidance', 'delivery', 'evaluation']);
   assert.equal(await page.locator('[data-trajectory-detail="simple"]').getAttribute('aria-pressed'), 'true', '简洁 is the default');
@@ -174,6 +180,7 @@ try {
   await ready(page);
   await selectHistoryRun(page, run.id, 'trajectory');
   await openTab(page, 'trajectory');
+  await expandResults(page);
   const live = step(page, '[data-kind="live"]');
   await live.waitFor();
   assert.match(await live.innerText(), /进行中/u);
@@ -430,6 +437,8 @@ try {
   await openSettings(page);
   await page.locator('#api-key').fill(input.apiKey);
   await page.locator('#settings-submit').click();
+  await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });
+  await showArtifacts(page);
   const note = page.locator('[data-run-continuation]');
   await note.waitFor();
   assert.match(await note.innerText(), /从「zero_add · 第 2 次」继续/u);
@@ -441,7 +450,7 @@ try {
   await shot(page, 'trajectory-continued-1440.png');
   const continuedId = (await page.locator('.detail-heading').getAttribute('data-run'))!;
   await note.getByRole('button', { name: '看原运行' }).click();
-  await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor();
+  await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor({ state: 'attached' }); await showArtifacts(page);
   // The original lists what came of it: the later run, the version it started from, and its own status.
   const later = page.locator('#detail-panel [data-result-later]');
   await later.waitFor();
@@ -475,10 +484,10 @@ try {
     'closing the comparison returns to its button');
   mark('对比代码 on a later run sets the two runs\' code side by side, folds unchanged lines on request, and Esc returns to its button');
   await row.click();
-  await page.locator(`.detail-heading[data-run="${continuedId}"]`).waitFor();
+  await page.locator(`.detail-heading[data-run="${continuedId}"]`).waitFor({ state: 'attached' }); await showArtifacts(page);
   assert.equal(await page.locator('#detail-panel [data-result-later]').count(), 0, 'the later run has none of its own');
   await note.getByRole('button', { name: '看原运行' }).click();
-  await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor();
+  await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor({ state: 'attached' }); await showArtifacts(page);
   mark('从这一版继续 starts a new run on the same problem with that version\'s code for the worker, the new run links back to it, and the original lists it under 后来的运行');
 
   await openTab(page, 'trajectory');

@@ -8,8 +8,8 @@ import { readWebConfig, webLimits } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRunInput } from '../apps/web/shared';
-import { closeHistory, closeSettings, fillConfig, newResearch, openHistory, openSettings, selectHistoryRun, text } from './web-ui-controls';
-import { freePort, normalize, postRun, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeHistory, closeSettings, fillConfig, newResearch, openHistory, openSettings, selectHistoryRun, text, showArtifacts } from './web-ui-controls';
+import { freePort, normalize, postRun, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -64,7 +64,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
     harness: (page, context) => ({ page, context, requests: [], runIds: [] }),
     routes: { local: 'source reading must not contact an external site or provider' }, open: true, timeout: { label: 'Source reader', seconds: 45 },
     verify: ({ requests, runIds }, elapsedMs) => {
-      const writes = requests.filter(request => request.method !== 'GET');
+      const writes = requests.filter(runtimeWrite);
       assert.equal(writes.length, runIds.length, 'search must not create, change or delete runs');
       assert.equal(writes.every(request => request.method === 'POST' && request.pathname === '/api/runs'), true);
       return { name, elapsedMs: elapsedMs(), requests, fixtureCreates: runIds.length };
@@ -74,7 +74,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   });
 async function position(page: Page, expected: string) { await text(page, '#source-find-position', expected); }
 async function showSource(page: Page) {
-  if (page.viewportSize()!.width <= 850) await page.locator('#mobile-runs').click();
+  await showArtifacts(page);
 }
 async function openFind(page: Page) {
   await page.locator('#open-source-find').click();

@@ -12,7 +12,7 @@ import type { WebRunInput } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { taskVersion } from '../src/solver/tasks';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
-import { freePort, postRun, preferFullCollaboration, startBrowser } from './web-scenario';
+import { freePort, postRun, preferFullCollaboration, startBrowser, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const staticRoot = path.resolve(process.env.THEOREMOS_WEB_STATIC_ROOT || path.join(root, 'out/web'));
@@ -182,7 +182,7 @@ try {
     await route.continue();
   });
   await page.goto(origin);
-  try { await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); }
+  try { await ready(page); }
   catch (error) { console.error(JSON.stringify(await page.evaluate(() => ({ runtime: document.querySelector('#runtime-note')?.textContent,
     notice: document.querySelector('#global-notice-text')?.textContent, provider: document.querySelector<HTMLSelectElement>('#provider')?.innerHTML,
     disabled: document.querySelector<HTMLButtonElement>('#submit-run')?.disabled })))); throw error; }

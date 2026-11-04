@@ -11,8 +11,8 @@ import type { WebRunner } from '../apps/web/runner';
 import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
-import { freePort, settled, startBrowser } from './web-scenario';
-import { openModulesTab } from './web-ui-controls';
+import { freePort, settled, startBrowser, ready } from './web-scenario';
+import { openModulesTab, openSample, showExamples } from './web-ui-controls';
 
 /**
  * Light and dark interface: without a choice the page follows the system, before the first paint and live when the
@@ -53,11 +53,11 @@ async function open(browser: Browser, colorScheme: 'light' | 'dark', width = 144
 }
 async function workbench(page: Page) {
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await settled(page);
 }
 async function paletteRun(page: Page, id: string) {
-  await page.locator('.palette-trigger').click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
   await page.locator('#command-palette[open]').waitFor();
   await page.locator(`#palette-${id}`).click();
   await page.locator('#command-palette').waitFor({ state: 'hidden' });
@@ -73,7 +73,7 @@ try {
     await page.route('**/app.js', async route => { await new Promise(resolve => setTimeout(resolve, 400)); await route.continue(); });
     await page.goto(origin, { waitUntil: 'domcontentloaded' });
     assert.deepEqual(await theme(page), { theme: scheme, background: paper[scheme], chrome: scheme === 'dark' ? '#1b1a18' : '#f5f4ee' }, `first paint follows the ${scheme} system theme`);
-    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await ready(page);
     assert.equal(await stored(page), null, 'Following the system stores nothing');
     await page.emulateMedia({ colorScheme: scheme === 'light' ? 'dark' : 'light' });
     await page.waitForFunction(expected => document.documentElement.dataset.theme === expected, scheme === 'light' ? 'dark' : 'light');
@@ -92,13 +92,13 @@ try {
     const other = await context.newPage();
     await workbench(other);
     assert.equal((await theme(other)).theme, 'dark', 'A new tab opens with the choice');
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await ready(page);
     assert.equal((await theme(page)).theme, 'dark', 'The choice survives a reload');
     await page.emulateMedia({ colorScheme: 'light' });
     assert.equal((await theme(page)).theme, 'dark', 'A choice is not overridden by the system');
     await paletteRun(page, 'theme-light');
     await other.waitForFunction(() => document.documentElement.dataset.theme === 'light');
-    await page.locator('.palette-trigger').click();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     await page.locator('#command-palette[open]').waitFor();
     assert.equal(await page.locator('#palette-theme-light').count(), 0, 'The palette does not offer the current choice');
     assert.equal(await page.locator('#palette-theme-system').count(), 1);
@@ -146,15 +146,15 @@ try {
     await workbench(page);
     await legible(page, `welcome (${scheme}, ${locale})`);
     // At this width the history is the docked left column, checked with the rest of the page above.
-    for (const [trigger, id] of [['#open-settings', 'run-settings'], ['#open-glossary', 'glossary-dialog'], ['.palette-trigger', 'command-palette']]) {
-      await page.locator(trigger).click();
+    await showExamples(page);
+    for (const [trigger, id] of [['#open-settings', 'run-settings'], ['.welcome-glossary', 'glossary-dialog'], ['Control+K', 'command-palette']]) {
+      if (trigger === 'Control+K') await page.keyboard.press(trigger); else await page.locator(trigger).click();
       await page.locator(`#${id}[open]`).waitFor(); await settled(page);
       await legible(page, `${id} (${scheme}, ${locale})`, `#${id}`);
       await page.keyboard.press('Escape');
       await page.locator(`#${id}`).waitFor({ state: 'hidden' });
     }
-    await page.locator('.welcome-sample').click();
-    await page.locator('[data-sample-badge]').waitFor();
+    await openSample(page);
     for (const tab of ['result', 'trajectory', 'collaboration', 'source', 'events', 'modules']) {
       if (tab === 'modules') await openModulesTab(page);
       else await page.locator(`#detail-tab-${tab}`).click();
@@ -173,8 +173,7 @@ try {
     const { context, page, errors } = await open(browser, scheme, 390);
     await workbench(page);
     await legible(page, `phone compose (${scheme})`);
-    await page.locator('.welcome-sample').click();
-    await page.locator('[data-sample-badge]').waitFor(); await settled(page);
+    await openSample(page); await settled(page);
     await legible(page, `phone sample (${scheme})`);
     await page.screenshot({ path: path.join(output, `phone-sample-${scheme}-390.png`) });
     assert.deepEqual(errors, []);

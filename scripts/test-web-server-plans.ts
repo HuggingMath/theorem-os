@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebSavedModulePlan } from '../apps/web/moduleRegistry';
 import { openSettings } from './web-ui-controls';
-import { deferred, freePort, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+import { deferred, freePort, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-server-plans');
@@ -62,7 +62,7 @@ const scenario = (name: string, run: (h: ScenarioHarness) => Promise<void>, widt
   context: { viewport: { width, height: width > 850 ? 1000 : 812 }, reducedMotion: 'reduce' },
   harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'Plan operations must stay local' },
   open: async ({ page }) => {
-    await page.goto(origin); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); await openSettings(page);
+    await page.goto(origin); await ready(page); await openSettings(page);
     await page.locator('[data-server-module-library] > summary').click();
     await page.locator('[data-server-plan-refresh]:enabled').waitFor();
   },

@@ -9,8 +9,8 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput } from '../apps/web/shared';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeSettings, fitViewport, openSettings, selectHistoryRun, showChat, text } from './web-ui-controls';
-import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, waitForRun, webScenario, writeScenarioReport } from './web-scenario';
+import { closeDialog, closeSettings, fitViewport, openSettings, selectHistoryRun, showChat, text, showArtifacts } from './web-ui-controls';
+import { freePort, postRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, waitForRun, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-source-handoff'), reportFile = path.join(output, 'report.json');
@@ -47,12 +47,12 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   harness: (page, context) => ({ page, context, requests: [], creates: 0, owner: '', releases: [] }),
   routes: { local: 'source handoff must remain local' }, timeout: { label: 'Source handoff', seconds: 50 },
   open: async h => {
-    await h.page.goto(origin); await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await h.page.goto(origin); await ready(h.page);
     h.owner = (await h.context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session')?.value ?? '';
     assert.ok(h.owner, 'a handoff fixture requires a real local session');
   },
   verify: async (h, elapsedMs) => {
-    const writes = h.requests.filter(request => request.method !== 'GET');
+    const writes = h.requests.filter(runtimeWrite);
     assert.equal(writes.length, h.creates, 'handoff must not create, cancel, change or delete a run');
     assert.equal(writes.every(request => request.method === 'POST' && request.pathname === '/api/runs'), true,
       'the only allowed API write is explicit creation of a read-only local run fixture');
@@ -66,16 +66,17 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   },
 });
 async function showDraft(page: Page) {
-  if (page.viewportSize()!.width <= 850) await page.locator('#mobile-runs').click();
+  // The draft preview opens from the composer's 预览 toggle at every width.
+  await showArtifacts(page);
   await page.locator('#draft-preview').waitFor(); await settled(page);
 }
 async function prepare(page: Page, source: string) {
-  await openSettings(page); await page.locator('#environment').selectOption('standard');
+  await showChat(page); await page.locator('#environment').selectOption('standard');
   await page.locator('#template').selectOption(''); await page.locator('#source').fill(source);
-  await closeSettings(page); await showDraft(page);
+  await showDraft(page);
 }
 async function setSource(page: Page, source: string) {
-  await openSettings(page); await page.locator('#source').fill(source); await closeSettings(page); await showDraft(page);
+  await showChat(page); await page.locator('#source').fill(source); await showDraft(page);
 }
 async function find(page: Page, query: string, count: string) {
   if (!await page.locator('#source-find-controls').isVisible()) await page.locator('#open-source-find').click();
@@ -135,7 +136,7 @@ async function visibleFocus(page: Page, label: string) {
     return { target: target?.id || target?.dataset.draftAction || target?.tagName || '',
       visible: Boolean(target && target !== document.body && target.getClientRects().length && !target.closest('dialog:not([open])')) };
   });
-  assert.equal(evidence.visible, true, `${label}: closing must leave keyboard focus on a visible control outside the closed editor`);
+  assert.equal(evidence.visible, true, `${label}: closing must leave keyboard focus on a visible control outside the closed editor: ${JSON.stringify(evidence)}`);
   focusChecks.push({ label, ...evidence });
 }
 async function recovery(page: Page) { return page.evaluate(key => sessionStorage.getItem(key), draftRecoveryStorageKey); }
@@ -311,7 +312,7 @@ try {
     await prepare(page, longSource); await find(page, needle, '1/1'); await closeFind(page);
     await openSettings(page); await page.locator('#model').fill('fixture-metadata-handoff');
     await page.locator('#max-seconds').fill('120'); await page.locator('#max-turns').fill('3'); await closeSettings(page);
-    if (page.viewportSize()!.width <= 850) await page.locator('#mobile-compose').click();
+    await showChat(page);
     await page.locator('#task').fill('Revise the task description while preserving the Lean source.'); await showDraft(page);
     await locationAvailable(page); const start = longSource.indexOf(needle);
     await enter(page, longSource, start, start + needle.length); await visibleSelection(page, 'handoff after metadata edits'); await closeEditor(page);
@@ -329,9 +330,9 @@ try {
 
   await scenario('Switching a template and restoring its backup both invalidate previous source locations', async ({ page }) => {
     await prepare(page, longSource); await find(page, needle, '1/1'); await closeFind(page);
-    await openSettings(page); await page.locator('#template').selectOption('logic');
+    await showChat(page); await page.locator('#template').selectOption('logic');
     const template = await page.locator('#source').inputValue(); assert.notEqual(template, longSource);
-    await closeSettings(page); await showDraft(page); await locationAvailable(page, false);
+    await showDraft(page); await locationAvailable(page, false);
     await enter(page, template, 0, 0, previewEdit, 'template replacement'); await closeEditor(page);
     await openSettings(page); await page.locator('#restore-draft-settings').click();
     assert.equal(await page.locator('#source').inputValue(), longSource); await closeSettings(page); await showDraft(page);
@@ -432,10 +433,11 @@ try {
           if (next === 'modal') {
             document.querySelector<HTMLButtonElement>('#open-settings')!.click();
             document.querySelector<HTMLInputElement>('#model')!.focus();
-          } else document.querySelector<HTMLTextAreaElement>('#task')!.focus();
+          // The preview replaces the composer, so the new control is the preview's own close button.
+          } else document.querySelector<HTMLButtonElement>('#close-draft-preview')!.focus();
         }, next));
         await visibleFocus(page, `an earlier close does not take ${next} focus`);
-        assert.equal(await page.evaluate(() => document.activeElement?.id), next === 'modal' ? 'model' : 'task');
+        assert.equal(await page.evaluate(() => document.activeElement?.id), next === 'modal' ? 'model' : 'close-draft-preview');
         if (next === 'modal') await closeSettings(page);
       }
       assert.equal(await page.locator('#source').inputValue(), source); await showDraft(page);

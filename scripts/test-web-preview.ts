@@ -31,7 +31,7 @@ const server = http.createServer(async (request, response) => {
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const specimens = ['foundations', 'sections', 'topbar', 'conversation', 'monitor', 'header', 'result', 'collaboration'];
 // Ids the workbench renders once per page; the preview mounts several variants of the same component side by side.
-const repeatedIds = /^(open-history|open-settings|current-model|open-glossary|locale-switch|connection-status|open-account|detail-tab-[a-z]+|result-[a-z]+-heading)$/u;
+const repeatedIds = /^(open-history|open-settings|workbench-home|topbar-draft|open-classics|current-model|open-glossary|locale-switch|connection-status|open-account|detail-tab-[a-z]+|result-[a-z]+-heading)$/u;
 const han = /[㐀-鿿]/u;
 
 const browser = await startBrowser(server, port);

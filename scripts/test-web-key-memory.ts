@@ -9,8 +9,8 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { keyMemoryStorageKey } from '../apps/web/client/keyMemory';
-import { closeSettings, newResearch, openSettings } from './web-ui-controls';
-import { freePort, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+import { closeSettings, fillConfig, newResearch, openSettings, showArtifacts } from './web-ui-controls';
+import { freePort, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioHarness, type ScenarioSuite, ready } from './web-scenario';
 
 /**
  * Opt-in API Key memory for one tab: off by default, kept across submissions and reloads in the same tab when ticked,
@@ -57,6 +57,8 @@ const keyField = (page: Page) => page.locator('#api-key').inputValue();
 async function submit(h: Harness, task: string, options: { key?: string; remember?: boolean } = {}) {
   const { page } = h, before = h.posted.length;
   await newResearch(page);
+  // New drafts start without a source.
+  await fillConfig(page, 'source', 'theorem key_memory_fixture : True := by\n  sorry\n');
   await page.locator('#task').fill(task);
   await openSettings(page);
   if (options.key !== undefined) await page.locator('#api-key').fill(options.key);
@@ -93,13 +95,13 @@ try {
     assert.equal(await page.locator('#forget-key').isVisible(), true);
     await page.screenshot({ path: path.join(output, 'remembered-1440.png') }); screenshots.push('remembered-1440.png');
     await closeSettings(page);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await ready(page);
     await openSettings(page); assert.equal(await keyField(page), credential, 'a reload in the same tab keeps it'); await closeSettings(page);
     // Draft storage holds no key even while one is remembered.
     stored = await storage(page);
     assert.equal(stored.session.split(credential).length - 1, 1, 'only the memory entry holds the key');
     const other = await context.newPage();
-    await other.goto(origin); await other.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await other.goto(origin); await ready(other);
     await openSettings(other);
     assert.equal(await keyField(other), '', 'another tab does not get it'); assert.equal(await other.locator('#remember-key').isChecked(), false);
     await other.close();
@@ -140,6 +142,8 @@ try {
   await scenario('a key the provider rejected is forgotten when the reader goes to change it', async h => {
     const { page } = h;
     await submit(h, 'Please reject', { key: credential, remember: true });
+    // The recovery actions sit in the run's result, opened from the chat.
+    await showArtifacts(page);
     await page.locator('[data-recovery="key"]').click();
     await page.locator('#run-settings[open]').waitFor(); await settled(page);
     assert.equal(await keyField(page), ''); assert.equal((await storage(page)).tab, null);

@@ -14,7 +14,7 @@ import { taskVersion } from '../src/solver/tasks';
 import { buildTheoremKnowledge } from '../src/solver/theoremKnowledge';
 import { refreshHistory, selectHistoryRun } from './web-ui-controls';
 import { deferred, freePort, postRun, settled, startBrowser, webScenario, writeScenarioReport,
-  type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+  type ScenarioHarness, type ScenarioSuite, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-workbench-ux');
@@ -196,7 +196,7 @@ try {
       assert.ok(nav && viewport && Math.abs(nav.y - viewport.y) <= 28, 'navigation stays at the detail panel top');
     }
     await jump(page, 'reviews'); await page.screenshot({ path: path.join(output, 'desktop.png') });
-    assert.equal(h.requests.some(r => r.method !== 'GET' && r.pathname !== '/api/runs'), false);
+    assert.equal(h.requests.some(r => runtimeWrite(r) && r.pathname !== '/api/runs'), false);
   });
 
   await scenario('task and Agent guidance return to their entry and keep separate drafts and return state per run', async h => {
@@ -254,7 +254,7 @@ try {
     assert.match(await page.locator(text).inputValue(), new RegExp(catalog.entries[0]!.id));
     assert.equal(await page.locator('[data-guidance-kind]').inputValue(), 'worker'); assert.equal(await page.locator('[data-guidance-target]').inputValue(), 'researcher');
     await returnTo(page, '[data-knowledge-reference]'); assert.equal(await page.locator('#knowledge-search').inputValue(), 'known_reflexivity');
-    assert.equal(h.requests.some(r => r.method !== 'GET' && r.pathname !== '/api/runs'), false, 'references never submit runtime commands');
+    assert.equal(h.requests.some(r => runtimeWrite(r) && r.pathname !== '/api/runs'), false, 'references never submit runtime commands');
   });
 
   await scenario('delayed source and check reads reveal loading immediately and completion never steals focus, including from a different run', async h => {
@@ -338,8 +338,8 @@ try {
     } finally { archiveRelease.resolve(); }
     h.effect = undefined; const archived = await page.locator('[data-collab-status]').innerText(); assert.match(archived, /已归档/);
     control.emit(); await poll(page); assert.equal(await page.locator('[data-collab-status]').innerText(), archived);
-    const writes = h.requests.filter(r => r.method !== 'GET').length; await page.locator('[data-collab-show-archive]').click(); await settled(page);
-    await page.locator('[data-collab-archive-download]').waitFor(); assert.equal(h.requests.filter(r => r.method !== 'GET').length, writes, 'show archive only navigates');
+    const writes = h.requests.filter(runtimeWrite).length; await page.locator('[data-collab-show-archive]').click(); await settled(page);
+    await page.locator('[data-collab-archive-download]').waitFor(); assert.equal(h.requests.filter(runtimeWrite).length, writes, 'show archive only navigates');
     assert.equal(await page.locator('[data-collab-archive-download]').isVisible(), true);
   });
 

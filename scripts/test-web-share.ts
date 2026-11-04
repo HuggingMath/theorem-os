@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
 import { selectHistoryRun } from './web-ui-controls';
 import { audit } from './web-a11y';
-import { freePort, postRun, readRun, settled, startBrowser } from './web-scenario';
+import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -47,7 +47,7 @@ async function finished(page: Page, id: string) {
 }
 async function open(page: Page, id: string) {
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
   await selectHistoryRun(page, id);
 }
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
@@ -60,7 +60,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(origin);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(page);
 
   const rejected: WebRun = await postRun({ page }, input('rejected'));
   await finished(page, rejected.id);

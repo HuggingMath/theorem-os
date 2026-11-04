@@ -10,9 +10,9 @@ import type { WebFormalizationReport } from '../apps/web/shared';
 import { webFormalizationLimits, type WebFormalization, type WebFormalizationCapabilities } from '../apps/web/formalizationTypes';
 import { localeStorageKey } from '../apps/web/i18n';
 import { researchExamples } from '../apps/web/problemExamples';
-import { freePort, startBrowser } from './web-scenario';
+import { freePort, startBrowser, ready } from './web-scenario';
 import { audit } from './web-a11y';
-import { openSettings, closeSettings } from './web-ui-controls';
+import { openSettings, closeSettings, enterLean, showExamples } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-formalize'); await fs.mkdir(output, { recursive: true });
@@ -83,16 +83,17 @@ try {
     const { page, context, writes } = await setup(browser, { locale, actualSession: true, width: locale === 'en' ? 390 : 1440 });
     // Both entry paths use the same problems. Choosing an example never starts a paid request.
     await page.goto(origin);
-    await page.locator('#entry-lean').click();
-    await page.locator('.research-example').last().waitFor();
+    await enterLean(page);
+    await showExamples(page); await page.locator('.research-example').last().waitFor();
     // Global entry points remain available when the home page restores a previous run.
     await page.goto(`${origin}/?sample`);
-    await page.locator('[data-sample-badge]').waitFor();
-    assert.equal(await page.locator('#open-natural-language').isVisible(), true);
-    assert.equal(await page.locator('#open-research-examples').isVisible(), false);
-    const topEntry = await page.locator('#open-natural-language').boundingBox();
+    // The sample opens in the chat; its run header stays behind the artifact panel until one is opened.
+    await page.locator('[data-sample-badge]').waitFor({ state: 'attached' });
+    // Over a run the input-mode switch gives way to the chat; 新对话 in the top bar leads back to a new problem.
+    assert.equal(await page.locator('#research-input-mode').isVisible(), false);
+    const topEntry = await page.locator('#topbar-draft').boundingBox();
     assert.ok(topEntry && topEntry.y >= 0 && topEntry.y + topEntry.height < 220);
-    await page.locator('#entry-lean').click();
+    await enterLean(page);
     await page.locator('#open-research-examples').click();
     await page.locator('.research-examples').waitFor();
     assert.equal(await page.locator('body').getAttribute('data-view'), 'draft');
@@ -239,7 +240,7 @@ try {
     assert.equal(await page.locator('#environment').inputValue(), report.environment);
     assert.equal(await page.locator('#draft-formalization-link').getAttribute('href'), 'formalize.html?id=11111111-1111-4111-8111-111111111111');
     assert.equal(writes.length, 0, 'Opening the confirmed problem must not start research');
-    await page.reload(); await page.locator('#entry-lean').click(); await page.locator('#draft-formalization-link').waitFor();
+    await page.reload(); await enterLean(page); await page.locator('#draft-formalization-link').waitFor();
     assert.equal(await page.locator('#source').inputValue(), report.statement);
     assert.equal(await page.locator('#environment').inputValue(), report.environment);
     await openSettings(page); await page.locator('#api-key').fill('fixture-research-key'); await closeSettings(page);
@@ -251,7 +252,7 @@ try {
     assert.equal(writes[0]!.body.environment, report.environment);
     await page.locator('#source').fill(report.statement + '-- edited\n');
     assert.equal(await page.locator('#draft-formalization-link').isVisible(), false, 'Edited source must release the evidence binding');
-    await page.reload(); await page.locator('#entry-lean').click(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await enterLean(page); await ready(page);
     assert.equal(await page.locator('#draft-formalization-link').isVisible(), false);
     assert.equal(await page.locator('#source').inputValue(), report.statement + '-- edited\n');
     await context.close();

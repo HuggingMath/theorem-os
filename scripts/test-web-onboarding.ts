@@ -8,8 +8,8 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { webSampleRunId } from '../apps/web/shared';
-import { freePort, settled, startBrowser } from './web-scenario';
-import { newResearch, openModulesTab } from './web-ui-controls';
+import { freePort, settled, startBrowser, ready } from './web-scenario';
+import { newResearch, openModulesTab, enterLean, showExamples, openSample, openSettings, showArtifacts } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -62,8 +62,8 @@ try {
   assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), false);
   mark('default mode starts with a blank composer, opens connection settings on demand, and new research clears the original');
 
-  await page.locator('#entry-lean').click();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await enterLean(page);
+  await ready(page);
   assert.equal(await page.locator('#source').inputValue(), '');
   await page.locator('#submit-run').click();
   await page.locator('#source-validation:not([hidden])').waitFor();
@@ -84,10 +84,11 @@ try {
 
   await page.reload();
   await page.locator('#natural-research #formalize-original').waitFor();
-  await page.locator('#entry-lean').click();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await enterLean(page);
+  await ready(page);
 
   // A new visitor sees the three steps, the sample entry and the glossary link.
+  await showExamples(page);
   const welcome = page.locator('.chat-welcome[data-first-run="true"]');
   await welcome.waitFor();
   assert.deepEqual(await welcome.locator('.welcome-steps strong').allInnerTexts(), ['写下原题', '连接模型', '等待验收']);
@@ -98,8 +99,7 @@ try {
   mark('a first visit explains the three steps and offers the sample run');
 
   // The sample opens without a key, says it is read-only, and offers no destructive or sharing action.
-  await page.locator('.welcome-sample').click();
-  await page.locator('[data-sample-badge]').waitFor();
+  await openSample(page);
   assert.equal(new URL(page.url()).search, '?sample', 'The sample has its own address');
   assert.match(await page.locator('[data-sample-note]').innerText(), /离线脚本[\s\S]*独立验收都是真实执行的/u);
   assert.equal(await page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
@@ -161,8 +161,8 @@ try {
   mark('a term tip is keyboard operable, and its glossary link opens at that term');
 
   // Inside a modal dialog the tip still shows above it, and Escape closes the tip before the dialog.
-  await page.locator('#open-settings').click();
-  await page.locator('#run-settings[open]').waitFor();
+  // In a run, 设置 opens the chat's connection settings; the run settings belong to the Lean editor.
+  await openSettings(page);
   const coordination = page.locator('#run-settings [data-term="coordination"]');
   await coordination.scrollIntoViewIfNeeded();
   await coordination.click();
@@ -180,10 +180,9 @@ try {
   // Reusing the sample fills a draft; the key stays empty and the saved position still points nowhere.
   // Settings opened the new-research page, so the sample is opened again first.
   const connection = { provider: await field(page, 'provider'), model: await field(page, 'model'), effort: await field(page, 'effort') };
-  await page.locator('.welcome-sample').click();
-  await page.locator('[data-sample-badge]').waitFor();
+  await openSample(page);
   await page.locator('[data-action="reuse-run"]').click();
-  await page.locator('#draft-preview').waitFor();
+  await page.locator('body[data-view="draft"]').waitFor({ state: 'attached' });
   assert.match(await field(page, 'task'), /自然数加法定理/u);
   assert.equal(await field(page, 'api-key'), '');
   assert.deepEqual({ provider: await field(page, 'provider'), model: await field(page, 'model'), effort: await field(page, 'effort') }, connection,
@@ -196,14 +195,15 @@ try {
   await page.locator('#run-settings').waitFor({ state: 'hidden' });
   mark('reusing the sample opens a draft at the empty API key with its task filled, and leaves no resume entry');
 
-  // The glossary and the sample are reachable from the top bar and the command palette.
-  await page.locator('#open-glossary').click();
+  // The glossary and the sample are reachable from the command palette.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+  await page.locator('#palette-open-glossary').click();
   await page.locator('#glossary-dialog[open]').waitFor();
   await page.locator('#close-glossary').click();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
   await page.locator('#command-palette[open] input').fill('示例');
   await page.locator('#palette-open-sample').click();
-  await page.locator('[data-sample-badge]').waitFor();
+  await page.locator('[data-sample-badge]').waitFor({ state: 'attached' });
   // The palette's feedback command opens the prefilled site form in a new tab.
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
   await page.locator('#command-palette[open] input').fill('反馈');
@@ -213,22 +213,22 @@ try {
   assert.equal(opened.pathname, '/feedback.html');
   assert.match(opened.searchParams.get('environment')!, /^TheoremOS workbench · .+ · zh$/u);
   await feedbackTab.close();
-  mark('the top bar opens the glossary, and the palette opens the sample and the feedback form');
+  mark('the palette opens the glossary, the sample and the feedback form');
 
   // Back from a new draft returns to the sample, and a reload of its address keeps it.
   await newResearch(page);
   await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
   await page.goBack();
-  await page.locator('[data-sample-badge]').waitFor();
+  await page.locator('[data-sample-badge]').waitFor({ state: 'attached' });
   assert.equal(new URL(page.url()).search, '?sample');
   await page.reload();
-  await page.locator('[data-sample-badge]').waitFor();
+  await page.locator('[data-sample-badge]').waitFor({ state: 'attached' });
   assert.equal(new URL(page.url()).search, '?sample');
   mark('the sample keeps its ?sample address through Back and a reload');
 
   // A phone turned sideways (812×375): the run page scrolls as a whole with its tabs pinned, and 提交 is reachable on the draft.
   await page.setViewportSize({ width: 812, height: 375 });
-  await settled(page);
+  await showArtifacts(page); await settled(page);
   const pinned = await page.evaluate(() => {
     const detail = document.querySelector<HTMLElement>('#run-detail')!;
     detail.scrollTop = 400;
@@ -250,7 +250,7 @@ try {
     undefined, { timeout: 2000 }).catch(() => { throw new Error('提交 cannot be scrolled into a short window'); });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goBack();
-  await page.locator('[data-sample-badge]').waitFor();
+  await page.locator('[data-sample-badge]').waitFor({ state: 'attached' });
   mark('in a short landscape window the run page scrolls with pinned tabs and the draft scrolls to 提交');
 
   for (const width of [375, 320]) {
@@ -263,8 +263,8 @@ try {
   const fresh = await context.newPage();
   await fresh.setViewportSize({ width: 320, height: 760 });
   await fresh.goto(origin);
-  await fresh.locator('#entry-lean').click();
-  await fresh.locator('.chat-welcome[data-first-run="true"]').waitFor();
+  await enterLean(fresh);
+  await showExamples(fresh); await fresh.locator('.chat-welcome[data-first-run="true"]').waitFor();
   await settled(fresh);
   assert.ok(await noOverflow(fresh), 'Welcome overflows at 320px');
   const bar = await fresh.evaluate(() => { const actions = document.querySelector('.topbar-actions')!; return actions.scrollWidth <= actions.clientWidth + 1 && actions.getBoundingClientRect().right <= innerWidth; });

@@ -11,7 +11,8 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
-import { freePort, settled, startBrowser } from './web-scenario';
+import { freePort, settled, startBrowser, ready } from './web-scenario';
+import { showExamples } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-guide');
@@ -66,7 +67,7 @@ try {
   {
     const { context, page, errors } = await open(browser);
     await page.goto(origin);
-    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await ready(page); await showExamples(page);
     const welcomeGuide = page.locator('.chat-welcome a[data-guide]');
     assert.equal(await welcomeGuide.innerText(), '使用说明');
     assert.equal(await welcomeGuide.getAttribute('target'), '_blank');
@@ -74,7 +75,9 @@ try {
     await fromWelcome.locator('#start-heading').waitFor();
     assert.equal(new URL(fromWelcome.url()).pathname, '/guide.html');
     await fromWelcome.close();
-    await page.locator('#open-glossary').click();
+    // The simplified top bar has no glossary button; the command palette opens it.
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    await page.locator('#palette-open-glossary').click();
     await page.locator('#glossary-dialog[open]').waitFor();
     const [fromGlossary] = await Promise.all([context.waitForEvent('page'), page.locator('#glossary-dialog a[data-guide]').click()]);
     await fromGlossary.locator('#start-heading').waitFor();

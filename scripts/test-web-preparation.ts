@@ -8,8 +8,8 @@ import { readWebConfig, webLimits, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeHistory, closeSettings, discardSourceEditor, historyDocked, openHistory, openSettings, showArtifacts, showChat, withSettings } from './web-ui-controls';
-import { freePort, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeDialog, closeHistory, closeSettings, discardSourceEditor, historyDocked, openHistory, openSettings, showArtifacts, showChat, withSettings, enterLean } from './web-ui-controls';
+import { freePort, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -54,9 +54,9 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
 async function open(h: Harness) {
   await h.page.goto(origin);
   await h.page.locator('#new-research:enabled').waitFor({ state: 'attached' });
-  await h.page.locator('#entry-lean').click();
+  await enterLean(h.page);
   await showChat(h.page);
-  await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await ready(h.page);
   await h.page.locator('#environment').selectOption('standard');
   await h.page.locator('#template').selectOption('addition');
   await h.page.locator('#submission-readiness[data-state="missing"]').waitFor();
@@ -85,6 +85,8 @@ async function snapshot(page: Page, name: string, fullPage = false) {
   screenshots.push(name);
 }
 async function bounds(page: Page, selector: string) {
+  // The Lean editor is one scrolling column; a control at its foot is brought into view, the page itself never scrolls.
+  await page.locator(selector).scrollIntoViewIfNeeded();
   const box = await page.locator(selector).boundingBox();
   const viewport = page.viewportSize()!;
   assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width + 1 &&
@@ -185,7 +187,7 @@ try {
     assert.match(await page.locator('#readiness-title').innerText(), /^可以提交/);
     assert.equal(await page.locator('#readiness-detail').isVisible(), false);
     assert.equal((await page.locator('#submission-readiness').innerText()).includes(credential), false);
-    assert.equal(h.requests.filter(request => request.method !== 'GET').length, 0);
+    assert.equal(h.requests.filter(runtimeWrite).length, 0);
     assert.equal(workerStarts, 0);
     await page.locator('#composer-settings').click();
     await closeSettings(page);

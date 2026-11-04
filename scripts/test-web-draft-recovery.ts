@@ -9,8 +9,8 @@ import type { TaskDraft } from '../apps/web/client/draft';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput } from '../apps/web/shared';
-import { closeDialog, closeSettings, discardSourceEditor, fillConfig, fitViewport, newResearch, openSettings, selectConfig, selectHistoryRun, showChat, withSettings } from './web-ui-controls';
-import { freePort, postRun, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport } from './web-scenario';
+import { closeDialog, closeSettings, discardSourceEditor, fillConfig, fitViewport, newResearch, openSettings, selectConfig, selectHistoryRun, showChat, withSettings, showArtifacts, showExamples } from './web-ui-controls';
+import { freePort, postRun, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-draft-recovery');
@@ -61,7 +61,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
     // Storage must stay empty here, so collaboration keeps its unstored default.
     collaborationDetail: 'simple',
     verify: async ({ page, requests }, elapsedMs) => {
-      const writes = requests.filter(request => request.method !== 'GET');
+      const writes = requests.filter(runtimeWrite);
       assert.equal(writes.length, expectedPosts, 'only explicit local fixture creation or valid submission may write to the API');
       assert.ok(writes.every(request => request.method === 'POST' && request.pathname === '/api/runs'));
       await privateStorage(page); await noInjection(page);
@@ -69,7 +69,7 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
     },
     cleanup: async ({ releases }) => { for (const release of releases) await release(); },
   });
-async function open(h: Harness) { await h.page.goto(origin); await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' }); }
+async function open(h: Harness) { await h.page.goto(origin); await ready(h.page); }
 async function snapshot(page: Page): Promise<TaskDraft> {
   return page.evaluate(ids => ({ ...Object.fromEntries(Object.entries(ids).map(([key, id]) =>
     [key, (document.getElementById(id) as HTMLInputElement).value])),
@@ -77,12 +77,13 @@ async function snapshot(page: Page): Promise<TaskDraft> {
 }
 async function fill(page: Page, value: TaskDraft) {
   await withSettings(page, async () => {
-    await page.locator('#provider').selectOption(value.providerId);
-    await page.locator('#environment').selectOption(value.environment);
-    await page.locator('#template').selectOption(''); await page.locator('#effort').selectOption(value.effort);
-    for (const key of ['model', 'source', 'maxTurns', 'maxRunSeconds', 'workers'] as const) await page.locator(`#${ids[key]}`).fill(value[key]);
+    await page.locator('#provider').selectOption(value.providerId); await page.locator('#effort').selectOption(value.effort);
+    for (const key of ['model', 'maxTurns', 'maxRunSeconds', 'workers'] as const) await page.locator(`#${ids[key]}`).fill(value[key]);
     await page.locator(`input[name="coordination"][value="${value.coordination}"]`).check();
   });
+  // Environment, template and source sit in the composer, behind the settings dialog.
+  await selectConfig(page, 'environment', value.environment); await selectConfig(page, 'template', '');
+  await fillConfig(page, 'source', value.source);
   await page.locator('#task').fill(value.task);
   if (value.templateId) await selectConfig(page, 'template', value.templateId);
 }
@@ -125,34 +126,36 @@ async function dismiss(page: Page) {
   assert.equal(await page.locator('#draft-recovery').isVisible(), false);
 }
 async function cleanDraft(page: Page, value = original) { await fill(page, value); await dismiss(page); await assertDraft(page, value); }
-async function visibleSettingsSource(page: Page) {
+/** The Lean source sits in the composer, so restoring from settings closes the dialog and shows the source there. */
+async function visibleRestoredSource(page: Page) {
   const geometry = await page.evaluate(() => {
-    const source = document.querySelector('#source')!, content = document.querySelector('#run-settings .settings-content')!;
-    const box = source.getBoundingClientRect(), frame = content.getBoundingClientRect();
-    return { source: { top: box.top, bottom: box.bottom }, frame: { top: frame.top, bottom: frame.bottom },
-      visibleHeight: Math.min(box.bottom, frame.bottom, innerHeight) - Math.max(box.top, frame.top, 0) };
+    const box = document.querySelector('#source')!.getBoundingClientRect();
+    return { top: box.top, bottom: box.bottom, visibleHeight: Math.min(box.bottom, innerHeight) - Math.max(box.top, 0) };
   });
-  assert.ok(geometry.visibleHeight > 12, `restored source must actually be visible in settings: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.visibleHeight > 12, `restored source must actually be visible: ${JSON.stringify(geometry)}`);
 }
 async function restore(page: Page, expected: TaskDraft, fromSettings = false) {
   await page.locator(fromSettings ? '#restore-draft-settings' : '#restore-draft').click();
   await assertDraft(page, expected);
   await page.waitForFunction(id => document.activeElement?.id === id, fromSettings ? 'source' : 'task');
-  if (fromSettings) {
-    assert.equal(await page.locator('#run-settings').isVisible(), true); await visibleSettingsSource(page);
-  } else assert.equal(await page.locator('#run-settings').isVisible(), false);
+  assert.equal(await page.locator('#run-settings').isVisible(), false);
+  if (fromSettings) await visibleRestoredSource(page);
   assert.equal(await page.locator('#api-key').inputValue(), '');
   assert.equal(await page.locator('#api-key').getAttribute('type'), 'password');
   assert.equal(await page.locator('#toggle-key').getAttribute('aria-pressed'), 'false');
   assert.equal(await page.locator('[aria-invalid="true"]').count(), 0, 'restoring must clear stale validation');
   assert.equal(await page.locator('#draft-recovery').isVisible(), false);
   assert.equal(await page.locator('#restore-draft-settings').isVisible(), false);
-  if (page.viewportSize()!.width > 850) assert.equal(await page.locator('#draft-preview').count(), 1, 'restoring must return to the unsent draft');
+  assert.equal(await page.locator('body').getAttribute('data-view'), 'draft', 'restoring must return to the unsent draft');
   restored.push({ scenario: suite.failedScenario, context: fromSettings ? 'settings' : 'composer',
     sourceBytes: Buffer.byteLength(expected.source), keyCleared: true });
 }
 async function screenshot(page: Page, name: string) { await page.screenshot({ path: path.join(output, name) }); screenshots.push(name); }
-const fit = (page: Page, selector: string) => fitViewport(page, selector, 'recovery must not widen the document');
+/** The Lean editor is one scrolling column, so the recovery bar and 提交 come into view at its end before they must fit. */
+const fit = async (page: Page, selector: string) => {
+  await page.locator(selector).scrollIntoViewIfNeeded();
+  await fitViewport(page, selector, 'recovery must not widen the document');
+};
 async function importJson(page: Page, draft: TaskDraft, filename = 'recovery.json') {
   await page.locator('#task-file').setInputFiles({ name: filename, mimeType: 'application/json', buffer: taskFile(draft) });
 }
@@ -198,6 +201,8 @@ try {
   await scenario('Select changes recover the previous environment and template before input/change handlers update them', async h => {
     const { page } = h; await open(h);
     assert.equal(await page.locator('#draft-recovery').isVisible(), false, 'initialization must not create a replacement backup');
+    // A new draft starts blank with no template; an environment change replaces only a chosen template's content.
+    await selectConfig(page, 'template', 'polynomial'); await dismiss(page);
     const defaults = await snapshot(page);
     await fillConfig(page, 'api-key', credential);
     await selectConfig(page, 'environment', 'standard');
@@ -217,15 +222,15 @@ try {
   await scenario('Chat suggestions cross environments atomically and repeated suggestions preserve the existing backup', async h => {
     const { page } = h; await open(h); await cleanDraft(page);
     await fillConfig(page, 'api-key', credential);
-    await page.locator('[data-chat-template="polynomial"]').click();
+    await showExamples(page); await page.locator('[data-chat-template="polynomial"]').click();
     const polynomial = webTemplates.find(template => template.id === 'polynomial')!;
     assert.equal(await page.locator('#environment').inputValue(), 'mathlib');
     assert.equal(await page.locator('#source').inputValue(), polynomial.source);
     await assertBackup(page, original, 'template');
-    await page.locator('[data-chat-template="polynomial"]').click(); await assertBackup(page, original, 'template');
+    await showExamples(page); await page.locator('[data-chat-template="polynomial"]').click(); await assertBackup(page, original, 'template');
     await screenshot(page, 'chat-template-backup.png');
     await restore(page, original); await noInjection(page);
-    await page.locator('[data-chat-template="logic"]').click();
+    await showExamples(page); await page.locator('[data-chat-template="logic"]').click();
     const current = await snapshot(page);
     await page.locator('#dismiss-draft-recovery').click();
     await assertDraft(page, current); assert.equal(await recovery(page), null);
@@ -250,7 +255,7 @@ try {
   await scenario('Reusing a history task preserves the unsent draft and never substitutes its candidate proof', async h => {
     const { page } = h; await open(h); await cleanDraft(page); await fillConfig(page, 'api-key', credential);
     const fixture = await createHistoryFixture(h);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await ready(page);
     await selectHistoryRun(page, fixture.run.id);
     await page.locator('[data-action="reuse-run"]').click();
     await page.locator('#run-settings[open]').waitFor();
@@ -259,7 +264,7 @@ try {
     assert.deepEqual((await recovery(page))?.task.draft, original);
     assert.equal((await recovery(page))?.reason, 'reuse');
     await restore(page, original, true); await closeSettings(page);
-    assert.equal(await page.locator('#run-count').innerText(), '1', 'restoring must not add or delete history');
+    assert.equal(await page.locator('#run-count').textContent(), '1', 'restoring must not add or delete history');
   }, 1440, 1);
 
   await scenario('JSON cancel, invalid files and unchanged confirmation preserve the previous backup; changed confirmation replaces it', async h => {
@@ -303,7 +308,7 @@ try {
     await closeSettings(page); await restore(page, initial);
     await page.locator('#source-file').setInputFiles({ name: 'again.lean', mimeType: 'text/plain', buffer: Buffer.from(source) });
     await page.waitForFunction(source => (document.querySelector('#source') as HTMLTextAreaElement).value === source, source);
-    await openSettings(page);
+    await showChat(page);
     for (const action of ['cancel', 'escape', 'unchanged', 'invalid']) {
       await page.locator('#expand-source').click(); await page.locator('#source-editor[open]').waitFor();
       if (action === 'cancel' || action === 'escape') await page.locator('#expanded-source').fill('discarded editor text');
@@ -320,7 +325,7 @@ try {
     await page.locator('#expand-source').click(); await page.locator('#expanded-source').fill(`${source}\n-- applied recovery edit`);
     await closeDialog(page, '#source-editor', () => page.locator('#apply-editor').click());
     assert.equal((await recovery(page))?.reason, 'edit'); assert.deepEqual((await recovery(page))?.task.draft, imported);
-    await restore(page, imported, true); await closeSettings(page);
+    await openSettings(page); await restore(page, imported, true); await closeSettings(page);
   });
 
   await scenario('Lean code pasted into the task or a .lean file dropped on the page replaces the original problem with one undo; prose stays in the task', async h => {
@@ -347,15 +352,16 @@ try {
       return { over: over.defaultPrevented, lit, drop: event.defaultPrevented, after: document.body.hasAttribute('data-file-drag') };
     }, text);
     const dropped = 'theorem dropped_recovery : True := by sorry\n';
-    // Unhandled, the browser would open the file in place of the workbench.
+    // Unhandled, the browser would open the file in place of the workbench. The preview opens from 预览.
+    await showArtifacts(page);
     assert.deepEqual(await drop('#draft-preview', dropped), { over: true, lit: true, drop: true, after: false });
     await page.waitForFunction(source => (document.querySelector('#source') as HTMLTextAreaElement).value === source, dropped);
-    await assertBackup(page, original, 'source');
+    await showChat(page); await assertBackup(page, original, 'source');
     await restore(page, original);
     // The source editor holds its own revision; a drop there leaves the draft as it is and does not offer to.
-    await openSettings(page); await page.locator('#expand-source').click(); await page.locator('#source-editor[open]').waitFor();
+    await showChat(page); await page.locator('#expand-source').click(); await page.locator('#source-editor[open]').waitFor();
     assert.deepEqual(await drop('#expanded-source', dropped), { over: true, lit: false, drop: true, after: false });
-    await closeDialog(page, '#source-editor', () => page.locator('#cancel-editor').click()); await closeSettings(page);
+    await closeDialog(page, '#source-editor', () => page.locator('#cancel-editor').click());
     await assertDraft(page, original); assert.equal(await recovery(page), null);
   });
 
@@ -368,15 +374,15 @@ try {
     const replacement = await snapshot(page);
     await page.waitForFunction(({ key, task }) => JSON.parse(sessionStorage.getItem(key) || 'null')?.draft?.task === task,
       { key: draftKey, task: replacement.task });
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await ready(page);
     await assertDraft(page, replacement); await assertBackup(page, unfinished, 'reset');
     const other = await h.context.newPage();
-    await other.goto(origin); await other.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await other.goto(origin); await ready(other);
     assert.equal(await other.locator('#draft-recovery').isVisible(), false);
     assert.equal(await other.evaluate(key => sessionStorage.getItem(key), recoveryKey), null);
     await other.close();
     await restore(page, unfinished); assert.equal(await recovery(page), null);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await ready(page);
     await assertDraft(page, unfinished); assert.equal(await page.locator('#draft-recovery').isVisible(), false);
   });
 
@@ -397,7 +403,7 @@ try {
     await page.locator('#draft-recovery-local').waitFor({ state: 'visible' });
     await screenshot(page, `storage-${failure}-memory.png`);
     await restore(page, original);
-    await page.reload(); await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.reload(); await ready(page);
     assert.equal(await page.locator('#draft-recovery').isVisible(), false, 'an in-memory backup must not survive refresh');
   });
 
@@ -424,7 +430,7 @@ try {
     await importJson(page, { ...original, task: 'Delayed JSON task' }, 'slow.json'); await fileStarted(page);
     await restore(page, original); await releaseFile(page);
     assert.equal(await page.locator('#import-task-dialog').isVisible(), false); await assertDraft(page, original);
-    await newResearch(page); await openSettings(page); await page.locator('#expand-source').click();
+    await newResearch(page); await showChat(page); await page.locator('#expand-source').click();
     await page.locator('#expanded-source').fill('theorem obsolete_editor : True := by sorry');
     // Trigger restoration while a nested editor holds an older revision, then exercise its real Apply command.
     await page.locator('#restore-draft-settings').evaluate(button => (button as HTMLButtonElement).click());
@@ -436,10 +442,12 @@ try {
 
   await scenario('Local validation keeps the backup while a real fixture submission consumes it before the response', async h => {
     const { page } = h; await open(h); await cleanDraft(page); await newResearch(page);
+    // A new draft starts blank; with a Lean statement typed in, the missing key is what local validation stops at.
+    await page.locator('#source').fill('theorem submitted_after_reset : True := by trivial\n');
     await page.locator('#submit-run').click(); await page.locator('#run-settings[open]').waitFor();
     await page.locator('#api-key-validation').waitFor({ state: 'visible' });
     assert.deepEqual((await recovery(page))?.task.draft, original);
-    assert.equal(h.requests.filter(request => request.method !== 'GET').length, 0);
+    assert.equal(h.requests.filter(runtimeWrite).length, 0);
     await page.locator('#api-key').fill(credential);
     let release!: () => void, sawRequest!: () => void;
     const pending = new Promise<void>(resolve => { release = resolve; }), sent = new Promise<void>(resolve => { sawRequest = resolve; });
@@ -456,7 +464,7 @@ try {
     assert.equal(await page.locator('#submit-run').isDisabled(), true);
     release(); assert.equal((await response).status(), 201);
     await page.waitForFunction(() => (document.querySelector('#api-key') as HTMLInputElement).value === '');
-    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await ready(page);
     assert.equal(await page.locator('#task').inputValue(), ''); assert.equal(await recovery(page), null);
     assert.equal(await page.locator('#draft-recovery').isVisible(), false, 'successful task clearing must not create a new backup');
     await screenshot(page, 'submitted-without-undo.png');
@@ -472,10 +480,10 @@ try {
     await screenshot(page, `recovery-${width}-settings.png`);
     await restore(page, original, true); await closeSettings(page);
     if (width <= 850) {
-      await page.locator('#mobile-runs').click(); await page.locator('#draft-preview').waitFor();
+      await showArtifacts(page); await page.locator('#draft-preview').waitFor();
       assert.equal(await page.locator('#draft-preview-code code').textContent(), original.source);
       assert.equal(await page.locator('#draft-preview-task').textContent(), original.task);
-      await page.locator('#mobile-compose').click();
+      await showChat(page);
     }
     await newResearch(page); await restore(page, original);
     await fit(page, '#task'); await fit(page, '#submit-run'); await noInjection(page);

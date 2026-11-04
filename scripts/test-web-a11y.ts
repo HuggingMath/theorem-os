@@ -9,7 +9,8 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { audit, tabStops } from './web-a11y';
-import { freePort, settled, startBrowser } from './web-scenario';
+import { freePort, settled, startBrowser, ready } from './web-scenario';
+import { showExamples, openSample } from './web-ui-controls';
 
 /**
  * Keyboard and screen-reader pass over the workbench, in Chinese and English: the static audit (names, labels, ARIA
@@ -54,11 +55,15 @@ try {
     const page = await context.newPage(), errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
-    await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
-    await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
+    await ready(page);
+    await showExamples(page); await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
     await settled(page);
     await clean(page, `welcome (${locale})`);
 
+    // Opening the examples left focus on their toggle; Tab order starts again from the document.
+    await page.evaluate(() => {
+      const root = document.documentElement; root.tabIndex = -1; root.focus({ preventScroll: true }); root.removeAttribute('tabindex');
+    });
     // The first Tab shows the skip link, which moves focus to the workspace; the top bar follows in reading order.
     await page.keyboard.press('Tab');
     assert.ok(await page.locator('.skip-link').evaluate(link => link === document.activeElement), 'The first Tab stop is not the skip link');
@@ -69,7 +74,8 @@ try {
     mark(`Tab starts at the skip link and reaches the top bar with a visible focus ring (${locale})`);
 
     await dialog(page, '#open-settings', 'run-settings', `settings (${locale})`);
-    await dialog(page, '#open-glossary', 'glossary-dialog', `glossary (${locale})`);
+    // The simplified top bar keeps the glossary in the welcome and the palette.
+    await dialog(page, '.welcome-glossary', 'glossary-dialog', `glossary (${locale})`);
     // Wide screens dock the history beside the workspace; its button folds and unfolds it and keeps focus.
     const history = page.locator('#open-history');
     await history.focus();
@@ -88,18 +94,18 @@ try {
     await dialog(page, '#open-history', 'history-dialog', `history dialog (${locale})`);
     await page.setViewportSize({ width: 1440, height: 900 });
     await settled(page);
-    await page.locator('.palette-trigger').focus();
-    await page.keyboard.press('Enter');
+    // The top bar has no palette button; Ctrl+K opens it and Escape returns focus to where it was.
+    await page.locator('#open-settings').focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     await page.locator('#command-palette[open]').waitFor();
     await clean(page, `command palette (${locale})`, '#command-palette');
     await page.keyboard.press('Escape');
     await page.locator('#command-palette').waitFor({ state: 'hidden' });
-    assert.ok(await page.locator('.palette-trigger').evaluate(element => element === document.activeElement), 'Palette did not return focus');
+    assert.ok(await page.locator('#open-settings').evaluate(element => element === document.activeElement), 'Palette did not return focus');
     mark(`settings, glossary, the history sidebar and dialog and the palette pass the audit, close on Escape and return focus (${locale})`);
 
     // The sample: each tab is reachable with the arrow keys and every panel passes the audit.
-    await page.locator('.welcome-sample').click();
-    await page.locator('[data-sample-badge]').waitFor();
+    await openSample(page);
     await page.locator('#detail-tab-result').focus();
     const order = await page.locator('[data-detail-tab]').evaluateAll(tabs => tabs.map(tab => (tab as HTMLElement).dataset.detailTab!));
     for (let step = 0; step < order.length; step++) {
@@ -128,7 +134,7 @@ try {
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.detailTab), order.at(-1));
     mark(`the sample's tabs follow the arrow-key pattern and every panel passes the audit (${locale})`);
 
-    // On a phone the run fills the screen; the new-research page splits into a compose and preview tablist.
+    // On a phone the run fills the screen; the new-research page shows its composer, whichever input mode it was left in.
     await page.setViewportSize({ width: 375, height: 760 });
     await settled(page);
     await clean(page, `375px run (${locale})`);
@@ -136,7 +142,7 @@ try {
     await page.locator('#history-dialog[open]').waitFor();
     await page.locator('#open-draft').click();
     await page.locator('body[data-view="draft"]').waitFor({ state: 'attached' });
-    await page.locator('#mobile-compose').waitFor();
+    await page.locator('#submit-run').or(page.locator('#natural-research #formalize-original')).first().waitFor();
     await settled(page);
     await clean(page, `375px new research (${locale})`);
     mark(`the 375px layout passes the audit (${locale})`);
