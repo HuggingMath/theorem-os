@@ -23,6 +23,7 @@
     "web": "bun apps/web/server.ts",
     "typecheck:web": "tsc --project apps/web/tsconfig.json && tsc --project apps/web/client/tsconfig.json && tsc --project apps/web/preview/tsconfig.json",
     "build:web-preview": "bun scripts/build-web-preview.ts",
+    "test:web-review-regressions": "bun scripts/test-web-review-regressions.ts",
     "test:web-ui": "bun scripts/test-web-ui.ts",
     "test:web-login": "bun scripts/test-web-login.ts",
     "test:web-failures": "bun scripts/test-web-failures.ts",

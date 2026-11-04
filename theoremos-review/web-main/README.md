@@ -2,6 +2,8 @@
 
 报告见 [web-main-review.md](../web-main-review.md)。基线 `8261c178ed9f379831606b154c41fbdecca94d57`。
 
+本目录保留修复前的历史证据。PR #2 已加入修复，当前验收见 [修复记录](../../docs/web-review-fixes.md)，修复后浏览器回归入口为 `bun run test:web-review-regressions`。下列缺陷复现脚本应在上述基线运行，其缺陷断言不适用于修复后的代码。
+
 在仓库根目录执行。审查使用 Bun 1.4.4 / Node 24.22.1；下列准备步骤供干净 checkout 使用，浏览器与依赖安装需要网络：
 
 ```sh

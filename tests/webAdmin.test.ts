@@ -63,8 +63,8 @@ describe('admin accounts manage the allowlist and see beta totals, never other r
 
   it('lets an admin sign in without an allowlist entry and marks only admins in the session', async () => {
     const admin = await login('admin@example.org'), bob = await login('bob@example.org');
-    expect((await session(admin)).account).toEqual({ email: 'admin@example.org', admin: true });
-    expect((await session(bob)).account).toEqual({ email: 'bob@example.org' });
+    expect((await session(admin)).account).toEqual({ email: 'admin@example.org', admin: true, passwordSet: false, passwordResetAllowed: true });
+    expect((await session(bob)).account).toEqual({ email: 'bob@example.org', passwordSet: false, passwordResetAllowed: true });
   });
 
   it('refuses the admin routes to anonymous sessions and to accounts that are not admins', async () => {

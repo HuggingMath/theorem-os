@@ -1,5 +1,9 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  "提交请求标识无效。": "The submission request ID is invalid.",
+  "提交请求标识无效或不一致。": "The submission request IDs are invalid or do not match.",
+  "同一提交请求不能使用不同的题目或配置。": "The same submission request cannot use a different problem or configuration.",
+  "这次提交对应的运行已删除，请发起新研究。": "The run for this submission was deleted. Start a new research run.",
   "请求必须使用 JSON。": "The request must be JSON.",
   "请求内容过大。": "The request is too large.",
   "JSON 内容无效。": "The JSON is invalid.",

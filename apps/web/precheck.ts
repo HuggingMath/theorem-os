@@ -89,7 +89,7 @@ export function precheckResult(environment: WebEnvironment, run: WebPrecheckOutp
 export class PrecheckSuperseded extends Error {}
 
 /**
- * Compiles statements for the editor. Each owner has at most one check in flight (a newer one replaces it), the
+ * Compiles statements for the editor. Each editor scope has at most one check in flight (a newer one replaces it), the
  * service runs a few at a time with a short queue, and identical statements come from a small cache.
  */
 export class WebPrechecker {
@@ -101,7 +101,10 @@ export class WebPrechecker {
   constructor(private readonly runner: WebPrecheckRunner,
     private readonly limits = { concurrency: 2, queue: 6, perMinute: 20, cache: 200 }) {}
 
-  async check(owner: string, input: { environment: WebEnvironment; source: string }, signal: AbortSignal): Promise<WebPrecheck> {
+  async check(owner: string, input: { environment: WebEnvironment; source: string; checkScope?: string }, signal: AbortSignal): Promise<WebPrecheck> {
+    signal.throwIfAborted();
+    const scope = JSON.stringify([owner, input.checkScope ?? 'legacy']);
+    this.inflight.get(scope)?.abort(new PrecheckSuperseded());
     const structural = inspectStatement(input.source);
     const targets = structural.some(item => item.code === 'lean_task_input_invalid') ? 0
       : inspectScopedLeanDeclarations(input.source).filter(item => item.kind === 'theorem').length;
@@ -112,9 +115,10 @@ export class WebPrechecker {
     const busy = (): WebPrecheck => ({ status: 'busy', environment: input.environment, targets, sorries: 0, diagnostics: [] });
     const now = Date.now(), times = (this.recent.get(owner) ?? []).filter(time => now - time < 60_000);
     if (times.length >= this.limits.perMinute) { this.recent.set(owner, times); return busy(); }
-    this.inflight.get(owner)?.abort(new PrecheckSuperseded());
+    // Reserve the owner rate allowance before waiting; distinct scopes share this limit.
+    times.push(now); this.recent.set(owner, times);
     const controller = new AbortController();
-    this.inflight.set(owner, controller);
+    this.inflight.set(scope, controller);
     const stop = () => controller.abort(signal.reason);
     signal.addEventListener('abort', stop, { once: true });
     try {
@@ -127,7 +131,6 @@ export class WebPrechecker {
           controller.signal.addEventListener('abort', leave, { once: true });
         });
       } else this.running++;
-      times.push(now); this.recent.set(owner, times);
       try {
         controller.signal.throwIfAborted();
         let output: WebPrecheckOutput | undefined;
@@ -148,7 +151,7 @@ export class WebPrechecker {
       }
     } finally {
       signal.removeEventListener('abort', stop);
-      if (this.inflight.get(owner) === controller) this.inflight.delete(owner);
+      if (this.inflight.get(scope) === controller) this.inflight.delete(scope);
     }
   }
 

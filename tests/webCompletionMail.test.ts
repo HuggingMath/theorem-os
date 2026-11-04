@@ -155,14 +155,14 @@ describe('completion mail delivery', () => {
     expect((await request('/api/auth/account', alice, { completionEmail: 'no' }, 'PATCH')).status).toBe(400);
     expect((await request('/api/auth/account', { ...alice, csrf: 'wrong' }, { completionEmail: false }, 'PATCH')).status).toBe(403);
     expect((await request('/api/auth/account', alice, { completionEmail: false }, 'PATCH')).status).toBe(200);
-    expect((await (await request('/api/session', alice)).json() as WebSession).account).toEqual({ email: 'alice@example.org', completionEmail: false });
+    expect((await (await request('/api/session', alice)).json() as WebSession).account).toEqual({ email: 'alice@example.org', completionEmail: false, passwordSet: false, passwordResetAllowed: true });
 
     const quiet = (await (await request('/api/runs', alice, input('pass'))).json()).run;
     await settle(alice, quiet.id);
     expect(completions()).toEqual([]);
 
     expect((await request('/api/auth/account', alice, { completionEmail: true }, 'PATCH')).status).toBe(200);
-    expect((await (await request('/api/session', alice)).json() as WebSession).account).toEqual({ email: 'alice@example.org' });
+    expect((await (await request('/api/session', alice)).json() as WebSession).account).toEqual({ email: 'alice@example.org', passwordSet: false, passwordResetAllowed: true });
     const loud = (await (await request('/api/runs', alice, input('pass'))).json()).run;
     await settle(alice, loud.id);
     expect(completions()).toHaveLength(1);

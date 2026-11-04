@@ -39,7 +39,7 @@ export type WebEnvironmentOption = { id: WebEnvironment; name: string; descripti
 export type WebTemplate = { id: string; name: string; environment: WebEnvironment; source: string; task: string };
 export type WebSavedKey = { providerId: string; ending: string };
 /** What the browser posts: `saveKey` asks the server to keep the typed key for this account; it never reaches the run. */
-export type WebRunRequest = WebRunInput & { saveKey?: boolean };
+export type WebRunRequest = WebRunInput & { saveKey?: boolean; requestId?: string };
 export type WebRunInput = {
   providerId: string;
   apiKey: string;
@@ -143,6 +143,8 @@ export type WebRun = {
   queue?: WebQueuePosition;
 };
 export type WebSession = {
+  /** Stable opaque owner identity for account-bound browser recovery. */
+  draftOwner?: string;
   csrfToken: string;
   /** `email` means the workbench needs a login; `account` is set once this session has one. */
   auth: 'none' | 'email';

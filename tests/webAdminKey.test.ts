@@ -81,9 +81,9 @@ describe('submitting with the admin key', () => {
   it('tells only the admin which providers the server holds a key for, never the key', async () => {
     const admin = await login('admin@example.org'), bob = await login('bob@example.org');
     const adminSession = await (await request('/api/session', admin)).text();
-    expect(JSON.parse(adminSession).account).toEqual({ email: 'admin@example.org', admin: true, serverKeys: ['sub2api'] });
+    expect(JSON.parse(adminSession).account).toEqual({ email: 'admin@example.org', admin: true, serverKeys: ['sub2api'], passwordSet: false, passwordResetAllowed: true });
     expect(adminSession).not.toContain(heldKey);
-    expect((await (await request('/api/session', bob)).json() as WebSession).account).toEqual({ email: 'bob@example.org' });
+    expect((await (await request('/api/session', bob)).json() as WebSession).account).toEqual({ email: 'bob@example.org', passwordSet: false, passwordResetAllowed: true });
   });
 
   it('fills in the held key for an admin who leaves the field empty, and keeps it out of every record', async () => {
