@@ -367,7 +367,8 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     alternativeRoutes: proofRoutes.filter(route => route.targetTaskId === node.task.id) }));
   const continuation = buildProofContinuation(routeTasks, { groups: cooperation.groups,
     environmentDigest: compilation.environmentDigest, proofRoutes });
-  const planningEvidence = action.kind === 'lead' ? leadPlanningEvidence(cooperation, compilation.environmentDigest) : undefined;
+  const planningEvidence = action.kind === 'lead' ? leadPlanningEvidence(cooperation, compilation.environmentDigest,
+    { goalPathReview: cooperation.goalPathReview }) : undefined;
   const focus = originalGoalTaskFocus(routeTasks, cooperation.groups, compilation.environmentDigest);
   const frontierSnapshot = originalGoalFrontierSnapshot(focus);
   const routeIndex = createProofRoutePriorityIndex(routeTasks, {
@@ -410,6 +411,8 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'Adopt a useful proposal by adding its exact typed task to the plan (upsert it in a revision): copy id, type, proofPath, theoremName and dependsOn verbatim, including Lean notation; rewriting ᵀ as .transpose changes its frozen contract. ' +
     'If the proposed type needs repair, delegate a corrected proposal rather than adopting a different interface under its id. Adoption only schedules a new proof obligation; do not mark an unproved proposal as checked. ' +
     'For a refutation or decision request, revise the affected route, delegate a discriminating check, or keep the route and state the specific mathematical reason in the plan notes. ' +
+    'For every deliveryId shown in research-inputs, include researchDecisions in the same math-plan JSON: {deliveryId:"ID",outcome:"adopt",taskIds:["CHANGED_TASK_ID"],reason:"specific action"}, {deliveryId:"ID",outcome:"source",sourcePaths:["OWNED_FILE.lean"],reason:"specific source change"}, or {deliveryId:"ID",outcome:"decline",reason:"specific mathematical reason"}. ' +
+    'An adoption must name a newly added or substantively changed task; an objective rewrite or revision counter is not enough. A source decision becomes final only after the changed owned Lean file is merged. Treat later findings as inputs to the next Lead turn. ' +
     'A model refutation never proves the original theorem false or authorizes acceptance. An unadopted proposal is shown again while its source task version is current.\n' : '';
   const leadRouteRules = action.kind === 'lead' ?
     'When the original-goal frontier is stalled, use new findings to split the substantive missing argument into genuinely weaker, independently Lean-checkable exact lemma tasks and a closing consumer. State what each sublemma removes from the original obstruction and verify that its hypotheses do not assume the unresolved core result. Changing notation or assuming the original bound in a wrapper does not reduce that gap. A paper theorem is a route reference; assign every unproved analytic premise explicitly. Preserve existing checked task contracts. If the available inputs give no further concrete step, retain the blockers and explain the specific new input needed to resume. The host will reconsider unchanged mathematical input only once, including across restarts.\n' +

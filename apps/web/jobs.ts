@@ -12,6 +12,7 @@ import { freezeModuleConfiguration } from './moduleRegistry';
 import { WebStorageError } from './storage';
 
 type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebProvider; controller: AbortController;
+  formalization?: WorkerInput['formalization'];
   continuation?: WorkerInput['continuation'] };
 const terminal = (run: WebRun) => ['completed', 'cancelled', 'error'].includes(run.status);
 const clean = <T>(value: T, key: string): T => JSON.parse(key ? JSON.stringify(value).replaceAll(
@@ -75,7 +76,8 @@ export class WebJobs {
     };
   }
   /** `continuation` is the saved file `input.continueFrom` names; it goes to the worker and is not kept with the run. */
-  create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation']): WebRun {
+  create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation'],
+    formalization?: { evidence: unknown; provenance: NonNullable<WebRun['formalization']> }): WebRun {
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
     const count = (status: string) => [...this.jobs.values()].filter(job => job.run.status === status).length;
     const active = count('running'), waiting = count('queued');
@@ -84,16 +86,25 @@ export class WebJobs {
     if (this.list(owner).length >= webLimits.maxRuns)
       throw new Error(`已达到 ${webLimits.maxRuns} 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。`);
     const now = new Date().toISOString();
-    const { apiKey, ...visible } = input;
-    const environment = input.environment ?? 'standard';
-    if (input.knowledgeDigest && !this.knowledge.getCatalog(owner, input.knowledgeDigest))
+    const pinnedDigest = input.knowledgeDigest === undefined
+      ? continuation ? this.get(owner, continuation.runId)?.knowledgeDigest : this.knowledge.latestReusableCatalog(owner)?.digest
+      : input.knowledgeDigest ?? undefined;
+    if (pinnedDigest && !this.knowledge.getCatalog(owner, pinnedDigest))
       throw new WebStorageError(404, '所选知识目录不存在或不属于当前会话。');
-    const run: WebRun = { ...clean(visible, apiKey), environment, id: crypto.randomUUID(),
+    const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard' };
+    if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
+    else delete pinnedInput.knowledgeDigest;
+    const { apiKey, knowledgeDigest: _selectedKnowledgeDigest, ...visible } = pinnedInput;
+    const environment = input.environment ?? 'standard';
+    const run: WebRun = { ...clean(visible, apiKey), ...(pinnedDigest ? { knowledgeDigest: pinnedDigest } : {}),
+      environment, id: crypto.randomUUID(),
       title: '', status: 'queued',
       phase: 'queued', createdAt: now, updatedAt: now, timings: {}, events: [], modules: {} };
-    run.title = run.task.split('\n')[0].slice(0, 60) || 'Lean 研究';
+    if (formalization) run.formalization = formalization.provenance;
+    run.title = (formalization?.provenance.original.trim() || run.task).split('\n')[0].slice(0, 60) || 'Lean 研究';
     run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
-    this.jobs.set(run.id, { owner, input: { ...input, environment }, provider, run, controller: new AbortController(),
+    this.jobs.set(run.id, { owner, input: pinnedInput, provider, run, controller: new AbortController(),
+      ...(formalization ? { formalization: formalization.evidence } : {}),
       ...(continuation ? { continuation } : {}) });
     this.event(run, 'queued', '任务已进入队列');
     this.reindex();
@@ -109,7 +120,7 @@ export class WebJobs {
       delete job.run.queue;
       this.event(job.run, 'cancelled', '运行已取消');
       job.controller.abort();
-      if (queued) { job.input.apiKey = ''; delete job.continuation; this.reindex(); }
+      if (queued) { job.input.apiKey = ''; delete job.continuation; delete job.formalization; this.reindex(); }
     }
     return job.run;
   }
@@ -341,6 +352,7 @@ export class WebJobs {
     };
     try {
       await this.runner.run({ id: job.run.id, input: job.input, provider: job.provider,
+        ...(job.formalization ? { formalization: job.formalization } : {}),
         ...(job.input.knowledgeDigest ? { knowledgeCatalog: this.knowledge.getCatalog(job.owner, job.input.knowledgeDigest) } : {}),
         ...(job.continuation ? { continuation: job.continuation } : {}) }, handle, job.controller.signal);
       if (!terminal(job.run)) {
@@ -360,6 +372,7 @@ export class WebJobs {
     } finally {
       job.input.apiKey = '';
       delete job.continuation;
+      delete job.formalization;
       job.run.finishedAt ??= new Date().toISOString();
       this.persist(job.run);
       try { this.onFinished?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }

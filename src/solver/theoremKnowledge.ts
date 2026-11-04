@@ -37,7 +37,7 @@ export const knowledgeElaborationSchema = z.object({
   environmentDigest: hash, toolIdentity: z.string().min(1).max(4096), sealedEnvironmentIdentity: z.string().max(4096).optional(),
 }).strict();
 const provenance = z.object({
-  kind: z.enum(['solver-check', 'accepted-archive', 'local-verified-archive']), problemId: z.string().min(1),
+  kind: z.enum(['solver-check', 'accepted-archive', 'local-verified-archive', 'frozen-library-pack']), problemId: z.string().min(1),
   source: z.string(), sourceDigest: hash, sourceCommit: z.string().optional(),
   archiveRecordDigest: hash.optional(),
   runId: z.string().optional(), taskId: z.string().optional(), taskDigest: z.string().optional(),
@@ -48,7 +48,7 @@ const provenance = z.object({
 const theorem = z.object({
   name: z.string().min(1), file: z.string(), type: z.string().min(1),
   typeKind: z.enum(['closed-task-type', 'source-header']),
-  /** `definition` entries are checked `def` bodies of `type`: reuse copies the body, it does not apply a proposition. */
+  /** `definition` entries retain `def` bodies: reuse copies the body, it does not apply a proposition. */
   kind: z.enum(['lemma', 'goal', 'definition']),
   description: z.string(), premises: z.array(z.string()),
   elaboration: knowledgeElaborationSchema.optional(),
@@ -226,6 +226,7 @@ export function theoremKnowledgeStats(base: TheoremKnowledgeBase) {
     solverCheckedEntries: base.entries.filter(item => item.provenance.some(origin => origin.kind === 'solver-check')).length,
     acceptedArchiveEntries: base.entries.filter(item => item.provenance.some(origin => origin.kind === 'accepted-archive')).length,
     localVerifiedArchiveEntries: base.entries.filter(item => item.provenance.some(origin => origin.kind === 'local-verified-archive')).length,
+    frozenLibraryPackEntries: base.entries.filter(item => item.provenance.some(origin => origin.kind === 'frozen-library-pack')).length,
     routeFindings: base.routeFindings?.length ?? 0,
     evidence: base.evidence, requiresFreshCheck: base.requiresFreshCheck };
 }

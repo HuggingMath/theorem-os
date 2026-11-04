@@ -7,7 +7,7 @@ import type { Browser, BrowserContext, Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
-import type { WebExplanationDocument, WebRunInput, WorkerExplanationInput, WorkerExplanationMessage } from '../apps/web/shared';
+import { webSampleRunId, type WebExplanationDocument, type WebRunInput, type WorkerExplanationInput, type WorkerExplanationMessage } from '../apps/web/shared';
 import { localeStorageKey } from '../apps/web/i18n';
 import { themeStorageKey } from '../apps/web/client/themePreference';
 import { leanGutter, refLines, stepAtLine } from '../apps/web/client/explainText';
@@ -59,7 +59,7 @@ type Explain = { input: WorkerExplanationInput; send(message: WorkerExplanationM
 const explains: Explain[] = [];
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: '本地讲解验证环境' }; },
-  async run(_input, send) { send({ type: 'result', result: { status: 'evaluated_passed', proof, report: {} } }); },
+  async run(value, send) { send({ type: 'result', result: { status: value.input.task === 'Unaccepted fixture' ? 'limit_reached' : 'evaluated_passed', proof, report: {} } }); },
   explain(value, send, signal) {
     return new Promise<void>((resolve, reject) => {
       explains.push({ input: { ...value }, send, resolve });
@@ -112,20 +112,66 @@ try {
   const run = await postRun({ page }, input);
   await until(async () => (await readRun({ page }, run.id)).status === 'completed', 'the fixture run finishes');
 
-  // The report links each target to the explanation page; the run page itself is unchanged.
+  // Open directly from the proof, without depending on the report's outline or display mode.
   await page.reload();
   await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   // The acceptance report, with the proof's structure, is part of 结果, where a run opens.
   await selectHistoryRun(page, run.id);
+  const proofLink = page.locator('#detail-panel .result-proof [data-proof-explanation]');
+  await proofLink.waitFor();
+  const proofHref = `explain.html?${new URLSearchParams({ run: run.id })}`;
+  assert.equal(await proofLink.innerText(), 'Lean → 自然语言');
+  assert.equal(await proofLink.getAttribute('href'), proofHref);
+  assert.equal(await proofLink.getAttribute('target'), '_blank');
+  await page.locator('[data-report-view="json"]').click();
+  assert.equal(await proofLink.getAttribute('href'), proofHref, 'raw report mode keeps the direct entry');
+  await page.locator('#detail-tab-source').click();
+  const sourceLink = page.locator('#detail-panel .source-actions [data-proof-explanation]');
+  await sourceLink.waitFor();
+  assert.equal(await sourceLink.getAttribute('href'), proofHref, 'the source toolbar opens the same proof explanation');
+  await page.locator('#detail-tab-result').click();
+  await page.locator('[data-report-view="summary"]').click();
   const link = page.locator('#detail-panel .report-outline a[href^="explain.html"]');
   await link.waitFor();
   assert.equal(await link.count(), 1, 'one explanation link, on the target');
   const href = await link.getAttribute('href');
   assert.equal(href, `explain.html?${new URLSearchParams({ run: run.id, target: 'target_thm' })}`);
   assert.equal(await link.getAttribute('target'), '_blank');
-  mark('the report of an accepted run links its target to the explanation page');
+  await proofLink.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(output, 'explain-workbench-entry-1440.png') });
+  mark('an accepted proof and its source toolbar link directly to natural-language explanation, including with the raw report open');
 
-  await page.goto(`${origin}/${href}`);
+  // Sample readers can discover the page too; opening it never starts generation and Back returns to the sample.
+  const sample = await open(browser, `${origin}/?sample`);
+  const sampleLink = sample.page.locator('#detail-panel .result-proof [data-proof-explanation]');
+  await sampleLink.waitFor();
+  assert.equal(await sampleLink.getAttribute('href'), `explain.html?${new URLSearchParams({ run: webSampleRunId })}`);
+  const popup = sample.context.waitForEvent('page');
+  await sampleLink.click();
+  const sampleExplanation = await popup;
+  await explainReady(sampleExplanation);
+  assert.ok(await sampleExplanation.locator('#explain-lean-code .lean-row').count() > 0);
+  assert.match(await sampleExplanation.locator('#explain-prose').innerText(), /示例运行只读，不能生成讲解/u);
+  assert.equal(await sampleExplanation.locator('[data-action="generate"]').count(), 0);
+  assert.equal(explains.length, 0, 'opening an explanation does not start the runner');
+  assert.equal(await sampleExplanation.locator('#explain-back').getAttribute('href'), './?sample');
+  await sampleExplanation.locator('#explain-back').click();
+  await sampleExplanation.locator('#detail-panel .result-proof [data-proof-explanation]').waitFor();
+  await sample.context.close();
+  mark('the sample exposes the explanation entry, stays read-only and returns to the sample');
+
+  const unaccepted = await postRun({ page }, { ...input, task: 'Unaccepted fixture' });
+  await until(async () => (await readRun({ page }, unaccepted.id)).status === 'completed', 'the unaccepted fixture finishes');
+  await page.reload();
+  await selectHistoryRun(page, unaccepted.id);
+  await page.locator('.result-proof.candidate').waitFor();
+  assert.equal(await page.locator('#detail-panel a[href^="explain.html"]').count(), 0);
+  await page.locator('#detail-tab-source').click();
+  await page.locator('.source-status.candidate').waitFor();
+  assert.equal(await page.locator('[data-proof-explanation]').count(), 0);
+  mark('an unaccepted candidate does not offer an accepted-proof explanation');
+
+  await page.goto(`${origin}/${proofHref}`);
   await explainReady(page);
   assert.equal(await page.locator('#explain-lean-code .lean-row').count(), lineCount, 'one Lean row per proof line');
   assert.equal(await page.locator('#explain-lean-code .lean-row[data-line="1"] .lean-tok-keyword').first().innerText(), 'theorem');

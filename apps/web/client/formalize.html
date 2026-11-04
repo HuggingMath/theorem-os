@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN" class="formalize-root">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ee"><meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">
+  <title>自然语言 → Lean · TheoremOS</title>
+  <link rel="icon" type="image/svg+xml" href="assets/mark.svg"><script src="theme.js"></script>
+  <link rel="stylesheet" href="app.css"><link rel="stylesheet" href="formalize.css">
+</head>
+<body class="formalize-page">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="topbar"><a class="brand" href="./" aria-label="TheoremOS 工作台"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a><div class="topbar-actions"><button id="locale-switch" type="button" class="text-button locale-switch" hidden></button><a class="button" href="./">返回工作台</a></div></header>
+  <main id="main" class="formalize-shell">
+    <header class="formalize-intro"><p class="formalize-eyebrow">准备研究原题</p><h1>自然语言 → Lean</h1><p>输入完整原题，生成 Lean 陈述。对照独立回译与审核结果，确认后带入研究。</p></header>
+    <p id="formalize-error" class="formalize-error" role="alert" hidden></p>
+    <div class="formalize-workspace">
+      <section class="formalize-compose" aria-labelledby="formalize-compose-heading"><h2 id="formalize-compose-heading">原题全文</h2>
+        <form id="formalize-form">
+          <div class="formalize-examples"><label for="formalize-example">选择自然语言例题</label><select id="formalize-example" aria-describedby="formalize-example-note"><option value="">自行输入原题</option></select><p id="formalize-example-note" class="field-note" aria-live="polite">选择后填入完整原题与证明环境，可修改后再生成。</p></div>
+          <label class="sr-only" for="formalize-original">自然语言或 TeX 原题</label>
+          <textarea id="formalize-original" rows="9" required spellcheck="false" placeholder="粘贴完整的数学题目，包括假设、定义与需要证明的结论。支持 TeX。" aria-describedby="formalize-original-note"></textarea>
+          <p id="formalize-original-note" class="field-note">全文按输入保存，空格与换行不会被改写。请勿在这里填研究指令。</p>
+          <details id="formalize-settings" open><summary>模型设置</summary><div class="formalize-settings-fields">
+          <div class="formalize-options"><label for="formalize-environment">证明环境<select id="formalize-environment"><option value="standard">标准库</option><option value="mathlib">Mathlib</option></select></label><label for="formalize-effort">推理强度<select id="formalize-effort"><option value="max">最高</option><option value="high">高</option><option value="low">低</option></select></label></div>
+          <label for="formalize-key">API Key<span id="formalize-key-note" class="field-note"></span></label><input id="formalize-key" type="password" autocomplete="off" spellcheck="false" aria-describedby="formalize-key-note" placeholder="仅本次使用，不在浏览器保存">
+          <div id="formalize-budget" class="formalize-budget" aria-live="polite">正在读取可用配置…</div>
+          <p id="formalize-unavailable" class="field-note" hidden></p>
+          </div></details>
+          <div class="formalize-submit"><button id="formalize-start" class="button button-primary" type="submit" disabled>生成 Lean 陈述</button><span class="field-note">点击后调用模型并消耗 API 额度。</span></div>
+          <p id="formalize-send-status" class="field-note" role="status" hidden></p>
+        </form>
+      </section>
+      <aside class="formalize-history" aria-labelledby="history-heading"><details id="formalize-history-details" open><summary id="history-heading">形式化记录</summary><div class="formalize-section-head"><p class="field-note">任务保存在服务端，刷新页面可继续查看。</p><button id="formalize-refresh" type="button" class="text-button">刷新</button></div><div id="formalize-list" aria-live="polite"></div></details></aside>
+    </div>
+    <section id="formalize-current" class="formalize-current" hidden aria-labelledby="current-heading">
+      <p id="formalize-changed" class="formalize-error" role="status" hidden>原题或证明环境已修改，下面的结果属于之前的输入。请重新生成 Lean 陈述，再核对并继续研究。</p>
+      <header class="formalize-section-head"><div><h2 id="current-heading">当前形式化</h2><p id="formalize-progress" role="status"></p></div><div id="formalize-actions" class="formalize-actions"></div></header>
+      <p id="formalize-reason" class="field-note" hidden></p>
+      <ol id="formalize-stages" class="formalize-stages" aria-label="解题进度" hidden><li data-stage="formalize">形式化原题</li><li data-stage="review">检查原题一致性</li><li data-stage="research">证明研究与 Lean 验证</li></ol>
+      <p id="formalize-research-status" class="field-note" role="status" hidden></p>
+      <p id="formalize-result" hidden><a id="formalize-result-link" class="button button-primary">查看解题结果</a><span class="field-note">研究进展与最终 Lean 验证结果会在研究页面展示。</span></p>
+      <details id="formalize-failure" hidden><summary>故障详情</summary><code id="formalize-failure-code" translate="no"></code></details>
+      <details id="formalize-source"><summary>查看保存的原题全文</summary><pre id="formalize-source-text" translate="no"></pre></details>
+      <div id="formalize-review" hidden>
+        <p class="formalize-review-note">请核对原题、Lean 陈述与独立回译。模型审核通过仅表示陈述待你确认，证明仍需研究与独立验收。</p>
+        <div id="formalize-report-toolbar" class="explain-toolbar"></div>
+        <div id="formalize-split" class="explain-split" data-pane="prose">
+          <section class="explain-pane explain-pane-lean" aria-labelledby="formalize-lean-heading"><header class="explain-pane-head"><h3 id="formalize-lean-heading">Lean 陈述</h3></header><div id="formalize-chosen" class="formal-chosen" aria-live="polite"></div><div id="formalize-lean" class="explain-scroll explain-lean" tabindex="0" aria-labelledby="formalize-lean-heading"><div id="formalize-code" class="lean-code" translate="no"></div></div></section>
+          <section class="explain-pane explain-pane-prose" aria-labelledby="formalize-prose-heading"><header class="explain-pane-head"><h3 id="formalize-prose-heading">原题与审核</h3></header><div id="formalize-prose" class="explain-scroll explain-prose" tabindex="0" aria-labelledby="formalize-prose-heading"></div></section>
+        </div>
+        <div id="formalize-confirmation" class="formalize-confirmation"><label><input id="formalize-checked" type="checkbox">我已核对原题、Lean 陈述及回译，确认以此陈述开始研究。</label><button id="formalize-confirm" type="button" class="button button-primary" disabled>确认陈述</button></div>
+        <p id="formalize-confirmed" hidden><a id="formalize-use" class="button button-primary" href="./">带入研究草稿</a><span class="field-note">带入后可设置研究要求，不会自动启动证明。</span></p>
+      </div>
+    </section>
+  </main>
+  <noscript><p>需要启用 JavaScript 才能使用在线形式化。</p></noscript><script src="formalize.js" defer></script>
+</body></html>

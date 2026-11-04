@@ -13,15 +13,16 @@ const custom: CustomResearchModule[] = [
 ];
 
 describe('one frozen identity for executable research modules and the optional web registry', () => {
-  it('matches committed runtime method digests after extracting the shared identity functions', () => {
-    // Golden digests: runtime b52f047 identity plus the theory-building module versions (tactic battery and its vacuity probe, untouched-seed request failures, Lead inbox, stopped-worker release, definition tasks, reference search, definition knowledge, math tools, isolated module builds, kernel certificates, goal-path review and stall wake, blueprint fields, theory modules, definition sanity lemmas, goal-path answers, owned declaration index, frozen library modules, library packs and task families).
+  it('matches runtime method digests for system progress reviews and dependency repair', () => {
+    // Golden identities include M2 projection-dependency diagnostics, M4 team/source-dependency review context,
+    // and M5 substantive goal-path decisions, source-dependency connections and active-goal progress reviews.
     const original: [ResearchModulePlan['scheduler'], ResearchModulePlan['context'], string][] = [
-      ['plan', 'full', '081459ca81837455596156a45c7c8bbedef9769b901a7b6acc7cd97000f1aad1'],
-      ['plan', 'essential', 'ef662f4dc6f572ed26fd299ac3d730c3c0e068f5140bafa49576f44f84212dfc'],
-      ['critical-path', 'full', 'f4cef87b069d9a87e94baf95bdfb3553176bdacf34647b1fbc5984b62928ece8'],
-      ['critical-path', 'essential', '4e170e3dd99c14859831e6a3ddb059c8b4a1aa5847ce36188f556d74eb6222d7'],
-      ['continuation', 'full', 'ccf14cf4615d41134c81a7de85236356a385886e76c0439172d63b2a9070b70f'],
-      ['continuation', 'essential', 'd8ae27662e47861899b1dbdbf47c11e8fa7b80bc47fcc4108623648dd2cd1200'],
+      ['plan', 'full', 'f1a8348e02b8d1ee7e841fcee37b0c4df1e247a074da5f006d45cdd1c14ea26f'],
+      ['plan', 'essential', '15a8c8dab3050fb7560fff4e95e1be7388c96398a211792f3053883160a79e0c'],
+      ['critical-path', 'full', '8a4773634534fb8b64f4aa581cd911119acd16b057289c3d4ac911663e5b3e83'],
+      ['critical-path', 'essential', '1eed30c0a86496c11d5210d7c238ed61c16e1a4d84bf13b928f6ca63ae5554ec'],
+      ['continuation', 'full', '18f57ad2f08e2f00fcfcb3d6b82e43cb5ae6507a4e4f8373df107979aa073d0e'],
+      ['continuation', 'essential', 'dc606ec859a340eefb89bc4ec210a738c4720e07a441a37fdc73d0efca90aa55'],
     ];
     for (const [scheduler, context, digest] of original) {
       const plan = { scheduler, context, custom: [] };
@@ -29,10 +30,10 @@ describe('one frozen identity for executable research modules and the optional w
       expect(solverIdentityMethodDigest(configuredResearchModuleIdentity(plan).identity, 'cooperative')).toBe(digest);
     }
     const advised: ['cooperative' | 'independent', number, string][] = [
-      ['cooperative', 1, '7e5902522d8e45c0164dc661da844a1baf6197c61bcd60ad91b0cb507a0df491'],
-      ['cooperative', 4, 'ff31f358d14d8a21838184af85b17c239821268eb553f8b1c9fcb35ce6f3b290'],
-      ['independent', 1, 'e804f7e426b39731202487d3f7661771dd3768e6e63659206688e5ecd978ae90'],
-      ['independent', 4, 'e804f7e426b39731202487d3f7661771dd3768e6e63659206688e5ecd978ae90'],
+      ['cooperative', 1, '9708cc4933aaa77bff247f93950f915051067e2a0c108002db7fe5d782a68836'],
+      ['cooperative', 4, '9b02976c9362352b2d9279a16f042a46c11b42b8ee5bb8c07eaa177504257bb0'],
+      ['independent', 1, 'ddd11acbefda2ac21d26835864fe13941b7446bb9433e6792f1b45f7fceadc94'],
+      ['independent', 4, 'ddd11acbefda2ac21d26835864fe13941b7446bb9433e6792f1b45f7fceadc94'],
     ];
     for (const [coordination, workers, digest] of advised) {
       const plan: ResearchModulePlan = { scheduler: 'continuation', context: 'essential', custom };

@@ -9,10 +9,15 @@ import { parseProofRoutes, type ProofRoute } from './proofRoutes';
 import type { CapacityExploration } from './capacityExploration';
 import type { ResearchBasis, ResearchRecord } from './researchRecords';
 import { expandTaskFamilies, type TaskFamily } from './taskFamilies';
+import type { researchSourceKinds } from './researchReferences';
 
 export type CooperativeTask = Readonly<{ id: string; kind: 'research' | 'sketch' | 'lemma' | 'goal'; objective: string;
   dependsOn: readonly string[]; revision: number; proofPath?: string; theoremName?: string; type?: string;
   groupId?: string; sharing?: 'group' | 'problem'; status?: 'active' | 'paused' | 'stopped'; ownerId?: string; premises?: readonly string[];
+  /** Initial scaffold preference; an idle generalist may take unstarted work while this peer is busy. */
+  preferredOwnerId?: string;
+  /** Tool/source focus for an advisory investigation; this is not a separate agent role. */
+  researchSource?: typeof researchSourceKinds[number];
   conditional?: boolean; statementReview?: boolean; informalStatement?: string;
   /** Blueprint prose: the intended informal argument and its literature sources. Guidance only, never a premise. */
   informalProof?: string; citations?: readonly string[];
@@ -61,7 +66,7 @@ export type CooperativeAction = { kind: 'lead' | 'assemble'; seedCommit: string;
   { kind: 'review'; seedCommit: string; sourceDigest: string; assignmentId?: string } | { kind: 'task'; assignment: TaskAssignment; task: CooperativeTask } | StatementAction;
 
 export const taskVersion = (task: CooperativeTask) => {
-  const { status: _status, ownerId: _owner, statementReview: _review, informalStatement: _intent,
+  const { status: _status, ownerId: _owner, preferredOwnerId: _preferredOwner, statementReview: _review, informalStatement: _intent,
     informalProof: _proof, citations: _citations, ...mathematics } = task;
   return mathDigest(canonicalMathJson(mathematics));
 };
@@ -241,6 +246,8 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
       task.citations !== undefined && (!Array.isArray(task.citations) || !task.citations.length || task.citations.length > MAX_CITATIONS ||
         task.citations.some((item: unknown) => typeof item !== 'string' || !item.trim() || item.length > MAX_CITATION_CHARS)) ? 'citations' :
       task.ownerId !== undefined && !validId(task.ownerId) ? 'ownerId' :
+      task.preferredOwnerId !== undefined && (!validId(task.preferredOwnerId) || task.kind !== 'goal' || task.ownerId !== undefined) ? 'preferredOwnerId' :
+      task.researchSource !== undefined && (!isAdvisoryTask(task) || !['mathlib', 'verified-library', 'public-literature'].includes(task.researchSource)) ? 'researchSource' :
       task.premises !== undefined && (!Array.isArray(task.premises) ||
         task.premises.some((premise: unknown) => typeof premise !== 'string')) ? 'premises' :
       task.declaration !== undefined && (task.declaration !== 'definition' || task.kind !== 'lemma' ||
@@ -277,7 +284,7 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
       revision: task.revision ?? 0, ...(isAdvisoryTask(task) ? {} : { proofPath: task.proofPath, theoremName: task.theoremName }),
       ...(task.kind === 'lemma' ? { type: task.type } : {}),
       ...optionalFields(task, ['conditional', 'statementReview', 'informalStatement', 'informalProof', 'citations', 'reviewScope', 'status',
-        'ownerId', 'premises', 'groupId', 'declaration', 'family', 'familyMember']),
+        'ownerId', 'preferredOwnerId', 'researchSource', 'premises', 'groupId', 'declaration', 'family', 'familyMember']),
       ...(task.sharing === undefined ? groups.length > 1 ? { sharing: 'group' } : {} : { sharing: task.sharing }) };
   });
   const duplicateId = tasks.find((task, index) => tasks.findIndex(item => item.id === task.id) !== index);

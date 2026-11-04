@@ -48,14 +48,22 @@ export async function showChat(page: Page) {
     await page.locator('body[data-view="draft"]').waitFor({ state: 'attached' });
   }
   await closeHistory(page);
-  if (!historyDocked(page)) await page.locator('#mobile-compose').click();
+  // These helpers exercise the optional Lean editor; natural-language onboarding has its own suite.
+  if (await page.locator('body[data-entry="natural"]').count()) await page.locator('#entry-lean').click();
+  if (await page.locator('#mobile-compose').isVisible()) await page.locator('#mobile-compose').click();
+  if (await page.locator('#close-draft-preview').isVisible()) await page.locator('#close-draft-preview').click();
+  await page.locator('.lean-input-options').evaluate(node => { (node as HTMLDetailsElement).open = true; });
+  await page.locator('#proof-instructions').evaluate(node => { (node as HTMLDetailsElement).open = true; });
 }
 
 /** The selected run, or the draft preview on the new-research page (its 预览 tab on phones). */
 export async function showArtifacts(page: Page) {
   await closeSettings(page);
   await closeHistory(page);
-  if (!historyDocked(page) && await page.locator('body[data-view="draft"]').count()) await page.locator('#mobile-runs').click();
+  if (await page.locator('body[data-view="run"]').count() && !await page.locator('#runs-panel').isVisible())
+    await page.locator('[data-research-artifact="roadmap"]').click();
+  else if (await page.locator('body[data-view="draft"]').count() && await page.locator('#open-draft-preview').isVisible())
+    await page.locator('#open-draft-preview').click();
 }
 
 export async function openSettings(page: Page) {
@@ -73,10 +81,20 @@ export async function withSettings<T>(page: Page, action: () => Promise<T>): Pro
 }
 
 export async function fillConfig(page: Page, id: string, value: string) {
+  if (['source', 'environment', 'template'].includes(id)) {
+    await showChat(page);
+    await page.locator(`#${id}`).fill(value);
+    return;
+  }
   await withSettings(page, () => page.locator(`#${id}`).fill(value));
 }
 
 export async function selectConfig(page: Page, id: string, value: string) {
+  if (['source', 'environment', 'template'].includes(id)) {
+    await showChat(page);
+    await page.locator(`#${id}`).selectOption(value);
+    return;
+  }
   await withSettings(page, () => page.locator(`#${id}`).selectOption(value));
 }
 
@@ -86,11 +104,13 @@ export async function openHistory(page: Page) {
   if (historyDocked(page)) {
     if (await page.locator('body[data-history-collapsed="true"]').count()) await page.locator('#open-history').click();
     await page.locator('#history-sidebar .run-history').waitFor();
-    return;
+  } else if (!await page.locator('#history-dialog[open]').count()) {
+    await page.locator('#open-history').click();
+    await page.locator('#history-dialog[open]').waitFor();
   }
-  if (await page.locator('#history-dialog[open]').count()) return;
-  await page.locator('#open-history').click();
-  await page.locator('#history-dialog[open]').waitFor();
+  // Historical proof tasks live below conversation history in a collapsed disclosure.
+  const tasks = page.locator('.chat-task-history:not([open]) > summary');
+  if (await tasks.count()) await tasks.click();
 }
 
 export async function refreshHistory(page: Page) {
@@ -110,6 +130,7 @@ export async function selectHistoryRun(page: Page, id: string, tab?: string) {
 }
 
 export async function openTab(page: Page, tab: string) {
+  await showArtifacts(page);
   if (await page.locator(`#detail-tab-${tab}[aria-selected="true"]`).count()) return;
   await page.locator(`#detail-tab-${tab}`).click();
   await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor({ state: 'attached' });
@@ -119,6 +140,8 @@ export async function openTab(page: Page, tab: string) {
 export async function newResearch(page: Page) {
   await showChat(page);
   await page.locator('#new-research').click();
+  await page.locator('#entry-lean').click();
+  await page.locator('#proof-instructions').evaluate(node => { (node as HTMLDetailsElement).open = true; });
 }
 
 /** Opens the ⋯ menu in the run header, where the identifier, modules, download and deletion live. */

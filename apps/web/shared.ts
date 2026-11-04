@@ -57,8 +57,11 @@ export type WebRunInput = {
   /** Hold every Agent after the first plan until the person who started the run approves it. */
   planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
-  knowledgeDigest?: string;
+  /** Omitted: choose the owner's latest reusable catalog; null: explicitly use no history. */
+  knowledgeDigest?: string | null;
   continueFrom?: WebContinuation;
+  /** Owned verified evidence, accepted manually or through an explicitly requested automatic solve workflow. */
+  formalizationId?: string;
 };
 /**
  * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
@@ -126,6 +129,8 @@ export type WebRun = {
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
   continueFrom?: WebContinuation;
+  formalizationId?: string;
+  formalization?: { id: string; evidenceSha256: string; original: string; confirmedAt: string; confirmation?: 'automatic' | 'manual' };
   observation?: WebObservation;
   archives?: WebArchive[];
   knowledgeCatalogDigest?: string;
@@ -150,7 +155,8 @@ export type WebSession = {
   /** `completionEmail: false` means the account turned off the mail sent when one of its runs ends; absent means on. */
   /** `serverKeys` lists the providers whose key the server fills in for this admin account when the field is left empty. */
   /** `keyVault` means this account may save its own keys; `savedKeys` names them by provider and last four characters. */
-  account?: { email: string; admin?: boolean; completionEmail?: boolean; serverKeys?: string[]; keyVault?: boolean; savedKeys?: WebSavedKey[] };
+  account?: { email: string; admin?: boolean; completionEmail?: boolean; passwordSet?: boolean; passwordResetAllowed?: boolean;
+    serverKeys?: string[]; keyVault?: boolean; savedKeys?: WebSavedKey[] };
   providers: WebProvider[];
   environments: WebEnvironmentOption[];
   templates: WebTemplate[];
@@ -187,6 +193,8 @@ export type WebProofOutlineDeclaration = {
 export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
 export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown;
+  /** Validated server-side artifact; never supplied directly by the browser. */
+  formalization?: unknown;
   /** The saved file of `input.continueFrom`, read by the server from the account's own run. */
   continuation?: WebContinuation & { file: string; source: string } };
 /**

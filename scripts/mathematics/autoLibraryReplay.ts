@@ -52,14 +52,20 @@ const SOLUTION = 'import Submission.Library.Auto.Quadruple\n\n' +
   'theorem replay_target (n : Nat) : n + n + (n + n) = 4 * n := by\n  exact TheoremOS.Auto.Quadruple.quadruple_eq n\n';
 
 const module = (lean: string, reason: string): Omit<AutoLibraryPlan, 'inputDigest'> => ({ decision: 'module', reason, name: 'Quadruple',
-  summary: 'Quadrupling natural numbers as two doublings, with its closed form and additivity.', sources: ['Peano arithmetic (standard)'], lean });
+  summary: 'Quadrupling natural numbers as two doublings, with its closed form and additivity.', sources: ['Peano arithmetic (standard)'], lean,
+  target: 'replay_target', application: 'Apply TheoremOS.Auto.Quadruple.quadruple_eq to the consumer parameter n.', remaining: [],
+  consumerApplication: { declaration: 'TheoremOS.Auto.Quadruple.quadruple_eq', application: {
+    expression: 'TheoremOS.Auto.Quadruple.quadruple_eq', expectedType: '∀ n : Nat, n + n + (n + n) = 4 * n',
+    context: { file: 'Submission.lean', declaration: 'replay_target' }, remainingGoals: [],
+  } } });
 /** Preset planner outputs by module and round: a host rejection, a Lean rejection, an unproved round, then the module. */
 const PLANS: Record<string, Omit<AutoLibraryPlan, 'inputDigest'>> = {
   '0/1': module(QUADRUPLE.replace('namespace TheoremOS', 'notation "𝟜" => 4\n\nnamespace TheoremOS'), 'global notation (host rejects it)'),
   '0/2': module(QUADRUPLE.replace('double (double n)', 'doubel (double n)'), 'misspelled definition (Lean rejects it)'),
   '0/3': module(QUADRUPLE, 'the replay solver proves nothing in this round'),
   '0/4': module(QUADRUPLE, 'the replay solver proves both theorems'),
-  '1/1': { decision: 'none', reason: 'the published module is enough', name: null, summary: null, sources: null, lean: null },
+  '1/1': { decision: 'none', reason: 'the published module is enough', name: null, summary: null, sources: null, lean: null,
+    target: null, application: null, remaining: null },
 };
 
 type Seen = { module: number; round: number; feedback: string | null; library: string[]; taken: string[] };
@@ -124,6 +130,9 @@ export async function replayAutoLibrary(directory: string, root: string) {
   const outcomes = summary.modules.map(item => item.rounds.map(round => round.outcome).join(','));
   expect(summary.status === 'built' && summary.published.join() === 'Quadruple', `build ${summary.status} ${summary.error ?? ''}`);
   expect(outcomes.join('|') === 'rejected,statement_failed,no_progress,published|none', `outcomes ${outcomes.join('|')}`);
+  const application = summary.modules[0]?.rounds.at(-1)?.applicationCheck?.check;
+  expect(application?.status === 'elaborated' && application.selectedDeclarationUsed === true && application.proofAcceptance === 'not-assessed',
+    `consumer application ${application?.status}: ${application?.reason}`);
   const feedback = (round: number) => seen.find(item => item.module === 0 && item.round === round)?.feedback ?? '';
   expect(feedback(2).includes('notation must be local or scoped'), 'round 2 sees the host rejection');
   expect(/doubel/u.test(feedback(3)), 'round 3 sees the Lean error');

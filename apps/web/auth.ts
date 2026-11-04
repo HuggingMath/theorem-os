@@ -21,6 +21,12 @@ export class WebAuthError extends Error {
 }
 
 const codeTtlMs = 10 * 60_000, captchaTtlMs = 5 * 60_000, resendAfterMs = 60_000;
+type PasswordRecord = { algorithm: 'scrypt'; salt: string; digest: string };
+const derivePassword = (password: string, salt: Buffer) => new Promise<Buffer>((resolve, reject) =>
+  crypto.scrypt(password, salt, 64, { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
+    (error, key) => error ? reject(error) : resolve(key)));
+const validPassword = (value: unknown): value is string =>
+  typeof value === 'string' && value.length >= 12 && Buffer.byteLength(value, 'utf8') <= 256;
 const emailPattern = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u;
 export const normalizeEmail = (value: unknown) => {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -184,6 +190,42 @@ export class WebAuth {
     return account;
   }
   getAccount(email: string): WebAccount | undefined { return this.storage.getRecord(this.accountPath(email)); }
+  private passwordPath(email: string) { return ['passwords', this.accountPath(email)[1]!]; }
+  private passwordRecord(email: string): PasswordRecord | undefined {
+    const record = this.storage.getRecord<PasswordRecord>(this.passwordPath(email));
+    return record?.algorithm === 'scrypt' && /^[a-f0-9]{32}$/u.test(record.salt) && /^[a-f0-9]{128}$/u.test(record.digest)
+      ? record : undefined;
+  }
+  hasPassword(email: string): boolean { return Boolean(this.passwordRecord(email)); }
+  private async matchesPassword(value: string, record?: PasswordRecord): Promise<boolean> {
+    const salt = record ? Buffer.from(record.salt, 'hex') : Buffer.alloc(16);
+    const expected = record ? Buffer.from(record.digest, 'hex') : Buffer.alloc(64);
+    const actual = await derivePassword(value, salt);
+    return Boolean(record) && crypto.timingSafeEqual(actual, expected);
+  }
+  async loginPassword(ip: string, body: { email?: unknown; password?: unknown }): Promise<WebAccount> {
+    const email = normalizeEmail(body.email);
+    if (!this.allow('password-ip:' + ip, 20, 60 * 60_000) || !this.allow('password-email:' + email, 5, 60 * 60_000))
+      throw new WebAuthError(429, '密码尝试过多，请一小时后再试，或使用邮箱验证码登录。');
+    if (typeof body.password !== 'string' || Buffer.byteLength(body.password, 'utf8') > 256)
+      throw new WebAuthError(401, '邮箱或密码不正确。');
+    const record = this.passwordRecord(email);
+    const matches = await this.matchesPassword(body.password, record);
+    const account = this.getAccount(email);
+    if (!matches || !account || !this.allowed(email)) throw new WebAuthError(401, '邮箱或密码不正确。');
+    return account;
+  }
+  async setPassword(email: string, next: unknown, current: unknown, verifiedByEmail: boolean) {
+    if (!this.getAccount(email)) throw new WebAuthError(404, '账号不存在。');
+    if (!validPassword(next)) throw new WebAuthError(400, '密码至少 12 位且不超过 256 字节。');
+    if (!this.allow('password-change:' + email, 5, 60 * 60_000)) throw new WebAuthError(429, '密码修改过于频繁，请一小时后再试。');
+    const record = this.passwordRecord(email);
+    if (!verifiedByEmail && (!record || typeof current !== 'string' || !(await this.matchesPassword(current, record))))
+      throw new WebAuthError(403, '请输入当前密码；忘记密码请用邮箱验证码重新登录后设置。');
+    const salt = crypto.randomBytes(16);
+    const digest = await derivePassword(next, salt);
+    this.storage.saveRecord(this.passwordPath(email), { algorithm: 'scrypt', salt: salt.toString('hex'), digest: digest.toString('hex') } satisfies PasswordRecord);
+  }
   /** Every account record; the funnel report and run milestones read these (a closed beta keeps the list short). */
   listAccounts(): WebAccount[] {
     return this.storage.listRecords(['accounts']).filter(file => /^[a-f0-9]{64}\.json$/u.test(file))
@@ -206,7 +248,7 @@ export class WebAuth {
     this.storage.saveRecord(this.accountPath(email), enabled ? rest : { ...rest, completionEmail: false });
   }
   async sendCompletion(to: string, message: { subject: string; text: string }) { await this.mailer({ to, ...message }); }
-  deleteAccount(email: string) { this.storage.deleteRecord(this.accountPath(email)); this.codes.delete(email); }
+  deleteAccount(email: string) { this.storage.deleteRecord(this.accountPath(email)); this.storage.deleteRecord(this.passwordPath(email)); this.codes.delete(email); }
 }
 
 export const allowlistFile = (dataRoot?: string) => dataRoot ? path.join(dataRoot, 'allowlist.txt') : undefined;

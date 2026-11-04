@@ -1,5 +1,6 @@
 import { isAdvisoryTask, isFeasibilityReview, taskVersion, type CooperativeAction, type TaskRecord } from '../tasks';
 import { contextTaskConsumers, type TaskConsumerContext } from '../taskConsumers';
+import { researchSourceContract } from '../researchReferences';
 
 const finiteWorkGuidance = 'A finite range of target values is not an enumerable proof task while it still quantifies over an infinite family of objects. ' +
   'State the finite reduction or a uniform argument before proposing enumeration.';
@@ -14,6 +15,8 @@ const planningDeliveryGuidance = 'For each new parallel task, use objective to s
   'Keep unresolved mathematical questions as scoped research; no task is required merely to occupy an idle worker. ' + finiteWorkGuidance;
 const researchDeliveryGuidance = 'As soon as a useful helper or glue step has an exact interface and a concrete implementation method, ' +
   'publish it promptly in lemmaRequests with a full closed Lean type and actual typed input dependencies. ' +
+  'When using a source, save sourceUses with its kind, exact reference and locator, full assumptions, definition adaptation, ' +
+  'visible consumer taskId/taskDigest, related lemmaRequestIds and remaining premises. Search the installed catalog before requesting a new dependency. ' +
   'In its objective, state the distinct scope, first construction or Lean step, and intended consumer with the application back to it. ' +
   'Name the nearest consumer task/declaration and its remaining premises; include the typed glue consumer as a sibling lemmaRequest when that step is implementable. ' +
   'Record the known typed inputs and consumers; an unrecorded consumer is a question for Lead, not an invented proof edge. ' +
@@ -59,5 +62,7 @@ export function cooperativeWorkContract(action: CooperativeAction, tasks: readon
     ...(action.kind === 'task' ? { plannedConsumers: contextTaskConsumers(action.task, tasks, context)
       .map(consumer => consumer.task.id) } : {}),
     ...(exploration ? { capacityExploration: exploration } : {}),
+    ...(action.kind === 'task' && (isAdvisoryTask(action.task) || exploration)
+      ? { researchSources: researchSourceContract(action.task.researchSource) } : {}),
   };
 }

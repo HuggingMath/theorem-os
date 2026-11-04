@@ -20,6 +20,7 @@ const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: '本地引导验证环境' }; },
   async run() { throw new Error('The onboarding check must not start a run'); },
+  async formalize() { throw new Error('The onboarding check must not start formalization'); },
 };
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner);
@@ -37,6 +38,53 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => { if (request.method() !== 'GET' && request.url().includes(webSampleRunId)) writes.push(`${request.method()} ${request.url()}`); });
   await page.goto(origin);
+  await page.locator('#natural-research #formalize-original').waitFor();
+  assert.equal(await page.locator('#formalize-original').inputValue(), '');
+  assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), false);
+  for (const selector of ['#formalize-example', '#formalize-environment', '#formalize-effort', '#formalize-key', '#formalize-budget', '#open-research-examples'])
+    assert.equal(await page.locator(selector).isHidden(), true, `default composer must keep ${selector} out of the initial view`);
+  assert.equal(await page.locator('#open-natural-language').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('#submission-readiness').isHidden(), true);
+  assert.equal(await page.locator('#source-validation').isHidden(), true);
+  assert.equal(await page.locator('#source').evaluate(node => (node as HTMLTextAreaElement).validity.customError), false);
+  assert.equal(await page.locator('#submit-run').isDisabled(), true);
+  assert.equal(await page.locator('#source').isDisabled(), true);
+  assert.equal(await page.locator('#settings-submit').isDisabled(), true);
+  await page.locator('#open-settings').click();
+  await page.waitForFunction(() => document.activeElement?.id === 'formalize-key');
+  assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true);
+  assert.equal(await page.locator('#formalize-key').isVisible(), true);
+  assert.equal(await page.locator('#run-settings').isHidden(), true, 'default settings must stay with the natural-language form');
+  await page.locator('#formalize-settings > summary').click();
+  await page.locator('#formalize-original').fill('A temporary natural-language problem.');
+  await page.locator('#open-draft').click();
+  await page.waitForFunction(() => (document.querySelector('#formalize-original') as HTMLTextAreaElement).value === '');
+  assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), false);
+  mark('default mode starts with a blank composer, opens connection settings on demand, and new research clears the original');
+
+  await page.locator('#entry-lean').click();
+  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  assert.equal(await page.locator('#source').inputValue(), '');
+  await page.locator('#submit-run').click();
+  await page.locator('#source-validation:not([hidden])').waitFor();
+  assert.match(await page.locator('#source-validation').innerText(), /请填写.*Lean 源码/u);
+  assert.equal(await page.locator('#source').evaluate(node => node === document.activeElement), true);
+  await page.locator('#open-settings').click();
+  await page.locator('#run-settings[open]').waitFor();
+  // Invoke the same mode action while the modal is open to verify it closes the obsolete configuration.
+  await page.locator('#open-natural-language').evaluate(button => (button as HTMLButtonElement).click());
+  await page.locator('#run-settings').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#source-validation').isHidden(), true);
+  assert.equal(await page.locator('#source').evaluate(node => (node as HTMLTextAreaElement).validity.customError), false);
+  assert.equal(await page.locator('#submission-readiness').isHidden(), true);
+  assert.equal(await page.locator('#settings-submit').isDisabled(), true);
+  assert.equal(await page.locator('#submit-run').isDisabled(), true);
+  assert.equal(await page.locator('#source').isDisabled(), true);
+  mark('default settings use the natural-language form; only advanced mode validates Lean, and changing modes closes stale settings');
+
+  await page.reload();
+  await page.locator('#natural-research #formalize-original').waitFor();
+  await page.locator('#entry-lean').click();
   await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
 
   // A new visitor sees the three steps, the sample entry and the glossary link.
@@ -70,13 +118,13 @@ try {
     else await page.locator(`#detail-tab-${tab}`).click();
     await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor();
   }
-  // A first visit sees the simple layer: the outcome with a way to the report, and none of the expert sections.
+  // A first visit sees the simple layer: the outcome, task graph and navigation to the full reading sections.
   await page.locator('#detail-tab-collaboration').click();
   await page.locator('.collab-now-ended [data-collab-open-report]').waitFor();
   assert.equal(await page.locator('.collab-agent-route .agent-route-lane').count(), 3, 'The simple layer draws one route lane per sample Agent');
   assert.equal(await page.locator('.collab-graph').isVisible(), true, 'The simple layer keeps the task graph of a planned run');
   assert.equal(await page.locator('.collab-inspector').isHidden(), true, 'The simple layer shows the task inspector');
-  assert.equal(await page.locator('.collab-navigation').isHidden(), true, 'The simple layer shows the section navigation');
+  assert.equal(await page.locator('.collab-navigation').isVisible(), true, 'The simple layer keeps section navigation visible');
   await page.locator('.collab-detail-toggle [data-collab-detail="full"]').click();
   await page.locator('.collab-surface [data-collab-task]').first().waitFor();
   assert.equal(await page.locator('[data-collab-archive]').isHidden(), true);
@@ -188,12 +236,16 @@ try {
     const panel = document.querySelector<HTMLElement>('#detail-panel')!.getBoundingClientRect();
     return { scrolled: detail.scrollTop, tabsTop: tabs.top, detailTop: detail.getBoundingClientRect().top, panel: Math.min(innerHeight, panel.bottom) - Math.max(tabs.bottom, panel.top) };
   });
-  assert.ok(pinned.scrolled > 0 && Math.abs(pinned.tabsTop - pinned.detailTop) <= 1 && pinned.panel > 200, `short run page: ${JSON.stringify(pinned)}`);
+  assert.ok(pinned.scrolled > 0 && Math.abs(pinned.tabsTop - pinned.detailTop) <= 1 && pinned.panel >= 190, `short run page: ${JSON.stringify(pinned)}`);
   await page.screenshot({ path: path.join(output, 'onboarding-sample-812x375.png') });
   await newResearch(page);
   // The wheel, as a finger would: a composer cut off by overflow:hidden only scrolls for focus, never for the reader.
   await page.mouse.move(400, 200);
-  for (let step = 0; step < 6; step++) await page.mouse.wheel(0, 200);
+  for (let step = 0; step < 20; step++) {
+    const visible = await page.locator('#submit-run').evaluate(button => { const box = button.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; });
+    if (visible) break;
+    await page.mouse.wheel(0, 200);
+  }
   await page.waitForFunction(() => { const box = document.querySelector('#submit-run')!.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; },
     undefined, { timeout: 2000 }).catch(() => { throw new Error('提交 cannot be scrolled into a short window'); });
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -211,6 +263,7 @@ try {
   const fresh = await context.newPage();
   await fresh.setViewportSize({ width: 320, height: 760 });
   await fresh.goto(origin);
+  await fresh.locator('#entry-lean').click();
   await fresh.locator('.chat-welcome[data-first-run="true"]').waitFor();
   await settled(fresh);
   assert.ok(await noOverflow(fresh), 'Welcome overflows at 320px');

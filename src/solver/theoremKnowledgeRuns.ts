@@ -6,7 +6,7 @@ import { readSolverRunState, type SolverRunState } from './archive';
 import { recordedTaskProofStatus } from './progress';
 import { isAdvisoryTask, isDefinitionTask, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 import { allowedKnowledgeFile, locateKnowledgeDeclaration, type KnowledgeCandidate, type KnowledgeImportResult } from './theoremKnowledge';
-import type { DeliveryRecord } from './deliveries';
+import { deliveryFinding, type DeliveryRecord } from './deliveries';
 import { prepareResearchDelivery, type ResearchAdmissionScope } from './researchAdmission';
 import { buildKnowledgeRouteFindings, type KnowledgeRouteContract, type KnowledgeRouteFindingCandidate } from './theoremKnowledgeFindings';
 
@@ -122,19 +122,25 @@ function routeContract(task: CooperativeTask, state: SolverRunState): KnowledgeR
   return error('finding_contract_missing');
 }
 
-function runFinding(state: SolverRunState, node: TaskRecord, delivery: DeliveryRecord,
+function runFinding(state: SolverRunState, node: TaskRecord, delivery: DeliveryRecord, findingText: string,
   stateFile: string, stateDigest: string): KnowledgeRouteFindingCandidate {
   const task = node.task;
   if (!publicResearchTask(task, state)) return error('finding_private');
-  if (!isAdvisoryTask(task) || typeof node.finding !== 'string' || node.status !== 'completed' ||
+  if (isAdvisoryTask(task) && node.status !== 'completed' ||
       delivery.kind !== 'research' || !['advisory', 'conditional'].includes(delivery.status) ||
       delivery.taskId !== task.id || delivery.taskDigest !== taskVersion(task) || !delivery.commit || !oid.test(delivery.commit) ||
-      delivery.findingDigest !== mathDigest(node.finding)) return error('finding_delivery_mismatch');
-  const finding = JSON.parse(node.finding);
+      delivery.findingDigest !== mathDigest(findingText)) return error('finding_delivery_mismatch');
+  const finding = JSON.parse(findingText);
   if (!finding || finding.taskId !== task.id || !['supporting', 'refuted', 'inconclusive'].includes(finding.conclusion) ||
       typeof finding.summary !== 'string' || !finding.summary.trim()) return error('finding_invalid');
   const records = [...(state.cooperation?.tasks ?? []), ...(state.cooperation?.history ?? [])];
   const gap = delivery.mathematicalGap, gapScope = delivery.mathematicalGapScope;
+  const researchRecord = delivery.researchRecord;
+  if (researchRecord && (researchRecord.taskId !== task.id || researchRecord.taskDigest !== taskVersion(task) ||
+      researchRecord.commit !== delivery.commit || researchRecord.findingDigest !== delivery.findingDigest ||
+      researchRecord.basis.problemReceiptDigest !== state.problem.receiptDigest ||
+      gapScope && researchRecord.basis.environmentDigest !== gapScope.environmentDigest)) return error('finding_record_mismatch');
+  const environmentDigest = gapScope?.environmentDigest ?? researchRecord?.basis.environmentDigest ?? state.environmentDigest;
   if (gap || gapScope || finding.mathematicalGap !== undefined) {
     if (!gap || !gapScope || canonicalMathJson(gap) !== canonicalMathJson(finding.mathematicalGap) ||
         gapScope.problemReceiptDigest !== state.problem.receiptDigest || gapScope.source.id !== task.id ||
@@ -159,8 +165,7 @@ function runFinding(state: SolverRunState, node: TaskRecord, delivery: DeliveryR
   // Historical notes can omit taskDigest, but cannot override the frozen task identity.
   const admissionScope: ResearchAdmissionScope = { source: task,
     assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: delivery.producer, seedCommit: delivery.commit },
-    identity: { problemReceiptDigest: state.problem.receiptDigest,
-      environmentDigest: gapScope?.environmentDigest ?? state.environmentDigest },
+    identity: { problemReceiptDigest: state.problem.receiptDigest, environmentDigest },
     tasks: [...records.map(record => ({ status: 'completed' as const, attempts: 0, ...record })),
       ...dependencies.map(task => ({ task, status: 'completed' as const, attempts: 0 })),
       ...(gapScope ? [{ task: gapScope.consumer, status: 'completed' as const, attempts: 0 }] : []), node],
@@ -180,9 +185,9 @@ function runFinding(state: SolverRunState, node: TaskRecord, delivery: DeliveryR
   })))];
   const candidate: KnowledgeRouteFindingCandidate = {
     evidence: 'recorded-advisory-not-replayed', acceptance: 'not-assessed',
-    conclusion: finding.conclusion, summary: finding.summary, finding: node.finding, notes,
+    conclusion: finding.conclusion, summary: finding.summary, finding: findingText, notes,
     scope: { problemId: state.problem.contract.problemId, problemReceiptDigest: state.problem.receiptDigest,
-      environmentDigest: gapScope?.environmentDigest ?? state.environmentDigest, source: routeContract(task, state),
+      environmentDigest, source: routeContract(task, state),
       ...(delivery.mathematicalGapScope ? { originalConsumer: routeContract(delivery.mathematicalGapScope.consumer, state) } : {}),
       dependencies: dependencies.map(task => routeContract(task, state)).sort((a, b) => canonicalMathJson(a).localeCompare(canonicalMathJson(b))) },
     evidenceRefs: [...delivery.evidenceRefs],
@@ -233,9 +238,27 @@ export function importKnowledgeRuns(stateFiles: readonly string[], options: { in
         item.taskId === record.task.id && item.taskDigest === taskVersion(record.task) && item.findingDigest === mathDigest(record.finding!));
       try {
         if (!delivery) error('finding_delivery_missing');
-        result.findings!.push(runFinding(state, node, delivery, source, stateDigest));
+        result.findings!.push(runFinding(state, node, delivery, record.finding!, source, stateDigest));
       } catch (failure) {
         result.skipped.push({ source, name: record.task.id,
+          reason: failure instanceof Error && /^math_knowledge_/u.test(failure.message) ? failure.message : 'math_knowledge_run_finding_invalid' });
+      }
+    }
+    if (options.includeFindings) for (const delivery of state.cooperation?.deliveries ?? []) {
+      if (delivery.kind !== 'research') continue;
+      const record = [...(state.cooperation?.tasks ?? []), ...(state.cooperation?.history ?? [])].find(item =>
+        item.task.id === delivery.taskId && taskVersion(item.task) === delivery.taskDigest);
+      if (record && !['lemma', 'goal'].includes(record.task.kind)) continue;
+      if (!record && delivery.finding === undefined) continue;
+      try {
+        if (!record) error('finding_task_missing');
+        // Proof workers publish advisory findings while still running or blocked. Each delivery owns its full text.
+        const finding = deliveryFinding(delivery);
+        if (finding === undefined) error('finding_delivery_mismatch');
+        const node = { status: 'completed', attempts: 0, ...record } as TaskRecord;
+        result.findings!.push(runFinding(state, node, delivery, finding, source, stateDigest));
+      } catch (failure) {
+        result.skipped.push({ source, name: delivery.taskId,
           reason: failure instanceof Error && /^math_knowledge_/u.test(failure.message) ? failure.message : 'math_knowledge_run_finding_invalid' });
       }
     }

@@ -102,10 +102,10 @@ const hidden = (page: Page, selector: string) => page.locator(`${surface} ${sele
 const focused = (page: Page) => page.evaluate(() => { const node = document.activeElement as HTMLElement | null;
   return node?.dataset.collabDetail ?? (node?.hasAttribute('data-inspected-task-heading') ? 'inspected-task' : node?.tagName ?? null); });
 const noXss = (page: Page) => page.evaluate(() => (globalThis as { __layersXss?: number }).__layersXss).then(value => assert.equal(value, undefined));
-const expert = ['.collab-navigation', '.collab-inspector', '.collab-map-tools', '.collab-observation-line', '.collab-research-overview', '.collab-agents', '.collab-deliveries', '[data-collab-records]', '[data-collab-plan]'];
+const expert = ['.collab-inspector', '.collab-map-tools', '.collab-observation-line', '.collab-research-overview', '.collab-reviews', '.collab-agents', '.collab-deliveries', '[data-collab-records]', '.collab-knowledge'];
 
 try {
-  await scenario('a first visit sees progress, the working Agents and guidance, and nothing expert', async h => {
+  await scenario('a first visit keeps navigation and available actions visible while advanced reading stays folded', async h => {
     const { page } = h; await open(h, 'Keep working');
     await page.locator(`${surface} .collab-now-worker`).first().waitFor();
     assert.equal(await page.locator(surface).getAttribute('data-detail'), 'simple');
@@ -115,12 +115,27 @@ try {
     assert.ok(!now.includes('Researcher'), 'idle Agents are counted, not listed');
     assert.ok(!now.includes('prover-1'), 'working Agents are named by role');
     for (const selector of expert) assert.equal(await hidden(page, selector), true, `${selector} is hidden in the simple layer`);
-    for (const selector of ['[data-collab-summary]', '.collab-agent-route', '.collab-graph', '.collab-guidance', '.collab-expand', '[data-collab-refresh]'])
+    for (const selector of ['[data-collab-summary]', '.collab-agent-route', '.collab-graph', '.collab-guidance', '.collab-expand', '[data-collab-refresh]', '.collab-navigation', '[data-collab-plan]', '[data-collab-archive]'])
       assert.equal(await hidden(page, selector), false, `${selector} stays in the simple layer`);
+    assert.equal(await page.locator('[data-collab-plan]').isDisabled(), true, 'editing waits for a recorded plan');
+    assert.equal(await page.locator('[data-collab-archive]').isDisabled(), false, 'an observed connected run can be archived');
+    assert.match(await page.locator('[data-collab-jump="reviews"]').innerText(), /原意与 Lean/);
     assert.equal(await page.locator(`${surface} .collab-detail-toggle [data-collab-detail="simple"]`).getAttribute('aria-pressed'), 'true');
     assert.equal(await page.locator(`${surface} img`).count(), 0); await noXss(page);
     assert.equal(await stored(page), null, 'looking does not store a choice');
     await settled(page); await page.screenshot({ path: path.join(output, 'simple-1440.png') }); screenshots.push('simple-1440.png');
+    await page.locator('#detail-panel').evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await settled(page);
+    assert.equal(await page.locator('[data-collab-jump="knowledge"]').getAttribute('aria-current'), null, 'hidden knowledge does not become the current section at the bottom of the simple view');
+  });
+
+  await scenario('visible navigation opens the saved intent and Lean comparison from the simple layer', async h => {
+    const { page } = h; await open(h, 'Keep working');
+    await page.locator('[data-collab-jump="reviews"]').click();
+    await page.locator(`${surface} .collab-reviews`).waitFor();
+    assert.equal(await page.locator(surface).getAttribute('data-detail'), 'full');
+    assert.equal(await page.locator('[data-review-heading]').evaluate(node => node === document.activeElement), true);
+    assert.match(await page.locator('[data-review-list]').innerText(), /尚无声明审阅记录/);
   });
 
   await scenario('the toggle switches layers in place and the choice survives a reload', async h => {
@@ -156,10 +171,10 @@ try {
     assert.equal(await page.evaluate(() => document.activeElement?.closest('.collab-map') !== null && document.activeElement?.tagName === 'H3'), true, 'focus lands on the task map heading');
   });
 
-  await scenario('an ended run points to the report, and the report opens its stuck task in full', async h => {
+  await scenario('an ended result opens its stuck task in the full collaboration view', async h => {
     const { page } = h; await open(h, 'Stop when stuck');
     const ended = page.locator(`${surface} .collab-now-ended`);
-    await ended.waitFor();
+    await ended.waitFor({ state: 'attached' });
     // The run stopped on its time budget before any acceptance, so the line says that rather than that acceptance failed.
     assert.ok((await ended.innerText()).includes('研究已结束：解题时间用完，没有得到通过验收的完整证明。'));
     for (const selector of ['.collab-now', '.collab-guidance', '[data-collab-refresh]'])
@@ -167,7 +182,7 @@ try {
     const summary = await page.locator(`${surface} [data-collab-summary]`).innerText();
     assert.ok(summary.includes('参与了这次研究') && !summary.includes('实际工作中') && !summary.includes('S3'), 'an ended run counts who took part, without module codes');
     assert.ok(summary.includes('没有验收结果') && !summary.includes('尚未验收通过'), 'a run that stopped before acceptance promises no verdict to come');
-    await ended.getByRole('button', { name: '查看报告' }).click();
+    await page.locator('#detail-tab-result').click();
     // The report is part of 结果; the button opens that tab at the report.
     await page.locator('#detail-panel[data-tab="result"] .report-stuck').waitFor();
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'detail-tab-result');
@@ -175,6 +190,16 @@ try {
     await page.locator('[data-inspected-task-heading]').filter({ hasText: 'bridge' }).waitFor();
     assert.equal(await page.locator(surface).getAttribute('data-detail'), 'full');
     assert.equal(await focused(page), 'inspected-task');
+  });
+
+  await scenario('an ended run keeps guidance history reachable without enabling another submission', async h => {
+    const { page } = h; await open(h, 'Stop when stuck');
+    assert.equal(await hidden(page, '.collab-guidance'), true);
+    await page.locator('[data-collab-jump="guidance"]').click();
+    await page.locator(`${surface} .collab-guidance`).waitFor();
+    assert.equal(await page.locator(surface).getAttribute('data-detail'), 'full');
+    assert.equal(await page.locator('.collab-guidance button[type="submit"]').isDisabled(), true);
+    assert.match(await page.locator('.collab-guidance').innerText(), /运行尚未开始或已结束/);
   });
 
   await scenario('the simple layer reads in English', async h => {
@@ -189,7 +214,7 @@ try {
     const { page } = h; await open(h, 'Keep working');
     await page.locator(`${surface} .collab-now-worker`).first().waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'the simple layer must not widen the document');
-    for (const selector of ['.collab-now', '.collab-now-worker', '.collab-detail-toggle', '.collab-expand']) {
+    for (const selector of ['.collab-now', '.collab-now-worker', '.collab-detail-toggle', '.collab-expand', '.collab-navigation']) {
       const box = await page.locator(`${surface} ${selector}`).first().boundingBox();
       assert.ok(box && box.width > 0 && box.x >= -1 && box.x + box.width <= width + 1, `${selector} must fit ${width}px: ${JSON.stringify(box)}`);
     }

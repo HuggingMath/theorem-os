@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { ArchiveCatalog, ArchiveIndex, ArchiveRecord, ArchiveSource } from './types';
 import { siteRepository } from './site';
+import { campaignRecords } from './campaignCatalog';
 
 const identifier = z.string().regex(/^[a-z0-9_]+$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -262,20 +263,23 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
       },
     });
   }
+  const campaign = campaignRecords(root);
+  records.push(...campaign.records);
   if (new Set(records.map(record => record.id)).size !== records.length) throw new Error('Duplicate archive problem');
   return {
     schema: 'theoremos.public-archive.v1', repository, archiveRevision,
-    snapshotAt: snapshot.captureFinishedAt, records: records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    snapshotAt: [snapshot.captureFinishedAt, campaign.capturedAt ?? ''].sort().at(-1)!, records: records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   };
 }
 
 /** Drop the Lean source text from the bundled index and keep a short statement excerpt for the overview. */
 export function archiveIndex(catalog: ArchiveCatalog): ArchiveIndex {
   return { ...catalog, records: catalog.records.map(record => {
-    const main = record.sources.find(file => file.name === (record.status === 'official_accepted' ? 'Submission.lean' : 'Challenge.lean')) ?? record.sources[0];
+    const main = record.sources.find(file => file.name === (record.status === 'in_progress_not_officially_accepted' ? 'Challenge.lean' : 'Submission.lean')) ?? record.sources[0];
     const lines = main.code.split('\n');
     const start = Math.max(0, lines.findIndex(line => record.declaration && line.startsWith(record.declaration)));
-    return { ...record, excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
+    const { process: _process, ...summary } = record;
+    return { ...summary, excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
   }) };
 }
 /** One script per record, so the archive also loads sources from file:// previews where fetch is unavailable. */

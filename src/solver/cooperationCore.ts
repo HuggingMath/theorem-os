@@ -21,11 +21,13 @@ import { type ProofReferences } from './proofReferences';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { buildProofContinuation } from './progress';
 import { leadResearchInputs } from './contextCompiler';
+import type { ResearchDecision } from './researchDecisions';
 import { recordRouteBlockers, refreshRouteBlockers, validateBlockerProposals } from './routeControl';
 import { parseProofRoutes } from './proofRoutes';
 import { createProofRoutePriorityIndex } from './routePriority';
 import { captureObligationSnapshot, diffObligationProgress } from './obligationProgress';
 import { reviewGoalPaths } from './goalPathReview';
+import { reviewProjectionDependencies } from './projectionDependencyReview';
 import type { GoalPathDecisions } from './goalPathDecisions';
 import { bindMathematicalGap, mathematicalGapVisible } from './mathematicalGaps';
 import { taskConnectionCheckCurrent } from './taskConnections';
@@ -36,6 +38,8 @@ import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, 
 import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type LeadWakeReason } from './leadWakes';
 import { MAX_INVALID_TASK_TRANSITIONS, setTaskStatus, type TaskStatus, type TaskTransitionCause } from './taskLifecycle';
 import { planApprovalStatus } from './planApproval';
+import { answerGoalProgress, GOAL_PROGRESS_REVIEW_MS, observeGoalProgress, resetGoalProgressClock,
+  type GoalProgressDecision } from './goalProgress';
 
 /** Shared cooperation state, scheduling primitives and the per-worker context projection. */
 /** Lead turns that may leave a presented stall unanswered before it is recorded as ignored. */
@@ -82,6 +86,12 @@ export abstract class CooperationCore {
   protected proofDeliveryChecks = new Set<Promise<void>>();
   protected integrationQueue = Promise.resolve();
   protected leadEvidence = new WeakMap<CooperativeAction, string>();
+  protected presentedResearchInputs = new WeakMap<CooperativeAction, { shown: DeliveryRecord[]; total: number }>();
+  protected pendingSourceResearchDecisions = new WeakMap<CooperativeAction, ResearchDecision[]>();
+  private goalProgressTimer?: NodeJS.Timeout;
+  protected goalProgressBudget?: { maxTurns: number; deadline: number };
+  protected presentedGoalProgress = new WeakMap<CooperativeAction, string>();
+  protected goalProgressDecisions = new WeakMap<CooperativeAction, GoalProgressDecision>();
   /** The goal-path stall a Lead dispatch was shown: its digest, goals and the stalled inputs its review listed. */
   protected presentedGoalPathStalls = new WeakMap<CooperativeAction, { digest: string; goalIds: readonly string[]; taskIds: readonly string[] }>();
   /** goalPath answers accepted from a Lead dispatch's publications, in order. */
@@ -112,10 +122,12 @@ export abstract class CooperationCore {
     freshContinuationChecks?: readonly TaskProof[];
     continuousResearch?: boolean;
     modelDispatchAllowed?: () => boolean;
+    goalProgressReviewMs?: number;
     save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
     modules: SolverModules; exclusiveCheck: <T>(check: () => Promise<T>) => Promise<T> }) {
     this.lead = input.workers[0];
     this.archive = input.state.cooperation ??= { tasks: [] };
+    resetGoalProgressClock(this.archive.goalProgress);
     const legacyLeadWakes = !this.archive.leadWakes;
     if (this.archive.leadWakes) reopenLeadWakes(this.archive.leadWakes);
     else this.archive.leadWakes = emptyLeadWakes();
@@ -154,6 +166,56 @@ export abstract class CooperationCore {
   }
   /** Ask the Lead for a decision; the request is saved with the state change that caused it. */
   protected wakeLead(reason: LeadWakeReason) { requestLeadWake(this.archive.leadWakes!, reason); }
+  /** One timer for the next goal review. Busy worker labels and offline time never arm it. */
+  protected refreshGoalProgress(snapshot = this.archive.progressSnapshot) {
+    clearTimeout(this.goalProgressTimer); this.goalProgressTimer = undefined;
+    const now = Date.now(), budget = this.goalProgressBudget;
+    const enabled = !this.stopping && !this.failure && !this.input.signal.aborted && !this.planApprovalPending() &&
+      this.input.modelDispatchAllowed?.() !== false && (!budget || now < budget.deadline && this.input.state.turns < budget.maxTurns);
+    const active = new Set<string>();
+    if (enabled) {
+      for (const [workerId, work] of this.active) if (work.action.kind === 'task' && !work.cancelled &&
+          this.liveWorkers.has(workerId) && this.current(work.action) &&
+          this.input.state.workers?.find(worker => worker.id === workerId)?.recovery?.phase !== 'cooling-down')
+        active.add(work.action.task.id);
+      for (const node of this.preparingTaskTypes.keys()) active.add(node.task.id);
+      for (const node of this.archive.tasks) if (node.assignment && this.deliveryChecks.has(node.assignment.workerId)) active.add(node.task.id);
+    }
+    const observation = observeGoalProgress(this.archive.goalProgress, {
+      problemReceiptDigest: this.input.state.problem.receiptDigest, targets: this.input.state.problem.targets,
+      tasks: this.archive.tasks, snapshot: snapshot ?? captureObligationSnapshot(this.archive.tasks, {
+        groups: this.archive.groups, environmentDigest: this.input.state.environmentDigest, proofRoutes: this.archive.proofRoutes }),
+      proofRoutes: this.archive.proofRoutes, groups: this.archive.groups, activeTaskIds: active, now, intervalMs: this.input.goalProgressReviewMs });
+    this.archive.goalProgress = observation.state;
+    if (observation.resumed.length) this.input.emit('goal_progress_resumed', { goalIds: observation.resumed, acceptance: 'not-assessed' });
+    if (observation.requested) {
+      this.wakeLead('goal-progress-review');
+      this.input.emit('goal_progress_review_requested', { ...observation.state.pending, acceptance: 'not-assessed' });
+    }
+    const retryAt = observation.state.pending?.retryAt;
+    const retryDelay = retryAt !== undefined && retryAt > now ? retryAt - now : undefined;
+    const delay = observation.nextDelayMs === undefined ? retryDelay : Math.min(observation.nextDelayMs, retryDelay ?? Infinity);
+    if (enabled && delay !== undefined) {
+      this.goalProgressTimer = setTimeout(() => { this.goalProgressTimer = undefined; this.changed(); },
+        Math.min(delay, Math.max(1, (budget?.deadline ?? Infinity) - now)));
+      this.goalProgressTimer.unref();
+    }
+    return observation.requested;
+  }
+  protected presentGoalProgressReview(action: CooperativeAction) {
+    const pending = this.archive.goalProgress?.pending;
+    if (!pending) return;
+    this.presentedGoalProgress.set(action, pending.id);
+    pending.retryAt = Date.now() + (this.input.goalProgressReviewMs ?? GOAL_PROGRESS_REVIEW_MS);
+    this.input.emit('goal_progress_review_dispatched', { id: pending.id, goalIds: pending.goalIds });
+    this.refreshGoalProgress();
+  }
+  protected answerGoalProgressReview(action: CooperativeAction) {
+    const decision = this.goalProgressDecisions.get(action), state = this.archive.goalProgress;
+    if (!decision || !state || this.presentedGoalProgress.get(action) !== decision.id || !answerGoalProgress(state, decision)) return;
+    this.input.emit('goal_progress_review_answered', { ...decision, acceptance: 'not-assessed' });
+    this.refreshGoalProgress();
+  }
   /**
    * Record whether some original goal has no frontier input that can run. The condition is recomputed from durable
    * state, so it is not a saved wake-up: a new stall stays owed to the Lead until a turn answers it (answerGoalPathStall)
@@ -189,8 +251,17 @@ export abstract class CooperationCore {
   }
   /** The review a Lead is shown, with candidate ids: the basis for its goalPath answer. */
   protected goalPathReview(candidates = true) {
-    return reviewGoalPaths(this.archive.tasks, { groups: this.archive.groups, proofRoutes: this.archive.proofRoutes,
-      environmentDigest: this.input.state.environmentDigest, candidates });
+    const options = { groups: this.archive.groups, proofRoutes: this.archive.proofRoutes,
+      environmentDigest: this.input.state.environmentDigest };
+    const review = reviewGoalPaths(this.archive.tasks, { ...options, candidates: false });
+    if (!candidates || !review.stalledTaskIds.length) return review;
+    const projectionConnections = reviewProjectionDependencies({ problem: this.input.state.problem,
+      worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit,
+      environmentDigest: this.input.state.environmentDigest, tasks: this.archive.tasks,
+      consumerTaskIds: review.stalledTaskIds,
+      retainedGoals: task => this.dependencies(task).filter(node => node.task.kind === 'goal' && node.status === 'integrated')
+        .map(node => node.task.theoremName!) });
+    return reviewGoalPaths(this.archive.tasks, { ...options, projectionConnections });
   }
   /** What a Lead dispatch is shown of the current stall: the stalled inputs listed in its bounded review. */
   protected presentedGoalPathStall() {
@@ -369,6 +440,7 @@ export abstract class CooperationCore {
       this.archive.progressReceipts = [...(this.archive.progressReceipts ?? []), progress].slice(-64);
       this.input.emit('obligation_progress', { receipt: progress });
     }
+    this.refreshGoalProgress(snapshot);
     const nodes = new Map(this.archive.tasks.map(node => [node.task.id, node]));
     const versions = this.taskVersions();
     const busy = new Map<string, Set<string | undefined>>();
@@ -453,6 +525,7 @@ export abstract class CooperationCore {
           environmentDigest: this.input.state.environmentDigest, proofRoutes: scoped.proofRoutes }),
         frontierFocus: originalGoalFrontierSnapshot(originalGoalTaskFocus(scoped.tasks, scoped.groups, this.input.state.environmentDigest)),
         mathematicalChanges: scoped.progressReceipts?.slice(-16) ?? [],
+        ...(scoped.goalProgress ? { goalProgress: scoped.goalProgress } : {}),
         continuation: buildProofContinuation(scoped.tasks, { groups: scoped.groups, environmentDigest: this.input.state.environmentDigest,
           proofRoutes: scoped.proofRoutes }),
         statements: (scoped.statementReviews ?? []).map(statementReviewSummary),
@@ -478,7 +551,7 @@ export abstract class CooperationCore {
     for (const wake of this.waiters) wake();
     this.waiters.clear();
   }
-  modelBudgetChanged() { this.wake(); }
+  modelBudgetChanged() { this.refreshGoalProgress(); this.input.save(); this.wake(); }
   protected rejectWorkerDelivery(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>,
     submission: string, error: Error): DeliveryReceipt {
     const receipt = rejectedDeliveryReceipt({ assignment: action.assignment, workerId: worker.id,

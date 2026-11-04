@@ -4,6 +4,7 @@ import { parseCooperationPlan, type RouteRecord, type TaskRecord } from '../src/
 import { parseLeadPlan } from '../src/solver/cooperationShared';
 import { applyGoalPathDecisions, MAX_GOAL_PATH_DECLINE_CHARS } from '../src/solver/goalPathDecisions';
 import { reviewGoalPaths } from '../src/solver/goalPathReview';
+import type { ProofRoute } from '../src/solver/proofRoutes';
 import { integratedProof } from './helpers/taskProof';
 
 const problem = {
@@ -18,14 +19,15 @@ const goal = { id: 'goal', kind: 'goal', objective: 'Prove the frozen target.', 
 
 /** An accepted graph goal <- bridge <- core, its records, and the review a Lead dispatch would be shown. */
 function fixture(core: Record<string, unknown> = { status: 'paused' }, options: { extra?: Record<string, unknown>[];
-  groups?: Record<string, unknown>[]; turns?: Record<string, number>; status?: Record<string, TaskRecord['status']>; checked?: string[] } = {}) {
+  groups?: Record<string, unknown>[]; turns?: Record<string, number>; status?: Record<string, TaskRecord['status']>; checked?: string[];
+  proofRoutes?: ProofRoute[] } = {}) {
   const plan = parseCooperationPlan(problem, { tasks: [lemma('core', [], core), lemma('bridge', ['core']), goal, ...options.extra ?? []],
-    ...(options.groups ? { groups: options.groups } : {}) });
+    ...(options.groups ? { groups: options.groups } : {}), ...(options.proofRoutes ? { proofRoutes: options.proofRoutes } : {}) });
   const records: TaskRecord[] = plan.tasks.map(task => ({ task, status: options.status?.[task.id] ?? 'pending', attempts: 0 }));
   for (const id of options.checked ?? []) integratedProof(records.find(item => item.task.id === id)!, { environmentDigest: 'environment' });
   const groups: RouteRecord[] = plan.groups.map(group => ({ group, turns: options.turns?.[group.id] ?? 0 }));
-  const base = { version: 'v1', tasks: plan.tasks, groups: plan.groups };
-  const review = reviewGoalPaths(records, { groups, environmentDigest: 'environment' });
+  const base = { version: 'v1', tasks: plan.tasks, groups: plan.groups, proofRoutes: plan.proofRoutes };
+  const review = reviewGoalPaths(records, { groups, environmentDigest: 'environment', proofRoutes: plan.proofRoutes });
   const parse = (goalPath: unknown, revision: Record<string, unknown> = {}) =>
     parseLeadPlan(problem, { baseVersion: 'v1', ...revision, goalPath }, base, { goalPath: review });
   return { base, review, parse, task: (plan: { tasks: { id: string }[] }, id: string) => plan.tasks.find(task => task.id === id) as Record<string, unknown> };
@@ -95,6 +97,71 @@ describe('goal-path answers in a Lead revision', () => {
       .toEqual([{ id: 'revise:core', action: 'revise', taskId: 'core' }]);
     expect(parse({ adopt: ['decompose:core'] }, { upsert: [{ id: 'bridge', dependsOn: ['core', 'piece'] }, lemma('piece')] })
       .goalPathDecisions!.adopted[0]).toMatchObject({ id: 'decompose:core' });
+  });
+
+  it.each(['revise:core', 'decompose:core'])('rejects labels and counters as adoption of %s', candidate => {
+    const { parse } = fixture({}, { status: { core: 'blocked' } });
+    for (const patch of [{ id: 'core' }, { id: 'core', type: 'True', dependsOn: [] },
+      { id: 'core', objective: 'Try this estimate again.' }, { id: 'core', revision: 1 },
+      { id: 'core', theoremName: 'Submission.renamed_core' }, { id: 'core', ownerId: 'another-worker' },
+      { id: 'bridge', objective: 'Now use the core estimate.' }, { id: 'bridge', revision: 2 }])
+      expect(() => parse({ adopt: [candidate] }, { upsert: [patch] }), JSON.stringify(patch))
+        .toThrow('math_plan_goal_path_unapplied');
+  });
+
+  it('ignores unchanged dependency order and unrelated consumer edits', () => {
+    const { parse } = fixture({}, { status: { core: 'blocked' },
+      extra: [lemma('piece'), lemma('off_path', ['core'])] });
+    expect(() => parse({ adopt: ['revise:core'] }, { upsert: [{ id: 'core', dependsOn: [] },
+      { id: 'off_path', type: '1 = 1' }] })).toThrow('math_plan_goal_path_unapplied');
+    const withInputs = fixture({ dependsOn: ['piece', 'other'] }, { status: { piece: 'blocked', other: 'blocked' },
+      extra: [lemma('piece'), lemma('other')] });
+    // This review names piece and other, whose consumer still has the same two mathematical inputs.
+    expect(() => withInputs.parse({ adopt: ['decompose:piece'] }, { upsert: [{ id: 'core', dependsOn: ['other', 'piece', 'piece'] }] }))
+      .toThrow('math_plan_goal_path_unapplied');
+  });
+
+  it('accepts an actual premise change or reroutes an ancestor around the failed input', () => {
+    const { parse, task } = fixture({}, { status: { core: 'blocked' }, extra: [lemma('replacement')] });
+    expect(task(parse({ adopt: ['revise:core'] }, { upsert: [{ id: 'core', premises: ['h : True'] }] }), 'core').premises)
+      .toEqual(['h : True']);
+    const rerouted = parse({ adopt: ['revise:core'] }, { upsert: [{ id: 'goal', dependsOn: ['replacement'] }] });
+    expect(task(rerouted, 'goal').dependsOn).toEqual(['replacement']);
+    expect(task(rerouted, 'core').type).toBe('True');
+  });
+
+  it('accepts a new alternative route and rejects a route id change as mathematical adoption', () => {
+    const alternative = { id: 'alternative', targetTaskId: 'goal', prerequisiteTaskIds: [], closingTaskId: 'replacement' };
+    const changed = fixture({}, { status: { core: 'blocked' }, extra: [lemma('replacement')] });
+    expect(changed.parse({ adopt: ['revise:core'] }, { proofRoutes: [alternative] }).proofRoutes).toEqual([alternative]);
+    const previous = fixture({}, { status: { core: 'blocked' }, proofRoutes: [
+      { id: 'old', targetTaskId: 'goal', prerequisiteTaskIds: ['core'], closingTaskId: 'bridge' },
+    ] });
+    expect(() => previous.parse({ adopt: ['revise:core'] }, { proofRoutes: [
+      { id: 'renamed', targetTaskId: 'goal', prerequisiteTaskIds: ['core'], closingTaskId: 'bridge' },
+    ] })).toThrow('math_plan_goal_path_unapplied');
+  });
+
+  it('accepts a new active feasibility check of the input without changing its contract', () => {
+    const { parse, task } = fixture({}, { status: { core: 'blocked' } });
+    const check = { id: 'check_core', kind: 'research', objective: 'Find a counterexample to the core inference.',
+      reviewScope: 'feasibility', dependsOn: ['core'] };
+    const revised = parse({ adopt: ['revise:core'] }, { upsert: [check] });
+    expect(task(revised, 'core').type).toBe('True');
+    expect(task(revised, 'check_core')).toMatchObject(check);
+    for (const patch of [{ ...check, status: 'paused' }, { ...check, reviewScope: undefined },
+      { ...check, dependsOn: [] }])
+      expect(() => parse({ adopt: ['revise:core'] }, { upsert: [patch] })).toThrow('math_plan_goal_path_unapplied');
+  });
+
+  it('does not count an already active or unrelated feasibility check as new adoption', () => {
+    const check = { id: 'check_core', kind: 'research', objective: 'Check the core inference.',
+      reviewScope: 'feasibility', dependsOn: ['core'] };
+    const { parse } = fixture({}, { status: { core: 'blocked' }, extra: [check, lemma('elsewhere')] });
+    expect(() => parse({ adopt: ['revise:core'] }, { upsert: [{ id: 'check_core', revision: 1 }] }))
+      .toThrow('math_plan_goal_path_unapplied');
+    expect(() => parse({ adopt: ['revise:core'] }, { upsert: [{ ...check, id: 'other_check', dependsOn: ['elsewhere'] }] }))
+      .toThrow('math_plan_goal_path_unapplied');
   });
 
   it('names the listed candidates for an unknown id of a stalled input and ignores ids of inputs no longer stalled', () => {

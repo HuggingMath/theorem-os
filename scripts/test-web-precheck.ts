@@ -13,7 +13,7 @@ import { audit } from './web-a11y';
 import { freePort, settled, startBrowser } from './web-scenario';
 
 /**
- * The statement check in the composer and in settings, against a fixture compiler (no Docker, no model): it runs by
+ * The statement check in the composer and inline editor, against a fixture compiler (no Docker, no model): it runs by
  * itself after an edit; a Lean error is listed with its line, selects that range in the editor and stops submission
  * until fixed or dismissed; structural failures need no compile and cannot be dismissed; a newer edit replaces a
  * slow check; an unavailable checker never blocks. Audited in Chinese and English, laid out at 375 and 320 px.
@@ -64,6 +64,8 @@ async function setSource(page: Page, source: string) {
 const chip = (page: Page) => page.locator('#source-check-chip');
 async function chipTone(page: Page, tone: string) { await page.locator(`#source-check-chip[data-tone="${tone}"]`).waitFor({ timeout: 10_000 }); }
 async function fillRequired(page: Page, task: string) {
+  if (!await page.locator('#proof-instructions').evaluate(node => (node as HTMLDetailsElement).open))
+    await page.locator('#proof-instructions > summary').click();
   await page.locator('#task').fill(task);
   await page.evaluate(() => {
     const key = document.querySelector<HTMLInputElement>('#api-key')!;
@@ -86,7 +88,10 @@ try {
     const page = await context.newPage(), errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
+    await page.locator('#new-research:enabled').waitFor({ state: 'attached' });
+    await page.locator('#entry-lean').click();
     await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await page.locator('#inline-problem-fields').waitFor();
 
     // A statement that compiles: the composer says so once the edit settles, and the list stays empty.
     // Each locale uses its own text, since the service answers a repeated statement from its cache.
@@ -106,8 +111,8 @@ try {
     assert.match(title, locale === 'zh' ? /原题第 6 行：Unknown identifier `foo`/u : /Statement line 6: Unknown identifier `foo`/u);
     const before = starts;
     await page.locator('#submit-run').click();
-    await page.locator('#run-settings[open]').waitFor();
     await page.waitForFunction(() => document.activeElement?.id === 'source');
+    assert.equal(await page.locator('#run-settings').isVisible(), false, 'a diagnostic must focus the inline editor without opening settings');
     const selected = await page.evaluate(() => { const editor = document.querySelector<HTMLTextAreaElement>('#source')!; return editor.value.slice(editor.selectionStart, editor.selectionEnd); });
     assert.equal(selected, 'foo', 'submitting must select the reported range, counting columns in code points');
     assert.equal(starts, before, 'a statement with Lean errors must not start a run');
@@ -116,7 +121,7 @@ try {
     assert.equal(await items.count(), 1);
     assert.match(await items.first().innerText(), locale === 'zh' ? /第 6 行[\s\S]*错误[\s\S]*Unknown identifier/u : /Line 6[\s\S]*Error[\s\S]*Unknown identifier/u);
     await settled(page);
-    assert.deepEqual(await audit(page, { scope: '#run-settings' }), [], `settings with check results (${locale})`);
+    assert.deepEqual(await audit(page, { scope: '#inline-problem-fields' }), [], `inline editor with check results (${locale})`);
     await page.screenshot({ path: path.join(output, `precheck-${locale}-errors.png`) });
     mark(`a Lean error is listed by line, selected in the editor and stops submission (${locale})`);
 
@@ -129,8 +134,6 @@ try {
     // The user may disagree with the check; dismissing lets this exact text through.
     await page.locator('#dismiss-source-check').click();
     await page.locator('#source-validation').waitFor({ state: 'hidden' });
-    await page.keyboard.press('Escape');
-    await page.locator('#run-settings').waitFor({ state: 'hidden' });
     await page.locator('#submit-run').click();
     await page.waitForFunction(count => document.querySelectorAll('.run-row').length > count, 0);
     await page.waitForFunction(() => document.querySelector('#toast:not([hidden])'));
@@ -143,7 +146,8 @@ try {
     await chipTone(page, 'bad');
     assert.equal(compiled.length, compiles, 'a structural failure must not start the compiler');
     await chip(page).click();
-    await page.locator('#run-settings[open]').waitFor();
+    await page.waitForFunction(() => document.activeElement?.id === 'source');
+    assert.equal(await page.locator('#run-settings').isVisible(), false, 'the check chip must lead to the inline editor');
     assert.equal(await page.locator('#dismiss-source-check').count(), 0);
     assert.match(await page.locator('#source-check').innerText(), locale === 'zh' ? /没有找到 theorem 或 lemma/u : /No theorem or lemma found/u);
     mark(`a structural failure is explained without a compile and cannot be dismissed (${locale})`);
@@ -162,7 +166,6 @@ try {
     await setSource(page, 'theorem fixture_unavailable : True := by sorry -- UNAVAILABLE\n');
     await page.locator('#source-check .source-check[data-tone="warn"]').waitFor();
     assert.equal(await page.locator('#source-validation').isVisible(), false);
-    await page.keyboard.press('Escape');
     await fillRequired(page, 'Prove the fixture theorem.');
     await page.locator('#submission-readiness[data-state="ready"]').waitFor();
     mark(`an unavailable checker does not block (${locale})`);

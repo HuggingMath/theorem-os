@@ -201,6 +201,8 @@ export const modules: Record<string, string> = {
   "确认删除": "Confirm delete",
   "新运行的知识目录": "Knowledge catalog for new runs",
   "不使用历史知识": "No past knowledge",
+  "自动使用最新知识": "Automatically use latest knowledge",
+  "自动选择本账户最新的非空目录；创建时固定版本，历史证据需要重新检查。": "Automatically select your latest nonempty catalog and pin it at creation; historical evidence must be rechecked.",
   "选中的目录随运行身份保存，历史证据需要重新检查。": "The selected catalog is saved with the run identity; past evidence must be rechecked.",
   "已载入 {0}，用于下一次运行": "Loaded {0} for the next run",
   "删除「{0}」？当前模块草稿会保留。": "Delete “{0}”? The current module draft is kept.",

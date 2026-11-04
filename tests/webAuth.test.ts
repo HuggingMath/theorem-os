@@ -127,7 +127,7 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     const alice = await login('alice@example.org');
     expect((await request('/api/runs', visitor)).status).toBe(401);
     const refreshed = await (await request('/api/session', alice)).json() as WebSession;
-    expect(refreshed.account).toEqual({ email: 'alice@example.org' });
+    expect(refreshed.account).toMatchObject({ email: 'alice@example.org', passwordSet: false, passwordResetAllowed: true });
     expect(refreshed.csrfToken).toBe(alice.csrf);
     expect(captchaImage('12345')).not.toMatch(/12345|<text/u);
   });
@@ -183,6 +183,64 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     await request('/api/runs', alice, { ...input(), task: 'Prove it at once' });
     for (let attempt = 0; attempt < 10; attempt++) await tick();
     expect(account()).toMatchObject({ firstRunAt, firstAcceptedAt });
+  });
+
+  it('sets a salted password after email verification, logs in with it, and recovers it through email', async () => {
+    const first = await login('alice@example.org');
+    expect((await request('/api/auth/password', first, { password: 'short' }, 'PATCH')).status).toBe(400);
+    const original = 'CorrectHorse2026!', changed = 'AnotherStrong2026!', recovered = 'RecoveredStrong2026!';
+    expect((await request('/api/auth/password', first, { password: original }, 'PATCH')).status).toBe(200);
+    const credentialFile = service.storage.listRecords(['passwords']);
+    expect(credentialFile).toHaveLength(1);
+    const credential = service.storage.getRecord<{ algorithm: string; salt: string; digest: string }>(['passwords', credentialFile[0]!])!;
+    expect(credential.algorithm).toBe('scrypt');
+    expect(credential.salt).toMatch(/^[a-f0-9]{32}$/u);
+    expect(credential.digest).toMatch(/^[a-f0-9]{128}$/u);
+    expect(JSON.stringify(credential)).not.toContain(original);
+    expect((await (await request('/api/session', first)).json() as WebSession).account).toMatchObject({ passwordSet: true, passwordResetAllowed: false });
+
+    await service.close();
+    const reservation = net.createServer();
+    await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+    config.port = (reservation.address() as net.AddressInfo).port;
+    await new Promise<void>(resolve => reservation.close(() => resolve()));
+    baseUrl = 'http://127.0.0.1:' + config.port;
+    config.publicUrl = baseUrl;
+    service = createWebService(config, runner, { mailer: async message => { mail.push(message); }, captchaAnswer: () => '12345' });
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    const visitor = await session();
+    expect((await request('/api/auth/password/login', visitor, { email: 'mallory@example.org', password: original })).status).toBe(401);
+    expect((await request('/api/auth/password/login', visitor, { email: 'alice@example.org', password: 'incorrect' })).status).toBe(401);
+    const signedIn = await request('/api/auth/password/login', visitor, { email: 'ALICE@example.org', password: original });
+    expect(signedIn.status).toBe(200);
+    const passwordClient: Client = { cookie: signedIn.headers.get('set-cookie')!.split(';')[0],
+      csrf: (await signedIn.json()).csrfToken, session: visitor.session };
+    expect(passwordClient.cookie).not.toBe(visitor.cookie);
+    expect((await request('/api/runs', visitor)).status).toBe(401);
+    expect((await (await request('/api/session', passwordClient)).json() as WebSession).account).toMatchObject({ passwordResetAllowed: false });
+    expect((await request('/api/auth/password', passwordClient,
+      { currentPassword: 'incorrect', password: changed }, 'PATCH')).status).toBe(403);
+    expect((await request('/api/auth/password', passwordClient,
+      { currentPassword: original, password: changed }, 'PATCH')).status).toBe(200);
+    expect((await request('/api/runs', first)).status).toBe(401);
+    expect((await request('/api/auth/password/login', await session(), { email: 'alice@example.org', password: original })).status).toBe(401);
+
+    const verifiedAgain = await login('alice@example.org');
+    expect((await request('/api/auth/password', verifiedAgain, { password: recovered }, 'PATCH')).status).toBe(200);
+    expect((await request('/api/runs', passwordClient)).status).toBe(401);
+    expect((await request('/api/auth/password/login', await session(), { email: 'alice@example.org', password: recovered })).status).toBe(200);
+    expect((await request('/api/auth/account', verifiedAgain, { email: 'alice@example.org' }, 'DELETE')).status).toBe(200);
+    expect(service.storage.listRecords(['passwords'])).toEqual([]);
+  });
+
+  it('limits password guesses without blocking the email-code recovery path', async () => {
+    const visitor = await session();
+    for (let attempt = 0; attempt < 5; attempt++)
+      expect((await request('/api/auth/password/login', visitor,
+        { email: 'alice@example.org', password: 'wrong-password' })).status).toBe(401);
+    expect((await request('/api/auth/password/login', visitor,
+      { email: 'alice@example.org', password: 'wrong-password' })).status).toBe(429);
+    expect((await login('alice@example.org')).cookie).toBeTruthy();
   });
 
   it('deletes an account with its records, cancels its runs and ends every session', async () => {

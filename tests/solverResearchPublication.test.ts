@@ -10,6 +10,7 @@ import * as knowledgeApplications from '../src/solver/knowledgeApplications';
 import { buildResearchContext } from '../src/solver/modules/context';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { committedSource, commitSolverSources, git } from '../src/solver/problem';
+import { mathDigest } from '../src/math/mathRuntimeIo';
 import { captureResearchBasis, researchSourceDigest } from '../src/solver/researchRecords';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import { deferred } from './helpers/async';
@@ -22,7 +23,7 @@ const finding = (summary = 'EXACT_LOCAL_COUNTEREXAMPLE') => ({ summary, conclusi
   evidenceRefs: ['nine-listed-constraints-only'], remainingObligations: ['original_goal_1'] });
 const publish = (value: unknown) => (cooperative as any).receive(workers[1], action, value, true);
 const leadInputs = () => leadResearchInputs(state.cooperation!.deliveries ?? [],
-  new Map(state.cooperation!.tasks.map(node => [node.task.id, node])));
+  new Map(state.cooperation!.tasks.map(node => [node.task.id, node])), state.cooperation!.researchDecisions);
 const summaries = () => leadInputs().map(item => item.summary);
 const create = () => cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal });
 const freezeResearchBasis = () => action.assignment.researchBasis = captureResearchBasis(action.task, {
@@ -122,6 +123,83 @@ it('retains multiple findings and proposals independently across restart and dup
   await publish(first);
   expect(state.cooperation!.deliveries).toHaveLength(3);
   expect(summaries()).toEqual(ordered);
+});
+
+it('requires an explicit answer for each presented finding and preserves it across restart', async () => {
+  await publish({ kind: 'research', finding: finding('ANSWER_THIS_EXACT_FINDING') });
+  const leadAction = await (cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true);
+  expect(leadAction).toMatchObject({ kind: 'lead' });
+  const shown = cooperative.contextState(leadAction, workers[0]);
+  const delivery = state.cooperation!.deliveries![0];
+  expect(shown.leadResearchInputIds).toEqual([delivery.id]);
+  const tasks = state.cooperation!.tasks.map(node => node.task);
+  const plan = parseCooperationPlan(state.problem, { tasks,
+    groups: state.cooperation!.groups!.map(record => record.group) });
+  await expect((cooperative as any).acceptPlan(plan, undefined, undefined, leadAction))
+    .rejects.toThrow('math_plan_research_decisions_missing');
+  await (cooperative as any).acceptPlan({ ...plan, researchDecisions: [{ deliveryId: delivery.id,
+    outcome: 'decline', reason: 'The counterexample assumes a premise absent from this exact target.' }] },
+  undefined, undefined, leadAction);
+  expect(state.cooperation!.researchDecisions).toEqual([expect.objectContaining({
+    deliveryId: delivery.id, taskDigest: delivery.taskDigest, findingDigest: delivery.findingDigest,
+    outcome: 'decline', planVersion: state.cooperation!.planVersion })]);
+  expect(cooperative.contextState(undefined, workers[2]).researchDecisions).toBeUndefined();
+  expect(leadInputs()).toEqual([]);
+  await restart();
+  expect(leadInputs()).toEqual([]);
+  const laterFinding = JSON.stringify(finding('A_LATER_DISTINCT_FINDING'));
+  state.cooperation!.deliveries!.push({ ...delivery, id: 'later-distinct-publication',
+    finding: laterFinding, findingDigest: mathDigest(laterFinding), summary: 'A_LATER_DISTINCT_FINDING' });
+  expect(leadInputs().map(item => item.summary)).toEqual(['A_LATER_DISTINCT_FINDING']);
+});
+
+it('does not apply an unanswered saved plan during actionless restore', async () => {
+  await publish({ kind: 'research', finding: finding('RESTORED_DECISION_REQUEST') });
+  const plan = parseCooperationPlan(state.problem, { tasks: state.cooperation!.tasks.map(node => node.task),
+    groups: state.cooperation!.groups!.map(record => record.group) });
+  await expect((cooperative as any).acceptPlan(plan)).rejects.toThrow('math_plan_research_decisions_missing');
+  expect(leadInputs().map(item => item.summary)).toEqual(['RESTORED_DECISION_REQUEST']);
+  await (cooperative as any).acceptPlan({ ...plan, researchDecisions: [{
+    deliveryId: state.cooperation!.deliveries![0].id, outcome: 'decline',
+    reason: 'The frozen target does not use this proposed route.' }] });
+  expect(leadInputs()).toEqual([]);
+  expect(state.cooperation!.researchDecisions).toHaveLength(1);
+});
+
+it('carries the ninth unanswered finding into the next Lead turn', async () => {
+  for (let index = 0; index < 9; index++)
+    await publish({ kind: 'research', finding: finding('FINDING_' + index) });
+  const first = await (cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true);
+  const shown = cooperative.contextState(first, workers[0]).leadResearchInputIds!;
+  expect(shown).toHaveLength(8);
+  const plan = parseCooperationPlan(state.problem, { tasks: state.cooperation!.tasks.map(node => node.task),
+    groups: state.cooperation!.groups!.map(record => record.group) });
+  await (cooperative as any).acceptPlan({ ...plan, researchDecisions: shown.map(deliveryId => ({ deliveryId,
+    outcome: 'decline', reason: 'This route does not use the reported candidate.' })) }, undefined, undefined, first);
+  (cooperative as any).rememberLeadDecision(first);
+  expect(leadInputs().map(item => item.summary)).toEqual(['FINDING_0']);
+  expect(state.cooperation!.lastLeadInputDigest).toBeUndefined();
+  const next = await (cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true);
+  expect(next).toMatchObject({ kind: 'lead' });
+  expect(cooperative.contextState(next, workers[0]).leadResearchInputIds).toEqual([state.cooperation!.deliveries![0].id]);
+});
+
+it('does not resolve a source answer before the changed Lean file is merged', async () => {
+  await publish({ kind: 'research', finding: finding('SOURCE_DECISION_PENDING_MERGE') });
+  const leadAction = await (cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true);
+  const file = path.join(workers[0].worktree, state.problem.projectRelative, 'Submission.lean');
+  const plan = parseCooperationPlan(state.problem, { tasks: state.cooperation!.tasks.map(node => node.task),
+    groups: state.cooperation!.groups!.map(record => record.group) });
+  const answer = { ...plan, researchDecisions: [{
+    deliveryId: state.cooperation!.deliveries![0].id, outcome: 'source', sourcePaths: ['Submission.lean'],
+    reason: 'The owned source contains the revised proof step.' }] };
+  await expect((cooperative as any).acceptPlan(answer, undefined, undefined, leadAction))
+    .rejects.toThrow('math_plan_research_source_unchanged');
+  fs.appendFileSync(file, '\n-- Pending Lead source change.\n');
+  await (cooperative as any).acceptPlan(answer, undefined, undefined, leadAction);
+  expect(state.cooperation!.researchDecisions ?? []).toEqual([]);
+  await restart();
+  expect(leadInputs().map(item => item.summary)).toEqual(['SOURCE_DECISION_PENDING_MERGE']);
 });
 
 it('keeps private findings within their route and excludes stale or late events from decisions', async () => {

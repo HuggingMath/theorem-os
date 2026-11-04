@@ -24,6 +24,8 @@
         <nav aria-label="本页目录"><ol class="guide-toc">
           <li><a href="#start">五步开始</a></li>
           <li><a href="#watch">运行时看什么</a></li>
+          <li><a href="#language">Lean 与自然语言</a></li>
+          <li><a href="#collaborate">指导与知识</a></li>
           <li><a href="#results">看懂结果</a></li>
           <li><a href="#after">运行结束以后</a></li>
           <li><a href="#keys">快捷键</a></li>
@@ -44,15 +46,34 @@
 
       <section class="share-card" id="watch" aria-labelledby="watch-heading">
         <h2 id="watch-heading">运行时看什么</h2>
-        <p class="guide-lead">左栏是研究记录，打开一次运行后，右侧有结果、轨迹、协作、源码和活动五个标签页。运行中随时可以点右上角的「取消运行」停下。</p>
+        <p class="guide-lead">左栏是研究记录，打开一次运行后，右侧有结果、路线图、协作、源码和活动五个标签页。运行中随时可以点右上角的「取消运行」停下。</p>
         <dl class="guide-terms">
           <div><dt>结果</dt><dd>结论和下一步、目标清单、验收证明、Agent 路线图和验收报告。运行中这里显示最新进展。</dd></div>
-          <div><dt>轨迹</dt><dd>每个目标的每次尝试和 Lean 的反馈，按时间排列。可以打开某一步的代码、问它为什么失败，或从这一版继续研究。</dd></div>
-          <div><dt>协作</dt><dd>谁在做哪个子任务、在等什么。默认是简洁视图；点「详细」可以看任务图、合同和阻塞，并给 Lead、任务或 Agent 写指导。</dd></div>
+          <div><dt>路线图</dt><dd>查看原题、引理、任务依赖和当前进展。点开节点可查看具体命题、尝试和 Lean 反馈，打开某一步的代码，或从保留的版本继续研究。运行中的记录会随观察更新。</dd></div>
+          <div><dt>协作</dt><dd>谁在做哪个子任务、在等什么。从分区导航查看任务、原意与 Lean、Agent、指导和知识；详细视图还包含任务合同、交付、变更和归档记录。</dd></div>
           <div><dt>源码</dt><dd>原始题目和当前证明，可以切换查看与原题的差异。</dd></div>
           <div><dt>活动</dt><dd>按时间排列的完整事件记录。</dd></div>
         </dl>
-        <p class="guide-note">运行时间较长时，可以在「结果」里开启「结束时通知我」，研究结束时浏览器会提醒你；开了「先审计划」的研究，计划拟好等你批准时也会提醒。手机上新建研究时，用顶部的「编写 / 预览」在输入框和 Lean 工作区之间切换。</p>
+        <p class="guide-note">在「结果」里开启「结束时通知我」后，页面保持打开时可收到研究结束或计划待批准的浏览器提醒。关闭页面后研究仍会在服务器继续；已启用账号邮件的用户会收到邮件，也可以回来查看研究记录。手机上用顶部的「编写 / 预览」切换输入框和 Lean 工作区。</p>
+      </section>
+
+      <section class="share-card" id="language" aria-labelledby="language-heading">
+        <h2 id="language-heading">Lean 与自然语言</h2>
+        <dl class="guide-terms">
+          <div><dt>原意与 Lean 对照</dt><dd>在「协作」的「原意与 Lean」分区选择一份声明审阅，查看数学原意、Lean 形式声明、独立回译和审阅结论。研究进行中就能查看已记录的审阅；没有记录时会显示空态。声明审阅通过后，完整证明仍需独立验收。</dd></div>
+          <div><dt>Lean → 自然语言</dt><dd>验收通过后，点「结果」中验收证明标题旁或「源码」工具栏的「Lean → 自然语言」。讲解页可切换目标与中英文，逐步对照 Lean 行、引理和自然语言，下载已通过审核的 Markdown。生成前会显示时间与用量估算，由你手动开始。</dd></div>
+          <div><dt>自然语言 → Lean</dt><dd>在新建研究中打开「自然语言 / TeX → Lean」，输入完整原题，生成后对照 Lean 陈述、独立回译和审核结论。确认陈述后带入研究草稿，再设置研究要求并开始证明。在线生成目前需要 Sub2API、deepseek-flash 和支持形式化的运行环境；刷新可继续查看任务。</dd></div>
+        </dl>
+        <p class="guide-note">证明讲解目前仅支持使用 Sub2API 与 deepseek-flash 的已验收运行，服务也需提供讲解运行环境；不支持时页面会说明原因。示例运行可以打开对照页，但没有预生成讲解，也不能生成。</p>
+      </section>
+
+      <section class="share-card" id="collaborate" aria-labelledby="collaborate-heading">
+        <h2 id="collaborate-heading">指导与知识</h2>
+        <dl class="guide-terms">
+          <div><dt>审阅研究计划</dt><dd>在执行配置勾选「先审计划再开始」，Lead 拟好计划后会等待你批准。可以查看或修改计划，也可以留言让 Lead 修改；等待也计入解题预算。此模式需要任务协作和至少 2 个 Agent。</dd></div>
+          <div><dt>提供指导</dt><dd>运行中可在协作区给 Lead、某个任务或 Agent 留言，并引用相关代码与检查记录。发送后查看回执，确认是否收到和采用；运行结束后仍可阅读指导记录。</dd></div>
+          <div><dt>归档与知识</dt><dd>协作区可归档研究证据、下载归档包，并在「知识」中搜索历史定理、引理与路线发现。引用知识时会带上来源和记录环境；历史检查通过不代表当前题目通过，使用前仍需重新检查。</dd></div>
+        </dl>
       </section>
       <section class="share-card" id="results" aria-labelledby="results-heading">
         <h2 id="results-heading">看懂结果</h2>
@@ -71,8 +92,8 @@
         <dl class="guide-terms">
           <div><dt>本地复核</dt><dd>在「结果」的验收报告里下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。</dd></div>
           <div><dt>分享</dt><dd>验收通过的运行可以创建只读分享链接。链接不包含 API Key、服务地址、运行日志和 Agent 对话，可以随时停止分享。</dd></div>
-          <div><dt>继续研究</dt><dd>用运行详情右上角的「复用任务配置」把题目和配置填进新草稿，调整后再提交。</dd></div>
-          <div><dt>保存与搬运</dt><dd>「新建研究」右上角可以导出任务草稿，或导入草稿和运行档案 JSON；运行详情的「更多操作」里可以下载运行档案。导入后需要重新填写 API Key。</dd></div>
+          <div><dt>继续研究</dt><dd>「复用任务配置」把原题和配置填进新草稿；「从这一版继续」则带上所选版本的代码供新运行参考。新运行都要重新检查和验收，后续运行可以与原运行对比代码。</dd></div>
+          <div><dt>保存与搬运</dt><dd>「新建研究」右上角可导出任务草稿，或导入草稿和运行档案 JSON；导入档案会提取原题与配置，不会恢复整次历史记录。「更多操作」可下载运行档案。草稿和档案不携带 API Key，使用前请确认模型连接。</dd></div>
           <div><dt>研究记录</dt><dd>左栏列出全部运行，可以搜索、按状态筛选；不需要的记录在运行详情的「更多操作」里删除。</dd></div>
         </dl>
       </section>
@@ -95,6 +116,7 @@
         <dl class="guide-terms">
           <div><dt>API Key</dt><dd>服务器只用它调用你选择的服务商，费用计入你自己的 API 账户。Key 不会写进草稿、运行档案或分享链接。保存到账号的 Key 加密存放，只有你的账号能用，可以在「模型连接」里随时删除。</dd></div>
           <div><dt>运行记录</dt><dd>登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。</dd></div>
+          <div><dt>草稿</dt><dd>未提交的草稿自动保存在当前标签页，刷新后可恢复，不会同步到账号。需要长期保留或换设备时，请导出任务草稿。</dd></div>
         </dl>
         <p class="guide-note">工作台里带 ? 的词都可以点开查看解释，顶栏的问号按钮打开完整的术语说明。还有不清楚的地方？<a href="https://theoremos.top/feedback.html" data-feedback target="_blank" rel="noopener noreferrer">告诉我们</a></p>
       </section>

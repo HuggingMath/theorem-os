@@ -20,6 +20,8 @@ import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
+import { answerResearchInputs } from './researchDecisions';
+import { leadResearchInputs } from './contextCompiler';
 
 /** Lead plan acceptance, plan identity and the idle original-goal frontier. */
 export abstract class CooperationPlanning extends CooperationIntegration {
@@ -106,6 +108,16 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.lastLeadPauseInputDigest = undefined;
       // Idle peers this deciding turn was shown are answered; only one Lead turn runs at a time.
       this.archive.leadDecisionBasisAt = this.archive.leadInboxBasis?.at ?? Date.now();
+      this.answerGoalProgressReview(action);
+      const pending = leadResearchInputs(this.archive.deliveries ?? [],
+        new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions);
+      const merging = new Set((this.pendingSourceResearchDecisions.get(action) ?? []).map(item => item.deliveryId));
+      if (pending.some(record => !merging.has(record.id)) && this.presentedResearchInputs.get(action)?.shown.length) {
+        // A second page was present at dispatch; evidence arriving later is already a different input digest.
+        const presented = this.presentedResearchInputs.get(action)!;
+        if (presented.total > presented.shown.length) this.archive.lastLeadInputDigest = undefined;
+        this.wakeLead('research-finding');
+      }
     }
   }
   protected activeGoalFrontier() {
@@ -250,11 +262,31 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     plan.tasks = keepRespacedObjectives(plan.tasks, new Map(this.archive.tasks.map(node => [node.task.id, node.task])));
     this.includeCapacityExplorations(plan);
     const { tasks, groups, proofRoutes } = plan;
+    const decidingAction = publication?.action ?? leadAction;
+    const restoringPlan = !decidingAction && !edit && this.archive.tasks.length > 0;
+    const shown = decidingAction?.kind === 'lead' ? this.presentedResearchInputs.get(decidingAction)?.shown ?? [] :
+      restoringPlan ? leadResearchInputs(this.archive.deliveries ?? [],
+        new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions).slice(-8) : [];
+    const researchDecisions = answerResearchInputs(plan, shown, this.plannedTasks().map(node => node.task),
+      tasks, [...this.archive.researchDecisions ?? [],
+        ...(decidingAction ? this.pendingSourceResearchDecisions.get(decidingAction) ?? [] : [])], '', Date.now());
+    for (const decision of researchDecisions.filter(item => item.outcome === 'source')) {
+      if (decidingAction?.kind !== 'lead') throw new Error('math_plan_research_source_invalid: no Lead source dispatch.');
+      for (const file of decision.sourcePaths ?? []) {
+        const problem = this.input.state.problem;
+        if (!file.endsWith('.lean') || !problem.ownedFiles.includes(file) || problem.frozenFiles?.[file])
+          throw new Error('math_plan_research_source_invalid: ' + file);
+        const relative = path.posix.join(problem.projectRelative, file);
+        if (fs.readFileSync(path.join(this.lead.worktree, relative), 'utf8') ===
+            committedSource(this.lead.worktree, decidingAction.seedCommit, relative))
+          throw new Error('math_plan_research_source_unchanged: ' + file);
+      }
+    }
     const publicationResponseDigest = publication ? this.proposedPlanDigest(
       git(this.lead.worktree, ['ls-tree', '--name-only', publication.action.seedCommit, '--', 'RESEARCH.md'])
         ? committedSource(this.lead.worktree, publication.action.seedCommit, 'RESEARCH.md') : '') : undefined;
-    for (const task of tasks) if (task.ownerId) {
-      const owner = this.input.workers.find(worker => worker.id === task.ownerId);
+    for (const task of tasks) if (task.ownerId || task.preferredOwnerId) {
+      const owner = this.input.workers.find(worker => worker.id === (task.ownerId ?? task.preferredOwnerId));
       const previous = this.archive.tasks.find(node => node.task.id === task.id);
       const ownershipTask = previous?.capacityExploration ? { ...task, status: 'active' as const } : task;
       if (!owner || !researchWorkerCanNode(owner, { ...(previous ?? { status: 'pending', attempts: 0 }), task: ownershipTask }))
@@ -327,8 +359,23 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.planEdited = true;
     }
     this.archive.planVersion = this.planVersion();
-    const decidingAction = publication?.action ?? leadAction;
+    const graphDecisions = researchDecisions.filter(decision => decision.outcome !== 'source');
+    const sourceDecisions = researchDecisions.filter(decision => decision.outcome === 'source');
+    if (sourceDecisions.length && decidingAction)
+      this.pendingSourceResearchDecisions.set(decidingAction, sourceDecisions);
+    if (graphDecisions.length) {
+      this.archive.researchDecisions = [...this.archive.researchDecisions ?? [],
+        ...graphDecisions.map(decision => ({ ...decision, planVersion: this.archive.planVersion! }))];
+      this.input.emit('research_findings_decided', { decisions: graphDecisions.map(decision =>
+        ({ deliveryId: decision.deliveryId, outcome: decision.outcome, taskIds: decision.taskIds })) });
+    }
+    if (restoringPlan && shown.length && leadResearchInputs(this.archive.deliveries ?? [],
+      new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions).length) {
+      this.archive.lastLeadInputDigest = undefined;
+      this.wakeLead('research-finding');
+    }
     if (plan.goalPathDecisions && decidingAction) this.recordGoalPathDecisions(decidingAction, plan.goalPathDecisions);
+    if (plan.goalProgressDecision && decidingAction) this.goalProgressDecisions.set(decidingAction, plan.goalProgressDecision);
     // A revision is not a graph: the next dispatch's notes show the complete accepted result.
     if (plan.fromPatch) this.archive.planEdited = true;
     // Replaying unchanged saved notes during restore does not correct a rejected live event.
@@ -365,6 +412,25 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     }
     this.changed(edit);
   }
+  /** A proposed source answer becomes durable only when its changed Lean file reaches the canonical commit. */
+  protected settleSourceResearchDecisions(action: CooperativeAction, previousCommit: string, mergedCommit: string) {
+    const pending = this.pendingSourceResearchDecisions.get(action);
+    if (!pending?.length) return;
+    this.pendingSourceResearchDecisions.delete(action);
+    const root = this.input.state.problem.projectRelative;
+    const applied = pending.filter(decision => decision.sourcePaths?.every(file => {
+      const relative = path.posix.join(root, file);
+      return committedSource(this.lead.worktree, previousCommit, relative) !==
+        committedSource(this.lead.worktree, mergedCommit, relative);
+    }));
+    if (applied.length) {
+      this.archive.researchDecisions = [...this.archive.researchDecisions ?? [], ...applied.map(decision =>
+        ({ ...decision, at: Date.now(), planVersion: this.archive.planVersion! }))];
+      this.input.emit('research_findings_decided', { decisions: applied.map(decision =>
+        ({ deliveryId: decision.deliveryId, outcome: decision.outcome, sourcePaths: decision.sourcePaths })) });
+    }
+    if (applied.length !== pending.length) this.wakeLead('research-finding');
+  }
   /** A planning checkpoint without a graph must not leave every peer idle. */
   async startInitialTasks() {
     if (this.archive.tasks.length) return;
@@ -372,12 +438,11 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const researchers = this.input.workers.filter(worker => worker.role === 'researcher' && this.liveWorkers.has(worker.id));
     const engineer = this.input.workers.find(worker => worker.role === 'engineer' && this.liveWorkers.has(worker.id));
     const targets = this.input.state.problem.targets;
-    // The fallback is a coordination scaffold, not a mathematical plan. An original goal is proof work,
-    // so pin it to a live Engineer: one unowned goal would otherwise be taken by the first ready
-    // Researcher, which strands that Researcher's own investigation and leaves the Engineer with nothing.
+    // Start the Engineer on original goals and preserve the Researchers' initial coverage.
+    // Once a Researcher has no ready investigation, it may share unstarted goals with a busy Engineer.
     const goals = targets.map((target, index) => ({ id: `initial_goal_${index + 1}`, kind: 'goal' as const,
       objective: `Prove the frozen original target ${target.theoremName}; use researcher findings as advisory guidance.`,
-      ...(engineer ? { ownerId: engineer.id } : {}),
+      ...(engineer ? { preferredOwnerId: engineer.id } : {}),
       proofPath: target.proofPath, theoremName: target.theoremName }));
     // Identical investigation text makes two Researchers ask one question; each gets a distinct angle.
     const angles = [
@@ -390,13 +455,15 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       // Round-robin coverage, but never an empty assignment: one target belongs to every Researcher.
       const primary = targets.filter((_, targetIndex) => targetIndex % researchers.length === index);
       const covered = (primary.length ? primary : targets).map(target => target.theoremName).join(', ');
-      return { id: `initial_research_${index + 1}`, kind: 'research' as const, ownerId: worker.id,
+      const researchSource = (['public-literature', 'verified-library', 'mathlib'] as const)[index % 3];
+      return { id: `initial_research_${index + 1}`, kind: 'research' as const, ownerId: worker.id, researchSource,
         // The goal is an inspection input, never a proof dependency: a parked advisory review must not
         // make the original goal unstartable (advisory tasks may depend on the consumer, not the reverse).
         dependsOn: goals.map(goal => goal.id),
         objective: `Investigate ${angles[index % angles.length]} for ${covered}` +
           `${researchers.length > 1 ? ` (investigation ${index + 1} of ${researchers.length})` : ''}. ` +
-          'Report concrete evidence and unresolved gaps; findings are advisory.' };
+          `Focus on ${researchSource}; deliver sourceUses with exact assumptions and consumer adaptation, ` +
+          'and typed lemmaRequests when the implementation method is known. Report concrete evidence and unresolved gaps; findings are advisory.' };
     })];
     await this.acceptPlan(parseCooperationPlan(this.input.state.problem, { tasks }));
     dropLeadWakes(this.archive.leadWakes!);

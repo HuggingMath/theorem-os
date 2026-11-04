@@ -9,6 +9,7 @@ import { mathGitBytes } from './mathGit';
 import { mathConstructionImports, mathConstructionImportSpans } from './mathConstructionSources';
 import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathJsonDurable } from './mathRuntimeIo';
 import { assertMathCanonicalPath } from './paths';
+import { knowledgeUseSchema } from '../solver/knowledgeUsage';
 
 /**
  * Auto-library modules are Lean modules the solving system writes for itself before it solves a problem. A planner
@@ -40,11 +41,15 @@ const commentText = (text: string) => text.replace(/[\u0000-\u0008\u000b-\u001f\
   .replaceAll('-/', '- /').replaceAll('/-', '/ -');
 
 /** A module doc header recording what the module is for and the literature it follows, placed after the imports. */
-export function withAutoLibraryHeader(source: string, input: { name: string; summary: string; sources: readonly string[] }): string {
+export function withAutoLibraryHeader(source: string, input: { name: string; summary: string; sources: readonly string[];
+  application?: { target: string; use: string; remaining: readonly string[] } }): string {
   const spans = mathConstructionImportSpans(source), at = spans.length ? spans.at(-1)!.end : 0;
   const lineEnd = spans.length ? source.indexOf('\n', at) : -1, insert = spans.length ? (lineEnd < 0 ? source.length : lineEnd + 1) : 0;
   const header = [`/-! # TheoremOS auto-library module \`${input.name}\``, '',
     commentText(input.summary.trim()), '',
+    ...(input.application ? ['Planned use for the triggering challenge:',
+      '* ' + commentText(input.application.target) + ': ' + commentText(input.application.use),
+      ...input.application.remaining.map(item => '* Remaining: ' + commentText(item)), ''] : []),
     ...(input.sources.length ? ['Sources:', ...input.sources.map(item => `* ${commentText(item.trim())}`), ''] : []),
     'Written by the TheoremOS library planner and proved by a TheoremOS solver run before solving the problem',
     'recorded in the pool record. Only declarations Lean accepted with no gaps are kept. -/', ''].join('\n');
@@ -336,4 +341,64 @@ export function autoLibraryRunUsage(input: { records: readonly AutoLibraryRecord
   return { commit, checked: state.check?.passed === true,
     modules: autoLibraryUsage({ records: input.records, source: read('Submission.lean'),
       pack: { modules: frozen.map(file => ({ file, source: read(file) })) } }) };
+}
+
+/** Read-only observations of the installed pack, live drafts and fixed commits. Imports are lexical evidence. */
+export function autoLibraryLiveUsage(input: { records: readonly AutoLibraryRecord[]; stateFile: string }) {
+  const raw = readMathText(path.resolve(input.stateFile), 64 * 1024 * 1024);
+  const state = z.object({ runId: z.string(), worktree: z.string(),
+    problem: z.object({ projectRelative: z.string(), baseCommit: oid, frozenFiles: z.record(hash).optional() }),
+    check: z.object({ commit: oid, passed: z.boolean() }).passthrough().optional(),
+    cooperation: z.object({ canonicalCommit: oid.optional() }).passthrough().optional(),
+    workers: z.array(z.object({ id: z.string(), worktree: z.string() }).passthrough()).optional(),
+    knowledgeUses: z.array(z.unknown()).optional(),
+  }).passthrough().parse(JSON.parse(raw));
+  const project = state.problem.projectRelative;
+  if (path.posix.isAbsolute(project) || project.split('/').includes('..')) throw new Error('auto_library_usage_state_invalid');
+  const frozen = Object.entries(state.problem.frozenFiles ?? {}).filter(([file]) =>
+    /^Submission\/Library\/(?:[A-Za-z0-9_]+\/)*[A-Za-z0-9_]+\.lean$/u.test(file)).sort(([a], [b]) => a.localeCompare(b));
+  const observedAt = new Date().toISOString(), checkpointDigest = mathDigest(raw);
+  const readCommit = (commit: string, file: string) => mathGitBytes(state.worktree,
+    ['show', `${commit}:${path.posix.join(project, file)}`],
+    { maxBuffer: file === 'Submission.lean' ? 16 * 1024 * 1024 : MAX_LIBRARY_MODULE_BYTES + 1,
+      timeout: 30_000, errorMessage: `auto_library_usage_source_unavailable: ${file}` }).toString('utf8');
+  const installed = frozen.map(([file, sourceDigest]) => {
+    const record = input.records.find(item => item.file === file && item.sourceDigest === sourceDigest);
+    return { file, sourceDigest, ...(record ? { name: record.name, trigger: record.trigger, cost: record.cost } : {}) };
+  });
+  type Identity = { stage: 'worker-draft' | 'canonical' | 'checked'; commit?: string; workerId?: string;
+    passed?: boolean; matchesCanonical?: boolean };
+  const observe = (identity: Identity, read: (file: string) => string) => {
+    const base = { ...identity, authority: 'lexical-import-observation' as const,
+      proofAcceptance: 'not-assessed' as const };
+    try {
+      const source = read('Submission.lean');
+      const modules = frozen.map(([file, digest]) => {
+        const text = read(file);
+        if (mathDigest(text) !== digest) throw new Error(`auto_library_usage_frozen_source_changed: ${file}`);
+        return { file, source: text };
+      });
+      return { ...base, status: 'observed' as const, sourceDigest: mathDigest(source),
+        modules: autoLibraryUsage({ records: input.records.filter(record =>
+          frozen.some(([file, digest]) => record.file === file && record.sourceDigest === digest)), source, pack: { modules } }) };
+    } catch (cause) {
+      return { ...base, status: 'unavailable' as const, modules: [],
+        error: (cause instanceof Error ? cause.message : String(cause)).slice(0, 1000) };
+    }
+  };
+  const canonicalCommit = state.cooperation?.canonicalCommit;
+  const canonical = canonicalCommit ? observe({ stage: 'canonical', commit: canonicalCommit },
+    file => readCommit(canonicalCommit, file)) : null;
+  const checked = state.check ? observe({ stage: 'checked', commit: state.check.commit, passed: state.check.passed,
+    matchesCanonical: state.check.commit === canonicalCommit }, file => readCommit(state.check!.commit, file)) : null;
+  const drafts = (state.workers ?? []).map(worker => observe({ stage: 'worker-draft', workerId: worker.id }, file => {
+    const absolute = path.join(worker.worktree, project, file);
+    assertMathCanonicalPath(absolute);
+    return readMathText(absolute, file === 'Submission.lean' ? 16 * 1024 * 1024 : MAX_LIBRARY_MODULE_BYTES + 1);
+  }));
+  const knowledgeApplications = (state.knowledgeUses ?? []).flatMap(value => {
+    const use = knowledgeUseSchema.extend({ workerId: z.string(), commit: z.string() }).safeParse(value);
+    return use.success && use.data.application ? [use.data] : [];
+  });
+  return { observedAt, runId: state.runId, checkpointDigest, installed, drafts, canonical, checked, knowledgeApplications };
 }

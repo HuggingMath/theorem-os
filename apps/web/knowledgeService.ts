@@ -33,6 +33,9 @@ export class WebKnowledgeService {
   listCatalogs(owner: string): WebCatalogInfo[] {
     return this.catalogRecords(owner).map(({ manifestDigest: _manifestDigest, ...info }) => info);
   }
+  latestReusableCatalog(owner: string): WebCatalogInfo | undefined {
+    return this.listCatalogs(owner).findLast(info => info.entries > 0 || info.routeFindings > 0);
+  }
   private catalogRecords(owner: string): StoredCatalogInfo[] {
     return this.storage.getRecord<StoredCatalogInfo[]>([...ownerPath(owner), 'catalogs.json']) ?? [];
   }

@@ -124,6 +124,7 @@ if (browser) {
   document.documentElement.lang = localeTag;
   if (locale === 'en') {
     document.title = en[document.title] ?? document.title;
-    localizeDocument();
+    // The embedded formalization bundle localizes only its newly mounted form.
+    if (document.body?.dataset.formalizeEmbedded !== 'true') localizeDocument();
   }
 }

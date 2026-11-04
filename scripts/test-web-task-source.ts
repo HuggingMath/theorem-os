@@ -82,6 +82,9 @@ const suite: ScenarioSuite = { origin, output, checks: [], failedScenario: '' };
 const input: WebRunInput = { providerId: 'openai', apiKey: 'sk-local-source-fixture', model: 'fixture', effort: 'low', environment: 'standard',
   source: 'theorem other : True := by sorry\n', task: 'Inspect immutable task source snapshots', maxTurns: 1, maxRunSeconds: 60, workers: 1, coordination: 'cooperative' };
 const key = (source: WebTaskSource) => JSON.stringify([source.taskId, source.taskVersion, source.commit, source.sourceDigest, source.environmentDigest, source.file]);
+async function openWorkbench({ page }: { page: Page }) {
+  await page.goto(origin); await page.locator('#formalize-original').waitFor();
+}
 async function create(page: Page) {
   const run = await postRun({ page }, input); await refreshHistory(page); await selectHistoryRun(page, run.id, 'collaboration');
   await page.locator('.collab-surface').waitFor(); return run;
@@ -151,12 +154,12 @@ try {
     assert.equal(await page.locator('[data-task-source-code]').textContent(), other.source, 'a delayed source response cannot replace another task’s source');
     assert.equal(await page.locator('[data-collab-artifact]').getByText(currentB.commit, { exact: true }).count(), 0);
     assert.ok((await page.locator('.collab-metrics').innerText()).includes('尚未验收通过')); assert.equal(control.observation.checks.length, 0, 'source fixtures do not invent proof receipts'); await connected(page);
-  }, { context: { viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' }, harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'Source browser fixtures must stay local' }, open: true, timeout: { label: 'Task sources', seconds: 60 } });
+  }, { context: { viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' }, harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'Source browser fixtures must stay local' }, open: openWorkbench, timeout: { label: 'Task sources', seconds: 60 } });
   for (const width of [375, 320]) await webScenario(browser, suite, `task source comparison fits ${width}px`, async ({ page }) => {
     await create(page); await openSource(page, currentB); await compare(page, currentA, currentB); await poll(page); await connected(page); await fit(page);
     await page.locator('[data-task-source-diff] .diff-added').first().waitFor(); await page.locator('[data-task-source-diff]').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(output, `mobile-${width}.png`) });
-  }, { context: { viewport: { width, height: 812 }, reducedMotion: 'reduce' }, harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'Source browser fixtures must stay local' }, open: true, timeout: { label: 'Mobile task sources', seconds: 30 } });
+  }, { context: { viewport: { width, height: 812 }, reducedMotion: 'reduce' }, harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'Source browser fixtures must stay local' }, open: openWorkbench, timeout: { label: 'Mobile task sources', seconds: 30 } });
   await writeScenarioReport(path.join(output, 'report.json'), suite, 'passed', undefined, 'local-real-http-saved-source-fixture', {
     checks: suite.checks, proofReceipts: 0, sourceCommits: savedSources.map(({ taskId, taskVersion, commit, sourceDigest }) => ({ taskId, taskVersion, commit, sourceDigest })), screenshots: ['desktop.png', 'mobile-375.png', 'mobile-320.png'],
   }, { credential: input.apiKey });

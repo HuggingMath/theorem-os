@@ -1,4 +1,4 @@
-import { originalGoalTaskFocus, plannedTaskDependencyIds, taskDependenciesReady } from './search';
+import { originalGoalTaskFocus, plannedTaskDependencyIds, readyResearchTasks, taskDependenciesReady } from './search';
 import { checkedUnconditionally, isAdvisoryTask, isFeasibilityReview, taskGroup, taskVersion,
   type CooperativeTask, type RouteGroup, type TaskRecord, type RouteRecord } from '../tasks';
 import { hasRunningDuplicateQuestion } from '../taskQuestions';
@@ -71,6 +71,15 @@ export function assessTaskResponsibility(node: TaskRecord, worker: Pick<Research
   if (pinned(engineerId)) return { kind: 'blocked', reason: 'engineer' };
   if (pinned(node.task.ownerId)) return { kind: 'blocked', reason: 'owner' };
   if (pinned(node.assignment?.workerId)) return { kind: 'blocked', reason: 'saved-assignment' };
+  if (!node.assignment && pinned(node.task.preferredOwnerId)) {
+    const busy = tasks.some(peer => peer !== node && peer.status === 'running' &&
+      peer.assignment?.workerId === node.task.preferredOwnerId &&
+      peer.assignment.taskId === peer.task.id && peer.assignment.taskDigest === taskVersion(peer.task));
+    const ownResearch = readyResearchTasks(tasks, groups).some(peer => isAdvisoryTask(peer.task) &&
+      peer.task.ownerId === worker.id && assessTaskResponsibility(peer, worker, { tasks, groups, stopped }).kind === 'matches');
+    if (node.status !== 'pending' || node.attempts !== 0 || !busy || ownResearch)
+      return { kind: 'blocked', reason: 'owner' };
+  }
   if (!independentFeasibilityWorker(node, worker, tasks, groups)) return { kind: 'blocked', reason: 'review-independence' };
   if (hasRunningDuplicateQuestion(node, tasks)) return { kind: 'blocked', reason: 'running-duplicate' };
   return { kind: 'matches' };

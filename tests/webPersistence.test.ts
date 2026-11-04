@@ -132,6 +132,16 @@ describe('durable web evidence and registered research configuration without mod
     expect(empty.catalogDigest).toBeNull(); expect(empty.results.hits).toEqual([]);
   });
 
+  it('treats a research-only catalog as reusable but leaves an empty catalog unselected', () => {
+    const service = new WebKnowledgeService(new WebStorage(root));
+    service.importCatalog('alice', buildTheoremKnowledge([]));
+    expect(service.latestReusableCatalog('alice')).toBeUndefined();
+    const advisory = service.importCatalog('alice', buildTheoremKnowledge([], undefined, [finding()]));
+    expect(advisory).toMatchObject({ entries: 0, routeFindings: 1, requiresFreshCheck: true });
+    expect(service.latestReusableCatalog('alice')?.digest).toBe(advisory.digest);
+    expect(service.latestReusableCatalog('bob')).toBeUndefined();
+  });
+
   it('retains exact assumptions, historical receipt provenance, source, dependency and consumer coverage', () => {
     const service = new WebKnowledgeService(new WebStorage(root));
     const info = service.importCatalog('alice', buildTheoremKnowledge([candidate(), candidate('Saved.consumer')], undefined, [finding()]));

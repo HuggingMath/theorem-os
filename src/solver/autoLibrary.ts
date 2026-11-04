@@ -12,6 +12,7 @@ import { AUTO_LIBRARY_PLANNER_INSTRUCTIONS, autoLibraryLeanFeedback, autoLibrary
 } from '../math/autoLibraryPlanner';
 import { bootstrapLeanTask, LEAN_TASK_DESCRIPTION_MAX_LENGTH } from '../math/leanTask';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../math/leanTaskEnvironment';
+import { inspectScopedLeanDeclarations } from '../math/leanSource';
 import { extractRunLibraryModules, LIBRARY_PACK_SCHEMA, libraryPackDigest, mergeLibraryPacks, parseLibraryPack,
   type LibraryPack } from '../math/libraryPacks';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
@@ -22,6 +23,8 @@ import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { MAX_RESEARCH_WORKERS } from './modules/organization';
 import { runSolver } from './run';
 import { initializeUsageAccounting, reportedTotalTokens, type UsageAccounting } from './usageBudget';
+import { autoLibraryDemandSchema } from './autoLibraryDemand';
+import { checkAutoLibraryApplication, autoLibraryApplicationCheckSchema } from './autoLibraryApplication';
 
 /**
  * Build the library a problem needs before solving it. Each round asks the planner for one module statement,
@@ -35,6 +38,7 @@ const requestSchema = z.object({
   schema: z.literal('theorem-os.auto-library-build.v1'), buildId: z.string().uuid(),
   challengeId: z.string().min(1).max(256), challengeSource: z.string().min(1).max(1024 * 1024),
   task: z.string().max(LEAN_TASK_DESCRIPTION_MAX_LENGTH), environment: z.string().min(1).max(64), environmentDigest: hash,
+  definitionTargets: z.array(z.string().min(1).max(512)).max(1024).optional(),
   pool: z.string().min(1).max(4096), basePackDigest: hash.nullable(),
   buildManifestRef: z.string().min(1).max(4096), buildDigest: hash,
   planner: z.object({ model: z.string().min(1).max(128), effort: z.string().min(1).max(32), profile: z.string().min(1).max(4096),
@@ -44,6 +48,7 @@ const requestSchema = z.object({
     maxRunSeconds: limit, maxTurns: limit, maxTurnSeconds: limit, maxTotalTokens: limit, prepareTimeoutSeconds: z.number().int().positive() }).strict(),
   maxModules: z.number().int().min(1).max(8), maxRounds: z.number().int().min(1).max(8),
   maxRunSeconds: limit, maxTotalTokens: limit, plannerTurnSeconds: limit,
+  demand: autoLibraryDemandSchema.optional(),
 }).strict();
 export type AutoLibraryRequest = z.infer<typeof requestSchema>;
 
@@ -63,6 +68,14 @@ export function prepareAutoLibraryBuild(directoryInput: string, rootInput: strin
   const request = requestSchema.parse({ ...rest, schema: 'theorem-os.auto-library-build.v1', buildId: crypto.randomUUID(),
     environment: environment.id, environmentDigest: environment.dependencyDigest, pool, buildManifestRef,
     buildDigest: mathDigest(readMathText(buildManifestRef, 8_000_000)), basePackDigest: basePack ? libraryPackDigest(basePack) : null });
+  if (request.definitionTargets) {
+    const definitions = new Set(inspectScopedLeanDeclarations(request.challengeSource)
+      .filter(item => item.kind !== 'theorem').map(item => item.qualifiedName));
+    if (new Set(request.definitionTargets).size !== request.definitionTargets.length ||
+        request.definitionTargets.some(name => !definitions.has(name))) throw new Error('auto_library_definition_target_invalid');
+  }
+  if (request.demand && request.demand.challengeDigest !== mathDigest(request.challengeSource))
+    throw new Error('auto_library_demand_challenge_changed');
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (basePack) writeMathJsonDurable(path.join(directory, 'base-pack.json'), basePack, 0o400);
   writeMathJsonDurable(path.join(directory, 'request.json'), request, 0o400);
@@ -91,7 +104,12 @@ const outcome = z.enum(['rejected', 'none', 'statement_failed', 'no_progress', '
 const roundSchema = z.object({
   round: z.number().int().positive(), phase: z.enum(['plan', 'check', 'prove', 'extract', 'verify', 'publish', 'done']),
   pool: z.array(z.string()).max(4096), taken: z.array(z.string()).max(4096), name: z.string().optional(),
-  plan: autoLibraryPlanSchema.optional(), prove: z.string().max(4096).optional(), verify: z.string().max(4096).optional(),
+  // Read earlier saved rounds without weakening the strict contract for a newly submitted plan.
+  plan: autoLibraryPlanSchema.extend({ target: autoLibraryPlanSchema.shape.target.default(null),
+    application: autoLibraryPlanSchema.shape.application.default(null),
+    remaining: autoLibraryPlanSchema.shape.remaining.default(null) }).optional(),
+  prove: z.string().max(4096).optional(), verify: z.string().max(4096).optional(),
+  applicationCheck: autoLibraryApplicationCheckSchema.optional(),
   proof: z.object({ status: z.string().max(64), tokens: limit.nullable(), turns: limit.nullable() }).strict().optional(),
   outcome: outcome.optional(), feedback: z.string().max(16_000).optional(),
 }).strict();
@@ -138,8 +156,12 @@ const retryable = (cause: unknown) => {
   return code === 'other' && Boolean(reason) || ['rateLimitExceeded', 'flexUnavailable', 'serverOverloaded', 'httpConnectionFailed',
     'responseStreamConnectionFailed', 'internalServerError', 'responseStreamDisconnected', 'responseTooManyFailedAttempts'].includes(code);
 };
-const ROLE_PROMPT = 'Follow the complete role protocol in the developer instructions. Read OUTPUT.schema.json and INPUT.json, ' +
-  'write OUTPUT.json atomically using that contract, then stop. ROLE.md is the same protocol and need not be reread.';
+const ROLE_PROMPT = 'Choose one useful reusable dependency. Read INPUT.json and OUTPUT.schema.json, then write a schema-valid ' +
+  'OUTPUT.json atomically and stop. Do not inspect Mathlib or search the library: the host checks your statement next. ' +
+  'State a tractable prerequisite with a concrete use, or submit decision none. ROLE.md repeats the developer protocol.';
+const PLANNER_TURNS_PER_ATTEMPT = 3;
+const CONTINUE_PROMPT = 'Continue the same library-planning decision from the files you already read. ' +
+  'Write a schema-valid OUTPUT.json atomically now, or submit decision none if no useful dependency is clear.';
 
 type RunResult = { status?: string; reason?: string; runId?: string; solution_commit?: string | null; stateFile?: string; turns?: number;
   tokenBudget?: { reportedTotalTokens?: number | null } };
@@ -173,7 +195,7 @@ const summarize = (directory: string, state: State) => ({
   status: state.status, directory, published: state.modules.flatMap(module => module.published ? [module.published] : []),
   modules: state.modules.map(module => ({ index: module.index, status: module.status, published: module.published,
     rounds: module.rounds.map(round => ({ round: round.round, phase: round.phase, name: round.name, outcome: round.outcome,
-      proof: round.proof })) })),
+      proof: round.proof, applicationCheck: round.applicationCheck })) })),
   plannerTokens: plannerTokens(state.sessions), proverTokens: proverTokens(state.modules.flatMap(module => module.rounds)),
   modelTurns: state.sessions.reduce((total, session) => total + session.turns, 0) +
     state.modules.flatMap(module => module.rounds).reduce((total, round) => total + (round.proof?.turns ?? 0), 0),
@@ -310,8 +332,15 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       });
       if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
       record.threadId = session.threadId;
-      record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true; record.status = 'running'; save();
-      record.status = await session.run(ROLE_PROMPT, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
+      for (let turn = 0; turn < PLANNER_TURNS_PER_ATTEMPT; turn++) {
+        checkLimits();
+        record.usageAccounting.startedTurns++;
+        record.usageAccounting.pending = true; record.status = 'running'; save();
+        record.status = await session.run(turn === 0 ? ROLE_PROMPT : CONTINUE_PROMPT,
+          crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns++; save(); });
+        lease.signal.throwIfAborted();
+        if (record.status !== 'checkpoint') break;
+      }
       lease.signal.throwIfAborted();
       if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
         if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
@@ -360,17 +389,22 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
     const pack = roundPack(round), previous = module.rounds.at(-2);
     const library = (pack?.modules ?? []).map(item => ({ module: item.file.slice(0, -5).replaceAll('/', '.'), file: item.file,
       auto: item.file.startsWith('Submission/Library/Auto/'), declarations: autoLibraryTheorems(item.source).length,
+      theorems: item.file.startsWith('Submission/Library/Auto/') ? autoLibraryTheorems(item.source) : [],
       summary: autoLibraryModuleSummary(item.source) }));
     const input = autoLibraryPlannerInput({ challengeId: request.challengeId, challenge: request.challengeSource, task: request.task,
+      ...(request.definitionTargets ? { definitionTargets: request.definitionTargets } : {}),
+      ...(request.demand ? { demand: request.demand } : {}),
       environment: request.environment, library, taken: round.taken, module: module.index, round: round.round, maxRounds: request.maxRounds,
       ...(previous?.feedback ? { feedback: previous.feedback } : {}),
-      ...(previous?.plan ? { previous: { name: previous.plan.name, summary: previous.plan.summary, lean: previous.plan.lean } } : {}) });
+      ...(previous?.plan ? { previous: { name: previous.plan.name, summary: previous.plan.summary, lean: previous.plan.lean,
+        target: previous.plan.target, application: previous.plan.application, remaining: previous.plan.remaining } } : {}) });
     const output = await planner(module, round, input, pack);
     const parsed = autoLibraryPlanSchema.safeParse(output);
     if (parsed.success) { round.plan = parsed.data; save(); }
     const modules = new Set((pack?.modules ?? []).map(item => item.file.slice(0, -5).replaceAll('/', '.')));
     const problems = output === undefined ? ['the planner wrote no readable OUTPUT.json'] :
-      autoLibraryPlanProblems(output, { inputDigest: input.inputDigest, taken: round.taken, libraryModules: modules });
+      autoLibraryPlanProblems(output, { inputDigest: input.inputDigest, taken: round.taken,
+        challenge: request.challengeSource, definitionTargets: request.definitionTargets, libraryModules: modules });
     if (problems.length) return finish(module, round, 'rejected', autoLibraryRejectionFeedback(problems));
     if (round.plan!.decision === 'none') return finish(module, round, 'none');
     if (!await reserveAutoLibraryName(request.pool, round.plan!.name!, request.buildId))
@@ -444,7 +478,9 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
         const found = extracted.modules.find(item => item.file === autoLibraryFile(name))!;
         const kept = autoLibraryTheorems(found.source).filter(theorem => wanted.has(theorem));
         if (!kept.length) { failures.push('no stated theorem was proved'); continue; }
-        const source = withAutoLibraryHeader(found.source, { name, summary: round.plan!.summary!, sources: round.plan!.sources! });
+        const source = withAutoLibraryHeader(found.source, { name, summary: round.plan!.summary!, sources: round.plan!.sources!,
+          ...(round.plan!.target && round.plan!.application && round.plan!.remaining ? {
+            application: { target: round.plan!.target, use: round.plan!.application, remaining: round.plan!.remaining } } : {}) });
         const problems = inspectAutoLibrarySource({ name, source, libraryModules: new Set((pack?.modules ?? [])
           .map(item => item.file.slice(0, -5).replaceAll('/', '.'))), allowSorry: false });
         if (problems.length) { failures.push(...problems); continue; }
@@ -491,6 +527,25 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       return finish(module, round, 'verify_failed', autoLibraryLeanFeedback('Lean rejected the proved module as a frozen library file:',
         readJson(path.join(`${output}.runtime`, 'library-pack-diagnostics.json'))));
     if (result?.status !== 'prepared') throw new Error(`auto_library_verify_failed: ${result?.reason ?? result?.status ?? 'no result'}`);
+    if (round.plan?.consumerApplication && !round.applicationCheck) {
+      const item = extracted(module, round), pack = roundPack(round);
+      const own: LibraryPack = { schema: LIBRARY_PACK_SCHEMA, modules: [{ file: autoLibraryFile(name), source: item.source, origin: item.origin }] };
+      const consumerDirectory = path.join(roundDirectory, 'consumer-application');
+      round.applicationCheck = await checkAutoLibraryApplication({
+        workspace: consumerDirectory, source: request.challengeSource,
+        definitionTargets: request.definitionTargets,
+        environment: request.environment as LeanTaskEnvironment, pack: pack ? mergeLibraryPacks([pack, own]) : parseLibraryPack(own),
+        moduleName: name, selected: { declaration: round.plan.consumerApplication.declaration!,
+          application: round.plan.consumerApplication.application! }, env: context.env, signal: lease.signal,
+        prepare: async () => {
+          fs.writeFileSync(path.join(consumerDirectory, 'task.md'), 'Check the selected library application at its original consumer.\n', { mode: 0o400 });
+          await context.solve(runArgs(consumerDirectory, 'verify', ['--startup-only', '--max-run-seconds', '0', ...resumeFlag(consumerDirectory)]),
+            { phase: 'verify', module: module.index, round: round.round, name });
+          if (readResult(path.join(consumerDirectory, 'result.json'))?.status !== 'prepared')
+            throw new Error('auto_library_application_environment_unavailable');
+        } });
+      save(); lease.signal.throwIfAborted();
+    }
     round.phase = 'publish'; save();
   };
   const publish = async (module: Module, round: Round) => {

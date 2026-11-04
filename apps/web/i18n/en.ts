@@ -5,10 +5,11 @@ import { common } from './common';
 import { editor } from './editor';
 import { errors } from './errors';
 import { explain } from './explain';
+import { formalize } from './formalize';
 import { guide } from './guide';
 import { modules } from './modules';
 import { pages } from './pages';
 import { server } from './server';
 
 /** English for every Chinese interface string, keyed by the Chinese text. tests/webI18n.test.ts checks coverage. */
-export const en: Record<string, string> = { ...server, ...pages, ...common, ...app, ...collaboration, ...modules, ...editor, ...guide, ...admin, ...errors, ...explain };
+export const en: Record<string, string> = { ...server, ...pages, ...common, ...app, ...collaboration, ...modules, ...editor, ...guide, ...admin, ...errors, ...explain, ...formalize };

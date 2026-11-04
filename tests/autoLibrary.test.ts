@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { autoLibraryPackFor, autoLibraryTheorems, autoLibraryUsage, inspectAutoLibrarySource, libraryImportClosure,
   parseAutoLibraryRecord, publishAutoLibraryRecord, readAutoLibraryPool, reserveAutoLibraryName, takenAutoLibraryNames,
   withAutoLibraryHeader, AUTO_LIBRARY_RECORD_SCHEMA, type AutoLibraryRecord } from '../src/math/autoLibrary';
-import { autoLibraryLeanFeedback, autoLibraryPlannerInput, autoLibraryPlanProblems, autoLibraryRejectionFeedback } from '../src/math/autoLibraryPlanner';
+import { autoLibraryLeanFeedback, autoLibraryPlanJsonSchema, autoLibraryPlannerInput, autoLibraryPlanProblems,
+  autoLibraryRejectionFeedback } from '../src/math/autoLibraryPlanner';
 import { LIBRARY_PACK_SCHEMA, parseLibraryPack, type LibraryPack } from '../src/math/libraryPacks';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { temporaryDirectory } from './helpers/files';
+import { readAutoLibraryState } from '../src/solver/autoLibrary';
 
 const QUADRUPLE = ['import Submission.Library.Fixture.Double', '', 'open Fixture', '', 'namespace TheoremOS.Auto.Quadruple', '',
   '/-- Four times a number. -/', 'def quadruple (n : Nat) : Nat := double (double n)', '',
@@ -221,8 +223,19 @@ describe('auto-library planner contract', () => {
   const input = autoLibraryPlannerInput({ challengeId: 'fixture/q', challenge: 'theorem target : True := by\n  sorry\n', task: '',
     environment: 'standard', library: [], taken: ['Taken'], module: 0, round: 1, maxRounds: 3 });
   const plan = { inputDigest: input.inputDigest, decision: 'module', reason: 'Quadrupling recurs.', name: 'Quadruple',
-    summary: 'Quadrupling.', sources: ['Peano'], lean: QUADRUPLE };
-  const problems = (value: unknown) => autoLibraryPlanProblems(value, { inputDigest: input.inputDigest, taken: input.takenNames, libraryModules });
+    summary: 'Quadrupling.', sources: ['Peano'], lean: QUADRUPLE, target: 'target',
+    application: 'Use TheoremOS.Auto.Quadruple.quadruple_eq for the consumer.', remaining: ['Adapt its hypothesis'] };
+  const problems = (value: unknown) => autoLibraryPlanProblems(value, { inputDigest: input.inputDigest, taken: input.takenNames,
+    challenge: input.challenge.source, libraryModules });
+
+  it('exports a strict role guide for the optional host application report', () => {
+    const schema = autoLibraryPlanJsonSchema();
+    expect(schema.required).toContain('consumerApplication');
+    const application = schema.properties!.consumerApplication.anyOf![0]!.properties!.application;
+    expect(application.required).toEqual(['expression', 'expectedType', 'context', 'remainingGoals']);
+    expect(application.additionalProperties).toBe(false);
+    expect(schema.properties!.consumerApplication.anyOf![1]).toEqual({ type: 'null', const: null });
+  });
 
   it('binds the output to its input and checks each decision', () => {
     expect(autoLibraryPlannerInput({ challengeId: 'fixture/q', challenge: 'theorem target : True := by\n  sorry\n', task: '',
@@ -230,15 +243,46 @@ describe('auto-library planner contract', () => {
     expect(autoLibraryPlannerInput({ challengeId: 'fixture/q', challenge: 'theorem target : True := by\n  sorry\n', task: '',
       environment: 'standard', library: [], taken: ['Taken'], module: 0, round: 2, maxRounds: 3, feedback: 'x' }).inputDigest).not.toBe(input.inputDigest);
     expect(problems(plan)).toEqual([]);
-    expect(problems({ ...plan, decision: 'none', name: null, summary: null, sources: null, lean: null })).toEqual([]);
+    expect(problems({ ...plan, decision: 'none', name: null, summary: null, sources: null, lean: null,
+      target: null, application: null, remaining: null })).toEqual([]);
     expect(problems({ ...plan, inputDigest: '0'.repeat(64) })).toEqual(['inputDigest must be copied from INPUT.json']);
-    expect(problems({ ...plan, decision: 'none' })).toEqual(['decision none requires name, summary, sources and lean to be null']);
-    expect(problems({ ...plan, lean: null })).toEqual(['decision module requires name, summary, sources and lean']);
+    expect(problems({ ...plan, decision: 'none' })).toEqual(['decision none requires name, summary, sources, lean, target, application and remaining to be null']);
+    expect(problems({ ...plan, lean: null })).toEqual(['decision module requires name, summary, sources, lean, target, application and remaining']);
+    expect(problems({ ...plan, target: 'other' })).toEqual(['target must name a theorem or explicit definition target in INPUT.challenge.source']);
+    expect(problems({ ...plan, application: 'Unrelated assertion' })).toEqual(['application must name a theorem stated in the proposed module']);
+    expect(problems({ ...plan, consumerApplication: { declaration: 'Other.lemma', application: {
+      expression: 'trivial', expectedType: 'True', context: { file: 'Submission.lean', declaration: 'target' },
+    } } })).toEqual(['consumerApplication must name a stated module theorem and the selected original target context']);
     expect(problems({ ...plan, name: 'TAKEN' })).toEqual(['name TAKEN is taken; choose another']);
     expect(problems({ ...plan, name: 'lower' })[0]).toMatch(/^name: /u);
     expect(problems({ ...plan, extra: 1 })[0]).toMatch(/^output: /u);
     expect(problems({ ...plan, lean: QUADRUPLE.replace('open Fixture', 'notation "dbl" => Fixture.double') }))
       .toEqual(['line 3: notation must be local or scoped', 'line 3: declarations and commands must be inside namespace TheoremOS.Auto.Quadruple']);
+  });
+
+  it('accepts an explicit construction target without promoting frozen definitions to goals', () => {
+    const challenge = 'namespace Example\ndef frozen : Nat := 1\ndef witness : Nat := by sorry\nend Example\n';
+    const query = { inputDigest: input.inputDigest, taken: input.takenNames, challenge, libraryModules,
+      definitionTargets: ['Example.witness'] };
+    expect(autoLibraryPlanProblems({ ...plan, target: 'Example.witness' }, query)).toEqual([]);
+    expect(autoLibraryPlanProblems({ ...plan, target: 'Example.frozen' }, query)).toEqual([
+      'target must name a theorem or explicit definition target in INPUT.challenge.source']);
+    const withDefinitions = autoLibraryPlannerInput({ challengeId: 'fixture/construction', challenge, task: '', environment: 'standard',
+      library: [], taken: [], module: 0, round: 1, maxRounds: 1, definitionTargets: ['Example.witness'] });
+    expect(withDefinitions.challenge.definitionTargets).toEqual(['Example.witness']);
+  });
+
+  it('reads saved legacy plans while keeping new submissions subject to the current contract', () => {
+    const directory = temporaryDirectory('auto-library-legacy-');
+    try {
+      const { target: _target, application: _application, remaining: _remaining, ...legacy } = plan;
+      fs.writeFileSync(path.join(directory, 'state.json'), JSON.stringify({ schema: 'theorem-os.auto-library-state.v1',
+        requestDigest: 'a'.repeat(64), status: 'stopped', elapsedMs: 100, sessions: [],
+        modules: [{ index: 0, status: 'open', openedAtMs: 0, rounds: [{ round: 1, phase: 'check', pool: [], taken: [], plan: legacy }] }] }));
+      expect(readAutoLibraryState(directory)?.modules[0]?.rounds[0]?.plan).toMatchObject({ ...legacy,
+        target: null, application: null, remaining: null });
+      expect(problems(legacy).length).toBeGreaterThan(0);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
 
   it('turns Lean diagnostics and host problems into feedback', () => {

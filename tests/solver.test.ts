@@ -1668,8 +1668,9 @@ describe('isolated solver and host acceptance', () => {
   ];
   // Receipt replay and concurrency fixtures prepare helpers under ordinary dependency waiting.
   const waitingPlanTasks = () => planTasks().map(task => task.kind === 'goal' ? { ...task, conditional: false } : task);
-  const writePlan = (worktree: string, tasks: readonly CooperativeTask[], groups?: readonly RouteGroup[]) =>
-    fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({ tasks, groups }) + '\n```\n');
+  const writePlan = (worktree: string, tasks: readonly CooperativeTask[], groups?: readonly RouteGroup[],
+    researchDecisions?: unknown[]) =>
+    fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({ tasks, groups, researchDecisions }) + '\n```\n');
 
   it('rejects forward original-goal dependencies and accepts a shared helper before both goals', () => {
     const tasks = planTasks();
@@ -1746,7 +1747,12 @@ describe('isolated solver and host acceptance', () => {
         expect(host.officialGate).not.toHaveBeenCalled();
         const tasks = [question, ...(status === 'adopted' ? [proposal] : []), ...initial.slice(1).map(task => ({ ...task,
           status: 'active', dependsOn: task.id === 'first' && status === 'adopted' ? ['bridge'] : task.dependsOn }))];
-        fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), JSON.stringify({ tasks }));
+        const deliveryId = /"deliveryId":"([^"]+)"/u.exec(message)?.[1];
+        fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), JSON.stringify({ tasks,
+          researchDecisions: [{ deliveryId, outcome: status === 'adopted' ? 'adopt' : 'decline',
+            ...(status === 'adopted' ? { taskIds: ['bridge'] } : {}),
+            reason: status === 'adopted' ? 'The exact bridge is a new proof obligation for the first goal.' :
+              'The first goal has a direct proof without this proposed bridge.' }] }));
       } else if (action.kind === 'task' && action.task.id === question.id) {
         fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), JSON.stringify({
           summary: 'This exact bridge has a concrete original-goal consumer.', conclusion: 'supporting', lemmaRequests: [proposal] }));
@@ -4404,6 +4410,9 @@ describe('isolated solver and host acceptance', () => {
         fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({
           tasks: [warmup, ...proofs, ...checks.map(task => ({ ...task,
             status: plans > 1 ? 'active' as const : 'paused' as const }))],
+          ...(plans > 1 ? { researchDecisions: [{ deliveryId: /"deliveryId":"([^"]+)"/u.exec(message)?.[1],
+            outcome: 'adopt', taskIds: ['check_a', 'check_b'],
+            reason: 'The two distinct input checks are now active.' }] } : {}),
         }) + '\n```');
       } else if (action.kind === 'task' && action.task.id === warmup.id) {
         fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), JSON.stringify({
@@ -5380,12 +5389,14 @@ describe('isolated solver and host acceptance', () => {
     tasks.splice(2, 0, update); let leads = 0;
     configureCooperation(async (action, options) => {
       if (action.kind === 'lead') {
-        fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({ tasks,
-        }) + '\n```');
         if (++leads === 2) {
           const file = path.join(options.workspace, 'generated/p/Submission.lean');
           fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('def selected : Nat := 2', 'def selected : Nat := 3'));
         }
+        writePlan(options.workspace, tasks, undefined, leads === 2 ? [{
+          deliveryId: cooperationState().deliveries.find((item: any) => item.taskId === update.id).id,
+          outcome: 'source', sourcePaths: ['Submission.lean'],
+          reason: 'The selected definition was changed in the owned Lean source.' }] : undefined);
       } else if (action.kind === 'task' && action.task.id === 'a') {
         finishAssignment(action, options);
         const file = path.join(options.workspace, 'generated/p/Submission.lean');
@@ -5426,12 +5437,15 @@ describe('isolated solver and host acceptance', () => {
     let leads = 0, translations = 0;
     configureCooperation(async (action, options) => {
       if (action.kind === 'lead') {
-        writePlan(options.workspace, tasks);
         if (++leads === 2) {
           expect(cooperationState().statementReviews[0].references.scope).toBe('statement');
           const file = path.join(options.workspace, 'generated/p/Submission.lean');
           fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('theorem first', 'def unrelated : Nat := 10\ntheorem first'));
         }
+        writePlan(options.workspace, tasks, undefined, leads === 2 ? [{
+          deliveryId: cooperationState().deliveries.find((item: any) => item.taskId === 'update').id,
+          outcome: 'source', sourcePaths: ['Submission.lean'],
+          reason: 'The new definition was added to the owned Lean source.' }] : undefined);
       } else if (action.kind === 'task' && action.task.id === 'update') {
         fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), '```math-result\n' + JSON.stringify({ taskId: 'update',
           summary: 'Add unrelated helper definition', conclusion: 'supporting', needsDecision: true, evidenceRefs: [] }) + '\n```');
@@ -5693,8 +5707,9 @@ describe('isolated solver and host acceptance', () => {
     configureCooperation(async (action, options) => {
       if (action.kind === 'lead') {
         if (++leadTurns === 2) { leadBusy.resolve(); await consumerStarted.promise; }
-        fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({ tasks,
-        }) + '\n```');
+        writePlan(options.workspace, tasks, undefined, leadTurns === 2 ? [{
+          deliveryId: cooperationState().deliveries.find((item: any) => item.taskId === 'question').id,
+          outcome: 'decline', reason: 'The independent checked helpers close the goals without a route change.' }] : undefined);
       } else if (action.kind === 'task' && action.task.id === 'question') {
         fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), '```math-result\n' + JSON.stringify({
           taskId: 'question', summary: 'Please choose a route', conclusion: 'inconclusive', evidenceRefs: [], needsDecision: true }) + '\n```');

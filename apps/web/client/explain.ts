@@ -475,6 +475,7 @@ async function start() {
   try {
     const session = await call<WebSession>('/api/session');
     if (session.auth === 'email' && !session.account) { location.replace('login.html'); return; }
+    if (state.runId === session.sample?.id) $<HTMLAnchorElement>('#explain-back').href = './?sample';
     state.csrf = session.csrfToken;
     const overview = await call<WebExplanationOverview>(base());
     if (!overview.targets.length) { missing(t('证明中没有找到原题的目标定理，无法生成讲解。')); return; }

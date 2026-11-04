@@ -741,6 +741,29 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect((await request(`/api/runs/${webSampleRunId}`, alice)).status).toBe(404);
   });
 
+  it('serves read-only classic evidence and Lean files only from the shared archive directory', async () => {
+    const proofs = path.join(root, 'classics/data/proofs/example');
+    fs.mkdirSync(proofs, { recursive: true });
+    fs.writeFileSync(path.join(proofs, 'Submission.lean'), 'theorem example : True := by trivial\n');
+    fs.writeFileSync(path.join(proofs, 'verification.json'), '{"status":"evaluated_passed"}');
+    fs.writeFileSync(path.join(root, 'private.json'), '{"private":true}');
+    fs.writeFileSync(path.join(root, 'private.lean'), '-- private');
+    const proof = await request('/classics/data/proofs/example/Submission.lean');
+    expect(proof.status).toBe(200);
+    expect(proof.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(await proof.text()).toContain('by trivial');
+    const evidence = await request('/classics/data/proofs/example/verification.json');
+    expect(evidence.status).toBe(200);
+    expect(evidence.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    expect(await evidence.json()).toEqual({ status: 'evaluated_passed' });
+    expect((await request('/classics/data/proofs/example/verification.json', undefined, { method: 'DELETE' })).status).toBe(405);
+    expect((await request('/private.json')).status).toBe(404);
+    expect((await request('/private.lean')).status).toBe(404);
+    expect((await request('/classics/..%2fprivate.json')).status).toBe(404);
+    expect((await request('/classics/..%2fprivate.lean')).status).toBe(404);
+    expect(runner.calls).toHaveLength(0);
+  });
+
   it('serves only files within the static root and sends browser security headers', async () => {
     const home = await request('/');
     expect(home.status).toBe(200);

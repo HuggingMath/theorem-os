@@ -5,7 +5,7 @@
 静态网站包含三个入口：
 
 - `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍，以及打开工作台（https://app.theoremos.top/）和“申请内测”的开始区。
-- `archive.html`：证明档案，支持搜索、筛选、源码查看、验收证据、JSON 下载和本地回放记录。
+- `archive.html`：证明档案，支持搜索、按官方验收/本地通过/研究中筛选、源码查看、验收证据、解题过程、JSON 下载和本地回放记录。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。工作台用 `?kind=&area=&environment=` 预填类型、位置和环境，未知值忽略，环境可在发布前修改。
 
 三个入口都有英文版，位于 `en/` 下，与中文页共用样式、脚本和素材。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。工作台截图仍是中文界面，英文页的说明里注明了这一点。
@@ -35,13 +35,28 @@ bun run build:site
 - `accepted/*/verification.json`：已有的本地检查与来源记录。检查投影和最终归档文件的哈希可能不同，档案界面会标明差异；官方验收状态以官方响应为准。
 - `in-progress/snapshot.json` 与各题 `manifest.json`：研究快照的时间、轮数、worker 数量和任务状态。它们不构成整题验收，也不计入首页的官方通过数量。
 
-当前静态站点和已验收清单仍只收录早期 6 道证明；2026 年 10 月 16 日获官方 4/4 通过的 [#2144 四题](../submitted/README.md) 保留在原提交归档中，未计入站点统计。
+当前静态站点收录早期 6 道官方验收证明、OpenAI Math campaign 的 10 道本地原生验收解答和 1 道研究快照。
+OpenAI Math 条目显示原题、最终证明、辅助模块、固定提交与证明哈希、Lean 收据、comparator 结果和按时间排列的研究尝试/引理任务/检查记录。
+它们使用单独的“本地验收通过”状态，不计入首页的官方通过数量；有外部代理数学辅助和续跑的记录保留归属。
+2026 年 10 月 16 日获官方 4/4 通过的 [#2144 四题](../submitted/README.md) 仍保留在原提交归档中。
+
+从持续归档中更新已验收结果，再构建前端：
+
+```sh
+bun run import:math-results /path/to/campaign
+bun run build:site
+```
+
+导入只读 campaign，核对原生 run、最终提交、Lean 和 comparator 结果后，写入 `research/openai-math/`。
+构建再次核对全部导出文件的 SHA-256 与验收身份。网页使用这些经过筛选的结果与过程，
+不会把原始会话、完整 runtime checkpoint、宿主路径或登录凭据复制到公开产物。
+证明和过程均按题目延迟加载；打开解题过程的 URL、下载 JSON 和英文页面保留同一题目的身份。
 
 成果来自前身 DeepScientist / DeepScientist Math 及后续工作，包含继续运行与环境迁移。页面保留原始归属，不将这些案例表述为当前运行时从零求解的成功率评测。
 
-构建时校验已验收提交包全部登记文件，以及页面收录的研究源码的 SHA-256。页面仅提取这些记录的明确字段，以及 solver 的 `Challenge.lean`、`Submission.lean`、`Submission/Helpers.lean`；不复制 `state.json`、会话、环境文件或完整实验目录。档案的源码行数仅统计页面收录的文件。
+构建时校验已验收提交包全部登记文件，以及页面收录的研究源码的 SHA-256。早期快照只提取明确字段与选定 Lean 文件；campaign 解答收录题目工程内的 Lean 源码及明确的过程、验收字段，不复制 `state.json`、会话、环境文件或完整实验目录。档案的源码行数仅统计页面收录的文件。
 
-生成的 `out/site/data/catalog.json` 与档案使用同一份数据。档案脚本 `site.js` 只打包不含源码的索引和目标声明节选；每道题的 Lean 源码写在 `data/sources/<id>.js`，打开“Lean 源码”或下载档案 JSON 时才加载。用脚本标签而不用 `fetch`，是为了 `file://` 预览也能读取源码。源码链接指向公开仓库 `main` 分支的同一路径；证明包按提交包逐字节保存，文件 SHA-256 写在档案里，可据此核对。
+生成的 `out/site/data/catalog.json` 与档案使用同一份数据。档案脚本 `site.js` 只打包不含源码的索引和目标声明节选；每道题的 Lean 源码写在 `data/sources/<id>.js`，打开“Lean 源码”或下载档案 JSON 时才加载。用脚本标签而不用 `fetch`，是为了 `file://` 预览也能读取源码。早期档案的源码链接指向公开仓库 `main` 分支的同一路径，campaign 的原文件链接指向站内 `data/proofs/<id>/`；证明包逐字节保存，文件 SHA-256 写在档案里，可据此核对。
 
 ## 修改页面
 

@@ -7,7 +7,7 @@ import { LeanName, Rich } from './richText';
 import { Icon } from './ui/Icon';
 
 /** What formalization.ts draws from; correspondence marks and items carry data-action="correspondence". */
-export type FormalizationView = { report: WebFormalizationReport; pane: 'lean' | 'prose'; active: ReadonlySet<number>; step?: FragmentStep };
+export type FormalizationView = { report: WebFormalizationReport; pane: 'lean' | 'prose'; active: ReadonlySet<number>; step?: FragmentStep; confirmed?: boolean };
 
 const checkLabels: Record<string, string> = {
   domains: t('对象与取值范围'), assumptions: t('假设'), conclusions: t('结论'), definitions: t('用到的定义'),
@@ -30,12 +30,12 @@ function Toolbar({ report, pane }: FormalizationView) {
 }
 
 /** The right pane: the original with its matched fragments, each correspondence, the blind back-translation, plan and reviews. */
-function Report({ report, active }: FormalizationView) {
+function Report({ report, active, confirmed }: FormalizationView) {
   const pieces = originalPieces(report.original, report.correspondences);
   const located = pieces.some(piece => report.correspondences[piece.quote]!.lean.length), wider = pieces.some(piece => piece.wider.length);
   return <article class="explain-document">
     <p class="explain-notice"><Icon name="triangle-alert" />
-      <span>{t('这份 Lean 陈述由模型写出。另一个模型只看 Lean，把它译回数学；{0} 个审核模型拿原题逐项对照 Lean 陈述和这份回译后才通过，未经人工审阅。Lean 只检查了陈述能编译，没有检查它是否忠实于原题。', report.reviews.length)}</span></p>
+      <span>{confirmed ? t('你已确认此陈述作为研究原题。证明仍需独立验收。') : t('这份 Lean 陈述由模型写出。另一个模型只看 Lean，把它译回数学；{0} 个审核模型拿原题逐项对照 Lean 陈述和这份回译后才通过，未经人工审阅。Lean 只检查了陈述能编译，没有检查它是否忠实于原题。', report.reviews.length)}</span></p>
     <section class="explain-section formal-problem" aria-labelledby="formal-original-heading">
       <header class="explain-section-head"><div class="explain-section-meta"><code translate={false}><LeanName name={report.problemId} /></code></div>
         <h3 id="formal-original-heading">{t('原题')}</h3></header>

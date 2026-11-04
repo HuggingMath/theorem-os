@@ -1,7 +1,8 @@
 import type { GoalPathCandidate, GoalPathReview } from './goalPathReview';
-import type { PlanPatchBase } from './planPatch';
+import { expandPlanPatch, type PlanPatchBase } from './planPatch';
 import { planError, taskGroup } from './tasks';
 import { familyParent } from './taskFamilies';
+import { canonicalMathJson } from '../math/mathRuntimeIo';
 
 /**
  * The Lead's answer to a stalled original goal, written in the same revision as
@@ -18,6 +19,14 @@ const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const invalid = (detail: Record<string, unknown>) => planError('math_plan_goal_path_invalid', detail,
   'Use "goalPath":{"adopt":["CANDIDATE_ID"],"decline":[{"taskId":"STALLED_INPUT","reason":"..."}]} beside baseVersion.');
+
+const taskContract = (task: Record<string, unknown> | undefined) => {
+  if (!task) return null;
+  const list = (value: unknown) => Array.isArray(value) ? [...new Set(value)].sort() : value ?? [];
+  return { kind: task.kind, type: typeof task.type === 'string' ? task.type.trim() : task.type,
+    dependsOn: list(task.dependsOn), premises: list(task.premises), conditional: task.conditional === true,
+    declaration: task.declaration, family: task.family };
+};
 
 /**
  * Strip `goalPath` from a Lead plan value and expand it against the current review. Without a review (a replay of an
@@ -50,6 +59,40 @@ export function applyGoalPathDecisions(value: unknown, review: GoalPathReview | 
   // A derived family member is edited through its family task, which also consumes it.
   const consumers = (taskId: string) => [...base.tasks.filter(task => task.dependsOn.includes(taskId)).map(task => task.id),
     ...[familyParent(base.tasks, taskId)?.id ?? []].flat()];
+  /** A claimed revision must change this obligation's argument, not merely its label or revision counter. */
+  const appliedRevision = (candidate: GoalPathCandidate) => {
+    // Expand the Lead's own patch before mechanical candidates add their independent edits.
+    const expanded = expandPlanPatch(revision, base);
+    const next = new Map((expanded.tasks as Record<string, unknown>[]).map(task => [task.id as string, task]));
+    const previous = new Map(base.tasks.map(task => [task.id, task]));
+    const inputs = (taskId: string) => [...(previous.get(taskId)?.dependsOn ?? []),
+      ...(base.proofRoutes ?? []).filter(route => route.targetTaskId === taskId)
+        .flatMap(route => [route.closingTaskId, ...route.prerequisiteTaskIds])];
+    const path = new Set<string>();
+    const visit = (id: string) => { if (path.has(id)) return; path.add(id); inputs(id).forEach(visit); };
+    for (const goal of stalled) if (goal.frontier.some(item => item.taskId === candidate.taskId)) visit(goal.taskId);
+    const related = new Set([candidate.taskId]);
+    for (const taskId of related) for (const task of base.tasks)
+      if (path.has(task.id) && (inputs(task.id).includes(taskId) || familyParent(base.tasks, taskId)?.id === task.id)) related.add(task.id);
+    if ([...related].some(id => canonicalMathJson(taskContract(previous.get(id))) !== canonicalMathJson(taskContract(next.get(id)))))
+      return true;
+    // Changing an alternative's id or ordering leaves the same mathematical route.
+    const routes = (items: unknown) => Array.isArray(items) ? items.filter(record)
+      .filter(route => related.has(route.targetTaskId as string))
+      .map(route => ({ targetTaskId: route.targetTaskId, closingTaskId: route.closingTaskId,
+        prerequisiteTaskIds: Array.isArray(route.prerequisiteTaskIds) ? [...route.prerequisiteTaskIds].sort() : route.prerequisiteTaskIds }))
+      .map(route => canonicalMathJson(route)).sort() : [];
+    if (canonicalMathJson(routes(base.proofRoutes)) !== canonicalMathJson(routes(expanded.proofRoutes))) return true;
+    // An independent feasibility check is immediately startable advisory work; it need not rewrite the proof contract.
+    const check = (task: Record<string, unknown> | undefined, groups: unknown) => Boolean(task &&
+      ['research', 'sketch'].includes(task.kind as string) && task.reviewScope === 'feasibility' &&
+      (task.status ?? 'active') === 'active' && Array.isArray(task.dependsOn) && task.dependsOn.some(id => related.has(id)) &&
+      (Array.isArray(groups) && groups.length ? groups : [{ id: 'main' }]).some(group =>
+        record(group) && group.id === (task.groupId ?? 'main') && (group.status ?? 'active') === 'active'));
+    return [...next.values()].some(task => check(task, expanded.groups) &&
+      (!check(previous.get(task.id as string), base.groups) ||
+        canonicalMathJson(taskContract(previous.get(task.id as string))) !== canonicalMathJson(taskContract(task))));
+  };
   const upserts = new Map(leadUpserts.map(task => [task.id as string, { ...task }]));
   const conflict = (candidate: GoalPathCandidate, field: string) => planError('math_plan_goal_path_conflict',
     { candidateId: candidate.id, field }, 'The revision sets this field differently from the adopted candidate; drop one.');
@@ -91,9 +134,11 @@ export function applyGoalPathDecisions(value: unknown, review: GoalPathReview | 
       }
     } else {
       const visible = candidate.action === 'reopen-route' ? groups !== undefined
+        : ['revise', 'decompose'].includes(candidate.action) ? appliedRevision(candidate)
         : touched.has(candidate.taskId) || consumers(candidate.taskId).some(id => touched.has(id));
       if (!visible) throw planError('math_plan_goal_path_unapplied', { candidateId: id },
-        'This candidate is not mechanical: write its change in the same revision (upsert or remove the input or a consumer, or supply groups), or decline it.');
+        'This candidate is not mechanical: change the relevant mathematical contract, dependencies or route, ' +
+        'or assign an active feasibility check of this input; objective edits and revision counters do not apply it. Otherwise decline it.');
     }
     decisions.adopted.push({ id, action: candidate.action, taskId: candidate.taskId });
   }

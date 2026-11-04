@@ -5,6 +5,7 @@ import {
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import type { WebExplainAnswer } from '../explain';
+import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../share';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
@@ -23,6 +24,7 @@ import { ActivityReader, readableMessage } from './activityReader';
 import { ModuleView, type ModuleViewInput } from './moduleView';
 import { ModulePlanEditor } from './modulePlanEditor';
 import { CollaborationView } from './collaborationView';
+import type { CollaborationSection } from './collaborationNavigation';
 import { TrajectoryView, type ExplainKey } from './trajectoryView';
 import { RunUpdates } from './runUpdates';
 import type { WebCommandResult, WebObservation } from '../collaboration';
@@ -35,6 +37,8 @@ import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSele
 import { renderTopbar } from './ui/Topbar';
 import { renderRunMonitor as drawRunMonitor, type MonitorItem } from './ui/RunMonitor';
 import { renderRunHeader as drawRunHeader, unmountRunHeader, type RunHeaderProps } from './ui/RunHeader';
+import { ChatSession } from './chatSession';
+import { ChatArtifactNavigation, chatArtifactLine, chatArtifactTask, type ChatArtifactKind, type ChatArtifactTarget } from './chatArtifactNavigation';
 import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
 import { renderFacts, renderGlyph, renderGlyphLabel, renderHistoryEmpty, renderHistoryGroup, renderHistoryRow } from './ui/Controls';
 import { renderConnecting, renderDraftPreview as drawDraftPreview } from './ui/DraftPreview';
@@ -55,6 +59,7 @@ import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
 import { localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
+import { classicLibraryUrl } from './classicLibrary';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -111,6 +116,109 @@ const state = {
   /** The read-only sample run, fetched when first opened; it is never part of runs. */
   sample: undefined as WebRun | undefined,
 };
+const entryStorageKey = 'theorem-os.research-entry.v1';
+let researchEntry: 'natural' | 'lean' = 'natural';
+// Opening the workbench starts with the user's problem, even when an older tab used a Lean template.
+document.body.dataset.entry = researchEntry;
+let naturalPage: Promise<void> | undefined;
+let chatWorkspace: ChatSession | undefined;
+const chatArtifacts = new ChatArtifactNavigation(element('#research-chat-thread'));
+const chatArtifactIdentity = () => chatWorkspace?.id || currentRun()?.id || 'home';
+function placeInputMode() {
+  const mode = currentRun() ? 'natural' : researchEntry;
+  element('#research-input-mode').hidden = mode === 'natural';
+  element('#open-natural-language').setAttribute('aria-pressed', String(mode === 'natural'));
+  element('#entry-lean').setAttribute('aria-pressed', String(mode === 'lean'));
+}
+function chooseEntry(mode: 'natural' | 'lean') {
+  closeSettings(false);
+  document.body.dataset.draftPreview = 'false';
+  element('#open-draft-preview').setAttribute('aria-expanded', 'false');
+  researchEntry = mode; document.body.dataset.entry = mode;
+  element('#open-natural-language').setAttribute('aria-pressed', String(mode === 'natural'));
+  element('#entry-lean').setAttribute('aria-pressed', String(mode === 'lean'));
+  placeInputMode();
+  try { sessionStorage.setItem(entryStorageKey, mode); } catch { /* Keep the choice for this page. */ }
+  syncNaturalResearch();
+  renderRuntime(); renderPreparation(); renderShell();
+}
+async function loadNaturalResearch() {
+  chatWorkspace = new ChatSession({
+    request: api,
+    draftScope: state.session?.account?.email ?? 'anonymous',
+    keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
+    onNavigate: (id, mode) => {
+      chatArtifacts.clear();
+      researchEntry = 'natural'; document.body.dataset.entry = 'natural'; placeInputMode();
+      const search = id ? `?chat=${encodeURIComponent(id)}` : '';
+      if (location.search !== search) history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search);
+      document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false';
+      closeHistoryDialog();
+    },
+    onSelection: run => {
+      const changed = currentRun()?.id !== run?.id;
+      if (run) state.runs = [run, ...state.runs.filter(item => item.id !== run.id)];
+      state.composing = !run; state.selectedId = run?.id ?? ''; state.selectedRun = run;
+      if (changed) { chatArtifacts.clear(); state.tab = 'result'; state.panelSignature = ''; }
+      renderRunList(); renderDetail(changed); renderShell();
+      if (changed) setMobileView('compose');
+    },
+    onArtifact: openChatArtifact,
+    onLean: () => { chooseEntry('lean'); startDraft(); },
+    onGuidance: (run, text?: string, taskId?: string) => openGuidance(run, text, undefined, taskId),
+    onCancelRun: openCancellation,
+    isSample,
+  });
+  await chatWorkspace.start(currentRun());
+}
+function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget) {
+  const run = currentRun(), task = chatArtifactTask(run, target?.taskId);
+  if (kind !== 'original' && !run) return;
+  if (kind !== 'original' && target?.taskId && !task) { toast(t('任务合同未保留')); return; }
+  chatArtifacts.remember(chatArtifactIdentity(), kind, target);
+  document.body.dataset.chatArtifact = kind;
+  document.body.dataset.outputOpen = 'true';
+  if (kind === 'original') { element('#close-research-output').focus({ preventScroll: true }); return; }
+  state.tab = kind === 'roadmap' ? 'trajectory' : 'source'; state.sourceView = 'proof';
+  setMobileView('runs'); renderDetail(true);
+  if (task && kind === 'roadmap') {
+    element('#detail-tab-trajectory').focus({ preventScroll: true });
+    void trajectoryView.showTask(run!.id, task.id);
+    return;
+  }
+  if (task && kind === 'source') { openTaskSource(run!, task.id); return; }
+  element(`#detail-tab-${state.tab}`).focus({ preventScroll: true });
+}
+function openTaskSource(run: WebRun, taskId: string) {
+  const task = chatArtifactTask(run, taskId);
+  if (!task) return;
+  document.body.dataset.chatArtifact = 'source';
+  state.proofViewer = ''; state.compare = undefined; state.sourceView = 'proof';
+  const line = chatArtifactLine(run, taskId, candidateSource(run));
+  state.tab = line === undefined ? 'collaboration' : 'source';
+  setMobileView('runs'); renderDetail(true);
+  if (line !== undefined) { sourceReader.goToLine(line); return; }
+  // A lemma may only have its own recorded file before integration into the candidate.
+  if (collaborationView.showTask(run.id, taskId)) {
+    document.querySelector<HTMLButtonElement>(`[data-collab-source="${CSS.escape(taskId)}"][data-source-version="${CSS.escape(task.version)}"]`)?.click();
+  }
+}
+function syncNaturalResearch() {
+  const run = currentRun();
+  const showing = Boolean(run) || researchEntry === 'natural';
+  element('#research-conversation-panel').hidden = !showing;
+  placeInputMode();
+  if (showing && state.session && !naturalPage) naturalPage = Promise.resolve().then(loadNaturalResearch);
+  if (run && chatWorkspace && chatWorkspace.runId !== run.id) void chatWorkspace.openRun(run);
+}
+async function openNaturalResearch(reset = false) {
+  if (state.submitting) return;
+  closeHistoryDialog();
+  chooseEntry('natural'); startDraft();
+  await naturalPage;
+  chatWorkspace?.home(reset);
+  chatWorkspace?.focus();
+}
 const baseTitle = document.title;
 // A link from the completion mail or the address bar (/?run=<id>) opens that run, also after the login page sends the reader back.
 // The address then follows the open run (syncAddress), so it can be bookmarked and Back returns to the run before.
@@ -119,6 +227,9 @@ const linkedRun = new URLSearchParams(location.search).get('run');
 // The sample has an address of its own (/?sample), so Back from a run returns to it and a reload keeps it open.
 const sampleAddress = '?sample';
 let sampleLink = location.search === sampleAddress;
+let formalizationLink = new URLSearchParams(location.search).get('formalization');
+// The root address opens a new problem; explicit run and sample links still open their records.
+state.composing = !linkedRun && !sampleLink;
 if (linkedRun !== null && runIdPattern.test(linkedRun))
   saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
 const notificationsSupported = () => typeof Notification === 'function';
@@ -192,6 +303,7 @@ let draftPreviewSignature = '';
 let draftSourceExpanded = false;
 /** The recorded version the next run starts from (「从这一版继续」); one submission uses it. */
 let draftContinuation: WebContinuation | undefined;
+let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement } | undefined;
 const sourceReader = new SourceReader(() => {
@@ -228,7 +340,7 @@ const editorReview = new EditorReview(element<HTMLDialogElement>('#source-editor
 const validationShown = new Set<SubmissionField>();
 const sourceCheck = new SourceCheck({
   input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value }),
-  enabled: () => Boolean(state.session?.precheck && state.connected && state.session.runtime.ready
+  enabled: () => Boolean(researchEntry === 'lean' && state.session?.precheck && state.connected && state.session.runtime.ready
     && new TextEncoder().encode(field('source').value).length <= state.session.limits.maxSourceBytes),
   post: async (input, signal) => (await api<{ precheck: WebPrecheck }>('/api/precheck',
     { method: 'POST', body: JSON.stringify(input), signal, timeoutMs: 120_000 })).precheck,
@@ -247,7 +359,7 @@ function renderSourceCheckView() {
     },
   });
 }
-/** Opens the statement in settings with the reported range selected and in view. */
+/** Focuses the inline statement with the reported range selected and in view. */
 function jumpToSourceDiagnostic(diagnostic: WebPrecheckDiagnostic) {
   openSettings('source');
   const editor = element<HTMLTextAreaElement>('#source');
@@ -324,7 +436,7 @@ function setGlobalNotice(text: string) {
   element('#global-notice').hidden = !text;
 }
 function setMobileView(view: 'compose' | 'runs', focus = false) {
-  if (currentRun()) view = 'runs';
+  document.body.dataset.outputOpen = String(view === 'runs' && Boolean(currentRun()));
   rememberConversationScroll();
   const changed = document.body.dataset.mobileView !== view;
   if (changed) { activityReader.remember(); moduleView.update(); }
@@ -348,7 +460,7 @@ function setMobileView(view: 'compose' | 'runs', focus = false) {
   }
   restoreConversationScroll();
   if (changed && window.matchMedia('(max-width:850px)').matches) {
-    animateEntrance(element(view === 'compose' ? '.composer' : '#runs-panel'), 'workspace');
+    animateEntrance(element(view === 'compose' ? currentRun() ? '#research-conversation-panel' : '.composer' : '#runs-panel'), 'workspace');
   }
 }
 /** Focuses the first usable control in the order given (not the page's order, where the top bar comes first). */
@@ -379,6 +491,26 @@ function syncSettingsNavigation() {
 }
 function openSettings(focusId?: string) {
   if (!state.session || state.submitting) return;
+  if (researchEntry === 'natural' || currentRun() && !focusId) {
+    if (currentRun()) setMobileView('compose');
+    void (currentRun() ? naturalPage ?? Promise.resolve() : openNaturalResearch()).then(() => {
+      const settings = document.querySelector<HTMLDetailsElement>('#formalize-settings');
+      if (settings) settings.open = true;
+      const key = document.querySelector<HTMLElement>('#formalize-key');
+      key?.focus(); key?.scrollIntoView({ block: 'center' });
+    });
+    return;
+  }
+  if (focusId && ['source', 'environment', 'template'].includes(focusId)) {
+    closeSettings(false);
+    chooseEntry('lean');
+    startDraft();
+    const options = field(focusId).closest('details');
+    if (options) options.open = true;
+    field(focusId).focus();
+    field(focusId).scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    return;
+  }
   // The configuration belongs to the next research, so it opens on the new-research page.
   if (currentRun()) startDraft();
   modulePlanLibrary.refresh();
@@ -427,7 +559,10 @@ function currentSubmissionIssues(): SubmissionIssue[] {
 }
 const recordsFull = () => Boolean(state.session && state.runs.length >= state.session.limits.maxRuns);
 let readinessFull = false;
-function renderPreparation(issues = currentSubmissionIssues()) {
+function renderPreparation(issues?: SubmissionIssue[]) {
+  element('#submission-readiness').hidden = researchEntry !== 'lean';
+  if (researchEntry !== 'lean') { clearValidation(); return; }
+  issues ??= currentSubmissionIssues();
   for (const id of submissionFields) {
     const issue = issues.find(issue => issue.field === id);
     const visible = Boolean(issue && validationShown.has(id));
@@ -495,6 +630,10 @@ function renderBudgetEstimate() {
     : t('还没有这个模型的用量记录，费用按服务商实际计费。');
   patchText(element('#budget-estimate'), sentences(limits, usage, cap ? t('达到 {0} Token 后停止新的调用。', formatTokens(cap)) : ''));
 }
+function focusProofInstructions(preventScroll = false) {
+  element<HTMLDetailsElement>('#proof-instructions').open = true;
+  field('task').focus({ preventScroll });
+}
 function focusSubmissionIssue(issue: SubmissionIssue) {
   validationShown.add(issue.field);
   renderPreparation();
@@ -505,7 +644,7 @@ function focusSubmissionIssue(issue: SubmissionIssue) {
     element('#module-plan-error').scrollIntoView({ block: 'nearest', behavior: 'instant' });
     return;
   }
-  if (issue.field === 'task') { closeSettings(false); setMobileView('compose'); }
+  if (issue.field === 'task') { closeSettings(false); setMobileView('compose'); element<HTMLDetailsElement>('#proof-instructions').open = true; }
   else openSettings(issue.field);
   field(issue.field).focus();
   // Focus alone can leave the explanation underneath the fixed settings footer.
@@ -521,9 +660,28 @@ function renderComposerSummary() {
   patchText(element('#composer-environment'), environmentName(field('environment').value));
   element('#draft-continuation').hidden = !draftContinuation;
   if (draftContinuation) patchText(element('#draft-continuation-label'), t('从「{0}」继续', draftContinuation.label));
+  element('#draft-formalization').hidden = !draftFormalization;
+  element('#confirmed-original').hidden = !draftFormalization;
+  element('#creation-mode').textContent = draftFormalization ? t('已确认的自然语言原题') : t('已有 Lean 原题');
+  element('#confirmed-original-text').textContent = draftFormalization?.original ?? t('正在加载…');
+  if (draftFormalization) element<HTMLAnchorElement>('#draft-formalization-link').href = `formalize.html?id=${encodeURIComponent(draftFormalization.id)}`;
   renderPreparation();
   renderTemplateSelection();
   renderShell();
+}
+async function loadConfirmedOriginal() {
+  const binding = draftFormalization;
+  if (!binding) return;
+  try {
+    const { formalization } = await api<{ formalization: WebFormalization }>(`/api/formalizations/${encodeURIComponent(binding.id)}`);
+    if (draftFormalization !== binding) return;
+    if (formalization.status !== 'confirmed' || formalization.report?.evidenceSha256 !== binding.evidenceSha256
+      || formalization.report.statement !== binding.source || formalization.environment !== binding.environment) return;
+    binding.original = formalization.original;
+    renderComposerSummary();
+  } catch (error) {
+    if (draftFormalization === binding) element('#confirmed-original-text').textContent = message(error);
+  }
 }
 function rememberConversationScroll() {
   const scroll = element('#conversation-scroll');
@@ -653,6 +811,7 @@ function sourceChanged() {
 }
 function captureDraft(): TaskDraft {
   const modulePlan = modulePlanEditor.value();
+  const knowledgeDigest = serverModulePlans.knowledgeDigest();
   return { providerId: field('provider').value, model: field('model').value,
     effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
     source: field('source').value, task: field('task').value, templateId: field('template').value,
@@ -660,9 +819,10 @@ function captureDraft(): TaskDraft {
     ...(field('max-tokens').value ? { maxTotalTokens: field('max-tokens').value } : {}),
     coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
     ...(element<HTMLInputElement>('#plan-approval').checked ? { planApproval: true as const } : {}),
-    ...(serverModulePlans.knowledgeDigest() ? { knowledgeDigest: serverModulePlans.knowledgeDigest() } : {}),
+    ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
     ...(modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full' ? { modulePlan } : {}),
-    ...(draftContinuation ? { continueFrom: draftContinuation } : {}) };
+    ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
+    ...(draftFormalization ? { formalization: { id: draftFormalization.id, evidenceSha256: draftFormalization.evidenceSha256 } } : {}) };
 }
 function setDraftStatus(text: string, warning = false) {
   element('#draft-status').textContent = text;
@@ -689,6 +849,7 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   replacingDraft = true;
   // Another problem or a fresh draft no longer continues the version; editing the statement or reusing a run keeps its own.
   if (reason !== 'edit' && reason !== 'reuse') draftContinuation = undefined;
+  if (reason !== 'edit') draftFormalization = undefined;
   try { change(); } finally { replacingDraft = nested; }
   if (track) {
     draftRecovery.remember(before, captureDraft(), reason);
@@ -702,16 +863,17 @@ function recoverDraft() {
   draftRecovery.clear();
   applyTaskDraft(recovery.draft);
   startDraft(); saveDraft(); renderDraftRecovery();
-  if (fromSettings) {
-    field('source').focus();
-    field('source').scrollIntoView({ block: 'nearest', behavior: 'instant' });
-  }
-  else field('task').focus({ preventScroll: true });
+  if (fromSettings) openSettings('source');
+  else focusProofInstructions(true);
   toast(t('已恢复替换前的草稿，请重新填写 API Key'));
 }
 /** 先审计划 holds the Agents after the Lead's plan, so it needs a Lead and at least one other Agent. */
 const planApprovalAvailable = () => element<HTMLInputElement>('input[name="coordination"]:checked').value === 'cooperative' && Number(field('workers').value) >= 2;
 function draftChanged(persist = true) {
+  if (draftFormalization && (field('source').value !== draftFormalization.source || field('environment').value !== draftFormalization.environment)) {
+    draftFormalization = undefined; draftContinuation = undefined;
+    toast(t('原题或环境已修改，当前草稿已转为普通 Lean 题目。'));
+  }
   element<HTMLInputElement>('#plan-approval').disabled = !planApprovalAvailable();
   latestDraft = captureDraft();
   modulePlanLibrary.sync();
@@ -733,7 +895,7 @@ function saveDraft() {
   try {
     sessionStorage.setItem(taskDraftStorageKey, encodeTaskDraft(captureDraft()));
     draftDirty = false;
-    setDraftStatus(t('草稿已保存'));
+    setDraftStatus(t('草稿已存于此标签页'));
   } catch {
     // Avoid restoring an older draft after the latest edits could not be saved.
     try { sessionStorage.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
@@ -757,6 +919,8 @@ function applyTaskDraft(draft: TaskDraft) {
   modulePlanEditor.setValue(draft.modulePlan);
   serverModulePlans.setKnowledgeDigest(draft.knowledgeDigest);
   draftContinuation = draft.continueFrom;
+  draftFormalization = draft.formalization ? { ...draft.formalization, source: draft.source, environment: draft.environment } : undefined;
+  void loadConfirmedOriginal();
   field('api-key').value = '';
   element<HTMLInputElement>('#api-key').type = 'password';
   updateKeyToggle(); providerAddress(); updateEnvironment(); sourceChanged();
@@ -795,10 +959,15 @@ async function importTaskFile(file: File) {
     pendingImport = { draft, revision };
     element('#import-filename').textContent = file.name;
     const provider = state.session?.providers.find(provider => provider.id === draft.providerId);
+    const plan = draft.modulePlan;
+    const schedulerLabels = { plan: t('按研究计划'), 'critical-path': t('优先关键路径'), continuation: t('延续证明前沿') };
+    const planSummary = [schedulerLabels[plan?.scheduler ?? 'plan'], plan?.context === 'essential' ? t('精简研究上下文') : t('完整研究上下文'),
+      t('启用 {0} / {1} 条自定义规则', plan?.custom.filter(rule => rule.enabled).length ?? 0, plan?.custom.length ?? 0)].join(' · ');
     renderFacts(element('#import-facts'), [[t('证明环境'), environmentName(draft.environment)],
       [t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))], [t('模型'), draft.model || t('未填写'), true],
       [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), draft.maxTurns || t('未填写')],
       [t('解题预算 / 秒'), draft.maxRunSeconds || t('未填写')], [t('Agent 数量'), draft.workers || t('未填写')],
+      [t('用量上限 / 万 Token'), draft.maxTotalTokens || t('不限')], [t('模块方案'), planSummary],
       [t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
       ...(draft.planApproval ? [[t('先审计划'), t('开启')] as [string, string]] : [])]);
     element('#import-task-preview').textContent = draft.task || t('未填写');
@@ -839,9 +1008,10 @@ function resetForm() {
     element<HTMLInputElement>(`input[name="coordination"][value="${session.defaults.coordination}"]`).checked = true;
     field('provider').value = session.providers[0]?.id ?? '';
     field('environment').value = session.defaults.environment;
-    renderTemplates('', true);
-    field('source').value = ''; field('task').value = '';
-    applyTemplate(field('template').value); providerAddress(); updateEnvironment();
+    renderTemplates();
+    field('source').value = ''; field('task').value = t('保留原题声明，补全 Lean 证明并通过独立验收。');
+    element<HTMLDetailsElement>('#proof-instructions').open = false;
+    sourceChanged(); providerAddress(); updateEnvironment();
     element('#form-error').hidden = true;
     element('#draft-error').hidden = true;
     draftReady = wasReady;
@@ -989,12 +1159,15 @@ function renderRuntime() {
   element('#runtime-note').textContent = !state.connected ? state.lost ? t('连接恢复后可提交') : t('正在检查环境') : session
     ? !session.providers.length ? t('未配置可用服务商') : localizeText(session.runtime.message) || (ready ? t('环境就绪') : t('环境未就绪'))
     : t('等待连接');
-  element<HTMLButtonElement>('#submit-run').disabled = !ready || state.submitting;
+  element<HTMLButtonElement>('#submit-run').disabled = !ready || state.submitting || researchEntry !== 'lean';
   renderGlyph(element('#submit-run'), state.submitting ? 'spinner' : 'arrow-up');
   element('#submit-run').setAttribute('aria-label', state.submitting ? t('正在提交') : t('发送研究任务'));
   element('#submit-run').setAttribute('title', state.submitting ? t('正在提交') : touchQuery.matches ? t('发送研究任务') : t('发送研究任务（Enter；Shift+Enter 换行）'));
   element<HTMLButtonElement>('#settings-submit').disabled = !ready || state.submitting;
+  element<HTMLButtonElement>('#settings-submit').disabled ||= researchEntry !== 'lean';
+  element('#settings-submit').hidden = researchEntry !== 'lean';
   element<HTMLFieldSetElement>('#form-fields').disabled = !session || state.submitting;
+  element<HTMLFieldSetElement>('#inline-problem-fields').disabled = !session || state.submitting || researchEntry !== 'lean';
   element<HTMLButtonElement>('#reset-form').disabled = !session || state.submitting;
   element<HTMLButtonElement>('#import-task').disabled = !session || state.submitting;
   element<HTMLButtonElement>('#export-draft').disabled = !session || state.submitting;
@@ -1200,7 +1373,8 @@ function resultProps(run: WebRun): ResultPanelProps {
       ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
     recovery: isSample(run) ? [] : nextSteps(run, goals), ...(working ? { notify: notifyState() } : {}),
     ...(['environment', 'unknown', 'interrupted'].includes(guide?.kind ?? '') ? { feedback: feedbackUrl({ failure: guide!.kind }) } : {}),
-    ...(proof ? { proof: { source: proof, verified: Boolean(run.result?.proof && passed(run)), rejected: isRejectedRun(run) } } : {}), ...(goals ? { goals } : {}),
+    ...(proof ? { proof: { source: proof, verified: Boolean(run.result?.proof && passed(run)), rejected: isRejectedRun(run),
+      ...(passed(run) && run.result?.proof ? { explainRun: run.id } : {}) } } : {}), ...(goals ? { goals } : {}),
     ...(proof && state.proofViewer === run.id ? { viewer: { onClose: closeProofViewer } } : {}),
     ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom!.label, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
       comparable: Boolean(proof && candidateSource(item)) })) } : {}),
@@ -1282,6 +1456,7 @@ function sourceContent(run: WebRun) {
   const lineCount = source.split(/\r\n|\r|\n/).length;
   const author = showingProof && !run.result?.proof ? run.artifact?.workerId : undefined;
   const props: SourcePanelProps = { hasProof, proofLabel, view: state.sourceView, showingProof, verified,
+    ...(verified ? { explainRun: run.id } : {}),
     status: showingProof ? verified ? t('完整原题已通过验收') : isRejectedRun(run) ? t('候选 · 验收未通过') : t('候选 · 尚未验收通过') : activeRun(run) && !hasProof ? t('原始题目 · 等待候选') : t('原始题目'),
     tone: showingProof ? verified ? 'verified' : 'candidate' : '',
     ...(author ? { origin: t('来自 {0}', workerNames(run.observation?.inspection.workers).get(author) ?? author) } : {}) };
@@ -1337,7 +1512,7 @@ function reportProps(run: WebRun): ReportPanelProps {
     metrics: summary.metrics.map(readableMetric), identity: summary.identity }, accepted: passed(run), ...(stuck ? { stuck } : {}),
     ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`, headings: headingsOf(run.result.proof),
       mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib'),
-      ...(isAcceptedRun(run) && !isSample(run) ? { explainRun: run.id } : {}) } } : {}) };
+      ...(isAcceptedRun(run) ? { explainRun: run.id } : {}) } } : {}) };
 }
 const outlines = new Map<string, OutlineState>();
 /** Starts loading the proof outline; the report re-renders when it arrives. Returns whether a request started. */
@@ -1479,13 +1654,18 @@ let viewSettled = false;
 /** A selected run fills the workspace as one document; without one the workspace is the new-research page. */
 function syncView() {
   const waiting = opening(), view = currentRun() || waiting ? 'run' : 'draft';
+  const run = currentRun();
+  element('#mobile-compose').setAttribute('aria-controls', run ? 'research-conversation-panel' : 'compose-panel');
+  element('#mobile-compose').textContent = run ? t('原题与进展') : t('编写');
+  element('#mobile-runs').textContent = run ? t('研究成果') : t('预览');
   // The page starts on the run layout; when it settles on the new-research page, a phone shows the composer.
   const settling = !waiting && !viewSettled;
   if (settling) viewSettled = true;
-  if (document.body.dataset.view === view) return;
+  if (document.body.dataset.view === view) { syncNaturalResearch(); return; }
   rememberConversationScroll();
   document.body.dataset.view = view;
-  if (view === 'run' && document.body.dataset.mobileView !== 'runs') setMobileView('runs');
+  syncNaturalResearch();
+  if (view === 'run') setMobileView('compose');
   if (view === 'draft' && settling) setMobileView('compose');
   restoreConversationScroll();
 }
@@ -1493,6 +1673,8 @@ function renderDetail(force = false) {
   syncView(); syncAddress();
   renderConversation();
   const run = currentRun();
+  const conversation = element('#research-conversation-panel');
+  conversation.hidden = !run && researchEntry !== 'natural';
   if (sourceComparison && sourceComparison.runId !== run?.id) sourceComparison = undefined;
   if (!run) {
     collaborationView.update();
@@ -1534,6 +1716,7 @@ function renderDetail(force = false) {
 }
 function renderRunHeader(run: WebRun) {
   const value = status(run), progress = runProgress(run), cancelling = state.cancelling.has(run.id);
+  chatWorkspace?.observe(run);
   drawRunHeader(element('#run-detail'), {
     title: run.title, id: run.id, updated: run.updatedAt, error: state.detailError,
     status: { key: `${run.status}:${run.phase}:${value.label}`, ...value },
@@ -1543,6 +1726,8 @@ function renderRunHeader(run: WebRun) {
     active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
     download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && Boolean(run.result?.proof),
     sample: isSample(run), ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
+    ...(run.formalizationId ? { formalizationId: run.formalizationId } : {}),
+    automaticFormalization: run.formalization?.confirmation === 'automatic',
     // The sample's Agents were offline scripts; its recorded token counts would read as a real cost.
     ...(!isSample(run) && runTokens(run) ? { tokens: { used: formatTokens(runTokens(run)!), ...(run.maxTotalTokens ? { cap: formatTokens(run.maxTotalTokens) } : {}) } } : {}),
     ...(approvalProps(run) ? { approval: approvalProps(run)! } : {}),
@@ -1592,15 +1777,20 @@ function closeProofViewer() {
   document.querySelector<HTMLElement>('#detail-panel [data-action="view-proof"]')?.focus({ preventScroll: true });
 }
 function openGuidance(run: WebRun, text?: string, notice?: string, taskId?: string) {
-  state.tab = 'collaboration'; renderDetail(true);
+  state.tab = 'collaboration'; setMobileView('runs'); renderDetail(true);
   if (!collaborationView.guide(run.id, text, notice, taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
+}
+function openCollaborationSection(run: WebRun, section: CollaborationSection, taskId?: string) {
+  state.tab = 'collaboration'; setMobileView('runs'); renderDetail(true);
+  const shown = section === 'reviews' ? collaborationView.showStatementReview(run.id, taskId) : collaborationView.showSection(run.id, section);
+  if (!shown) element('#detail-tab-collaboration').focus({ preventScroll: true });
 }
 /** How the next address change is recorded: a run the reader chose adds a history entry, anything automatic replaces it. */
 let addressMode: 'push' | 'replace' = 'replace';
 function syncAddress() {
   const mode = addressMode; addressMode = 'replace';
   // Until the first list arrives the selection is not known yet, and a ?run= or ?sample link must survive until it is.
-  if (!state.resumed || sampleLink) return;
+  if (!state.resumed || sampleLink || formalizationLink || chatWorkspace?.id || new URLSearchParams(location.search).has('chat') && !chatWorkspace) return;
   const run = currentRun(), search = !run ? '' : isSample(run) ? sampleAddress : `?run=${encodeURIComponent(run.id)}`;
   if (location.search === search) return;
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search + location.hash);
@@ -1617,6 +1807,7 @@ function selectRun(id: string, closeHistory = true, address: 'push' | 'replace' 
   state.diffChange = 0; state.compare = undefined;
   renderRunList(); renderDetail(true);
   if (closeHistory) closeHistoryDialog();
+  if (switching) setMobileView('compose');
   // Phones move between their own views.
   if (switching && !historyQuery.matches) animateEntrance(element('#run-detail'), 'panel', true);
 }
@@ -1646,19 +1837,43 @@ async function openSample(address: 'push' | 'replace' = 'push') {
   state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = ''; state.panelSignature = '';
   state.diffChange = 0; state.compare = undefined;
   renderRunList(); renderDetail(true); renderShell();
-  closeHistoryDialog(); setMobileView('runs');
+  closeHistoryDialog(); setMobileView('compose');
 }
 function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
+  chatWorkspace?.home(false);
   const leaving = !state.composing;
   state.composing = true; addressMode = address;
   state.selectedId = ''; state.selectedRun = undefined;
   state.tab = 'source'; state.sourceView = 'proof'; state.detailError = '';
   state.draftView = 'source';
+  document.body.dataset.draftPreview = 'false';
+  element('#open-draft-preview').setAttribute('aria-expanded', 'false');
   moduleView.update(undefined, moduleInput());
   state.panelSignature = ''; draftPreviewSignature = '';
   if (reset) resetForm();
   renderRunList(); renderDetail(true); setMobileView('compose');
   if (leaving && !historyQuery.matches) animateEntrance(element('.workspace'), 'workspace');
+}
+async function openFormalizedDraft(id: string) {
+  const revision = draftRevision;
+  try {
+    const { formalization } = await api<{ formalization: WebFormalization }>(`/api/formalizations/${encodeURIComponent(id)}`);
+    if (formalization.status !== 'confirmed' || !formalization.report) throw new Error(t('请先审阅并确认这份形式化原题。'));
+    if (draftRevision !== revision) throw new Error(t('草稿已变化，未载入形式化原题。请从形式化页面重新打开。'));
+    const report = formalization.report;
+    const draft: TaskDraft = { ...captureDraft(), source: report.statement, environment: report.environment, templateId: '',
+      task: t('证明已确认原题中的全部目标，保留所有定义、假设与声明。'),
+      formalization: { id: formalization.id, evidenceSha256: report.evidenceSha256 } };
+    delete draft.continueFrom;
+    replaceDraft('import', () => applyTaskDraft(draft));
+    chooseEntry('lean');
+    formalizationLink = null;
+    startDraft(false, 'replace'); saveDraft(); renderDraftRecovery();
+    toast(t('已载入确认后的 Lean 原题，配置模型后即可开始证明。'));
+  } catch (error) {
+    formalizationLink = null;
+    toast(message(error));
+  }
 }
 const currentConnection = (epoch: number) => pageActive && epoch === state.connectionEpoch;
 const sessionFailure = (error: unknown) => error instanceof ApiError
@@ -1826,6 +2041,7 @@ function initialize(): Promise<void> {
       await refreshRuns(epoch, false, listed);
       if (!currentConnection(epoch)) return;
       state.connected = true; state.lost = false;
+      if (formalizationLink) await openFormalizedDraft(formalizationLink);
       setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
       if (currentConnection(epoch)) {
@@ -1855,7 +2071,7 @@ function renderShell() {
     ? { label: state.cancelling.has(run.id) ? t('正在取消') : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }
     : running.length ? { label: t('{0} 项研究进行中', running.length), detail: '', tone: 'running', count: running.length } : undefined;
   renderTopbar(element('#topbar'), {
-    model: field('model').value || t('模型配置'), mac, live,
+    model: researchEntry === 'natural' && !run ? t('默认版配置') : field('model').value || t('模型配置'), mac, live,
     history: { docked: historyDocked(), expanded: !historyCollapsed() },
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
@@ -1875,6 +2091,14 @@ function openAccount() {
   element('#account-email').textContent = state.session?.account?.email ?? '';
   element<HTMLInputElement>('#completion-email').checked = state.session?.account?.completionEmail !== false;
   element('#open-admin').hidden = !state.session?.account?.admin;
+  const account = state.session?.account, recentCode = account?.passwordResetAllowed;
+  element('#account-current-wrap').hidden = !account?.passwordSet || Boolean(recentCode);
+  element('#account-password-note').textContent = recentCode ? t('刚通过邮箱验证，可在 10 分钟内设置或重设密码。')
+    : account?.passwordSet ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
+      : t('请用邮箱验证码重新登录，在 10 分钟内设置至少 12 位的密码。');
+  element<HTMLButtonElement>('#save-password').textContent = account?.passwordSet ? t('修改密码') : t('设置密码');
+  for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
+  element('#account-password-error').hidden = true;
   field('account-confirm').value = ''; element<HTMLButtonElement>('#delete-account').disabled = true;
   element('#account-error').hidden = true;
   showDialog(element<HTMLDialogElement>('#account-dialog'));
@@ -1903,6 +2127,30 @@ async function changeCompletionEmail(input: HTMLInputElement) {
   } catch (error) { input.checked = !wanted; toast(message(error)); }
   finally { input.disabled = false; }
 }
+async function changePassword(event: Event) {
+  event.preventDefault();
+  const error = element('#account-password-error'), button = element<HTMLButtonElement>('#save-password');
+  const password = field('account-new-password').value, repeat = field('account-repeat-password').value;
+  error.hidden = true;
+  if (password.length < 12 || new TextEncoder().encode(password).length > 256) {
+    error.textContent = t('密码至少 12 位且不超过 256 字节。'); error.hidden = false; return;
+  }
+  if (password !== repeat) { error.textContent = t('两次输入的密码不一致。'); error.hidden = false; return; }
+  button.disabled = true;
+  try {
+    await api('/api/auth/password', { method: 'PATCH', body: JSON.stringify({ password,
+      currentPassword: field('account-current-password').value }) });
+    if (state.session?.account) { state.session.account.passwordSet = true; state.session.account.passwordResetAllowed = false; }
+    element('#account-current-wrap').hidden = false;
+    element('#account-password-note').textContent = t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。');
+    button.textContent = t('修改密码');
+    toast(t('密码已更新；其他设备需要重新登录'));
+  } catch (cause) { error.textContent = message(cause); error.hidden = false; }
+  finally {
+    for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
+    button.disabled = false;
+  }
+}
 async function changeAllowlist(method: 'POST' | 'DELETE', email: string): Promise<boolean> {
   admin.busy = email; admin.error = undefined; renderAdmin();
   try {
@@ -1914,7 +2162,13 @@ async function changeAllowlist(method: 'POST' | 'DELETE', email: string): Promis
 }
 async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonElement) {
   button.disabled = true; element('#account-error').hidden = true;
-  try { await request(); saveDraft(); forgetKey(keyStorage); location.replace('login.html'); }
+  try {
+    await request(); saveDraft(); forgetKey(keyStorage);
+    try {
+      for (const key of Object.keys(sessionStorage)) if (key.startsWith('theorem-os.natural-research-draft.v1:') || key === entryStorageKey) sessionStorage.removeItem(key);
+    } catch { /* Session storage may be unavailable. */ }
+    location.replace('login.html');
+  }
   catch (error) {
     element('#account-error').textContent = message(error); element('#account-error').hidden = false;
     button.disabled = false;
@@ -1946,6 +2200,7 @@ followThemeChanges(showThemeChoice);
 showThemeChoice();
 document.querySelectorAll<HTMLInputElement>('input[name="theme"]').forEach(input => input.addEventListener('change', () => chooseTheme(input.value as ThemePreference)));
 element('#completion-email').addEventListener('change', event => void changeCompletionEmail(event.currentTarget as HTMLInputElement));
+element('#account-password-form').addEventListener('submit', event => void changePassword(event));
 function openGlossary(id?: TermId) {
   const dialog = element<HTMLDialogElement>('#glossary-dialog');
   renderGlossary(dialog, id);
@@ -1985,13 +2240,9 @@ function openHistory() {
   restoreHistoryScroll();
   if (!touchQuery.matches && state.runs.length) field('run-search').focus();
 }
-/** Opens the new-research page with the current draft; 清空草稿 on that page starts it over. */
+/** An explicit new research starts with an empty natural-language input. */
 function openDraft() {
-  if (state.submitting) return;
-  closeHistoryDialog();
-  if (currentRun()) startDraft();
-  else setMobileView('compose');
-  field('task').focus({ preventScroll: true });
+  void openNaturalResearch(true);
 }
 function paletteCommands(): PaletteCommand[] {
   const run = currentRun(), click = (selector: string) => () => element(selector).click();
@@ -2007,10 +2258,17 @@ function paletteCommands(): PaletteCommand[] {
       keywords: t('theme appearance dark light 外观 主题 深色 浅色 夜间'), run: () => chooseTheme(option) });
   commands.push({ id: 'switch-locale', group: t('帮助'), label: otherLocale.label, lang: otherLocale.lang, hint: otherLocale.title, icon: 'languages', keywords: 'language locale english chinese 语言 中文 英文', run: changeLocale });
   commands.push({ id: 'open-glossary', group: t('帮助'), label: t('术语说明'), icon: 'book-open', keywords: t('glossary help 术语 帮助'), run: () => openGlossary() });
+  commands.push({ id: 'open-classics', group: t('帮助'), label: t('经典题库'), hint: t('所有账户共享，无需 API Key'), icon: 'book-open',
+    keywords: 'classic problems proofs solutions archive library 经典 题库 数学 解答 过程',
+    run: () => { window.open(classicLibraryUrl, '_blank', 'noopener'); } });
   if (state.session?.account?.admin) commands.push({ id: 'open-admin', group: t('操作'), label: t('管理'), hint: t('白名单与内测漏斗'), icon: 'shield-check',
     keywords: t('admin allowlist manage 管理 白名单 账号'), run: () => void openAdmin() });
   commands.push({ id: 'open-guide', group: t('帮助'), label: t('使用说明'), icon: 'circle-help', keywords: t('guide help manual how 使用 说明 教程 帮助'),
     run: () => { window.open('guide.html', '_blank', 'noopener'); } });
+  commands.push({ id: 'open-language-guide', group: t('帮助'), label: t('Lean 与自然语言'), hint: t('原意对照、证明讲解与形式化说明'), icon: 'languages',
+    keywords: 'formalization translation natural language 形式化 转换 回译 自然语言', run: () => { window.open('guide.html#language', '_blank', 'noopener'); } });
+  commands.push({ id: 'open-formalization', group: t('操作'), label: t('自然语言 / TeX → Lean'), hint: t('先形式化原题，再开始证明'), icon: 'languages',
+    keywords: 'formalize formalization natural language tex 形式化 转换 自然语言 原题', run: () => { saveDraft(); void openNaturalResearch(); } });
   commands.push({ id: 'send-feedback', group: t('帮助'), label: t('反馈问题或建议'), hint: t('在官网填写，确认后发布到 GitHub'), icon: 'message-square',
     keywords: t('feedback bug report issue 反馈 问题 建议'), run: () => { window.open(feedbackUrl(), '_blank', 'noopener'); } });
   if (state.session?.sample && !sampleSelected()) commands.push({ id: 'open-sample', group: t('帮助'), label: t('查看示例运行'), hint: t('无需 API Key'), icon: 'eye', keywords: t('sample demo example 示例'), run: () => void openSample() });
@@ -2019,6 +2277,13 @@ function paletteCommands(): PaletteCommand[] {
     const proof = candidateSource(run), verified = Boolean(run.result?.proof && passed(run)), sample = isSample(run);
     const proofLabel = verified ? t('验收证明') : t('候选源码');
     const actions: (PaletteCommand | false)[] = [
+      { id: 'run-statement-review', group: t('当前研究'), label: t('原意与 Lean'), hint: t('数学原意、Lean 声明与独立回译'), icon: 'languages',
+        keywords: 'statement review translation intent 原意 声明 审阅 回译 转换 自然语言', run: () => openCollaborationSection(run, 'reviews') },
+      verified && { id: 'run-explanation', group: t('当前研究'), label: t('Lean → 自然语言'), hint: t('按步骤阅读验收证明'), icon: 'book-open',
+        keywords: 'explain proof natural language 讲解 解释 证明 转换 自然语言', run: () => { window.open(`explain.html?run=${encodeURIComponent(run.id)}`, '_blank', 'noopener'); } },
+      { id: 'run-knowledge', group: t('当前研究'), label: t('知识检索'), icon: 'search', keywords: 'knowledge search library 知识 检索 知识库', run: () => openCollaborationSection(run, 'knowledge') },
+      { id: 'run-records', group: t('当前研究'), label: t('归档记录'), icon: 'archive', keywords: 'archive records 归档 记录', run: () => openCollaborationSection(run, 'records') },
+      { id: 'run-guidance-history', group: t('当前研究'), label: t('指导记录'), icon: 'message-square', keywords: 'guidance feedback history 指导 历史 人工', run: () => openCollaborationSection(run, 'guidance') },
       Boolean(proof) && { id: 'run-copy-proof', group: t('当前研究'), label: t('复制{0}', proofLabel), icon: 'copy', keywords: t('copy proof lean 复制 证明 源码'),
         run: () => void copyText(proof, verified ? t('验收证明已复制') : t('候选源码已复制')) },
       Boolean(proof) && { id: 'run-download-proof', group: t('当前研究'), label: t('下载 Lean'), hint: proofFileName(run), icon: 'download', keywords: t('download proof lean file 下载 证明 文件'),
@@ -2040,7 +2305,7 @@ function paletteCommands(): PaletteCommand[] {
   const paletteTabs: readonly (readonly [DetailTab, string])[] = [...baseTabs, ['modules', t('模块方案')]];
   // What each view holds, so 报告 or json finds the result view.
   const tabKeywords: Record<DetailTab, string> = { result: t('result report verdict json 报告 验收报告 验收 证明'),
-    trajectory: t('trajectory steps timeline 轨迹 步骤 过程'), collaboration: t('collaboration agents plan tasks route map 协作 计划 任务 分工 路线图 Agent 路线'),
+    trajectory: 'roadmap trajectory steps timeline route 研究路线图 轨迹 步骤 过程 路线', collaboration: 'collaboration agents plan tasks dependencies reviews 协作 计划 任务 分工 依赖 审阅 Agent',
     source: t('source code lean diff 源码 代码 对比'), events: t('events activity log 活动 日志 事件'), modules: t('modules plan 模块 方案') };
   if (run) for (const [tab, label] of paletteTabs) commands.push({ id: `tab-${tab}`, group: t('当前研究'), label, hint: tab === state.tab ? t('当前视图') : undefined, icon: tabIcons[tab],
     keywords: `${tab} ${tabKeywords[tab]}`, run: () => { state.tab = tab; setMobileView('runs'); renderDetail(true); element(`#detail-tab-${tab}`).focus({ preventScroll: true }); } });
@@ -2063,6 +2328,7 @@ document.addEventListener('keydown', event => {
 }, true);
 element<HTMLFormElement>('#run-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if (researchEntry !== 'lean') { void openNaturalResearch(); return; }
   const session = state.session;
   if (!session || !state.connected || state.submitting || !session.runtime.ready || !session.providers.length) return;
   const errorBox = element('#form-error'); errorBox.hidden = true;
@@ -2076,6 +2342,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     return;
   }
   try {
+    const capturedDraft = captureDraft();
     const input: WebRunRequest = {
       providerId: field('provider').value, apiKey: field('api-key').value.trim(), model: field('model').value.trim(),
       effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
@@ -2085,9 +2352,10 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       workers: Number(field('workers').value),
       coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
       ...(element<HTMLInputElement>('#plan-approval').checked && planApprovalAvailable() ? { planApproval: true } : {}),
-      ...(captureDraft().modulePlan ? { modulePlan: captureDraft().modulePlan } : {}),
-      ...(captureDraft().knowledgeDigest ? { knowledgeDigest: captureDraft().knowledgeDigest } : {}),
+      ...(capturedDraft.modulePlan ? { modulePlan: capturedDraft.modulePlan } : {}),
+      ...(capturedDraft.knowledgeDigest !== undefined ? { knowledgeDigest: capturedDraft.knowledgeDigest } : {}),
       ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
+      ...(draftFormalization ? { formalizationId: draftFormalization.id } : {}),
     };
     const saveKey = Boolean(session.account?.keyVault && input.apiKey && element<HTMLInputElement>('#save-key').checked);
     if (saveKey) input.saveKey = true;
@@ -2116,8 +2384,9 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     state.composing = false;
     state.selectedId = run.id; state.selectedRun = run; state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';
     addressMode = 'push'; clearFilters();
-    field('task').value = ''; draftContinuation = undefined; updateCounts(); draftChanged();
-    state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('runs');
+    field('task').value = ''; draftContinuation = undefined; draftFormalization = undefined; updateCounts(); draftChanged();
+    state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('compose');
+    chatWorkspace?.useRunKey(run.id, input.apiKey);
     schedulePoll();
     requestRunsRefresh();
     toast(saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
@@ -2138,7 +2407,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     // A send from the settings dialog left with the dialog, so the task takes it then.
     if (failed && document.activeElement === document.body) {
       returnFocus.focus({ preventScroll: true });
-      if (document.activeElement === document.body) field('task').focus({ preventScroll: true });
+      if (document.activeElement === document.body) focusProofInstructions(true);
     }
   }
 });
@@ -2356,9 +2625,12 @@ async function continueChecked(run: WebRun, taskIds: readonly string[], button: 
 function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'> = 'retry', from?: WebContinuation) {
   const session = state.session;
   if (!session || state.submitting) return;
+  chooseEntry('lean');
   if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
     draftContinuation = from;
+    draftFormalization = run.formalization ? { id: run.formalization.id, evidenceSha256: run.formalization.evidenceSha256,
+      source: run.source, environment: run.environment, original: run.formalization.original } : undefined;
     clearValidation();
     // The sample's agent was a script, so its provider and model are no choice to copy; the visitor keeps their own.
     const connection = isSample(run) ? {} : { model: run.model, effort: run.effort };
@@ -2384,6 +2656,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
     startDraft();
     if (recovery === 'task') {
       // The task is in the composer, outside the settings dialog: put the caret at its end to add to it.
+      element<HTMLDetailsElement>('#proof-instructions').open = true;
       const task = element<HTMLTextAreaElement>('#task');
       task.focus(); task.setSelectionRange(task.value.length, task.value.length);
       toast(t('已载入原始题目与执行配置；在研究任务里补充思路，再输入 API Key 提交'));
@@ -2530,6 +2803,17 @@ element('#run-detail').addEventListener('click', event => {
     if (!collaborationView.showTask(run.id, target.dataset.taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
     return;
   }
+  if (target.dataset.action === 'show-task-source' && target.dataset.taskId) {
+    openTaskSource(run, target.dataset.taskId); return;
+  }
+  if (target.dataset.action === 'show-statement-review' && target.dataset.taskId) {
+    openCollaborationSection(run, 'reviews', target.dataset.taskId); return;
+  }
+  if (target.dataset.action === 'guide-task' && target.dataset.taskId) {
+    if (!isSample(run) && run.status === 'running' && state.connected && run.observation?.inspection.tasks.some(task => task.id === target.dataset.taskId))
+      openGuidance(run, undefined, undefined, target.dataset.taskId);
+    return;
+  }
   if (target.dataset.action === 'diff-prev') updateDiffNavigation(-1);
   if (target.dataset.action === 'diff-next') updateDiffNavigation(1);
   if (target.dataset.action === 'download-proof' && candidateSource(run)) download(proofFileName(run), candidateSource(run), 'text/plain;charset=utf-8');
@@ -2606,7 +2890,8 @@ field('environment').addEventListener('change', () => {
   updateEnvironment();
 });
 field('template').addEventListener('change', () => applyTemplate(field('template').value));
-for (const type of ['input', 'change']) element('#run-form').addEventListener(type, event => {
+for (const container of ['#run-form', '#inline-problem-fields'])
+for (const type of ['input', 'change']) element(container).addEventListener(type, event => {
   const target = event.target as HTMLElement;
   if (target.closest('#module-plan-library')) return;
   // Selects emit input before change; preserve the previous environment and template until replacement finishes.
@@ -2630,7 +2915,7 @@ element<HTMLInputElement>('#source-file').addEventListener('change', event => {
   input.value = '';
   if (file) void loadSourceFile(file);
 });
-/** A chosen or dropped .lean file becomes the original problem; a wrong file is explained beside the source in the settings. */
+/** A chosen or dropped .lean file becomes the original problem; a wrong file is explained beside the inline source. */
 async function loadSourceFile(file: File) {
   if (!state.session || state.submitting) return;
   const revision = ++sourceRevision;
@@ -2794,11 +3079,11 @@ element('#reset-form').addEventListener('click', resetForm);
 for (const id of ['restore-draft', 'restore-draft-settings']) element(`#${id}`).addEventListener('click', recoverDraft);
 element('#clear-continuation').addEventListener('click', () => {
   draftContinuation = undefined; draftChanged();
-  field('task').focus({ preventScroll: true });
+  focusProofInstructions(true);
   toast(t('新运行不再从这一版继续'));
 });
 element('#dismiss-draft-recovery').addEventListener('click', () => {
-  draftRecovery.clear(); renderDraftRecovery(); field('task').focus({ preventScroll: true });
+  draftRecovery.clear(); renderDraftRecovery(); focusProofInstructions(true);
 });
 element('#retry-connection').addEventListener('click', () => void initialize());
 element('#refresh-runs').addEventListener('click', () => void poll(true));
@@ -2822,7 +3107,7 @@ element('#prepare-run').addEventListener('click', () => {
   if (readiness.dataset.state === 'full') { openHistory(); return; }
   const issue = currentSubmissionIssues()[0];
   // An empty task or a Key nobody has been asked for yet is the next step, not a fault: the field opens without an error under it.
-  if (readiness.dataset.state === 'compose') { closeSettings(false); setMobileView('compose'); field('task').focus(); }
+  if (readiness.dataset.state === 'compose') { closeSettings(false); setMobileView('compose'); focusProofInstructions(); }
   else if (issue?.field === 'api-key' && readiness.hasAttribute('data-quiet')) openSettings('api-key');
   else if (issue) focusSubmissionIssue(issue);
   else if (readiness.hasAttribute('data-settled')) openEditor();
@@ -2863,7 +3148,57 @@ for (const id of ['run-settings', 'history-dialog']) element(`#${id}`).addEventL
     if (dialog.id === 'history-dialog') closeHistoryDialog(); else dialog.close();
   }
 });
-element('#new-research').addEventListener('click', () => { startDraft(true); field('task').focus(); });
+element('#new-research').addEventListener('click', () => { startDraft(true); void openNaturalResearch(true); });
+element('#open-research-examples').addEventListener('click', () => {
+  const panel = element('#research-examples-panel');
+  panel.hidden = !panel.hidden;
+  element('#open-research-examples').setAttribute('aria-expanded', String(!panel.hidden));
+  if (!panel.hidden) panel.scrollIntoView({ block: 'start' });
+});
+element('#open-draft-preview').addEventListener('click', () => {
+  document.body.dataset.draftPreview = 'true';
+  element('#open-draft-preview').setAttribute('aria-expanded', 'true');
+  setMobileView('runs'); renderDraftPreview(true);
+  element('#close-draft-preview').focus();
+});
+element('#expand-research-output').addEventListener('click', () => {
+  const expanded = document.body.dataset.resultsExpanded !== 'true';
+  document.body.dataset.resultsExpanded = String(expanded);
+  element('#expand-research-output').setAttribute('aria-pressed', String(expanded));
+  element('#expand-research-output').textContent = expanded ? t('恢复分栏') : t('展开成果');
+});
+element('#close-research-output').addEventListener('click', () => {
+  document.body.dataset.resultsExpanded = 'false';
+  document.body.dataset.chatArtifact = '';
+  element('#expand-research-output').setAttribute('aria-pressed', 'false');
+  element('#expand-research-output').textContent = t('展开成果');
+  setMobileView('compose');
+  if (!chatArtifacts.restore(chatArtifactIdentity())) document.querySelector<HTMLElement>('#formalize-original')?.focus({ preventScroll: true });
+});
+element('#close-draft-preview').addEventListener('click', () => {
+  document.body.dataset.draftPreview = 'false';
+  element('#open-draft-preview').setAttribute('aria-expanded', 'false');
+  setMobileView('compose'); element('#open-draft-preview').focus();
+});
+element('#open-natural-language').addEventListener('click', () => { void openNaturalResearch(); });
+element('#entry-lean').addEventListener('click', () => { if (!state.submitting) { chooseEntry('lean'); startDraft(); } });
+element('#open-formalization').addEventListener('click', event => { event.preventDefault(); void openNaturalResearch(); });
+element('#change-natural-problem').addEventListener('click', async () => {
+  const original = draftFormalization?.original;
+  await openNaturalResearch();
+  if (original !== undefined) chatWorkspace?.fillOriginal(original);
+});
+element('#task-as-original').addEventListener('click', async () => {
+  const original = field('task').value;
+  if (!original.trim() || state.submitting) return;
+  await openNaturalResearch();
+  chatWorkspace?.fillOriginal(original);
+});
+window.addEventListener('message', event => {
+  if (event.origin !== location.origin || event.source !== window || event.data?.type !== 'theoremos:formalization-confirmed'
+    || typeof event.data.id !== 'string' || !/^[a-f0-9-]{36}$/u.test(event.data.id) || state.submitting) return;
+  void openFormalizedDraft(event.data.id);
+});
 element('#edit-draft-source').addEventListener('click', () => openEditor());
 element('#attach-source').addEventListener('click', () => element<HTMLInputElement>('#source-file').click());
 element('#conversation').addEventListener('click', event => {
@@ -2873,7 +3208,7 @@ element('#conversation').addEventListener('click', event => {
   if (template) {
     field('environment').value = template.environment;
     renderTemplates(template.id); applyTemplate(template.id); updateEnvironment();
-    if (!touchQuery.matches) field('task').focus();
+    if (!touchQuery.matches) focusProofInstructions();
     return;
   }
   if (target.dataset.chatAction === 'sample') { void openSample(); return; }
@@ -2973,11 +3308,22 @@ window.addEventListener('online', () => void resumeConnection());
 // Back and Forward open the run the address names, or the new-research page; they never add entries themselves.
 window.addEventListener('popstate', () => {
   if (!state.resumed || state.submitting) return;
+  const chatId = new URLSearchParams(location.search).get('chat');
+  if (chatId) {
+    chooseEntry('natural');
+    void naturalPage?.then(() => chatWorkspace?.open(chatId, 'replace'));
+    return;
+  }
   const id = new URLSearchParams(location.search).get('run') ?? '';
   if (id && runIdPattern.test(id) && state.runs.some(run => run.id === id)) {
     if (id !== state.selectedId || state.composing) { selectRun(id, true, 'replace'); setMobileView('runs'); }
   } else if (location.search === sampleAddress && state.session?.sample) { if (!sampleSelected()) void openSample('replace'); }
-  else if (!id && currentRun() && !isSample(currentRun())) startDraft(false, 'replace');
+  else if (!id && !location.search) {
+    chooseEntry('natural'); startDraft(false, 'replace');
+    void naturalPage?.then(() => {
+      if (!currentRun() && !location.search) chatWorkspace?.home(true);
+    });
+  }
   else renderDetail();
 });
 window.addEventListener('pagehide', () => {

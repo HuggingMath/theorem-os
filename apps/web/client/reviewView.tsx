@@ -43,8 +43,8 @@ export class ReviewView {
     this.render();
   }
 
-  showForTask(id: string) {
-    if (!this.tasks.includes(id)) this.tasks = [...this.tasks, id];
+  showForTask(id = '') {
+    if (id && !this.tasks.includes(id)) this.tasks = [...this.tasks, id];
     this.task = id; this.state = ''; this.query = ''; this.filter();
     this.element.querySelector<HTMLElement>('[data-review-heading]')!.focus({ preventScroll: true });
     this.element.scrollIntoView({ block: 'nearest' });
@@ -71,7 +71,9 @@ export class ReviewView {
     return t('所选声明审阅状态：{0}。{1} 完整原题以独立验收为准。', status(review.status), review.status === 'superseded' ? t('此审阅已被替代，保留供追溯。') : review.status === 'accepted' ? t('已接受的是此声明快照；新任务版本只有在原意和形式声明快照不变时才能沿用审阅。') : review.status === 'changes_requested' ? t('此记录请求修改；具体原因见保存的摘要。') : ['pending', 'translating', 'translated', 'reviewing'].includes(review.status) ? t('当前状态尚未接受审阅。{0}', review.summary ? t('恢复后可能保留先前摘要。') : '') : t('回译保存后仍需完成声明比较。'));
   }
   private choices(items: WebStatementReview[]) {
-    if (!items.length) return help(this.records().length ? t('没有匹配的声明审阅') : t('本次观察尚无声明审阅记录；无法据此判断是否需要审阅。'));
+    if (!items.length) return help(this.task && !this.records().some(review => review.taskId === this.task)
+      ? t('任务 {0} 尚无已保存的声明审阅。', this.task)
+      : this.records().length ? t('没有匹配的声明审阅') : t('本次观察尚无声明审阅记录；无法据此判断是否需要审阅。'));
     const seen = new Map<string, number>();
     return items.map(review => {
       const key = statementReviewKey(review), occurrence = seen.get(key) ?? 0, selected = key === this.selected;
@@ -140,7 +142,7 @@ export class ReviewView {
     this.resetReading('[data-review-detail]', 'detail', this.selected);
     this.resetReading('[data-review-candidate]', 'candidate', candidate.key);
     renderSection(this.element, <>
-      <div class="collab-section-heading"><h3 tabIndex={-1} data-review-heading>{t('审阅与验收')}</h3><span class="collab-help" data-review-count>{t('{0} / {1} 条声明审阅', items.length, this.records().length)}</span></div>
+      <div class="collab-section-heading"><h3 tabIndex={-1} data-review-heading>{t('原意与 Lean')}</h3><span class="collab-help" data-review-count>{t('{0} / {1} 条声明审阅', items.length, this.records().length)}</span></div>
       <div class="collab-review-verdicts">
         <article><p class="collab-help" data-review-candidate-status role="status">{candidate.status}</p><div data-review-candidate>{candidate.view}</div></article>
         <article data-review-acceptance><h4>{t('完整原题 · 独立验收')}</h4><strong class={`collab-review-verdict${accepted ? ' collab-accepted' : rejected ? ' collab-rejected' : ''}`}>{accepted ? t('验收通过') : rejected ? t('验收未通过') : ended ? t('没有验收结果') : t('尚未验收通过')}</strong>
