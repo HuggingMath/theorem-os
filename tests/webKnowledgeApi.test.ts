@@ -98,6 +98,33 @@ describe('knowledge and module configuration through the real HTTP service witho
     expect(runner.calls).toHaveLength(1);
   });
 
+  it('auto-pins only reusable knowledge from the same owner, with an explicit no-history choice', async () => {
+    const alice = await session(), bob = await session();
+    const empty = service.knowledge.importCatalog(alice.owner, buildTheoremKnowledge([]));
+    expect(empty.entries).toBe(0);
+    expect(service.knowledge.latestReusableCatalog(alice.owner)).toBeUndefined();
+    const without = await request(alice, '/api/runs', input());
+    expect(without.status).toBe(201);
+    expect((await without.json()).run.knowledgeDigest).toBeUndefined();
+    const published = service.knowledge.importCatalog(alice.owner, buildTheoremKnowledge([candidate('identity')]));
+    const automatic = await request(alice, '/api/runs', input());
+    expect(automatic.status).toBe(201);
+    const pinnedRun = (await automatic.json()).run;
+    expect(pinnedRun.knowledgeDigest).toBe(published.digest);
+    const optedOut = await request(alice, '/api/runs', { ...input(), knowledgeDigest: null });
+    expect(optedOut.status).toBe(201);
+    const noHistoryRun = (await optedOut.json()).run;
+    expect(noHistoryRun.knowledgeDigest).toBeUndefined();
+    const isolated = await request(bob, '/api/runs', input());
+    expect(isolated.status).toBe(201);
+    const bobRun = (await isolated.json()).run;
+    expect(bobRun.knowledgeDigest).toBeUndefined();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(runner.calls.find(call => call.id === pinnedRun.id)?.knowledgeCatalog?.entries).toHaveLength(1);
+    expect(runner.calls.find(call => call.id === noHistoryRun.id)?.knowledgeCatalog).toBeUndefined();
+    expect(runner.calls.find(call => call.id === bobRun.id)?.knowledgeCatalog).toBeUndefined();
+  });
+
   it('forwards exact source pages and all available metadata fields without dropping long recorded text', async () => {
     const alice = await session(), base = buildTheoremKnowledge([candidate('identity')]);
     const catalog = service.knowledge.importCatalog(alice.owner, base), id = base.entries[0]!.id;

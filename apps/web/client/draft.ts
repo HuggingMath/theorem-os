@@ -22,9 +22,10 @@ export type TaskDraft = {
   planApproval?: true;
   templateId: string;
   modulePlan?: ResearchModulePlan;
-  knowledgeDigest?: string;
+  knowledgeDigest?: string | null;
   /** A version of one of this account's runs to start from; archives never carry one, it names a run of their owner. */
   continueFrom?: WebContinuation;
+  formalization?: { id: string; evidenceSha256: string };
 };
 
 const archiveSchema = 'theorem-os.web-export.v1';
@@ -88,6 +89,13 @@ function continuation(value: unknown): WebContinuation {
 
 function validatedDraft(value: unknown): TaskDraft {
   const draft = object(value);
+  let formalization: TaskDraft['formalization'];
+  if (Object.hasOwn(draft, 'formalization')) {
+    const ref = object(draft.formalization);
+    const id = text(ref, 'id', 36), evidenceSha256 = text(ref, 'evidenceSha256', 64);
+    if (!/^[a-f0-9-]{36}$/u.test(id) || !/^[a-f0-9]{64}$/u.test(evidenceSha256)) invalid();
+    formalization = { id, evidenceSha256 };
+  }
   return {
     providerId: text(draft, 'providerId', 64), model: text(draft, 'model', 128),
     source: utf8Text(draft, 'source', 32 * 1024), task: utf8Text(draft, 'task', 8_000),
@@ -98,9 +106,10 @@ function validatedDraft(value: unknown): TaskDraft {
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
     ...flag(draft, 'planApproval'),
     templateId: text(draft, 'templateId', 64),
-    ...(Object.hasOwn(draft, 'knowledgeDigest') ? { knowledgeDigest: text(draft, 'knowledgeDigest', 256) } : {}),
+    ...(Object.hasOwn(draft, 'knowledgeDigest') ? { knowledgeDigest: draft.knowledgeDigest === null ? null : text(draft, 'knowledgeDigest', 256) } : {}),
     ...(Object.hasOwn(draft, 'modulePlan') ? { modulePlan: researchModulePlanDraftSchema.parse(draft.modulePlan) as ResearchModulePlan } : {}),
     ...(Object.hasOwn(draft, 'continueFrom') ? { continueFrom: continuation(draft.continueFrom) } : {}),
+    ...(formalization ? { formalization } : {}),
   };
 }
 

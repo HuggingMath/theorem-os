@@ -1,6 +1,7 @@
-/** The proof explanation page (explain.html) and the link that opens it from the report. */
+/** The proof explanation page (explain.html) and its workbench links. */
 export const explain: Record<string, string> = {
   "证明讲解": "Proof explanation",
+  "Lean → 自然语言": "Lean → natural language",
   "证明讲解 · TheoremOS": "Proof explanation · TheoremOS",
   "{0}证明讲解：Lean 与自然语言对照": "{0}Proof explanation: Lean side by side with prose",
   "TheoremOS 工作台": "TheoremOS workbench",

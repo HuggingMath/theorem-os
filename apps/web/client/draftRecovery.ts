@@ -13,6 +13,9 @@ function copyDraft(draft: TaskDraft): TaskDraft {
     ...(draft.maxTotalTokens !== undefined ? { maxTotalTokens: draft.maxTotalTokens } : {}),
     effort: draft.effort, environment: draft.environment, coordination: draft.coordination, templateId: draft.templateId,
     ...(draft.planApproval ? { planApproval: true as const } : {}),
+    ...(draft.formalization ? { formalization: { ...draft.formalization } } : {}),
+    ...(draft.knowledgeDigest !== undefined ? { knowledgeDigest: draft.knowledgeDigest } : {}),
+    ...(draft.continueFrom ? { continueFrom: { ...draft.continueFrom } } : {}),
     ...(draft.modulePlan ? { modulePlan: structuredClone(draft.modulePlan) } : {}) };
 }
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify as stringifyToml } from 'smol-toml';
-import { bootstrapLeanTask } from '../../src/math/leanTask';
+import { prepareWebProblem } from './formalizationSeed';
 import { classifyWebError, classifyWebResult } from './failure';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { mathDigest, readMathJson, readMathText } from '../../src/math/mathRuntimeIo';
@@ -243,13 +243,11 @@ async function main() {
   console.error = () => {};
   try {
     const environment = getLeanTaskEnvironment(request.input.environment ?? 'standard');
-    const receipt = bootstrapLeanTask(path.join(directory, 'workspace'), {
-      source: request.input.source, task: request.input.task, environment: environment.id });
+    const receipt = prepareWebProblem(directory, request);
     const buildFile = process.env.THEOREMOS_WORKER_BUILD || '/opt/theoremos-build.json';
     const buildIndex = readMathJson(buildFile) as { buildManifestRef: string };
     readMathBuildManifest(buildIndex.buildManifestRef, root, path.join(root, 'out/main'));
-    const taskFile = path.join(directory, 'task.md');
-    fs.writeFileSync(taskFile, request.input.task + '\nPreserve all original declarations. Prove every target in generated/problem/Submission.lean.\n', { mode: 0o600 });
+    const taskFile = receipt.taskFile;
     const knowledgeFile = freezeWebKnowledge(directory, request.knowledgeCatalog);
     if (request.input.knowledgeDigest) {
       if (!knowledgeFile) throw new Error('math_knowledge_identity_changed');

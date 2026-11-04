@@ -12,6 +12,8 @@ import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
 import { validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
+import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizationInput,
+  type WorkerFormalizationMessage } from './formalizationTypes';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string }>;
@@ -21,6 +23,8 @@ export type WebRunner = {
   check?: WebPrecheckRunner;
   /** Writes and audits a proof explanation in its own container; absent when the service cannot. */
   explain?(input: WorkerExplanationInput, onMessage: (message: WorkerExplanationMessage) => void, signal: AbortSignal): Promise<void>;
+  /** Formalizes and independently reviews an original problem; confirmation belongs to the workbench. */
+  formalize?(input: WorkerFormalizationInput, onMessage: (message: WorkerFormalizationMessage) => void, signal: AbortSignal): Promise<void>;
 };
 const execute = promisify(execFile);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -87,6 +91,19 @@ export function parseExplanationMessage(line: string): WorkerExplanationMessage 
   try {
     const message = explanationMessageSchema.safeParse(JSON.parse(line));
     return message.success ? message.data as WorkerExplanationMessage : undefined;
+  } catch { return undefined; }
+}
+
+const formalizationMessageSchema = z.union([
+  z.object({ type: z.literal('progress'), progress: z.object({ phase: z.enum(webFormalizationPhases),
+    round: count.optional(), tokens: count.optional() }).strict() }).strict(),
+  z.object({ type: z.literal('result'), status: z.literal('approved'), evidence: z.record(z.unknown()) }).strict(),
+  z.object({ type: z.literal('result'), status: z.enum(['exhausted', 'error']), reason: z.string().regex(webFormalizationReason) }).strict(),
+]);
+export function parseFormalizationMessage(line: string): WorkerFormalizationMessage | undefined {
+  try {
+    const message = formalizationMessageSchema.safeParse(JSON.parse(line));
+    return message.success ? message.data as WorkerFormalizationMessage : undefined;
   } catch { return undefined; }
 }
 
@@ -317,6 +334,57 @@ export class DockerWebRunner implements WebRunner {
         child.stdin.on('error', () => {});
         child.once('error', () => finish(new Error('explanation_container_failed')));
         child.once('close', () => finish(received ? undefined : new Error('explanation_worker_exited')));
+        // Credentials travel over the private input pipe, never Docker args, env or logs.
+        child.stdin.end(JSON.stringify(input) + '\n');
+      });
+    } finally { await remove(); }
+  }
+
+  /** A private container for planning, Lean compilation, blind backtranslation and unanimous review. */
+  async formalize(input: WorkerFormalizationInput, onMessage: (message: WorkerFormalizationMessage) => void, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    const name = `theoremos-formalize-${input.id}`, mathlib = input.environment === 'mathlib';
+    const memory = mathlib ? '12g' : '4g';
+    const remove = () => execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).then(() => {}, () => {});
+    try {
+      await execute('docker', ['create', '--interactive', '--pull=never', '--name', name,
+        '--add-host=host.docker.internal:host-gateway',
+        '--log-driver=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+        '--security-opt=seccomp=unconfined', '--security-opt=apparmor=unconfined', '--security-opt=systempaths=unconfined',
+        '--cpus=2', `--memory=${memory}`, `--memory-swap=${memory}`, '--pids-limit=512',
+        '--tmpfs', '/work:rw,nosuid,nodev,size=67108864,uid=10001,gid=10001,mode=0700',
+        '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=134217728,mode=1777',
+        '--ulimit', 'nofile=4096:4096', '--mount', 'type=volume,destination=/var/tmp',
+        ...(mathlib ? ['--device=/dev/fuse:/dev/fuse:rw'] : []),
+        this.config.workerImage, input.environment, 'formalize'], { timeout: 30_000, maxBuffer: 8_192 });
+    } catch { await remove(); throw new Error('formalization_container_failed'); }
+    try {
+      signal.throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
+        let buffer = '', finished = false, received = false;
+        const finish = (error?: Error) => {
+          if (finished) return;
+          finished = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+          if (error) { child.kill('SIGKILL'); reject(error); } else resolve();
+        };
+        const abort = () => finish(new Error('formalization_cancelled'));
+        const timer = setTimeout(() => finish(new Error('formalization_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
+        signal.addEventListener('abort', abort, { once: true });
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', chunk => {
+          buffer += chunk;
+          for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+            const message = parseFormalizationMessage(buffer.slice(0, newline));
+            buffer = buffer.slice(newline + 1);
+            if (message?.type === 'result') received = true;
+            if (message && !finished) onMessage(message);
+          }
+          if (buffer.length > 32 * 1024 * 1024) finish(new Error('formalization_output_too_large'));
+        });
+        child.stdin.on('error', () => {});
+        child.once('error', () => finish(new Error('formalization_container_failed')));
+        child.once('close', () => finish(received ? undefined : new Error('formalization_worker_exited')));
         // Credentials travel over the private input pipe, never Docker args, env or logs.
         child.stdin.end(JSON.stringify(input) + '\n');
       });

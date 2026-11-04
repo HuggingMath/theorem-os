@@ -124,7 +124,15 @@ export const preferFullCollaboration = (context: BrowserContext) => context.addI
   try { if (localStorage.getItem(key) === null) localStorage.setItem(key, 'full'); } catch { /* Storage is blocked; the page uses its default. */ }
 }, collaborationDetailStorageKey);
 export const normalize = (source: string) => source.replace(/\r\n?/g, '\n');
-export const ready = (page: Page) => page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+/** The workbench opens on the natural-language chat; suites written for the Lean editor enter it through the composer's Lean link
+ * (an address naming a run or chat keeps its own view), then wait for an enabled submit button. */
+export async function ready(page: Page) {
+  const submit = page.locator('#submit-run:enabled');
+  const lean = page.locator('.chat-lean-entry');
+  await submit.or(lean).first().waitFor({ state: 'attached' });
+  if (!await submit.count() && !/[?&](?:run|chat)=/u.test(page.url())) await lean.click();
+  await submit.waitFor({ state: 'attached' });
+}
 export function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });

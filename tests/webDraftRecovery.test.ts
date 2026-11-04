@@ -18,6 +18,23 @@ const envelope = (value: TaskDraft = draft(), reason = 'template') => ({
 });
 
 describe('one recoverable draft replacement', () => {
+  it('restores the confirmed formalization reference along with the unchanged source', () => {
+    const saved = storage(), recovery = new DraftRecovery(() => saved);
+    const original = draft({ formalization: { id: 'd5a5c217-b5a4-4600-9aae-97846e615ab2', evidenceSha256: 'a'.repeat(64) } });
+    recovery.remember(original, draft({ source: 'theorem replacement : True := by sorry' }), 'import');
+    const reloaded = new DraftRecovery(() => saved); reloaded.load();
+    expect(reloaded.current?.draft).toEqual(original);
+    const exposed = reloaded.current!; exposed.draft.formalization!.id = 'changed';
+    expect(reloaded.current?.draft.formalization).toEqual(original.formalization);
+  });
+  it('restores the chosen knowledge version and continuation in a replaced draft', () => {
+    const saved = storage(), recovery = new DraftRecovery(() => saved);
+    const original = draft({ knowledgeDigest: null, continueFrom: { runId: 'a'.repeat(36), taskId: 'goal',
+      commit: 'b'.repeat(40), label: 'saved proof' } });
+    recovery.remember(original, draft({ task: 'Replacement' }), 'reuse');
+    const reloaded = new DraftRecovery(() => saved); reloaded.load();
+    expect(reloaded.current?.draft).toEqual(original);
+  });
   it('stores the full editable draft independently of autosave and restores it in a fresh controller', () => {
     const saved = storage(), before = draft(), recovery = new DraftRecovery(() => saved);
     saved.values.set(taskDraftStorageKey, 'unrelated autosave');

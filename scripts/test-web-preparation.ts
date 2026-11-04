@@ -53,7 +53,12 @@ const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440
   });
 async function open(h: Harness) {
   await h.page.goto(origin);
+  await h.page.locator('#new-research:enabled').waitFor({ state: 'attached' });
+  await h.page.locator('#entry-lean').click();
+  await showChat(h.page);
   await h.page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await h.page.locator('#environment').selectOption('standard');
+  await h.page.locator('#template').selectOption('addition');
   await h.page.locator('#submission-readiness[data-state="missing"]').waitFor();
 }
 async function readiness(page: Page, state: string) {
@@ -87,7 +92,7 @@ async function bounds(page: Page, selector: string) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 }
 async function editSource(h: Harness, source: string) {
-  await open(h); await openSettings(h.page);
+  await open(h);
   await h.page.locator('#template').selectOption('');
   await h.page.locator('#source').fill(source);
   await h.page.locator('#expand-source').click();
@@ -105,9 +110,9 @@ async function editorValue(page: Page, expected: string) {
 async function editorPosition(page: Page, expected: string) {
   await page.waitForFunction(expected => document.querySelector('#editor-position')?.textContent === expected, expected);
 }
-async function visibleSettingsError(page: Page, id: string) {
+async function visibleFieldError(page: Page, id: string) {
   const geometry = await page.evaluate(id => {
-    const scroller = document.querySelector<HTMLElement>('#run-settings .settings-content')!;
+    const scroller = document.querySelector<HTMLElement>(id === 'source' ? '#conversation-scroll' : '#run-settings .settings-content')!;
     const control = document.getElementById(id)!;
     const error = document.getElementById(`${id}-validation`)!;
     const rect = (element: Element) => {
@@ -130,8 +135,8 @@ async function visibleSettingsError(page: Page, id: string) {
     };
   }, id);
   validationVisibility.push({ field: id, width: page.viewportSize()!.width, geometry });
-  assert.equal(geometry.controlIntersects, true, `${id} must intersect the settings scroller after automatic focus: ${JSON.stringify(geometry)}`);
-  assert.equal(geometry.errorFullyVisible, true, `${id} error must be fully readable inside the settings scroller after automatic focus: ${JSON.stringify(geometry)}`);
+  assert.equal(geometry.controlIntersects, true, `${id} must intersect the field scroller after automatic focus: ${JSON.stringify(geometry)}`);
+  assert.equal(geometry.errorFullyVisible, true, `${id} error must be fully readable inside the field scroller after automatic focus: ${JSON.stringify(geometry)}`);
 }
 async function doesNotStealFocus(page: Page, selector: string) {
   assert.equal(await page.evaluate(async selector => {
@@ -205,7 +210,7 @@ try {
     const values = () => page.locator('#task, #source, #model, #environment, #max-turns, #max-seconds, #workers, #api-key')
       .evaluateAll(fields => fields.map(field => (field as HTMLInputElement).value));
     const before = await values();
-    for (const id of ['module-plan', 'settings-execution', 'settings-connection', 'settings-research']) {
+    for (const id of ['module-plan', 'settings-execution', 'settings-connection']) {
       await page.locator(`[data-settings-section="${id}"]`).click();
       await page.waitForFunction(id => document.querySelector(`[data-settings-section="${id}"]`)?.getAttribute('aria-current') === 'location', id);
       const section = await page.locator(`#${id}`).evaluate(section => {
@@ -223,7 +228,7 @@ try {
     await page.locator('#module-plan-library summary').click();
     await snapshot(page, `settings-navigation-${width}.png`);
     await page.locator('.settings-content').evaluate(content => { content.scrollTop = 0; });
-    await page.waitForFunction(() => document.querySelector('[data-settings-section="settings-research"]')?.getAttribute('aria-current') === 'location');
+    await page.waitForFunction(() => document.querySelector('[data-settings-section="settings-connection"]')?.getAttribute('aria-current') === 'location');
     await closeDialog(page, '#run-settings', () => page.keyboard.press('Escape'));
     assert.equal(await page.locator('#open-settings').evaluate(button => button === document.activeElement), true);
   }, width);
@@ -251,9 +256,13 @@ try {
       { id: 'workers', value: String(webLimits.maxWorkers + 1), good: '1' },
     ];
     for (const { id, value, good } of cases) {
+      if (id === 'source') await closeSettings(page);
+      else await openSettings(page);
       await page.locator(`#${id}`).fill(value);
+      await openSettings(page);
       await page.locator('#settings-submit').click();
-      assert.equal(await page.locator('#run-settings').isVisible(), true, 'settings errors must stay in the active dialog');
+      assert.equal(await page.locator('#run-settings').isVisible(), id !== 'source',
+        'inline source errors must close settings; settings errors stay in the dialog');
       await invalid(page, id);
       if (id === 'api-key' && value.trim()) assert.equal((await page.locator('#api-key-validation').innerText()).includes(value), false,
         'Validation must not repeat the entered secret');
@@ -304,14 +313,13 @@ try {
     await readiness(page, 'ready');
   }, width);
 
-  await scenario('Nested source editing keeps settings open and restores its source trigger', async h => {
+  await scenario('Inline source editing leaves settings closed and restores its source trigger', async h => {
     const { page } = h;
     await open(h);
-    await openSettings(page);
     const original = await page.locator('#source').inputValue();
     await page.locator('#expand-source').click();
     await page.locator('#source-editor[open]').waitFor();
-    assert.equal(await page.locator('#run-settings').evaluate(dialog => (dialog as HTMLDialogElement).open), true);
+    assert.equal(await page.locator('#run-settings').evaluate(dialog => (dialog as HTMLDialogElement).open), false);
     assert.equal(await page.locator('#expanded-source').evaluate(field => field === document.activeElement), true);
     await page.locator('#expanded-source').fill(`${original}\n-- discarded preparation fixture`);
     await discardSourceEditor(page, () => page.keyboard.press('Escape'));
@@ -326,6 +334,25 @@ try {
     assert.equal(await page.locator('#expand-source').evaluate(button => button === document.activeElement), true);
     await closeSettings(page);
   });
+
+  for (const width of widths) await scenario(`Restoring a draft from settings returns to its inline source at ${width}px`, async h => {
+    const { page } = h;
+    const source = 'theorem settings_recovery_fixture : True := by\n  trivial';
+    await editSource(h, source);
+    const edited = `${source}\n-- replacement to restore`;
+    await page.locator('#expanded-source').fill(edited);
+    await closeDialog(page, '#source-editor', () => page.locator('#apply-editor').click());
+    assert.equal(await page.locator('#source').inputValue(), edited);
+    await openSettings(page);
+    await page.locator('#restore-draft-settings').waitFor();
+    await closeDialog(page, '#run-settings', () => page.locator('#restore-draft-settings').click());
+    assert.equal(await page.locator('#run-settings').isVisible(), false);
+    assert.equal(await page.locator('#source').inputValue(), source);
+    assert.equal(await page.locator('#source').evaluate(field => field === document.activeElement), true,
+      'restoring from settings must focus the inline source after the modal close event');
+    assert.equal(await page.locator('body').getAttribute('data-mobile-view'), 'compose');
+    assert.equal(await page.evaluate(key => sessionStorage.getItem(key), draftRecoveryStorageKey), null);
+  }, width);
 
   for (const width of widths) await scenario(`Dirty close requests retain scratch edits, focus and native undo at ${width}px`, async h => {
     const { page } = h;
@@ -443,7 +470,7 @@ try {
     const { page } = h;
     const source = 'theorem delayed_editor_fixture : True := by\n  trivial';
     const incoming = `${source}\n-- delayed file replacement`;
-    await open(h); await openSettings(page);
+    await open(h);
     await page.locator('#template').selectOption(''); await page.locator('#source').fill(source);
     await page.evaluate(() => {
       const original = File.prototype.arrayBuffer;
@@ -549,7 +576,7 @@ try {
     await page.locator('#editor-indent').click();
     await closeDialog(page, '#source-editor', () => page.locator('#apply-editor').click());
     assert.equal(await page.locator('#source').inputValue(), indented);
-    assert.equal(await page.locator('#restore-draft-settings').isVisible(), true, 'applying remains one recoverable draft replacement');
+    assert.equal(await page.locator('#restore-draft').isVisible(), true, 'applying remains one recoverable draft replacement');
     const recovery = await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)!), draftRecoveryStorageKey);
     assert.equal(recovery.reason, 'edit'); assert.equal(recovery.task.draft.source, source);
     await page.locator('#expand-source').click();
@@ -677,7 +704,7 @@ try {
     await readiness(page, 'missing');
   });
 
-  for (const width of [320, 375]) await scenario(`Mobile settings errors remain readable after automatic focus at ${width}px`, async h => {
+  for (const width of [320, 375]) await scenario(`Mobile field errors remain readable after automatic focus at ${width}px`, async h => {
     const { page } = h;
     await open(h);
     await openSettings(page);
@@ -690,12 +717,15 @@ try {
       { id: 'api-key', value: 'sk-x', good: credential },
     ];
     for (const { id, value, good } of cases) {
+      if (id === 'source') await closeSettings(page);
+      else await openSettings(page);
       await page.locator(`#${id}`).fill(value);
+      await openSettings(page);
       await page.locator('#settings-submit').click();
       await invalid(page, id);
       // Observe the product's focus scrolling; do not scroll the error into view in the test.
       await snapshot(page, `preparation-${width}-${id}-error.png`);
-      await visibleSettingsError(page, id);
+      await visibleFieldError(page, id);
       assert.equal(h.requests.filter(request => request.method === 'POST').length, 0);
       await corrected(page, id, good);
     }
@@ -738,7 +768,7 @@ try {
   }, 1440, 1);
 
   await writeReport('passed');
-  console.log(`Preparation checks passed: ${checks.length} scenarios, 3 viewport sizes, visible local readiness, field-specific validation, zero invalid POSTs, native dialog focus and nested editing, import handoff, and one local fixture submission.`);
+  console.log(`Preparation checks passed: ${checks.length} scenarios, 3 viewport sizes, visible local readiness, field-specific validation, zero invalid POSTs, native dialog focus and inline source editing, import handoff, and one local fixture submission.`);
   console.log(`Report: ${path.relative(root, reportFile)}`);
 } catch (error) {
   await writeReport('failed', error);

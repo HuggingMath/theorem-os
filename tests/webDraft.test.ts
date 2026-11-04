@@ -27,6 +27,11 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
   });
 
+  it('preserves an explicit no-history choice in a saved draft', () => {
+    const original = draft({ knowledgeDigest: null });
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
+  });
+
   it('converts only archived execution configuration into an editable draft', () => {
     expect(decodeTaskDraft(archive())).toEqual(draft({ templateId: '' }));
     expect(decodeTaskDraft(archive())).not.toHaveProperty('status');

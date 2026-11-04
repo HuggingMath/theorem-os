@@ -75,9 +75,11 @@ async function fill(page: Page, value: Draft) {
     await page.locator('#environment').selectOption(value.environment);
     await page.locator('#template').selectOption('');
     await page.locator('#effort').selectOption(value.effort);
-    for (const key of ['model', 'source', 'maxTurns', 'maxRunSeconds', 'workers'] as const) await page.locator(`#${ids[key]}`).fill(value[key]);
+    for (const key of ['model', 'maxTurns', 'maxRunSeconds', 'workers'] as const) await page.locator(`#${ids[key]}`).fill(value[key]);
     await page.locator(`input[name="coordination"][value="${value.coordination}"]`).check();
   });
+  // The Lean source sits in the composer, behind the settings dialog.
+  await fillConfig(page, 'source', value.source);
   await page.locator('#task').fill(value.task);
   if (value.templateId) await selectConfig(page, 'template', value.templateId);
 }
@@ -160,6 +162,7 @@ try {
     await fill(h.page, imported);
     await fillConfig(h.page, 'api-key', credential);
     await saved(h.page, imported);
+    assert.equal(await h.page.locator('#draft-status').innerText(), '草稿已存于此标签页');
     await assertKeyNotStored(h.page);
     await h.page.reload(); await ready(h.page);
     await assertDraft(h.page, imported);
@@ -306,6 +309,29 @@ try {
     assert.equal(await h.page.locator('#api-key').inputValue(), '');
     await saved(h.page, archiveDraft);
     await assertKeyNotStored(h.page);
+  });
+
+  await scenario('Import previews the token cap and module settings that will enter the new draft', async h => {
+    await open(h);
+    const modulePlan = { scheduler: 'critical-path', context: 'essential', custom: [
+      { id: 'review', name: 'Review first', slot: 'M1', mode: 'append', enabled: true, instructions: 'Check the statement first.' },
+      { id: 'unused', name: 'Optional', slot: 'M4', mode: 'append', enabled: false, instructions: '' },
+    ] };
+    await importFile(h.page, draftBytes({ ...imported, maxTotalTokens: '35', modulePlan } as Draft));
+    await dialog(h.page).waitFor();
+    const facts = await h.page.locator('#import-facts').innerText();
+    assert.match(facts, /用量上限 \/ 万 Token\s+35/u);
+    assert.match(facts, /优先关键路径 · 精简研究上下文 · 启用 1 \/ 2 条自定义规则/u);
+    assert.match(await h.page.locator('#import-description').innerText(), /不恢复历史运行/u);
+    await h.page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await screenshot(h.page, 'drafts-import-settings-390.png');
+    await h.page.locator('#confirm-import').click(); await dialog(h.page).waitFor({ state: 'hidden' });
+    await saved(h.page, imported);
+    assert.equal(await h.page.locator('#max-tokens').inputValue(), '35');
+    assert.equal(await h.page.locator('#module-plan-scheduler').inputValue(), 'critical-path');
+    assert.equal(await h.page.locator('#module-plan-context').inputValue(), 'essential');
+    assert.deepEqual(await h.page.evaluate(key => JSON.parse(sessionStorage.getItem(key)!).draft.modulePlan, storageKey), modulePlan);
   });
 
   await scenario('Invalid, oversized and malformed UTF-8 files preserve the active draft and key', async h => {

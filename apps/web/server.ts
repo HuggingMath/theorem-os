@@ -28,8 +28,13 @@ import { trajectoryQuery, trajectoryVersionQuery, WebTrajectories } from './traj
 import { explainInput, failedFeedback, WebExplainError, WebExplainer, webExplainLimits, type WebExplainTurn } from './explain';
 import { explanationMarkdownFilename, verifyExplanationEvidence } from './explanation';
 import { explanationKey, WebExplanations } from './explanations';
+import { WebFormalizations } from './formalizations';
+import { webFormalizationLimits, type WebFormalizationCapabilities, type WebFormalizationRequest } from './formalizationTypes';
 import { SUB2API_PROVIDER } from '../../src/runtime/sub2api';
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
+import { formalizationDigest } from '../../src/math/formalization';
+import { WebConversations } from './conversations';
+import { webConversationLimits } from './conversationTypes';
 
 const inputSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
@@ -38,7 +43,7 @@ const inputSchema = z.object({
   model: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']),
   environment: z.enum(['standard', 'mathlib']).default('standard'),
-  source: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
+  source: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webLimits.maxSourceBytes),
   task: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxTaskBytes),
   maxTurns: z.number().int().min(1).max(webLimits.maxTurns),
   maxRunSeconds: z.number().int().min(30).max(webLimits.maxRunSeconds),
@@ -47,7 +52,8 @@ const inputSchema = z.object({
   coordination: z.enum(['cooperative', 'independent']),
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
-  knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).nullable().optional(),
+  formalizationId: z.string().uuid().optional(),
   // Names a version of one of the account's runs; its saved file is looked up here, never taken from the request.
   continueFrom: z.object({ runId: z.string().regex(/^[a-f0-9-]{36}$/u), taskId: z.string().min(1).max(200),
     commit: z.string().regex(/^[A-Za-z0-9]{1,128}$/u),
@@ -72,6 +78,16 @@ const explanationSchema = z.object({
   // Empty uses the account's saved key, then the server's key for admins, as for runs.
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
 }).strict();
+const formalizationSchema = z.object({
+  original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
+  environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('max'),
+  apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
+  solve: z.boolean().optional(),
+}).strict();
+const conversationSchema = z.object({ formalizationId: z.string().uuid().optional(), runId: z.string().uuid().optional() })
+  .strict().refine(value => Boolean(value.formalizationId || value.runId));
+const conversationMessageSchema = z.object({ text: z.string().trim().min(1).max(webConversationLimits.question),
+  apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default('') }).strict();
 // Explanation roles accept only these Codex efforts (src/runtime/sub2api.ts).
 const explanationEffort = (effort: WebEffort): 'low' | 'high' | 'max' =>
   effort === 'low' ? 'low' : effort === 'medium' || effort === 'high' ? 'high' : 'max';
@@ -196,8 +212,22 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     onPlanWaiting: (owner, run) => mailOwner(owner, run, 'plan approval', planApprovalMail) });
   const trajectories = new WebTrajectories(storage);
   const explanations = new WebExplanations(runner, storage);
+  const formalizations = new WebFormalizations(runner, storage, webFormalizationLimits, (owner, formalization, evidence, input) => {
+    const run = jobs.create(owner, { ...webDefaults, providerId: input.provider.id, apiKey: input.apiKey,
+      model: input.model, effort: input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
+      task: '依据自然语言原题及其已审核的 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
+    { evidence, provenance: { id: formalization.id, evidenceSha256: formalizationDigest(evidence), original: formalization.original,
+      confirmedAt: formalization.confirmedAt!, confirmation: 'automatic' } });
+    milestone(owner, 'firstRunAt');
+    return run.id;
+  });
   const prechecker = runner.check ? new WebPrechecker(runner.check.bind(runner)) : undefined;
   const explainer = new WebExplainer();
+  const conversations = new WebConversations(storage, { run: (owner, id) => jobs.get(owner, id),
+    formalization: (owner, id) => {
+      try { return formalizations.read(owner, id); }
+      catch (error) { if (error instanceof WebStorageError && error.status === 404) return undefined; throw error; }
+    }, commandReceipt: (owner, runId, id) => jobs.commandReceipt(owner, runId, id) }, (owner, call, signal) => explainer.ask(owner, call, signal));
   const rates = new Map<string, { count: number; expiresAt: number }>();
   const runStreams = new Map<string, Set<() => void>>();
   const origin = new URL(config.publicUrl);
@@ -217,7 +247,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   /** Ends one browser session. Anonymous records go with it; account records stay with the account. */
   const endSession = (id: string) => {
     for (const stop of runStreams.get(id) ?? []) stop();
-    if (!auth) { explanations.forget(id); jobs.forget(id); storage.deleteOwner(id); trajectories.forgetOwner(id); }
+    if (!auth) { conversations.forget(id); formalizations.forget(id); explanations.forget(id); jobs.forget(id); storage.deleteOwner(id); trajectories.forgetOwner(id); }
     sessions.delete(id); storage.deleteSession(id);
   };
   const prune = () => {
@@ -350,7 +380,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
-            explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
+            conversations.forget(owner); formalizations.forget(owner); explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
             auth.deleteAccount(account.email);
             for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
@@ -382,6 +412,78 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         const owner = ownerOf(session);
         if (!owner) throw new HttpError(401, '请先登录。');
+        if (url.pathname === '/api/conversations') {
+          if (request.method === 'GET') { json(response, 200, { conversations: conversations.list(owner) }); return; }
+          if (request.method === 'POST') {
+            const parsed = conversationSchema.safeParse(await readJson(request));
+            if (!parsed.success) throw new HttpError(400, '请选择要讨论的题目。');
+            json(response, 201, { conversation: conversations.create(owner, parsed.data) }); return;
+          }
+          throw new HttpError(405, '请求方法不受支持。');
+        }
+        const conversationMatch = /^\/api\/conversations\/([a-f0-9-]{36})(?:\/(messages|stop|guidance))?$/u.exec(url.pathname);
+        if (conversationMatch) {
+          const [, id, action] = conversationMatch;
+          if (!action && request.method === 'GET') { json(response, 200, { conversation: conversations.read(owner, id) }); return; }
+          if (action === 'stop' && request.method === 'POST') { json(response, 200, { conversation: conversations.stop(owner, id) }); return; }
+          if (action === 'guidance' && request.method === 'POST') {
+            const parsed = webGuidanceSchema.safeParse(await readJson(request));
+            if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
+            const conversation = await conversations.guide(owner, id, parsed.data, (runId, guidance) => jobs.command(owner, runId, { type: 'guidance', guidance }));
+            json(response, 200, { conversation }); return;
+          }
+          if (action === 'messages' && request.method === 'POST') {
+            const conversation = conversations.read(owner, id);
+            const parsed = conversationMessageSchema.safeParse(await readJson(request));
+            if (!parsed.success) throw new HttpError(400, '请检查问题内容与 API Key。');
+            const run = conversation.runId ? jobs.get(owner, conversation.runId) : undefined;
+            const provider = config.providers.find(item => item.id === (run?.providerId ?? SUB2API_PROVIDER.id));
+            if (!provider) throw new HttpError(400, '当前服务没有配置这个题目使用的模型服务。');
+            const apiKey = parsed.data.apiKey || heldKey(session, provider);
+            if (!apiKey) throw new HttpError(400, '请填写 API Key。');
+            const model = run?.model ?? SUB2API_PROVIDER.defaultModel;
+            json(response, 202, { conversation: conversations.send(owner, id, parsed.data.text, { baseUrl: provider.baseUrl, apiKey, model }) }); return;
+          }
+          throw new HttpError(405, '请求方法不受支持。');
+        }
+        if (url.pathname === '/api/formalizations') {
+          const provider = config.providers.find(item => item.id === SUB2API_PROVIDER.id);
+          if (request.method === 'GET') {
+            const formalizationReady = Boolean(runner.formalize) && (await runner.readiness()).ready;
+            const generation: WebFormalizationCapabilities = { available: gatewayProvider(provider) && formalizationReady,
+              ...(!gatewayProvider(provider) ? { reason: 'provider' as const } : !formalizationReady ? { reason: 'runtime' as const } : {}),
+              ...(provider ? { providerId: provider.id } : {}), model: SUB2API_PROVIDER.defaultModel,
+              key: provider && savedKeysFor(session).some(item => item.providerId === provider.id) ? 'saved'
+                : provider && serverKeysFor(session)?.includes(provider.id) ? 'server' : 'required', limits: webFormalizationLimits };
+            json(response, 200, { formalizations: formalizations.list(owner), generation }); return;
+          }
+          if (request.method === 'POST') {
+            const parsed = formalizationSchema.safeParse(await readJson(request));
+            if (!parsed.success) throw new HttpError(400, '请检查原题、证明环境与 API Key。');
+            if (!gatewayProvider(provider)) throw new HttpError(409, '自然语言形式化需要配置 Sub2API 服务。');
+            if (!runner.formalize || !(await runner.readiness()).ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
+            const apiKey = parsed.data.apiKey || heldKey(session, provider!);
+            if (!apiKey) throw new HttpError(400, '请填写 API Key。');
+            json(response, 201, { formalization: formalizations.create(owner, { ...parsed.data, apiKey } as WebFormalizationRequest, provider!, SUB2API_PROVIDER.defaultModel) }); return;
+          }
+          throw new HttpError(405, '请求方法不受支持。');
+        }
+        const formalizationMatch = /^\/api\/formalizations\/([a-f0-9-]{36})(?:\/(cancel|confirm))?$/u.exec(url.pathname);
+        if (formalizationMatch) {
+          const id = formalizationMatch[1], action = formalizationMatch[2];
+          if (!action && request.method === 'GET') { json(response, 200, { formalization: formalizations.read(owner, id) }); return; }
+          if (!action && request.method === 'DELETE') {
+            if (jobs.list(owner).some(run => run.formalizationId === id)) throw new HttpError(409, '已有研究使用这份原题，请先删除相关研究记录。');
+            formalizations.remove(owner, id); json(response, 200, { deletedId: id }); return;
+          }
+          if (action === 'cancel' && request.method === 'POST') { json(response, 200, { formalization: formalizations.cancel(owner, id) }); return; }
+          if (action === 'confirm' && request.method === 'POST') {
+            const parsed = z.object({ evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().safeParse(await readJson(request));
+            if (!parsed.success) throw new HttpError(400, '请提供当前核对版本。');
+            json(response, 200, { formalization: formalizations.confirm(owner, id, parsed.data.evidenceSha256) }); return;
+          }
+          throw new HttpError(405, '请求方法不受支持。');
+        }
         if (['/api/module-registry', '/api/modules'].includes(url.pathname) && request.method === 'GET') {
           json(response, 200, registry.registry()); return;
         }
@@ -491,6 +593,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (headerId !== undefined && (typeof headerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(headerId)
               || bodyRequestId && bodyRequestId !== headerId)) throw new HttpError(400, '提交请求标识无效或不一致。');
           const requestId = bodyRequestId ?? (typeof headerId === 'string' ? headerId : undefined);
+          // Confirmed statements retain their exact artifact bytes; ordinary Lean drafts keep the existing normalization.
+          if (!input.formalizationId) input.source = input.source.trim();
           if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
             throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
           if (!input.planApproval) delete input.planApproval;
@@ -511,8 +615,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const from = input.continueFrom as WebContinuation | undefined;
           const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
           if (from && !saved) throw new HttpError(404, '这个版本的代码没有记录或已超出保留范围。');
+          const approved = input.formalizationId ? formalizations.confirmed(owner, input.formalizationId) : undefined;
+          if (approved && (input.source !== approved.evidence.candidate.source || input.environment !== approved.evidence.request.environment))
+            throw new HttpError(409, 'Lean 原题或环境已改变，请重新形式化确认，或作为普通 Lean 题目创建。');
+          if (from && jobs.get(owner, from.runId)?.formalizationId !== input.formalizationId)
+            throw new HttpError(409, '继续研究必须保留原运行的形式化来源。');
           try {
-            const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId);
+            const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
+              approved ? { evidence: approved.evidence, provenance: { id: approved.formalization.id,
+                evidenceSha256: approved.formalization.report!.evidenceSha256, original: approved.formalization.original,
+                confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined);
             milestone(owner, 'firstRunAt');
             if (saveKey && typed && vault && session.account) vault.save(session.account.id, provider.id, provider.baseUrl, typed);
             json(response, 201, { run, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) });
@@ -774,7 +886,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         throw new HttpError(404, '文件不存在。');
       const allowed: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
         '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' };
-      const contentType = allowed[path.extname(file)];
+      // Only the checked, shared proof archive adds JSON/Lean downloads; account-owned records remain behind /api/runs.
+      const extension = path.extname(file);
+      const archiveType = file.startsWith(path.join(config.staticRoot, 'classics') + path.sep)
+        ? extension === '.json' ? 'application/json; charset=utf-8' : extension === '.lean' ? 'text/plain; charset=utf-8' : undefined
+        : undefined;
+      const contentType = allowed[extension] ?? archiveType;
       if (!contentType) throw new HttpError(404, '文件不存在。');
       sendStatic(request, response, file, path.extname(file), contentType);
     } catch (error) {
@@ -791,9 +908,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
-    await Promise.all([jobs.close(), explanations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    await Promise.all([jobs.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
   };
-  return { server, jobs, explanations, storage, knowledge, registry, auth, close };
+  return { server, jobs, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

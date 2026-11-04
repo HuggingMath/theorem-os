@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { webLimits, type WebEnvironment, type WebEnvironmentOption, type WebProvider, type WebTemplate } from './shared';
 import { allowlistFile, normalizeEmail, type WebAuthConfig } from './auth';
+import { researchExamples } from './problemExamples';
 
 const providerSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
@@ -126,6 +127,7 @@ export function getWebEnvironments(): WebEnvironmentOption[] {
   });
 }
 export const webTemplates: WebTemplate[] = [
+  ...researchExamples.map(({ id, name, environment, source, task }) => ({ id, name, environment, source, task })),
   { id: 'addition', name: '自然数加法', environment: 'standard',
     source: 'namespace Tutorial\n\ntheorem add_zero (n : Nat) : n + 0 = n := by sorry\n\ntheorem zero_add (n : Nat) : 0 + n = n := by sorry\n\nend Tutorial\n',
     task: '证明两个自然数加法定理，保持原题声明不变。根据 Lean 反馈修复候选，并验收完整原题。' },

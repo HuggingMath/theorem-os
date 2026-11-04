@@ -10,7 +10,7 @@ import { GuidanceComposer } from './guidanceComposer';
 import { recordedTask, ResearchProgressView, taskCheckKey } from './researchProgressView';
 import { MathematicalChangesView } from './mathematicalChangesView';
 import { ReviewView } from './reviewView';
-import { CollaborationNavigation } from './collaborationNavigation';
+import { CollaborationNavigation, type CollaborationSection } from './collaborationNavigation';
 import { detailLevel, onDetailLevel, setDetailLevel, type DetailLevel } from './detailLevel';
 import { compactGraphMetrics, compactGraphTasks, graphMetrics, layoutTaskGraph, type GraphEdge, type GraphLayout } from './taskGraphLayout';
 import { renderTaskGraph, renderTaskList, type TaskCard } from './ui/TaskBoard';
@@ -258,6 +258,21 @@ export class CollaborationView {
       if (taskId && view.observation?.inspection.tasks.some(task => task.id === taskId)) view.guidance.guide('task', taskId);
       return text === undefined ? undefined : view.guidance.appendReference(text, notice);
     });
+  }
+  /** Open an existing collaboration section, expanding its reading layer when needed. */
+  showSection(runId: string, section: CollaborationSection): boolean {
+    const view = this.views.get(runId);
+    if (!view || this.current !== view) return false;
+    view.navigation.go(section);
+    return true;
+  }
+  /** Scope declaration comparison to the requested task; an unreviewed task keeps an empty result. */
+  showStatementReview(runId: string, taskId?: string): boolean {
+    const view = this.views.get(runId);
+    if (!view || this.current !== view) return false;
+    view.reviews.showForTask(taskId);
+    view.navigation.go('reviews');
+    return true;
   }
   /** A note to the Lead about its plan, which it may revise before the plan is approved; false when that run is not shown. */
   guideLead(runId: string): boolean {
@@ -690,6 +705,9 @@ export class CollaborationView {
       if (source.taskId !== taskId || source.taskVersion !== version || snapshotKey && taskSourceKey(source) !== snapshotKey) throw new Error(t('读取结果与所选源码快照身份不同，未展示替代材料。'));
       view.sourceComparison = new TaskSourceComparison(source, view.observation?.sources ?? [], view.observation?.inspection.tasks.find(task => task.id === taskId)?.version ?? t('当前计划已无此任务'));
       show(<Host node={view.sourceComparison.element} data-task-source-host />);
+      // The loaded snapshot adds its identity fields above the code; reveal the code after that layout exists.
+      const code = view.sourceComparison.element.querySelector<HTMLElement>('[data-task-source-code]');
+      if (code && this.current === view) { view.navigation.reveal(code); code.focus({ preventScroll: true }); }
     }
     catch(error){if(request!==view.artifactRequest)return;show(<p class="collab-error">{errorText(error)}</p>);}
   }

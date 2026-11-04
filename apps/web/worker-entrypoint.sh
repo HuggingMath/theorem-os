@@ -2,9 +2,9 @@
 set -eu
 case "${2:-run}" in
   run) script=apps/web/worker.ts ;;
-  explain)
-    # Explanation roles compile in their own sandboxes; their scratch and the shared package image need the disk volume.
-    script=apps/web/explanationWorker.ts
+  explain|formalize)
+    # Language roles compile in their own sandboxes; their scratch and the shared package image need the disk volume.
+    if [ "$2" = formalize ]; then script=apps/web/formalizationWorker.ts; else script=apps/web/explanationWorker.ts; fi
     mkdir -p -m 0700 /var/tmp/explain-home /var/tmp/explain-tmp
     export HOME=/var/tmp/explain-home TMPDIR=/var/tmp/explain-tmp
     ;;

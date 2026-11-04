@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { researchExamples } from '../apps/web/problemExamples';
 
 /**
  * Lists the Chinese interface text the English dictionary (apps/web/i18n/en.ts) must cover: t() keys in the browser
@@ -49,14 +50,22 @@ export function scanBundle(files = bundleSources()) {
  * Chinese token units (English uses K/M), and the language switch's search keywords, which match in both languages.
  */
 const allowedText = new Set(['/会话/u', '/[，,\\s]+/u', "'会话校验'", '} 亿`', '} 万`',
-  "'language locale english chinese 语言 中文 英文'"]);
+  "'language locale english chinese 语言 中文 英文'",
+  "'classic problems proofs solutions archive library 经典 题库 数学 解答 过程'",
+  "'formalization translation natural language 形式化 转换 回译 自然语言'",
+  "'formalize formalization natural language tex 形式化 转换 自然语言 原题'",
+  "'statement review translation intent 原意 声明 审阅 回译 转换 自然语言'",
+  "'explain proof natural language 讲解 解释 证明 转换 自然语言'",
+  "'knowledge search library 知识 检索 知识库'", "'archive records 归档 记录'", "'guidance feedback history 指导 历史 人工'",
+  "'roadmap trajectory steps timeline route 研究路线图 轨迹 步骤 过程 路线'",
+  "'collaboration agents plan tasks dependencies reviews 协作 计划 任务 分工 依赖 审阅 Agent'"]);
 const allowed = (node: ts.Node, source: ts.SourceFile) => allowedText.has(node.getText(source));
 
 /** Text nodes and readable attributes of the static pages, with whitespace collapsed as localizeDocument does. */
 export function pageKeys() {
   const keys = new Map<string, string>();
   const decode = (value: string) => value.replace(/&nbsp;/gu, ' ').replace(/&lt;/gu, '<').replace(/&gt;/gu, '>').replace(/&quot;/gu, '"').replace(/&#39;/gu, "'").replace(/&amp;/gu, '&');
-  for (const name of ['index.html', 'login.html', 'share.html', 'guide.html', 'explain.html', 'formalization.html']) {
+  for (const name of ['index.html', 'login.html', 'share.html', 'guide.html', 'explain.html', 'formalization.html', 'formalize.html', 'formalize.html']) {
     const markup = read(web('client', name)).replace(/<(script|style)\b[\s\S]*?<\/\1>/giu, '').replace(/<!--[\s\S]*?-->/gu, '');
     const add = (value: string) => { const key = decode(value).trim().replace(/\s+/gu, ' '); if (han.test(key) && !keys.has(key)) keys.set(key, name); };
     for (const match of markup.matchAll(/>([^<]+)</gu)) add(match[1]);
@@ -74,6 +83,7 @@ export function pageKeys() {
  */
 export function serverKeys() {
   const keys = new Map<string, string>();
+  for (const example of researchExamples) for (const value of [example.name, example.task]) keys.set(value, 'apps/web/problemExamples.ts');
   const files = ['apps/web/progress.ts', 'apps/web/jobs.ts', 'apps/web/runner.ts', 'apps/web/config.ts', 'apps/web/share.ts', 'apps/web/moduleRegistry.ts', 'src/solver/modules/policy.ts', 'scripts/build-web-sample.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
@@ -97,7 +107,7 @@ export function serverKeys() {
  */
 export function errorKeys() {
   const keys = new Map<string, string>();
-  const files = ['apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts',
+  const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts',
     'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));

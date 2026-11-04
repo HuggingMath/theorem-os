@@ -176,6 +176,23 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440
 }
 
 try {
+  await scenario('intent comparison stays discoverable in simple mode and an unreviewed task never shows another task review', async h => {
+    const { page } = h; await create(h);
+    await page.locator('.collab-detail-toggle [data-collab-detail="simple"]').click();
+    assert.equal(await page.locator(section).isVisible(), false);
+    await page.locator('[data-collab-jump="reviews"]').click();
+    await page.locator(section).waitFor();
+    assert.equal(await page.locator('[data-review-heading]').innerText(), '原意与 Lean');
+    await page.locator('.collab-graph [data-collab-task="premise"]').click();
+    await page.locator('[data-collab-reviews-task]').click();
+    assert.equal(await page.locator(taskFilter).inputValue(), 'premise');
+    assert.equal(await page.locator(`${list} [data-review-key]`).count(), 0);
+    assert.match(await page.locator(list).innerText(), /任务 premise 尚无已保存的声明审阅/);
+    assert.equal(await page.locator(`${detail} .collab-review-comparison`).count(), 0);
+    await page.locator('[data-review-clear]').click();
+    assert.ok(await page.locator(`${list} [data-review-key]`).count() > 0);
+  });
+
   await scenario('all statement review states retain intent, Lean statement, structured/legacy translations and escaped raw materials', async h => {
     const { page } = h; await create(h);
     assert.equal(await page.locator(`${list} [data-review-key]`).count(), reviews.length);

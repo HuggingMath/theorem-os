@@ -4,25 +4,18 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { archiveIndex, archiveSourceScript, buildSiteCatalog } from '../docs/web/catalog';
+import { buildSiteCatalog } from '../docs/web/catalog';
 import { acceptedProofRows, researchReplay } from '../docs/web/presentation';
 import { LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
 import { analyticsWebsiteId, customDomain, pagesOrigin } from '../docs/web/site';
+import { archiveCounts, buildArchive } from './site-archive';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const catalog = buildSiteCatalog(root, revision);
 const output = path.join(root, 'out/site');
 fs.mkdirSync(output, { recursive: true });
-await build({
-  entryPoints: [path.join(root, 'docs/web/app.ts')], outfile: path.join(output, 'site.js'),
-  bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true,
-  legalComments: 'eof',
-  plugins: [{ name: 'public-archive', setup(builder) {
-    builder.onResolve({ filter: /^virtual:archive$/ }, () => ({ path: 'archive', namespace: 'public-archive' }));
-    builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, () => ({ contents: JSON.stringify(archiveIndex(catalog)), loader: 'json' }));
-  } }],
-});
+await buildArchive(root, output, catalog);
 await build({
   entryPoints: [path.join(root, 'docs/web/landing.ts')], outfile: path.join(output, 'landing.js'),
   bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true,
@@ -39,9 +32,14 @@ for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
   const homepage = fs.readFileSync(path.join(root, 'docs', directory, 'index.html'), 'utf8')
     .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale))
     .replace('<!-- accepted-count -->', String(catalog.records.filter(record => record.status === 'official_accepted').length))
+    .replace('<!-- local-count -->', String(catalog.records.filter(record => record.status === 'locally_verified').length))
     .replace('<!-- accepted-proofs -->', acceptedProofRows(catalog, locale));
   fs.writeFileSync(path.join(output, directory, 'index.html'), homepage);
-  for (const file of ['archive.html', 'feedback.html', 'privacy.html']) fs.copyFileSync(path.join(root, 'docs', directory, file), path.join(output, directory, file));
+  for (const file of ['archive.html', 'feedback.html', 'privacy.html']) {
+    let page = fs.readFileSync(path.join(root, 'docs', directory, file), 'utf8');
+    if (file === 'archive.html') page = archiveCounts(page, catalog);
+    fs.writeFileSync(path.join(output, directory, file), page);
+  }
 }
 for (const file of ['site.css', 'feedback.css', 'legal.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
 // Embed the Latin fonts so the same typography works for file:// previews without font CORS errors.
@@ -54,11 +52,6 @@ fs.copyFileSync(path.join(root, 'node_modules/lucide/LICENSE'), path.join(output
 if (fs.existsSync(path.join(root, 'docs/assets'))) {
   fs.cpSync(path.join(root, 'docs/assets'), path.join(output, 'assets'), { recursive: true });
 }
-fs.mkdirSync(path.join(output, 'data'), { recursive: true });
-fs.writeFileSync(path.join(output, 'data/catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
-fs.rmSync(path.join(output, 'data/sources'), { recursive: true, force: true });
-fs.mkdirSync(path.join(output, 'data/sources'));
-for (const record of catalog.records) fs.writeFileSync(path.join(output, 'data/sources', `${record.id}.js`), archiveSourceScript(record));
 fs.writeFileSync(path.join(output, '.nojekyll'), '');
 // Site address and analytics are set in docs/web/site.ts and applied to every page here.
 const origin = customDomain ? `https://${customDomain}` : pagesOrigin;

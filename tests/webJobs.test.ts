@@ -2,11 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebJobs } from '../apps/web/jobs';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebProvider, WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { buildTheoremKnowledge, type KnowledgeCandidate } from '../src/solver/theoremKnowledge';
 
 const provider: WebProvider = { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' };
 const input = (apiKey = 'sk-test-job-secret'): WebRunInput => ({ providerId: provider.id, apiKey,
   model: 'gpt-6.1-sol', effort: 'xhigh', source: 'theorem example : True := by sorry',
   task: 'Prove the theorem', maxTurns: 2, maxRunSeconds: 30, workers: 1, coordination: 'cooperative' });
+const known = (name: string): KnowledgeCandidate => ({
+  name: `Saved.${name}`, file: 'Submission.lean', type: 'True', typeKind: 'closed-task-type', kind: 'lemma',
+  description: name, premises: [], dependencies: { statement: [], proof: [], tasks: [], coverage: 'recorded' },
+  files: { 'Submission.lean': `namespace Saved\nlemma ${name} : True := by trivial\nend Saved\n` },
+  provenance: { kind: 'solver-check', problemId: 'fixture', source: 'saved/state.json',
+    sourceDigest: mathDigest(name), receiptIds: [name] },
+});
 const result = (proof = 'theorem example : True := by trivial'): WebResult => ({
   status: 'evaluated_passed', proof, report: { acceptance: 'kernel_verified' },
 });
@@ -63,6 +72,43 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     expect(runner.active).toBe(0);
     expect(runs.every(run => run.status === 'completed')).toBe(true);
     expect(runner.calls.every(call => call.input.input.apiKey === '')).toBe(true);
+  });
+
+  it('pins the default catalog at creation and keeps the originating version on continuation', async () => {
+    const { jobs, runner } = setup();
+    const firstCatalog = jobs.knowledge.importCatalog('owner', buildTheoremKnowledge([known('first')]));
+    const original = jobs.create('owner', input(), provider);
+    expect(original.knowledgeDigest).toBe(firstCatalog.digest);
+    await tick();
+    const secondCatalog = jobs.knowledge.importCatalog('owner', buildTheoremKnowledge([known('second')]));
+    const queued = jobs.create('owner', input(), provider);
+    expect(queued.knowledgeDigest).toBe(secondCatalog.digest);
+    const continued = jobs.create('owner', { ...input(), continueFrom: { runId: original.id, taskId: 'goal',
+      commit: 'a'.repeat(40), label: 'original proof' } }, provider,
+    { runId: original.id, taskId: 'goal', commit: 'a'.repeat(40), label: 'original proof',
+      file: '/tmp/fixture-source', source: 'theorem example : True := by trivial' });
+    expect(continued.knowledgeDigest).toBe(firstCatalog.digest);
+    jobs.knowledge.importCatalog('owner', buildTheoremKnowledge([known('third')]));
+    runner.calls[0]!.finish(); await tick();
+    expect(runner.calls[1]!.input.id).toBe(queued.id);
+    expect(runner.calls[1]!.input.input.knowledgeDigest).toBe(secondCatalog.digest);
+    expect(runner.calls[1]!.input.knowledgeCatalog?.entries).toHaveLength(2);
+    runner.calls[1]!.finish(); await tick();
+    expect(runner.calls[2]!.input.id).toBe(continued.id);
+    expect(runner.calls[2]!.input.input.knowledgeDigest).toBe(firstCatalog.digest);
+    expect(runner.calls[2]!.input.knowledgeCatalog?.entries).toHaveLength(1);
+    runner.calls[2]!.finish(); await tick();
+  });
+
+  it('does not add new historical knowledge to a continuation of a run that had none', async () => {
+    const { jobs } = setup();
+    const original = jobs.create('owner', input(), provider);
+    jobs.knowledge.importCatalog('owner', buildTheoremKnowledge([known('later')]));
+    const reference = { runId: original.id, taskId: 'goal', commit: 'a'.repeat(40), label: 'original proof' };
+    const continued = jobs.create('owner', { ...input(), continueFrom: reference }, provider,
+      { ...reference, file: '/tmp/fixture-source', source: 'theorem example : True := by trivial' });
+    expect(original.knowledgeDigest).toBeUndefined();
+    expect(continued.knowledgeDigest).toBeUndefined();
   });
 
   it('prevents another owner from reading or cancelling a job', async () => {

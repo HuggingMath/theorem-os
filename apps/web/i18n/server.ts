@@ -1,5 +1,7 @@
+import { researchExamples } from '../problemExamples';
 /** Text the server stores or sends in Chinese: run events, runtime status, templates, environments, plan validation. */
 export const server: Record<string, string> = {
+  ...Object.fromEntries(researchExamples.flatMap(example => [[example.name, example.nameEn], [example.task, example.taskEn]])),
   "Mathlib 数学库": "Mathlib",
   "Lean 标准库": "Lean standard library",
   "固定版本 Mathlib 数学库与预编译依赖。": "Pinned Mathlib release with prebuilt dependencies.",

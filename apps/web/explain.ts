@@ -76,7 +76,7 @@ const upstreamStatus: Record<number, string> = {
   404: '模型服务不认识这个模型，或不支持 Responses API。', 429: '模型服务限流或额度不足，请稍后再问。',
 };
 
-export type WebExplainCall = { baseUrl: string; apiKey: string; model: string; input: unknown[]; timeoutMs?: number };
+export type WebExplainCall = { baseUrl: string; apiKey: string; model: string; input: unknown[]; timeoutMs?: number; instructions?: string; onText?(text: string): void };
 /**
  * One streamed call to the provider's Responses API, the endpoint the run's workers use, with light reasoning and
  * nothing stored. Aborting `signal` (the reader closed the panel) stops it; so does running past `timeoutMs`.
@@ -88,7 +88,7 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
     const response = await fetch(`${call.baseUrl}/responses`, { method: 'POST', redirect: 'error',
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       headers: { Authorization: `Bearer ${call.apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ model: call.model, instructions: webExplainInstructions, input: call.input,
+      body: JSON.stringify({ model: call.model, instructions: call.instructions ?? webExplainInstructions, input: call.input,
         reasoning: { effort: 'low' }, stream: true, store: false }) });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
@@ -98,7 +98,7 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
       const body = await response.json() as Record<string, unknown>;
       return answerOf(outputText(body.output), true, body.usage);
     }
-    return await streamed(response.body!);
+    return await streamed(response.body!, call.onText);
   } catch (error) {
     if (error instanceof WebExplainError) throw error;
     if (signal?.aborted) throw new WebExplainError(499, '已停止。');
@@ -108,7 +108,7 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
 }
 
 /** Reads the Responses event stream: text deltas until `response.completed`, whose usage it keeps. */
-async function streamed(body: ReadableStream<Uint8Array>): Promise<WebExplainAnswer> {
+async function streamed(body: ReadableStream<Uint8Array>, onText?: (text: string) => void): Promise<WebExplainAnswer> {
   const reader = body.getReader(), decoder = new TextDecoder();
   let buffer = '', text = '', usage: unknown, finished = false;
   try {
@@ -122,7 +122,10 @@ async function streamed(body: ReadableStream<Uint8Array>): Promise<WebExplainAns
         const data = block.split(/\r?\n/u).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
         if (!data || data === '[DONE]') continue;
         const event = JSON.parse(data) as Record<string, unknown>, response = event.response as Record<string, unknown> | undefined;
-        if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') text += event.delta;
+        if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+          text += event.delta;
+          onText?.(text.trimStart().slice(0, webExplainLimits.answer));
+        }
         else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
           usage = response?.usage; finished = event.type === 'response.completed';
           text ||= outputText(response?.output);

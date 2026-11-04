@@ -8,6 +8,7 @@ import { chromium } from 'playwright';
 // The English pages share the root bundles; check that every visible string they render is English.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const site = path.join(root, 'out/site');
+const catalog = JSON.parse(fs.readFileSync(path.join(site, 'data/catalog.json'), 'utf8'));
 const output = path.join(root, 'out/i18n-checks');
 fs.mkdirSync(output, { recursive: true });
 const base = '/theorem-os-site/';
@@ -102,12 +103,20 @@ try {
       assert.deepEqual(await cjkIn(page), [], `English archive ${tab} at ${width}px`);
     }
     await page.locator('#search').fill('geometry');
-    assert.match(await page.locator('#result-count').innerText(), /^2 records · “geometry”$/);
+    const geometryCount = catalog.records.filter(record => `${record.title} ${record.en?.subtitle ?? record.subtitle} ${record.en?.area ?? record.area} ${record.id} ${record.model}`.toLowerCase().includes('geometry')).length;
+    assert.equal(await page.locator('#result-count').innerText(), `${geometryCount} records · “geometry”`);
     await page.locator('#search').fill('');
     await page.locator('input[name="status"][value="progress"]').check({ force: true });
     assert.deepEqual(await cjkIn(page), [], `English archive snapshot at ${width}px`);
     await checkOverflow(page, `English archive at ${width}px`);
     await page.screenshot({ path: path.join(output, `en-archive-${width}.png`), fullPage: true });
+    await open(page, `${hosted}en/archive.html#proof=openai_totient_companion_zero&status=verified&tab=evidence`);
+    assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
+    assert.deepEqual(await cjkIn(page), [], `English local acceptance at ${width}px`);
+    assert.equal(await page.locator('.campaign-evidence a').getAttribute('href'), '../data/proofs/openai_totient_companion_zero/verification.json');
+    await page.getByRole('tab', { name: 'Research process' }).click();
+    await page.locator('.process-run').first().waitFor();
+    await checkOverflow(page, `English research process at ${width}px`);
     await open(page, `${hosted}en/archive.html#view=quickstart`);
     assert.deepEqual(await cjkIn(page), [], `English replay view at ${width}px`);
 

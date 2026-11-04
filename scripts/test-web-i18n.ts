@@ -21,6 +21,7 @@ const proof = 'theorem fixture : True := by\n  trivial\n';
 // The runner's own messages stay Chinese like any server text; the check is that the client translates them.
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: '运行环境就绪' }; },
+  async formalize() { throw new Error('The language check must not start formalization'); },
   async run(_input, send) {
     send({ type: 'result', result: { status: 'evaluated_passed', proof, report: { turns: 2, solveWallMs: 31_000, usage: { totalTokens: 48_000 },
       environment: { toolchain: 'leanprover/lean4:v4.33.0', mathlibRevision: 'f'.repeat(40) },
@@ -85,6 +86,15 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(origin);
+  await page.locator('#natural-research #formalize-original').waitFor();
+  await english(page, 'natural-language start');
+  assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), false);
+  await page.locator('#open-settings').click();
+  await page.waitForFunction(() => document.activeElement?.id === 'formalize-key');
+  assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true);
+  await english(page, 'natural-language connection settings', '#formalize-settings');
+  await page.locator('#formalize-settings > summary').click();
+  await page.locator('#entry-lean').click();
   await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
   await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en-US');
@@ -132,7 +142,7 @@ try {
   const run = await postRun({ page }, input);
   for (let attempt = 0; attempt < 100 && (await readRun({ page }, run.id)).status !== 'completed'; attempt++) await page.waitForTimeout(50);
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await page.locator('#natural-research #formalize-original').waitFor();
   await openHistory(page);
   await english(page, 'run history', '#history-sidebar');
   await selectHistoryRun(page, run.id);
@@ -174,19 +184,19 @@ try {
   await newResearch(page);
   await page.locator('#task').fill('A draft that must survive the switch');
   await Promise.all([page.waitForEvent('load'), page.locator('#locale-switch').click()]);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await page.locator('#natural-research #formalize-original').waitFor();
   assert.equal(await page.evaluate(key => localStorage.getItem(key), localeKey), 'zh');
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');
   assert.equal(await page.locator('#task').inputValue(), 'A draft that must survive the switch');
   assert.equal(await page.locator('#locale-switch').innerText(), 'English');
   await page.reload();
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await page.locator('#natural-research #formalize-original').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');
   // The palette switches back, so keyboard users never need the top bar.
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
   await page.locator('#command-palette[open] input').fill('english');
   await Promise.all([page.waitForEvent('load'), page.locator('#palette-switch-locale').click()]);
-  await page.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+  await page.locator('#natural-research #formalize-original').waitFor();
   assert.equal(await page.evaluate(key => localStorage.getItem(key), localeKey), 'en');
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en-US');
   mark('the top-bar switch and the palette command change language, remember it and keep the draft');
@@ -196,13 +206,14 @@ try {
     const narrow = await context.newPage();
     await narrow.setViewportSize({ width, height: 760 });
     await narrow.goto(origin);
-    await narrow.locator('#submit-run:enabled').waitFor({ state: 'attached' });
+    await narrow.locator('#natural-research #formalize-original').waitFor();
     await settled(narrow);
     assert.ok(await noOverflow(narrow), `English workbench overflows at ${width}px`);
     assert.ok(await narrow.evaluate(() => { const actions = document.querySelector('.topbar-actions')!; return actions.scrollWidth <= actions.clientWidth + 1 && actions.getBoundingClientRect().right <= innerWidth; }),
       `English top bar is clipped at ${width}px`);
     assert.equal(await narrow.getByRole('button', { name: '中文' }).count(), 1, 'The icon-only switch lost its accessible name');
-    // The visitor's accepted run reopens here; its longer English stage names wrap between words in their quarter of a phone.
+    // The home starts a new natural-language problem; choose the accepted record explicitly.
+    await selectHistoryRun(narrow, run.id);
     await narrow.locator('.artifact-stages[data-ended]').waitFor();
     await narrow.evaluate(() => document.fonts.ready);
     await settled(narrow);

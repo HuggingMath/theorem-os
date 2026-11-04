@@ -25,9 +25,9 @@ export class ServerModulePlans {
     if (heading) heading.after(this.root); else host.prepend(this.root);
     this.render();
   }
-  knowledgeDigest() { return this.digest || undefined; }
-  setKnowledgeDigest(digest?: string) {
-    this.digest = digest ?? ''; this.render();
+  knowledgeDigest() { return this.digest === '__none__' ? null : this.digest || undefined; }
+  setKnowledgeDigest(digest?: string | null) {
+    this.digest = digest === null ? '__none__' : digest ?? ''; this.render();
   }
   async refresh() {
     if (this.loading) return; this.pendingDelete = undefined; this.loading = true; this.render();
@@ -144,9 +144,9 @@ export class ServerModulePlans {
         </details>}</div>
       </div></details>
       <label class="collab-catalog-label" for="knowledge-catalog">{t('新运行的知识目录')}<select id="knowledge-catalog" value={this.digest} onChange={event => this.chooseCatalog(event.currentTarget.value)}>
-        <option value="">{t('不使用历史知识')}</option>{this.catalogOptions()}
+        <option value="">{t('自动使用最新知识')}</option><option value="__none__">{t('不使用历史知识')}</option>{this.catalogOptions()}
       </select></label>
-      <p class="collab-help">{t('选中的目录随运行身份保存，历史证据需要重新检查。')}</p>
+      <p class="collab-help">{t('自动选择本账户最新的非空目录；创建时固定版本，历史证据需要重新检查。')}</p>
     </>);
   }
 }

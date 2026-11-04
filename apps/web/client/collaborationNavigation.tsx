@@ -5,7 +5,7 @@ import { t } from '../i18n';
 
 const sections = [
   ['overview', t('进展'), '.collab-research-overview'], ['tasks', t('任务'), '.collab-layout'],
-  ['reviews', t('审阅'), '.collab-reviews'], ['changes', t('变化'), '.collab-math-changes'],
+  ['reviews', t('原意与 Lean'), '.collab-reviews'], ['changes', t('变化'), '.collab-math-changes'],
   ['agents', 'Agent', '.collab-agents'], ['deliveries', t('交付'), '.collab-deliveries'],
   ['guidance', t('指导'), '.collab-guidance'], ['records', t('记录'), '[data-collab-records]'],
   ['knowledge', t('知识'), '.collab-knowledge'],
@@ -151,7 +151,8 @@ export class CollaborationNavigation {
       const node = this.section(section);
       if (node.getClientRects().length && node.getBoundingClientRect().top <= top) id = section;
     }
-    if (this.viewport!.scrollTop > 0 && this.viewport!.scrollTop + this.viewport!.clientHeight >= this.viewport!.scrollHeight - 2) id = 'knowledge';
+    if (this.viewport!.scrollTop > 0 && this.viewport!.scrollTop + this.viewport!.clientHeight >= this.viewport!.scrollHeight - 2
+      && this.section('knowledge').getClientRects().length) id = 'knowledge';
     this.activate(id);
   }
 }

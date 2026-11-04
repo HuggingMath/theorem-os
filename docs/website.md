@@ -5,7 +5,7 @@
 静态网站包含三个入口：
 
 - `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍，以及打开工作台（https://app.theoremos.top/）和“申请内测”的开始区。
-- `archive.html`：证明档案，支持搜索、筛选、源码查看、验收证据、JSON 下载和本地回放记录。
+- `archive.html`：证明档案，支持搜索、按官方验收/本地通过/研究中筛选、源码查看、验收证据、解题过程、JSON 下载和本地回放记录。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。工作台用 `?kind=&area=&environment=` 预填类型、位置和环境，未知值忽略，环境可在发布前修改。
 
 三个入口都有英文版，位于 `en/` 下，与中文页共用样式、脚本和素材。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。工作台截图仍是中文界面，英文页的说明里注明了这一点。
@@ -35,13 +35,28 @@ bun run build:site
 - `accepted/*/verification.json`：已有的本地检查与来源记录。检查投影和最终归档文件的哈希可能不同，档案界面会标明差异；官方验收状态以官方响应为准。
 - `in-progress/snapshot.json` 与各题 `manifest.json`：研究快照的时间、轮数、worker 数量和任务状态。它们不构成整题验收，也不计入首页的官方通过数量。
 
-当前静态站点和已验收清单仍只收录早期 6 道证明；2026 年 10 月 16 日获官方 4/4 通过的 [#2144 四题](../submitted/README.md) 保留在原提交归档中，未计入站点统计。
+当前静态站点收录早期 6 道官方验收证明、OpenAI Math campaign 的 10 道本地原生验收解答和 1 道研究快照。
+OpenAI Math 条目显示原题、最终证明、辅助模块、固定提交与证明哈希、Lean 收据、comparator 结果和按时间排列的研究尝试/引理任务/检查记录。
+它们使用单独的“本地验收通过”状态，不计入首页的官方通过数量；有外部代理数学辅助和续跑的记录保留归属。
+2026 年 10 月 16 日获官方 4/4 通过的 [#2144 四题](../submitted/README.md) 仍保留在原提交归档中。
+
+从持续归档中更新已验收结果，再构建前端：
+
+```sh
+bun run import:math-results /path/to/campaign
+bun run build:site
+```
+
+导入只读 campaign，核对原生 run、最终提交、Lean 和 comparator 结果后，写入 `research/openai-math/`。
+构建再次核对全部导出文件的 SHA-256 与验收身份。网页使用这些经过筛选的结果与过程，
+不会把原始会话、完整 runtime checkpoint、宿主路径或登录凭据复制到公开产物。
+证明和过程均按题目延迟加载；打开解题过程的 URL、下载 JSON 和英文页面保留同一题目的身份。
 
 成果来自前身 DeepScientist / DeepScientist Math 及后续工作，包含继续运行与环境迁移。页面保留原始归属，不将这些案例表述为当前运行时从零求解的成功率评测。
 
-构建时校验已验收提交包全部登记文件，以及页面收录的研究源码的 SHA-256。页面仅提取这些记录的明确字段，以及 solver 的 `Challenge.lean`、`Submission.lean`、`Submission/Helpers.lean`；不复制 `state.json`、会话、环境文件或完整实验目录。档案的源码行数仅统计页面收录的文件。
+构建时校验已验收提交包全部登记文件，以及页面收录的研究源码的 SHA-256。早期快照只提取明确字段与选定 Lean 文件；campaign 解答收录题目工程内的 Lean 源码及明确的过程、验收字段，不复制 `state.json`、会话、环境文件或完整实验目录。档案的源码行数仅统计页面收录的文件。
 
-生成的 `out/site/data/catalog.json` 与档案使用同一份数据。档案脚本 `site.js` 只打包不含源码的索引和目标声明节选；每道题的 Lean 源码写在 `data/sources/<id>.js`，打开“Lean 源码”或下载档案 JSON 时才加载。用脚本标签而不用 `fetch`，是为了 `file://` 预览也能读取源码。源码链接指向公开仓库 `main` 分支的同一路径；证明包按提交包逐字节保存，文件 SHA-256 写在档案里，可据此核对。
+生成的 `out/site/data/catalog.json` 与档案使用同一份数据。档案脚本 `site.js` 只打包不含源码的索引和目标声明节选；每道题的 Lean 源码写在 `data/sources/<id>.js`，打开“Lean 源码”或下载档案 JSON 时才加载。用脚本标签而不用 `fetch`，是为了 `file://` 预览也能读取源码。早期档案的源码链接指向公开仓库 `main` 分支的同一路径，campaign 的原文件链接指向站内 `data/proofs/<id>/`；证明包逐字节保存，文件 SHA-256 写在档案里，可据此核对。
 
 ## 修改页面
 
@@ -121,7 +136,7 @@ bun run export:site /home/lzh/theorem-os-site
 
 ## 视觉素材
 
-`docs/assets/mark.svg` 是首页、档案与工作台共用的墨色项目标记（陶土色方块），`mark.png` 保留为位图版本。首页正文使用本地 Hanken Grotesk 字体，字面代码使用 Fira Code；档案页与工作台正文使用 Inter，工作台代码使用 JetBrains Mono。工作台加载的是 `InterVariable-latin.woff2`：保留两个可变轴与全部排版特性，只收录拉丁、拉丁扩展 A、希腊字母、通用标点、上下标、字母式符号、箭头与数学运算符（352 KB 降到 157 KB）；由 `pyftsubset InterVariable.woff2 --unicodes=U+0000-017F,U+0370-03FF,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-22FF,U+2318,U+FEFF,U+FFFD --layout-features='*' --flavor=woff2` 生成。档案页仍嵌入完整的 `InterVariable.woff2`。三处的中文正文都使用思源黑体（Noto Sans SC），以 “TheoremOS Sans SC” 的名称加载，覆盖 400–600 字重，同样按 `NotoSansSC-ui` 与 `NotoSansSC-common` 两个 unicode-range 子集拆分。标题与品牌名使用衬线字体：西文为 Lora 的拉丁子集，中文为思源宋体（Noto Serif SC）600 字重的两个子集。按 OFL 保留字体名的要求，修改后的 Lora 子集改名为 “TheoremOS Serif Latin”，中文子集为 “TheoremOS Serif SC”。中文子集按 unicode-range 拆分：`NotoSerifSC-ui` 收录工作台与官网源码中出现的汉字，`NotoSerifSC-common` 收录其余 GB2312 一级字，仅在标题用到时加载。此后界面新增的文字里有 88 个汉字不在 `-ui` 子集中，工作台把它们放进 `NotoSansSC-ui-extra.woff2` 与 `NotoSerifSC-ui-extra.woff2`（各约 20 KB，官网样式不引用），并从 `app.css` 中 `-common` 的 unicode-range 里移除，否则中文界面首次打开就会因为「轨迹」「万」这类字多下载 760 KB 的 `-common`。`tests/webFonts.test.ts` 检查界面文字（`scripts/web-i18n.ts` 列出的全部中文键）只用到 `-ui` 与 `-ui-extra`。界面再出现新字时，`-common` 文件里仍有这些字形，从中重新取出：`pyftsubset NotoSansSC-common.woff2 --unicodes=<原有加新增的码位> --layout-features='*' --flavor=woff2 --output-file=NotoSansSC-ui-extra.woff2`（宋体同理），再把新增码位从 `app.css` 的 `-common` 范围移到 `-ui-extra`。黑体的 `-ui-extra` 另含「中」「文」两字：英文界面唯一可见的中文是语言切换上的「中文」，两字的 unicode-range 从 `-ui` 移到 `-ui-extra` 后，英文页只下载约 24 KB 的 `-ui-extra`，不再为两个字下载 217 KB 的 `-ui`。这两个字不在 `-common` 文件里，所以黑体的 `-ui-extra` 要从思源黑体原始可变字体重新生成：与 `-ui` 相同，先用 fontTools 的 instancer 把字重轴截到 400–600，再按全部码位子集化。字体及各自的 SIL Open Font License 保存在 `docs/assets/fonts/`。构建时将拉丁字体嵌入样式，确保直接打开本地文件时也能加载；中文子集体积较大，保留为外部文件，页面不依赖外部字体服务。
+`docs/assets/mark.svg` 是首页、档案与工作台共用的墨色项目标记（陶土色方块），`mark.png` 保留为位图版本。首页正文使用本地 Hanken Grotesk 字体，字面代码使用 Fira Code；档案页与工作台正文使用 Inter，工作台代码使用 JetBrains Mono。工作台加载的是 `InterVariable-latin.woff2`：保留两个可变轴与全部排版特性，只收录拉丁、拉丁扩展 A、希腊字母、通用标点、上下标、字母式符号、箭头与数学运算符（352 KB 降到 157 KB）；由 `pyftsubset InterVariable.woff2 --unicodes=U+0000-017F,U+0370-03FF,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-22FF,U+2318,U+FEFF,U+FFFD --layout-features='*' --flavor=woff2` 生成。档案页仍嵌入完整的 `InterVariable.woff2`。三处的中文正文都使用思源黑体（Noto Sans SC），以 “TheoremOS Sans SC” 的名称加载，覆盖 400–600 字重，同样按 `NotoSansSC-ui` 与 `NotoSansSC-common` 两个 unicode-range 子集拆分。标题与品牌名使用衬线字体：西文为 Lora 的拉丁子集，中文为思源宋体（Noto Serif SC）600 字重的两个子集。按 OFL 保留字体名的要求，修改后的 Lora 子集改名为 “TheoremOS Serif Latin”，中文子集为 “TheoremOS Serif SC”。中文子集按 unicode-range 拆分：`NotoSerifSC-ui` 收录工作台与官网源码中出现的汉字，`NotoSerifSC-common` 收录其余 GB2312 一级字，仅在标题用到时加载。此后界面新增的文字里有 106 个汉字不在 `-ui` 子集中，工作台把它们放进 `NotoSansSC-ui-extra.woff2` 与 `NotoSerifSC-ui-extra.woff2`（各约 23–29 KB，官网样式不引用），并从 `app.css` 中 `-common` 的 unicode-range 里移除，否则中文界面首次打开就会因为「轨迹」「万」这类字多下载 760 KB 的 `-common`。`tests/webFonts.test.ts` 检查界面文字（`scripts/web-i18n.ts` 列出的全部中文键）只用到 `-ui` 与 `-ui-extra`。界面再出现新字时，`-common` 文件里仍有这些字形，从中重新取出：`pyftsubset NotoSansSC-common.woff2 --unicodes=<原有加新增的码位> --layout-features='*' --flavor=woff2 --output-file=NotoSansSC-ui-extra.woff2`（宋体同理），再把新增码位从 `app.css` 的 `-common` 范围移到 `-ui-extra`。黑体的 `-ui-extra` 另含「中」「文」两字：英文界面唯一可见的中文是语言切换上的「中文」，两字的 unicode-range 从 `-ui` 移到 `-ui-extra` 后，英文页只下载约 24 KB 的 `-ui-extra`，不再为两个字下载 217 KB 的 `-ui`。这两个字不在 `-common` 文件里，所以黑体的 `-ui-extra` 要从思源黑体原始可变字体重新生成：与 `-ui` 相同，先用 fontTools 的 instancer 把字重轴截到 400–600，再按全部码位子集化。字体及各自的 SIL Open Font License 保存在 `docs/assets/fonts/`。构建时将拉丁字体嵌入样式，确保直接打开本地文件时也能加载；中文子集体积较大，保留为外部文件，页面不依赖外部字体服务。
 
 `workbench-desktop.png` 和 `workbench-mobile.png` 来自真实本地工作台的新会话，分别是 1440×500 的桌面视口和 390×440 的手机视口。`workbench-full-desktop.png` 与 `workbench-full-mobile.png` 为弹窗使用的完整截图，视口分别是 1440×900 和 390×844，以 2 倍像素密度生成。桌面展示左侧对话与右侧源码，手机切到工作区，展示经过正常编辑器载入的紧凑 Mathlib 草稿；图注均标明未提交。截图脚本核对源码在手机上完整可见并阻止创建任务，不需要模型或 Key：
 

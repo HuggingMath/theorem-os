@@ -73,7 +73,12 @@ describe('explaining a failed version', () => {
       const next = () => { if (offset >= bytes.length) { response.end(); return; } response.write(bytes.subarray(offset, offset += 7)); setImmediate(next); };
       next();
     });
-    expect(await askProvider(call(mock.baseUrl))).toEqual({ answer: '因为 `rfl` 只看定义。', usage: { inputTokens: 812, outputTokens: 96, totalTokens: 908 } });
+    const partials: string[] = [];
+    expect(await askProvider({ ...call(mock.baseUrl), onText: text => partials.push(text) })).toEqual({ answer: '因为 `rfl` 只看定义。', usage: { inputTokens: 812, outputTokens: 96, totalTokens: 908 } });
+    expect(partials[0]).toBe('因');
+    expect(partials.at(-1)).toBe('因为 `rfl` 只看定义。');
+    expect(partials.every((text, index) => text.startsWith(partials[index - 1] ?? ''))).toBe(true);
+    expect(JSON.stringify(mock.seen[0]!.body)).not.toContain('onText');
     expect(mock.seen[0]!.url).toBe('/v1/responses');
     expect(mock.seen[0]!.headers.authorization).toBe(`Bearer ${key}`);
     expect(mock.seen[0]!.body).toMatchObject({ model: 'fixture-model', stream: true, store: false, reasoning: { effort: 'low' }, instructions: webExplainInstructions });

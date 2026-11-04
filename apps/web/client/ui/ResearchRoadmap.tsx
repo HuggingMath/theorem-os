@@ -4,7 +4,7 @@ import { localizeText, t } from '../../i18n';
 import { Icon } from './Icon';
 
 type Box = { x: number; y: number; width: number; height: number; rowTop?: number; rowBottom?: number };
-const card = { width: 320, support: 232, column: 376, gap: 44, noteGap: 14, margin: 32 };
+const card = { width: 352, support: 256, column: 432, gutter: 80, gap: 56, noteGap: 24, margin: 40 };
 const icons: Record<RoadmapNode['kind'], string> = { problem: 'book-open', plan: 'git-branch', task: 'file-code-2',
   guidance: 'user-round', proof: 'git-compare', review: 'eye', evaluation: 'shield-check', end: 'square' };
 const taskKind = (node: RoadmapNode) => node.taskKind === 'goal' ? t('原始目标') : node.taskKind === 'lemma' ? t('引理')
@@ -17,7 +17,7 @@ function arrange(model: Roadmap, heights: Readonly<Record<string, number>>, comp
   const hints = model.nodes.filter(node => node.kind === 'guidance');
   const ending = model.nodes.filter(node => ['proof', 'review', 'evaluation', 'end'].includes(node.kind));
   const left = model.nodes.filter(node => node.kind === 'problem' || node.kind === 'plan');
-  const height = (node: RoadmapNode) => heights[node.id] ?? (node.kind === 'task' ? 210 : node.kind === 'guidance' ? 156 : 108);
+  const height = (node: RoadmapNode) => heights[node.id] ?? (node.kind === 'task' ? 250 : node.kind === 'guidance' ? 200 : 136);
   const notes = new Map<string, RoadmapNode[]>();
   for (const hint of hints) {
     const target = model.edges.find(edge => edge.kind === 'guidance' && edge.from === hint.id)?.to;
@@ -52,7 +52,7 @@ function arrange(model: Roadmap, heights: Readonly<Record<string, number>>, comp
       + Math.max(0, rows.length - 1) * card.gap };
   });
   const taskColumns = Math.max(1, groups.reduce((sum, group) => sum + group.columns, 0));
-  const taskX = card.margin + card.support + 56, endingX = taskX + taskColumns * card.column, top = 88;
+  const taskX = card.margin + card.support + card.gutter, endingX = taskX + taskColumns * card.column, top = 104;
   const mainHeight = Math.max(240, stackHeight(left), stackHeight(ending), ...groups.map(group => group.height));
   const stack = (nodes: RoadmapNode[], x: number) => {
     let y = compact ? top : top + (mainHeight - stackHeight(nodes)) / 2;
@@ -76,7 +76,7 @@ function arrange(model: Roadmap, heights: Readonly<Record<string, number>>, comp
   }
   return { positions, width: endingX + card.support + card.margin, height: top + mainHeight + card.margin,
     stages: [{ x: card.margin, width: card.support, label: t('原题与计划') },
-      { x: taskX, width: taskColumns * card.column - 56, label: t('数学任务') },
+      { x: taskX, width: taskColumns * card.column - card.gutter, label: t('数学任务') },
       { x: endingX, width: card.support, label: t('证明与验收') }] };
 }
 
@@ -92,7 +92,7 @@ function path(edge: RoadmapEdge, positions: ReadonlyMap<string, Box>) {
     const x2 = to.x + to.width, y2 = to.y + to.height / 2, rail = x2 + 20;
     return `M${x1},${y1} V${y1 + 12} H${rail} V${y2} H${x2}`;
   }
-  if ((edge.kind === 'integration' || edge.kind === 'assignment') && to.x - from.x > from.width + 57) {
+  if ((edge.kind === 'integration' || edge.kind === 'assignment') && to.x - from.x > from.width + card.gutter + 1) {
     const x2 = to.x, y2 = to.y + to.height / 2;
     const boxes = [...positions.values()];
     const clear = (y: number, left: number, right: number) => boxes.every(box =>

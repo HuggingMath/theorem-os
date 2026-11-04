@@ -1,0 +1,116 @@
+html.formalize-root{height:auto;overflow:auto}
+.formalize-page .skip-link{top:8px;transform:none;clip-path:inset(100%)}
+.formalize-page .skip-link:focus{clip-path:none}
+body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
+.formalize-page .topbar{flex-wrap:wrap;min-height:64px;height:auto;padding-block:12px;gap:12px}
+.formalize-shell{width:min(1440px,100%);margin:0 auto;padding:48px 36px 80px}
+.formalize-intro{max-width:760px;margin-bottom:36px}
+.formalize-eyebrow{color:var(--blue);font-size:13px;margin-bottom:8px}
+.formalize-intro h1{font-family:var(--serif);font-size:36px;line-height:1.3;margin-bottom:16px}
+.formalize-intro>p:last-child{color:var(--muted);line-height:1.9}
+.formalize-workspace{display:grid;grid-template-columns:minmax(0,2fr) minmax(260px,1fr);gap:40px}
+.formalize-compose,.formalize-history{min-width:0}
+:is(.formalize-page,.formalize-embedded) h2{font-size:18px;margin-bottom:16px}
+:is(.formalize-page,.formalize-embedded) h3{font-size:15px}
+.formalize-compose form{display:grid;gap:16px}
+#formalize-settings summary,#formalize-history-details>summary{cursor:pointer;font-size:14px;font-weight:500}
+.formalize-settings-fields{display:grid;gap:16px;margin-top:16px}
+#formalize-history-details>.formalize-section-head{margin-top:16px}
+.formalize-examples{padding-bottom:20px;border-bottom:1px solid var(--line)}
+.formalize-examples select{margin-top:10px}
+.formalize-examples .field-note{margin-top:10px;line-height:1.8}
+:is(.formalize-page,.formalize-embedded) input:not([type=checkbox]),:is(.formalize-page,.formalize-embedded) select,:is(.formalize-page,.formalize-embedded) textarea{display:block;width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--card);padding:12px}
+:is(.formalize-page,.formalize-embedded) textarea{resize:vertical;min-height:220px;line-height:1.85}
+:is(.formalize-page,.formalize-embedded) label{display:block;font-weight:500}
+:is(.formalize-page,.formalize-embedded) label .field-note{display:block;font-weight:400;margin-top:6px}
+.formalize-options{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.formalize-options select{margin-top:8px}
+.formalize-budget{padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:13px;color:var(--muted);line-height:1.9;overflow-wrap:anywhere}
+.formalize-submit,.formalize-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.formalize-section-head{display:flex;align-items:start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.formalize-section-head h2{margin-bottom:8px}
+.formalize-history{border-left:1px solid var(--line);padding-left:28px}
+#formalize-list{display:grid;gap:8px;margin-top:20px;max-height:440px;overflow:auto;padding:2px}
+.formalize-record{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:8px;padding:12px;min-width:0}
+.formalize-record[aria-pressed=true]{border-color:var(--line);background:var(--card)}
+.formalize-record:hover{background:var(--gray-50)}
+.formalize-record-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.formalize-record-meta{display:block;color:var(--muted);font-size:12px;margin-top:8px}
+.formalize-current{margin-top:48px;border-top:1px solid var(--line);padding-top:28px;scroll-margin-top:24px}
+#formalize-progress{color:var(--muted);font-size:13px}
+#formalize-source{margin-top:20px}#formalize-source summary{cursor:pointer;color:var(--muted);font-size:13px}
+#formalize-source-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;margin-top:16px;padding:16px;background:var(--card);border:1px solid var(--line);border-radius:8px}
+.formalize-review-note{margin:24px 0;color:var(--muted);line-height:1.9;max-width:900px}
+:is(.formalize-page,.formalize-embedded) .explain-split{height:680px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+:is(.formalize-page,.formalize-embedded) .explain-toolbar{margin-top:24px}
+:is(.formalize-page,.formalize-embedded) .explain-pane{min-height:0;min-width:0}
+.formalize-confirmation{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:20px;padding:24px 0}
+.formalize-confirmation label{font-weight:400;line-height:1.9;max-width:800px}
+.formalize-confirmation input[type=checkbox]{display:inline-block;width:16px;height:16px;min-width:16px;margin:0 8px 0 0;padding:0;vertical-align:middle;accent-color:var(--blue)}
+#formalize-confirmed{display:flex;align-items:center;flex-wrap:wrap;gap:16px;padding:24px 0}
+.formalize-error{padding:14px 16px;margin-bottom:24px;border:1px solid var(--red-200);border-radius:8px;color:var(--red-700);background:var(--red-50);overflow-wrap:anywhere}
+#formalize-reason{margin-top:12px;overflow-wrap:anywhere}
+.formalize-stages{display:flex;flex-wrap:wrap;gap:16px 28px;list-style:none;padding:0;margin:24px 0 16px;color:var(--muted);font-size:13px}
+.formalize-stages li{border-bottom:2px solid var(--line);padding-bottom:8px}
+.formalize-stages li[aria-current=step]{color:var(--blue);border-color:var(--blue)}
+#formalize-research-status{line-height:1.8;margin:16px 0}
+#formalize-result{display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin:20px 0}
+@media(max-width:900px){.formalize-shell{padding:32px 24px 56px}.formalize-workspace{grid-template-columns:1fr;gap:32px}.formalize-history{padding:24px 0 0;border-left:0;border-top:1px solid var(--line)}#formalize-list{max-height:260px}:is(.formalize-page,.formalize-embedded) .explain-split{height:640px}}
+@media(max-width:480px){.formalize-shell{padding:28px 16px 48px}.formalize-page .topbar{padding:12px 16px}.formalize-page .brand{font-size:20px}.formalize-page .topbar-actions{gap:6px}.formalize-page .topbar-actions .button{font-size:12px;padding:6px 8px}.formalize-intro h1{font-size:28px}.formalize-options{gap:12px}:is(.formalize-page,.formalize-embedded) .explain-split{height:600px}:is(.formalize-page,.formalize-embedded) .explain-target{min-width:0;overflow-wrap:anywhere}:is(.formalize-page,.formalize-embedded) .explain-toolbar{flex-wrap:wrap}}
+
+#formalize-failure{margin-top:12px;font-size:13px;color:var(--muted)}
+#formalize-failure summary{cursor:pointer}
+#formalize-failure code{display:block;margin-top:8px;overflow-wrap:anywhere}
+
+/* The home workbench mounts this form in its own scrollable workspace. */
+.formalize-embedded.formalize-shell{width:100%;max-width:1040px;margin:0 auto;padding:clamp(80px,22vh,220px) 36px 64px;overflow-y:auto}
+.formalize-embedded :is(.formalize-intro,.formalize-examples,#formalize-compose-heading,#formalize-original-note,.formalize-options,.formalize-submit>.field-note){display:none}
+.formalize-embedded #formalize-settings:not([open]){display:none}
+.formalize-embedded .formalize-workspace{display:block;max-width:760px;margin-inline:auto}
+.formalize-embedded #formalize-form{gap:0;border:1px solid var(--gray-200);border-radius:20px;background:var(--card);padding:8px;box-shadow:0 4px 20px #00000006}
+.formalize-embedded #formalize-form:focus-within{border-color:var(--gray-400)}
+.formalize-embedded #formalize-original{min-height:116px;max-height:320px;border:0;background:transparent;border-radius:12px;padding:18px 18px 12px;resize:none;font-size:16px;line-height:1.85;box-shadow:none}
+.formalize-embedded #formalize-original:focus{outline:0;box-shadow:none}
+.formalize-embedded .formalize-submit{justify-content:flex-end;flex-wrap:nowrap;padding:8px;gap:12px}
+.formalize-embedded #formalize-start{min-width:64px;border-radius:12px;padding:9px 16px;flex-shrink:0}
+.formalize-embedded #formalize-settings[open]{margin:12px 20px;padding:20px 0;border-top:1px solid var(--line)}
+.formalize-embedded .formalize-history{border:0;padding:0;margin-top:28px}
+.formalize-embedded .formalize-current{margin:44px auto 0;max-width:960px}
+.formalize-embedded:has(.formalize-current:not([hidden])){padding-top:40px}
+.formalize-embedded:has(.formalize-current:not([hidden])){display:flex;flex-direction:column;max-width:1040px;padding:24px 24px 20px;height:100%}
+.formalize-embedded:has(.formalize-current:not([hidden])) .formalize-workspace{order:2;width:100%;flex:none}
+.formalize-embedded:has(.formalize-current:not([hidden])) .formalize-current{order:1;flex:1;min-height:0;width:100%;max-width:760px;margin:0 auto 24px;padding:0 12px 24px;border:0;overflow:auto;display:flex;flex-direction:column}
+.formalize-embedded #formalize-source{order:-1;margin:0 0 28px;flex:none}
+.formalize-embedded #formalize-source>summary{display:none}
+.formalize-embedded #formalize-source-text{margin:0 0 0 auto;max-width:90%;max-height:none;background:var(--gray-100);border:0;border-radius:20px;padding:16px 22px;font-family:inherit;font-size:15px;line-height:1.9}
+.formalize-embedded #formalize-send-status{padding:4px 14px 10px;margin:0;font-size:12px;line-height:1.7}
+body[data-view=draft] .topbar :is(.palette-trigger,#open-glossary,.connection-status.ready){display:none}
+body[data-view=draft] .topbar .model-menu{border:0;background:transparent}
+body[data-view=draft] .topbar .model-menu :is(#current-model,svg:last-child){display:none}
+.topbar :is(.palette-trigger,#open-glossary,.connection-status.ready){display:none}
+.topbar .model-menu{border:0;background:transparent}
+.topbar .model-menu :is(#current-model,svg:last-child){display:none}
+.topbar #topbar-draft{display:inline-flex;flex-shrink:0}
+body[data-view=draft][data-entry=lean] .workspace{display:flex;justify-content:center;overflow-y:auto}
+body[data-view=draft][data-entry=lean] :is(.runs-workspace,.pane-resizer,.mobile-switch){display:none}
+body[data-view=draft][data-entry=lean] .composer{width:min(832px,100%);flex:none;overflow:visible;padding:clamp(40px,10vh,100px) 36px 48px;background:transparent}
+body[data-view=draft][data-entry=lean] .composer-heading{padding:0 0 20px;min-height:0}
+body[data-view=draft][data-entry=lean] .creation-path{display:none}
+body[data-view=draft][data-entry=lean] .chat-scroll{flex:none;padding:0;overflow:visible;mask-image:none}
+body[data-view=draft][data-entry=lean] .inline-problem{padding:0;border:0}
+body[data-view=draft][data-entry=lean] .inline-problem>.section-heading{display:none}
+body[data-view=draft][data-entry=lean] #source{min-height:210px;max-height:420px;border-radius:12px;padding:18px;line-height:1.8}
+body[data-view=draft][data-entry=lean] #run-form{padding:20px 0 0}
+body[data-view=draft][data-entry=lean] .composer-tools{flex-wrap:wrap;gap:6px}
+body[data-view=draft][data-entry=lean] .composer-tools>.workbench-entrypoints{flex:1 0 auto}
+body[data-view=draft][data-entry=lean] .composer-environment{display:none}
+.lean-input-options{margin-top:12px}
+.lean-input-options summary{cursor:pointer;color:var(--muted);font-size:13px;padding-block:8px}
+.lean-input-options[open]{padding-bottom:12px}
+.draft-preview-toggle{align-self:flex-end;margin-bottom:16px}
+.draft-preview-close{display:none}
+body[data-view=draft][data-entry=lean][data-draft-preview=true] .composer{display:none}
+body[data-view=draft][data-entry=lean][data-draft-preview=true] .runs-workspace{display:flex;flex-direction:column;width:100%;flex:1}
+body[data-view=draft][data-entry=lean][data-draft-preview=true] .draft-preview-close{display:block;align-self:flex-start;margin:12px 24px}
+@media(max-width:900px){.formalize-embedded.formalize-shell{padding:clamp(64px,18vh,180px) 24px 48px}}
+@media(max-width:480px){.formalize-embedded.formalize-shell{padding:clamp(48px,18vh,144px) 16px 40px}.formalize-embedded #formalize-original{padding:16px 12px}.formalize-embedded #formalize-settings[open]{margin:12px 8px}.formalize-embedded .formalize-submit{padding:6px 2px;gap:4px}.formalize-embedded #formalize-start{min-width:56px;padding:9px 12px}body[data-view=draft][data-entry=lean] .composer{padding:40px 16px}.formalize-embedded:has(.formalize-current:not([hidden])){padding-top:24px}}

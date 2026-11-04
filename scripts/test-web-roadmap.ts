@@ -9,7 +9,7 @@ import { loadWebSample } from '../apps/web/sample';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import { audit } from './web-a11y';
-import { freePort, postRun, ready, settled, startBrowser, waitForRun } from './web-scenario';
+import { freePort, postRun, settled, startBrowser, waitForRun } from './web-scenario';
 import { openTab, selectHistoryRun } from './web-ui-controls';
 import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
 
@@ -48,7 +48,9 @@ const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= i
 try {
   await page.route(/\/api\/runs\/[^/]+\/trajectory(?:\?|$)/u,
     route => route.fulfill({ status: 503, json: { error: 'Recorded read failure' } }), { times: 1 });
-  await page.goto(`${origin}/?sample`); await ready(page);
+  await page.goto(`${origin}/?sample`); await page.locator('#research-conversation-panel').waitFor();
+  await page.locator('[data-research-artifact="roadmap"]').click();
+  await openTab(page, 'result');
   await page.locator('[data-result-roadmap] .trajectory-error').getByRole('button', { name: '重试', exact: true }).click();
   await page.locator('[data-result-roadmap] [data-roadmap-node="evaluation"]').waitFor();
   assert.equal(await page.locator('[data-result-roadmap] [data-trajectory-view]').count(), 0, 'retry keeps the result overview and its node navigation');
@@ -97,6 +99,39 @@ try {
   await shot('roadmap-check-feedback.png');
   await page.keyboard.press('Escape');
   await page.locator('#trajectory-viewer').waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.roadmap-detail [data-action="guide-task"]').count(), 0, 'the recorded sample offers read-only actions');
+  await page.locator('.roadmap-detail [data-action="inspect-task"]').click();
+  await page.locator('[data-inspected-task-heading]').waitFor();
+  assert.match(await page.locator('.collab-inspector').innerText(), /goal_2/u, 'the node opens its own task');
+  await openTab(page, 'trajectory');
+  assert.equal(await node('task:goal_2').getAttribute('aria-pressed'), 'true');
+  await page.locator('.roadmap-detail [data-action="show-statement-review"]').click();
+  await page.locator('[data-review-task]').waitFor();
+  assert.equal(await page.locator('[data-review-task]').inputValue(), 'goal_2');
+  assert.match(await page.locator('[data-review-list]').innerText(), /任务 goal_2 尚无已保存的声明审阅/u);
+  const palette = async (query: string) => {
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    await page.locator('#command-palette[open] input').fill(query);
+  };
+  for (const [query, command, target] of [['原意', 'run-statement-review', '[data-review-task]'], ['知识', 'run-knowledge', '.collab-knowledge'],
+    ['归档', 'run-records', '[data-collab-records]'], ['指导', 'run-guidance-history', '[data-collab-guidance-records]']]) {
+    await palette(query!); await page.locator(`#palette-${command}`).click();
+    assert.equal(await page.locator(target!).isVisible(), true, `${query} opens its collaboration section`);
+  }
+  assert.equal(await page.locator('[data-review-task]').inputValue(), '', 'the global review command clears the task filter');
+  await palette('自然语言');
+  const [explanation] = await Promise.all([context.waitForEvent('page'), page.locator('#palette-run-explanation').click()]);
+  assert.equal(new URL(explanation.url()).pathname, '/explain.html');
+  assert.equal(new URL(explanation.url()).searchParams.get('run'), recording.run.id);
+  await explanation.close();
+  await palette('形式化');
+  const [languageGuide] = await Promise.all([context.waitForEvent('page'), page.locator('#palette-open-language-guide').click()]);
+  await languageGuide.locator('#language-heading').waitFor();
+  assert.equal(new URL(languageGuide.url()).hash, '#language');
+  await languageGuide.close();
+  await openTab(page, 'trajectory');
+  await shot('roadmap-task-actions.png');
+  console.log('PASS nodes open the matching task and statement review; search reaches explanation, knowledge, archives and guidance');
   await page.getByRole('button', { name: '关闭节点详情', exact: true }).click();
   await node('plan').focus(); await page.keyboard.press('ArrowRight');
   assert.match(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.roadmapNode ?? ''), /^task:/u);
@@ -108,6 +143,10 @@ try {
   assert.notEqual(await map().locator('output').innerText(), before);
   await map().getByRole('button', { name: '适应画布', exact: true }).click();
   console.log('PASS nodes open the saved failed check; keyboard navigation and zoom work');
+
+  await page.locator('#expand-research-output').click();
+  assert.equal(await page.locator('#research-conversation-panel').isVisible(), false);
+  assert.ok((await page.locator('#runs-panel').boundingBox())!.width > 1000, 'expanded output gives the map and source their full workspace');
 
   await node('task:goal_1').click();
   await page.locator('[data-trajectory-view="steps"]').click();
@@ -155,6 +194,12 @@ try {
   await node('task:goal_2').waitFor();
   assert.equal(await node('evaluation').getAttribute('data-status'), 'pending');
   await node('task:goal_2').click();
+  await page.locator('.roadmap-detail [data-action="guide-task"]').click();
+  await page.locator('[data-guidance-text]').waitFor();
+  assert.equal(await page.locator('[data-guidance-kind]').inputValue(), 'task');
+  assert.equal(await page.locator('[data-guidance-target]').inputValue(), 'goal_2');
+  assert.equal(await page.locator('[data-guidance-text]').inputValue(), '', 'opening guidance does not send or invent a message');
+  await openTab(page, 'trajectory');
   await map().getByRole('button', { name: '放大', exact: true }).click();
   const liveZoom = await map().locator('output').innerText();
   beforeFailure.release(); await beforePass.reached;
@@ -182,7 +227,8 @@ try {
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', paidModelCalls: false,
     checks: ['default graph', 'recorded branches and hint', 'failed retry', 'independent acceptance', 'saved check feedback', 'keyboard', 'zoom',
       'readable default size', 'theorem names and propositions', 'expanded canvas and keyboard close', 'view memory', 'source panel cleanup',
-      'dark theme', 'mobile panning', 'read-only browsing', 'recorded live progression', 'live selection and zoom'], errors }, null, 2) + '\n');
+      'dark theme', 'mobile panning', 'read-only browsing', 'task and statement review navigation', 'task guidance draft', 'feature command search',
+      'recorded live progression', 'live selection and zoom'], errors }, null, 2) + '\n');
 } catch (error) { await shot('failure.png').catch(() => {}); throw error; }
 finally { beforeFailure.release(); beforePass.release(); beforeIntegration.release();
   await context.close(); await browser.close(); await new Promise<void>(resolve => service.server.close(() => resolve())); }

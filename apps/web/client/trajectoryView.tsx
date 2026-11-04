@@ -424,6 +424,20 @@ export class TrajectoryView {
     this.render();
   }
 
+  /** A chat task link opens the recorded node after the first trajectory read, then brings it into view. */
+  async showTask(runId: string, taskId: string): Promise<boolean> {
+    if (this.run?.id !== runId || !this.run.observation?.inspection.tasks.some(task => task.id === taskId)) return false;
+    const root = this.root, state = this.state(runId);
+    if (!state.loaded) await this.fetch(runId);
+    if (this.run?.id !== runId || this.root !== root || !root?.isConnected) return false;
+    this.showNode(runId, `task:${taskId}`);
+    const node = root.querySelector<HTMLElement>(`[data-roadmap-node="task:${CSS.escape(taskId)}"]`);
+    if (!node) return false;
+    node.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    node.focus({ preventScroll: true });
+    return true;
+  }
+
   /**
    * Opens a step of the run the view is showing. `checked`: the code of the latest attempt of `taskIds` that passed its
    * Lean check, for a goal the run checked but did not get accepted. `failed`: the latest failed check of those tasks,
@@ -654,6 +668,7 @@ export class TrajectoryView {
       const model = buildResearchRoadmap({ data: state.data, steps: built.steps, status: run.status, tasks,
         taskDetails: run.observation?.inspection.tasks, originalSource: run.source });
       const selected = model.nodes.find(node => node.id === state.mapNode);
+      const selectedTask = selected?.taskId && run.observation?.inspection.tasks.find(task => task.id === selected.taskId);
       const details = (selected?.stepIndexes ?? []).map(index => items[index]).filter((item): item is Item => Boolean(item));
       return <div class="trajectory-layout" data-mode="roadmap" data-viewer-host>
         <section class="trajectory trajectory-roadmap">
@@ -669,6 +684,12 @@ export class TrajectoryView {
               {selected.statement && <p>{localizeText(selected.statement)}</p>}
               {selected.type && <code class="roadmap-node-type">{selected.type}</code>}
               {selected.objective && selected.objective !== selected.statement && <p>{localizeText(selected.objective)}</p>}
+            </div>}
+            {selectedTask && <div class="roadmap-detail-actions">
+              <button type="button" class="button" data-action="show-task-source" data-task-id={selectedTask.id}><Icon name="file-code-2" />{t('Lean 源码')}</button>
+              <button type="button" class="button" data-action="inspect-task" data-task-id={selectedTask.id}><Icon name="list-tree" />{t('任务详情')}</button>
+              <button type="button" class="button" data-action="show-statement-review" data-task-id={selectedTask.id}><Icon name="languages" />{t('原意与 Lean')}</button>
+              {run.status === 'running' && this.own?.allowed(run) && <button type="button" class="button" data-action="guide-task" data-task-id={selectedTask.id}><Icon name="message-square" />{t('指导此任务')}</button>}
             </div>}
             {details.length > 0 ? <ol class="trajectory-steps">{details.map(item => this.step({ ...ctx, key: item.key, index: item.index }, item.step))}</ol>
               : <p class="trajectory-note">{selected.detail || t('这个节点还没有检查记录。')}</p>}

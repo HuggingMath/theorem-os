@@ -17,6 +17,7 @@ export type Banner = { tone: string; symbol: string; title: string; description:
 export type OutlineState = { status: 'loading' } | { status: 'ready'; outline: WebProofOutline } | { status: 'failed'; error: string };
 export type SourcePanelProps = {
   hasProof: boolean; proofLabel: string; view: 'proof' | 'input' | 'diff'; showingProof: boolean; verified: boolean; status: string; tone: string;
+  /** The accepted proof's explanation, including read-only sample runs. */ explainRun?: string;
   /** Which Agent wrote an unaccepted candidate. */ origin?: string;
   diff?: { comparison: SourceComparison; folded: boolean; accepted: boolean };
 };
@@ -39,7 +40,7 @@ export type ResultPanelProps = {
   /** Prefilled feedback form for failures on our side, which the visitor cannot fix by changing the run. */ feedback?: string;
   /** The accepted proof or the newest candidate; absent until an Agent captures one. */
   /** `rejected`: the independent acceptance checked this candidate and it failed, rather than never reaching it. */
-  proof?: { source: string; verified: boolean; rejected?: boolean };
+  proof?: { source: string; verified: boolean; rejected?: boolean; explainRun?: string };
   /** 完整源码 opened beside the result (or over it on a narrow screen). */ viewer?: { onClose: () => void };
   /** One row per original target: proved, conditional or unsolved, and what it rests on. */ goals?: GoalChecklist;
   active: boolean; report: ReportPanelProps;
@@ -75,7 +76,7 @@ function SourcePanel(props: SourcePanelProps) {
   return <>
     <div class="panel-topline source-topline">
       {props.hasProof ? <div class="source-switch" role="group" aria-label={t('源码版本')}>{switchButton('proof', props.proofLabel)}{switchButton('input', t('原始题目'))}{switchButton('diff', t('差异对比'))}</div> : <h3>Submission.lean</h3>}
-      <div class="source-actions"><button type="button" class="icon-button" data-action="copy-source" aria-label={copyLabel} title={copyLabel}><Icon name="copy" /></button>
+      <div class="source-actions">{props.explainRun && <ExplanationLink run={props.explainRun} />}<button type="button" class="icon-button" data-action="copy-source" aria-label={copyLabel} title={copyLabel}><Icon name="copy" /></button>
         {props.showingProof && <button type="button" class="icon-button" data-action="download-proof" aria-label={t('下载 Lean')} title={t('下载 Lean')}><Icon name="download" /></button>}</div>
     </div>
     <div class={`source-status ${props.tone}`}>
@@ -110,6 +111,11 @@ const recoveryIcons: Record<string, string> = { 'continue-checked': 'git-branch-
 const notifyLabels = { on: t('结束时通知我 · 已开启'), off: t('结束时通知我'), blocked: t('通知已被浏览器阻止'), unsupported: '' };
 // The result tab previews the start of the proof; the source tab reads the whole file.
 const previewLines = 80;
+
+function ExplanationLink(props: { run: string }) {
+  return <a class="text-button" data-proof-explanation href={`explain.html?${new URLSearchParams({ run: props.run })}`} target="_blank" rel="noopener">
+    <Icon name="book-open" />{t('Lean → 自然语言')}</a>;
+}
 
 const Written = createContext((name: string) => name);
 /** A Lean name the way the file writes it; the full name stays in the tooltip. */
@@ -292,6 +298,7 @@ function ProofPreview(props: NonNullable<ResultPanelProps['proof']> & { open: bo
     <div class="result-section-heading">
       <h3 id="result-proof-heading"><Icon name={props.verified ? 'circle-check' : 'file-code-2'} />{label}{!props.verified && (props.rejected ? <span class="badge failed">{t('验收未通过')}</span> : <span class="badge warning">{t('尚未验收')}</span>)}</h3>
       <div class="result-proof-actions">
+        {props.explainRun && <ExplanationLink run={props.explainRun} />}
         <button type="button" class="icon-button" data-action="copy-proof" aria-label={t('复制{0}', label)} title={t('复制{0}', label)}><Icon name="copy" /></button>
         <button type="button" class="icon-button" data-action="download-proof" aria-label={t('下载 Lean')} title={t('下载 Lean')}><Icon name="download" /></button>
         <button type="button" class="text-button" data-action="view-proof" aria-controls={props.open ? 'result-viewer' : undefined} aria-expanded={props.open}>

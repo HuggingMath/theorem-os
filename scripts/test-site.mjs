@@ -10,7 +10,8 @@ const output = path.join(root, 'out/site-checks');
 fs.mkdirSync(output, { recursive: true });
 const catalog = JSON.parse(fs.readFileSync(path.join(root, 'out/site/data/catalog.json'), 'utf8'));
 const official = catalog.records.filter(record => record.status === 'official_accepted');
-const ongoing = catalog.records.filter(record => record.status !== 'official_accepted');
+const ongoing = catalog.records.filter(record => record.status === 'in_progress_not_officially_accepted');
+const local = catalog.records.filter(record => record.status === 'locally_verified');
 // Lean sources load per record from data/sources; the archive script must not bundle them again.
 assert.ok(fs.statSync(path.join(root, 'out/site/site.js')).size < 200_000, 'site.js must not bundle the archive sources');
 const errors = [];
@@ -28,6 +29,39 @@ try {
   assert.equal(await page.locator('.proof-row.is-selected').count(), 1);
   assert.equal(await page.locator('#inspector .detail-title').textContent(), official[0].title);
   await page.screenshot({ path: path.join(output, 'desktop.png'), fullPage: true });
+
+  await page.locator('input[name="status"][value="verified"]').check();
+  assert.equal(await page.locator('.proof-row').count(), local.length);
+  assert.equal(await page.locator('#verified-count').innerText(), String(local.length));
+  for (const record of local) {
+    await page.locator(`[data-proof-id="${record.id}"]`).click();
+    await page.getByRole('tab', { name: '验证证据' }).click();
+    assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
+    assert.match(await page.locator('.campaign-evidence').innerText(), new RegExp(record.campaign.proofSha256));
+    assert.equal(await page.locator('.official-result-link').count(), 0);
+    await page.getByRole('tab', { name: '解题过程' }).click();
+    await page.locator('.process-run').first().waitFor();
+    assert.equal(await page.locator('.process-run').count(), record.process.runs.length);
+  }
+  const example = local.find(record => record.campaign.target === 'TotientCompanionZero');
+  assert.ok(example, 'the completed Totient result must be displayed');
+  await page.locator(`[data-proof-id="${example.id}"]`).click();
+  await page.getByRole('tab', { name: 'Lean 源码' }).click();
+  await page.locator('#source-file').waitFor();
+  assert.equal(await page.locator('#source-file option').count(), example.sources.length);
+  assert.match(await page.locator('.source-code').innerText(), /companion_zero_case/);
+  await page.getByRole('tab', { name: '解题过程' }).click();
+  const processLink = page.url();
+  await page.reload();
+  await page.locator('.process-run').first().waitFor();
+  assert.equal(page.url(), processLink);
+  const localDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载此题档案 JSON' }).click();
+  const downloaded = JSON.parse(fs.readFileSync(await (await localDownload).path(), 'utf8'));
+  assert.deepEqual(downloaded.process, example.process);
+  assert.equal(downloaded.sources.find(source => source.name === 'Submission.lean').code,
+    example.sources.find(source => source.name === 'Submission.lean').code);
+  await page.screenshot({ path: path.join(output, 'openai-process-desktop.png'), fullPage: true });
 
   await page.getByRole('radio', { name: /已验收/ }).check();
   assert.equal(await page.locator('.proof-row').count(), official.length);
@@ -113,6 +147,11 @@ try {
     await page.getByRole('tab', { name: 'Lean 源码' }).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Source overflow at ${viewport.width}px`);
     await page.screenshot({ path: path.join(output, `source-${viewport.width}.png`), fullPage: true });
+    await page.goto(`${url}#proof=${example.id}&tab=process&status=verified`);
+    await page.locator('.process-run').first().waitFor();
+    await page.locator('#inspector').scrollIntoViewIfNeeded();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Process overflow at ${viewport.width}px`);
+    await page.screenshot({ path: path.join(output, `openai-process-${viewport.width}.png`), fullPage: true });
   }
   assert.deepEqual(errors, []);
   console.log('Site checks passed: filters, search, provenance, evidence, source files, clipboard, JSON download, links, navigation, and 4 viewport sizes.');
