@@ -47,7 +47,7 @@ export class SourceCheck {
   constructor(private readonly options: {
     input(): Input; enabled(): boolean; render(): void;
     post(input: Input, signal: AbortSignal): Promise<WebPrecheck>;
-    superseded(error: unknown): boolean; message(error: unknown): string; delay?: number;
+    message(error: unknown): string; delay?: number;
   }) {}
 
   /** Called on every draft change; repeated calls for the same text do nothing. */
@@ -86,7 +86,7 @@ export class SourceCheck {
       const result = await this.options.post(input, controller.signal);
       if (controller === this.controller) this.state = { phase: 'done', key, result };
     } catch (error) {
-      if (controller !== this.controller || controller.signal.aborted || this.options.superseded(error)) return;
+      if (controller !== this.controller) return;
       this.state = { phase: 'failed', key, message: this.options.message(error) };
     } finally {
       if (controller === this.controller) { this.controller = undefined; this.options.render(); }

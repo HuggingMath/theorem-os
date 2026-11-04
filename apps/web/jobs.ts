@@ -6,7 +6,7 @@ import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits } fro
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
-import { WebStorage } from './storage';
+import { WebStorage, type WebCreation } from './storage';
 import { WebKnowledgeService } from './knowledgeService';
 import { freezeModuleConfiguration } from './moduleRegistry';
 import { WebStorageError } from './storage';
@@ -19,6 +19,7 @@ const clean = <T>(value: T, key: string): T => JSON.parse(key ? JSON.stringify(v
 
 export class WebJobs {
   private jobs = new Map<string, Job>();
+  private creations = new Map<string, WebCreation & { runId: string }>();
   private running = 0;
   private closing = false;
   private commands = new Map<string, { digest: string; promise: Promise<WebCommandResult> }>();
@@ -41,7 +42,8 @@ export class WebJobs {
     this.onPlanWaiting = options.onPlanWaiting;
     this.storage = options.storage ?? new WebStorage();
     this.knowledge = options.knowledge ?? new WebKnowledgeService(this.storage);
-    for (const { owner, run } of this.storage.loadRuns()) {
+    for (const { owner, run, creation } of this.storage.loadRuns()) {
+      if (creation) this.creations.set(JSON.stringify([owner, creation.requestId]), { ...creation, runId: run.id });
       const provider: WebProvider = { id: run.providerId, name: run.providerId, baseUrl: '' };
       this.jobs.set(run.id, { owner, run, provider, input: { ...run, apiKey: '' }, controller: new AbortController() });
       if (!terminal(run)) {
@@ -74,8 +76,28 @@ export class WebJobs {
       if (!listeners.size && this.listeners.get(owner) === listeners) this.listeners.delete(owner);
     };
   }
+  private creation(input: WebRunInput, provider: WebProvider, requestId: string): WebCreation {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(requestId)) throw new WebStorageError(400, '提交请求标识无效。');
+    const { apiKey: _key, ...visible } = input;
+    return { schema: 'theorem-os.web-creation.v1', requestId, digest: crypto.createHash('sha256').update(canonicalMathJson({
+      input: { ...visible, environment: input.environment ?? 'standard' }, provider: { id: provider.id, baseUrl: provider.baseUrl },
+    })).digest('hex') };
+  }
+  replay(owner: string, input: WebRunInput, provider: WebProvider, requestId?: string): WebRun | undefined {
+    if (!requestId) return;
+    const expected = this.creation(input, provider, requestId);
+    const stored = this.creations.get(JSON.stringify([owner, requestId]));
+    const previous = stored ?? this.storage.deletedCreation(owner, requestId);
+    if (!previous) return;
+    if (previous.digest !== expected.digest) throw new WebStorageError(409, '同一提交请求不能使用不同的题目或配置。');
+    const run = stored && this.get(owner, stored.runId);
+    if (!run) throw new WebStorageError(410, '这次提交对应的运行已删除，请发起新研究。');
+    return run;
+  }
   /** `continuation` is the saved file `input.continueFrom` names; it goes to the worker and is not kept with the run. */
-  create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation']): WebRun {
+  create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation'], requestId?: string): WebRun {
+    const previous = this.replay(owner, input, provider, requestId);
+    if (previous) return previous;
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
     const count = (status: string) => [...this.jobs.values()].filter(job => job.run.status === status).length;
     const active = count('running'), waiting = count('queued');
@@ -93,9 +115,13 @@ export class WebJobs {
       phase: 'queued', createdAt: now, updatedAt: now, timings: {}, events: [], modules: {} };
     run.title = run.task.split('\n')[0].slice(0, 60) || 'Lean 研究';
     run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
+    const creation = requestId ? this.creation(input, provider, requestId) : undefined;
+    this.event(run, 'queued', '任务已进入队列');
+    // Persist the identity and initial run atomically before a worker can be queued.
+    this.storage.saveRun(owner, run, creation);
+    if (creation) this.creations.set(JSON.stringify([owner, requestId]), { ...creation, runId: run.id });
     this.jobs.set(run.id, { owner, input: { ...input, environment }, provider, run, controller: new AbortController(),
       ...(continuation ? { continuation } : {}) });
-    this.event(run, 'queued', '任务已进入队列');
     this.reindex();
     queueMicrotask(() => this.pump());
     return run;
@@ -117,8 +143,8 @@ export class WebJobs {
     const job = this.jobs.get(id);
     if (!job || job.owner !== owner) return 'missing';
     if (!terminal(job.run)) return 'active';
-    this.jobs.delete(id);
     this.storage.deleteRun(owner, id);
+    this.jobs.delete(id);
     this.changed(owner);
     return 'deleted';
   }

@@ -138,6 +138,28 @@ describe('WebPrechecker', () => {
     calls[1].resolve(ok(sorry));
     expect((await second).status).toBe('ready');
   });
+  it('isolates editor scopes while keeping a shared owner rate limit', async () => {
+    const { calls, runner } = controlled();
+    const checker = new WebPrechecker(runner, { concurrency: 2, queue: 2, perMinute: 2, cache: 10 });
+    const a = checker.check('owner', { ...input(), checkScope: 'tab-a' }, never);
+    const b = checker.check('owner', { ...input('theorem b : True := by sorry'), checkScope: 'tab-b' }, never);
+    expect(calls).toHaveLength(2);
+    expect(calls.every(call => !call.signal.aborted)).toBe(true);
+    expect((await checker.check('owner', { ...input('theorem c : True := by sorry'), checkScope: 'tab-c' }, never)).status).toBe('busy');
+    calls.forEach(call => call.resolve(ok(sorry)));
+    expect((await a).status).toBe('ready'); expect((await b).status).toBe('ready');
+  });
+  it('replaces only the same scope, even when the newer statement is structurally invalid', async () => {
+    const { calls, runner } = controlled();
+    const checker = new WebPrechecker(runner);
+    const a = checker.check('owner', { ...input(), checkScope: 'tab-a' }, never);
+    const b = checker.check('owner', { ...input(), checkScope: 'tab-b' }, never);
+    const rejected = expect(a).rejects.toBeInstanceOf(PrecheckSuperseded);
+    expect((await checker.check('owner', { ...input('def a := 1'), checkScope: 'tab-a' }, never)).status).toBe('invalid');
+    await rejected;
+    expect(calls[1].signal.aborted).toBe(false);
+    calls[1].resolve(ok(sorry)); await b;
+  });
   it('queues beyond the concurrency limit and reports busy beyond the queue', async () => {
     const { calls, runner } = controlled();
     const checker = new WebPrechecker(runner, { concurrency: 1, queue: 1, perMinute: 20, cache: 10 });

@@ -1,0 +1,57 @@
+[
+  {
+    "name": "Same account, independent login sessions: B precheck cancels A",
+    "result": "reproduced",
+    "httpA": 409,
+    "aAborted": true,
+    "aStillChecking": true,
+    "aRecheckDisabled": true,
+    "bReady": true
+  },
+  {
+    "name": "Two proof runs, double-submit guard, reload selection, switch and cancel B",
+    "result": "passed",
+    "postsForDoubleClick": 1,
+    "simultaneousWorkers": 2,
+    "cancelledOnlyB": true
+  },
+  {
+    "name": "Authenticated second-account reads and cancellation rejected",
+    "result": "passed",
+    "statuses": {
+      "/detail": 404,
+      "/events": 404,
+      "/observation": 404,
+      "/actions": 404,
+      "/trajectory": 404,
+      "/cancel": 404
+    }
+  },
+  {
+    "name": "Accepted response lost, GET recovery, then manual unchanged-form retry",
+    "result": "reproduced",
+    "automaticReplay": false,
+    "explicitRetryCreatesSecondRun": true,
+    "workerStartsForSameSubmission": 2
+  },
+  {
+    "name": "Repeated POST with identical Idempotency-Key",
+    "result": "reproduced",
+    "statuses": [
+      201,
+      201
+    ],
+    "distinctRunIds": true
+  },
+  {
+    "name": "Concurrency 1, queue cap 2, retained draft on 429, A failure releases B",
+    "result": "passed"
+  },
+  {
+    "name": "Logout Alice and login Bob in the same tab",
+    "result": "reproduced",
+    "serverHistoryIsolated": true,
+    "aliceDraftRestoredForBob": true,
+    "boundary": "shared browser tab local sessionStorage"
+  }
+]

@@ -117,7 +117,7 @@ describe('saving a key to the account', () => {
 
   it('keeps the key for the account that saved it, shows only its ending and reuses it across logins', async () => {
     const alice = await login('alice@example.org'), bob = await login('bob@example.org');
-    expect(await account(alice)).toEqual({ email: 'alice@example.org', keyVault: true });
+    expect(await account(alice)).toEqual({ email: 'alice@example.org', keyVault: true, passwordSet: false, passwordResetAllowed: true });
     const created = await request('/api/runs', alice, input(aliceKey, { saveKey: true }));
     expect(created.status).toBe(201);
     const body = await created.text();
@@ -135,7 +135,7 @@ describe('saving a key to the account', () => {
     expect(runner.keys).toEqual([aliceKey, aliceKey]);
 
     // Bob sees nothing of Alice's and still has to type his own.
-    expect(await account(bob)).toEqual({ email: 'bob@example.org', keyVault: true });
+    expect(await account(bob)).toEqual({ email: 'bob@example.org', keyVault: true, passwordSet: false, passwordResetAllowed: true });
     const refused = await request('/api/runs', bob, input(''));
     expect(refused.status).toBe(400);
     expect((await refused.json()).error).toBe('请填写 API Key。');

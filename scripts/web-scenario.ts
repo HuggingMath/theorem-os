@@ -67,7 +67,7 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
   run: (h: H) => Promise<void>, options: ScenarioOptions<H>) {
   suite.failedScenario = name;
   const started = performance.now();
-  const context = await browser.newContext(options.context);
+  const context = await browser.newContext({ locale: 'zh-CN', ...options.context });
   if (!options.collaborationDetail) await preferFullCollaboration(context);
   await options.init?.(context);
   const page = await context.newPage();

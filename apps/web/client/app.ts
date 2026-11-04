@@ -30,6 +30,8 @@ import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
+import { OwnedDrafts } from './ownedDrafts';
+import { SubmissionIdentity } from './submissionIdentity';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
 import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSelection, revealTheme, selectionBox } from './motion';
 import { renderTopbar } from './ui/Topbar';
@@ -170,13 +172,25 @@ let deletionTarget: { id: string; title: string; csrfToken: string } | undefined
 /** The active run the cancel confirmation names; confirming acts on this id even if the selection moved meanwhile. */
 let cancellationTarget: { id: string; title: string; csrfToken: string } | undefined;
 let sharing: { id: string; link?: WebShareLink | null; busy: boolean } | undefined;
+let submissionSequence = 0;
 let draftReady = false;
 let draftDirty = false;
 let draftRevision = 0;
 let draftTimer: ReturnType<typeof setTimeout> | undefined;
 let latestDraft: TaskDraft | undefined;
 let replacingDraft = false;
-const draftRecovery = new DraftRecovery(() => sessionStorage);
+const ownedDrafts = new OwnedDrafts(() => sessionStorage);
+const submissionIdentity = new SubmissionIdentity(ownedDrafts);
+const draftRecovery = new DraftRecovery(() => ownedDrafts);
+const ownerOfSession = (session: WebSession) => session.draftOwner ?? (session.account ? `account:${session.account.email}` : session.csrfToken);
+function clearOwnedDrafts() {
+  submissionSequence++;
+  draftReady = false; draftDirty = false; clearTimeout(draftTimer);
+  latestDraft = undefined; pendingImport = undefined; taskImportSequence++;
+  draftContinuation = undefined; submissionIdentity.clear(); draftRecovery.clear(); ownedDrafts.clear();
+  forgetRememberedKey();
+}
+
 let taskImportSequence = 0;
 let pendingImport: { draft: TaskDraft; revision: number } | undefined;
 let sourceComparison: { runId: string; before: string; after: string; folded: boolean; result: SourceComparison } | undefined;
@@ -226,13 +240,13 @@ const editorNavigation = new EditorNavigation(element<HTMLDialogElement>('#sourc
 const editorReview = new EditorReview(element<HTMLDialogElement>('#source-editor'), () => editorNavigation.close(),
   updateEditorPosition, position => editorNavigation.locate(position));
 const validationShown = new Set<SubmissionField>();
+const checkScope = crypto.randomUUID();
 const sourceCheck = new SourceCheck({
   input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value }),
   enabled: () => Boolean(state.session?.precheck && state.connected && state.session.runtime.ready
     && new TextEncoder().encode(field('source').value).length <= state.session.limits.maxSourceBytes),
   post: async (input, signal) => (await api<{ precheck: WebPrecheck }>('/api/precheck',
-    { method: 'POST', body: JSON.stringify(input), signal, timeoutMs: 120_000 })).precheck,
-  superseded: error => error instanceof ApiError && error.status === 409,
+    { method: 'POST', body: JSON.stringify({ ...input, checkScope }), signal, timeoutMs: 120_000 })).precheck,
   message: error => message(error),
   render: () => { renderSourceCheckView(); renderPreparation(); },
 });
@@ -277,6 +291,7 @@ type ApiInit = RequestInit & { timeoutMs?: number };
 function api<T>(url: string, init?: ApiInit): Promise<T>;
 function api<T>(url: string, init: ApiInit, etag: (value: string | null) => void): Promise<T | undefined>;
 async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
+  const requestOwner = state.session?.draftOwner;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
   const signals = [timeout.signal];
@@ -288,6 +303,11 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
       headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } })
       .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('无法连接服务器')) : error; });
+    const responseOwner = response.headers.get('X-Theoremos-Owner');
+    if (!url.startsWith('/api/session') && responseOwner && state.session?.draftOwner && responseOwner !== state.session.draftOwner) {
+      if (requestOwner === state.session.draftOwner) { clearOwnedDrafts(); state.submitting = false; void initialize(); }
+      throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
+    }
     if (etag && response.status === 304) { etag(response.headers.get('ETag')); return; }
     const payload: unknown = await response.json().catch(error => {
       if (timeout.signal.aborted) throw timeout.signal.reason;
@@ -731,12 +751,12 @@ function saveDraft() {
   clearTimeout(draftTimer);
   if (!draftReady || !draftDirty) return;
   try {
-    sessionStorage.setItem(taskDraftStorageKey, encodeTaskDraft(captureDraft()));
+    ownedDrafts.setItem(taskDraftStorageKey, encodeTaskDraft(captureDraft()));
     draftDirty = false;
     setDraftStatus(t('草稿已保存'));
   } catch {
     // Avoid restoring an older draft after the latest edits could not be saved.
-    try { sessionStorage.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
+    try { ownedDrafts.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
     setDraftStatus(t('草稿未保存'), true);
   }
 }
@@ -765,14 +785,14 @@ function applyTaskDraft(draft: TaskDraft) {
 }
 function restoreDraft() {
   let stored: string | null;
-  try { stored = sessionStorage.getItem(taskDraftStorageKey); }
+  try { stored = ownedDrafts.getItem(taskDraftStorageKey); }
   catch { setDraftStatus(t('草稿保存不可用'), true); return; }
   if (!stored) return;
   try {
     applyTaskDraft(decodeTaskDraft(JSON.parse(stored)));
     setDraftStatus(t('已恢复草稿'));
   } catch {
-    try { sessionStorage.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
+    try { ownedDrafts.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
     setDraftStatus(t('草稿未恢复'), true);
   }
 }
@@ -846,7 +866,7 @@ function resetForm() {
     element('#draft-error').hidden = true;
     draftReady = wasReady;
     if (wasReady) {
-      try { sessionStorage.removeItem(taskDraftStorageKey); setDraftStatus(t('草稿已重置')); }
+      try { ownedDrafts.removeItem(taskDraftStorageKey); setDraftStatus(t('草稿已重置')); }
       catch { setDraftStatus(t('草稿保存不可用'), true); }
     }
   });
@@ -1656,7 +1676,7 @@ function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
   state.draftView = 'source';
   moduleView.update(undefined, moduleInput());
   state.panelSignature = ''; draftPreviewSignature = '';
-  if (reset) resetForm();
+  if (reset) { submissionIdentity.clear(); resetForm(); }
   renderRunList(); renderDetail(true); setMobileView('compose');
   if (leaving && !historyQuery.matches) animateEntrance(element('.workspace'), 'workspace');
 }
@@ -1797,15 +1817,17 @@ function initialize(): Promise<void> {
       const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs');
       const session = localizeSession(reply);
       if (!currentConnection(epoch)) return;
-      if (session.auth === 'email' && !session.account) { saveDraft(); forgetKey(keyStorage); location.replace('login.html'); return; }
-      const firstLoad = !state.session;
-      if (state.session && state.session.account?.email !== session.account?.email) forgetRememberedKey();
+      if (session.auth === 'email' && !session.account) { saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace('login.html'); return; }
+      const ownerChanged = Boolean(state.session && ownerOfSession(state.session) !== ownerOfSession(session));
+      const firstLoad = !state.session || ownerChanged;
+      if (ownerChanged) { clearOwnedDrafts(); state.submitting = false; }
+      ownedDrafts.bind(ownerOfSession(session));
       if (state.session && state.session.csrfToken !== session.csrfToken) {
         state.runs = []; state.selectedId = ''; state.selectedRun = undefined;
         state.finishedRuns.clear(); state.cancelling.clear();
         state.detailError = ''; state.panelSignature = '';
         renderRunList(); renderDetail();
-        toast(t('会话已更新，未提交内容已保留'));
+        if (!ownerChanged) toast(t('会话已更新，未提交内容已保留'));
       }
       state.session = session;
       const previousProvider = field('provider').value;
@@ -1946,7 +1968,11 @@ async function changeAllowlist(method: 'POST' | 'DELETE', email: string): Promis
 }
 async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonElement) {
   button.disabled = true; element('#account-error').hidden = true;
-  try { await request(); saveDraft(); forgetKey(keyStorage); location.replace('login.html'); }
+  try {
+    await request();
+    try { localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner: state.session && ownerOfSession(state.session), nonce: crypto.randomUUID() })); } catch { /* Other tabs also detect session changes on their next request. */ }
+    clearOwnedDrafts(); location.replace('login.html');
+  }
   catch (error) {
     element('#account-error').textContent = message(error); element('#account-error').hidden = false;
     button.disabled = false;
@@ -2101,6 +2127,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
   const errorBox = element('#form-error'); errorBox.hidden = true;
   const epoch = state.connectionEpoch;
   const returnFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : field('task');
+  const submission = ++submissionSequence;
   let sent = false, failed = false;
   const issues = currentSubmissionIssues();
   if (issues.length) {
@@ -2127,6 +2154,9 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     syncKeyMemory();
     closeSettings(false);
     state.submitting = true; renderRuntime();
+    input.requestId = await submissionIdentity.prepare(input);
+    if (!currentConnection(epoch)) return;
+    saveDraft();
     sent = true;
     // A run arriving through the list before this response must not replace the page that will report the outcome.
     state.composing = true;
@@ -2134,15 +2164,15 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     modulePlanLibrary.clearUndo();
     draftRecovery.clear(); renderDraftRecovery();
     const result = await api<{ run: WebRun; savedKeys?: WebSavedKey[] }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    if (!currentConnection(epoch)) {
+      toast(t('研究已提交，连接已变化，请核对运行记录'));
+      void poll(); return;
+    }
     const run = state.runs.find(item => item.id === result.run.id) ?? result.run;
     if (result.savedKeys && currentConnection(epoch) && state.session?.account) state.session.account.savedKeys = result.savedKeys;
     field('api-key').value = '';
     clearValidation();
     element<HTMLInputElement>('#api-key').type = 'password'; updateKeyToggle(); providerAddress();
-    if (!currentConnection(epoch)) {
-      toast(t('研究已提交，连接已变化，请核对运行记录'));
-      void poll(); return;
-    }
     state.listGeneration++;
     if (!state.runs.some(item => item.id === run.id)) arrivals.add(run.id);
     state.runs = [run, ...state.runs.filter(item => item.id !== run.id)];
@@ -2150,11 +2180,14 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     state.selectedId = run.id; state.selectedRun = run; state.tab = 'result'; state.sourceView = 'proof'; state.reportMode = 'summary'; state.detailError = '';
     addressMode = 'push'; clearFilters();
     field('task').value = ''; draftContinuation = undefined; updateCounts(); draftChanged();
+    // Persist the consumed draft before dropping its retry identity, including immediate reloads.
+    saveDraft(); submissionIdentity.clear(input.requestId);
     state.panelSignature = ''; renderRunList(); renderDetail(true); setMobileView('runs');
     schedulePoll();
     requestRunsRefresh();
     toast(saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
   } catch (error) {
+    if (submission !== submissionSequence) return;
     const key = field('api-key').value.trim();
     const uncertain = sent && (!(error instanceof ApiError) || error.status >= 500);
     const text = uncertain ? t('提交结果尚未确认，请先核对运行记录后再决定是否重新提交。') : message(error);
@@ -2166,6 +2199,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     }
     failed = true;
   } finally {
+    if (submission !== submissionSequence) return;
     state.submitting = false; renderRuntime();
     // The form was disabled while the request ran, which drops focus to the page; after a refusal it goes back where the reader was.
     // A send from the settings dialog left with the dialog, so the task takes it then.
@@ -3012,6 +3046,13 @@ window.addEventListener('popstate', () => {
   } else if (location.search === sampleAddress && state.session?.sample) { if (!sampleSelected()) void openSample('replace'); }
   else if (!id && currentRun() && !isSample(currentRun())) startDraft(false, 'replace');
   else renderDetail();
+});
+window.addEventListener('storage', event => {
+  if (event.key !== 'theorem-os.web-account-left.v1' || !event.newValue || !state.session) return;
+  try {
+    if (JSON.parse(event.newValue).owner !== ownerOfSession(state.session)) return;
+    clearOwnedDrafts(); location.replace('login.html');
+  } catch { /* Ignore invalid notifications. */ }
 });
 window.addEventListener('pagehide', () => {
   saveDraft();

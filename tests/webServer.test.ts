@@ -81,6 +81,21 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
         ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }), ...options.headers },
       body: options.body === undefined ? undefined : JSON.stringify(options.body) });
   }
+  it('deduplicates concurrent HTTP retries, validates identity conflicts and replays while runtime is unavailable', async () => {
+    const alice = await session(), bob = await session();
+    const options = { body: { ...input(), requestId: 'http-retry' } };
+    const responses = await Promise.all([request('/api/runs', alice, options), request('/api/runs', alice, options)]);
+    const runs = await Promise.all(responses.map(async response => { expect([200, 201]).toContain(response.status); return (await response.json()).run; }));
+    expect(runs[0].id).toBe(runs[1].id);
+    await tick(); expect(runner.calls).toHaveLength(1);
+    expect((await request('/api/runs', alice, { body: { ...options.body, task: 'changed' } })).status).toBe(409);
+    expect((await request('/api/runs', alice, { ...options, headers: { 'Idempotency-Key': 'mismatch' } })).status).toBe(400);
+    const bobRun = await request('/api/runs', bob, options);
+    expect((await bobRun.json()).run.id).not.toBe(runs[0].id);
+    runner.ready = false;
+    const replay = await request('/api/runs', alice, { body: { ...input(), apiKey: '' }, headers: { 'Idempotency-Key': 'http-retry' } });
+    expect(replay.status).toBe(200); expect((await replay.json()).run.id).toBe(runs[0].id);
+  });
   function rawStatus(route: string, headers: Record<string, string>, body = '', method = body ? 'POST' : 'GET') {
     return new Promise<number>((resolve, reject) => {
       const socket = net.createConnection({ host: '127.0.0.1', port: config.port });

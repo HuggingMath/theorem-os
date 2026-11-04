@@ -119,7 +119,11 @@ async function screenshot(page: Page, name: string) {
   screenshots.push(name);
 }
 async function seed(h: Harness, body: string) {
-  await h.context.addInitScript(({ key, body }) => sessionStorage.setItem(key, body), { key: storageKey, body });
+  const session = await (await h.context.request.get(origin + '/api/session')).json();
+  await h.context.addInitScript(({ key, body, owner }) => {
+    sessionStorage.setItem('theorem-os.web-draft-owner.v1', owner);
+    sessionStorage.setItem(key, body);
+  }, { key: storageKey, body, owner: session.draftOwner });
 }
 async function gateFile(page: Page, filename: string) {
   await page.evaluate(filename => {

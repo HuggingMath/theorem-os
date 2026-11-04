@@ -32,6 +32,7 @@ import { SUB2API_PROVIDER } from '../../src/runtime/sub2api';
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 
 const inputSchema = z.object({
+  requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
   // Empty asks for the key this account saved, then the one the server holds for admins (THEOREMOS_WEB_ADMIN_KEYS).
   providerId: z.string().min(1).max(40), apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/), saveKey: z.boolean().optional(),
   model: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
@@ -61,6 +62,7 @@ const explainSchema = z.object({
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
 }).strict();
 const precheckSchema = z.object({
+  checkScope: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
   environment: z.enum(['standard', 'mathlib']),
   source: z.string().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
 }).strict();
@@ -281,7 +283,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           setSessionCookie(response, session);
           session.touchedAt = Date.now();
           storage.saveSession(session);
-          const body: WebSession = { csrfToken: session.csrf, auth: auth ? 'email' : 'none',
+          const body: WebSession = { draftOwner: crypto.createHash('sha256').update(ownerOf(session) || session.id).digest('hex'), csrfToken: session.csrf, auth: auth ? 'email' : 'none',
             ...(session.account ? { account: { email: session.account.email, ...(auth?.isAdmin(session.account.email) ? { admin: true } : {}),
               ...(auth ? { passwordSet: auth.hasPassword(session.account.email), passwordResetAllowed: Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()) } : {}),
               ...(serverKeysFor(session) ? { serverKeys: serverKeysFor(session) } : {}),
@@ -293,6 +295,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (owner) body.runs = { runs: jobs.list(owner), version: jobs.version(owner) };
           json(response, 200, body); return;
         }
+        if (session) response.setHeader('X-Theoremos-Owner', crypto.createHash('sha256').update(ownerOf(session) || session.id).digest('hex'));
         if (!session) throw new HttpError(401, '会话已过期，请刷新页面。');
         session.touchedAt = Date.now();
         if (request.method !== 'GET' && !equal(String(request.headers['x-csrf-token'] || ''), session.csrf))
@@ -483,10 +486,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
-          const { saveKey, ...input } = parsed.data;
+          const { saveKey, requestId: bodyRequestId, ...input } = parsed.data;
+          const headerId = request.headers['idempotency-key'];
+          if (headerId !== undefined && (typeof headerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(headerId)
+              || bodyRequestId && bodyRequestId !== headerId)) throw new HttpError(400, '提交请求标识无效或不一致。');
+          const requestId = bodyRequestId ?? (typeof headerId === 'string' ? headerId : undefined);
           if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
             throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
           if (!input.planApproval) delete input.planApproval;
+          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
+          if (previous) { json(response, 200, { run: previous, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) }); return; }
           // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
           const typed = input.apiKey;
           if (!typed) {
@@ -494,12 +503,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (!held) throw new HttpError(400, '请填写 API Key。');
             input.apiKey = held;
           }
-          if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
+          const readiness = await runner.readiness();
+          // Another request can be accepted while readiness is being checked.
+          const raced = jobs.replay(owner, input as WebRunInput, provider, requestId);
+          if (raced) { json(response, 200, { run: raced, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) }); return; }
+          if (!readiness.ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
           const from = input.continueFrom as WebContinuation | undefined;
           const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
           if (from && !saved) throw new HttpError(404, '这个版本的代码没有记录或已超出保留范围。');
           try {
-            const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined);
+            const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId);
             milestone(owner, 'firstRunAt');
             if (saveKey && typed && vault && session.account) vault.save(session.account.id, provider.id, provider.baseUrl, typed);
             json(response, 201, { run, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) });

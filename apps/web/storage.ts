@@ -6,6 +6,9 @@ import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, Web
 import type { WebAgentAction, WebEvent, WebExplanation, WebRun } from './shared';
 import type { WebShareSnapshot } from './share';
 
+export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
+type StoredRun = { owner: string; run: WebRun; creation?: WebCreation };
+
 export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string }; passwordResetUntil?: number };
 export type StoredWebArchive = {
   schema: 'theorem-os.web-archive.v1';
@@ -113,23 +116,32 @@ export class WebStorage {
   }
   deleteSession(id: string): void { this.deleteRecord(['sessions', `${digestKey(id)}.json`]); }
 
-  saveRun(owner: string, run: WebRun): void {
+  saveRun(owner: string, run: WebRun, creation?: WebCreation): void {
     const directory = this.runPath(owner, run.id);
     this.saveRecord([...this.ownerPath(owner), 'owner.json'], { owner }, true);
     if (run.observation) this.saveObservation(owner, run.observation);
     for (const event of run.events) this.saveRecord([...directory, 'events', `${event.sequence}.json`], event, true);
-    this.saveRecord([...directory, 'run.json'], { owner, run });
+    creation ??= this.getRecord<StoredRun>([...directory, 'run.json'])?.creation;
+    this.saveRecord([...directory, 'run.json'], { owner, run, ...(creation ? { creation } : {}) });
   }
   getRun(owner: string, id: string): WebRun | undefined {
     return this.getRecord<{ owner: string; run: WebRun }>([...this.runPath(owner, id), 'run.json'])?.run;
   }
-  loadRuns(): { owner: string; run: WebRun }[] {
+  loadRuns(): StoredRun[] {
     return this.listRecords(['owners']).flatMap(directory => this.listRecords(['owners', directory, 'runs'])
-      .map(id => this.getRecord<{ owner: string; run: WebRun }>(['owners', directory, 'runs', id, 'run.json']))
-      .filter((item): item is { owner: string; run: WebRun } => Boolean(item)))
+      .map(id => this.getRecord<StoredRun>(['owners', directory, 'runs', id, 'run.json']))
+      .filter((item): item is StoredRun => Boolean(item)))
       .sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
   }
-  deleteRun(owner: string, id: string): void { this.deleteShare(owner, id); this.deleteRecord(this.runPath(owner, id)); }
+  deletedCreation(owner: string, requestId: string): WebCreation | undefined {
+    return this.getRecord([...this.ownerPath(owner), 'deleted-requests', `${digestKey(requestId)}.json`]);
+  }
+  deleteRun(owner: string, id: string): void {
+    const creation = this.getRecord<StoredRun>([...this.runPath(owner, id), 'run.json'])?.creation;
+    // Keep a tombstone: a delayed retry must never resurrect a deliberately deleted run.
+    if (creation) this.saveRecord([...this.ownerPath(owner), 'deleted-requests', `${digestKey(creation.requestId)}.json`], creation, true);
+    this.deleteShare(owner, id); this.deleteRecord(this.runPath(owner, id));
+  }
   /** Everything a session or account owns: runs, share links, archives, knowledge catalogs and module plans. */
   deleteOwner(owner: string): void {
     for (const id of this.listRecords([...this.ownerPath(owner), 'runs'])) this.deleteShare(owner, id);

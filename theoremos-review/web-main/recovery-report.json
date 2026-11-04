@@ -1,0 +1,396 @@
+{
+  "status": "passed",
+  "checkedAt": "2026-11-03T14:29:23.491Z",
+  "mode": "Real HTTP service and Chromium with controlled response failures and an in-process worker fixture. No Docker, Lean or model provider is called.",
+  "paidModelCalls": false,
+  "checks": [
+    {
+      "name": "Offline polling disables submission, keeps drafts editable, and online restores the draft",
+      "elapsedMs": 936,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        }
+      ]
+    },
+    {
+      "name": "A 401 recovers with GET requests only and keeps the existing draft",
+      "elapsedMs": 704,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        }
+      ]
+    },
+    {
+      "name": "A session response alone cannot enable submission; recovery is single-flight until list success",
+      "elapsedMs": 1084,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        }
+      ]
+    },
+    {
+      "name": "CSRF 403 refreshes the session without replaying the rejected POST",
+      "elapsedMs": 6542,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        }
+      ]
+    },
+    {
+      "name": "An accepted POST with a lost response is reconciled by GET without a duplicate worker",
+      "elapsedMs": 6609,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        }
+      ]
+    },
+    {
+      "name": "Full list responses update selected run results while the detail endpoint is unavailable",
+      "elapsedMs": 695,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "POST",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/9f30183c-59b5-49f3-82b9-bf7817204076/trajectory"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/9f30183c-59b5-49f3-82b9-bf7817204076/outline"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        }
+      ]
+    },
+    {
+      "name": "A fallback poll settling after pagehide cannot restart the stopped polling timer",
+      "elapsedMs": 11400,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        }
+      ]
+    },
+    {
+      "name": "A late 401 from before pagehide cannot disconnect a successfully restored page",
+      "elapsedMs": 483,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        }
+      ]
+    },
+    {
+      "name": "A hung GET times out within the request limit and permits subsequent recovery",
+      "elapsedMs": 16020,
+      "requests": [
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/module-plans"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/modules"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/knowledge/catalogs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/session"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs"
+        },
+        {
+          "method": "GET",
+          "pathname": "/api/runs/stream"
+        }
+      ]
+    }
+  ],
+  "workerStarts": 2,
+  "timeoutElapsedMs": 15399
+}
