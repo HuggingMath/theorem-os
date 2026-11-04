@@ -1,0 +1,66 @@
+{
+  "date": "2026-11-03",
+  "timezone": "America/Los_Angeles",
+  "source_baseline": "8261c178ed9f379831606b154c41fbdecca94d57",
+  "public_resources": [
+    {
+      "observed_at": "2026-11-03T06:32:40.333865-08:00",
+      "url": "https://app.theoremos.top/",
+      "method": "GET; no supplied credentials/cookies; default TLS verification",
+      "curl_exit": 0,
+      "bytes": 46513,
+      "sha256": "c47180c0149762c55b0dcd060b66fd540381e679a55df069aa6c8db7b61e21e4",
+      "markers": {
+        "formalize-form": 0,
+        "formalize-original": 0,
+        "formalize-start": 0,
+        "?chat=": 0,
+        "formalization_token_limit": 0,
+        "sourceMappingURL": 0,
+        "buildId": 0,
+        "commitSha": 0
+      },
+      "title": [
+        "TheoremOS · 研究工作台"
+      ],
+      "script_src": [
+        "theme.js",
+        "app.js"
+      ]
+    },
+    {
+      "observed_at": "2026-11-03T06:32:41.336179-08:00",
+      "url": "https://app.theoremos.top/app.js",
+      "method": "GET; no supplied credentials/cookies; default TLS verification",
+      "curl_exit": 0,
+      "bytes": 1548645,
+      "sha256": "cdaee6382d33596680e6ac1964fe3abaa78659a11ef592403a215ad3a42cba53",
+      "markers": {
+        "formalize-form": 1,
+        "formalize-original": 3,
+        "formalize-start": 1,
+        "?chat=": 2,
+        "formalization_token_limit": 0,
+        "sourceMappingURL": 0,
+        "buildId": 0,
+        "commitSha": 0
+      },
+      "formalization_api_literals": [
+        "/api/formalizations",
+        "/api/formalizations/"
+      ]
+    }
+  ],
+  "browser_observations": [
+    "Initial Chrome navigation returned ERR_CONNECTION_CLOSED.",
+    "A later reload reached the workbench shell with Connecting, then redirected to /login.html.",
+    "Login form offered email code with image CAPTCHA, or password login; no credentials were entered and no form was submitted.",
+    "No authenticated task/history/detail was observed."
+  ],
+  "privacy": "No cookies, auth headers, account identifiers, session identifiers, full HTML or full JS retained. Screenshot cropped to public title and empty email input; CAPTCHA excluded.",
+  "limitations": [
+    "Resource digests identify sampled public bytes, not source commit or server/worker version.",
+    "Absence of selected version strings does not establish that every possible version identifier is absent.",
+    "No actual model, Lean worker, task submission or concurrency test was run."
+  ]
+}
