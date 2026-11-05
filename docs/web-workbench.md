@@ -490,7 +490,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 ### 部署来源
 
-构建时传入源码提交：`THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build web`，worker 用同一参数（`--build-arg THEOREMOS_SOURCE_COMMIT=…`）。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 返回 `{"ok":true,"commit":"…"}`；未传入时只返回 `ok`。部署后在同一检出目录运行 `scripts/web-deploy-record.sh https://域名 >> deploys.jsonl`，一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 为 false 时该提交不能代表部署内容，应先提交再部署。回滚使用部署前打的镜像标签，回滚后同样记录一行。
+构建时传入源码提交：`THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build web`，worker 用同一参数（`--build-arg THEOREMOS_SOURCE_COMMIT=…`）。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 返回 `{"ok":true,"commit":"…"}`；未传入时只返回 `ok`。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 为 false 时该提交不能代表部署内容，应先提交再部署。回滚使用部署前打的镜像标签，回滚后同样记录一行。
 
 ### 有效容量
 
