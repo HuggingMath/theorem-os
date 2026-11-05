@@ -433,7 +433,7 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
     });
     if (!response.ok) {
       const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
-        ? payload.error : t('请求失败 ({0})', response.status);
+        ? payload.error : response.status === 429 ? t('请求太频繁，请稍后再试。') : t('请求失败 ({0})', response.status);
       throw new ApiError(message, response.status);
     }
     if (payload === undefined) throw new Error(t('服务器返回了无法读取的响应'));

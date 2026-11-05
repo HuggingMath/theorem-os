@@ -219,7 +219,8 @@ try {
         const response = await route.fetch(); readHeld = true;
         await readGate; await route.fulfill({ response }); readDelivered = true;
       }, { times: 1 });
-      // Wait for the controller's ordinary polling GET; its snapshot predates the next send.
+      // Returning to the tab reads the conversation at once; that snapshot predates the next send.
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await eventually(() => readHeld, 'The controller has an old conversation snapshot in flight');
       holdAnswer = true;
     }
@@ -416,9 +417,44 @@ try {
       assert.equal(await page.title(), pageTitle, 'A conversation without a run names the page');
       await page.reload(); await details.waitFor();
       assert.equal(await page.title(), pageTitle, 'A reopened conversation names the page');
+      if (width === 1440) {
+        const id = (await conversation(page)).id, reads: string[] = [];
+        page.on('request', request => { if (new URL(request.url()).pathname === `/api/conversations/${id}`) reads.push(request.method()); });
+        await page.waitForTimeout(8000);
+        assert.deepEqual(reads, [], 'A conversation with nothing in progress is not re-read every few seconds');
+        await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+        await eventually(() => reads.length === 1, 'Returning to the tab reads the conversation at once');
+        mark('an idle conversation polls slowly and returning to the tab refreshes it at once');
+      }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Failure details fit the width');
       await page.screenshot({ path: path.join(output, `formalization-failure-${width}.png`), fullPage: true });
       mark(`${width}px: a failed formalization shows stage, reason, kept work, next step and diagnostic code, and names the page after its conversation`);
+    } finally { await context.close(); }
+  }
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
+    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      await page.route('**/api/conversations', route => route.request().method() === 'GET'
+        ? route.fulfill({ status: 503, json: { error: '本地测试：暂时不可用' } }) : route.continue(), { times: 1 });
+      await page.goto(origin); await page.locator('#formalize-original').waitFor();
+      if (await page.locator('body').getAttribute('data-history-collapsed') === 'true') await page.locator('#open-history').click();
+      const failed = page.locator('#chat-history-list [role="alert"]');
+      await failed.waitFor();
+      assert.match(await failed.innerText(), /对话列表暂时没有加载出来。/u, 'A list that failed to load does not read as an empty history');
+      assert.equal(await page.getByText('新对话会保存在这里').count(), 0);
+      assert.deepEqual(await audit(page), []);
+      // This browser is a new owner, so the list that loads on retry is genuinely empty.
+      await page.locator('[data-chat-history-retry]').click();
+      await page.getByText('新对话会保存在这里').waitFor();
+      assert.equal(await failed.count(), 0);
+      const missing = '00000000-0000-4000-8000-000000000000';
+      await page.route(`**/api/conversations/${missing}`, route => route.fulfill({ status: 429, body: '' }), { times: 1 });
+      await page.goto(`${origin}/?chat=${missing}`);
+      await page.getByText('请求太频繁，请稍后再试。').first().waitFor();
+      mark('a failed history load says so and retries; a rate-limited read names the limit');
     } finally { await context.close(); }
   }
   assert.deepEqual(errors, []);

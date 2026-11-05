@@ -30,6 +30,8 @@ type Options = {
 export class ChatSession {
   private conversation?: WebConversation;
   private summaries: WebConversationSummary[] = [];
+  private historyLoaded = false;
+  private historyFailed = false;
   private run?: WebRun;
   private formalization?: WebFormalization;
   private capabilities?: WebFormalizationCapabilities;
@@ -193,13 +195,18 @@ export class ChatSession {
   async refreshHistory() {
     try {
       const { conversations } = await this.options.request<{ conversations: WebConversationSummary[] }>('/api/conversations');
-      this.summaries = conversations; this.drawHistory();
-    } catch { /* Keep existing history on a transient read error; opening a record reports errors. */ }
+      this.summaries = conversations; this.historyLoaded = true; this.historyFailed = false; this.drawHistory();
+    } catch {
+      // Keep a loaded history on a transient read error; one never loaded says so instead of looking empty.
+      if (!this.historyLoaded) { this.historyFailed = true; this.drawHistory(); }
+    }
   }
   private schedule() {
     clearTimeout(this.timer);
     const pending = this.conversation?.messages.some(message => message.status === 'pending');
-    this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) ? 1500 : 6000);
+    // Nothing in progress: a slow check, since returning to the tab refreshes at once. A fast idle poll on every open tab
+    // reached the site's per-address request limit.
+    this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) ? 1500 : 30_000);
   }
   async refresh() {
     if (this.refreshing || this.submitting || document.hidden) { this.schedule(); return; }
@@ -321,7 +328,8 @@ export class ChatSession {
     } catch (error) { if (generation === this.generation) { this.error = reason(error); this.draw(); } }
   }
   private drawHistory() {
-    renderChatHistory(this.list, { items: this.summaries, selectedId: this.currentId, onOpen: id => void this.open(id) });
+    renderChatHistory(this.list, { items: this.summaries, selectedId: this.currentId, onOpen: id => void this.open(id),
+      failed: this.historyFailed, onRetry: () => void this.refreshHistory() });
   }
   private draw() {
     const pending = Boolean(this.conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending'));

@@ -210,12 +210,13 @@ function ChatComposer(props: ChatComposerProps) {
   </div>;
 }
 
-export type ChatHistoryProps = { items: WebConversationSummary[]; selectedId?: string; onOpen(id: string): void };
-function ChatHistory({ items, selectedId, onOpen }: ChatHistoryProps) {
+export type ChatHistoryProps = { items: WebConversationSummary[]; selectedId?: string; onOpen(id: string): void; failed?: boolean; onRetry?(): void };
+function ChatHistory({ items, selectedId, onOpen, failed, onRetry }: ChatHistoryProps) {
   return <nav class="chat-history" aria-label={t("对话历史")}>
     <p class="chat-history-heading">{t("对话")}</p>
     {items.length ? items.map(item => <a key={item.id} href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
       onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}><span translate={false}>{item.title}</span>{item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>)
+      : failed ? <p class="chat-history-empty" role="alert">{t("对话列表暂时没有加载出来。")}<button type="button" class="text-button" data-chat-history-retry onClick={onRetry}>{t("重试")}</button></p>
       : <p class="chat-history-empty">{t("新对话会保存在这里")}</p>}
   </nav>;
 }
