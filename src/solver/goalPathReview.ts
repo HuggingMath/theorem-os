@@ -1,6 +1,7 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { buildProofContinuation, createRecordedTaskSettlement, recordedTaskProofStatus } from './progress';
 import type { ProofRoute } from './proofRoutes';
+import type { ProjectionDependencyConnection } from './projectionDependencyHints';
 import { allRoutesParked, assumableLemma, groupOpen, isAdvisoryTask, isDefinitionTask, taskGroup, taskVersion,
   type RouteRecord, type TaskRecord } from './tasks';
 
@@ -17,7 +18,7 @@ export type GoalPathCandidate = {
   id: string; action: GoalPathCandidateAction; taskId: string; detail: string;
   /** The host can apply it from its id alone (goalPathDecisions.ts); otherwise the adopting revision writes the change. */
   mechanical: boolean;
-  /** connect: an off-path checked lemma with the same conclusion; assume: the consumers to mark conditional:true. */
+  /** connect: checked inputs to add to dependsOn; assume: the consumers to mark conditional:true. */
   relatedTaskIds?: string[]; extraPremises?: string[] };
 export type GoalPathNode = { taskId: string; taskDigest: string | null; kind?: TaskRecord['task']['kind'];
   state: GoalPathState; attempts: number; feedbackPreview?: string };
@@ -47,6 +48,8 @@ export function reviewGoalPaths(tasks: readonly TaskRecord[], options: {
   groups?: readonly RouteRecord[]; proofRoutes?: readonly ProofRoute[]; environmentDigest?: string;
   /** Skip candidate construction when only the stall identity is needed. */
   candidates?: boolean;
+  /** Source-bound missing inputs whose exact declarations have current host acceptance. */
+  projectionConnections?: readonly ProjectionDependencyConnection[];
 } = {}): GoalPathReview {
   // Host capacity work is advisory scheduling, never part of a planned route.
   tasks = tasks.filter(node => !node.capacityExploration);
@@ -106,9 +109,10 @@ export function reviewGoalPaths(tasks: readonly TaskRecord[], options: {
   });
   const candidatesFor = (frontier: readonly GoalPathNode[], pathIds: ReadonlySet<string>) => {
     const result: GoalPathCandidate[] = [];
-    const add = (candidate: Omit<GoalPathCandidate, 'id' | 'mechanical'>, mechanical = false) => result.push({
-      id: [candidate.action, candidate.taskId, ...(candidate.action === 'connect' ? candidate.relatedTaskIds! : [])].join(':'),
-      ...candidate, mechanical });
+    const add = (candidate: Omit<GoalPathCandidate, 'id' | 'mechanical'>, mechanical = false) => {
+      const id = [candidate.action, candidate.taskId, ...(candidate.action === 'connect' ? candidate.relatedTaskIds! : [])].join(':');
+      if (!result.some(item => item.id === id)) result.push({ id, ...candidate, mechanical });
+    };
     for (const item of frontier) {
       const node = nodes.get(item.taskId);
       if (item.state === 'paused' || item.state === 'stopped')
@@ -124,6 +128,18 @@ export function reviewGoalPaths(tasks: readonly TaskRecord[], options: {
         add({ action: 'revise', taskId: item.taskId, detail: 'Its current attempt or type check is blocked; revise its contract from the feedback, or split it.' });
       else if (item.state === 'missing')
         add({ action: 'add-task', taskId: item.taskId, detail: 'A planned input names no task; add it or remove the reference.' });
+      if (node && ['blocked', 'parked'].includes(item.state) && node.proof?.passed === false &&
+          node.proof.taskDigest === item.taskDigest && !node.task.familyMember) {
+        for (const connection of options.projectionConnections ?? []) {
+          const dependency = nodes.get(connection.dependency.taskId);
+          if (connection.consumer.taskId !== item.taskId || connection.consumer.taskDigest !== item.taskDigest ||
+              !dependency || connection.dependency.taskDigest !== taskVersion(dependency.task) ||
+              !settled(dependency) || node.task.dependsOn.includes(dependency.task.id)) continue;
+          add({ action: 'connect', taskId: item.taskId, relatedTaskIds: [dependency.task.id],
+            detail: `The failed projection removed ${connection.hint.root.name}, reached through ${connection.hint.path.slice(1).map(part => part.name).join(' → ')}. ` +
+              `Its exact current declaration has host acceptance as ${dependency.task.id}; add that task to dependsOn, then recheck this input.` }, true);
+        }
+      }
       if (!node || node.task.kind !== 'lemma' || isDefinitionTask(node.task)) continue;
       const target = statement(node);
       if (target) for (const match of offPath.map(candidate => ({ candidate, cover: statementCover(target, statement(candidate)) }))

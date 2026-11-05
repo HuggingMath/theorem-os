@@ -21,6 +21,8 @@ import type { ContextCheckpointRejection } from './contextCheckpoint';
 import { expandPlanPatch, isPlanPatch, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
 import { applyGoalPathDecisions, type GoalPathDecisions } from './goalPathDecisions';
 import type { GoalPathReview } from './goalPathReview';
+import { parseGoalProgressDecision, type GoalProgressDecision, type GoalProgressState } from './goalProgress';
+import type { ResearchDecision } from './researchDecisions';
 import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
 
 export const digest = taskVersion;
@@ -76,6 +78,9 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   history?: { task: CooperativeTask; producer?: string; proof?: TaskProof; integratedCheck?: ProofCheck; finding?: string;
     researchCompletion?: ResearchRecord }[];
   deliveries?: DeliveryRecord[]; cursors?: Record<string, number>; edits?: HumanEditRecord[];
+  researchDecisions?: ResearchDecision[];
+  /** Exact research publications shown in this Lead dispatch; later arrivals wait for the next turn. */
+  leadResearchInputIds?: string[]; leadResearchInputCount?: number;
   deliveryReceipts?: DeliveryReceipt[];
   proofReadyRecords?: ProofReadyRecord[];
   proofImports?: ProofImportRecord[];
@@ -111,6 +116,10 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
    */
   goalPathStall?: { digest: string; active: boolean; at: number; goalIds: string[]; taskIds: string[]; answeredAt?: number;
     unanswered?: number; ignoredAt?: number; declined?: { taskId: string; reason: string; at: number }[] };
+  /** Host observation of started worker time without new checked inputs on each frozen goal's path. */
+  goalProgress?: GoalProgressState;
+  /** Context-only host review, including candidates bound to fresh source evidence. */
+  goalPathReview?: GoalPathReview;
   /** Durable mathematical input/method tombstones, independent of scheduling and plan revisions. */
   capacityExplorationInputs?: { inputDigest: string; focus: import('./capacityExploration').CapacityExplorationFocus;
     targetTaskId: string; taskId: string }[];
@@ -155,8 +164,10 @@ export const deliveryInputFields = (record: DeliveryRecord) => ({
   summary: record.summary, evidenceRefs: record.evidenceRefs, dependencies: record.dependencies,
   remainingObligations: record.remainingObligations, lemmaRequests: record.lemmaRequests, findingDigest: record.findingDigest,
   mathematicalGap: record.mathematicalGap, mathematicalGapScope: record.mathematicalGapScope,
+  sourceUses: record.sourceUses,
 });
-export type LeadPlan = ReturnType<typeof parseCooperationPlan> & { fromPatch?: boolean; goalPathDecisions?: GoalPathDecisions };
+export type LeadPlan = ReturnType<typeof parseCooperationPlan> & { fromPatch?: boolean; goalPathDecisions?: GoalPathDecisions;
+  goalProgressDecision?: GoalProgressDecision; researchDecisions?: unknown };
 type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: GoalPathReview };
 /**
  * Model proposes tasks or a revision of the accepted graph; the host validates coverage, exact targets and an acyclic
@@ -164,8 +175,12 @@ type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: Goal
  */
 export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
   const { goalPath, ...patchOptions } = options;
+  const progressDecision = parseGoalProgressDecision(value);
   const answered = applyGoalPathDecisions(liftNestedPlanPatch(value), goalPath, base);
-  const decisions = answered.decisions ? { goalPathDecisions: answered.decisions } : {};
+  const decisions = { ...(answered.decisions ? { goalPathDecisions: answered.decisions } : {}),
+    ...(progressDecision ? { goalProgressDecision: progressDecision } : {}),
+    ...(value && typeof value === 'object' && 'researchDecisions' in value
+      ? { researchDecisions: (value as { researchDecisions: unknown }).researchDecisions } : {}) };
   if (!isPlanPatch(answered.value)) return { ...parseCooperationPlan(problem, answered.value), ...decisions };
   return { ...parseCooperationPlan(problem, expandPlanPatch(answered.value, base, patchOptions)), fromPatch: true, ...decisions };
 }

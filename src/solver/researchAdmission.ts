@@ -1,6 +1,7 @@
 import { parseMathResponse, type DeliveryRecord } from './deliveries';
 import { bindMathematicalGap, mathematicalGapSchema, type MathematicalGap, type MathematicalGapScope } from './mathematicalGaps';
 import { type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
+import { researchReferenceIssues, type ResearchSourceUse } from './researchReferences';
 
 export type ResearchSubmission =
   | Readonly<{ kind: 'notes'; text: string }>
@@ -18,6 +19,7 @@ export type ResearchFinding = Record<string, unknown> & {
   conclusion: 'supporting' | 'refuted' | 'inconclusive';
   summary: string;
   mathematicalGap?: MathematicalGap;
+  sourceUses?: readonly ResearchSourceUse[];
 };
 export type ResearchAdmissionIssue = Readonly<{ path: string; message: string }>;
 export type ResearchAdmission =
@@ -75,6 +77,9 @@ export function prepareResearchDelivery(input: ResearchSubmission, scope: Resear
         !(finding[key] as unknown[]).every(item => typeof item === 'string')))
       return rejection('math_delivery_invalid', key, 'Provide an array of strings.');
   }
+  const referenceIssues = researchReferenceIssues(finding.sourceUses, scope.source, scope.tasks, finding.lemmaRequests);
+  if (referenceIssues.length) return { status: 'rejected', code: 'math_research_delivery_invalid',
+    issues: referenceIssues, recovery: 'correct-and-resubmit' };
   let mathematicalGapScope: MathematicalGapScope | undefined;
   if (finding.mathematicalGap !== undefined) {
     const parsed = mathematicalGapSchema.safeParse(finding.mathematicalGap);

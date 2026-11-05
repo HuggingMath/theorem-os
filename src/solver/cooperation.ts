@@ -31,6 +31,7 @@ import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGrou
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
 import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
+import { leadResearchInputs } from './contextCompiler';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
 import { ResearchAdmissionError } from './researchAdmission';
@@ -223,6 +224,7 @@ export class CooperativeResearch extends CooperationInputs {
   }
   async stop() {
     this.stopping = true;
+    this.refreshGoalProgress();
     if (this.planApprovalPending()) this.input.emit('plan_approval_unanswered', { planVersion: this.archive.planVersion });
     clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
     clearTimeout(this.explorationTimer?.timer); this.explorationTimer = undefined;
@@ -342,6 +344,8 @@ export class CooperativeResearch extends CooperationInputs {
     return this.reviewed() || goals.length > 0 && goals.every(node => node.status === 'integrated');
   }
   async next(worker: ResearchWorker, budget: DispatchBudget): Promise<CooperativeAction | undefined> {
+    this.goalProgressBudget = { maxTurns: budget.maxTurns, deadline: Date.now() + budget.remainingMs };
+    if (this.refreshGoalProgress()) this.changed();
     for (;;) {
       if (this.stopping) return;
       this.input.signal.throwIfAborted();
@@ -400,12 +404,14 @@ export class CooperativeResearch extends CooperationInputs {
     if (this.archive.review && ['pending', 'running'].includes(this.archive.review.status)) return this.waitForDispatch();
     this.wakeForIdlePeers();
     const wakes = this.archive.leadWakes!, through = wakes.requested;
+    const pendingProgress = this.archive.goalProgress?.pending;
+    const owedProgress = pendingProgress && (pendingProgress.retryAt ?? 0) <= Date.now();
     // Conditions recomputed from durable state; only one-shot events are saved wake-ups.
     let wake = leadWakePending(wakes);
     // Idle peers are not in the planning digests, so their unconsumed wake must not be deduplicated away.
     const owedIdle = (wakes.recent ?? []).some(item => item.reason === 'peers-idle' && item.seq > wakes.consumed && item.seq <= through);
     const rejection = this.archive.planRejection;
-    if (rejection?.stalled) {
+    if (rejection?.stalled && !owedProgress) {
       if (rejection.inputDigest === this.planningInputDigest() && rejection.proposalDigest === this.proposedPlanDigest()) {
         dropLeadWakes(wakes, through);
         if (!running && !this.canAdvance()) {
@@ -447,7 +453,7 @@ export class CooperativeResearch extends CooperationInputs {
       const frontier = this.activeGoalFrontier();
       const inputDigest = this.planningInputDigest();
       if (!frontier.length || inputDigest === this.archive.lastLeadInputDigest) {
-        if (!owedStall) return this.idleFrontier(frontier, inputDigest);
+        if (!owedStall && !owedProgress) return this.idleFrontier(frontier, inputDigest);
         // A mechanical resume of unattempted inputs comes before asking the Lead about the stall.
         if (!this.preparingTaskTypes.size && this.resumeUnattemptedFrontier(frontier)) return RETRY_DISPATCH;
       } else {
@@ -456,15 +462,15 @@ export class CooperativeResearch extends CooperationInputs {
           goalIds: [...new Set(frontier.flatMap(item => item.goalIds))], inputDigest });
       }
     }
-    if (owedStall) wake = true;
+    if (owedStall || owedProgress) wake = true;
     if (wake || (!running && (!this.livePeers.length || !this.hasAssignableTask()))) {
       const inputDigest = this.planningInputDigest();
       // The previous decision (or pause) already answers these inputs; drop the wake-ups without a turn.
-      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall && !owedIdle) {
+      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall && !owedIdle && !owedProgress) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask() ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : RETRY_DISPATCH;
       }
-      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall && !owedIdle) {
+      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall && !owedIdle && !owedProgress) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask()
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
@@ -484,9 +490,13 @@ export class CooperativeResearch extends CooperationInputs {
       ...(!this.archive.tasks.length && !this.archive.initialPlanPublication ? { initialPlanNonce: crypto.randomUUID() } : {}),
       ...(this.archive.tasks.length ? { planNonce: crypto.randomUUID() } : {}) };
     this.leadEvidence.set(action, this.planningEvidenceDigest());
+    const research = leadResearchInputs(this.archive.deliveries ?? [],
+      new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions);
+    this.presentedResearchInputs.set(action, { shown: research.slice(-8), total: research.length });
     this.leadPauseInputs.set(action, this.leadPauseInputDigest(action.seedCommit));
     const presented = this.presentedGoalPathStall();
     if (presented) this.presentedGoalPathStalls.set(action, presented);
+    this.presentGoalProgressReview(action);
     return action;
   }
   /** Lead guidance written while the plan waits for approval, and not yet answered by a revision turn. */
@@ -950,6 +960,13 @@ export class CooperativeResearch extends CooperationInputs {
     if (action?.kind === 'lead' && !this.active.has(this.lead.id) && !this.pendingLeadInboxBases.has(action))
       this.pendingLeadInboxBases.set(action, leadInboxBasis(this.archive.tasks, this.archive.planVersion));
     return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView,
+      researchDecisions: action?.kind === 'lead' || worker?.id === this.lead.id
+        ? this.archive.researchDecisions : undefined,
+      ...(action?.kind === 'lead' && this.presentedResearchInputs.has(action) ? {
+        leadResearchInputIds: this.presentedResearchInputs.get(action)!.shown.map(record => record.id),
+        leadResearchInputCount: this.presentedResearchInputs.get(action)!.total } : {}),
+      goalProgress: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.goalProgress : undefined,
+      goalPathReview: action?.kind === 'lead' || worker?.id === this.lead.id ? this.goalPathReview() : undefined,
       planPublicationRejection: (action?.kind === 'lead' || worker?.id === this.lead.id) &&
         this.archive.planPublicationRejection?.baseVersion === this.archive.planVersion ? this.archive.planPublicationRejection : undefined,
       contextCheckpointRejection: checkpointResearch ? contextCheckpointRejection(checkpointResearch) : undefined,
@@ -1081,6 +1098,7 @@ export class CooperativeResearch extends CooperationInputs {
           if (this.archive.canonicalCommit !== snapshot.canonical || this.input.state.environmentDigest !== snapshot.environmentDigest ||
               this.input.state.problem.receiptDigest !== snapshot.problemReceiptDigest) return 'retry';
           this.archive.canonicalCommit = merged;
+          this.settleSourceResearchDecisions(action, snapshot.canonical, merged);
           const integrated = new Set(this.archive.tasks.filter(node => node.status === 'integrated').map(node => node.task.id));
           this.markPendingValidation(this.archive.tasks.filter(node => integrated.has(node.task.id) || node.task.statementReview), integrated);
           this.changed(); return 'published';

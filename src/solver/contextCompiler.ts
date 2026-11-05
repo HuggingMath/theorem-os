@@ -11,6 +11,7 @@ import { contextTaskConsumers } from './taskConsumers';
 import { mathematicalGapContext } from './mathematicalGaps';
 import { leadPlanPublicationFeedback } from './cooperationShared';
 import { contextCheckpointRejectionFeedback } from './contextCheckpoint';
+import { researchDecisionMatches, type ResearchDecision } from './researchDecisions';
 
 export const DEFAULT_TASK_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES = 64 * 1024;
@@ -242,7 +243,7 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
   };
   // Unadopted proposals and refutations are ordinary planning inputs; their sources join the Lead's scope.
   const visitLeadInputs = () => {
-    for (const delivery of leadResearchInputs(input.cooperation?.deliveries ?? [], byId)) {
+    for (const delivery of visibleLeadResearchInputs(input, byId)) {
       visit(delivery.taskId!);
       delivery.dependencies.forEach(input => visit(input.taskId));
       for (const proposal of delivery.lemmaRequests ?? []) proposal.dependsOn.filter(id => byId.has(id)).forEach(id => visit(id));
@@ -321,8 +322,10 @@ function proofSources(problem: SolverProblem, node: TaskRecord) {
 const LEAD_RESEARCH_INPUTS = 8, LEAD_RESEARCH_PROPOSALS = 8, LEAD_INLINE_FINDING_BYTES = 2 * 1024;
 
 /** Current research deliveries the Lead must review: unadopted lemma proposals, refutations and decision requests. */
-export function leadResearchInputs(deliveries: readonly DeliveryRecord[], byId: ReadonlyMap<string, TaskRecord>) {
+export function leadResearchInputs(deliveries: readonly DeliveryRecord[], byId: ReadonlyMap<string, TaskRecord>,
+  decisions: readonly ResearchDecision[] = []) {
   return deliveries.filter(record => {
+    if (decisions.some(decision => researchDecisionMatches(record, decision))) return false;
     const source = record.taskId ? byId.get(record.taskId) : undefined;
     if (record.kind !== 'research' || record.status === 'superseded' || !source || record.taskDigest !== taskVersion(source.task) ||
         record.dependencies.some(input => !byId.has(input.taskId) || taskVersion(byId.get(input.taskId)!.task) !== input.taskDigest))
@@ -337,12 +340,20 @@ export function leadResearchInputs(deliveries: readonly DeliveryRecord[], byId: 
   });
 }
 
+function visibleLeadResearchInputs(input: TaskContextInput, byId: ReadonlyMap<string, TaskRecord>) {
+  const current = leadResearchInputs(input.cooperation?.deliveries ?? [], byId, input.cooperation?.researchDecisions);
+  const ids = input.cooperation?.leadResearchInputIds;
+  return ids ? ids.flatMap(id => current.find(record => record.id === id) ?? []) : current;
+}
+
 /** Exact proposals stay inline; a long finding is retrievable by digest from its saved notes. */
 function leadResearchInput(record: DeliveryRecord, byId: ReadonlyMap<string, TaskRecord>) {
   const finding = deliveryFinding(record, byId.get(record.taskId!)?.finding);
   const proposals = (record.lemmaRequests ?? []).filter(task => !byId.has(task.id));
   return { deliveryId: record.id, producer: record.producer, taskId: record.taskId, taskDigest: record.taskDigest,
     summary: record.summary, evidenceRefs: record.evidenceRefs, remainingObligations: record.remainingObligations,
+    ...(record.sourceUses?.length ? { sourceUseCount: record.sourceUses.length,
+      sourceUseConsumers: [...new Set(record.sourceUses.map(use => use.consumer.taskId))] } : {}),
     ...(finding === undefined ? {} : Buffer.byteLength(finding) <= LEAD_INLINE_FINDING_BYTES ? { finding } : {
       findingBytes: Buffer.byteLength(finding), findingDigest: record.findingDigest }),
     ...(record.commit ? { savedSource: { commit: record.commit, notesPath: 'RESEARCH.md' } } : {}),
@@ -405,6 +416,7 @@ function optionalDeliveries(input: TaskContextInput, required: ReadonlySet<strin
         ...artifact, declarations: artifact.declarations.map(({ name, sha256, draft }) => ({ name, sha256, draft })),
       })) },
       artifactWarning: record.artifactWarning, lemmaRequests: record.lemmaRequests,
+      sourceUseCount: record.sourceUses?.length,
     };
     return [{ ...section(`delivery:${record.id}`, 'delivery', 'Current-version delivery selected for this task (advisory; retain unproved obligations):',
       { ...visible, ...(findingId ? { summarySource: findingId } : { summary: record.summary }) }),
@@ -469,11 +481,12 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
       mathematicalGapContext(input.cooperation.mathematicalGaps)));
     if (action?.kind === 'lead') {
       // Newest first, so a stale unanswered input never hides newer evidence.
-      const inputs = leadResearchInputs(input.cooperation.deliveries ?? [], byId).reverse();
+      const inputs = visibleLeadResearchInputs(input, byId).reverse();
       if (inputs.length) mandatory.push(section('lead-research-inputs', 'assignment',
         'Research inputs for this planning decision (advisory, not checked lemmas or proof acceptance; retrieve a long finding from savedSource commit and notesPath):', {
           inputs: inputs.slice(0, LEAD_RESEARCH_INPUTS).map(record => leadResearchInput(record, byId)),
-          ...(inputs.length > LEAD_RESEARCH_INPUTS ? { unshown: inputs.length - LEAD_RESEARCH_INPUTS } : {}),
+          ...((input.cooperation.leadResearchInputCount ?? inputs.length) > LEAD_RESEARCH_INPUTS
+            ? { unshown: (input.cooperation.leadResearchInputCount ?? inputs.length) - LEAD_RESEARCH_INPUTS } : {}),
         }));
     }
     mandatory.push(section('task-interfaces', 'interfaces', 'Lead task graph and host feedback:', graph));

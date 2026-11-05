@@ -101,6 +101,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
         root: directory, buildFile: path.join(directory, 'build.json'), taskText: 'Prove the original targets.',
         executable: 'offline-fixture', profile: 'offline-fixture', signal: controller.signal,
         deadline: Infinity, maxTurnMs: Infinity, maxTurns, maxTotalTokens: 0,
+        // Checkpoint timing is under test; a goal-progress Lead review would need a Lead model turn.
+        goalProgressReviewMs: 24 * 3_600_000,
         save: () => {}, emit: (event, details) => events.push({ event, details }),
       });
       running.push(completion); return completion;

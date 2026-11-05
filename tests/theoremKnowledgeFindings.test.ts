@@ -5,14 +5,16 @@ import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { writeSolverRunState, type SolverRunState } from '../src/solver/archive';
-import { parseMathResponse, type DeliveryRecord } from '../src/solver/deliveries';
-import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { deliveryDetails, parseMathResponse, type DeliveryRecord } from '../src/solver/deliveries';
+import { taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import { buildTheoremKnowledge, searchTheoremKnowledge, validateTheoremKnowledge, writeTheoremKnowledge } from '../src/solver/theoremKnowledge';
 import { buildKnowledgeRouteFindings, getKnowledgeRouteFinding, getKnowledgeRouteFindingPage, searchKnowledgeRouteFindings,
   searchKnowledgeRouteFindingRequests, type KnowledgeRouteFindingCandidate, type KnowledgeRouteFindingSearchRequest } from '../src/solver/theoremKnowledgeFindings';
 import { importKnowledgeRuns } from '../src/solver/theoremKnowledgeRuns';
 import { copyKnowledgeSnapshot, readKnowledgeCatalog, writePackedKnowledge } from '../src/solver/theoremKnowledgeStore';
 import { recordRouteBlockers, validateBlockerProposals } from '../src/solver/routeControl';
+import { prepareResearchDelivery } from '../src/solver/researchAdmission';
+import { captureResearchBasis, settleResearch } from '../src/solver/researchRecords';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -51,6 +53,41 @@ function fixture() {
   const node = state.cooperation!.tasks[1]!;
   const importFinding = () => importKnowledgeRuns([save()], { includeFindings: true });
   return { root, repository, task, dependency, state, stateFile, delivery, node, save, importFinding, notes, commit };
+}
+
+function proofFindingFixture(kind: 'lemma' | 'goal' = 'lemma', status: TaskRecord['status'] = 'running') {
+  const f = fixture();
+  const task: CooperativeTask = { ...f.task, id: 'proof', kind, objective: 'Prove the corrected density inequality',
+    proofPath: 'Submission.lean', theoremName: 'proof', ...(kind === 'lemma' ? { type: '∀ (n : Nat), n ≤ 2 * n' } : {}) };
+  const node: TaskRecord = { task, status, attempts: 1 };
+  f.state.cooperation!.tasks[1] = node; f.state.cooperation!.deliveries = [];
+  const header = 'theorem proof : ∀ (n : Nat), n ≤ 2 * n';
+  f.state.problem.declarations = { 'Submission.lean': [{ name: 'proof', header }] };
+  const publish = (fields: Record<string, unknown> = {}, id = 'proof-delivery') => {
+    const identity = { problemReceiptDigest: f.state.problem.receiptDigest, environmentDigest: f.state.environmentDigest };
+    const assignment = { taskId: task.id, taskDigest: taskVersion(task), workerId: 'proof-worker', seedCommit: f.commit };
+    const admitted = prepareResearchDelivery({ kind: 'event', value: { conclusion: 'inconclusive',
+      summary: 'A uniform density estimate is still missing.', argument: 'The pointwise estimate does not close the uniform gap.',
+      evidenceRefs: ['RESEARCH.md: uniform estimate'], remainingObligations: ['Prove a bound uniform in n.'], ...fields } },
+    { source: task, assignment, identity, tasks: f.state.cooperation!.tasks, deliveries: f.state.cooperation!.deliveries });
+    if (admitted.status !== 'admitted') throw new Error(admitted.code);
+    const finding = JSON.stringify(admitted.finding);
+    fs.writeFileSync(path.join(f.repository, 'RESEARCH.md'), finding + '\n');
+    const git = (...args: string[]) => execFileSync('git', ['-C', f.repository, ...args], { encoding: 'utf8' }).trim();
+    git('add', 'RESEARCH.md');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '--quiet', '--no-gpg-sign', '-m', id);
+    const commit = git('rev-parse', 'HEAD');
+    const basis = captureResearchBasis(task, { ...identity, sourceDigest: mathDigest('dispatch inputs'),
+      tasks: f.state.cooperation!.tasks, deliveries: f.state.cooperation!.deliveries });
+    const delivery: DeliveryRecord = { ...f.delivery, ...deliveryDetails(admitted.finding), id, producer: assignment.workerId,
+      taskId: task.id, taskDigest: taskVersion(task), statement: task.objective, finding, findingDigest: mathDigest(finding), commit,
+      mathematicalGapScope: admitted.mathematicalGapScope,
+      researchRecord: settleResearch({ id, assignment, basis, commit, finding, complete: false }) };
+    f.state.cooperation!.deliveries!.push(delivery);
+    return delivery;
+  };
+  const delivery = publish();
+  return { ...f, task, node, delivery, header, publish };
 }
 
 describe('explicit advisory route finding import', () => {
@@ -137,6 +174,144 @@ describe('explicit advisory route finding import', () => {
     expect(f.importFinding().skipped[0]!.reason).toBe('math_knowledge_run_finding_dependency_missing');
     f.state.cooperation!.history = [{ task: f.dependency }];
     expect(f.importFinding().findings?.[0]!.scope.dependencies[0]!.statement).toBe(f.dependency.type);
+  });
+});
+
+describe('proof-worker research delivery import', () => {
+  it.each((['lemma', 'goal'] as const).flatMap(kind =>
+    (['running', 'blocked', 'integrated'] as const).map(status => ({ kind, status }))))
+  ('imports a full $kind finding while its source task is $status', ({ kind, status }) => {
+    const f = proofFindingFixture(kind, status), before = canonicalMathJson(f.state);
+    expect(f.node.finding).toBeUndefined(); expect(f.delivery.researchRecord!.complete).toBe(false);
+    expect(importKnowledgeRuns([f.save()]).findings).toBeUndefined();
+    const imported = f.importFinding();
+    expect(imported.skipped).toEqual([]); expect(imported.candidates).toEqual([]); expect(imported.findings).toHaveLength(1);
+    expect(imported.findings![0]).toMatchObject({ conclusion: 'inconclusive', acceptance: 'not-assessed',
+      evidence: 'recorded-advisory-not-replayed', finding: f.delivery.finding,
+      scope: { source: { kind, statementKind: kind === 'lemma' ? 'closed-task-type' : 'source-header',
+        statement: kind === 'lemma' ? f.task.type : f.header } },
+      provenance: { deliveryId: f.delivery.id, sourceCommit: f.delivery.commit, findingDigest: mathDigest(f.delivery.finding!) } });
+    expect(buildTheoremKnowledge([], undefined, imported.findings).entries).toEqual([]);
+    expect(canonicalMathJson(f.state)).toBe(before);
+  });
+
+  it('retains every publication and its committed full argument even when summaries are identical', () => {
+    const f = proofFindingFixture(), second = f.publish({ argument: 'The new reduction still needs a uniform lower bound.' }, 'second');
+    fs.writeFileSync(path.join(f.repository, 'RESEARCH.md'), 'A later mutable journal is not evidence.');
+    const imported = f.importFinding();
+    expect(imported.skipped).toEqual([]); expect(imported.findings).toHaveLength(2);
+    expect(imported.findings!.map(item => item.summary)).toEqual([f.delivery.summary, second.summary]);
+    expect(imported.findings!.map(item => item.finding)).toEqual([f.delivery.finding, second.finding]);
+    expect(imported.findings!.map(item => item.notes)).toEqual([f.delivery.finding + '\n', second.finding + '\n']);
+    const base = buildTheoremKnowledge([], undefined, imported.findings);
+    expect(base.routeFindings).toHaveLength(2);
+    expect(new Set(base.routeFindings!.map(item => item.scopeDigest)).size).toBe(1);
+    expect(buildTheoremKnowledge([], base, imported.findings)).toEqual(base);
+  });
+
+  it('preserves the captured historical environment and supports older full deliveries without a research record', () => {
+    const f = proofFindingFixture(), environmentDigest = f.state.environmentDigest;
+    f.state.environmentDigest = mathDigest('new environment');
+    expect(f.importFinding().findings![0]!.scope.environmentDigest).toBe(environmentDigest);
+    delete f.delivery.researchRecord;
+    expect(f.importFinding().findings![0]!.finding).toBe(f.delivery.finding);
+  });
+
+  it.each(['missing-text', 'missing-digest', 'digest', 'source', 'task', 'dependency', 'commit', 'commit-format'] as const)
+  ('rejects a proof publication with an invalid %s binding', binding => {
+    const f = proofFindingFixture(); delete f.delivery.researchRecord;
+    if (binding === 'missing-text') { f.node.finding = f.delivery.finding; delete f.delivery.finding; }
+    if (binding === 'missing-digest') delete f.delivery.findingDigest;
+    if (binding === 'digest') f.delivery.findingDigest = mathDigest('another full argument');
+    if (binding === 'source') {
+      f.delivery.finding = JSON.stringify({ ...JSON.parse(f.delivery.finding!), argument: 'Forged full argument with unchanged summary.' });
+      f.delivery.findingDigest = mathDigest(f.delivery.finding);
+    }
+    if (binding === 'task') f.delivery.taskDigest = mathDigest('unavailable source task version');
+    if (binding === 'dependency') f.delivery.dependencies[0]!.taskDigest = mathDigest('unavailable dependency version');
+    if (binding === 'commit') f.delivery.commit = 'f'.repeat(40);
+    if (binding === 'commit-format') f.delivery.commit = 'HEAD';
+    const imported = f.importFinding();
+    expect(imported.findings).toEqual([]); expect(imported.skipped).toHaveLength(1);
+    expect(imported.skipped[0]!.reason).toBe({
+      'missing-text': 'math_knowledge_run_finding_delivery_mismatch', 'missing-digest': 'math_knowledge_run_finding_delivery_mismatch',
+      digest: 'math_knowledge_run_finding_delivery_mismatch', source: 'math_knowledge_run_finding_source_mismatch',
+      task: 'math_knowledge_run_finding_task_missing', dependency: 'math_knowledge_run_finding_dependency_missing',
+      commit: 'math_knowledge_run_source_unavailable', 'commit-format': 'math_knowledge_run_finding_delivery_mismatch',
+    }[binding]);
+  });
+
+  it.each(['task', 'commit', 'finding', 'problem'] as const)('rejects a research record bound to a different %s', binding => {
+    const f = proofFindingFixture(), record = f.delivery.researchRecord!;
+    f.delivery.researchRecord = binding === 'task' ? { ...record, taskId: 'other', basis: { ...record.basis, taskId: 'other' } } :
+      binding === 'commit' ? { ...record, commit: 'f'.repeat(40) } :
+        binding === 'finding' ? { ...record, findingDigest: mathDigest('different finding') } :
+          { ...record, basis: { ...record.basis, problemReceiptDigest: mathDigest('different problem') } };
+    expect(f.importFinding()).toMatchObject({ findings: [], skipped: [{ reason: 'math_knowledge_run_finding_record_mismatch' }] });
+  });
+
+  it('resolves only the exact historical source task instead of borrowing a revised current contract', () => {
+    const f = proofFindingFixture();
+    f.node.task = { ...f.task, type: '∀ (n : Nat), n = 2 * n', revision: 1 };
+    expect(f.importFinding()).toMatchObject({ findings: [], skipped: [{ reason: 'math_knowledge_run_finding_task_missing' }] });
+    f.state.cooperation!.history = [{ task: f.task }];
+    const imported = f.importFinding();
+    expect(imported.skipped).toEqual([]);
+    expect(imported.findings![0]!.scope.source.statement).toBe(f.task.type);
+    expect(imported.findings![0]!.provenance.taskDigest).toBe(taskVersion(f.task));
+  });
+
+  it.each(['source', 'dependency', 'implicit-multi-group'] as const)('excludes a private proof finding: %s', target => {
+    const f = proofFindingFixture();
+    if (target === 'source') {
+      f.node.task = { ...f.task, sharing: 'group' }; f.delivery.taskDigest = taskVersion(f.node.task);
+    }
+    if (target === 'dependency') {
+      f.state.cooperation!.tasks[0]!.task = { ...f.dependency, sharing: 'group' };
+      f.delivery.dependencies[0]!.taskDigest = taskVersion(f.state.cooperation!.tasks[0]!.task);
+    }
+    if (target === 'implicit-multi-group') {
+      f.node.task = { ...f.task, sharing: undefined }; f.delivery.taskDigest = taskVersion(f.node.task);
+      f.state.cooperation!.groups = ['main', 'private'].map(id => ({ turns: 0,
+        group: { id, objective: id, status: 'active', revision: 0 } }));
+    }
+    expect(f.importFinding()).toMatchObject({ findings: [], skipped: [{ reason: 'math_knowledge_run_finding_private' }] });
+  });
+
+  it('retains exact gap consumers, reconsideration conditions and source adaptations across revisions', () => {
+    const f = proofFindingFixture('lemma', 'blocked');
+    const consumer: CooperativeTask = { id: 'original', kind: 'goal', objective: 'Prove the original theorem',
+      dependsOn: [f.task.id], revision: 0, proofPath: 'Submission.lean', theoremName: 'original', sharing: 'problem' };
+    const header = 'theorem original : ∀ (n : Nat), n ≤ 2 * n';
+    f.state.problem.declarations = { 'Submission.lean': [{ name: consumer.theoremName!, header }] };
+    f.state.cooperation!.tasks.push({ task: consumer, status: 'blocked', attempts: 0 });
+    f.state.cooperation!.deliveries = [];
+    const mathematicalGap = { consumer: { taskId: consumer.id, taskDigest: taskVersion(consumer) },
+      previousGap: 'Need a uniform inequality.', reduced: 'A pointwise estimate is available.', remaining: 'Uniformity in n.',
+      evidenceScope: 'A source adaptation still needs a Lean proof.', reconsiderWhen: ['Supply an exact uniform estimate.'] };
+    const sourceUses = [{ kind: 'public-literature', reference: 'https://example.org/inequalities', locator: 'Theorem 2',
+      assumptions: ['n is a natural number'], adaptation: 'Specialize the coefficient and discharge positivity.',
+      consumer: mathematicalGap.consumer, lemmaRequestIds: [], remaining: ['Check the specialized estimate in Lean.'] }];
+    const delivery = f.publish({ mathematicalGap, sourceUses }, 'gap-publication'), environmentDigest = f.state.environmentDigest;
+    f.state.environmentDigest = mathDigest('later environment');
+    f.state.cooperation!.history = [{ task: consumer }];
+    f.state.cooperation!.tasks[2]!.task = { ...consumer, revision: 1 };
+    const imported = f.importFinding();
+    expect(imported.skipped).toEqual([]);
+    expect(imported.findings![0]).toMatchObject({ mathematicalGap, reconsiderWhen: mathematicalGap.reconsiderWhen,
+      scope: { environmentDigest, originalConsumer: { kind: 'goal', statement: header } } });
+    expect(JSON.parse(imported.findings![0]!.finding).sourceUses).toEqual(sourceUses);
+    const record = delivery.researchRecord!;
+    delivery.researchRecord = { ...record, basis: { ...record.basis, environmentDigest: f.state.environmentDigest } };
+    expect(f.importFinding()).toMatchObject({ findings: [], skipped: [{ reason: 'math_knowledge_run_finding_record_mismatch' }] });
+    delivery.researchRecord = record;
+    f.state.cooperation!.tasks[2]!.task = { ...consumer, sharing: 'group', revision: 1 };
+    expect(f.importFinding()).toMatchObject({ findings: [], skipped: [{ reason: 'math_knowledge_run_finding_private' }] });
+  });
+
+  it.each(['proof', 'failure'] as const)('does not reinterpret an ordinary failed %s delivery as a mathematical refutation', kind => {
+    const f = proofFindingFixture(); f.delivery.kind = kind; f.delivery.status = 'failed';
+    expect(f.importFinding()).toMatchObject({ candidates: [], findings: [], skipped: [] });
   });
 });
 

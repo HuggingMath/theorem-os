@@ -67,7 +67,8 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     const start = (behavior: { saveResearchProgress?: boolean; saveLeadProgress?: boolean } = {}) => {
       const controller = new AbortController(); controllers.push(controller);
       const events: { event: string; details?: Record<string, unknown>; at: number }[] = [];
-      const messages: { assignment: CooperativeAction; inbox: string[]; threadId: string }[] = [];
+      const messages: { assignment: CooperativeAction; inbox: string[]; threadId: string; researchInputIds?: string[];
+        progressReview?: { id: string }; eventCount: number }[] = [];
       const notifications: { workerId: string; message: string }[] = [];
       const sessionInterrupts: { workerId: string; threadId: string }[] = [], sessionCloses: typeof sessionInterrupts = [];
       const firstLead = deferred(), firstResearch = deferred();
@@ -104,7 +105,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
           },
           run: async (message, _messageId, _workspace, onStarted) => {
             const parsed = JSON.parse(message) as (typeof messages)[number];
-            messages.push({ ...parsed, threadId }); active = deferred<string>();
+            messages.push({ ...parsed, threadId, eventCount: events.length }); active = deferred<string>();
             onStarted(`offline-turn-${messages.length}`);
             // The advisory clock measures mathematical work, so a turn arms it once the model produces
             // its first item. This offline writer produces one immediately; only provider latency waits.
@@ -119,7 +120,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         M2: { ...directSolverModules.M2, check, checkTask: check },
         M4: { ...directSolverModules.M4, build: (_problem, state, access) => {
           const message = JSON.stringify({ assignment: access.assignment,
-            inbox: state.cooperation?.deliveries?.map(delivery => delivery.summary) ?? [] });
+            inbox: state.cooperation?.deliveries?.map(delivery => delivery.summary) ?? [],
+            ...(access.assignment?.kind === 'lead' ? { researchInputIds: state.cooperation?.leadResearchInputIds ?? [] } : {}),
+            ...(access.assignment?.kind === 'lead' && state.cooperation?.goalProgress?.pending
+              ? { progressReview: { id: state.cooperation.goalProgress.pending.id } } : {}) });
           return { instructions: 'Offline coordination fixture.', message, continuationMessage: message,
             scope: 'original-problem-and-allowed-library', sources: { problemReceiptDigest: problem.receiptDigest } };
         } } };
@@ -130,6 +134,25 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         save: () => {}, emit: (event, details) => events.push({ event, details, at: Date.now() }) });
       running.push(completion); void completion.catch(() => {});
       const leads = () => messages.filter(message => message.assignment.kind === 'lead');
+      const expectScheduledLeadTurns = (after: number) => {
+        const turns = leads();
+        for (let index = after; index < turns.length; index++) {
+          const turn = turns[index], previous = turns[index - 1];
+          const triggers = events.slice(previous.eventCount, turn.eventCount);
+          const reviews = triggers.filter(item => item.event === 'goal_progress_review_dispatched');
+          const idleWakes = triggers.filter(item => item.event === 'lead_woken_for_idle_peers');
+          // A pending review can share an idle wake turn; count the turn once and verify its exact presented ID.
+          expect(reviews.length > 0 || idleWakes.length > 0).toBe(true);
+          if (turn.progressReview) {
+            expect(reviews).toHaveLength(1);
+            expect(reviews[0].details?.id).toBe(turn.progressReview.id);
+            expect(events.slice(0, turn.eventCount)).toContainEqual(expect.objectContaining({
+              event: 'goal_progress_review_requested', details: expect.objectContaining({ id: turn.progressReview.id }),
+            }));
+          } else expect(reviews).toHaveLength(0);
+        }
+        return turns.slice(after);
+      };
       const latestLead = () => {
         const message = leads().at(-1)!;
         if (message.assignment.kind !== 'lead') throw new Error('fixture_expected_lead');
@@ -154,10 +177,16 @@ describe('Lead planning liveness across checkpoints and restore', () => {
       };
       /** Publish an unchanged complete plan as the Lead's answer to its dispatched planning input. */
       const answer = async (action = latestLead().assignment) => {
+        const presented = leads().find(message => message.assignment.kind === 'lead' &&
+          message.assignment.planNonce === action.planNonce);
         fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify({
           kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
           tasks: fixture.state.cooperation!.tasks.map(node => node.task),
           groups: fixture.state.cooperation!.groups!.map(route => route.group),
+          researchDecisions: (presented?.researchInputIds ?? []).map(deliveryId => ({ deliveryId,
+            outcome: 'decline', reason: 'The current evidence does not establish a sound change to this route.' })),
+          ...(presented?.progressReview ? { progressReview: { id: presented.progressReview.id,
+            reason: 'Continue the researcher\'s missing-construction investigation: no checked fact is available yet; the next check is a precise construction for the remaining case.' } } : {}),
         }) + '\n');
         await cooperation!.pulse(workers[0].id);
         expect(fixture.state.cooperation!.lastLeadInputDigest).toBeTruthy();
@@ -168,7 +197,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         capture.mockRestore();
       };
       return { completion, controller, events, messages, notifications, sessionInterrupts, sessionCloses,
-        leads, latestLead, waitForLead, publish, answer, stop, open,
+        leads, expectScheduledLeadTurns, latestLead, waitForLead, publish, answer, stop, open,
         planningInputDigest: () => (cooperation as unknown as { planningInputDigest: () => string }).planningInputDigest(),
         current: (action: CooperativeAction) => cooperation!.current(actual(action)),
         ready: ({ research = true } = {}) => Promise.race([Promise.all(research
@@ -231,10 +260,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(fixtureState.state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBeUndefined();
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
-    // The only further turns answer the idle prover, on the Lead's backoff schedule; the pause itself wakes nothing.
+    // The pause itself wakes nothing: each further turn answers an idle peer or a dispatched goal progress review.
     const idleWakes = run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
     expect(idleWakes.length).toBeLessThanOrEqual(4);
-    expect(run.leads()).toHaveLength(pausedTurns + idleWakes.length);
+    expect(run.expectScheduledLeadTurns(pausedTurns).some(turn => turn.progressReview)).toBe(true);
     const nonces = run.leads().map(message => (message.assignment as Extract<CooperativeAction, { kind: 'lead' }>).planNonce);
     expect(new Set(nonces).size).toBe(nonces.length);
     expect(fixtureState.state.cooperation!.tasks.find(node => node.task.id === 'investigate')!.status).toBe('running');
@@ -249,7 +278,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(run.planningInputDigest());
     const answeredTurns = run.leads().length;
     await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(run.leads()).toHaveLength(answeredTurns);
+    const reviews = run.expectScheduledLeadTurns(answeredTurns);
+    expect(reviews.length).toBeGreaterThan(0);
+    expect(reviews.every(turn => turn.progressReview)).toBe(true);
+    expect(run.events.filter(item => item.event === 'lead_woken_for_idle_peers')).toHaveLength(idleWakes.length);
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(run.open.mock.calls.every(([options]) => options.turnTimeoutMs === undefined)).toBe(true);
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
@@ -288,7 +320,9 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(cooperation().leadDecisionBasisAt).toBeGreaterThanOrEqual(at[2]);
     const answeredTurns = run.leads().length;
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
-    expect(run.leads()).toHaveLength(answeredTurns);
+    const reviews = run.expectScheduledLeadTurns(answeredTurns);
+    expect(reviews.length).toBeGreaterThan(0);
+    expect(reviews.every(turn => turn.progressReview)).toBe(true);
     expect(idleWakes()).toHaveLength(3);
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   });
@@ -311,7 +345,9 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(run.planningInputDigest());
     const settledTurns = run.leads().length;
     await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(run.leads()).toHaveLength(settledTurns);
+    const reviews = run.expectScheduledLeadTurns(settledTurns);
+    expect(reviews.length).toBeGreaterThan(0);
+    expect(reviews.every(turn => turn.progressReview)).toBe(true);
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
     await run.stop();

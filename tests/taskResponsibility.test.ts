@@ -24,6 +24,39 @@ const group = (engineerId?: string): RouteRecord => ({
 });
 
 describe('task responsibility assessment', () => {
+  it('shares an unstarted fallback goal only after the Researcher has no ready investigation', () => {
+    const engineer = worker('engineer', 'engineer'), peer = worker('peer'), other = worker('other');
+    const working = node('working', 'goal'), waiting = node('waiting', 'goal'), research = node('research', 'research');
+    waiting.task = { ...waiting.task, preferredOwnerId: engineer.id };
+    research.task = { ...research.task, ownerId: peer.id };
+    working.status = 'running'; saveAssignment(working, engineer);
+    const tasks = [working, waiting, research];
+    const peers = [engineer, peer, other];
+    expect(assignSharedResearchTask(readyResearchTasks(tasks), peer, peers, undefined, tasks)).toBe(research);
+    research.status = 'blocked';
+    expect(assignSharedResearchTask([waiting], peer, peers, undefined, tasks)).toBe(waiting);
+    const version = taskVersion(waiting.task);
+    saveAssignment(waiting, peer);
+    expect(assessTaskResponsibility(waiting, peer, { tasks })).toEqual({ kind: 'matches' });
+    expect(assessTaskResponsibility(waiting, other, { tasks })).toEqual({ kind: 'blocked', reason: 'saved-assignment' });
+    expect(assessTaskResponsibility(waiting, engineer, { tasks })).toEqual({ kind: 'blocked', reason: 'saved-assignment' });
+    expect(taskVersion({ ...waiting.task, preferredOwnerId: undefined })).toBe(version);
+  });
+
+  it.each(['owner-idle', 'attempted', 'group-engineer', 'exclusive-owner', 'stale-owner-assignment'] as const)(
+    'keeps the preference boundary for %s', boundary => {
+      const engineer = worker('engineer', 'engineer'), peer = worker('peer');
+      const working = node('working', 'goal'), waiting = node('waiting', 'goal');
+      waiting.task = { ...waiting.task, preferredOwnerId: engineer.id };
+      working.status = 'running'; saveAssignment(working, engineer);
+      if (boundary === 'owner-idle') working.status = 'pending';
+      if (boundary === 'attempted') waiting.attempts = 1;
+      if (boundary === 'exclusive-owner') waiting.task = { ...waiting.task, preferredOwnerId: undefined, ownerId: engineer.id };
+      if (boundary === 'stale-owner-assignment') working.assignment!.taskDigest = 'stale';
+      const groups = boundary === 'group-engineer' ? [group(engineer.id)] : undefined;
+      expect(assignSharedResearchTask([waiting], peer, [engineer, peer], groups, [working, waiting])).toBeUndefined();
+    });
+
   it('keeps a saved assignment exclusive after its task owner is removed', () => {
     const author = worker('author'), peer = worker('peer'), saved = node('saved'), alternative = node('alternative');
     saved.task = { ...saved.task, ownerId: author.id }; saveAssignment(saved, author);

@@ -15,6 +15,7 @@ import { TaskProofCache, type TaskVerificationArtifact } from './taskProofCache'
 import { formalVerificationToolIdentity, type MathematicsVerifierBatchItem } from '../math/verifier';
 import { hasTaskConnectionCheck } from './taskConnections';
 import { compactTaskSources } from './taskProjection';
+import { projectionDependencyHintId, type ProjectionDeclaration, type ProjectionDependencyHint } from './projectionDependencyHints';
 
 export { TaskProofCache } from './taskProofCache';
 
@@ -29,6 +30,8 @@ export type TaskProof = ProofCheck & { taskDigest: string; seedCommit: string; c
   projectionReuse?: TaskProjectionReuse;
   /** Set by the host after checking the exact projection and its receipts. */
   projection?: Readonly<{ environmentDigest: string; problemReceiptDigest: string; sourceDigest: string }>;
+  /** Source-bound reasons a projection removed a potential dependency; advisory, never a proof receipt. */
+  projectionDependencyHints?: readonly ProjectionDependencyHint[];
   conditions?: NonNullable<TaskAssignment['dependencies']>; references?: ProofReferences };
 export type TaskProofRequest = { task: CooperativeTask; assignment: TaskAssignment; retainedGoals: readonly string[];
   conditions?: readonly CooperativeTask[] };
@@ -146,6 +149,7 @@ export function taskChanges(problem: SolverProblem, worktree: string, sourceComm
 export function createTaskSourceProjector(problem: SolverProblem, worktree: string, sourceCommit: string,
   options: { compact?: boolean; preserved?: readonly { file: string; name: string }[] } = {}) {
   problem = structuredClone(problem);
+  if (!/^[a-f0-9]{40,64}$/u.test(sourceCommit)) sourceCommit = git(worktree, ['rev-parse', sourceCommit + '^{commit}']);
   const sourceSnapshot = new Map(problem.ownedFiles.map(file => [file,
     committedSource(worktree, sourceCommit, `${problem.projectRelative}/${file}`)]));
   const regions = new Map([...sourceSnapshot].filter(([file]) => file.endsWith('.lean'))
@@ -158,7 +162,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     return regions.get(file)!.map(region => {
       const declaration = scoped.find(item => item.startOffset === region.startOffset)!;
       const header = source.slice(region.startOffset, region.bodyOffset);
-      return { ...declaration, file, id: key(file, declaration.qualifiedName),
+      return { ...declaration, endOffset: region.endOffset, file, id: key(file, declaration.qualifiedName),
         theorem: /^(?:theorem|lemma)\s/u.test(header), header: identifiers(header),
         references: identifiers(source.slice(region.startOffset, region.endOffset)) };
     });
@@ -177,7 +181,8 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     return [file, files] as const;
   }));
   const originals = new Map<string, string>();
-  return (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): Map<string, string> => {
+  const project = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = [],
+    observe?: (hints: readonly ProjectionDependencyHint[]) => void): Map<string, string> => {
     const binders = conditions.map(dependency => `(${local(dependency.theoremName!)} : ${dependency.type})`).join(' ');
     const declaration = sourceSnapshot.get(task.proofPath!) ?? '';
     const matches = (regions.get(task.proofPath!) ?? []).filter(region => local(region.name) === local(task.theoremName!));
@@ -216,6 +221,8 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     const assumptions = new Map(conditions.map(dependency => [targetKey(dependency.proofPath!, dependency.theoremName!), dependency]));
     const removed = new Set([...problem.targets.map(target => targetKey(target.proofPath, target.theoremName)),
       ...assumptions.keys()].filter(id => !keep.has(id)));
+    const removalRoots = observe ? new Map<string, ProjectionDependencyHint['root']['removedBecause']>([...removed].map(id => [id,
+      assumptions.has(id) ? 'assumed-input' as const : 'excluded-original-target' as const])) : undefined;
     const bindings = new Map<string, { file: string; id: string }[]>();
     for (const binding of [...declarations.map(item => ({ file: item.file, name: item.qualifiedName, id: item.id })),
       ...[...assumptions].map(([id, dependency]) => ({ id, file: dependency.proofPath!, name: id.slice(id.indexOf('\0') + 1) }))]) {
@@ -237,7 +244,10 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       }
     };
     for (const item of declarations) if (item.theorem && !keep.has(item.id) &&
-        item.references.some(name => name === 'sorry' || name === 'admit')) removed.add(item.id);
+        item.references.some(name => name === 'sorry' || name === 'admit')) {
+      removed.add(item.id);
+      if (removalRoots && !removalRoots.has(item.id)) removalRoots.set(item.id, 'draft-declaration');
+    }
     // Removing or parameterizing a theorem also invalidates unrelated saved wrappers that call it.
     const changed = new Set([...removed, ...(conditions.length ? [target] : [])]);
     for (;;) {
@@ -245,6 +255,54 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
         item.references.some(name => { const reference = referenceKey(item, name); return reference !== undefined && changed.has(reference); }));
       if (!affected.length) break;
       for (const item of affected) { removed.add(item.id); changed.add(item.id); }
+    }
+    if (observe) {
+      const counts = new Map<string, number>();
+      for (const item of declarations) counts.set(item.id, (counts.get(item.id) ?? 0) + 1);
+      const unique = new Map(declarations.filter(item => counts.get(item.id) === 1)
+        .map(item => [item.id, item]));
+      const consumer = unique.get(target), requested = task.theoremName?.replace(/^_root_\./u, '');
+      const describe = (item: typeof declarations[number]): ProjectionDeclaration => ({ file: item.file,
+        name: item.qualifiedName, declarationDigest: mathDigest(sourceSnapshot.get(item.file)!.slice(item.startOffset, item.endOffset)) });
+      const localBindings = (item: typeof declarations[number]) => new Set([
+        ...maskLeanCommentsAndStrings(sourceSnapshot.get(item.file)!.slice(item.startOffset, item.endOffset))
+          .matchAll(/(?:\b(?:let|letI|have|haveI|fun|intro|intros|rintro|obtain|rcases|case|rename_i)\b|∀|∃)\s+([^:=\n]*)(?:[:=\n]|$)/gu),
+      ].flatMap(match => identifiers(match[1]!)));
+      const hints: ProjectionDependencyHint[] = [];
+      // The projection's name reader is advisory. Only exact, unique owned declarations may become a hint;
+      // Lean still decides their actual dependency and accepts every repaired task independently.
+      if (consumer && consumer.qualifiedName === requested) {
+        const pending = [[consumer.id]], visited = new Set<string>();
+        for (const route of pending) {
+          const current = unique.get(route.at(-1)!)!;
+          if (visited.has(current.id)) continue;
+          visited.add(current.id);
+          const reason = removalRoots!.get(current.id);
+          if (route.length > 1 && reason) {
+            const root = { ...describe(current), removedBecause: reason };
+            const content: Omit<ProjectionDependencyHint, 'id'> = {
+              authority: 'unambiguous-source-reference', proofAcceptance: 'not-assessed',
+              problemReceiptDigest: problem.receiptDigest, sourceCommit,
+              sourceDigest: mathDigest(canonicalMathJson([...sourceSnapshot].map(([file, source]) => [file, mathDigest(source)]))),
+              consumer: { taskId: task.id, taskDigest: taskVersion(task), declaration: describe(consumer) },
+              path: route.map(id => describe(unique.get(id)!)), root };
+            hints.push({ id: projectionDependencyHintId(content), ...content });
+            continue;
+          }
+          // A closed task type supplies qualified references even when the written source header uses
+          // a short name that the projector deliberately treats as possibly bound.
+          const names = current === consumer ? [...current.references,
+            ...identifiers(task.type ?? '').filter(name => name.includes('.'))] : current.references;
+          const bound = localBindings(current);
+          for (const name of new Set(names)) {
+            if (!name.includes('.') && bound.has(name)) continue;
+            const reference = referenceKey(current, name);
+            if (reference && reference !== target && removed.has(reference) && unique.has(reference) && !route.includes(reference))
+              pending.push([...route, reference]);
+          }
+        }
+      }
+      observe(hints);
     }
     for (const file of problem.ownedFiles) {
       let source = sources.get(file)!;
@@ -277,6 +335,15 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     }
     return options.compact ? compactTaskSources(problem, sources, task, retainedGoals, options.preserved) : sources;
   };
+  return Object.assign((task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []) =>
+    project(task, retainedGoals, conditions), {
+    /** Recompute only from this immutable snapshot; this observation never changes projection or proof acceptance. */
+    dependencyHints(task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): readonly ProjectionDependencyHint[] {
+      let hints: readonly ProjectionDependencyHint[] = [];
+      project(task, retainedGoals, conditions, value => { hints = value; });
+      return hints;
+    },
+  });
 }
 
 /** Isolate one exact helper or original goal; incomplete unrelated original goals are removed. */
@@ -420,15 +487,17 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
       };
     } else attributions = (await run()).attributions;
     const sourceDigest = ownedSourceDigest(problem, checkout, sourceCommit);
-    return prepared.map(({ task, assignment, taskDigest, changes, imports, conditions }, index) => {
+    return prepared.map(({ task, assignment, taskDigest, changes, imports, retainedGoals, conditions }, index) => {
       const { passed, verification, attributable } = attributions[index]!;
       const result = verification.results[0];
       const references = passed && !conditions.length && result?.declarationReferences ? captureProofReferences(problem, checkout, sourceCommit,
         { name: task.theoremName!, file: task.proofPath! }, result.declarationReferences, environmentDigest) : undefined;
+      const projectionDependencyHints = !passed ? projectSources.dependencyHints(task, retainedGoals, conditions) : [];
       const proof: TaskProof = { commit: sourceCommit, sourceDigest, passed, verification,
         taskDigest, seedCommit: assignment.seedCommit, changes, ...(imports.length ? { imports } : {}),
         ...(compacted ? { projectionMode: 'compact' as const } : {}),
         ...(projectionReuse ? { projectionReuse: { ...projectionReuse } } : {}),
+        ...(projectionDependencyHints.length ? { projectionDependencyHints } : {}),
         ...(references ? { references } : {}),
         ...(conditions.length ? { conditions: conditions.map(dependency => ({ taskId: dependency.id, taskDigest: taskVersion(dependency) })) } : {}) };
       if (attributable) attributedProofs.set(proof, mathDigest(canonicalMathJson(proof)));

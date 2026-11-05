@@ -4,20 +4,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
-import { autoLibraryPackFor, autoLibraryRunUsage, readAutoLibraryPool } from '../../src/math/autoLibrary';
+import { autoLibraryLiveUsage, autoLibraryPackFor, autoLibraryRunUsage, readAutoLibraryPool } from '../../src/math/autoLibrary';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { readLibraryPack, summarizeLibraryPack } from '../../src/math/libraryPacks';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { readMathText, writeMathJsonDurable } from '../../src/math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin } from '../../src/math/paths';
 import { inspectAutoLibraryBuild, prepareAutoLibraryBuild, readAutoLibraryRequest, runAutoLibraryBuild } from '../../src/solver/autoLibrary';
+import { captureAutoLibraryDemand, readAutoLibraryDemand } from '../../src/solver/autoLibraryDemand';
+import { readSolverRunState } from '../../src/solver/archive';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const prepareFlags = ['challenge-file', 'task-file', 'challenge-id', 'environment', 'pool', 'base-pack', 'build-manifest',
   'model', 'effort', 'profile', 'codex', 'prover-model', 'prover-effort', 'workers', 'coordination', 'max-modules', 'max-rounds',
   'max-run-seconds', 'max-total-tokens', 'planner-turn-seconds', 'prover-max-run-seconds', 'prover-max-turns',
-  'prover-max-turn-seconds', 'prover-max-total-tokens', 'prepare-timeout-seconds'] as const;
+  'prover-max-turn-seconds', 'prover-max-total-tokens', 'prepare-timeout-seconds', 'demand-file', 'definition-targets'] as const;
 
 function externalPath(value: string): string {
   const resolved = path.resolve(value);
@@ -57,6 +59,8 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     maxRunSeconds: integerFlag(flags, 'max-run-seconds', 7200), maxTotalTokens: integerFlag(flags, 'max-total-tokens', 0),
     plannerTurnSeconds: integerFlag(flags, 'planner-turn-seconds', 1800),
     ...(flags.has('base-pack') ? { basePack: readLibraryPack(required(flags, 'base-pack')) } : {}),
+    ...(flags.has('demand-file') ? { demand: readAutoLibraryDemand(required(flags, 'demand-file')) } : {}),
+    ...(flags.has('definition-targets') ? { definitionTargets: flags.get('definition-targets')!.split(',').map(name => name.trim()) } : {}),
   });
   return { schema: 'theorem-os.auto-library-cli.v1', phase: 'prepare', directory, modelInvoked: false, buildId: request.buildId,
     challengeId: request.challengeId, environment: request.environment, pool: request.pool, basePackDigest: request.basePackDigest };
@@ -76,39 +80,58 @@ function pack(flags: ReadonlyMap<string, string>) {
 }
 
 export async function autoLibrary(argv: string[]): Promise<number> {
-  const flags = parseFlags(argv, ['phase', 'directory', 'pool', 'challenge-file', 'base-pack', 'environment', 'output', 'run', ...prepareFlags]);
+  const flags = parseFlags(argv, ['phase', 'directory', 'pool', 'challenge-file', 'base-pack', 'environment', 'output', 'run',
+    'delivery', 'live', ...prepareFlags]);
   if (flags.has('help')) {
-    console.log('Usage: theorem-os auto-library --phase prepare|run|inspect|pack|usage|replay [options]\n'
+    console.log('Usage: theorem-os auto-library --phase prepare|demand|run|inspect|pack|usage|replay [options]\n'
       + 'prepare (offline): --directory DIR --challenge-id ID --challenge-file Challenge.lean --pool DIR --build-manifest FILE\n'
-      + '  [--task-file FILE] [--environment mathlib|standard] [--base-pack PACK.json] (the hand library after its exclusions)\n'
+      + '  [--task-file FILE] [--environment mathlib|standard|mathlib-4.8|openai-math] [--base-pack PACK.json] (the hand library after its exclusions)\n'
+      + '  [--demand-file FILE] (a frozen source-bound gap from the demand phase)\n'
+      + '  [--definition-targets Qualified.name,Other.name] (original definitions to solve)\n'
       + '  [--model deepseek-flash --effort max] (planner) [--prover-model M --prover-effort E] [--profile DIR] [--codex FILE]\n'
       + '  [--workers 4] [--coordination cooperative|independent] [--max-modules 1] [--max-rounds 3]\n'
       + '  [--max-run-seconds 7200] [--max-total-tokens 0] [--planner-turn-seconds 1800]\n'
       + '  [--prover-max-run-seconds 3600] [--prover-max-turns 200] [--prover-max-turn-seconds 180] [--prover-max-total-tokens 0]\n'
       + '  [--prepare-timeout-seconds 1800] (0 = unlimited for run, token and turn limits)\n'
+      + 'demand (offline): --run RESULT.json|state.json --delivery ID --output NEW_FILE\n'
+      + '  capture the selected current public gap and its typed lemma requests with their source identities.\n'
       + 'run --directory DIR: plan, check, prove, extract, recheck and publish modules; resumable. Calls the planner and solver models.\n'
       + 'inspect --directory DIR (offline): the saved build state.\n'
       + 'pack (offline): --pool DIR --challenge-file FILE --output PACK.json [--base-pack PACK.json] [--environment mathlib]\n'
       + '  the pack a challenge installs: the hand pack plus pool modules whose requirements and environment match.\n'
-      + 'usage (offline): --pool DIR --run RESULT.json|state.json: pool modules the run\'s solution imports, with trigger and cost.\n'
+      + 'usage (offline): --pool DIR --run RESULT.json|state.json [--live true]\n'
+      + '  report pool modules the run\'s solution imports; --live true also inspects current worker sources.\n'
       + 'replay --directory NEW_DIR (offline): preset planner and solver outputs checked with real Lean v4.33.0; no model calls.\n'
       + 'Pool modules are not excluded per challenge; each record names the problem that triggered it and what it cost.');
     return 0;
   }
   const phase = required(flags, 'phase');
   const allowed: Record<string, readonly string[]> = { prepare: ['directory', ...prepareFlags], run: ['directory'], inspect: ['directory'],
-    pack: ['pool', 'challenge-file', 'base-pack', 'environment', 'output'], usage: ['pool', 'run'], replay: ['directory'] };
+    demand: ['run', 'delivery', 'output'],
+    pack: ['pool', 'challenge-file', 'base-pack', 'environment', 'output'], usage: ['pool', 'run', 'live'], replay: ['directory'] };
   if (!Object.hasOwn(allowed, phase)) throw new Error('Unknown auto-library phase.');
   for (const name of flags.keys()) if (name !== 'phase' && !allowed[phase]!.includes(name)) throw new Error(`--${name} is not valid for --phase ${phase}`);
   let report: unknown, code = 0;
-  if (phase === 'prepare') report = prepare(flags, externalPath(required(flags, 'directory')));
+  if (phase === 'demand') {
+    const run = path.resolve(required(flags, 'run'));
+    const stateFile = run.endsWith('state.json') ? run : path.join(`${run}.runtime`, 'state.json');
+    const demand = captureAutoLibraryDemand(readSolverRunState(stateFile), required(flags, 'delivery'));
+    const output = externalPath(required(flags, 'output'));
+    if (fs.existsSync(output)) throw new Error('auto_library_demand_output_exists');
+    fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 });
+    writeMathJsonDurable(output, demand, 0o400);
+    report = { schema: 'theorem-os.auto-library-cli.v1', phase, modelInvoked: false, output, demand };
+  } else if (phase === 'prepare') report = prepare(flags, externalPath(required(flags, 'directory')));
   else if (phase === 'inspect') report = inspectAutoLibraryBuild(externalPath(required(flags, 'directory')));
   else if (phase === 'pack') report = pack(flags);
   else if (phase === 'usage') {
+    const live = flags.get('live');
+    if (live !== undefined && live !== 'true' && live !== 'false') throw new Error('--live must be true or false');
     const run = path.resolve(required(flags, 'run'));
     const stateFile = run.endsWith('state.json') ? run : path.join(`${run}.runtime`, 'state.json');
+    const input = { records: readAutoLibraryPool(externalPath(required(flags, 'pool'))), stateFile };
     report = { schema: 'theorem-os.auto-library-cli.v1', phase, modelInvoked: false,
-      ...autoLibraryRunUsage({ records: readAutoLibraryPool(externalPath(required(flags, 'pool'))), stateFile }) };
+      ...(live === 'true' ? autoLibraryLiveUsage(input) : autoLibraryRunUsage(input)) };
   } else if (phase === 'replay') {
     const { replayAutoLibrary } = await import('./autoLibraryReplay');
     report = await replayAutoLibrary(externalPath(required(flags, 'directory')), root);

@@ -108,7 +108,7 @@ export async function runResearchWorkers(input: {
   state: SolverRunState; workers: readonly ResearchWorker[]; access: ReadonlyMap<string, WorkerAccess>;
   modules: SolverModules; root: string; buildFile: string; taskText: string; executable: string; profile: string;
   signal: AbortSignal; deadline: number; maxTurns: number; maxTurnMs: number; maxTotalTokens: number; proofTimeoutMs?: number;
-  freshContinuationChecks?: readonly TaskProof[];
+  freshContinuationChecks?: readonly TaskProof[]; goalProgressReviewMs?: number;
   save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
 }): Promise<{ worktree: string; check: ProofCheck } | undefined> {
   const { state, modules, save } = input;

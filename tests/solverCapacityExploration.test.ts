@@ -302,6 +302,8 @@ describe('host exploration for spare cooperative capacity', () => {
     fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(lead)!), JSON.stringify({
       kind: 'plan', dispatchNonce: lead.planNonce, baseVersion: lead.planVersion,
       summary: 'Revise the exact consumer without adopting the obsolete candidate interface.', ...proposal,
+      researchDecisions: [{ deliveryId: state.cooperation!.deliveries!.at(-1)!.id, outcome: 'decline',
+        reason: 'This proposed interface is obsolete after the consumer revision.' }],
     }) + '\n');
     await cooperative.pulse();
     expect(events.filter(item => item.event === 'plan_published')).toHaveLength(1);

@@ -4,6 +4,7 @@ import { isAdvisoryTask, taskVersion, type CooperativeTask, type TaskRecord } fr
 import type { CooperationState } from './cooperationShared';
 import type { ProofRoute } from './proofRoutes';
 import { reviewGoalPaths } from './goalPathReview';
+import type { GoalPathReview } from './goalPathReview';
 
 const summaryLimit = 8, referenceLimit = 4;
 const reference = (task: CooperativeTask) => ({ taskId: task.id, taskDigest: taskVersion(task) });
@@ -39,8 +40,8 @@ export function createTaskApplicationEvidence(tasks: readonly TaskRecord[], opti
 }
 
 /** Make local proof packages and the original frontier visible even when optional history is omitted. */
-export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'groups' | 'proofRoutes' | 'failedTaskInputs' | 'goalPathStall'>,
-  environmentDigest?: string) {
+export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'groups' | 'proofRoutes' | 'failedTaskInputs' | 'goalPathStall' | 'goalProgress'>,
+  environmentDigest?: string, options: { goalPathReview?: GoalPathReview } = {}) {
   const continuation = buildProofContinuation(state.tasks, { groups: state.groups, proofRoutes: state.proofRoutes, environmentDigest });
   const byId = new Map(state.tasks.map(node => [node.task.id, node]));
   const recorded = createRecordedTaskSettlement(state.tasks, { proofRoutes: state.proofRoutes, environmentDigest });
@@ -89,7 +90,7 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
       requiredChange: 'For a retry of these recorded inputs, identify a changed proof step or method and its discriminating check, or the exact new premise/evidence; otherwise retain the gap and reopening condition.' };
   });
   const { evidence: _evidence, acceptance: _acceptance, stallDigest, stalledTaskIds: _tasks, stalledPathTaskIds: _path, ...review } =
-    reviewGoalPaths(state.tasks, { groups: state.groups, proofRoutes: state.proofRoutes, environmentDigest });
+    options.goalPathReview ?? reviewGoalPaths(state.tasks, { groups: state.groups, proofRoutes: state.proofRoutes, environmentDigest });
   // The Lead's earlier answers to this same stall: decline reasons, and turns that left it unanswered.
   const stall = stallDigest && state.goalPathStall?.active && state.goalPathStall.digest === stallDigest ? state.goalPathStall : undefined;
   const goalPath = { ...review,
@@ -99,6 +100,11 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
   return { evidence: 'recorded-not-replayed' as const, acceptance: 'not-assessed' as const,
     // Whether each goal's frontier can run now, and host-proposed decisions for a goal that cannot.
     goalPath,
+    ...(state.goalProgress?.pending ? { progressReview: { ...state.goalProgress.pending,
+      evidence: 'started-worker-execution-without-new-recorded-checked-inputs' as const,
+      goals: state.goalProgress.goals.filter(goal => state.goalProgress!.pending!.goalKeys.includes(goal.key))
+        .map(({ taskId, proofPath, theoremName, activeMs, lastProgressAt }) =>
+          ({ taskId, proofPath, theoremName, activeMs, lastProgressAt })) } } : {}),
     goals: continuation.goals.slice(0, referenceLimit).map(goal => ({ ...ref(goal.taskId), recordedProof: goal.recordedProof,
       frontier: goal.frontier.slice(0, referenceLimit).map(ref), omittedFrontier: Math.max(0, goal.frontier.length - referenceLimit),
       missingDependencies: goal.missingDependencies.slice(0, referenceLimit),
@@ -119,6 +125,12 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
 export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlanningEvidence>) {
   const goalPath = evidence.goalPath;
   return 'Current route applications and remaining obligations (recorded, not proof acceptance):\n' + JSON.stringify(evidence) +
+    (evidence.progressReview ? '\nTeam progress review ' + evidence.progressReview.id + ': these original goals have accumulated worker execution ' +
+      'without new recorded checked inputs on their own paths. Review the remaining mathematical gap, dependencies, role allocation and route. ' +
+      'Publish an ordinary validated plan revision and include "progressReview":{"id":"' + evidence.progressReview.id +
+      '","reason":"evidence for the chosen route or change, and the next discriminating check"} beside baseVersion. ' +
+      'You may retain a useful long proof with a specific reason and next check. Elapsed execution alone does not establish failure, ' +
+      'and it does not require interrupting a worker. A checkpoint, an unaccepted plan or a description edit does not answer this review.' : '') +
     (goalPath.stalledGoalIds.length ? '\nStalled original goals (goalPath.goals[].stalled): no frontier input of these goals can run, ' +
       'so other workers\' progress does not advance them. Answer every stalled frontier input in this revision with ' +
       '"goalPath":{"adopt":["CANDIDATE_ID"],"decline":[{"taskId":"INPUT_ID","reason":"..."}]} beside baseVersion. ' +

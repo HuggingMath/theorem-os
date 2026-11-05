@@ -69,7 +69,12 @@ describe('Lead scheduling checkpoint control responses', () => {
   const graph = () => ({ tasks: state.cooperation!.tasks.map(node => node.task),
     groups: state.cooperation!.groups!.map(route => route.group) });
   const notes = () => path.join(workers[0].worktree, 'RESEARCH.md');
-  const write = (response: unknown) => fs.writeFileSync(notes(), '```math-plan\n' + JSON.stringify(response) + '\n```\n');
+  const planText = (response: unknown) => '```math-plan\n' + JSON.stringify(response) + '\n```\n';
+  const write = (response: unknown) => fs.writeFileSync(notes(), planText(response));
+  // A validated plan answers each shown research finding.
+  const decide = (outcome: 'adopt' | 'decline') => ({ researchDecisions: [{ deliveryId: 'proposal-delivery', outcome,
+    reason: outcome === 'adopt' ? 'The typed bridge closes the route.' : 'The bridge is not needed yet.',
+    ...(outcome === 'adopt' ? { taskIds: ['bridge'] } : {}) }] });
   const start = async (baseline?: string | null) => {
     if (baseline === null) fs.rmSync(notes(), { force: true });
     else if (baseline === undefined) write(graph());
@@ -140,7 +145,7 @@ describe('Lead scheduling checkpoint control responses', () => {
   });
 
   it('keeps initial dispatch response validation even if an existing graph is present', async () => {
-    const action = await start();
+    const action = await start(planText({ ...graph(), ...decide('decline') }));
     action.initialPlanNonce = 'initial-dispatch-with-bootstrap-graph';
     await checkpoint(action);
     // Ordinary validation accepts the inherited graph; the unchanged-draft shortcut is not taken.
@@ -149,18 +154,18 @@ describe('Lead scheduling checkpoint control responses', () => {
   });
 
   it.each(['final', 'request-failure', 'checkpoint'] as const)('still validates an inherited graph delivered as %s', async kind => {
-    const action = await start(), commit = commitSolverSources(problem, workers[0].worktree);
+    const action = await start(planText({ ...graph(), ...decide('decline') })), commit = commitSolverSources(problem, workers[0].worktree);
     cooperative.deactivate(workers[0]);
     await cooperative.deliver(workers[0], action, commit, kind !== 'final', kind === 'final' ? 'checkpoint' : kind);
     expect(events.some(item => item.event === 'plan_updated')).toBe(true);
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(false);
-    // The unadopted proposal stays a planning input for the next Lead decision.
+    // The declined proposal is not added to the plan.
     expect(pendingProposals()).toHaveLength(1);
   });
 
   it('accepts a changed complete checkpoint plan as a new unproved obligation', async () => {
     const action = await start();
-    write({ ...graph(), tasks: [...graph().tasks, proposal] });
+    write({ ...graph(), tasks: [...graph().tasks, proposal], ...decide('adopt') });
     await checkpoint(action);
     expect(state.cooperation!.tasks.find(node => node.task.id === proposal.id)).toMatchObject({ status: 'pending', task: proposal });
     expect(state.cooperation!.tasks.find(node => node.task.id === proposal.id)?.integratedCheck).toBeUndefined();
@@ -172,7 +177,7 @@ describe('Lead scheduling checkpoint control responses', () => {
     const action = await start(), inherited = fs.readFileSync(notes(), 'utf8');
     fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify({
       kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
-      ...graph(), tasks: [...graph().tasks, proposal],
+      ...graph(), tasks: [...graph().tasks, proposal], ...decide('adopt'),
     }) + '\n');
     await cooperative.pulse();
     expect(state.cooperation!.planPublication).toBeDefined();

@@ -79,7 +79,7 @@ function researchDeliveryInput(delivery: DeliveryRecord) {
   return { statement: delivery.statement, premises: delivery.premises, dependencies: references(delivery.dependencies ?? []),
     remainingObligations: delivery.remainingObligations, summary: delivery.summary,
     findingDigest: typeof delivery.finding === 'string' ? mathDigest(delivery.finding) : delivery.findingDigest,
-    evidenceRefs: [...new Set(delivery.evidenceRefs)].sort(), mathematicalGap: delivery.mathematicalGap,
+    evidenceRefs: [...new Set(delivery.evidenceRefs)].sort(), mathematicalGap: delivery.mathematicalGap, sourceUses: delivery.sourceUses,
     lemmaRequests: delivery.lemmaRequests?.map(taskVersion).sort() };
 }
 
