@@ -182,6 +182,21 @@ describe('persistent conversations use saved owned task context', () => {
     expect(() => service.create('alice', { formalizationId: crypto.randomUUID(), runId: run.id })).toThrow('不存在');
   });
 
+  it('opens a Lean run with its request and its source as a Lean block, titled like the run', () => {
+    const { service, run } = fixture();
+    run.title = '帮我证明高斯定理'; run.task = '帮我证明高斯定理';
+    run.source = 'namespace Tutorial\n\ntheorem add_zero (n : Nat) : n + 0 = n := by\n  sorry\n\nend Tutorial\n';
+    const created = service.create('alice', { runId: run.id });
+    expect(created.title).toBe('帮我证明高斯定理');
+    expect(created.messages[0]?.text).toBe('帮我证明高斯定理\n\n```lean\nnamespace Tutorial\n\ntheorem add_zero (n : Nat) : n + 0 = n := by\n  sorry\n\nend Tutorial\n```');
+    // A source holding a fence of its own gets a longer one, so the block cannot end early.
+    const { service: other, run: fenced } = fixture();
+    fenced.task = ''; fenced.source = '/-- ```\nexample\n``` -/\ntheorem t : True := trivial';
+    const block = other.create('alice', { runId: fenced.id });
+    expect(block.title).toBe('Original problem');
+    expect(block.messages[0]?.text).toBe('````lean\n/-- ```\nexample\n``` -/\ntheorem t : True := trivial\n````');
+  });
+
   it('retains history across restart and supplies original, previous answer and current evidence to follow-ups', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-conversations-'));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));

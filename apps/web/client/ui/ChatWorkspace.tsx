@@ -215,7 +215,7 @@ function ChatHistory({ items, selectedId, onOpen }: ChatHistoryProps) {
   return <nav class="chat-history" aria-label={t("对话历史")}>
     <p class="chat-history-heading">{t("对话")}</p>
     {items.length ? items.map(item => <a key={item.id} href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
-      onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}><span>{item.title}</span>{item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>)
+      onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}><span translate={false}>{item.title}</span>{item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>)
       : <p class="chat-history-empty">{t("新对话会保存在这里")}</p>}
   </nav>;
 }

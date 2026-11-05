@@ -116,8 +116,13 @@ export class WebConversations {
     const runId = run?.id ?? formalization?.runId;
     const existing = this.list(owner).find(item => formalizationId && item.formalizationId === formalizationId || runId && item.runId === runId);
     if (existing) return this.read(owner, existing.id);
-    const original = formalization?.original ?? run?.formalization?.original ?? run!.source, at = now();
-    const conversation: WebConversation = { id: crypto.randomUUID(), title: original.replace(/\s+/gu, ' ').slice(0, 80),
+    // A run started from Lean has no natural-language original: it opens with its request and the source as a Lean block,
+    // titled like the run, instead of the source flattened into prose.
+    const natural = formalization?.original ?? run?.formalization?.original, at = now();
+    const fence = '`'.repeat(Math.max(3, ...[...(run?.source ?? '').matchAll(/`+/gu)].map(match => match[0].length + 1)));
+    const original = natural ?? [run!.task.trim(), `${fence}lean\n${run!.source.replace(/\s+$/u, '')}\n${fence}`].filter(Boolean).join('\n\n');
+    const title = natural ?? (run!.title || run!.task || run!.source);
+    const conversation: WebConversation = { id: crypto.randomUUID(), title: title.replace(/\s+/gu, ' ').trim().slice(0, 80),
       createdAt: at, updatedAt: at, ...(formalizationId ? { formalizationId } : {}), ...(runId ? { runId } : {}), messages: [
         { id: crypto.randomUUID(), role: 'user', kind: 'text', text: original, createdAt: at, status: 'complete' },
         { id: crypto.randomUUID(), role: 'assistant', kind: 'task', text: '', createdAt: at, status: 'complete' },
