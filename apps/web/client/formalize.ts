@@ -145,8 +145,8 @@ function drawCapabilities() {
   $('#formalize-key-note').textContent = caps.key === 'saved' ? t('留空使用已保存的 Key；填写则仅用于这次生成。')
     : caps.key === 'server' ? t('留空使用服务器 Key；填写则仅用于这次生成。') : t('填写当前服务商的 Key，仅用于这次生成。');
   key.required = !embedded && caps.key === 'required';
-  $('#formalize-budget').textContent = t('固定模型 {0} · 最多 {1} 分钟 · {2} Token · {3} 轮写作 · {4} 位审核模型', caps.model,
-    Math.ceil(caps.limits.maxRunSeconds / 60), caps.limits.maxTotalTokens.toLocaleString(localeTag), caps.limits.maxRounds, caps.limits.reviewers);
+  $('#formalize-budget').textContent = t('固定模型 {0} · 最多 {1} 分钟 · Token 不限 · {2} 轮写作 · {3} 位审核模型', caps.model,
+    Math.ceil(caps.limits.maxRunSeconds / 60), caps.limits.maxRounds, caps.limits.reviewers);
   if (embedded) $('#formalize-budget').append(document.createTextNode(' ' + t('以上为形式化预算；随后证明研究最多 5 分钟、5 次模型调用，共用本次 Key。')));
   const note = $('#formalize-unavailable'); note.hidden = caps.available;
   note.textContent = caps.reason === 'provider' ? t('当前未配置支持形式化的服务商，请联系管理员配置。') : t('当前运行环境尚未支持在线形式化。已有结果仍可查看。');

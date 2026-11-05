@@ -24,7 +24,7 @@ export const formalizationWorkerInputSchema = z.object({
   effort: z.enum(['low', 'high', 'max']), apiKey: z.string().regex(/^[\x21-\x7e]{8,4096}$/u),
   provider: z.object({ id: z.literal(SUB2API_PROVIDER.id), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
   maxRunSeconds: z.number().int().positive().max(webFormalizationLimits.maxRunSeconds),
-  maxTotalTokens: z.number().int().positive().max(webFormalizationLimits.maxTotalTokens),
+  maxTotalTokens: z.literal(webFormalizationLimits.maxTotalTokens),
   maxRounds: z.number().int().positive().max(webFormalizationLimits.maxRounds),
   maxPlanningRounds: z.number().int().positive().max(webFormalizationLimits.maxPlanningRounds),
   reviewers: z.literal(webFormalizationLimits.reviewers),

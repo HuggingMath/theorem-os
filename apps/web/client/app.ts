@@ -167,6 +167,7 @@ async function loadNaturalResearch() {
       renderRunList(); renderDetail(changed); renderShell();
       if (changed) setMobileView('compose');
     },
+    onConversation: renderShell,
     onArtifact: openChatArtifact,
     onLean: () => { chooseEntry('lean'); startDraft(); },
     onGuidance: (run, text?: string, taskId?: string) => openGuidance(run, text, undefined, taskId),
@@ -2103,7 +2104,8 @@ const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 function renderShell() {
   const session = state.session, ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
   const run = currentRun(), running = state.runs.filter(activeRun);
-  const title = documentTitle(baseTitle, running.length, state.unseenRuns.size, running.filter(waitsForOwner).length, run?.title);
+  const named = run?.title ?? (researchEntry === 'natural' ? chatWorkspace?.selected?.title : undefined);
+  const title = documentTitle(baseTitle, running.length, state.unseenRuns.size, running.filter(waitsForOwner).length, named);
   if (document.title !== title) document.title = title;
   const live = run && activeRun(run)
     ? { label: state.cancelling.has(run.id) ? t('正在取消') : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }

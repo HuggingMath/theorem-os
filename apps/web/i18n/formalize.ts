@@ -72,7 +72,7 @@ export const formalize: Record<string, string> = {
   '留空使用已保存的 Key；填写则仅用于这次生成。': 'Leave blank to use your saved key, or enter a key for this generation only.',
   '留空使用服务器 Key；填写则仅用于这次生成。': 'Leave blank to use the server key, or enter a key for this generation only.',
   '填写当前服务商的 Key，仅用于这次生成。': 'Enter a key for the current provider. It is used for this generation only.',
-  '固定模型 {0} · 最多 {1} 分钟 · {2} Token · {3} 轮写作 · {4} 位审核模型': 'Fixed model {0} · Up to {1} minutes · {2} tokens · {3} writing rounds · {4} reviewers',
+  '固定模型 {0} · 最多 {1} 分钟 · Token 不限 · {2} 轮写作 · {3} 位审核模型': 'Fixed model {0} · Up to {1} minutes · No token limit · {2} writing rounds · {3} reviewers',
   '当前未配置支持形式化的服务商，请联系管理员配置。': 'No supported formalization provider is configured. Ask an administrator to configure one.',
   '当前运行环境尚未支持在线形式化。已有结果仍可查看。': 'This runtime does not yet support online formalization. Existing results are still available.',
   '还没有形式化记录。': 'No formalizations yet.',

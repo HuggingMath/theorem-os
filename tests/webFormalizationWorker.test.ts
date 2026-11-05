@@ -19,7 +19,7 @@ describe('formalization worker input and protocol', () => {
     const request = input();
     expect(formalizationWorkerInputSchema.parse(request)).toEqual(request);
     for (const override of [{ original: ' ' }, { original: '原'.repeat(11_000) }, { apiKey: 'bad\nkey' },
-      { model: 'other' }, { reviewers: 1 }, { maxRounds: 0 }, { maxPlanningRounds: 0 }, { maxTotalTokens: 0 },
+      { model: 'other' }, { reviewers: 1 }, { maxRounds: 0 }, { maxPlanningRounds: 0 }, { maxTotalTokens: 200_000 },
       { maxRunSeconds: webFormalizationLimits.maxRunSeconds + 1 }, { profile: '/private/profile' }])
       expect(formalizationWorkerInputSchema.safeParse({ ...request, ...override }).success).toBe(false);
   });

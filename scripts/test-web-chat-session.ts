@@ -410,9 +410,15 @@ try {
         ['保留成果', '没有保存可用的 Lean 陈述。'], ['下一步', '修改题目后重新发送；不会自动重试。'],
         ['诊断编号', 'formalization_token_limit']]);
       assert.equal(runs.length, proofs, 'A failed formalization starts no proof');
+      // With no proof run, the page is named after the conversation, as a run would name it.
+      const named = [...(await conversation(page)).title];
+      const pageTitle = `${named.length > 30 ? `${named.slice(0, 29).join('')}…` : named.join('')} · TheoremOS`;
+      assert.equal(await page.title(), pageTitle, 'A conversation without a run names the page');
+      await page.reload(); await details.waitFor();
+      assert.equal(await page.title(), pageTitle, 'A reopened conversation names the page');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Failure details fit the width');
       await page.screenshot({ path: path.join(output, `formalization-failure-${width}.png`), fullPage: true });
-      mark(`${width}px: a failed formalization shows stage, reason, kept work, next step and diagnostic code`);
+      mark(`${width}px: a failed formalization shows stage, reason, kept work, next step and diagnostic code, and names the page after its conversation`);
     } finally { await context.close(); }
   }
   assert.deepEqual(errors, []);

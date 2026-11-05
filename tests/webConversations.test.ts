@@ -197,6 +197,22 @@ describe('persistent conversations use saved owned task context', () => {
     expect(block.messages[0]?.text).toBe('````lean\n/-- ```\nexample\n``` -/\ntheorem t : True := trivial\n````');
   });
 
+  it('rewrites a Lean run conversation saved with its raw source and the title flattened from it', () => {
+    const { service, run, storage } = fixture();
+    run.title = '帮我证明高斯定理'; run.task = '帮我证明高斯定理';
+    run.source = 'namespace Tutorial\n\ntheorem add_zero (n : Nat) : n + 0 = n := by\n  sorry\n\nend Tutorial\n';
+    const created = service.create('alice', { runId: run.id }), stored = storedConversation(storage, created.id);
+    Object.assign(stored, { title: run.source.replace(/\s+/gu, ' ').slice(0, 80) }); stored.messages[0]!.text = run.source;
+    storage.saveRecord(['owners', mathDigest('alice'), 'conversations', `${created.id}.json`], stored);
+    expect(service.list('alice')[0]?.title).toBe('帮我证明高斯定理');
+    expect(storedConversation(storage, created.id).messages[0]?.text).toBe(created.messages[0]?.text);
+    // A title that was not flattened from the source stays.
+    Object.assign(stored, { title: 'My own name' }); stored.messages[0]!.text = run.source;
+    storage.saveRecord(['owners', mathDigest('alice'), 'conversations', `${created.id}.json`], stored);
+    const read = service.read('alice', created.id);
+    expect([read.title, read.messages[0]?.text]).toEqual(['My own name', created.messages[0]?.text]);
+  });
+
   it('retains history across restart and supplies original, previous answer and current evidence to follow-ups', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-conversations-'));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));

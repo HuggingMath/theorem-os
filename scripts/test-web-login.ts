@@ -157,7 +157,15 @@ try {
   assert.equal((await (await page.request.get(origin + '/api/session')).json()).account.passwordSet, true);
   await page.click('#logout');
   await page.waitForURL(/\/login\.html$/u);
+  // Until the page has its session, the password form cannot be sent: it would carry no session cookie or CSRF token.
+  let releaseSession!: () => void;
+  const sessionHeld = new Promise<void>(resolve => { releaseSession = resolve; });
+  await page.route('**/api/session', async route => { await sessionHeld; await route.continue(); }, { times: 1 });
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.click('#use-password');
+  assert.equal(await page.locator('#password-submit').isDisabled(), true, 'The password form can be sent before the page has its session');
+  releaseSession();
+  await page.locator('#password-submit:enabled').waitFor();
   await page.fill('#password-email', 'alice@example.org');
   await page.fill('#login-password', 'wrong-password');
   await page.click('#password-submit');
@@ -173,7 +181,7 @@ try {
   await page.waitForURL(/\/login\.html$/u);
   await page.goto(origin);
   await page.waitForURL(/\/login\.html$/u);
-  mark('the account dialog sets a password; a wrong password fails and the right one opens the same account');
+  mark('the account dialog sets a password; the password form waits for the session, a wrong password fails and the right one opens the same account');
 
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 760 });

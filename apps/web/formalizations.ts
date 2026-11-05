@@ -4,7 +4,7 @@ import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
 import { webLimits } from './config';
 import { formalizationReport } from './formalizationReport';
-import { webFormalizationLimits, webFormalizationReason, type WebFormalization, type WebFormalizationRequest,
+import { webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization, type WebFormalizationRequest,
   type WorkerFormalizationInput, type WorkerFormalizationMessage } from './formalizationTypes';
 import type { WebRunner } from './runner';
 import type { WebProvider } from './shared';
@@ -34,7 +34,7 @@ export function verifyWebFormalizationEvidence(value: unknown, formalization: We
     request.model !== formalization.model || request.effort !== formalization.effort ||
     request.execution !== 'model' || evidence.execution !== 'model' || !evidence.modelInvoked ||
     request.maxRounds !== webFormalizationLimits.maxRounds || request.maxRunSeconds !== webFormalizationLimits.maxRunSeconds ||
-    request.maxTotalTokens !== webFormalizationLimits.maxTotalTokens || !workflow ||
+    !webFormalizationTokenBudgets.includes(request.maxTotalTokens) || !workflow ||
     workflow.maxPlanningRounds !== webFormalizationLimits.maxPlanningRounds || workflow.reviewers.length !== webFormalizationLimits.reviewers ||
     [workflow.planner, workflow.backtranslator, ...workflow.reviewers].some(role => role.model !== request.model ||
       role.effort !== request.effort || role.profile !== request.profile || role.executable !== request.executable))

@@ -241,6 +241,19 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await (await request(alice, `/api/formalizations/${two.id}`)).json()).formalization.status).toBe('error');
   });
 
+  it('sets no token budget and still accepts evidence generated under the earlier 200,000-token budget', async () => {
+    const alice = await client(), current = await create(alice), pending = runner.pending.at(-1)!;
+    expect(pending.input.maxTotalTokens).toBe(0);
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence({ ...pending.input, maxTotalTokens: 200_000 }) });
+    pending.resolve(); await settle();
+    expect((await (await request(alice, `/api/formalizations/${current.id}`)).json()).formalization.status).toBe('review');
+    const other = await create(alice), next = runner.pending.at(-1)!;
+    next.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence({ ...next.input, maxTotalTokens: 150_000 }) });
+    next.resolve(); await settle();
+    expect((await (await request(alice, `/api/formalizations/${other.id}`)).json()).formalization)
+      .toMatchObject({ status: 'error', reason: 'formalization_binding_mismatch' });
+  });
+
   it('rejects otherwise valid evidence that omits the production fidelity review policy', async () => {
     const alice = await client(), value = await create(alice), pending = runner.pending.at(-1)!;
     const evidence = webFormalizationEvidence(pending.input);

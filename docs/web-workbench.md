@@ -579,6 +579,6 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 API 为 `GET/POST /api/formalizations`、`GET/DELETE /api/formalizations/:id`、`POST /api/formalizations/:id/cancel` 和 `POST /api/formalizations/:id/confirm`（含 `evidenceSha256`）。写操作沿用会话、归属与 CSRF 检查。凭据只驻留执行输入，服务端记录不包含 Key；账户已保存 Key 和管理员配置 Key 可直接使用。任务与证据保存于所有者目录，服务重启会把未完成任务标为中断，不自动重跑。
 
-当前生成固定使用 Sub2API 的 `deepseek-flash`，每次上限 30 分钟、200,000 Token、3 轮候选与 2 轮规划，使用两位独立 Reviewer；每个账号一次一个任务，全局单并发、最多 8 个等待或执行任务，每个账号最多保留 20 条记录。部署须同时重新构建 Web 静态产物和 worker 镜像，镜像 entrypoint 新增 `formalize` 分支；没有对应 runner 或 gateway 时页面说明不可用。原 CLI 与离线形式化报告保持独立。
+当前生成固定使用 Sub2API 的 `deepseek-flash`，每次上限 30 分钟、3 轮候选与 2 轮规划，不设 Token 上限（2026-11-05 之前的记录按 200,000 Token 生成，证据仍可验证），使用两位独立 Reviewer；每个账号一次一个任务，全局单并发、最多 8 个等待或执行任务，每个账号最多保留 20 条记录。部署须同时重新构建 Web 静态产物和 worker 镜像，镜像 entrypoint 新增 `formalize` 分支；没有对应 runner 或 gateway 时页面说明不可用。原 CLI 与离线形式化报告保持独立。
 
 手动形式化工具中，自然语言原文或证明环境修改后，旧结果的确认和继续入口不可用，须重新生成并确认。选择历史记录时恢复其原文和环境，替换未保存输入前需确认。解题任务同时携带确认原文和对应 Lean 陈述，独立验收仍检查冻结的完整 Lean 原题。

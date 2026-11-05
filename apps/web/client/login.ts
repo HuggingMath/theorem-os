@@ -46,7 +46,8 @@ async function start() {
   if (session.auth !== 'email' || session.account) { location.replace(workbench); return; }
   // Signed out, the workbench is not loaded at all, so the tab's remembered API Key is cleared here.
   forgetKey(() => sessionStorage);
-  csrf = session.csrfToken;
+  // The password form waits for the session cookie and CSRF token; sent earlier, it reads as an expired page.
+  csrf = session.csrfToken; passwordSubmit.disabled = false;
   await loadCaptcha();
 }
 /** An expired login-page session is replaced; the visitor only has to repeat the current step. */

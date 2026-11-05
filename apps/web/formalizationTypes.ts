@@ -1,6 +1,7 @@
 import type { WebEnvironment, WebFormalizationReport, WebProvider } from './shared';
 
-export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 200_000,
+// maxTotalTokens 0 sets no token budget: the time limit and rounds bound a generation.
+export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 0,
   maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 1, recordsPerOwner: 20 });
 export const webFormalizationPhases = ['queued', 'preparing', 'planning', 'generating', 'compiling', 'translating', 'reviewing', 'finishing'] as const;
 export type WebFormalizationProgress = { phase: typeof webFormalizationPhases[number]; round?: number; tokens?: number; updatedAt?: string };
@@ -20,4 +21,6 @@ export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve'> & 
 export type WorkerFormalizationMessage = { type: 'progress'; progress: WebFormalizationProgress }
   | { type: 'result'; status: 'approved'; evidence: unknown }
   | { type: 'result'; status: 'exhausted' | 'error'; reason: string };
+/** Generations before 2026-11-05 ran under a 200,000-token budget; their evidence stays valid. */
+export const webFormalizationTokenBudgets: readonly number[] = [webFormalizationLimits.maxTotalTokens, 200_000];
 export const webFormalizationReason = /^(?:formalization|math|lean_task)_[a-z0-9_]{1,100}$/u;

@@ -15,6 +15,8 @@ type Options = {
   draftScope: string;
   keyRequired(providerId: string): boolean;
   onSelection(run?: WebRun): void;
+  /** A conversation was opened or replaced; one without a run still names the page. */
+  onConversation(): void;
   /** `attached` names the conversation of a run already on screen, which the reader may still be browsing to from the history. */
   onNavigate(id: string, mode: 'push' | 'replace', attached?: boolean): void;
   onArtifact(kind: 'roadmap' | 'original' | 'source', target?: { taskId?: string; messageId?: string }): void;
@@ -109,14 +111,14 @@ export class ChatSession {
     if (reset) { this.drafts.set('home', ''); this.rememberDraft(); }
     document.body.dataset.chatArtifact = '';
     document.body.dataset.outputOpen = 'false';
-    this.draw();
+    this.draw(); this.options.onConversation();
   }
   fillOriginal(original: string) { this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
   private setConversation(conversation: WebConversation) {
     this.reading.select(conversation.id);
-    this.conversation = conversation; this.currentId = conversation.id;
+    this.conversation = conversation; this.currentId = conversation.id; this.options.onConversation();
     const pending = this.pendingGuidance;
     const status = pending && conversation.messages.find(message => message.guidance?.input.id === pending.id)?.guidance?.receipt?.status;
     if (pending && status && status !== 'unknown') {
