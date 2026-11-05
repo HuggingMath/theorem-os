@@ -4,6 +4,7 @@ import {
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
+import { workbenchReturn } from '../shared';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../share';
@@ -233,8 +234,9 @@ const linkedRun = new URLSearchParams(location.search).get('run');
 const sampleAddress = '?sample';
 let sampleLink = location.search === sampleAddress;
 let formalizationLink = new URLSearchParams(location.search).get('formalization');
-// A run link opened while signed out goes through login.html?run=<id>, which returns to this address with the same run.
-const loginAddress = () => linkedRun && runIdPattern.test(linkedRun) ? `login.html?run=${linkedRun}` : 'login.html';
+// When the session ends, the login page keeps the run or conversation open now (login.html?run=<id>, ?chat=<id>) and
+// returns to it.
+const loginAddress = () => `login.html${workbenchReturn(location.search)}`;
 // The root address opens a new problem; explicit run and sample links still open their records.
 state.composing = !linkedRun && !sampleLink;
 if (linkedRun !== null && runIdPattern.test(linkedRun))

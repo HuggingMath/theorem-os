@@ -9,7 +9,7 @@ import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, w
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
 import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEffort, type WebEnvironment,
-  type WebExplanationLanguage, type WebExplanationOverview, type WebProvider, type WebRun, type WebRunInput, type WebSession } from './shared';
+  type WebExplanationLanguage, type WebExplanationOverview, type WebProvider, type WebRun, type WebRunInput, type WebSession, workbenchReturn } from './shared';
 import { researchModulePlanSchema } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
@@ -883,10 +883,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       }
       if (!['GET', 'HEAD'].includes(request.method || '')) throw new HttpError(405, '请求方法不受支持。');
       // A signed-out visitor goes straight to the login page instead of loading the workbench only to be sent there;
-      // a run link keeps its run (login.html?run=<id>) so signing in returns to it.
+      // a run or conversation link keeps its record (login.html?run=<id>, ?chat=<id>) so signing in returns to it.
       if (auth && ['/', '/index.html'].includes(url.pathname) && !cookieSession(request)?.account) {
-        const run = url.searchParams.get('run');
-        response.writeHead(302, { Location: run && /^[a-f0-9-]{1,36}$/u.test(run) ? `/login.html?run=${run}` : '/login.html' });
+        response.writeHead(302, { Location: `/login.html${workbenchReturn(url.search)}` });
         response.end(); return;
       }
       const relative = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';

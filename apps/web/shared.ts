@@ -380,3 +380,12 @@ export type WebAdminOverview = {
   /** False when the service has no allowlist file, so only the deployment configuration can change who signs in. */
   editable: boolean;
 };
+
+/** The run or conversation a workbench address names (`?run=<id>` or `?chat=<id>`), kept through the login page so signing
+ * in returns to it. Anything else, or a malformed id, returns to the plain workbench. */
+export function workbenchReturn(search: string): string {
+  const params = new URLSearchParams(search), run = params.get('run'), chat = params.get('chat');
+  if (run && /^[a-f0-9-]{1,36}$/u.test(run)) return `?run=${run}`;
+  if (chat && /^[a-f0-9-]{36}$/u.test(chat)) return `?chat=${chat}`;
+  return '';
+}

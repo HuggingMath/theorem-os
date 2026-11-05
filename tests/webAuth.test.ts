@@ -115,12 +115,13 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     expect(mail).toHaveLength(1);
   });
 
-  it('sends a signed-out visitor from the workbench address straight to the login page, keeping a run link', async () => {
+  it('sends a signed-out visitor from the workbench address straight to the login page, keeping a run or conversation link', async () => {
     fs.writeFileSync(path.join(root, 'index.html'), '<!doctype html><title>workbench</title>');
     const page = (route: string, client?: Client) => fetch(`${baseUrl}${route}`, { redirect: 'manual',
       headers: client ? { Cookie: client.cookie } : {} });
     for (const [route, location] of [['/', '/login.html'], ['/index.html', '/login.html'], ['/?run=0123abcd-ef', '/login.html?run=0123abcd-ef'],
-      ['/?run=../x', '/login.html'], ['/?chat=abc', '/login.html']]) {
+      ['/?run=../x', '/login.html'], ['/?chat=abc', '/login.html'],
+      ['/?chat=0123abcd-0123-4abc-8def-0123456789ab', '/login.html?chat=0123abcd-0123-4abc-8def-0123456789ab']]) {
       const response = await page(route);
       expect(response.status, route).toBe(302);
       expect(response.headers.get('location'), route).toBe(location);

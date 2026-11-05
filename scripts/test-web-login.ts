@@ -125,6 +125,17 @@ try {
   await page.locator(`#run-list [data-run-id="${older}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
   mark('a completion mail links to its run, and the link still opens that run after the login page');
 
+  // A session that ends while a conversation is open keeps that conversation through the login page.
+  await page.waitForURL(url => url.searchParams.has('chat'));
+  const chatAddress = new URL(page.url()).search, signedIn = await page.context().cookies();
+  await page.context().clearCookies();
+  await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
+  await page.waitForURL(url => url.pathname === '/login.html' && url.search === chatAddress);
+  await page.context().addCookies(signedIn);
+  await page.reload();
+  await page.waitForURL(url => workbench(url) && url.search === chatAddress);
+  mark('a session that ends on an open conversation returns to that conversation after the login page');
+
   await page.click('#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   assert.equal(await page.locator('#completion-email').isChecked(), true, 'Completion mail starts off');

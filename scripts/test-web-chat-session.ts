@@ -279,6 +279,10 @@ try {
       await credentials(page); await page.locator('#formalize-start').click();
       await page.getByText('本地测试：暂时不可用', { exact: true }).waitFor();
       assert.equal(await page.locator('#formalize-original').inputValue(), draft, 'Failed HTTP send retains the unsent draft');
+      const read = page.waitForResponse(response => response.url().endsWith(`/api/conversations/${id}`) && response.ok());
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await read;
+      await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 150)));
+      assert.equal(await page.getByText('本地测试：暂时不可用', { exact: true }).count(), 1, 'A later successful read keeps the failed send in view');
       holdAnswer = true; await credentials(page); await page.locator('#formalize-start').click();
       await page.locator('#chat-stop').waitFor(); await page.locator('#chat-stop').click();
       await page.waitForFunction(async id => {
@@ -425,6 +429,17 @@ try {
         await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
         await eventually(() => reads.length === 1, 'Returning to the tab reads the conversation at once');
         mark('an idle conversation polls slowly and returning to the tab refreshes it at once');
+        // A read that fails while the network is down says so; the read after the connection returns clears it.
+        let dropped = false;
+        await page.route(`**/api/conversations/${id}`, route => { dropped = true; return route.abort('internetdisconnected'); }, { times: 1 });
+        // The refresh started above may still be running, and a refresh never overlaps another; ask until one reaches the network.
+        for (let attempt = 0; !dropped && attempt < 50; attempt++) {
+          await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await page.waitForTimeout(200);
+        }
+        await page.locator('#formalize-error').filter({ hasText: '无法连接服务器' }).waitFor();
+        await page.evaluate(() => window.dispatchEvent(new Event('online')));
+        await page.locator('#formalize-error').waitFor({ state: 'detached' });
+        mark('a failed background read shows until the connection returns, and the next read clears it');
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Failure details fit the width');
       await page.screenshot({ path: path.join(output, `formalization-failure-${width}.png`), fullPage: true });

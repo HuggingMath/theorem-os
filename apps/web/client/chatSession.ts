@@ -43,6 +43,8 @@ export class ChatSession {
   private loading = false;
   private submitting = false;
   private error = '';
+  // A failed read shows until a later read succeeds; a failed send, stop or guidance keeps `error` until the next action.
+  private readError = '';
   private guidanceMode = false;
   private guidanceTarget = '';
   private guidanceVersion?: string;
@@ -70,6 +72,7 @@ export class ChatSession {
     this.draft = this.restoredDraft(this.currentId || 'home');
     this.draw();
     document.addEventListener('visibilitychange', () => { if (!document.hidden) void this.refresh(); });
+    window.addEventListener('online', () => void this.refresh());
     window.addEventListener('pagehide', () => { this.rememberDraft(); this.apiKey = ''; clearTimeout(this.timer); });
     window.addEventListener('pageshow', event => { if (event.persisted) void this.refresh(); });
   }
@@ -92,8 +95,10 @@ export class ChatSession {
     try {
       const data = await this.options.request<{ formalizations: WebFormalization[]; generation: WebFormalizationCapabilities }>('/api/formalizations');
       this.capabilities = data.generation; this.formalizations = data.formalizations;
+      // A conversation that failed to open keeps its own error.
+      if (!this.currentId || this.conversation) this.readError = '';
       this.draw();
-    } catch (error) { this.error = reason(error); this.draw(); }
+    } catch (error) { this.readError = reason(error); this.draw(); }
   }
   private rememberDraft() {
     const id = this.currentId || 'home';
@@ -108,7 +113,7 @@ export class ChatSession {
     this.rememberDraft(); this.generation++; this.currentId = ''; this.conversation = undefined;
     this.run = undefined; this.formalization = undefined; this.seed = undefined; this.uncertainSubmission = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
-    this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.apiKey = '';
+    this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = '';
     this.draft = reset ? '' : this.restoredDraft('home');
     if (reset) { this.drafts.set('home', ''); this.rememberDraft(); }
     document.body.dataset.chatArtifact = '';
@@ -120,7 +125,7 @@ export class ChatSession {
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
   private setConversation(conversation: WebConversation) {
     this.reading.select(conversation.id);
-    this.conversation = conversation; this.currentId = conversation.id; this.options.onConversation();
+    this.conversation = conversation; this.currentId = conversation.id; this.readError = ''; this.options.onConversation();
     const pending = this.pendingGuidance;
     const status = pending && conversation.messages.find(message => message.guidance?.input.id === pending.id)?.guidance?.receipt?.status;
     if (pending && status && status !== 'unknown') {
@@ -138,7 +143,7 @@ export class ChatSession {
     this.currentId = id; this.conversation = undefined; this.run = undefined; this.formalization = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
     this.seed = undefined; this.uncertainSubmission = undefined; this.attachRunId = '';
-    this.loading = true; this.submitting = false; this.error = ''; this.apiKey = '';
+    this.loading = true; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = '';
     this.draft = this.restoredDraft(id);
     this.options.onNavigate(id, mode); this.options.onSelection(); this.draw();
     try {
@@ -146,7 +151,7 @@ export class ChatSession {
       if (generation !== this.generation) return;
       this.setConversation(conversation);
       await this.loadTask(generation);
-    } catch (error) { if (generation === this.generation) this.error = reason(error); }
+    } catch (error) { if (generation === this.generation) this.readError = reason(error); }
     finally { if (generation === this.generation) { this.loading = false; this.draw(); this.schedule(); } }
   }
   async openRun(run: WebRun) {
@@ -157,7 +162,7 @@ export class ChatSession {
     this.currentId = ''; this.conversation = undefined; this.run = run; this.formalization = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
     this.seed = undefined; this.uncertainSubmission = undefined; this.attachRunId = run.id;
-    this.loading = !this.options.isSample(run); this.error = ''; this.draft = ''; this.apiKey = ''; this.submitting = false;
+    this.loading = !this.options.isSample(run); this.error = ''; this.readError = ''; this.draft = ''; this.apiKey = ''; this.submitting = false;
     this.draw();
     if (this.options.isSample(run)) return;
     try {
@@ -223,7 +228,7 @@ export class ChatSession {
         this.lastListRefresh = Date.now();
         await this.loadCapabilities(); await this.refreshHistory();
       }
-    } catch (error) { if (generation === this.generation) { this.error = reason(error); this.draw(); } }
+    } catch (error) { if (generation === this.generation) { this.readError = reason(error); this.draw(); } }
     finally { this.refreshing = false; this.schedule(); }
   }
   private async submit(retryText?: string) {
@@ -342,7 +347,7 @@ export class ChatSession {
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
     renderChatThread(this.thread, {
       conversation: this.conversation, run: this.run, formalization: this.formalization ?? this.seed,
-      loading: this.loading, error: this.error,
+      loading: this.loading, error: this.error || this.readError,
       onArtifact: (kind, target) => { this.reading.capture(); this.drawOriginal(); this.options.onArtifact(kind, target); },
       ...(canGuide ? { onGuidance: (text?: string, taskId?: string) => this.beginGuidance(text, taskId) } : {}),
       onGuidanceReceipt: message => this.recoverGuidance(message),
@@ -360,7 +365,7 @@ export class ChatSession {
           const last = this.conversation.messages.at(-1)!;
           const question = this.conversation.messages.find(message => message.id === last.replyTo);
           if (question) void this.submit(question.text);
-        } else void this.refresh();
+        } else { this.lastListRefresh = 0; void this.refresh(); }
       },
     });
     renderChatComposer(this.composer, {
