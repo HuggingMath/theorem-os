@@ -168,6 +168,39 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await (await request(alice, route)).json()).formalization.runId).toBe(completed.runId);
   });
 
+  it('queues two accounts behind one formalization slot and hands each to its own proof in the separate proof queue', async () => {
+    expect(webFormalizationLimits).toMatchObject({ concurrency: 1, queueLimit: 8, perOwner: 1 });
+    expect(config.concurrency).toBe(1);
+    const alice = await client(), bob = await client();
+    const a = await create(alice, true), b = await create(bob, true);
+    // One formalization runs at a time; the other waits, and an account cannot start a second one.
+    expect(runner.pending.map(item => item.input.id)).toEqual([a.id]);
+    expect((await (await request(bob, `/api/formalizations/${b.id}`)).json()).formalization.status).toBe('queued');
+    expect((await request(alice, '/api/formalizations', body)).status).toBe(429);
+    const approveNext = async (id: string) => {
+      const pending = runner.pending.find(item => item.input.id === id)!;
+      pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
+    };
+    await approveNext(a.id);
+    // A's proof holds the single proof slot while B's formalization runs in its own slot.
+    expect(runner.pending.map(item => item.input.id)).toEqual([a.id, b.id]);
+    expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id]);
+    await approveNext(b.id);
+    const done = async (who: Client, id: string) => (await (await request(who, `/api/formalizations/${id}`)).json()).formalization as WebFormalization;
+    const [doneA, doneB] = [await done(alice, a.id), await done(bob, b.id)];
+    expect(doneA.runId).toBeTruthy(); expect(doneB.runId).toBeTruthy(); expect(doneA.runId).not.toBe(doneB.runId);
+    // B's proof waits behind A's; each run names its own formalization and belongs only to its account.
+    expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id]);
+    const runA = (await (await request(alice, `/api/runs/${doneA.runId}`)).json()).run as WebRun;
+    const runB = (await (await request(bob, `/api/runs/${doneB.runId}`)).json()).run as WebRun;
+    expect(runA.status).toBe('running'); expect(runB.status).toBe('queued');
+    expect(runA.formalizationId).toBe(a.id); expect(runB.formalizationId).toBe(b.id);
+    expect((await request(alice, `/api/runs/${doneB.runId}`)).status).toBe(404);
+    expect((await request(bob, `/api/runs/${doneA.runId}`)).status).toBe(404);
+    expect((await request(alice, `/api/runs/${doneA.runId}/cancel`, {})).status).toBe(200); await settle();
+    expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id, b.id]);
+  });
+
   it('reports automatic proof queue rejection without retrying or leaking credentials', async () => {
     const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
     config.queueLimit = 0;

@@ -274,7 +274,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     if (secure) response.setHeader('Strict-Transport-Security', 'max-age=31536000');
     try {
-      if (request.url === '/healthz') { json(response, 200, { ok: true }); return; }
+      if (request.url === '/healthz') { json(response, 200, { ok: true, ...config.sourceCommit ? { commit: config.sourceCommit } : {} }); return; }
       if (request.headers.host !== origin.host) throw new HttpError(403, '访问地址与服务配置不一致。');
       if (request.headers.origin && request.headers.origin !== origin.origin) throw new HttpError(403, '跨站请求已拒绝。');
       const url = new URL(request.url || '/', origin);

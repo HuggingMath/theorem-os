@@ -389,6 +389,32 @@ try {
       mark('a late first-send response preserves the new blank route and draft while the authorized task remains in history');
     } finally { releaseResponse?.(); await context.close(); }
   }
+  for (const width of [1440, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      const started = formalizations.length, proofs = runs.length;
+      await page.goto(origin); await page.locator('#formalize-original').fill(original); await credentials(page);
+      await page.locator('#formalize-start').click();
+      await eventually(() => formalizations.length === started + 1, 'The failing formalization starts');
+      const pending = formalizations.at(-1)!;
+      pending.send({ type: 'progress', progress: { phase: 'generating', round: 3, tokens: 200_000 } });
+      pending.send({ type: 'result', status: 'exhausted', reason: 'formalization_token_limit' }); pending.resolve();
+      const details = page.locator('[data-formalization-failure]');
+      await details.waitFor();
+      const rows = await details.locator('dt').evaluateAll(nodes => nodes.map(node => [node.textContent,
+        node.nextElementSibling?.textContent]));
+      assert.deepEqual(rows, [['停止阶段', '生成 Lean 陈述'], ['原因', '已用完本次 Token 预算，尚未完成形式化。'],
+        ['保留成果', '没有保存可用的 Lean 陈述。'], ['下一步', '修改题目后重新发送；不会自动重试。'],
+        ['诊断编号', 'formalization_token_limit']]);
+      assert.equal(runs.length, proofs, 'A failed formalization starts no proof');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Failure details fit the width');
+      await page.screenshot({ path: path.join(output, `formalization-failure-${width}.png`), fullPage: true });
+      mark(`${width}px: a failed formalization shows stage, reason, kept work, next step and diagnostic code`);
+    } finally { await context.close(); }
+  }
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', paidModelCalls: false, checks }, null, 2) + '\n');
 } catch (error) {

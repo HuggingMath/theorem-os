@@ -5,9 +5,10 @@
 
 当前按用户选择只完成实验工具、方案和离线验证，暂停真实模型调用。
 此前已启动的预算校准试跑已经停止，记录见 [2026-10-19 试跑说明](PILOT-20261019.md)。
-后续实验按用户选择使用现有 Westlake 凭据，模型为 `deepseek-flash`，推理强度为 `high`。
-接入与密钥配置见 [Westlake DeepSeek 配置](WESTLAKE.md)；此前 GPT 试跑不并入 DeepSeek 的比较结果。
-DeepSeek 官方服务仍可单独选择，见[官方配置](DEEPSEEK.md)。
+新实验统一使用本地 Sub2API 网关（`--provider sub2api`），模型为 `deepseek-flash`，推理强度为 `max`，
+与 `AGENTS.md` 和当前 CLI 默认一致；独立实验 profile 需在调用环境中设置 `SUB2API_WESTLAKE_API_KEY`（见 [docs/usage.md](../../docs/usage.md)）。
+此前按 Westlake 直连、`high` 准备或运行的计划保留原身份，仅作历史记录，不与新基线合并比较；
+直连配置见 [Westlake DeepSeek 配置](WESTLAKE.md)。此前 GPT 试跑同样不并入。DeepSeek 官方服务仍可单独选择，见[官方配置](DEEPSEEK.md)。
 
 ## 首轮比较什么
 
@@ -45,7 +46,7 @@ Codex CLI 可用。从仓库根目录构建，再使用构建命令打印的 `bu
 ```bash
 bun run build
 bun run math compare --phase prepare \
-  --provider westlake --model deepseek-flash --effort high \
+  --provider sub2api --model deepseek-flash --effort max \
   --module-experiment examples/components/module-experiment.json \
   --repo /absolute/path/to/imo2026 --problem imo2026_q1 \
   --task-file examples/components/experiment-task.md \
@@ -57,11 +58,11 @@ bun run math compare --phase prepare \
 ```
 
 这会准备一题、四组、每组一次的探索性计划，每组解题时间设为十分钟，最多 20 次调度。
-30,000 个服务商上报 token 是请求门槛，不是硬用量上限。新 Westlake 运行会逐次检查
+30,000 个服务商上报 token 是请求门槛，不是硬用量上限。Sub2API 与 Westlake 运行会逐次检查
 上游请求；单次或已经并发发出的请求仍可能超额。其他直接 Responses 服务和历史记录
 仍标为调度级限制。该数值仅用于配置示例，已发现不足以覆盖本次 Q1 规划阶段，
 不应直接用于正式效果比较。依赖准备和最终验收另计时间。
-该命令固定模型为 Westlake `deepseek-flash`，推理强度 `high`；该模型的预算仍需独立校准。
+该命令固定模型为 Sub2API `deepseek-flash`，推理强度 `max`；该配置的预算仍需独立校准，Westlake / `high` 的历史试跑预算不能沿用。
 当前兼容器还会限制初始 Lead 规划：达到总门槛的四分之一或两次上游请求后，
 在完整记账和源码检查通过的前提下交接保存的方案，或回退到原题目标任务。
 具体适用范围见[初始规划交接](WESTLAKE.md#初始规划交接)。该策略尚未经过真实模型校准，
@@ -69,7 +70,7 @@ bun run math compare --phase prepare \
 
 `prepare` 不调用模型，会冻结题目、构建、环境摘要，以及每次运行的模块配置与启动参数。
 每组和每次重复均使用新的隔离工作区，不从其他组复制候选证明。
-`--provider westlake` 或 `--provider deepseek` 还会为每次尝试生成无密钥的独立 Codex profile，冻结服务商配置与模型目录。
+`--provider sub2api`、`--provider westlake` 或 `--provider deepseek` 还会为每次尝试生成无密钥的独立 Codex profile，冻结服务商配置与模型目录。
 启动文件固定各自的 profile，避免随后运行时继承其他服务商的配置。
 方案顺序随重复轮转；重复编号不是模型采样 seed。
 

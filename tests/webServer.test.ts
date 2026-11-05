@@ -165,6 +165,11 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const small = await raw('/healthz', 'br');
     expect(small.headers['content-encoding']).toBeUndefined();
     expect(JSON.parse(small.body.toString('utf8'))).toEqual({ ok: true });
+    expect(readWebConfig({ THEOREMOS_SOURCE_COMMIT: 'abc1234' }).sourceCommit).toBe('abc1234');
+    expect(readWebConfig({ THEOREMOS_SOURCE_COMMIT: 'unknown' }).sourceCommit).toBeUndefined();
+    config.sourceCommit = 'abc1234';
+    expect(JSON.parse((await raw('/healthz', 'br')).body.toString('utf8'))).toEqual({ ok: true, commit: 'abc1234' });
+    delete config.sourceCommit;
     runner.calls[0].finish();
   });
 

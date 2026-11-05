@@ -1,7 +1,6 @@
 import { Fragment, type ComponentChildren } from 'preact';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Marked, type Token, type Tokens, type TokenizerExtension } from 'marked';
-import { render } from 'katex';
 import { t } from '../../i18n';
 import { leanTokens } from '../sourceText';
 import { Icon } from './Icon';
@@ -42,12 +41,24 @@ function safeLink(href: string): string | undefined {
   return /^(?:https?:\/\/|mailto:|\/(?![\/\\])|#)/iu.test(value) && !/[\u0000-\u0020\u007f]/u.test(value) ? value : undefined;
 }
 
+type Katex = typeof import('../math');
+let katex: Katex | undefined, loading: Promise<Katex> | undefined;
+// Built separately as /math.js (scripts/build-web.ts); one request is shared by every formula on the page.
+const loadKatex = () => loading ??= (import('/math.js' as string) as Promise<Katex>).then(module => katex = module,
+  error => { loading = undefined; throw error; });
+
 function Formula({ token }: { token: MathToken }) {
   const element = useRef<HTMLSpanElement>(null);
   const [failed, setFailed] = useState<string>();
-  const rendered = token.closed && failed !== token.text;
+  const [, setLoaded] = useState(Boolean(katex));
+  const rendered = token.closed && failed !== token.text && Boolean(katex);
+  useEffect(() => {
+    // Until KaTeX arrives, or if it cannot load, the formula stays readable as its source.
+    if (token.closed && !katex) void loadKatex().then(() => setLoaded(true), () => {});
+  }, [token.closed]);
   useLayoutEffect(() => {
-    if (!rendered || !element.current) return;
+    if (!rendered || !element.current || !katex) return;
+    const { render } = katex;
     try {
       // KaTeX builds the formula as DOM nodes; no HTML string is parsed, and model HTML stays literal text below.
       render(token.text, element.current, { displayMode: token.display, throwOnError: true,

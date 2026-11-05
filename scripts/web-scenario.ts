@@ -133,14 +133,18 @@ export const normalize = (source: string) => source.replace(/\r\n?/g, '\n');
 export async function ready(page: Page) {
   const submit = page.locator('#submit-run:enabled');
   const run = page.locator('body[data-view="run"] .detail-heading[data-run]');
-  if (/[?&](?:run|chat)=|[?]sample$/u.test(page.url())) {
-    // A run's own address reopens that run beside the chat, where 提交 belongs to the hidden Lean editor; once the run
-    // is gone (deleted), the page is back on the new-research page.
-    await submit.or(run).or(page.locator('body[data-view="draft"] .chat-lean-entry')).first().waitFor({ state: 'attached' });
-    if (await run.count()) return;
+  // A run's own address reopens that run beside the chat, where 提交 belongs to the hidden Lean editor; once the run
+  // is gone (deleted), the page is back on the new-research page.
+  const named = /[?&](?:run|chat)=|[?]sample$/u.test(page.url());
+  const entry = page.locator(named ? 'body[data-view="draft"] .chat-lean-entry' : '.chat-lean-entry');
+  for (;;) {
+    await (named ? submit.or(run).or(entry) : submit.or(entry)).first().waitFor({ state: 'attached' });
+    if (named && await run.count()) return;
+    if (await submit.count()) return;
+    if (await entry.count()) break;
+    // The matched control changed (an enabled submit is disabled while a run opens); look again.
   }
-  await submit.or(page.locator('.chat-lean-entry')).first().waitFor({ state: 'attached' });
-  if (!await submit.count()) await enterLean(page);
+  await enterLean(page);
   await submit.waitFor({ state: 'attached' });
 }
 export function deferred() {

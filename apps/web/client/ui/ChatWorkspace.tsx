@@ -6,6 +6,7 @@ import type { WebRun } from '../../shared';
 import { researchExamples } from '../../problemExamples';
 import { isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
 import { locale, localizeText, t } from '../../i18n';
+import { formalizationReasonText } from '../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
 
@@ -23,6 +24,26 @@ export type ChatThreadProps = {
   onCancelTask?(): void;
   onRetry?(): void;
 };
+
+/** Where a formalization stopped, why, what was kept and what the reader can do; the code is the diagnostic. */
+function FormalizationFailure({ item }: { item: WebFormalization }) {
+  const code = item.researchError || item.reason!;
+  const phases: Record<string, string> = { queued: t("等待开始"), preparing: t("准备证明环境"), planning: t("理解题目与定义"),
+    generating: t("生成 Lean 陈述"), compiling: t("检查 Lean 陈述"), translating: t("核对自然语言与 Lean"),
+    reviewing: t("审核原题一致性"), finishing: t("整理形式化结果") };
+  const stage = item.researchError ? t('启动证明研究') : phases[item.progress?.phase ?? ''] ?? t('形式化');
+  const kept = item.report ? t('已保存这次生成的 Lean 陈述与检查记录，可在“原题 / Lean”中查看。') : t('没有保存可用的 Lean 陈述。');
+  return <details class="chat-task-details" data-formalization-failure open>
+    <summary>{t("查看详情")}</summary>
+    <dl>
+      <dt>{t('停止阶段')}</dt><dd>{stage}</dd>
+      <dt>{t('原因')}</dt><dd>{formalizationReasonText(code)}</dd>
+      <dt>{t('保留成果')}</dt><dd>{kept}</dd>
+      <dt>{t('下一步')}</dt><dd>{t('修改题目后重新发送；不会自动重试。')}</dd>
+      <dt>{t('诊断编号')}</dt><dd><code>{code}</code></dd>
+    </dl>
+  </details>;
+}
 
 function TaskMessage(props: ChatThreadProps) {
   const { run, formalization: item } = props;
@@ -54,7 +75,7 @@ function TaskMessage(props: ChatThreadProps) {
       <p class="research-conversation-description">{description}</p>
     </div>
     {active && run?.events.at(-1)?.message && <p class="research-conversation-latest">{localizeText(run.events.at(-1)!.message)}</p>}
-    {failed && (item?.reason || item?.researchError) && <details class="chat-task-details"><summary>{t("查看详情")}</summary><p>{localizeText(item.researchError || item.reason || '')}</p></details>}
+    {!run && failed && item && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
     {(run || item?.report) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {run && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
       <button type="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" /><span>{t('原题')} / Lean</span><Icon name="arrow-up-right" /></button>

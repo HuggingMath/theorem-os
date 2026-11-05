@@ -11,7 +11,7 @@ import { freePort, startBrowser } from './web-scenario';
 
 /**
  * First-load cost of the workbench on a slow connection: bytes on the wire per resource, first contentful paint and the
- * time until the composer can submit, for a first visit and a repeat visit. `--report` only prints; otherwise the budget
+ * time until the chat composer takes input, for a first visit and a repeat visit. `--report` only prints; otherwise the budget
  * below is enforced. Fixture runner, no model or Lean; the service is the real one, so headers and encoding are what
  * users get from the origin.
  */
@@ -45,7 +45,8 @@ async function visit(page: Page): Promise<Visit> {
   cdp.on('Network.loadingFinished', event => { const item = seen.get(event.requestId); if (item) item.bytes = event.encodedDataLength; });
   const started = Date.now();
   await page.goto(origin, { waitUntil: 'commit' });
-  await page.locator('#submit-run:enabled').waitFor({ timeout: 120_000 });
+  // The workbench opens on the natural-language composer; it is ready once the question box takes input.
+  await page.locator('#formalize-original:enabled').waitFor({ timeout: 120_000 });
   const readyMs = Date.now() - started;
   // Fonts are requested once text needs them; wait for them and the network to go quiet before counting.
   await page.evaluate(() => document.fonts.ready);
@@ -70,12 +71,14 @@ try {
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ checkedAt: new Date().toISOString(), network: slow, first, repeat }, null, 2));
   if (!reportOnly) {
     // Measured 2026-10-27 on this profile: first 240 KB code, 1610 KB total, FCP 0.7 s, ready 3.5 s; repeat 6 KB, ready 1.0 s.
+    // 2026-11-05, chat-first workbench: first 349 KB code (app.js 284 KB with KaTeX moved to math.js, loaded with the first
+    // formula), 788 KB total, FCP 0.8 s, ready 4.0 s; repeat 7 KB, ready 1.0 s. The code budget moved from 300 KB to 380 KB.
     // The margins absorb machine noise; growing past them is a decision, not drift.
     const code = (visit: Visit) => visit.resources.filter(item => /\.(?:js|css)$|\/$/u.test(item.path)).reduce((sum, item) => sum + item.bytes, 0);
     // Files up to 1 KB (theme.js) are sent as they are, as in staticFiles.ts; with headers they transfer under 2 KB.
     for (const item of first.resources.filter(item => /\.(?:js|css|html)$|\/$/u.test(item.path) && item.bytes > 2048))
       assert.ok(['br', 'gzip'].includes(item.encoding), `${item.path} must be sent compressed, got ${item.encoding}`);
-    assert.ok(code(first) <= 300 * 1024, `first visit HTML, JS and CSS ${kb(code(first))} exceed 300 KB`);
+    assert.ok(code(first) <= 380 * 1024, `first visit HTML, JS and CSS ${kb(code(first))} exceed 380 KB`);
     assert.ok(first.transferred <= 1800 * 1024, `first visit ${kb(first.transferred)} exceeds 1800 KB`);
     assert.ok(first.firstContentfulPaintMs > 0 && first.firstContentfulPaintMs <= 1500, `first contentful paint ${first.firstContentfulPaintMs} ms exceeds 1500 ms`);
     assert.ok(first.readyMs <= 5000, `first visit ready after ${first.readyMs} ms, budget 5000 ms`);

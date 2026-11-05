@@ -53,6 +53,10 @@ RUN bun scripts/build.ts --state-root /opt/runtime-state > /opt/theoremos-build.
     && bun scripts/build-agent-tools.ts --out /opt/theoremos-agent-tools > /dev/null \
     && chmod -R a+rX /opt/runtime-state /opt/theoremos-agent-tools \
     && chmod 0555 apps/web/worker-entrypoint.sh
+# The source commit this image was built from (scripts/web-deploy-record.sh records it with the image digests).
+ARG THEOREMOS_SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT
+ENV THEOREMOS_SOURCE_COMMIT=$THEOREMOS_SOURCE_COMMIT
 USER 10001:10001
 ENTRYPOINT ["/opt/theorem-os/apps/web/worker-entrypoint.sh"]
 
@@ -63,6 +67,8 @@ COPY docs/archive.html docs/site.css ./docs/
 COPY docs/en/archive.html ./docs/en/archive.html
 COPY research/openai-math ./research/openai-math
 RUN bun scripts/build-web.ts
-ENV THEOREMOS_WEB_HOST=0.0.0.0 THEOREMOS_WEB_PORT=8787
+ARG THEOREMOS_SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT
+ENV THEOREMOS_WEB_HOST=0.0.0.0 THEOREMOS_WEB_PORT=8787 THEOREMOS_SOURCE_COMMIT=$THEOREMOS_SOURCE_COMMIT
 EXPOSE 8787
 CMD ["bun", "apps/web/server.ts"]
