@@ -93,6 +93,13 @@ describe('auto-library module header', () => {
     expect(withAutoLibraryHeader(inside(), { name: 'Quadruple', summary: 'S', sources: [] }))
       .toMatch(/^\/-! # TheoremOS auto-library module `Quadruple`\n\nS\n\nWritten by[^]*-\/\nnamespace TheoremOS\.Auto\.Quadruple\n/u);
   });
+  it('carries the planned use into the proved module header', () => {
+    const source = withAutoLibraryHeader(inside(), { name: 'Quadruple', summary: 'S', sources: [],
+      application: { target: 'Fixture.target', use: 'Apply TheoremOS.Auto.Quadruple.t', remaining: ['other case'] } });
+    expect(source).toContain('Planned use for the triggering challenge:\n* Fixture.target: Apply TheoremOS.Auto.Quadruple.t');
+    expect(source).toContain('* Remaining: other case');
+    expect(gate(source)).toEqual([]);
+  });
 });
 
 const DOUBLE = 'namespace Fixture\ndef double (n : Nat) : Nat := n + n\ntheorem double_eq (n : Nat) : double n = 2 * n := by\n  unfold double; omega\nend Fixture\n';
@@ -221,8 +228,10 @@ describe('auto-library planner contract', () => {
   const input = autoLibraryPlannerInput({ challengeId: 'fixture/q', challenge: 'theorem target : True := by\n  sorry\n', task: '',
     environment: 'standard', library: [], taken: ['Taken'], module: 0, round: 1, maxRounds: 3 });
   const plan = { inputDigest: input.inputDigest, decision: 'module', reason: 'Quadrupling recurs.', name: 'Quadruple',
-    summary: 'Quadrupling.', sources: ['Peano'], lean: QUADRUPLE };
-  const problems = (value: unknown) => autoLibraryPlanProblems(value, { inputDigest: input.inputDigest, taken: input.takenNames, libraryModules });
+    summary: 'Quadrupling.', sources: ['Peano'], lean: QUADRUPLE, target: 'target',
+    application: 'Use TheoremOS.Auto.Quadruple.quadruple_eq to normalize the target.', remaining: [] };
+  const problems = (value: unknown) => autoLibraryPlanProblems(value, { inputDigest: input.inputDigest, taken: input.takenNames,
+    challenge: input.challenge.source, libraryModules });
 
   it('binds the output to its input and checks each decision', () => {
     expect(autoLibraryPlannerInput({ challengeId: 'fixture/q', challenge: 'theorem target : True := by\n  sorry\n', task: '',
@@ -230,10 +239,16 @@ describe('auto-library planner contract', () => {
     expect(autoLibraryPlannerInput({ challengeId: 'fixture/q', challenge: 'theorem target : True := by\n  sorry\n', task: '',
       environment: 'standard', library: [], taken: ['Taken'], module: 0, round: 2, maxRounds: 3, feedback: 'x' }).inputDigest).not.toBe(input.inputDigest);
     expect(problems(plan)).toEqual([]);
-    expect(problems({ ...plan, decision: 'none', name: null, summary: null, sources: null, lean: null })).toEqual([]);
+    expect(problems({ ...plan, decision: 'none', name: null, summary: null, sources: null, lean: null,
+      target: null, application: null, remaining: null })).toEqual([]);
     expect(problems({ ...plan, inputDigest: '0'.repeat(64) })).toEqual(['inputDigest must be copied from INPUT.json']);
-    expect(problems({ ...plan, decision: 'none' })).toEqual(['decision none requires name, summary, sources and lean to be null']);
-    expect(problems({ ...plan, lean: null })).toEqual(['decision module requires name, summary, sources and lean']);
+    expect(problems({ ...plan, decision: 'none' })).toEqual([
+      'decision none requires name, summary, sources, lean, target, application and remaining to be null']);
+    expect(problems({ ...plan, lean: null })).toEqual([
+      'decision module requires name, summary, sources, lean, target, application and remaining']);
+    expect(problems({ ...plan, target: 'missing' })).toEqual(['target must name a theorem in INPUT.challenge.source']);
+    expect(problems({ ...plan, application: 'No concrete use' })).toEqual([
+      'application must name a theorem stated in the proposed module']);
     expect(problems({ ...plan, name: 'TAKEN' })).toEqual(['name TAKEN is taken; choose another']);
     expect(problems({ ...plan, name: 'lower' })[0]).toMatch(/^name: /u);
     expect(problems({ ...plan, extra: 1 })[0]).toMatch(/^output: /u);

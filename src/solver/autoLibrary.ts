@@ -138,8 +138,12 @@ const retryable = (cause: unknown) => {
   return code === 'other' && Boolean(reason) || ['rateLimitExceeded', 'flexUnavailable', 'serverOverloaded', 'httpConnectionFailed',
     'responseStreamConnectionFailed', 'internalServerError', 'responseStreamDisconnected', 'responseTooManyFailedAttempts'].includes(code);
 };
-const ROLE_PROMPT = 'Follow the complete role protocol in the developer instructions. Read OUTPUT.schema.json and INPUT.json, ' +
-  'write OUTPUT.json atomically using that contract, then stop. ROLE.md is the same protocol and need not be reread.';
+const ROLE_PROMPT = 'Choose one useful reusable dependency. Read INPUT.json and OUTPUT.schema.json, then write a schema-valid ' +
+  'OUTPUT.json atomically and stop. Do not inspect Mathlib or search the library: the host checks your statement next. ' +
+  'State a tractable prerequisite with a concrete use, or submit decision none. ROLE.md repeats the developer protocol.';
+const PLANNER_TURNS_PER_ATTEMPT = 3;
+const CONTINUE_PROMPT = 'Continue the same library-planning decision from the files you already read. ' +
+  'Write a schema-valid OUTPUT.json atomically now, or submit decision none if no useful dependency is clear.';
 
 type RunResult = { status?: string; reason?: string; runId?: string; solution_commit?: string | null; stateFile?: string; turns?: number;
   tokenBudget?: { reportedTotalTokens?: number | null } };
@@ -310,8 +314,15 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       });
       if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
       record.threadId = session.threadId;
-      record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true; record.status = 'running'; save();
-      record.status = await session.run(ROLE_PROMPT, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
+      for (let turn = 0; turn < PLANNER_TURNS_PER_ATTEMPT; turn++) {
+        checkLimits();
+        record.usageAccounting.startedTurns++;
+        record.usageAccounting.pending = true; record.status = 'running'; save();
+        record.status = await session.run(turn === 0 ? ROLE_PROMPT : CONTINUE_PROMPT,
+          crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns++; save(); });
+        lease.signal.throwIfAborted();
+        if (record.status !== 'checkpoint') break;
+      }
       lease.signal.throwIfAborted();
       if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
         if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
@@ -360,17 +371,20 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
     const pack = roundPack(round), previous = module.rounds.at(-2);
     const library = (pack?.modules ?? []).map(item => ({ module: item.file.slice(0, -5).replaceAll('/', '.'), file: item.file,
       auto: item.file.startsWith('Submission/Library/Auto/'), declarations: autoLibraryTheorems(item.source).length,
+      theorems: item.file.startsWith('Submission/Library/Auto/') ? autoLibraryTheorems(item.source) : [],
       summary: autoLibraryModuleSummary(item.source) }));
     const input = autoLibraryPlannerInput({ challengeId: request.challengeId, challenge: request.challengeSource, task: request.task,
       environment: request.environment, library, taken: round.taken, module: module.index, round: round.round, maxRounds: request.maxRounds,
       ...(previous?.feedback ? { feedback: previous.feedback } : {}),
-      ...(previous?.plan ? { previous: { name: previous.plan.name, summary: previous.plan.summary, lean: previous.plan.lean } } : {}) });
+      ...(previous?.plan ? { previous: { name: previous.plan.name, summary: previous.plan.summary, lean: previous.plan.lean,
+        target: previous.plan.target, application: previous.plan.application, remaining: previous.plan.remaining } } : {}) });
     const output = await planner(module, round, input, pack);
     const parsed = autoLibraryPlanSchema.safeParse(output);
     if (parsed.success) { round.plan = parsed.data; save(); }
     const modules = new Set((pack?.modules ?? []).map(item => item.file.slice(0, -5).replaceAll('/', '.')));
     const problems = output === undefined ? ['the planner wrote no readable OUTPUT.json'] :
-      autoLibraryPlanProblems(output, { inputDigest: input.inputDigest, taken: round.taken, libraryModules: modules });
+      autoLibraryPlanProblems(output, { inputDigest: input.inputDigest, taken: round.taken,
+        challenge: request.challengeSource, libraryModules: modules });
     if (problems.length) return finish(module, round, 'rejected', autoLibraryRejectionFeedback(problems));
     if (round.plan!.decision === 'none') return finish(module, round, 'none');
     if (!await reserveAutoLibraryName(request.pool, round.plan!.name!, request.buildId))
@@ -444,7 +458,8 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
         const found = extracted.modules.find(item => item.file === autoLibraryFile(name))!;
         const kept = autoLibraryTheorems(found.source).filter(theorem => wanted.has(theorem));
         if (!kept.length) { failures.push('no stated theorem was proved'); continue; }
-        const source = withAutoLibraryHeader(found.source, { name, summary: round.plan!.summary!, sources: round.plan!.sources! });
+        const source = withAutoLibraryHeader(found.source, { name, summary: round.plan!.summary!, sources: round.plan!.sources!,
+          application: { target: round.plan!.target!, use: round.plan!.application!, remaining: round.plan!.remaining! } });
         const problems = inspectAutoLibrarySource({ name, source, libraryModules: new Set((pack?.modules ?? [])
           .map(item => item.file.slice(0, -5).replaceAll('/', '.'))), allowSorry: false });
         if (problems.length) { failures.push(...problems); continue; }

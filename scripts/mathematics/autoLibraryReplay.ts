@@ -52,26 +52,37 @@ const SOLUTION = 'import Submission.Library.Auto.Quadruple\n\n' +
   'theorem replay_target (n : Nat) : n + n + (n + n) = 4 * n := by\n  exact TheoremOS.Auto.Quadruple.quadruple_eq n\n';
 
 const module = (lean: string, reason: string): Omit<AutoLibraryPlan, 'inputDigest'> => ({ decision: 'module', reason, name: 'Quadruple',
-  summary: 'Quadrupling natural numbers as two doublings, with its closed form and additivity.', sources: ['Peano arithmetic (standard)'], lean });
+  summary: 'Quadrupling natural numbers as two doublings, with its closed form and additivity.', sources: ['Peano arithmetic (standard)'],
+  lean, target: 'replay_target', application: 'Use TheoremOS.Auto.Quadruple.quadruple_eq n to close replay_target.', remaining: [] });
 /** Preset planner outputs by module and round: a host rejection, a Lean rejection, an unproved round, then the module. */
 const PLANS: Record<string, Omit<AutoLibraryPlan, 'inputDigest'>> = {
   '0/1': module(QUADRUPLE.replace('namespace TheoremOS', 'notation "𝟜" => 4\n\nnamespace TheoremOS'), 'global notation (host rejects it)'),
   '0/2': module(QUADRUPLE.replace('double (double n)', 'doubel (double n)'), 'misspelled definition (Lean rejects it)'),
   '0/3': module(QUADRUPLE, 'the replay solver proves nothing in this round'),
   '0/4': module(QUADRUPLE, 'the replay solver proves both theorems'),
-  '1/1': { decision: 'none', reason: 'the published module is enough', name: null, summary: null, sources: null, lean: null },
+  '1/1': { decision: 'none', reason: 'the published module is enough', name: null, summary: null, sources: null,
+    lean: null, target: null, application: null, remaining: null },
 };
 
-type Seen = { module: number; round: number; feedback: string | null; library: string[]; taken: string[] };
-function replayPlanner(seen: Seen[]) {
-  return async (options: MathAgentOptions): Promise<MathAgentSession> => ({
-    threadId: `preset-planner-${seen.length + 1}`,
+type Seen = { module: number; round: number; feedback: string | null; library: string[];
+  autoTheorems: string[]; taken: string[] };
+function replayPlanner(seen: Seen[], opened: string[]) {
+  let firstCheckpoint = true;
+  return async (options: MathAgentOptions): Promise<MathAgentSession> => {
+    const threadId = `preset-planner-${opened.length + 1}`;
+    opened.push(threadId);
+    return { threadId,
     run: async (_message, _id, workspace, onStarted) => {
       onStarted(`preset-plan-${seen.length + 1}`);
       const input = JSON.parse(readMathText(path.join(workspace, 'INPUT.json'), 8_000_000)) as { inputDigest: string; module: number;
-        round: number; feedback: string | null; library: { module: string }[]; takenNames: string[] };
+        round: number; feedback: string | null; library: { module: string; theorems: string[] }[]; takenNames: string[] };
       seen.push({ module: input.module, round: input.round, feedback: input.feedback, library: input.library.map(item => item.module),
-        taken: input.takenNames });
+        autoTheorems: input.library.flatMap(item => item.theorems), taken: input.takenNames });
+      if (firstCheckpoint && input.module === 0 && input.round === 1) {
+        firstCheckpoint = false;
+        options.onUsage({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+        return 'checkpoint';
+      }
       const plan = PLANS[`${input.module}/${input.round}`];
       if (!plan) throw new Error(`replay has no planner output for module ${input.module} round ${input.round}`);
       const output = { inputDigest: input.inputDigest, ...plan };
@@ -80,7 +91,8 @@ function replayPlanner(seen: Seen[]) {
       options.onUsage({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
       return 'completed';
     }, interrupt: async () => {}, close: async () => {},
-  });
+    };
+  };
 }
 
 /** Preset solver: proves the spec theorems (nothing in round 3) and solves the destination with the published module. */
@@ -112,29 +124,39 @@ export async function replayAutoLibrary(directory: string, root: string) {
   if (built.exitCode !== 0) throw new Error(`Replay build failed: ${built.stderr || built.stdout}`);
   const { buildManifestRef } = JSON.parse(built.stdout) as { buildManifestRef: string };
   readMathBuildManifest(buildManifestRef, root, path.join(root, 'out/main'));
-  const pool = path.join(directory, 'pool'), buildDirectory = path.join(directory, 'build'), prover = replayProver(), seen: Seen[] = [];
+  const pool = path.join(directory, 'pool'), buildDirectory = path.join(directory, 'build'), prover = replayProver(),
+    seen: Seen[] = [], opened: string[] = [];
   prepareAutoLibraryBuild(buildDirectory, root, { challengeId: 'replay/quadruple', challengeSource: CHALLENGE,
     task: 'Prove replay_target.', environment: 'standard', pool, buildManifestRef, basePack: BASE,
     planner: { model: 'preset-replay', effort: 'none', profile: path.join(directory, 'no-profile'), executable: 'preset-replay' },
     prover: { model: 'preset-replay', effort: 'none', executable: 'preset-replay', workers: 1, coordination: 'cooperative',
       maxRunSeconds: 300, maxTurns: 3, maxTurnSeconds: 120, maxTotalTokens: 0, prepareTimeoutSeconds: 600 },
     maxModules: 2, maxRounds: 4, maxRunSeconds: 0, maxTotalTokens: 0, plannerTurnSeconds: 0 });
-  const options = { openSession: replayPlanner(seen), solve: (args: string[]) => runSolver(args, root, prover) };
+  const options = { openSession: replayPlanner(seen, opened), solve: (args: string[]) => runSolver(args, root, prover) };
   const summary = await runAutoLibraryBuild(buildDirectory, root, options);
   const outcomes = summary.modules.map(item => item.rounds.map(round => round.outcome).join(','));
   expect(summary.status === 'built' && summary.published.join() === 'Quadruple', `build ${summary.status} ${summary.error ?? ''}`);
   expect(outcomes.join('|') === 'rejected,statement_failed,no_progress,published|none', `outcomes ${outcomes.join('|')}`);
+  const firstPlan = (JSON.parse(readMathText(path.join(buildDirectory, 'state.json'), 64 * 1024 * 1024)) as {
+    sessions: { threadId: string; turns: number; usageAccounting: { startedTurns: number; reportedTurns: number } }[]
+  }).sessions[0];
+  expect(seen.length === 6 && opened.length === 5 && firstPlan?.threadId === opened[0] && firstPlan.turns === 2 &&
+    firstPlan.usageAccounting.startedTurns === 2 && firstPlan.usageAccounting.reportedTurns === 2,
+    'checkpoint continues in the same planner thread with two accounted turns');
   const feedback = (round: number) => seen.find(item => item.module === 0 && item.round === round)?.feedback ?? '';
   expect(feedback(2).includes('notation must be local or scoped'), 'round 2 sees the host rejection');
   expect(/doubel/u.test(feedback(3)), 'round 3 sees the Lean error');
   expect(feedback(4).startsWith('The solver run did not prove the module:') && feedback(4).includes('proved none of the stated theorems'), 'round 4 sees the unproved round');
   expect(seen.find(item => item.module === 1)?.library.includes('Submission.Library.Auto.Quadruple'), 'module 1 sees the published module');
+  expect(seen.find(item => item.module === 1)?.autoTheorems.includes('TheoremOS.Auto.Quadruple.quadruple_eq'),
+    'module 1 sees the published theorem for dependency planning');
   const again = await runAutoLibraryBuild(buildDirectory, root, { ...options, openSession: async () => { throw new Error('resume opened a planner'); } });
-  expect(again.status === 'built' && seen.length === 5, 'a finished build resumes without model sessions');
+  expect(again.status === 'built' && seen.length === 6, 'a finished build resumes without model sessions');
   const [record] = readAutoLibraryPool(pool);
   expect(record && record.theorems.join() === 'TheoremOS.Auto.Quadruple.quadruple_eq,TheoremOS.Auto.Quadruple.quadruple_add' &&
     record.requires.length === 1 && record.visible.join() === BASE.modules.map(module => module.file).join() &&
-    record.trigger.challengeId === 'replay/quadruple' && record.cost.rounds === 4 && !/sorry/u.test(record.source),
+    record.trigger.challengeId === 'replay/quadruple' && record.cost.rounds === 4 && !/sorry/u.test(record.source) &&
+    record.source.includes('Planned use for the triggering challenge:'),
   'published record');
   // A later problem installs the pool module and its solution imports it.
   const destination = path.join(directory, 'destination');

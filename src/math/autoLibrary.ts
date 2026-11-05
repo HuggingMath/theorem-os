@@ -40,11 +40,15 @@ const commentText = (text: string) => text.replace(/[\u0000-\u0008\u000b-\u001f\
   .replaceAll('-/', '- /').replaceAll('/-', '/ -');
 
 /** A module doc header recording what the module is for and the literature it follows, placed after the imports. */
-export function withAutoLibraryHeader(source: string, input: { name: string; summary: string; sources: readonly string[] }): string {
+export function withAutoLibraryHeader(source: string, input: { name: string; summary: string; sources: readonly string[];
+  application?: { target: string; use: string; remaining: readonly string[] } }): string {
   const spans = mathConstructionImportSpans(source), at = spans.length ? spans.at(-1)!.end : 0;
   const lineEnd = spans.length ? source.indexOf('\n', at) : -1, insert = spans.length ? (lineEnd < 0 ? source.length : lineEnd + 1) : 0;
   const header = [`/-! # TheoremOS auto-library module \`${input.name}\``, '',
     commentText(input.summary.trim()), '',
+    ...(input.application ? ['Planned use for the triggering challenge:',
+      '* ' + commentText(input.application.target) + ': ' + commentText(input.application.use),
+      ...input.application.remaining.map(item => '* Remaining: ' + commentText(item)), ''] : []),
     ...(input.sources.length ? ['Sources:', ...input.sources.map(item => `* ${commentText(item.trim())}`), ''] : []),
     'Written by the TheoremOS library planner and proved by a TheoremOS solver run before solving the problem',
     'recorded in the pool record. Only declarations Lean accepted with no gaps are kept. -/', ''].join('\n');
