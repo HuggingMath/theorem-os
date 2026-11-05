@@ -95,6 +95,14 @@ describe('auto-library module header', () => {
     expect(withAutoLibraryHeader(inside(), { name: 'Quadruple', summary: 'S', sources: [] }))
       .toMatch(/^\/-! # TheoremOS auto-library module `Quadruple`\n\nS\n\nWritten by[^]*-\/\nnamespace TheoremOS\.Auto\.Quadruple\n/u);
   });
+
+  it('carries the planned use into the proved module header', () => {
+    const source = withAutoLibraryHeader(inside(), { name: 'Quadruple', summary: 'S', sources: [],
+      application: { target: 'Fixture.target', use: 'Apply TheoremOS.Auto.Quadruple.t', remaining: ['other case'] } });
+    expect(source).toContain('Planned use for the triggering challenge:\n* Fixture.target: Apply TheoremOS.Auto.Quadruple.t');
+    expect(source).toContain('* Remaining: other case');
+    expect(gate(source)).toEqual([]);
+  });
 });
 
 const DOUBLE = 'namespace Fixture\ndef double (n : Nat) : Nat := n + n\ntheorem double_eq (n : Nat) : double n = 2 * n := by\n  unfold double; omega\nend Fixture\n';
