@@ -33,9 +33,17 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of 40[013]/u.test(message.text())) errors.push(message.text()); });
 
+  const firstVisit: string[] = [];
+  const recordFirstVisit = (request: { url(): string }) => firstVisit.push(new URL(request.url()).pathname);
+  page.on('request', recordFirstVisit);
   await page.goto(origin);
   await page.waitForURL(/\/login\.html$/u);
   await page.locator('#send-code:enabled').waitFor();
+  page.off('request', recordFirstVisit);
+  // The server sends a signed-out visitor to the login page; the workbench bundle is never fetched on the way.
+  assert.deepEqual(firstVisit.filter(pathname => /^\/(?:app\.js|formalize\.css|research-conversation\.css|assets\/katex\/)/u.test(pathname)), [],
+    `A signed-out first visit loads the workbench: ${firstVisit.join(' ')}`);
+  assert.equal(firstVisit.filter(pathname => pathname === '/api/session').length, 1, 'A signed-out first visit asks for its session once');
   assert.ok(await page.locator('#captcha-image').evaluate((image: HTMLImageElement) => image.decode().then(() => image.naturalWidth > 0)));
   // The usage guide is a page of this service and needs no account; the other footer links go to the site.
   const guide = await page.locator('.login-footer a[data-guide]').evaluate(link => (link as HTMLAnchorElement).href);
@@ -105,9 +113,10 @@ try {
   const cookies = await page.context().cookies();
   await page.context().clearCookies();
   await page.goto(link);
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(url => url.pathname === '/login.html' && url.search === `?run=${older}`);
+  // Signing in elsewhere and reloading this login page counts the same as signing in on it: it returns to the linked run.
   await page.context().addCookies(cookies);
-  await page.goto(`${origin}/login.html`);
+  await page.reload();
   await page.waitForURL(workbench);
   await page.locator(`#run-list [data-run-id="${older}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
   // The open run is addressed by its run id or, once its conversation opens beside it, by that conversation; either reopens it.

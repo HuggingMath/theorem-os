@@ -124,7 +124,7 @@ function ChatThread(props: ChatThreadProps) {
       {errorNotice}
     </div>;
   }
-  if (!conversation) return <div class="chat-welcome">
+  if (!conversation) return <div class="chat-start">
     {loading ? <p role="status">{t("正在读取对话…")}</p> : <>
       <h1>{t("今天想证明什么？")}</h1>
       <p>{t("用自然语言描述题目，逐步得到可验证的 Lean 证明。")}</p>

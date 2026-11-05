@@ -262,6 +262,15 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     auth?.prune();
   };
   const maintenance = setInterval(prune, 60_000).unref();
+  /** The browser session named by the cookie. An address removed from the allowlist, or a deleted account, loses its signed-in sessions. */
+  const cookieSession = (request: IncomingMessage) => {
+    const cookie = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('theoremos_session='))?.slice(18);
+    const session = cookie ? sessions.get(cookie) : undefined;
+    if (session?.account && auth && !(auth.allowed(session.account.email) && auth.getAccount(session.account.email)?.id === session.account.id)) {
+      endSession(session.id); return undefined;
+    }
+    return session;
+  };
   const server = http.createServer(async (request, response) => {
     const encoding = acceptedEncoding(request.headers['accept-encoding']);
     if (encoding) jsonEncodings.set(response, encoding);
@@ -298,12 +307,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!share) throw new HttpError(404, '分享链接不存在或已停止分享。');
           json(response, 200, { share: share.snapshot }); return;
         }
-        const cookie = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('theoremos_session='))?.slice(18);
-        let session = cookie ? sessions.get(cookie) : undefined;
-        // An address removed from the allowlist, or a deleted account, loses its signed-in sessions.
-        if (session?.account && auth && !(auth.allowed(session.account.email) && auth.getAccount(session.account.email)?.id === session.account.id)) {
-          endSession(session.id); session = undefined;
-        }
+        let session = cookieSession(request);
         if (request.method === 'GET' && url.pathname === '/api/session') {
           if (!session) {
             const anonymous = [...sessions.values()].filter(item => !item.account).length;
@@ -878,6 +882,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         throw new HttpError(405, '请求方法不受支持。');
       }
       if (!['GET', 'HEAD'].includes(request.method || '')) throw new HttpError(405, '请求方法不受支持。');
+      // A signed-out visitor goes straight to the login page instead of loading the workbench only to be sent there;
+      // a run link keeps its run (login.html?run=<id>) so signing in returns to it.
+      if (auth && ['/', '/index.html'].includes(url.pathname) && !cookieSession(request)?.account) {
+        const run = url.searchParams.get('run');
+        response.writeHead(302, { Location: run && /^[a-f0-9-]{1,36}$/u.test(run) ? `/login.html?run=${run}` : '/login.html' });
+        response.end(); return;
+      }
       const relative = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
       const file = path.resolve(config.staticRoot, relative);
       if (!file.startsWith(config.staticRoot + path.sep) || !fs.existsSync(file) || !fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink())

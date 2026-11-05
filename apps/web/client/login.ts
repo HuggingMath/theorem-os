@@ -2,6 +2,7 @@ import { createIcons, LogIn, MailCheck, RefreshCw } from 'lucide';
 import type { WebSession } from '../shared';
 import { localizeMessage, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
+import { forgetKey } from './keyMemory';
 
 createIcons({ icons: { LogIn, MailCheck, RefreshCw }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -13,6 +14,9 @@ const sendCode = $<HTMLButtonElement>('#send-code'), verify = $<HTMLButtonElemen
 const passwordEmail = $<HTMLInputElement>('#password-email'), password = $<HTMLInputElement>('#login-password');
 const passwordSubmit = $<HTMLButtonElement>('#password-submit');
 let csrf = '', captchaId = '', sentTo = '', resendTimer: ReturnType<typeof setInterval> | undefined;
+// A run link opened while signed out arrives as login.html?run=<id>; signing in returns to that run.
+const linkedRun = new URLSearchParams(location.search).get('run');
+const workbench = linkedRun && /^[a-f0-9-]{1,36}$/u.test(linkedRun) ? `./?run=${linkedRun}` : './';
 
 /** `message` is what the visitor sees; `reason` keeps the server's own text for the session check. */
 class LoginError extends Error {
@@ -39,7 +43,9 @@ async function loadCaptcha() {
 }
 async function start() {
   const session = await call<WebSession>('/api/session');
-  if (session.auth !== 'email' || session.account) { location.replace('./'); return; }
+  if (session.auth !== 'email' || session.account) { location.replace(workbench); return; }
+  // Signed out, the workbench is not loaded at all, so the tab's remembered API Key is cleared here.
+  forgetKey(() => sessionStorage);
   csrf = session.csrfToken;
   await loadCaptcha();
 }
@@ -101,7 +107,7 @@ codeStep.addEventListener('submit', event => {
   void guarded(async () => {
     try {
       await call('/api/auth/verify', { email: sentTo, code: code.value.trim() });
-      location.replace('./');
+      location.replace(workbench);
     } finally { verify.disabled = false; }
   });
 });
@@ -115,7 +121,7 @@ passwordStep.addEventListener('submit', event => {
     try {
       await call('/api/auth/password/login', { email: passwordEmail.value, password: password.value });
       password.value = '';
-      location.replace('./');
+      location.replace(workbench);
     } finally { passwordSubmit.disabled = false; }
   });
 });

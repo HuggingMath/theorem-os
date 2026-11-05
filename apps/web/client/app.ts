@@ -232,13 +232,10 @@ const linkedRun = new URLSearchParams(location.search).get('run');
 const sampleAddress = '?sample';
 let sampleLink = location.search === sampleAddress;
 let formalizationLink = new URLSearchParams(location.search).get('formalization');
-// A run link opened while signed out goes through the login page, which returns to the root address; the run comes back with it.
-const loginReturnKey = 'theorem-os.web-login-run.v1';
-const returnedRun = (() => {
-  try { const id = sessionStorage.getItem(loginReturnKey); sessionStorage.removeItem(loginReturnKey); return id; } catch { return null; }
-})();
+// A run link opened while signed out goes through login.html?run=<id>, which returns to this address with the same run.
+const loginAddress = () => linkedRun && runIdPattern.test(linkedRun) ? `login.html?run=${linkedRun}` : 'login.html';
 // The root address opens a new problem; explicit run and sample links still open their records.
-state.composing = !linkedRun && !sampleLink && !(returnedRun && runIdPattern.test(returnedRun));
+state.composing = !linkedRun && !sampleLink;
 if (linkedRun !== null && runIdPattern.test(linkedRun))
   saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
 const notificationsSupported = () => typeof Notification === 'function';
@@ -2050,8 +2047,7 @@ function initialize(): Promise<void> {
       if (!currentConnection(epoch)) return;
       if (session.auth === 'email' && !session.account) {
         saveDraft(); draftReady = false; forgetKey(keyStorage);
-        if (linkedRun && runIdPattern.test(linkedRun)) try { sessionStorage.setItem(loginReturnKey, linkedRun); } catch { /* The run is still in the resume record. */ }
-        location.replace('login.html'); return;
+        location.replace(loginAddress()); return;
       }
       const ownerChanged = Boolean(state.session && ownerOfSession(state.session) !== ownerOfSession(session));
       const firstLoad = !state.session || ownerChanged;

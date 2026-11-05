@@ -59,9 +59,14 @@ try {
     assert.equal(await page.locator('#workbench-home').getAttribute('href'), './');
     const emptyInput = await page.locator('#formalize-original').boundingBox();
     assert.ok(emptyInput && emptyInput.height < 180, 'The initial input is comfortably sized');
+    // The heading, its subtitle and the composer share one centre line.
+    const centres = await page.evaluate(() => ['.chat-start h1', '.chat-start > p', '#natural-research'].map(selector => {
+      const box = document.querySelector(selector)!.getBoundingClientRect(); return box.left + box.width / 2;
+    }));
+    assert.ok(Math.max(...centres) - Math.min(...centres) <= 2, `The empty-chat heading is off centre: ${centres.map(Math.round).join(', ')}`);
     assert.equal(await noOverflow(page), true); assert.deepEqual(await audit(page), []);
     await page.screenshot({ path: path.join(output, `natural-${locale}-${width}.png`), fullPage: true });
-    mark(`${locale} ${width}px: blank natural home, collapsed choices, visible new chat and no overflow`);
+    mark(`${locale} ${width}px: blank natural home, centred heading, collapsed choices, visible new chat and no overflow`);
 
     await page.locator('#formalize-original').fill(original);
     await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill('fixture-secret-not-persisted');

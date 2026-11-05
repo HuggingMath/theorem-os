@@ -115,6 +115,32 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     expect(mail).toHaveLength(1);
   });
 
+  it('sends a signed-out visitor from the workbench address straight to the login page, keeping a run link', async () => {
+    fs.writeFileSync(path.join(root, 'index.html'), '<!doctype html><title>workbench</title>');
+    const page = (route: string, client?: Client) => fetch(`${baseUrl}${route}`, { redirect: 'manual',
+      headers: client ? { Cookie: client.cookie } : {} });
+    for (const [route, location] of [['/', '/login.html'], ['/index.html', '/login.html'], ['/?run=0123abcd-ef', '/login.html?run=0123abcd-ef'],
+      ['/?run=../x', '/login.html'], ['/?chat=abc', '/login.html']]) {
+      const response = await page(route);
+      expect(response.status, route).toBe(302);
+      expect(response.headers.get('location'), route).toBe(location);
+      expect(response.headers.get('cache-control')).toBe('no-store, no-transform');
+    }
+    // A login-page session without an account is still signed out.
+    expect((await page('/', await session())).status).toBe(302);
+    const alice = await login('alice@example.org');
+    const signedIn = await page('/?run=0123abcd-ef', alice);
+    expect(signedIn.status).toBe(200);
+    expect(await signedIn.text()).toContain('workbench');
+    // An address removed from the allowlist is signed out on its next page load too.
+    const file = path.join(root, 'data', 'allowlist.txt');
+    fs.writeFileSync(file, '# approved\nbob@example.org\n');
+    const bob = await login('bob@example.org');
+    expect((await page('/', bob)).status).toBe(200);
+    fs.writeFileSync(file, '# approved\n');
+    expect((await page('/', bob)).status).toBe(302);
+  });
+
   it('rotates the session on login, rejects wrong codes and invalidates a code after five misses', async () => {
     const visitor = await session();
     await code(visitor, 'alice@example.org');
