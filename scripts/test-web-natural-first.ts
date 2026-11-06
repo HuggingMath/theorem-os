@@ -68,6 +68,21 @@ try {
     await page.screenshot({ path: path.join(output, `natural-${locale}-${width}.png`), fullPage: true });
     mark(`${locale} ${width}px: blank natural home, centred heading, collapsed choices, visible new chat and no overflow`);
 
+    // The composer sits under the heading here, so its settings open below it, and a short screen scrolls them into view.
+    if (width === 320) await page.setViewportSize({ width, height: 640 });
+    await page.locator('#formalize-settings > summary').click();
+    await page.locator('.chat-settings-fields').waitFor(); await page.waitForTimeout(100);
+    const placement = await page.evaluate(() => {
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      return { panel: box('.chat-settings-fields'), form: box('#natural-research #formalize-form'), heading: box('.chat-start h1'), height: innerHeight };
+    });
+    assert.ok(placement.panel.top >= placement.form.bottom && placement.panel.top > placement.heading.bottom && placement.panel.bottom <= placement.height + 1,
+      `The home settings must open below the composer and on screen: ${JSON.stringify(placement)}`);
+    await page.locator('#formalize-settings > summary').click();
+    await page.locator('.chat-settings-fields').waitFor({ state: 'hidden' });
+    if (width === 320) await page.setViewportSize({ width, height: 1000 });
+    mark(`${locale} ${width}px: the home settings open below the composer, clear of the heading and the input, and on screen`);
+
     await page.locator('#formalize-original').fill(original);
     await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill('fixture-secret-not-persisted');
     await page.reload(); await page.locator('#formalize-original').waitFor();

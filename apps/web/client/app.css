@@ -1182,10 +1182,8 @@ textarea.expanded-source:focus-visible{outline-width:1px;outline-offset:-1px}
   /* The status keeps only its dot (the label stays in the title and for screen readers), so the model name has room. */
   .connection-status{font-size:0;padding-inline:4px;gap:0}
   .status-dot{width:5px;height:5px}
-  /* Signed in, the account button joins the actions; the model name gives way (it truncates) so nothing leaves the screen. */
-  .topbar-actions{gap:1px;flex-shrink:1}
-  .topbar .model-menu{min-width:0}
-  .topbar #open-glossary{width:30px;height:32px}
+  .topbar-actions{gap:1px}
+  .topbar .palette-trigger{width:30px;height:32px}
   .mobile-switch{padding-inline:18px;gap:26px}
   .composer-heading{padding-inline:17px}
   .composer-heading h1{font-size:var(--text-sm)}
@@ -1821,15 +1819,8 @@ textarea.expanded-source:focus-visible{outline-width:1px;outline-offset:-1px}
 .live-pill-detail{color:var(--blue-600);font-family:var(--sans);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
 .live-pill-detail:empty{display:none}
 @keyframes live-ring{0%{opacity:.9;transform:scale(.6)}80%,100%{opacity:0;transform:scale(1.6)}}
-.palette-trigger{display:inline-flex;align-items:center;gap:8px;height:32px;min-width:0;padding:0 6px 0 10px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--gray-25);color:var(--gray-500);font-size:var(--text-xs);white-space:nowrap;transition:background .15s,border-color .15s}
-.palette-trigger:hover{background:var(--gray-50);border-color:var(--gray-300);color:var(--gray-700)}
-.palette-trigger>svg{width:14px;height:14px}
-.palette-trigger>span{margin-right:14px}
 @media(min-width:851px){
-  .palette-trigger,.topbar .model-menu{height:32px;min-height:32px;border-radius:999px;border-color:var(--gray-200);background:var(--card)}
-  .palette-trigger{padding-inline:12px 5px}
-  .topbar .model-menu{padding-inline:12px 10px}
-  .palette-trigger kbd{border-radius:999px;padding-inline:7px;border-bottom-width:1px;background:var(--gray-50)}
+  .topbar .model-menu{height:32px;min-height:32px;border-radius:999px;border-color:var(--gray-200);background:var(--card);padding-inline:12px 10px}
   .connection-status{height:32px;min-height:32px;padding-inline:8px 4px}
 }
 kbd{display:inline-flex;align-items:center;height:20px;padding:0 5px;border:1px solid var(--gray-200);border-bottom-width:2px;border-radius:4px;background:var(--card);color:var(--gray-500);font:500 var(--text-xs)/1 var(--mono)}
@@ -1855,18 +1846,13 @@ kbd{display:inline-flex;align-items:center;height:20px;padding:0 5px;border:1px 
   .palette-options button:has(>.palette-hint)>svg:last-child:not(:first-child){grid-column:3;grid-row:1/3}}
 .palette-empty{padding:28px 10px;text-align:center;color:var(--gray-500);font-size:var(--text-sm)}
 
-@media(max-width:1150px){
-  .palette-trigger>span{display:none}
-}
 @media(max-width:850px){
   .topbar{height:54px;gap:10px;padding-inline:12px}
-  .palette-trigger{padding-inline:8px}
-  .palette-trigger>kbd{display:none}
   .run-monitor{padding-inline:12px}
   .run-monitor-entry{flex-basis:220px}
 }
 @media(max-width:560px){
-  .live-pill,.palette-trigger{display:none}
+  .live-pill{display:none}
   .command-palette{margin-top:8vh}
 }
 /* Collaboration board: task graph/list cards, agents and progress meters (ui/TaskBoard, ui/AgentCards, ui/ProgressSummary). */
@@ -2014,6 +2000,10 @@ body.login-page{overflow:auto}
 .login-footer a:hover{text-decoration-color:currentColor}
 .account-trigger{display:inline-flex;align-items:center;gap:6px;max-width:220px;min-height:34px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:10px;background:var(--card);color:var(--gray-700);font-size:var(--text-xs)}
 .account-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The address is what gives way when the top bar is full: it truncates, and every other control keeps its size. */
+.topbar-actions:has(.account-trigger){flex-shrink:1}
+.topbar-actions>:not(.account-trigger){flex-shrink:0}
+.topbar .account-trigger{min-width:34px}
 .account-trigger:hover{background:var(--gray-50)}
 .account-email{font-weight:500;overflow-wrap:anywhere;margin-bottom:14px}
 .account-password{border-top:1px solid var(--line);margin:16px 0;padding-top:16px}
@@ -2181,14 +2171,16 @@ body.share-page{height:auto;min-height:100dvh;overflow:visible}
 .glossary-content dd{margin:2px 0 0;font-size:var(--text-xs);line-height:1.7;color:var(--gray-600)}
 .glossary-content .term-detail{margin-top:3px;color:var(--gray-500)}
 .term-heading{display:inline-flex;align-items:center;gap:2px;min-width:0}
-/* The narrowest top bar has no room; the welcome link and every term tip still open the glossary. */
-@media(max-width:380px){#open-glossary{display:none}}
+/* Phone top bars have no room; the search button (command palette), the welcome link and every term tip still open the glossary. */
+@media(max-width:560px){#open-glossary{display:none}}
 /* Language switch: names the other language; below 760px only the icon shows and the label stays the accessible name. */
 .topbar-locale{display:inline-flex;align-items:center;gap:6px;height:32px;flex-shrink:0;padding:0 10px;border:0;border-radius:999px;background:transparent;color:var(--gray-600);font-size:var(--text-xs);white-space:nowrap}
 .topbar-locale:hover{background:var(--gray-100);color:var(--gray-800)}
 .topbar-locale svg{width:15px;height:15px}
-/* Below 350px the language switch leaves no room for the wordmark; the mark and the link's label remain. */
-@media(max-width:350px){.topbar .brand>span{display:none}}
+/* The home link is a 32px target at every width. Phones keep the mark and lose the wordmark, so the search button,
+   settings, language and account all keep their size. */
+.topbar .brand{min-height:32px}
+@media(max-width:420px){.topbar .brand>span{display:none}.topbar .brand{min-width:32px;justify-content:center}}
 @media(max-width:760px){.topbar-locale{width:32px;padding:0;justify-content:center}.topbar-locale .locale-switch-label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .share-top-actions{display:flex;align-items:center;gap:12px}
 .locale-switch-separator:has(+.locale-switch[hidden]){display:none}
@@ -3243,4 +3235,22 @@ button.formal-lean{vertical-align:top}
   .lean-row,.explain-steps>li,.explain-statement-block,.formal-correspondence,.explain-goal{break-inside:avoid}
   .explain-page :is(h2,h3,.explain-pane-head){break-after:avoid}
   .explain-goal{max-height:none;overflow:visible;white-space:pre-wrap;overflow-wrap:anywhere}
+}
+/*
+ * Forced colours (Windows high contrast) replace backgrounds, border colours and shadows with the system palette, so a
+ * state shown only by those disappears. Selected, current, pressed and checked controls get an inset Highlight ring
+ * instead; a focused one keeps its focus ring. The switch and the palette's active row are drawn in system colours, the row
+ * without the Canvas backplate the browser would put behind its HighlightText label.
+ */
+@media(forced-colors:active){
+  :is([aria-current]:not([aria-current=false]),[aria-pressed=true],[aria-pressed=mixed],[aria-selected=true],.segmented input:checked+span,
+    .run-row.selected,.collab-task.selected,.collab-review-choice.selected,.collab-delivery-choice.selected,.collab-math-choice.selected,
+    .module-customization-row[data-selected=true],.module-policies details[data-selected=true],button.agent-route-label[data-selected],
+    .glossary-content dl>div[data-current],.lean-row.is-active,.explain-section.is-active,.explain-statement-block.is-active,
+    .explain-steps>li.is-active,.formal-correspondence.is-active):not(:focus-visible){outline:2px solid Highlight;outline-offset:-2px}
+  .palette-options button[aria-selected=true]{forced-color-adjust:none;background:Highlight;color:HighlightText}
+  .palette-options button[aria-selected=true] :is(svg,span,kbd){color:HighlightText}
+  .module-plan-toggle input[type=checkbox]::before{background:CanvasText}
+  .module-plan-toggle input[type=checkbox]:checked{background:Highlight;border-color:Highlight}
+  .module-plan-toggle input[type=checkbox]:checked::before{background:HighlightText}
 }

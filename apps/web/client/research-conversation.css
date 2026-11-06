@@ -117,6 +117,8 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 #natural-research .chat-composer{width:100%;min-width:0}
 #natural-research .chat-composer #formalize-form{display:block;margin:0;padding:8px;border:1px solid var(--gray-200);border-radius:22px;background:var(--card);box-shadow:0 4px 20px #00000006}
 #natural-research .chat-composer #formalize-form:focus-within{border-color:var(--gray-400)}
+/* Typing in the composer thickens its outline to 2px at 3.6:1 or more against the resting border, page and fill in both themes. */
+#natural-research .chat-composer #formalize-form:has(#formalize-original:focus){border-color:var(--gray-500);box-shadow:0 0 0 1px var(--gray-500),0 4px 20px #00000006}
 #natural-research .chat-composer #formalize-original{display:block;width:100%;min-width:0;min-height:92px;max-height:260px;margin:0;padding:14px 16px 10px;border:0;border-radius:14px;background:transparent;color:var(--ink);font:inherit;font-size:16px;line-height:1.8;resize:none;box-shadow:none;overflow-y:auto}
 #natural-research .chat-composer #formalize-original:focus{outline:none}
 .chat-composer-toolbar{display:flex;align-items:center;gap:12px;padding:4px 8px 6px;position:relative}
@@ -126,6 +128,8 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-composer-settings>summary svg,.chat-lean-entry svg{width:15px;height:15px;flex-shrink:0}
 .chat-composer-settings[open]>summary{color:var(--ink)!important}
 .chat-settings-fields{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:12;display:grid;gap:12px;max-height:48dvh;overflow-y:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:0 8px 32px #00000014;font-size:13px}
+/* On the empty home the composer sits mid-page under the heading, so the settings open below it instead of over the input. */
+body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:auto}
 .chat-settings-options{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 .chat-settings-options label{min-width:0}
 #natural-research .chat-settings-fields :is(input,select){display:block;width:100%;min-width:0;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:10px;font-size:13px}
@@ -209,3 +213,10 @@ body[data-view=draft][data-output-open=true] .research-output-close{display:bloc
 .chat-guidance-receipt[data-guidance-status=delivered]{color:var(--green-600)}
 .chat-guidance-receipt:is([data-guidance-status=rejected],[data-guidance-status=failed]){color:var(--red-700)}
 @media(max-width:480px){.chat-guidance-target label{flex-basis:100%}.chat-composer-toolbar{gap:6px}.chat-composer-toolbar>[data-chat-guidance-mode-open]{font-size:12px}}
+/* Forced colours drop the bubble fills, the round send button and the composer's focus border; draw them as lines. */
+@media(forced-colors:active){
+  :is(.chat-message-user,.research-conversation-original,.formalize-embedded #formalize-source-text){border:1px solid CanvasText}
+  #natural-research .chat-composer :is(#formalize-start,#chat-stop){border:1px solid ButtonText}
+  #natural-research .chat-composer #formalize-start:disabled{border-color:GrayText;color:GrayText}
+  :is(#natural-research .chat-composer,.formalize-embedded) #formalize-form:has(#formalize-original:focus){outline:2px solid Highlight;outline-offset:2px}
+}

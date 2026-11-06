@@ -16,7 +16,8 @@ import { showExamples, openSample } from './web-ui-controls';
  * Keyboard and screen-reader pass over the workbench, in Chinese and English: the static audit (names, labels, ARIA
  * references, unique ids) on the welcome page, every tab of the sample run and each dialog; Tab reaches the main
  * controls with a visible focus ring; the detail tabs follow the arrow-key tab pattern; and every dialog closes on
- * Escape with focus back on the control that opened it. Runs against the read-only sample, so nothing is submitted.
+ * Escape with focus back on the control that opened it. Under forced colours (Windows high contrast) the current, selected
+ * and focused states stay visible. Runs against the read-only sample, so nothing is submitted.
  * The login page is audited in test-web-login, which configures accounts.
  */
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -94,11 +95,11 @@ try {
     await dialog(page, '#open-history', 'history-dialog', `history dialog (${locale})`);
     await page.setViewportSize({ width: 1440, height: 900 });
     await settled(page);
-    // The top bar has no palette button; Ctrl+K opens it and Escape returns focus to where it was.
+    // The search button in the top bar opens the palette; so does Ctrl+K from anywhere, and Escape returns focus to where it was.
+    await dialog(page, '.topbar .palette-trigger', 'command-palette', `command palette (${locale})`);
     await page.locator('#open-settings').focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     await page.locator('#command-palette[open]').waitFor();
-    await clean(page, `command palette (${locale})`, '#command-palette');
     await page.keyboard.press('Escape');
     await page.locator('#command-palette').waitFor({ state: 'hidden' });
     assert.ok(await page.locator('#open-settings').evaluate(element => element === document.activeElement), 'Palette did not return focus');
@@ -151,8 +152,63 @@ try {
     await context.close();
   }
 
+  // Forced colours (Windows high contrast) drop backgrounds, border colours and shadows; current, selected and focused
+  // states must still show, and the Lean source carries no token colours that would read as search matches.
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, forcedColors: 'active', reducedMotion: 'reduce' });
+    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    const now = new Date().toISOString(), ids = ['0123abcd-0123-4abc-8def-0123456789ab', '1123abcd-0123-4abc-8def-0123456789ab'];
+    const chats = ids.map((id, index) => ({ id, title: ['证明素数有无穷多个', '一元五次方程'][index], createdAt: now, updatedAt: now, answering: false }));
+    const thread = { ...chats[0], messages: [{ id: 'm1', role: 'user', kind: 'text', text: '证明素数有无穷多个。', createdAt: now, status: 'complete' },
+      { id: 'm2', role: 'assistant', kind: 'text', text: '假设只有有限个素数。', createdAt: now, status: 'complete', replyTo: 'm1' }] };
+    await context.route('**/api/conversations', route => route.request().method() === 'GET' ? route.fulfill({ json: { conversations: chats } }) : route.abort());
+    await context.route('**/api/conversations/*', route => route.request().method() === 'GET' ? route.fulfill({ json: { conversation: thread } }) : route.abort());
+    const page = await context.newPage(), errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    // The browser's Highlight, read from a probe, since its value differs between systems.
+    const highlight = () => page.evaluate(() => {
+      const probe = document.body.appendChild(document.createElement('i')); probe.style.color = 'Highlight';
+      const value = getComputedStyle(probe).color; probe.remove(); return value;
+    });
+    const outline = (selector: string) => page.locator(selector).first().evaluate(element => {
+      const style = getComputedStyle(element); return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor };
+    });
+    await page.goto(`${origin}/?chat=${ids[0]}`);
+    await page.locator('.chat-message-user').waitFor(); await settled(page);
+    const system = await highlight();
+    assert.deepEqual(await outline('.chat-history-item[aria-current="page"]'), { style: 'solid', width: '2px', color: system }, 'The current conversation is ringed');
+    assert.equal((await outline('.chat-history-item:not([aria-current])')).style, 'none', 'Other conversations are not ringed');
+    assert.equal(await page.locator('.chat-message-user').evaluate(element => getComputedStyle(element).borderTopStyle), 'solid', 'The question keeps an outline');
+    await page.locator('#formalize-original').focus();
+    assert.deepEqual(await outline('#formalize-form'), { style: 'solid', width: '2px', color: system }, 'The focused composer is ringed');
+    await page.screenshot({ path: path.join(output, 'a11y-forced-colors-chat.png') });
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    await page.locator('#command-palette[open]').waitFor(); await page.keyboard.press('ArrowDown');
+    // The active row is drawn in system colours without the Canvas backplate that would hide its label.
+    assert.deepEqual(await page.locator('.palette-options button[aria-selected=true]').evaluate(element => [getComputedStyle(element).backgroundColor,
+      getComputedStyle(element.querySelector('.palette-label')!).forcedColorAdjust]), [system, 'none']);
+    await page.keyboard.press('Escape');
+    mark('forced colours: the current conversation, the focused composer and the palette row are shown in system colours');
+
+    await page.goto(origin); await ready(page);
+    await openSample(page);
+    await page.locator('#detail-tab-source').click();
+    await page.locator('#detail-panel[data-tab="source"] .code-scroll code').waitFor(); await settled(page);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    assert.equal((await outline('#detail-tab-source')).color, system, 'The selected tab is ringed');
+    assert.equal((await outline('#detail-tab-result')).style, 'none');
+    const tokens = () => page.evaluate(() => CSS.highlights.get('lean-keyword')?.size ?? 0);
+    assert.equal(await tokens(), 0, 'Forced colours paint highlights as selections, so the source has no token highlights');
+    await page.screenshot({ path: path.join(output, 'a11y-forced-colors-source.png') });
+    await page.emulateMedia({ forcedColors: 'none' });
+    await page.waitForFunction(() => (CSS.highlights.get('lean-keyword')?.size ?? 0) > 0);
+    mark('forced colours: the selected tab is ringed, and the Lean token colours return when forced colours end');
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+
 } finally {
   await browser?.close();
   service.server.close();
 }
-console.log('Accessibility checks passed: audit of the welcome, dialogs, sample tabs, phone layout; keyboard order, focus rings and focus return.');
+console.log('Accessibility checks passed: audit of the welcome, dialogs, sample tabs, phone layout; keyboard order, focus rings and focus return; forced colours.');

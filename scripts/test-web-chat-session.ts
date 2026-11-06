@@ -274,6 +274,16 @@ try {
     await page.screenshot({ path: path.join(output, `conversation-${width}.png`), fullPage: true });
     mark(`${width}px: home, new chat, history, browser back, refresh and per-session drafts`);
 
+    // In a conversation the composer is at the bottom, so its settings open upwards, above the settings button and on screen.
+    const settings = page.locator('#formalize-settings'), settingsOpen = await settings.evaluate(details => (details as HTMLDetailsElement).open);
+    await settings.evaluate(details => { (details as HTMLDetailsElement).open = true; });
+    await page.locator('.chat-settings-fields').waitFor();
+    const placement = await page.evaluate(() => ({ panel: document.querySelector('.chat-settings-fields')!.getBoundingClientRect().toJSON(),
+      button: document.querySelector('#formalize-settings > summary')!.getBoundingClientRect().toJSON() }));
+    assert.ok(placement.panel.bottom <= placement.button.top && placement.panel.top >= 0, `The settings must open above the composer: ${JSON.stringify(placement)}`);
+    await settings.evaluate((details, open) => { (details as HTMLDetailsElement).open = open; }, settingsOpen);
+    mark(`${width}px: in a conversation the settings open above the composer`);
+
     if (width === 1440) {
       await page.route(`**/api/conversations/${id}/messages`, route => route.fulfill({ status: 503, json: { error: '本地测试：暂时不可用' } }), { times: 1 });
       await credentials(page); await page.locator('#formalize-start').click();

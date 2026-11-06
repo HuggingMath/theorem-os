@@ -9,6 +9,8 @@ type Surface = { id: string; code: HTMLElement; scroll: HTMLElement; toolbar: HT
 const tokenKinds = ['comment', 'keyword', 'tactic', 'placeholder', 'string', 'number'] as const;
 const headingKinds: Record<LeanHeadingKind, string> = { theorem: t('定理'), definition: t('定义'), structure: t('结构'), instance: t('实例'), axiom: t('公理') };
 const canHighlight = () => typeof CSS !== 'undefined' && Boolean(CSS.highlights) && typeof Highlight !== 'undefined';
+/** Windows high contrast paints every highlight in the selection colours, so token colours would read as matches there. */
+const forcedColors = () => typeof matchMedia === 'function' && matchMedia('(forced-colors: active)').matches;
 function Toolbar() {
   const button = (id: string, label: string, title: string, icon: string) =>
     <button type="button" id={id} class="icon-button" aria-label={label} title={title}><Icon name={icon} /></button>;
@@ -65,7 +67,9 @@ export class SourceReader {
   private searchSignature = '';
   private editLocation?: SourceSelection;
 
-  constructor(private readonly expandDraft: () => void) {}
+  constructor(private readonly expandDraft: () => void) {
+    if (typeof matchMedia === 'function') matchMedia('(forced-colors: active)').addEventListener('change', () => this.paintSyntax());
+  }
 
   update(surface?: Surface) {
     if (!surface) {
@@ -318,7 +322,7 @@ export class SourceReader {
   private paintSyntax() {
     if (!canHighlight()) return;
     const groups = new Map(tokenKinds.map(kind => [kind, new Highlight()]));
-    for (const token of leanTokens(this.text)) {
+    if (this.node && !forcedColors()) for (const token of leanTokens(this.text)) {
       const range = this.range(token.start, token.end);
       if (range) groups.get(token.kind)!.add(range);
     }

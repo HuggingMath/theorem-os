@@ -18,7 +18,8 @@ import { openModulesTab, openSample, showExamples } from './web-ui-controls';
  * Light and dark interface: without a choice the page follows the system, before the first paint and live when the
  * system changes; a choice from the account dialog or the command palette wins, survives a reload, reaches other tabs
  * and is removed again by "Match system". Every visible text passes WCAG contrast in both themes on the welcome page,
- * every tab of the read-only sample, the dialogs, a phone width, the login page and the share page.
+ * every tab of the read-only sample, the dialogs, a phone width, the login page and the share page, and the focused composer's
+ * outline passes the 3:1 non-text contrast.
  */
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-theme');
@@ -181,6 +182,33 @@ try {
   }
   mark('every visible text passes WCAG AA contrast in both themes: welcome, dialogs, palette, all sample tabs (zh and en) and a phone width');
 
+  // Typing in the composer thickens its outline in a colour at 3:1 or more against the resting border, the page and its fill.
+  for (const scheme of ['light', 'dark'] as const) {
+    const { context, page, errors } = await open(browser, scheme);
+    // The natural-language home, not workbench(), which switches to the Lean editor.
+    await page.goto(origin); await page.locator('#formalize-original').waitFor(); await settled(page);
+    const form = page.locator('#natural-research #formalize-form');
+    const look = () => form.evaluate(element => { const style = getComputedStyle(element);
+      return { border: style.borderTopColor, ring: style.boxShadow, fill: style.backgroundColor, page: getComputedStyle(document.body).backgroundColor }; });
+    const idle = await look();
+    await page.locator('#formalize-original').focus();
+    await page.waitForFunction(border => getComputedStyle(document.querySelector('#natural-research #formalize-form')!).borderTopColor !== border, idle.border);
+    const focused = await look();
+    assert.ok(focused.ring.startsWith(`${focused.border} 0px 0px 0px 1px`), `The focused composer has a second pixel of outline (${scheme}): ${focused.ring}`);
+    const ratios = await page.evaluate(([color, others]) => {
+      const canvas = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+      const luminance = (value: string) => { canvas.clearRect(0, 0, 1, 1); canvas.fillStyle = value; canvas.fillRect(0, 0, 1, 1);
+        const [r, g, b] = [...canvas.getImageData(0, 0, 1, 1).data].slice(0, 3).map(channel => { channel /= 255;
+          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4; });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      return others.map(other => { const [high, low] = [luminance(color), luminance(other)].sort((x, y) => y - x); return (high + 0.05) / (low + 0.05); });
+    }, [focused.border, [idle.border, focused.page, focused.fill]] as const);
+    assert.ok(ratios.every(ratio => ratio >= 3), `Composer focus contrast below 3:1 (${scheme}): ${ratios.map(ratio => ratio.toFixed(2)).join(', ')}`);
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+  mark('the focused composer has a 2px outline at 3:1 or more against its resting border, the page and its fill, in both themes');
+
   // The login and share pages load the same theme script and pass contrast in the dark theme.
   {
     const { context, page, errors } = await open(browser, 'dark');
@@ -197,7 +225,7 @@ try {
     await context.close();
   }
   mark('the login and share pages follow the theme and pass contrast in the dark theme');
-  console.log('Theme checks passed: system default before first paint and live, palette and account choice, persistence, other tabs, WCAG contrast in both themes.');
+  console.log('Theme checks passed: system default before first paint and live, palette and account choice, persistence, other tabs, WCAG contrast in both themes, composer focus outline.');
 } finally {
   await browser?.close(); await service.close(); await loginService.close();
 }

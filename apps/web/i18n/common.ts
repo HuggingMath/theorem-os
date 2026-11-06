@@ -129,7 +129,6 @@ export const common: Record<string, string> = {
   "所选任务合同未保留，不能以当前同名任务替代。": "The selected task contract was not kept and cannot be replaced by the current task of the same name.",
   "查看进行中的研究：{0}": "View research in progress: {0}",
   "打开命令面板": "Open command palette",
-  "跳转或执行": "Search or run",
   "账号：{0}": "Account: {0}",
   "排队": "Queued",
   "准备环境": "Preparing environment",

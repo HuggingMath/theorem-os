@@ -30,9 +30,8 @@ function Topbar(props: TopbarProps) {
     </button>}
     <div class="topbar-actions">
       <a id="open-classics" class="classics-link" href={classicLibraryUrl} target="_blank" rel="noopener" title={t('经典题库')} aria-label={t('经典题库')}><Icon name="book-open" /><span>{t('经典题库')}</span></a>
-      <button type="button" class="palette-trigger" onClick={props.onPalette} aria-label={t('打开命令面板')} aria-haspopup="dialog" aria-keyshortcuts={props.mac ? 'Meta+K' : 'Control+K'}>
-        <Icon name="search" /><span>{t('跳转或执行')}</span><kbd>{props.mac ? '⌘K' : 'Ctrl K'}</kbd>
-      </button>
+      <button type="button" class="palette-trigger icon-button" onClick={props.onPalette} aria-label={t('打开命令面板')} title={`${t('打开命令面板')} (${props.mac ? '⌘K' : 'Ctrl K'})`}
+        aria-haspopup="dialog" aria-keyshortcuts={props.mac ? 'Meta+K' : 'Control+K'}><Icon name="search" /></button>
       <button type="button" id="open-settings" class="model-menu" title={t('研究配置')} aria-haspopup="dialog" disabled={props.settingsDisabled} onClick={props.onSettings}>
         <Icon name="sliders-horizontal" /><span id="current-model">{props.model}</span><Icon name="chevron-down" />
       </button>

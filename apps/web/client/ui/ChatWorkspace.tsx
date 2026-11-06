@@ -191,7 +191,11 @@ function ChatComposer(props: ChatComposerProps) {
           event.preventDefault(); if (canSend) props.onSubmit();
         }} />
       <div class="chat-composer-toolbar">
-        <details id="formalize-settings" class="chat-composer-settings"><summary title={t("模型设置")}><Icon name="sliders-horizontal" /><span>{t("设置")}</span></summary>
+        <details id="formalize-settings" class="chat-composer-settings" onToggle={event => {
+          // On the empty home the fields open below the composer; a short screen scrolls them into view.
+          const details = event.currentTarget;
+          if (details.open && document.body.dataset.chatEmpty === 'true') details.querySelector('.chat-settings-fields')?.scrollIntoView({ block: 'nearest' });
+        }}><summary title={t("模型设置")}><Icon name="sliders-horizontal" /><span>{t("设置")}</span></summary>
           <div class="chat-settings-fields">
             <div class="chat-settings-options"><label for="formalize-environment">{t("证明环境")}<select id="formalize-environment" value={props.environment} onChange={event => props.onEnvironment(event.currentTarget.value as ChatComposerProps['environment'])} disabled={props.hasConversation}><option value="standard">{t("标准库")}</option><option value="mathlib">Mathlib</option></select></label>
               <label for="formalize-effort">{t("推理强度")}<select id="formalize-effort" value={props.effort} onChange={event => props.onEffort(event.currentTarget.value as ChatComposerProps['effort'])}><option value="max">{t("最高")}</option><option value="high">{t("高")}</option><option value="low">{t("低")}</option></select></label></div>

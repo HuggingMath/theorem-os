@@ -89,16 +89,25 @@ try {
   await ready(page);
   mark('a wrong code is reported, the right code opens the workbench with the account in the top bar');
 
-  // Signed in, the account button joins the top bar; on phones the model name truncates so the button stays on screen.
-  for (const width of [375, 320]) {
+  // Signed in, the account button joins the top bar; when the bar is full the address truncates, and every other control,
+  // the search button included, keeps a target of at least 24px without overlapping its neighbour.
+  for (const width of [1440, 1150, 850, 768, 561, 560, 414, 390, 375, 360, 320]) {
     await page.setViewportSize({ width, height: 760 });
     await settled(page);
     const bar = await page.locator('#topbar').evaluate(topbar => ({ scroll: topbar.scrollWidth, client: topbar.clientWidth,
-      account: document.querySelector('#open-account')!.getBoundingClientRect().right }));
-    assert.ok(bar.scroll <= bar.client && bar.account <= width, `The signed-in top bar overflows at ${width}px: ${JSON.stringify(bar)}`);
+      controls: [...topbar.querySelectorAll<HTMLElement>('button, a')].filter(control => control.getClientRects().length).map(control => {
+        const box = control.getBoundingClientRect();
+        return { name: control.id || control.className.split(' ')[0], left: box.left, right: box.right, width: box.width, height: box.height };
+      }).sort((a, b) => a.left - b.left) }));
+    assert.ok(bar.scroll <= bar.client, `The signed-in top bar overflows at ${width}px: ${JSON.stringify(bar)}`);
+    for (const name of ['palette-trigger', 'open-settings', 'locale-switch', 'open-account'])
+      assert.ok(bar.controls.some(control => control.name === name && control.right <= width), `${name} is missing at ${width}px: ${JSON.stringify(bar.controls)}`);
+    for (const control of bar.controls) assert.ok(control.width >= 24 && control.height >= 24, `${control.name} is under 24px at ${width}px: ${JSON.stringify(control)}`);
+    for (const [index, control] of bar.controls.slice(1).entries())
+      assert.ok(control.left >= bar.controls[index].right - 0.5, `${bar.controls[index].name} and ${control.name} overlap at ${width}px`);
   }
   await page.setViewportSize({ width: 1440, height: 900 });
-  mark('the signed-in top bar keeps the account button on 375 and 320 pixel screens');
+  mark('the signed-in top bar keeps the search button, settings, language and account at 24px or more, without overlap, from 1440 to 320 pixels');
 
   // The runner here ends every run without a result, so each one ends with an error and mails its link.
   const csrf = (await (await page.request.get(`${origin}/api/session`)).json()).csrfToken as string;
