@@ -36,11 +36,13 @@ const baseItem: WebFormalization = { id: '11111111-1111-4111-8111-111111111111',
 const capabilities: WebFormalizationCapabilities = { available: true, model: 'deepseek-flash', providerId: 'sub2api', key: 'required', limits: webFormalizationLimits };
 const errors: string[] = [];
 let browser: Browser | undefined;
-async function setup(browser: Browser, options: { width?: number; locale?: string; items?: WebFormalization[]; actualSession?: boolean; capabilities?: WebFormalizationCapabilities } = {}) {
+async function setup(browser: Browser, options: { width?: number; locale?: string; items?: WebFormalization[]; actualSession?: boolean; loseCreationResponse?: boolean; capabilities?: WebFormalizationCapabilities } = {}) {
   const context = await browser.newContext({ viewport: { width: options.width ?? 1440, height: 1000 } });
   await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [localeStorageKey, options.locale ?? 'zh']);
   const page = await context.newPage(); page.on('pageerror', cause => errors.push(cause.message));
   const items = options.items ?? [], caps = options.capabilities ?? capabilities, writes: { path: string; body: Record<string, unknown> }[] = [];
+  const creations = new Map<string, WebFormalization>();
+  let lostResponse = false;
   await page.route('**/api/**', async route => {
     const request = route.request(), url = new URL(request.url()), method = request.method();
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -60,7 +62,12 @@ async function setup(browser: Browser, options: { width?: number; locale?: strin
       if (method === 'GET') return json({ formalizations: items.map(({ report: _, ...rest }) => rest), generation: caps });
       assert.equal(method, 'POST'); const body = request.postDataJSON();
       assert.notEqual(body.solve, true, 'The standalone advanced utility must retain manual confirmation');
+      assert.match(body.requestId, /^[a-f0-9-]{36}$/u);
+      const previous = creations.get(body.requestId);
+      if (previous) return json({ formalization: previous });
       items.unshift({ ...baseItem, original: body.original, environment: body.environment, effort: body.effort });
+      creations.set(body.requestId, items[0]!);
+      if (options.loseCreationResponse && !lostResponse) { lostResponse = true; return route.abort('connectionreset'); }
       return json({ formalization: items[0] });
     }
     const item = items.find(item => url.pathname.split('/')[3] === item.id);
@@ -164,6 +171,29 @@ try {
     assert.equal(await page.locator('#formalize-confirmation').isVisible(), false);
     assert.deepEqual(await audit(page), []);
     await context.close();
+  }
+  {
+    const { page, context, items, writes } = await setup(browser, { loseCreationResponse: true,
+      items: [{ ...baseItem, id: '22222222-2222-4222-8222-222222222222' }] });
+    await page.locator('#formalize-original').fill('Standalone lost-response retry');
+    await page.locator('#formalize-key').fill('fixture-retry-secret');
+    await page.locator('#formalize-start').click();
+    await page.locator('#formalize-error').waitFor();
+    await page.reload(); await page.locator('#formalize-start:enabled').waitFor();
+    assert.equal(await page.locator('#formalize-original').inputValue(), 'Standalone lost-response retry');
+    assert.equal(await page.locator('#formalize-key').inputValue(), '');
+    await page.locator('#formalize-start').click();
+    await page.locator('#formalize-source-text').filter({ hasText: 'Standalone lost-response retry' }).waitFor({ state: 'attached' });
+    const creates = writes.filter(write => write.path === '/api/formalizations');
+    assert.equal(creates.length, 2); assert.equal(creates[0]!.body.requestId, creates[1]!.body.requestId);
+    assert.equal(items.length, 2, 'A full queue permits replay without another record');
+    assert.equal(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]).includes('fixture-retry-secret')), false);
+    const example = researchExamples[0]!;
+    await page.goto(`${origin}/formalize.html?example=${example.id}`);
+    await page.locator('#formalize-budget').filter({ hasText: 'deepseek-flash' }).waitFor();
+    assert.equal(await page.locator('#formalize-original').inputValue(), example.original, 'An explicit example link takes priority over an older stored draft');
+    await context.close();
+    console.log('PASS standalone lost response retains identity across refresh and replays without key or free queue slot');
   }
   console.log('PASS exact original input, key lifecycle, persisted read-only refresh, reviewed evidence and explicit confirmation');
   {

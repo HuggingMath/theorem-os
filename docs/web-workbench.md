@@ -493,7 +493,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 ### 部署来源
 
-构建时传入源码提交：`THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build web`，worker 用同一参数（`--build-arg THEOREMOS_SOURCE_COMMIT=…`）。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 返回 `{"ok":true,"commit":"…"}`；未传入时只返回 `ok`。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 为 false 时该提交不能代表部署内容，应先提交再部署。回滚使用部署前打的镜像标签，回滚后同样记录一行。
+构建时传入源码提交：`THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build web`，worker 用同一参数（`--build-arg THEOREMOS_SOURCE_COMMIT=…`）。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 返回 `{"ok":true,"commit":"…"}`；未传入时只返回 `ok`。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 检查受控变更与未跟踪文件（不含 Git 忽略文件）；false 时该提交不能代表部署内容。构建应使用干净的提交检出，并核对忽略文件是否进入 Docker 上下文。记录只采样 `app.js`，不覆盖 `math.js` 等所有资源，也不验证实际运行的 worker 容器；镜像标签、healthz 和产物摘要需要发布者核对一致。CI 镜像构建传入 `github.sha`。回滚使用部署前打的镜像标签，回滚后同样记录一行。
 
 ### 有效容量
 
@@ -501,12 +501,16 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 | 队列 | 同时执行 | 等待+执行上限 | 每账号 |
 | --- | --- | --- | --- |
-| 原题形式化 | 1 | 8 | 1 个进行中、保留 20 条 |
+| 原题形式化 | 1 | 8 | 最多 2 个等待或执行中的任务、保留 20 条 |
 | 证明研究 | `THEOREMOS_WEB_CONCURRENCY`（默认 1，最多 8） | `THEOREMOS_WEB_QUEUE_LIMIT`（默认 8） | 保留上限见运行记录 |
-| 提交前 Lean 检查 | 2 | 8（另排队 6） | 每会话 1 个、每分钟 20 次 |
+| 提交前 Lean 检查 | 2 | 8（另排队 6） | 每页面 1 个、每账号每分钟 20 次 |
 | 证明讲解 | 1 | 4 | 2 |
 
-形式化通过后自动入证明队列；证明队列已满时形式化记录标为 `formalization_research_queue_failed`，不自动重试。形式化与证明各占自己的执行位，因此 A 的证明运行时 B 的形式化可以同时执行，B 的证明随后在证明队列排队。关联 ID：形式化记录 `id` 等于证明运行的 `formalizationId`，形式化记录的 `runId` 指回该运行，两者都只能由所属账号读取。模型网关自身的并发（例如每个 Key 的上限）不在这些数字内；提高 `THEOREMOS_WEB_CONCURRENCY` 前须确认网关和宿主机 CPU/内存能承担。对应回归见 `tests/webFormalizations.test.ts` 的双账号排队用例。
+同账号可接收两项形式化任务，执行并发仍为 1，第二项按全局 FIFO 等待；页面展示实时排队位置和计数，不暴露其他账号任务。
+
+自然语言与独立形式化页面在提交前保存账号范围的 `requestId` 和输入摘要（不保存 Key）；响应丢失后，刷新并手动重试仍使用同一身份。`POST /api/formalizations` 将身份和初始记录一起持久化；相同身份和输入返回原任务，改变输入返回 409，已删除的任务返回 410。重放先于容量、worker 就绪与 Key 检查，不启动新 worker；服务重启后返回中断记录，不自动恢复付费执行。身份包含原题、环境、effort、solve、服务商和模型，不包含凭据。旧客户端不传身份仍可提交，但不具备这项重放保证；明确新建对话或改动输入会使用新身份。
+
+形式化通过后自动入证明队列；证明队列已满时形式化记录标为 `formalization_research_queue_failed`，不自动重试。形式化与证明各占自己的执行位，因此 A 的证明运行时 B 的形式化可以同时执行，B 的证明随后在证明队列排队。关联 ID：形式化记录 `id` 等于证明运行的 `formalizationId`，形式化记录的 `runId` 指回该运行，两者都只能由所属账号读取。模型网关自身的并发（例如每个 Key 的上限）不在这些数字内；提高 `THEOREMOS_WEB_CONCURRENCY` 前须确认网关和宿主机 CPU/内存能承担。对应回归见 `tests/webFormalizations.test.ts` 的同账号与双账号排队用例。
 
 如果首页提示“运行镜像尚未就绪”，确认 worker 镜像已构建，Web 服务能访问 Docker daemon，且镜像标签一致。如果镜像就绪但 Lean 验收无法执行，先运行上述离线 Docker 验证，检查用户命名空间和 Bubblewrap 的宿主机支持。
 

@@ -6,7 +6,7 @@ import type { WebRun } from '../../shared';
 import { researchExamples } from '../../problemExamples';
 import { isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
 import { locale, localizeText, t } from '../../i18n';
-import { formalizationReasonText } from '../formalizationReasons';
+import { formalizationReasonText, formalizationNextStep } from '../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
 
@@ -39,8 +39,8 @@ function FormalizationFailure({ item }: { item: WebFormalization }) {
       <dt>{t('停止阶段')}</dt><dd>{stage}</dd>
       <dt>{t('原因')}</dt><dd>{formalizationReasonText(code)}</dd>
       <dt>{t('保留成果')}</dt><dd>{kept}</dd>
-      <dt>{t('下一步')}</dt><dd>{t('修改题目后重新发送；不会自动重试。')}</dd>
-      <dt>{t('诊断编号')}</dt><dd><code>{code}</code></dd>
+      <dt>{t('下一步')}</dt><dd>{formalizationNextStep(code)}</dd>
+      <dt>{t('错误代码')}</dt><dd><code>{code}</code></dd>
     </dl>
   </details>;
 }
@@ -64,7 +64,7 @@ function TaskMessage(props: ChatThreadProps) {
           : item?.status === 'confirmed' ? t("陈述已确认") : t("正在读取任务");
   const description = run ? resultDescription(run) : failed
     ? item?.researchError ? t("Lean 陈述已生成，但证明研究未能启动。")
-      : t("本次未能完成原题形式化，可查看详情后修改题目重试。")
+      : t("本次未能完成原题形式化，请查看详情中的原因和下一步。")
     : item?.status === 'cancelled' ? t("任务已停止，已保存的消息仍可查看。")
       : active ? t("先把原题转成 Lean，核对一致性后继续证明。")
         : t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
@@ -74,6 +74,7 @@ function TaskMessage(props: ChatThreadProps) {
       <p class="research-conversation-state"><Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : 'square'} /><strong>{title}</strong></p>
       <p class="research-conversation-description">{description}</p>
     </div>
+    {!run && item?.status === 'queued' && item.queue && <p class="research-conversation-latest" data-formalization-queue>{t('排队第 {0} 位 · 前方 {1} 项等待 · {2} 项执行中', item.queue.position, item.queue.ahead, item.queue.running)}</p>}
     {active && run?.events.at(-1)?.message && <p class="research-conversation-latest">{localizeText(run.events.at(-1)!.message)}</p>}
     {!run && failed && item && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
     {(run || item?.report) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>

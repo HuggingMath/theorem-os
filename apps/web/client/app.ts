@@ -148,7 +148,7 @@ function chooseEntry(mode: 'natural' | 'lean') {
 async function loadNaturalResearch() {
   chatWorkspace = new ChatSession({
     request: api,
-    draftScope: state.session?.account?.email ?? 'anonymous',
+    draftScope: state.session ? ownerOfSession(state.session) : 'anonymous',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
     onNavigate: (id, mode, attached) => {
       chatArtifacts.clear();

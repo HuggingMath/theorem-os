@@ -6,6 +6,7 @@ import { locale, localizeMessage, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
 import { renderChatComposer, renderChatHistory, renderChatOriginal, renderChatThread } from './ui/ChatWorkspace';
 import { ChatReadingPosition } from './chatReadingPosition';
+import { SubmissionIdentity } from './submissionIdentity';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -57,7 +58,7 @@ export class ChatSession {
   private lastListRefresh = 0;
   private attachRunId = '';
   private seed?: WebFormalization;
-  private uncertainSubmission?: { original: string; startedAt: string };
+  private readonly submission: SubmissionIdentity;
   private currentId = new URLSearchParams(location.search).get('chat') ?? '';
   private readonly drafts = new Map<string, string>();
   private readonly thread = document.querySelector<HTMLElement>('#research-chat-thread')!;
@@ -67,6 +68,12 @@ export class ChatSession {
   private readonly reading: ChatReadingPosition;
 
   constructor(private readonly options: Options) {
+    this.submission = new SubmissionIdentity(sessionStorage, `theorem-os.chat-submission.${options.draftScope}`);
+    try {
+      const settings = JSON.parse(sessionStorage.getItem(`theorem-os.chat-settings.${options.draftScope}`) ?? 'null');
+      if (settings?.environment === 'standard') this.environment = 'standard';
+      if (['low', 'high', 'max'].includes(settings?.effort)) this.effort = settings.effort;
+    } catch { /* Defaults remain usable without stored settings. */ }
     this.reading = new ChatReadingPosition(this.thread, document.querySelector<HTMLButtonElement>('[data-chat-latest]')!, options.draftScope);
     this.reading.select(this.currentId);
     this.draft = this.restoredDraft(this.currentId || 'home');
@@ -103,7 +110,10 @@ export class ChatSession {
   private rememberDraft() {
     const id = this.currentId || 'home';
     this.drafts.set(id, this.draft);
-    try { sessionStorage.setItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`, this.draft); } catch { /* In-memory draft remains. */ }
+    try {
+      sessionStorage.setItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`, this.draft);
+      sessionStorage.setItem(`theorem-os.chat-settings.${this.options.draftScope}`, JSON.stringify({ environment: this.environment, effort: this.effort }));
+    } catch { /* In-memory draft remains. */ }
   }
   private restoredDraft(id: string) {
     try { return this.drafts.get(id) ?? sessionStorage.getItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`) ?? ''; } catch { return this.drafts.get(id) ?? ''; }
@@ -111,16 +121,16 @@ export class ChatSession {
   home(reset = true) {
     this.reading.select('');
     this.rememberDraft(); this.generation++; this.currentId = ''; this.conversation = undefined;
-    this.run = undefined; this.formalization = undefined; this.seed = undefined; this.uncertainSubmission = undefined;
+    this.run = undefined; this.formalization = undefined; this.seed = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
     this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = '';
     this.draft = reset ? '' : this.restoredDraft('home');
-    if (reset) { this.drafts.set('home', ''); this.rememberDraft(); }
+    if (reset) { this.submission.clear(); this.drafts.set('home', ''); this.rememberDraft(); }
     document.body.dataset.chatArtifact = '';
     document.body.dataset.outputOpen = 'false';
     this.draw(); this.options.onConversation();
   }
-  fillOriginal(original: string) { this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
+  fillOriginal(original: string) { if (this.draft !== original) { this.seed = undefined; this.submission.clear(); } this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
   private setConversation(conversation: WebConversation) {
@@ -142,7 +152,7 @@ export class ChatSession {
     this.rememberDraft(); const generation = ++this.generation;
     this.currentId = id; this.conversation = undefined; this.run = undefined; this.formalization = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
-    this.seed = undefined; this.uncertainSubmission = undefined; this.attachRunId = '';
+    this.seed = undefined; this.attachRunId = '';
     this.loading = true; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = '';
     this.draft = this.restoredDraft(id);
     this.options.onNavigate(id, mode); this.options.onSelection(); this.draw();
@@ -161,7 +171,7 @@ export class ChatSession {
     this.rememberDraft(); const generation = ++this.generation;
     this.currentId = ''; this.conversation = undefined; this.run = run; this.formalization = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
-    this.seed = undefined; this.uncertainSubmission = undefined; this.attachRunId = run.id;
+    this.seed = undefined; this.attachRunId = run.id;
     this.loading = !this.options.isSample(run); this.error = ''; this.readError = ''; this.draft = ''; this.apiKey = ''; this.submitting = false;
     this.draw();
     if (this.options.isSample(run)) return;
@@ -242,29 +252,24 @@ export class ChatSession {
       if (conversation) {
         ({ conversation: next } = await this.post<{ conversation: WebConversation }>(`/api/conversations/${conversation.id}/messages`, { text, apiKey: key }));
       } else {
-        // A lost response is reconciled before another paid formalization can be created.
-        const uncertain = this.uncertainSubmission;
-        if (uncertain?.original === text && !this.seed) {
-          const { formalizations } = await this.options.request<{ formalizations: WebFormalization[] }>('/api/formalizations');
-          if (generation !== this.generation) return;
-          this.seed = formalizations.find(item => item.original === text && item.createdAt >= uncertain.startedAt);
-        }
+        // The server reconciles the same persisted identity, including after a lost response and reload.
+        const input = { original: text, environment: this.environment, effort: this.effort, apiKey: key, solve: true };
+        const requestId = await this.submission.prepare(input);
+        if (generation !== this.generation) return;
         let formalization = this.seed;
         if (!formalization) {
-          this.uncertainSubmission = { original: text, startedAt: new Date().toISOString() };
-          ({ formalization } = await this.post<{ formalization: WebFormalization }>('/api/formalizations', {
-            original: text, environment: this.environment, effort: this.effort, apiKey: key, solve: true,
-          }));
+          ({ formalization } = await this.post<{ formalization: WebFormalization }>('/api/formalizations', { ...input, requestId }));
           if (generation === this.generation) this.seed = formalization;
         }
         ({ conversation: next } = await this.post<{ conversation: WebConversation }>('/api/conversations', { formalizationId: formalization.id }));
+        this.submission.clear(requestId);
       }
       // Persist the originating conversation even if the user has already opened a new one.
       void this.refreshHistory();
       if (generation !== this.generation) return;
       if (this.draft === text) this.draft = '';
       if (!conversation) { this.drafts.set('home', ''); try { sessionStorage.removeItem(`theorem-os.chat-draft.${this.options.draftScope}.home`); } catch {} }
-      this.seed = undefined; this.uncertainSubmission = undefined;
+      this.seed = undefined;
       this.setConversation(next); this.rememberDraft();
       this.options.onNavigate(next.id, conversation ? 'replace' : 'push');
       const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
@@ -343,7 +348,8 @@ export class ChatSession {
     const staleTarget = !!this.guidanceTarget && (!task || task.version !== this.guidanceVersion);
     const unresolvedGuidance = !!this.pendingGuidance || this.conversation?.messages.some(message => message.kind === 'guidance' && message.status === 'pending');
     const newProblem = !this.conversation && !this.run;
-    const busyFormalization = newProblem && !this.seed && this.formalizations.some(item => running(item));
+    const busyFormalization = newProblem && !this.seed && !this.submission.hasPending && !!this.capabilities
+      && this.formalizations.filter(item => running(item)).length >= this.capabilities.limits.perOwner;
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
     renderChatThread(this.thread, {
       conversation: this.conversation, run: this.run, formalization: this.formalization ?? this.seed,
@@ -359,7 +365,7 @@ export class ChatSession {
       onRetry: () => {
         if (this.pendingGuidance) void this.sendGuidance(this.pendingGuidance);
         else if (this.currentId && !this.conversation) { const id = this.currentId; this.currentId = ''; void this.open(id, 'replace'); }
-        else if (this.seed || this.uncertainSubmission) void this.submit();
+        else if (this.seed || this.submission.hasPending) void this.submit();
         else if (this.run && !this.conversation) { const run = this.run; this.attachRunId = ''; void this.openRun(run); }
         else if (this.conversation?.messages.at(-1)?.status === 'error') {
           const last = this.conversation.messages.at(-1)!;
@@ -369,13 +375,13 @@ export class ChatSession {
       },
     });
     renderChatComposer(this.composer, {
-      input: this.draft, onInput: value => { this.draft = value; this.rememberDraft(); this.draw(); },
+      input: this.draft, onInput: value => { if (this.draft !== value) { this.seed = undefined; this.submission.clear(); } this.draft = value; this.rememberDraft(); this.draw(); },
       onSubmit: () => void this.submit(), onStop: () => void this.stop(), pending: pending && !this.guidanceMode, submitting: this.submitting,
       disabled: this.loading || Boolean(this.run && this.options.isSample(this.run)) || Boolean(this.currentId && !this.conversation)
-        || newProblem && (!this.capabilities?.available || busyFormalization)
+        || newProblem && (!this.capabilities?.available && !this.submission.hasPending || busyFormalization)
         || this.guidanceMode && (!canGuide || !this.run?.observation || staleTarget || !!unresolvedGuidance),
       hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
-      keyRequired: this.guidanceMode ? false : this.run ? this.options.keyRequired(this.run.providerId) : this.capabilities?.key === 'required',
+      keyRequired: this.guidanceMode || newProblem && this.submission.hasPending ? false : this.run ? this.options.keyRequired(this.run.providerId) : this.capabilities?.key === 'required',
       ...(canGuide ? { onGuidance: () => this.beginGuidance() } : {}),
       ...(this.guidanceMode ? { guidance: { target: this.guidanceTarget,
         targets: (this.run?.observation?.inspection.tasks ?? []).map(item => ({ id: item.id, label: item.theorem || item.objective || item.id })),
@@ -387,13 +393,13 @@ export class ChatSession {
         : staleTarget ? t('任务版本已变化，请核对指导内容，再确认当前任务版本。')
           : !canGuide ? t('运行尚未开始或已结束，暂时无法发送指导。')
             : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('要求将发送给证明任务，投递状态会留在对话中。')
-        : busyFormalization ? t("上一道题正在形式化，你可以先写下一条消息。")
+        : busyFormalization ? t("当前账号的形式化队列已满，输入内容会保留。")
         : newProblem && !this.capabilities ? t("正在连接…") : undefined,
-      onEnvironment: value => { this.environment = value; this.draw(); }, onEffort: value => { this.effort = value; this.draw(); },
+      onEnvironment: value => { if (this.environment !== value) { this.seed = undefined; this.submission.clear(); } this.environment = value; this.rememberDraft(); this.draw(); }, onEffort: value => { if (this.effort !== value) { this.seed = undefined; this.submission.clear(); } this.effort = value; this.rememberDraft(); this.draw(); },
       onKey: value => { this.apiKey = value; this.draw(); },
       onExample: id => {
         const example = researchExamples.find(item => item.id === id);
-        if (example) { this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
+        if (example) { this.seed = undefined; this.submission.clear(); this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
       },
       onLean: this.options.onLean,
     });

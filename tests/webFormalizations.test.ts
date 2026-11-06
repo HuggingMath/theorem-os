@@ -60,7 +60,7 @@ describe('online formalization ownership and evidence handoff', () => {
     return { cookie: response.headers.get('set-cookie')!.split(';')[0], csrf: value.csrfToken };
   }
   function request(client: Client, route: string, value?: unknown, method = value === undefined ? 'GET' : 'POST') {
-    return fetch(base + route, { method, headers: { Cookie: client.cookie, 'X-CSRF-Token': client.csrf,
+    return fetch(base + route, { method, headers: { Connection: 'close', Cookie: client.cookie, 'X-CSRF-Token': client.csrf,
       ...(value === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: value === undefined ? undefined : JSON.stringify(value) });
   }
   async function create(client: Client, solve = false) {
@@ -85,6 +85,53 @@ describe('online formalization ownership and evidence handoff', () => {
       workers: 1, coordination: 'cooperative', formalizationId: formalization.id };
   }
 
+  it('deduplicates concurrent creation before key, readiness and queue checks, without crossing owners', async () => {
+    const alice = await client(), bob = await client();
+    const input = { ...body, requestId: crypto.randomUUID(), solve: true };
+    const readiness = runner.readiness.bind(runner);
+    let arrivals = 0, release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    runner.readiness = async () => { if (++arrivals === 2) release(); await gate; return readiness(); };
+    const responses = await Promise.all([request(alice, '/api/formalizations', input), request(alice, '/api/formalizations', input)]);
+    runner.readiness = readiness;
+    expect(arrivals).toBe(2);
+    expect(responses.map(response => response.status).sort()).toEqual([200, 201]);
+    const [first, replay] = await Promise.all(responses.map(async response => (await response.json()).formalization));
+    expect(replay.id).toBe(first.id); await settle(); expect(runner.pending).toHaveLength(1);
+    expect(runner.pending[0].input).not.toHaveProperty('requestId');
+    await create(alice); // Fill the second owner slot.
+    runner.ready = false;
+    const recovered = await request(alice, '/api/formalizations', { ...input, apiKey: '' });
+    expect(recovered.status).toBe(200); expect((await recovered.json()).formalization.id).toBe(first.id);
+    expect((await request(alice, '/api/formalizations', { ...input, original: 'changed' })).status).toBe(409);
+    expect((await request(bob, '/api/formalizations', { ...input, apiKey: '' })).status).toBe(503);
+    runner.ready = true;
+    const separate = await request(bob, '/api/formalizations', input);
+    expect(separate.status).toBe(201); expect((await separate.json()).formalization.id).not.toBe(first.id);
+    expect((await request(alice, '/api/formalizations', { ...input, requestId: 'invalid' })).status).toBe(400);
+    const persisted = fs.readdirSync(config.dataRoot!, { recursive: true }).filter(file => String(file).endsWith('.json'))
+      .map(file => fs.readFileSync(path.join(config.dataRoot!, String(file)), 'utf8')).join('\n');
+    expect(persisted).not.toContain(KEY);
+  });
+
+  it('replays interrupted creation after restart and retains deleted identities without restarting work', async () => {
+    const alice = await client(), input = { ...body, requestId: crypto.randomUUID() };
+    const first = (await (await request(alice, '/api/formalizations', input)).json()).formalization;
+    await service.close(); runner = new Runner(); runner.ready = false;
+    service = createWebService(config, runner, { sample: null });
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    const replay = await request(alice, '/api/formalizations', { ...input, apiKey: '' });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).formalization).toMatchObject({ id: first.id, status: 'error', reason: 'formalization_interrupted' });
+    expect(runner.pending).toHaveLength(0);
+    expect((await request(alice, `/api/formalizations/${first.id}`, undefined, 'DELETE')).status).toBe(200);
+    await service.close(); service = createWebService(config, runner, { sample: null });
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    expect((await request(alice, '/api/formalizations', { ...input, apiKey: '' })).status).toBe(410);
+    expect((await request(alice, '/api/formalizations', { ...input, original: 'changed' })).status).toBe(409);
+    expect(runner.pending).toHaveLength(0);
+  });
+
   it('uses authenticated session and CSRF boundaries, hides other owners and never stores keys', async () => {
     const alice = await client(), bob = await client();
     expect((await fetch(base + '/api/formalizations')).status).toBe(401);
@@ -97,6 +144,8 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(bob, route)).status).toBe(404);
     expect((await request(bob, route + '/cancel', {})).status).toBe(404);
     expect((await request(bob, route + '/confirm', { evidenceSha256: 'a'.repeat(64) })).status).toBe(404);
+    const queued = await create(alice);
+    expect(queued.queue).toMatchObject({ position: 1, ahead: 0, running: 1 });
     expect((await request(alice, '/api/formalizations', body)).status).toBe(429);
     expect((await request(alice, route, undefined, 'DELETE')).status).toBe(409);
     expect(JSON.stringify(await (await request(alice, '/api/formalizations')).json())).not.toContain(KEY);
@@ -169,14 +218,13 @@ describe('online formalization ownership and evidence handoff', () => {
   });
 
   it('queues two accounts behind one formalization slot and hands each to its own proof in the separate proof queue', async () => {
-    expect(webFormalizationLimits).toMatchObject({ concurrency: 1, queueLimit: 8, perOwner: 1 });
+    expect(webFormalizationLimits).toMatchObject({ concurrency: 1, queueLimit: 8, perOwner: 2 });
     expect(config.concurrency).toBe(1);
     const alice = await client(), bob = await client();
     const a = await create(alice, true), b = await create(bob, true);
-    // One formalization runs at a time; the other waits, and an account cannot start a second one.
+    // One formalization runs at a time; the other waits.
     expect(runner.pending.map(item => item.input.id)).toEqual([a.id]);
     expect((await (await request(bob, `/api/formalizations/${b.id}`)).json()).formalization.status).toBe('queued');
-    expect((await request(alice, '/api/formalizations', body)).status).toBe(429);
     const approveNext = async (id: string) => {
       const pending = runner.pending.find(item => item.input.id === id)!;
       pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
@@ -198,6 +246,46 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(alice, `/api/runs/${doneB.runId}`)).status).toBe(404);
     expect((await request(bob, `/api/runs/${doneA.runId}`)).status).toBe(404);
     expect((await request(alice, `/api/runs/${doneA.runId}/cancel`, {})).status).toBe(200); await settle();
+    expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id, b.id]);
+  });
+
+  it('queues the same account, cancels queued work independently, and releases the next task after failure', async () => {
+    const alice = await client(), a = await create(alice, true), b = await create(alice, true);
+    expect(runner.pending.map(item => item.input.id)).toEqual([a.id]);
+    const read = async (id: string) => (await (await request(alice, `/api/formalizations/${id}`)).json()).formalization as WebFormalization;
+    expect((await read(b.id)).queue).toEqual({ position: 1, ahead: 0, running: 1, slots: 1 });
+    expect((await request(alice, '/api/formalizations', body)).status).toBe(429);
+    expect((await request(alice, `/api/formalizations/${b.id}/cancel`, {})).status).toBe(200);
+    expect(runner.pending[0].signal.aborted).toBe(false);
+    expect((await read(b.id)).queue).toBeUndefined();
+    const c = await create(alice, true);
+    runner.pending[0].send({ type: 'result', status: 'error', reason: 'formalization_failed' });
+    runner.pending[0].resolve(); await settle();
+    expect((await read(a.id)).status).toBe('error');
+    expect((await read(c.id)).queue).toBeUndefined();
+    expect(runner.pending.map(item => item.input.id)).toEqual([a.id, c.id]);
+    const pending = runner.pending[1];
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) });
+    pending.resolve(); await settle();
+    expect(runner.runs.map(run => run.input.formalizationId)).toEqual([c.id]);
+    expect((await read(c.id)).runId).toBe(runner.runs[0].id);
+  });
+
+  it('preserves same-account formalization and proof identities across both independent queues', async () => {
+    const alice = await client(), a = await create(alice, true), b = await create(alice, true);
+    for (const id of [a.id, b.id]) {
+      const pending = runner.pending.find(item => item.input.id === id)!;
+      pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) });
+      pending.resolve(); await settle();
+    }
+    const records = await (await request(alice, '/api/formalizations')).json();
+    const doneA = records.formalizations.find((item: WebFormalization) => item.id === a.id);
+    const doneB = records.formalizations.find((item: WebFormalization) => item.id === b.id);
+    expect(doneA.runId).not.toBe(doneB.runId);
+    expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id]);
+    const queued = (await (await request(alice, `/api/runs/${doneB.runId}`)).json()).run;
+    expect(queued.status).toBe('queued'); expect(queued.formalizationId).toBe(b.id);
+    await request(alice, `/api/runs/${doneA.runId}/cancel`, {}); await settle();
     expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id, b.id]);
   });
 

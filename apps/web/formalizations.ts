@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { assertFormalizationEvidence, formalizationDigest, formalizationEvidenceSchema, type FormalizationEvidence } from '../../src/math/formalization';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { mathDigest } from '../../src/math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { webLimits } from './config';
 import { formalizationReport } from './formalizationReport';
 import { webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization, type WebFormalizationRequest,
@@ -10,12 +10,18 @@ import type { WebRunner } from './runner';
 import type { WebProvider } from './shared';
 import { WebStorage, WebStorageError } from './storage';
 
-type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string };
+type Creation = { requestId: string; digest: string; id: string };
+type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string; creation?: Creation };
 type Job = { record: Record; input: WorkerFormalizationInput; controller: AbortController; persistedAt: number };
 type StartResearch = (owner: string, formalization: WebFormalization, evidence: FormalizationEvidence, input: WorkerFormalizationInput) => string;
 const active = (value: WebFormalization) => value.status === 'queued' || value.status === 'running';
 const reasonOf = (error: unknown) => error instanceof Error && webFormalizationReason.test(error.message) ? error.message : 'formalization_failed';
 const directory = (owner: string) => ['owners', mathDigest(owner), 'formalizations'];
+const tombstonePath = (owner: string, requestId: string) => ['owners', mathDigest(owner), 'deleted-formalization-requests', `${mathDigest(requestId)}.json`];
+const creationDigest = (request: WebFormalizationRequest, provider: WebProvider, model: string) => mathDigest(canonicalMathJson({
+  original: request.original, environment: request.environment, effort: request.effort, solve: !!request.solve,
+  provider: { id: provider.id, baseUrl: provider.baseUrl }, model,
+}));
 const recordPath = (owner: string, id: string) => {
   if (!/^[a-f0-9-]{36}$/u.test(id)) throw new WebStorageError(404, '形式化任务不存在。');
   return [...directory(owner), id];
@@ -64,8 +70,18 @@ export class WebFormalizations {
     }
   }
   list(owner: string): WebFormalization[] {
-    return this.storage.listRecords(directory(owner)).map(id => this.record(owner, id)!.formalization)
+    return this.storage.listRecords(directory(owner)).flatMap(id => {
+      const record = this.record(owner, id);
+      return record ? [this.view(record.formalization)] : [];
+    })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  private view(value: WebFormalization): WebFormalization {
+    if (value.status !== 'queued') return value;
+    const waiting = [...this.jobs.values()].filter(job => job.record.formalization.status === 'queued');
+    const index = waiting.findIndex(job => job.record.formalization.id === value.id);
+    return index < 0 ? value : { ...value, queue: { position: index + 1, ahead: index,
+      running: this.running, slots: this.limits.concurrency } };
   }
   private record(owner: string, id: string): Record | undefined {
     return this.jobs.get(this.key(owner, id))?.record ?? this.storage.getRecord<Record>([...recordPath(owner, id), 'record.json']);
@@ -84,7 +100,7 @@ export class WebFormalizations {
   }
   read(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), value = record.formalization;
-    return value.status === 'review' || value.status === 'confirmed' ? { ...value, report: formalizationReport(this.evidence(record)) } : value;
+    return value.status === 'review' || value.status === 'confirmed' ? { ...value, report: formalizationReport(this.evidence(record)) } : this.view(value);
   }
   confirm(owner: string, id: string, sha256: string): WebFormalization {
     const record = this.required(owner, id);
@@ -104,25 +120,46 @@ export class WebFormalizations {
     const evidence = this.evidence(record);
     return { formalization: { ...record.formalization, report: formalizationReport(evidence) }, evidence };
   }
+  /** Single-supervisor replay: the identity is saved with the record before any worker can start. */
+  replay(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization | undefined {
+    if (!request.requestId) return;
+    const digest = creationDigest(request, provider, model);
+    const check = (creation: Creation) => {
+      if (creation.digest !== digest) throw new WebStorageError(409, '提交标识已用于不同内容，请新建提交。');
+    };
+    const deleted = this.storage.getRecord<Creation>(tombstonePath(owner, request.requestId));
+    if (deleted) { check(deleted); throw new WebStorageError(410, '该提交的形式化任务已删除，请新建提交。'); }
+    for (const id of this.storage.listRecords(directory(owner))) {
+      const record = this.record(owner, id);
+      if (record?.owner === owner && record.creation?.requestId === request.requestId) {
+        check(record.creation); return this.read(owner, id);
+      }
+    }
+  }
   create(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization {
+    const previous = this.replay(owner, request, provider, model);
+    if (previous) return previous;
     if (this.closing) throw new WebStorageError(503, '服务正在停止，请稍后重试。');
     if (request.solve && !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
     if (this.jobs.size >= this.limits.queueLimit) throw new WebStorageError(429, '形式化队列已满，请稍后重试。');
     if ([...this.jobs.values()].filter(job => job.record.owner === owner).length >= this.limits.perOwner)
-      throw new WebStorageError(429, '已有形式化任务正在进行，请等待结束。');
+      throw new WebStorageError(429, '当前账号的形式化队列已满，请等待已有任务结束。');
     if (this.list(owner).length >= this.limits.recordsPerOwner) throw new WebStorageError(429, '形式化记录已满，请先删除不需要的记录。');
     const now = new Date().toISOString(), id = crypto.randomUUID();
     const formalization: WebFormalization = { id, original: request.original, environment: request.environment, model,
       effort: request.effort, status: 'queued', createdAt: now, updatedAt: now, progress: { phase: 'queued', updatedAt: now },
       ...(request.solve ? { workflow: 'solve' } : {}) };
-    const { solve: _solve, ...generation } = request;
+    const { solve: _solve, requestId, ...generation } = request;
     const input: WorkerFormalizationInput = { ...generation, id, model, provider, maxRunSeconds: webFormalizationLimits.maxRunSeconds,
       maxTotalTokens: webFormalizationLimits.maxTotalTokens, maxRounds: webFormalizationLimits.maxRounds,
       maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
-    const job: Job = { record: { owner, formalization }, input, controller: new AbortController(), persistedAt: 0 };
-    this.jobs.set(this.key(owner, id), job); this.persist(job, true);
+    const creation = requestId ? { requestId, digest: creationDigest(request, provider, model), id } : undefined;
+    const job: Job = { record: { owner, formalization, ...(creation ? { creation } : {}) }, input,
+      controller: new AbortController(), persistedAt: Date.now() };
+    this.save(job.record);
+    this.jobs.set(this.key(owner, id), job);
     queueMicrotask(() => this.pump());
-    return formalization;
+    return this.view(formalization);
   }
   cancel(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), job = this.jobs.get(this.key(owner, id));
@@ -132,6 +169,8 @@ export class WebFormalizations {
   remove(owner: string, id: string) {
     const record = this.required(owner, id);
     if (active(record.formalization)) throw new WebStorageError(409, '请先取消进行中的形式化任务。');
+    // Write the tombstone first: a delayed retry must never recreate a deleted paid task.
+    if (record.creation) this.storage.saveRecord(tombstonePath(owner, record.creation.requestId), record.creation, true);
     this.storage.deleteRecord(recordPath(owner, id));
   }
   forget(owner: string) {

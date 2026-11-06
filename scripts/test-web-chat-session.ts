@@ -404,6 +404,38 @@ try {
       mark('a late first-send response preserves the new blank route and draft while the authorized task remains in history');
     } finally { releaseResponse?.(); await context.close(); }
   }
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    try {
+      const started = formalizations.length;
+      await page.goto(origin); await page.locator('#formalize-original').fill('同账号任务 A'); await credentials(page);
+      await page.locator('#formalize-start').click(); await page.waitForURL(/chat=/);
+      await eventually(() => formalizations.length === started + 1, 'A starts');
+      const a = await conversation(page);
+      await page.locator('#topbar-draft').click(); await page.waitForURL(origin + '/');
+      await page.locator('#formalize-original').fill('同账号任务 B'); await credentials(page);
+      await page.locator('#formalize-start').click(); await page.waitForURL(/chat=/);
+      const b = await conversation(page);
+      assert.notEqual(a.id, b.id);
+      await page.locator('[data-formalization-queue]').getByText('排队第 1 位 · 前方 0 项等待 · 1 项执行中', { exact: true }).waitFor();
+      assert.equal(formalizations.length, started + 1, 'B is queued, not a second running worker');
+      await page.reload(); await page.locator('[data-formalization-queue]').waitFor();
+      await page.locator('#topbar-draft').click(); await page.waitForURL(origin + '/');
+      await page.locator('#formalize-original').fill('队满仍保留的任务 C');
+      await page.locator('#formalize-send-status').getByText('当前账号的形式化队列已满，输入内容会保留。', { exact: true }).waitFor();
+      assert.equal(await page.locator('#formalize-start').isEnabled(), false);
+      await page.reload(); assert.equal(await page.locator('#formalize-original').inputValue(), '队满仍保留的任务 C');
+      await page.goto(origin + '/?chat=' + b.id);
+      await page.getByRole('button', { name: '停止解题', exact: true }).click();
+      await expectMessage(page, '已取消');
+      assert.equal(formalizations.length, started + 1);
+      formalizations[started].send({ type: 'result', status: 'error', reason: 'formalization_failed' });
+      formalizations[started].resolve();
+      mark('same-account A runs, B queues across refresh, full queue keeps C draft and cancelling B leaves A running');
+    } finally { await context.close(); }
+  }
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
@@ -422,8 +454,8 @@ try {
       const rows = await details.locator('dt').evaluateAll(nodes => nodes.map(node => [node.textContent,
         node.nextElementSibling?.textContent]));
       assert.deepEqual(rows, [['停止阶段', '生成 Lean 陈述'], ['原因', '已用完本次 Token 预算，尚未完成形式化。'],
-        ['保留成果', '没有保存可用的 Lean 陈述。'], ['下一步', '修改题目后重新发送；不会自动重试。'],
-        ['诊断编号', 'formalization_token_limit']]);
+        ['保留成果', '没有保存可用的 Lean 陈述。'], ['下一步', '先核对本次用量和预算；如需再试，可重新发送原题。不会自动重试，也不会自动增加预算。'],
+        ['错误代码', 'formalization_token_limit']]);
       assert.equal(runs.length, proofs, 'A failed formalization starts no proof');
       // With no proof run, the page is named after the conversation, as a run would name it.
       const named = [...(await conversation(page)).title];
@@ -480,6 +512,54 @@ try {
       await page.goto(`${origin}/?chat=${missing}`);
       await page.getByText('请求太频繁，请稍后再试。').first().waitFor();
       mark('a failed history load says so and retries; a rate-limited read names the limit');
+    } finally { await context.close(); }
+  }
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    try {
+      const started = formalizations.length, ids: string[] = [];
+      const text = '刷新后手动重试仍是同一次提交';
+      for (const lost of ['formalization', 'conversation'] as const) {
+        await page.goto(origin);
+        if (ids.length) await page.locator('#topbar-draft').click();
+        await page.locator('#formalize-original').fill(text); await credentials(page);
+        const requestIds: string[] = [];
+        page.on('request', request => {
+          if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/formalizations') {
+            requestIds.push(request.postDataJSON().requestId);
+          }
+        });
+        const endpoint = lost === 'formalization' ? '**/api/formalizations' : '**/api/conversations';
+        let dropped = false;
+        await page.route(endpoint, async route => {
+          if (route.request().method() !== 'POST' || dropped) return route.continue();
+          await route.fetch(); dropped = true; await route.abort('connectionreset');
+        });
+        await page.locator('#formalize-start').click();
+        await page.locator('#formalize-error').filter({ hasText: '无法连接服务器' }).waitFor();
+        assert.equal(dropped, true);
+        await page.reload(); await page.locator('#formalize-start:enabled').waitFor();
+        assert.equal(await page.locator('#formalize-original').inputValue(), text);
+        assert.equal(await page.locator('#formalize-environment').inputValue(), 'standard');
+        // A replay needs neither a new key nor free queue capacity, including when both owner slots are occupied.
+        await page.locator('#formalize-start').click(); await page.waitForURL(/chat=/);
+        assert.equal(requestIds.length, 2);
+        assert.ok(requestIds[0]); assert.equal(requestIds[0], requestIds[1]);
+        const saved = await conversation(page); ids.push(saved.id);
+        const records = await page.evaluate(async () => (await (await fetch('/api/formalizations')).json()).formalizations);
+        assert.equal(records.length, ids.length);
+        assert.equal(formalizations.length, started + 1, 'Only the first task runs; replay never starts another worker');
+        await page.unroute(endpoint);
+      }
+      assert.notEqual(ids[0], ids[1], 'An explicit new chat creates an independent task even with identical text');
+      for (const id of ids.slice().reverse()) {
+        await page.goto(origin + '/?chat=' + id);
+        await page.getByRole('button', { name: '停止解题', exact: true }).click();
+        await expectMessage(page, '已取消');
+      }
+      mark('lost creation and conversation responses survive refresh: manual replay uses the same identity without a key or free slot; explicit new chat stays independent');
     } finally { await context.close(); }
   }
   assert.deepEqual(errors, []);

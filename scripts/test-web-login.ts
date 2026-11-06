@@ -28,7 +28,7 @@ const mark = (check: string) => console.log(`PASS ${check}`);
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of 40[013]/u.test(message.text())) errors.push(message.text()); });
@@ -124,6 +124,8 @@ try {
   await page.goto(link);
   await page.waitForURL(url => url.pathname === '/login.html' && url.search === `?run=${older}`);
   // Signing in elsewhere and reloading this login page counts the same as signing in on it: it returns to the linked run.
+  // Finish the anonymous session bootstrap before the test installs another tab's signed-in cookie.
+  await page.locator('#send-code:enabled').waitFor();
   await page.context().addCookies(cookies);
   await page.reload();
   await page.waitForURL(workbench);
@@ -140,6 +142,7 @@ try {
   await page.context().clearCookies();
   await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
   await page.waitForURL(url => url.pathname === '/login.html' && url.search === chatAddress);
+  await page.locator('#send-code:enabled').waitFor();
   await page.context().addCookies(signedIn);
   await page.reload();
   await page.waitForURL(url => workbench(url) && url.search === chatAddress);
@@ -213,6 +216,11 @@ try {
   mark('the login page fits 375 and 320 pixel screens');
   assert.deepEqual(errors, []);
   console.log('Login checks passed: email and password login, account password setup, run links, account menu, logout and narrow layouts.');
+} catch (error) {
+  const page = browser?.contexts()[0]?.pages()[0];
+  console.error('Login check failed at', page?.url());
+  await page?.screenshot({ path: path.join(output, 'login-failure.png'), fullPage: true }).catch(() => {});
+  throw error;
 } finally {
   await browser?.close();
   await service.close();

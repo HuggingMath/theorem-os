@@ -3,9 +3,11 @@ import type { WebFormalization, WebFormalizationCapabilities, WebFormalizationRe
 import { locale, localeTag, localizeDocument, localizeMessage, mountLocaleSwitch, sentences, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
 import { renderFormalization } from './formalizationView';
-import { formalizationReasonText } from './formalizationReasons';
+import { formalizationReasonText, formalizationNextStep } from './formalizationReasons';
 import { correspondenceSpans, fragmentLadder } from './correspondence';
 import { buildLeanRows, highlightSpans } from './leanPane';
+import { SubmissionIdentity } from './submissionIdentity';
+let submission: SubmissionIdentity | undefined;
 
 const embedded = document.body.dataset.formalizeEmbedded === 'true';
 const shell = document.querySelector<HTMLElement>(embedded ? '#natural-research' : '.formalize-shell')!;
@@ -38,15 +40,18 @@ function saveDraft() {
   } catch { /* The editable draft remains usable when browser storage is unavailable. */ }
 }
 function restoreDraft(session: WebSession) {
-  if (!embedded) return;
-  draftStorageKey = `theorem-os.natural-research-draft.v1:${session.account?.email ?? 'anonymous'}`;
+  const owner = session.draftOwner ?? session.account?.email ?? session.csrfToken;
+  submission = new SubmissionIdentity(sessionStorage, `theorem-os.formalization-submission.${owner}.${embedded}`);
+  draftStorageKey = `theorem-os.natural-research-draft.v2:${owner}.${embedded}`;
   if (draftEdited) { saveDraft(); return; }
+  if (!embedded && (state.selected || selectedExample) && !submission.hasPending) return;
   try {
     const saved = JSON.parse(sessionStorage.getItem(draftStorageKey) ?? 'null') as Record<string, unknown> | null;
     if (!saved || typeof saved.original !== 'string') return;
     draftEdited = true;
     original.value = saved.original;
-    environment.value = 'mathlib'; effort.value = 'max';
+    environment.value = saved.environment === 'standard' ? 'standard' : 'mathlib';
+    effort.value = ['low', 'high', 'max'].includes(String(saved.effort)) ? String(saved.effort) : 'max';
     state.selected = typeof saved.selected === 'string' ? saved.selected : '';
     const example = researchExamples.find(item => item.id === saved.example);
     if (example) {
@@ -118,6 +123,7 @@ function controls() {
     original.style.height = `${Math.min(320, Math.max(116, original.scrollHeight))}px`;
   }
   const caps = state.capabilities;
+  key.required = !embedded && !submission?.hasPending && caps?.key === 'required';
   const changed = Boolean(state.item && !matchesInput(state.item));
   $('#formalize-changed').hidden = embedded || !changed;
   const checked = $<HTMLInputElement>('#formalize-checked');
@@ -128,12 +134,14 @@ function controls() {
   use.setAttribute('aria-disabled', String(!usable));
   if (usable) use.href = `/?formalization=${encodeURIComponent(state.item!.id)}`;
   else use.removeAttribute('href');
-  $<HTMLButtonElement>('#formalize-start').disabled = state.busy || !caps?.available || !original.value.trim() || state.items.some(active)
-    || (!embedded && caps.key === 'required' && !key.value.trim());
+  const retry = !!submission?.hasPending;
+  const queueFull = !retry && !!caps && state.items.filter(active).length >= caps.limits.perOwner;
+  $<HTMLButtonElement>('#formalize-start').disabled = state.busy || !caps?.available && !retry || !original.value.trim() || queueFull
+    || (!embedded && !retry && caps?.key === 'required' && !key.value.trim());
   const sendStatus = $('#formalize-send-status');
-  sendStatus.hidden = !embedded || Boolean(caps) && !state.items.some(active) && !state.busy;
+  sendStatus.hidden = !embedded || Boolean(caps) && !queueFull && !state.busy;
   sendStatus.textContent = !caps ? t('正在连接，连接后即可发送。') : state.busy ? t('正在发送…')
-    : t('上一道题正在形式化。你可以先输入，处理完成后即可发送。');
+    : t('当前账号的形式化队列已满，输入内容会保留。');
   $<HTMLButtonElement>('#formalize-confirm').disabled = state.busy || changed || !checked.checked || state.item?.status !== 'review';
   for (const element of document.querySelectorAll<HTMLButtonElement>('#formalize-actions button')) element.disabled = state.busy;
   $<HTMLButtonElement>('#formalize-refresh').disabled = state.busy;
@@ -144,7 +152,7 @@ function drawCapabilities() {
   if (!caps) return;
   $('#formalize-key-note').textContent = caps.key === 'saved' ? t('留空使用已保存的 Key；填写则仅用于这次生成。')
     : caps.key === 'server' ? t('留空使用服务器 Key；填写则仅用于这次生成。') : t('填写当前服务商的 Key，仅用于这次生成。');
-  key.required = !embedded && caps.key === 'required';
+  key.required = !embedded && !submission?.hasPending && caps.key === 'required';
   $('#formalize-budget').textContent = t('固定模型 {0} · 最多 {1} 分钟 · Token 不限 · {2} 轮写作 · {3} 位审核模型', caps.model,
     Math.ceil(caps.limits.maxRunSeconds / 60), caps.limits.maxRounds, caps.limits.reviewers);
   if (embedded) $('#formalize-budget').append(document.createTextNode(' ' + t('以上为形式化预算；随后证明研究最多 5 分钟、5 次模型调用，共用本次 Key。')));
@@ -183,7 +191,7 @@ function drawReport() {
 function drawCurrent() {
   const item = state.item; $('#formalize-current').hidden = !item;
   if (!item) return;
-  $('#formalize-progress').textContent = [statusName(item), active(item) && item.progress ? phaseNames[item.progress.phase] : '',
+  $('#formalize-progress').textContent = [statusName(item), item.queue ? t('排队第 {0} 位 · 前方 {1} 项等待 · {2} 项执行中', item.queue.position, item.queue.ahead, item.queue.running) : '', active(item) && item.progress ? phaseNames[item.progress.phase] : '',
     item.progress?.round ? t('第 {0} 轮', item.progress.round) : '', item.progress?.tokens !== undefined ? t('已用 {0} Token', item.progress.tokens.toLocaleString(localeTag)) : ''].filter(Boolean).join(' · ');
   $('#formalize-source-text').textContent = item.original;
   if (embedded) $<HTMLDetailsElement>('#formalize-source').open = true;
@@ -203,7 +211,7 @@ function drawCurrent() {
   const resultLink = $<HTMLAnchorElement>('#formalize-result-link');
   if (item.runId) resultLink.href = `/?run=${encodeURIComponent(item.runId)}`; else resultLink.removeAttribute('href');
   const reason = $('#formalize-reason'); reason.hidden = !item.reason;
-  reason.textContent = item.reason ? sentences(formalizationReasonText(item.reason), t('可复制原题修改后重新生成，不会自动重试。')) : '';
+  reason.textContent = item.reason ? sentences(formalizationReasonText(item.reason), formalizationNextStep(item.reason)) : '';
   $('#formalize-failure').hidden = !item.reason;
   $('#formalize-failure-code').textContent = item.reason ?? '';
   const actions = $('#formalize-actions'); actions.replaceChildren();
@@ -292,7 +300,7 @@ async function mutate(kind: 'cancel' | 'confirm') {
 $('#formalize-form').addEventListener('submit', async event => {
   event.preventDefault(); if ($<HTMLButtonElement>('#formalize-start').disabled) return;
   const caps = state.capabilities!;
-  if (embedded && caps.key === 'required' && !key.value.trim()) {
+  if (embedded && !submission?.hasPending && caps.key === 'required' && !key.value.trim()) {
     $<HTMLDetailsElement>('#formalize-settings').open = true;
     key.focus(); key.scrollIntoView({ block: 'center' }); return;
   }
@@ -303,8 +311,13 @@ $('#formalize-form').addEventListener('submit', async event => {
   const input: WebFormalizationRequest = { original: original.value, environment: environment.value === 'mathlib' ? 'mathlib' : 'standard',
     effort: effort.value as WebFormalizationRequest['effort'], apiKey: key.value, ...(embedded ? { solve: true } : {}) };
   key.value = '';
+  saveDraft();
   try {
+    const requestId = await submission!.prepare(input);
+    if (generation !== conversationGeneration) return;
+    input.requestId = requestId;
     const { formalization } = await call<{ formalization: WebFormalization }>('/api/formalizations', 'POST', input);
+    submission!.clear(requestId);
     if (generation !== conversationGeneration) { store(formalization); drawList(); return; }
     state.selected = formalization.id; autoOpen = embedded ? formalization.id : ''; store(formalization); report = undefined;
     if (embedded) {
@@ -327,9 +340,9 @@ exampleSelect.addEventListener('change', () => {
   if (next !== selectedExample && original.value.trim() && !confirm(t('用所选例题替换当前输入的原题？'))) {
     exampleSelect.value = selectedExample; return;
   }
-  autoOpen = ''; loadExample(next); saveDraft(); controls();
+  submission?.clear(); autoOpen = ''; loadExample(next); saveDraft(); controls();
 });
-original.addEventListener('input', () => { autoOpen = ''; clearExample(); saveDraft(); controls(); });
+original.addEventListener('input', () => { submission?.clear(); autoOpen = ''; clearExample(); saveDraft(); controls(); });
 if (embedded) {
   original.addEventListener('focus', controls);
   window.addEventListener('resize', controls);
@@ -339,8 +352,8 @@ if (embedded) {
     if (!$<HTMLButtonElement>('#formalize-start').disabled) $<HTMLFormElement>('#formalize-form').requestSubmit();
   });
 }
-environment.addEventListener('change', () => { autoOpen = ''; clearExample(); saveDraft(); controls(); });
-effort.addEventListener('change', saveDraft);
+environment.addEventListener('change', () => { submission?.clear(); autoOpen = ''; clearExample(); saveDraft(); controls(); });
+effort.addEventListener('change', () => { submission?.clear(); saveDraft(); controls(); });
 key.addEventListener('input', controls);
 $('#formalize-use').addEventListener('click', event => {
   if (state.busy || state.item?.status !== 'confirmed' || !matchesInput(state.item)) { event.preventDefault(); controls(); return; }
@@ -360,7 +373,7 @@ if (embedded) window.addEventListener('theoremos:natural-original', event => {
   original.focus(); original.scrollIntoView({ block: 'center' });
 });
 if (embedded) window.addEventListener('theoremos:new-natural', () => {
-  conversationGeneration++;
+  conversationGeneration++; submission?.clear();
   autoOpen = ''; original.value = ''; key.value = ''; environment.value = 'mathlib'; effort.value = 'max';
   state.selected = ''; state.item = undefined; report = undefined;
   clearExample(); saveDraft(); error(); drawCurrent(); drawList(); controls();

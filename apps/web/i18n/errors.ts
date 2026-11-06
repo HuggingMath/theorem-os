@@ -1,5 +1,7 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  "提交标识已用于不同内容，请新建提交。": "This submission ID was used for different content. Start a new submission.",
+  "该提交的形式化任务已删除，请新建提交。": "The formalization for this submission was deleted. Start a new submission.",
   "提交请求标识无效。": "The submission request ID is invalid.",
   "提交请求标识无效或不一致。": "The submission request IDs are invalid or do not match.",
   "同一提交请求不能使用不同的题目或配置。": "The same submission request cannot use a different problem or configuration.",
@@ -14,7 +16,7 @@ export const errors: Record<string, string> = {
   "请检查原题、证明环境与 API Key。": "Check the original problem, proof environment and API key.",
   "请先取消进行中的形式化任务。": "Cancel the active formalization first.",
   "形式化记录已满，请先删除不需要的记录。": "The formalization history is full. Delete records you no longer need first.",
-  "已有形式化任务正在进行，请等待结束。": "A formalization is already running. Wait for it to finish.",
+  "当前账号的形式化队列已满，请等待已有任务结束。": "Your formalization queue is full. Wait for an existing task to finish.",
   "形式化队列已满，请稍后重试。": "The formalization queue is full. Try again shortly.",
   "请先确认原题与 Lean 声明的对应关系。": "Confirm the correspondence between the original problem and the Lean statement first.",
   "确认内容已改变，请刷新并重新核对。": "The content to confirm has changed. Refresh and check it again.",

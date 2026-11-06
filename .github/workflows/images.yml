@@ -62,6 +62,8 @@ jobs:
           context: .
           file: apps/web/Dockerfile
           target: ${{ matrix.target }}
+          build-args: |
+            THEOREMOS_SOURCE_COMMIT=${{ github.sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

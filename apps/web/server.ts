@@ -82,7 +82,7 @@ const formalizationSchema = z.object({
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
   environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('max'),
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
-  solve: z.boolean().optional(),
+  solve: z.boolean().optional(), requestId: z.string().uuid().optional(),
 }).strict();
 const conversationSchema = z.object({ formalizationId: z.string().uuid().optional(), runId: z.string().uuid().optional() })
   .strict().refine(value => Boolean(value.formalizationId || value.runId));
@@ -464,8 +464,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (request.method === 'POST') {
             const parsed = formalizationSchema.safeParse(await readJson(request));
             if (!parsed.success) throw new HttpError(400, '请检查原题、证明环境与 API Key。');
+            const previous = provider && formalizations.replay(owner, parsed.data, provider, SUB2API_PROVIDER.defaultModel);
+            if (previous) { json(response, 200, { formalization: previous }); return; }
             if (!gatewayProvider(provider)) throw new HttpError(409, '自然语言形式化需要配置 Sub2API 服务。');
-            if (!runner.formalize || !(await runner.readiness()).ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
+            const ready = !!runner.formalize && (await runner.readiness()).ready;
+            // Another request may have committed the same identity while readiness was awaited.
+            const raced = formalizations.replay(owner, parsed.data, provider!, SUB2API_PROVIDER.defaultModel);
+            if (raced) { json(response, 200, { formalization: raced }); return; }
+            if (!ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider!);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
             json(response, 201, { formalization: formalizations.create(owner, { ...parsed.data, apiKey } as WebFormalizationRequest, provider!, SUB2API_PROVIDER.defaultModel) }); return;
