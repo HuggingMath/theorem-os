@@ -130,6 +130,13 @@ const retryableRoleFailure = (cause: unknown) => {
 // candidates forever under an unlimited round budget.
 const MAX_UNKNOWN_ROUNDS = 3;
 const INLINE_ROLE_CONTEXT_BYTES = 64 * 1024;
+const reviewOutputFeedback = (cause: unknown) => [
+  'OUTPUT.json was not accepted. Repair the output contract in this same independent reviewer thread.',
+  'Host validation error (data): ' + JSON.stringify(errorText(cause).slice(0, 16000)),
+  'Copy originalFragment and candidateFragment directly from the decoded INPUT.json strings, preserving whitespace and newlines. Do not reconstruct an elaborated type, switch pretty-printer notation or add implicit arguments inside a quotation. A contiguous excerpt of the supplied candidate declaration is sufficient when it supports your explanation.',
+  'Preserve your independent mathematical assessment; a valid unknown or changes_requested verdict is acceptable. This feedback supplies no semantic verdict. Do not change INPUT.json, ROLE.md or OUTPUT.schema.json.',
+  'Write the complete corrected JSON atomically to OUTPUT.json, then stop.',
+].join('\n');
 const roleInstructions: Record<Role, string> = {
   plan: [
     'Plan a faithful Lean formalization of the complete original mathematical task in INPUT.json before generating declarations.',
@@ -378,6 +385,7 @@ export async function runFormalization(directory: string, root: string, options:
         const turnTimeout = Math.min(stageTimeout(request.maxTurnSeconds),
           role === 'refute' && request.falsification?.maxTurnSeconds ? request.falsification.maxTurnSeconds * 1000 : Infinity);
         let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined, stopped = false;
+        let receivedTurnUsage = false;
         let completionNoticeSent = false;
         const remindSubmission = () => {
           const accounting = record.requestUsageAccounting;
@@ -411,10 +419,12 @@ export async function runFormalization(directory: string, root: string, options:
             environment: env, signal: lease.signal,
             turnTimeoutMs: Number.isFinite(turnTimeout) ? turnTimeout : undefined,
             ...(request.execution === 'model' ? { readIsolation: { environment: request.environment } } : {}),
-            completedOutput: { file: outputFile, validate: value => { validateOutput(value); } },
+            completedOutput: { file: outputFile, validate: value => { validateOutput(value); },
+              ...(request.fidelityPolicy && structuredInput ? { validationFeedback: reviewOutputFeedback } : {}) },
             onUsage: usage => {
               // Relayed roles settle each provider request; cumulative native notifications are observational.
               if (record.requestUsageAccounting) return;
+              receivedTurnUsage = reportedTotalTokens(usage) !== null;
               record.usage = usage; save();
               if (spent()) for (const stopRole of running) stopRole();
             }, onUsageIncomplete: () => {
@@ -443,10 +453,8 @@ export async function runFormalization(directory: string, root: string, options:
           record.threadId = session.threadId;
           if (state.sessions.some(item => item !== record && item.threadId === record.threadId))
             throw new Error('formalization_role_thread_reused');
-          record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true;
-          record.status = 'running'; save();
           const inlineContext = request.fidelityPolicy && Buffer.byteLength(inputText) + Buffer.byteLength(schemaText) <= INLINE_ROLE_CONTEXT_BYTES;
-          const message = inlineContext ? [
+          let message = inlineContext ? [
             'Complete your assigned role using the frozen input and exact output schema below. These are the complete INPUT.json and OUTPUT.schema.json bytes; do not reread those files or ROLE.md.',
             'Follow the developer role protocol. Use tools only for a specific missing library fact or to write the final OUTPUT.json atomically, then stop.',
             'BEGIN INPUT.json', inputText, 'END INPUT.json',
@@ -454,16 +462,47 @@ export async function runFormalization(directory: string, root: string, options:
           ].join('\n') : request.fidelityPolicy ?
             'Follow the complete role protocol in the developer instructions. Read OUTPUT.schema.json and INPUT.json, write OUTPUT.json atomically using that contract, then stop. ROLE.md is the same protocol and need not be reread.' :
             'Read ROLE.md, OUTPUT.schema.json and INPUT.json in the current directory. Produce OUTPUT.json using that exact contract. The complete protocol is in these files; no runtime source search or theorem proof is required.';
-          const ran = session.run(message,
-            crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
-          // A turn stopped at the allowance ends the run; one that still finished keeps its output.
-          record.status = await ran.catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });
-          lease.signal.throwIfAborted();
-          if (record.status === 'submitted') record.completionReason = 'validated-output';
-          if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
-            if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
-            if (stopped) throw new Error('math_total_token_limit');
-            throw new FormalizationRoleFailure(record.status, session.lastFailureDiagnostic);
+          while (true) {
+            lease.signal.throwIfAborted();
+            const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
+            if (!modelDispatchAllowed(budget)) throw new Error(budget.reason ?? 'formalization_token_limit');
+            receivedTurnUsage = false;
+            record.usageAccounting.startedTurns++; record.usageAccounting.pending = true;
+            record.status = 'running'; save();
+            const ran = session.run(message, crypto.randomUUID(), workspace,
+              turnId => { record.turnId = turnId; record.turns++; save(); });
+            // A turn stopped at the allowance ends the run; one that still finished keeps its output.
+            record.status = await ran.catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });
+            record.usageAccounting.pending = false;
+            if (record.requestUsageAccounting ? !record.requestUsageAccounting.incomplete && !record.requestUsageAccounting.pendingRequests :
+              receivedTurnUsage && !incomplete) record.usageAccounting.reportedTurns++;
+            record.usageAccounting.incomplete = incomplete || record.usageAccounting.startedTurns > record.usageAccounting.reportedTurns;
+            save(); lease.signal.throwIfAborted();
+            if (record.status === 'submitted') record.completionReason = 'validated-output';
+            if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
+              if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
+              if (stopped) throw new Error('math_total_token_limit');
+              throw new FormalizationRoleFailure(record.status, session.lastFailureDiagnostic);
+            }
+            // A normal turn may finish before the output watcher can send feedback.
+            // Keep a malformed review in its own thread; valid semantic judgments
+            // leave this loop and still require the full independent panel.
+            if (request.fidelityPolicy && structuredInput && record.status === 'completed') {
+              if (currentProfileDigest() !== profileDigest || readMathText(inputFile, 8_000_000) !== inputText ||
+                  readMathText(instructionsFile, 1_000_000) !== instructionsText || readMathText(schemaFile, 1_000_000) !== schemaText)
+                throw new Error('formalization_role_contract_changed');
+              let output: unknown;
+              try { output = JSON.parse(readMathText(outputFile, 2_000_000)); }
+              catch (cause) {
+                if (!(cause instanceof SyntaxError) && (cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+                message = reviewOutputFeedback(cause); event('formalization_review_output_repairing', role, errorText(cause)); continue;
+              }
+              try { validateOutput(output); }
+              catch (cause) {
+                message = reviewOutputFeedback(cause); event('formalization_review_output_repairing', role, errorText(cause)); continue;
+              }
+            }
+            break;
           }
           // Stop the writer before parsing or binding a submitted output.
           await session.close();
@@ -483,7 +522,6 @@ export async function runFormalization(directory: string, root: string, options:
           lease.signal.removeEventListener('abort', interrupt);
           running.delete(stop);
           record.usageAccounting.pending = false;
-          record.usageAccounting.reportedTurns = reportedTotalTokens(record.usage) !== null && !incomplete ? 1 : 0;
           record.usageAccounting.incomplete = incomplete || (record.usageAccounting.startedTurns > record.usageAccounting.reportedTurns);
           save(); event('formalization_role_finished', role);
         }

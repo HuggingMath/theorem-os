@@ -98,6 +98,15 @@ backtranslators may receive one submission reminder after three fully settled
 provider requests, only while usage is complete and budget remains. The reminder
 does not interrupt an active request or waive any output or review requirement.
 
+Structured reviewers receive host feedback when their output fails its contract,
+including a quotation that is not present verbatim in the supplied text. They
+repair that output in their own independent thread with the same frozen input.
+If a turn finished before feedback could arrive, the next turn resumes only that
+reviewer; valid sibling reviews and the existing candidate remain available.
+Every repair turn remains inside the original time and provider-usage budget.
+A valid semantic judgment, including `unknown` or `changes_requested`, leaves
+this repair path and follows the normal panel decision.
+
 These checks constrain admitted task transformations. They do not certify that a
 source contract captures every natural-language requirement, establish independent
 model errors or accept an original theorem proof. Artifacts still record

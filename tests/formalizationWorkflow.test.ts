@@ -145,6 +145,64 @@ function withProviderRequests(agent: ReturnType<typeof preset>, receipts: readon
   };
   return { open, notices, checkpoints, opened, interrupted, denied };
 }
+
+function reviewerQuoteSessions(options: { activeFeedback?: boolean; validFirst?: boolean;
+  verdict?: 'unknown' | 'changes_requested'; accounting?: 'upstream' | 'native'; missingUsage?: boolean;
+  tamperInput?: boolean } = {}) {
+  const verdict = options.verdict ?? 'unknown', agent = preset({ verdicts: [verdict, verdict] });
+  const visits: { role: string; threadId: string; closed: boolean; messages: string[]; messageIds: string[];
+    turnIds: string[]; protocolBytes: string[][]; validOutputs: string[]; feedback: string[] }[] = [];
+  const open = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+    const role = path.basename(config.workspace), native = options.accounting === 'native';
+    const visit = { role, threadId: '', closed: false, messages: [] as string[], messageIds: [] as string[],
+      turnIds: [] as string[], protocolBytes: [] as string[][], validOutputs: [] as string[], feedback: [] as string[] };
+    const base = await agent.open({ ...config, onUsage: usage => {
+      if (native && options.missingUsage && role === 'compare-reviewer-2') return;
+      config.onUsage({ ...usage, totalTokens: visit.messages.length });
+    } });
+    visit.threadId = base.threadId; visits.push(visit);
+    return { ...base, usageSource: native ? 'native-thread-totals' : 'upstream-requests',
+      close: async () => { visit.closed = true; await base.close(); },
+      run: async (message, id, workspace, onStarted) => {
+        expect(visit.closed).toBe(false); expect(workspace).toBe(config.workspace);
+        visit.messages.push(message); visit.messageIds.push(id);
+        const turn = visit.messages.length, turnId = base.threadId + '-turn-' + turn;
+        visit.turnIds.push(turnId);
+        visit.protocolBytes.push(['INPUT.json', 'ROLE.md', 'OUTPUT.schema.json']
+          .map(file => readMathText(path.join(workspace, file))));
+        const status = await base.run(message, id, workspace, () => {
+          onStarted(turnId);
+          if (native) return;
+          const admission = config.requestGate!({ requestId: turnId, source: 'responses-relay' });
+          if (!admission.allowed) throw new Error(admission.reason);
+          admission.settle(options.missingUsage && role === 'compare-reviewer-2' ?
+            { complete: false, outcome: 'completed', missingReason: 'provider-usage-missing' } : completeRequest);
+        });
+        const file = path.join(workspace, 'OUTPUT.json'), valid = readMathText(file);
+        visit.validOutputs.push(valid);
+        if (role !== 'compare-reviewer-2' || turn !== 1 || options.validFirst) return status;
+        const invalid = JSON.parse(valid);
+        invalid.correspondences[0].candidateFragment = '@Eq Nat (Nat.add n 0) n';
+        const invalidText = JSON.stringify(invalid); fs.writeFileSync(file, invalidText);
+        let error: unknown;
+        try { config.completedOutput!.validate(invalid); } catch (cause) { error = cause; }
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain('formalization_review_fragment_not_found');
+        if (options.tamperInput) {
+          const input = path.join(workspace, 'INPUT.json');
+          fs.chmodSync(input, 0o600); fs.appendFileSync(input, '\n');
+        }
+        if (!options.activeFeedback) return 'completed';
+        const feedback = config.completedOutput!.validationFeedback!(error, { text: invalidText, turnId });
+        expect(feedback).toContain('formalization_review_fragment_not_found'); visit.feedback.push(feedback);
+        fs.writeFileSync(file, valid); config.completedOutput!.validate(JSON.parse(valid));
+        return 'submitted';
+      },
+    };
+  };
+  return { open, visits, seen: agent.seen };
+}
+
 const elaborate: NonNullable<Parameters<typeof runFormalization>[2]>['elaborate'] =
   async (_directory, source, environment, options) => {
     const result = syntheticElaboration(source, environment, options);
@@ -267,6 +325,94 @@ describe('fidelity role context and submission reminders', () => {
     expect(readFormalizationState(f.directory).sessions[0].requestUsageAccounting).toMatchObject({
       startedRequests: 3, reportedRequests: 3, pendingRequests: 0, incomplete: false,
     });
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+});
+
+describe('same-thread reviewer output correction', () => {
+  it.each([
+    ['completed upstream turn', false, 'upstream', 2],
+    ['completed native turn', false, 'native', 2],
+    ['active upstream turn', true, 'upstream', 1],
+  ] as const)('repairs an invalid quote from a %s without rerunning another role', async (_name, activeFeedback, accounting, turns) => {
+    const f = fixture(workflow => { workflow.reviewScheduling = 'parallel'; },
+      { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 });
+    const agent = reviewerQuoteSessions({ activeFeedback, accounting });
+    const repairs: string[] = [];
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate,
+      onEvent: event => { if (event.event === 'formalization_review_output_repairing') repairs.push(event.error!); } });
+    expect(result).toMatchObject({ status: 'exhausted', rounds: 1, candidatesTried: 1,
+      roleTurns: { plan: 1, generate: 1, backtranslate: 1, compare: 1 + turns } });
+    expect(result.error).toContain('formalization_semantic_unknown');
+    expect(result.error).not.toContain('formalization_review_fragment_not_found');
+    expect(agent.visits.map(visit => visit.role)).toEqual(['plan-1', 'generate', 'backtranslate', 'compare-reviewer-1', 'compare-reviewer-2']);
+    expect(new Set(agent.visits.map(visit => visit.threadId)).size).toBe(5);
+    const repaired = agent.visits.find(visit => visit.role === 'compare-reviewer-2')!;
+    for (const visit of agent.visits) {
+      expect(visit.closed).toBe(true);
+      expect(visit.messages).toHaveLength(visit === repaired ? turns : 1);
+      for (const protocol of visit.protocolBytes) expect(protocol).toEqual(visit.protocolBytes[0]);
+    }
+    expect(new Set(repaired.messageIds).size).toBe(turns);
+    expect(new Set(repaired.turnIds).size).toBe(turns);
+    if (activeFeedback) {
+      expect(repaired.feedback).toHaveLength(1); expect(repairs).toEqual([]);
+    } else {
+      expect(repaired.messages[1]).toContain('formalization_review_fragment_not_found');
+      expect(repaired.feedback).toEqual([]); expect(repairs).toHaveLength(1);
+    }
+    const state = readFormalizationState(f.directory), review = state.sessions.find(item => item.reviewerId === 'reviewer-2')!;
+    expect(review).toMatchObject({ threadId: repaired.threadId, turnId: repaired.turnIds.at(-1), turns,
+      usage: { totalTokens: turns }, usageAccounting: { startedTurns: turns, reportedTurns: turns, pending: false, incomplete: false } });
+    expect(review.inputDigest).toBe(formalizationDigest(JSON.parse(repaired.protocolBytes[0][0])));
+    expect(review.outputDigest).toBe(formalizationDigest(JSON.parse(repaired.validOutputs.at(-1)!)));
+    expect(result.tokenBudget).toMatchObject({ reportedTotalTokens: 4 + turns, usageComplete: true });
+    if (accounting === 'upstream') expect(review.requestUsageAccounting).toMatchObject({
+      startedRequests: turns, reportedRequests: turns, pendingRequests: 0, incomplete: false,
+    });
+    else expect(review.requestUsageAccounting).toBeUndefined();
+    expect(state.sessions.filter(item => item.role === 'compare')).toHaveLength(2);
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it('keeps valid changes_requested judgments without a correction turn and still calls both reviewers', async () => {
+    const f = fixture(workflow => { workflow.reviewScheduling = 'parallel'; },
+      { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 });
+    const agent = reviewerQuoteSessions({ validFirst: true, verdict: 'changes_requested' });
+    const repairs: string[] = [];
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate,
+      onEvent: event => { if (event.event === 'formalization_review_output_repairing') repairs.push(event.role!); } });
+    expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_semantic_changes_requested');
+    expect(agent.visits).toHaveLength(5); expect(agent.visits.every(visit => visit.messages.length === 1)).toBe(true);
+    const reviews = agent.visits.filter(visit => visit.role.startsWith('compare-'));
+    expect(reviews.map(visit => visit.role)).toEqual(['compare-reviewer-1', 'compare-reviewer-2']);
+    expect(reviews.map(visit => JSON.parse(visit.validOutputs[0]).verdict)).toEqual(['changes_requested', 'changes_requested']);
+    expect(repairs).toEqual([]); expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it.each([
+    ['missing upstream usage', 'upstream', true, 100, 'math_model_usage_unavailable'],
+    ['missing native usage', 'native', true, 100, 'math_model_usage_unavailable'],
+    ['spent shared budget', 'upstream', false, 5, 'math_total_token_limit'],
+  ] as const)('stops correction before another call after %s', async (_name, accounting, missingUsage, maxTotalTokens, error) => {
+    const f = fixture(workflow => { workflow.reviewScheduling = 'parallel'; },
+      { fidelityPolicy: 'task-preserving-v2', maxTotalTokens });
+    const agent = reviewerQuoteSessions({ accounting, missingUsage });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
+    expect(result).toMatchObject({ status: 'stopped', error });
+    expect(agent.visits).toHaveLength(5); expect(agent.visits.every(visit => visit.messages.length === 1)).toBe(true);
+    const repaired = readFormalizationState(f.directory).sessions.find(item => item.reviewerId === 'reviewer-2')!;
+    expect(repaired.turns).toBe(1); expect(repaired.usageAccounting.startedTurns).toBe(1);
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it('rejects changed frozen reviewer input instead of starting a correction turn', async () => {
+    const f = fixture(workflow => { workflow.reviewScheduling = 'parallel'; },
+      { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 });
+    const agent = reviewerQuoteSessions({ tamperInput: true });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
+    expect(result.error).toBe('formalization_role_contract_changed');
+    expect(agent.visits).toHaveLength(5); expect(agent.visits.every(visit => visit.messages.length === 1)).toBe(true);
     expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
   });
 });
