@@ -191,6 +191,8 @@ try {
   assert.ok(link && mail.some(item => item.text.includes(`?run=${newer}`)), 'Each finished run mails its link');
   assert.ok(mail.every(item => !item.text.includes('sk-login-test')), 'A completion mail carries the API key');
   const cookies = await page.context().cookies();
+  // Leave the old workbench before clearing its cookie: an in-flight API reply can otherwise restore it.
+  await page.goto('about:blank');
   await page.context().clearCookies();
   await page.goto(link);
   await page.waitForURL(url => url.pathname === '/login.html' && url.search === `?run=${older}`);
