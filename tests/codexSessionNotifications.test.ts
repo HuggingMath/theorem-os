@@ -42,7 +42,7 @@ setInterval(() => {
     send({ method: 'item/completed', params: { threadId: 'notice-thread', item: { id: 'reasoning', type: 'reasoning' } } });
     record('reasoning-reported');
   }
-  if (command === 'complete') { controller?.abort(); finish('completed'); }
+  if (command === 'complete') finish('completed');
   if (command === 'cancel-request') { controller?.abort(); record('client-aborted'); }
   if (command === 'request') void request();
   if (command === 'ack') { const reply = steerReply; steerReply = undefined; reply?.(); }
@@ -245,6 +245,11 @@ describe('soft notifications at real provider request boundaries', () => {
     if (stop === 'complete') control('complete');
     else if (stop === 'interrupt') await session!.interrupt();
     expect(await running).toBe(stop === 'complete' ? 'completed' : stop === 'timeout' ? 'checkpoint' : 'interrupted');
+    // This case checks completion before request settlement. Aborting HTTP in the child before
+    // sending stdout's completion races independent transports and may legitimately deliver a
+    // notice while the host still sees the first turn as active. Acknowledge completion first.
+    if (stop === 'complete') control('cancel-request');
+    await expect.poll(() => receipts.length).toBe(1);
     await expect(delivered).rejects.toThrow('math_codex_notification_turn_settled');
     expect(trace().filter(item => item.event === 'steer')).toEqual([]);
     if (stop !== 'timeout') {
