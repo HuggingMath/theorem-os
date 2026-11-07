@@ -58,6 +58,11 @@ claim such as `∀ n : Nat, n = n`; two different provable claims do not pass me
 because both are true. Earlier requests retain their baseline guards and query
 bytes.
 
+New task-preserving-v2 comparisons record method `cardinality-correspondence-v7`
+and receipt schema v6. This restores the complete-identity exception that method
+v6 incorrectly refused for tasks such as `n + 0 = n`. Persisted v5 receipts retain
+their exact generated query and decision; recovery never relabels them.
+
 Generation requires every reviewer to approve and every corresponding Lean check
 to establish correspondence. Unestablished correspondence blocks the artifact
 and returns revision feedback without blacklisting the candidate as a proved
@@ -84,6 +89,14 @@ environment: `standard` has the Lean standard library and no Mathlib mount.
 Planning stops once the object, assumption, conclusion-type and definition
 dependencies are covered. Generation submits after its final declaration check;
 changing comments or notes does not require repeating a successful Lean check.
+
+Small role inputs include the complete frozen input and output schema directly
+in the first message (combined UTF-8 size at most 64 KiB). Larger inputs retain
+the complete file-reading protocol. The blind backtranslator still receives
+only its permitted checked snapshot, never the original source. Planners and
+backtranslators may receive one submission reminder after three fully settled
+provider requests, only while usage is complete and budget remains. The reminder
+does not interrupt an active request or waive any output or review requirement.
 
 These checks constrain admitted task transformations. They do not certify that a
 source contract captures every natural-language requirement, establish independent

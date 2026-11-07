@@ -48,7 +48,7 @@ export async function compareFormalizationReference(directory: string, input: Fo
     referenceToCandidate: { status: 'not-established' as const, reason } }));
   let result: CurrentFormalizationReferenceResult = {
     ...(input.purpose === 'task-fidelity-v2' ? {
-      schema: 'theoremos.formalization-reference.v5' as const, method: 'cardinality-correspondence-v6' as const,
+      schema: 'theoremos.formalization-reference.v6' as const, method: 'cardinality-correspondence-v7' as const,
     } : {
       schema: 'theoremos.formalization-reference.v4' as const, method: 'cardinality-correspondence-v5' as const,
     }),

@@ -129,10 +129,13 @@ const retryableRoleFailure = (cause: unknown) => {
 // resolving the ambiguity, so the run ends exhausted instead of re-generating
 // candidates forever under an unlimited round budget.
 const MAX_UNKNOWN_ROUNDS = 3;
+const INLINE_ROLE_CONTEXT_BYTES = 64 * 1024;
 const roleInstructions: Record<Role, string> = {
   plan: [
     'Plan a faithful Lean formalization of the complete original mathematical task in INPUT.json before generating declarations.',
     'Write exactly one strict JSON object to OUTPUT.json with schema,taskKind,spans,objects,assumptions,conclusions,definitions,unresolved.',
+    'Produce the smallest complete mathematical inventory, not a Lean implementation or a proof. A complete source clause can be one span reused by its objects and conclusions; do not split every word or symbol into a separate record.',
+    'Empty assumptions, definitions and unresolved arrays are correct when the source has no separate hypotheses, specialized definitions or ambiguity. Ordinary quantifiers, equality and number notation do not require invented library identifiers, instance helpers or local abbreviations. Still record every mathematical domain, convention and specialized concept that affects the claim.',
     'schema is theorem-os.formalization-plan.v1; taskKind is prove, decision or construction. Classify yes/no questions as decision. Do not assume the answer is yes, and never replace a requested decision with excluded middle.',
     'spans is an array of {id,start,end,text}: exact nonempty original text at JavaScript UTF-16 slice(start,end), without splitting a surrogate pair. Use stable unique alphanumeric IDs.',
     'objects is [{id,spanIds,description,leanType}]; describe domains and quantifiers explicitly.',
@@ -300,6 +303,8 @@ export async function runFormalization(directory: string, root: string, options:
             '\nRead ROLE.md and OUTPUT.schema.json, then INPUT.json in this directory. These files contain the complete role protocol and task data.',
           ...(request.fidelityPolicy && role !== 'refute' ? ['Preserve the complete original task. Reordering independent parameters and supported equivalent representations are allowed; changing whole-structure assumptions into pair-local assumptions, weakening premises or strengthening conclusions is not approval. Establish the comparison of full obligations, not separate provability.'] : []),
           'OUTPUT.schema.json describes the exact output structure, field types and required fields. Do not search installed libraries, old sessions or runtime source for the output protocol.',
+          ...(request.fidelityPolicy ? ['When the turn message includes the complete frozen input and output schema, use those bytes directly; rereading their files adds no evidence. Larger inputs remain in the files and must be read completely using the role protocol.',
+            'After several settled requests the host may remind a planner or backtranslator to finish its output. This is a submission reminder, not semantic approval or permission to omit required evidence.'] : []),
           'The host still checks cross-references, exact source spans, mathematical fidelity and Lean source admission after checking JSON structure.',
           request.fidelityPolicy && request.environment === 'standard' ?
             'This request uses only the Lean standard library. Installed Lean sources are in /opt/lean/src/lean; Mathlib is unavailable and /opt/lean-packages is not mounted.' :
@@ -373,6 +378,20 @@ export async function runFormalization(directory: string, root: string, options:
         const turnTimeout = Math.min(stageTimeout(request.maxTurnSeconds),
           role === 'refute' && request.falsification?.maxTurnSeconds ? request.falsification.maxTurnSeconds * 1000 : Infinity);
         let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined, stopped = false;
+        let completionNoticeSent = false;
+        const remindSubmission = () => {
+          const accounting = record.requestUsageAccounting;
+          if (!request.fidelityPolicy || !['plan', 'backtranslate'].includes(role) || completionNoticeSent || !session?.notify ||
+              stopped || lease.signal.aborted || accounting?.incomplete || accounting?.pendingRequests ||
+              (accounting?.reportedRequests ?? 0) < 3 || fs.existsSync(outputFile)) return;
+          completionNoticeSent = true;
+          const message = role === 'plan' ?
+            'Finish the statement plan from the evidence already available. Use the smallest inventory covering all source clauses; do not construct proofs or enumerate kernel/typeclass implementation details. Make further library queries only for a specific unresolved mathematical meaning. Record genuine remaining ambiguity in unresolved, and write the complete schema-valid OUTPUT.json atomically.' :
+            'Finish the independent backtranslation from the supplied checked snapshot and observations. Cover every target, domain, quantifier, hypothesis, conclusion and definition affecting the mathematical meaning. Do not recompile or rederive observations already supplied. Make further queries only for a specific missing meaning; describe genuine uncertainty in the existing translation fields. Write the complete schema-valid OUTPUT.json atomically.';
+          void session.notify(message, { waitForRequest: true })
+            .then(() => event('formalization_submission_reminded', role))
+            .catch(() => event('formalization_submission_reminder_cancelled', role));
+        };
         const interrupt = () => { void session?.interrupt().catch(() => {}); void session?.close().catch(() => {}); };
         const stop = () => { stopped = true; interrupt(); };
         lease.signal.addEventListener('abort', interrupt, { once: true });
@@ -413,6 +432,7 @@ export async function runFormalization(directory: string, root: string, options:
               return { allowed: true, settle: receipt => {
                 settle(receipt); save();
                 if (spent()) for (const stopRole of running) stopRole();
+                else remindSubmission();
               } };
             },
           });
@@ -425,9 +445,16 @@ export async function runFormalization(directory: string, root: string, options:
             throw new Error('formalization_role_thread_reused');
           record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true;
           record.status = 'running'; save();
-          const ran = session.run(request.fidelityPolicy ?
+          const inlineContext = request.fidelityPolicy && Buffer.byteLength(inputText) + Buffer.byteLength(schemaText) <= INLINE_ROLE_CONTEXT_BYTES;
+          const message = inlineContext ? [
+            'Complete your assigned role using the frozen input and exact output schema below. These are the complete INPUT.json and OUTPUT.schema.json bytes; do not reread those files or ROLE.md.',
+            'Follow the developer role protocol. Use tools only for a specific missing library fact or to write the final OUTPUT.json atomically, then stop.',
+            'BEGIN INPUT.json', inputText, 'END INPUT.json',
+            'BEGIN OUTPUT.schema.json', schemaText, 'END OUTPUT.schema.json',
+          ].join('\n') : request.fidelityPolicy ?
             'Follow the complete role protocol in the developer instructions. Read OUTPUT.schema.json and INPUT.json, write OUTPUT.json atomically using that contract, then stop. ROLE.md is the same protocol and need not be reread.' :
-            'Read ROLE.md, OUTPUT.schema.json and INPUT.json in the current directory. Produce OUTPUT.json using that exact contract. The complete protocol is in these files; no runtime source search or theorem proof is required.',
+            'Read ROLE.md, OUTPUT.schema.json and INPUT.json in the current directory. Produce OUTPUT.json using that exact contract. The complete protocol is in these files; no runtime source search or theorem proof is required.';
+          const ran = session.run(message,
             crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
           // A turn stopped at the allowance ends the run; one that still finished keeps its output.
           record.status = await ran.catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });

@@ -189,10 +189,10 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
     const result = await compareFormalizationReference(path.join(root, 'positive'), properInput, { env: process.env, timeoutMs: 0 });
     expect(() => assertFormalizationReferenceResult(properInput, result)).not.toThrow();
     checkCompleted(result, 'positive');
-    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v5', method: 'cardinality-correspondence-v6',
+    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v6', method: 'cardinality-correspondence-v7',
       check: 'completed', status: 'established', modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
     const report = JSON.parse(result.evidence!.reportText);
-    expect(report.schema).toBe('theoremos.reference-report.v5');
+    expect(report.schema).toBe('theoremos.reference-report.v6');
     const steps = report.pairs[0].transformations;
     expect(steps.map((step: { ruleId: string }) => step.ruleId)).toEqual(expect.arrayContaining([
       'finite-proper-condition', 'finite-family-reindex',

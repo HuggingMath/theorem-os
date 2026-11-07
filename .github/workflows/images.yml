@@ -53,7 +53,7 @@ jobs:
       - name: Verify account, job, persistence and operations boundaries without models
         run: bunx vitest run --maxWorkers=4 tests/webAuth.test.ts tests/webSignup.test.ts tests/webAuthPolicy.test.ts tests/webQuota.test.ts tests/webAdmission.test.ts tests/webAdmissionRace.test.ts tests/webProviderCheck.test.ts tests/webI18n.test.ts tests/webFonts.test.ts tests/webKeyVault.test.ts tests/webJobs.test.ts tests/webFormalizations.test.ts tests/webServer.test.ts tests/webRunner.test.ts tests/webPrecheck.test.ts tests/webOperations.test.ts tests/webOperationsApi.test.ts
       - name: Verify isolated provider routing and usage accounting without models
-        run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts
+        run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts tests/formalizationWorkflow.test.ts tests/formalizationLimits.test.ts tests/formalizationFidelityReference.test.ts
       - run: bun run build && bun run build:web
       - run: bunx playwright install --with-deps chromium
       - name: Verify the browser's login and research flows with local fixtures

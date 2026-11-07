@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { assertFormalizationReferenceResult, type FormalizationReferenceInput,
   type FormalizationReferenceResult } from '../src/math/formalizationReference';
@@ -19,6 +20,32 @@ const identitySource = 'theorem target (n : Nat) : n = n := by sorry\n';
 const request = (candidateSource: string, referenceSource = candidateSource): FormalizationReferenceInput => ({
   candidateSource, referenceSource, environment: 'standard', purpose: 'task-fidelity-v1',
   pairs: [{ candidateTarget: 'target', referenceTarget: 'target' }],
+});
+
+describe('saved task-fidelity-v2 reference compatibility', () => {
+  const saved = () => {
+    const bytes = fs.readFileSync(new URL('./fixtures/web-formalization-fidelity-v2.json.gz', import.meta.url));
+    expect(mathDigest(bytes)).toBe('3afb8c1ae9ee80d42658b901b76ba8dc6f9dc9eb19bbb5e4c143da75f8c97328');
+    return JSON.parse(gunzipSync(bytes).toString('utf8')) as {
+      input: FormalizationReferenceInput; result: FormalizationReferenceResult;
+    };
+  };
+
+  it('validates the unchanged native v5 receipt using its frozen query', () => {
+    const { input, result } = saved(), before = canonicalMathJson(result);
+    expect(input.purpose).toBe('task-fidelity-v2');
+    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v5',
+      method: 'cardinality-correspondence-v6', status: 'established', check: 'completed' });
+    expect(JSON.parse(result.evidence!.reportText).schema).toBe('theoremos.reference-report.v5');
+    expect(() => assertFormalizationReferenceResult(input, result)).not.toThrow();
+    expect(canonicalMathJson(result)).toBe(before);
+  });
+
+  it('rejects relabeling old query evidence as the new identity method', () => {
+    const { input, result } = saved();
+    const relabeled = { ...result, schema: 'theoremos.formalization-reference.v6', method: 'cardinality-correspondence-v7' };
+    expect(() => assertFormalizationReferenceResult(input, relabeled)).toThrow();
+  });
 });
 
 describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1' ||
@@ -116,6 +143,64 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('task-fidelit
     expect(positive).toMatchObject({ modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
     expect(Object.values(positive.files).map(file => file.text).join('\n')).not.toMatch(/\b(?:sorry|sorryAx|admit|axiom)\b/u);
   });
+
+  it.each(['identical', 'namespace-import-layout'] as const)(
+    'admits the complete v2 add-zero claim with %s sources using checked opposite-assumption conversions', async variant => {
+      const source = 'theorem target (n : Nat) : n + 0 = n := by sorry\n';
+      const input: FormalizationReferenceInput = variant === 'identical' ? {
+        ...request(source), purpose: 'task-fidelity-v2',
+      } : {
+        candidateSource: 'namespace Candidate\ntheorem add_zero (n : Nat) : n + 0 = n := by sorry\nend Candidate\n',
+        referenceSource: 'import Init\r\nnamespace SourceContract\r\n'
+          + 'theorem zero_identity : ∀ (k : Nat), k + 0 = k := by\r\n  sorry\r\n\r\nend SourceContract\r\n',
+        environment: 'standard', purpose: 'task-fidelity-v2',
+        pairs: [{ candidateTarget: 'Candidate.add_zero', referenceTarget: 'SourceContract.zero_identity' }],
+      };
+      const result = await compare('v2-add-zero-' + variant, input);
+      expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v6',
+        method: 'cardinality-correspondence-v7', check: 'completed', status: 'established',
+        modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
+      expect(result.candidateSourceSha256).toBe(mathDigest(input.candidateSource));
+      expect(result.referenceSourceSha256).toBe(mathDigest(input.referenceSource));
+      const report = JSON.parse(result.evidence!.reportText);
+      expect(report.schema).toBe('theoremos.reference-report.v6');
+      expect(report.pairs[0]).toMatchObject({ candidateBaseline: true, referenceBaseline: true,
+        definitionallyEqual: true, representationCorrespondence: false, transformations: [],
+        candidateToReference: { status: 'established', reason: 'definitional-identity-with-opposite-assumption',
+          proofDeclaration: 'TheoremOSCorrespondence.candidateToReference0' },
+        referenceToCandidate: { status: 'established', reason: 'definitional-identity-with-opposite-assumption',
+          proofDeclaration: 'TheoremOSCorrespondence.referenceToCandidate0' } });
+    }, 65000);
+
+  it.each([
+    ['different-reflexive-claim', 'theorem target (n : Nat) : Nat.succ n = Nat.succ n := by sorry\n'],
+    ['extra-unused-binder', 'theorem target (n unused : Nat) : n + 0 = n := by sorry\n'],
+    ['extra-hypothesis', 'theorem target (n : Nat) (extra : n = 0) : n + 0 = n := by sorry\n'],
+  ])('keeps a baseline-provable v2 %s outside definitional identity', async (name, reference) => {
+    const input: FormalizationReferenceInput = { ...request(
+      'theorem target (n : Nat) : n + 0 = n := by sorry\n', reference), purpose: 'task-fidelity-v2' };
+    const result = await compare('v2-' + name, input);
+    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v6',
+      method: 'cardinality-correspondence-v7', check: 'completed', status: 'not-established' });
+    expect(JSON.parse(result.evidence!.reportText).pairs[0]).toMatchObject({
+      candidateBaseline: true, referenceBaseline: true, definitionallyEqual: false,
+      binderPermutation: false, representationCorrespondence: false, transformations: [],
+      candidateToReference: { status: 'not-established', reason: 'baseline-trivial' },
+      referenceToCandidate: { status: 'not-established', reason: 'baseline-trivial' } });
+  }, 65000);
+
+  it('preserves dependent universal/existential order in the v2 identity method', async () => {
+    const input: FormalizationReferenceInput = { ...request(
+      'theorem target (G : Type) (R : G → G → Prop) : ∀ a : G, ∃ b : G, R a b := by sorry\n',
+      'theorem target (G : Type) (R : G → G → Prop) : ∃ b : G, ∀ a : G, R a b := by sorry\n'),
+      purpose: 'task-fidelity-v2' };
+    const result = await compare('v2-forall-exists-order', input);
+    expect(result).toMatchObject({ check: 'completed', status: 'not-established' });
+    expect(JSON.parse(result.evidence!.reportText).pairs[0]).toMatchObject({ candidateBaseline: false,
+      referenceBaseline: false, definitionallyEqual: false, binderPermutation: false,
+      candidateToReference: { status: 'not-established', reason: 'not-definitionally-equal' },
+      referenceToCandidate: { status: 'not-established', reason: 'not-definitionally-equal' } });
+  }, 65000);
 
   it('accepts placeholder layout without changing source digests or string-valued definitions', async () => {
     const source = 'namespace Candidate\ndef label : String := "a  b"\n'

@@ -131,6 +131,19 @@ bun scripts/test-web-runtime.ts --case mathlib-valid
 bun run test:web-cooperative-runtime
 ```
 
+默认模型的首次流程另用隔离、匿名的本地工作台验收；先构建同一源码的 web / worker 镜像并启动独立数据目录，然后显式允许真实调用：
+
+```bash
+bun scripts/smoke-web-first-use.ts --allow-model \
+  --base-url http://127.0.0.1:8797 --problem add-zero \
+  --credential-profile /absolute/path/to/existing-sub2api-profile \
+  --output /private/theoremos-first-use-add-zero
+```
+
+脚本从浏览器提交自然语言原题，等待两位独立审核、自动进入证明及宿主 Lean 独立验收，再实际点击下载复核包，校验 ZIP、冻结陈述、证明和固定环境。`--problem add-comm` 可做第二个个案。默认保留 `deepseek-flash / max`、形式化十分钟 / 40 万 Token、证明五分钟 / 20 万 Token / 五轮；单个请求可能使已报告用量超过预算。不自动重试，不向生产账号提交任务；凭据仅从已有 profile 的 auth command 或 `SUB2API_WESTLAKE_API_KEY` 在内存读取。
+
+报告包含各阶段用时、宿主已报告 Token、截图和下载包。无法取得可归属到本次请求的账单时金额为 `unknown`，缺少用量不记作零。这是维护者真实调用验收；真人试用结果仍记录在[试用表](web-release-trial.md)。旧的 `smoke-web-release.ts` 入口调用同一脚本。
+
 默认五槽混合队列可用独立演练验证。它运行真实 Docker / Lean，用本地假模型暂时占用研究、形式化和讲解槽，同时运行两个预检查并验证排队；自动清理测试容器、卷与账号数据。选择一个尚无结果的新目录：
 
 ```bash

@@ -7,6 +7,7 @@ import { assertFormalizationEvidence, formalizationDigest, prepareFormalization,
 import { defaultFormalizationWorkflow, type FormalizationWorkflow } from '../src/math/formalizationWorkflow';
 import type { FormalizationPlan } from '../src/math/formalizationPlan';
 import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
+import type { ModelRequestReceipt } from '../src/runtime/modelRequest';
 import { readFormalizationState, runFormalization } from '../src/solver/formalization';
 import { canonicalMathJson, readMathText } from '../src/math/mathRuntimeIo';
 import { mathDigest } from '../src/math/mathRuntimeIo';
@@ -42,16 +43,16 @@ function preset(options: { verdicts?: ('approved' | 'changes_requested' | 'unkno
   incompleteFinalUsage?: boolean; submitted?: boolean; claimShapeFirst?: boolean; afterOutput?: (role: string) => void;
   refutations?: (input: any) => unknown[]; refuteStatus?: string; refuteDiagnostic?: MathAgentFailureDiagnostic } = {}) {
   let sequence = 0, plans = 0;
-  const seen: { role: string; config: MathAgentOptions; input: any }[] = [];
+  const seen: { role: string; config: MathAgentOptions; input: any; message: string }[] = [];
   const open = async (config: MathAgentOptions): Promise<MathAgentSession> => {
     const number = ++sequence, role = path.basename(config.workspace);
     return { threadId: options.reuseThread && role.startsWith('compare-') ? 'reused-review-thread' : 'preset-thread-' + number,
       ...(role === 'refute' && options.refuteDiagnostic ? { lastFailureDiagnostic: options.refuteDiagnostic } : {}),
-      close: async () => {}, interrupt: async () => {}, run: async (_message, _id, workspace, onStarted) => {
+      close: async () => {}, interrupt: async () => {}, run: async (message, _id, workspace, onStarted) => {
         onStarted('preset-turn-' + number);
         if (!options.missingFinalUsage || role !== 'compare-reviewer-2') config.onUsage({ totalTokens: 1 });
         if (options.incompleteFinalUsage && role === 'compare-reviewer-2') config.onUsageIncomplete?.();
-        const input = JSON.parse(readMathText(path.join(workspace, 'INPUT.json'))); seen.push({ role, config, input });
+        const input = JSON.parse(readMathText(path.join(workspace, 'INPUT.json'))); seen.push({ role, config, input, message });
         let output: unknown;
         if (role.startsWith('plan-')) {
           plans++; const value = plan(input.statement);
@@ -79,12 +80,23 @@ function preset(options: { verdicts?: ('approved' | 'changes_requested' | 'unkno
           const round = seen.filter(item => item.role === 'generate').at(-1)!.input.round;
           const verdict = options.rejectedFirstRound && round === 1 ? 'changes_requested' :
             options.unknownFirstRound && round === 1 ? 'unknown' : options.verdicts?.[index] ?? 'approved';
-          output = input.schema === 'theorem-os.formalization-review-input.v2' ?
+          const review = input.schema === 'theorem-os.formalization-review-input.v2' ?
             semanticReviewFixture(input, verdict, verdict === 'approved' ? 'Preset faithful translation.' : 'Preset uncertain domain.',
               options.mismatchAspects?.[index]) :
             { inputDigest: input.inputDigest, snapshotDigest: input.snapshotDigest, translationDigest: input.translationDigest,
               verdict, summary: 'Legacy workflow test review.',
               checks: { equivalent: true, complete: true, assumptions: true, definitions: true }, issues: [] };
+          if (input.fidelityPolicy && 'schema' in review) review.fidelity = {
+            policy: input.fidelityPolicy,
+            targets: input.observation.snapshot.targets.map(target => ({ targetName: target.name,
+              originalFragment: input.original, sourceClaim: input.original, candidateClaim: 'For every natural n, n + 0 = n.',
+              hypothesisScope: 'Only the natural-number domain is assumed.', quantifierOrder: 'n is universally quantified.',
+              binderIds: target.context.bindings.binders.map(binder => binder.id),
+              conclusionDependencies: target.context.bindings.conclusionDependencies })),
+            sourceContract: verdict === 'approved' ? { source: input.observation.snapshot.source,
+              pairs: input.observation.snapshot.targets.map(target => ({ candidateTarget: target.name, referenceTarget: target.name })) } : null,
+          };
+          output = review;
         }
         fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify(output)); options.afterOutput?.(role);
         if (options.submitted) config.completedOutput!.validate(output);
@@ -93,6 +105,45 @@ function preset(options: { verdicts?: ('approved' | 'changes_requested' | 'unkno
       } };
   };
   return { open, seen };
+}
+
+const completeRequest: ModelRequestReceipt = { complete: true, outcome: 'completed',
+  usage: { inputTokens: 1, outputTokens: 0, totalTokens: 1 } };
+
+/** Simulate provider admission/settlement without a transport, model or Lean process. */
+function withProviderRequests(agent: ReturnType<typeof preset>, receipts: readonly ModelRequestReceipt[] =
+  Array.from({ length: 5 }, () => completeRequest), batchSize = 1) {
+  const notices: { role: string; reported: number; pending: number; waitForRequest: boolean | undefined }[] = [];
+  const checkpoints: { role: string; settled: number; notices: number }[] = [];
+  const opened: string[] = [], interrupted: string[] = [], denied: string[] = [];
+  const open = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+    const base = await agent.open(config), role = path.basename(config.workspace);
+    opened.push(role);
+    let reported = 0, pending = 0, noticeCount = 0;
+    return { ...base, usageSource: 'upstream-requests',
+      notify: async (_message, options) => {
+        noticeCount++; notices.push({ role, reported, pending, waitForRequest: options?.waitForRequest });
+      },
+      interrupt: async () => { interrupted.push(role); await base.interrupt(); },
+      run: (message, id, workspace, onStarted) => base.run(message, id, workspace, turnId => {
+        onStarted(turnId);
+        for (let start = 0; start < receipts.length; start += batchSize) {
+          const admissions = receipts.slice(start, start + batchSize).map((receipt, index) => {
+            const admission = config.requestGate!({ requestId: role + '-' + (start + index), source: 'responses-relay' });
+            if (!admission.allowed) { denied.push(admission.reason); throw new Error(admission.reason); }
+            pending++;
+            return { receipt, admission };
+          });
+          for (const [index, { receipt, admission }] of admissions.entries()) {
+            pending--; if (receipt.complete) reported++;
+            admission.settle(receipt);
+            checkpoints.push({ role, settled: start + index + 1, notices: noticeCount });
+          }
+        }
+      }),
+    };
+  };
+  return { open, notices, checkpoints, opened, interrupted, denied };
 }
 const elaborate: NonNullable<Parameters<typeof runFormalization>[2]>['elaborate'] =
   async (_directory, source, environment, options) => {
@@ -115,6 +166,110 @@ const elaborate: NonNullable<Parameters<typeof runFormalization>[2]>['elaborate'
     }
     return result;
   };
+
+describe('fidelity role context and submission reminders', () => {
+  it('delivers each small frozen input and schema in the first message while keeping backtranslation blind', async () => {
+    const statement = fixtureStatement + '\nSource tag: "原题🙂" \\n';
+    const f = fixture(undefined, { statement, fidelityPolicy: 'task-preserving-v2' });
+    const agent = preset({ verdicts: ['unknown', 'unknown'] });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
+    expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_semantic_unknown');
+    expect(agent.seen.map(item => item.role)).toEqual(['plan-1', 'generate', 'backtranslate', 'compare-reviewer-1', 'compare-reviewer-2']);
+    for (const { config, input, message } of agent.seen) {
+      const inputText = readMathText(path.join(config.workspace, 'INPUT.json'));
+      const schemaText = readMathText(path.join(config.workspace, 'OUTPUT.schema.json'));
+      expect(Buffer.byteLength(inputText) + Buffer.byteLength(schemaText)).toBeLessThanOrEqual(64 * 1024);
+      expect(message.match(/\nBEGIN INPUT\.json\n([\s\S]*?)\nEND INPUT\.json\n/u)?.[1]).toBe(inputText);
+      expect(message.match(/\nBEGIN OUTPUT\.schema\.json\n([\s\S]*?)\nEND OUTPUT\.schema\.json$/u)?.[1]).toBe(schemaText);
+      expect(JSON.parse(inputText)).toEqual(input);
+    }
+    const blind = agent.seen.find(item => item.role === 'backtranslate')!;
+    for (const hidden of [statement, JSON.stringify(statement), 'Source tag:', 'zero-identity'])
+      expect(blind.message).not.toContain(hidden);
+    expect(blind.input).not.toHaveProperty('statement'); expect(blind.input).not.toHaveProperty('plan');
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it.each([
+    ['ASCII', 'x'.repeat(70 * 1024)], ['multibyte', '汉'.repeat(22 * 1024)],
+  ])('keeps the complete %s input in its file when inline context exceeds 64 KiB', async (_kind, padding) => {
+    const statement = 'large-source-start\n' + padding + '\nlarge-source-end\n' + fixtureStatement;
+    const f = fixture(workflow => { workflow.maxPlanningRounds = 1; }, { statement, fidelityPolicy: 'task-preserving-v2' });
+    const agent = preset({ unresolved: true });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
+    expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_plan_unresolved');
+    expect(agent.seen).toHaveLength(1);
+    const { config, input, message } = agent.seen[0]!;
+    const inputText = readMathText(path.join(config.workspace, 'INPUT.json'));
+    const schemaText = readMathText(path.join(config.workspace, 'OUTPUT.schema.json'));
+    expect(Buffer.byteLength(inputText) + Buffer.byteLength(schemaText)).toBeGreaterThan(64 * 1024);
+    if (_kind === 'multibyte') expect(inputText.length + schemaText.length).toBeLessThan(64 * 1024);
+    expect(JSON.parse(inputText).statement).toBe(statement); expect(input.statement).toBe(statement);
+    expect(message).toContain('INPUT.json'); expect(message).toContain('OUTPUT.schema.json');
+    expect(message).not.toContain('BEGIN INPUT.json'); expect(message).not.toContain('BEGIN OUTPUT.schema.json');
+    expect(message).not.toContain('large-source-start'); expect(message).not.toContain('large-source-end');
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it.each(['unknown', 'changes_requested'] as const)(
+    'reminds once after three settled requests and still requires both reviewers when they return %s', async verdict => {
+      const f = fixture(workflow => { workflow.reviewScheduling = 'parallel'; },
+        { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 });
+      const agent = preset({ verdicts: [verdict, verdict] }), provider = withProviderRequests(agent);
+      const result = await runFormalization(f.directory, f.root, { openSession: provider.open, elaborate });
+      expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_semantic_' + verdict);
+      expect(result.roleTurns).toMatchObject({ plan: 1, generate: 1, backtranslate: 1, compare: 2 });
+      expect(provider.notices).toEqual([
+        { role: 'plan-1', reported: 3, pending: 0, waitForRequest: true },
+        { role: 'backtranslate', reported: 3, pending: 0, waitForRequest: true },
+      ]);
+      for (const role of ['plan-1', 'backtranslate'])
+        expect(provider.checkpoints.filter(item => item.role === role).map(item => item.notices)).toEqual([0, 0, 1, 1, 1]);
+      expect(provider.checkpoints.filter(item => !['plan-1', 'backtranslate'].includes(item.role)).every(item => item.notices === 0)).toBe(true);
+      expect(provider.denied).toEqual([]); expect(provider.interrupted).toEqual([]);
+      const state = readFormalizationState(f.directory);
+      expect(state.sessions).toHaveLength(5);
+      for (const session of state.sessions) expect(session.requestUsageAccounting).toMatchObject({
+        startedRequests: 5, reportedRequests: 5, pendingRequests: 0, incomplete: false,
+      });
+      const reviews = state.sessions.filter(item => item.role === 'compare');
+      expect(reviews.map(item => item.reviewerId)).toEqual(['reviewer-1', 'reviewer-2']);
+      expect(new Set(reviews.map(item => item.threadId)).size).toBe(2);
+      const round = fs.readdirSync(f.directory).find(name => name.startsWith('round-'))!;
+      const saved = JSON.parse(readMathText(path.join(f.directory, round, 'reviews.json')));
+      expect(saved.reviews.map(item => item.review.verdict)).toEqual([verdict, verdict]);
+      expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+      expect(fs.existsSync(path.join(f.directory, 'workspace'))).toBe(false);
+    });
+
+  it('withholds reminders while requests are pending and stops after a receipt loses usage', async () => {
+    const f = fixture(undefined, { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 }), agent = preset();
+    const provider = withProviderRequests(agent, [completeRequest, completeRequest, completeRequest,
+      { complete: false, outcome: 'completed', missingReason: 'provider-usage-missing' }, completeRequest], 4);
+    const result = await runFormalization(f.directory, f.root, { openSession: provider.open, elaborate });
+    expect(result).toMatchObject({ status: 'stopped', error: 'math_model_usage_unavailable' });
+    expect(provider.opened).toEqual(['plan-1']); expect(provider.notices).toEqual([]);
+    expect(provider.checkpoints.map(item => item.notices)).toEqual([0, 0, 0, 0]);
+    expect(provider.denied).toEqual(['math_model_usage_unavailable']);
+    expect(readFormalizationState(f.directory).sessions[0].requestUsageAccounting).toMatchObject({
+      startedRequests: 4, reportedRequests: 3, pendingRequests: 0, incomplete: true,
+    });
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it('stops for the shared token allowance before sending a third-request reminder', async () => {
+    const f = fixture(undefined, { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 3 }), agent = preset();
+    const provider = withProviderRequests(agent);
+    const result = await runFormalization(f.directory, f.root, { openSession: provider.open, elaborate });
+    expect(result).toMatchObject({ status: 'stopped', error: 'math_total_token_limit' });
+    expect(provider.opened).toEqual(['plan-1']); expect(provider.notices).toEqual([]);
+    expect(provider.interrupted).toContain('plan-1'); expect(provider.denied).toEqual(['math_model_request_stopped']);
+    expect(readFormalizationState(f.directory).sessions[0].requestUsageAccounting).toMatchObject({
+      startedRequests: 3, reportedRequests: 3, pendingRequests: 0, incomplete: false,
+    });
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+});
 
 describe('planned formalization and unanimous review protocol', () => {
   it('retains frozen v2 workflow evidence and restores its artifact without model calls', async () => {

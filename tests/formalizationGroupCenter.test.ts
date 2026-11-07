@@ -46,8 +46,8 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
   afterAll(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
 
   it('establishes ProofNet 001 through a fixed center-product bridge and rejects a nearby false target', () => {
-    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v5',
-      method: 'cardinality-correspondence-v6', check: 'completed', status: 'not-established',
+    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v6',
+      method: 'cardinality-correspondence-v7', check: 'completed', status: 'not-established',
       modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
     expect(result.pairs[0]).toMatchObject({
       candidateToReference: { status: 'established' }, referenceToCandidate: { status: 'established' },

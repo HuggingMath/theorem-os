@@ -71,10 +71,14 @@ const taskFidelityV2ResultSchema = representationResultSchema.extend({
   schema: z.literal('theoremos.formalization-reference.v5'),
   method: z.literal('cardinality-correspondence-v6'),
 }).strict();
+const taskFidelityIdentityResultSchema = representationResultSchema.extend({
+  schema: z.literal('theoremos.formalization-reference.v6'),
+  method: z.literal('cardinality-correspondence-v7'),
+}).strict();
 export type CurrentFormalizationReferenceResult = z.infer<typeof representationResultSchema> |
-  z.infer<typeof taskFidelityV2ResultSchema>;
+  z.infer<typeof taskFidelityV2ResultSchema> | z.infer<typeof taskFidelityIdentityResultSchema>;
 export const formalizationReferenceResultSchema = z.discriminatedUnion('schema', [legacyResultSchema, previousResultSchema,
-  finiteFamilyResultSchema, representationResultSchema, taskFidelityV2ResultSchema]);
+  finiteFamilyResultSchema, representationResultSchema, taskFidelityV2ResultSchema, taskFidelityIdentityResultSchema]);
 export type FormalizationReferenceResult = z.infer<typeof formalizationReferenceResultSchema>;
 
 export const FORMALIZATION_REFERENCE_QUERY = 'ReferenceComparison.lean';
@@ -137,7 +141,7 @@ function carrierSource(source: string, side: keyof typeof carrierNamespaces): st
   return [...imports, `namespace ${carrierNamespaces[side]}`, source, `end ${carrierNamespaces[side]}`, ''].join('\n');
 }
 
-function querySource(input: FormalizationReferenceInput): string {
+function querySource(input: FormalizationReferenceInput, legacyV2 = false): string {
   return ['import Lean', ...(input.environment !== 'standard' ? ['import Mathlib'] : []),
     'import ReferenceCandidate', 'import ReferenceGold',
     'set_option maxHeartbeats 100000', 'set_option maxRecDepth 512',
@@ -254,7 +258,10 @@ function querySource(input: FormalizationReferenceInput): string {
         '      referenceType := (← Lean.Meta.ppExpr reference).pretty',
         '      candidateBaseline ← baseline candidate', '      referenceBaseline ← baseline reference',
         '      definitionallyEqual ← Lean.Meta.isDefEq candidate reference',
-        input.purpose === 'task-fidelity-v1' ?
+        // An identical complete task is supported even when Lean can reduce it
+        // directly. Still require both guarded conversions below; distinct
+        // baseline-provable claims remain unsupported.
+        input.purpose === 'task-fidelity-v1' || input.purpose === 'task-fidelity-v2' && !legacyV2 ?
           '      if (candidateBaseline || referenceBaseline) && !definitionallyEqual then reason := "baseline-trivial"' :
           '      if candidateBaseline || referenceBaseline then reason := "baseline-trivial"',
         '      else',
@@ -289,7 +296,8 @@ function querySource(input: FormalizationReferenceInput): string {
         '  reports := reports.push pairReport',
       ];
     }),
-    `  let report := (Lean.Json.mkObj [("schema", Lean.toJson ${input.purpose === 'task-fidelity-v2' ? '"theoremos.reference-report.v5"' : '"theoremos.reference-report.v4"'}), ("pairs", Lean.toJson reports)]).compress`,
+    `  let report := (Lean.Json.mkObj [("schema", Lean.toJson ${JSON.stringify(input.purpose === 'task-fidelity-v2' ?
+      legacyV2 ? 'theoremos.reference-report.v5' : 'theoremos.reference-report.v6' : 'theoremos.reference-report.v4')}), ("pairs", Lean.toJson reports)]).compress`,
     '  if report.utf8ByteSize > 1000000 then throwError "reference report bound exceeded"',
     '  Lean.logInfo m!"THEOREMOS_REFERENCE_REPORT:{report}"',
     `  Lean.Core.liftIOCore <| IO.FS.writeFile ${JSON.stringify(FORMALIZATION_REFERENCE_REPORT)} report`, ''].join('\n');
@@ -297,6 +305,12 @@ function querySource(input: FormalizationReferenceInput): string {
 
 /** Deterministic host files are also rebuilt when validating persisted evidence. */
 export function formalizationReferenceFiles(input: FormalizationReferenceInput): Record<string, string> {
+  return referenceFiles(input, false);
+}
+
+// Old v5 receipts keep their exact host program, including its baseline refusal.
+// Never reinterpret frozen evidence using the newer identity rule.
+function referenceFiles(input: FormalizationReferenceInput, legacyV2: boolean): Record<string, string> {
   input = formalizationReferenceInputSchema.parse(input);
   const candidateTargets = formalizationTargets(input.candidateSource).map(item => item.name);
   const referenceTargets = formalizationTargets(input.referenceSource).map(item => item.name);
@@ -306,14 +320,15 @@ export function formalizationReferenceFiles(input: FormalizationReferenceInput):
   return { ...getLeanTaskEnvironment(input.environment).files,
     'ReferenceCandidate.lean': carrierSource(input.candidateSource, 'candidate'),
     'ReferenceGold.lean': carrierSource(input.referenceSource, 'reference'),
-    [FORMALIZATION_REFERENCE_QUERY]: querySource(input) };
+    [FORMALIZATION_REFERENCE_QUERY]: querySource(input, legacyV2) };
 }
 
 /** Validate saved advisory evidence against the exact request and host-generated files. */
 export function assertFormalizationReferenceResult(input: FormalizationReferenceInput, value: unknown): asserts value is FormalizationReferenceResult {
   input = formalizationReferenceInputSchema.parse(input);
   const parsed = formalizationReferenceResultSchema.parse(value);
-  if (input.purpose === 'task-fidelity-v2' && parsed.schema !== 'theoremos.formalization-reference.v5' ||
+  const taskV2Schema = parsed.schema === 'theoremos.formalization-reference.v5' || parsed.schema === 'theoremos.formalization-reference.v6';
+  if (input.purpose === 'task-fidelity-v2' && !taskV2Schema ||
       input.purpose !== 'task-fidelity-v2' && (input.environment === 'mathlib-4.8' || input.purpose) &&
         parsed.schema !== 'theoremos.formalization-reference.v4')
     throw new Error('formalization_reference_legacy_environment_unsupported');
@@ -329,7 +344,7 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
     assertFiniteFamilyResult({ ...input, environment: input.environment as 'standard' | 'mathlib' }, value);
     return;
   }
-  if (input.purpose === 'task-fidelity-v2' && parsed.schema !== 'theoremos.formalization-reference.v5' ||
+  if (input.purpose === 'task-fidelity-v2' && !taskV2Schema ||
       input.purpose !== 'task-fidelity-v2' && parsed.schema !== 'theoremos.formalization-reference.v4')
     throw new Error('formalization_reference_evidence_invalid');
   const result = parsed;
@@ -342,7 +357,7 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
   const allEstablished = result.pairs.every(pair => pair.candidateToReference.status === 'established' && pair.referenceToCandidate.status === 'established');
   if ((result.status === 'established') !== allEstablished) invalid();
   let expected: Record<string, string> | undefined;
-  try { expected = formalizationReferenceFiles(input); } catch (cause) {
+  try { expected = referenceFiles(input, result.schema === 'theoremos.formalization-reference.v5'); } catch (cause) {
     if (cause instanceof Error && cause.message === 'reference_target_mapping_incomplete') invalid();
     // Unsupported source syntax only carries an unsupported, unknown receipt.
   }
@@ -370,8 +385,9 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
         latest.sourceFiles.map((entry: any) => [entry.file, entry.digest])])) ||
       mathDigest(evidence.reportText) !== evidence.reportSha256) invalid();
   const report = JSON.parse(evidence.reportText);
-  const isV6 = result.schema === 'theoremos.formalization-reference.v5';
-  if (report.schema !== (isV6 ? 'theoremos.reference-report.v5' : 'theoremos.reference-report.v4') ||
+  const isV6 = result.schema === 'theoremos.formalization-reference.v5' || result.schema === 'theoremos.formalization-reference.v6';
+  if (report.schema !== (result.schema === 'theoremos.formalization-reference.v6' ? 'theoremos.reference-report.v6' :
+      isV6 ? 'theoremos.reference-report.v5' : 'theoremos.reference-report.v4') ||
       !Array.isArray(report.pairs) || report.pairs.length !== result.pairs.length ||
       canonicalMathJson(report.pairs.map((pair: any) => ({ candidateTarget: pair.candidateTarget, referenceTarget: pair.referenceTarget,
         candidateToReference: pair.candidateToReference, referenceToCandidate: pair.referenceToCandidate }))) !== canonicalMathJson(result.pairs)) invalid();

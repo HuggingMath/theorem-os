@@ -128,8 +128,8 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
 
   it('establishes ProofNet 005 with a kernel-proved nonzero Fintype-to-Nat.card conversion', async () => {
     const result = await compare('proofnet-005', proofnet005Input);
-    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v5',
-      method: 'cardinality-correspondence-v6', check: 'completed', status: 'established',
+    expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v6',
+      method: 'cardinality-correspondence-v7', check: 'completed', status: 'established',
       modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
     expect(result.pairs).toHaveLength(1);
     expect(result.pairs[0]).toMatchObject({
