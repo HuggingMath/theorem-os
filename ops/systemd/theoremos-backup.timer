@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry a due TheoremOS backup hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

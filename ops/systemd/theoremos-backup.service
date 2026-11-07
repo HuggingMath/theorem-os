@@ -1,0 +1,10 @@
+[Unit]
+Description=Create and verify a private TheoremOS backup when idle
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/flock -n -E 0 @STATE@/backup.lock @BUN@ @ROOT@/scripts/web-operations-scheduled.ts backup --container @CONTAINER@ --backup-root @BACKUPS@ --state-root @STATE@ --interval-hours 24 --drain-seconds 30
+ExecStopPost=@BUN@ @ROOT@/scripts/web-operations-scheduled.ts recover --container @CONTAINER@ --backup-root @BACKUPS@ --state-root @STATE@
+TimeoutStartSec=300
+TimeoutStopSec=120

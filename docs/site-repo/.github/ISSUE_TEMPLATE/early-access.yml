@@ -6,8 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        在线工作台开放时，我们会在这条 Issue 里回复你。
-        We will reply in this issue when the online workbench opens.
+        在线工作台已上线白名单 Beta，尚未开放自由注册。我们会根据申请确认内测资格，并在这条 Issue 里回复你。
+        The online workbench is live in allowlist beta; open registration is not available. We will review your application and reply in this issue to confirm access eligibility.
 
         **这条 Issue 会公开显示。请勿填写 API Key、访问令牌、邮箱、电话等个人信息。**
         **This issue is public. Do not include API keys, access tokens, email addresses, phone numbers or other personal information.**

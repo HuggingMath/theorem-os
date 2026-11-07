@@ -1,0 +1,8 @@
+[Unit]
+Description=Check TheoremOS service, queues, disk and verified backups
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=@BUN@ @ROOT@/scripts/web-operations-monitor.ts --container @CONTAINER@ --base-url @PUBLIC_URL@ --state-root @STATE@ --backup-root @BACKUPS@ --min-free-gib 30 --max-queue-seconds 1800 --max-backup-hours 26
+TimeoutStartSec=90

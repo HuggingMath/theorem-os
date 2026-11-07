@@ -102,6 +102,39 @@ WantedBy=timers.target
 
 验证后用 `systemctl --user daemon-reload`、`systemctl --user enable --now theoremos-backup-retention.timer` 启用。代码提交本身不会安装定时任务，也不会建立异地副本；部署记录应保留启用状态和最近清理结果。恢复旧备份可能包含用户已经删除的数据；对外启用前必须重新处理备份之后的账号删除请求。没有可核对的删除记录时，不应直接把旧快照重新对外开放。
 
+## 本机自动备份与监控
+
+`scripts/web-operations-scheduled.ts` 和 `scripts/web-operations-monitor.ts` 是独立宿主命令，只依赖同目录的 `web-operations.ts` 与 Node 内建模块，不改变网页和 CLI 研究运行时。部署时将这三个文件复制到仓库外、按完整提交 SHA 固定的目录，保留文件间的相对路径；定时器引用该固定目录，避免工作树编辑影响运行中的运维任务。
+
+```bash
+bun scripts/web-operations-scheduled.ts backup --container theorem-os-web-1 \
+  --backup-root /private/theoremos-scheduled-backups --state-root /private/theoremos-operations
+bun scripts/web-operations-monitor.ts --container theorem-os-web-1 \
+  --base-url https://workbench.example.org --backup-root /private/theoremos-scheduled-backups \
+  --state-root /private/theoremos-operations
+```
+
+备份每隔 24 小时到期，timer 每小时尝试一次。已有任务或人工维护时延后，不取消任务；空闲时开启本次维护并重新排空，短暂暂停同一个容器，仅在暂停期间复制数据，然后恢复服务。本地复制完成后在副本上生成快照并恢复到独立目录，逐文件核对清单、大小与 SHA-256，读取恢复后的账号和任务记录，成功后才发布 `scheduled-…/verification.json`。每个副本只用于这次校验，结束后删除；备份不包含宿主的 SMTP、管理员 Key 或 Key 加密秘密，也不调用模型或发送邮件。
+
+排空、复制或校验失败会留下失败状态；已开启的维护和暂停通过 `finally` 清理。`backup-lease.json` 绑定本次维护的 owner 和容器 ID；`recover` 可在进程被终止后恢复该容器，保留后来人工设置的维护状态。systemd 的 `ExecStopPost` 必须配置这条恢复命令。镜像或容器已被其他部署替换时停止自动清理并报告异常，操作员需检查旧容器；不要删除 lease 后直接假定网站已恢复。残留临时副本由 `backup-work.json` 精确指认，下次备份或 `recover` 清理，不扫描删除其他目录。
+
+可直接使用 [ops/systemd](../ops/systemd) 的模板。安装前将 `@BUN@`、`@ROOT@`、`@STATE@`、`@BACKUPS@`、`@LEGACY_BACKUPS@`、`@CONTAINER@` 和 `@PUBLIC_URL@` 换成实际绝对路径或服务值；两个私有目录需预先以 `0700` 创建。备份 service 用 `flock` 防止重入，最长五分钟，恢复清理最多两分钟。monitor service 每分钟运行；每日 retention service 同时处理旧的人工快照和新的自动快照，两者保留六天，给七天隐私上限留调度余量。既有清理 timer 可保留，只更新它的 service，避免重复清理任务。
+
+```bash
+systemctl --user daemon-reload
+systemctl --user start theoremos-backup.service
+systemctl --user start theoremos-monitor.service
+systemctl --user enable --now theoremos-backup.timer theoremos-monitor.timer
+systemctl --user list-timers --all
+journalctl --user -u theoremos-backup.service -u theoremos-monitor.service --since today
+```
+
+首次安装先用独立 Docker 数据卷演练，再执行一次生产备份与恢复校验；服务启动、定时器启用以及下一次实际触发均应回读确认。用户级 timer 需确保登录退出后仍运行，可检查 `loginctl show-user <用户> -p Linger`。`--force` 仅用于明确需要再次创建快照的人工演练，不放进 timer。
+
+监控覆盖本地及公网存活/就绪、数据盘和备份盘不足 30 GiB、排队超过 30 分钟、近期 SMTP 失败、最新备份失败，以及超过 26 小时没有已验证快照。只对与当前容器 ID 一致且不足两分钟的备份 lease 暂停窗口豁免就绪告警，过期 lease 和长期维护仍报异常。私有 `monitor.json` 覆盖保存当前 incidents，`backup.json` 保存最近调度结果；stdout 只包含计数与安全状态，历史由 systemd journal 留存。非零退出会使 monitor service 显示 failed，本机记录不代表已向维护者发出通知。
+
+本机快照与服务仍可能同时受宿主机故障影响。异地复制、通知投递和真实 SMTP 收件分别需要已授权的目标与验收；未配置时不宣称完成。恢复旧数据必须先处理备份后已发生的删除请求，不能直接把演练目录挂回生产。
+
 ## 健康检查与告警信号
 
 `/healthz` 用于进程存活和版本核对；`/readyz` 检查当前能否接收工作，包括维护状态、数据目录与 worker 就绪。Lean 编译属于发布验收，不会在每次健康请求里启动容器。

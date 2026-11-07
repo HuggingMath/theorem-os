@@ -1,0 +1,8 @@
+[Unit]
+Description=Expire private TheoremOS release and scheduled snapshots
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=@BUN@ @ROOT@/scripts/web-operations.ts prune --backup-root @LEGACY_BACKUPS@ --retention-days 6 --apply
+ExecStart=@BUN@ @ROOT@/scripts/web-operations.ts prune --backup-root @BACKUPS@ --retention-days 6 --apply
