@@ -130,6 +130,8 @@ export const pages: Record<string, string> = {
   "的词都能点开查看。只有「独立验收」通过才算证明完成。": "in the workbench open an explanation. A proof only counts as done once it passes “Independent acceptance”.",
   "账号": "Account",
   "当前登录邮箱": "Signed in as",
+  "本窗口还可开始 {0} 次研究、{1} 次形式化、{2} 份讲解；额度会在窗口结束后恢复。":
+    "This window still has {0} research runs, {1} formalizations and {2} proof explanations left; the allowance returns when the window ends.",
   "登录密码": "Sign-in password",
   "用邮箱验证码登录后，可设置至少 12 位的密码。": "After signing in with an email code, you can set a password of at least 12 characters.",
   "当前密码": "Current password",
@@ -248,9 +250,6 @@ export const pages: Record<string, string> = {
   "登录": "Sign in",
   "换一个邮箱": "Use another email",
   "重新发送": "Resend",
-  "还没有内测资格？": "No beta access yet? ",
-  "申请内测": "Apply for the beta",
-  "隐私与条款": "Privacy and terms",
   "需要启用 JavaScript 才能登录。": "Signing in needs JavaScript.",
   "TheoremOS 官网": "TheoremOS website",
   "图形验证码，5 位数字": "Image code, 5 digits",
@@ -275,4 +274,9 @@ export const pages: Record<string, string> = {
   "不从这一版继续": "Don't continue from this version",
   "先审计划再开始": "Review the plan before starting",
   "Lead 拟好研究计划后先停下来等你批准；批准前可以修改计划或给 Lead 留言。需要任务协作和至少 2 个 Agent，等待的时间也计入解题预算。": "Once the Lead has drafted the research plan, the run waits for your approval; before approving you can edit the plan or leave the Lead a note. Needs task collaboration and at least 2 Agents; the wait counts toward the solve budget.",
+  "输入邮箱收验证码即可登录；第一次登录会自动创建账号。": "Enter your email to get a sign-in code; your first sign-in creates the account.",
+  "我已阅读并同意": "I have read and agree to ",
+  "与": " and ",
+  "使用条款": "Terms of Use",
+  "用邮箱注册或登录：输入邮箱，收到 6 位验证码即可开始。第一次登录会自动创建账号。": "Sign up or sign in with your email: enter it, then use the 6-digit code you receive. Your first sign-in creates the account.",
 };

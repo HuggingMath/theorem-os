@@ -2,7 +2,8 @@ import path from 'node:path';
 import { z } from 'zod';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { webLimits, type WebEnvironment, type WebEnvironmentOption, type WebProvider, type WebTemplate } from './shared';
-import { allowlistFile, normalizeEmail, type WebAuthConfig } from './auth';
+import { allowlistFile, normalizeEmail, type WebAuthConfig, type WebSignupMode } from './auth';
+import { webQuotaDefaults, type WebQuotaLimits } from './quota';
 import { researchExamples } from './problemExamples';
 
 const providerSchema = z.object({
@@ -24,8 +25,10 @@ export type WebConfig = {
   queueLimit: number;
   sessionTtlMs: number;
   providers: WebProvider[];
-  /** Present when every workbench request needs an allowlisted email login. */
+  /** Present when every workbench request needs an email login; see `auth.signup` for who may register. */
   auth?: WebAuthConfig;
+  /** What one account may start per window; absent when accounts do not exist (loopback preview). */
+  quota?: WebQuotaLimits;
   /** A header set by the reverse proxy in front (e.g. cf-connecting-ip) that names the visitor for rate limits. */
   clientIpHeader?: string;
   /** Provider keys the server holds for admin accounts, by provider ID; never sent to a browser. */
@@ -34,9 +37,9 @@ export type WebConfig = {
   keySecret?: Buffer;
 };
 
-function integer(value: string | undefined, fallback: number, min: number, max: number): number {
+function integer(value: string | undefined, fallback: number, min: number, max: number, name = 'web service limit'): number {
   const parsed = value === undefined ? fallback : Number(value);
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) throw new Error('Invalid web service limit.');
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) throw new Error(`Invalid ${name}: expected an integer from ${min} to ${max}.`);
   return parsed;
 }
 
@@ -60,6 +63,12 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(publicUrl.hostname);
   const authMode = env.THEOREMOS_WEB_AUTH || (loopback ? 'none' : 'email');
   if (!['none', 'email'].includes(authMode)) throw new Error('THEOREMOS_WEB_AUTH must be none or email.');
+  // An allowlist is the default: one address at a time is admitted until the operator opens signup.
+  const signup = (env.THEOREMOS_WEB_SIGNUP || 'allowlist') as WebSignupMode;
+  if (!['allowlist', 'open'].includes(signup)) throw new Error('THEOREMOS_WEB_SIGNUP must be allowlist or open.');
+  if (signup === 'open' && authMode !== 'email') throw new Error('THEOREMOS_WEB_SIGNUP=open needs email login (THEOREMOS_WEB_AUTH=email).');
+  const termsVersion = env.THEOREMOS_WEB_TERMS_VERSION?.trim() || (signup === 'open' ? '2026-11-07' : undefined);
+  if (termsVersion && !/^[0-9A-Za-z._-]{1,32}$/u.test(termsVersion)) throw new Error('THEOREMOS_WEB_TERMS_VERSION must be 1-32 letters, digits, dots, dashes or underscores.');
   let auth: WebAuthConfig | undefined;
   if (env.THEOREMOS_WEB_ADMINS && authMode !== 'email') throw new Error('THEOREMOS_WEB_ADMINS needs email login (THEOREMOS_WEB_AUTH=email).');
   if (authMode === 'email') {
@@ -71,6 +80,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     const dataRoot = env.THEOREMOS_WEB_DATA_ROOT ? path.resolve(env.THEOREMOS_WEB_DATA_ROOT) : undefined;
     const list = (value?: string) => (value || '').split(',').map(item => item.trim()).filter(Boolean).map(normalizeEmail);
     auth = { smtpUrl, from, allowlist: list(env.THEOREMOS_WEB_ALLOWLIST), admins: list(env.THEOREMOS_WEB_ADMINS),
+      signup, ...(termsVersion ? { termsVersion } : {}),
       ...(env.THEOREMOS_WEB_ALLOWLIST_FILE || dataRoot ? { allowlistFile: path.resolve(env.THEOREMOS_WEB_ALLOWLIST_FILE || allowlistFile(dataRoot)!) } : {}) };
   }
   const clientIpHeader = env.THEOREMOS_WEB_CLIENT_IP_HEADER?.trim().toLowerCase();
@@ -92,6 +102,13 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   const keySecretText = env.THEOREMOS_WEB_KEY_SECRET?.trim();
   if (keySecretText && !auth) throw new Error('THEOREMOS_WEB_KEY_SECRET needs THEOREMOS_WEB_AUTH=email.');
   if (keySecretText && !/^[0-9a-f]{64}$/iu.test(keySecretText)) throw new Error('THEOREMOS_WEB_KEY_SECRET must be 64 hex digits.');
+  // A published service needs an allowance per account; an anonymous loopback preview has no account to count against.
+  const quota: WebQuotaLimits | undefined = auth ? {
+    windowHours: integer(env.THEOREMOS_WEB_QUOTA_WINDOW_HOURS, webQuotaDefaults.windowHours, 1, 24 * 30, 'THEOREMOS_WEB_QUOTA_WINDOW_HOURS'),
+    runs: integer(env.THEOREMOS_WEB_QUOTA_RUNS, webQuotaDefaults.runs, 0, 10_000, 'THEOREMOS_WEB_QUOTA_RUNS'),
+    formalizations: integer(env.THEOREMOS_WEB_QUOTA_FORMALIZATIONS, webQuotaDefaults.formalizations, 0, 10_000, 'THEOREMOS_WEB_QUOTA_FORMALIZATIONS'),
+    explanations: integer(env.THEOREMOS_WEB_QUOTA_EXPLANATIONS, webQuotaDefaults.explanations, 0, 10_000, 'THEOREMOS_WEB_QUOTA_EXPLANATIONS'),
+  } : undefined;
   return {
     host: env.THEOREMOS_WEB_HOST || '127.0.0.1', port, publicUrl: publicUrl.origin,
     staticRoot: path.resolve(env.THEOREMOS_WEB_STATIC_ROOT || 'out/web'),
@@ -103,6 +120,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     sessionTtlMs: 1000 * integer(env.THEOREMOS_WEB_SESSION_TTL_SECONDS,
       env.THEOREMOS_WEB_DATA_ROOT ? 30 * 24 * 60 * 60 : 60 * 60, 60, 365 * 24 * 60 * 60), providers,
     ...(auth ? { auth } : {}),
+    ...(quota ? { quota } : {}),
     ...(clientIpHeader ? { clientIpHeader } : {}),
     ...(adminKeys ? { adminKeys } : {}),
     ...(keySecretText ? { keySecret: Buffer.from(keySecretText, 'hex') } : {}),

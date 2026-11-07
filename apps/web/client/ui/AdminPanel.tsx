@@ -45,12 +45,16 @@ function Allowlist({ overview, busy, onAdd, onRemove }: Required<Pick<AdminPanel
 
 function Accounts({ accounts }: { accounts: WebAdminOverview['accounts'] }) {
   if (!accounts.length) return <p class="field-note">{t('还没有账号登录过。')}</p>;
+  // Counts for the current allowance window, in the same order as the allowance sentence above the table.
+  const usage = (account: WebAdminOverview['accounts'][number]) => account.usage
+    ? t('研究 {0} · 形式化 {1} · 讲解 {2}', account.usage.research, account.usage.formalizations, account.usage.explanations) : '—';
   return <div class="admin-table-scroll" tabindex={0} aria-label={t('账号列表')}><table class="admin-table">
-    <thead><tr><th scope="col">{t('邮箱')}</th><th scope="col">{t('首次登录')}</th><th scope="col">{t('首次提交运行')}</th><th scope="col">{t('首次通过验收')}</th></tr></thead>
+    <thead><tr><th scope="col">{t('邮箱')}</th><th scope="col">{t('首次登录')}</th><th scope="col">{t('首次提交运行')}</th><th scope="col">{t('首次通过验收')}</th><th scope="col">{t('本窗口用量')}</th></tr></thead>
     <tbody>{accounts.map(account => <tr key={account.email}>
       <th scope="row"><span translate={false}>{account.email}</span>{account.admin && <span class="badge" data-source="admin">{t('管理员')}</span>}
         {!account.allowed && <span class="badge warning">{t('已移出白名单')}</span>}</th>
-      <td>{date(account.createdAt)}</td><td>{date(account.firstRunAt)}</td><td>{date(account.firstAcceptedAt)}</td></tr>)}</tbody>
+      <td>{date(account.createdAt)}</td><td>{date(account.firstRunAt)}</td><td>{date(account.firstAcceptedAt)}</td>
+      <td class="admin-usage">{usage(account)}</td></tr>)}</tbody>
   </table></div>;
 }
 

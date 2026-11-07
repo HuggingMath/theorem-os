@@ -153,6 +153,10 @@ export type WebSession = {
   csrfToken: string;
   /** `email` means the workbench needs a login; `account` is set once this session has one. */
   auth: 'none' | 'email';
+  /** `open` means anyone with a working inbox may register; absent means only allowlisted addresses sign in. */
+  signup?: 'open';
+  /** What this account has used in the current window of its per-account allowance; absent without an account. */
+  quota?: WebQuotaView;
   /** `admin` accounts may manage the allowlist; they see no other account's runs. */
   /** `completionEmail: false` means the account turned off the mail sent when one of its runs ends; absent means on. */
   /** `serverKeys` lists the providers whose key the server fills in for this admin account when the field is left empty. */
@@ -372,13 +376,24 @@ export function isProgressEvent(type: string, details?: WebEventDetails): boolea
   return type === 'proof_checked' && details?.passed === true && details.reused !== true;
 }
 
+/** One kind of the per-account allowance: how much of it the current window used, and the limit it is used against. */
+export type WebQuotaUsage = { used: number; limit: number };
+/** The per-account allowance as the account's session shows it, one entry per kind plus the window's end. */
+export type WebQuotaView = { windowHours: number; windowEndsAt: string; runs: WebQuotaUsage; formalizations: WebQuotaUsage; explanations: WebQuotaUsage };
 /** The admin dialog: who may sign in, which accounts exist with their beta milestones, and the funnel totals. */
+/** The per-account allowance as the admin list shows it: the window, and what each account used in it. */
+export type WebAdminQuota = { windowHours: number; limits: { research: number; formalizations: number; explanations: number } };
+export type WebAdminUsage = { research: number; formalizations: number; explanations: number };
 export type WebAdminOverview = {
   allowlist: { email: string; source: 'admin' | 'config' | 'file'; account: boolean }[];
-  accounts: { email: string; admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean }[];
+  accounts: { email: string; admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean;
+    /** Absent without a quota configuration (an anonymous loopback preview). */
+    usage?: WebAdminUsage }[];
   funnel: { step: string; count: number; ofPrevious?: number }[];
   /** False when the service has no allowlist file, so only the deployment configuration can change who signs in. */
   editable: boolean;
+  /** The allowance every account shares; absent when the service has none. */
+  quota?: WebAdminQuota;
 };
 
 /** The run or conversation a workbench address names (`?run=<id>` or `?chat=<id>`), kept through the login page so signing

@@ -17,12 +17,12 @@ const bundle = (entry: string, directory: string, format?: 'esm') =>
   build({ entryPoints: [path.join(root, `apps/web/client/${entry}.ts`)], outfile: path.join(directory, `${entry}.js`),
     bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
     jsx: 'automatic', jsxImportSource: 'preact', external: ['/math.js'], ...format ? { format } : {} });
-for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'explain', 'formalize']) await bundle(entry, output);
+for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'legal', 'explain', 'formalize']) await bundle(entry, output);
 // KaTeX, imported by the chat when a formula first appears.
 await bundle('math', output, 'esm');
 await bundle('formalization', reports);
 fs.copyFileSync(path.join(root, 'apps/web/client/formalization.html'), path.join(reports, 'formalization.html'));
-for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['explain.html', 'explain.html'], ['app.css', 'app.css'], ['formalize.html', 'formalize.html'], ['formalize.css', 'formalize.css'], ['research-conversation.css', 'research-conversation.css']])
+for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['terms.html', 'terms.html'], ['privacy.html', 'privacy.html'], ['explain.html', 'explain.html'], ['app.css', 'app.css'], ['formalize.html', 'formalize.html'], ['formalize.css', 'formalize.css'], ['research-conversation.css', 'research-conversation.css']])
   fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
 const fonts = ['InterVariable-latin.woff2', 'Inter-LICENSE.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',

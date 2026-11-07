@@ -158,4 +158,8 @@ export const errors: Record<string, string> = {
   "已保存的讲解与这次运行的证明不一致。": "The saved explanation does not match this run's proof.",
   "这次运行的证明讲解正在生成，请先取消或等待结束。": "A proof explanation for this run is being generated; cancel it or wait for it to finish.",
   "讲解标识无效。": "Invalid explanation id.",
+  "请先阅读并同意使用条款与隐私说明。": "Read and agree to the Terms of Use and the Privacy Notice first.",
+  "已达到每 {0} 小时 {1} 次研究的额度。已开始的运行不受影响；额度会在窗口结束后恢复。": "This account has reached its {1} research runs per {0} hours. Runs already started are not affected; the allowance returns when the window ends.",
+  "已达到每 {0} 小时 {1} 次形式化的额度。已开始的形式化不受影响；额度会在窗口结束后恢复。": "This account has reached its {1} formalizations per {0} hours. Formalizations already started are not affected; the allowance returns when the window ends.",
+  "已达到每 {0} 小时 {1} 份证明讲解的额度。已开始的不受影响；额度会在窗口结束后恢复。": "This account has reached its {1} proof explanations per {0} hours. Explanations already started are not affected; the allowance returns when the window ends.",
 };

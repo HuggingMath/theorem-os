@@ -24,6 +24,7 @@ import { acceptedEncoding, sendStatic } from './staticFiles';
 import { webFunnel } from './funnel';
 import { completionMail, mailsCompletion, planApprovalMail } from './completionMail';
 import { WebKeyVault } from './keyVault';
+import { WebQuota, WebQuotaError, type WebQuotaKind } from './quota';
 import { trajectoryQuery, trajectoryVersionQuery, WebTrajectories } from './trajectory';
 import { explainInput, failedFeedback, WebExplainError, WebExplainer, webExplainLimits, type WebExplainTurn } from './explain';
 import { explanationMarkdownFilename, verifyExplanationEvidence } from './explanation';
@@ -140,16 +141,20 @@ function readJson(request: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** Addresses, accounts and milestones for the admin dialog; never a run, a key or anything an account wrote. */
-function adminOverview(auth: WebAuth): WebAdminOverview {
+/** Addresses, accounts, milestones and this window's usage for the admin dialog; never a run, a key or anything written. */
+function adminOverview(auth: WebAuth, quota?: WebQuota): WebAdminOverview {
   const accounts = auth.listAccounts(), allowed = auth.allowlist(), signedUp = new Set(accounts.map(account => account.email));
   return {
     allowlist: auth.allowlistEntries().map(entry => ({ ...entry, account: signedUp.has(entry.email) })),
-    accounts: accounts.map(({ email, createdAt, firstRunAt, firstAcceptedAt }) => ({ email, admin: auth.isAdmin(email), createdAt,
-      ...(firstRunAt ? { firstRunAt } : {}), ...(firstAcceptedAt ? { firstAcceptedAt } : {}), allowed: allowed.has(email) }))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    accounts: accounts.map(({ email, id, createdAt, firstRunAt, firstAcceptedAt }) => {
+      const view = quota && !auth.isAdmin(email) ? quota.view(id) : undefined;
+      return { email, admin: auth.isAdmin(email), createdAt,
+        ...(firstRunAt ? { firstRunAt } : {}), ...(firstAcceptedAt ? { firstAcceptedAt } : {}), allowed: allowed.has(email),
+        ...(view ? { usage: { research: view.runs.used, formalizations: view.formalizations.used, explanations: view.explanations.used } } : {}) };
+    }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     funnel: webFunnel(accounts, allowed).steps,
     editable: auth.allowlistWritable(),
+    ...(quota ? { quota: quota.settings() } : {}),
   };
 }
 
@@ -164,6 +169,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const registry = new WebModuleRegistry(storage);
   const sessions = new Map<string, Session>(storage.listSessions().map(session => [session.id, session]));
   const auth = config.auth ? new WebAuth(config.auth, storage, options.mailer, options.captchaAnswer) : undefined;
+  const quota = auth && config.quota ? new WebQuota(storage, config.quota) : undefined;
   // With login enabled, records belong to the account; otherwise to the anonymous browser session.
   // Provider IDs, never keys, that the server can fill in for this session's admin account.
   const serverKeysFor = (session: Session) => {
@@ -196,6 +202,18 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       maxRunSeconds: webExplanationLimits.maxRunSeconds, maxTotalTokens: webExplanationLimits.maxTotalTokens,
       reference: { ...webExplanationLimits.reference } };
   };
+  /**
+   * Counts one use of the account's allowance before the work starts and answers what to call if the work never did.
+   * Admins and anonymous loopback previews are not counted; a refusal is the 429 the reader sees.
+   */
+  const spend = (session: Session, kind: WebQuotaKind): (() => void) => {
+    if (!quota || !auth || !session.account || auth.isAdmin(session.account.email)) return () => undefined;
+    try { quota.take(session.account.id, kind); }
+    catch (error) { throw error instanceof WebQuotaError ? new HttpError(error.status, error.message) : error; }
+    const id = session.account.id;
+    return () => quota.refund(id, kind);
+  };
+  const usageOf = (session: Session) => quota && session.account && !auth?.isAdmin(session.account.email) ? quota.view(session.account.id) : undefined;
   // Beta funnel milestones exist only for accounts; anonymous loopback previews record nothing.
   const milestone = (owner: string, name: WebMilestone) => {
     if (auth && owner.startsWith('account:')) try { auth.markMilestone(owner.slice(8), name); } catch { /* A milestone never fails a run. */ }
@@ -317,7 +335,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           setSessionCookie(response, session);
           session.touchedAt = Date.now();
           storage.saveSession(session);
+          const usage = usageOf(session);
           const body: WebSession = { draftOwner: crypto.createHash('sha256').update(ownerOf(session) || session.id).digest('hex'), csrfToken: session.csrf, auth: auth ? 'email' : 'none',
+            ...(auth?.signup() === 'open' ? { signup: 'open' as const } : {}),
+            ...(usage ? { quota: usage } : {}),
             ...(session.account ? { account: { email: session.account.email, ...(auth?.isAdmin(session.account.email) ? { admin: true } : {}),
               ...(auth ? { passwordSet: auth.hasPassword(session.account.email), passwordResetAllowed: Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()) } : {}),
               ...(serverKeysFor(session) ? { serverKeys: serverKeysFor(session) } : {}),
@@ -385,6 +406,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
             conversations.forget(owner); formalizations.forget(owner); explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
+            quota?.forget(account.id);
             auth.deleteAccount(account.email);
             for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
@@ -401,7 +423,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (url.pathname.startsWith('/api/admin/')) {
           // Checked on every request, so removing an address from THEOREMOS_WEB_ADMINS takes effect at the next restart.
           if (!auth || !session.account || !auth.isAdmin(session.account.email)) throw new HttpError(403, '需要管理员账号。');
-          if (url.pathname === '/api/admin/overview' && request.method === 'GET') { json(response, 200, adminOverview(auth)); return; }
+          if (url.pathname === '/api/admin/overview' && request.method === 'GET') { json(response, 200, adminOverview(auth, quota)); return; }
           if (url.pathname === '/api/admin/allowlist' && ['POST', 'DELETE'].includes(request.method ?? '')) {
             const email = objectBody(await readJson(request)).email;
             if (request.method === 'POST') auth.addToAllowlist(email);
@@ -410,7 +432,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               // The removed address is signed out now, not at its next request.
               for (const [id, other] of sessions) if (other.account && !auth.allowed(other.account.email)) endSession(id);
             }
-            json(response, 200, adminOverview(auth)); return;
+            json(response, 200, adminOverview(auth, quota)); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
@@ -468,7 +490,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (!runner.formalize || !(await runner.readiness()).ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider!);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
-            json(response, 201, { formalization: formalizations.create(owner, { ...parsed.data, apiKey } as WebFormalizationRequest, provider!, SUB2API_PROVIDER.defaultModel) }); return;
+            // A confirmed formalization starts its proof through jobs.create itself, so it costs this kind only.
+            const refund = spend(session, 'formalizations');
+            try {
+              json(response, 201, { formalization: formalizations.create(owner, { ...parsed.data, apiKey } as WebFormalizationRequest, provider!, SUB2API_PROVIDER.defaultModel) }); return;
+            } catch (error) {
+              refund();
+              throw error;
+            }
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
@@ -630,6 +659,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             throw new HttpError(409, 'Lean 原题或环境已改变，请重新形式化确认，或作为普通 Lean 题目创建。');
           if (from && jobs.get(owner, from.runId)?.formalizationId !== input.formalizationId)
             throw new HttpError(409, '继续研究必须保留原运行的形式化来源。');
+          // Only a new run costs allowance; a replayed request above already returned the run it created.
+          const refund = spend(session, 'runs');
           try {
             const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
               approved ? { evidence: approved.evidence, provenance: { id: approved.formalization.id,
@@ -640,6 +671,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             json(response, 201, { run, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) });
           }
           catch (error) {
+            // A submit that never became a run gives the allowance back.
+            refund();
             if (error instanceof WebStorageError) throw error;
             throw new HttpError(429, error instanceof Error ? error.message : '运行队列已满。');
           }
@@ -692,9 +725,15 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               apiKey = held;
             }
             if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
-            json(response, 201, { explanation: explanations.create(owner, run, { target: parsed.data.target,
-              language: parsed.data.language as WebExplanationLanguage, apiKey, provider, model: generation.model,
-              effort: generation.effort }) });
+            const refund = spend(session, 'explanations');
+            try {
+              json(response, 201, { explanation: explanations.create(owner, run, { target: parsed.data.target,
+                language: parsed.data.language as WebExplanationLanguage, apiKey, provider, model: generation.model,
+                effort: generation.effort }) });
+            } catch (error) {
+              refund();
+              throw error;
+            }
             return;
           }
           const target = url.searchParams.get('target') ?? '';

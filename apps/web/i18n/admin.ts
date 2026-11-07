@@ -45,4 +45,6 @@ export const admin: Record<string, string> = {
   "研究已提交，Key 已保存到你的账号": "Research submitted; key saved to your account",
   "已删除保存的 API Key": "Saved API key deleted",
   "写下研究任务": "Write the research task",
+  "本窗口用量": "Usage this window",
+  "研究 {0} · 形式化 {1} · 讲解 {2}": "Research {0} · Formalization {1} · Explanations {2}",
 }

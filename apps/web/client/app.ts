@@ -2147,6 +2147,12 @@ function renderShell() {
 function changeLocale() { saveDraft(); switchLocale(otherLocale.locale); }
 function openAccount() {
   element('#account-email').textContent = state.session?.account?.email ?? '';
+  // The allowance is only sent for signed-in accounts that are not admins; anything else leaves the line out.
+  const quota = state.session?.quota, quotaLine = element('#account-quota');
+  quotaLine.hidden = !quota;
+  quotaLine.textContent = quota ? t('本窗口还可开始 {0} 次研究、{1} 次形式化、{2} 份讲解；额度会在窗口结束后恢复。',
+    Math.max(0, quota.runs.limit - quota.runs.used), Math.max(0, quota.formalizations.limit - quota.formalizations.used),
+    Math.max(0, quota.explanations.limit - quota.explanations.used)) : '';
   element<HTMLInputElement>('#completion-email').checked = state.session?.account?.completionEmail !== false;
   element('#open-admin').hidden = !state.session?.account?.admin;
   const account = state.session?.account, recentCode = account?.passwordResetAllowed;

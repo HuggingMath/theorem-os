@@ -15,7 +15,7 @@
     <a class="brand" href="https://theoremos.top/" data-site="" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
     <section class="login-card" aria-labelledby="login-heading">
       <h1 id="login-heading">登录研究工作台</h1>
-      <p class="login-lead" id="login-lead">内测期间仅限已通过申请的邮箱。可用邮箱验证码或已设置的密码登录。</p>
+      <p class="login-lead" id="login-lead">输入邮箱收验证码即可登录；第一次登录会自动创建账号。</p>
       <div id="login-error" class="inline-error" role="alert" hidden></div>
       <form id="email-step" class="login-form" novalidate>
         <label for="login-email">邮箱</label>
@@ -27,6 +27,7 @@
           <button type="button" id="refresh-captcha" class="icon-button" aria-label="换一张图形验证码" title="换一张"><i data-lucide="refresh-cw"></i></button>
         </div>
         <p class="field-note" id="captcha-note">输入图中的 5 位数字。看不清可以换一张。</p>
+        <label class="checkbox-option login-terms" id="terms-option" hidden><input type="checkbox" id="accept-terms"><span>我已阅读并同意<a href="terms.html" target="_blank" rel="noopener">使用条款</a>与<a href="privacy.html" target="_blank" rel="noopener">隐私说明</a></span></label>
         <button type="submit" id="send-code" class="button button-primary login-submit" disabled><i data-lucide="mail-check"></i><span>发送验证码</span></button>
         <div class="login-secondary"><button type="button" id="use-password" class="text-button">使用密码登录</button></div>
       </form>
@@ -46,7 +47,7 @@
         <div class="login-secondary"><button type="button" id="change-email" class="text-button">换一个邮箱</button><button type="button" id="resend-code" class="text-button" disabled>重新发送</button></div>
       </form>
     </section>
-    <p class="login-footer">还没有内测资格？<a href="https://theoremos.top/#start" data-site="#start">申请内测</a> · <a href="guide.html" data-guide>使用说明</a> · <a href="https://theoremos.top/feedback.html" data-feedback target="_blank" rel="noopener noreferrer">反馈问题</a> · <a href="https://theoremos.top/privacy.html" data-site="privacy.html">隐私与条款</a><span class="locale-switch-separator"> · </span><button type="button" id="locale-switch" class="text-button locale-switch" hidden></button></p>
+    <p class="login-footer"><a href="guide.html" data-guide>使用说明</a> · <a href="terms.html">使用条款</a> · <a href="privacy.html">隐私说明</a> · <a href="https://theoremos.top/feedback.html" data-feedback target="_blank" rel="noopener noreferrer">反馈问题</a><span class="locale-switch-separator"> · </span><button type="button" id="locale-switch" class="text-button locale-switch" hidden></button></p>
   </main>
   <noscript><div class="no-script">需要启用 JavaScript 才能登录。</div></noscript>
   <script src="login.js" defer></script>

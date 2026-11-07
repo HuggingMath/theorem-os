@@ -13,6 +13,9 @@ const email = $<HTMLInputElement>('#login-email'), captcha = $<HTMLInputElement>
 const sendCode = $<HTMLButtonElement>('#send-code'), verify = $<HTMLButtonElement>('#verify-code'), resend = $<HTMLButtonElement>('#resend-code');
 const passwordEmail = $<HTMLInputElement>('#password-email'), password = $<HTMLInputElement>('#login-password');
 const passwordSubmit = $<HTMLButtonElement>('#password-submit');
+const termsOption = $('#terms-option'), acceptTerms = $<HTMLInputElement>('#accept-terms');
+// An open signup asks a new account to accept the terms; the server refuses the code login without it.
+let openSignup = false;
 let csrf = '', captchaId = '', sentTo = '', resendTimer: ReturnType<typeof setInterval> | undefined;
 // A run or conversation link opened while signed out, or open when the session ended, arrives as login.html?run=<id> or
 // ?chat=<id>; signing in returns to that record.
@@ -46,6 +49,12 @@ async function start() {
   if (session.auth !== 'email' || session.account) { location.replace(workbench); return; }
   // Signed out, the workbench is not loaded at all, so the tab's remembered API Key is cleared here.
   forgetKey(() => sessionStorage);
+  // An open signup admits any inbox, so the page says so and asks for consent; the allowlist keeps its beta wording.
+  openSignup = session.signup === 'open';
+  $('#login-lead').textContent = openSignup
+    ? t('用邮箱注册或登录：输入邮箱，收到 6 位验证码即可开始。第一次登录会自动创建账号。')
+    : t('内测期间仅限已通过申请的邮箱。可用邮箱验证码或已设置的密码登录。');
+  termsOption.hidden = !openSignup;
   // The password form waits for the session cookie and CSRF token; sent earlier, it reads as an expired page.
   csrf = session.csrfToken; passwordSubmit.disabled = false;
   await loadCaptcha();
@@ -77,6 +86,7 @@ emailStep.addEventListener('submit', event => {
   if (sendCode.disabled) return;
   if (!email.checkValidity() || !email.value.trim()) { showError(t('请输入有效的邮箱地址。')); email.focus(); return; }
   if (!/^\d{5}$/u.test(captcha.value.trim())) { showError(t('请输入图中的 5 位数字。')); captcha.focus(); return; }
+  if (openSignup && !acceptTerms.checked) { showError(t('请先阅读并同意使用条款与隐私说明。')); acceptTerms.focus(); return; }
   sendCode.disabled = true;
   void guarded(async () => {
     try {
@@ -107,7 +117,7 @@ codeStep.addEventListener('submit', event => {
   verify.disabled = true;
   void guarded(async () => {
     try {
-      await call('/api/auth/verify', { email: sentTo, code: code.value.trim() });
+      await call('/api/auth/verify', { email: sentTo, code: code.value.trim(), ...(openSignup ? { terms: acceptTerms.checked } : {}) });
       location.replace(workbench);
     } finally { verify.disabled = false; }
   });

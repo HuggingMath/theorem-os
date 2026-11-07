@@ -140,7 +140,7 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 
 - 未登录（没有会话，或会话还没有账号）访问 `/` 或 `/index.html` 时，服务端直接 302 到 `login.html`，不加载工作台脚本、样式和数学排版资源；首次访问因此只下载登录页本身的资源。地址里的运行或对话（`?run=<id>`、`?chat=<id>`）带到登录页，登录后回到它；打开着的页面发现会话已结束时也这样跳转。
 - 登录页 `login.html` 先要求输入图形验证码（5 位数字，服务端生成 SVG，5 分钟有效，每张只能用一次），再向邮箱发送 6 位验证码。验证码 10 分钟有效，输错 5 次作废；同一邮箱 60 秒内不重发、每小时最多 5 封，同一 IP 每 10 分钟最多请求 10 次。
-- 只有内测白名单中的邮箱能收到验证码。白名单来自 `THEOREMOS_WEB_ALLOWLIST`（逗号分隔）和 `allowlist.txt`（每行一个邮箱，`#` 后为注释）。`allowlist.txt` 默认放在数据目录根下，Compose 中为 `research-data` 卷内的 `/var/lib/theorem-os/allowlist.txt`，每次请求重新读取，改动无需重启。移出白名单的邮箱在下一次请求时退出登录，记录保留。
+- `THEOREMOS_WEB_SIGNUP=allowlist`（默认）时只有内测白名单中的邮箱能收到验证码；`open` 时任何邮箱都能注册登录，白名单只用于内测和优先名单。白名单来自 `THEOREMOS_WEB_ALLOWLIST`（逗号分隔）和 `allowlist.txt`（每行一个邮箱，`#` 后为注释）。`allowlist.txt` 默认放在数据目录根下，Compose 中为 `research-data` 卷内的 `/var/lib/theorem-os/allowlist.txt`，每次请求重新读取，改动无需重启。移出白名单的邮箱在下一次请求时退出登录，记录保留。
 - 登录成功后更换会话 ID 和 CSRF token。运行记录、归档、知识目录和服务端方案归属账号：同一账号的多个浏览器看到同一份记录，退出登录或会话到期不删除记录。账号菜单可以退出登录，或输入邮箱确认后删除账号；删除会取消运行中的任务并立即删除全部记录。
 - 运行自行结束（完成或出错）时，服务给所有者的登录邮箱发一封结束邮件：题目标题、结论（通过验收、未通过、出错）、用时和回到该运行的链接 `/?run=<id>`，不含源码、证明、报告或 API Key。所有者停止的运行和服务重启中断的运行不发。账号对话框的「研究结束时发邮件」默认打开，关闭后账号文件记 `completionEmail: false`（`PATCH /api/auth/account`）；移出白名单的账号也不再收到。链接在未登录时由服务端直接 302 到 `login.html?run=<id>`，登录后回到 `/?run=<id>` 打开该运行。发信失败只在服务日志记一行运行 ID，不影响运行。内容由 `apps/web/completionMail.ts` 生成。
 - 账号文件保存在数据目录的 `accounts/` 下，含账号 ID、邮箱、创建时间（即首次登录），以及首次提交运行 `firstRunAt` 和首次通过验收 `firstAcceptedAt` 两个时间，只在第一次发生时写入，删除账号时一起删除。验证码只以 HMAC 形式保存在内存中，服务重启后作废。
@@ -149,6 +149,9 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 - `THEOREMOS_WEB_ADMIN_KEYS` 可以让服务器替管理员保存服务商 Key，值是 JSON 对象 `{"<服务商 ID>": "<Key>"}`，只认已配置的服务商，需要 `THEOREMOS_WEB_ADMINS`。管理员提交时 Key 留空，服务器就用这里的 Key；手填的 Key 优先。会话只告诉管理员哪些服务商有保存的 Key（`account.serverKeys`），Key 本身不会发给浏览器，也和手填的 Key 一样不写入运行记录、出现在输出里时替换为 `[REDACTED]`。其他账号留空仍返回 400。启动时格式错误的报错只写服务商 ID，不写 Key。改 Key 后要重建容器。
 - 设了 `THEOREMOS_WEB_KEY_SECRET`（64 位十六进制，需要 `THEOREMOS_WEB_AUTH=email`，生成：`openssl rand -hex 32`）后，每个账号可以把自己的 Key 保存到服务器（`apps/web/keyVault.ts`）。模型连接里的「保存到我的账号」默认勾选，提交时请求带 `saveKey: true`，运行创建成功后服务器用 AES-256-GCM 加密，存到数据目录 `keys/<sha256(账号 ID)>.json`（0600），每份密文绑定账号 ID、服务商 ID 和服务商地址，拷给别的账号、换了地址或换了密钥都解不开，按没有保存处理。密钥只在服务环境里，不进数据目录。会话的 `account.keyVault` 表示可以保存，`account.savedKeys` 只给服务商 ID 和末四位；Key 留空时依次用本账号保存的 Key、管理员的服务器 Key，都没有返回 400；手填的 Key 优先，只有勾选时才替换保存的 Key。`DELETE /api/auth/keys/<服务商 ID>` 删除一个，删除账号时一起删除。其他账号看不到、也用不到。开启后不再显示「在此标签页记住」。换密钥会让已保存的 Key 全部失效，用户需要重新填写。
 - 本机调试可设 `THEOREMOS_WEB_SMTP_URL=log:`，验证码打印到服务日志，不发邮件；该值只允许用于回环地址。
+- 开放注册时，第一次登录的验证码请求必须带 `terms: true`，否则返回 400「请先阅读并同意使用条款与隐私说明。」，验证码同时作废，账号不建立。账号文件记下同意的版本 `termsVersion` 和时间 `termsAt`，版本来自 `THEOREMOS_WEB_TERMS_VERSION`（默认 `2026-11-07`，与 `terms.html`、`privacy.html` 顶部的版本行一致）。改条款时同时改这两个页面的版本行并更新该变量；已注册账号再次登录不会重复询问。
+- 每个账号按种类计用量，窗口到期后重新计数：研究 `THEOREMOS_WEB_QUOTA_RUNS`（默认 24 小时 30 次）、形式化 `THEOREMOS_WEB_QUOTA_FORMALIZATIONS`（8 次）、证明讲解 `THEOREMOS_WEB_QUOTA_EXPLANATIONS`（4 份），窗口长度 `THEOREMOS_WEB_QUOTA_WINDOW_HOURS`（1 小时至 30 天）。额度在创建前扣除，创建失败（参数不对、队列已满）时退回；重放的提交和已开始的运行不重复计数。超限返回 429 和一句说明，已开始的运行不受影响。记录写在数据目录 `usage/<sha256(账号 ID)>.json`，只有计数，删除账号时一起删除。管理员不受额度限制，会话里也没有这份数据。账号对话框显示本窗口剩余次数。
+- 用量额度只记账，不接支付；把某个种类设为 0 等于关闭该功能。要临时放开某个账号，把邮箱加入 `THEOREMOS_WEB_ADMINS`。
 
 ```bash
 THEOREMOS_WEB_PUBLIC_URL=https://workbench.example.org \
@@ -249,6 +252,12 @@ docker compose -f apps/web/compose.yml up -d web
 | `THEOREMOS_WEB_MAIL_FROM` | 无 | 验证码邮件和结束邮件的发件人，例如 `TheoremOS <login@example.org>` |
 | `THEOREMOS_WEB_ALLOWLIST` | 空 | 逗号分隔的内测邮箱；另可写入数据目录的 `allowlist.txt` |
 | `THEOREMOS_WEB_ALLOWLIST_FILE` | 数据目录下 `allowlist.txt` | 白名单文件路径 |
+| `THEOREMOS_WEB_SIGNUP` | `allowlist` | `allowlist` 只放行白名单邮箱，`open` 开放注册；`open` 需要邮箱登录 |
+| `THEOREMOS_WEB_TERMS_VERSION` | 开放注册时 `2026-11-07` | 账号同意的条款版本，需与 `terms.html`、`privacy.html` 的版本行一致 |
+| `THEOREMOS_WEB_QUOTA_WINDOW_HOURS` | `24` | 用量额度窗口，1 小时至 30 天 |
+| `THEOREMOS_WEB_QUOTA_RUNS` | `30` | 每窗口每人研究次数，0 为关闭 |
+| `THEOREMOS_WEB_QUOTA_FORMALIZATIONS` | `8` | 每窗口每人形式化次数，0 为关闭 |
+| `THEOREMOS_WEB_QUOTA_EXPLANATIONS` | `4` | 每窗口每人证明讲解份数，0 为关闭 |
 | `THEOREMOS_WEB_ADMINS` | 空 | 逗号分隔的管理员邮箱，可登录并管理白名单；需要邮箱登录 |
 | `THEOREMOS_WEB_ADMIN_KEYS` | 空 | JSON `{"服务商 ID": "Key"}`，管理员 Key 留空时由服务器填入；Key 只放在 `.env` 或密钥管理里 |
 | `THEOREMOS_WEB_KEY_SECRET` | 空 | 64 位十六进制，加密账号保存的 API Key；空表示不能保存。只放在 `.env` 或密钥管理里，丢失或更换后已保存的 Key 失效 |
@@ -499,6 +508,26 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 ### 部署来源
 
 构建时传入源码提交：`THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build web`，worker 用同一参数（`--build-arg THEOREMOS_SOURCE_COMMIT=…`）。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 返回 `{"ok":true,"commit":"…"}`；未传入时只返回 `ok`。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 为 false 时该提交不能代表部署内容，应先提交再部署。回滚使用部署前打的镜像标签，回滚后同样记录一行。
+
+### 发布清单
+
+对外开放（`THEOREMOS_WEB_SIGNUP=open`）之前逐项确认；每项都能用一条命令或一个页面复核。
+
+| 项 | 要求 | 复核 |
+| --- | --- | --- |
+| 登录 | `THEOREMOS_WEB_AUTH=email`，`THEOREMOS_WEB_PUBLIC_URL` 为线上 origin | `/api/session` 的 `signup` 为 `open` |
+| 发信 | `SMTP_URL`、`MAIL_FROM` 可达，发件域有 SPF/DKIM | 用自己的邮箱走一遍验证码 |
+| 条款 | `terms.html`、`privacy.html` 可访问，版本行与 `THEOREMOS_WEB_TERMS_VERSION` 一致 | 登录页的注册提示与两页顶部的版本行 |
+| 额度 | 四个 `THEOREMOS_WEB_QUOTA_*` 按容量设定 | 账号对话框的剩余次数、超限时的 429 说明 |
+| 管理员 | `THEOREMOS_WEB_ADMINS` 至少一个可达邮箱 | 管理面板的账号表用量列 |
+| 密钥 | `THEOREMOS_WEB_KEY_SECRET` 已设（否则不能保存 Key），`THEOREMOS_WEB_ADMINS` 用于兜底 | `/api/session` 的 `account.keyVault` 为 true |
+| 地址 | `THEOREMOS_WEB_CLIENT_IP_HEADER=cf-connecting-ip`（仅在端口只对代理开放时） | 两个不同访客的限流互不影响 |
+| 容量 | `THEOREMOS_WEB_CONCURRENCY`、`THEOREMOS_WEB_QUEUE_LIMIT` 与网关并发相符 | 管理面板的漏斗与队列 |
+| 健康 | `/healthz` 返回 `ok` 和提交号 | `curl -fsS https://…/healthz` |
+| 回滚 | 部署前打过 `theorem-os-web:<提交>`、`theorem-os-worker:<提交>` 标签，最多保留三组 | `docker image ls theorem-os-web theorem-os-worker` |
+| 记录 | 部署后运行 `scripts/web-deploy-record.sh`，`clean` 为 true | `deploys.jsonl` 最后一行 |
+
+开放注册后，新访客可以直接注册，白名单不再是准入门槛；从白名单移除一个账号会立即让它退出登录，但不会阻止它重新注册。需要挡住某个地址时，把它从白名单移除没有用，应改用反向代理的访问控制或额度设为 0。
 
 ### 有效容量
 

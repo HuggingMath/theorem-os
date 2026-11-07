@@ -65,7 +65,7 @@ const allowed = (node: ts.Node, source: ts.SourceFile) => allowedText.has(node.g
 export function pageKeys() {
   const keys = new Map<string, string>();
   const decode = (value: string) => value.replace(/&nbsp;/gu, ' ').replace(/&lt;/gu, '<').replace(/&gt;/gu, '>').replace(/&quot;/gu, '"').replace(/&#39;/gu, "'").replace(/&amp;/gu, '&');
-  for (const name of ['index.html', 'login.html', 'share.html', 'guide.html', 'explain.html', 'formalization.html', 'formalize.html', 'formalize.html']) {
+  for (const name of ['index.html', 'login.html', 'share.html', 'guide.html', 'terms.html', 'privacy.html', 'explain.html', 'formalization.html', 'formalize.html']) {
     const markup = read(web('client', name)).replace(/<(script|style)\b[\s\S]*?<\/\1>/giu, '').replace(/<!--[\s\S]*?-->/gu, '');
     const add = (value: string) => { const key = decode(value).trim().replace(/\s+/gu, ' '); if (han.test(key) && !keys.has(key)) keys.set(key, name); };
     for (const match of markup.matchAll(/>([^<]+)</gu)) add(match[1]);
@@ -107,7 +107,7 @@ export function serverKeys() {
  */
 export function errorKeys() {
   const keys = new Map<string, string>();
-  const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts',
+  const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts',
     'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN" class="share-root">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ee">
+  <meta name="referrer" content="same-origin">
+  <title>隐私说明 · TheoremOS</title>
+  <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="share-page guide-page legal-page">
+  <a class="skip-link" href="#main">跳到正文</a>
+  <div class="share-shell">
+    <header class="share-top">
+      <a class="brand" href="https://theoremos.top/" data-site="" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
+      <div class="share-top-actions"><button type="button" id="locale-switch" class="text-button locale-switch" hidden></button><a class="button" href="./">打开工作台</a></div>
+    </header>
+    <main id="main" class="guide-content" tabindex="-1">
+      <header class="share-card guide-heading">
+        <h1>隐私说明</h1>
+        <p class="legal-updated">更新于 2026-11-07 · 适用于在线工作台 app.theoremos.top</p>
+        <p>这份说明讲工作台保存哪些数据、为什么保存、谁能看到，以及你怎样删除它们。</p>
+      </header>
+
+      <section class="share-card" id="account-data" aria-labelledby="account-data-heading">
+        <h2 id="account-data-heading">一、账号</h2>
+        <ul>
+          <li>保存你的邮箱、账号 ID、第一次登录的时间，以及你接受使用条款的时间与版本。</li>
+          <li>还记录两个时间：第一次提交运行和第一次通过验收，用来判断新手引导是否有效。统计只看汇总的人数和转化率，不记录你的点击或浏览。</li>
+          <li>邮箱只用于发送登录验证码、你开启的「研究结束时发邮件」提醒，以及条款重大变更的通知；不发给第三方，不用于营销。验证码邮件经阿里云邮件推送投递。</li>
+          <li>登录后服务器设置一个仅限 HTTPS 传输、脚本无法读取的会话 Cookie，只用于保持登录，不用于跨站追踪。</li>
+        </ul>
+      </section>
+
+      <section class="share-card" id="key" aria-labelledby="key-heading">
+        <h2 id="key-heading">二、API Key</h2>
+        <ul>
+          <li>API Key 不写入日志、不写入运行记录，也不会出现在分享链接里。</li>
+          <li>你不勾选「保存到我的账号」时，Key 只在该次运行期间存在于服务器内存和隔离的运行容器里，运行结束即丢弃。</li>
+          <li>你勾选保存时，Key 用 AES-256-GCM 加密后保存在服务器上，密钥在服务环境里、不在数据目录里；界面只显示末四位。你随时可以在账号面板里删除它。</li>
+        </ul>
+      </section>
+
+      <section class="share-card" id="records" aria-labelledby="records-heading">
+        <h2 id="records-heading">三、题目与运行记录</h2>
+        <ul>
+          <li>你提交的原题、Lean 源码、任务、运行过程、候选证明和验收结果归属你的账号，只有你和为这次运行启动的隔离容器读得到。</li>
+          <li>运行时的 Lean 检查、Agent 动作和形式化过程保存在你的账号目录下，只用于给你显示过程记录。</li>
+          <li>分享链接只在你主动创建时生成，内容是选定运行的只读快照；撤销分享后链接立即失效。分享页不包含 API Key、邮箱、运行配置和过程记录。</li>
+          <li>管理员只能看到邮箱、账号时间和每个账号在当前窗口的用量计数，看不到其他账号的题目、证明与运行记录。</li>
+        </ul>
+      </section>
+
+      <section class="share-card" id="retention" aria-labelledby="retention-heading">
+        <h2 id="retention-heading">四、保存期限与删除</h2>
+        <ul>
+          <li>运行记录、归档和知识库保留在你的账号下，直到你删除它们或删除账号。</li>
+          <li>删除账号会立即删除账号记录、登录密码、保存的 Key、全部运行记录、分享链接、归档、知识库与模块方案，以及用量计数，无法恢复。</li>
+          <li>服务运行日志只记录请求状态和错误，不记录题目内容与 Key。</li>
+        </ul>
+      </section>
+
+      <section class="share-card" id="contact" aria-labelledby="contact-heading">
+        <h2 id="contact-heading">五、联系</h2>
+        <ul>
+          <li>想了解或删除与账号有关的数据，可以先在账号面板里自助处理；其他问题请通过<a href="https://theoremos.top/feedback.html" data-feedback target="_blank" rel="noopener noreferrer">反馈页面</a>或邮件 <a href="mailto:liuzhenhao@westlake.edu.cn">liuzhenhao@westlake.edu.cn</a> 联系。</li>
+          <li>官网与证明档案是托管在 Cloudflare 上的静态页面，它们如何处理访问日志见官网的<a href="https://theoremos.top/privacy.html" data-site="privacy.html">隐私页</a>。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+  <noscript><div class="no-script">需要启用 JavaScript 才能切换语言。</div></noscript>
+  <script src="legal.js" defer></script>
+</body>
+</html>

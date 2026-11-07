@@ -4,8 +4,14 @@ import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 import type { WebStorage } from './storage';
 
-/** `admins` may always sign in and manage the allowlist file; they see no other account's runs. */
-export type WebAuthConfig = { smtpUrl: string; from: string; allowlist: string[]; allowlistFile?: string; admins?: string[] };
+/**
+ * `admins` may always sign in and manage the allowlist file; they see no other account's runs.
+ * `signup: 'open'` admits every valid email that can receive a code; the allowlist then only marks how an address
+ * arrived. `termsVersion` names the terms an account has to accept when it first signs in.
+ */
+export type WebAuthConfig = { smtpUrl: string; from: string; allowlist: string[]; allowlistFile?: string; admins?: string[];
+  signup?: WebSignupMode; termsVersion?: string };
+export type WebSignupMode = 'allowlist' | 'open';
 /** Where an address is admitted from: only `file` entries can be removed in the workbench. */
 export type WebAllowlistEntry = { email: string; source: 'admin' | 'config' | 'file' };
 /**
@@ -13,7 +19,9 @@ export type WebAllowlistEntry = { email: string; source: 'admin' | 'config' | 'f
  * acceptance; scripts/web-funnel.ts reports them only as totals, and they go with the account when it is deleted.
  * `completionEmail: false` turns off the mail sent when a run ends; absent means on.
  */
-export type WebAccount = { id: string; email: string; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; completionEmail?: boolean };
+export type WebAccount = { id: string; email: string; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; completionEmail?: boolean;
+  /** When this account accepted the terms, and which version; an open signup records it before the account exists. */
+  termsAt?: string; termsVersion?: string };
 export type WebMilestone = 'firstRunAt' | 'firstAcceptedAt';
 export type WebMailer = (message: { to: string; subject: string; text: string }) => Promise<void>;
 export class WebAuthError extends Error {
@@ -92,9 +100,16 @@ export class WebAuth {
   allowlist(): Set<string> {
     return new Set([...this.admins(), ...this.config.allowlist, ...this.fileEntries()]);
   }
-  allowed(email: string): boolean { return this.allowlist().has(email); }
+  /** True when this address may sign in: an open signup takes any address, otherwise only the allowlist does. */
+  allowed(email: string): boolean {
+    return this.config.signup === 'open' || this.allowlist().has(email);
+  }
   admins(): Set<string> { return new Set(this.config.admins ?? []); }
   isAdmin(email: string): boolean { return this.admins().has(email); }
+  /** `open` when anyone may register; the login page says so. */
+  signup(): WebSignupMode { return this.config.signup ?? 'allowlist'; }
+  /** The terms version a new account accepts; absent when the service does not ask. */
+  get termsVersion(): string | undefined { return this.config.termsVersion; }
   private fileLines(): string[] {
     const file = this.config.allowlistFile;
     const lines = file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : [];
@@ -167,7 +182,8 @@ export class WebAuth {
     return { email, expiresInSeconds: codeTtlMs / 1000, resendAfterSeconds: resendAfterMs / 1000 };
   }
 
-  verifyCode(body: { email?: unknown; code?: unknown }): WebAccount {
+  /** `terms` is the signup form's checkbox; an open signup requires it before the account exists. */
+  verifyCode(body: { email?: unknown; code?: unknown; terms?: unknown }): WebAccount {
     const email = normalizeEmail(body.email), pending = this.codes.get(email);
     if (!pending || pending.expiresAt <= Date.now()) throw new WebAuthError(400, '验证码已过期，请重新获取。');
     const code = String(body.code ?? '').trim();
@@ -178,14 +194,24 @@ export class WebAuth {
     this.codes.delete(email);
     // Removing an address from the allowlist also blocks its next login.
     if (!this.allowed(email)) throw new WebAuthError(403, '这个邮箱还没有内测资格。请先申请内测，通过后再登录。');
-    return this.account(email);
+    // The terms are accepted before the account is created, so no account exists without a record of consent.
+    const terms = this.config.termsVersion;
+    if (terms && body.terms !== true) throw new WebAuthError(400, '请先阅读并同意使用条款与隐私说明。');
+    return this.account(email, terms && body.terms === true ? terms : undefined);
   }
 
   private accountPath(email: string) { return ['accounts', `${crypto.createHash('sha256').update(email).digest('hex')}.json`]; }
-  private account(email: string): WebAccount {
+  private account(email: string, termsVersion?: string): WebAccount {
     const existing = this.storage.getRecord<WebAccount>(this.accountPath(email));
-    if (existing) return existing;
-    const account = { id: crypto.randomUUID(), email, createdAt: new Date().toISOString() };
+    // An account that signed in before the terms existed records them at its next code login.
+    if (existing) {
+      if (!termsVersion || existing.termsVersion === termsVersion) return existing;
+      const updated = { ...existing, termsAt: new Date().toISOString(), termsVersion };
+      this.storage.saveRecord(this.accountPath(email), updated);
+      return updated;
+    }
+    const account = { id: crypto.randomUUID(), email, createdAt: new Date().toISOString(),
+      ...(termsVersion ? { termsAt: new Date().toISOString(), termsVersion } : {}) };
     this.storage.saveRecord(this.accountPath(email), account);
     return account;
   }

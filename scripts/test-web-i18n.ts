@@ -263,7 +263,7 @@ try {
   await Promise.all([page.waitForEvent('load'), page.locator('#locale-switch').click()]);
   await page.locator('#send-code:enabled').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');
-  assert.match(await page.locator('body').innerText(), /内测资格/u);
+  assert.match(await page.locator('body').innerText(), /内测期间仅限/u);
   assert.deepEqual(errors, []);
   mark('the login page follows the browser language, fits 320px, and switches to Chinese');
 } finally {

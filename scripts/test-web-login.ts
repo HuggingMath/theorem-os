@@ -45,14 +45,19 @@ try {
     `A signed-out first visit loads the workbench: ${firstVisit.join(' ')}`);
   assert.equal(firstVisit.filter(pathname => pathname === '/api/session').length, 1, 'A signed-out first visit asks for its session once');
   assert.ok(await page.locator('#captcha-image').evaluate((image: HTMLImageElement) => image.decode().then(() => image.naturalWidth > 0)));
-  // The usage guide is a page of this service and needs no account; the other footer links go to the site.
+  // The guide, the terms and the privacy notice are pages of this service and need no account; feedback goes to the site.
   const guide = await page.locator('.login-footer a[data-guide]').evaluate(link => (link as HTMLAnchorElement).href);
   assert.equal(guide, `${origin}/guide.html`);
   const guidePage = await page.request.get(guide);
   assert.equal(guidePage.status(), 200);
   assert.match(await guidePage.text(), /<h1>使用说明<\/h1>/u);
-  const footer = await page.locator('.login-footer a:not([data-guide])').evaluateAll(links => links.map(link => (link as HTMLAnchorElement).href));
-  assert.equal(footer.length, 3);
+  const legal = await page.locator('.login-footer a:not([data-guide]):not([data-feedback])').evaluateAll(links => links.map(link => (link as HTMLAnchorElement).href));
+  assert.deepEqual(legal, [`${origin}/terms.html`, `${origin}/privacy.html`]);
+  const termsPage = await page.request.get(legal[0]);
+  assert.equal(termsPage.status(), 200);
+  assert.match(await termsPage.text(), /<h1>使用条款<\/h1>/u);
+  const footer = await page.locator('.login-footer a[data-feedback]').evaluateAll(links => links.map(link => (link as HTMLAnchorElement).href));
+  assert.equal(footer.length, 1);
   assert.ok(footer.every(href => href.startsWith('https://theoremos.top/')), `Login footer links leave the site: ${footer}`);
   assert.ok(footer.some(href => href.includes('feedback.html?') && href.includes('area=workbench')), 'Login footer lacks the prefilled feedback link');
   assert.deepEqual(await audit(page), [], 'Login page accessibility');
