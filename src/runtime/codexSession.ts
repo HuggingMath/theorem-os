@@ -412,6 +412,18 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         });
     });
   };
+  const notify: NonNullable<MathAgentSession['notify']> = async (message, notifyOptions) => {
+    if (!activeTurn || turnSettled || turnStopping || closing) {
+      if (notifyOptions?.waitForRequest === false) throw new Error('math_codex_notification_turn_settled');
+      return;
+    }
+    if (notifyOptions?.waitForRequest === false && (activeRequests.size || notificationFence))
+      throw new Error('math_codex_notification_request_active');
+    return new Promise<void>((resolve, reject) => {
+      notices.add({ turnId: activeTurn!, turn: requestTurn, message, resolve, reject });
+      flushNotifications();
+    });
+  };
   requestStateChanged = () => { drainSubmittedRequests?.(); flushNotifications(); };
   let lastStreamActivityAt = 0;
   const outputTails = new Map<string, string>();
@@ -577,7 +589,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
                 options.completedOutput!.validate(value);
               } catch (error) {
                 const feedback = options.completedOutput!.validationFeedback;
-                if (!feedback || turnSettled || earlyCompletions.has(turnId) || validationFeedbackPending) return;
+                if (!feedback || turnSettled || turnStopping || earlyCompletions.has(turnId) || validationFeedbackPending) return;
                 const outputDigest = mathDigest(outputText);
                 if (reportedInvalidOutputs.has(outputDigest)) return;
                 reportedInvalidOutputs.add(outputDigest);
@@ -588,10 +600,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
                   return;
                 }
                 validationFeedbackPending = true;
-                // A turn may finish before the steer is handled. Its failure must not
-                // affect a later run or leave an unhandled rejection behind.
-                void rpc.request('turn/steer', { threadId, expectedTurnId: turnId,
-                  input: [{ type: 'text', text: message, text_elements: [] }] })
+                // Repair feedback shares the paid-request settlement boundary with other
+                // notices. A turn may finish before delivery; don't affect a later run.
+                void notify(message)
                   .catch(() => {}).finally(() => { validationFeedbackPending = false; });
                 return;
               }
@@ -649,18 +660,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         turnStopping = true; cancelNotifications();
         if (activeTurn) await rpc.request('turn/interrupt', { threadId, turnId: activeTurn });
       },
-      notify: async (message, notifyOptions) => {
-        if (!activeTurn || turnSettled || turnStopping || closing) {
-          if (notifyOptions?.waitForRequest === false) throw new Error('math_codex_notification_turn_settled');
-          return;
-        }
-        if (notifyOptions?.waitForRequest === false && (activeRequests.size || notificationFence))
-          throw new Error('math_codex_notification_request_active');
-        return new Promise<void>((resolve, reject) => {
-          notices.add({ turnId: activeTurn!, turn: requestTurn, message, resolve, reject });
-          flushNotifications();
-        });
-      },
+      notify,
       close: closeSession,
       stopForFreeze: async () => {
         // An interrupt RPC acknowledgement does not settle the active turn.

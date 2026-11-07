@@ -111,9 +111,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   if (call.method === 'turn/interrupt') {
     if (process.env.THEOREM_OS_FIXTURE_INTERRUPT_EXIT === '1') return process.exit(28);
-    send({ method: 'turn/completed', params: { threadId: settings.threadId || 'thread-fixture', turn: {
-      ...turn, status: process.env.THEOREM_OS_FIXTURE_INTERRUPT_STATUS || 'interrupted' } } });
-    result({});
+    const complete = () => {
+      send({ method: 'turn/completed', params: { threadId: settings.threadId || 'thread-fixture', turn: {
+        ...turn, status: process.env.THEOREM_OS_FIXTURE_INTERRUPT_STATUS || 'interrupted' } } });
+      result({});
+    };
+    // Keep the output watcher alive briefly after interruption cancels the queued feedback.
+    if (process.env.THEOREM_OS_FIXTURE_DEFER_STEER_ERROR === '1') setTimeout(complete, 150);
+    else complete();
   }
   if (call.method === 'turn/steer') {
     if (process.env.THEOREM_OS_FIXTURE_DEFER_STEER_ERROR === '1') {
@@ -677,6 +682,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     await new Promise(resolve => setTimeout(resolve, 250));
     expect(feedback).toHaveBeenCalledTimes(1);
     await session.interrupt(); expect(await first).toBe('interrupted');
+    expect(feedback).toHaveBeenCalledTimes(1);
     started = false;
     const second = session.run('wait', 'after-late-steer-turn', root, () => { started = true; });
     await expect.poll(() => started).toBe(true);

@@ -80,13 +80,16 @@ const trace = () => fs.existsSync(path.join(directory, 'trace.jsonl'))
   ? fs.readFileSync(path.join(directory, 'trace.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
 const control = (command: string) => fs.writeFileSync(path.join(directory, 'control'), command);
 
-async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: { holdAck?: boolean; turnTimeoutMs?: number; completedOutput?: boolean } = {}) {
+async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
+  holdAck?: boolean; turnTimeoutMs?: number; completedOutput?: boolean; validationFeedback?: boolean;
+} = {}) {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-notice-'));
   const profile = path.join(directory, 'profile'), executable = path.join(directory, 'fake-codex');
   const selected = provider === 'sub2api' ? SUB2API_PROVIDER : WESTLAKE_PROVIDER;
   (provider === 'sub2api' ? prepareSub2apiProfile : prepareWestlakeProfile)(profile, 'deepseek-flash', 'max');
   fs.writeFileSync(executable, '#!' + process.execPath + '\n' + appServer, { mode: 0o700 });
   streams = []; receipts = []; cancelled = []; sources = []; validatedOutputs = 0; incompleteUsage = 0;
+  const feedback = vi.fn(() => 'Repair the output contract in the same role.');
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
     const index = streams.length;
     let source!: ReadableStreamDefaultController<Uint8Array>;
@@ -116,10 +119,10 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: { ho
   session = await createCodexMathSession({ executable, profile, workspace: directory, model: 'deepseek-flash', effort: 'max',
     instructions: 'offline fixture', onUsage: () => {}, turnTimeoutMs: extra.turnTimeoutMs,
     onUsageIncomplete: () => { incompleteUsage++; },
-    ...(extra.completedOutput ? { completedOutput: { file: path.join(directory, 'OUTPUT.json'), validate: value => {
+    ...(extra.completedOutput || extra.validationFeedback ? { completedOutput: { file: path.join(directory, 'OUTPUT.json'), validate: value => {
       if ((value as { approved?: boolean }).approved !== true) throw new Error('invalid fixture output');
       validatedOutputs++;
-    } } } : {}),
+    }, ...(extra.validationFeedback ? { validationFeedback: feedback } : {}) } } : {}),
     environment: { PATH: process.env.PATH, [selected.apiKeyEnvironment]: 'offline-fixture-key',
       FIXTURE_TRACE: path.join(directory, 'trace.jsonl'), FIXTURE_CONTROL: path.join(directory, 'control'),
       ...(extra.holdAck ? { FIXTURE_HOLD_ACK: '1' } : {}) },
@@ -131,7 +134,7 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: { ho
   const running = session.run('work', 'first-turn', directory, () => {});
   void running.catch(() => {});
   await expect.poll(() => streams.length).toBe(1);
-  return { running };
+  return { running, feedback };
 }
 
 afterEach(async () => {
@@ -141,6 +144,55 @@ afterEach(async () => {
 });
 
 describe('soft notifications at real provider request boundaries', () => {
+  it.each(['sub2api', 'westlake'] as const)(
+    'defers invalid-output feedback until the %s request settles and fences the next admission', async provider => {
+      const { running, feedback } = await fixture(provider, { validationFeedback: true, holdAck: true });
+      fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: false }));
+      await expect.poll(() => feedback.mock.calls.length).toBe(1);
+      await delay(30);
+      expect(cancelled).toEqual([]); expect(receipts).toEqual([]); expect(streams[0].ended).toBe(false);
+      expect(trace().filter(item => item.event === 'steer')).toEqual([]);
+
+      streams[0].finish();
+      await expect.poll(() => trace().filter(item => item.event === 'local-request').length).toBe(2);
+      await delay(30);
+      expect(receipts).toMatchObject([{ complete: true, outcome: 'completed', usage: { totalTokens: 12 } }]);
+      expect(streams).toHaveLength(1); expect(sources).toHaveLength(1); expect(cancelled).toEqual([]);
+      expect(trace().filter(item => item.event === 'steer')).toMatchObject([{
+        expectedTurnId: 'first-turn', input: [{ text: feedback.mock.results[0].value }],
+      }]);
+
+      control('ack');
+      await expect.poll(() => streams.length).toBe(2);
+      fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
+      await expect.poll(() => validatedOutputs).toBe(1);
+      expect(cancelled).toEqual([]); expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+      streams[1].finish();
+      expect(await running).toBe('submitted');
+      expect(feedback).toHaveBeenCalledTimes(1); expect(trace().filter(item => item.event === 'steer')).toHaveLength(1);
+      expect(receipts).toMatchObject([
+        { complete: true, usage: { totalTokens: 12 } }, { complete: true, usage: { totalTokens: 12 } },
+      ]);
+      expect(sources).toEqual(Array(2).fill(provider === 'sub2api' ? 'responses-relay' : 'chat-completions-bridge'));
+      expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+    });
+
+  it('drops queued invalid-output feedback when a valid submission arrives before request settlement', async () => {
+    const { running, feedback } = await fixture('sub2api', { validationFeedback: true });
+    fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: false }));
+    await expect.poll(() => feedback.mock.calls.length).toBe(1);
+    expect(trace().filter(item => item.event === 'steer')).toEqual([]);
+    fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
+    await expect.poll(() => validatedOutputs).toBe(1);
+    expect(cancelled).toEqual([]); expect(receipts).toEqual([]);
+    expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+    streams[0].finish();
+    expect(await running).toBe('submitted');
+    expect(receipts).toMatchObject([{ complete: true, outcome: 'completed', usage: { totalTokens: 12 } }]);
+    expect(trace().filter(item => item.event === 'steer')).toEqual([]);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
   it.each(['sub2api', 'westlake'] as const)('settles paid %s requests before interrupting a valid file submission and closes later admission', async provider => {
     const { running } = await fixture(provider, { completedOutput: true });
     fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
