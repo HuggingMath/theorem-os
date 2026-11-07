@@ -13,6 +13,10 @@ import { leadWorker, localExample, peerWorker, solverState } from './helpers/sol
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+const requestReceipt = (totalTokens: number, complete = true) => ({ requestId: expect.any(String),
+  runId: 'research-usage-integration', sessionId: expect.any(String), taskId: undefined,
+  startedAt: expect.any(Number), settledAt: expect.any(Number), outcome: 'unknown', status: complete ? 'reported' : 'missing',
+  usage: { totalTokens, inputTokens: totalTokens - 2, outputTokens: 2 }, ...(complete ? {} : { missingReason: 'unknown' }) });
 function fixture(cooperative = false) {
   const example = localExample('research-usage-', 'lead'), { directory, workspace, problem } = example; roots.push(directory);
   const workers = [leadWorker(problem, workspace), ...cooperative ? [peerWorker(example, 'peer')] : []];
@@ -143,14 +147,17 @@ describe('research usage at the real research worker boundary', () => {
     await expect(run(modules(open), 2)).resolves.toBeUndefined();
     expect(open).toHaveBeenCalledTimes(2);
     expect(state.usage!.totalTokens).toBe(13);
-    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false });
+    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false,
+      receipts: [requestReceipt(10), requestReceipt(3)] });
+    expect(new Set(state.requestUsageAccounting!.receipts!.map(receipt => receipt.requestId)).size).toBe(2);
+    expect(new Set(state.requestUsageAccounting!.receipts!.map(receipt => receipt.sessionId)).size).toBe(2);
     expect(state.usageAccounting).toEqual({ startedTurns: 2, reportedTurns: 2, pending: false, incomplete: false });
     expect(state.error).toBeUndefined();
   });
 
   it.each([{ timing: 'closing', complete: true }, { timing: 'replacement', complete: true },
     { timing: 'replacement', complete: false }])
-  ('retains late request consumption during $timing (complete: $complete) without restoring missing coverage', async ({ timing, complete }) => {
+  ('settles the original request during $timing (complete: $complete) without charging the replacement turn', async ({ timing, complete }) => {
     const { state, run, modules } = fixture(); let sessions = 0;
     let lateRequest = () => {};
     const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
@@ -177,9 +184,13 @@ describe('research usage at the real research worker boundary', () => {
     await expect(run(modules(open), 2)).resolves.toBeUndefined();
     expect(open).toHaveBeenCalledTimes(2);
     expect(state.usage!.totalTokens).toBe(13);
-    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: complete ? 2 : 1, pendingRequests: 0, incomplete: true });
-    expect(state.usageAccounting).toEqual({ startedTurns: 2, reportedTurns: complete ? 1 : 0, pending: false, incomplete: true });
-    expect(state.tokenBudget).toMatchObject({ status: 'unlimited', reportedTotalTokens: 13, usageComplete: false });
+    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: complete ? 2 : 1,
+      pendingRequests: 0, incomplete: !complete, receipts: [requestReceipt(10, complete), requestReceipt(3)] });
+    expect(new Set(state.requestUsageAccounting!.receipts!.map(receipt => receipt.requestId)).size).toBe(2);
+    expect(new Set(state.requestUsageAccounting!.receipts!.map(receipt => receipt.sessionId)).size).toBe(2);
+    // The first turn finished with a pending request, but its late receipt cannot mark the next turn incomplete.
+    expect(state.usageAccounting).toEqual({ startedTurns: 2, reportedTurns: 1, pending: false, incomplete: true });
+    expect(state.tokenBudget).toMatchObject({ status: 'unlimited', reportedTotalTokens: 13, usageComplete: complete });
   });
 
   it('saves an interrupted cooperative assignment as an advisory draft without checking it', async () => {

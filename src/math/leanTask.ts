@@ -12,9 +12,9 @@ import { mathConstructionImports } from './mathConstructionSources';
 import { mathGitBytes, mathGitText } from './mathGit';
 import { assertMathCanonicalPath } from './paths';
 
-export const LEAN_TASK_SOURCE_MAX_BYTES = 1024 * 1024;
+export const LEAN_TASK_SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 /** Declarations, and so definition targets, per statement. */
-export const LEAN_TASK_DECLARATIONS_MAX = 1024;
+export const LEAN_TASK_DECLARATIONS_MAX = 2048;
 export const LEAN_TASK_DESCRIPTION_MAX_LENGTH = 8_000;
 const projectRelative = 'generated/problem';
 const schema = 'theorem-os.lean-task.v1' as const;
@@ -23,7 +23,8 @@ const hash = z.string().regex(/^[0-9a-f]{64}$/u);
 const inputSchema = z.object({
   source: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
   task: z.string().trim().min(1).max(LEAN_TASK_DESCRIPTION_MAX_LENGTH),
-  environment: z.enum(['standard', 'mathlib', 'mathlib-4.8', 'openai-math']).optional(),
+  environment: z.enum(['standard', 'mathlib', 'mathlib-4.8', 'openai-math',
+    'openai-math-cartier-reviewed-v1', 'openai-math-character-reviewed-v1']).optional(),
   definitionTargets: z.array(z.string().min(1)).max(LEAN_TASK_DECLARATIONS_MAX).optional(),
   libraryPack: z.unknown().optional(),
 }).strict();

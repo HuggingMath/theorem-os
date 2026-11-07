@@ -14,8 +14,12 @@ import { knowledgeUseSchema } from './knowledgeUsage';
 import { z } from 'zod';
 import { deliveryReceiptSchema } from './deliveryReceipts';
 import { proofReadyRecordSchema } from './proofReady';
+import type { VerificationCheckpoint } from './verificationCheckpoint';
 import { proofImportRecordSchema } from './proofImportRecord';
+import { proofSearchCheckpointReferenceSchema, proofSearchRecordSchema } from './proofSearchRecords';
 import { researchBasisSchema, researchRecordSchema } from './researchRecords';
+import { nextCheckRecordSchema } from './nextCheckContract';
+import { goalProgressStateSchema } from './goalProgress';
 
 /** A recorded dispatch observation, never a permission to dispatch or accept a proof. */
 export type DispatchWaitObservation = {
@@ -100,6 +104,7 @@ export type SolverRunState = {
   dispatchCounts?: Partial<Record<'planning' | 'research' | 'proof' | 'review', number>>;
   solveStartedAt?: number;
   solveFinishedAt?: number;
+  verificationCheckpoints?: VerificationCheckpoint[];
   usage?: Record<string, unknown>;
   usageBeforeThread?: Record<string, unknown>;
   usageAccounting?: UsageAccounting;
@@ -139,7 +144,19 @@ const knowledgeDiagnostic = z.object({ authority: z.literal('advisory-lean-proce
 const usageAccounting = z.object({ startedTurns: safeCount, reportedTurns: safeCount,
   pending: z.boolean(), incomplete: z.boolean() }).refine(value => value.reportedTurns <= value.startedTurns);
 const requestUsageAccounting = z.object({ startedRequests: safeCount, reportedRequests: safeCount,
-  pendingRequests: safeCount, incomplete: z.boolean() }).refine(value =>
+  pendingRequests: safeCount, incomplete: z.boolean(), nativeUsageObserved: z.boolean().optional(),
+  receipts: z.array(z.object({ requestId: z.string().min(1),
+    source: z.enum(['chat-completions-bridge', 'responses-relay']).optional(),
+    runId: z.string().optional(), sessionId: z.string().optional(), taskId: z.string().optional(),
+    startedAt: safeCount, settledAt: safeCount.optional(), status: z.enum(['pending', 'reported', 'missing']),
+    outcome: z.enum(['completed', 'failed', 'cancelled', 'interrupted', 'unknown']).optional(),
+    missingReason: z.enum(['provider-usage-missing', 'provider-usage-invalid', 'upstream-http-error',
+      'upstream-transport-error', 'request-cancelled', 'response-not-terminal', 'resumed-without-receipt', 'unknown']).optional(),
+    providerRequestId: z.string().optional(),
+    usage: z.object({ inputTokens: safeCount, outputTokens: safeCount, totalTokens: safeCount,
+      cachedInputTokens: safeCount.optional(), reasoningOutputTokens: safeCount.optional() }).optional(),
+  })).optional(),
+}).refine(value =>
     value.reportedRequests <= value.startedRequests && value.pendingRequests <= value.startedRequests - value.reportedRequests);
 const tokenBudget = z.object({ maxTotalTokens: safeCount,
   enforcement: z.enum(['provider-observed-dispatch-limit', 'provider-observed-upstream-request-limit']),
@@ -195,6 +212,7 @@ const connectionCheck = z.object({ schema: z.literal('theorem-os.consumer-connec
   routeId: z.string().optional(), routesDigest: z.string().min(1), problemReceiptDigest: z.string().min(1),
   environmentDigest: z.string().min(1), basisDigest: z.string().min(1) }).strict();
 const taskRecord = z.object({ task, status: z.enum(['pending', 'running', 'blocked', 'conditional', 'delivered', 'integrated', 'completed']),
+  nextCheckId: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   capacityExploration: z.object({ schema: z.literal('theorem-os.capacity-exploration.v1'),
     targetTaskId: z.string(), targetTaskDigest: z.string().regex(/^[a-f0-9]{64}$/u),
     inputDigest: z.string().regex(/^[a-f0-9]{64}$/u), focus: z.enum(['construction', 'interface', 'decomposition', 'boundary']),
@@ -270,6 +288,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   providerProfile: z.string().optional(), providerProfileDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   model: z.string(), effort: z.string(), workerCount: z.number().int().positive().optional(),
   taskUsage: z.record(z.record(safeCount)).optional(),
+  verificationCheckpoints: z.array(z.object({ key: z.string().regex(/^[a-f0-9]{64}$/u), timeoutMs: safeCount,
+    attempts: safeCount, at: safeCount, targetCommit: z.string(), receiptIds: z.array(z.string()) }).strict()).max(32).optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   knowledgeRetrievals: z.object({ dropped: safeCount, observations: z.array(z.object({
     sectionId: z.string(), catalogDigest: z.string(), searchInputDigest: z.string(),
@@ -297,10 +317,13 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     status: z.enum(['active', 'paused', 'stopped']), revision: count }).passthrough(), turns: count }).passthrough()).optional(),
     history: z.array(z.object({ task, proof: check.optional(), integratedCheck: check.optional(),
       researchCompletion: researchRecordSchema.optional() }).passthrough()).optional(),
-    deliveries: z.array(z.object({ researchRecord: researchRecordSchema.optional() }).passthrough()).optional(),
+    deliveries: z.array(z.object({ researchRecord: researchRecordSchema.optional(),
+      searchCheckpoint: proofSearchCheckpointReferenceSchema.optional() }).passthrough()).optional(),
+    nextChecks: z.array(nextCheckRecordSchema).optional(),
     deliveryReceipts: z.array(deliveryReceiptSchema).optional(), blockers: z.array(routeBlocker).optional(),
     proofReadyRecords: z.array(proofReadyRecordSchema).optional(),
     proofImports: z.array(proofImportRecordSchema).optional(),
+    proofSearchRecords: z.record(proofSearchRecordSchema).optional(),
     initialPlanPublication: planPublication.optional(), planPublication: planPublication.optional(),
     lastLeadPauseInputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
     planApproval: z.object({ requestedAt: safeCount.optional(), requestedVersion: z.string().optional(),
@@ -314,14 +337,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
       goalIds: z.array(z.string()), taskIds: z.array(z.string()).max(16), answeredAt: safeCount.optional(),
       unanswered: safeCount.optional(), ignoredAt: safeCount.optional(),
       declined: z.array(z.object({ taskId: z.string(), reason: z.string().min(1).max(500), at: safeCount }).strict()).max(16).optional() }).optional(),
-    goalProgress: z.object({ schema: z.literal('theoremos.goal-progress.v1'), problemReceiptDigest: z.string(), sequence: safeCount,
-      goals: z.array(z.object({ key: z.string(), proofPath: z.string(), theoremName: z.string(), taskId: z.string().optional(),
-        activeMs: safeCount, observedAt: safeCount, active: z.boolean(), seenEvidence: z.array(z.string()),
-        lastProgressAt: safeCount.optional(), closed: z.boolean() })),
-      pending: z.object({ id: z.string(), at: safeCount, goalKeys: z.array(z.string()), goalIds: z.array(z.string()),
-        retryAt: safeCount.optional() }).optional(),
-      decisions: z.array(z.object({ id: z.string(), at: safeCount, reason: z.string().min(1).max(2000),
-        goalKeys: z.array(z.string()) })).max(16).optional() }).optional(),
+    goalProgress: goalProgressStateSchema.optional(),
     leadWakes: z.object({ requested: safeCount, consumed: safeCount, settled: safeCount,
       recent: z.array(z.object({ seq: safeCount, reason: z.string(), at: safeCount })).max(64).optional() }).optional(),
     invalidTaskTransitions: z.array(z.object({ taskId: z.string(), from: z.string(), to: z.string(), cause: z.string(),

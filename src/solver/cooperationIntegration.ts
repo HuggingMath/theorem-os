@@ -194,10 +194,25 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
     const checked = new Set<string>();
     const batched = new Map<TaskRecord, { proof: TaskProof; source: string; retainedGoals: string }>();
     const batchAttempted = new Set<TaskRecord>();
+    // Phase-local receipts bind the fixed canonical, environment and task version.
+    // Restored integrated labels cannot authorize original-goal context.
+    const freshGoals = new Map<string, string>();
+    const retryable = new Map<TaskRecord, readonly string[]>();
+    const retried = new Set<TaskRecord>();
+    const availableGoals = (node: TaskRecord) => tasks.filter(item => item.task.kind === 'goal' &&
+      item.task.id !== node.task.id && item.status === 'integrated' &&
+      freshGoals.get(item.task.id) === digest(item.task));
+    const extraGoals = (node: TaskRecord) => availableGoals(node).filter(item => retried.has(node) ||
+      this.sourceGoalInputs(node.task, tasks, this.lead.worktree, canonical)
+        .some(input => input.task.id === item.task.id)).map(item => item.task.theoremName!);
     const request = (node: TaskRecord) => ({ task: node.task,
       assignment: { taskId: node.task.id, taskDigest: digest(node.task), workerId: this.lead.id, seedCommit: canonical },
-      retainedGoals: this.dependencies(node.task, tasks).filter(item => item.task.kind === 'goal' && item.status === 'integrated')
-        .map(item => item.task.theoremName!) });
+      retainedGoals: [...new Set([...this.retainedTaskGoals(node.task, tasks, this.lead.worktree, canonical), ...extraGoals(node)])] });
+    const prerequisites = new Map(pending.map(node => [node.task.id, [...new Set([
+      ...this.dependencies(node.task, tasks).map(item => item.task.id),
+      ...this.sourceGoalInputs(node.task, tasks, this.lead.worktree, canonical).map(item => item.task.id) ])]]));
+    const ready = (node: TaskRecord) => prerequisites.get(node.task.id)!.every(id => !selected.has(id) ||
+      tasks.find(item => item.task.id === id)?.status !== 'integrated' || checked.has(id));
     let projector: ReturnType<typeof createTaskSourceProjector> | undefined;
     const projections = new Map<string, string | Error>();
     const projection = (node: TaskRecord) => {
@@ -246,14 +261,28 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
     };
     await persistProgress();
     const finish = async (node: TaskRecord) => {
-      checked.add(node.task.id); progress.completed++; progress.taskId = undefined;
+      if (!checked.has(node.task.id)) { checked.add(node.task.id); progress.completed++; }
+      progress.taskId = undefined;
+      if (node.status === 'integrated' && node.task.kind === 'goal' && node.integratedCheck?.passed &&
+          !node.integratedCheck.conditions?.length && this.checkedDeliveries.has(node.integratedCheck) &&
+          hasTaskAcceptance(node.integratedCheck)) freshGoals.set(node.task.id, digest(node.task));
       this.input.emit('task_recheck_finished', { ...progress, taskId: node.task.id, passed: node.status === 'integrated', ...(snapshot ? { staged: true } : {}) });
       await persistProgress();
     };
-    while (pending.length) {
+    while (pending.length || retryable.size) {
       this.input.signal.throwIfAborted();
       if (snapshot && !snapshot.current()) return false;
-      const index = pending.findIndex(node => node.task.dependsOn.every(id => !selected.has(id) || tasks.find(item => item.task.id === id)?.status !== 'integrated' || checked.has(id)));
+      if (!pending.length) {
+        for (const [node, previousGoals] of retryable) {
+          retryable.delete(node);
+          if (retried.has(node) || !availableGoals(node).some(item => !previousGoals.includes(item.task.theoremName!))) continue;
+          retried.add(node); pending.push(node);
+          this.input.emit('task_recheck_context_retry', { taskId: node.task.id, canonicalCommit: canonical,
+            retainedGoals: request(node).retainedGoals, ...(snapshot ? { staged: true } : {}) });
+        }
+        if (!pending.length) break;
+      }
+      const index = pending.findIndex(ready);
       if (index < 0) throw new Error('math_plan_dependency_cycle');
       const [node] = pending.splice(index, 1);
       progress.taskId = node.task.id;
@@ -269,7 +298,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         if (!batchAttempted.has(node) && (this.input.modules.M2.checkTask ?? checkTaskProof) === checkTaskProof) {
           const source = projection(node);
           const group = [node, ...pending.filter(item => {
-            if (batchAttempted.has(item)) return false;
+            if (batchAttempted.has(item) || !ready(item)) return false;
             try { return !reusable(item) && projection(item) === source; } catch { return false; }
           })].slice(0, 32);
           if (group.length > 1) {
@@ -288,7 +317,9 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
               group.forEach((item, index) => {
                 const proof = proofs[index];
                 if (!proof) throw new Error('math_verifier_unavailable');
-                batched.set(item, { proof, source, retainedGoals: canonicalMathJson(requests[index].retainedGoals) });
+                // A failed shared compilation cannot identify a bad member. Leave
+                // failed views to the ordinary single-target compact/full check.
+                if (proof.passed) batched.set(item, { proof, source, retainedGoals: canonicalMathJson(requests[index].retainedGoals) });
               });
             } catch (error) {
               this.input.signal.throwIfAborted();
@@ -303,16 +334,20 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         const prepared = batched.get(node);
         const checkedProof = prepared && prepared.source === projection(node) &&
           prepared.retainedGoals === canonicalMathJson(request(node).retainedGoals) ? prepared.proof : undefined;
+        const beforeGoals = request(node).retainedGoals;
         const receipt = await this.check(node.task, assignment, this.lead.worktree, canonical, [], checkedProof, false, false, tasks,
-          snapshot && { environment: snapshot.environment, digest: snapshot.environmentDigest });
+          snapshot && { environment: snapshot.environment, digest: snapshot.environmentDigest }, extraGoals(node));
         this.input.signal.throwIfAborted();
         if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw new Error('math_verifier_unavailable');
         if (snapshot && !snapshot.current()) return false;
         node.integratedCheck = receipt;
+        if (!receipt.passed && !retried.has(node) && !receipt.conditions?.length &&
+            hasDeterministicLeanFailure(receipt.verification)) retryable.set(node, beforeGoals);
         if (!receipt.passed) { this.moveTask(node, 'blocked', 'invalidated'); node.feedback = solverProofFeedback(receipt); if (!snapshot) this.wakeLead('integration-blocked'); }
-        else if (!taskDependenciesReady(node.task, tasks)) {
-          this.moveTask(node, 'blocked', 'invalidated'); node.feedback = 'math_task_dependency_invalidated'; if (!snapshot) this.wakeLead('integration-blocked');
-        }
+        // A kernel-checked original can supply concrete source context even when
+        // an earlier helper projection failed. Settle graph readiness after the
+        // bounded recovery pass, before this snapshot can be published.
+        else { this.moveTask(node, 'integrated', 'integrated'); node.feedback = undefined; }
       } catch (error) {
         this.input.signal.throwIfAborted();
         const rejected = expectedRejection(error, integrationRejections);
@@ -384,7 +419,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       routesDigest: canonicalMathJson({ alternatives: node.alternativeRoutes ?? [], routes: this.archive.proofRoutes ?? [] }), tasks,
       dependencies: dependencies.map(item => ({ id: item.task.id, taskDigest: digest(item.task), status: item.status,
         proof: item.proof, integratedCheck: item.integratedCheck })),
-      retainedGoals: dependencies.filter(item => item.task.kind === 'goal' && item.status === 'integrated').map(item => item.task.theoremName!) };
+      retainedGoals: this.retainedTaskGoals(node.task, tasks, this.lead.worktree, this.archive.canonicalCommit!) };
   }
   private integrationTaskCurrent(snapshot: NonNullable<ReturnType<CooperationIntegration['integrationSnapshot']>>) {
     const { node } = snapshot;
@@ -516,11 +551,11 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         await withSolverWorktree(this.lead.worktree, snapshot.canonical, async checkout => {
           const checker = this.input.modules.M2.checkTask ?? checkTaskProof;
           const environment = this.input.access.get(this.lead.id)!.environment;
-          const check = async (commit: string, assignment: TaskAssignment, conditions: readonly CooperativeTask[]) => {
-            const raw = await checker(problem, checkout, commit, snapshot.task, assignment, snapshot.retainedGoals,
+          const check = async (commit: string, assignment: TaskAssignment, conditions: readonly CooperativeTask[], checkedWorktree = checkout) => {
+            const raw = await checker(problem, checkedWorktree, commit, snapshot.task, assignment, snapshot.retainedGoals,
               environment, this.input.signal, this.input.timeoutMs, conditions, snapshot.environmentDigest,
               ...(checker === checkTaskProof ? [this.taskProofCache] : []));
-            return this.check(snapshot.task, assignment, checkout, commit, conditions, raw, false, false, snapshot.tasks);
+            return this.check(snapshot.task, assignment, checkedWorktree, commit, conditions, raw, false, false, snapshot.tasks);
           };
           // Restored JSON needs fresh delivery evidence before its changes can enter a merge.
           if (!this.checkedDeliveries.has(submitted)) {
@@ -541,7 +576,28 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
                 digest(input.task) !== condition.taskDigest) throw new Error('math_task_condition_version_invalid');
             return input.task;
           });
-          applyTaskChanges(problem, checkout, submitted.changes, submitted.imports, resolvedConditions);
+          try {
+            applyTaskChanges(problem, checkout, submitted.changes, submitted.imports, resolvedConditions, submitted);
+          } catch (conflict) {
+            if (!(conflict instanceof Error) || rejectionCode(conflict) !== 'math_task_integration_conflict') throw conflict;
+            // A peer may already have proved this exact task with a different body. Preserve
+            // its sources and check the untouched canonical, without the delivery's assumptions.
+            let existing: TaskProof;
+            try {
+              existing = await withSolverWorktree(this.lead.worktree, snapshot.canonical, canonicalCheckout =>
+                check(snapshot.canonical, { taskId: snapshot.task.id, taskDigest: snapshot.taskDigest,
+                  workerId: this.lead.id, seedCommit: snapshot.canonical }, [], canonicalCheckout));
+            } catch (error) {
+              this.input.signal.throwIfAborted();
+              expectedRejection(error, integrationRejections);
+              throw conflict;
+            }
+            this.input.signal.throwIfAborted();
+            if (['unavailable', 'blocked'].includes(existing.verification.status)) throw new Error('math_verifier_unavailable');
+            if (!existing.passed) throw conflict;
+            receipt = existing; merged = snapshot.canonical;
+            return;
+          }
           merged = commitSolverSources(problem, checkout);
           receipt = await check(merged, { taskId: snapshot.task.id, taskDigest: snapshot.taskDigest,
             workerId: this.lead.id, seedCommit: merged }, []);

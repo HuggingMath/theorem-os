@@ -127,7 +127,9 @@ describe('goal progress controls the cooperative planning loop', () => {
       upsert: [{ id: 'goal_1', dependsOn: ['estimate'] }, { id: 'estimate', kind: 'lemma',
         objective: 'Prove the estimate consumed by the original goal.', proofPath: 'Submission.lean',
         theoremName: 'Tutorial.progress_estimate', type: '1 = 1', dependsOn: [], ownerId: 'prover' }],
-      progressReview: { id: pending.id, reason: 'The original proof has no checked intermediate fact; prove this estimate next.' },
+      progressReview: { id: pending.id, reason: 'The original proof has no checked intermediate fact; prove this estimate next.',
+        nextChecks: [{ action: 'construction-check', targetTaskId: 'estimate', objective: 'Prove the exact estimate.',
+          expectedEvidence: 'A kernel-checked estimate available to the original goal.' }] },
     }) + '\n');
     await cooperation.pulse(workers[0].id);
     await cooperation.deliver(workers[0], action, commitSolverSources(run.problem, workers[0].worktree));
@@ -150,7 +152,9 @@ describe('goal progress controls the cooperative planning loop', () => {
         ? [{ id: 'goal_1', theoremName: 'Tutorial.changed_original' }] : [],
       ...(kind === 'missing-answer' || kind === 'checkpoint' ? {} : {
         progressReview: { id: kind === 'wrong-review-id' ? 'unpresented-review' : pending.id,
-          reason: 'This response must only settle the exact presented valid decision.' },
+          reason: 'This response must only settle the exact presented valid decision.',
+          nextChecks: [{ action: 'construction-check', targetTaskId: 'goal_1', objective: 'Check the original goal proof.',
+            expectedEvidence: 'A checked proof or an exact residual goal.' }] },
       }) };
       const commit = kind === 'checkpoint' ? action.seedCommit : run.commitPlan(patch);
       await run.cooperation.deliver(run.workers[0], action, commit, kind === 'checkpoint', 'scheduling-checkpoint');

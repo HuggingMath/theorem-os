@@ -8,7 +8,9 @@ import type { DeliveryArtifactManifest } from './deliveryArtifacts';
 import type { CooperativeTask } from './tasks';
 import type { KnowledgeUse } from './knowledgeUsage';
 import type { ResearchRecord } from './researchRecords';
+import { proofSearchCheckpointReferenceSchema, type ProofSearchCheckpointReference } from './proofSearchRecords';
 import { mathematicalGapSchema, type MathematicalGap, type MathematicalGapScope } from './mathematicalGaps';
+import { checkOutcomeSchema, type CheckOutcome, type NextCheckScope } from './nextCheckContract';
 import { researchSourceUseSchema, type ResearchSourceUse } from './researchReferences';
 
 // Long-lived task graphs can exceed a short prompt's display allowance. Keep the
@@ -123,10 +125,14 @@ export type DeliveryRecord = {
   knowledgeUses?: readonly KnowledgeUse[];
   mathematicalGap?: MathematicalGap;
   mathematicalGapScope?: MathematicalGapScope;
+  checkOutcome?: CheckOutcome;
+  checkOutcomeScope?: NextCheckScope;
   evidence?: { passed: boolean; verification: Pick<ProofCheck['verification'], 'status' | 'targetCommit'> & { results: { receiptId: string }[] } };
   actualReferences?: ProofReferences;
   artifacts?: DeliveryArtifactManifest;
   artifactWarning?: string;
+  /** Host-retained advisory search history; COOPERATION exposes a task-scoped worker copy for recovery. */
+  searchCheckpoint?: ProofSearchCheckpointReference;
   lemmaRequests?: readonly CooperativeTask[];
   sourceUses?: readonly ResearchSourceUse[];
 };
@@ -138,13 +144,16 @@ export function deliveryFinding(record: DeliveryRecord, nodeFinding?: string): s
 }
 
 export function deliveryDetails(value: any): Pick<DeliveryRecord, 'summary' | 'evidenceRefs'> &
-  Partial<Pick<DeliveryRecord, 'statement' | 'premises' | 'remainingObligations' | 'mathematicalGap' | 'sourceUses'>> {
+  Partial<Pick<DeliveryRecord, 'statement' | 'premises' | 'remainingObligations' | 'mathematicalGap' | 'sourceUses' | 'checkOutcome' | 'searchCheckpoint'>> {
   const strings = (items: unknown) => Array.isArray(items) && items.every(item => typeof item === 'string');
   if (!value || (value.summary !== undefined && typeof value.summary !== 'string') ||
       (value.statement !== undefined && (typeof value.statement !== 'string' || !value.statement.trim())) ||
       (value.premises !== undefined && !strings(value.premises)) ||
       (value.remainingObligations !== undefined && !strings(value.remainingObligations)) ||
       (value.mathematicalGap !== undefined && !mathematicalGapSchema.safeParse(value.mathematicalGap).success) ||
+      (value.checkOutcome !== undefined && !checkOutcomeSchema.safeParse(value.checkOutcome).success) ||
+      (value.searchCheckpoint !== undefined && (value.kind !== 'progress' ||
+        !proofSearchCheckpointReferenceSchema.safeParse(value.searchCheckpoint).success)) ||
       (value.sourceUses !== undefined && (!Array.isArray(value.sourceUses) || value.sourceUses.length > 32 ||
         value.sourceUses.some((item: unknown) => !researchSourceUseSchema.safeParse(item).success)))) throw new Error('math_delivery_invalid');
   const summary = value.summary ?? '';
@@ -154,6 +163,8 @@ export function deliveryDetails(value: any): Pick<DeliveryRecord, 'summary' | 'e
     ...(value.premises === undefined ? {} : { premises: value.premises }),
     ...(value.remainingObligations === undefined ? {} : { remainingObligations: value.remainingObligations }),
     ...(value.mathematicalGap === undefined ? {} : { mathematicalGap: mathematicalGapSchema.parse(value.mathematicalGap) }),
+    ...(value.checkOutcome === undefined ? {} : { checkOutcome: checkOutcomeSchema.parse(value.checkOutcome) }),
+    ...(value.searchCheckpoint === undefined ? {} : { searchCheckpoint: proofSearchCheckpointReferenceSchema.parse(value.searchCheckpoint) }),
     ...(value.sourceUses === undefined ? {} : { sourceUses: value.sourceUses.map((item: unknown) => researchSourceUseSchema.parse(item)) }) };
 }
 

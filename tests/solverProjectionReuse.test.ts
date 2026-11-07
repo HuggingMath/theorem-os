@@ -9,6 +9,7 @@ import { commitSolverSources, git, type SolverProblem } from '../src/solver/prob
 import { taskVersion, type CooperativeTask, type TaskAssignment } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, solverState } from './helpers/solver';
+import { failedBatch, receiptBatch } from './helpers/verifier';
 
 const host = vi.hoisted(() => ({ verify: vi.fn() }));
 vi.mock('../src/math/verifier', async importOriginal => ({
@@ -77,6 +78,64 @@ describe('host validation of content-equivalent task projections', () => {
     expect((cooperative as any).pinned.has(reuse.projectionCommit)).toBe(true);
     expect((cooperative as any).pinned.has(reuse.checkedProjectionCommit)).toBe(true);
     expect(host.verify).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks each member independently after a restored integration batch fails', async () => {
+    const file = path.join(workspace, problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('theorem add_zero',
+      'lemma broken : True := by trivial\ntheorem add_zero'));
+    const canonical = commitSolverSources(problem, workspace);
+    const broken = { ...task, id: 'broken', theoremName: 'Tutorial.broken', objective: 'Check the broken helper' };
+    const archive = (cooperative as any).archive;
+    archive.canonicalCommit = canonical;
+    archive.tasks = [task, broken].map(task => ({ task, status: 'integrated', attempts: 1,
+      integratedCheck: { ...raw, taskDigest: taskVersion(task) } }));
+    host.verify.mockReset().mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const receipts = receiptBatch(request, { sessionId: 'restored-check', receiptId: (_, name) => `restore-${name}` });
+      return request.items.length > 1 || request.items.some(item => item.theoremName === broken.theoremName)
+        ? failedBatch(receipts, { stdoutPreview: file => `${file}:4:1: error: unsolved goals` }) : receipts;
+    });
+    await (cooperative as any).recheckIntegrated(canonical);
+    expect(host.verify.mock.calls[0][0].items).toHaveLength(2);
+    expect(host.verify.mock.calls.slice(1).every(([request]) => request.items.length === 1)).toBe(true);
+    expect(archive.tasks.map(node => [node.task.id, node.status])).toEqual([['helper', 'integrated'], ['broken', 'blocked']]);
+  });
+
+  it.each(['recover', 'still-fails', 'no-fresh-goal', 'goal-already-checked'] as const)
+  ('bounds restored recheck context recovery: %s', async mode => {
+    const archive = (cooperative as any).archive;
+    archive.canonicalCommit = sourceCommit;
+    const goal: CooperativeTask = { id: 'original-goal', kind: 'goal', objective: 'Check the original.',
+      proofPath: problem.targets[0]!.proofPath, theoremName: problem.targets[0]!.theoremName,
+      dependsOn: ['no-fresh-goal', 'goal-already-checked'].includes(mode) ? [] : [task.id], revision: 0 };
+    // Persisted receipts deliberately do not enter checkedDeliveries in this process.
+    archive.tasks = [task, ...(mode === 'no-fresh-goal' ? [] : [goal])].map(task => ({ task,
+      status: 'integrated', attempts: 1, integratedCheck: { ...raw, taskDigest: taskVersion(task) } }));
+    if (mode === 'goal-already-checked') archive.tasks.reverse();
+    const expectedStatus = ['recover', 'goal-already-checked'].includes(mode) ? 'integrated' : 'blocked';
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    const helperContexts: boolean[] = [];
+    host.verify.mockReset().mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const receipts = receiptBatch(request, { sessionId: 'context-recheck',
+        receiptId: (_, name) => 'context-' + request.targetCommit + '-' + name });
+      // Missing reference coverage preserves the explicit dependency contract.
+      for (const result of receipts.results) if (result.theoremName === goal.theoremName)
+        delete result.declarationReferences;
+      if (!request.items.some(item => item.theoremName === task.theoremName)) return receipts;
+      const source = fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8');
+      const retained = source.includes('theorem add_zero'); helperContexts.push(retained);
+      return ['recover', 'goal-already-checked'].includes(mode) && retained ? receipts : failedBatch(receipts,
+        { stdoutPreview: file => file + ':4:1: error: unknown identifier from omitted original context' });
+    });
+    await (cooperative as any).recheckIntegrated(sourceCommit);
+    expect(archive.tasks.find((node: any) => node.task.id === task.id).status).toBe(expectedStatus);
+    if (mode !== 'no-fresh-goal') expect(archive.tasks.find((node: any) => node.task.id === goal.id).status).toBe(expectedStatus);
+    const retries = emit.mock.calls.filter(([event]) => event === 'task_recheck_context_retry');
+    expect(retries).toHaveLength(mode === 'no-fresh-goal' ? 0 : 1);
+    expect(helperContexts).toContain(false);
+    if (mode !== 'no-fresh-goal') expect(helperContexts).toContain(true);
+    expect(archive.recheck.completed).toBe(archive.tasks.length);
+    expect(archive.recheck.completed).toBeLessThanOrEqual(archive.recheck.total);
   });
 
   it.each(['clone', 'json', 'changed-map', 'removed-map', 'changed-reference'] as const)

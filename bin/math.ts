@@ -20,6 +20,8 @@ const commands: Readonly<Record<string, string>> = {
   'search-lean': fs.existsSync(path.join(root, 'out/main/search-lean.js')) ? 'out/main/search-lean.js' : 'scripts/mathematics/searchLean.ts',
   knowledge: 'scripts/mathematics/theoremKnowledge.ts',
   'check-lean': 'scripts/mathematics/checkLean.ts',
+  'proof-search': 'scripts/mathematics/proofSearch.ts',
+  'research-observe': 'scripts/mathematics/researchObserve.ts',
   'check-finite': 'scripts/mathematics/checkFinite.ts',
   'kernel-certificate': 'scripts/mathematics/kernelCertificate.ts',
   'library-pack': 'scripts/mathematics/libraryPack.ts',
@@ -55,6 +57,8 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   search-lean          Find declarations in verified local Lean packages
   knowledge            Build and query previously checked theorem sources
   check-lean           Check changed Lean files with bounded diagnostics
+  proof-search         Explore bounded tactic branches and retain resumable proof states
+  research-observe     Validate and publish one research finding with retained Lean probes
   check-finite         Replay finite Boolean constraints and return witnesses
   kernel-certificate   Generate chunked decide +kernel certificate modules
   library-pack         Extract checked run modules or backport upstream files as a frozen library

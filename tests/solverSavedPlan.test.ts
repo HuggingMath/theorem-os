@@ -159,7 +159,17 @@ describe('saved Lead plans after request failure', () => {
         reportedTotalTokens: mode === 'requests' ? 30 : 300 });
       const lead = state.workers![0];
       expect(lead.requestUsageAccounting).toEqual({ startedRequests: mode === 'requests' ? 2 : 1,
-        reportedRequests: mode === 'requests' ? 2 : 1, pendingRequests: 0, incomplete: false });
+        reportedRequests: mode === 'requests' ? 2 : 1, pendingRequests: 0, incomplete: false,
+        ...(mode === 'resume' ? {} : { receipts: (mode === 'requests' ? [20, 10] : [300]).map(totalTokens => ({
+          requestId: expect.any(String), runId: state.runId, sessionId: expect.any(String), taskId: undefined,
+          startedAt: expect.any(Number), settledAt: expect.any(Number), status: 'reported', outcome: 'unknown',
+          usage: { totalTokens, inputTokens: totalTokens - 5, outputTokens: 5 },
+        })) }) });
+      if (mode === 'requests') {
+        const receipts = lead.requestUsageAccounting!.receipts!;
+        expect(new Set(receipts.map(receipt => receipt.requestId)).size).toBe(2);
+        expect(new Set(receipts.map(receipt => receipt.sessionId)).size).toBe(1);
+      }
       expect(lead.lastFailure).toBeUndefined(); expect(lead.error).toBeUndefined();
       expect(state.cooperation!.tasks.map(node => node.task.id)).toEqual(mode === 'saved-plan'
         ? ['goal_1', 'goal_2'] : ['initial_goal_1', 'initial_goal_2']);

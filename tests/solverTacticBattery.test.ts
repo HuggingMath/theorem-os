@@ -9,7 +9,7 @@ import type { ResearchWorker } from '../src/solver/modules/organization';
 import { committedSource, commitSolverSources, git } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
 import { tacticBatteryProof, vacuityProbeProof } from '../src/solver/tacticBattery';
-import { taskVersion } from '../src/solver/tasks';
+import { hasTaskAcceptance, taskVersion } from '../src/solver/tasks';
 import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
 import { deferred } from './helpers/async';
 import { cooperativeResearch } from './helpers/cooperation';
@@ -91,9 +91,13 @@ describe('host tactic battery before model dispatch', () => {
     expect(host.lean.mock.calls[0][0]).toMatchObject({ context: 'Tutorial.add_zero', type: 'True', expression: tacticBatteryProof(false) });
     expect(host.lean.mock.calls[1][0]).toMatchObject({ context: 'Tutorial.add_zero', type: 'True', expression: vacuityProbeProof(false) });
     expect(node()).toMatchObject({ status: 'integrated', attempts: 0, proof: { passed: true }, integratedCheck: { passed: true } });
-    // The candidate task check, then the ordinary merged integration check; a new source change cannot reuse the first.
-    expect(host.verify).toHaveBeenCalledTimes(2);
-    expect(host.verify.mock.calls.map(call => call[1].expectedDeclarationType)).toEqual(['True', 'True']);
+    // The complete-source merge preserves the checked projection, so integration reuses its exact receipt.
+    expect(host.verify).toHaveBeenCalledOnce();
+    expect(host.verify.mock.calls.map(call => call[1].expectedDeclarationType)).toEqual(['True']);
+    expect(node().integratedCheck!.verification).toEqual(node().proof!.verification);
+    expect(node().integratedCheck!.commit).toBe(state.cooperation!.canonicalCommit);
+    expect(node().integratedCheck!.taskDigest).toBe(taskVersion(node().task));
+    expect(hasTaskAcceptance(node().integratedCheck!)).toBe(true);
     expect(canonical()).toContain(`theorem helper : True\n  := ${tacticBatteryProof(false)}\n`);
     for (const original of ['theorem add_zero (n : Nat) : n + 0 = n := by sorry', 'theorem zero_add (n : Nat) : 0 + n = n := by sorry'])
       expect(canonical()).toContain(original);

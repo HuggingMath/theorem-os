@@ -115,7 +115,9 @@ function readJsonLine<T>(read: JsonLineRead<T>): Promise<T> {
       if (error) reject(error); else resolve(value!);
     };
     const ended = () => finish(new Error(read.ended)), aborted = () => finish(read.aborted());
-    const timer = read.timeoutMs === undefined ? undefined : setTimeout(() => finish(read.timedOut()), read.timeoutMs);
+    // Unlimited preparation passes Infinity; native timers would turn it into a 1 ms deadline.
+    const timer = read.timeoutMs !== undefined && Number.isFinite(read.timeoutMs)
+      ? setTimeout(() => finish(read.timedOut()), read.timeoutMs) : undefined;
     const data = (chunk: Buffer) => {
       text += chunk.toString();
       if (text.length > read.limit) return finish(new Error(read.invalid));

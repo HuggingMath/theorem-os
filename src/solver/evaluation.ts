@@ -1,8 +1,27 @@
 import { MATH_PROOF_ENVIRONMENT_ENV } from '../math/mathProofEnvironment';
-import { runMathematicsSandboxedCommand } from '../math/verifier';
+import { runMathematicsSandboxedCommand, type MathematicsSandboxCommandResult } from '../math/verifier';
 import { runPersistedLeanEvalOfficialGate } from '../math/leanEvalBootstrap';
 import { checkSolverProof, type ProofCheck } from './modules/evidence';
 import { git, type SolverProblem } from './problem';
+
+/** Execution failures cannot decide whether a mathematical submission is correct. */
+export function evaluatorExecutionFailure(result: Pick<MathematicsSandboxCommandResult,
+  'started' | 'exitCode' | 'signal' | 'stderr' | 'timedOut' | 'aborted'>): string | undefined {
+  if (result.timedOut) return 'math_evaluation_timeout';
+  if (result.aborted || !result.started || result.signal || result.exitCode === null ||
+      result.exitCode === 126 || result.exitCode === 127) return 'math_evaluator_environment_unavailable';
+  if (result.exitCode === 0) return undefined;
+  // These are diagnostics from the process launcher, runtime or Git, rather
+  // than Lean's source diagnostics or the comparator's mathematical verdict.
+  // Keep the signatures anchored and narrow: arbitrary stderr is not evidence
+  // of an unavailable environment, and a normal rejection remains `failed`.
+  if (/^libc\+\+abi: [^\n]*failed to create thread: Resource temporarily unavailable\s*$/mu.test(result.stderr) ||
+      /^could not execute external process '(?:lean|lake|git|landrun|comparator)'\s*$/mu.test(result.stderr) ||
+      /^fatal: unable to access '[^'\n]+': (?:Could not resolve host:|Failed to connect to |Network is unreachable)[^\n]*$/mu.test(result.stderr) ||
+      /^(?:cp|mkdir|chmod|rm): [^\n]*: Read-only file system\s*$/mu.test(result.stderr))
+    return 'math_evaluator_environment_unavailable';
+  return undefined;
+}
 
 /** S3: final acceptance stays independent of replaceable research modules. */
 export async function evaluateSolverProof(problem: SolverProblem, worktree: string, receipt: ProofCheck,
@@ -39,8 +58,9 @@ export async function evaluateSolverProof(problem: SolverProblem, worktree: stri
       const result = await runMathematicsSandboxedCommand({ checkoutRoot: worktree, projectRelative: problem.projectRelative,
         command: '/bin/sh', args: ['-c', options.command], timeoutMs: options.timeoutMs, env, signal: evaluationSignal });
       assertActive();
-      return { status: result.timedOut || result.aborted || !result.started ? 'error' : result.exitCode === 0 ? 'passed' : 'failed',
-        method: 'external-command', official: false, result };
+      const reason = evaluatorExecutionFailure(result);
+      return { status: reason ? 'error' : result.exitCode === 0 ? 'passed' : 'failed',
+        ...(reason ? { reason } : {}), method: 'external-command', official: false, result };
     }
     if (problem.kind === 'lean-eval') {
       if (!problem.sourceRepository) throw new Error('math_official_source_missing');
@@ -48,9 +68,11 @@ export async function evaluateSolverProof(problem: SolverProblem, worktree: stri
         repositoryRoot: problem.sourceRepository, timeoutMs: options.timeoutMs,
         env: { ...env, [MATH_PROOF_ENVIRONMENT_ENV]: undefined }, signal: evaluationSignal });
       assertActive();
-      return { status: comparison.timedOut || comparison.aborted || comparison.cleanupError ? 'error' :
+      const reason = evaluatorExecutionFailure({ ...comparison, started: comparison.status !== 'unavailable',
+        stderr: comparison.stderrPreview ?? '' });
+      return { status: reason || comparison.cleanupError ? 'error' :
         comparison.status === 'official_verified' ? 'passed' : comparison.status === 'failed' ? 'failed' : 'error',
-        method: 'official-comparator', official: true, comparison };
+        ...(reason ? { reason } : {}), method: 'official-comparator', official: true, comparison };
     }
     return { status: 'passed', method: 'host-lean-kernel-all-targets', official: false, verification: finalCheck };
   } catch (error) {

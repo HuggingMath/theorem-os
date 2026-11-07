@@ -2,6 +2,9 @@ import { parseMathResponse, type DeliveryRecord } from './deliveries';
 import { bindMathematicalGap, mathematicalGapSchema, type MathematicalGap, type MathematicalGapScope } from './mathematicalGaps';
 import { type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { researchReferenceIssues, type ResearchSourceUse } from './researchReferences';
+import { checkOutcomeSchema, type CheckOutcome, type NextCheckRecord, type NextCheckScope } from './nextCheckContract';
+import { bindCheckOutcome } from './nextChecks';
+import type { ProofSearchRecord } from './proofSearchRecords';
 
 export type ResearchSubmission =
   | Readonly<{ kind: 'notes'; text: string }>
@@ -12,6 +15,8 @@ export type ResearchAdmissionScope = Readonly<{
   identity: Readonly<{ problemReceiptDigest: string; environmentDigest: string }>;
   tasks: readonly TaskRecord[];
   deliveries?: readonly DeliveryRecord[];
+  nextChecks?: readonly NextCheckRecord[];
+  proofSearchRecords?: Readonly<Record<string, ProofSearchRecord>>;
 }>;
 export type ResearchFinding = Record<string, unknown> & {
   taskId: string;
@@ -20,10 +25,11 @@ export type ResearchFinding = Record<string, unknown> & {
   summary: string;
   mathematicalGap?: MathematicalGap;
   sourceUses?: readonly ResearchSourceUse[];
+  checkOutcome?: CheckOutcome;
 };
 export type ResearchAdmissionIssue = Readonly<{ path: string; message: string }>;
 export type ResearchAdmission =
-  | Readonly<{ status: 'admitted'; finding: ResearchFinding; mathematicalGapScope?: MathematicalGapScope }>
+  | Readonly<{ status: 'admitted'; finding: ResearchFinding; mathematicalGapScope?: MathematicalGapScope; checkOutcomeScope?: NextCheckScope }>
   | Readonly<{ status: 'rejected'; code: string; issues: readonly ResearchAdmissionIssue[];
       recovery: 'correct-and-resubmit' | 'assignment-superseded' }>;
 
@@ -88,14 +94,32 @@ export function prepareResearchDelivery(input: ResearchSubmission, scope: Resear
     finding.mathematicalGap = parsed.data;
     try { mathematicalGapScope = bindMathematicalGap(parsed.data, scope.source, scope, scope.identity); }
     catch (error) {
-      if (!(error instanceof Error) || !/^math_delivery_invalid:gap_(?:consumer|previous|dependency)$/u.test(error.message)) throw error;
+      if (!(error instanceof Error) || !/^math_delivery_invalid:gap_(?:consumer|previous|dependency|next_check_target)$/u.test(error.message)) throw error;
       const issue = error.message.endsWith('gap_previous')
         ? { path: 'mathematicalGap.previousDeliveryId', message: 'Reference a visible prior gap delivery with an immutable scope for this consumer and problem; omit the reference if none exists.' }
+        : error.message.endsWith('gap_next_check_target')
+          ? { path: 'mathematicalGap.nextCheck', message: 'Reference a visible planned task. Executable checks require its exact current contract and file/declaration context; proof-search requires a typed ordinary lemma. Host advisory checks cannot be targets.' }
         : error.message.endsWith('gap_consumer')
           ? { path: 'mathematicalGap.consumer', message: 'Reference the exact current visible goal contract by taskId and taskDigest.' }
           : { path: 'mathematicalGap', message: 'The source dependency scope is unavailable; refresh the assignment inputs.' };
       return { status: 'rejected', code: error.message, issues: [issue], recovery: 'correct-and-resubmit' };
     }
   }
-  return { status: 'admitted', finding: finding as ResearchFinding, ...(mathematicalGapScope ? { mathematicalGapScope } : {}) };
+  let checkOutcomeScope: NextCheckScope | undefined;
+  if (finding.checkOutcome !== undefined) {
+    const parsed = checkOutcomeSchema.safeParse(finding.checkOutcome);
+    if (!parsed.success) return { status: 'rejected', code: 'math_research_delivery_invalid', recovery: 'correct-and-resubmit',
+      issues: parsed.error.issues.map(issue => ({ path: ['checkOutcome', ...issue.path].join('.'), message: issue.message })) };
+    try { checkOutcomeScope = bindCheckOutcome(parsed.data, scope.source, scope.assignment, scope, scope.identity); }
+    catch (error) {
+      if (!(error instanceof Error) || error.message !== 'math_delivery_invalid:check_outcome_scope') throw error;
+      return rejection(error.message, 'checkOutcome.checkId', 'Use the pending check assigned to this task in COOPERATION.json.nextChecks; changed inputs require a new scoped check.');
+    }
+    if (value.conclusion !== undefined && value.conclusion !== parsed.data.conclusion)
+      return rejection('math_research_delivery_invalid', 'conclusion', 'Match the scoped checkOutcome conclusion.');
+    finding.checkOutcome = parsed.data; finding.conclusion = parsed.data.conclusion; finding.needsDecision = true;
+  } else if (input.kind === 'notes' && scope.nextChecks?.some(record => record.taskId === scope.source.id && record.status === 'pending'))
+    return rejection('math_research_delivery_invalid', 'checkOutcome', 'Complete this scoped investigation with checkOutcome; use inconclusive when the requested inference remains unknown.');
+  return { status: 'admitted', finding: finding as ResearchFinding, ...(mathematicalGapScope ? { mathematicalGapScope } : {}),
+    ...(checkOutcomeScope ? { checkOutcomeScope } : {}) };
 }

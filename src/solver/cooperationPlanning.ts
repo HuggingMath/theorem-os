@@ -20,6 +20,8 @@ import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
+import { prepareNextCheckDecisions } from './nextChecks';
+import { prepareGoalProgressDecision } from './goalProgress';
 import { answerResearchInputs } from './researchDecisions';
 import { leadResearchInputs } from './contextCompiler';
 
@@ -55,7 +57,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     // A rebased repeat of an applied publication already answered the review it was written against.
     return readCooperationPlan(this.input.state.problem, this.lead.worktree, base, {
       acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [(action as { planVersion: string }).planVersion] : [])],
-      rebased, ...(rebased ? {} : { goalPath: this.goalPathReview() }) });
+      rebased, restoring: !action, ...(rebased ? {} : { goalPath: this.goalPathReview() }) });
   }
   protected planningInputDigest(omitLeadDrafts = false) {
     const versions = new Map(this.archive.tasks.map(node => [node.task.id, digest(node.task)]));
@@ -260,9 +262,12 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     leadAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
     const plan = planInput ?? this.readLeadPlan(leadAction);
     plan.tasks = keepRespacedObjectives(plan.tasks, new Map(this.archive.tasks.map(node => [node.task.id, node.task])));
-    this.includeCapacityExplorations(plan);
-    const { tasks, groups, proofRoutes } = plan;
     const decidingAction = publication?.action ?? leadAction;
+    const nextCheckDecisions = prepareNextCheckDecisions(this.archive, this.explorationIdentity, plan,
+      plan.nextCheckDecisions, decidingAction ? this.presentedNextCheckOutcomes.get(decidingAction) : []);
+    this.includeCapacityExplorations(plan);
+    this.includeNextCheckTasks(plan);
+    const { tasks, groups, proofRoutes } = plan;
     const restoringPlan = !decidingAction && !edit && this.archive.tasks.length > 0;
     const shown = decidingAction?.kind === 'lead' ? this.presentedResearchInputs.get(decidingAction)?.shown ?? [] :
       restoringPlan ? leadResearchInputs(this.archive.deliveries ?? [],
@@ -282,6 +287,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
           throw new Error('math_plan_research_source_unchanged: ' + file);
       }
     }
+    // Peer evidence can settle a review while its Lead is still composing an otherwise valid plan.
+    // Only the still-owed review shown to this dispatch may contribute a new progress decision.
+    const progressDecision = plan.goalProgressDecision && decidingAction &&
+      this.archive.goalProgress?.pending?.id === plan.goalProgressDecision.id &&
+      this.presentedGoalProgress.get(decidingAction) === plan.goalProgressDecision.id
+      ? prepareGoalProgressDecision(plan.goalProgressDecision, this.archive.goalProgress, plan,
+        this.archive.nextChecks, this.archive.tasks) : undefined;
     const publicationResponseDigest = publication ? this.proposedPlanDigest(
       git(this.lead.worktree, ['ls-tree', '--name-only', publication.action.seedCommit, '--', 'RESEARCH.md'])
         ? committedSource(this.lead.worktree, publication.action.seedCommit, 'RESEARCH.md') : '') : undefined;
@@ -374,8 +386,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.lastLeadInputDigest = undefined;
       this.wakeLead('research-finding');
     }
+    for (const { record, decision, repeated } of nextCheckDecisions) if (!repeated) {
+      record.decision = { ...decision, at: Date.now(), planVersion: this.archive.planVersion }; record.status = 'decided';
+      this.input.emit('next_check_decided', { checkId: record.id, outcomeDeliveryId: decision.outcomeDeliveryId,
+        action: decision.action, target: record.scope.target });
+    }
     if (plan.goalPathDecisions && decidingAction) this.recordGoalPathDecisions(decidingAction, plan.goalPathDecisions);
-    if (plan.goalProgressDecision && decidingAction) this.goalProgressDecisions.set(decidingAction, plan.goalProgressDecision);
+    if (progressDecision && decidingAction) this.goalProgressDecisions.set(decidingAction, progressDecision);
     // A revision is not a graph: the next dispatch's notes show the complete accepted result.
     if (plan.fromPatch) this.archive.planEdited = true;
     // Replaying unchanged saved notes during restore does not correct a rejected live event.
@@ -454,9 +471,12 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const tasks = [...goals, ...researchers.map((worker, index) => {
       // Round-robin coverage, but never an empty assignment: one target belongs to every Researcher.
       const primary = targets.filter((_, targetIndex) => targetIndex % researchers.length === index);
-      const covered = (primary.length ? primary : targets).map(target => target.theoremName).join(', ');
+      const coveredTargets = primary.length ? primary : targets;
+      const covered = coveredTargets.map(target => target.theoremName).join(', ');
       const researchSource = (['public-literature', 'verified-library', 'mathlib'] as const)[index % 3];
       return { id: `initial_research_${index + 1}`, kind: 'research' as const, ownerId: worker.id, researchSource,
+        consumerGoalIds: goals.filter(goal => coveredTargets.some(target => target.proofPath === goal.proofPath &&
+          target.theoremName === goal.theoremName)).map(goal => goal.id),
         // The goal is an inspection input, never a proof dependency: a parked advisory review must not
         // make the original goal unstartable (advisory tasks may depend on the consumer, not the reverse).
         dependsOn: goals.map(goal => goal.id),

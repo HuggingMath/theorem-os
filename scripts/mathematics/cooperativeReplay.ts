@@ -12,7 +12,10 @@ import { directSolverModules, type SolverModules } from '../../src/solver/module
 import { proofReceiptsMatch, type ProofCheck } from '../../src/solver/modules/evidence';
 import { runSolver } from '../../src/solver/run';
 import { inspectStoredRun } from '../../src/solver/storedRunInspection';
-import { leadPlanDeliveryFile, type CooperativeAction, type CooperativeTask, type TaskRecord } from '../../src/solver/tasks';
+import { leadPlanDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask, type TaskRecord } from '../../src/solver/tasks';
+import type { NextCheckRecord } from '../../src/solver/nextCheckContract';
+import { queueResearchObservation } from '../../src/solver/researchObservation';
+import { runLeanDiagnostics } from '../../src/math/leanDiagnostics';
 
 /** Local arithmetic only: no benchmark statement, answer, model or search service is used. */
 export const COOPERATIVE_REPLAY_SOURCE = `namespace Replay
@@ -40,8 +43,8 @@ const GOAL: CooperativeTask = { id: 'original', kind: 'goal', ownerId: 'engineer
 const HELPER_PROOF = 'by\n  intro n\n  induction n with\n  | zero => rfl\n  | succ n ih =>\n    change climb n + 1 = n + 1\n    exact congrArg (fun value : Nat => value + 1) ih';
 const BAD_HELPER_PROOF = 'by\n  intro n\n  exact Nat.zero_ne_one';
 
-export type CooperativeReplayScenario = 'clean' | 'repair-once';
-type ScopedCooperation = { tasks: TaskRecord[]; deliveries?: { kind: string; lemmaRequests?: CooperativeTask[] }[] };
+export type CooperativeReplayScenario = 'clean' | 'repair-once' | 'next-check';
+type ScopedCooperation = { tasks: TaskRecord[]; deliveries?: { kind: string; lemmaRequests?: CooperativeTask[] }[]; nextChecks?: NextCheckRecord[] };
 export type CooperativeReplayTurn = { index: number; workerId: string; role: 'lead' | 'researcher' | 'engineer' | 'reviewer';
   threadId: string; turnId: string; action: CooperativeAction; context: string; output: string; source: string;
   injectedFailure: boolean };
@@ -81,7 +84,11 @@ export function cooperativeReplayActors(scenario: CooperativeReplayScenario, tra
           // Keep a live original frontier; conditional:false waits for genuine helper integration.
           const changes = !helper && proposal
             ? [proposal, { id: GOAL.id, status: 'active', dependsOn: [HELPER.id] }] : [];
-          output = { baseVersion: action.planVersion, upsert: changes };
+          output = { baseVersion: action.planVersion, upsert: changes,
+            ...(scenario === 'next-check' ? { nextCheckDecisions: (view.nextChecks ?? [])
+              .filter(check => check.status === 'awaiting-decision').map(check => ({ checkId: check.id,
+                outcomeDeliveryId: check.outcome!.deliveryId, action: 'continue',
+                reason: 'The saved Lean probe checks the induction invariant. Adopt the exact helper for independent proof checking.' })) } : {}) };
         }
         // Publish through the same nonce-bound live intake used by a real Lead.
         const file = leadPlanDeliveryFile(action);
@@ -100,12 +107,38 @@ export function cooperativeReplayActors(scenario: CooperativeReplayScenario, tra
         fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), '```math-review\n' + JSON.stringify(output) + '\n```\n');
       } else if (action.kind === 'task' && action.task.id === QUESTION.id) {
         role = 'researcher';
-        output = { summary: 'Induction proves climb n = n. Rewrite both climb applications in Replay.target.',
+        output = scenario === 'next-check' ? {
+          summary: 'Test the induction invariant before assigning its formal proof.', conclusion: 'inconclusive', needsDecision: true,
+          mathematicalGap: { consumer: { taskId: GOAL.id, taskDigest: taskVersion(view.tasks.find(node => node.task.id === GOAL.id)!.task) },
+            previousGap: 'The recursion must be connected to the target.', reduced: 'The two occurrences share one candidate invariant.',
+            remaining: 'Prove climb n = n for every natural number n and then apply it twice.', evidenceScope: 'Proposed invariant, not yet checked.',
+            reconsiderWhen: ['A Lean check of the induction invariant.'],
+            nextCheck: { action: 'construction-check', objective: 'Check the induction proof for climb n = n in a disposable probe.',
+              expectedEvidence: 'A complete saved Lean probe compiling without errors, or its exact failed goal.', targetTaskId: GOAL.id } },
+        } : { summary: 'Induction proves climb n = n. Rewrite both climb applications in Replay.target.',
           conclusion: 'supporting', needsDecision: true, lemmaRequests: [HELPER],
           evidenceRefs: ['generated/problem/Challenge.lean:Replay.climb', 'Nat.rec'], remainingObligations: [],
           finding: 'Base case is reflexivity. In the successor case apply congrArg (fun value : Nat => value + 1) to the induction hypothesis. ' +
             'The consumer is Replay.target; rewriting by the resulting identity closes both occurrences.' };
         fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), JSON.stringify(output) + '\n');
+      } else if (action.kind === 'task' && scenario === 'next-check' && view.nextChecks?.some(check => check.taskId === action.task.id)) {
+        role = 'researcher';
+        const check = view.nextChecks.find(check => check.taskId === action.task.id)!;
+        const project = path.join(worktree, 'generated/problem');
+        const probe = path.join(project, 'InvariantProbe.lean');
+        fs.mkdirSync(path.dirname(probe), { recursive: true });
+        fs.writeFileSync(probe, COOPERATIVE_REPLAY_SOURCE.replace('theorem target (n : Nat) : climb n + climb n = n + n := by\n  sorry',
+          'theorem climb_eq : ∀ n : Nat, climb n = n := ' + HELPER_PROOF));
+        const diagnostics = await runLeanDiagnostics({ projectRoot: project, files: [path.basename(probe)],
+          env: process.env, timeoutMs: 60_000, signal: new AbortController().signal });
+        if (diagnostics.exitCode !== 0 || diagnostics.timedOut) throw new Error('cooperative_replay_probe_failed:' + JSON.stringify(diagnostics));
+        output = { summary: 'The complete induction probe passed Lean; the formal helper still needs host acceptance.',
+          conclusion: 'supporting', needsDecision: true, lemmaRequests: [HELPER],
+          checkOutcome: { checkId: check.id, conclusion: 'supporting', summary: 'The local induction probe compiles.', evidenceRefs: ['RESEARCH.md:Replay.climb_eq'] },
+          leanChecks: [{ status: 'passed', path: 'RESEARCH.md', declarations: ['Replay.climb_eq'] }] };
+        queueResearchObservation({ worktree, finding: output, probes: [probe] });
+        fs.rmSync(probe);
+        fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), 'The observation has been published with its retained probe. Read its host receipt.\n');
       } else if (action.kind === 'task' && action.task.id === HELPER.id) {
         role = 'engineer';
         injectedFailure = scenario === 'repair-once' && helperAttempts++ === 0;
@@ -206,12 +239,16 @@ async function replayScenario(directory: string, root: string, buildManifestRef:
       duration: 'not-inferred-from-observation-times' },
     helper: { integrated: helper?.status === 'integrated' && helper.integratedCheck?.passed === true, usedByOriginal: helperUsed },
     reviewer: state.cooperation?.review, evaluation: result.evaluator,
+    nextChecks: (state.cooperation?.nextChecks ?? []).map(check => ({ id: check.id, status: check.status,
+      outcome: check.outcome?.conclusion, decision: check.decision?.action,
+      decisionApplied: Boolean(check.decision && events.some(event => event.event === 'next_check_decided' &&
+        event.checkId === check.id && event.outcomeDeliveryId === check.outcome?.deliveryId && event.action === check.decision!.action)) })),
     artifacts: { output, stateFile, log, inspection: inspectionFile, turns: path.join(directory, 'turns/turns.json') } };
   writeMathJsonDurable(path.join(directory, 'report.json'), report);
   return report;
 }
 
-/** Same local mathematics, normal host checks, with and without one deliberately invalid proof. */
+/** Same local mathematics through clean proof, proof repair and the research next-check loop. */
 export async function replayCooperative(directory: string, root: string, buildManifestRef: string) {
   if (fs.existsSync(directory)) throw new Error('Replay directory already exists; use a new directory.');
   const manifest = readMathBuildManifest(buildManifestRef, root, path.join(root, 'out/main'));
@@ -222,12 +259,14 @@ export async function replayCooperative(directory: string, root: string, buildMa
     buildManifestRef, buildManifestDigest: mathDigest(canonicalMathJson(manifest)),
     roles: 'default four workers; researcher-1 supplies the independently assigned fixed-candidate review',
     configuration: { workers: 4, maxTurns: 24, maxRunSeconds: 600, maxTurnSeconds: 120 },
-    scenarios: ['clean', 'repair-once'] });
+    scenarios: ['clean', 'repair-once', 'next-check'] });
   const runs = [];
-  for (const scenario of ['clean', 'repair-once'] as const)
+  for (const scenario of ['clean', 'repair-once', 'next-check'] as const)
     runs.push(await replayScenario(path.join(directory, scenario), root, buildManifestRef, scenario));
   const passed = runs.every(run => run.accepted && run.exitCode === 0 && run.helper.integrated && run.helper.usedByOriginal &&
-    run.roles.every(role => role.turns > 0)) && runs[1].injectedFailures === 1 && runs[1].failedChecks >= 1;
+    run.roles.every(role => role.turns > 0)) && runs[1].injectedFailures === 1 && runs[1].failedChecks >= 1 &&
+    // Adopting the helper changes the consumer contract: the consumed historical check becomes stale.
+    runs[2].nextChecks.some(check => check.decisionApplied && check.outcome === 'supporting' && check.decision === 'continue');
   const report = { schema: 'theorem-os.cooperative-replay.v1', mode: 'scripted-zero-model', modelInvoked: false,
     passed, directory, runs, comparisonKind: 'controlled-fault-recovery',
     evidence: 'Fresh Git commits, real Lean checks, independent fixed-candidate review and S3; only model transport is scripted.',
@@ -240,7 +279,7 @@ export async function cooperativeReplay(argv: string[], root = path.resolve(path
   const flags = parseFlags(argv, ['directory', 'build-manifest']);
   if (flags.has('help')) {
     console.log('Usage: bun scripts/mathematics/cooperativeReplay.ts --directory NEW_EXTERNAL_DIR --build-manifest FILE\n' +
-      'Uses an existing current build; writes no runtime bundle and invokes no model. Saves both complete four-role scenarios.');
+      'Uses an existing current build; writes no runtime bundle and invokes no model. Saves all three complete four-role scenarios.');
     return 0;
   }
   const report = await replayCooperative(path.resolve(required(flags, 'directory')), root, fs.realpathSync(required(flags, 'build-manifest')));

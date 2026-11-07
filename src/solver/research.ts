@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { VerificationCheckpointError } from './verificationCheckpoint';
 import type { MathAgentActivity, MathAgentFailureDiagnostic, MathAgentSession } from '../runtime/codexSession';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
@@ -14,7 +15,7 @@ import { isStatementAction } from './statementReview';
 import { rememberSolverFailure, solverSourceFeedback } from './feedback';
 import type { SolverModules } from './modules';
 import { solverProofIsCurrent, type ProofCheck } from './modules/evidence';
-import type { ContextBundle } from './modules/context';
+import { finalizeResearchDispatch, type ContextBundle } from './modules/context';
 import type { KnowledgeContextSnapshot } from './knowledgeContext';
 import { researchTaskRole, type ResearchWorker } from './modules/organization';
 import type { ResearchOperation } from './modules/value';
@@ -440,7 +441,15 @@ export async function runResearchWorkers(input: {
             // A queued human message needs a real active turn; optional/no-op notifications cannot earn a delivery receipt.
             if (options?.requireTurn && (!live() || !armed || isStatementAction(assignment) || !activeSession.notify))
               throw new Error('math_guidance_recipient_not_running');
-            if (!isStatementAction(assignment)) await activeSession.notify?.(message);
+            if (!isStatementAction(assignment)) try {
+              // Guidance polling must not wait for a long provider request or claim an enqueue as delivery.
+              await activeSession.notify?.(message, { waitForRequest: !options?.requireTurn });
+            } catch (error) {
+              if (options?.requireTurn && error instanceof Error &&
+                  /^math_codex_notification_(?:request_active|turn_settled)$/u.test(error.message))
+                throw new Error('math_guidance_recipient_not_running');
+              throw error;
+            }
           },
           async () => {
             if (!current() || readyRequested) return;
@@ -452,6 +461,7 @@ export async function runResearchWorkers(input: {
             try { await activeSession.interrupt(); } catch { closeStalledTurn(); }
           });
         const started = (turnId: string) => {
+          usage.turnStarted(turnId);
           onStarted(turnId);
           if (armed || !current()) return;
           armed = true;
@@ -812,7 +822,7 @@ export async function runResearchWorkers(input: {
           let claims: unknown;
           try { claims = parseMathResponse(committedSource(worker.worktree, research.check.commit, 'RESEARCH.md'),
             'math-result', {}, 'summary').knowledgeUses; } catch { /* Ordinary notes need no usage response. */ }
-          if (claims !== undefined) {
+          {
             const records = state.knowledgeUses ??= [];
             for (const [index, target] of state.problem.targets.entries()) {
               const task = state.cooperation?.tasks.find(node => node.task.kind === 'goal' && node.task.theoremName === target.theoremName &&
@@ -1016,9 +1026,11 @@ export async function runResearchWorkers(input: {
           const continuation = !researchInputsChanged && responsibility !== undefined && Boolean(research.threadId) &&
             currentContext.continuationMessage !== undefined &&
             dispatchedContext?.threadId === research.threadId && dispatchedContext?.responsibility === responsibility;
-          if (continuation) currentContext.message = currentContext.continuationMessage!;
-          if (research.threadId && research.contextCheckpoint?.threadId === research.threadId && !currentCheckpointNotesDigest())
-            currentContext.message = contextCheckpointInstruction(assignment) + '\n\n' + currentContext.message;
+          Object.assign(currentContext, finalizeResearchDispatch(currentContext, {
+            continuation,
+            checkpointInstruction: research.threadId && research.contextCheckpoint?.threadId === research.threadId && !currentCheckpointNotesDigest()
+              ? contextCheckpointInstruction(assignment) : undefined,
+          }));
           // Resume the same thread with new instructions, preserving its history and cumulative usage.
           if (session && sessionInstructions !== currentContext.instructions) await close();
           if (!await beginTurn(currentContext, assignment, operation)) {
@@ -1160,10 +1172,13 @@ export async function runResearchWorkers(input: {
       } catch (error) {
         if (!signal.aborted) {
           errors.push(error);
-          research.error = error instanceof Error ? error.message : 'math_worker_failed';
-          emit('worker_failed', { reason: research.error });
+          if (error instanceof VerificationCheckpointError) emit('worker_checkpoint', { reason: error.message, key: error.checkpoint.key });
+          else {
+            research.error = error instanceof Error ? error.message : 'math_worker_failed';
+            emit('worker_failed', { reason: research.error });
+          }
           if (!parallel || (cooperation && worker.id === input.workers[0].id && research.error !== 'math_model_context_capacity_blocked') ||
-              (error instanceof Error && error.message === 'math_verifier_unavailable')) abort();
+              (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable')) abort();
         }
       } finally {
         signal.removeEventListener('abort', cancel);
@@ -1182,7 +1197,7 @@ export async function runResearchWorkers(input: {
       error.message.startsWith('math_writer_stop_unconfirmed:'));
     if (unconfirmedStop) throw unconfirmedStop;
     if (cleanupErrors.length) throw cleanupErrors[0];
-    if (!winner && errors.length) throw errors[0];
+    if (!winner && errors.length) throw errors.find(error => error instanceof VerificationCheckpointError) ?? errors[0];
     return winner;
   } finally {
     try { await cooperation?.stop(); } finally { input.signal.removeEventListener('abort', abort); }

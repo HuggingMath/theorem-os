@@ -26,11 +26,14 @@ import { knowledgeContextConsumers, knowledgeContextSections, type KnowledgeCont
 import { continuationContextSection, readContinuationSnapshot, type ContinuationSnapshot } from '../continuationInput';
 import { continuationReferenceSection, referenceQuery } from '../continuationSearch';
 import { knowledgeApplicationContextSections } from '../knowledgeApplications';
-import { compileTaskContext, frozenSourceContext, TaskContextError,
-  type ContextManifest, type ContextSection, type TaskContextInput } from '../contextCompiler';
+import { compileContextSections, compileTaskContext, frozenSourceContext, leadResearchInputSection, TaskContextError,
+  type CompiledContext, type ContextManifest, type ContextSection, type TaskContextInput } from '../contextCompiler';
 import type { CustomResearchModule, ResearchModuleSlot } from './policy';
 import { defaultResearchRouteConcurrency, researchTaskRole, type ResearchWorker } from './organization';
 import { leadPlanningEvidence, leadPlanningEvidenceText } from '../planningEvidence';
+import { mathematicalGapContextText } from '../mathematicalGaps';
+import { nextCheckContextText } from '../nextChecks';
+import { goalProgressTaskContext } from '../goalProgress';
 
 export type ContextAccess = Readonly<{
   root: string;
@@ -63,13 +66,51 @@ export type ContextBundle = Readonly<{
   workContract?: ReturnType<typeof cooperativeWorkContract>;
   instructions: string;
   message: string;
-  /** Same-thread responsibility continuation; full compilation remains the context manifest. */
+  /** Same-thread dispatch compiled under the same byte budget as the full context. */
   continuationMessage?: string;
+  continuationManifest?: ContextManifest;
+  /** Recompile before dispatch so an added checkpoint instruction participates in selection and accounting. */
+  compileDispatch?: (options: ResearchDispatchOptions, current?: ContextBundle) => CompiledContext;
   scope: 'original-problem-and-allowed-library' | 'fixed-statement';
   sources: Readonly<{ problemReceiptDigest: string }>;
   manifest?: ContextManifest;
   knowledgeRetrievals?: readonly (KnowledgeRetrieval & { included: boolean; omissionReason?: string })[];
 }>;
+
+export type ResearchDispatchOptions = Readonly<{ continuation?: boolean; checkpointInstruction?: string }>;
+const dispatchPrefix = (text?: string): ContextSection[] => text ? [{
+  id: 'dispatch-checkpoint-instruction', kind: 'checkpoint', text,
+}] : [];
+
+/** Finalize the exact message before the host saves its manifest or opens a model turn. */
+function compileCustomDispatch(context: ContextBundle, options: ResearchDispatchOptions, preserveInventory = true): CompiledContext {
+  const previous = options.continuation ? context.continuationManifest ?? context.manifest : context.manifest;
+  const message = options.continuation ? context.continuationMessage ?? context.message : context.message;
+  const sourceManifest = preserveInventory ? options.continuation && context.continuationMessage !== context.message
+    ? context.continuationManifest : context.manifest : undefined;
+  let compiled = compileContextSections({ instructions: context.instructions,
+      mandatory: [...dispatchPrefix(options.checkpointInstruction), { id: 'dispatch-message', kind: 'continuation', text: message }],
+      maxContextBytes: previous?.maxBytes, maxOptionalContextBytes: previous?.maxOptionalBytes,
+      requiredTaskIds: sourceManifest?.requiredTaskIds, omitted: sourceManifest?.omitted, inlineManifest: false,
+    });
+  if (sourceManifest) compiled = { ...compiled, manifest: { ...compiled.manifest,
+      included: [...compiled.manifest.included.filter(item => item.id === 'dispatch-checkpoint-instruction'), ...sourceManifest.included],
+      optionalBytes: sourceManifest.optionalBytes,
+      mandatoryBytes: compiled.manifest.usedBytes - sourceManifest.optionalBytes,
+    } };
+  return compiled;
+}
+
+/** Finalize the actual M4 output, including replacements of the built-in prompt. */
+export function finalizeResearchDispatch(context: ContextBundle, options: ResearchDispatchOptions = {}): ContextBundle {
+  const compiled = context.compileDispatch?.(options, context) ?? compileCustomDispatch(context, options);
+  return { ...context, ...compiled, ...(context.knowledgeRetrievals ? {
+    knowledgeRetrievals: context.knowledgeRetrievals.map(retrieval => ({ ...retrieval,
+      included: compiled.manifest.included.some(item => item.id === retrieval.sectionId),
+      omissionReason: compiled.manifest.omitted.find(item => item.id === retrieval.sectionId)?.reason,
+    })),
+  } : {}) };
+}
 
 /** Backtranslation is built from the formal snapshot alone, in a fresh session. */
 export function buildStatementReviewContext(review: StatementReview, action: StatementAction, problemReceiptDigest: string): ContextBundle {
@@ -115,6 +156,14 @@ export function buildResearchContext(task: SolverProblem, state: Readonly<Solver
     `You may inspect one expression beforehand with ${command} check-lean --workspace ${shellArgument(path.join(access.worktree, task.projectRelative))} --file 'Owned/File.lean' --context 'ASSIGNED_THEOREM' --type 'CLOSED_EXPECTED_TYPE' --expression 'CLOSED_LEAN_TERM'. Do not scan all catalog entries with application checks. ` +
     'The task context may include bounded saved-theorem candidates already searched by the host for this exact assignment or the original-goal frontier. Inspect these candidates before repeating the same search; the manifest records hints omitted for context budget. An input-not-searched status or zero lexical matches does not establish that no useful theorem exists. ' +
     'Inspect the complete type, all premises and statement/proof dependencies before reuse. source-header types require the archived context and are not closed types. Search is lexical and a missing hit does not establish a missing theorem. These are historical checked sources, not declarations installed in this problem. Adapt only needed declarations into owned files, respect the frozen problem and allowed imports, then check their actual application with Lean and return for independent host acceptance. Never copy an entire archived Submission over current goals or inherit historical receipts. Record the knowledge theorem id and the consumer in RESEARCH.md.\n' : '';
+  const proofSearchRules = access.environment.DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST ?
+    `For a materialized plain helper lemma with a closed task type, use ${command} proof-search --workspace ${shellArgument(path.join(access.worktree, task.projectRelative))} --request-file 'REQUEST.json'. ` +
+    'Write a finite request {branches:[{tactics:["intro n","simp"]}],limits:{timeoutMs:30000,maxTransitions:64}}. You generate candidates within this research turn; the tool never calls a model. ' +
+    'The tool keeps the complete coupled proof state, shares common prefixes in one call, and closes its backend at return. Read node IDs, goals and checkpoint artifacts before choosing the next branches. ' +
+    'For continuation use the matching worker-local COOPERATION.json.proofSearchRecords[taskId].checkpoint as resume:{path,digest}; branches[].from selects a logical node digest. Replayed transitions count against the call budget. ' +
+    'Aesop can expose partial progress with "aesop (config := { terminal := false })" when imported. Keep its remaining goals; an exhausted candidate list or timeout is inconclusive. ' +
+    'This first version requires exact source and backend identity, an explicit closed helper declaration, and completed preceding local proofs. Unsupported context or incompatible backend requires ordinary saved-source work. ' +
+    'Copy a complete returned candidate into the assigned owned declaration, inspect its source, and submit through the existing ready/freeze/checker flow. Search closure never grants acceptance. Independent nextCheck investigations retain the candidate for its owner.\n' : '';
   const taskRules = access.assignment?.kind === 'task' && access.assignment.task.kind === 'lemma'
     ? access.assignment.task.declaration === 'definition'
       ? `This task defines ${access.assignment.task.theoremName}: save one def of exactly the requested type with a complete body, matching the objective's intended meaning. Preserve other helper statements, definition bodies and original goal proofs.\n`
@@ -127,7 +176,7 @@ Edit only ${editableOwnedFiles(task.ownedFiles, file => path.join(access.worktre
 Save RESEARCH.md and delivery logs at these exact worktree-root paths, including when a diagnostic command runs inside the Lean project subdirectory.
 Temporary probes, backups and diagnostic output may be written under ${path.join(access.worktree, '.scratch', 'tmp')} or the Lean project's .scratch/tmp directory. The shell's TMPDIR points to the worktree-local directory; run mkdir -p "$TMPDIR" before creating temporary files. /tmp is read-only. Untracked regular scratch files stay advisory and remain outside formal proof checkpoints. Do not git add scratch files or use symlinks there. Retain reusable proof code and findings in RESEARCH.md or owned Lean files before returning.
 Preserve original declaration kinds, names, parameters, types, assumptions, existing imports, options and namespace/section context. Original goals may include def declarations whose bodies must be filled; retain all other original definition bodies. You may add explicit Mathlib.* imports from the pinned library, frozen local modules already imported by the original owned files, or other owned modules, without import cycles; do not edit trusted problem or package files. Completed proofs must not use sorry, admit, native_decide, unsafe or new axioms. Do not read external candidate solutions.
-${taskRules}${knowledgeRules}${strategyAdvice(access, 'M1', 'Use installed library lemmas and test uncertain bridges early. Batch independent searches and reads, reuse results, bound output in bytes and show the earliest Lean error and goal.')} The host launches the cooperative agents; do not spawn agents inside this session. ${strategyAdvice(access, 'M5', 'Lead planning saves a task graph and returns promptly; assigned workers investigate and prove it.', Boolean(state.cooperation))}
+${taskRules}${knowledgeRules}${proofSearchRules}${strategyAdvice(access, 'M1', 'Use installed library lemmas and test uncertain bridges early. Batch independent searches and reads, reuse results, bound output in bytes and show the earliest Lean error and goal.')} The host launches the cooperative agents; do not spawn agents inside this session. ${strategyAdvice(access, 'M5', 'Lead planning saves a task graph and returns promptly; assigned workers investigate and prove it.', Boolean(state.cooperation))}
 For diagnostics, run ${command} check-lean --workspace ${shellArgument(path.join(access.worktree, task.projectRelative))} --file 'OWNED_FILE.lean' --timeout-seconds 0. It compiles saved sources with pinned imports and bounded output. Read firstBlocking and its exact position; follow diagnosticArtifacts for captured messages, local hypotheses and goals when previews are incomplete. Source/environment digests identify the checked inputs; inspect captureComplete before treating captured output as complete. To preflight an uncertain closed task type, add --type 'CLOSED_LEAN_TYPE' --context 'EXISTING_QUALIFIED_DECLARATION' with exactly one --file. This elaborates a type in a disposable proof-erased snapshot using that declaration's scopes; it does not check a proof or make future helper names available. Keep unavailable future dependencies explicit and revise an invalid interface before sending workers to prove it. Poll a returned process ID. A timeout is inconclusive. ${strategyAdvice(access, 'M3', 'Repair the earliest error; avoid rebuilding dependencies or repeating unchanged checks.')} For math_original_context_changed or math_original_declaration_changed, use the reported file and recovery instructions to restore the offending context or declaration from the seed commit while preserving new proof work, then retry the saved-file check. Keep helper-specific scopes and instances inside their proofs. If the environment is unavailable or the same startup error remains after a repair, report it and return.
 For a finite Boolean inference, use ${command} check-finite --json 'JSON' --witnesses 16. Supply {"schema":"theorem-os.finite-boolean-cnf.v1","variables":["A"],"fixed":[],"clauses":[[{"variable":"A","value":true}]]}. Each clause is a disjunction of matching literals and all clauses must hold. Preserve the exact input data and returned digests, satisfyingCount and complete witnesses in your research evidence. A satisfying assignment can refute only a claimed contradiction of those constraints; it does not refute their geometric construction or the original theorem. Size-unsupported results are inconclusive. Enumeration and its translation remain advisory and must be formalized for proof acceptance.
 ${kernelCertificateRules(task, command, path.join(access.worktree, task.projectRelative))}${theoryModuleRules(task)}${libraryModuleRules(task)}${declarationIndexRules(access.worktree)}Add helpers in owned modules; definitions may be noncomputable. For type lookup, add single-name #check commands such as #check Finset.sum_eq_single in the existing namespace. For instance lookup, use #synth MeasureSpace ℝ or parenthesize complex types, such as #synth Fintype (Fin 2). If a known library declaration is unavailable, find its module in the installed corpus and import that explicit Mathlib.* module in the owned file; an unknown name alone does not establish a missing library theorem. Check the actual saved file, remove probes before delivery, and save checked helpers, gaps and next steps in RESEARCH.md. ${strategyAdvice(access, 'M4', 'Keep this file as a concise current checkpoint; replace obsolete status instead of appending transcripts. Earlier committed notes remain in git history.')} Then return for independent host checking. Turns may be checkpointed and resumed. Verify computational results in Lean.
@@ -157,6 +206,13 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
     text: 'Current residual goal from complete, source-matched Lean diagnostics (advisory; not proof acceptance):\n' +
       JSON.stringify({ ...goal, goalText: undefined }) + '\n' + goal.goalText,
   }));
+  for (const record of Object.values(cooperation?.proofSearchRecords ?? {})) residualSections.push({
+    id: `proof-search:${record.taskId}:${record.checkpoint.digest}`, kind: 'feedback', priority: 6,
+    text: 'Host-retained advisory proof-search checkpoint for this scope. Read the worker-local copy in COOPERATION.json.proofSearchRecords before continuing:\n' +
+      JSON.stringify({ taskId: record.taskId, taskDigest: record.taskDigest, basis: record.basisDigest,
+        generation: record.generation, checkpointDigest: record.checkpoint.digest,
+        workerReportedToolUsage: record.toolUsage, proofAcceptance: record.proofAcceptance }),
+  });
   if (residualSnapshot.omissions.length) residualSections.push({ id: 'residual-goals:reader-omissions', kind: 'feedback', priority: 6,
     text: 'Additional source-matched residual diagnostics were omitted by the bounded reader. Inspect the current diagnostic artifacts before treating these goals as fully covered:\n' +
       JSON.stringify(residualSnapshot.omissions) });
@@ -179,11 +235,30 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
     environmentDigest: state.environmentDigest,
     ...(continuation ? { mandatory: [continuationContextSection(continuation, command, task.projectRelative)] } : {}),
     optional: [...residualSections, ...knowledgeSections, ...applicationSections, ...(reference ? [reference] : [])] };
+  const compileFull = (checkpointInstruction?: string) => compileTaskContext({ ...compilation, instructions,
+    mandatory: [...dispatchPrefix(checkpointInstruction), ...(compilation.mandatory ?? [])] });
   const compiled = access.assignment && cooperation ? buildCooperativeContext(task, cooperation, bundle, access.assignment,
-    compilation, state.workers) : { ...bundle, ...compileTaskContext({ ...compilation, instructions }) };
-  return { ...compiled, ...(access.knowledgeSnapshot ? { knowledgeRetrievals: knowledgeSections.map(section => ({
+    compilation, state.workers) : { ...bundle, ...compileFull(),
+      compileDispatch: (options: ResearchDispatchOptions) => compileFull(options.checkpointInstruction) };
+  const result: ContextBundle = { ...compiled, ...(access.knowledgeSnapshot ? { knowledgeRetrievals: knowledgeSections.map(section => ({
     ...section.knowledge, included: compiled.manifest?.included.some(item => item.id === section.id) ?? false,
     omissionReason: compiled.manifest?.omitted.find(item => item.id === section.id)?.reason })) } : {}) };
+  const recompile = result.compileDispatch;
+  if (!recompile) return result;
+  return { ...result, compileDispatch: (options, current = result) => {
+    if (current.instructions === result.instructions && current.message === result.message &&
+        current.continuationMessage === result.continuationMessage) return recompile(options);
+    // Spreading a built-in context must not let its captured compiler overwrite a custom M4 prompt.
+    const changedMessage = current.message !== result.message;
+    const inheritedContinuation = current.continuationMessage === result.continuationMessage;
+    const selected = options.continuation && changedMessage && inheritedContinuation
+      ? { ...current, continuationMessage: current.message, continuationManifest: current.manifest } : current;
+    const changedBody = options.continuation
+      ? selected.continuationMessage !== result.continuationMessage : changedMessage;
+    const inventory = options.continuation ? selected.continuationManifest : selected.manifest;
+    const originalInventory = options.continuation ? result.continuationManifest : result.manifest;
+    return compileCustomDispatch(selected, options, !changedBody || inventory !== originalInventory && inventory !== result.manifest);
+  } };
 }
 
 function strategyAdvice(access: ContextAccess, slot: ResearchModuleSlot, fallback: string, applicable = true): string {
@@ -383,6 +458,10 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
   const boundedFrontier = action.kind === 'task' && proofRoutes.length > 0;
   const focusRules = action.kind === 'lead' || action.kind === 'task' ?
     'Prioritize a ready typed step proving a substantive missing construction or quantitative estimate on the original-goal frontier. Choose genuinely weaker, independently Lean-checkable sublemmas with closed types. Record the actual consumer with explicit dependsOn or proofRoutes and show the concrete application, discharged inference and remaining premises. Renaming the whole theorem, assuming the core result or proving a conditional wrapper is not a reduction. Advisory dependencies identify questions, not proved premises. Preserve checked contracts and independent investigations. Let consumers do short glue; add helpers only for useful reusable results. Split independent core proof, strength/counterexample audit and library adaptation questions.\n' : '';
+  const nextCheckRules = ['lead', 'task'].includes(action.kind) ?
+    'To test one unresolved inference, add mathematicalGap.nextCheck:{action:"feasibility"|"apply-lemma"|"construction-check",objective:"one discriminating check",expectedEvidence:"the exact evidence that would support or challenge this step",targetTaskId:"OPTIONAL_VISIBLE_TASK"}. The host schedules an independent feasibility task, binds its parent/target/original consumer and retains it in COOPERATION.json.nextChecks. This checks a method; it supplies no proved premise. A check worker must finish with checkOutcome:{checkId:"HOST_CHECK_ID",conclusion:"supporting"|"refuted"|"inconclusive",summary:"scoped result",evidenceRefs:["retained evidence"]}. Unknown remains inconclusive. An outcome publication ends this check. Lead answers each presented outcome in nextCheckDecisions:[{checkId,outcomeDeliveryId,action:"continue"|"revise"|"stop",reason}]. Continue records the selected route; revise must change its actual target argument, dependencies or route in the same plan; stop pauses its target. Host check IDs cannot become proof dependencies.\n' : '';
+  const observationRules = action.kind === 'task' ?
+    'Publish a single research observation promptly with theorem-os research-observe --worktree WORKTREE --finding FINDING_JSON [--probe LEAN_FILE] [--snapshot-sources]. This validates fields before appending the current assignment event. Probe files retain exact Lean code as advisory artifacts; include precise scope and check results in the finding, and use check-lean for actual local diagnostics. The host snapshots the event and independently verifies any later typed proof. Read the command result and COOPERATION.json.deliveryReceipts for corrections.\n' : '';
   const gapRules = ['lead', 'task'].includes(action.kind) ?
     'Report gaps in research/progress JSON: mathematicalGap:{consumer:{taskId:"ORIGINAL_GOAL_ID",taskDigest:"EXACT_GOAL_DIGEST"},previousGap:"prior inference",reduced:"established result",remaining:"exact quantifiers, strength, nondegeneracy and uniformity needed",evidenceScope:"checked assumptions and scope",reconsiderWhen:["new inputs or evidence"]}. Use a visible kind:"goal" original consumer and its exact digest, not the assigned lemma or research task. Submit the complete object on every correction. Optional previousDeliveryId must be a mathematicalGaps[].deliveryId in COOPERATION.json for this goal; ordinary research delivery IDs are not prior gap references. If none exists, omit only previousDeliveryId and keep the required previousGap description. Read full reports in COOPERATION.json mathematicalGaps. Historical reports are advisory; review changed inputs. A weaker bound or renamed route does not establish the stronger gap; conditional checks establish sufficiency only.\n' : '';
   const focusPacket = {
@@ -426,10 +505,10 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'The assignment canonicalProbe records a check of the existing declaration at its sourceCommit in the recorded environment, before a model started. ' +
     'Compare its full type and additional assumptions with the assigned type before choosing a repair, and recheck the current saved file after editing. ' +
     'This is a historical source diagnostic, not a model failure or a mathematical refutation; it grants no proof acceptance.\n' : '';
-  const instructions = context.instructions + '\n' + rules + organizationRules + leadDeliveryRules + planRevisionRules + initialPlanningRules + familyRules + feasibilityRules + earlyRouteRules + connectionRules + familyMemberRules + attemptRules + focusRules + gapRules + checkpointRules + researchSourcesRules + canonicalProbeRules +
+  const instructions = context.instructions + '\n' + rules + organizationRules + leadDeliveryRules + planRevisionRules + initialPlanningRules + familyRules + feasibilityRules + earlyRouteRules + connectionRules + familyMemberRules + attemptRules + focusRules + gapRules + nextCheckRules + observationRules + checkpointRules + researchSourcesRules + canonicalProbeRules +
     (action.kind === 'lead' || action.kind === 'task' && !isFeasibilityReview(action.task)
       ? 'For parallel work, assign distinct proof, feasibility/counterexample, library-connection or consumer questions. Inspect in-flight work and reuse saved results; do not duplicate an unchanged question. Keep backup routes testing different inferences. Leave a slot waiting for input when no independent useful work exists. Do not manufacture helpers. Route priority reflects recorded inputs and obstructions, not predicted ease.\n' : '') +
-    (action.kind === 'lead' ? 'Use the proof-continuation snapshot to identify the original goal\'s current mathematical frontier. Prefer consuming relevant checked lemmas before creating more auxiliary work; give each new helper an intended consumer and explicitly assign every substantive missing premise. Keep useful alternative routes visible. A lemma without a recorded consumer may still be useful; investigate its connection rather than deleting it. Planned dependencies, actual Lean proof references and conditional references are reported separately. Do not count auxiliary lemma totals as completion of the original problem. The host obtains fixed-candidate review after the complete proof is checked; mark any advisory final-candidate task with reviewScope:"final-candidate" so it waits for freshly checked original goals. Use a distinct task with reviewScope:"feasibility" for independent mathematical route checks before a complete candidate exists. Inspect validated lemmaRequests in deliveries and adopt useful exact proposals as separate lemma tasks; proposals and their local checks are advisory. Advisory research may start before its planned dependencies are proved; use typed proof tasks when a consumer must wait for checked premises.\n' :
+    (action.kind === 'lead' ? 'Use the proof-continuation snapshot to identify the original goal\'s current mathematical frontier. Prefer consuming relevant checked lemmas before creating more auxiliary work; give each new helper an intended consumer and explicitly assign every substantive missing premise. Keep useful alternative routes visible. A lemma without a recorded consumer may still be useful; investigate its connection rather than deleting it. Planned dependencies, actual Lean proof references and conditional references are reported separately. Do not count auxiliary lemma totals as completion of the original problem. The host obtains fixed-candidate review after the complete proof is checked; mark any advisory final-candidate task with reviewScope:"final-candidate" so it waits for freshly checked original goals. Use a distinct task with reviewScope:"feasibility" for independent mathematical route checks before a complete candidate exists. Inspect validated lemmaRequests in deliveries and adopt useful exact proposals as separate lemma tasks; proposals and their local checks are advisory. Advisory research may start before its planned dependencies are proved; use typed proof tasks when a consumer must wait for checked premises. Set consumerGoalIds on advisory tasks to the original goals their effort serves; these attribution links never add proof premises or dependency waits.\n' :
       action.kind === 'task' && ['lemma', 'goal'].includes(action.task.kind) ? 'Inspect relevant checked inputs and their exact declarations before reconstructing an argument. Save the concrete consumer application and discharge every premise; report the remaining original-goal obstacle in RESEARCH.md.\n' : '') +
     (action.kind === 'task' && ['research', 'sketch'].includes(action.task.kind)
       ? 'Before restoring a temporary Lean probe, retain its complete reusable code, namespace/context, exact declaration names and proposed consumer in a lean fence in worktree-root RESEARCH.md. A prose claim that Lean passed is not a recoverable proof. To report a successful local check explicitly, use leanChecks:[{status:"passed",path:"RESEARCH.md",declarations:["Qualified.name"]}] in the single JSON response and keep the complete code outside that JSON in a lean fence. The host binds retained artifacts to this problem, assignment and commit; every local check remains advisory until a separate typed host check passes.\n' : '') +
@@ -451,6 +530,24 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     receipt.status === 'needs-correction' && receipt.workerId === action.assignment.workerId && receipt.taskId === action.task.id &&
     receipt.taskDigest === action.assignment.taskDigest && receipt.seedCommit === action.assignment.seedCommit &&
     receipt.assignmentKey === assignmentDeliveryFile(action.assignment) && receipt.environmentDigest === compilation.environmentDigest) ?? [] : [];
+  const receiptIndex: ContextSection[] = taskReceipts.length && action.kind === 'task' ? [{
+    id: 'assignment-receipt-index', kind: 'feedback',
+    text: 'Pending assignment correction receipts (retrieve all before correcting deliveries):\n' + JSON.stringify({
+      file: 'COOPERATION.json', field: 'deliveryReceipts', count: taskReceipts.length,
+      digest: mathDigest(canonicalMathJson(taskReceipts)),
+      scope: { status: 'needs-correction', workerId: action.assignment.workerId, taskId: action.task.id,
+        taskDigest: action.assignment.taskDigest, seedCommit: action.assignment.seedCommit,
+        assignmentKey: assignmentDeliveryFile(action.assignment), environmentDigest: compilation.environmentDigest },
+      retrieval: 'Read every matching deliveryReceipts row in worktree-root COOPERATION.json, in stored array order; require the count and ' +
+        'SHA-256(canonicalMathJson(rows)) to match this index. Every pending receipt remains a correction obligation, including receipts ' +
+        'not shown inline. Correct its issues and append a complete event with replacesReceipt set to its id; rejected corrections name the ' +
+        'new receipt. If this live set changed or is unavailable, refresh the current receipts before correcting; never treat missing rows as resolved. ' +
+        'These intake receipts grant no proof acceptance.',
+    }),
+  }] : [];
+  const receiptDetails: ContextSection[] = taskReceipts.length ? [{ id: 'assignment-receipts', kind: 'feedback', priority: 0,
+    text: 'Current assignment delivery receipts (intake feedback, not proof acceptance):\n' + JSON.stringify(taskReceipts) }] : [];
+  optional.push(...receiptDetails);
   const taskInbox = taskContinuation ? {
     file: 'COOPERATION.json',
     deliveries: (cooperation.deliveries ?? []).slice(-16).map(record => ({ id: record.id, taskId: record.taskId,
@@ -468,13 +565,18 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
       JSON.stringify(inbox) + '\nStart from these ids and look up only the records you need; idleWorkers are live peers waiting for assignable work.' +
       (inbox.stoppedWorkers?.length ? ' stoppedWorkers will not return in this run; eligible live peers may take their reserved tasks, so plan for the reduced team.' : '')
     : 'No new deliveries, task status changes or idle peers since your previous Lead turn.';
-  const continuationMessage = action.kind === 'lead' ? [
+  const gapContext = mathematicalGapContextText(cooperation.mathematicalGaps ?? []);
+  const nextCheckContext = nextCheckContextText(cooperation.nextChecks ?? [], action.kind === 'task' ? action.task.id : undefined);
+  const progressCheckContext = action.kind === 'task' ? goalProgressTaskContext(cooperation.goalProgress, action.task) : '';
+  const continuationText = action.kind === 'lead' ? [
     'Continue the current Lead responsibility in this saved thread. The original problem and unchanged task graph are already in its history.',
     'This turn is one planning decision: from the changes and task table below, revise the accepted graph or return it unchanged. Read COOPERATION.json only for the specific records you need, and delegate open searches as research tasks. Record the current argument and precise unresolved inference in worktree-root RESEARCH.md together with the decision.',
     'Current cooperative assignment (replaces every previous dispatch nonce and receipt):\n' + JSON.stringify(action),
     leadInboxText,
     leadTaskTable(cooperation),
     'Current host work contract:\n' + JSON.stringify(workContract),
+    gapContext,
+    nextCheckContext, nextCheckRules,
     planningEvidence ? leadPlanningEvidenceText(planningEvidence) : '',
     compilation.feedback ? 'Current host feedback:\n' + compilation.feedback : '',
     leadPlanPublicationFeedback(action, cooperation),
@@ -485,13 +587,13 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'Continue the current task responsibility in this saved thread. Its frozen problem, exact interfaces, and unchanged source rules are already in the thread history.',
     'Current cooperative assignment:\n' + JSON.stringify(action),
     'Current host work contract:\n' + JSON.stringify(workContract),
+    gapContext,
+    nextCheckContext, progressCheckContext, nextCheckRules, observationRules,
     canonicalProbeRules,
     compilation.feedback ? 'Current host feedback:\n' + compilation.feedback : '',
     contextCheckpointRejectionFeedback(cooperation.contextCheckpointRejection,
       action.kind === 'task' ? assignmentDeliveryFile(action.assignment) : undefined),
     assignedNode?.feedback ? 'Current task feedback:\n' + assignedNode.feedback : '',
-    ...(compilation.optional ?? []).filter(section => section.kind === 'feedback').map(section => section.text),
-    'Current assignment delivery receipts (intake feedback, not proof acceptance):\n' + JSON.stringify(taskReceipts),
     'Current scoped inbox references (retrieve full records before using them):\n' + JSON.stringify(taskInbox),
     'Read the latest worktree-root COOPERATION.json before continuing. Inspect referenced deliveries, mathematicalGaps, blockers, peers and their saved source references for new scoped input. A matching task digest does not mean its feedback or inbox is unchanged. Missing or unavailable referenced evidence supplies no premise.',
     'Correct every needs-correction receipt by appending a new complete event to ' +
@@ -500,9 +602,8 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'Save useful progress and use the current assignment delivery protocol. A progress report, retained draft or intake receipt is advisory; only independent host checking can establish proof acceptance.',
     researchSourcesRules, sharing,
   ].filter(Boolean).join('\n\n') : undefined;
-  return { ...context, assignment: action, workContract, instructions, continuationMessage,
-    ...compileTaskContext({ ...compilation, instructions, optional,
-      mandatory: [...(compilation.mandatory ?? []),
+  const compileFull = (checkpointInstruction?: string) => compileTaskContext({ ...compilation, instructions, optional,
+      mandatory: [...dispatchPrefix(checkpointInstruction), ...(compilation.mandatory ?? []), ...receiptIndex,
         { id: 'work-contract', kind: 'assignment', text: 'Host work contract (one product; completion is not proof acceptance):\n' + JSON.stringify(workContract) },
         ...(planningEvidence ? [{ id: 'planning-evidence', kind: 'continuation' as const, text: leadPlanningEvidenceText(planningEvidence) }] : []),
         ...(capacityExploration ? [{ id: 'capacity-exploration', kind: 'assignment' as const,
@@ -522,5 +623,22 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
               JSON.stringify(parallelQuestions),
           }] : []),
         ...(focusRules ? [{ id: 'frontier-focus', kind: 'continuation' as const,
-          text: 'Original-goal focus (advisory, not proof acceptance):\n' + JSON.stringify(focusPacket) }] : [])] }) };
+          text: 'Original-goal focus (advisory, not proof acceptance):\n' + JSON.stringify(focusPacket) }] : [])] });
+  const full = compileFull();
+  const researchInputs = action.kind === 'lead' ? leadResearchInputSection(compilation) : undefined;
+  const compileContinuation = (checkpointInstruction?: string) => compileContextSections({ instructions,
+    mandatory: [...dispatchPrefix(checkpointInstruction), { id: 'same-thread-continuation', kind: 'continuation',
+      text: continuationText! }, ...(researchInputs ? [researchInputs] : []), ...receiptIndex],
+    optional: [...receiptDetails, ...(compilation.optional ?? []).filter(section => section.kind === 'feedback')],
+    omitted: (compilation.optional ?? []).filter(section => section.kind !== 'feedback')
+      .map(section => ({ id: section.id, kind: section.kind, reason: 'outside-task-scope' as const })),
+    requiredTaskIds: full.manifest.requiredTaskIds, maxContextBytes: compilation.maxContextBytes,
+    maxOptionalContextBytes: compilation.maxOptionalContextBytes,
+  });
+  const compiledContinuation = continuationText === undefined ? undefined : compileContinuation();
+  return { ...context, assignment: action, workContract, instructions, ...full,
+    continuationMessage: compiledContinuation?.message, continuationManifest: compiledContinuation?.manifest,
+    compileDispatch: options => options.continuation && compiledContinuation
+      ? options.checkpointInstruction ? compileContinuation(options.checkpointInstruction) : compiledContinuation
+      : options.checkpointInstruction ? compileFull(options.checkpointInstruction) : full };
 }

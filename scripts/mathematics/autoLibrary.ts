@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
 import { autoLibraryLiveUsage, autoLibraryPackFor, autoLibraryRunUsage, readAutoLibraryPool } from '../../src/math/autoLibrary';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
+import { LEAN_TASK_SOURCE_MAX_BYTES } from '../../src/math/leanTask';
 import { readLibraryPack, summarizeLibraryPack } from '../../src/math/libraryPacks';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { readMathText, writeMathJsonDurable } from '../../src/math/mathRuntimeIo';
@@ -45,7 +46,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const coordination = flags.get('coordination') ?? 'cooperative';
   if (coordination !== 'cooperative' && coordination !== 'independent') throw new Error('--coordination must be cooperative or independent');
   const request = prepareAutoLibraryBuild(directory, root, {
-    challengeId: required(flags, 'challenge-id'), challengeSource: readFile(required(flags, 'challenge-file'), 1024 * 1024),
+    challengeId: required(flags, 'challenge-id'), challengeSource: readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES),
     task: flags.has('task-file') ? readFile(required(flags, 'task-file'), 64 * 1024).trim() : '',
     environment: flags.get('environment') ?? 'mathlib', pool: externalPath(required(flags, 'pool')), buildManifestRef,
     planner: { model: flags.get('model') ?? 'deepseek-flash', effort: flags.get('effort') ?? 'max', executable: codex,
@@ -71,7 +72,7 @@ function pack(flags: ReadonlyMap<string, string>) {
   const environment = getLeanTaskEnvironment((flags.get('environment') ?? 'mathlib') as LeanTaskEnvironment);
   const base = flags.has('base-pack') ? readLibraryPack(required(flags, 'base-pack')) : undefined;
   const result = autoLibraryPackFor({ base, records: readAutoLibraryPool(externalPath(required(flags, 'pool'))),
-    environmentDigest: environment.dependencyDigest, challengeSource: readFile(required(flags, 'challenge-file'), 1024 * 1024) });
+    environmentDigest: environment.dependencyDigest, challengeSource: readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES) });
   const output = path.resolve(required(flags, 'output')); assertMathCanonicalPath(output);
   if (fs.existsSync(output)) throw new Error('--output exists; choose a new file');
   if (result.pack) writeMathJsonDurable(output, result.pack, 0o400);

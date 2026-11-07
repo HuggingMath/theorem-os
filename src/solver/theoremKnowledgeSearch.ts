@@ -2,6 +2,7 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import { knowledgeGoalSurfaceShape, knowledgeResidualViews } from './theoremKnowledgeGoal';
 import type { TheoremKnowledgeBase, TheoremKnowledgeEntry } from './theoremKnowledge';
+import { createKnowledgeRelationIndex, type KnowledgeRelation } from './theoremKnowledgeRelations';
 
 export type KnowledgeSearchOptions = {
   goal?: string; limit?: number; problemId?: string; environmentDigest?: string; problemReceiptDigest?: string;
@@ -9,7 +10,7 @@ export type KnowledgeSearchOptions = {
   displayGrouping?: 'exact-interface';
 };
 export type KnowledgeSearchRequest = { query: string; goal?: string };
-type KnowledgeSearchBase = Pick<TheoremKnowledgeBase, 'entries' | 'evidence'>;
+type KnowledgeSearchBase = Pick<TheoremKnowledgeBase, 'entries' | 'evidence'> & Partial<Pick<TheoremKnowledgeBase, 'contexts'>>;
 type PreferenceMatch = 'match' | 'different' | 'unknown' | 'not-requested';
 const boilerplate = new Set(['submission', 'helpers', 'helper', 'theorem', 'lemma', 'def', 'abbrev', 'opaque',
   'by', 'fun', 'type', 'prop', 'sort', 'forall', 'exists', 'let', 'in', 'have', 'show',
@@ -155,7 +156,8 @@ function prepareSearch(base: KnowledgeSearchBase, options: Omit<KnowledgeSearchO
       groups.add(document.corpusGroup);
     }
   }
-  return { documents, groupCount: new Set(documents.map(document => document.corpusGroup)).size,
+  return { documents, relations: createKnowledgeRelationIndex(base),
+    groupCount: new Set(documents.map(document => document.corpusGroup)).size,
     frequencies: new Map([...groupsByToken].map(([token, groups]) => [token, groups.size])) };
 }
 
@@ -215,18 +217,17 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
   const idf = new Map(relevant.map(term => [term, 1 + Math.log((groupCount + 1) /
     (1 + (frequencies.get(term) ?? 0)))]));
   const primaryWeight = primary.reduce((sum, term) => sum + idf.get(term)!, 0);
-  const scored = documents.map(document => {
+  const assessed = documents.map(document => {
     const { item, fields } = document, normalizedName = item.name.replace(/^_root_\./u, '').toLowerCase();
     const nameScore = !goalOnly && nameQuery ? normalizedName === identifier ? 5000 :
       normalizedName.split('.').at(-1) === identifier ? 4500 : normalizedName.endsWith(`.${identifier}`) ? 4700 : 0 : 0;
     const matched = primary.filter(term => fields.some(field => field.has(term)));
-    if (!goalOnly && !nameScore && !matched.length) return undefined;
     const main = primary.filter(term => fields[0]!.has(term) || fields[1]!.has(term));
     const dependencies = primary.filter(term => fields[2]!.has(term));
     const exactGoal = Boolean(normalizedGoal && normalizedGoal === document.normalizedType),
       trailingGoal = Boolean(normalizedGoal.length >= 8 && document.normalizedType.endsWith(normalizedGoal)),
       surfaceMatch = goalSurface !== undefined && goalSurface === document.surfaceShape;
-    if (goalOnly && !main.length && !exactGoal && !trailingGoal && !surfaceMatch) return undefined;
+    const eligible = goalOnly ? Boolean(main.length || exactGoal || trailingGoal || surfaceMatch) : Boolean(nameScore || matched.length);
     const coverage = primaryWeight ? main.reduce((sum, term) => sum + idf.get(term)!, 0) / primaryWeight : 0;
     let score = nameScore;
     for (const term of primary) {
@@ -243,37 +244,80 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
       score += goalScore * (goalOnly || main.length || nameScore ? 1 : dependencies.length ? 0.1 : 0.01);
     }
     const tier = goalOnly ? 1 : nameScore ? 4 : main.length ? 3 : dependencies.length ? 2 : matched.length ? 1 : 0;
-    return score > 0 ? { ...document, score, tier, matched } : undefined;
-  }).filter((value): value is NonNullable<typeof value> => value !== undefined)
-    .sort((left, right) => right.tier - left.tier || right.score - left.score || left.item.id.localeCompare(right.item.id));
-  const groups = new Map<string, { groupScore: number; declarations: Map<string, typeof scored> }>();
-  let declarationCount = 0;
-  for (const hit of scored) {
-    let group = groups.get(hit.corpusGroup);
-    if (!group) { group = { groupScore: hit.score, declarations: new Map() }; groups.set(hit.corpusGroup, group); }
-    const versions = group.declarations.get(hit.group);
-    if (versions) versions.push(hit);
-    else { group.declarations.set(hit.group, [hit]); declarationCount++; }
-  }
+    const exactMatch: 'name' | 'type' | undefined = nameScore ? 'name' : exactGoal ? 'type' : undefined;
+    return { ...document, score, tier, matched, eligible: eligible && score > 0, exactMatch };
+  });
+  const compareRelevance = (left: typeof assessed[number], right: typeof assessed[number]) =>
+    right.tier - left.tier || right.score - left.score || left.item.id.localeCompare(right.item.id);
+  const scored = assessed.filter(hit => hit.eligible).sort(compareRelevance);
+  type Group = { key: string; groupScore: number; declarations: Map<string, typeof scored> };
+  const groupRows = (rows: typeof scored) => {
+    const groups = new Map<string, Group>();
+    for (const hit of rows) {
+      let group = groups.get(hit.corpusGroup);
+      if (!group) { group = { key: hit.corpusGroup, groupScore: hit.score, declarations: new Map() }; groups.set(hit.corpusGroup, group); }
+      const versions = group.declarations.get(hit.group);
+      if (versions) versions.push(hit);
+      else group.declarations.set(hit.group, [hit]);
+    }
+    return groups;
+  };
+  const groups = groupRows(scored);
   const compareVersions = (left: typeof scored[number], right: typeof scored[number]) => {
     const a = versionPreference(left.item, options), b = versionPreference(right.item, options);
     for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return b[index]! - a[index]!;
     return right.tier - left.tier || right.score - left.score || left.item.id.localeCompare(right.item.id);
   };
+  const selectVersion = (group: Group) => {
+    const declarations = [...group.declarations.values()];
+    for (const versions of declarations) versions.sort(compareVersions);
+    declarations.sort((left, right) => compareVersions(left[0]!, right[0]!));
+    const versions = declarations[0]!;
+    return { group, declarations, versions, row: versions[0]!, relation: undefined as KnowledgeRelation | undefined };
+  };
+  const lexical = [...groups.values()].slice(0, limit).map(selectVersion);
+  // Seeds are concrete versions, chosen before graph expansion. No name-only or cross-context joins.
+  const seedIds = lexical.slice(0, 3).map(hit => hit.row.item.id), expansion = prepared.relations.expand(seedIds, 12);
+  const byId = new Map(assessed.map(hit => [hit.item.id, hit]));
+  const relatedGroups = new Set(expansion.relations.flatMap(relation => {
+    const row = byId.get(relation.entryId); return row ? [row.corpusGroup] : [];
+  }));
+  const relationGroups = groupRows(assessed.filter(hit => relatedGroups.has(hit.corpusGroup)).sort(compareRelevance));
+  const related = [...relationGroups.values()].flatMap(group => {
+    const selected = lexical.find(hit => hit.group.key === group.key) ?? selectVersion(group);
+    // Interface grouping can choose a different contextual version. Its edge must also exist.
+    const relation = expansion.relations.find(item => item.entryId === selected.row.item.id);
+    return relation ? [{ ...selected, relation }] : [];
+  }).sort((left, right) => compareRelevance(left.row, right.row));
+  const supplement = related[0];
+  let selected = lexical;
+  if (supplement) {
+    const prior = lexical.findIndex(hit => hit.row.item.id === supplement.row.item.id);
+    const lastExact = lexical.findLastIndex(hit => hit.row.exactMatch !== undefined);
+    const insertion = Math.max(Math.min(2, lexical.length), lastExact + 1);
+    // Preserve the first lexical alternatives and all exact hits; use at most one relation slot.
+    selected = lexical.filter(hit => hit.row.item.id !== supplement.row.item.id);
+    selected.splice(prior >= 0 && prior < insertion ? prior : insertion, 0, supplement);
+    selected = selected.slice(0, limit);
+  }
+  const recalledRows = selected.filter(hit => hit.relation).flatMap(hit => [...hit.group.declarations.values()].flat());
+  const matchedRows = [...new Map([...scored, ...recalledRows].map(row => [row.item.id, row])).values()];
+  const matchedGroups = groupRows(matchedRows);
+  const declarationCount = [...matchedGroups.values()].reduce((count, group) => count + group.declarations.size, 0);
   return { schema: 'theorem-os.theorem-knowledge-search.v1', evidence, requiresFreshCheck: true,
-    preferenceEvidence: 'recorded-metadata-not-applicability', total: declarationCount, totalVersions: scored.length,
-    ...(options.displayGrouping ? { displayGrouping: options.displayGrouping, totalInterfaces: groups.size } : {}),
-    hits: [...groups.values()].slice(0, limit).map(({ groupScore, declarations: byDeclaration }) => {
-      const declarations = [...byDeclaration.values()];
-      for (const versions of declarations) versions.sort(compareVersions);
-      declarations.sort((left, right) => compareVersions(left[0]!, right[0]!));
-      const versions = declarations[0]!;
-      const { item, matched } = versions[0]!, selected = knowledgeVersionSummary(item, options);
+    preferenceEvidence: 'recorded-metadata-not-applicability', total: declarationCount,
+    totalVersions: matchedRows.length,
+    ...(options.displayGrouping ? { displayGrouping: options.displayGrouping, totalInterfaces: matchedGroups.size } : {}),
+    relationSearch: { referenceSemantics: 'local-transitive-closure' as const, seedIds,
+      considered: expansion.relations.length, unresolved: expansion.unresolved, truncated: expansion.truncated },
+    hits: selected.map(({ group, declarations, versions, row, relation }) => {
+      const { item, matched, exactMatch } = row, summary = knowledgeVersionSummary(item, options);
       return { id: item.id, name: item.name, kind: item.kind, typeKind: item.typeKind,
         consumers: { command: 'knowledge consumers', id: item.id },
         typePreview: item.type.slice(0, 800), typeTruncated: item.type.length > 800, description: item.description.slice(0, 500),
-        problemIds: selected.problemIds, sourceKinds: selected.sourceKinds, dependencyCoverage: item.dependencies.coverage,
-        score: groupScore, matched, environmentMatch: selected.environmentMatch, problemReceiptMatch: selected.problemReceiptMatch,
+        problemIds: summary.problemIds, sourceKinds: summary.sourceKinds, dependencyCoverage: item.dependencies.coverage,
+        score: group.groupScore, matched, ...(exactMatch ? { exactMatch } : {}), ...(relation ? { relation } : {}),
+        environmentMatch: summary.environmentMatch, problemReceiptMatch: summary.problemReceiptMatch,
         ...(options.displayGrouping ? { declarationVariantCount: declarations.length } : {}),
         versionCount: versions.length, versions: versions.slice(0, 8).map(version => knowledgeVersionSummary(version.item, options)),
         versionsTruncated: versions.length > 8 };

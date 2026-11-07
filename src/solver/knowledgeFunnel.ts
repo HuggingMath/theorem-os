@@ -1,6 +1,7 @@
 import { canonicalMathJson } from '../math/mathRuntimeIo';
 import type { SolverRunState } from './archive';
 import type { KnowledgeUse } from './knowledgeUsage';
+import { knowledgeReferenceCoverage } from './knowledgeUsage';
 import { proofReceiptsMatch, type ProofCheck } from './modules/evidence';
 import { captureObligationSnapshot } from './obligationProgress';
 import { taskVersion } from './tasks';
@@ -78,6 +79,16 @@ export function summarizeKnowledgeFunnel(state: FunnelState, options: { mode?: '
   const packetIds = retrievals.flatMap(item => item.candidateIds);
   const includedIds = included.flatMap(item => item.candidateIds);
   const currentChecks = checks.filter(check => check.environmentDigest === state.environmentDigest);
+  const referenceConsumers = unique([
+    ...nodes.flatMap(node => {
+      const proof = node.integratedCheck?.passed ? node.integratedCheck : node.proof?.passed ? node.proof : undefined;
+      return proof ? [{ task: node.task, proof }] : [];
+    }),
+    ...originals.flatMap(original => original.proof ? [{ task: nodes.find(node => node.task.id === original.taskId)?.task ?? {
+      id: original.taskId, kind: 'goal' as const, objective: `Prove ${original.target.theoremName}`,
+      revision: 0, dependsOn: [], ...original.target }, proof: original.proof }] : []),
+  ], item => canonicalMathJson([item.task.id, taskVersion(item.task), item.proof.commit, item.proof.sourceDigest]));
+  const availableReferences = referenceConsumers.filter(item => knowledgeReferenceCoverage(item.task, item.proof).coverage === 'available').length;
   return {
     schema: 'theorem-os.knowledge-funnel.v1' as const,
     evidence: 'recorded-not-replayed' as const, attribution: 'observed-not-causal' as const,
@@ -93,6 +104,12 @@ export function summarizeKnowledgeFunnel(state: FunnelState, options: { mode?: '
       searchHitScope: 'returned-hit-unions-per-observation-before-packet-limits; search-api-limits-still-apply' as const,
       residualReaderOmissions: 'retained-omission-records-only; earlier-reader-drops-not-counted' as const,
       applicationScope: 'recorded-elaboration; current-source-bytes-not-rechecked' as const,
+      checkedReferenceConsumers: referenceConsumers.length,
+      consumersWithReferenceCoverage: availableReferences,
+      consumersWithoutReferenceCoverage: referenceConsumers.length - availableReferences,
+      referenceCoverage: !referenceConsumers.length || !availableReferences ? 'unknown' as const :
+        availableReferences === referenceConsumers.length ? 'available' as const : 'partial' as const,
+      referenceScope: 'available-checked-project-declaration-references; exact-catalog-name-and-file' as const,
       missingEvidence: 'absence-from-retained-records-does-not-establish-non-use' as const,
       catalogMismatchRetrievals: allRetrievals.filter(item => item.catalogDigest !== catalog).length,
       catalogMismatchUses: allUses.filter(item => item.catalogDigest !== catalog).length,
@@ -119,6 +136,11 @@ export function summarizeKnowledgeFunnel(state: FunnelState, options: { mode?: '
       recordedUses: uses.length, distinctCandidates: distinctIds(uses),
       duplicateRecords: allUses.filter(item => item.catalogDigest === catalog).length - uses.length,
       reportedAttempts: uses.filter(item => item.status === 'reported-attempt').length,
+      modelReportedUses: uses.filter(item => item.attribution === 'model-reported-origin').length,
+      hostDiscoveredReferences: uses.filter(item => item.attribution === 'host-observed-reference').length,
+      exactCatalogReferences: uses.filter(item => item.status === 'checked-reference' && item.catalogDeclarationMatch === true).length,
+      modelReportedAdaptationReferences: uses.filter(item => item.status === 'checked-reference' && item.catalogDeclarationMatch === false).length,
+      referencesWithoutCatalogMatchObservation: uses.filter(item => item.status === 'checked-reference' && item.catalogDeclarationMatch === undefined).length,
       checkedReferences: uses.filter(item => item.status === 'checked-reference').length,
       withRetainedIncludedContext: includedSelectionCount,
       withoutRetainedIncludedContext: uses.length - includedSelectionCount,

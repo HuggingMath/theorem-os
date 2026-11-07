@@ -65,6 +65,22 @@ export function plannedTaskDependencyIds(node: TaskRecord, tasks: readonly TaskR
   return route ? [...new Set([...node.task.dependsOn, ...route.prerequisiteTaskIds, route.closingTaskId])] : node.task.dependsOn;
 }
 
+/** The same transitive inputs are used by dispatch, proof checking and continuation. */
+export function taskDependencyRecords(task: TaskRecord['task'], tasks: readonly TaskRecord[]): TaskRecord[] {
+  const nodes = new Map(tasks.map(node => [node.task.id, node]));
+  const found = new Set<string>();
+  const ids = (node: TaskRecord) => taskReferenceDependencies(node)?.map(reference => reference.taskId) ?? plannedTaskDependencyIds(node, tasks);
+  const visit = (id: string) => {
+    if (found.has(id)) return;
+    const node = nodes.get(id);
+    if (!node) throw new Error('math_plan_dependency_missing');
+    found.add(id); ids(node).forEach(visit);
+  };
+  const node = nodes.get(task.id);
+  (node?.task === task ? ids(node) : task.dependsOn).forEach(visit);
+  return [...found].map(id => nodes.get(id)!);
+}
+
 /** Memoization lasts only for this selection; mutable task state never enters a global cache. */
 function taskReadiness(tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]) {
   const nodes = new Map(tasks.map(node => [node.task.id, node]));
@@ -131,7 +147,22 @@ export function readyResearchTasks(tasks: readonly TaskRecord[], groups?: readon
   const rank = (node: TaskRecord) => isAdvisoryTask(node.task) || !readiness.dependenciesReady(node.task) ? 0 :
     node.task.kind === 'goal' ? 2 : consumed.has(node.task.id) && node.task.dependsOn.some(id => checked.has(id)) ? 1 : 0;
   const ready = tasks.filter(node => node.status === 'pending' && routeAllowsTask(node.task, tasks, groups) && readiness.canStart(node.task));
-  return prioritizeEarlyRouteChecks(ready.toSorted((a, b) => rank(b) - rank(a) || priority.compareTasks(a, b)), tasks, groups);
+  const compare = (a: TaskRecord, b: TaskRecord) => rank(b) - rank(a) || priority.compareTasks(a, b);
+  const ranked = ready.toSorted(compare);
+  // A yielded investigation must not repeatedly hide equally ranked, untried work.
+  // Reorder only advisory slots within one priority tier, retaining every proof slot.
+  // A pairwise advisory-only tie-break would be non-transitive across proof tasks.
+  for (let start = 0; start < ranked.length;) {
+    let end = start + 1;
+    while (end < ranked.length && compare(ranked[start], ranked[end]) === 0) end++;
+    const advisory = ranked.slice(start, end).filter(node => isAdvisoryTask(node.task))
+      .toSorted((a, b) => a.attempts - b.attempts);
+    let next = 0;
+    for (let index = start; index < end; index++)
+      if (isAdvisoryTask(ranked[index].task)) ranked[index] = advisory[next++];
+    start = end;
+  }
+  return prioritizeEarlyRouteChecks(ranked, tasks, groups);
 }
 
 /** Offer one fresh route check before investing in its still-unproved inputs. */

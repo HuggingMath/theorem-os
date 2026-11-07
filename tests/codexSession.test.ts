@@ -276,7 +276,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const started = vi.fn();
     expect(await session.run('proof', 'message-1', root, started)).toBe('completed');
     expect(started).toHaveBeenCalledWith('message-1');
-    expect(options.onUsage).toHaveBeenCalledWith({ totalTokens: 21 });
+    expect(options.onUsage).toHaveBeenCalledWith({ totalTokens: 21 }, {});
     expect(session.lastInputTokens).toBe(12345);
     const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(calls.find(call => call.method === 'thread/start').params.config).toMatchObject({

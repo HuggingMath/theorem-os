@@ -182,7 +182,7 @@ describe('original-goal frontier priority', () => {
     });
     const live = [engineer, researcher, ...busy];
 
-    expect(ids(ready)).toEqual(['helper', 'old_exploration', 'fresh_exploration']);
+    expect(ids(ready)).toEqual(['helper', 'fresh_exploration', 'old_exploration']);
     expect(assignSharedResearchTask(ready, engineer, live, [main], tasks)).toBe(old);
     expect(assignSharedResearchTask(ready, researcher, live, [main], tasks)).toBe(fresh);
     fresh.status = 'running';

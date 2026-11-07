@@ -186,7 +186,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
           researchDecisions: (presented?.researchInputIds ?? []).map(deliveryId => ({ deliveryId,
             outcome: 'decline', reason: 'The current evidence does not establish a sound change to this route.' })),
           ...(presented?.progressReview ? { progressReview: { id: presented.progressReview.id,
-            reason: 'Continue the researcher\'s missing-construction investigation: no checked fact is available yet; the next check is a precise construction for the remaining case.' } } : {}),
+            reason: 'Continue the researcher\'s missing-construction investigation: no checked fact is available yet; the next check is a precise construction for the remaining case.',
+            nextChecks: [{ action: 'construction-check', targetTaskId: 'investigate',
+              objective: 'Construct the remaining case required by both original goals.',
+              expectedEvidence: 'An exact construction or a concrete obstruction in the remaining case.' }] } } : {}),
         }) + '\n');
         await cooperation!.pulse(workers[0].id);
         expect(fixture.state.cooperation!.lastLeadInputDigest).toBeTruthy();

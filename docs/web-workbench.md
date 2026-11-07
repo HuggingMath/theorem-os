@@ -8,6 +8,10 @@
 
 首次构建需联网下载 Bun、Codex CLI、固定 Lean 工具链、Mathlib 源码和预编译依赖，镜像较大，下载可能较慢。构建会复用下载缓存、重试失败下载，并执行完整 Mathlib 构建和 `import Mathlib` / `ring` 探针。
 
+worker 还通过 `scripts/build-pantograph.ts` 从固定 Pantograph commit `0ee70917fb93a5421157119362ecde806a4d881b` 构建 `repl`。脚本校验源码归档 SHA-256，使用镜像已安装的 Lean 4.33.0 重新编译，并将可执行文件、Lean 库、许可证、构建来源和逐文件摘要清单安装到只读的 `/opt/theoremos-pantograph`。上游源码的 4.33.1 工具链选择只在临时构建目录改为 4.33.0；题目和 Mathlib 的固定环境保持原样，运行时不会下载或构建后端。
+
+目前仅 Mathlib worker 注入 `DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST`，由运行时校验产物并把后端摘要纳入运行身份。Agent 通过独立工具包中的 `proof-search` 对已物化、类型闭合的普通 helper lemma 执行有预算的 tactic 搜索。候选和断点是 advisory，仍须经过 ready、停写、冻结、独立 Lean 检查、集成和 S3。标准库 worker 没有 sealed/FUSE 环境，因此保持后端未配置，调用会返回 `proof_search_backend_not_configured`；未放宽其设备或文件权限。
+
 ```bash
 git clone https://github.com/LikC1606/theorem-os.git
 cd theorem-os

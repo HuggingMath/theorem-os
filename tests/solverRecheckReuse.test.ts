@@ -124,7 +124,7 @@ describe('process-local reuse of unchanged integrated projections', () => {
     }
   });
 
-  it('rechecks a batched consumer after a retained goal dependency becomes invalid', async () => {
+  it('rechecks a consumer separately after its retained goal dependency becomes invalid', async () => {
     const consumer: CooperativeTask = { id: 'consumer', kind: 'lemma', objective: 'Consume the checked goal.', type: 'True',
       proofPath: 'Submission.lean', theoremName: 'Tutorial.consumer', dependsOn: ['goal_0'], revision: 0 };
     update(text => text.replace('theorem add_zero', 'lemma consumer : True := by trivial\n\ntheorem add_zero'));
@@ -134,7 +134,7 @@ describe('process-local reuse of unchanged integrated projections', () => {
     await expect(recheck()).resolves.toBe(true);
 
     expect(host.verify.mock.calls.map(([request]) => request.items.map(item => item.theoremName)))
-      .toEqual([['Tutorial.add_zero', 'Tutorial.consumer'], ['Tutorial.consumer']]);
+      .toEqual([['Tutorial.add_zero'], ['Tutorial.consumer']]);
     for (const id of ['goal_0', 'consumer']) expect(node(id)).toMatchObject({
       status: 'blocked', feedback: 'math_task_dependency_invalidated',
       integratedCheck: { passed: true, commit: state.cooperation!.canonicalCommit },
@@ -142,8 +142,11 @@ describe('process-local reuse of unchanged integrated projections', () => {
     const requests = host.verify.mock.calls.map(([request]: [MathematicsVerifierBatchRequest]) => request);
     expect(committedSource(workspace, requests[0].targetCommit!, problem.projectRelative + '/Submission.lean'))
       .toContain('theorem add_zero');
+    // The original was independently checked in this phase, so its concrete source can
+    // remain in the consumer check while the invalidated graph still blocks both tasks.
     expect(committedSource(workspace, requests[1].targetCommit!, problem.projectRelative + '/Submission.lean'))
-      .not.toContain('theorem add_zero');
+      .toContain('theorem add_zero (n : Nat) : n + 0 = n := by rfl');
+    expect(node('consumer').integratedCheck!.verification.targetCommit).toBe(requests[1].targetCommit);
   });
 
   it('rechecks a restored receipt without forcing an unchanged live receipt through the verifier', async () => {

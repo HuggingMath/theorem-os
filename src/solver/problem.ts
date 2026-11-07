@@ -15,6 +15,7 @@ import { readLocalExampleReceipt } from '../math/localExample';
 import { readLeanTaskReceipt } from '../math/leanTask';
 import { DECLARATION_INDEX_FILE } from './declarationIndex';
 import { libraryDeclarationConflict } from '../math/libraryPacks';
+import { maskLeanComments } from '../math/leanSyntax';
 
 export function committedSource(worktree: string, commit: string, file: string): string {
   // Matches the Lean-Eval per-file limit so generated certificate modules remain readable.
@@ -67,6 +68,8 @@ export type SolverProblem = Readonly<{
   sourceRepository?: string;
   declarations: Readonly<Record<string, readonly OriginalDeclaration[]>>;
   sourceStructure: Readonly<Record<string, string>>;
+  /** Original context text bound by sourceStructure; permits inert comments without changing legacy identities. */
+  sourceContexts?: Readonly<Record<string, string>>;
   sourceImports?: Readonly<Record<string, readonly string[]>>;
   /** Owned library-pack modules whose bytes are frozen (file → digest); proofs import them and never edit them. */
   frozenFiles?: Readonly<Record<string, string>>;
@@ -85,11 +88,12 @@ export function commitSolverProjection(problem: SolverProblem, worktree: string,
   return git(worktree, ['rev-parse', 'HEAD']);
 }
 
-export type SolverSourceConstraints = Pick<SolverProblem, 'trustedFiles' | 'declarations' | 'sourceStructure' | 'sourceImports' | 'frozenFiles'>;
+export type SolverSourceConstraints = Pick<SolverProblem, 'trustedFiles' | 'declarations' | 'sourceStructure' | 'sourceContexts' | 'sourceImports' | 'frozenFiles'>;
 
 /** The fields every host writer copies into .lake/source-constraints.json for check-lean. */
 export const solverSourceConstraints = (problem: SolverSourceConstraints, declarations = problem.declarations): SolverSourceConstraints => ({
   trustedFiles: problem.trustedFiles, declarations, sourceStructure: problem.sourceStructure, sourceImports: problem.sourceImports,
+  ...(problem.sourceContexts ? { sourceContexts: problem.sourceContexts } : {}),
   ...(problem.frozenFiles ? { frozenFiles: problem.frozenFiles } : {}) });
 
 /** Only explicit modules from the pinned Mathlib package may extend proof imports. */
@@ -130,7 +134,7 @@ function isInstanceQuery(line: string): boolean {
   return depth === 0 && validBare();
 }
 
-function sourceStructure(source: string, originals: readonly Pick<OriginalDeclaration, 'name' | 'qualifiedName'>[],
+function sourceContext(source: string, originals: readonly Pick<OriginalDeclaration, 'name' | 'qualifiedName'>[],
   originalImports?: readonly string[], allowedImports = solverMathlibImports(source)): string {
   const addedImports = new Set(originalImports === undefined ? [] :
     allowedImports.filter(module => !originalImports.includes(module)));
@@ -146,9 +150,16 @@ function sourceStructure(source: string, originals: readonly Pick<OriginalDeclar
   }
   frozen += source.slice(cursor);
   // Read-only name and instance queries leave the original proof context intact.
-  return mathDigest(frozen.split('\n').map(line => line.trim()).filter(line => line &&
+  return frozen.split('\n').map(line => line.trim()).filter(line => line &&
     !addedImports.has(/^import[ \t]+([^ \t]+)$/u.exec(line)?.[1] ?? '') &&
-    !/^#check[ \t]+[\p{L}_][\p{L}\p{M}\p{N}_'.]*$/u.test(line) && !isInstanceQuery(line)).join('\n'));
+    !/^#check[ \t]+[\p{L}_][\p{L}\p{M}\p{N}_'.]*$/u.test(line) && !isInstanceQuery(line)).join('\n');
+}
+
+/** Ignore comments and spacing outside literals; strings and every effective context command remain bound. */
+function contextWithoutComments(context: string): string {
+  return maskLeanComments(context).split('\n').map(line => line.trim()
+    .replace(/"(?:\\.|[^"\\])*"|[ \t]+/gu, token => token.startsWith('"') ? token : ' '))
+    .filter(Boolean).join('\n');
 }
 
 export function readSolverProblem(workspacePath: string, receiptFile: string): SolverProblem {
@@ -210,8 +221,9 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
       ...(kinds.get(item.startOffset) !== 'theorem' && !targetNames.has(item.name.split('.').at(-1))
         ? { body: mathDigest(source.slice(item.bodyOffset, item.endOffset).trim()) } : {}) }))];
   }));
-  const structures = Object.fromEntries(Object.entries(declarations).map(([file, originals]) =>
-    [file, sourceStructure(originalSource(file), originals)]));
+  const contexts = Object.fromEntries(Object.entries(declarations).map(([file, originals]) =>
+    [file, sourceContext(originalSource(file), originals)]));
+  const structures = Object.fromEntries(Object.entries(contexts).map(([file, context]) => [file, mathDigest(context)]));
   const sourceImports = Object.fromEntries(Object.keys(declarations).map(file =>
     [file, mathConstructionImports(originalSource(file))]));
   const frozenFiles = libraryPack && Object.fromEntries(Object.entries(libraryPack.files).map(([file, digest]) => {
@@ -225,7 +237,7 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
     baseCommit: receipt.schema === 'theorem-os.lean-task.v1' ? receipt.baseCommit : git(workspace, ['rev-parse', 'HEAD']),
     receiptDigest: mathDigest(canonicalMathJson(receipt)),
     contract: receipt.contract, targets, trustedFiles, ownedFiles: receipt.solverOwnedFiles,
-    declarations, sourceStructure: structures, sourceImports, activeProblemPath: receipt.activeProblemPath,
+    declarations, sourceStructure: structures, sourceContexts: contexts, sourceImports, activeProblemPath: receipt.activeProblemPath,
     ...(frozenFiles ? { frozenFiles } : {}),
     ...('sourceProjectRoot' in receipt ? { sourceRepository: receipt.sourceProjectRoot } : {}) };
   if (receipt.schema === 'theorem-os.lean-task.v1') assertSolverProjectSources(problem, receipt.projectRoot);
@@ -265,8 +277,15 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
     const allowedImports = solverProofImports(problem, source);
     if (allowedImports.some(module => !module.startsWith('Mathlib.') && !problem.sourceImports?.[relative]?.includes(module)))
       addedLocalImportFile = relative;
-    if (sourceStructure(source, originals, problem.sourceImports?.[relative], allowedImports) !== problem.sourceStructure[relative])
-      throw new SolverSourceError(relative, 'math_original_context_changed');
+    const currentContext = sourceContext(source, originals, problem.sourceImports?.[relative], allowedImports);
+    if (mathDigest(currentContext) !== problem.sourceStructure[relative]) {
+      const originalContext = problem.sourceContexts?.[relative];
+      // Old checkpoints keep their exact digest. Only a preimage of that frozen digest can authorize
+      // comment-insensitive comparison; an arbitrary replacement context cannot weaken the guard.
+      if (originalContext === undefined || mathDigest(originalContext) !== problem.sourceStructure[relative] ||
+          contextWithoutComments(currentContext) !== contextWithoutComments(originalContext))
+        throw new SolverSourceError(relative, 'math_original_context_changed');
+    }
   }
   const conflict = Object.keys(frozenSources).length ? libraryDeclarationConflict(frozenSources, ownedSources) : undefined;
   if (conflict) throw new SolverSourceError(conflict.file, 'math_library_declaration_redeclared', conflict.name);

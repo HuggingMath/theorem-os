@@ -9,7 +9,7 @@ const task: CooperativeTask = { id: 'consumer', kind: 'lemma', revision: 0, depe
 const knowledge = { digest: 'pinned-catalog', base: { entries: [{ id: 'saved-theorem' }] } } as KnowledgeContextSnapshot;
 const claim = { id: 'saved-theorem', catalogDigest: knowledge.digest, declaration: { name: 'Current.bridge', file: 'Submission.lean' } };
 const proof = { passed: true, commit: 'fixed-commit', sourceDigest: 'fixed-source', verification: { results: [] },
-  references: { proof: [claim.declaration] } } as unknown as TaskProof;
+  references: { sourceCommit: 'fixed-commit', root: { name: task.theoremName, file: task.proofPath }, proof: [claim.declaration] } } as unknown as TaskProof;
 
 it('separates a reported origin from a Lean-confirmed reference to its adapted declaration', () => {
   expect(inspectKnowledgeUses([claim], knowledge, task).uses[0]).toMatchObject({ status: 'reported-attempt', attribution: 'model-reported-origin' });
@@ -27,7 +27,7 @@ it('does not upgrade unused, statement-only, wrong-file or failed declarations',
 
 it('checks original-target references only against that exact file and theorem', () => {
   const whole = { ...proof, references: undefined, verification: { ...proof.verification, results: [
-    { theoremName: 'Different.consumer', proofPath: task.proofPath, declarationReferences: { proof: [claim.declaration] } },
+    { theoremName: 'Different.consumer', proofPath: task.proofPath, targetCommit: 'fixed-commit', status: 'kernel_verified', declarationReferences: { proof: [claim.declaration] } },
   ] } } as unknown as TaskProof;
   expect(inspectKnowledgeUses([claim], knowledge, task, whole).uses[0].status).toBe('reported-attempt');
   whole.verification.results[0]!.theoremName = task.theoremName!;
@@ -35,10 +35,10 @@ it('checks original-target references only against that exact file and theorem',
 });
 
 it('records malformed, disabled or forged usage as rejected telemetry without rejecting a proof', () => {
-  expect(inspectKnowledgeUses([claim], undefined, task, proof)).toEqual({ uses: [], rejected: 1 });
+  expect(inspectKnowledgeUses([claim], undefined, task, proof)).toMatchObject({ uses: [], rejected: 1 });
   for (const invalid of [{ ...claim, id: 'forged' }, { ...claim, catalogDigest: 'changed' }, null, { ...claim, declaration: false }])
-    expect(inspectKnowledgeUses([invalid], knowledge, task, proof)).toEqual({ uses: [], rejected: 1 });
-  expect(inspectKnowledgeUses({}, knowledge, task)).toEqual({ uses: [], rejected: 1 });
+    expect(inspectKnowledgeUses([invalid], knowledge, task, proof)).toMatchObject({ uses: [], rejected: 1 });
+  expect(inspectKnowledgeUses({}, knowledge, task)).toMatchObject({ uses: [], rejected: 1 });
 });
 
 it('bounds optional claims and removes duplicate records', () => {

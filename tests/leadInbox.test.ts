@@ -80,7 +80,7 @@ describe('Lead inbox', () => {
       { cooperation: { tasks: [checked, paused, running, exploration] } } as unknown as SolverRunState,
       { root: '/runtime', worktree: '/proof', environment: {}, taskText: 'Prove the target', retrievalRoot: '/library',
         frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' }, assignment: action }).continuationMessage!;
-    const table = message.slice(message.indexOf('Current tasks ('));
+    const table = message.slice(message.indexOf('Current tasks (')).split('\n\n')[0];
     expect(table.split('\n').slice(1, 4)).toEqual([
       'paused_lemma research pending/paused owner=- attempts=2 waitsOn=open_bridge',
       'open_bridge research running owner=researcher-1 attempts=0 waitsOn=-',

@@ -10,7 +10,7 @@ import { AUTO_LIBRARY_RECORD_SCHEMA, autoLibraryFile, autoLibraryPackFor, autoLi
 import { AUTO_LIBRARY_PLANNER_INSTRUCTIONS, autoLibraryLeanFeedback, autoLibraryModuleSummary, autoLibraryPlanJsonSchema,
   autoLibraryPlannerInput, autoLibraryPlanProblems, autoLibraryPlanSchema, autoLibraryProverTask, autoLibraryRejectionFeedback,
 } from '../math/autoLibraryPlanner';
-import { bootstrapLeanTask, LEAN_TASK_DESCRIPTION_MAX_LENGTH } from '../math/leanTask';
+import { bootstrapLeanTask, LEAN_TASK_DESCRIPTION_MAX_LENGTH, LEAN_TASK_SOURCE_MAX_BYTES } from '../math/leanTask';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { inspectScopedLeanDeclarations } from '../math/leanSource';
 import { extractRunLibraryModules, LIBRARY_PACK_SCHEMA, libraryPackDigest, mergeLibraryPacks, parseLibraryPack,
@@ -36,7 +36,7 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const limit = z.number().int().nonnegative();
 const requestSchema = z.object({
   schema: z.literal('theorem-os.auto-library-build.v1'), buildId: z.string().uuid(),
-  challengeId: z.string().min(1).max(256), challengeSource: z.string().min(1).max(1024 * 1024),
+  challengeId: z.string().min(1).max(256), challengeSource: z.string().min(1).max(LEAN_TASK_SOURCE_MAX_BYTES),
   task: z.string().max(LEAN_TASK_DESCRIPTION_MAX_LENGTH), environment: z.string().min(1).max(64), environmentDigest: hash,
   definitionTargets: z.array(z.string().min(1).max(512)).max(1024).optional(),
   pool: z.string().min(1).max(4096), basePackDigest: hash.nullable(),
@@ -83,7 +83,7 @@ export function prepareAutoLibraryBuild(directoryInput: string, rootInput: strin
 }
 
 export function readAutoLibraryRequest(directory: string): { request: AutoLibraryRequest; basePack?: LibraryPack } {
-  const request = requestSchema.parse(JSON.parse(readMathText(path.join(directory, 'request.json'), 4 * 1024 * 1024)));
+  const request = requestSchema.parse(JSON.parse(readMathText(path.join(directory, 'request.json'), 4 * LEAN_TASK_SOURCE_MAX_BYTES)));
   if (getLeanTaskEnvironment(request.environment as LeanTaskEnvironment).dependencyDigest !== request.environmentDigest)
     throw new Error('auto_library_environment_changed');
   if (request.basePackDigest === null) return { request };

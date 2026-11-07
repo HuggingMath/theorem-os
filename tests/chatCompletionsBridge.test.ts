@@ -75,7 +75,7 @@ describe('upstream request budget across session bridges', () => {
     const url = await upstream((_request, response) => { calls++; sse(response, [chunk({ content: 'ok' }), chunk({}, 'stop'), usage(25)]); });
     const value = await bridge(url, incomplete, shared.gate(0));
     expect(completed(await events(await post(value)))).toBeDefined();
-    expect(shared.receipts).toEqual([{ complete: true, usage: { inputTokens: 23, outputTokens: 2, totalTokens: 25,
+    expect(shared.receipts.map(({ complete, usage }) => ({ complete, usage }))).toEqual([{ complete: true, usage: { inputTokens: 23, outputTokens: 2, totalTokens: 25,
       cachedInputTokens: 3, reasoningOutputTokens: 1 } }]);
     for (let retry = 0; retry < 3; retry++) {
       const response = await post(value);
@@ -118,7 +118,7 @@ describe('upstream request budget across session bridges', () => {
     }
     expect(calls).toBe(1); expect(incomplete).toHaveBeenCalledOnce();
     expect(shared.status()).toMatchObject({ status: 'usage-unavailable', reportedTotalTokens: null, usageComplete: false });
-    expect(shared.receipts).toEqual([{ complete: false, usage: undefined }]);
+    expect(shared.receipts.map(({ complete, usage }) => ({ complete, usage }))).toEqual([{ complete: false, usage: undefined }]);
     expect(shared.records[1].requestUsageAccounting?.startedRequests).toBe(0);
   });
 
@@ -130,7 +130,7 @@ describe('upstream request budget across session bridges', () => {
     expect((await post(value)).status).toBe(502);
     expect((await post(value)).status).toBe(403);
     expect(fetch).toHaveBeenCalledOnce(); expect(incomplete).toHaveBeenCalledOnce();
-    expect(shared.receipts).toEqual([{ complete: false, usage: undefined }]);
+    expect(shared.receipts.map(({ complete, usage }) => ({ complete, usage }))).toEqual([{ complete: false, usage: undefined }]);
     expect(shared.records[0].requestUsageAccounting?.pendingRequests).toBe(0);
   });
 
@@ -149,7 +149,7 @@ describe('upstream request budget across session bridges', () => {
     } finally { release(); }
     expect((await first).status).toBe(status === 429 ? 429 : 502);
     expect(fetch).toHaveBeenCalledOnce(); expect(incomplete).toHaveBeenCalledOnce();
-    expect(shared.receipts).toEqual([{ complete: false, usage: undefined }]);
+    expect(shared.receipts.map(({ complete, usage }) => ({ complete, usage }))).toEqual([{ complete: false, usage: undefined }]);
   });
 
   it('retains known usage when closing a response before its terminal marker', async () => {
@@ -163,7 +163,7 @@ describe('upstream request budget across session bridges', () => {
     const reader = response.body!.getReader(); await reader.read();
     await value.close();
     await reader.cancel().catch(() => {});
-    expect(shared.receipts).toEqual([{ complete: false, usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12,
+    expect(shared.receipts.map(({ complete, usage }) => ({ complete, usage }))).toEqual([{ complete: false, usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12,
       cachedInputTokens: 3, reasoningOutputTokens: 1 } }]);
     expect(shared.status()).toMatchObject({ status: 'usage-unavailable', reportedTotalTokens: 12, usageComplete: false });
     expect(shared.records[0].requestUsageAccounting?.pendingRequests).toBe(0);
@@ -209,9 +209,9 @@ describe('upstream stream liveness', () => {
       const result = completed(await traffic);
       expect(result.output[0].content[0].text).toBe('working ' + 'still working '.repeat(32));
       expect(result.usage).toEqual({ input_tokens: 10, output_tokens: 2, total_tokens: 12 });
-      expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: true, usage: {
+      expect(settle.mock.calls.map(([item]) => ({ complete: item.complete, usage: item.usage }))).toEqual([{ complete: true, usage: {
         inputTokens: 10, outputTokens: 2, totalTokens: 12,
-      } });
+      } }]);
       expect(incomplete).not.toHaveBeenCalled(); expect(fetch).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
@@ -237,7 +237,7 @@ describe('upstream stream liveness', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(signal.aborted).toBe(true);
       expect(await stopped).toBe('aborted');
-      expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: false, usage: undefined });
+      expect(settle.mock.calls.map(([item]) => ({ complete: item.complete, usage: item.usage }))).toEqual([{ complete: false, usage: undefined }]);
       expect(incomplete).toHaveBeenCalledOnce(); expect(fetch).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
@@ -457,7 +457,7 @@ describe('session-scoped Responses to Chat Completions bridge, entirely offline'
     expect(JSON.stringify(body)).not.toContain(upstreamKey);
     expect(JSON.stringify(body)).not.toContain('private prompt');
     expect(JSON.stringify(body)).not.toContain(message);
-    expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: false, usage: undefined });
+    expect(settle.mock.calls.map(([item]) => ({ complete: item.complete, usage: item.usage }))).toEqual([{ complete: false, usage: undefined }]);
     expect(incomplete).toHaveBeenCalledOnce();
   });
 

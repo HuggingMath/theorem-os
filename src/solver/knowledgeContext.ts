@@ -13,7 +13,7 @@ import { knowledgeResidualViews, type KnowledgeResidualView } from './theoremKno
 /** Validated once when the run pins its catalog; no archived proof sources enter task hints. */
 export type KnowledgeContextSnapshot = Readonly<{
   digest: string;
-  base: Pick<TheoremKnowledgeBase, 'entries' | 'evidence' | 'routeFindings'>;
+  base: Pick<TheoremKnowledgeBase, 'entries' | 'evidence' | 'contexts' | 'routeFindings'>;
 }>;
 export type KnowledgeRetrieval = Readonly<{
   sectionId: string; catalogDigest: string; searchInputDigest: string; consumer: SearchTarget['consumer'];
@@ -32,7 +32,7 @@ type SearchTarget = {
   query: string; goal?: string;
   diagnostic?: Pick<LeanResidualGoal, 'authority' | 'sourceDigest' | 'environmentDigest' | 'toolIdentity' | 'artifact' | 'file' | 'line' | 'column'>;
 };
-const maxTargets = 3, candidateLimit = 3, maxSectionBytes = 4096;
+const maxTargets = 3, poolLimit = 12, displayLimit = 3, maxSectionBytes = 4096;
 const title = 'Saved theorem candidates (advisory; inspect full types and premises, then check the actual application):\n';
 
 function originalTarget(problem: SolverProblem, target: { theoremName?: string; proofPath?: string }): SearchTarget | undefined {
@@ -89,6 +89,23 @@ export function knowledgeContextSections(input: {
   residualOmissions?: readonly LeanResidualGoalOmission[];
 }): (ContextSection & { knowledge: KnowledgeRetrieval })[] {
   const { problem, knowledge } = input;
+  const entries = new Map(knowledge.base.entries.map(entry => [entry.id, entry]));
+  const applicationSummary = (id: string) => {
+    const hints = entries.get(id)?.applicationHints;
+    return hints?.length ? {
+      evidence: 'recorded-not-replayed', requiresFreshCheck: true, proofAcceptance: 'not-assessed',
+      count: hints.length, complete: false,
+      preview: hints.slice(0, 2).map(hint => ({ target: hint.application.context, historicalStatus: hint.historicalCheck.status,
+        selectedDeclarationUsed: hint.historicalCheck.selectedDeclarationUsed, remainingGoals: hint.application.remainingGoals?.length ?? 0,
+        scopeMatch: hint.scope.problemReceiptDigest === problem.receiptDigest && hint.scope.environmentDigest === input.environmentDigest
+          ? 'recorded-problem-and-environment' : 'not-established' })),
+      read: { command: 'knowledge get', id, metadata: true, field: 'applicationHints', startOffset: 0 },
+    } : undefined;
+  };
+  const challengeDigest = mathDigest(problem.contract.formalStatement);
+  const scopedApplications = knowledge.base.entries.filter(entry => entry.applicationHints?.some(hint =>
+    hint.scope.problemReceiptDigest === problem.receiptDigest && hint.scope.environmentDigest === input.environmentDigest &&
+    hint.scope.challengeDigest === challengeDigest));
   const targets = searchTargets(problem, input.cooperation, input.action, input.environmentDigest).map(original => {
     const residuals = input.residualGoals?.filter(goal => canonicalMathJson(goal.consumer) === canonicalMathJson(original.consumer) &&
       Buffer.byteLength(goal.goalText) <= 16000);
@@ -118,7 +135,7 @@ export function knowledgeContextSections(input: {
       requests.push({ query: item.target.query, goal: item.target.goal });
     }
   }
-  const searches = requests.length ? searchTheoremKnowledgeRequests(knowledge.base, requests, { limit: candidateLimit,
+  const searches = requests.length ? searchTheoremKnowledgeRequests(knowledge.base, requests, { limit: poolLimit,
     displayGrouping: 'exact-interface', environmentDigest: input.environmentDigest,
     problemReceiptDigest: problem.receiptDigest }) : [];
   const findingSearches = requests.length ? searchKnowledgeRouteFindingRequests(knowledge.base, requests, { limit: 2,
@@ -128,13 +145,34 @@ export function knowledgeContextSections(input: {
     const results = items.flatMap(item => item.requestIndex !== undefined ? [searches[item.requestIndex]!] : []);
     const hits = results.flatMap(result => result.hits);
     // Include a first candidate from each case before adding alternatives for a single case.
-    const diverse = Array.from({ length: candidateLimit }, (_, rank) => results.flatMap(result => result.hits[rank] ? [result.hits[rank]!] : [])).flat();
-    const candidates = [...new Map(diverse.map(hit => [hit.id, hit])).values()].slice(0, candidateLimit).map(hit => ({ id: hit.id, name: hit.name, kind: hit.kind,
+    const byId = new Map<string, typeof hits[number]>();
+    for (let rank = 0; rank < poolLimit; rank++) for (const result of results) {
+      const hit = result.hits[rank];
+      if (!hit) continue;
+      const previous = byId.get(hit.id);
+      byId.set(hit.id, previous ? { ...hit, exactMatch: previous.exactMatch ?? hit.exactMatch,
+        relation: previous.relation ?? hit.relation } : hit);
+    }
+    const diverse = [...byId.values()];
+    let selected = diverse.slice(0, displayLimit);
+    if (hits.some(hit => hit.relation)) {
+      const firstIds = new Set(results.flatMap(result => result.hits[0] ? [result.hits[0].id] : []));
+      const protectedHits = diverse.filter(hit => firstIds.has(hit.id) || hit.exactMatch);
+      const protectedIds = new Set(protectedHits.map(hit => hit.id));
+      const relation = diverse.find(hit => hit.relation && !protectedIds.has(hit.id));
+      // Each residual case gets its first candidate before a relation competes for one remaining slot.
+      const alternatives = diverse.filter(hit => !hit.relation || protectedIds.has(hit.id) || hit.id === relation?.id);
+      selected = [...new Map([...protectedHits, ...(relation ? [relation] : []), ...alternatives]
+        .map(hit => [hit.id, hit])).values()].slice(0, displayLimit);
+    }
+    const candidates = selected.map(hit => ({ id: hit.id, name: hit.name, kind: hit.kind,
       typeKind: hit.typeKind, typePreview: hit.typePreview, typeTruncated: hit.typeTruncated,
       dependencyCoverage: hit.dependencyCoverage, environmentMatch: hit.environmentMatch,
       consumers: hit.consumers,
       problemReceiptMatch: hit.problemReceiptMatch, versionCount: hit.versionCount,
-      declarationVariantCount: hit.declarationVariantCount }));
+      declarationVariantCount: hit.declarationVariantCount,
+      ...(hit.exactMatch ? { exactMatch: hit.exactMatch } : {}), ...(hit.relation ? { relation: hit.relation } : {}),
+      ...(applicationSummary(hit.id) ? { applicationHints: applicationSummary(hit.id) } : {}) }));
     const routeFindings = [...new Map(items.flatMap(item => item.requestIndex !== undefined ? findingSearches[item.requestIndex]!.hits : [])
       .map(hit => [hit.id, hit])).values()].slice(0, 2);
     const residualSearches = items.flatMap(item => item.view && item.target.diagnostic ? [{ inputDigest: item.inputDigest,
@@ -157,7 +195,8 @@ export function knowledgeContextSections(input: {
       candidateGrouping: 'exact-name-type-typeKind-display-only',
       variantCountEvidence: 'distinct-recorded-declarations-not-interchangeable',
       totalMatches: results.length === 1 ? results[0]!.total : new Set(hits.map(hit => hit.id)).size,
-      totalInterfaces: results.length === 1 ? results[0]!.totalInterfaces : undefined, candidateLimit, omittedForBytes: 0, candidates,
+      totalInterfaces: results.length === 1 ? results[0]!.totalInterfaces : undefined,
+      candidateLimit: displayLimit, poolLimit, omittedForBytes: 0, candidates,
       ...(residualCoverage ? { residualCoverage, residualSearches: residualDetails } : {}),
       routeFindings };
     let text = title + JSON.stringify(packet);
@@ -173,7 +212,7 @@ export function knowledgeContextSections(input: {
       routeFindings.pop(); text = title + JSON.stringify(packet);
     }
     const sectionId = `knowledge:${inputDigest}`;
-    return Buffer.byteLength(text) <= maxSectionBytes
+    const sections: (ContextSection & { knowledge: KnowledgeRetrieval })[] = Buffer.byteLength(text) <= maxSectionBytes
       ? [{ id: sectionId, kind: 'sources' as const, text, priority: 7, knowledge: { sectionId,
         catalogDigest: knowledge.digest, searchInputDigest: inputDigest, consumer: target.consumer,
         searchSource: target.source, ...(target.diagnostic ? { diagnostic: target.diagnostic } : {}),
@@ -181,5 +220,31 @@ export function knowledgeContextSections(input: {
         ...(omissions.length ? { residualOmissions: omissions } : {}),
         searchCandidateIds: [...new Set(hits.map(hit => hit.id))],
         candidateIds: candidates.map(item => item.id), routeFindingIds: routeFindings.map(item => item.id) } }] : [];
+    // A known application for this exact original target can be useful even without lexical overlap,
+    // or after the ordinary candidate packet loses it to the findings/context byte budget.
+    const handoffs = scopedApplications.filter(entry => !sections.some(section => section.knowledge.candidateIds.includes(entry.id)) &&
+      entry.applicationHints!.some(hint => hint.application.context.file === target.consumer.proofPath &&
+        hint.application.context.declaration === target.consumer.theoremName)).slice(0, displayLimit)
+      .map(entry => ({ id: entry.id, name: entry.name, applicationHints: applicationSummary(entry.id)! }));
+    if (handoffs.length) {
+      const handoffDigest = mathDigest(canonicalMathJson({ consumer: target.consumer, ids: handoffs.map(entry => entry.id) }));
+      const handoffId = `knowledge-application-hints:${handoffDigest}`;
+      const packet = { schema: 'theorem-os.knowledge-application-context.v1', catalogDigest: knowledge.digest,
+        selection: 'exact-recorded-application-scope', evidence: 'recorded-not-replayed', requiresFreshCheck: true,
+        proofAcceptance: 'not-assessed', consumerCoverage: 'not-assessed', consumer: target.consumer, candidates: handoffs };
+      let hintText = JSON.stringify(packet);
+      if (Buffer.byteLength(hintText) > maxSectionBytes) {
+        for (const item of handoffs) item.applicationHints.preview = [];
+        hintText = JSON.stringify(packet);
+      }
+      while (Buffer.byteLength(hintText) > maxSectionBytes && handoffs.length) {
+        handoffs.pop(); hintText = JSON.stringify(packet);
+      }
+      if (handoffs.length && Buffer.byteLength(hintText) <= maxSectionBytes)
+        sections.push({ id: handoffId, kind: 'sources', text: hintText, priority: 8,
+          knowledge: { sectionId: handoffId, catalogDigest: knowledge.digest, searchInputDigest: handoffDigest,
+            consumer: target.consumer, candidateIds: handoffs.map(item => item.id), searchCandidateIds: [], routeFindingIds: [] } });
+    }
+    return sections;
   });
 }

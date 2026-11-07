@@ -1,14 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { parse as parseToml } from 'smol-toml';
 import { z } from 'zod';
+import { createParser } from 'eventsource-parser';
 import { assertMathCanonicalPath } from '../math/paths';
 import { mathDigest } from '../math/mathRuntimeIo';
 import { runMathProcess } from '../math/mathProcess';
 import { SUB2API_PROVIDER } from './sub2api';
+import { normalizeModelRequestUsage, type ModelRequestAdmission, type ModelRequestGate,
+  type ModelRequestReceipt, type ModelRequestMissingReason } from './modelRequest';
 
 const HTTP_HOST = 'formalization-relay.local';
 const ROUTE = '/v1/responses';
@@ -16,6 +20,65 @@ const ENDPOINT = SUB2API_PROVIDER.baseUrl + '/responses';
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_CREDENTIAL_BYTES = 8192;
 const MAX_ACTIVE_REQUESTS = 8;
+const MAX_USAGE_EVENT_BYTES = 2 * 1024 * 1024;
+
+/** Observe the existing Responses wire stream without changing its bytes or accepting model claims. */
+function responseUsageObserver(streaming: boolean) {
+  let usage: ModelRequestReceipt['usage'], outcome: ModelRequestReceipt['outcome'], providerRequestId: string | undefined;
+  let terminal = false, invalid = false, limited = false, pendingBytes = 0;
+  const chunks: Uint8Array[] = [], decoder = new TextDecoder('utf-8', { fatal: true });
+  const inspect = (value: unknown) => {
+    if (!value || typeof value !== 'object') return;
+    const event = value as Record<string, any>;
+    const response = streaming ? event.response : event;
+    const status = streaming ? ({ 'response.completed': 'completed', 'response.incomplete': 'incomplete',
+      'response.failed': 'failed', 'response.cancelled': 'cancelled' } as Record<string, string>)[event.type] : response.status;
+    if (!status || !['completed', 'incomplete', 'failed', 'cancelled'].includes(status)) return;
+    terminal = true;
+    outcome = status === 'cancelled' ? 'cancelled' : status === 'failed' ? 'failed' : 'completed';
+    if (!response || typeof response !== 'object') { invalid = true; return; }
+    if (typeof response.id === 'string' && response.id.length <= 1024) providerRequestId = response.id;
+    if (response.usage === undefined || response.usage === null) return;
+    const reported = response.usage;
+    const parsed = normalizeModelRequestUsage({ inputTokens: reported.input_tokens, outputTokens: reported.output_tokens,
+      totalTokens: reported.total_tokens,
+      ...(reported.input_tokens_details?.cached_tokens === undefined ? {} : { cachedInputTokens: reported.input_tokens_details.cached_tokens }),
+      ...(reported.output_tokens_details?.reasoning_tokens === undefined ? {} : { reasoningOutputTokens: reported.output_tokens_details.reasoning_tokens }) });
+    if (!parsed || usage && JSON.stringify(usage) !== JSON.stringify(parsed)) invalid = true;
+    else usage = parsed;
+  };
+  const parser = createParser({ onEvent: event => {
+    pendingBytes = 0;
+    if (event.data === '[DONE]') return;
+    try { inspect(JSON.parse(event.data)); } catch { invalid = true; }
+  }, onError: () => { invalid = true; } });
+  const accept = (chunk: Uint8Array) => {
+    if (limited) return;
+    try {
+      if (!streaming) {
+        pendingBytes += chunk.byteLength;
+        if (pendingBytes > MAX_USAGE_EVENT_BYTES) { limited = true; chunks.length = 0; return; }
+        chunks.push(Buffer.from(chunk)); return;
+      }
+      for (let offset = 0; offset < chunk.byteLength; offset += 32 * 1024) {
+        const slice = chunk.subarray(offset, offset + 32 * 1024); pendingBytes += slice.byteLength;
+        if (pendingBytes > MAX_USAGE_EVENT_BYTES) { limited = true; return; }
+        parser.feed(decoder.decode(slice, { stream: true }));
+      }
+    } catch { invalid = true; }
+  };
+  const finish = (failure?: ModelRequestMissingReason): ModelRequestReceipt => {
+    if (!limited) try {
+      if (streaming) parser.feed(decoder.decode());
+      else inspect(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    } catch { invalid = true; }
+    const complete = terminal && usage !== undefined && !invalid && !limited;
+    return { usage, complete, providerRequestId, outcome: outcome ?? (failure === 'request-cancelled' ? 'cancelled' : 'failed'),
+      ...(!complete ? { missingReason: limited ? 'unknown' : invalid ? 'provider-usage-invalid' :
+        failure ?? (terminal ? 'provider-usage-missing' : 'response-not-terminal') } : {}) };
+  };
+  return { accept, finish };
+}
 
 class RelayError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
@@ -98,14 +161,15 @@ function admitRequest(body: Record<string, unknown>, model: string, effort: stri
 
 export type FormalizationRelayReceipt = Readonly<{
   schema: 'theoremos.formalization-relay.v1'; providerId: 'sub2api'; wireApi: 'responses';
-  endpoint: string; model: string; effort: string; transport: 'unix-http'; httpHost: 'formalization-relay.local';
+  endpoint: string; model: string; effort: string; transport: 'unix-http' | 'loopback-http'; httpHost: string;
   credentialLocation: 'host-only'; credentialSource: 'environment' | 'auth-command';
 }>;
 export type FormalizationRelay = Readonly<{
-  socketPath: string;
+  socketPath?: string;
+  baseUrl?: string;
   /** Disposable role capability; this is never the upstream credential. */
   apiKey: string;
-  httpHost: typeof HTTP_HOST;
+  httpHost: string;
   route: typeof ROUTE;
   receipt: FormalizationRelayReceipt;
   close: () => Promise<void>;
@@ -197,26 +261,31 @@ function redactor(secret: string) {
  * There is no default model deadline; timeoutMs, when supplied, is a host-selected limit.
  */
 export async function startFormalizationRelay(input: {
-  socketPath: string; profile: string; model: string; effort: string;
+  socketPath?: string; transport?: 'unix-http' | 'loopback-http'; profile: string; model: string; effort: string;
   env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs?: number;
+  requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
 }): Promise<FormalizationRelay> {
   const profile = readProfile(input.profile, input.model);
   if (!['low', 'high', 'max'].includes(input.effort)) throw new Error('formalization_relay_effort_invalid');
   if (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0))
     throw new Error('formalization_relay_timeout_invalid');
   input.signal?.throwIfAborted();
-  const socketPath = path.resolve(input.socketPath);
-  assertMathCanonicalPath(socketPath);
-  const parent = fs.statSync(path.dirname(socketPath));
-  if (!parent.isDirectory() || (parent.mode & 0o077) !== 0 ||
-      process.getuid && parent.uid !== process.getuid() || Buffer.byteLength(socketPath) > 100 || fs.existsSync(socketPath))
-    throw new Error('formalization_relay_socket_invalid');
+  const loopback = input.transport === 'loopback-http';
+  const socketPath = !loopback && input.socketPath ? path.resolve(input.socketPath) : undefined;
+  if (!loopback) {
+    if (!socketPath) throw new Error('formalization_relay_socket_invalid');
+    assertMathCanonicalPath(socketPath);
+    const parent = fs.statSync(path.dirname(socketPath));
+    if (!parent.isDirectory() || (parent.mode & 0o077) !== 0 ||
+        process.getuid && parent.uid !== process.getuid() || Buffer.byteLength(socketPath) > 100 || fs.existsSync(socketPath))
+      throw new Error('formalization_relay_socket_invalid');
+  }
   const apiKey = randomBytes(32).toString('hex'), expectedAuth = Buffer.from('Bearer ' + apiKey);
   const env = { ...(input.env ?? process.env) };
   const active = new Set<AbortController>(), tasks = new Set<Promise<void>>();
   const authController = new AbortController();
   let cached: { key: string; expiresAt: number } | undefined, loading: Promise<string> | undefined;
-  let closed = false, closing: Promise<void> | undefined;
+  let closed = false, closing: Promise<void> | undefined, httpHost: string = HTTP_HOST;
   const loadCredential = async (): Promise<string> => {
     if (closed) throw new RelayError(503, 'relay_closed');
     if (cached && cached.expiresAt > Date.now()) return cached.key;
@@ -252,7 +321,7 @@ export async function startFormalizationRelay(input: {
       if (sensitive.has(name) && seen.has(name)) return errorResponse(response, 400, 'duplicate_request_header');
       seen.add(name);
     }
-    if (request.headers.host !== HTTP_HOST || request.headers.origin ||
+    if (request.headers.host !== httpHost || request.headers.origin ||
         request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'none')
       return errorResponse(response, 403, 'invalid_relay_host');
     if (auth.length !== expectedAuth.length || !timingSafeEqual(auth, expectedAuth))
@@ -263,6 +332,8 @@ export async function startFormalizationRelay(input: {
     const controller = new AbortController(); active.add(controller);
     const abort = () => { if (!response.writableEnded) controller.abort(); };
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let admission: ModelRequestAdmission | undefined, observer: ReturnType<typeof responseUsageObserver> | undefined;
+    let upstreamAttempted = false, failure: ModelRequestMissingReason | undefined;
     const cancelRead = () => {
       if (!request.complete) request.destroy();
       void reader?.cancel().catch(() => {});
@@ -276,15 +347,20 @@ export async function startFormalizationRelay(input: {
       admitRequest(body, input.model, input.effort);
       controller.signal.throwIfAborted();
       const key = await loadCredential();
+      await input.requestGate?.beforeRequest?.(controller.signal);
       controller.signal.throwIfAborted();
+      admission = input.requestGate?.({ requestId: randomUUID(), source: 'responses-relay' });
+      if (admission?.allowed === false) throw new RelayError(403, admission.reason);
       // Never copy caller headers, URL components, cookies or proxy settings upstream.
       // Bun's implicit fetch socket timeout must not impose a model deadline.
       const upstreamInit: RequestInit & { timeout: false } = {
         method: 'POST', redirect: 'error', signal: controller.signal, timeout: false,
         headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json',
           Accept: body.stream === true ? 'text/event-stream' : 'application/json' }, body: JSON.stringify(body) };
+      upstreamAttempted = true;
       const upstream = await globalThis.fetch(ENDPOINT, upstreamInit);
       if (!upstream.ok) {
+        failure = 'upstream-http-error';
         void upstream.body?.cancel().catch(() => {});
         throw new RelayError(upstream.status >= 400 && upstream.status <= 599 ? upstream.status : 502, 'upstream_request_failed');
       }
@@ -296,10 +372,12 @@ export async function startFormalizationRelay(input: {
       }
       response.writeHead(200, { 'Content-Type': contentType!, 'Cache-Control': 'no-store', Connection: 'close' });
       response.flushHeaders();
+      observer = responseUsageObserver(contentType === 'text/event-stream');
       const filter = redactor(key);
       reader = upstream.body.getReader();
       while (true) {
         const chunk = await reader.read();
+        if (!chunk.done) observer.accept(chunk.value);
         for (const data of filter(chunk.done ? undefined : chunk.value)) {
           if (response.destroyed || controller.signal.aborted) throw new Error();
           if (!response.write(data)) await once(response, 'drain', { signal: controller.signal });
@@ -308,13 +386,23 @@ export async function startFormalizationRelay(input: {
       }
       response.end();
     } catch (cause) {
+      failure ??= controller.signal.aborted ? 'request-cancelled' : 'upstream-transport-error';
       errorResponse(response, controller.signal.aborted ? 499 : cause instanceof RelayError ? cause.status : 502,
         controller.signal.aborted ? 'relay_request_cancelled' : cause instanceof RelayError ? cause.code : 'upstream_transport_failed');
     } finally {
-      clearTimeout(timer); controller.abort();
-      await reader?.cancel().catch(() => {});
-      controller.signal.removeEventListener('abort', cancelRead);
-      active.delete(controller); request.off('aborted', abort); response.off('close', abort);
+      try {
+        if (upstreamAttempted) {
+          const receipt = observer?.finish(failure) ?? { complete: false, outcome: failure === 'request-cancelled' ? 'cancelled' as const : 'failed' as const,
+            missingReason: failure ?? 'unknown' };
+          if (admission?.allowed) admission.settle(receipt);
+          if (!receipt.complete) input.onUsageIncomplete?.();
+        }
+      } finally {
+        clearTimeout(timer); controller.abort();
+        await reader?.cancel().catch(() => {});
+        controller.signal.removeEventListener('abort', cancelRead);
+        active.delete(controller); request.off('aborted', abort); response.off('close', abort);
+      }
     }
   };
   const server = createServer((request, response) => {
@@ -329,9 +417,12 @@ export async function startFormalizationRelay(input: {
   await new Promise<void>((resolve, reject) => {
     const failed = () => { reject(new Error('formalization_relay_socket_unavailable')); };
     server.once('error', failed);
-    server.listen(socketPath, () => { server.off('error', failed); resolve(); });
+    const listening = () => { server.off('error', failed); resolve(); };
+    if (loopback) server.listen(0, '127.0.0.1', listening);
+    else server.listen(socketPath!, listening);
   });
-  try { fs.chmodSync(socketPath, 0o600); }
+  if (loopback) httpHost = '127.0.0.1:' + (server.address() as AddressInfo).port;
+  try { if (socketPath) fs.chmodSync(socketPath, 0o600); }
   catch { server.close(); throw new Error('formalization_relay_socket_unavailable'); }
   const stop = () => { void close(); };
   const close = () => closing ??= (async () => {
@@ -344,8 +435,8 @@ export async function startFormalizationRelay(input: {
   })();
   input.signal?.addEventListener('abort', stop, { once: true });
   if (input.signal?.aborted) { await close(); throw new Error('formalization_relay_cancelled'); }
-  return { socketPath, apiKey, httpHost: HTTP_HOST, route: ROUTE,
+  return { socketPath, ...(loopback ? { baseUrl: 'http://' + httpHost + '/v1' } : {}), apiKey, httpHost, route: ROUTE,
     receipt: { schema: 'theoremos.formalization-relay.v1', providerId: 'sub2api', wireApi: 'responses',
-      endpoint: ENDPOINT, model: input.model, effort: input.effort, transport: 'unix-http', httpHost: HTTP_HOST,
+      endpoint: ENDPOINT, model: input.model, effort: input.effort, transport: loopback ? 'loopback-http' : 'unix-http', httpHost,
       credentialLocation: 'host-only', credentialSource: profile.envKey ? 'environment' : 'auth-command' }, close };
 }

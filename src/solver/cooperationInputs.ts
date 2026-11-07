@@ -1,6 +1,7 @@
 import { parseCooperationPlan, isAdvisoryTask as advisory } from './tasks';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { VerificationCheckpointError } from './verificationCheckpoint';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { mathGitResult } from '../math/mathGit';
 import { type ResearchWorker } from './modules/organization';
@@ -16,6 +17,7 @@ import { CooperationPlanning } from './cooperationPlanning';
 import { ResearchAdmissionError } from './researchAdmission';
 import { acceptContextCheckpoint, contextCheckpointRejection, contextCheckpointRejectionFeedback, savedContextCheckpoint } from './contextCheckpoint';
 import { MAX_PLAN_APPROVAL_REJECTIONS, planApprovalInputSchema, planApprovalLog, planApprovalStatus, type PlanApprovalInput } from './planApproval';
+import { latestProofSearchRecord, retainProofSearchCheckpoint } from './proofSearchRecords';
 
 /** Worker delivery intake. */
 export abstract class CooperationInputs extends CooperationPlanning {
@@ -125,7 +127,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
       this.deliveryChecks.set(worker.id, check);
       void check.catch(error => {
         this.input.emit('cooperation_poll_failed', { reason: error instanceof Error ? error.message : 'unknown' });
-        if (error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
+        if (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
       }).finally(() => {
         if (this.deliveryChecks.get(worker.id) === check) this.deliveryChecks.delete(worker.id);
       }).catch(() => {});
@@ -412,18 +414,32 @@ export abstract class CooperationInputs extends CooperationPlanning {
       const supportingArtifacts = value.commit ? captureDeliveryArtifacts({ problem: this.input.state.problem,
         worktree: worker.worktree, commit: base, assignment: action.assignment }) : undefined;
       await this.publishResearchFinding(worker, action, base, { kind: 'event', value: value.finding },
-        { submissionId: value.id, assignmentKey, ...(supportingArtifacts ? { artifacts: supportingArtifacts } : {}) }, value.sources);
+        { submissionId: value.id, assignmentKey, ...(supportingArtifacts ? { artifacts: supportingArtifacts } : {}) }, value.sources, value.probes);
       return;
     }
     if (value.kind === 'progress') {
+      const search = details.searchCheckpoint && retainProofSearchCheckpoint({
+        projectRoot: path.join(worker.worktree, this.input.state.problem.projectRelative),
+        runDirectory: path.dirname(this.lead.worktree), reference: details.searchCheckpoint,
+        scope: this.proofSearchScope(action),
+        workerId: worker.id, assignmentKey,
+      });
+      const latestSearch = search && latestProofSearchRecord(this.archive.proofSearchRecords?.[search.taskId], search);
       if (details.mathematicalGap) bindMathematicalGap(details.mathematicalGap, node.task, this.archive,
         { problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest });
       this.reportBlockers(node.task, value.blockers);
       const remaining = [...new Set([...(value.remainingObligations ?? []),
         ...this.dependencies(node.task).filter(dependency => !['integrated', 'completed'].includes(dependency.status)).map(dependency => dependency.task.id)])] as string[];
       if (value.needsDecision === true) this.wakeLead('progress-decision-requested');
+      if (latestSearch) {
+        (this.archive.proofSearchRecords ??= {})[latestSearch.taskId] = latestSearch;
+        this.input.emit('proof_search_checkpoint_saved', { taskId: latestSearch.taskId, taskDigest: latestSearch.taskDigest,
+          workerId: worker.id, basisDigest: latestSearch.basisDigest, generation: latestSearch.generation,
+          checkpoint: latestSearch.checkpoint, proofAcceptance: 'not-accepted' });
+      }
       this.record(worker, node.task, 'progress', remaining.length || node.task.kind === 'sketch' ? 'conditional' : 'advisory', details.summary,
-        { ...details, submissionId: value.id, assignmentKey, remainingObligations: remaining });
+        { ...details, ...(search ? { searchCheckpoint: search.checkpoint } : {}),
+          submissionId: value.id, assignmentKey, remainingObligations: remaining });
       return;
     }
     if (advisory(node.task) || typeof value.commit !== 'string' || !/^[a-f0-9]{40,64}$/u.test(value.commit)) throw new Error('math_delivery_requires_fixed_proof');

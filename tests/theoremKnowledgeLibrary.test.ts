@@ -134,7 +134,8 @@ describe('frozen library knowledge snapshots', () => {
 
   it('returns disabled without creating output when the receipt has no library pack', () => {
     const f = fixture(false);
-    expect(prepareLibraryKnowledge(f.receipt.workspaceRoot, f.output)).toEqual({ enabled: false });
+    expect(prepareLibraryKnowledge(f.receipt.workspaceRoot, f.output)).toEqual({ enabled: false,
+      inputs: { states: [], autoLibraryBuilds: [] }, skipped: [] });
     expect(fs.existsSync(path.dirname(f.output))).toBe(false);
   });
 

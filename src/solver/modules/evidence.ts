@@ -7,6 +7,7 @@ import { commitSolverSources, git, withSolverWorktree, type SolverProblem } from
 import { bindLeanPackages } from '../../math/leanDiagnostics';
 import { findLeanTypeQueryDeclaration, hashMathFormalSourceDeclaration } from '../../math/leanSource';
 import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure, proofReuseEnvironment, proofVerificationDigest } from '../proofReuse';
+import { checkpointVerification } from '../verificationCheckpoint';
 
 export type ProofCheck = Readonly<{ commit: string; sourceDigest: string; passed: boolean; verification: MathematicsVerifierBatchResult }>;
 
@@ -88,9 +89,10 @@ export function attributeProofEvidence(verification: MathematicsVerifierBatchRes
 
 export async function checkProofEvidence(request: MathematicsVerifierBatchRequest & { targetCommit: string },
   options: MathematicsVerifierExecutionOptions): Promise<Pick<ProofCheck, 'passed' | 'verification'>> {
-  const verification = await checkManyFormalVerifications({ ...request,
+  const verification = await checkpointVerification({ ...request,
     batchTimeoutMs: request.timeoutMs === Infinity ? Infinity : request.batchTimeoutMs },
-  { ...options, trustedLakePackagesRoots: (options.env?.DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS || '').split(path.delimiter).filter(Boolean) });
+    bound => checkManyFormalVerifications(bound,
+      { ...options, trustedLakePackagesRoots: (options.env?.DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS || '').split(path.delimiter).filter(Boolean) }));
   return { verification, passed: proofReceiptsMatch(verification, request.targetCommit, request.items) };
 }
 

@@ -131,7 +131,7 @@ describe('integrated task projection preparation', () => {
 
     expectVerified(canonical);
     expect(preparations).toHaveLength(3);
-    expect(firstHost.targets).toEqual([...targetIds, ...targetIds]);
+    expect(firstHost.targets).toEqual(targetIds);
     expect(host.verify).toHaveBeenCalledOnce();
 
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('helper_0 : True := by trivial', 'helper_0 : True := by exact True.intro'));
@@ -143,7 +143,7 @@ describe('integrated task projection preparation', () => {
     expectVerified(changed);
     expect(preparations).toHaveLength(5);
     expect(preparations.slice(3).map(item => [item.commit, item.targets])).toEqual([[changed, targetIds], [changed, targetIds]]);
-    expect(firstHost.targets).toEqual([...targetIds, ...targetIds]);
+    expect(firstHost.targets).toEqual(targetIds);
     expect(host.verify).toHaveBeenCalledTimes(2);
     const request = host.verify.mock.calls[1]![0] as MathematicsVerifierBatchRequest;
     expect(committedSource(workspace, request.targetCommit!, `${problem.projectRelative}/Submission.lean`))

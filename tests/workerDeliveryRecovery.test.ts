@@ -130,6 +130,41 @@ describe('worker delivery log recovery', () => {
     expect(events.filter(event => event.event === 'delivery_rejected')).toHaveLength(1);
   });
 
+  it('keeps consuming worker deliveries while a correction notice waits for its request boundary', async () => {
+    fs.appendFileSync(path.join(directory, log()), '{broken\n');
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const notify = vi.fn(() => waiting);
+    cooperative.active = new Map([['peer', { action, notify }]]);
+    try {
+      const firstPoll = poll();
+      expect(await Promise.race([firstPoll.then(() => 'polled'), new Promise(resolve => setTimeout(() => resolve('blocked'), 100))]))
+        .toBe('polled');
+      append({ summary: 'Progress produced while the reminder is pending.' });
+      await poll();
+      expect(records.map(record => record.summary)).toEqual(['Progress produced while the reminder is pending.']);
+      expect(notify).toHaveBeenCalledOnce();
+      release(); await Promise.resolve(); await Promise.resolve();
+      await poll(); expect(notify).toHaveBeenCalledOnce();
+    } finally { release(); }
+  });
+
+  it('retries a pending correction notice after delivery fails without replaying accepted logs', async () => {
+    fs.appendFileSync(path.join(directory, log()), '{broken\n');
+    let rejectNotice!: (error: Error) => void;
+    const waiting = new Promise<void>((_resolve, reject) => { rejectNotice = reject; });
+    const notify = vi.fn().mockImplementationOnce(() => waiting).mockResolvedValue(undefined);
+    cooperative.active = new Map([['peer', { action, notify }]]);
+    await poll(); await poll(); expect(notify).toHaveBeenCalledOnce();
+    rejectNotice(new Error('turn settled before delivery'));
+    await Promise.allSettled([...cooperative.notifications]);
+    append({ summary: 'Keep this progress while retrying the reminder.' });
+    await poll(); await Promise.allSettled([...cooperative.notifications]); await poll();
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(cooperative.archive.deliveryReceipts).toHaveLength(1);
+    expect(records.map(record => record.summary)).toEqual(['Keep this progress while retrying the reminder.']);
+  });
+
   it('rejects a commit outside the frozen problem history once without blocking following progress', async () => {
     const tree = git(directory, ['rev-parse', `${commit}^{tree}`]);
     const unrelated = git(directory, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost',

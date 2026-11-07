@@ -40,7 +40,7 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-构建生成 `out/main/math-solver.js`、`search-lean.js` 和 `check-lean.js`，并输出 JSON。记录其中的 **`buildManifestRef`**，运行时需要传入这个文件的绝对路径。源码与 bundle 均校验哈希，修改运行时代码后需重新构建。
+构建生成 `out/main/math-solver.js`、`search-lean.js`、`check-lean.js` 和 `proof-search.js`，并输出 JSON。记录其中的 **`buildManifestRef`**，运行时需要传入这个文件的绝对路径。源码与 bundle 均校验哈希，修改运行时代码后需重新构建。
 
 CLI 默认使用 `~/.config/deepscientist/math-sol-codex` 中的 Codex profile（本地 Sub2API 网关的 `deepseek-flash` / `max`，网关 `http://127.0.0.1:8080/v1`）。本机 profile 的认证命令按需读取已有部署的 Westlake 号池密钥，无需复制密钥或手动 export。也可通过 `CODEX_HOME` 指向其他已有 profile。
 
@@ -350,9 +350,10 @@ Lead 的普通规划和初始规划执行 90 秒后收到保存提醒，120 秒�
 | `--max-turns` | `200` | 所有 Agent 合计模型调度次数 |
 | `--max-total-tokens` | `0` | 全部角色累计的 provider 报告 token 阈值；`0` 不限。达到后停止新模型请求，在途请求仍可完成并产生超额 |
 | `--max-turn-seconds` | `180` | 单轮时间限制；停止写入后检查已保存源码 |
+| `--proof-timeout-seconds` | `1800` | 单次宿主证明检查预算；超时保存可恢复检查点 |
 | `--evaluator-timeout-seconds` | `1800` | 集成后 Lean 复核与最终评测共享的独立时间预算 |
 
-`--max-run-seconds`、`--max-turns`、`--max-turn-seconds` 与 `--evaluator-timeout-seconds` 可设为 `0` 关闭对应限制。关闭总解题时间限制时，证明检查的期限也会关闭。
+`--prepare-timeout-seconds`、`--max-run-seconds`、`--max-turns`、`--max-turn-seconds`、`--proof-timeout-seconds` 与 `--evaluator-timeout-seconds` 可设为 `0` 关闭对应限制。证明检查预算独立于总解题时间；关闭总解题时间限制不会关闭证明检查期限。同一源码、任务和环境的检查超时后保留候选，恢复时逐次延长检查时间，最多 24 小时。
 
 `--max-total-tokens` 包含规划、研究、证明和审阅角色，按跨线程累计消费计算；恢复时继续使用历史用量，省略参数时保留已存额度。它依据 provider 的事后通知阻止新请求，不能保证并发在途消费不超过阈值。报告保留超额与用量完整性；有限额度下缺失已执行请求的用量会停止继续派发。旧运行未记录逐轮用量完整性，不能直接当作严格 token 对照。默认不限 token，不为已有长跑增加停止条件。原生 provider 的用量按完整 turn 记账：turn 被 `--max-turn-seconds` 截断时该轮用量记为不完整，有限额度会以 usage-unavailable 停止；需要有限 token 额度时应同时放宽 `--max-turn-seconds`（或设为 0）。
 
@@ -399,6 +400,8 @@ bun run math bootstrap-lean-eval --help
 | `import-proof` | 将纯 Lean 声明排队给待处理引理，由宿主冻结、检查并合并，支持 `--dry-run` |
 | `compare` | 准备、运行并汇总固定预算的单 Agent / 独立并行 / 协作对照 |
 | `check-lean` | 获取局部诊断、预检闭合类型或具体应用表达式 |
+| `proof-search` | 在当前分配的 helper 上执行有界 Lean tactic 分支，保存并恢复完整证明状态 |
+| `research-observe` | 即时交付研究观察和完整 Lean 探针，可同时保留当前 owned 源码 |
 | `continuation` | 按摘要及附件 ID 分页读取冻结的续跑材料 |
 | `search-lean` | 检索已验证的本地 Lean 包声明 |
 | `knowledge` | [导入、搜索和读取历史已检查定理](theorem-knowledge.md)；显式 enrich 补采类型与引用，consumers 回读历史应用链 |
@@ -415,6 +418,22 @@ bun run math check-lean \
 ```
 
 `check-lean` 默认超时为 `0`（等待完成），保留失败退出码和最早错误；其诊断仅用于局部修复。
+
+`proof-search` 从当前 worker 的 `COOPERATION.json` 读取任务、目标和环境身份，仅支持已分配的闭合 helper lemma。请求文件指定分支和本次预算，例如：
+
+```json
+{"branches":[{"tactics":["intro n","rfl"]}],"limits":{"timeoutMs":30000,"maxTransitions":8}}
+```
+
+```bash
+bun run math proof-search --worktree /PATH/worker --request-file /PATH/request.json
+```
+
+返回的 `checkpoint: {path,digest}` 可放入下次请求的 `resume`；分支的 `from` 可指向已保存节点。恢复所需的 tactic 重放计入预算。宿主保留断点与源码，任务或环境改变时拒绝套用旧状态。候选仅为建议，仍须写入任务文件并经过 ready、停写冻结、Lean 检查和原目标 S3 验收。
+
+搜索后端使用固定 Pantograph 源码构建，清单由 `DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST` 显式指定。当前接受分别为 Lean 4.33.0 或 4.33.1 编译的产物，项目工具链必须与后端精确一致；需要宿主提供的 sealed 依赖环境和隔离 worker。Web 镜像为 Mathlib 环境装配 4.33.0 后端，标准 Lean 环境暂不启用。未配置或不兼容时命令返回 `unavailable`，不自动下载或升级。导入 Aesop 的项目可使用 `aesop (config := { terminal := false })` 保留未闭合状态。
+
+研究者可用 `research-observe --worktree /PATH/worker --finding /PATH/finding.json --probe /PATH/probe.lean` 即时交付观察，`--probe` 可重复，`--snapshot-sources` 保留当前 owned 源码。结构化 `nextCheck` 由宿主绑定当前任务和环境后派发；检查结果仍需 Lead 作出继续、修改或停止的决定。
 
 数学 worker 的临时目录为工作树根的 `.scratch/tmp`，由 shell 的 `TMPDIR` 指向；`/tmp` 在沙箱内只读。创建探针前运行 `mkdir -p "$TMPDIR"`，并把临时 Lean 文件、备份和诊断输出保存在该目录。宿主检查前会清理 `.scratch`，可复用代码和结论需先保存在根目录 `RESEARCH.md` 或已有的 owned Lean 文件中。
 

@@ -26,7 +26,7 @@ const nonempty = (value: unknown): value is string => typeof value === 'string' 
 
 /** Host records remain in the execution graph, but never become the Lead's base plan. */
 export function plannedTaskRecords(tasks: readonly TaskRecord[]): TaskRecord[] {
-  return tasks.filter(node => !node.capacityExploration);
+  return tasks.filter(node => !node.capacityExploration && !node.nextCheckId);
 }
 
 /** Only mathematical inputs in this consumer's dependency cone define another investigation. */

@@ -4,7 +4,7 @@ import { knowledgeSearchGroup, knowledgeVersionSummary } from './theoremKnowledg
 import { largestFittingPage, splitsSurrogate } from './textPage';
 
 const fieldNames = ['name', 'file', 'type', 'premises', 'environmentDigest', 'description', 'dependencies',
-  'provenance', 'relatedVersions', 'files', 'elaboration'] as const;
+  'provenance', 'relatedVersions', 'files', 'elaboration', 'applicationHints'] as const;
 export type KnowledgeMetadataField = typeof fieldNames[number];
 export type KnowledgeMetadataOptions = { field?: KnowledgeMetadataField; startOffset?: number; maxBytes?: number };
 type FieldDescriptor = {
@@ -32,7 +32,7 @@ export function getKnowledgeMetadata(base: TheoremKnowledgeBase, id: string, opt
         .map(other => knowledgeVersionSummary(other)).sort((left, right) => left.id.localeCompare(right.id));
     } else if (name === 'files') value = Object.keys(files).sort().map(file => ({ file, sha256: files[file]! }));
     else value = name === 'environmentDigest' ? entry.environmentDigest ?? null :
-      name === 'elaboration' ? entry.elaboration ?? null : entry[name];
+      name === 'elaboration' ? entry.elaboration ?? null : name === 'applicationHints' ? entry.applicationHints ?? [] : entry[name];
     const format = typeof value === 'string' ? 'text' as const : 'json' as const;
     const text = format === 'text' ? value as string : canonicalMathJson(value);
     return { value, format, text, sha256: mathDigest(text), bytes: Buffer.byteLength(text),

@@ -13,6 +13,7 @@ const index = process.argv.indexOf('--out');
 const output = path.resolve(index > 0 ? process.argv[index + 1]! : path.join(root, 'out/agent-tools'));
 const agentToolCommands = {
   'check-lean': 'checkLean.ts', 'search-lean': 'searchLean.ts', knowledge: 'theoremKnowledge.ts',
+  'research-observe': 'researchObserve.ts', 'proof-search': 'proofSearch.ts',
   'check-finite': 'checkFinite.ts', 'kernel-certificate': 'kernelCertificate.ts', continuation: 'readContinuation.ts',
 } as const;
 fs.rmSync(output, { recursive: true, force: true });

@@ -1,4 +1,5 @@
-import type { ModelRequestReceipt } from '../runtime/modelRequest';
+import { randomUUID } from 'node:crypto';
+import { normalizeModelRequestUsage, type ModelRequestReceipt, type ModelRequestIdentity } from '../runtime/modelRequest';
 
 export type UsageAccounting = {
   startedTurns: number;
@@ -12,6 +13,17 @@ export type RequestUsageAccounting = {
   reportedRequests: number;
   pendingRequests: number;
   incomplete: boolean;
+  /** Optional for legacy checkpoints. These are the identities behind the existing counters. */
+  receipts?: RequestUsageObservation[];
+  /** A native session cannot supply a provider request denominator. */
+  nativeUsageObserved?: boolean;
+};
+
+export type RequestUsageObservation = ModelRequestIdentity & {
+  runId?: string; sessionId?: string; taskId?: string; startedAt: number; settledAt?: number;
+  status: 'pending' | 'reported' | 'missing';
+  usage?: ModelRequestReceipt['usage']; outcome?: ModelRequestReceipt['outcome'];
+  missingReason?: ModelRequestReceipt['missingReason']; providerRequestId?: string;
 };
 
 export type TokenBudget = {
@@ -55,6 +67,10 @@ export function initializeUsageAccounting(record: UsageRecord): void {
     if (!record.requestUsageAccounting) record.usageAccounting.incomplete = true;
   }
   if (record.requestUsageAccounting?.pendingRequests) {
+    for (const receipt of record.requestUsageAccounting.receipts ?? []) if (receipt.status === 'pending') {
+      receipt.status = 'missing'; receipt.outcome = 'interrupted'; receipt.missingReason = 'resumed-without-receipt';
+      receipt.settledAt = Date.now();
+    }
     record.requestUsageAccounting.pendingRequests = 0;
     record.requestUsageAccounting.incomplete = true;
   }
@@ -69,25 +85,41 @@ export function initializeRequestUsageAccounting(record: UsageRecord): void {
 }
 
 /** Each lease represents exactly one attempted upstream request, independent of native thread counters. */
-export function beginRequestUsage(record: UsageRecord): (receipt: ModelRequestReceipt) => void {
+export function beginRequestUsage(record: UsageRecord, identity: Partial<ModelRequestIdentity> & {
+  runId?: string; sessionId?: string; taskId?: string; startedAt?: number;
+} = {}): (receipt: ModelRequestReceipt) => void {
   const accounting = record.requestUsageAccounting!;
-  accounting.startedRequests++;
-  accounting.pendingRequests++;
-  let settled = false;
+  const requestId = identity.requestId ?? randomUUID();
+  const receipts = accounting.receipts ??= [];
+  let observation = receipts.find(item => item.requestId === requestId);
+  if (!observation) {
+    observation = { ...identity, requestId, startedAt: identity.startedAt ?? Date.now(), status: 'pending' };
+    receipts.push(observation);
+    accounting.startedRequests++;
+    accounting.pendingRequests++;
+  }
   return receipt => {
-    if (settled) return;
-    settled = true;
+    // The persisted identity also deduplicates settlement after checkpoint serialization/replay.
+    if (observation.status !== 'pending') return;
     accounting.pendingRequests--;
-    let valid = reportedTotalTokens(receipt.usage) !== null;
+    const usage = normalizeModelRequestUsage(receipt.usage);
+    let valid = usage !== undefined;
     const merged = { ...record.usage };
-    for (const [key, value] of Object.entries(receipt.usage ?? {})) {
+    for (const [key, value] of Object.entries(usage ?? {})) {
       const previous = merged[key] ?? 0;
       if (!count(value) || !count(previous) || !count(previous + value)) { valid = false; continue; }
       merged[key] = previous + value;
     }
-    record.usage = merged;
-    if (receipt.complete && valid) accounting.reportedRequests++;
-    else accounting.incomplete = true;
+    if (valid) record.usage = merged;
+    observation.settledAt = Date.now(); observation.outcome = receipt.outcome ?? 'unknown';
+    if (usage) observation.usage = usage;
+    if (receipt.providerRequestId) observation.providerRequestId = receipt.providerRequestId;
+    if (receipt.complete && valid) { observation.status = 'reported'; accounting.reportedRequests++; }
+    else {
+      observation.status = 'missing'; accounting.incomplete = true;
+      observation.missingReason = receipt.missingReason ?? (receipt.usage === undefined ? 'provider-usage-missing' :
+        !valid ? 'provider-usage-invalid' : 'unknown');
+    }
   };
 }
 
@@ -139,6 +171,64 @@ export function aggregateUsage(records: readonly UsageRecord[]): Record<string, 
     usage[key] = count(total) ? total : null;
   }
   return usage;
+}
+
+export type UsageAttemptObservation = {
+  runId: string; sourceRunId?: string; observedAt: number; records: readonly UsageRecord[];
+};
+
+/** A report over explicit attempt ancestry, not another budget or a reconstruction of missing provider data. */
+export function summarizeUsageObservation(attempts: readonly UsageAttemptObservation[], input: {
+  runId: string; startedAt: number; endedAt: number;
+}) {
+  const latest = new Map<string, UsageAttemptObservation>();
+  for (const attempt of attempts) if (!latest.has(attempt.runId) || latest.get(attempt.runId)!.observedAt < attempt.observedAt)
+    latest.set(attempt.runId, attempt);
+  const selected: UsageAttemptObservation[] = [], missingRunIds: string[] = [], visited = new Set<string>();
+  let runId: string | undefined = input.runId;
+  while (runId && !visited.has(runId)) {
+    visited.add(runId);
+    const attempt = latest.get(runId);
+    if (!attempt) { missingRunIds.push(runId); break; }
+    selected.push(attempt); runId = attempt.sourceRunId;
+  }
+  const ancestryCycle = runId !== undefined && visited.has(runId) && missingRunIds.length === 0;
+  const receipts = new Map<string, RequestUsageObservation>();
+  let duplicateReceipts = 0, unidentifiedRequests = 0, nativeRecordsWithUnknownRequests = 0;
+  for (const attempt of selected) for (const record of attempt.records) {
+    const accounting = record.requestUsageAccounting;
+    if ((!accounting && (record.usageAccounting?.startedTurns ?? record.turns) > 0) || accounting?.nativeUsageObserved)
+      nativeRecordsWithUnknownRequests++;
+    if (accounting) unidentifiedRequests += Math.max(0, accounting.startedRequests - (accounting.receipts?.length ?? 0));
+    for (const receipt of accounting?.receipts ?? []) {
+      if (receipt.startedAt < input.startedAt || receipt.startedAt > input.endedAt) continue;
+      const key = attempt.runId + '\0' + receipt.requestId, previous = receipts.get(key);
+      if (previous) duplicateReceipts++;
+      if (!previous || (receipt.settledAt ?? receipt.startedAt) > (previous.settledAt ?? previous.startedAt)) receipts.set(key, receipt);
+    }
+  }
+  const observed = [...receipts.values()], reported = observed.filter(item => item.status === 'reported'),
+    pending = observed.filter(item => item.status === 'pending'), missing = observed.filter(item => item.status === 'missing');
+  const reasons: Record<string, number> = {};
+  for (const item of missing) reasons[item.missingReason ?? 'unknown'] = (reasons[item.missingReason ?? 'unknown'] ?? 0) + 1;
+  const unknownDenominator = missingRunIds.length > 0 || ancestryCycle || unidentifiedRequests > 0 || nativeRecordsWithUnknownRequests > 0;
+  const budget = buildTokenBudget(0, selected.flatMap(attempt => [...attempt.records]));
+  return {
+    schema: 'theorem-os.usage-observation.v1' as const,
+    interval: { startedAt: input.startedAt, endedAt: input.endedAt },
+    runIds: selected.map(attempt => attempt.runId), missingRunIds, ancestryCycle,
+    duplicateAttemptSnapshots: attempts.length - latest.size, duplicateReceiptRecords: duplicateReceipts,
+    denominator: { scope: 'observed-upstream-request-identities-started-in-interval' as const,
+      observedRequestStarts: observed.length, actualProviderRequestStarts: unknownDenominator ? null : observed.length,
+      coverage: unknownDenominator ? 'unknown' as const : 'observed' as const },
+    completedRequests: reported.length + missing.length, pendingRequests: pending.length,
+    requestsWithCompleteUsage: reported.length, knownMissingRequests: missing.length, missingReasons: reasons,
+    unidentifiedHistoricalRequests: unidentifiedRequests, nativeRecordsWithUnknownRequests,
+    observedRequestReceiptCoverage: pending.length || missing.length ? 'incomplete' as const : 'complete' as const,
+    knownIntervalTokens: observed.reduce((total, item) => total + (reportedTotalTokens(item.usage) ?? 0), 0),
+    cumulativeKnownTokens: budget.reportedTotalTokens, cumulativeUsageComplete: budget.usageComplete && !missingRunIds.length && !ancestryCycle,
+    costComparison: 'unsupported' as const,
+  };
 }
 
 /** Partial reported consumption stays visible; missing reports never become zero-cost completed work. */

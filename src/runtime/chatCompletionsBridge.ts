@@ -1,10 +1,10 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createParser } from 'eventsource-parser';
 import { ChatBridgeError, ChatBridgeStream, translateChatBridgeRequest } from './chatCompletionsProtocol';
-import type { ModelRequestAdmission, ModelRequestGate } from './modelRequest';
+import type { ModelRequestAdmission, ModelRequestGate, ModelRequestMissingReason } from './modelRequest';
 
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_STREAM_BYTES = 32 * 1024 * 1024;
@@ -115,10 +115,12 @@ export async function startChatCompletionsBridge(input: {
     let upstreamAttempted = false;
     let upstreamDiagnostic: UpstreamDiagnostic | undefined;
     let admission: ModelRequestAdmission | undefined, settled = false;
-    const settle = (complete: boolean) => {
+    const settle = (complete: boolean, missingReason?: ModelRequestMissingReason) => {
       if (!upstreamAttempted || settled) return;
       settled = true;
-      if (admission?.allowed) admission.settle({ usage: stream?.reportedUsage, complete });
+      if (admission?.allowed) admission.settle({ usage: stream?.reportedUsage, complete,
+        outcome: controller.signal.aborted ? 'cancelled' : complete ? 'completed' : 'failed',
+        ...(!complete ? { missingReason: missingReason ?? (stream?.reportedUsage ? 'response-not-terminal' : 'provider-usage-missing') } : {}) });
       if (!complete) input.onUsageIncomplete?.();
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -128,15 +130,16 @@ export async function startChatCompletionsBridge(input: {
     try {
       const translated = translateChatBridgeRequest(await readRequest(request), input.model, input.effort);
       const body = JSON.stringify(translated.body);
+      await input.requestGate?.beforeRequest?.(controller.signal);
       controller.signal.throwIfAborted();
-      admission = input.requestGate?.();
+      admission = input.requestGate?.({ requestId: randomUUID(), source: 'chat-completions-bridge' });
       if (admission?.allowed === false) throw new ChatBridgeError(admission.reason, 403);
       upstreamAttempted = true;
       const upstreamResponse = await globalThis.fetch(upstream, { method: 'POST', redirect: 'error', signal: controller.signal,
         headers: { Authorization: `Bearer ${input.apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body });
       if (!upstreamResponse.ok) {
-        settle(false);
+        settle(false, 'upstream-http-error');
         upstreamDiagnostic = await readUpstreamDiagnostic(upstreamResponse, input.apiKey);
         void upstreamResponse.body?.cancel().catch(() => {});
         const status = upstreamResponse.status >= 400 && upstreamResponse.status <= 599 ? upstreamResponse.status : 502;
@@ -145,14 +148,15 @@ export async function startChatCompletionsBridge(input: {
         throw new ChatBridgeError(`upstream_http_${upstreamResponse.status}`, status);
       }
       if (!upstreamResponse.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream') || !upstreamResponse.body) {
-        settle(false);
+        settle(false, 'upstream-transport-error');
         await upstreamResponse.body?.cancel(); throw new ChatBridgeError('expected_upstream_sse', 502);
       }
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       stream = new ChatBridgeStream(input.model, translated.tools, event => {
         if (response.destroyed || controller.signal.aborted) throw new ChatBridgeError('bridge_request_aborted', 499);
         if (event.type === 'response.completed' || event.type === 'response.incomplete')
-          settle(event.type === 'response.completed' && stream?.reportedUsage !== undefined);
+          settle(event.type === 'response.completed' && stream?.reportedUsage !== undefined,
+            stream?.reportedUsage === undefined ? 'provider-usage-missing' : 'response-not-terminal');
         response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       });
       stream.start();
@@ -182,7 +186,7 @@ export async function startChatCompletionsBridge(input: {
       }
       response.end();
     } catch (error) {
-      settle(false);
+      settle(false, controller.signal.aborted ? 'request-cancelled' : 'upstream-transport-error');
       const code = controller.signal.aborted ? 'bridge_request_aborted' : error instanceof ChatBridgeError ? error.code : 'upstream_transport_error';
       if (response.headersSent) {
         try { stream?.fail(code); response.end(); } catch { response.destroy(); }

@@ -12,7 +12,7 @@ import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../src/math/mathProof
 import { withMathRuntimeLease } from '../src/math/mathRuntimeIo';
 import type { MathematicsVerifierBatchRequest, MathematicsVerifierExecutionOptions } from '../src/math/verifier';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
-import { seedSolverContinuation } from '../src/solver/continuationSeed';
+import { captureSolverContinuationSource, seedSolverContinuation } from '../src/solver/continuationSeed';
 import { readContinuationPage, readContinuationSnapshot } from '../src/solver/continuationInput';
 import { committedSource, git, readSolverProblem } from '../src/solver/problem';
 import { theoryModuleSource } from '../src/math/theoryModules';
@@ -23,7 +23,10 @@ import * as taskProofs from '../src/solver/cooperativeProof';
 import { hasTaskConnectionCheck } from '../src/solver/taskConnections';
 import { captureResearchBasis, researchSourceDigest, settleResearch } from '../src/solver/researchRecords';
 import { researchSourceTasks, scopedResearchSources } from '../src/solver/researchSources';
+import { bindMathematicalGap } from '../src/solver/mathematicalGaps';
+import { proposedNextChecks } from '../src/solver/nextChecks';
 import { cooperativeResearch } from './helpers/cooperation';
+import { WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
 import { failedBatch, receiptBatch, verifiedBatch } from './helpers/verifier';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), build: vi.fn(), prepare: vi.fn(), dispose: vi.fn(),
@@ -45,7 +48,7 @@ const commit = (root: string, message: string) => {
   return git(root, ['rev-parse', 'HEAD']);
 };
 
-function fixture() {
+function fixture(statement = original, goalNames = ['Submission.original']) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'continuation-seed-test-'))); roots.push(root);
   const workspace = path.join(root, 'workspace'), projectRelative = 'generated/fixture', project = path.join(workspace, projectRelative);
   fs.mkdirSync(path.join(project, 'Submission'), { recursive: true });
@@ -53,12 +56,12 @@ function fixture() {
     'config.json': '{"theorem_names":["original"]}\n', 'holes.json': '{"id":"fixture","holes":[{"name":"original"}]}\n',
     'lean-toolchain': 'leanprover/lean4:v4.31.0\n', 'lakefile.toml': 'name = "fixture"\n[[lean_lib]]\nname = "Submission"\n' };
   for (const [file, text] of Object.entries(trusted)) fs.writeFileSync(path.join(project, file), text);
-  fs.writeFileSync(path.join(project, 'Submission.lean'), original);
+  fs.writeFileSync(path.join(project, 'Submission.lean'), statement);
   fs.writeFileSync(path.join(project, 'Submission/Helpers.lean'), emptyHelpers);
   git(workspace, ['init', '--quiet']); const base = commit(workspace, 'Public solver baseline');
   fs.appendFileSync(path.join(workspace, '.git/info/exclude'), `\n/${projectRelative}/.lake/\n/active-problem.json\n`);
-  const payloads = canonicalMathProblemStatementPayloads({ informalStatement: 'Prove the original claim.', formalStatement: original, assumptions: [] });
-  const contract: MathProblemContract = { problemId: 'fixture', informalStatement: 'Prove the original claim.', formalStatement: original,
+  const payloads = canonicalMathProblemStatementPayloads({ informalStatement: 'Prove the original claim.', formalStatement: statement, assumptions: [] });
+  const contract: MathProblemContract = { problemId: 'fixture', informalStatement: 'Prove the original claim.', formalStatement: statement,
     assumptions: [], knownTraps: [], acceptanceCriteria: ['Prove original'], officialVerificationCommand: 'lake test',
     statementHash: mathDigest(payloads.informal), leanStatementHash: mathDigest(payloads.lean) };
   const receiptFile = path.join(workspace, 'active-problem.json');
@@ -66,7 +69,7 @@ function fixture() {
     receiptId: 'fixture', problemId: 'fixture', benchmarkCommit: LEAN_EVAL_BENCHMARK_COMMIT, catalogHash: 'a'.repeat(64),
     leaderboardSource: 'disabled', contract, workspaceRoot: workspace, projectRoot: project, activeProblemPath: receiptFile,
     createdAt: 1, trustedFiles: Object.keys(trusted), solverOwnedFiles: ['Submission.lean', 'Submission/Helpers.lean'],
-    publicObligations: [{ name: 'Submission.original', declarationHash: hashMathFormalSourceDeclaration(original, 'Submission.original') }] }));
+    publicObligations: goalNames.map(name => ({ name, declarationHash: hashMathFormalSourceDeclaration(statement, name) })) }));
   const problem = readSolverProblem(workspace, receiptFile);
   const oldDirectory = path.join(root, 'old.json.runtime'), directory = path.join(root, 'new.json.runtime');
   for (const parent of [oldDirectory, directory]) {
@@ -143,8 +146,104 @@ function conditionalFixture() {
   return { ...f, task, condition, proofCommit };
 }
 
+function frozenGoalFixture() {
+  const f = fixture(), node = f.oldState.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+  const worker = f.oldState.workers![1]!;
+  worker.role = 'engineer'; f.newState.workers![1]!.role = 'engineer';
+  node.assignment = { taskId: node.task.id, taskDigest: taskVersion(node.task), workerId: worker.id,
+    seedCommit: f.oldState.cooperation!.canonicalCommit!, assignmentId: 'old-frozen-goal',
+    dependencies: node.task.dependsOn.map(id => ({ taskId: id, taskDigest: taskVersion(f.tasks.find(task => task.id === id)!) })) };
+  git(worker.worktree, ['reset', '--hard', node.assignment.seedCommit]);
+  fs.writeFileSync(path.join(worker.worktree, f.projectRelative, 'Submission.lean'), original.replace('by sorry', 'by trivial'));
+  const snapshotCommit = commit(worker.worktree, 'Frozen goal candidate');
+  const cooperation = cooperationFor(f, f.oldState), descriptor = { id: worker.id, role: worker.role,
+    worktree: worker.worktree, ownedFiles: f.oldState.problem.ownedFiles };
+  const ready = cooperation.freezeImportedProof(descriptor, { kind: 'task', task: node.task, assignment: node.assignment },
+    'host-frozen-goal-input', snapshotCommit)!;
+  if (!ready) throw new Error('fixture_frozen_goal_missing');
+  writeSolverRunState(f.sourceStateFile, f.oldState); writeSolverRunState(f.stateFile, f.newState);
+  return { ...f, snapshotCommit, ready };
+}
+
+function initialPlanningFixture() {
+  const f = fixture();
+  git(f.sourceWorktree, ['reset', '--hard', f.base]);
+  f.oldState.phase = 'finished'; f.oldState.turns = 0;
+  f.oldState.solveStartedAt = 10; f.oldState.solveFinishedAt = 11;
+  for (const worker of f.oldState.workers!) { worker.turns = 0; delete worker.threadId; }
+  f.oldState.cooperation = { canonicalCommit: f.base, leadSeedCommit: f.base, tasks: [], proofRoutes: [],
+    // Cooperation establishes an empty-graph version before its first context is compiled.
+    planVersion: mathDigest(canonicalMathJson({ tasks: [], groups: undefined })),
+    leadWakes: { requested: 1, consumed: 1, settled: 0, recent: [{ at: 10, reason: 'initial-plan', seq: 1 }] } };
+  writeSolverRunState(f.sourceStateFile, f.oldState);
+  return f;
+}
+
+function startedInitialPlanningFixture() {
+  const f = initialPlanningFixture();
+  for (const [index, id, role] of [[1, 'researcher-1', 'researcher'], [2, 'researcher-2', 'researcher'],
+    [3, 'engineer', 'engineer']] as const) {
+    for (const [directory, state] of [[f.oldDirectory, f.oldState], [f.directory, f.newState]] as const) {
+      const worktree = path.join(directory, `worktree-${index + 1}`);
+      if (index > 1) git(f.workspace, ['worktree', 'add', '--quiet', '--detach', worktree, f.base]);
+      state.workers![index] = { id, role, worktree, phase: directory === f.oldDirectory ? 'finished' : 'prepared',
+        turns: 0, dispatchCounts: {} };
+      state.workerCount = 4;
+    }
+  }
+  const usage = { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 };
+  const accounting = { startedTurns: 3, reportedTurns: 0, pending: false, incomplete: true };
+  const requests = { startedRequests: 2, reportedRequests: 1, pendingRequests: 0, incomplete: true,
+    receipts: [{ source: 'responses-relay' as const, requestId: 'initial-request', runId: f.oldState.runId,
+      sessionId: 'initial-session', startedAt: 1, status: 'reported' as const, settledAt: 2,
+      outcome: 'completed' as const, usage }] };
+  f.oldState.phase = 'finished'; f.oldState.turns = 3; f.oldState.dispatchCounts = { planning: 3 };
+  f.oldState.usage = usage;
+  const lead = f.oldState.workers![0];
+  Object.assign(lead, { turns: 3, threadId: 'initial-thread', previousThreadIds: ['earlier-initial-thread'],
+    sessionRole: 'lead', sessionStatementReview: false, dispatchCounts: { planning: 3 }, usage,
+    usageBeforeThread: { inputTokens: 1000, outputTokens: 200, totalTokens: 1200 },
+    usageAccounting: accounting, requestUsageAccounting: requests,
+    candidate: { status: 'failed', operation: 'direct', worktree: lead.worktree,
+      problemReceiptDigest: f.oldState.problem.receiptDigest } });
+  const leadNotes = 'Initial-plan draft and unresolved obligations.\n';
+  const leadDraft = emptyHelpers.replace('end Submission.Helpers', 'lemma initial_draft : True := by sorry\nend Submission.Helpers');
+  fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), leadNotes);
+  fs.writeFileSync(path.join(lead.worktree, f.projectRelative, 'Submission/Helpers.lean'), leadDraft);
+  const savedDraft = { id: 'saved-initial-lead-draft', producer: lead.id, kind: 'progress' as const,
+    status: 'advisory' as const, statement: f.oldState.problem.contract.formalStatement,
+    premises: f.oldState.problem.contract.assumptions, dependencies: [], remainingObligations: [], evidenceRefs: [],
+    createdAt: 11, commit: f.base,
+    summary: 'Saved Lead draft pending integration: math_math-plan_missing_or_too_large. ' +
+      `Inspect git show ${f.base}:PROJECT_RELATIVE_PATH and reapply the useful declarations against the current canonical sources. ` +
+      'This draft has no proof acceptance.' };
+  f.oldState.cooperation!.deliveries = [savedDraft];
+  writeSolverRunState(f.sourceStateFile, f.oldState); writeSolverRunState(f.stateFile, f.newState);
+  return { ...f, usage, accounting, requests, leadNotes, leadDraft, savedDraft };
+}
+
 function freshReceipts(request: MathematicsVerifierBatchRequest) {
   return receiptBatch(request, { sessionId: 'fresh-seed', receiptId: (_, name) => `fresh-seed-${request.targetCommit}-${name}` });
+}
+
+function originalDependencyFixture(declared = false, hidden = false) {
+  const statement = 'import Submission.Helpers\nnamespace Submission\n' +
+    'theorem premise : True := by sorry\ndef witness : True := premise\n' +
+    'theorem original : True := by sorry\nend Submission\n';
+  const f = fixture(statement, ['Submission.original', 'Submission.premise']);
+  const source = statement.replace('premise : True := by sorry', 'premise : True := by trivial')
+    .replace('original : True := by sorry', `original : True := by ${hidden ? 'trivial' : 'exact witness'}`);
+  fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission.lean'), source);
+  const canonical = commit(f.sourceWorktree, 'Frozen original goal chain');
+  const oldProof = f.oldState.cooperation!.tasks[0]!.integratedCheck!;
+  const goal = { ...f.tasks[2]!, dependsOn: declared ? ['premise'] : [] };
+  const premise = { ...goal, id: 'premise', theoremName: 'Submission.premise', objective: 'Prove premise', dependsOn: [] };
+  f.oldState.cooperation!.canonicalCommit = canonical;
+  // Consumers deliberately precede their original prerequisite in the saved graph.
+  f.oldState.cooperation!.tasks = [goal, premise].map(task => ({ task, status: 'integrated', attempts: 1,
+    integratedCheck: { ...oldProof, commit: canonical, taskDigest: taskVersion(task) } }));
+  writeSolverRunState(f.sourceStateFile, f.oldState);
+  return f;
 }
 
 function replaceHelperCandidates(f: ReturnType<typeof fixture>, count: number) {
@@ -265,6 +364,165 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('explicit prepared-run continuation initialization', () => {
+  it('preserves a source that failed before its first plan and resumes ordinary initial planning', async () => {
+    const f = initialPlanningFixture(), before = fs.readFileSync(f.sourceStateFile);
+    const first = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(first).toMatchObject({ stage: 'complete', candidates: [], checked: [], failed: [] });
+    expect(host.verify).not.toHaveBeenCalled();
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(before);
+    expect(state.turns).toBe(0);
+    expect(state.solveStartedAt).toBeUndefined();
+    expect(state.check).toBeUndefined();
+    expect(state.cooperation).toMatchObject({ tasks: [], history: [], deliveries: [], planEdited: false });
+    expect(state.cooperation!.planVersion).toBeUndefined();
+    expect(fs.readFileSync(path.join(f.worktree, f.projectRelative, 'Submission.lean'), 'utf8')).toBe(original);
+    const source = JSON.parse(fs.readFileSync(path.join(f.directory, 'continuation-seed-source.json'), 'utf8'));
+    expect(source).toMatchObject({ initialPlanning: true, plan: { tasks: [], groups: [] } });
+    expect(readContinuationPage(path.join(f.directory, 'continuation.json'), state.continuationDigest, 'seed-recovery-guide').text)
+      .toContain('Lead still owes the first plan covering every original target');
+    const draft = JSON.parse(readContinuationPage(path.join(f.directory, 'continuation.json'), state.continuationDigest, 'draft-prover-1').text);
+    expect(draft.notes).toBe(f.notes);
+    expect(draft.sources['Submission/Helpers.lean']).toContain('by sorry');
+    const again = await f.seed();
+    expect(again.snapshotDigest).toBe(first.snapshotDigest);
+    const resumed = readSolverRunState(f.stateFile), cooperative = cooperationFor(f, resumed);
+    try {
+      await cooperative.restore();
+      const action = await cooperative.next(resumed.workers![0], { maxTurns: 10, remainingMs: 60_000 });
+      expect(action).toMatchObject({ kind: 'lead', initialPlanNonce: expect.any(String) });
+      expect(resumed.cooperation!.initialPlanPublication).toBeUndefined();
+      expect(resumed.cooperation!.tasks).toEqual([]);
+    } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it('preserves a started initial-planning source with three Lead turns and idle peers', async () => {
+    const f = startedInitialPlanningFixture(), historical = fs.readFileSync(f.sourceStateFile);
+    const originalSources = f.oldState.workers!.flatMap(worker => ['RESEARCH.md',
+      ...f.oldState.problem.ownedFiles.map(file => path.join(f.projectRelative, file))]
+      .map(file => path.join(worker.worktree, file)).filter(file => fs.existsSync(file)))
+      .map(file => [file, fs.readFileSync(file)] as const);
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report).toMatchObject({ stage: 'complete', candidates: [], checked: [], failed: [] });
+    expect(host.verify).not.toHaveBeenCalled();
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+    for (const [file, bytes] of originalSources) expect(fs.readFileSync(file)).toEqual(bytes);
+    expect(state.turns).toBe(0); expect(state.usage).toBeUndefined();
+    expect(state.workers!.every(worker => worker.turns === 0 && !worker.threadId && !worker.usage)).toBe(true);
+    expect(state.cooperation).toMatchObject({ tasks: [], planEdited: false });
+    expect(state.cooperation!.planVersion).toBeUndefined();
+    expect(fs.readFileSync(path.join(f.worktree, f.projectRelative, 'Submission/Helpers.lean'), 'utf8')).toBe(emptyHelpers);
+    const source = JSON.parse(fs.readFileSync(path.join(f.directory, 'continuation-seed-source.json'), 'utf8'));
+    expect(source).toMatchObject({ initialPlanning: true, source: { runId: 'old-run' }, plan: { tasks: [], groups: [] },
+      history: { activity: { turns: 3, dispatchCounts: { planning: 3 }, usage: f.usage,
+        workers: [expect.objectContaining({ id: 'solver', turns: 3, usage: f.usage,
+          usageAccounting: f.accounting, requestUsageAccounting: f.requests }),
+        expect.objectContaining({ id: 'researcher-1', turns: 0 }), expect.objectContaining({ id: 'researcher-2', turns: 0 }),
+        expect.objectContaining({ id: 'engineer', turns: 0 })] } } });
+    expect(source.history.deliveries).toContainEqual(expect.objectContaining(f.savedDraft));
+    const snapshot = path.join(f.directory, 'continuation.json');
+    const history = JSON.parse(readContinuationPage(snapshot, state.continuationDigest, 'seed-history').text);
+    expect(history.history.activity.turns).toBe(3);
+    expect(history.history.activity.workers[0].requestUsageAccounting).toEqual(f.requests);
+    const draft = JSON.parse(readContinuationPage(snapshot, state.continuationDigest, 'draft-solver').text);
+    expect(draft.notes).toBe(f.leadNotes); expect(draft.sources['Submission/Helpers.lean']).toBe(f.leadDraft);
+    const firstDigest = report.snapshotDigest;
+    expect((await f.seed()).snapshotDigest).toBe(firstDigest);
+    const resumed = readSolverRunState(f.stateFile), cooperative = cooperationFor(f, resumed);
+    try {
+      await cooperative.restore();
+      expect(await cooperative.next(resumed.workers![0], { maxTurns: 10, remainingMs: 60_000 }))
+        .toMatchObject({ kind: 'lead', initialPlanNonce: expect.any(String) });
+      expect(resumed.cooperation!.tasks).toEqual([]);
+    } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it('captures a preserved initial Lead draft read-only without initializing or checking the destination', () => {
+    const f = startedInitialPlanningFixture(), historical = fs.readFileSync(f.sourceStateFile);
+    const prepared = fs.readFileSync(f.stateFile);
+    const source = captureSolverContinuationSource(f.sourceStateFile, f.stateFile, f.newState);
+    expect(source).toMatchObject({ initialPlanning: true, candidateIds: [], plan: { tasks: [], groups: [] },
+      history: { deliveries: [f.savedDraft], activity: { turns: 3 } } });
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+    expect(fs.readFileSync(f.stateFile)).toEqual(prepared);
+    expect(fs.existsSync(path.join(f.directory, 'continuation-seed-source.json'))).toBe(false);
+    expect(host.verify).not.toHaveBeenCalled(); expect(host.prepare).not.toHaveBeenCalled();
+  });
+
+  it.each(['proof', 'verified', 'accepted', 'conditional', 'external-producer', 'task-bound', 'dependency',
+    'remaining-obligation', 'evidence', 'evidence-reference', 'artifact', 'foreign-commit', 'ordinary-progress',
+    'different-statement', 'different-premises'] as const)
+    ('refuses a delivery with graph or proof authority in initial planning: %s', async kind => {
+      const f = startedInitialPlanningFixture(), delivery = f.oldState.cooperation!.deliveries![0];
+      if (kind === 'proof') delivery.kind = 'proof';
+      if (kind === 'verified' || kind === 'accepted' || kind === 'conditional') delivery.status = kind;
+      if (kind === 'external-producer') delivery.producer = 'researcher-1';
+      if (kind === 'task-bound') { delivery.taskId = 'removed-task'; delivery.taskDigest = 'a'.repeat(64); }
+      if (kind === 'dependency') delivery.dependencies = [{ taskId: 'removed-task', taskDigest: 'a'.repeat(64) }];
+      if (kind === 'remaining-obligation') delivery.remainingObligations = ['removed-task'];
+      if (kind === 'evidence') delivery.evidence = { passed: true, verification: { status: 'kernel_verified',
+        targetCommit: f.base, results: [{ receiptId: 'historical-proof' }] } };
+      if (kind === 'evidence-reference') delivery.evidenceRefs = ['historical-proof'];
+      if (kind === 'artifact') delivery.artifacts = { commit: f.base, artifacts: [] } as typeof delivery.artifacts;
+      if (kind === 'foreign-commit') delivery.commit = f.base[0] === 'a' ? 'b'.repeat(40) : 'a'.repeat(40);
+      if (kind === 'ordinary-progress') delivery.summary = 'Accepted work from a previous task.';
+      if (kind === 'different-statement') delivery.statement = 'A prior typed task, not the initial problem.';
+      if (kind === 'different-premises') delivery.premises = ['A prior dependency.'];
+      writeSolverRunState(f.sourceStateFile, f.oldState);
+      const historical = fs.readFileSync(f.sourceStateFile);
+      await expect(f.seed()).rejects.toThrow('math_plan_invalid');
+      expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+      expect(fs.existsSync(path.join(f.directory, 'continuation-seed-source.json'))).toBe(false);
+      expect(host.verify).not.toHaveBeenCalled();
+    });
+
+  it.each(['turns', 'worker-turns', 'started-request', 'publication', 'history', 'partial-plan'])
+    ('does not treat a previously active or incomplete graph as unstarted planning: %s', async kind => {
+      const f = initialPlanningFixture();
+      if (kind === 'turns') f.oldState.turns = 1;
+      if (kind === 'worker-turns') f.oldState.workers![0].turns = 1;
+      if (kind === 'started-request') f.oldState.workers![0].usageAccounting =
+        { startedTurns: 1, reportedTurns: 0, pending: true, incomplete: true };
+      if (kind === 'publication') f.oldState.cooperation!.initialPlanPublication = { nonce: 'old-publication',
+        file: `DELIVERIES-${mathDigest('old-publication')}.jsonl`, offset: 0,
+        eventDigest: mathDigest('old-event'), baseVersion: 'old-base', planVersion: 'old-plan', acceptedAt: 1 };
+      if (kind === 'history') f.oldState.cooperation!.history = [{ task: f.tasks[0] }];
+      if (kind === 'partial-plan') f.oldState.cooperation!.tasks = [{ task: f.tasks[0], status: 'pending', attempts: 0 }];
+      writeSolverRunState(f.sourceStateFile, f.oldState);
+      await expect(f.seed()).rejects.toThrow(kind === 'partial-plan' ? 'math_plan_incomplete_original_coverage' : 'math_plan_invalid');
+      expect(host.verify).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(f.directory, 'continuation-seed-source.json'))).toBe(false);
+    });
+
+  it.each(['publication', 'edited', 'edit-history', 'history', 'partial-plan', 'nonempty-version',
+    'missing-version', 'peer-turn', 'peer-request', 'lead-task', 'nonplanning-turn', 'accepted-candidate',
+    'proof-receipt', 'changed-canonical'] as const)
+    ('does not reinterpret a started accepted, incomplete or inconsistent graph as initial planning: %s', async kind => {
+      const f = startedInitialPlanningFixture(), cooperation = f.oldState.cooperation!;
+      if (kind === 'publication') cooperation.initialPlanPublication = { nonce: 'old-publication',
+        file: `DELIVERIES-${mathDigest('old-publication')}.jsonl`, offset: 0,
+        eventDigest: mathDigest('old-event'), baseVersion: 'old-base', planVersion: 'old-plan', acceptedAt: 1 };
+      if (kind === 'edited') cooperation.planEdited = true;
+      if (kind === 'edit-history') cooperation.edits = [{ id: 'old-edit', status: 'applied' }] as typeof cooperation.edits;
+      if (kind === 'history') cooperation.history = [{ task: f.tasks[0] }];
+      if (kind === 'partial-plan') cooperation.tasks = [{ task: f.tasks[0], status: 'pending', attempts: 0 }];
+      if (kind === 'nonempty-version') cooperation.planVersion = mathDigest('accepted-but-cleared-graph');
+      if (kind === 'missing-version') delete cooperation.planVersion;
+      if (kind === 'peer-turn') f.oldState.workers![1].turns = 1;
+      if (kind === 'peer-request') f.oldState.workers![1].usageAccounting =
+        { startedTurns: 1, reportedTurns: 0, pending: true, incomplete: true };
+      if (kind === 'lead-task') f.oldState.workers![0].sessionTaskId = 'removed-task';
+      if (kind === 'nonplanning-turn') f.oldState.dispatchCounts = { planning: 2, proving: 1 };
+      if (kind === 'accepted-candidate') f.oldState.workers![0].candidate!.status = 'passed';
+      if (kind === 'proof-receipt') cooperation.proofReadyRecords = [{ status: 'consumed' }] as typeof cooperation.proofReadyRecords;
+      if (kind === 'changed-canonical') cooperation.canonicalCommit = f.base[0] === 'a' ? 'b'.repeat(40) : 'a'.repeat(40);
+      writeSolverRunState(f.sourceStateFile, f.oldState);
+      const historical = fs.readFileSync(f.sourceStateFile);
+      await expect(f.seed()).rejects.toThrow();
+      expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+      expect(host.verify).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(f.directory, 'continuation-seed-source.json'))).toBe(false);
+    });
+
   it('owns a fresh proof environment without changing frozen settings or the static run identity', async () => {
     const f = fixture(), savedEnvironment = fs.readFileSync(f.environmentFile);
     const lifecycle: string[] = [];
@@ -518,7 +776,7 @@ describe('explicit prepared-run continuation initialization', () => {
     writeSolverRunState(f.sourceStateFile, f.oldState);
     const report = await f.seed(), state = readSolverRunState(f.stateFile);
     expect(report.failed).toEqual([]); expect(report.candidates).toEqual(['first', 'second', 'bridge']);
-    expect(host.verify).toHaveBeenCalledOnce();
+    expect(host.verify).toHaveBeenCalledTimes(2); // Its typed predecessor is checked in an earlier wave.
     expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')).toMatchObject({ status: 'integrated',
       integratedCheck: { passed: true } });
     expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')!.proof).toBeUndefined();
@@ -776,6 +1034,69 @@ describe('completed advisory research continuation', () => {
       'seed-completed-research').text)[0]).toMatchObject({ task: { id: f.task.id, ...blueprint } });
   });
 
+  it.each(['mathlib', 'verified-library', 'public-literature'] as const)(
+    'preserves preferred owners and %s research identities throughout continuation metadata', async researchSource => {
+      const f = completedResearchFixture(), prior = f.oldState.cooperation!.tasks.at(-1)!;
+      const goal = f.oldState.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+      goal.task = { ...goal.task, preferredOwnerId: 'prover-1' };
+      prior.task = { ...prior.task, researchSource, consumerGoalIds: [goal.task.id] };
+      prior.finding = JSON.stringify({ ...JSON.parse(f.finding), taskDigest: taskVersion(prior.task) });
+      const completion = publishCompletedResearch(f.oldState, prior.task.id, 'source-focused-completion');
+      f.oldState.cooperation!.goalProgress = { schema: 'theoremos.goal-progress.v1',
+        problemReceiptDigest: f.oldState.problem.receiptDigest, sequence: 1,
+        goals: [{ key: 'goal-key', proofPath: goal.task.proofPath!, theoremName: goal.task.theoremName!, taskId: goal.task.id,
+          activeMs: 900, coreActiveMs: 1200, lastReviewedCoreMs: 900, observedAt: 1000, active: true,
+          seenEvidence: [], coreSeenEvidence: [], closed: false }],
+        decisions: [{ id: 'review', at: 900, reason: 'Inspect the next mathematical step.', goalKeys: ['goal-key'],
+          nextChecks: [{ action: 'construction-check', objective: 'Test the retained construction.', expectedEvidence: 'An exact witness.',
+            targetTaskId: prior.task.id, taskDigest: taskVersion(prior.task) }] }] };
+      const gapScope = { problemReceiptDigest: f.oldState.problem.receiptDigest,
+        environmentDigest: f.oldState.environmentDigest, source: goal.task, consumer: goal.task, dependencies: [] };
+      f.oldState.cooperation!.deliveries!.push({ id: 'preferred-owner-gap', producer: 'prover-1',
+        taskId: goal.task.id, taskDigest: taskVersion(goal.task), kind: 'research', status: 'advisory',
+        statement: goal.task.objective, premises: [], dependencies: [], remainingObligations: [],
+        summary: 'An advisory gap on the unchanged original target.', evidenceRefs: [], createdAt: 50,
+        mathematicalGap: { consumer: { taskId: goal.task.id, taskDigest: taskVersion(goal.task) },
+          previousGap: 'The original target is open.', reduced: 'The helper has been proved.',
+          remaining: 'Connect the helper to the target.', evidenceScope: 'Current original target.', reconsiderWhen: [] },
+        mathematicalGapScope: gapScope });
+      writeSolverRunState(f.sourceStateFile, f.oldState);
+
+      expect((await f.seed()).stage).toBe('complete');
+      await f.seed();
+      const state = readSolverRunState(f.stateFile), retained = state.cooperation!.tasks.find(node => node.task.id === prior.task.id)!;
+      expect(retained).toMatchObject({ status: 'completed', task: { researchSource, consumerGoalIds: [goal.task.id] } });
+      expect(retained.researchCompletion).toEqual(completion);
+      expect(taskVersion(retained.task)).toBe(taskVersion(prior.task));
+      expect(state.cooperation!.tasks.find(node => node.task.id === goal.task.id)?.task).toEqual(goal.task);
+      expect(state.cooperation!.goalProgress!.decisions).toEqual(f.oldState.cooperation!.goalProgress.decisions);
+      expect(state.cooperation!.goalProgress!.goals[0]).toMatchObject({ active: false, activeMs: 900, coreActiveMs: 1200 });
+      expect(state.cooperation!.deliveries!.find(delivery => delivery.id === 'preferred-owner-gap')?.mathematicalGapScope).toEqual(gapScope);
+      const source = JSON.parse(fs.readFileSync(path.join(f.directory, 'continuation-seed-source.json'), 'utf8'));
+      expect(source.completedResearch.find(record => record.task.id === prior.task.id).task).toEqual(prior.task);
+      expect(source.researchContext.tasks.find(node => node.task.id === goal.task.id).task).toEqual(goal.task);
+      expect(source.researchContext.tasks.find(node => node.task.id === prior.task.id).task).toEqual(prior.task);
+    });
+
+  it.each([
+    { preferredOwnerId: 'invalid owner' },
+    { researchSource: 'unsupported-source' },
+    { unexpectedMigrationField: true },
+  ])('rejects invalid or unknown nested handoff metadata %j before importing sources', async metadata => {
+    const f = completedResearchFixture(), goal = f.oldState.cooperation!.tasks.find(node => node.task.id === 'goal')!.task;
+    f.oldState.cooperation!.deliveries!.push({ id: 'invalid-handoff-gap', producer: 'prover-1',
+      taskId: goal.id, taskDigest: taskVersion(goal), kind: 'research', status: 'advisory',
+      statement: goal.objective, premises: [], dependencies: [], remainingObligations: [], summary: 'Invalid scope.',
+      evidenceRefs: [], createdAt: 50, mathematicalGapScope: { problemReceiptDigest: f.oldState.problem.receiptDigest,
+        environmentDigest: f.oldState.environmentDigest, source: { ...goal, ...metadata } as CooperativeTask,
+        consumer: goal, dependencies: [] } });
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await expect(f.seed()).rejects.toThrow();
+    expect(fs.existsSync(path.join(f.directory, 'continuation-seed-source.json'))).toBe(false);
+    expect(readSolverRunState(f.stateFile).cooperation).toBeUndefined();
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
   it('does not bind research completed on A to canonical sources B before the first continuation', async () => {
     const f = completedResearchFixture();
     fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission/Helpers.lean'),
@@ -1007,6 +1328,113 @@ describe('completed advisory research continuation', () => {
 });
 
 describe('bounded continuation verification batches', () => {
+  it('reconsiders a failed old continuation check against canonical source with fresh receipts', async () => {
+    const f = fixture(), node = f.oldState.cooperation!.tasks[0]!;
+    node.status = 'blocked'; node.feedback = 'math_continuation_seed_helper_not_verified';
+    node.integratedCheck = { ...node.integratedCheck!, passed: false, verification: {
+      ...node.integratedCheck!.verification, status: 'failed', results: [{
+        ...node.integratedCheck!.verification.results[0], status: 'failed',
+        error: 'Lean exited with status 1.', stdoutPreview: 'Submission/Helpers.lean:2:1: error: unknown identifier removed_context',
+      }] } };
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    host.verify.mockImplementation(freshReceipts);
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report.candidates).toEqual(['first', 'second']); expect(report.failed).toEqual([]);
+    expect(state.cooperation!.tasks[0]).toMatchObject({ status: 'integrated', integratedCheck: { passed: true } });
+    expect(state.cooperation!.tasks[0].integratedCheck!.verification.results[0].receiptId).toMatch(/^fresh-seed-/u);
+  });
+
+  it.each(['changed-contract', 'environment-failure'] as const)('does not select an obsolete failed check (%s)', async kind => {
+    const f = fixture(), node = f.oldState.cooperation!.tasks[0]!;
+    node.status = 'blocked'; node.integratedCheck = { ...node.integratedCheck!, passed: false,
+      taskDigest: kind === 'changed-contract' ? 'f'.repeat(64) : taskVersion(node.task), verification: {
+        ...node.integratedCheck!.verification, status: kind === 'environment-failure' ? 'unavailable' : 'failed',
+        results: [{ ...node.integratedCheck!.verification.results[0], status: kind === 'environment-failure' ? 'unavailable' : 'failed',
+          error: kind === 'environment-failure' ? 'No Lean toolchain' : 'Lean exited with status 1.',
+          stdoutPreview: 'Submission/Helpers.lean:2:1: error: unknown identifier removed_context' }] } };
+    writeSolverRunState(f.sourceStateFile, f.oldState); host.verify.mockImplementation(freshReceipts);
+    const report = await f.seed();
+    expect(report.candidates).toEqual(['second']);
+    expect(readSolverRunState(f.stateFile).cooperation!.tasks[0].status).toBe('pending');
+  });
+
+  it.each([false, true])('rechecks an original prerequisite before its def consumer (declared=%s)', async declared => {
+    const f = originalDependencyFixture(declared), check = vi.spyOn(taskProofs, 'checkTaskProofs');
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const source = committedSource(f.worktree, request.targetCommit!, `${f.projectRelative}/Submission.lean`);
+      if (request.items.some(item => item.theoremName === 'Submission.original')) {
+        expect(source).toContain('theorem premise : True := by trivial');
+        expect(source).toContain('def witness');
+      }
+      return freshReceipts(request);
+    });
+    let state!: SolverRunState, proofs!: TaskProof[];
+    const report = await seedSolverContinuation({ ...f.options, onSeeded: (next, checked) => { state = next; proofs = checked; } });
+    expect(report.checked).toEqual(['premise', 'goal']); expect(report.failed).toEqual([]);
+    expect(check.mock.calls.map(call => call[3].map(request => [request.task.id, request.retainedGoals])))
+      .toEqual([[['premise', []]], [['goal', ['Submission.premise']]]]);
+    const cooperative = cooperationFor(f, state, proofs);
+    try {
+      await cooperative.restore();
+      expect(state.cooperation!.tasks.every(node => node.status === 'integrated')).toBe(true);
+    } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it('recovers an unknown source dependency once only after a new original receipt', async () => {
+    const f = originalDependencyFixture(false, true), attempts: { target: string; retained: boolean }[] = [];
+    const check = vi.spyOn(taskProofs, 'checkTaskProofs');
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const source = committedSource(f.worktree, request.targetCommit!, `${f.projectRelative}/Submission.lean`);
+      const target = request.items[0].theoremName!, retained = source.includes('theorem premise');
+      attempts.push({ target, retained });
+      if (target === 'Submission.original' && !retained) return failedBatch(freshReceipts(request), {
+        stdoutPreview: file => `${file}:4:1: error: unknown identifier selected by tactic` });
+      return freshReceipts(request);
+    });
+    const report = await f.seed();
+    // Existing single-target compact/full fallback is separate from one context recovery.
+    expect(attempts).toEqual([{ target: 'Submission.original', retained: false }, { target: 'Submission.original', retained: false },
+      { target: 'Submission.premise', retained: true }, { target: 'Submission.original', retained: true }]);
+    expect(check.mock.calls.filter(call => call[3][0].task.id === 'goal')).toHaveLength(2);
+    expect(report.checked).toEqual(['goal', 'premise']); expect(report.failed).toEqual([]);
+    expect(readSolverRunState(f.stateFile).cooperation!.recheck!.completed).toBe(2);
+  });
+
+  it('does not restore an unverified original or retry unchanged context', async () => {
+    const f = originalDependencyFixture(false, true);
+    const check = vi.spyOn(taskProofs, 'checkTaskProofs');
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => failedBatch(freshReceipts(request), {
+      stdoutPreview: file => `${file}:3:1: error: unsolved goals` }));
+    const report = await f.seed();
+    expect(report.failed.toSorted()).toEqual(['goal', 'premise']);
+    expect(check.mock.calls).toHaveLength(2);
+    expect(check.mock.calls.every(call => call[3].every(request => !request.retainedGoals.length))).toBe(true);
+  });
+
+  it('blocks a cycle inferred through definitions without accepting either original', async () => {
+    const f = originalDependencyFixture();
+    const source = fs.readFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission.lean'), 'utf8')
+      .replace('premise : True := by trivial', 'premise : True := by exact original');
+    fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission.lean'), source);
+    f.oldState.cooperation!.canonicalCommit = commit(f.sourceWorktree, 'Invalid cyclic source');
+    writeSolverRunState(f.sourceStateFile, f.oldState); host.verify.mockImplementation(freshReceipts);
+    const report = await f.seed();
+    expect(report.failed.toSorted()).toEqual(['goal', 'premise']); expect(host.verify).not.toHaveBeenCalled();
+    expect(readSolverRunState(f.stateFile).cooperation!.tasks.every(node => node.feedback?.includes('dependency_cycle'))).toBe(true);
+  });
+
+  it('independently checks members after a shared Lean compilation fails', async () => {
+    const f = fixture();
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => request.items.length > 1 ||
+      request.items.some(item => item.theoremName?.includes('second_helper')) ? failedBatch(freshReceipts(request), {
+        stdoutPreview: file => `${file}:3:1: error: unsolved goals` }) : freshReceipts(request));
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report.failed).toEqual(['second']); expect(report.checked).toEqual(['first', 'second']);
+    expect(host.verify.mock.calls[0][0].items).toHaveLength(2);
+    expect(host.verify.mock.calls.slice(1).every(([request]) => request.items.length === 1)).toBe(true);
+    expect(state.cooperation!.tasks[0].status).toBe('integrated'); expect(state.cooperation!.tasks[1].status).toBe('blocked');
+  });
+
   it('checks identical helper projections once and preserves each target receipt and type', async () => {
     const f = fixture(); host.verify.mockImplementation(freshReceipts);
     const report = await f.seed(), state = readSolverRunState(f.stateFile);
@@ -1171,5 +1599,123 @@ describe('bounded continuation verification batches', () => {
     expect(JSON.parse(fs.readFileSync(path.join(f.directory, 'continuation-seed.json'), 'utf8')).checked).toEqual([]);
     await withMathRuntimeLease({ lockPath: path.join(f.directory, 'run.lock'),
       flockExecutable: '/usr/bin/flock' }, async () => undefined);
+  });
+});
+
+describe('continuation of a host-frozen unfinished delivery', () => {
+  it('defers its exact goal snapshot to the ordinary lifecycle without a new model writer', async () => {
+    const f = frozenGoalFixture(), historical = fs.readFileSync(f.sourceStateFile);
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    const node = state.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    const ready = state.cooperation!.proofReadyRecords![0]!;
+    expect(report.checked).not.toContain('goal');
+    expect(host.verify.mock.calls.flatMap(call => call[0].items).some(item => item.theoremName === 'Submission.original')).toBe(false);
+    expect(node.status).toBe('pending'); expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined();
+    expect(ready.status).toBe('frozen'); expect(ready.snapshotCommit).toBe(f.snapshotCommit);
+    expect(ready.sourceDigest).toBe(f.ready.sourceDigest); expect(ready.id).not.toBe(f.ready.id);
+    expect(ready.receiptIds).toBeUndefined(); expect(node.assignment!.assignmentId).not.toBe('old-frozen-goal');
+    const cooperation = cooperationFor(f, state), worker = state.workers![1]!;
+    await cooperation.restore();
+    const descriptor = { id: worker.id, role: worker.role, worktree: worker.worktree, ownedFiles: state.problem.ownedFiles };
+    const action = await cooperation.next(descriptor, { maxTurns: Infinity, remainingMs: Infinity });
+    expect(action?.kind).toBe('task');
+    const close = vi.fn(async () => {}), checked = vi.fn(), emit = vi.fn();
+    const lifecycle = new WorkerProofLifecycle({ state, research: worker, worker: descriptor, cooperation, close,
+      save: () => {}, emit, checked });
+    try {
+      expect(await lifecycle.resumeFrozen(action)).toBe(true);
+      expect(close).toHaveBeenCalledOnce(); expect(checked).toHaveBeenCalledOnce();
+      expect(emit).toHaveBeenCalledWith('proof_ready_checked', expect.objectContaining({ commit: f.snapshotCommit, passed: true }));
+      expect(ready.status).toBe('checked'); expect(ready.receiptIds?.length).toBeGreaterThan(0);
+      expect(host.verify.mock.calls.some(call => call[0].items.some(item => item.theoremName === 'Submission.original'))).toBe(true);
+    } finally { await cooperation.stop(); }
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+  });
+
+  it.each(['digest', 'assignment', 'receipt', 'environment', 'task-version', 'seed'] as const)('rejects a frozen record with changed %s identity', async kind => {
+    const f = frozenGoalFixture(), ready = f.oldState.cooperation!.proofReadyRecords![0]!;
+    if (kind === 'digest') ready.sourceDigest = '0'.repeat(64);
+    else if (kind === 'assignment') ready.assignmentKey = 'DELIVERIES-wrong.jsonl';
+    else if (kind === 'receipt') ready.problemReceiptDigest = '0'.repeat(64);
+    else if (kind === 'environment') ready.environmentDigest = '0'.repeat(64);
+    else if (kind === 'task-version') ready.taskDigest = '0'.repeat(64);
+    else ready.seedCommit = f.base;
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await expect(f.seed()).rejects.toThrow('math_continuation_seed_frozen_identity_changed');
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('requires the source run lease and refuses a quarantined writer', async () => {
+    const f = frozenGoalFixture();
+    await withMathRuntimeLease({ lockPath: path.join(f.oldDirectory, 'run.lock'), flockExecutable: '/usr/bin/flock' },
+      async () => { await expect(f.seed()).rejects.toThrow('math_runtime_lease_busy'); });
+    f.oldState.workers![1]!.writerStopUnconfirmed = { at: 1, reason: 'unconfirmed-fixture' };
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await expect(f.seed()).rejects.toThrow('math_continuation_seed_frozen_writer_unconfirmed');
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('keeps a candidate with a changed destination environment advisory', async () => {
+    const f = frozenGoalFixture();
+    f.newState.environmentDigest = mathDigest('different-runtime-environment'); writeSolverRunState(f.stateFile, f.newState);
+    await f.seed();
+    const state = readSolverRunState(f.stateFile);
+    expect(state.cooperation!.proofReadyRecords).toBeUndefined();
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'goal')!.assignment).toBeUndefined();
+  });
+
+  it('repeats prepared seeding with the same frozen source without duplicating execution records', async () => {
+    const f = frozenGoalFixture(); await f.seed();
+    const first = readSolverRunState(f.stateFile).cooperation!.proofReadyRecords;
+    await f.seed();
+    expect(readSolverRunState(f.stateFile).cooperation!.proofReadyRecords).toEqual(first);
+  });
+
+  it('keeps a frozen goal advisory when the destination worker can no longer prove goals', async () => {
+    const f = frozenGoalFixture();
+    f.newState.workers![1]!.role = 'prover'; writeSolverRunState(f.stateFile, f.newState);
+    await f.seed();
+    expect(readSolverRunState(f.stateFile).cooperation!.proofReadyRecords).toBeUndefined();
+  });
+
+  it('does not replace a freshly rechecked canonical goal with a pending snapshot', async () => {
+    const f = frozenGoalFixture(), node = f.oldState.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    f.oldState.cooperation!.canonicalCommit = f.snapshotCommit;
+    node.integratedCheck = { ...f.oldState.cooperation!.tasks[0]!.integratedCheck!, commit: f.snapshotCommit,
+      taskDigest: taskVersion(node.task) };
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed();
+    const state = readSolverRunState(f.stateFile), goal = state.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    expect(goal.status).toBe('integrated'); expect(goal.integratedCheck?.passed).toBe(true);
+    expect(state.cooperation!.proofReadyRecords).toBeUndefined();
+  });
+
+  it('migrates a scoped pending check and its parent evidence without adding it to the editable proof plan', async () => {
+    const f = fixture(), cooperation = f.oldState.cooperation!, goal = cooperation.tasks.find(node => node.task.id === 'goal')!.task;
+    const source: CooperativeTask = { id: 'membership_audit', kind: 'research', objective: 'Inspect the missing membership inference.',
+      revision: 0, dependsOn: ['goal'] };
+    cooperation.tasks.push({ task: source, status: 'completed', attempts: 1 });
+    const identity = { problemReceiptDigest: f.oldState.problem.receiptDigest, environmentDigest: f.oldState.environmentDigest };
+    const gap = { consumer: { taskId: goal.id, taskDigest: taskVersion(goal) }, previousGap: 'Membership was assumed.',
+      reduced: 'The candidate is specified.', remaining: 'Its membership remains unknown.', evidenceScope: 'Original assumptions.',
+      reconsiderWhen: [], nextCheck: { action: 'construction-check' as const, objective: 'Check membership.', expectedEvidence: 'A valid application or exact missing premise.' } };
+    const finding = JSON.stringify({ taskId: source.id, taskDigest: taskVersion(source), conclusion: 'inconclusive',
+      summary: 'Check membership next.', mathematicalGap: gap });
+    cooperation.deliveries!.push({ id: 'membership-gap', taskId: source.id, taskDigest: taskVersion(source), producer: 'prover-1',
+      kind: 'research', status: 'advisory', statement: source.objective, premises: [], dependencies: [], remainingObligations: [gap.remaining],
+      summary: 'Check membership next.', evidenceRefs: [], createdAt: 10, commit: cooperation.canonicalCommit,
+      finding, findingDigest: mathDigest(finding), mathematicalGap: gap,
+      mathematicalGapScope: bindMathematicalGap(gap, source, cooperation, identity) });
+    const proposed = proposedNextChecks(cooperation, identity, 11)[0]!;
+    cooperation.nextChecks = [proposed.record]; cooperation.tasks.push(proposed.node);
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed();
+    const restored = readSolverRunState(f.stateFile).cooperation!;
+    expect(restored.nextChecks).toEqual([proposed.record]);
+    expect(restored.tasks.find(node => node.nextCheckId === proposed.record.id)).toMatchObject({ task: proposed.node.task, status: 'pending' });
+    expect(restored.deliveries!.find(delivery => delivery.id === 'membership-gap')?.mathematicalGap?.nextCheck).toEqual(gap.nextCheck);
+    expect(restored.tasks.find(node => node.nextCheckId)?.proof).toBeUndefined();
+    await f.seed();
+    expect(readSolverRunState(f.stateFile).cooperation!.nextChecks).toHaveLength(1);
   });
 });

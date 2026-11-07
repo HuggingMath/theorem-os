@@ -8,7 +8,7 @@ import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspect
 import { assertSolverSources, committedSource, commitSolverProjection, git, originalDeclarationRegions, solverProofImports,
   withSolverWorktree, type SolverProblem } from './problem';
 import { attributeProofEvidence, checkProjectedDeclarations, type ProofCheck } from './modules/evidence';
-import { assumableLemma, isDefinitionTask, taskVersion, type CooperativeTask, type TaskAssignment } from './tasks';
+import { assumableLemma, isDefinitionTask, taskVersion, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { captureProofReferences, type ProofReferences } from './proofReferences';
 import { hasDeterministicLeanFailure, proofReuseEnvironment } from './proofReuse';
 import { TaskProofCache, type TaskVerificationArtifact } from './taskProofCache';
@@ -18,6 +18,19 @@ import { compactTaskSources } from './taskProjection';
 import { projectionDependencyHintId, type ProjectionDeclaration, type ProjectionDependencyHint } from './projectionDependencyHints';
 
 export { TaskProofCache } from './taskProofCache';
+
+/** Source hints only order/recover checks; callers must separately establish fresh acceptance. */
+export function projectedGoalInputs(project: ReturnType<typeof createTaskSourceProjector>, task: CooperativeTask,
+  tasks: readonly TaskRecord[]): TaskRecord[] {
+  const found = new Set<TaskRecord>();
+  for (const hint of project.dependencyHints(task, [])) {
+    if (hint.root.removedBecause !== 'excluded-original-target') continue;
+    const matches = tasks.filter(node => node.task.kind === 'goal' && node.task.id !== task.id &&
+      node.task.proofPath === hint.root.file && node.task.theoremName?.replace(/^_root_\./u, '') === hint.root.name);
+    if (matches.length === 1) found.add(matches[0]);
+  }
+  return [...found];
+}
 
 /** `afterName` moves an existing declaration after that sibling, or inserts a new one after it. */
 export type DeclarationChange = { file: string; name: string; before?: string; after: string; beforeName?: string; afterName?: string; tail?: string };
@@ -228,20 +241,53 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       ...[...assumptions].map(([id, dependency]) => ({ id, file: dependency.proofPath!, name: id.slice(id.indexOf('\0') + 1) }))]) {
       bindings.set(binding.name, [...(bindings.get(binding.name) ?? []), binding]);
     }
-    // Only unambiguous source names guide projection cleanup; Lean owns actual dependency evidence.
-    const referenceKey = (declaration: typeof declarations[number], name: string) => {
-      if (!name.includes('.') && declaration.header.includes(name)) return;
+    const visibleBindings = (declaration: typeof declarations[number], candidates: readonly { file: string; id: string }[]) => {
+      const visibleCandidates = candidates.filter(item => visible.get(declaration.file)!.has(item.file));
+      const own = visibleCandidates.filter(item => item.file === declaration.file);
+      return [...new Set((own.length ? own : visibleCandidates).map(item => item.id))];
+    };
+    const scopedReferences = (declaration: typeof declarations[number], name: string) => {
       // Lean tries enclosing namespaces before opened ones, so `open` leaves these candidates unchanged.
       // Only a root-level helper could be shadowed by an opened name, and owned sources rarely have one.
       const namespace = declaration.namespace.split('.').filter(Boolean);
       const names = name.startsWith('_root_.') ? [name.slice(7)] :
         Array.from({ length: namespace.length + 1 }, (_, index) => [...namespace.slice(0, namespace.length - index), name].join('.'));
       for (const qualified of names) {
-        const candidates = (bindings.get(qualified) ?? []).filter(item => visible.get(declaration.file)!.has(item.file));
-        const own = candidates.filter(item => item.file === declaration.file);
-        const ids = new Set((own.length ? own : candidates).map(item => item.id));
-        if (ids.size) return ids.size === 1 ? [...ids][0] : undefined;
+        const candidates = visibleBindings(declaration, bindings.get(qualified) ?? []);
+        if (candidates.length) return candidates;
       }
+      return [];
+    };
+    const fields = new Map<string, { file: string; id: string }[]>();
+    for (const [name, candidates] of bindings) fields.set(local(name), [...(fields.get(local(name)) ?? []), ...candidates]);
+    // Dot notation can reference an owned declaration through a receiver or as a prefix of a chain:
+    // `trace.finiteIdeal.topologicalClosure` and `existsWitness.choose` both carry dependencies.
+    // Candidate groups are conservative for removal; only a unique group may become an advisory hint.
+    const referenceGroups = (declaration: typeof declarations[number], name: string): string[][] => {
+      if (!name.includes('.') && declaration.header.includes(name)) return [];
+      const parts = name.split('.'), groups: string[][] = [];
+      let prefixLength = 0;
+      for (let length = parts.length; length > 0; length--) {
+        const prefix = parts.slice(0, length).join('.');
+        if (length === 1 && declaration.header.includes(prefix)) continue;
+        const candidates = scopedReferences(declaration, prefix);
+        if (candidates.length) { groups.push(candidates); prefixLength = length; break; }
+      }
+      if (!name.startsWith('_root_.')) for (const field of parts.slice(prefixLength || 1)) {
+        // The receiver's type, rather than this declaration's namespace or file, selects a method.
+        // Without elaboration, every visible owned method sharing the field is a possible dependency.
+        const candidates = [...new Set((fields.get(field) ?? [])
+          .filter(item => visible.get(declaration.file)!.has(item.file)).map(item => item.id))];
+        if (candidates.length) groups.push(candidates);
+      }
+      return groups;
+    };
+    // Body substitution must match an actual name, not replace `receiver.field` with a bare assumption:
+    // Lean decides the receiver argument's position, which source-only dependency lookup cannot infer.
+    const referenceKey = (declaration: typeof declarations[number], name: string) => {
+      if (!name.includes('.') && declaration.header.includes(name)) return;
+      const candidates = scopedReferences(declaration, name);
+      return candidates.length === 1 ? candidates[0] : undefined;
     };
     for (const item of declarations) if (item.theorem && !keep.has(item.id) &&
         item.references.some(name => name === 'sorry' || name === 'admit')) {
@@ -252,7 +298,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     const changed = new Set([...removed, ...(conditions.length ? [target] : [])]);
     for (;;) {
       const affected = declarations.filter(item => !keep.has(item.id) && !removed.has(item.id) &&
-        item.references.some(name => { const reference = referenceKey(item, name); return reference !== undefined && changed.has(reference); }));
+        item.references.some(name => referenceGroups(item, name).some(candidates => candidates.some(reference => changed.has(reference)))));
       if (!affected.length) break;
       for (const item of affected) { removed.add(item.id); changed.add(item.id); }
     }
@@ -296,9 +342,11 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           const bound = localBindings(current);
           for (const name of new Set(names)) {
             if (!name.includes('.') && bound.has(name)) continue;
-            const reference = referenceKey(current, name);
-            if (reference && reference !== target && removed.has(reference) && unique.has(reference) && !route.includes(reference))
-              pending.push([...route, reference]);
+            for (const candidates of referenceGroups(current, name)) {
+              const reference = candidates.length === 1 ? candidates[0] : undefined;
+              if (reference && reference !== target && removed.has(reference) && unique.has(reference) && !route.includes(reference))
+                pending.push([...route, reference]);
+            }
           }
         }
       }
@@ -608,7 +656,26 @@ function orderConditionalChanges(source: string, file: string, changes: readonly
 
 /** Merge disjoint declaration edits, including helpers sharing a file, without overwriting peer work. */
 export function applyTaskChanges(problem: SolverProblem, worktree: string, changes: readonly DeclarationChange[],
-  imports: NonNullable<TaskProof['imports']> = [], conditions: readonly CooperativeTask[] = []): void {
+  imports: NonNullable<TaskProof['imports']> = [], conditions: readonly CooperativeTask[] = [],
+  delivery?: Pick<TaskProof, 'commit' | 'seedCommit'>): void {
+  if (delivery && !conditions.length) {
+    const sources = problem.ownedFiles.map(file => ({ file,
+      before: committedSource(worktree, delivery.seedCommit, `${problem.projectRelative}/${file}`),
+      after: committedSource(worktree, delivery.commit, `${problem.projectRelative}/${file}`) }));
+    const exactSeed = sources.every(({ file, before }) =>
+      fs.readFileSync(path.join(worktree, problem.projectRelative, file), 'utf8') === before);
+    const expectedImports = sources.filter(({ file }) => file.endsWith('.lean')).flatMap(({ file, before, after }) =>
+      solverProofImports(problem, after).filter(module => !solverProofImports(problem, before).includes(module))
+        .map(module => ({ file, module })));
+    // A byte-preserving copy is safe only for the complete authorized patch on its unchanged seed.
+    // Concurrent edits and discharged assumptions continue through the original declaration merger.
+    if (exactSeed && canonicalMathJson(taskChanges(problem, worktree, delivery.commit, undefined, delivery)) === canonicalMathJson(changes) &&
+        canonicalMathJson(expectedImports) === canonicalMathJson(imports)) {
+      for (const { file, after } of sources) fs.writeFileSync(path.join(worktree, problem.projectRelative, file), after);
+      assertSolverSources(problem, worktree);
+      return;
+    }
+  }
   const files = new Map<string, string>();
   for (const change of changes) {
     if (!problem.ownedFiles.includes(change.file)) throw new Error('math_task_source_outside_scope');

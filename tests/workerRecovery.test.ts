@@ -114,6 +114,26 @@ describe('bounded role session recovery', () => {
   });
   afterEach(() => { vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
+  it('saves an independent proof verification deadline as a resumable checkpoint', async () => {
+    host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async (_text, id, _workspace, started) => {
+      started?.(id); fs.writeFileSync(proof(options), completed); return 'completed';
+    }));
+    host.verify.mockImplementationOnce(async request => {
+      const batch = evidence(request);
+      return { ...batch, status: 'blocked', results: batch.results.map(item => ({ ...item,
+        status: 'blocked', error: 'Lean verification timed out.' })) };
+    });
+    expect(await runSolver(args, directory)).toBe(4);
+    expect(result()).toMatchObject({ status: 'limit_reached', reason: 'math_verification_checkpoint' });
+    const before = state(); expect(before.verificationCheckpoints).toHaveLength(1);
+    expect(events().some(event => event.event === 'worker_checkpoint')).toBe(true);
+    expect(events().some(event => event.event === 'worker_failed')).toBe(false);
+    expect(await runSolver([...args, '--resume'], directory)).toBe(0);
+    expect(state().runId).toBe(before.runId);
+    expect(host.verify.mock.calls[0]![0].timeoutMs).toBe(1800000);
+    expect(host.verify.mock.calls[1]![0].timeoutMs).toBe(3600000);
+  });
+
   it('logs only structured authentication metadata and stops without retrying the provider', async () => {
     host.open.mockImplementationOnce(async (options: MathAgentOptions) => ({
       ...session(options, async () => 'failed', 'private provider response'),

@@ -7,6 +7,7 @@ import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '..
 import { knowledgeSearchGroup, knowledgeVersionSummary } from './theoremKnowledgeSearch';
 import { buildKnowledgeRouteFindings, knowledgeRouteFindingSchema, validateKnowledgeRouteFindings,
   type KnowledgeRouteFindingCandidate } from './theoremKnowledgeFindings';
+import { knowledgeApplicationHintSchema } from './theoremKnowledgeApplicationHints';
 
 export { searchTheoremKnowledge, searchTheoremKnowledgeBatch, searchTheoremKnowledgeRequests } from './theoremKnowledgeSearch';
 export type { KnowledgeSearchOptions, KnowledgeSearchRequest } from './theoremKnowledgeSearch';
@@ -52,6 +53,7 @@ const theorem = z.object({
   kind: z.enum(['lemma', 'goal', 'definition']),
   description: z.string(), premises: z.array(z.string()),
   elaboration: knowledgeElaborationSchema.optional(),
+  applicationHints: z.array(knowledgeApplicationHintSchema).max(64).optional(),
   dependencies: z.object({ statement: z.array(reference), proof: z.array(reference),
     tasks: z.array(z.object({ taskId: z.string(), taskDigest: z.string() }).strict()),
     coverage: z.enum(['recorded', 'unavailable']),
@@ -202,6 +204,10 @@ export function validateKnowledgeMetadata(base: TheoremKnowledgeBase, sourceIden
     const digest = base.contexts[item.contextDigest]?.[item.file];
     if (!digest || !allowedKnowledgeFile(item.file) || !Object.hasOwn(sourceIdentities, digest))
       throw new Error('math_knowledge_forbidden_or_missing_source');
+    for (const hint of item.applicationHints ?? [])
+      if (hint.declaration.name !== item.name || hint.declaration.file !== item.file || hint.declaration.sourceDigest !== digest ||
+          hint.scope.environmentDigest !== item.environmentDigest || hint.historicalCheck.environmentDigest !== hint.scope.environmentDigest)
+        throw new Error('math_knowledge_application_hint_mismatch');
   }
   sourceIdentitiesByBase.set(base, sourceIdentities);
   validateKnowledgeRouteFindings(base.routeFindings ?? []);

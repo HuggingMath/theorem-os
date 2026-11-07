@@ -101,10 +101,11 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
     // Whether each goal's frontier can run now, and host-proposed decisions for a goal that cannot.
     goalPath,
     ...(state.goalProgress?.pending ? { progressReview: { ...state.goalProgress.pending,
-      evidence: 'started-worker-execution-without-new-recorded-checked-inputs' as const,
+      evidence: 'started-worker-execution-without-new-checked-inputs-or-frontier-closure' as const,
       goals: state.goalProgress.goals.filter(goal => state.goalProgress!.pending!.goalKeys.includes(goal.key))
-        .map(({ taskId, proofPath, theoremName, activeMs, lastProgressAt }) =>
-          ({ taskId, proofPath, theoremName, activeMs, lastProgressAt })) } } : {}),
+        .map(({ taskId, proofPath, theoremName, activeMs, lastProgressAt, coreActiveMs, lastCoreProgressAt, lastReviewedCoreMs, coreFrontier }) =>
+          ({ taskId, proofPath, theoremName, activeMs, lastProgressAt, coreActiveMs, lastCoreProgressAt, lastReviewedCoreMs,
+            coreFrontier: coreFrontier?.slice(0, referenceLimit), omittedCoreFrontier: Math.max(0, (coreFrontier?.length ?? 0) - referenceLimit) })) } } : {}),
     goals: continuation.goals.slice(0, referenceLimit).map(goal => ({ ...ref(goal.taskId), recordedProof: goal.recordedProof,
       frontier: goal.frontier.slice(0, referenceLimit).map(ref), omittedFrontier: Math.max(0, goal.frontier.length - referenceLimit),
       missingDependencies: goal.missingDependencies.slice(0, referenceLimit),
@@ -126,9 +127,15 @@ export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlannin
   const goalPath = evidence.goalPath;
   return 'Current route applications and remaining obligations (recorded, not proof acceptance):\n' + JSON.stringify(evidence) +
     (evidence.progressReview ? '\nTeam progress review ' + evidence.progressReview.id + ': these original goals have accumulated worker execution ' +
-      'without new recorded checked inputs on their own paths. Review the remaining mathematical gap, dependencies, role allocation and route. ' +
+      'without new recorded checked inputs or unconditional closure of a previously observed frontier obligation. ' +
+      'coreActiveMs tracks effort without that closure; conditional connections can be useful while this clock continues. ' +
+      'Review the remaining mathematical gap, dependencies, role allocation and route. ' +
       'Publish an ordinary validated plan revision and include "progressReview":{"id":"' + evidence.progressReview.id +
-      '","reason":"evidence for the chosen route or change, and the next discriminating check"} beside baseVersion. ' +
+      '","reason":"evidence for the chosen route or change","nextChecks":[{"action":"construction-check",' +
+      '"objective":"the next discriminating check","expectedEvidence":"the observation that will decide it",' +
+      '"targetTaskId":"ACTIVE_TASK_ID"}]} beside baseVersion. Use the existing nextCheck actions ' +
+      '(feasibility, apply-lemma, construction-check); each target must be an active task serving a reviewed goal. ' +
+      'The host delivers these directions to that task; existing host next checks keep their checkOutcome protocol. ' +
       'You may retain a useful long proof with a specific reason and next check. Elapsed execution alone does not establish failure, ' +
       'and it does not require interrupting a worker. A checkpoint, an unaccepted plan or a description edit does not answer this review.' : '') +
     (goalPath.stalledGoalIds.length ? '\nStalled original goals (goalPath.goals[].stalled): no frontier input of these goals can run, ' +

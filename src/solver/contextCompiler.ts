@@ -8,7 +8,9 @@ import { originalDeclarationRegions, type SolverProblem } from './problem';
 import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
 import { buildProofContinuation } from './progress';
 import { contextTaskConsumers } from './taskConsumers';
-import { mathematicalGapContext } from './mathematicalGaps';
+import { mathematicalGapContextText } from './mathematicalGaps';
+import { nextCheckContextText } from './nextChecks';
+import { goalProgressTaskContext } from './goalProgress';
 import { leadPlanPublicationFeedback } from './cooperationShared';
 import { contextCheckpointRejectionFeedback } from './contextCheckpoint';
 import { researchDecisionMatches, type ResearchDecision } from './researchDecisions';
@@ -243,10 +245,11 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
   };
   // Unadopted proposals and refutations are ordinary planning inputs; their sources join the Lead's scope.
   const visitLeadInputs = () => {
-    for (const delivery of visibleLeadResearchInputs(input, byId)) {
+    for (const delivery of selectedLeadResearchInputs(input, byId)) {
       visit(delivery.taskId!);
       delivery.dependencies.forEach(input => visit(input.taskId));
-      for (const proposal of delivery.lemmaRequests ?? []) proposal.dependsOn.filter(id => byId.has(id)).forEach(id => visit(id));
+      for (const proposal of selectedLeadProposals(delivery, byId))
+        proposal.dependsOn.filter(id => byId.has(id)).forEach(id => visit(id));
     }
   };
   if (action?.kind === 'task') visit(action.task.id);
@@ -302,16 +305,42 @@ function sourceReferences(input: TaskContextInput) {
     if (typeof input.frozenContexts?.[file] !== 'string') return missing(`frozen-context:${file}`);
   return { baseCommit: problem.baseCommit,
     retrieval: 'Read full proofs and namespace/section/instance context with git show COMMIT:PATH in this isolated worktree. Source references identify immutable content; they grant no proof acceptance.',
-    files: files.map(file => ({
-      commit: problem.baseCommit, path: sourcePath(problem, file),
-      contextDigest: problem.sourceStructure?.[file], imports: problem.sourceImports?.[file],
-      declarations: problem.declarations[file] ?? [], context: input.frozenContexts![file] })),
+    files: files.map(file => {
+      const context = input.frozenContexts![file], declarations = problem.declarations[file] ?? [];
+      return { commit: problem.baseCommit, path: sourcePath(problem, file),
+        contextDigest: problem.sourceStructure?.[file], imports: problem.sourceImports?.[file],
+        // Large sources already retain every exact header in context. Repeating the
+        // full declaration inventory can exhaust the budget before the first turn.
+        ...(Buffer.byteLength(context) > COMPACT_CONTEXT_SOURCE_BYTES
+          ? { declarationsFrom: 'context', declarationCount: declarations.length,
+            targetDeclarations: declarations.filter(declaration => problem.targets.some(target =>
+              target.proofPath === file && localName(target.theoremName) === localName(declaration.name))) }
+          : { declarations }), context };
+    }),
     // Library declarations are listed by the declaration index, not inline.
     ...(Object.keys(frozen).length ? { libraryFiles: Object.keys(frozen).sort().map(file => ({ commit: problem.baseCommit,
       path: sourcePath(problem, file), digest: frozen[file], frozenLibrary: true,
       declarationCount: problem.declarations[file]?.length ?? 0 })) } : {}),
     trustedFiles: Object.entries(problem.trustedFiles ?? {}).map(([file, digest]) =>
       ({ commit: problem.baseCommit, path: sourcePath(problem, file), digest })) };
+}
+
+/** Large frozen contexts already contain their headers; cite the complete order rather than repeating every name. */
+function frozenDeclarationOrder(input: TaskContextInput) {
+  return Object.fromEntries(Object.entries(input.problem.declarations)
+    .filter(([file]) => !Object.hasOwn(input.problem.frozenFiles ?? {}, file))
+    .map(([file, declarations]) => {
+      const names = declarations.map(declaration => declaration.name), context = input.frozenContexts?.[file];
+      return [file, context && Buffer.byteLength(context) > COMPACT_CONTEXT_SOURCE_BYTES ? {
+        encoding: 'frozen-declaration-order-v1', commit: input.problem.baseCommit, path: sourcePath(input.problem, file),
+        declarationCount: names.length, orderDigest: mathDigest(canonicalMathJson(names)),
+        retrieval: 'Read the complete frozen file with git show COMMIT:PATH for its exact declaration order. ' +
+          'The ordered array of declaration names as written (including dotted names and repeated local names) must match ' +
+          'declarationCount and SHA-256(canonicalMathJson(names)) = orderDigest. ' +
+          'Missing or mismatched source is unavailable. The frozen-sources context keeps the declaration headers inline; ' +
+          'this reference replaces only the duplicate name list and grants no proof acceptance.',
+      } : names];
+    }));
 }
 
 function proofSources(problem: SolverProblem, node: TaskRecord) {
@@ -331,6 +360,8 @@ export function leadResearchInputs(deliveries: readonly DeliveryRecord[], byId: 
         record.dependencies.some(input => !byId.has(input.taskId) || taskVersion(byId.get(input.taskId)!.task) !== input.taskDigest))
       return false;
     if (record.lemmaRequests?.some(task => !byId.has(task.id))) return true;
+    // Host-bound check outcomes have their own per-publication nextCheckDecisions contract.
+    if (source.nextCheckId && record.checkOutcome?.checkId === source.nextCheckId && record.checkOutcomeScope) return false;
     const text = deliveryFinding(record, source.finding);
     if (text === undefined) return false;
     try {
@@ -340,10 +371,18 @@ export function leadResearchInputs(deliveries: readonly DeliveryRecord[], byId: 
   });
 }
 
-function visibleLeadResearchInputs(input: TaskContextInput, byId: ReadonlyMap<string, TaskRecord>) {
+function visibleLeadResearchInputs(input: Pick<TaskContextInput, 'cooperation'>, byId: ReadonlyMap<string, TaskRecord>) {
   const current = leadResearchInputs(input.cooperation?.deliveries ?? [], byId, input.cooperation?.researchDecisions);
   const ids = input.cooperation?.leadResearchInputIds;
   return ids ? ids.flatMap(id => current.find(record => record.id === id) ?? []) : current;
+}
+
+function selectedLeadResearchInputs(input: TaskContextInput, byId: ReadonlyMap<string, TaskRecord>) {
+  return visibleLeadResearchInputs(input, byId).slice(-LEAD_RESEARCH_INPUTS).reverse();
+}
+
+function selectedLeadProposals(record: DeliveryRecord, byId: ReadonlyMap<string, TaskRecord>) {
+  return (record.lemmaRequests ?? []).filter(task => !byId.has(task.id)).slice(0, LEAD_RESEARCH_PROPOSALS);
 }
 
 /** Exact proposals stay inline; a long finding is retrievable by digest from its saved notes. */
@@ -357,8 +396,22 @@ function leadResearchInput(record: DeliveryRecord, byId: ReadonlyMap<string, Tas
     ...(finding === undefined ? {} : Buffer.byteLength(finding) <= LEAD_INLINE_FINDING_BYTES ? { finding } : {
       findingBytes: Buffer.byteLength(finding), findingDigest: record.findingDigest }),
     ...(record.commit ? { savedSource: { commit: record.commit, notesPath: 'RESEARCH.md' } } : {}),
-    ...(proposals.length ? { lemmaRequests: proposals.slice(0, LEAD_RESEARCH_PROPOSALS),
+    ...(proposals.length ? { lemmaRequests: selectedLeadProposals(record, byId),
       ...(proposals.length > LEAD_RESEARCH_PROPOSALS ? { unshownProposals: proposals.length - LEAD_RESEARCH_PROPOSALS } : {}) } : {}) };
+}
+
+/** Full and same-thread Lead contexts carry the same exact presented publications. */
+export function leadResearchInputSection(input: Pick<TaskContextInput, 'cooperation'>,
+  byId: ReadonlyMap<string, TaskRecord> = new Map(input.cooperation?.tasks.map(node => [node.task.id, node]))) {
+  // Newest first, so a stale unanswered input never hides newer evidence.
+  const inputs = visibleLeadResearchInputs(input, byId).reverse();
+  if (!inputs.length) return;
+  return section('lead-research-inputs', 'assignment',
+    'Research inputs for this planning decision (advisory, not checked lemmas or proof acceptance; retrieve a long finding from savedSource commit and notesPath):', {
+      inputs: inputs.slice(0, LEAD_RESEARCH_INPUTS).map(record => leadResearchInput(record, byId)),
+      ...((input.cooperation?.leadResearchInputCount ?? inputs.length) > LEAD_RESEARCH_INPUTS
+        ? { unshown: (input.cooperation?.leadResearchInputCount ?? inputs.length) - LEAD_RESEARCH_INPUTS } : {}),
+    });
 }
 
 function deliveryMatchesFinding(record: DeliveryRecord, node?: TaskRecord): boolean {
@@ -476,18 +529,15 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     `Host feedback for ${assigned.task.id}:`, assigned.feedback));
   if (selectedRoute) mandatory.push(section(`route:${selectedRoute.id}`, 'routes', 'Selected alternative route and exact closing obligation (planned, not accepted):', selectedRoute));
   if (input.cooperation) {
-    if (input.cooperation.mathematicalGaps?.length) mandatory.push(section('mathematical-gaps', 'finding',
-      'Persistent mathematical gaps (advisory; historical-scope reports require review of changed inputs; complete records remain in COOPERATION.json):',
-      mathematicalGapContext(input.cooperation.mathematicalGaps)));
+    if (input.cooperation.mathematicalGaps?.length) mandatory.push({ id: 'mathematical-gaps', kind: 'finding',
+      text: mathematicalGapContextText(input.cooperation.mathematicalGaps) });
+    const nextChecks = nextCheckContextText(input.cooperation.nextChecks ?? [], action?.kind === 'task' ? action.task.id : undefined);
+    if (nextChecks) mandatory.push({ id: 'next-checks', kind: 'finding', text: nextChecks });
+    const progressChecks = action?.kind === 'task' ? goalProgressTaskContext(input.cooperation.goalProgress, action.task) : '';
+    if (progressChecks) mandatory.push({ id: 'goal-review-next-checks', kind: 'assignment', text: progressChecks });
     if (action?.kind === 'lead') {
-      // Newest first, so a stale unanswered input never hides newer evidence.
-      const inputs = visibleLeadResearchInputs(input, byId).reverse();
-      if (inputs.length) mandatory.push(section('lead-research-inputs', 'assignment',
-        'Research inputs for this planning decision (advisory, not checked lemmas or proof acceptance; retrieve a long finding from savedSource commit and notesPath):', {
-          inputs: inputs.slice(0, LEAD_RESEARCH_INPUTS).map(record => leadResearchInput(record, byId)),
-          ...((input.cooperation.leadResearchInputCount ?? inputs.length) > LEAD_RESEARCH_INPUTS
-            ? { unshown: (input.cooperation.leadResearchInputCount ?? inputs.length) - LEAD_RESEARCH_INPUTS } : {}),
-        }));
+      const researchInputs = leadResearchInputSection(input, byId);
+      if (researchInputs) mandatory.push(researchInputs);
     }
     mandatory.push(section('task-interfaces', 'interfaces', 'Lead task graph and host feedback:', graph));
     if (graph.some(node => 'objectiveDigest' in node)) mandatory.push(section('task-objective-reference-encoding', 'sources',
@@ -581,9 +631,7 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
           'row.evidence.verification.targetCommit. Only null has this meaning; absent fields remain absent, and every distinct explicit value is retained.',
       }));
   }
-  mandatory.push(section('declaration-order', 'sources', 'Frozen declaration order by file:', Object.fromEntries(
-    Object.entries(problem.declarations).filter(([file]) => !Object.hasOwn(problem.frozenFiles ?? {}, file))
-      .map(([file, declarations]) => [file, declarations.map(declaration => declaration.name)]))),
+  mandatory.push(section('declaration-order', 'sources', 'Frozen declaration order by file:', frozenDeclarationOrder(input)),
   section('original-targets', 'problem', 'Original targets:', problem.targets));
   mandatory.push(...(input.mandatory ?? []));
   const { sections: deliveries, findingSources } = optionalDeliveries(input, required, byId, omitted);
@@ -673,8 +721,28 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     omitted, [...required], maxBytes, maxOptionalBytes);
 }
 
+export type CompiledContext = Readonly<{ message: string; manifest: ContextManifest }>;
+
+/** Compile a same-thread dispatch with the same budget and manifest rules as a full task context. */
+export function compileContextSections(input: Readonly<{
+  instructions: string; mandatory: readonly ContextSection[]; optional?: readonly ContextSection[];
+  omitted?: ContextManifest['omitted']; requiredTaskIds?: readonly string[];
+  maxContextBytes?: number; maxOptionalContextBytes?: number;
+  /** Custom M4 prompts may have their own wire format; their manifest still lives in CONTEXT-MANIFEST.json. */
+  inlineManifest?: boolean;
+}>): CompiledContext {
+  const maxBytes = input.maxContextBytes ?? DEFAULT_TASK_CONTEXT_BYTES;
+  const maxOptionalBytes = input.maxOptionalContextBytes ?? DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new TaskContextError('math_context_invalid_budget', 'maxContextBytes');
+  if (!Number.isSafeInteger(maxOptionalBytes) || maxOptionalBytes < 0)
+    throw new TaskContextError('math_context_invalid_budget', 'maxOptionalContextBytes');
+  return compileSections(input.instructions, input.mandatory, input.optional ?? [], [...(input.omitted ?? [])],
+    input.requiredTaskIds ?? [], maxBytes, maxOptionalBytes, input.inlineManifest);
+}
+
 function compileSections(instructions: string, mandatory: readonly ContextSection[], optional: readonly ContextSection[],
-  initialOmissions: ContextManifest['omitted'][number][], requiredTaskIds: readonly string[], maxBytes: number, maxOptionalBytes: number) {
+  initialOmissions: ContextManifest['omitted'][number][], requiredTaskIds: readonly string[], maxBytes: number, maxOptionalBytes: number,
+  embedManifest = true) {
   const selected: ContextSection[] = [];
   const omissionReasons = new Map<string, ContextOmissionReason>();
   const optionalBytes = (items: readonly ContextSection[]) => items.reduce((total, item) => total + Buffer.byteLength(item.text) + 2, 0);
@@ -703,7 +771,7 @@ function compileSections(instructions: string, mandatory: readonly ContextSectio
       // byte accounting and omission preview inline without repeating section metadata.
       const { included: _included, requiredTaskIds: _requiredTaskIds, ...summary } = manifest;
       const inlineManifest = omissionPreview ? { ...summary, manifestRef: 'CONTEXT-MANIFEST.json', ...omissionPreview } : manifest;
-      message = content + '\n\nContext compilation manifest:\n' + json(inlineManifest);
+      message = embedManifest ? content + '\n\nContext compilation manifest:\n' + json(inlineManifest) : content;
       const usedBytes = Buffer.byteLength(instructions) + Buffer.byteLength(message);
       if (usedBytes === manifest.usedBytes) break;
       manifest.usedBytes = usedBytes;

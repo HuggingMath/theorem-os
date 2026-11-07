@@ -21,6 +21,8 @@ export function proofReuseEnvironment(projectRoot: string, env: NodeJS.ProcessEn
         !sealed && (packages || runtime.DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS?.trim()))
       return { env: runtime, reusable: false };
     const configuration = LAKE_CONFIGURATION_FILES.map(file => {
+      // A validated seal supplies sandbox-generated overrides, independent of source worktree paths.
+      if (sealed && file === '.lake/package-overrides.json') return [file, null];
       try { return [file, mathDigest(fs.readFileSync(path.join(projectRoot, file)))]; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [file, null];

@@ -365,14 +365,35 @@ describe('same-layer checked task integration batches', () => {
     expectNoFailure();
   });
 
-  it('isolates a canonical merge conflict and still integrates an independent checked task', async () => {
+  it.each([true, false])('checks the untouched canonical conflict and still integrates an independent task (canonical passed: %s)', async canonicalPassed => {
     await preparePair();
-    state.cooperation!.canonicalCommit = writeLemma(workers[3]!, 'lemma batch_first : True := by exact True.intro');
+    const canonical = writeLemma(workers[3]!, 'lemma batch_first : True := by exact True.intro');
+    state.cooperation!.canonicalCommit = canonical;
+    host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) => {
+      const batch = verified(request);
+      if (!canonicalPassed && request.items.some(item => item.theoremName === 'Tutorial.batch_first')) {
+        batch.status = 'failed';
+        batch.results = batch.results.map(item => ({ ...item, status: 'failed', error: 'Lean exited with status 1.',
+          stdoutPreview: 'Submission.lean:3:1: error: Fixture canonical proof rejection.' }));
+      }
+      return batch;
+    });
 
     await integrate(); await drain();
 
-    expect(node().status).toBe('blocked'); expect(node('second').status).toBe('integrated');
-    expect(calls()).toHaveLength(1); expect(calls()[0]!.items).toHaveLength(1);
+    expect(node().status).toBe(canonicalPassed ? 'integrated' : 'blocked');
+    expect(node('second').status).toBe('integrated');
+    expect(calls().map(request => request.items.map(item => item.theoremName)))
+      .toEqual([['Tutorial.batch_first'], ['Tutorial.batch_second']]);
+    const firstSource = committedSource(workspace, calls()[0]!.targetCommit!, `${problem.projectRelative}/Submission.lean`);
+    expect(firstSource).toContain('lemma batch_first : True := by exact True.intro');
+    expect(firstSource).not.toContain('lemma batch_first : True := by trivial');
+    if (canonicalPassed) expect(node().integratedCheck).toMatchObject({ passed: true, commit: canonical,
+      seedCommit: canonical, taskDigest: taskVersion(node().task), changes: [] });
+    else {
+      expect(node().integratedCheck).toBeUndefined();
+      expect(node().feedback).toContain('math_task_integration_conflict');
+    }
     expect(canonicalSource()).toContain('lemma batch_first : True := by exact True.intro');
     expect(canonicalSource()).toContain('lemma batch_second : True := by trivial');
   });

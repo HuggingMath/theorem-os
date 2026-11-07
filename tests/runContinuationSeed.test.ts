@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MATH_PROOF_ENVIRONMENT_ENV } from '../src/math/mathProofEnvironment';
-import { mathDigest, withMathRuntimeLease } from '../src/math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest, withMathRuntimeLease } from '../src/math/mathRuntimeIo';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { CooperativeResearch } from '../src/solver/cooperation';
@@ -139,6 +139,43 @@ describe('same-process CLI continuation initialization', () => {
     expect(state.cooperation!.tasks.find(node => node.task.id === 'saved_helper')!.status).toBe('integrated');
     expect(state.workers!.every(worker => fs.existsSync(path.join(worker.worktree, f.problem.projectRelative, '.lake/continuation.json')))).toBe(true);
     expect(host.run).not.toHaveBeenCalled(); expect(host.prepare).toHaveBeenCalledOnce(); expect(host.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('startup-only preserves started initial-planning activity and leaves the new run ready for its first plan', async () => {
+    const f = fixture(), source = readSolverRunState(f.sourceStateFile);
+    source.turns = 3; source.dispatchCounts = { planning: 3 };
+    source.usage = { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 };
+    source.cooperation = { canonicalCommit: f.problem.baseCommit, leadSeedCommit: f.problem.baseCommit, tasks: [], proofRoutes: [],
+      planVersion: mathDigest(canonicalMathJson({ tasks: [], groups: undefined })),
+      deliveries: [{ id: 'saved-initial-draft', producer: 'solver', kind: 'progress', status: 'advisory',
+        statement: source.problem.contract.formalStatement, premises: source.problem.contract.assumptions,
+        dependencies: [], remainingObligations: [], evidenceRefs: [], createdAt: 10, commit: f.problem.baseCommit,
+        summary: 'Saved Lead draft pending integration: math_math-plan_missing_or_too_large. This draft has no proof acceptance.' }] };
+    const lead = source.workers![0];
+    Object.assign(lead, { turns: 3, threadId: 'old-initial-thread', previousThreadIds: ['old-planning-thread'],
+      sessionRole: 'lead', dispatchCounts: { planning: 3 }, usage: source.usage,
+      usageAccounting: { startedTurns: 3, reportedTurns: 2, pending: true, incomplete: true } });
+    const peer = source.workers![1]; peer.turns = 0; peer.dispatchCounts = {};
+    git(lead.worktree, ['reset', '--hard', f.problem.baseCommit]);
+    fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), 'Incomplete initial plan with prior mathematical reasoning.\n');
+    writeSolverRunState(f.sourceStateFile, source);
+    const historical = fs.readFileSync(f.sourceStateFile);
+    expect(await runSolver([...f.args, '--startup-only'], f.directory, modules)).toBe(0);
+    const state = readSolverRunState(f.stateFile);
+    expect(state).toMatchObject({ phase: 'prepared', turns: 0 });
+    expect(state.workers!.every(worker => worker.turns === 0 && !worker.threadId && !worker.usage)).toBe(true);
+    expect(state.cooperation).toMatchObject({ tasks: [], planEdited: false });
+    expect(state.cooperation!.planVersion).toBeUndefined();
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+    const directory = path.dirname(f.stateFile), snapshot = path.join(directory, 'continuation.json');
+    const history = JSON.parse(readContinuationPage(snapshot, state.continuationDigest, 'seed-history').text);
+    expect(history).toMatchObject({ source: { runId: 'historical-run' },
+      history: { deliveries: source.cooperation.deliveries, activity: { turns: 3, usage: source.usage, workers: [expect.objectContaining({ id: 'solver', turns: 3,
+        usageAccounting: lead.usageAccounting }), expect.objectContaining({ id: 'engineer', turns: 0 })] } } });
+    const draft = JSON.parse(readContinuationPage(snapshot, state.continuationDigest, 'draft-solver').text);
+    expect(draft.notes).toBe('Incomplete initial plan with prior mathematical reasoning.\n');
+    expect(host.run).not.toHaveBeenCalled(); expect(host.verify).not.toHaveBeenCalled();
+    expect(modules.M1.open).not.toHaveBeenCalled();
   });
 
   it('preserves initialization progress after an error and retries the frozen source with resume', async () => {

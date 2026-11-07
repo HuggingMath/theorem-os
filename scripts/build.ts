@@ -32,6 +32,7 @@ if (args.includes('--help') || args.includes('-h')) {
       'math-solver': path.join(root, 'scripts/mathematics/runMathProof.ts'),
       'search-lean': path.join(root, 'scripts/mathematics/searchLean.ts'),
       'check-lean': path.join(root, 'scripts/mathematics/checkLean.ts'),
+      'proof-search': path.join(root, 'scripts/mathematics/proofSearch.ts'),
     },
     outdir: bundleRoot,
     bundle: true,

@@ -9,7 +9,7 @@ import type { DispatchWaitObservation, SolverRunState } from './archive';
 import { independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
 import type { WorkerAccess } from './research';
 import type { SolverModules } from './modules';
-import { originalGoalTaskFocus, originalGoalFrontierSnapshot, plannedTaskDependencyIds } from './modules/search';
+import { originalGoalTaskFocus, originalGoalFrontierSnapshot, plannedTaskDependencyIds, taskDependencyRecords } from './modules/search';
 import { type DeliveryRecord } from './deliveries';
 import { rejectedDeliveryReceipt, deliveryReceiptFeedback, type DeliveryReceipt } from './deliveryReceipts';
 import { proofReadyRecord, type ProofReadyRecord } from './proofReady';
@@ -30,6 +30,7 @@ import { reviewGoalPaths } from './goalPathReview';
 import { reviewProjectionDependencies } from './projectionDependencyReview';
 import type { GoalPathDecisions } from './goalPathDecisions';
 import { bindMathematicalGap, mathematicalGapVisible } from './mathematicalGaps';
+import { currentNextCheck, proposedNextChecks } from './nextChecks';
 import { taskConnectionCheckCurrent } from './taskConnections';
 import { TaskTypePreflightCache } from './taskTypePreflight';
 import { currentCapacityExploration, plannedTaskRecords } from './capacityExploration';
@@ -38,7 +39,8 @@ import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, 
 import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type LeadWakeReason } from './leadWakes';
 import { MAX_INVALID_TASK_TRANSITIONS, setTaskStatus, type TaskStatus, type TaskTransitionCause } from './taskLifecycle';
 import { planApprovalStatus } from './planApproval';
-import { answerGoalProgress, GOAL_PROGRESS_REVIEW_MS, observeGoalProgress, resetGoalProgressClock,
+import { projectProofSearchRecord, proofSearchTargetForAssignment } from './proofSearchRecords';
+import { answerGoalProgress, GOAL_PROGRESS_REVIEW_MS, goalProgressTaskContext, observeGoalProgress, resetGoalProgressClock,
   type GoalProgressDecision } from './goalProgress';
 
 /** Shared cooperation state, scheduling primitives and the per-worker context projection. */
@@ -48,6 +50,9 @@ export const MAX_UNANSWERED_GOAL_PATH_TURNS = 2;
 export abstract class CooperationCore {
   protected readonly lead: ResearchWorker;
   protected readonly archive: CooperationState;
+  protected presentedResearchInputs = new WeakMap<CooperativeAction, { shown: DeliveryRecord[]; total: number }>();
+  protected pendingSourceResearchDecisions = new WeakMap<CooperativeAction, ResearchDecision[]>();
+  protected presentedNextCheckOutcomes = new WeakMap<CooperativeAction, { checkId: string; outcomeDeliveryId: string }[]>();
   protected lastAssembly?: string;
   private waiters = new Set<() => void>();
   protected reservedTurns = new Set<string>();
@@ -82,12 +87,12 @@ export abstract class CooperationCore {
   private deliveryReceiptNotifications = new Set<string>();
   protected pendingPulse?: Promise<ReadonlyMap<string, Promise<void>>>;
   protected deliveryChecks = new Map<string, Promise<void>>();
-  protected proofPublications = new Map<string, Promise<TaskProof | undefined>>();
+  protected proofPublications = new Map<string, {
+    workerId: string; action: Extract<CooperativeAction, { kind: 'task' }>; pending: Promise<TaskProof | undefined>;
+  }>();
   protected proofDeliveryChecks = new Set<Promise<void>>();
   protected integrationQueue = Promise.resolve();
   protected leadEvidence = new WeakMap<CooperativeAction, string>();
-  protected presentedResearchInputs = new WeakMap<CooperativeAction, { shown: DeliveryRecord[]; total: number }>();
-  protected pendingSourceResearchDecisions = new WeakMap<CooperativeAction, ResearchDecision[]>();
   private goalProgressTimer?: NodeJS.Timeout;
   protected goalProgressBudget?: { maxTurns: number; deadline: number };
   protected presentedGoalProgress = new WeakMap<CooperativeAction, string>();
@@ -159,7 +164,7 @@ export abstract class CooperationCore {
     } else if (legacyLeadWakes) {
       // Older states saved no wake-ups: infer the unanswered decision once from its durable inputs.
       const researchInputs = leadResearchInputs(this.archive.deliveries ?? [],
-        new Map(this.archive.tasks.map(node => [node.task.id, node]))).length > 0;
+        new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions).length > 0;
       if (this.archive.error || (researchInputs || this.archive.tasks.some(node => node.status === 'blocked')) &&
           this.archive.lastLeadInputDigest !== this.planningInputDigest()) this.wakeLead('restored-legacy-state');
     }
@@ -180,11 +185,13 @@ export abstract class CooperationCore {
         active.add(work.action.task.id);
       for (const node of this.preparingTaskTypes.keys()) active.add(node.task.id);
       for (const node of this.archive.tasks) if (node.assignment && this.deliveryChecks.has(node.assignment.workerId)) active.add(node.task.id);
+      for (const publication of this.proofPublications.values()) if (this.current(publication.action)) active.add(publication.action.task.id);
     }
     const observation = observeGoalProgress(this.archive.goalProgress, {
       problemReceiptDigest: this.input.state.problem.receiptDigest, targets: this.input.state.problem.targets,
       tasks: this.archive.tasks, snapshot: snapshot ?? captureObligationSnapshot(this.archive.tasks, {
         groups: this.archive.groups, environmentDigest: this.input.state.environmentDigest, proofRoutes: this.archive.proofRoutes }),
+      nextChecks: this.archive.nextChecks?.filter(record => currentNextCheck(record, this.archive, this.explorationIdentity)),
       proofRoutes: this.archive.proofRoutes, groups: this.archive.groups, activeTaskIds: active, now, intervalMs: this.input.goalProgressReviewMs });
     this.archive.goalProgress = observation.state;
     if (observation.resumed.length) this.input.emit('goal_progress_resumed', { goalIds: observation.resumed, acceptance: 'not-assessed' });
@@ -214,6 +221,14 @@ export abstract class CooperationCore {
     const decision = this.goalProgressDecisions.get(action), state = this.archive.goalProgress;
     if (!decision || !state || this.presentedGoalProgress.get(action) !== decision.id || !answerGoalProgress(state, decision)) return;
     this.input.emit('goal_progress_review_answered', { ...decision, acceptance: 'not-assessed' });
+    for (const [workerId, active] of this.active) if (active.action.kind === 'task' && !active.cancelled && this.current(active.action)) {
+      const task = active.action.task, message = goalProgressTaskContext(state, task);
+      if (!message || !decision.nextChecks.some(check => check.targetTaskId === task.id)) continue;
+      const pending = active.notify(message).catch(() => {
+        this.input.emit('notification_deferred', { workerId, reviewId: decision.id });
+      });
+      this.notifications.add(pending); void pending.finally(() => this.notifications.delete(pending));
+    }
     this.refreshGoalProgress();
   }
   /**
@@ -340,6 +355,62 @@ export abstract class CooperationCore {
   }
   /** The CAS plan belongs to Lead; host advisory capacity is a separate execution overlay. */
   protected plannedTasks() { return plannedTaskRecords(this.archive.tasks); }
+  /** Turn one scoped mathematical question into ordinary feasibility work and retain its complete lifecycle. */
+  protected refreshNextChecks() {
+    const identity = { problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest };
+    const now = Date.now();
+    for (const proposed of proposedNextChecks(this.archive, identity, now)) {
+      if (this.archive.nextChecks?.some(record => record.id === proposed.record.id)) continue;
+      // A model task cannot take ownership of the host's deterministic check id.
+      if (this.archive.tasks.some(node => node.task.id === proposed.node.task.id)) continue;
+      (this.archive.nextChecks ??= []).push(proposed.record); this.archive.tasks.push(proposed.node);
+      this.input.emit('next_check_scheduled', { checkId: proposed.record.id, taskId: proposed.node.task.id,
+        target: proposed.record.scope.target, consumer: proposed.record.scope.consumer });
+    }
+    for (const record of this.archive.nextChecks ?? []) {
+      const node = this.archive.tasks.find(item => item.nextCheckId === record.id);
+      if (record.status !== 'stale' && !currentNextCheck(record, this.archive, identity)) {
+        record.status = 'stale';
+        if (node) { node.task = { ...node.task, status: 'stopped' }; this.moveTask(node, 'blocked', 'expired'); }
+        this.input.emit('next_check_expired', { checkId: record.id, taskId: record.taskId });
+      }
+      if (record.status === 'pending') {
+        const outcome = this.archive.deliveries?.find(delivery => delivery.checkOutcome?.checkId === record.id &&
+          delivery.kind === 'research' && delivery.status !== 'superseded' && delivery.taskId === record.taskId &&
+          delivery.taskDigest === record.taskDigest && canonicalMathJson(delivery.checkOutcomeScope) === canonicalMathJson(record.scope));
+        if (outcome?.checkOutcome) {
+          record.outcome = { ...outcome.checkOutcome, deliveryId: outcome.id, ...(outcome.commit ? { commit: outcome.commit } : {}) };
+          record.status = 'awaiting-decision';
+          if (node && node.status !== 'completed') this.moveTask(node, 'completed', 'research-completed');
+          this.wakeLead('research-finding');
+          this.input.emit('next_check_outcome', { checkId: record.id, outcomeDeliveryId: outcome.id, conclusion: outcome.checkOutcome.conclusion });
+        }
+      }
+      if (record.status !== 'pending' && node?.assignment) {
+        const active = this.active.get(node.assignment.workerId);
+        if (active?.action.kind === 'task' && active.action.assignment === node.assignment && !active.cancelled) {
+          active.cancelled = true; void active.interrupt().catch(() => {});
+        }
+      }
+    }
+  }
+  protected includeNextCheckTasks(plan: ReturnType<typeof parseCooperationPlan>) {
+    const hostNodes = this.archive.tasks.filter(node => node.nextCheckId);
+    const hostIds = new Set(hostNodes.map(node => node.task.id));
+    for (const task of plan.tasks) {
+      const host = hostNodes.find(node => node.task.id === task.id);
+      if (host && digest(task) !== digest(host.task)) throw new Error('math_plan_host_next_check_changed');
+      if (!host && task.dependsOn.some(id => hostIds.has(id)))
+        throw new Error('math_plan_host_next_check_dependency: adopt a separate typed lemma; advisory checks are not proof inputs.');
+    }
+    plan.tasks = plan.tasks.filter(task => !hostIds.has(task.id));
+    const proposed = { ...this.archive, tasks: plan.tasks.map(task => ({ task, status: 'pending' as const, attempts: 0 })) };
+    for (const node of hostNodes) {
+      const record = this.archive.nextChecks?.find(item => item.id === node.nextCheckId);
+      if (record && currentNextCheck(record, proposed, this.explorationIdentity) && plan.groups.some(group => group.id === taskGroup(node.task)))
+        plan.tasks.push(node.task);
+    }
+  }
   protected refreshCapacityExplorations() {
     let changed = false;
     for (const node of this.archive.tasks) {
@@ -422,6 +493,7 @@ export abstract class CooperationCore {
       endedAt: wait.endedAt, planVersion: wait.planVersion, stage: wait.stage, reason });
   }
   protected changed(edit?: HumanEditRecord) {
+    this.refreshNextChecks();
     this.refreshCapacityExplorations();
     this.refreshFeasibilityAssignments();
     this.refreshResearchCheckpoints();
@@ -449,6 +521,7 @@ export abstract class CooperationCore {
     };
     for (const node of this.archive.tasks) if (node.status === 'running') occupy(taskGroup(node.task), node.assignment?.workerId);
     for (const [id, active] of this.active) if (active.action.kind === 'task') occupy(taskGroup(active.action.task), id);
+    for (const publication of this.proofPublications.values()) occupy(taskGroup(publication.action.task), publication.workerId);
     for (const review of this.archive.statementReviews ?? []) {
       const node = nodes.get(review.taskId);
       if (node && ['translating', 'reviewing'].includes(review.status)) occupy(taskGroup(node.task), review.workerId);
@@ -465,7 +538,9 @@ export abstract class CooperationCore {
       lead.cancelled = true; void lead.interrupt().catch(() => {});
     }
     const agents = this.input.workers.map(peer => {
-      const active = this.active.get(peer.id), work = active?.action;
+      const active = this.active.get(peer.id);
+      const publication = [...this.proofPublications.values()].find(item => item.workerId === peer.id);
+      const work = active?.action ?? publication?.action;
       const preparation = [...this.preparingTaskTypes].find(([, item]) => item.workerId === peer.id)?.[0];
       const status = !this.liveWorkers.has(peer.id) ? 'stopped' as const
         : active && (active.cancelled || !this.current(active.action)) ? 'stopping' as const
@@ -489,8 +564,18 @@ export abstract class CooperationCore {
     for (const worker of this.input.workers) {
       const action = this.active.get(worker.id)?.action;
       const scoped = this.contextState(action, worker, versions);
+      const search = action?.kind === 'task' ? projectProofSearchRecord({
+        record: this.archive.proofSearchRecords?.[this.proofSearchScope(action).taskId],
+        scope: this.proofSearchScope(action),
+        projectRoot: path.join(worker.worktree, this.input.state.problem.projectRelative),
+        runDirectory: path.dirname(this.lead.worktree),
+      }) : undefined;
       const visible = new Set(scoped.tasks.map(node => node.task.id));
-      const deliveries = (scoped.deliveries ?? []).slice(-16);
+      const requiredCheckDeliveries = new Set((scoped.nextChecks ?? []).filter(record =>
+        record.status === 'pending' || record.status === 'awaiting-decision').flatMap(record =>
+        [record.gapDeliveryId, ...(record.outcome ? [record.outcome.deliveryId] : [])]));
+      const recentDeliveries = new Set((scoped.deliveries ?? []).slice(-16).map(record => record.id));
+      const deliveries = (scoped.deliveries ?? []).filter(record => recentDeliveries.has(record.id) || requiredCheckDeliveries.has(record.id));
       writeMathJsonDurable(path.join(worker.worktree, 'COOPERATION.json'), {
         planVersion: this.archive.planVersion,
         edits: (this.archive.edits ?? []).slice(-16),
@@ -518,7 +603,14 @@ export abstract class CooperationCore {
         deliveries: deliveries.map(({ evidence: _evidence, researchRecord: _researchRecord, ...record }) => record),
         deliveryReceipts: scoped.deliveryReceipts ?? [],
         proofReadyRecords: scoped.proofReadyRecords ?? [],
+        proofSearchRecords: search ? { [search.taskId]: search } : {},
         mathematicalGaps: scoped.mathematicalGaps ?? [],
+        nextChecks: scoped.nextChecks ?? [],
+        ...(action?.kind === 'task' ? { researchDelivery: { assignment: action.assignment,
+          problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest,
+          projectRelative: this.input.state.problem.projectRelative,
+          ownedFiles: this.input.state.problem.ownedFiles.filter(file => file.endsWith('.lean') &&
+            !Object.hasOwn(this.input.state.problem.frozenFiles ?? {}, file)) } } : {}),
         blockers: scoped.blockers ?? [],
         proofRoutes: scoped.proofRoutes ?? [],
         routePriority: createProofRoutePriorityIndex(scoped.tasks, { groups: scoped.groups,
@@ -532,6 +624,13 @@ export abstract class CooperationCore {
       });
     }
     this.wake();
+  }
+  /** An independent scoped check may continue its explicit target's advisory search, never an arbitrary task. */
+  protected proofSearchScope(action: Extract<CooperativeAction, { kind: 'task' }>) {
+    const identity = { problemReceiptDigest: this.input.state.problem.receiptDigest,
+      environmentDigest: this.input.state.environmentDigest };
+    const checks = (this.archive.nextChecks ?? []).filter(record => currentNextCheck(record, this.archive, identity));
+    return { ...identity, ...proofSearchTargetForAssignment(action.assignment, checks, identity) };
   }
   /** With --plan-approval, the first accepted plan holds every worker until a human approves its exact version. */
   protected planApprovalPending() {
@@ -572,8 +671,17 @@ export abstract class CooperationCore {
     for (const receipt of this.archive.deliveryReceipts ?? []) {
       if (receipt.status !== 'needs-correction' || receipt.workerId !== worker.id || receipt.assignmentKey !== assignmentDeliveryFile(action.assignment) ||
           receipt.environmentDigest !== this.input.state.environmentDigest || notified.has(receipt.id)) continue;
-      try { await active.notify(deliveryReceiptFeedback(receipt)); notified.add(receipt.id); }
-      catch { this.input.emit('delivery_receipt_notification_deferred', { workerId: worker.id, receiptId: receipt.id }); }
+      // Reserve this receipt while its soft notice waits, without blocking later worker deliveries.
+      notified.add(receipt.id);
+      const pending = Promise.resolve().then(async () => {
+        if (this.active.get(worker.id) !== active || !this.current(action)) throw new Error('math_notification_assignment_changed');
+        await active.notify(deliveryReceiptFeedback(receipt));
+      }).catch(() => {
+        notified.delete(receipt.id);
+        this.input.emit('delivery_receipt_notification_deferred', { workerId: worker.id, receiptId: receipt.id });
+      });
+      const notifications = this.notifications ??= new Set();
+      notifications.add(pending); void pending.finally(() => notifications.delete(pending));
     }
   }
   protected resolveDeliveryReceipts(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>,
@@ -713,6 +821,9 @@ export abstract class CooperationCore {
         review.sourceDigest === action.sourceDigest && review.assignmentId === action.assignmentId);
     }
     return action.kind !== 'task' || this.archive.tasks.some(node => node.assignment === action.assignment && digest(node.task) === action.assignment.taskDigest &&
+      (!node.nextCheckId || this.archive.nextChecks?.some(record => record.id === node.nextCheckId && record.status === 'pending' &&
+        currentNextCheck(record, this.archive, { problemReceiptDigest: this.input.state.problem.receiptDigest,
+          environmentDigest: this.input.state.environmentDigest }))) &&
       (!node.capacityExploration || currentCapacityExploration(node, this.archive.tasks, this.explorationIdentity)) &&
       (!action.assignment.connectionCheck || taskReferenceDependencies(node) || taskConnectionCheckCurrent(node.task,
         action.assignment, this.archive.tasks, { environmentDigest: this.input.state.environmentDigest,
@@ -809,13 +920,7 @@ export abstract class CooperationCore {
   }
   protected node(id: string) { return this.archive.tasks.find(node => node.task.id === id)!; }
   protected dependencies(task: CooperativeTask, tasks: readonly TaskRecord[] = this.archive.tasks): TaskRecord[] {
-    const nodes = new Map(tasks.map(node => [node.task.id, node]));
-    const found = new Set<string>();
-    const ids = (node: TaskRecord) => taskReferenceDependencies(node)?.map(reference => reference.taskId) ?? plannedTaskDependencyIds(node, tasks);
-    const visit = (id: string) => { if (found.has(id)) return; found.add(id); ids(nodes.get(id)!).forEach(visit); };
-    const node = nodes.get(task.id);
-    (node?.task === task ? ids(node) : task.dependsOn).forEach(visit);
-    return [...found].map(id => nodes.get(id)!);
+    return taskDependencyRecords(task, tasks);
   }
   protected synchronizationBlocked(task: CooperativeTask): boolean {
     return [this.node(task.id), ...this.dependencies(task)].some(node => node &&

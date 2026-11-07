@@ -13,16 +13,19 @@ import { type TaskConsumerProjection } from './taskConsumers';
 import { type CheckpointCandidate } from './researchEvidence';
 import { type ParallelQuestion } from './taskQuestions';
 import { mathematicalGaps } from './mathematicalGaps';
+import type { NextCheckRecord, NextCheckDecision } from './nextCheckContract';
+import { parseNextCheckDecisions } from './nextChecks';
 import type { DeliveryReceipt } from './deliveryReceipts';
 import type { ProofReadyRecord } from './proofReady';
 import type { ProofImportRecord } from './proofImportRecord';
+import type { ProofSearchRecord } from './proofSearchRecords';
 import type { ResearchRecord } from './researchRecords';
+import type { ResearchDecision } from './researchDecisions';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
 import { expandPlanPatch, isPlanPatch, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
 import { applyGoalPathDecisions, type GoalPathDecisions } from './goalPathDecisions';
 import type { GoalPathReview } from './goalPathReview';
 import { parseGoalProgressDecision, type GoalProgressDecision, type GoalProgressState } from './goalProgress';
-import type { ResearchDecision } from './researchDecisions';
 import { leadPlanDeliveryFile, taskVersion, type CooperativeTask, type RouteRecord, type TaskRecord, type CooperativeAction } from './tasks';
 
 export const digest = taskVersion;
@@ -42,7 +45,8 @@ export const directDeliveryRejections = new Set([...taskSourceRejections, 'math_
   'math_research_delivery_invalid', 'math_research_delivery_unchanged', 'math_research_lemma_requests_invalid',
   'math_delivery_invalid', 'math_response_invalid', 'math_math-result_missing_or_too_large', 'math_math-result_requires_one_block',
   'math_delivery_artifact_not_regular_file', 'math_delivery_artifact_too_large', 'math_delivery_artifact_invalid_commit',
-  'math_delivery_artifact_path_invalid', 'math_delivery_artifact_claim_invalid', 'math_delivery_artifact_required', 'math_route_blocker_invalid']);
+  'math_delivery_artifact_path_invalid', 'math_delivery_artifact_claim_invalid', 'math_delivery_artifact_required', 'math_route_blocker_invalid',
+  'math_proof_search_checkpoint_invalid', 'math_proof_search_checkpoint_scope_changed', 'math_proof_search_checkpoint_unavailable']);
 export const rejectionCode = (error: Error) => error.message.split(/[\n:]/u, 1)[0];
 /** Source-contract failures need a local correction before a mathematical route decision. */
 export const taskSourceRepairRejections = new Set(['math_task_existing_declaration_removed', 'math_task_existing_declaration_changed',
@@ -73,6 +77,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   consumerInterfaces?: TaskConsumerProjection;
   /** Scoped advisory history, derived from immutable delivery records. */
   mathematicalGaps?: ReturnType<typeof mathematicalGaps>;
+  /** Durable scoped investigations and explicit Lead decisions; all outcomes remain advisory. */
+  nextChecks?: NextCheckRecord[];
   /** Context-only public in-flight metadata, without expanding task/source visibility. */
   parallelQuestions?: readonly ParallelQuestion[];
   history?: { task: CooperativeTask; producer?: string; proof?: TaskProof; integratedCheck?: ProofCheck; finding?: string;
@@ -84,6 +90,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   deliveryReceipts?: DeliveryReceipt[];
   proofReadyRecords?: ProofReadyRecord[];
   proofImports?: ProofImportRecord[];
+  /** Latest host-retained search checkpoint per task; advisory and independently revalidated on use. */
+  proofSearchRecords?: Record<string, ProofSearchRecord>;
   planVersion?: string; planEdited?: boolean; statementReviews?: StatementReview[];
   initialPlanPublication?: InitialPlanPublication;
   /** Last immutable live publication; its dispatch continuation is process-local. */
@@ -164,23 +172,26 @@ export const deliveryInputFields = (record: DeliveryRecord) => ({
   summary: record.summary, evidenceRefs: record.evidenceRefs, dependencies: record.dependencies,
   remainingObligations: record.remainingObligations, lemmaRequests: record.lemmaRequests, findingDigest: record.findingDigest,
   mathematicalGap: record.mathematicalGap, mathematicalGapScope: record.mathematicalGapScope,
-  sourceUses: record.sourceUses,
+  checkOutcome: record.checkOutcome, checkOutcomeScope: record.checkOutcomeScope,
+  sourceUses: record.sourceUses, searchCheckpoint: record.searchCheckpoint,
 });
 export type LeadPlan = ReturnType<typeof parseCooperationPlan> & { fromPatch?: boolean; goalPathDecisions?: GoalPathDecisions;
-  goalProgressDecision?: GoalProgressDecision; researchDecisions?: unknown };
-type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: GoalPathReview };
+  goalProgressDecision?: GoalProgressDecision; researchDecisions?: unknown; nextCheckDecisions?: NextCheckDecision[] };
+type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: GoalPathReview; restoring?: boolean };
 /**
  * Model proposes tasks or a revision of the accepted graph; the host validates coverage, exact targets and an acyclic
  * dependency graph. A revision may answer the current goal-path review, whose mechanical candidates expand first.
  */
 export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
-  const { goalPath, ...patchOptions } = options;
-  const progressDecision = parseGoalProgressDecision(value);
+  const { goalPath, restoring, ...patchOptions } = options;
+  const progressDecision = parseGoalProgressDecision(value, restoring);
+  const nextCheckDecisions = parseNextCheckDecisions(liftNestedPlanPatch(value));
   const answered = applyGoalPathDecisions(liftNestedPlanPatch(value), goalPath, base);
   const decisions = { ...(answered.decisions ? { goalPathDecisions: answered.decisions } : {}),
     ...(progressDecision ? { goalProgressDecision: progressDecision } : {}),
     ...(value && typeof value === 'object' && 'researchDecisions' in value
-      ? { researchDecisions: (value as { researchDecisions: unknown }).researchDecisions } : {}) };
+      ? { researchDecisions: (value as { researchDecisions: unknown }).researchDecisions } : {}),
+    ...(nextCheckDecisions ? { nextCheckDecisions } : {}) };
   if (!isPlanPatch(answered.value)) return { ...parseCooperationPlan(problem, answered.value), ...decisions };
   return { ...parseCooperationPlan(problem, expandPlanPatch(answered.value, base, patchOptions)), fromPatch: true, ...decisions };
 }

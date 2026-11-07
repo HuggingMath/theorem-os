@@ -113,10 +113,12 @@ def main():
                         if stat.S_ISREG(metadata.st_mode):
                             total_bytes += metadata.st_size
                 require_disk(workspace, total_bytes)
+                # snapfuse builds may omit zstd; gzip is supported by both
+                # mount implementations accepted above.
                 compressor = subprocess.Popen(
                     [compressor_bin, str(source), str(image_path),
                      '-noappend', '-quiet', '-no-progress', '-processors', '2',
-                     '-mem', '128M', '-comp', 'zstd', '-Xcompression-level', '1'],
+                     '-mem', '128M', '-comp', 'gzip', '-Xcompression-level', '1'],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL, stderr=diagnostics)
                 while compressor.poll() is None:

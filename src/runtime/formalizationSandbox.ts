@@ -10,6 +10,7 @@ import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_ENV, prepareMa
   resolveMathProofEnvironment } from '../math/mathProofEnvironment';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { startFormalizationRelay } from './formalizationRelay';
+import type { ModelRequestGate } from './modelRequest';
 import { SUB2API_PROVIDER, sub2apiModelCatalog, validateSub2apiModel } from './sub2api';
 
 const CAPABILITY_ENV = 'FORMALIZATION_RELAY_CAPABILITY';
@@ -100,6 +101,7 @@ export type FormalizationSandbox = Readonly<{
 type Input = Readonly<{
   workspace: string; executable: string; profile: string; model: string; effort: string;
   environment: LeanTaskEnvironment; env?: NodeJS.ProcessEnv; signal?: AbortSignal;
+  requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
 }>;
 
 function nativeFile(file: string): string {
@@ -217,7 +219,8 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
     }
     input.signal?.throwIfAborted();
     relay = await startFormalizationRelay({ socketPath: path.join(temporary, 'model.sock'), profile: input.profile,
-      model: input.model, effort: input.effort, env: environment, signal: input.signal });
+      model: input.model, effort: input.effort, env: environment, signal: input.signal,
+      requestGate: input.requestGate, onUsageIncomplete: input.onUsageIncomplete });
     const profileConfig = stringifyToml({ model: input.model, model_provider: SUB2API_PROVIDER.id,
       model_reasoning_effort: input.effort, model_catalog_json: '/profile/models.json', web_search: 'disabled',
       approval_policy: 'never', sandbox_mode: 'danger-full-access',
@@ -241,7 +244,7 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
       ...protocol.flatMap(({ name }) => ['--ro-bind', path.join(temporary, name), '/workspace/' + name]),
       '--bind', profile, '/profile', '--ro-bind', path.join(profile, 'config.toml'), '/profile/config.toml',
       '--ro-bind', path.join(profile, 'models.json'), '/profile/models.json',
-      '--ro-bind', relay.socketPath, SOCKET, '--ro-bind', path.join(temporary, 'launch.py'), HELPER,
+      '--ro-bind', relay.socketPath!, SOCKET, '--ro-bind', path.join(temporary, 'launch.py'), HELPER,
       '--ro-bind', toolchain, '/opt/lean'];
     if (executable.vendor) args.push('--ro-bind', executable.vendor, '/opt/codex');
     // Also support a directly supplied native executable without exposing its host parent.

@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { stringify as stringifyToml } from 'smol-toml';
 import { prepareWebProblem } from './formalizationSeed';
 import { classifyWebError, classifyWebResult } from './failure';
-import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
+import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
+import { PANTOGRAPH_DIGEST_ENV, PANTOGRAPH_MANIFEST_ENV } from '../../src/math/pantographSession';
 import { mathDigest, readMathJson, readMathText } from '../../src/math/mathRuntimeIo';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { isMathPathWithin } from '../../src/math/paths';
@@ -167,6 +168,12 @@ export function writeWebContinuation(directory: string, continuation: NonNullabl
  * scripts/build-agent-tools.ts instead, which the image installs here.
  */
 export const webAgentToolsDefault = '/opt/theoremos-agent-tools/math.mjs';
+export const webPantographManifest = '/opt/theoremos-pantograph/manifest.json';
+/** Proof search needs the existing sealed Mathlib/FUSE environment. Standard workers have no lease. */
+export function configureWebProofSearchEnvironment(environment: LeanTaskEnvironment, env: NodeJS.ProcessEnv = process.env): void {
+  if (environment === 'mathlib') env[PANTOGRAPH_MANIFEST_ENV] = webPantographManifest;
+  else { delete env[PANTOGRAPH_MANIFEST_ENV]; delete env[PANTOGRAPH_DIGEST_ENV]; }
+}
 export type WebAgentIsolation = { tools: string; hiddenRoots: readonly string[] };
 
 export function webSolverModules(request: WorkerInput, actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[] },
@@ -243,6 +250,7 @@ async function main() {
   console.error = () => {};
   try {
     const environment = getLeanTaskEnvironment(request.input.environment ?? 'standard');
+    configureWebProofSearchEnvironment(environment.id);
     const receipt = prepareWebProblem(directory, request);
     const buildFile = process.env.THEOREMOS_WORKER_BUILD || '/opt/theoremos-build.json';
     const buildIndex = readMathJson(buildFile) as { buildManifestRef: string };

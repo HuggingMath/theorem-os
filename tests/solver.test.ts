@@ -83,6 +83,10 @@ function failed(batch: MathematicsVerifierBatchResult, fields: Partial<Mathemati
 }
 
 const unsolved = 'Submission.lean:4:1: error: unsolved goals\n⊢ True';
+const requestReceipt = (runId: string, totalTokens?: number) => ({ requestId: expect.any(String), runId,
+  sessionId: expect.any(String), startedAt: expect.any(Number), settledAt: expect.any(Number), outcome: 'unknown',
+  ...(totalTokens === undefined ? { status: 'missing', missingReason: 'provider-usage-missing' } : {
+    status: 'reported', usage: { totalTokens, inputTokens: totalTokens - 10, outputTokens: 10 } }) });
 
 /** A model session stub whose turns run `turn`; `fields` adds session fields such as lastError. */
 function session(thread: string | ((options: MathAgentOptions) => string),
@@ -450,10 +454,10 @@ describe('isolated solver and host acceptance', () => {
     ]));
     expect(recorded.knowledgeUses).toEqual([
       { ...claim, consumer: { taskId: 'original_goal_1', taskDigest: expect.any(String) },
-        status: 'checked-reference', attribution: 'model-reported-origin', workerId: 'solver',
+        status: 'checked-reference', attribution: 'model-reported-origin', catalogDeclarationMatch: false, workerId: 'solver',
         commit: recorded.check!.commit, checkedCommit: recorded.check!.commit, checkedSourceDigest: recorded.check!.sourceDigest },
       { ...claim, consumer: { taskId: 'original_goal_2', taskDigest: expect.any(String) },
-        status: 'reported-attempt', attribution: 'model-reported-origin', workerId: 'solver', commit: recorded.check!.commit },
+        status: 'reported-attempt', attribution: 'model-reported-origin', catalogDeclarationMatch: false, workerId: 'solver', commit: recorded.check!.commit },
     ]);
     expect(vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(line)).filter(item => item.event === 'knowledge_use_rejected'))
       .toEqual([expect.objectContaining({ commit: recorded.check!.commit, rejected: 1 }),
@@ -619,7 +623,10 @@ describe('isolated solver and host acceptance', () => {
       usage: { totalTokens: 110, inputTokens: 90, outputTokens: 20 }, tokenBudget: {
         enforcement: 'provider-observed-upstream-request-limit', status: 'exhausted', reportedTotalTokens: 110, usageComplete: true } });
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
-    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false });
+    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false,
+      receipts: [requestReceipt(state.runId, 60), requestReceipt(state.runId, 50)] });
+    expect(new Set(state.requestUsageAccounting.receipts.map((receipt: any) => receipt.requestId)).size).toBe(2);
+    expect(new Set(state.requestUsageAccounting.receipts.map((receipt: any) => receipt.sessionId)).size).toBe(1);
     expect(state.lastFailure?.reason).toBe(solved ? undefined : 'math_total_token_limit');
     expect(state.usageAccounting).toMatchObject({ startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false });
     expect(requests).toHaveBeenCalledTimes(2); expect(host.delay).not.toHaveBeenCalled();
@@ -664,7 +671,8 @@ describe('isolated solver and host acceptance', () => {
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'limit_reached', reason: 'math_model_usage_unavailable',
       usage: { totalTokens: 40 }, tokenBudget: { status: 'usage-unavailable', reportedTotalTokens: 40, usageComplete: false } });
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
-    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 1, pendingRequests: 0, incomplete: true });
+    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 1, pendingRequests: 0, incomplete: true,
+      receipts: [requestReceipt(state.runId, 40), requestReceipt(state.runId)] });
     expect(host.delay).not.toHaveBeenCalled();
   });
 
@@ -709,6 +717,7 @@ describe('isolated solver and host acceptance', () => {
     }, { usageSource: 'upstream-requests' }));
     expect(await runSolver([...requestArgs, '--max-total-tokens', '100'], directory)).toBe(4);
     expect(JSON.parse(fs.readFileSync(output, 'utf8')).usage.totalTokens).toBe(40);
+    const beforeResume = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     if (legacy) {
       const stateFile = `${output}.runtime/state.json`, state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
       delete state.requestUsageAccounting;
@@ -720,8 +729,11 @@ describe('isolated solver and host acceptance', () => {
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ usage: { totalTokens: 80 },
       tokenBudget: { maxTotalTokens: 100, usageComplete: true, reportedTotalTokens: 80,
         enforcement: legacy ? 'provider-observed-dispatch-limit' : 'provider-observed-upstream-request-limit' } });
-    expect(JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).requestUsageAccounting)
-      .toEqual({ startedRequests: legacy ? 1 : 2, reportedRequests: legacy ? 1 : 2, pendingRequests: 0, incomplete: false });
+    const resumed = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
+    expect(resumed.requestUsageAccounting)
+      .toEqual({ startedRequests: legacy ? 1 : 2, reportedRequests: legacy ? 1 : 2, pendingRequests: 0, incomplete: false,
+        receipts: [...legacy ? [] : beforeResume.requestUsageAccounting.receipts, requestReceipt(resumed.runId, 40)] });
+    expect(new Set(resumed.requestUsageAccounting.receipts.map((receipt: any) => receipt.requestId)).size).toBe(legacy ? 1 : 2);
   });
 
   it('keeps request consumption additive when context rotation creates a new thread', async () => {
@@ -745,7 +757,10 @@ describe('isolated solver and host acceptance', () => {
     expect(state.previousThreadIds).toEqual(['request-large-context']);
     expect(state.usage.totalTokens).toBe(80);
     expect(state.usageBeforeThread.totalTokens).toBe(40);
-    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false });
+    expect(state.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false,
+      receipts: [requestReceipt(state.runId, 40), requestReceipt(state.runId, 40)] });
+    expect(new Set(state.requestUsageAccounting.receipts.map((receipt: any) => receipt.requestId)).size).toBe(2);
+    expect(new Set(state.requestUsageAccounting.receipts.map((receipt: any) => receipt.sessionId)).size).toBe(2);
     expect(state.tokenBudget).toMatchObject({ reportedTotalTokens: 80, usageComplete: true, status: 'available' });
   });
 
@@ -3745,7 +3760,7 @@ describe('isolated solver and host acceptance', () => {
     expect(host.officialGate).toHaveBeenCalledOnce();
   });
 
-  it.each(['partial', 'shared-source', 'infrastructure'])('retains attributable results after a %s restoration batch without individual recompilation', async mode => {
+  it.each(['partial', 'shared-source', 'infrastructure'])('retains attributable passes and rechecks deterministic failures after a %s restoration batch', async mode => {
     configureCooperation(undefined, waitingPlanTasks);
     const parallelArgs = [...args, '--workers', '4', '--max-turns', '3'];
     expect(await runSolver(parallelArgs, directory)).toBe(4);
@@ -3762,11 +3777,15 @@ describe('isolated solver and host acceptance', () => {
     });
     expect(await runSolver([...parallelArgs, '--resume'], directory)).toBe(mode === 'infrastructure' ? 1 : 4);
     expect(host.verify.mock.calls.slice(before).map(([request]) => request.items.map(item => item.theoremName)))
-      .toEqual([['Submission.a', 'Submission.b']]);
+      .toEqual(mode === 'infrastructure' ? [['Submission.a', 'Submission.b']] : mode === 'partial'
+        ? [['Submission.a', 'Submission.b'], ['Submission.b']]
+        : [['Submission.a', 'Submission.b'], ['Submission.a'], ['Submission.b']]);
     expect(host.createSession).toHaveBeenCalledTimes(sessions);
     const saved = cooperationState();
-    expect(saved.tasks.slice(0, 2).map((node: TaskRecord) => node.status)).toEqual(mode === 'partial' ? ['integrated', 'blocked'] :
-      mode === 'shared-source' ? ['blocked', 'blocked'] : ['integrated', 'integrated']);
+    expect(saved.tasks.slice(0, 2).map((node: TaskRecord) => node.status)).toEqual(['integrated', 'integrated']);
+    if (mode !== 'infrastructure') for (const node of saved.tasks.slice(0, 2))
+      expect(node.integratedCheck.verification.results).toEqual([
+        expect.objectContaining({ status: 'kernel_verified', theoremName: node.task.theoremName })]);
     expect(saved.recheck.completed).toBe(mode === 'infrastructure' ? 0 : 2);
     expect(host.officialGate).not.toHaveBeenCalled();
   });
@@ -3837,7 +3856,7 @@ describe('isolated solver and host acceptance', () => {
     expect(host.officialGate).toHaveBeenCalledOnce();
   });
 
-  it('keeps cooperative partial checks unlimited when the total solving limit is disabled', async () => {
+  it('keeps cooperative proof checks bounded independently of an unlimited solving budget', async () => {
     configureCooperation();
     const exitCode = await runSolver([...args, '--workers', '4', '--max-turns', '0', '--max-run-seconds', '0'], directory);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
@@ -3848,7 +3867,7 @@ describe('isolated solver and host acceptance', () => {
         .filter(event => /error|failed|blocked|idle/u.test(event.event)) }, null, 2)).toBe(0);
     const partialChecks = host.verify.mock.calls.filter(([request]) => request.items.length === 1);
     expect(partialChecks).toHaveLength(6);
-    for (const [request] of partialChecks) expect(request).toMatchObject({ timeoutMs: Infinity, batchTimeoutMs: Infinity });
+    for (const [request] of partialChecks) expect(request).toMatchObject({ timeoutMs: 1_800_000, batchTimeoutMs: 1_800_000 });
   });
 
   const routeGroups = (): RouteGroup[] => [
@@ -6163,7 +6182,7 @@ describe('isolated solver and host acceptance', () => {
       return 'completed';
     }));
     expect(await runSolver([...args, '--max-run-seconds', '0', '--max-turns', '0', '--max-turn-seconds', '0',
-      '--evaluator-timeout-seconds', '0'], directory)).toBe(0);
+      '--proof-timeout-seconds', '0', '--evaluator-timeout-seconds', '0'], directory)).toBe(0);
     expect(turns).toBe(2);
     expect(host.createSession.mock.calls[0][0].turnTimeoutMs).toBeUndefined();
     for (const [request] of host.verify.mock.calls) expect(request).toMatchObject({ timeoutMs: Infinity, batchTimeoutMs: Infinity });

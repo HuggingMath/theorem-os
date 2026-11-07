@@ -11,7 +11,7 @@ import { independentFeasibilityWorker, type ResearchWorker } from './modules/org
 import { proofReceiptsMatch, type ProofCheck } from './modules/evidence';
 import { routeAllowsTask, taskCanStart, selectedTaskRoute } from './modules/search';
 import { deliveryDetails, deliveryFinding, MAX_RESEARCH_NOTES_BYTES, parseMathResponse, type DeliveryRecord } from './deliveries';
-import { checkTaskProof, createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, trustedTaskProjectionReuse, type TaskProof } from './cooperativeProof';
+import { checkTaskProof, createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, projectedGoalInputs, trustedTaskProjectionReuse, type TaskProof } from './cooperativeProof';
 import { proofReferencesUnchanged, type ProofReferences } from './proofReferences';
 import { captureDeliveryArtifacts, diagnoseUnbackedLeanClaims, validateDeliveryArtifactClaims, type DeliveryArtifactManifest } from './deliveryArtifacts';
 import { validateLemmaRequests } from './taskProposals';
@@ -22,6 +22,8 @@ import { checkpointCandidate } from './researchEvidence';
 import { inspectKnowledgeUses, type KnowledgeUse } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
 import { bindMathematicalGap, mathematicalGaps } from './mathematicalGaps';
+import { bindCheckOutcome } from './nextChecks';
+import { researchPublicationNotes } from './researchPublication';
 import { taskConnectionCheckCurrent, taskInputsMissingFromSeed } from './taskConnections';
 import { hasLeanResourceLimitFailure, hasLeanSourceDiagnostic } from './proofReuse';
 import { assumableLemma, taskReferenceDependencies, assignmentDeliveryFile, markTaskReferences, markTaskAcceptance, hasTaskAcceptance, type CooperativeTask,
@@ -383,7 +385,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     } else this.interrupted(worker, action);
   }
   protected async publishResearchFinding(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string,
-    submission: ResearchSubmission, options: Partial<DeliveryRecord> = {}, sources?: unknown) {
+    submission: ResearchSubmission, options: Partial<DeliveryRecord> = {}, sources?: unknown, probes?: unknown) {
     // A publication belongs to the inputs dispatched to this writer, even if its live
     // assignment gains a newer context while the asynchronous checks are running.
     const assignment = structuredClone(action.assignment), basis = assignment.researchBasis;
@@ -408,10 +410,11 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     }
     const admission = prepareResearchDelivery(submission, { source: action.task,
       assignment, tasks: this.archive.tasks, deliveries: this.archive.deliveries,
+      nextChecks: this.archive.nextChecks, proofSearchRecords: this.archive.proofSearchRecords,
       identity: { problemReceiptDigest, environmentDigest } });
     if (admission.status === 'rejected') throw new ResearchAdmissionError(admission);
     const finding = structuredClone(admission.finding), text = JSON.stringify(finding);
-    const complete = submission.kind === 'notes';
+    const complete = submission.kind === 'notes' || finding.checkOutcome !== undefined;
     const node = this.node(action.task.id), details = deliveryDetails(finding);
     const lemmaRequests = validateLemmaRequests(this.input.state.problem, this.archive.tasks.map(node => node.task),
       this.archive.groups?.map(route => route.group) ?? [], node.task, finding.lemmaRequests,
@@ -433,6 +436,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
           problemReceiptDigest !== this.input.state.problem.receiptDigest) return;
       if (details.mathematicalGap) bindMathematicalGap(details.mathematicalGap, node.task, this.archive,
         { problemReceiptDigest, environmentDigest });
+      const checkOutcomeScope = details.checkOutcome && bindCheckOutcome(details.checkOutcome, node.task, assignment,
+        this.archive, { problemReceiptDigest, environmentDigest });
       const remaining = [...new Set([...(details.remainingObligations ?? []),
         ...this.dependencies(node.task).filter(dependency => !['integrated', 'completed'].includes(dependency.status)).map(dependency => dependency.task.id)])];
       // Creating the delivery pins its immutable evidence before completed becomes
@@ -440,7 +445,9 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       const record = this.createDeliveryRecord(worker, node.task, 'research',
         !remaining.length && node.task.kind !== 'sketch' ? 'advisory' : 'conditional', details.summary,
         { ...details, ...options, assignmentKey, remainingObligations: remaining, commit: fixedCommit, artifacts,
+          sourceDigest: ownedSourceDigest(this.input.state.problem, fixedWorker.worktree, fixedCommit),
           lemmaRequests, finding: text, findingDigest: mathDigest(text), knowledgeUses,
+          ...(checkOutcomeScope ? { checkOutcomeScope } : {}),
           ...(artifactWarning ? { artifactWarning } : {}) });
       record.researchRecord = settleResearch({ id: record.id, assignment, basis, commit: fixedCommit, finding: text, complete });
       // A challenge alone is never a repeated-blocker report that parks the proof task.
@@ -466,7 +473,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       await withSolverWorktree(worker.worktree, commit, async checkout => {
         for (const [file, source] of sourceSnapshot ?? [])
           fs.writeFileSync(path.join(checkout, this.input.state.problem.projectRelative, file), source);
-        fs.writeFileSync(path.join(checkout, 'RESEARCH.md'), text);
+        fs.writeFileSync(path.join(checkout, 'RESEARCH.md'), researchPublicationNotes(finding, probes));
         await publish({ ...worker, worktree: checkout }, commitSolverSources(this.input.state.problem, checkout));
       });
     }
@@ -477,6 +484,22 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (this.preparedSources?.identity !== identity) this.preparedSources = { identity,
       project: createTaskSourceProjector(this.input.state.problem, worktree, commit, { compact, preserved }) };
     return this.preparedSources.project;
+  }
+  protected sourceGoalInputs(task: CooperativeTask, tasks: readonly TaskRecord[], worktree: string, commit: string) {
+    try { return projectedGoalInputs(this.sourceProjector(worktree, commit), task, tasks); }
+    catch { return []; } // Missing draft declarations are diagnosed by the actual proof check.
+  }
+  protected retainedTaskGoals(task: CooperativeTask, tasks: readonly TaskRecord[], worktree: string, commit: string) {
+    const goals = new Set(this.dependencies(task, tasks).filter(node => node.task.kind === 'goal' &&
+      node.task.id !== task.id && node.status === 'integrated').map(node => node.task.theoremName!));
+    for (const node of this.sourceGoalInputs(task, tasks, worktree, commit)) {
+      const proof = node.integratedCheck;
+      if (node.status === 'integrated' && proof?.passed && !proof.conditions?.length &&
+          proof.taskDigest === digest(node.task) && this.checkedDeliveries.has(proof) && hasTaskAcceptance(proof) &&
+          proof.references && proofReferencesUnchanged(this.input.state.problem, worktree, commit,
+            proof.references, this.input.state.environmentDigest)) goals.add(node.task.theoremName!);
+    }
+    return [...goals];
   }
   protected assignmentConditions(task: CooperativeTask, assignment?: TaskAssignment,
     tasks: readonly TaskRecord[] = this.archive.tasks, worktree = this.lead.worktree): readonly CooperativeTask[] {
@@ -503,7 +526,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   protected async check(task: CooperativeTask, assignment: TaskAssignment, worktree: string, commit: string,
     conditions?: readonly CooperativeTask[], checked?: TaskProof, reuseDeliveryFailure = false, incompleteDelivery = false,
     taskGraph: readonly TaskRecord[] = this.archive.tasks,
-    checkEnvironment?: { environment: NodeJS.ProcessEnv; digest: string }): Promise<TaskProof> {
+    checkEnvironment?: { environment: NodeJS.ProcessEnv; digest: string },
+    additionalRetainedGoals: readonly string[] = []): Promise<TaskProof> {
     this.input.signal.throwIfAborted();
     if (reuseDeliveryFailure && !checked) {
       const candidate = this.failedTaskInput(task, assignment, worktree, commit, conditions);
@@ -543,13 +567,14 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       }
     }
     const tasks = taskGraph.map(node => ({ ...node }));
-    const dependencies = this.dependencies(task, tasks), taskDigest = digest(task);
+    const taskDigest = digest(task);
     const environmentDigest = checkEnvironment?.digest ?? this.input.state.environmentDigest;
     if (assignment.connectionCheck && !taskConnectionCheckCurrent(task, assignment, tasks,
       { environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest }))
       throw new Error('math_task_condition_version_invalid');
     conditions ??= this.assignmentConditions(task, assignment, tasks, worktree);
-    const retainedGoals = dependencies.filter(node => node.task.kind === 'goal' && node.status === 'integrated').map(node => node.task.theoremName!);
+    const retainedGoals = [...new Set([...this.retainedTaskGoals(task, tasks, worktree, commit),
+      ...additionalRetainedGoals.filter(name => name !== task.theoremName)])];
     const checker = this.input.modules.M2.checkTask ?? checkTaskProof;
     const environment = checkEnvironment?.environment ?? this.input.access.get(this.lead.id)!.environment;
     const proof = checked ?? await checker(this.input.state.problem, worktree, commit, task, assignment, retainedGoals,
@@ -613,16 +638,19 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         if (options.evidenceRefs) request.options.evidenceRefs = [...new Set([...(request.options.evidenceRefs ?? []), ...options.evidenceRefs])];
         if (request.record) await this.input.exclusiveCheck(async () => this.mergeProofDeliveryMetadata(request));
       }
-      return previous;
+      return previous.pending;
     }
     const request: ProofDeliveryRequest = { worker, action, commit, summary, options: { ...options }, prepared };
     this.proofDeliveryRequests.set(key, request);
     const pending = this.publishCheckedTaskProof(request, recovering);
-    this.proofPublications.set(key, pending);
-    try { return await pending; }
+    const publication = { workerId: worker.id, action, pending };
+    this.proofPublications.set(key, publication);
+    try { this.changed(); return await pending; }
     finally {
-      if (this.proofPublications.get(key) === pending) this.proofPublications.delete(key);
+      const current = this.proofPublications.get(key) === publication;
+      if (current) this.proofPublications.delete(key);
       if (this.proofDeliveryRequests.get(key) === request) this.proofDeliveryRequests.delete(key);
+      if (current) this.changed();
     }
   }
   private async publishCheckedTaskProof(request: ProofDeliveryRequest, recovering: boolean): Promise<TaskProof | undefined> {
@@ -897,7 +925,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     task = structuredClone(task);
     let value: unknown;
     try { value = parseMathResponse(committedSource(worker.worktree, commit, 'RESEARCH.md'), 'math-result', {}, 'summary').knowledgeUses; }
-    catch { /* Missing optional usage reports have no observations. */ }
+    catch { /* Host reference observation also works without optional model reports. */ }
     // Consume the pinned catalog now; only normalized uses cross the async seam.
     const { uses, rejected } = inspectKnowledgeUses(value, this.input.access.get(worker.id)?.knowledgeSnapshot, task, proof);
     const worktree = worker.worktree, projectRelative = this.input.state.problem.projectRelative;

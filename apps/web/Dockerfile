@@ -40,6 +40,8 @@ RUN --mount=type=cache,id=theoremos-mathlib-v4.33.0,target=/var/cache/theoremos-
     MATHLIB_CACHE_DIR=/var/cache/theoremos-mathlib bun scripts/prepare-web-mathlib.ts \
     && chmod -R a+rX /opt/theoremos-mathlib \
     && chown 10001:10001 /var/tmp && chmod 0700 /var/tmp
+COPY scripts/build-pantograph.ts ./scripts/build-pantograph.ts
+RUN bun scripts/build-pantograph.ts /opt/theoremos-pantograph
 
 FROM worker-mathlib AS worker
 ENV TMPDIR=/tmp \

@@ -17,6 +17,7 @@ vi.mock('../src/math/mathBuildManifest', async original => ({ ...await original<
   readMathBuildManifest: host.buildManifest }));
 import { autoLibrary } from '../scripts/mathematics/autoLibrary';
 import { readAutoLibraryDemand } from '../src/solver/autoLibraryDemand';
+import { LEAN_TASK_SOURCE_MAX_BYTES } from '../src/math/leanTask';
 
 const digest = 'a'.repeat(64), consumer = { taskId: 'goal', taskDigest: digest };
 const demand = { schema: 'theorem-os.auto-library-demand.v1', runId: 'fixture', challengeDigest: digest,
@@ -78,6 +79,31 @@ describe('auto-library CLI entry points', () => {
       '--definition-targets', 'User.witness, Other.witness'])).toBe(0);
     expect(host.prepare).toHaveBeenCalledWith(path.join(directory, 'build'), expect.any(String), expect.objectContaining({
       definitionTargets: ['User.witness', 'Other.witness'], challengeSource: 'def User.witness : Nat := by sorry\n' }));
+  });
+
+  it('preserves a challenge larger than one MiB through prepare and pack', async () => {
+    const challenge = path.join(directory, 'Challenge.lean');
+    const source = `theorem target : True := by sorry\n/-${'x'.repeat(1_426_542 - 36)}-/\n`;
+    expect(Buffer.byteLength(source)).toBeGreaterThan(1024 * 1024);
+    fs.writeFileSync(challenge, source);
+    expect(await autoLibrary(['--phase', 'prepare', '--directory', path.join(directory, 'build'), '--challenge-id', 'large',
+      '--challenge-file', challenge, '--pool', path.join(directory, 'pool'), '--build-manifest', path.join(directory, 'manifest.json')])).toBe(0);
+    expect(host.prepare).toHaveBeenCalledWith(path.join(directory, 'build'), expect.any(String), expect.objectContaining({ challengeSource: source }));
+    expect(await autoLibrary(['--phase', 'pack', '--challenge-file', challenge, '--pool', path.join(directory, 'pool'),
+      '--output', path.join(directory, 'pack.json')])).toBe(0);
+    expect(fs.readFileSync(challenge, 'utf8')).toBe(source);
+  });
+
+  it.each(['prepare', 'pack'])('rejects challenge files beyond the finite source limit in %s', async phase => {
+    const challenge = path.join(directory, 'Challenge.lean');
+    fs.writeFileSync(challenge, ' '.repeat(LEAN_TASK_SOURCE_MAX_BYTES + 1));
+    const args = ['--phase', phase, '--challenge-file', challenge, '--pool', path.join(directory, 'pool'),
+      ...(phase === 'prepare' ? ['--directory', path.join(directory, 'build'), '--challenge-id', 'large',
+        '--build-manifest', path.join(directory, 'manifest.json')] : ['--output', path.join(directory, 'pack.json')])];
+    await expect(autoLibrary(args)).rejects.toThrow('math_runtime_file_too_large');
+    expect(host.prepare).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(directory, 'build'))).toBe(false);
+    expect(fs.existsSync(path.join(directory, 'pack.json'))).toBe(false);
   });
 
   it('documents demand, definition targets and live usage in help', async () => {

@@ -142,7 +142,7 @@ describe('direct upstream request accounting', () => {
     initializeRequestUsageAccounting(value);
     beginRequestUsage(value)(receipt(60));
     expect(value.usage).toEqual({ totalTokens: 100, inputTokens: 90, outputTokens: 10, cachedInputTokens: 4, reasoningOutputTokens: 2 });
-    expect(value.requestUsageAccounting).toEqual({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false });
+    expect(value.requestUsageAccounting).toMatchObject({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false });
     expect(buildTokenBudget(100, [value], 'provider-observed-upstream-request-limit')).toMatchObject({
       status: 'exhausted', reportedTotalTokens: 100, usageComplete: true, enforcement: 'provider-observed-upstream-request-limit',
     });
@@ -154,7 +154,7 @@ describe('direct upstream request accounting', () => {
     beginRequestUsage(value)({ complete: false });
     beginRequestUsage(value)(receipt(25));
     expect(buildTokenBudget(100, [value])).toMatchObject({ status: 'usage-unavailable', reportedTotalTokens: 65, usageComplete: false });
-    expect(value.requestUsageAccounting).toEqual({ startedRequests: 3, reportedRequests: 2, pendingRequests: 0, incomplete: true });
+    expect(value.requestUsageAccounting).toMatchObject({ startedRequests: 3, reportedRequests: 2, pendingRequests: 0, incomplete: true });
   });
 
   it('retains a validated receipt from an interrupted response as known partial consumption', () => {

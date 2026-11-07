@@ -8,6 +8,8 @@ import { integratedProof } from './helpers/taskProof';
 const node = (id: string, kind: 'goal' | 'lemma' = 'lemma', dependsOn: string[] = []): TaskRecord => ({
   task: { id, kind, objective: id, dependsOn, revision: 1, proofPath: 'Main.lean', theoremName: id,
     type: '∀ n : Nat, n + 0 = n' }, status: 'pending', attempts: 0 });
+const nextCheck = (targetTaskId: string) => ({ action: 'construction-check' as const, targetTaskId,
+  objective: 'Check the base case and induction step.', expectedEvidence: 'A checked proof or an exact failed induction goal.' });
 function fixture() {
   const helper = node('helper'), goal = node('original', 'goal', ['helper']);
   const tasks = [goal, helper], targets = [{ proofPath: 'Main.lean', theoremName: 'original' }];
@@ -110,18 +112,21 @@ describe('goal progress observation', () => {
     const result = observe(160);
     expect(result.requested).toBe(false);
     expect(result.nextDelayMs).toBeUndefined();
-    expect(answerGoalProgress(state!, { id: state!.pending!.id, reason: 'Retain this route and check the induction step.' }, 160)).toBe(true);
+    expect(answerGoalProgress(state!, { id: state!.pending!.id, reason: 'Retain this route and check the induction step.',
+      nextChecks: [nextCheck('second')] }, 160)).toBe(true);
     expect(observe(160).state.pending?.goalIds).toEqual(['original']);
   });
 
   it('requires an explicit current review answer and cancels a review on real progress', () => {
     const f = fixture(); f.observe(0); f.observe(100);
-    expect(answerGoalProgress(f.state(), { id: 'old-review', reason: 'obsolete' }, 101)).toBe(false);
+    expect(answerGoalProgress(f.state(), { id: 'old-review', reason: 'obsolete', nextChecks: [nextCheck('helper')] }, 101)).toBe(false);
     integratedProof(f.helper); f.observe(110);
     expect(f.state().pending).toBeUndefined();
     expect(f.state().decisions).toBeUndefined();
-    expect(parseGoalProgressDecision({ progressReview: { id: 'current', reason: 'Keep the proof; verify the base case.' } }))
-      .toEqual({ id: 'current', reason: 'Keep the proof; verify the base case.' });
-    expect(() => parseGoalProgressDecision({ progressReview: { id: 'current', reason: ' ' } })).toThrow('math_plan_progress_review_invalid');
+    expect(parseGoalProgressDecision({ progressReview: { id: 'current', reason: 'Keep the proof; verify the base case.',
+      nextChecks: [nextCheck('helper')] } }))
+      .toEqual({ id: 'current', reason: 'Keep the proof; verify the base case.', nextChecks: [nextCheck('helper')] });
+    expect(() => parseGoalProgressDecision({ progressReview: { id: 'current', reason: ' ', nextChecks: [nextCheck('helper')] } }))
+      .toThrow('math_plan_progress_review_invalid');
   });
 });

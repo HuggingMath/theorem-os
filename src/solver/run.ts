@@ -1,7 +1,9 @@
+import { readPantographBackend, PANTOGRAPH_DIGEST_ENV } from '../math/pantographSession';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { VerificationCheckpointError, withVerificationCheckpoints } from './verificationCheckpoint';
 import { parseArgs } from 'node:util';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, readMathJson, readMathText, withMathRuntimeLease, writeMathJsonDurable, type MathLease } from '../math/mathRuntimeIo';
@@ -48,6 +50,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     'max-total-tokens': { type: 'string', default: '0' },
     'prepare-timeout-seconds': { type: 'string', default: '1800' }, 'max-turn-seconds': { type: 'string', default: '180' },
     'evaluator-command': { type: 'string' }, 'evaluator-timeout-seconds': { type: 'string', default: '1800' },
+    'proof-timeout-seconds': { type: 'string', default: '1800' },
     'proof-environment-cache-dir': { type: 'string' }, 'startup-only': { type: 'boolean' }, 'check-statement': { type: 'boolean' },
     help: { type: 'boolean' },
     'knowledge-base': { type: 'string' }, 'continuation-manifest': { type: 'string' },
@@ -58,7 +61,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     'plan-approval': { type: 'boolean' },
   } });
   if (values.help) {
-    console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --max-run-seconds, --max-turns, --max-turn-seconds or --evaluator-timeout-seconds to disable that limit. Unlimited total solving time also disables proof verification deadlines.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
+    console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--proof-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --prepare-timeout-seconds, --max-run-seconds, --max-turns, --max-turn-seconds, --proof-timeout-seconds or --evaluator-timeout-seconds to disable that limit. Proof checks default to 1800 seconds independently of the solving budget; an expired check saves a resumable checkpoint and the identical candidate gets more time on its next check.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
     console.log('--knowledge-base FILE attaches an immutable saved-theorem catalog. Resume requires the same catalog digest. Historical knowledge never grants proof acceptance.');
     console.log('--continuation-manifest FILE attaches explicit historical sources and notes without changing the verbatim task file. Resume retains the frozen attachment identity; historical material remains advisory.');
     console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. Use --resume to retry an interrupted zero-turn initialization; combine with --startup-only to retain a prepared checkpoint.');
@@ -87,7 +90,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
     return unlimited && value === 0 ? Infinity : value;
   };
   const maxRunMs = limit('max-run-seconds', true) * 1000;
-  const preparationMs = limit('prepare-timeout-seconds') * 1000;
+  const proofTimeoutMs = limit('proof-timeout-seconds', true) * 1000;
+  const preparationMs = limit('prepare-timeout-seconds', true) * 1000;
   const maxTurnMs = limit('max-turn-seconds', true) * 1000;
   const maxTurns = limit('max-turns', true);
   let maxTotalTokens = Number(values['max-total-tokens']);
@@ -121,7 +125,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   const preparationStarted = Date.now();
   let preparing = true;
   let deadline = Infinity;
-  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(abort, preparationMs);
+  let timer: ReturnType<typeof setTimeout> | undefined = Number.isFinite(preparationMs) ? setTimeout(abort, preparationMs) : undefined;
   let ownedState: SolverRunState | undefined;
   let proofEnvironment: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
   let continuationSeeding = false;
@@ -170,6 +174,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (env[MATH_TOOLS_SHA256_ENV] && env[MATH_TOOLS_SHA256_ENV] !== mathTools.digest) throw new Error('math_tools_identity_changed');
         env = { ...env, [MATH_TOOLS_SHA256_ENV]: mathTools.digest };
       }
+      const proofSearchBackend = readPantographBackend(env);
+      if (proofSearchBackend) env = { ...env, [PANTOGRAPH_DIGEST_ENV]: proofSearchBackend.digest };
       const profile = process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex');
       const sub2apiProfile = modules.M1.open === directSolverModules.M1.open ? selectedSub2apiProfile(profile) : undefined;
       const westlakeProfile = modules.M1.open === directSolverModules.M1.open && !sub2apiProfile ? selectedWestlakeProfile(profile) : undefined;
@@ -374,7 +380,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
           ...(workerContinuation ? { continuation: workerContinuation } : {}),
           ...(knowledge ? { knowledgeFile, knowledgeDigest: knowledge.digest,
             knowledgeSnapshot: { digest: knowledge.digest, base: { entries: knowledge.base.entries, evidence: knowledge.base.evidence,
-              routeFindings: knowledge.base.routeFindings } } } : {}) });
+              contexts: knowledge.base.contexts, routeFindings: knowledge.base.routeFindings } } } : {}) });
       };
       prepareAccess('solver', state.worktree, project, corpusFile);
       const peerPreparation = await Promise.allSettled(workers.slice(1).map(async worker => {
@@ -424,11 +430,13 @@ export async function runSolver(args: string[], root: string, customModules?: So
       deadline = state.solveStartedAt + maxRunMs;
       timer = Number.isFinite(maxRunMs) ? setTimeout(abort, maxRunMs) : undefined;
       emit('solve_started', { budgetMs: maxRunMs, maxTurnMs });
-      const winner = await runResearchWorkers({ state, workers, access: workerAccess, modules, root, buildFile, taskText: task,
+      const winner = await withVerificationCheckpoints({ environmentDigest: state.environmentDigest,
+        problemReceiptDigest: state.problem.receiptDigest, checkpoints: state.verificationCheckpoints ??= [], save, emit },
+        () => runResearchWorkers({ state, workers, access: workerAccess, modules, root, buildFile, taskText: task,
         executable: values.codex || process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex',
         profile,
-        signal, deadline, maxTurns, maxTurnMs, maxTotalTokens, proofTimeoutMs: maxRunMs === Infinity ? Infinity : undefined,
-        freshContinuationChecks, save, emit });
+        signal, deadline, maxTurns, maxTurnMs, maxTotalTokens, proofTimeoutMs,
+        freshContinuationChecks, save, emit }));
       clearTimeout(timer);
       timer = undefined;
       state.solveFinishedAt = Date.now();
@@ -448,6 +456,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         status, run_outcome: status, solution_commit: state.check?.passed ? state.check.commit : null,
         solver_ready_receipt_valid: state.check?.passed === true, completion_signal_valid: evaluation.status === 'passed',
         evaluator: evaluation, ...runSummary(state),
+        ...(status === 'runtime_error' && typeof evaluation.reason === 'string' ? { reason: evaluation.reason } : {}),
         ...(status === 'limit_reached' && state.tokenBudget?.reason ? { reason: state.tokenBudget.reason } : {}),
         solveWallMs: state.solveFinishedAt - state.solveStartedAt, stateFile, winningWorker: state.winningWorker };
       writeMathJsonDurable(output, result);
@@ -464,7 +473,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
       try { await disposeProofEnvironment(); } catch { /* The original failure controls the checkpoint. */ }
       if (!ownsRun) { emit('rejected', { reason: error instanceof Error ? error.message : 'math_runtime_error' }); return 1; }
       lease.assertOwned();
-      const status = controller.signal.aborted ? 'limit_reached' : 'runtime_error';
+      const checkpoint = error instanceof VerificationCheckpointError;
+      const status = controller.signal.aborted || checkpoint ? 'limit_reached' : 'runtime_error';
       // Initialization owns durable progress before its final in-memory handoff.
       if (continuationSeeding) ownedState = readSolverRunState(stateFile);
       if (ownedState) {
@@ -473,14 +483,14 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (!(preparing && values['continuation-source-run'] && ownedState.phase === 'prepared'))
           ownedState.phase = 'finished';
         if (ownedState.solveStartedAt && !ownedState.solveFinishedAt) ownedState.solveFinishedAt = Date.now();
-        ownedState.error = controller.signal.aborted ? undefined : error instanceof Error ? error.message : 'math_runtime_error';
+        ownedState.error = controller.signal.aborted || checkpoint ? undefined : error instanceof Error ? error.message : 'math_runtime_error';
         writeSolverRunState(stateFile, ownedState);
       }
       writeMathJsonDurable(output, { schema: 'deepscientist.math.run.v2', status, run_outcome: status,
         reason: controller.signal.aborted ? preparing ? 'math_preparation_stopped' : 'math_run_stopped' : error instanceof Error ? error.message : 'math_runtime_error',
         runId: ownedState?.runId, problemId: ownedState?.problem.contract.problemId, ...runSummary(ownedState),
         evaluator: { status: 'skipped' }, stateFile });
-      publishedExit = controller.signal.aborted ? 4 : 1;
+      publishedExit = controller.signal.aborted || checkpoint ? 4 : 1;
       emit('finished', { status, output });
       return publishedExit;
     }

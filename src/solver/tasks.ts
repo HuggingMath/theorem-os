@@ -18,6 +18,8 @@ export type CooperativeTask = Readonly<{ id: string; kind: 'research' | 'sketch'
   preferredOwnerId?: string;
   /** Tool/source focus for an advisory investigation; this is not a separate agent role. */
   researchSource?: typeof researchSourceKinds[number];
+  /** Original goals served by advisory effort; these are attribution links, never proof dependencies. */
+  consumerGoalIds?: readonly string[];
   conditional?: boolean; statementReview?: boolean; informalStatement?: string;
   /** Blueprint prose: the intended informal argument and its literature sources. Guidance only, never a premise. */
   informalProof?: string; citations?: readonly string[];
@@ -48,6 +50,8 @@ export type TaskAssignment = { taskId: string; taskDigest: string; workerId: str
   /** Actual prompt inputs, frozen when a research turn starts. */
   researchBasis?: ResearchBasis };
 export type TaskRecord = { task: CooperativeTask; readonly status: 'pending' | 'running' | 'blocked' | 'conditional' | 'delivered' | 'integrated' | 'completed';
+  /** Host-owned scoped feasibility work, excluded from the Lead's editable proof graph. */
+  nextCheckId?: string;
   /** Host-owned advisory work; never supplied by a model plan. */
   capacityExploration?: CapacityExploration;
   attempts: number; assignment?: TaskAssignment; proof?: TaskProof; integratedCheck?: TaskProof; feedback?: string; finding?: string;
@@ -67,7 +71,7 @@ export type CooperativeAction = { kind: 'lead' | 'assemble'; seedCommit: string;
 
 export const taskVersion = (task: CooperativeTask) => {
   const { status: _status, ownerId: _owner, preferredOwnerId: _preferredOwner, statementReview: _review, informalStatement: _intent,
-    informalProof: _proof, citations: _citations, ...mathematics } = task;
+    informalProof: _proof, citations: _citations, consumerGoalIds: _consumers, ...mathematics } = task;
   return mathDigest(canonicalMathJson(mathematics));
 };
 const objectiveWords = (objective: string) => objective.replace(/\s+/gu, ' ').trim();
@@ -248,6 +252,8 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
       task.ownerId !== undefined && !validId(task.ownerId) ? 'ownerId' :
       task.preferredOwnerId !== undefined && (!validId(task.preferredOwnerId) || task.kind !== 'goal' || task.ownerId !== undefined) ? 'preferredOwnerId' :
       task.researchSource !== undefined && (!isAdvisoryTask(task) || !['mathlib', 'verified-library', 'public-literature'].includes(task.researchSource)) ? 'researchSource' :
+      task.consumerGoalIds !== undefined && (!isAdvisoryTask(task) || !Array.isArray(task.consumerGoalIds) ||
+        task.consumerGoalIds.some((id: unknown) => !validId(id))) ? 'consumerGoalIds' :
       task.premises !== undefined && (!Array.isArray(task.premises) ||
         task.premises.some((premise: unknown) => typeof premise !== 'string')) ? 'premises' :
       task.declaration !== undefined && (task.declaration !== 'definition' || task.kind !== 'lemma' ||
@@ -285,6 +291,7 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
       ...(task.kind === 'lemma' ? { type: task.type } : {}),
       ...optionalFields(task, ['conditional', 'statementReview', 'informalStatement', 'informalProof', 'citations', 'reviewScope', 'status',
         'ownerId', 'preferredOwnerId', 'researchSource', 'premises', 'groupId', 'declaration', 'family', 'familyMember']),
+      ...(task.consumerGoalIds ? { consumerGoalIds: [...new Set<string>(task.consumerGoalIds)].sort() } : {}),
       ...(task.sharing === undefined ? groups.length > 1 ? { sharing: 'group' } : {} : { sharing: task.sharing }) };
   });
   const duplicateId = tasks.find((task, index) => tasks.findIndex(item => item.id === task.id) !== index);
@@ -298,6 +305,13 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
   if (uncovered) throw planError('math_plan_incomplete_original_coverage', { proofPath: uncovered.proofPath, theoremName: uncovered.theoremName },
     'Each original target needs exactly one goal task.');
   const byId = new Map(tasks.map(task => [task.id, task]));
+  for (const task of tasks) for (const id of task.consumerGoalIds ?? []) {
+    const consumer = byId.get(id);
+    if (!consumer || consumer.kind !== 'goal')
+      throw planError('math_plan_invalid_task', { taskId: task.id, field: 'consumerGoalIds' }, 'Reference original goal tasks.');
+    if (taskGroup(task) !== taskGroup(consumer) && consumer.sharing === 'group')
+      throw planError('math_plan_dependency_not_shared', { taskId: task.id, consumerGoalId: id });
+  }
   const visiting: string[] = [], visited = new Set<string>();
   const visit = (id: string, consumer?: string) => {
     if (visiting.includes(id)) throw planError('math_plan_dependency_cycle', { cycle: [...visiting.slice(visiting.indexOf(id)), id] });

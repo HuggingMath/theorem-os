@@ -1,8 +1,8 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import type { DeliveryRecord } from './deliveries';
 import { plannedTaskDependencyIds } from './modules/search';
-import { taskGroup, taskReferenceDependencies, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
-import type { MathematicalGap } from './mathematicalGapContract';
+import { isAdvisoryTask, taskGroup, taskReferenceDependencies, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+import type { MathematicalGap, NextCheck } from './mathematicalGapContract';
 export { mathematicalGapSchema, type MathematicalGap } from './mathematicalGapContract';
 export type MathematicalGapScope = Readonly<{
   problemReceiptDigest: string; environmentDigest: string;
@@ -11,12 +11,30 @@ export type MathematicalGapScope = Readonly<{
 }>;
 type GapState = { tasks: readonly TaskRecord[]; deliveries?: readonly DeliveryRecord[] };
 
-/** A public source does not publish a private consumer's contract or its earlier scope. */
+/** An executable check names an existing declaration; it cannot manufacture a theorem from goal text. */
+export function nextCheckExecutionMatchesTask(check: NextCheck, target: CooperativeTask): boolean {
+  const execution = check.execution;
+  if (!execution) return true;
+  if ((check.targetTaskId && check.targetTaskId !== target.id) || !target.proofPath || !target.theoremName || isAdvisoryTask(target)) return false;
+  return execution.kind === 'application'
+    ? execution.context.file === target.proofPath && execution.context.declaration === target.theoremName
+    : execution.taskId === target.id && execution.taskDigest === taskVersion(target) && target.kind === 'lemma' &&
+      target.declaration !== 'definition' && !target.conditional && Boolean(target.type?.trim());
+}
+
+/** A public source does not publish a private consumer's contract or an executable target's inputs. */
 export function mathematicalGapVisible(delivery: DeliveryRecord, state: GapState, viewer?: CooperativeTask): boolean {
   if (!delivery.mathematicalGap && !delivery.mathematicalGapScope) return true;
   const scope = delivery.mathematicalGapScope;
   if (!scope || !delivery.mathematicalGap) return false;
   const visible = (task: CooperativeTask) => !viewer || taskGroup(task) === taskGroup(viewer) || task.sharing !== 'group';
+  const check = delivery.mathematicalGap.nextCheck;
+  if (viewer && check?.execution) {
+    const targetId = check.targetTaskId ?? (check.execution.kind === 'proof-search' ? check.execution.taskId :
+      isAdvisoryTask(scope.source) ? scope.consumer.id : scope.source.id);
+    const target = state.tasks.find(node => node.task.id === targetId)?.task;
+    if (!target || !visible(target)) return false;
+  }
   return [scope.source, scope.consumer].every(task => visible(task) &&
     state.tasks.filter(node => node.task.id === task.id).every(node => visible(node.task)));
 }
@@ -27,6 +45,16 @@ export function bindMathematicalGap(gap: MathematicalGap, source: CooperativeTas
     taskVersion(node.task) === gap.consumer.taskDigest)?.task;
   if (!consumer || taskGroup(source) !== taskGroup(consumer) && consumer.sharing === 'group')
     throw new Error('math_delivery_invalid:gap_consumer');
+  const check = gap.nextCheck, execution = check?.execution;
+  const targetId = check?.targetTaskId ?? (execution?.kind === 'proof-search' ? execution.taskId :
+    execution ? isAdvisoryTask(source) ? consumer.id : source.id : undefined);
+  if (targetId) {
+    const target = state.tasks.find(node => node.task.id === targetId);
+    if (!target || target.nextCheckId || target.capacityExploration ||
+        taskGroup(source) !== taskGroup(target.task) && target.task.sharing === 'group' ||
+        check && !nextCheckExecutionMatchesTask(check, target.task))
+      throw new Error('math_delivery_invalid:gap_next_check_target');
+  }
   if (gap.previousDeliveryId) {
     const prior = state.deliveries?.find(item => item.id === gap.previousDeliveryId);
     if (!prior?.mathematicalGapScope || prior.mathematicalGapScope.consumer.id !== consumer.id ||
@@ -38,7 +66,8 @@ export function bindMathematicalGap(gap: MathematicalGap, source: CooperativeTas
   const ids = (node: TaskRecord) => taskReferenceDependencies(node)?.map(reference => reference.taskId) ??
     plannedTaskDependencyIds(node, state.tasks);
   const sourceNode = nodes.get(source.id), visited = new Set([source.id]);
-  const pending = [...(sourceNode?.task === source ? ids(sourceNode) : source.dependsOn)].reverse();
+  const pending = [...(sourceNode?.task === source ? ids(sourceNode) : source.dependsOn),
+    ...(targetId ? [targetId] : [])].reverse();
   const dependencies: DeliveryRecord['dependencies'] = [];
   while (pending.length) {
     const id = pending.pop()!;
@@ -92,11 +121,26 @@ function gapEntry(item: ReturnType<typeof mathematicalGaps>[number], textBytes: 
   const reconsiderWhen = item.reconsiderWhen.slice(0, 4).map(value => preview(value, 256));
   const evidenceRefs = item.evidenceRefs.slice(0, 4).map(value => preview(value, 256));
   const dependencies = scope.dependencies.slice(0, 4);
+  const execution = item.nextCheck?.execution;
+  const executionPreview = execution?.kind === 'application' ? { ...execution,
+    expression: preview(execution.expression, textBytes), expectedType: preview(execution.expectedType, textBytes),
+    context: { file: preview(execution.context.file, 256), declaration: preview(execution.context.declaration, 256) } } :
+    execution && { ...execution, ...(execution.checkpoint ? { checkpoint: { ...execution.checkpoint,
+      path: preview(execution.checkpoint.path, 256) } } : {}) };
+  const nextCheck = item.nextCheck && { ...item.nextCheck,
+    objective: preview(item.nextCheck.objective, textBytes), expectedEvidence: preview(item.nextCheck.expectedEvidence, textBytes),
+    ...(executionPreview ? { execution: executionPreview } : {}) };
+  const executionComplete = !executionPreview || (executionPreview.kind === 'application'
+    ? typeof executionPreview.expression === 'string' && typeof executionPreview.expectedType === 'string' &&
+      Object.values(executionPreview.context).every(value => typeof value === 'string')
+    : !executionPreview.checkpoint || typeof executionPreview.checkpoint.path === 'string');
+  const checkComplete = !nextCheck || typeof nextCheck.objective === 'string' && typeof nextCheck.expectedEvidence === 'string' && executionComplete;
   const complete = Object.values(descriptions).every(value => typeof value === 'string') &&
     reconsiderWhen.every(value => typeof value === 'string') && item.reconsiderWhen.length === reconsiderWhen.length &&
     evidenceRefs.every(value => typeof value === 'string') && item.evidenceRefs.length === evidenceRefs.length &&
-    scope.dependencies.length === dependencies.length;
+    scope.dependencies.length === dependencies.length && checkComplete;
   return { deliveryId: item.deliveryId, consumer: item.consumer, previousDeliveryId: item.previousDeliveryId,
+    ...(nextCheck ? { nextCheck } : {}),
     ...descriptions, reconsiderWhen, evidenceRefs, dependencies, complete,
     omittedRetryConditions: item.reconsiderWhen.length - reconsiderWhen.length,
     omittedEvidenceRefs: item.evidenceRefs.length - evidenceRefs.length,
@@ -125,4 +169,10 @@ export function mathematicalGapContext(entries: ReturnType<typeof mathematicalGa
         jsonBytes(packet([...shown, display])) <= MATHEMATICAL_GAP_CONTEXT_MAX_BYTES) shown.push(display);
   }
   return packet(shown);
+}
+
+/** Full and same-thread dispatches carry the same bounded gap evidence, not just its retrieval ids. */
+export function mathematicalGapContextText(entries: ReturnType<typeof mathematicalGaps>) {
+  return entries.length ? 'Persistent mathematical gaps (advisory; historical-scope reports require review of changed inputs; ' +
+    'complete records remain in COOPERATION.json):\n' + JSON.stringify(mathematicalGapContext(entries)) : '';
 }

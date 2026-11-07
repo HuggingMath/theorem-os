@@ -62,7 +62,7 @@ describe('proof continuation scheduling', () => {
     goal.task = { ...goal.task, conditional: false };
     const tasks = [tried, core, ...running, fresh, goal];
     const ready = continuationResearchTasks(tasks, [main]);
-    expect(ready.map(record => record.task.id)).toEqual(['core', 'tried', 'fresh']);
+    expect(ready.map(record => record.task.id)).toEqual(['core', 'fresh', 'tried']);
     const engineer: ResearchWorker = { id: 'engineer', role: 'engineer', worktree: '/engineer', ownedFiles: [] };
     const researcher: ResearchWorker = { ...engineer, id: 'researcher', role: 'researcher' };
     const busy = running.map((record, index) => {

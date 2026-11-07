@@ -1,7 +1,9 @@
+import { proofSearchRecordMatches } from './proofSearchRecords';
 import { isAdvisoryTask as advisory } from './tasks';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { VerificationCheckpointError } from './verificationCheckpoint';
 import { canonicalMathJson, mathDigest, readMathText, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
 import { committedSource, git, originalDeclarationRegions, solverSourceConstraints } from './problem';
@@ -22,8 +24,11 @@ import { attributeTaskReferences } from './taskReferenceAttribution';
 import { taskConsumerProjection } from './taskConsumers';
 import { parallelQuestions } from './taskQuestions';
 import { contextCheckpointRejection } from './contextCheckpoint';
+import { leadResearchInputs } from './contextCompiler';
 import { deliverHumanGuidance, readHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
+import { visibleNextChecks } from './nextChecks';
+import { goalProgressForTask } from './goalProgress';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { taskTypePreflightEnvironmentIdentity, typeDiagnosticExcerpt, type TaskTypePreflight } from './taskTypePreflight';
@@ -31,7 +36,6 @@ import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGrou
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
 import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
-import { leadResearchInputs } from './contextCompiler';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
 import { ResearchAdmissionError } from './researchAdmission';
@@ -59,8 +63,9 @@ export class CooperativeResearch extends CooperationInputs {
       onRecord: record => {
         this.input.emit('human_guidance_' + record.status, { id: record.id, recipient: record.recipient,
           taskRef: record.taskRef, deliveredTo: record.deliveredTo, reason: record.reason });
-        // A plan waiting for approval has no running Lead to receive it: wake one for a revision turn.
-        if (record.status === 'deferred' && record.recipient.kind === 'lead' && this.planApprovalPending()) this.wake();
+        // An idle Lead needs a decision turn before its normal checkpoint can deliver this note.
+        if (record.status === 'deferred' && record.recipient.kind === 'lead' && !record.taskRef &&
+            (!record.recipient.id || record.recipient.id === this.lead.id)) this.wake();
       },
     }).catch(error => {
       if (error instanceof Error && error.message === 'math_runtime_lease_busy') return;
@@ -68,18 +73,19 @@ export class CooperativeResearch extends CooperationInputs {
     }).finally(() => { this.guidancePulse = undefined; });
   }
   /**
-   * Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. A small team with a
-   * solving deadline gets the same supply only through a narrow gate (timedExplorationDue), on its crux consumer.
+   * Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. A small team gets
+   * the same supply only through a narrow gate (timedExplorationDue), on its crux consumer.
    */
   private async requestCapacityExploration(worker: ResearchWorker, budget: DispatchBudget, previousReady: readonly TaskRecord[]) {
     const expanded = this.input.workers.length > 4 && budget.remainingMs === Infinity;
-    const timed = this.input.workers.length <= 4 && Number.isFinite(budget.remainingMs);
+    const timed = this.input.workers.length <= 4;
     if (!this.input.continuousResearch || !expanded && !timed ||
         !['prover', 'researcher', 'engineer'].includes(worker.role) || budget.maxTurns !== Infinity) return false;
     return this.input.exclusiveCheck(async () => {
       if (this.stopping || this.failure || this.input.signal.aborted || this.input.modelDispatchAllowed?.() === false ||
           !this.liveWorkers.has(this.lead.id) || !this.allocationPeers.some(peer => peer.id === worker.id) ||
           this.active.has(worker.id) || this.reservedTurns.has(worker.id) || this.deliveryChecks.has(worker.id) ||
+          [...this.proofPublications.values()].some(publication => publication.workerId === worker.id) ||
           [...this.preparingTaskTypes.values()].some(pending => pending.workerId === worker.id) ||
           this.pendingFixedStatementReviews() || this.archive.review && ['pending', 'running'].includes(this.archive.review.status)) return false;
       const ready = readyResearchTasks(this.archive.tasks, this.archive.groups)
@@ -119,7 +125,7 @@ export class CooperativeResearch extends CooperationInputs {
   }
   private explorationTimer?: { at: number; timer: NodeJS.Timeout };
   /**
-   * The narrow gate for a team of at most four with a solving deadline. This peer has waited at least
+   * The narrow gate for a team of at most four. This peer has waited at least
    * TIMED_EXPLORATION_IDLE_MS with nothing it can start; since the last deciding Lead turn the Lead was woken for idle
    * peers at least twice while this peer was idle, and no Lead turn is running now; and enough solving time remains.
    * Only the wait itself matures with time, so a peer that is otherwise eligible is re-dispatched when it does.
@@ -164,7 +170,7 @@ export class CooperativeResearch extends CooperationInputs {
    */
   private wakeForIdlePeers() {
     clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
-    if (this.stopping || !this.active.size || this.active.has(this.lead.id) || !this.archive.tasks.length) return;
+    if (this.stopping || !this.active.size && !this.proofPublications.size || this.active.has(this.lead.id) || !this.archive.tasks.length) return;
     const decidedAt = this.archive.leadDecisionBasisAt ?? 0, previous = this.archive.idlePeerWake;
     const unanswered = previous && previous.at > decidedAt ? previous : undefined;
     const retry = unanswered && { at: unanswered.at,
@@ -218,7 +224,7 @@ export class CooperativeResearch extends CooperationInputs {
   start() {
     this.timer = setInterval(() => { void this.humanGuidanceCheckpoint(); void this.inputs().catch(error => {
       this.input.emit('cooperation_poll_failed', { reason: error instanceof Error ? error.message : 'unknown' });
-      if (error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
+      if (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
     }); }, 200);
     this.timer.unref();
   }
@@ -239,7 +245,8 @@ export class CooperativeResearch extends CooperationInputs {
     let failure: unknown;
     for (;;) {
       const work = [...new Set<Promise<unknown>>([...(pending?.values() ?? []), ...(this.pendingPulse ? [this.pendingPulse] : []),
-        ...this.deliveryChecks.values(), ...this.proofPublications.values(), ...this.proofDeliveryChecks, ...this.planSynchronizations,
+        ...this.deliveryChecks.values(), ...[...this.proofPublications.values()].map(publication => publication.pending),
+        ...this.proofDeliveryChecks, ...this.planSynchronizations,
         ...this.leadDeliveries, ...[...this.preparingTaskTypes.values()].map(pending => pending.settled),
         ...(this.preparingStatements ? [this.preparingStatements] : []), this.integrationQueue])]
         .filter(item => !drained.has(item));
@@ -373,8 +380,8 @@ export class CooperativeResearch extends CooperationInputs {
     }
     if (this.planApprovalPending()) {
       // Nothing runs until a person approves; only their own note to the Lead earns a revision turn.
-      if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, this.active.size > 0);
-      const guidance = this.unansweredApprovalGuidance();
+      if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, this.active.size > 0 || this.proofPublications.size > 0);
+      const guidance = this.pendingLeadGuidance(this.archive.planApproval?.guidanceIds);
       if (!guidance.length) return this.waitForDispatch();
       const record = this.archive.planApproval ??= {};
       record.guidanceIds = [...record.guidanceIds ?? [], ...guidance].slice(-512); record.revisionAt = Date.now();
@@ -393,7 +400,7 @@ export class CooperativeResearch extends CooperationInputs {
       this.cancelStaleTaskTypes();
       this.lastAssembly = seed; return { kind: 'assemble', seedCommit: seed };
     }
-    const running = this.preparingTaskTypes.size > 0 || this.active.size > 0 || this.archive.tasks.some(node => ['running', 'delivered'].includes(node.status) ||
+    const running = this.preparingTaskTypes.size > 0 || this.active.size > 0 || this.proofPublications.size > 0 || this.archive.tasks.some(node => ['running', 'delivered'].includes(node.status) ||
       (node.status === 'conditional' && taskDependenciesReady(node.task, this.archive.tasks))) || this.archive.review?.status === 'running' ||
       this.archive.statementReviews?.some(review => ['translating', 'reviewing'].includes(review.status) ||
         (modelAllowed && this.input.state.turns < budget.maxTurns && budget.remainingMs > 0 &&
@@ -402,6 +409,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, running);
     if (!running && !this.livePeers.length) return;
     if (this.archive.review && ['pending', 'running'].includes(this.archive.review.status)) return this.waitForDispatch();
+    if (this.pendingLeadGuidance().length) return this.leadDecision(worker, head, this.planningInputDigest());
     this.wakeForIdlePeers();
     const wakes = this.archive.leadWakes!, through = wakes.requested;
     const pendingProgress = this.archive.goalProgress?.pending;
@@ -499,13 +507,13 @@ export class CooperativeResearch extends CooperationInputs {
     this.presentGoalProgressReview(action);
     return action;
   }
-  /** Lead guidance written while the plan waits for approval, and not yet answered by a revision turn. */
-  private unansweredApprovalGuidance(): string[] {
-    const answered = new Set(this.archive.planApproval?.guidanceIds ?? []);
+  /** Undelivered unscoped notes for this Lead; approval revisions exclude notes already dispatched. */
+  private pendingLeadGuidance(answeredIds: readonly string[] = []): string[] {
+    const answered = new Set(answeredIds);
     let records: ReturnType<typeof readHumanGuidance>;
     try { records = readHumanGuidance(path.join(path.dirname(this.lead.worktree), 'state.json'), this.input.state.runId); }
     catch { return []; }
-    return records.filter(record => record.recipient.kind === 'lead' && !record.taskRef &&
+    return records.filter(record => record.recipient.kind === 'lead' && (!record.recipient.id || record.recipient.id === this.lead.id) && !record.taskRef &&
       ['queued', 'deferred'].includes(record.status) && !answered.has(record.id)).map(record => record.id);
   }
   /** Work on a stalled goal's own route that settles without the Lead: a run, delivery, ready recheck, type or statement check. */
@@ -629,13 +637,20 @@ export class CooperativeResearch extends CooperationInputs {
       const assignment = node.assignment, workerAccess = this.input.access.get(worker.id), leadAccess = this.input.access.get(this.lead.id);
       const problemReceipt = this.input.state.problem.receiptDigest;
       const controller = new AbortController(), signal = AbortSignal.any([this.input.signal, controller.signal]);
+      const preparationGroups = () => {
+        const publishing = [...this.proofPublications.values()].some(publication => publication.action.assignment === dispatchAssignment);
+        // Publication already occupies this worker's group slot. Test whether the
+        // preparation can keep that slot, without charging itself a second one.
+        return publishing ? this.archive.groups?.map(route => route.group.id === taskGroup(task)
+          ? { ...route, busy: Math.max(0, (route.busy ?? 0) - 1) } : route) : this.archive.groups;
+      };
       const current = () => !signal.aborted && !this.stopping && !this.failure && this.liveWorkers.has(this.lead.id) &&
         this.archive.canonicalCommit === seed && this.archive.tasks.includes(node) && digest(node.task) === taskDigest &&
         this.typePreflightDependencies(task) === dependencies && this.input.access.get(worker.id) === workerAccess &&
         this.input.access.get(this.lead.id) === leadAccess && this.input.state.problem.receiptDigest === problemReceipt &&
         this.input.state.environmentDigest === environment && node.status === 'pending' && node.assignment === assignment &&
         !this.synchronizationBlocked(node.task) && taskCanStart(node.task, this.archive.tasks, this.archive.groups) &&
-        routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) && this.liveWorkers.has(worker.id) &&
+        routeAllowsTask(node.task, this.archive.tasks, preparationGroups()) && this.liveWorkers.has(worker.id) &&
         assessTaskResponsibility(node, worker, this.responsibility).kind === 'matches' &&
         canonicalMathJson(selectedTaskRoute(node, this.archive.tasks) ?? null) === routeDigest &&
         this.input.modelDispatchAllowed?.() !== false &&
@@ -672,8 +687,7 @@ export class CooperativeResearch extends CooperationInputs {
           this.wakeLead('task-type-invalid'); this.changed(); return RETRY_DISPATCH;
         }
         const checker = this.input.modules.M2.checkTask ?? checkTaskProof;
-        const retainedGoals = () => this.dependencies(task).filter(item => item.task.kind === 'goal' && item.status === 'integrated')
-          .map(item => item.task.theoremName!);
+        const retainedGoals = () => this.retainedTaskGoals(task, this.archive.tasks, worker.worktree, head);
         const publishable = () => current() && checked.current() && taskDependenciesReady(task, this.archive.tasks) &&
           git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
           this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node;
@@ -959,13 +973,21 @@ export class CooperativeResearch extends CooperationInputs {
     // Keep the earliest snapshot for this dispatch: repeating a change is harmless, skipping one is not.
     if (action?.kind === 'lead' && !this.active.has(this.lead.id) && !this.pendingLeadInboxBases.has(action))
       this.pendingLeadInboxBases.set(action, leadInboxBasis(this.archive.tasks, this.archive.planVersion));
+    if (action?.kind === 'lead' && !this.active.has(this.lead.id) && !this.presentedNextCheckOutcomes.has(action))
+      this.presentedNextCheckOutcomes.set(action, (this.archive.nextChecks ?? []).flatMap(record =>
+        record.status === 'awaiting-decision' && record.outcome ? [{ checkId: record.id, outcomeDeliveryId: record.outcome.deliveryId }] : []));
+    const searchScope = action?.kind === 'task' ? this.proofSearchScope(action) : undefined;
+    const searchRecord = searchScope && this.archive.proofSearchRecords?.[searchScope.taskId];
     return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView,
-      researchDecisions: action?.kind === 'lead' || worker?.id === this.lead.id
-        ? this.archive.researchDecisions : undefined,
+      researchDecisions: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.researchDecisions : undefined,
       ...(action?.kind === 'lead' && this.presentedResearchInputs.has(action) ? {
         leadResearchInputIds: this.presentedResearchInputs.get(action)!.shown.map(record => record.id),
-        leadResearchInputCount: this.presentedResearchInputs.get(action)!.total } : {}),
-      goalProgress: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.goalProgress : undefined,
+        leadResearchInputCount: this.presentedResearchInputs.get(action)!.total,
+      } : {}),
+      proofSearchRecords: searchScope && proofSearchRecordMatches(searchRecord, searchScope)
+        ? { [searchScope.taskId]: searchRecord } : undefined,
+      goalProgress: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.goalProgress :
+        action?.kind === 'task' ? goalProgressForTask(this.archive.goalProgress, action.task) : undefined,
       goalPathReview: action?.kind === 'lead' || worker?.id === this.lead.id ? this.goalPathReview() : undefined,
       planPublicationRejection: (action?.kind === 'lead' || worker?.id === this.lead.id) &&
         this.archive.planPublicationRejection?.baseVersion === this.archive.planVersion ? this.archive.planPublicationRejection : undefined,
@@ -984,6 +1006,7 @@ export class CooperativeResearch extends CooperationInputs {
       consumerInterfaces: task ? taskConsumerProjection(task, this.archive.tasks, this.archive.proofRoutes) : undefined,
       mathematicalGaps: mathematicalGaps(this.archive, { problemReceiptDigest: this.input.state.problem.receiptDigest,
         environmentDigest: this.input.state.environmentDigest }, gapViewer),
+      nextChecks: visibleNextChecks(this.archive, gapViewer),
       failedTaskInputs: this.archive.failedTaskInputs?.filter(record => tasks === this.archive.tasks || visible(record.taskId, record.taskDigest)),
       progressSnapshot: tasks === this.archive.tasks ? this.archive.progressSnapshot : undefined,
       progressReceipts: tasks === this.archive.tasks ? this.archive.progressReceipts : undefined,
@@ -1119,7 +1142,7 @@ export class CooperativeResearch extends CooperationInputs {
       }
     } catch (error) {
       this.input.signal.throwIfAborted();
-      if (error instanceof Error && error.message === 'math_verifier_unavailable') throw error;
+      if (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable') throw error;
       await this.input.exclusiveCheck(async () => {
         this.preserveLeadDraft(commit, action.seedCommit, error instanceof Error ? error.message : 'math_lead_integration_failed',
           this.archive.planVersion === staged.planVersion);

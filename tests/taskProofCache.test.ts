@@ -1,3 +1,4 @@
+import { VerificationCheckpointError, withVerificationCheckpoints, type VerificationCheckpoint } from '../src/solver/verificationCheckpoint';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,6 +80,25 @@ describe('run-local task proof projection cache', () => {
     signal = new AbortController().signal;
   });
   afterEach(() => { vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
+
+  it('resumes an expired projected check with the same candidate and fresh receipts', async () => {
+    const checkpoints: VerificationCheckpoint[] = [];
+    const context = { environmentDigest: 'fixture-environment', problemReceiptDigest: problem.receiptDigest,
+      checkpoints, save: () => {}, emit: () => {} };
+    host.verify.mockImplementationOnce(async input => {
+      const batch = verified(input);
+      return { ...batch, status: 'blocked', results: batch.results.map(result => ({ ...result,
+        status: 'blocked', error: 'Lean verification timed out.' })) };
+    });
+    await expect(withVerificationCheckpoints(context, () => check())).rejects.toBeInstanceOf(VerificationCheckpointError);
+    expect(signal.aborted).toBe(false);
+    const proofs = await withVerificationCheckpoints(context, () => check());
+    expect(host.verify).toHaveBeenCalledTimes(2);
+    expect(host.verify.mock.calls[0]![0].timeoutMs).toBe(180000);
+    expect(host.verify.mock.calls[1]![0].timeoutMs).toBe(360000);
+    expect(proofs[0]!.passed).toBe(true);
+    expect(isAttributedTaskProof(proofs[0]!)).toBe(true);
+  });
 
   it('reuses only exact inputs in the same run while preserving live attribution on fresh result objects', async () => {
     const first = await check(), second = await check();
