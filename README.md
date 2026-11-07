@@ -259,7 +259,7 @@ TheoremOS 使用 `gpt-5.6-sol`、`xhigh`、每题 4 个 worker，通过 **6/6 �
 | [组件示例](examples/components/README.md) · [对照实验](examples/imo2026/COMPARISON.md) | 接入研究策略与比较实验 |
 | [PutnamBench 小样本](examples/putnambench/README.md) | 固定选题、逐题模块对照与离线汇总 |
 | [First Proof Batch 3](examples/first-proof/README.md) | 官方题面快照、形式化审核门槛和离线接入 |
-| [成果来源](accepted/README.md) · [发布说明](docs/releases/v0.1.0.md) | 归属与验收记录、当前版本范围与限制 |
+| [成果来源](accepted/README.md) · [发布说明](docs/releases/v0.1.0.md) · [工作台发布状态](docs/web-release-status.md) | 归属与验收记录、版本范围与限制、工作台验收及待办 |
 
 <a id="架构与开发"></a>
 
