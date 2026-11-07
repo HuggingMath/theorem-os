@@ -187,7 +187,7 @@ const flag = (value: unknown) => value === undefined || value === true;
 const integer = (value: unknown) => value === undefined || typeof value === 'number' && Number.isSafeInteger(value);
 const only = (item: Item, allowed: readonly string[]) => Object.keys(item).every(key => allowed.includes(key));
 
-function isLeanCheck(value: unknown) {
+export function isWebAgentLeanCheck(value: unknown): value is WebAgentLeanCheck {
   const lean = object(value);
   return !!lean && only(lean, ['passed', 'timedOut', 'messages', 'omittedMessages']) && typeof lean.passed === 'boolean' && flag(lean.timedOut) &&
     integer(lean.omittedMessages) && Array.isArray(lean.messages) && lean.messages.length <= limits.leanMessages && lean.messages.every(entry => {
@@ -216,7 +216,7 @@ export function isWebAgentActionBody(value: unknown): value is WebAgentActionBod
   if (!short(action.command, limits.command) || !short(action.output, limits.output) || !short(action.text, limits.text) ||
       !short(action.query, limits.query) || !short(action.url, limits.query) || !short(action.tool, 200) || !short(action.arguments, limits.arguments)) return false;
   if (![action.outputClipped, action.withheld, action.textClipped].every(flag) || ![action.exitCode, action.durationMs, action.omittedChanges].every(integer)) return false;
-  if ((action.lean !== undefined && !isLeanCheck(action.lean)) || (action.found !== undefined && !isLeanSearch(action.found))) return false;
+  if ((action.lean !== undefined && !isWebAgentLeanCheck(action.lean)) || (action.found !== undefined && !isLeanSearch(action.found))) return false;
   if (action.intents !== undefined && (!Array.isArray(action.intents) || action.intents.length > limits.intents || !action.intents.every(intent => {
     const item = object(intent);
     return item && Object.keys(item).every(key => ['type', 'path', 'query'].includes(key)) && ['read', 'list', 'search'].includes(item.type as string) &&

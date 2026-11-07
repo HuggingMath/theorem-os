@@ -1,4 +1,5 @@
 import type { WebAgentAction, WebEvent } from '../shared';
+import { t } from '../i18n';
 
 export type RouteStepKind = 'read' | 'write' | 'check' | 'deliver' | 'accept' | 'stop';
 /** What happened inside a step, in time order: the host's events for the Agent and the Agent's own actions. */
@@ -135,6 +136,25 @@ export function agentNames(workers: readonly { id: string; role?: string }[]): M
     names.set(worker.id, shared.get(worker.role)! > 1 ? `${worker.role} ${index}` : worker.role);
   }
   return names;
+}
+
+/** A step as its chip reads: what the Agent did, with the task's short name. */
+export function routeStepLabel(step: RouteStep, tasks: ReadonlyMap<string, string>) {
+  const task = step.taskId && tasks.get(step.taskId) ? ` ${tasks.get(step.taskId)}` : '';
+  switch (step.kind) {
+    case 'read': return step.reviewing ? t('接审阅') : step.taskId ? step.again ? t('重新接任务{0}', task) : t('接任务{0}', task) : t('读题');
+    case 'write': return step.reviewing ? t('审阅候选') : step.planning ? t('制定计划') : step.count > 1 ? t('写证明 ×{0}', step.count) : t('写证明');
+    case 'check': return step.count > 1 ? t('Lean 检查 ×{0}', step.count) : t('Lean 检查');
+    case 'deliver': return t('交付{0}', task);
+    case 'accept': return t('独立验收');
+    case 'stop': return t('会话停止');
+  }
+}
+/** The file an Agent's `check-lean` command checked; undefined for any other command, '' when it named none. */
+export function checkLeanFile(action: WebAgentAction): string | undefined {
+  const command = action.kind === 'command' ? action.command ?? '' : '';
+  if (!/\bcheck-lean\b/u.test(command)) return;
+  return /--file\s+'?([^\s']+)/u.exec(command)?.[1] ?? '';
 }
 
 /** A task as a reader knows it: the last part of its theorem's name (Tutorial.add_zero → add_zero). */

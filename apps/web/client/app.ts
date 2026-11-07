@@ -52,6 +52,7 @@ import { renderConversation as drawConversation } from './ui/Conversation';
 import { renderAgentRoute, unmountAgentRoute } from './ui/AgentRoute';
 import { agentRoutes, taskNames } from './agentRoute';
 import { AgentActivity } from './agentActivity';
+import { FormalizationActivityStore } from './formalizationActivityStore';
 import { clockTime, commandId, workerNames } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, newlyWaiting, notifyStorageKey, readResume, saveResume, waitsForOwner } from './runAwareness';
 import { forgetKey, hasRememberedKey, rememberKey, rememberedKey } from './keyMemory';
@@ -155,7 +156,8 @@ async function loadNaturalResearch() {
       researchEntry = 'natural'; document.body.dataset.entry = 'natural'; placeInputMode();
       const search = id ? `?chat=${encodeURIComponent(id)}` : '';
       if (location.search !== search) history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search);
-      document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false';
+      // The live workspace belongs to the task, not to one of its stages: a task moving from its statement to its proof keeps it open.
+      if (!id || document.body.dataset.chatArtifact !== 'live') { document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false'; }
       // Arrow keys in the phone history open each run in turn; its conversation arriving must not close the list.
       if (!attached) closeHistoryDialog();
     },
@@ -166,10 +168,12 @@ async function loadNaturalResearch() {
       state.composing = !run; state.selectedId = run?.id ?? ''; state.selectedRun = run;
       if (changed) { chatArtifacts.clear(); state.tab = 'result'; state.panelSignature = ''; }
       renderRunList(); renderDetail(changed); renderShell();
-      if (changed) setMobileView('compose');
+      // The live workspace follows whichever task the conversation shows; switching tasks redraws it in place.
+      if (changed && document.body.dataset.chatArtifact !== 'live') setMobileView('compose');
     },
     onConversation: renderShell,
     onArtifact: openChatArtifact,
+    agentActivity, formalizationActivity,
     onLean: () => { chooseEntry('lean'); startDraft(); },
     onGuidance: (run, text?: string, taskId?: string) => openGuidance(run, text, undefined, taskId),
     onCancelRun: openCancellation,
@@ -177,14 +181,18 @@ async function loadNaturalResearch() {
   });
   await chatWorkspace.start(currentRun());
 }
-function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget) {
+function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget, auto = false) {
   const run = currentRun(), task = chatArtifactTask(run, target?.taskId);
-  if (kind !== 'original' && !run) return;
-  if (kind !== 'original' && target?.taskId && !task) { toast(t('任务合同未保留')); return; }
-  chatArtifacts.remember(chatArtifactIdentity(), kind, target);
+  // The live workspace is there for a formalization too, before any run exists.
+  if (kind !== 'original' && kind !== 'live' && !run) return;
+  if (kind !== 'original' && kind !== 'live' && target?.taskId && !task) { toast(t('任务合同未保留')); return; }
+  // The task opening its own workspace is not a place the reader came from; coming back still returns to their last one.
+  if (!auto) chatArtifacts.remember(chatArtifactIdentity(), kind, target);
   document.body.dataset.chatArtifact = kind;
   document.body.dataset.outputOpen = 'true';
   if (kind === 'original') { element('#close-research-output').focus({ preventScroll: true }); return; }
+  // The live workspace replaces the run detail for the time it is open, on any screen size.
+  if (kind === 'live') { if (!auto) element('#close-research-output').focus({ preventScroll: true }); return; }
   state.tab = kind === 'roadmap' ? 'trajectory' : 'source'; state.sourceView = 'proof';
   setMobileView('runs'); renderDetail(true);
   if (task && kind === 'roadmap') {
@@ -336,6 +344,7 @@ const moduleView = new ModuleView();
 const modulePlanEditor = new ModulePlanEditor(element('#module-plan'), icons, () => draftChanged());
 // Each run's events and Agent actions for the route maps of the result and collaboration tabs, read once for both.
 const agentActivity = new AgentActivity(url => api(url));
+const formalizationActivity = new FormalizationActivityStore(url => api(url));
 const collaborationView = new CollaborationView(api, receiveRunObservation, () => {
   state.tab = 'result'; renderDetail(true);
   document.querySelector('#detail-panel .result-report')?.scrollIntoView({ block: 'start', behavior: 'instant' });
@@ -463,9 +472,14 @@ function setGlobalNotice(text: string) {
   element('#global-notice').hidden = !text;
 }
 function setMobileView(view: 'compose' | 'runs', focus = false) {
-  document.body.dataset.outputOpen = String(view === 'runs' && Boolean(currentRun()));
-  rememberConversationScroll();
   const changed = document.body.dataset.mobileView !== view;
+  // Both panels belong to the task the conversation shows, so a task's own redraw keeps them; leaving the panel view
+  // for the conversation closes them. A task still switching between its own stages does not.
+  const panel = view === 'compose' && changed
+    ? '' : document.body.dataset.chatArtifact;
+  document.body.dataset.chatArtifact = panel;
+  document.body.dataset.outputOpen = String(panel === 'live' || panel === 'original' || (view === 'runs' && Boolean(currentRun())));
+  rememberConversationScroll();
   if (changed) { activityReader.remember(); moduleView.update(); }
   document.body.dataset.mobileView = view;
   finishHiddenMotion();
@@ -2122,6 +2136,8 @@ function renderShell() {
       const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
       if (!target) return;
       if (target.id !== state.selectedId) selectRun(target.id);
+      // The status line opens the run's own detail, so whatever the conversation was showing steps aside.
+      document.body.dataset.chatArtifact = '';
       setMobileView('runs');
       element(`#detail-tab-${state.tab}`).focus({ preventScroll: true });
     },

@@ -4,11 +4,13 @@ import type { WebConversation, WebConversationMessage, WebConversationSummary } 
 import type { WebFormalization } from '../../formalizationTypes';
 import type { WebRun } from '../../shared';
 import { researchExamples } from '../../problemExamples';
-import { isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
+import { formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
 import { locale, localizeText, t } from '../../i18n';
+import type { SolveProcess } from '../solveProcess';
 import { formalizationReasonText } from '../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
+import { Elapsed, SolveProcessView } from './SolveProcess';
 
 
 export type ChatThreadProps = {
@@ -17,7 +19,9 @@ export type ChatThreadProps = {
   formalization?: WebFormalization;
   loading: boolean;
   error?: string;
-  onArtifact(kind: 'roadmap' | 'original' | 'source', target?: { taskId?: string; messageId?: string }): void;
+  /** The solving process of the task this thread shows, when it has one. */
+  solve?: { process: SolveProcess; loading?: boolean; failed?: boolean; wide: boolean; time: (at: string) => string; onRetry?(): void; onCheck?(id: string): void };
+  onArtifact(kind: 'roadmap' | 'original' | 'source' | 'live', target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
   onGuidance?(text?: string, taskId?: string): void;
   onGuidanceReceipt?(message: WebConversationMessage): void;
   onEditProblem?(): void;
@@ -69,12 +73,22 @@ function TaskMessage(props: ChatThreadProps) {
       : active ? t("先把原题转成 Lean，核对一致性后继续证明。")
         : t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
   const proof = run?.result?.proof || run?.artifact?.source;
+  const solve = props.solve, wide = solve?.wide && solve.process.active;
   return <div class="chat-task">
-    <div class="research-conversation-status" role="status" aria-atomic="true" data-active={active} data-accepted={accepted} data-failed={failed}>
-      <p class="research-conversation-state"><Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : 'square'} /><strong>{title}</strong></p>
+    <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
+      <p class="research-conversation-state" role="status" aria-atomic="true">
+        <Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : 'square'} /><strong>{title}</strong></p>
+      {solve && <p class="research-conversation-meta">
+        {solve.process.startedAt && <Elapsed from={solve.process.startedAt} to={solve.process.endedAt} />}
+        {solve.process.tokens !== undefined && <span>{t('Token {0}', formatTokens(solve.process.tokens))}</span>}
+        {wide && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
+          <Icon name="panel-right" />{t('实时工作区')}</button>}
+        {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
+      </p>}
       <p class="research-conversation-description">{description}</p>
     </div>
-    {active && run?.events.at(-1)?.message && <p class="research-conversation-latest">{localizeText(run.events.at(-1)!.message)}</p>}
+    {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
+      loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
     {!run && failed && item && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
     {(run || item?.report) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {run && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
@@ -83,7 +97,6 @@ function TaskMessage(props: ChatThreadProps) {
     </div>}
     <div class="chat-task-actions">
       {active && run && props.onGuidance && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('补充证明要求')}</button>}
-      {active && props.onCancelTask && <button type="button" class="text-button" onClick={props.onCancelTask}>{t("停止解题")}</button>}
       {!active && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t("修改题目")}</button>}
     </div>
   </div>;

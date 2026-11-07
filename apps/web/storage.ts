@@ -256,6 +256,7 @@ export class WebStorage {
     return this.recordsAfter<WebObservation>([...this.runPath(owner, runId), 'observations'], after, limit);
   }
   /** Numbered records after `after` in sequence order; reading stops at a record that cannot be parsed, to be read again later. */
+  listRecordsAfter<T>(directory: string[], after: number, limit: number): T[] { return this.recordsAfter<T>(directory, after, limit); }
   private recordsAfter<T>(directory: string[], after: number, limit: number): T[] {
     const sequences = this.listRecords(directory).flatMap(file => /^\d+\.json$/u.test(file) ? [Number.parseInt(file, 10)] : [])
       .filter(sequence => sequence > after).sort((a, b) => a - b).slice(0, limit);

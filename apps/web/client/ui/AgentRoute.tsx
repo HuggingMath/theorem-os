@@ -1,8 +1,8 @@
 import { render } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { webAgentActionLimits, type WebAgentAction, type WebEvent, type WebRun } from '../../shared';
+import { webAgentActionLimits, type WebAgentAction, type WebAgentLeanCheck, type WebEvent, type WebRun } from '../../shared';
 import type { AgentActivity } from '../agentActivity';
-import type { AgentRoute, RouteItem, RouteStep } from '../agentRoute';
+import { checkLeanFile, routeStepLabel, type AgentRoute, type RouteItem, type RouteStep } from '../agentRoute';
 import { readableDuration } from '../../presentation';
 import { Icon, Spinner } from './Icon';
 import { localizeText, t } from '../../i18n';
@@ -23,17 +23,7 @@ export type AgentRouteProps = {
 
 // A long lane shows its newest steps; the earlier ones are one click away.
 const shownSteps = 24;
-const stepLabel = (step: RouteStep, tasks: AgentRouteProps['tasks']) => {
-  const task = step.taskId && tasks.get(step.taskId) ? ` ${tasks.get(step.taskId)}` : '';
-  switch (step.kind) {
-    case 'read': return step.reviewing ? t('接审阅') : step.taskId ? step.again ? t('重新接任务{0}', task) : t('接任务{0}', task) : t('读题');
-    case 'write': return step.reviewing ? t('审阅候选') : step.planning ? t('制定计划') : step.count > 1 ? t('写证明 ×{0}', step.count) : t('写证明');
-    case 'check': return step.count > 1 ? t('Lean 检查 ×{0}', step.count) : t('Lean 检查');
-    case 'deliver': return t('交付{0}', task);
-    case 'accept': return t('独立验收');
-    case 'stop': return t('会话停止');
-  }
-};
+const stepLabel = routeStepLabel;
 const outcomeLabel = { passed: t('通过'), failed: t('未通过') } as const;
 const nameOf = (route: Lane) => route.name ?? route.workerId;
 const stepKey = (step: RouteStep) => `${step.kind}@${step.at}`;
@@ -49,7 +39,7 @@ type Group = 'think' | 'look' | 'edit' | 'lean' | 'run' | 'say' | 'host';
 const groups: [Group, string][] = [['think', t('思考')], ['look', t('查看')], ['edit', t('修改')], ['lean', 'Lean'], ['run', t('命令')],
   ['say', t('说明')], ['host', t('平台')]];
 const leanCommand = /\b(?:check-lean|search-lean)\b|\blake\s+(?:env\s+lean|build|exe)\b|(?:^|[\s;&|(])lean\s/u;
-const groupOf = (item: RouteItem): Group => {
+export const groupOf = (item: RouteItem): Group => {
   if (item.type === 'event') return 'host';
   const action = item.action;
   switch (action.kind) {
@@ -62,8 +52,8 @@ const groupOf = (item: RouteItem): Group => {
   }
 };
 
-const base = (file: string) => file.split('/').filter(Boolean).at(-1) ?? file;
-const firstLine = (text: string, limit = 90) => {
+export const base = (file: string) => file.split('/').filter(Boolean).at(-1) ?? file;
+export const firstLine = (text: string, limit = 90) => {
   const line = (text.split('\n').find(value => value.trim()) ?? '').replace(/\*\*/gu, '').trim();
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
 };
@@ -90,7 +80,7 @@ const diffStat = (changes: NonNullable<WebAgentAction['changes']>) => {
 type Outcome = { text: string; tone: 'passed' | 'failed' | 'muted' };
 type Summary = { icon: string; label: string; code?: string; outcome?: Outcome };
 /** One action as a row title: what the Agent did, the file or query it did it on, and how it came out. */
-function summarize(action: WebAgentAction): Summary {
+export function summarize(action: WebAgentAction): Summary {
   switch (action.kind) {
     case 'reasoning': return { icon: 'brain', label: action.text ? t('思考：{0}', firstLine(action.text)) : t('思考') };
     case 'message': return { icon: 'message-square-text', label: action.text ? t('说明：{0}', firstLine(action.text)) : t('说明') };
@@ -112,8 +102,9 @@ function summarize(action: WebAgentAction): Summary {
 }
 function summarizeCommand(action: WebAgentAction): Summary {
   const command = action.command ?? '';
-  if (/\bcheck-lean\b/u.test(command)) {
-    const file = /--file\s+'?([^\s']+)/u.exec(command)?.[1], lean = action.lean;
+  const checked = checkLeanFile(action);
+  if (checked !== undefined) {
+    const file = checked || undefined, lean = action.lean;
     const errors = lean?.messages.filter(message => message.severity === 'error').length ?? 0;
     const sorry = lean?.messages.some(message => /\bsorry\b/u.test(message.text));
     const outcome: Outcome | undefined = action.status === 'running' ? undefined
@@ -140,14 +131,14 @@ function summarizeCommand(action: WebAgentAction): Summary {
   return { icon: 'terminal', label: t('运行命令'), code: firstLine(command, 120) };
 }
 /** How an action ended, when its title does not already say. */
-function endState(action: WebAgentAction, running: boolean): Outcome | undefined {
+export function endState(action: WebAgentAction, running: boolean): Outcome | undefined {
   if (action.status === 'declined') return { text: t('被拒绝'), tone: 'muted' };
   if (action.status === 'running') return running ? undefined : { text: t('未结束'), tone: 'muted' };
   if (action.status === 'failed') return action.exitCode ? { text: t('退出码 {0}', action.exitCode), tone: 'failed' } : { text: t('失败'), tone: 'failed' };
   return undefined;
 }
 /** A host event as one line inside an Agent's step; the step already names the Agent. */
-const eventText = (event: WebEvent) => {
+export const eventText = (event: WebEvent) => {
   const message = localizeText(event.message), worker = event.details?.workerId;
   return worker && message.endsWith(` · ${worker}`) ? message.slice(0, -worker.length - 3) : message;
 };
@@ -157,12 +148,12 @@ const eventOutcome = (event: WebEvent): Outcome | undefined => {
   if (typeof details?.passed === 'boolean') return details.passed ? { text: t('通过'), tone: 'passed' } : { text: t('未通过'), tone: 'failed' };
   return undefined;
 };
-const itemKey = (item: RouteItem) => item.type === 'event' ? `e:${item.event.sequence}` : `a:${item.action.workerId}:${item.action.itemId}`;
+export const itemKey = (item: RouteItem) => item.type === 'event' ? `e:${item.event.sequence}` : `a:${item.action.workerId}:${item.action.itemId}`;
 const itemAt = (item: RouteItem) => item.type === 'event' ? item.event.at : item.action.at;
 const eventDetail = (event: WebEvent) => eventText(event).split('\n').slice(1).join('\n').trim();
 const textBody = (action: WebAgentAction) => Boolean(action.text && action.text.trim() !== firstLine(action.text));
 /** Whether a row opens to more than its title. */
-function hasBody(item: RouteItem) {
+export function hasBody(item: RouteItem) {
   if (item.type === 'event') return Boolean(eventDetail(item.event));
   const action = item.action;
   switch (action.kind) {
@@ -182,18 +173,22 @@ function Diff({ change }: { change: NonNullable<WebAgentAction['changes']>[numbe
     {diffLines(change).map((line, index) => <span key={index} class="route-diff-line" data-line={line.kind}>{line.text || ' '}{'\n'}</span>)}
   </pre>;
 }
-function ActionBody({ action }: { action: WebAgentAction }) {
+/** What Lean said in one check: each message with where it points, or why there is none. */
+export function LeanReport({ lean }: { lean: WebAgentLeanCheck }) {
+  return <div class="route-lean">
+    {lean.messages.length ? <ul>{lean.messages.map((message, index) => <li key={index} data-severity={message.severity}>
+      <span class="route-lean-where">{message.severity === 'error' ? t('错误') : message.severity === 'warning' ? t('警告') : t('信息')}
+        {message.line !== undefined && ` · ${message.file ? base(message.file) : ''}:${message.line}${message.column !== undefined ? `:${message.column}` : ''}`}</span>
+      <pre>{message.text}</pre></li>)}</ul>
+      : <Note>{lean.passed ? t('Lean 没有报告任何消息。') : lean.timedOut ? t('Lean 在时限内没有检查完。') : t('Lean 没有给出具体消息。')}</Note>}
+    {lean.omittedMessages ? <Note>{t('另有 {0} 条消息没有显示。', lean.omittedMessages)}</Note> : null}
+  </div>;
+}
+export function ActionBody({ action }: { action: WebAgentAction }) {
   switch (action.kind) {
     case 'command': return <>
       <pre class="route-command"><code>{action.command}</code></pre>
-      {action.lean && <div class="route-lean">
-        {action.lean.messages.length ? <ul>{action.lean.messages.map((message, index) => <li key={index} data-severity={message.severity}>
-          <span class="route-lean-where">{message.severity === 'error' ? t('错误') : message.severity === 'warning' ? t('警告') : t('信息')}
-            {message.line !== undefined && ` · ${message.file ? base(message.file) : ''}:${message.line}${message.column !== undefined ? `:${message.column}` : ''}`}</span>
-          <pre>{message.text}</pre></li>)}</ul>
-          : <Note>{action.lean.passed ? t('Lean 没有报告任何消息。') : action.lean.timedOut ? t('Lean 在时限内没有检查完。') : t('Lean 没有给出具体消息。')}</Note>}
-        {action.lean.omittedMessages ? <Note>{t('另有 {0} 条消息没有显示。', action.lean.omittedMessages)}</Note> : null}
-      </div>}
+      {action.lean && <LeanReport lean={action.lean} />}
       {action.found && <ul class="route-found">{action.found.map((query, index) => <li key={index}>
         <span class="route-found-query">{query.query}</span><span class="route-found-total">{t('{0} 条结果', query.total)}</span>
         {query.names.length > 0 && <span class="route-found-names">{query.names.map(name => <code key={name}>{name}</code>)}</span>}</li>)}</ul>}
@@ -235,12 +230,14 @@ const memoryOf = (runId: string) => {
   if (!memory) { memory = { follow: false, expanded: new Set(), open: new Set() }; memories.set(runId, memory); }
   return memory;
 };
+/** What a row of actions needs from its list: which rows are open, a redraw, the clock and whether the Agent still works. */
+export type ItemContext = { memory: { open: Set<string> }; time: (at: string) => string; running: boolean; refresh: () => void };
 type Context = {
   memory: Memory; tasks: AgentRouteProps['tasks']; time: AgentRouteProps['time']; running: boolean; recorded: boolean;
   refresh: () => void; select: (lane: Lane, index: number, options?: { toggle?: boolean }) => void; close: () => void; focus?: string;
 };
 
-function ItemRow({ item, ctx }: { item: RouteItem; ctx: Context }) {
+export function ItemRow({ item, ctx }: { item: RouteItem; ctx: ItemContext }) {
   const key = itemKey(item), open = ctx.memory.open.has(key), body = hasBody(item), at = itemAt(item);
   let head;
   if (item.type === 'event') {

@@ -5,7 +5,12 @@ import type { WebRun } from '../shared';
 import { locale, localizeMessage, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
 import { renderChatComposer, renderChatHistory, renderChatOriginal, renderChatThread } from './ui/ChatWorkspace';
+import { renderLiveWorkspace } from './ui/LiveWorkspace';
 import { ChatReadingPosition } from './chatReadingPosition';
+import type { AgentActivity } from './agentActivity';
+import type { FormalizationActivityStore } from './formalizationActivityStore';
+import { buildSolveProcess, type SolveProcess } from './solveProcess';
+import { clockTime } from './collaborationUi';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -19,7 +24,10 @@ type Options = {
   onConversation(): void;
   /** `attached` names the conversation of a run already on screen, which the reader may still be browsing to from the history. */
   onNavigate(id: string, mode: 'push' | 'replace', attached?: boolean): void;
-  onArtifact(kind: 'roadmap' | 'original' | 'source', target?: { taskId?: string; messageId?: string }): void;
+  onArtifact(kind: 'roadmap' | 'original' | 'source' | 'live', target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
+  /** What the formalization and the Agents of this conversation did; both are owner-only reads, so a sample run has none. */
+  agentActivity: AgentActivity;
+  formalizationActivity: FormalizationActivityStore;
   onLean(): void;
   onGuidance(run: WebRun): void;
   onCancelRun(run: WebRun): void;
@@ -64,13 +72,27 @@ export class ChatSession {
   private readonly composer = document.querySelector<HTMLElement>('#natural-research')!;
   private readonly list = document.querySelector<HTMLElement>('#chat-history-list')!;
   private readonly originalPanel = document.querySelector<HTMLElement>('#chat-original-panel')!;
+  private readonly livePanel = document.querySelector<HTMLElement>('#chat-live-panel')!;
   private readonly reading: ChatReadingPosition;
+  /** A wide screen has room for the live workspace beside the conversation; a phone shows the checklist only. */
+  private readonly wide = matchMedia('(min-width: 1101px)');
+  /** The tasks whose live workspace opened by itself, so a redraw does not reopen one the reader closed. */
+  private readonly liveShown = new Set<string>();
+  /** The check the reader picked in each task's live workspace; without one it follows the latest. */
+  private readonly liveSelected = new Map<string, string>();
+  private solveCache?: { key: string; process: SolveProcess };
+  private liveFrame = false;
+  private lastActionPoll = 0;
 
   constructor(private readonly options: Options) {
     this.reading = new ChatReadingPosition(this.thread, document.querySelector<HTMLButtonElement>('[data-chat-latest]')!, options.draftScope);
     this.reading.select(this.currentId);
     this.draft = this.restoredDraft(this.currentId || 'home');
     this.draw();
+    // A read of what the task did redraws the process where it stands; it never starts one by itself.
+    options.agentActivity.subscribe(id => { if (id === this.run?.id) this.redraw(); });
+    options.formalizationActivity.subscribe(id => { if (id === (this.formalization ?? this.seed)?.id) this.redraw(); });
+    this.wide.addEventListener('change', () => this.draw());
     document.addEventListener('visibilitychange', () => { if (!document.hidden) void this.refresh(); });
     window.addEventListener('online', () => void this.refresh());
     window.addEventListener('pagehide', () => { this.rememberDraft(); this.apiKey = ''; clearTimeout(this.timer); });
@@ -336,6 +358,41 @@ export class ChatSession {
     renderChatHistory(this.list, { items: this.summaries, selectedId: this.currentId, onOpen: id => void this.open(id),
       failed: this.historyFailed, onRetry: () => void this.refreshHistory() });
   }
+  /** One more frame at most: a store notifies once per page it reads, and a keystroke redraws on top of that. */
+  private redraw() {
+    if (this.liveFrame) return;
+    this.liveFrame = true;
+    requestAnimationFrame(() => { this.liveFrame = false; this.draw(); });
+  }
+  /**
+   * The task's solving process, rebuilt only when something it reads changed: the run and its events, what the Agents
+   * and the formalization did, the selected task's routes. A sample run has no server to read from, so it keeps none.
+   */
+  private solve(): { process: SolveProcess; loading?: boolean; failed?: boolean; wide: boolean; time: (at: string) => string; onRetry?(): void; onCheck?(id: string): void } | undefined {
+    const item = this.formalization ?? this.seed, run = this.run, sample = run && this.options.isSample(run);
+    if (!item && !run) return;
+    const agents = this.options.agentActivity, roles = this.options.formalizationActivity;
+    // Reads what is not read yet; a running task also asks for its newest actions now and then, off the fast poll.
+    const poll = run?.status === 'running' && Date.now() - this.lastActionPoll >= 3_000;
+    if (item && !sample) roles.sync(item);
+    if (run && !sample) { if (poll) this.lastActionPoll = Date.now(); agents.sync(run, poll); }
+    const state = item ? roles.state(item.id) : undefined, activity = item && !sample ? roles.activity(item.id) : [];
+    const records = run && !sample ? agents.records(run) : { events: run?.events ?? [], actions: [] };
+    const routes = run && !sample ? agents.routes(run, run.observation?.inspection.workers.find(worker => worker.role === 'Lead')?.id) : [];
+    const key = JSON.stringify([run?.id, run?.status, run?.updatedAt, records.events.length, records.events.at(-1)?.sequence ?? 0,
+      records.actions.length, routes.map(route => `${route.workerId}:${route.steps.length}`).join(','),
+      item?.id, item?.status, item?.updatedAt, item?.activity?.count ?? 0, activity.length, state?.version ?? 0]);
+    if (this.solveCache?.key !== key) this.solveCache = { key, process: buildSolveProcess({
+      ...(item ? { formalization: item } : {}), ...(activity.length ? { activity } : {}), ...(state ? { activityDropped: state.dropped } : {}),
+      ...(run && !sample ? { run, events: records.events, routes } : {}),
+    }) };
+    const process = this.solveCache.process;
+    const onRetry = () => { if (item && state?.failed) roles.retry(item); if (run && !sample && agents.state(run.id).failed) agents.retry(run); this.draw(); };
+    return { process, wide: this.wide.matches, time: clockTime, onRetry,
+      ...(state?.loading || (run && !sample && agents.state(run.id).loading) ? { loading: true } : {}),
+      ...(state?.failed || (run && !sample && agents.state(run.id).failed) ? { failed: true } : {}),
+      ...(this.wide.matches ? { onCheck: (id: string) => this.openCheck(process, id) } : {}) };
+  }
   private draw() {
     const pending = Boolean(this.conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending'));
     const canGuide = !!this.conversation && this.run?.status === 'running' && this.run.coordination === 'cooperative' && !this.options.isSample(this.run);
@@ -345,10 +402,20 @@ export class ChatSession {
     const newProblem = !this.conversation && !this.run;
     const busyFormalization = newProblem && !this.seed && this.formalizations.some(item => running(item));
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
+    const solve = this.solve();
+    // A task that just started opens its workspace once; one the reader closed stays closed until they open it again.
+    // A task still waiting for its place only has the checklist: its result panel stays the reader's. The reader's own
+    // results panel is never replaced behind their back, so the workspace only opens while the conversation is shown.
+    if (solve?.process.active && (solve.process.state === 'formalizing' || solve.process.state === 'proving')
+      && solve.wide && document.body.dataset.view !== 'run' && !this.liveShown.has(solve.process.key)
+      && !document.body.dataset.chatArtifact && document.body.dataset.outputOpen !== 'true') {
+      this.liveShown.add(solve.process.key);
+      queueMicrotask(() => { if (this.solve()?.process.key === solve.process.key) this.options.onArtifact('live', undefined, true); });
+    }
     renderChatThread(this.thread, {
       conversation: this.conversation, run: this.run, formalization: this.formalization ?? this.seed,
-      loading: this.loading, error: this.error || this.readError,
-      onArtifact: (kind, target) => { this.reading.capture(); this.drawOriginal(); this.options.onArtifact(kind, target); },
+      loading: this.loading, error: this.error || this.readError, ...(solve ? { solve } : {}),
+      onArtifact: (kind, target, auto) => { this.reading.capture(); this.drawOriginal(); this.options.onArtifact(kind, target, auto); },
       ...(canGuide ? { onGuidance: (text?: string, taskId?: string) => this.beginGuidance(text, taskId) } : {}),
       onGuidanceReceipt: message => this.recoverGuidance(message),
       ...(running(this.formalization) || running(this.run) && !this.options.isSample(this.run!) ? { onCancelTask: () => void this.cancelTask() } : {}),
@@ -398,7 +465,26 @@ export class ChatSession {
       onLean: this.options.onLean,
     });
     this.reading.rendered();
-    this.drawHistory(); this.drawOriginal();
+    this.drawHistory(); this.drawOriginal(); this.drawLive(solve);
   }
   private drawOriginal() { renderChatOriginal(this.originalPanel, { formalization: this.formalization, run: this.run }); }
+  /** The panel beside the conversation; it keeps the process it was last drawn with while the task did not change. */
+  private drawLive(solve: ReturnType<ChatSession['solve']>) {
+    const process = solve?.process, run = this.run;
+    renderLiveWorkspace(this.livePanel, { process, time: clockTime, onSelect: id => this.selectCheck(process, id),
+      ...(run && !this.options.isSample(run) ? { onRoadmap: () => this.options.onArtifact('roadmap') } : {}),
+      ...(process && this.liveSelected.has(process.key) ? { selected: this.liveSelected.get(process.key)! } : {}) });
+  }
+  private selectCheck(process: SolveProcess | undefined, id: string | undefined) {
+    if (process) {
+      if (id) this.liveSelected.set(process.key, id); else this.liveSelected.delete(process.key);
+    }
+    this.draw();
+  }
+  /** A row's Lean check opens beside the conversation, reading from where the reader was. */
+  private openCheck(process: SolveProcess, id: string) {
+    this.liveSelected.set(process.key, id);
+    if (document.body.dataset.chatArtifact !== 'live') { this.reading.capture(); this.options.onArtifact('live'); }
+    this.draw();
+  }
 }

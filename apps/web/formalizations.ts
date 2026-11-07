@@ -4,8 +4,8 @@ import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
 import { webLimits } from './config';
 import { formalizationReport } from './formalizationReport';
-import { webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization, type WebFormalizationRequest,
-  type WorkerFormalizationInput, type WorkerFormalizationMessage } from './formalizationTypes';
+import { webFormalizationActivityLimits, webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization,
+  type WebFormalizationActivity, type WebFormalizationRequest, type WorkerFormalizationInput, type WorkerFormalizationMessage } from './formalizationTypes';
 import type { WebRunner } from './runner';
 import type { WebProvider } from './shared';
 import { WebStorage, WebStorageError } from './storage';
@@ -55,6 +55,9 @@ export class WebFormalizations {
       if (stored && active(stored.formalization)) {
         const now = new Date().toISOString();
         Object.assign(stored.formalization, { status: 'error', reason: 'formalization_interrupted', updatedAt: now, finishedAt: now });
+        // The count is saved every few seconds; the stored entries are what it counted.
+        const saved = storage.listRecords(['owners', owner, 'formalizations', id, 'activity']).filter(file => /^\d+\.json$/u.test(file)).length;
+        if (saved > (stored.formalization.activity?.count ?? 0)) stored.formalization.activity = { ...stored.formalization.activity, count: saved };
         this.save(stored);
       }
       if (stored?.formalization.workflow === 'solve' && stored.formalization.status === 'confirmed'
@@ -85,6 +88,12 @@ export class WebFormalizations {
   read(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), value = record.formalization;
     return value.status === 'review' || value.status === 'confirmed' ? { ...value, report: formalizationReport(this.evidence(record)) } : value;
+  }
+  /** What the formalization did after `after`, oldest first; only its owner reads it. */
+  activity(owner: string, id: string, after: number) {
+    const record = this.required(owner, id);
+    return { activity: this.storage.listRecordsAfter<WebFormalizationActivity>([...recordPath(owner, id), 'activity'], after, webFormalizationActivityLimits.page),
+      count: record.formalization.activity?.count ?? 0, dropped: record.formalization.activity?.dropped ?? 0 };
   }
   confirm(owner: string, id: string, sha256: string): WebFormalization {
     const record = this.required(owner, id);
@@ -173,6 +182,18 @@ export class WebFormalizations {
       await this.runner.formalize(job.input, message => {
         if (!this.current(job) || !active(job.record.formalization)) return;
         if (message.type === 'result') { result = message; return; }
+        if (message.type === 'activity') {
+          // Past the per-record limit only the count grows, as with a run's actions.
+          const tally = job.record.formalization.activity ??= { count: 0 };
+          if (tally.count >= webFormalizationActivityLimits.perRecord) tally.dropped = (tally.dropped ?? 0) + 1;
+          else {
+            tally.count++;
+            this.storage.saveRecord([...recordPath(job.record.owner, job.record.formalization.id), 'activity', `${tally.count}.json`],
+              { ...message.activity, sequence: tally.count, at: new Date().toISOString() } satisfies WebFormalizationActivity, true);
+          }
+          this.persist(job);
+          return;
+        }
         const previous = job.record.formalization.progress, now = new Date().toISOString();
         job.record.formalization.progress = { ...message.progress, updatedAt: now }; job.record.formalization.updatedAt = now;
         this.persist(job, previous?.phase !== message.progress.phase);

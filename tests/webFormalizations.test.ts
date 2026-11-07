@@ -112,6 +112,36 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(alice, route)).status).toBe(404);
   });
 
+  it('keeps the process view with its owner, pages it and removes it with the record', async () => {
+    const alice = await client(), bob = await client();
+    const value = await create(alice), route = `/api/formalizations/${value.id}`, pending = runner.pending.at(-1)!;
+    const action = { workerId: 'r1-plan-1', itemId: '1:a', phase: 'completed', kind: 'message', status: 'done', text: 'reading the problem' } as const;
+    pending.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'role', workerId: 'r1-plan-1', role: 'plan', slot: 'plan-1', state: 'started' } } });
+    pending.send({ type: 'activity', activity: { type: 'action', action } });
+    pending.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'compile', state: 'started', source: 'theorem t : True := by sorry' } } });
+    await settle();
+    const first = await (await request(alice, route + '/activity')).json();
+    expect(first).toMatchObject({ count: 3, dropped: 0 });
+    expect(first.activity.map((entry: { sequence: number; type: string }) => `${entry.sequence}:${entry.type}`)).toEqual(['1:step', '2:action', '3:step']);
+    expect(first.activity[1]).toMatchObject({ type: 'action', action, sequence: 2 });
+    expect(typeof first.activity[1].at).toBe('string');
+    expect((await (await request(alice, route + '/activity?after=2')).json()).activity.map((entry: { sequence: number }) => entry.sequence)).toEqual([3]);
+    expect((await (await request(alice, route)).json()).formalization.activity).toEqual({ count: 3 });
+    expect((await request(alice, route + '/activity?after=-1')).status).toBe(400);
+    expect((await request(alice, route + '/activity?after=x')).status).toBe(400);
+    expect((await request(bob, route + '/activity')).status).toBe(404);
+    expect((await fetch(base + route + '/activity')).status).toBe(401);
+    expect((await request(alice, route + '/activity', {})).status).toBe(405);
+    await request(alice, route + '/cancel', {});
+    // A cancelled worker's late entries are not stored.
+    pending.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'approved' } } }); await settle();
+    expect((await (await request(alice, route + '/activity')).json()).count).toBe(3);
+    expect((await request(alice, route, undefined, 'DELETE')).status).toBe(200);
+    expect((await request(alice, route + '/activity')).status).toBe(404);
+    const stored = fs.readdirSync(config.dataRoot!, { recursive: true }).map(String);
+    expect(stored.some(file => file.includes(value.id))).toBe(false);
+  });
+
   it('requires explicit current evidence confirmation and preserves it through research creation', async () => {
     const alice = await client(), bob = await client(), value = await approve(alice), route = `/api/formalizations/${value.id}`;
     expect((await request(alice, '/api/runs', runBody(value))).status).toBe(409);
@@ -353,8 +383,12 @@ describe('online formalization ownership and evidence handoff', () => {
     const storage = new WebStorage(), isolated = new Runner(), provider = config.providers.find(item => item.id === 'sub2api')!;
     const jobs = new WebFormalizations(isolated, storage, { ...webFormalizationLimits, concurrency: 0 });
     const value = jobs.create('owner', body as any, provider, 'deepseek-flash');
+    // Entries stored after the last saved count are counted again when the record is interrupted.
+    for (const sequence of [1, 2]) storage.saveRecord(['owners', mathDigest('owner'), 'formalizations', value.id, 'activity', `${sequence}.json`],
+      { type: 'step', step: { round: 1, step: 'approved' }, sequence, at: new Date().toISOString() }, true);
     const recovered = new WebFormalizations(isolated, storage);
-    expect(recovered.read('owner', value.id)).toMatchObject({ status: 'error', reason: 'formalization_interrupted' });
+    expect(recovered.read('owner', value.id)).toMatchObject({ status: 'error', reason: 'formalization_interrupted', activity: { count: 2 } });
+    expect(recovered.activity('owner', value.id, 1).activity.map(entry => entry.sequence)).toEqual([2]);
     await jobs.close(); await recovered.close();
     const active = new WebFormalizations(isolated, storage);
     const running = active.create('delete-owner', body as any, provider, 'deepseek-flash'); await settle();

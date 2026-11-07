@@ -52,11 +52,16 @@ export class AgentActivity {
     const entry = this.entries.get(run.id), last = run.events.at(-1)?.sequence ?? 0;
     const key = [entry?.version ?? 0, run.events.length, last, lead ?? ''].join('|');
     if (entry?.routes?.key === key) return entry.routes.value;
-    const known = entry?.history.at(-1)?.sequence ?? 0;
-    const events = entry?.history.length ? [...entry.history, ...run.events.filter(event => event.sequence > known)] : run.events;
-    const value = agentRoutes(events, { actions: mergeAgentActions(entry?.actions ?? []), lead });
+    const { events, actions } = this.records(run);
+    const value = agentRoutes(events, { actions, lead });
     if (entry) entry.routes = { key, value };
     return value;
+  }
+  /** Every event of `run` read so far, oldest first, and its Agents' actions with started and completed reports merged. */
+  records(run: WebRun): { events: readonly WebEvent[]; actions: readonly WebAgentAction[] } {
+    const entry = this.entries.get(run.id), known = entry?.history.at(-1)?.sequence ?? 0;
+    const events = entry?.history.length ? [...entry.history, ...run.events.filter(event => event.sequence > known)] : run.events;
+    return { events, actions: mergeAgentActions(entry?.actions ?? []) };
   }
 
   private missing(entry: Entry, poll: boolean) {

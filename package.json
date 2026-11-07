@@ -85,6 +85,7 @@
     "test:web-formalize": "bun scripts/test-web-formalize.ts",
     "test:web-chat-session": "bun scripts/test-web-chat-session.ts",
     "test:web-chat-artifacts": "bun scripts/test-web-chat-artifacts.ts",
+    "test:web-solve-process": "bun scripts/test-web-solve-process.ts",
     "test:web-natural-first": "bun scripts/test-web-natural-first.ts",
     "test:web-admin": "bun scripts/test-web-admin.ts",
     "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",

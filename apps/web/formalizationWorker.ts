@@ -11,8 +11,10 @@ import { readMathJson } from '../../src/math/mathRuntimeIo';
 import { createCodexMathSession } from '../../src/runtime/codexSession';
 import { prepareSub2apiProfile, SUB2API_PROVIDER } from '../../src/runtime/sub2api';
 import { readFormalizationState, runFormalization } from '../../src/solver/formalization';
+import { elaborateFormalization } from '../../src/solver/formalizationElaboration';
 import { reportedTotalTokens } from '../../src/solver/usageBudget';
 import { startGatewayForwarder } from './explanationWorker';
+import { createFormalizationActivity } from './formalizationActivity';
 import { webFormalizationLimits, webFormalizationReason, type WorkerFormalizationInput,
   type WorkerFormalizationMessage, type WebFormalizationProgress } from './formalizationTypes';
 
@@ -102,10 +104,14 @@ async function main() {
     prepareFormalization(directory, webFormalizationPreparation(input, profile, buildIndex.buildManifestRef,
       process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex'));
     poll = setInterval(() => { refresh(); report(); }, 10_000);
+    const activity = createFormalizationActivity({ scratch, directory, root, apiKey: key, redact: [input.provider.baseUrl],
+      send: entry => { void send({ type: 'activity', activity: entry }); } });
     const result = await runFormalization(directory, root, {
-      openSession: options => createCodexMathSession({ ...options,
-        environment: { ...options.environment, [SUB2API_PROVIDER.apiKeyEnvironment]: key } }),
+      openSession: activity.openSession(options => createCodexMathSession({ ...options,
+        environment: { ...options.environment, [SUB2API_PROVIDER.apiKeyEnvironment]: key } })),
+      elaborate: activity.elaborate(elaborateFormalization),
       onEvent: event => {
+        activity.onEvent(event);
         if (event.round) progress.round = event.round;
         if (event.event === 'formalization_role_started') {
           const phases = { plan: 'planning', generate: 'generating', backtranslate: 'translating', compare: 'reviewing', refute: 'reviewing' } as const;
@@ -117,8 +123,11 @@ async function main() {
     clearInterval(poll);
     if (result.status === 'approved')
       await send({ type: 'result', status: 'approved', evidence: readFormalizationArtifact(path.join(directory, 'artifact')) });
-    else await send({ type: 'result', ...formalizationStopReason(result.status, result.error,
-      Date.now() - startedAt >= input.maxRunSeconds * 1_000) });
+    else {
+      const stop = formalizationStopReason(result.status, result.error, Date.now() - startedAt >= input.maxRunSeconds * 1_000);
+      activity.stopped(stop.reason, result.error);
+      await send({ type: 'result', ...stop });
+    }
   } catch (error) {
     await send({ type: 'result', ...formalizationStopReason('stopped', error instanceof Error ? error.message : undefined, false) });
     process.exitCode = 1;

@@ -472,10 +472,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
-        const formalizationMatch = /^\/api\/formalizations\/([a-f0-9-]{36})(?:\/(cancel|confirm))?$/u.exec(url.pathname);
+        const formalizationMatch = /^\/api\/formalizations\/([a-f0-9-]{36})(?:\/(cancel|confirm|activity))?$/u.exec(url.pathname);
         if (formalizationMatch) {
           const id = formalizationMatch[1], action = formalizationMatch[2];
           if (!action && request.method === 'GET') { json(response, 200, { formalization: formalizations.read(owner, id) }); return; }
+          // The owner's process view: role actions, compilations and review feedback. Never part of a share.
+          if (action === 'activity' && request.method === 'GET') {
+            const after = Number(url.searchParams.get('after') ?? 0);
+            if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '动作游标无效。');
+            json(response, 200, formalizations.activity(owner, id, after)); return;
+          }
           if (!action && request.method === 'DELETE') {
             if (jobs.list(owner).some(run => run.formalizationId === id)) throw new HttpError(409, '已有研究使用这份原题，请先删除相关研究记录。');
             formalizations.remove(owner, id); json(response, 200, { deletedId: id }); return;
