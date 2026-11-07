@@ -394,9 +394,9 @@ export async function runResearchWorkers(input: {
           compactionTimer.unref();
         };
         turnActivity = activity => {
-          // Waiting on the provider is not a work slice: only the first produced item starts the
-          // advisory clock, so a slow first token cannot be mistaken for a stalled mathematical turn.
-          if (!clockArmed && activity.itemType !== 'contextCompaction') {
+          // Echoed input and compaction are not model work. Start the advisory clock at the first
+          // model output or tool activity, preserving the independent fallback for a silent turn.
+          if (!clockArmed && activity.itemType !== 'userMessage' && activity.itemType !== 'contextCompaction') {
             clockArmed = true;
             clearTimeout(firstActivityTimer); firstActivityTimer = undefined;
             if (advisoryScope) emit('cooperative_checkpoint_clock_started', { itemType: activity.itemType });

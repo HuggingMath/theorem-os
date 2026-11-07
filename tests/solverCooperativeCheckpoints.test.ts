@@ -147,7 +147,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     }
   }
 
-  function heldContinuationTurns(options: { saveNotes?: boolean; highContext?: boolean } = {}) {
+  function heldContinuationTurns(options: { saveNotes?: boolean; highContext?: boolean; deferFirstActivity?: boolean } = {}) {
     const started = [deferred(), deferred()], done = [deferred<string>(), deferred<string>()];
     const messages: { assignment: CooperativeAction; receipt?: string; mode: string; exactTasks?: unknown[]; sentinel?: string;
       feedback?: string; inbox?: string[] }[] = [];
@@ -169,7 +169,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
             fs.writeFileSync(path.join(access.workspace, 'RESEARCH.md'), 'The current mathematical argument and exact unresolved inference are saved.\n');
           started[turn].resolve();
           // The advisory clock starts at the model's first produced item, not at turn admission.
-          access.onActivity?.({ event: 'reasoning' });
+          if (!options.deferFirstActivity) access.onActivity?.({ event: 'reasoning' });
           return done[turn].promise;
         } };
     });
@@ -177,6 +177,56 @@ describe('cooperative advisory scheduling checkpoints', () => {
       completion.then(() => { throw new Error('fixture_finished_before_continuation:' + turn); })]);
     return { open, close, interrupt, notify, messages, threads, wait };
   }
+
+  it.each([{ event: 'reasoning' as const }, { event: 'item_started' as const, itemType: 'commandExecution' }])(
+    'starts the work slice only at real model or tool activity (%j)', async firstActivity => {
+      const { events, controller, run } = fixture(false, undefined, 'lead');
+      const held = heldContinuationTurns({ deferFirstActivity: true }), completion = run(held.open, Infinity);
+      void completion.catch(() => {}); await held.wait(0, completion);
+      const activity = held.open.mock.calls[0][0].onActivity!;
+      activity({ event: 'item_started', itemType: 'userMessage' });
+      activity({ event: 'item_completed', itemType: 'userMessage' });
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(events.filter(item => item.event === 'cooperative_checkpoint_clock_started')).toEqual([]);
+      expect(held.notify).not.toHaveBeenCalled();
+      expect(held.interrupt).not.toHaveBeenCalled();
+
+      activity(firstActivity);
+      expect(events.filter(item => item.event === 'cooperative_checkpoint_clock_started')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(4 * 60_000 - 1);
+      expect(held.notify).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(held.notify).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS - 4 * 60_000 - 1);
+      expect(held.interrupt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1); await held.wait(1, completion);
+      expect(held.interrupt).toHaveBeenCalledOnce();
+      controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+  it('keeps the independent silent-turn fallback despite input messages', async () => {
+    const { events, controller, run } = fixture(false, undefined, 'lead');
+    const held = heldContinuationTurns({ deferFirstActivity: true }), completion = run(held.open, Infinity);
+    void completion.catch(() => {}); await held.wait(0, completion);
+    const activity = held.open.mock.calls[0][0].onActivity!;
+    activity({ event: 'item_started', itemType: 'userMessage' });
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    activity({ event: 'item_completed', itemType: 'userMessage' });
+    await vi.advanceTimersByTimeAsync(60_000 - 1);
+    expect(events.filter(item => item.event === 'cooperative_checkpoint_clock_started')).toEqual([]);
+    expect(held.notify).not.toHaveBeenCalled();
+    expect(held.interrupt).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).toContainEqual({ event: 'cooperative_checkpoint_clock_started',
+      details: expect.objectContaining({ itemType: 'none', silentMs: 15 * 60_000 }) });
+    await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS - 1);
+    expect(held.interrupt).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1); await held.wait(1, completion);
+    expect(held.interrupt).toHaveBeenCalledOnce();
+    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it('pauses the Lead scheduling clock during compaction and resumes its remaining work slice', async () => {
     const { events, controller, run } = fixture(false, undefined, 'lead');
