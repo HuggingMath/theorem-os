@@ -58,7 +58,8 @@ describe('administrator operations HTTP API', () => {
   afterEach(async () => { await service?.close(); fs.rmSync(root, { recursive: true, force: true }); });
 
   function request(route: string, client?: Client, body?: unknown, method = body === undefined ? 'GET' : 'POST') {
-    return fetch(base + route, { method, headers: { ...(client ? { Cookie: client.cookie, 'X-CSRF-Token': client.csrf } : {}),
+    // The restart test deliberately replaces the server at the same address; discard its old transport.
+    return fetch(base + route, { method, headers: { Connection: 'close', ...(client ? { Cookie: client.cookie, 'X-CSRF-Token': client.csrf } : {}),
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
   }
   async function session(): Promise<Client> {
