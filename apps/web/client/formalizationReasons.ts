@@ -6,6 +6,7 @@ export function formalizationReasonText(reason: string): string {
     formalization_time_limit: t('已达到时间上限，尚未完成形式化。'),
     formalization_token_limit: t('已用完本次 Token 预算，尚未完成形式化。'),
     math_total_token_limit: t('已用完本次 Token 预算，尚未完成形式化。'),
+    math_model_usage_unavailable: t('模型服务没有返回 Token 用量，无法控制上限，已停止。'),
     formalization_rounds_exhausted: t('已达到写作轮次上限，尚未得到一致通过的陈述。'),
     formalization_runtime_unavailable: t('形式化运行环境暂不可用，请稍后重试。'),
     formalization_interrupted: t('服务中断，形式化未完成。'),

@@ -1,5 +1,7 @@
 /** The terms and privacy pages, translated in place by localizeDocument like the other static pages. */
 export const legal: Record<string, string> = {
+  '维护时创建的私有备份最多保留 7 天，由运营人员清理，仅用于恢复。在线删除不会立即改写已有备份；恢复先在隔离目录中进行，恢复对外服务前需重新核对已处理的删除请求。':
+    'Private maintenance backups are kept for at most 7 days, removed by operators, and used only for recovery. Deleting live data does not immediately rewrite existing backups. Recovery first uses an isolated directory; completed deletion requests must be checked again before service is reopened.',
   "使用条款 · TheoremOS": "Terms of Use · TheoremOS",
   "隐私说明 · TheoremOS": "Privacy Notice · TheoremOS",
   "版本 2026-11-07 · 适用于在线工作台 app.theoremos.top": "Version 2026-11-07 · applies to the workbench at app.theoremos.top",
@@ -20,8 +22,8 @@ export const legal: Record<string, string> = {
     "Your email address, your account ID, when you first signed in, and when and which version of the terms you accepted.",
   "还记录两个时间：第一次提交运行和第一次通过验收，用来判断新手引导是否有效。统计只看汇总的人数和转化率，不记录你的点击或浏览。":
     "Two more times are recorded — your first run submission and your first acceptance — to judge whether onboarding works. Statistics look only at aggregate counts and conversion rates, never at your clicks or page views.",
-  "邮箱只用于发送登录验证码、你开启的「研究结束时发邮件」提醒，以及条款重大变更的通知；不发给第三方，不用于营销。验证码邮件经阿里云邮件推送投递。":
-    "Your address is used only to send sign-in codes, the \"email me when a run finishes\" reminders you turn on, and notice of significant changes to the terms; it is not given to third parties or used for marketing. Code mail is delivered through Alibaba Cloud DirectMail.",
+  "邮箱用于登录验证码、你开启的研究提醒和条款通知，不用于营销。发信服务商会处理收件邮箱与邮件内容；当前邮件经阿里云邮件推送投递。":
+    "Email is used for login codes, enabled research notifications and terms notices, never marketing. The mail provider processes the recipient address and message; delivery currently uses Alibaba Cloud DirectMail.",
   "登录后服务器设置一个仅限 HTTPS 传输、脚本无法读取的会话 Cookie，只用于保持登录，不用于跨站追踪。":
     "After you sign in the server sets a session cookie that is sent only over HTTPS and cannot be read by scripts; it keeps you signed in and is not used to track you across sites.",
 
@@ -38,10 +40,10 @@ export const legal: Record<string, string> = {
   "二、API Key": "2. API keys",
   "API Key 不写入日志、不写入运行记录，也不会出现在分享链接里。":
     "API keys are never written to logs or run records, and never appear in share links.",
-  "你不勾选「保存到我的账号」时，Key 只在该次运行期间存在于服务器内存和隔离的运行容器里，运行结束即丢弃。":
-    "If you leave \"Save to my account\" unchecked, the key exists only in server memory and in the isolated run container for the length of that run, and is discarded when the run ends.",
-  "你勾选保存时，Key 用 AES-256-GCM 加密后保存在服务器上，密钥在服务环境里、不在数据目录里；界面只显示末四位。你随时可以在账号面板里删除它。":
-    "If you check save, the key is stored encrypted with AES-256-GCM, the encryption secret lives in the service environment rather than the data directory, and the interface shows only the last four characters. You can delete it from the account panel at any time.",
+  "未保存到账号的 Key 只用于本次任务及当前对话，存在于当前页面内存、服务器执行输入和隔离运行容器中；不写入持久记录，刷新页面后需重新填写。":
+    "Unsaved keys are used for this task and the current conversation. They remain in page memory, server execution inputs and isolated worker containers, never persisted records. Refreshing the page clears the input.",
+  "在进阶版勾选「保存到我的账号」时，Key 用 AES-256-GCM 加密后保存在服务器；界面只显示末四位，可在「模型连接」中删除。服务器需在调用时解密 Key，服务运营方负责保护加密密钥。":
+    "Selecting “Save to my account” in advanced mode stores the key encrypted with AES-256-GCM. The interface shows only its last four characters; remove it under Model connection. The server decrypts keys when making calls, and the operator is responsible for protecting the encryption key.",
 
   "三、合理使用": "3. Acceptable use",
   "不要用工作台提交违法内容、侵犯他人权利的内容，或试图让服务替你访问你无权访问的系统。":
@@ -52,18 +54,18 @@ export const legal: Record<string, string> = {
     "We may suspend or delete accounts that exceed the allowance, get around limits or interfere with other people's use.",
 
   "三、题目与运行记录": "3. Problems and run records",
-  "你提交的原题、Lean 源码、任务、运行过程、候选证明和验收结果归属你的账号，只有你和为这次运行启动的隔离容器读得到。":
-    "The original problem, Lean source, tasks, run activity, candidate proofs and acceptance results you submit belong to your account; only you and the isolated container started for that run can read them.",
+  "原题、Lean 源码、对话、运行过程、候选证明和验收结果按账号隔离，其他用户不能读取。为完成任务，相关内容会发送到你选择的模型服务商，由其政策决定处理与保留。服务运营方可为维护、备份和排障访问服务器保存的数据。":
+    "Problems, Lean source, conversations, activity, candidate proofs and results are isolated by account and inaccessible to other users. Relevant content is sent to your selected model provider to perform the task, subject to its processing and retention policies. The service operator can access stored server data for maintenance, backups and troubleshooting.",
   "运行时的 Lean 检查、Agent 动作和形式化过程保存在你的账号目录下，只用于给你显示过程记录。":
     "Lean checks, Agent actions and formalization activity from a run are kept under your account and used only to show you the process record.",
-  "分享链接只在你主动创建时生成，内容是选定运行的只读快照；撤销分享后链接立即失效。分享页不包含 API Key、邮箱、运行配置和过程记录。":
-    "A share link is created only when you ask for one; it is a read-only snapshot of the run you chose, and it stops working as soon as you revoke it. The share page holds no API key, email address, run settings or process record.",
-  "管理员只能看到邮箱、账号时间和每个账号在当前窗口的用量计数，看不到其他账号的题目、证明与运行记录。":
-    "Administrators see only email addresses, account times and each account's usage counts for the current window; they cannot see another account's problems, proofs or run records.",
+  "分享链接由你主动创建，任何持有链接的人可查看原题、Lean 证明、验收结论、模型、环境及耗时与用量。分享页不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话；撤销后链接失效。":
+    "You create share links explicitly. Anyone with a link can read the problem, Lean proof, acceptance result, model, environment, duration and usage. Shares exclude keys, email, provider addresses, run logs and Agent conversations. Revoking a link disables it.",
+  "产品内的管理员面板只展示账号资料、状态与用量，不提供其他账号题目、证明或对话的读取入口；这不限制服务运营方对服务器的维护权限。":
+    "The product’s admin panel shows account details, status and usage, with no route to read another account’s problems, proofs or conversations. This does not limit the operator’s server maintenance access.",
 
   "四、结果与责任": "4. Results and liability",
-  "「独立验收通过」表示候选证明在配置的 Lean 版本与环境下编译通过、且完整覆盖原题声明。它不保证原题在数学上是有意义的，也不替代同行评审。":
-    "\"Independently accepted\" means the candidate proof compiles under the configured Lean version and environment and covers the whole original statement. It does not establish that the original problem is mathematically meaningful, and it is no substitute for peer review.",
+  "「独立验收通过」表示证明在固定 Lean 环境中通过检查、完整覆盖冻结的 Lean 声明。自然语言到 Lean 的含义对应由模型审核或由你确认，另行展示；Lean 验收不保证翻译忠实，也不替代同行评审。":
+    "Independent acceptance means the proof passed checks in the fixed Lean environment and covers all frozen Lean statements. Correspondence with natural-language meaning is reviewed by models or confirmed by you and shown separately. Lean acceptance does not guarantee translation fidelity or replace peer review.",
   "模型与 Agent 的输出可能有错误。请自行核对重要结论。":
     "Model and Agent output can be wrong. Check conclusions that matter to you yourself.",
   "服务按现状提供，我们尽力保持可用，但不承诺不中断。因服务中断、模型服务故障或数据丢失造成的损失，我们在法律允许的范围内不承担责任。":
@@ -74,8 +76,8 @@ export const legal: Record<string, string> = {
   "四、保存期限与删除": "4. Retention and deletion",
   "运行记录、归档和知识库保留在你的账号下，直到你删除它们或删除账号。":
     "Run records, archives and knowledge stay under your account until you delete them or delete the account.",
-  "删除账号会立即删除账号记录、登录密码、保存的 Key、全部运行记录、分享链接、归档、知识库与模块方案，以及用量计数，无法恢复。":
-    "Deleting the account immediately deletes the account record, the password, the saved key, every run record, share link, archive, knowledge version and module plan, and the usage counts; this cannot be undone.",
+  "删除账号会立即删除在线账号记录、密码、Key、运行记录、分享链接、归档、知识库与模块方案。为防止删号重建刷新额度，仅保留不含邮箱、账号 ID 或内容的服务器 HMAC 标识、本窗口用量与截止时间，到原额度窗口结束后自动删除，默认最长 24 小时。":
+    "Deleting an account immediately removes its live account record, password, keys, runs, shares, archives, knowledge and module plans. To prevent resetting allowances by recreating an account, only a server HMAC identifier, current-window usage and expiry remain, with no email, account ID or content. They expire at the original window end, within 24 hours by default.",
   "服务运行日志只记录请求状态和错误，不记录题目内容与 Key。":
     "Service logs record request status and errors only, not problem text or keys.",
 

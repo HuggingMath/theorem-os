@@ -23,11 +23,12 @@ docker compose -f apps/web/compose.yml ps
 不想在本机构建时，可拉取 GitHub Actions 发布到 GHCR 的镜像。`.github/workflows/images.yml` 在 `main` 推送、`v*` 标签和手动触发时构建 `web` 与 `worker` 两个目标，发布为 `ghcr.io/likc1606/theorem-os-web` 和 `ghcr.io/likc1606/theorem-os-worker`，标签为分支名、完整 commit SHA 和版本号。worker 镜像约 16 GB，其中 Mathlib 层约 7.5 GB，首次拉取较慢。
 
 ```bash
+export THEOREMOS_IMAGE_TAG=<完整的40位提交SHA>
 docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web
 docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-build web
 ```
 
-`THEOREMOS_IMAGE_TAG` 把两个镜像固定到同一次构建，例如 `THEOREMOS_IMAGE_TAG=v1.2.0` 或某个完整 commit SHA；默认使用 `main`。runner 以 `--pull=never` 创建运行容器，因此 worker 镜像需要先拉取到本机。GHCR 包首次发布后默认私有；需要匿名拉取时，在仓库 Packages 设置中把两个包改为 Public。
+`THEOREMOS_IMAGE_TAG` 必须指定完整提交 SHA，web 与 worker 使用同一版本；没有默认 `main`。CI 先通过测试，只有两个镜像均发布成功后才生成配对发布产物。维护、排空、备份恢复、监控和回滚命令见[运维指南](web-operations.md)；首轮用户试用见[任务与反馈表](web-release-trial.md)。runner 以 `--pull=never` 创建运行容器，因此 worker 镜像需要先拉取到本机。GHCR 包首次发布后默认私有；需要匿名拉取时，在仓库 Packages 设置中把两个包改为 Public。
 
 浏览器打开 <http://127.0.0.1:8787>，首页显示问题输入框；不预填例题，也不要求先导入原题。Mathlib 与 max 是默认值。输入框的「设置」可填写 Key；账号已有 Key 时直接使用。首页的输入框在页面中部，设置向下展开，不盖住标题和输入框，屏幕太矮时滚到可见；对话中的输入框在底部，设置向上展开。在输入框里打字时边框加粗为 2 像素，颜色与静止边框、页面和输入框底色的对比度都在 3:1 以上（浅色 3.68 / 5.05 / 5.42，深色 3.65 / 6.42 / 5.94）。新对话清空输入，普通刷新保留当前标签页的草稿，顶部 Logo 和「新对话」均回到首页。
 
@@ -48,15 +49,15 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 
 追问用于解释和讨论，回答本身不执行 Lean 或修改原题。运行中可在输入框点「发给证明任务」，或把已有追问「作为证明要求」，选择任务负责人或具体引理后提交；原文、目标版本、观察身份和真实投递回执保存在会话中。排队、送达、暂缓或拒绝状态随原回执更新；结果未知时只核对原提交，不换 ID 重复投递。任务版本变化时须核对内容并确认新版本。修改题目创建新任务，不覆盖冻结原题。「停止回答」只中止当前问答，「停止解题」使用任务取消流程。切换或新建会话不会取消后台研究。消息回答完成不表示证明通过，只有完整原题的独立 Lean 验收通过才显示通过。
 
-形式化与证明使用首次提交的 Key（或账号已有 Key），刷新不重提。形式化或独立审核不通过时不启动证明，证明排队失败显示原因；失败请求不会自动重放。Key 不随浏览器草稿或会话消息保存。自然语言输入不要求填写 Lean 源码。
+形式化与证明使用首次提交所选服务商、模型及 Key（或账号已有 Key），刷新不重提。形式化或独立审核不通过时不启动证明；证明排队失败可点「继续证明」，复用已冻结证据，只创建一次证明，不重新扣形式化次数。Key 不随浏览器草稿或会话消息保存。自然语言输入不要求填写 Lean 源码。
 
 `test:web-chat-session` 使用临时服务与本地模拟 Responses 服务，验证连续追问、历史/返回/刷新、空闲时的慢速核对、列表加载失败与重试、同一个输入节点、公式与代码、部分回答持久化、失败与停止、阅读位置、原题对照，以及对话中设置向上展开。`test:web-chat-artifacts` 验证消息到真实引理、Lean 源码与返回位置，以及定向证明要求的持久投递回执。两者覆盖桌面与移动端；`test:web-natural-first` 验证两种输入入口、例题、草稿、语言布局，以及首页设置在输入框下方展开且不出屏。测试不调用真实模型。
 
 独立的 `formalize.html` 页面保留手动生成、核对、确认及带入进阶版草稿的工具。修改原文或环境后不能把旧确认结果当成新题使用。
 
-新建研究提供平方和公式、有限维柯西–施瓦茨不等式、素数无穷性和三次舒尔不等式四组研究例题，每题均有完整中英文自然语言原题与对应 Lean 陈述。首页「试试例题」展开自然语言例题选择器，选题填入原文与环境。选题本身不调用模型。已有 Lean 模式内保留对应 Lean 例题，以及自然数加法、命题逻辑和实数多项式三项入门示例。
+新建研究首个例题是「自然数加零」，与首轮试用卡一致：证明对任意自然数 n，都有 n + 0 = n，只需 Lean 标准库。其后保留平方和公式、有限维柯西–施瓦茨不等式、素数无穷性和三次舒尔不等式四组 Mathlib 例题。五题均有完整中英文自然语言原题与对应 Lean 陈述。首页「试试例题」展开自然语言例题选择器，选题填入原文与环境。选题本身不调用模型。已有 Lean 模式内保留对应 Lean 例题，以及自然数加法、命题逻辑和实数多项式三项入门示例。
 
-例题数据统一维护在 `apps/web/problemExamples.ts`。四个 Lean 声明已通过固定 Mathlib 环境的离线编译检查，证明位置保留 `sorry`；声明可编译不表示证明已完成。`test:web-formalize` 覆盖两种入口、中英文原文、替换确认、环境匹配、显式提交和窄屏布局。
+例题数据统一维护在 `apps/web/problemExamples.ts`。「自然数加零」使用 `theorem add_zero_trial (n : Nat) : n + 0 = n := by sorry`，模板及替换为 `by rfl` 的证明均通过固定 Lean 4.33.0 标准库检查；其余四个 Lean 声明已通过固定 Mathlib 环境的离线编译检查。界面中的例题证明位置保留 `sorry`，声明可编译不表示证明已完成。`test:web-formalize` 覆盖两种入口、中英文原文、替换确认、环境匹配、显式提交和窄屏布局。
 
 提交后停留在对话内，点击结果入口查看「研究协作」。任务依赖、Agent 分工、源码与检查回执、人工指导、计划修改和知识检索均读取实际运行；尚未建立计划时显示等待状态。独立并行运行也可查看已有观测，协作计划编辑需要运行时提供对应计划。
 
@@ -507,7 +508,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 为嵌套的非特权 Bubblewrap 验证器，worker 放开容器 seccomp / AppArmor profile，并使用 `systempaths=unconfined` 允许在独立 PID 命名空间内挂载新的 procfs。Mathlib 入口的外层 Bubblewrap 在新 user namespace 内仅授予 `SYS_ADMIN` 和 `SETFCAP`，用于构造冻结的依赖环境；Docker 容器仍保留 `--cap-drop=ALL`、`no-new-privileges` 和资源限制，不共享宿主机 PID 命名空间。`/tmp` 的 tmpfs 显式启用 `exec`，供验证器运行临时 Lean 启动脚本，并保留 `nosuid,nodev`。宿主机需要支持这一隔离方式；不支持时应修正宿主机配置，不能跳过 Lean 验证隔离。
 
-没有登录系统，已能访问网站的访客均可提交任务。会话、队列、并发和输入有上限；需要限制公开访问时，可在反向代理配置访问控制。API 限流使用 TCP 对端 IP，每分钟 600 次；经单台反向代理转发的访客共享该限额。
+公网默认启用邮箱登录；只有显式设置 `THEOREMOS_WEB_AUTH=none` 的自托管实例允许匿名提交。普通 API 每 IP 每分钟最多 600 次，新建会话另限每 IP 每十分钟 30 次；登录页匿名会话池满时回收最旧匿名会话，已登录会话不会被挤出。匿名本地工作台不采用淘汰，因为其会话拥有运行记录。反向代理应正确配置可信的 `THEOREMOS_WEB_CLIENT_IP_HEADER`，不能接受来自任意客户端的伪造头。
 
 ### 部署来源
 
@@ -531,7 +532,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | 回滚 | 部署前打过 `theorem-os-web:<提交>`、`theorem-os-worker:<提交>` 标签，最多保留三组 | `docker image ls theorem-os-web theorem-os-worker` |
 | 记录 | 部署后运行 `scripts/web-deploy-record.sh`，`clean` 为 true | `deploys.jsonl` 最后一行 |
 
-开放注册后，新访客可以直接注册，白名单不再是准入门槛；从白名单移除一个账号会立即让它退出登录，但不会阻止它重新注册。需要挡住某个地址时，把它从白名单移除没有用，应改用反向代理的访问控制或额度设为 0。
+开放注册后，新访客可以直接注册，白名单不再是准入门槛。管理员可在账号表暂停或恢复非管理员账号；暂停会终止该账号的活动任务并退出其会话，保留已有记录。删号后仅保留当前额度窗口的 HMAC 用量摘要，防止同邮箱重建绕过额度，窗口到期后清理。设置新的条款版本后，密码、验证码和已有会话都须确认当前版本；确认前可退出或删号。
 
 ### 有效容量
 
@@ -544,7 +545,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 | 提交前 Lean 检查 | 2 | 8（另排队 6） | 每会话 1 个、每分钟 20 次 |
 | 证明讲解 | 1 | 4 | 2 |
 
-形式化通过后自动入证明队列；证明队列已满时形式化记录标为 `formalization_research_queue_failed`，不自动重试。形式化与证明各占自己的执行位，因此 A 的证明运行时 B 的形式化可以同时执行，B 的证明随后在证明队列排队。关联 ID：形式化记录 `id` 等于证明运行的 `formalizationId`，形式化记录的 `runId` 指回该运行，两者都只能由所属账号读取。模型网关自身的并发（例如每个 Key 的上限）不在这些数字内；提高 `THEOREMOS_WEB_CONCURRENCY` 前须确认网关和宿主机 CPU/内存能承担。对应回归见 `tests/webFormalizations.test.ts` 的双账号排队用例。
+形式化通过后自动入证明队列；证明队列已满时形式化记录标为 `formalization_research_queue_failed`，用户可显式继续已审核陈述。重试校验冻结证据、原服务商地址和记录归属，并幂等返回同一 runId。形式化与证明各占自己的执行位，因此 A 的证明运行时 B 的形式化可以同时执行，B 的证明随后在证明队列排队。关联 ID：形式化记录 `id` 等于证明运行的 `formalizationId`，形式化记录的 `runId` 指回该运行，两者都只能由所属账号读取。模型网关自身的并发（例如每个 Key 的上限）不在这些数字内；提高 `THEOREMOS_WEB_CONCURRENCY` 前须确认网关和宿主机 CPU/内存能承担。对应回归见 `tests/webFormalizations.test.ts` 的双账号排队用例。
 
 如果首页提示“运行镜像尚未就绪”，确认 worker 镜像已构建，Web 服务能访问 Docker daemon，且镜像标签一致。如果镜像就绪但 Lean 验收无法执行，先运行上述离线 Docker 验证，检查用户命名空间和 Bubblewrap 的宿主机支持。
 
@@ -617,8 +618,10 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 核对原题、Lean、独立回译和审核后，用户显式确认当前证据摘要，再带入研究草稿。证明提交携带 `formalizationId`，服务端核对归属、确认状态、原题字节及环境，并将完整证据交给隔离证明 worker。worker 重建冻结原题，保留自然语言原题和证据摘要；复用与继续研究保留此来源。手动更改 Lean 或环境会将草稿转为普通 Lean 题目，不沿用原语义确认。
 
-API 为 `GET/POST /api/formalizations`、`GET/DELETE /api/formalizations/:id`、`POST /api/formalizations/:id/cancel` 和 `POST /api/formalizations/:id/confirm`（含 `evidenceSha256`）。写操作沿用会话、归属与 CSRF 检查。凭据只驻留执行输入，服务端记录不包含 Key；账户已保存 Key 和管理员配置 Key 可直接使用。任务与证据保存于所有者目录，服务重启会把未完成任务标为中断，不自动重跑。
+API 包含 `POST /api/providers/:id/check`（只读取模型列表，不调用模型）、`POST /api/formalizations/:id/research`（接续证明）以及 `GET/POST /api/formalizations`、`GET/DELETE /api/formalizations/:id`、`POST /api/formalizations/:id/cancel` 和 `POST /api/formalizations/:id/confirm`（含 `evidenceSha256`）。写操作沿用会话、归属与 CSRF 检查。凭据只驻留执行输入，服务端记录不包含 Key；账户已保存 Key 和管理员配置 Key 可直接使用。任务与证据保存于所有者目录，服务重启会把未完成任务标为中断，不自动重跑。
 
-当前生成固定使用 Sub2API 的 `deepseek-flash`，每次上限 30 分钟、3 轮候选与 2 轮规划，不设 Token 上限（2026-11-05 之前的记录按 200,000 Token 生成，证据仍可验证），使用两位独立 Reviewer；每个账号一次一个任务，全局单并发、最多 8 个等待或执行任务，每个账号最多保留 20 条记录。部署须同时重新构建 Web 静态产物和 worker 镜像，镜像 entrypoint 新增 `formalize` 分支；没有对应 runner 或 gateway 时页面说明不可用。原 CLI 与离线形式化报告保持独立。
+生成支持配置中的 Sub2API `deepseek-flash` 和 HTTPS Responses 服务（包括 OpenAI），原服务商、模型和预算随记录保存。默认形式化 10 分钟 / 400,000 Token，后续证明 5 分钟 / 5 轮 / 200,000 Token；发送前可分别修改。形式化最多 30 分钟 / 2,000,000 Token、3 轮候选与 2 轮规划，使用两位独立 Reviewer；每个账号一次一个任务，全局单并发、最多 8 个等待或执行任务，每个账号最多保留 20 条记录。部署须同时重新构建 Web 静态产物和 worker 镜像，镜像 entrypoint 新增 `formalize` 分支；没有对应 runner 或服务商时页面说明不可用。原 CLI 与离线形式化报告保持独立。
+
+Token 上限依据服务商返回的用量执行，进行中的请求可能超出；它与时间限制、每日次数额度都不是金额保证。费用由模型服务商收取。旧的零上限或 200,000 Token 证据仍可读取，新记录必须与实际提交的预算一致。模型对自然语言转写的审核与最终独立 Lean 验收分别显示，Lean 验收只保证冻结 Lean 陈述下的证明。
 
 手动形式化工具中，自然语言原文或证明环境修改后，旧结果的确认和继续入口不可用，须重新生成并确认。选择历史记录时恢复其原文和环境，替换未保存输入前需确认。解题任务同时携带确认原文和对应 Lean 陈述，独立验收仍检查冻结的完整 Lean 原题。

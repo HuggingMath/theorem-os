@@ -14,7 +14,9 @@ export type WebQuotaLimits = { windowHours: number } & Record<WebQuotaKind, numb
 export const webQuotaDefaults: WebQuotaLimits = Object.freeze({ windowHours: 24, runs: 30, formalizations: 8, explanations: 4 });
 
 const schema = 'theorem-os.web-usage.v1';
-type UsageRecord = { schema: typeof schema; accountId: string; windowStart: number; counts: Record<WebQuotaKind, number> };
+type UsageRecord = { schema: typeof schema; accountId: string; windowStart: number; windowEnd?: number; counts: Record<WebQuotaKind, number> };
+/** A deleted account leaves no address or account ID, only a keyed identifier and counts until this window ends. */
+type RetainedUsage = { expiresAt: number; windowStart: number; counts: Record<WebQuotaKind, number> };
 export class WebQuotaError extends Error {
   constructor(readonly kind: WebQuotaKind, readonly status: number, message: string) { super(message); }
 }
@@ -22,19 +24,52 @@ const empty = (accountId: string, windowStart = Date.now()): UsageRecord =>
   ({ schema, accountId, windowStart, counts: { runs: 0, formalizations: 0, explanations: 0 } });
 
 export class WebQuota {
+  private identitySecret?: Buffer;
   constructor(private readonly storage: WebStorage, private readonly limits: WebQuotaLimits = webQuotaDefaults) {}
 
   private windowMs() { return this.limits.windowHours * 60 * 60_000; }
   private path(accountId: string) { return ['usage', `${crypto.createHash('sha256').update(accountId).digest('hex')}.json`]; }
+  private end(record: UsageRecord) { return record.windowEnd ?? record.windowStart + this.windowMs(); }
+  private retainedPath(email: string) {
+    if (!this.identitySecret) {
+      const where = ['usage-policy', 'identity.json'];
+      const stored = this.storage.getRecord<{ secret: string }>(where);
+      if (stored && !/^[a-f0-9]{64}$/u.test(stored.secret)) throw new Error('web_quota_identity_invalid');
+      this.identitySecret = stored ? Buffer.from(stored.secret, 'hex') : crypto.randomBytes(32);
+      if (!stored) this.storage.saveRecord(where, { secret: this.identitySecret.toString('hex') });
+    }
+    const identity = crypto.createHmac('sha256', this.identitySecret).update(`theorem-os.quota.v1\n${email.trim().toLowerCase()}`).digest('hex');
+    return ['usage-retained', `${identity}.json`];
+  }
   /** The current record; a window that has run out starts again at zero. */
   private read(accountId: string): UsageRecord {
     const stored = this.storage.getRecord<UsageRecord>(this.path(accountId));
     if (!stored || stored.schema !== schema) return empty(accountId);
-    if (Date.now() - stored.windowStart >= this.windowMs()) return empty(accountId);
+    if (Date.now() >= this.end(stored)) return empty(accountId);
     // A record written by an older build may lack a kind added later.
     return { ...stored, counts: { ...empty(accountId).counts, ...stored.counts } };
   }
-  private write(record: UsageRecord) { this.storage.saveRecord(this.path(record.accountId), record); }
+  private write(record: UsageRecord) { this.storage.saveRecord(this.path(record.accountId), { ...record, windowEnd: this.end(record) }); }
+
+  /** Recreating an address continues its unexpired allowance; earlier account-id records need no migration. */
+  restore(accountId: string, email: string): void {
+    const existing = this.storage.getRecord<UsageRecord>(this.path(accountId));
+    if (existing?.schema === schema && Date.now() < this.end(existing)) return;
+    const where = this.retainedPath(email), retained = this.storage.getRecord<RetainedUsage>(where);
+    if (!retained) return;
+    if (Date.now() < retained.expiresAt)
+      this.write({ schema, accountId, windowStart: retained.windowStart, windowEnd: retained.expiresAt, counts: retained.counts });
+    this.storage.deleteRecord(where);
+  }
+
+  /** Maintenance removes expired summaries even when their address never signs up again. */
+  prune(): void {
+    for (const file of this.storage.listRecords(['usage-retained'])) {
+      if (!/^[a-f0-9]{64}\.json$/u.test(file)) continue;
+      const where = ['usage-retained', file], record = this.storage.getRecord<RetainedUsage>(where);
+      if (record && Date.now() >= record.expiresAt) this.storage.deleteRecord(where);
+    }
+  }
 
   /** The allowance itself, without an account: what the admin dialog names above its per-account counts. */
   settings(): { windowHours: number; limits: { research: number; formalizations: number; explanations: number } } {
@@ -46,7 +81,7 @@ export class WebQuota {
     const record = this.read(accountId);
     const usage = (kind: WebQuotaKind): WebQuotaUsage => ({ used: record.counts[kind], limit: this.limits[kind] });
     return { windowHours: this.limits.windowHours,
-      windowEndsAt: new Date(record.windowStart + this.windowMs()).toISOString(),
+      windowEndsAt: new Date(this.end(record)).toISOString(),
       runs: usage('runs'), formalizations: usage('formalizations'), explanations: usage('explanations') };
   }
   /**
@@ -75,6 +110,11 @@ export class WebQuota {
     record.counts[kind] -= 1;
     this.write(record);
   }
-  /** Goes with the account: a new account with the same id never sees the old counts (ids are fresh anyway). */
-  forget(accountId: string) { this.storage.deleteRecord(this.path(accountId)); }
+  /** Delete account-owned usage; retain only the current window's keyed summary when its verified address is known. */
+  forget(accountId: string, email?: string) {
+    const record = this.read(accountId);
+    if (email && Object.values(record.counts).some(count => count > 0))
+      this.storage.saveRecord(this.retainedPath(email), { expiresAt: this.end(record), windowStart: record.windowStart, counts: record.counts } satisfies RetainedUsage);
+    this.storage.deleteRecord(this.path(accountId));
+  }
 }

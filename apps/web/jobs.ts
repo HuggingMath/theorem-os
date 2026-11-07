@@ -57,6 +57,11 @@ export class WebJobs {
     }
   }
 
+  counts() {
+    const queued = [...this.jobs.values()].filter(job => job.run.status === 'queued');
+    const oldestQueuedAt = queued.map(job => job.run.createdAt).sort()[0];
+    return { running: this.running, queued: queued.length, ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
+  }
   list(owner: string): WebRun[] {
     return [...this.jobs.values()].filter(job => job.owner === owner).map(job => job.run).reverse();
   }

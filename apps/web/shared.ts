@@ -155,6 +155,10 @@ export type WebSession = {
   auth: 'none' | 'email';
   /** `open` means anyone with a working inbox may register; absent means only allowlisted addresses sign in. */
   signup?: 'open';
+  /** Terms shown by the login page, and whether an existing account must accept that version before continuing. */
+  termsVersion?: string;
+  termsRequired?: boolean;
+  maintenance?: boolean;
   /** What this account has used in the current window of its per-account allowance; absent without an account. */
   quota?: WebQuotaView;
   /** `admin` accounts may manage the allowlist; they see no other account's runs. */
@@ -386,12 +390,13 @@ export type WebAdminQuota = { windowHours: number; limits: { research: number; f
 export type WebAdminUsage = { research: number; formalizations: number; explanations: number };
 export type WebAdminOverview = {
   allowlist: { email: string; source: 'admin' | 'config' | 'file'; account: boolean }[];
-  accounts: { email: string; admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean;
+  accounts: { email: string; admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean; suspended?: boolean;
     /** Absent without a quota configuration (an anonymous loopback preview). */
     usage?: WebAdminUsage }[];
   funnel: { step: string; count: number; ofPrevious?: number }[];
   /** False when the service has no allowlist file, so only the deployment configuration can change who signs in. */
   editable: boolean;
+  signup?: 'open' | 'allowlist';
   /** The allowance every account shares; absent when the service has none. */
   quota?: WebAdminQuota;
 };

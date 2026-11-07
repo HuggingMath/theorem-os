@@ -7,8 +7,8 @@ export const guide: Record<string, string> = {
   "跳到正文": "Skip to content",
   "打开工作台": "Open the workbench",
   "本页目录": "On this page",
-  "TheoremOS 帮你证明 Lean 定理：你提交一个用 sorry 留出待证定理的 Lean 文件，用自己的模型 API 运行，Agent 分工写证明，最后由隔离的 Lean 环境检查完整原题。只有这一步「独立验收」通过，才算证明完成。":
-    "TheoremOS helps you prove Lean theorems. You submit a Lean file that leaves the theorems to prove as sorry, run it with your own model API, Agents share the proof work, and an isolated Lean environment finally checks the complete problem. Only when this independent acceptance passes is the proof done.",
+  "TheoremOS 把自然语言或 TeX 原题转成 Lean 陈述，经模型回译与审核后尝试构造证明，最后由隔离的 Lean 环境独立验收。你也可以从已有 Lean 文件开始。自然语言含义的审核与 Lean 证明验收分别展示。":
+    "TheoremOS turns a natural-language or TeX problem into a Lean statement, checks it through model back-translation and review, then attempts a proof and independently checks it in an isolated Lean environment. You can also start from an existing Lean file. Meaning review and Lean proof acceptance are shown separately.",
   "五步开始": "Start in five steps",
   "运行时看什么": "What to watch during a run",
   "Lean 与自然语言": "Lean and natural language",
@@ -20,18 +20,19 @@ export const guide: Record<string, string> = {
   "快捷键": "Keyboard shortcuts",
   "数据与费用": "Data and cost",
   "先看示例": "Look at the sample first",
-  "首页的「先看一次完整运行」是一次录制好的运行，不需要 API Key。可以逐个标签页浏览，了解一次研究从拆分任务到验收的全过程。":
-    "\"See a complete run first\" on the start page is a recorded run that needs no API key. Browse its tabs to see a whole research run, from splitting the work to acceptance.",
-  "点输入框上方的「原始题目」打开源码编辑器，或用回形针附加 .lean 文件，也可以直接选一道示例题目。要证明的定理用 sorry 留空；定理的声明在研究过程中不会被改动。":
-    "Click “Original problem” above the input to open the source editor, attach a .lean file with the paperclip, or pick one of the sample problems. Leave each theorem to prove as sorry; theorem statements are never changed during the research.",
-  "确认原题能提交": "Make sure the problem can be submitted",
-  "修改源码后，工作台会自动用 Lean 检查一遍原题，输入框上方显示结果。语法错误或缺少待证定理时会标出位置，改好之后才能提交。":
-    "After you edit the source, the workbench checks the problem with Lean and shows the result above the input. Syntax errors or a missing theorem to prove are marked in place and must be fixed before you can submit.",
-  "点滑杆图标打开研究配置，在「模型连接」里选服务商、填模型名和 API Key。「保存到我的账号」默认勾选：Key 加密保存在服务器，只有你的账号能用，下次不用再填；不想保存就取消勾选。":
-    "Open the research settings with the slider icon and, under Model connection, choose a provider and enter the model name and API key. \"Save to my account\" is ticked by default: the key is stored encrypted on the server, only your account can use it, and you won't need to enter it again. Untick it to keep nothing.",
+  "在经典题库浏览已有证明，或打开「先看一次完整运行」查看录制回放，都不需要 API Key。「试试例题」只把原题填入输入框，发送后才调用模型。":
+    "Browse existing proofs in the classics library, or open “See a complete run first” for a recorded replay. Neither needs an API key. “Try an example” only fills the composer; model calls begin when you send.",
+  "直接在首页输入完整的自然语言或 TeX 原题，包括对象、假设与结论。已有 Lean 文件时，点输入框旁的 Lean 入口粘贴或导入源码，待证部分用 sorry 留空。":
+    "Enter the complete problem in natural language or TeX, including its objects, assumptions and conclusion. If you already have Lean, use the Lean entry beside the composer to paste or import the source, leaving the proof as sorry.",
+  "选择服务商与模型":
+    "Choose a provider and model",
+  "打开「设置」选择模型服务商、模型与证明环境。模型名必须是该服务商为你的账号提供的名称；切换服务商会清空未保存的 Key。":
+    "Open Settings and choose a provider, model and proof environment. Use a model name available to your account at that provider. Switching provider clears the unsaved key.",
+  "填写所选服务商的 API Key。OpenAI 提供创建 Key 的链接；网关账号与 Key 请向该网关管理员获取。可以先点「检查 Key 与模型」，此操作只读取模型列表，不调用模型；不支持模型列表的服务需在发送时确认。":
+    "Enter the selected provider’s API key. OpenAI has a link to create one; ask the gateway administrator for a gateway account and key. “Check key and model” reads the model list without calling a model. Providers without that endpoint are checked when you send.",
   "设定预算并发送": "Set a budget and send",
-  "「执行配置」里的轮次上限、解题预算和用量上限，到达任一项运行就会停止。不确定时保持默认，在输入框写下研究任务后点发送。":
-    "Under Execution, the run stops at whichever comes first: the turn limit, the solving budget or the usage cap. If unsure, keep the defaults, write the research task in the input and send it.",
+  "形式化与随后证明各有时间和 Token 预算，发送前会显示两阶段上限。费用计入你的模型账户，按服务商已报告用量停止；进行中的请求可能超额，Token 预算不是金额封顶。发送后先核对原题含义，再自动开始证明。":
+    "Formalization and proof each have a time and token budget, shown before you send. The provider bills your model account. Work stops based on reported usage; requests already in progress may exceed the cap, so token budgets are not monetary caps. Sending starts meaning review followed automatically by proof.",
   "左栏是研究记录，打开一次运行后，右侧有结果、路线图、协作、源码和活动五个标签页。运行中随时可以点右上角的「取消运行」停下。":
     "The left column lists your research runs. Open one and the right side has five tabs: Result, Roadmap, Collaboration, Source and Activity. Stop a run at any time with \"Cancel run\" at the top right.",
   "谁在做哪个子任务、在等什么。从分区导航查看任务、原意与 Lean、Agent、指导和知识；详细视图还包含任务合同、交付、变更和归档记录。":
@@ -49,8 +50,8 @@ export const guide: Record<string, string> = {
   "验收通过后，点「结果」中验收证明标题旁或「源码」工具栏的「Lean → 自然语言」。讲解页可切换目标与中英文，逐步对照 Lean 行、引理和自然语言，下载已通过审核的 Markdown。生成前会显示时间与用量估算，由你手动开始。":
     "After acceptance, choose Lean → Natural language beside the accepted proof heading in Result or in the Source toolbar. Switch targets and Chinese or English, compare prose steps with Lean lines and lemmas, and download approved explanations as Markdown. Generation starts only when you choose it, after a time and usage estimate is shown.",
   "自然语言 → Lean": "Natural language → Lean",
-  "在新建研究中打开「自然语言 / TeX → Lean」，输入完整原题，生成后对照 Lean 陈述、独立回译和审核结论。确认陈述后带入研究草稿，再设置研究要求并开始证明。在线生成目前需要 Sub2API、deepseek-flash 和支持形式化的运行环境；刷新可继续查看任务。":
-    "From New research, open Natural language / TeX → Lean and enter the complete problem. Compare the generated Lean statement, independent back-translation and review results, then confirm the statement and load it into a research draft. Add research instructions before starting the proof. Online generation requires Sub2API, deepseek-flash and a formalization runtime. Refreshing resumes viewing the task.",
+  "首页发送自然语言原题后，系统生成 Lean 陈述并由模型独立回译、审核，通过后自动开始证明。点「原题 / Lean」核对对应关系；「完整审核」保留各次模型结论。独立形式化页面也保留先由你核对确认、再带入 Lean 草稿的流程。":
+    "Send a natural-language problem from the home page. The system generates a Lean statement, independently back-translates and reviews it with models, then starts proof automatically. Open “Problem / Lean” to compare the meaning; “Full review” keeps the model verdicts. The standalone formalization page also lets you review and confirm first, then open a Lean draft.",
   "证明讲解目前仅支持使用 Sub2API 与 deepseek-flash 的已验收运行，服务也需提供讲解运行环境；不支持时页面会说明原因。示例运行可以打开对照页，但没有预生成讲解，也不能生成。":
     "Proof explanations currently require an accepted run using Sub2API and deepseek-flash, with an explanation runtime provided by the service. The page explains why generation is unavailable when these conditions are not met. Sample runs can open the comparison page, but have no pre-generated explanations and cannot generate them.",
   "审阅研究计划": "Review the research plan",
@@ -61,7 +62,8 @@ export const guide: Record<string, string> = {
   "归档与知识": "Archives and knowledge",
   "协作区可归档研究证据、下载归档包，并在「知识」中搜索历史定理、引理与路线发现。引用知识时会带上来源和记录环境；历史检查通过不代表当前题目通过，使用前仍需重新检查。":
     "In Collaboration, archive research evidence, download an archive and search historical theorems, lemmas and route findings under Knowledge. References include their source and recorded environment. A historical check does not establish the current problem; reused work must be checked again.",
-  "所有目标定理都通过了独立验收。这是唯一算数的结论。": "Every target theorem passed independent acceptance. This is the only verdict that counts.",
+  "所有冻结的 Lean 目标都通过了独立验收。自然语言输入还会单独显示陈述是由模型审核，还是由你确认；Lean 验收本身不验证翻译是否忠实。":
+    "All frozen Lean targets passed independent acceptance. Natural-language tasks separately show whether the statement was reviewed by models or confirmed by you; Lean acceptance itself does not check translation fidelity.",
   "Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。": "The Agents submitted a candidate proof, but independent acceptance rejected it. The report says which check failed.",
   "到达轮次、时间或用量上限时还没有完成证明，标签会写明原因，例如「解题时间用完」。已检查的成果保留在报告里，可以提高预算后重新运行。":
     "The turn, time or usage limit was reached before the proof was complete, and the badge names it, such as \"Solve time used up\". Checked work stays in the report, and you can rerun with a larger budget.",
@@ -77,8 +79,8 @@ export const guide: Record<string, string> = {
   "验收通过的运行可以创建只读分享链接。链接不包含 API Key、服务地址、运行日志和 Agent 对话，可以随时停止分享。":
     "An accepted run can get a read-only share link. It leaves out the API key, service address, run logs and Agent conversations, and you can stop sharing at any time.",
   "继续研究": "Keep researching",
-  "「复用任务配置」把原题和配置填进新草稿；「从这一版继续」则带上所选版本的代码供新运行参考。新运行都要重新检查和验收，后续运行可以与原运行对比代码。":
-    "Reuse task settings fills a new draft with the original problem and settings. Continue from this version also supplies the selected code as a reference for the new run. Every new run needs fresh checks and acceptance; compare a follow-up run's code with its original run.",
+  "形式化已完成、证明队列未能接收时，点「继续证明」使用已有陈述，不重新生成形式化。已有运行可用「复用任务配置」或「从这一版继续」新建研究；新运行仍需重新检查和验收。":
+    "If formalization finished but the proof queue could not accept it, choose “Continue proof” to reuse the statement without formalizing again. Existing runs can start a new task through “Reuse task settings” or “Continue from this version”; new runs still require fresh checks and acceptance.",
   "保存与搬运": "Save and move work",
   "「新建研究」右上角可导出任务草稿，或导入草稿和运行档案 JSON；导入档案会提取原题与配置，不会恢复整次历史记录。「更多操作」可下载运行档案。草稿和档案不携带 API Key，使用前请确认模型连接。":
     "At the top right of New research, export a draft or import a draft or run archive JSON. Importing an archive extracts its original problem and settings; it does not restore the full historical run. Download a run archive from More actions. Drafts and archives contain no API key, so check the model connection before use.",
@@ -91,8 +93,8 @@ export const guide: Record<string, string> = {
   "跳转到指定行号。": "Go to a line number.",
   "减少 / 增加缩进。": "Decrease / increase indentation.",
   "关闭当前弹窗或查找栏。": "Close the current dialog or find bar.",
-  "服务器只用它调用你选择的服务商，费用计入你自己的 API 账户。Key 不会写进草稿、运行档案或分享链接。保存到账号的 Key 加密存放，只有你的账号能用，可以在「模型连接」里随时删除。":
-    "The server only uses it to call the provider you chose, and the cost goes to your own API account. The key is never written into drafts, run archives or share links. A key saved to your account is stored encrypted, only your account can use it, and you can delete it any time under Model connection.",
+  "服务器用 Key 访问你选择的服务商，费用计入你的 API 账户。自然语言输入框中的 Key 只在当前页面内存中保留，刷新后清空。进阶版可选择加密保存到账号，并在「模型连接」里删除；Key 不进入草稿、运行档案或分享链接。":
+    "The server uses your key with the selected provider, which bills your API account. A key entered in the natural-language composer stays only in page memory and clears on refresh. Advanced mode can save it encrypted to your account and remove it under Model connection. Keys never enter drafts, run archives or share links.",
   "登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。":
     "When you sign in, records belong to your email account, and the account page can delete the account with all its records. Without sign-in, records belong only to the current browser session.",
   "未提交的草稿自动保存在当前标签页，刷新后可恢复，不会同步到账号。需要长期保留或换设备时，请导出任务草稿。":

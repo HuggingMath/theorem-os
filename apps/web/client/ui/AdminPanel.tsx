@@ -8,6 +8,7 @@ import type { WebAdminOverview } from '../../shared';
 export type AdminPanelProps = {
   overview?: WebAdminOverview; error?: string; busy?: string;
   onAdd(email: string): Promise<boolean>; onRemove(email: string): void;
+  onSuspend?(email: string, suspended: boolean): void;
 };
 const sourceLabels = { admin: t('管理员'), config: t('部署配置'), file: t('白名单文件') };
 const stepLabels: Record<string, string> = { allowlisted: t('白名单内'), logged_in: t('首次登录'), submitted: t('首次提交运行'), accepted: t('首次通过验收') };
@@ -43,18 +44,24 @@ function Allowlist({ overview, busy, onAdd, onRemove }: Required<Pick<AdminPanel
   </>;
 }
 
-function Accounts({ accounts }: { accounts: WebAdminOverview['accounts'] }) {
+function Accounts({ accounts, busy, onSuspend }: { accounts: WebAdminOverview['accounts'] } & Pick<AdminPanelProps, 'busy' | 'onSuspend'>) {
+  const [confirming, setConfirming] = useState<string>();
   if (!accounts.length) return <p class="field-note">{t('还没有账号登录过。')}</p>;
   // Counts for the current allowance window, in the same order as the allowance sentence above the table.
   const usage = (account: WebAdminOverview['accounts'][number]) => account.usage
     ? t('研究 {0} · 形式化 {1} · 讲解 {2}', account.usage.research, account.usage.formalizations, account.usage.explanations) : '—';
   return <div class="admin-table-scroll" tabindex={0} aria-label={t('账号列表')}><table class="admin-table">
-    <thead><tr><th scope="col">{t('邮箱')}</th><th scope="col">{t('首次登录')}</th><th scope="col">{t('首次提交运行')}</th><th scope="col">{t('首次通过验收')}</th><th scope="col">{t('本窗口用量')}</th></tr></thead>
+    <thead><tr><th scope="col">{t('邮箱')}</th><th scope="col">{t('首次登录')}</th><th scope="col">{t('首次提交运行')}</th><th scope="col">{t('首次通过验收')}</th><th scope="col">{t('本窗口用量')}</th>{onSuspend && <th scope="col">{t('账号状态')}</th>}</tr></thead>
     <tbody>{accounts.map(account => <tr key={account.email}>
       <th scope="row"><span translate={false}>{account.email}</span>{account.admin && <span class="badge" data-source="admin">{t('管理员')}</span>}
-        {!account.allowed && <span class="badge warning">{t('已移出白名单')}</span>}</th>
+        {account.suspended ? <span class="badge warning">{t('已暂停')}</span> : !account.allowed && <span class="badge warning">{t('已移出白名单')}</span>}</th>
       <td>{date(account.createdAt)}</td><td>{date(account.firstRunAt)}</td><td>{date(account.firstAcceptedAt)}</td>
-      <td class="admin-usage">{usage(account)}</td></tr>)}</tbody>
+      <td class="admin-usage">{usage(account)}</td>{onSuspend && <td>{!account.admin && (confirming === account.email
+        ? <span class="admin-confirm"><button type="button" class="button button-destructive" disabled={Boolean(busy)}
+          onClick={() => { setConfirming(undefined); onSuspend(account.email, !account.suspended); }}>{account.suspended ? t('确认恢复') : t('确认暂停')}</button>
+          <button type="button" class="text-button" onClick={() => setConfirming(undefined)}>{t('取消')}</button></span>
+        : <button type="button" class="text-button" disabled={Boolean(busy)} aria-label={account.suspended ? t('恢复 {0}', account.email) : t('暂停 {0}', account.email)}
+          onClick={() => setConfirming(account.email)}>{account.suspended ? t('恢复账号') : t('暂停账号')}</button>)}</td>}</tr>)}</tbody>
   </table></div>;
 }
 
@@ -65,9 +72,12 @@ function AdminPanel(props: AdminPanelProps) {
     {!overview ? !error && <p class="field-note" role="status">{t('正在读取…')}</p> : <>
       <section aria-labelledby="admin-funnel-heading"><h3 id="admin-funnel-heading">{t('内测漏斗')}</h3><Funnel steps={overview.funnel} /></section>
       <section aria-labelledby="admin-allowlist-heading"><h3 id="admin-allowlist-heading">{t('白名单')}</h3>
-        <p class="field-note">{t('白名单里的邮箱才能收到登录验证码。移出后对方会立即退出登录，账号和运行记录保留。')}</p>
+        <p class="field-note">{overview.signup === 'open'
+          ? t('目前开放注册，白名单只记录邀请来源。需要限制某个账号时，请在账号列表中暂停。')
+          : t('白名单里的邮箱才能收到登录验证码。移出后对方会立即退出登录，账号和运行记录保留。')}</p>
         <Allowlist {...props} overview={overview} /></section>
-      <section aria-labelledby="admin-accounts-heading"><h3 id="admin-accounts-heading">{t('账号')}</h3><Accounts accounts={overview.accounts} />
+      <section aria-labelledby="admin-accounts-heading"><h3 id="admin-accounts-heading">{t('账号')}</h3><Accounts accounts={overview.accounts} busy={props.busy} onSuspend={props.onSuspend} />
+        {props.onSuspend && <p class="field-note">{t('暂停会阻止登录并停止正在进行的任务，已有记录保留；恢复后可重新登录。管理员账号不能暂停。')}</p>}
         <p class="field-note admin-scope">{t('管理员只能看到邮箱和这几个时间，看不到其他账号的题目、证明和运行记录。')}</p></section>
     </>}
   </>;

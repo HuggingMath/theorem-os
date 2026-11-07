@@ -120,7 +120,8 @@ export function webIncompleteReason(raw: Record<string, unknown>, input: Pick<Wo
   return 'math_research_routes_exhausted';
 }
 
-export function webProviderConfig(input: WorkerInput, modelCatalog?: string): string {
+type ProviderInput = Pick<WorkerInput, 'provider'> & { input: Pick<WorkerInput['input'], 'model' | 'effort'> };
+export function webProviderConfig(input: ProviderInput, modelCatalog?: string): string {
   return stringifyToml({
     model: input.input.model, model_provider: 'web_provider', model_reasoning_effort: input.input.effort,
     ...(modelCatalog ? { model_catalog_json: modelCatalog,
@@ -134,7 +135,7 @@ export function webProviderConfig(input: WorkerInput, modelCatalog?: string): st
   });
 }
 
-export function prepareWebProviderProfile(profile: string, request: WorkerInput): void {
+export function prepareWebProviderProfile(profile: string, request: ProviderInput): void {
   fs.mkdirSync(profile, { mode: 0o700 });
   const modelCatalog = request.provider.id === 'sub2api' ? path.join(profile, 'models.json') : undefined;
   if (modelCatalog) fs.writeFileSync(modelCatalog, JSON.stringify(sub2apiModelCatalog()), { mode: 0o600, flag: 'wx' });

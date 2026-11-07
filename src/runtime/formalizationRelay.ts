@@ -84,7 +84,7 @@ class RelayError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
 type AuthCommand = { command: string; args: string[]; timeoutMs: number; refreshMs: number };
-type Profile = { envKey?: string; command?: AuthCommand };
+type Profile = { providerId: 'sub2api' | 'web_provider'; endpoint: string; envKey?: string; command?: AuthCommand };
 
 // Admit the native stateless Codex Responses dialect, without translating it. Unknown
 // fields/types fail closed: a role capability must not become a stored-response/file,
@@ -160,7 +160,7 @@ function admitRequest(body: Record<string, unknown>, model: string, effort: stri
 }
 
 export type FormalizationRelayReceipt = Readonly<{
-  schema: 'theoremos.formalization-relay.v1'; providerId: 'sub2api'; wireApi: 'responses';
+  schema: 'theoremos.formalization-relay.v1'; providerId: 'sub2api' | 'web_provider'; wireApi: 'responses';
   endpoint: string; model: string; effort: string; transport: 'unix-http' | 'loopback-http'; httpHost: string;
   credentialLocation: 'host-only'; credentialSource: 'environment' | 'auth-command';
 }>;
@@ -177,18 +177,28 @@ export type FormalizationRelay = Readonly<{
 
 function readProfile(directory: string, model: string): Profile {
   try {
-    if (!path.isAbsolute(directory) || model !== SUB2API_PROVIDER.defaultModel) throw new Error();
+    if (!path.isAbsolute(directory)) throw new Error();
     const file = path.join(directory, 'config.toml'), stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > 128 * 1024) throw new Error();
     const config = parseToml(fs.readFileSync(file, 'utf8')) as Record<string, any>;
-    const provider = config.model_providers?.[SUB2API_PROVIDER.id];
-    if (config.model_provider !== SUB2API_PROVIDER.id || !provider || provider.base_url !== SUB2API_PROVIDER.baseUrl ||
+    const providerId = config.model_provider;
+    if (!['sub2api', 'web_provider'].includes(providerId) || config.model !== model) throw new Error();
+    const provider = config.model_providers?.[providerId];
+    if (!provider ||
         provider.wire_api !== 'responses' || provider.requires_openai_auth === true ||
         provider.experimental_bearer_token !== undefined || provider.http_headers !== undefined ||
         provider.env_http_headers !== undefined || provider.query_params !== undefined) throw new Error();
+    if (providerId === 'web_provider') {
+      const url = new URL(provider.base_url);
+      if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+          provider.env_key !== 'THEOREMOS_PROVIDER_API_KEY' || provider.auth !== undefined ||
+          !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(model)) throw new Error();
+      return { providerId, endpoint: url.href.replace(/\/$/u, '') + '/responses', envKey: provider.env_key };
+    }
+    if (model !== SUB2API_PROVIDER.defaultModel || provider.base_url !== SUB2API_PROVIDER.baseUrl) throw new Error();
     if (provider.env_key !== undefined) {
       if (provider.auth !== undefined || provider.env_key !== SUB2API_PROVIDER.apiKeyEnvironment) throw new Error();
-      return { envKey: provider.env_key };
+      return { providerId, endpoint: ENDPOINT, envKey: provider.env_key };
     }
     const auth = provider.auth;
     if (!auth || typeof auth !== 'object' || typeof auth.command !== 'string' || !path.isAbsolute(auth.command) ||
@@ -197,7 +207,7 @@ function readProfile(directory: string, model: string): Profile {
     const timeoutMs = auth.timeout_ms ?? 5000, refreshMs = auth.refresh_interval_ms ?? 300000;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000 ||
         !Number.isSafeInteger(refreshMs) || refreshMs < 1 || refreshMs > 86400000) throw new Error();
-    return { command: { command: auth.command, args: [...auth.args], timeoutMs, refreshMs } };
+    return { providerId, endpoint: ENDPOINT, command: { command: auth.command, args: [...auth.args], timeoutMs, refreshMs } };
   } catch { throw new Error('formalization_relay_profile_unsupported'); }
 }
 
@@ -358,7 +368,7 @@ export async function startFormalizationRelay(input: {
         headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json',
           Accept: body.stream === true ? 'text/event-stream' : 'application/json' }, body: JSON.stringify(body) };
       upstreamAttempted = true;
-      const upstream = await globalThis.fetch(ENDPOINT, upstreamInit);
+      const upstream = await globalThis.fetch(profile.endpoint, upstreamInit);
       if (!upstream.ok) {
         failure = 'upstream-http-error';
         void upstream.body?.cancel().catch(() => {});
@@ -436,7 +446,7 @@ export async function startFormalizationRelay(input: {
   input.signal?.addEventListener('abort', stop, { once: true });
   if (input.signal?.aborted) { await close(); throw new Error('formalization_relay_cancelled'); }
   return { socketPath, ...(loopback ? { baseUrl: 'http://' + httpHost + '/v1' } : {}), apiKey, httpHost, route: ROUTE,
-    receipt: { schema: 'theoremos.formalization-relay.v1', providerId: 'sub2api', wireApi: 'responses',
-      endpoint: ENDPOINT, model: input.model, effort: input.effort, transport: loopback ? 'loopback-http' : 'unix-http', httpHost,
+    receipt: { schema: 'theoremos.formalization-relay.v1', providerId: profile.providerId, wireApi: 'responses',
+      endpoint: profile.endpoint, model: input.model, effort: input.effort, transport: loopback ? 'loopback-http' : 'unix-http', httpHost,
       credentialLocation: 'host-only', credentialSource: profile.envKey ? 'environment' : 'auth-command' }, close };
 }

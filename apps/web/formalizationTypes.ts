@@ -1,8 +1,10 @@
 import type { WebAgentActionBody, WebAgentLeanCheck, WebEnvironment, WebFormalizationReport, WebProvider } from './shared';
 
-// maxTotalTokens 0 sets no token budget: the time limit and rounds bound a generation.
-export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 0,
+export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 2_000_000,
   maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 1, recordsPerOwner: 20 });
+export type WebResearchBudget = { maxRunSeconds: number; maxTurns: number; maxTotalTokens: number };
+export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 600, maxTotalTokens: 400_000,
+  research: Object.freeze({ maxRunSeconds: 300, maxTurns: 5, maxTotalTokens: 200_000 }) });
 export const webFormalizationPhases = ['queued', 'preparing', 'planning', 'generating', 'compiling', 'translating', 'reviewing', 'finishing'] as const;
 export type WebFormalizationProgress = { phase: typeof webFormalizationPhases[number]; round?: number; tokens?: number; updatedAt?: string };
 export type WebFormalization = {
@@ -14,11 +16,16 @@ export type WebFormalization = {
   activity?: { count: number; dropped?: number };
   /** Explicit authorization to formalize and then start proof research automatically. */
   workflow?: 'solve'; confirmation?: 'automatic' | 'manual'; runId?: string; researchError?: string;
+  /** Absent on older records; new generations bind the exact submitted budgets and provider. */
+  providerId?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget;
 };
 export type WebFormalizationCapabilities = { available: boolean; reason?: 'provider' | 'runtime'; providerId?: string;
-  model: string; key: 'required' | 'saved' | 'server'; limits: typeof webFormalizationLimits };
-export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean };
-export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve'> & { id: string; model: string; provider: WebProvider;
+  model: string; key: 'required' | 'saved' | 'server'; limits: typeof webFormalizationLimits;
+  providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
+  defaults?: typeof webFormalizationDefaults };
+export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean;
+  providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
+export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number };
 /**
  * The roles of one formalization round (src/solver/formalization.ts): plan reads the problem, generate writes the Lean
@@ -58,5 +65,5 @@ export type WorkerFormalizationMessage = { type: 'progress'; progress: WebFormal
   | { type: 'result'; status: 'approved'; evidence: unknown }
   | { type: 'result'; status: 'exhausted' | 'error'; reason: string };
 /** Generations before 2026-11-05 ran under a 200,000-token budget; their evidence stays valid. */
-export const webFormalizationTokenBudgets: readonly number[] = [webFormalizationLimits.maxTotalTokens, 200_000];
+export const webFormalizationTokenBudgets: readonly number[] = [0, 200_000];
 export const webFormalizationReason = /^(?:formalization|math|lean_task)_[a-z0-9_]{1,100}$/u;

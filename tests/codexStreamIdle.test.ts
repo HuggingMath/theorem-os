@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../src/runtime/codexSession';
 import { prepareSub2apiProfile, sub2apiProfileDigest } from '../src/runtime/sub2api';
+import { webProviderConfig } from '../apps/web/worker';
 
 const host = vi.hoisted(() => ({ sandbox: vi.fn() }));
 vi.mock('../src/runtime/formalizationSandbox', () => ({ prepareFormalizationSandbox: host.sandbox }));
@@ -79,6 +80,30 @@ describe('Responses client stream idle tolerance', () => {
     expect(fs.readFileSync(path.join(profile, 'config.toml'), 'utf8')).toBe(original);
     expect(sub2apiProfileDigest(profile)).toBe(digest);
     expect(calls().find(call => call.event === 'idle-clock').idleMs).toBe(300_000);
+  });
+
+  it.each([false, true])('preserves a generic HTTPS isolated provider and its model without a Sub2API catalog (resume=%s)', async resume => {
+    const file = path.join(profile, 'config.toml'); fs.chmodSync(file, 0o600);
+    const genericConfig = webProviderConfig({ provider: { id: 'compatible', name: 'Fixture', baseUrl: 'https://models.example.test/v1' },
+      input: { model: 'custom-reasoner', effort: 'high' } });
+    fs.writeFileSync(file, genericConfig);
+    const close = vi.fn(async () => {});
+    host.sandbox.mockImplementation(async () => ({ command: executable, args: [], profile, workspace: root,
+      env: { PATH: process.env.PATH, FIXTURE_TRACE: traceFile }, providerId: 'web_provider',
+      providerBaseUrl: 'http://127.0.0.1:18888/v1', receipt: { providerId: 'web_provider' }, close }));
+    session = await createCodexMathSession({ ...options('isolated'), model: 'custom-reasoner', effort: 'high',
+      environment: { PATH: process.env.PATH, THEOREMOS_PROVIDER_API_KEY: 'private-https-fixture-key', FIXTURE_TRACE: traceFile },
+      ...(resume ? { threadId: 'idle-thread' } : {}) });
+    expect(await session.run('gap', 'generic-idle-turn', root, () => {})).toBe('completed');
+    const start = calls().find(call => call.method === (resume ? 'thread/resume' : 'thread/start'));
+    expect(start.params).toMatchObject({ model: 'custom-reasoner', config: { model_provider: 'web_provider',
+      model_reasoning_effort: 'high', 'model_providers.web_provider.base_url': 'http://127.0.0.1:18888/v1',
+      'model_providers.web_provider.stream_idle_timeout_ms': 300_000 } });
+    expect(start.params.config.model_catalog_json).toBeUndefined();
+    expect(JSON.stringify(calls())).not.toContain('private-https-fixture-key');
+    expect(fs.readFileSync(file, 'utf8')).toBe(genericConfig);
+    expect(host.sandbox.mock.calls[0][0].requestGate).toBeTypeOf('function');
+    await session.close(); expect(close).toHaveBeenCalledOnce();
   });
 
   it('still stops a Responses stream that remains idle beyond the configured limit', async () => {

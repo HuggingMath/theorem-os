@@ -20,6 +20,17 @@ const taskEn = 'Prove every theorem in the original problem without changing its
 
 export const researchExamples: readonly ResearchExample[] = [
   {
+    id: 'add-zero', name: '自然数加零', nameEn: 'Adding zero',
+    summary: '对任意自然数证明加零不变，只需 Lean 标准库。',
+    summaryEn: 'Prove that adding zero leaves every natural number unchanged, using only the Lean standard library.',
+    original: '证明：对任意自然数 n，都有 n + 0 = n。',
+    originalEn: 'Prove that for every natural number n, n + 0 = n.',
+    environment: 'standard',
+    source: 'theorem add_zero_trial (n : Nat) : n + 0 = n := by sorry\n',
+    task: '证明这个自然数加零定理，保持原题声明不变。使用 Lean 标准库，根据 Lean 编译反馈修复证明，并验收完整原题。',
+    taskEn: 'Prove this natural-number addition theorem without changing the original statement. Use the Lean standard library, repair the proof using Lean compiler feedback, and verify the complete original problem.',
+  },
+  {
     id: 'sum-of-squares', name: '平方和公式', nameEn: 'Sum of squares',
     summary: '对任意自然数证明有限平方和公式，结合归纳与代数化简。',
     summaryEn: 'Prove a finite sum formula for every natural number using induction and algebra.',

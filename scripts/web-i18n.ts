@@ -107,7 +107,7 @@ export function serverKeys() {
  */
 export function errorKeys() {
   const keys = new Map<string, string>();
-  const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts',
+  const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
     'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
@@ -126,6 +126,7 @@ export function errorKeys() {
       if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(source))) node.arguments?.forEach(collect);
       else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && /\.error$/u.test(node.left.getText(source))) collect(node.right);
       else if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'error') collect(node.initializer);
+      else if (relative === 'apps/web/providerCheck.ts' && ts.isPropertyAssignment(node) && node.name.getText(source) === 'message') collect(node.initializer);
       else if (ts.isObjectLiteralExpression(node) && node.properties.some(item => ts.isPropertyAssignment(item) && item.name.getText(source) === 'type'
         && item.initializer.getText(source) === "'error'")) {
         for (const item of node.properties) if (ts.isPropertyAssignment(item) && item.name.getText(source) === 'message') collect(item.initializer);

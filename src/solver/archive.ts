@@ -143,7 +143,7 @@ const knowledgeDiagnostic = z.object({ authority: z.literal('advisory-lean-proce
   line: z.number().int().positive(), column: safeCount });
 const usageAccounting = z.object({ startedTurns: safeCount, reportedTurns: safeCount,
   pending: z.boolean(), incomplete: z.boolean() }).refine(value => value.reportedTurns <= value.startedTurns);
-const requestUsageAccounting = z.object({ startedRequests: safeCount, reportedRequests: safeCount,
+export const requestUsageAccountingSchema = z.object({ startedRequests: safeCount, reportedRequests: safeCount,
   pendingRequests: safeCount, incomplete: z.boolean(), nativeUsageObserved: z.boolean().optional(),
   receipts: z.array(z.object({ requestId: z.string().min(1),
     source: z.enum(['chat-completions-bridge', 'responses-relay']).optional(),
@@ -200,7 +200,7 @@ const research = z.object({ worktree: z.string().min(1), phase, turns: count, th
   advisoryCheckpoint: z.object({ scope: z.string().regex(/^[a-f0-9]{64}$/u), noProgressStreak: safeCount,
     contentDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).optional(),
   usage: record.optional(), usageBeforeThread: record.optional(), usageAccounting: usageAccounting.optional(),
-  requestUsageAccounting: requestUsageAccounting.optional(),
+  requestUsageAccounting: requestUsageAccountingSchema.optional(),
   tokenBudget: tokenBudget.optional(), candidate: record.optional(),
   failures: z.array(record).optional(), error: z.string().optional() }).passthrough();
 const role = z.enum(['lead', 'researcher', 'prover', 'engineer', 'reviewer']);

@@ -4,8 +4,8 @@
 
 <h1>TheoremOS</h1>
 
-<p><strong>让数学 Agent 构造证明，由 Lean 独立验收完整原题。</strong></p>
-<p>面向数学 Agent 研究者与 Lean 开发者的可组合运行时。</p>
+<p><strong>从自然语言原题出发，构造可独立核查的 Lean 证明。</strong></p>
+<p>面向数学研究者、Lean 用户与数学 Agent 研究者的在线工作台。</p>
 
 [![Research Preview](https://img.shields.io/badge/status-research%20preview-0f766e.svg)](docs/releases/v0.1.0.md) [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](docs/web-workbench.md) [![License: proprietary](https://img.shields.io/badge/license-proprietary-555.svg)](LICENSE)
 
@@ -22,25 +22,26 @@
 <a href="docs/assets/workbench-full-desktop.png">
   <picture>
     <source media="(max-width: 640px)" srcset="docs/assets/workbench-mobile.png">
-    <img src="docs/assets/workbench-desktop.png" alt="TheoremOS 网页研究工作台：选择 Mathlib 环境，编辑实数多项式原题，预览尚未提交的研究草稿" width="1440">
+    <img src="docs/assets/workbench-desktop.png" alt="TheoremOS 自然语言入口：输入原题、设置模型与两阶段预算；真实界面预览，尚未提交任务" width="1440">
   </picture>
 </a>
 
-<p align="center"><sub>真实工作台截图 · Mathlib 草稿，尚未提交 · <a href="docs/assets/workbench-full-desktop.png">桌面原图</a> · <a href="docs/assets/workbench-full-mobile.png">手机原图</a></sub></p>
+<p align="center"><sub>真实界面预览 · 自然语言入口，尚未提交 · <a href="docs/assets/workbench-full-desktop.png">桌面原图</a> · <a href="docs/assets/workbench-full-mobile.png">手机原图</a></sub></p>
 
-输入 Lean 原题，使用自己的 API Key 开始研究，查看候选证明和验收报告。研究者还可以替换搜索、上下文或协作策略，在固定题目、环境、模型与预算下开展对照实验。
+输入自然语言、TeX 或已有 Lean 原题，使用自己的 API Key 开始研究。系统先生成 Lean 陈述并做模型回译与审核，再构造证明并独立验收；陈述含义的审核与 Lean 证明验收分别展示。可以查看过程、核对原意、下载证明和本地复核包。研究者还可替换搜索、上下文或协作策略开展对照实验。
 
 ## 选择你的入口
 
 | 你想做什么 | 从这里开始 | 需要准备 |
 | --- | --- | --- |
 | 先了解产品与成果 | [产品官网](https://theoremos.top/) · [证明档案](https://theoremos.top/archive.html) | 浏览器即可 |
-| 输入自己的 Key，提交 Lean 原题 | [部署网页工作台](#网页工作台) | Linux、Docker、API Key |
+| 输入自己的题目，在线构造证明 | [打开工作台](https://app.theoremos.top/) | 获准的邮箱、OpenAI 或所选网关的 API Key |
+| 维护或部署独立服务 | [部署网页工作台](#部署网页工作台) | 源码使用授权、Linux、Docker、API Key |
 | 看一次失败、修复与验收 | [预设 Lean 回放](#快速体验) | 本机 Lean 环境，无需 API Key |
 | 研究自己的 Agent 策略 | [替换研究组件](#五个可替换组件) · [CLI 指南](docs/usage.md) | 本地开发环境；模型运行需认证 |
 
 > [!NOTE]
-> GitHub Pages 托管静态官网和证明档案。提交任务、调用模型和运行 Lean，需要在 Linux 本地或服务器部署网页工作台。
+> 在线工作台当前仍是**白名单 Beta，尚未开放自由注册**。已有资格的邮箱可直接登录；其余用户可通过[官网申请入口](https://theoremos.top/#start)联系。浏览器使用在线服务不需要本地安装 Lean 或 Docker。
 
 ## 已验收证明
 
@@ -85,7 +86,20 @@
 
 ## 快速开始
 
-### 网页工作台
+### 在线工作台
+
+1. 打开 <https://app.theoremos.top/>，用获准邮箱登录。可以先浏览经典题库或录制回放，无需模型 Key。
+2. 在首页「设置」中选择服务商与模型，填写对应 Key。OpenAI Key 可在[服务商后台](https://platform.openai.com/api-keys)创建；网关账号与 Key 需向该网关管理员取得。「检查 Key 与模型」只读取模型列表，不调用模型。
+3. 输入完整的自然语言或 TeX 原题，或选择「试试例题」。已有 Lean 源码时使用输入框旁的 Lean 入口。
+4. 确认两阶段预算后发送。默认形式化最多 10 分钟 / 40 万 Token，随后证明最多 5 分钟 / 20 万 Token；两阶段可分别调整。Beta 期间平台免费，模型账单由服务商向你的 API 账户收取。用量按服务商报告计数，进行中的请求可能超额，Token 预算不是金额封顶。
+
+模型审核通过后会自动开始证明。结果页分别显示模型对自然语言含义的判断与固定 Lean 陈述的独立验收；Lean 验收不证明翻译一定忠实，请在「原题 / Lean」核对。若陈述已完成而证明未能入队，可使用「继续证明」，无需重新形式化。
+
+自然语言入口的 Key 只保留在当前页面内存，刷新后清空；进阶版可选择加密保存到账号，并在「模型连接」中删除。数据、分享与删除范围见[隐私说明](https://app.theoremos.top/privacy.html)。
+
+### 部署网页工作台
+
+以下面向维护者与获授权的部署者；当前源码使用遵循 [LICENSE](LICENSE)。
 
 在浏览器中提交原题、查看研究进度、对比候选源码，并下载证明和验收报告。支持 OpenAI 及兼容 Responses API 的服务；仅提供 Chat Completions 的服务暂不支持。
 
@@ -107,7 +121,7 @@ docker compose -f apps/web/compose.yml up -d web
 
 - Mathlib 每次运行的内存上限为 8 GiB，标准库为 4 GiB；建议每个并发 Mathlib 运行预留 30 GiB 可用磁盘。首次构建需下载大型依赖和预编译缓存。
 - Mathlib 冷准备最长 600 秒，准备与最终验收均不计入解题预算。轮次和时间限制不等于 API 费用上限。
-- Key 由使用者提供；浏览器不会将其写入本地存储，服务也不会将其写入任务档案或日志。提交成功后清空输入框。
+- Key 由使用者提供，不写入草稿、运行档案或日志。自然语言对话仅在当前页面内存中保留；进阶版提交后清空输入。配置密钥库的部署允许用户选择加密保存到账号。
 - 网页服务配置数据目录后会持久保存历史与证据，Compose 默认使用命名卷；未配置数据目录时仅保存在内存。服务重启会将未完成任务标为中断，不会自动恢复执行。需要保留的证明与 JSON 仍建议下载；CLI 提供持久运行档案与断点恢复。
 
 标准库与 Mathlib 已通过真实容器和 Lean 检查，验证使用模拟模型，不产生 API 费用。不同服务商的实际 API 兼容性需使用对应账户验证。

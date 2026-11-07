@@ -17,6 +17,17 @@
       <h1 id="login-heading">登录研究工作台</h1>
       <p class="login-lead" id="login-lead">输入邮箱收验证码即可登录；第一次登录会自动创建账号。</p>
       <div id="login-error" class="inline-error" role="alert" hidden></div>
+      <label class="checkbox-option login-terms" id="terms-option" hidden><input type="checkbox" id="accept-terms"><span>我已阅读并同意<a href="terms.html" target="_blank" rel="noopener">使用条款</a>与<a href="privacy.html" target="_blank" rel="noopener">隐私说明</a></span></label>
+      <form id="terms-step" class="login-form" novalidate hidden>
+        <button type="submit" id="confirm-terms" class="button button-primary login-submit">同意并继续</button>
+        <button type="button" id="terms-logout" class="text-button">退出登录</button>
+        <details><summary>删除账号</summary>
+          <p class="field-note">不同意更新后的条款时，你仍可以退出或删除账号。删除会清除账号下的记录，无法恢复。</p>
+          <label for="terms-delete-email">输入账号邮箱确认删除</label>
+          <input id="terms-delete-email" type="email" autocomplete="off" inputmode="email" spellcheck="false">
+          <button type="button" id="terms-delete-account" class="button button-destructive">删除账号</button>
+        </details>
+      </form>
       <form id="email-step" class="login-form" novalidate>
         <label for="login-email">邮箱</label>
         <input id="login-email" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" required spellcheck="false">
@@ -27,7 +38,6 @@
           <button type="button" id="refresh-captcha" class="icon-button" aria-label="换一张图形验证码" title="换一张"><i data-lucide="refresh-cw"></i></button>
         </div>
         <p class="field-note" id="captcha-note">输入图中的 5 位数字。看不清可以换一张。</p>
-        <label class="checkbox-option login-terms" id="terms-option" hidden><input type="checkbox" id="accept-terms"><span>我已阅读并同意<a href="terms.html" target="_blank" rel="noopener">使用条款</a>与<a href="privacy.html" target="_blank" rel="noopener">隐私说明</a></span></label>
         <button type="submit" id="send-code" class="button button-primary login-submit" disabled><i data-lucide="mail-check"></i><span>发送验证码</span></button>
         <div class="login-secondary"><button type="button" id="use-password" class="text-button">使用密码登录</button></div>
       </form>

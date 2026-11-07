@@ -12,12 +12,13 @@ import { guide } from '../apps/web/i18n/guide';
 import { modules } from '../apps/web/i18n/modules';
 import { pages } from '../apps/web/i18n/pages';
 import { process } from '../apps/web/i18n/process';
+import { release } from '../apps/web/i18n/release';
 import { server } from '../apps/web/i18n/server';
 import { localizeText, t } from '../apps/web/i18n';
 import { han, requiredKeys } from '../scripts/web-i18n';
 
 describe('workbench English dictionary', () => {
-  const parts = { server, pages, common, app, collaboration, modules, editor, guide, admin, errors, explain, formalize, process };
+  const parts = { server, pages, common, app, collaboration, modules, editor, guide, admin, errors, explain, formalize, process, release };
   const { keys, stray } = requiredKeys();
   const placeholders = (text: string) => [...text.matchAll(/\{(\d+)\}/gu)].map(match => match[1]).sort().join(',');
 

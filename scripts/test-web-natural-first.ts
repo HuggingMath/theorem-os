@@ -41,7 +41,13 @@ try {
     const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
     page.on('pageerror', error => errors.push(error.message));
     const writes: string[] = [];
+    const connectionChecks: { url: string; body: Record<string, unknown> }[] = [];
+    let connectionStatus: 'available' | 'unknown' = 'available';
     await page.route('**/api/**', async route => {
+      if (/\/api\/providers\/[^/]+\/check$/u.test(new URL(route.request().url()).pathname)) {
+        connectionChecks.push({ url: route.request().url(), body: route.request().postDataJSON() });
+        return route.fulfill({ json: { status: connectionStatus, message: connectionStatus === 'available' ? 'Key and model available; no model called.' : 'Model list unavailable; verify when sending.' } });
+      }
       if (route.request().method() !== 'GET') {
         writes.push(new URL(route.request().url()).pathname);
         return route.fulfill({ status: 422, json: { error: 'This UI-only fixture must not start a task' } });
@@ -78,6 +84,45 @@ try {
     });
     assert.ok(placement.panel.top >= placement.form.bottom && placement.panel.top > placement.heading.bottom && placement.panel.bottom <= placement.height + 1,
       `The home settings must open below the composer and on screen: ${JSON.stringify(placement)}`);
+    if (width === 1440) {
+      assert.equal(await page.locator('#formalize-provider').inputValue(), 'sub2api');
+      assert.equal(await page.locator('#formalize-model').inputValue(), 'deepseek-flash');
+      assert.equal(await page.locator('#formalize-tokens').inputValue(), '400000');
+      assert.equal(await page.locator('#research-tokens').inputValue(), '200000');
+      assert.equal(await page.locator('#research-turns').inputValue(), '5');
+      assert.match(await page.locator('[data-chat-budget]').innerText(), /10 分钟.*5 分钟/u);
+      await page.locator('#formalize-key').fill('gateway-key-to-clear');
+      await page.locator('#formalize-provider').selectOption('openai');
+      assert.equal(await page.locator('#formalize-key').inputValue(), '', 'A gateway key cannot accidentally be sent to OpenAI');
+      assert.equal(await page.locator('#chat-key-help a').getAttribute('href'), 'https://platform.openai.com/api-keys');
+      assert.equal(await page.locator('#formalize-model').inputValue(), 'gpt-6.1-sol');
+      await page.locator('#formalize-key').fill('sk-disposable-check');
+      await page.locator('#check-model-connection').click();
+      await page.locator('#chat-connection-result[data-status="available"]').waitFor();
+      assert.equal(connectionChecks.length, 1);
+      assert.equal(connectionChecks[0]?.body.model, 'gpt-6.1-sol');
+      assert.equal(connectionChecks[0]?.body.apiKey, 'sk-disposable-check');
+      await page.locator('#formalize-model').fill('fixture-other-model');
+      assert.equal(await page.locator('#chat-connection-result').count(), 0, 'A model change invalidates the prior connection result');
+      connectionStatus = 'unknown';
+      await page.locator('#check-model-connection').click();
+      await page.locator('#chat-connection-result[data-status="unknown"]').waitFor();
+      await page.locator('#formalize-key').fill('changed-key');
+      assert.equal(await page.locator('#chat-connection-result').count(), 0, 'Changing the key invalidates the prior result');
+      await page.locator('#formalize-original').fill(original);
+      await page.locator('#formalize-tokens').fill('0');
+      assert.equal(await page.locator('#formalize-start').isDisabled(), true, 'The first task cannot start with an unbounded token budget');
+      await page.locator('#formalize-tokens').fill('120000');
+      await page.locator('#research-tokens').fill('80000');
+      await page.locator('#formalize-minutes').fill('4');
+      await page.locator('#research-minutes').fill('3');
+      assert.equal(await page.locator('#formalize-start').isEnabled(), true);
+      assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟.*3 分钟/u);
+      assert.equal(writes.length, 0, 'Connection checks and budget edits create no paid task');
+      await page.locator('#formalize-provider').selectOption('sub2api');
+      await page.locator('#formalize-original').fill('');
+      mark('provider-specific key guidance, key clearing, bounded budgets and non-generating connection checks');
+    }
     await page.locator('#formalize-settings > summary').click();
     await page.locator('.chat-settings-fields').waitFor({ state: 'hidden' });
     if (width === 320) await page.setViewportSize({ width, height: 1000 });
@@ -119,17 +164,21 @@ try {
       mark('Empty Lean source cannot prove an example; move-to-natural preserves the user request without launching it');
     }
     await page.locator('#topbar-draft').click(); assert.equal(await page.locator('#formalize-original').inputValue(), '');
-    const example = researchExamples.find(example => example.id === 'schur-cubic')!;
     await page.locator('.chat-examples > summary').click();
-    await page.locator('#formalize-example').selectOption(example.id);
-    assert.equal(await page.locator('#formalize-original').inputValue(), locale === 'en' ? example.originalEn : example.original);
+    assert.equal(await page.locator('#formalize-example option').nth(1).getAttribute('value'), 'add-zero');
+    for (const id of ['add-zero', 'schur-cubic']) {
+      const example = researchExamples.find(example => example.id === id)!;
+      await page.locator('#formalize-example').selectOption(example.id);
+      assert.equal(await page.locator('#formalize-original').inputValue(), locale === 'en' ? example.originalEn : example.original);
+      assert.equal(await page.locator('#formalize-environment').inputValue(), example.environment);
+    }
     assert.equal(writes.length, 0, 'Choosing a natural-language example only prepares an editable draft');
     await page.locator('#workbench-home').click();
     assert.equal(new URL(page.url()).search, '');
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     await page.reload(); await page.locator('#formalize-original').waitFor();
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
-    mark(`${locale} ${width}px: rich natural examples are editable; new chat and home remain blank after refresh`);
+    mark(`${locale} ${width}px: the standard-library starter comes first; both simple and Mathlib examples set editable drafts and matching environments`);
     await context.close();
   }
   assert.deepEqual(errors, []);

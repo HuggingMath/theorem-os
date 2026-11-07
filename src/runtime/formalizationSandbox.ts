@@ -11,7 +11,7 @@ import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_ENV, prepareMa
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { startFormalizationRelay } from './formalizationRelay';
 import type { ModelRequestGate } from './modelRequest';
-import { SUB2API_PROVIDER, sub2apiModelCatalog, validateSub2apiModel } from './sub2api';
+import { sub2apiModelCatalog } from './sub2api';
 
 const CAPABILITY_ENV = 'FORMALIZATION_RELAY_CAPABILITY';
 const BASE_URL = 'http://127.0.0.1:18888/v1';
@@ -85,7 +85,7 @@ sys.exit(status if status >= 0 else 128 - status)
 
 export type FormalizationSandboxReceipt = Readonly<{
   schema: 'theorem-os.formalization-sandbox.v2'; backend: 'bwrap';
-  workspace: '/workspace'; profile: '/profile'; providerId: 'sub2api';
+  workspace: '/workspace'; profile: '/profile'; providerId: 'sub2api' | 'web_provider';
   namespaces: readonly ['user', 'mount', 'pid', 'ipc', 'uts', 'net'];
   network: 'role-model-relay-only'; credentials: 'host-only'; input: 'read-only';
   toolchain: string; environmentDigest: string; executableSha256: string; profileDigest: string; inputSha256: string;
@@ -95,7 +95,7 @@ export type FormalizationSandboxReceipt = Readonly<{
 }>;
 export type FormalizationSandbox = Readonly<{
   command: string; args: string[]; env: NodeJS.ProcessEnv; inheritedFds?: readonly number[];
-  workspace: '/workspace'; profile: '/profile'; providerId: 'sub2api'; providerBaseUrl: string;
+  workspace: '/workspace'; profile: '/profile'; providerId: 'sub2api' | 'web_provider'; providerBaseUrl: string; modelCatalog?: string;
   receipt: FormalizationSandboxReceipt; close: () => Promise<void>;
 }>;
 type Input = Readonly<{
@@ -158,7 +158,9 @@ function leanToolchain(toolchain: string, env: NodeJS.ProcessEnv): string {
 /** Full-process isolation. No host profile, campaign directory or credential enters the mount namespace. */
 export async function prepareFormalizationSandbox(input: Input): Promise<FormalizationSandbox> {
   if (process.platform !== 'linux') throw new Error('formalization_sandbox_requires_linux');
-  input.signal?.throwIfAborted(); validateSub2apiModel(input.model, input.effort);
+  input.signal?.throwIfAborted();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(input.model) || !['low', 'high', 'max'].includes(input.effort))
+    throw new Error('formalization_sandbox_model_invalid');
   const workspace = path.resolve(input.workspace); assertMathCanonicalPath(workspace);
   if (!fs.statSync(workspace).isDirectory()) throw new Error('formalization_sandbox_input_unavailable');
   // Read each host-owned contract once before any asynchronous preparation. Reject links,
@@ -221,16 +223,17 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
     relay = await startFormalizationRelay({ socketPath: path.join(temporary, 'model.sock'), profile: input.profile,
       model: input.model, effort: input.effort, env: environment, signal: input.signal,
       requestGate: input.requestGate, onUsageIncomplete: input.onUsageIncomplete });
-    const profileConfig = stringifyToml({ model: input.model, model_provider: SUB2API_PROVIDER.id,
-      model_reasoning_effort: input.effort, model_catalog_json: '/profile/models.json', web_search: 'disabled',
+    const providerId = relay.receipt.providerId, modelCatalog = providerId === 'sub2api' ? '/profile/models.json' : undefined;
+    const profileConfig = stringifyToml({ model: input.model, model_provider: providerId,
+      model_reasoning_effort: input.effort, ...(modelCatalog ? { model_catalog_json: modelCatalog } : {}), web_search: 'disabled',
       approval_policy: 'never', sandbox_mode: 'danger-full-access',
-      model_providers: { sub2api: { name: 'Isolated role model relay', base_url: BASE_URL, wire_api: 'responses',
+      model_providers: { [providerId]: { name: 'Isolated role model relay', base_url: BASE_URL, wire_api: 'responses',
         env_key: CAPABILITY_ENV, requires_openai_auth: false, request_max_retries: 0, stream_max_retries: 0 } },
       features: { apps: false, plugins: false, multi_agent: false, multi_agent_v2: false, goals: false,
         shell_snapshot: false, view_image: false },
       shell_environment_policy: { inherit: 'all', exclude: [CAPABILITY_ENV] },
       history: { persistence: 'none' }, analytics: { enabled: false }, allow_login_shell: false });
-    const catalog = canonicalMathJson(sub2apiModelCatalog());
+    const catalog = canonicalMathJson(providerId === 'sub2api' ? sub2apiModelCatalog() : { models: [] });
     fs.writeFileSync(path.join(profile, 'config.toml'), profileConfig, { flag: 'wx', mode: 0o400 });
     fs.writeFileSync(path.join(profile, 'models.json'), catalog, { flag: 'wx', mode: 0o400 });
     for (const { name, bytes } of protocol)
@@ -275,7 +278,7 @@ assert 'Lean (version ${expectedVersion},' in result.stdout
     if (canary.status !== 0 || canary.error) throw new Error('formalization_sandbox_canary_failed');
     input.signal?.throwIfAborted();
     const receipt: FormalizationSandboxReceipt = { schema: 'theorem-os.formalization-sandbox.v2', backend: 'bwrap',
-      workspace: '/workspace', profile: '/profile', providerId: 'sub2api', namespaces: ['user', 'mount', 'pid', 'ipc', 'uts', 'net'],
+      workspace: '/workspace', profile: '/profile', providerId, namespaces: ['user', 'mount', 'pid', 'ipc', 'uts', 'net'],
       network: 'role-model-relay-only', credentials: 'host-only', input: 'read-only', toolchain: config.toolchain,
       environmentDigest: config.dependencyDigest, executableSha256: mathDigest(fs.readFileSync(executable.file)),
       profileDigest: mathDigest(canonicalMathJson({ config: profileConfig, catalog })),
@@ -287,6 +290,6 @@ assert 'Lean (version ${expectedVersion},' in result.stdout
     input.signal?.addEventListener('abort', aborted, { once: true });
     return { command, args: [...args, '--', '/usr/bin/python3', '-I', HELPER, COMMAND, 'app-server', '--listen', 'stdio://'],
       env: { ...SPAWN_ENV }, ...(packagesFd === undefined ? {} : { inheritedFds: [packagesFd] }),
-      workspace: '/workspace', profile: '/profile', providerId: 'sub2api', providerBaseUrl: BASE_URL, receipt, close };
+      workspace: '/workspace', profile: '/profile', providerId, providerBaseUrl: BASE_URL, ...(modelCatalog ? { modelCatalog } : {}), receipt, close };
   } catch (cause) { await close(); throw cause; }
 }

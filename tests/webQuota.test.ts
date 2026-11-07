@@ -90,4 +90,54 @@ describe('per-account allowance', () => {
     expect(webQuotaDefaults).toEqual({ windowHours: 24, runs: 30, formalizations: 8, explanations: 4 });
     expect(Object.isFrozen(webQuotaDefaults)).toBe(true);
   });
+
+  it('keeps a deleted address in its original window without retaining its address or account ID', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-07T09:00:00Z'));
+    const storage = new WebStorage(), subject = quota(storage);
+    subject.take('deleted-account', 'runs');
+    subject.take('deleted-account', 'runs');
+    subject.forget('deleted-account', 'Alice@Example.org');
+    expect(storage.listRecords(['usage'])).toEqual([]);
+    const files = storage.listRecords(['usage-retained']);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^[a-f0-9]{64}\.json$/u);
+    const retained = storage.getRecord(['usage-retained', files[0]!]);
+    expect(JSON.stringify(retained)).not.toMatch(/alice|example|deleted-account/iu);
+    expect(Object.keys(retained as object).sort()).toEqual(['counts', 'expiresAt', 'windowStart']);
+
+    vi.setSystemTime(new Date('2026-11-07T10:00:00Z'));
+    const restarted = quota(storage);
+    restarted.restore('recreated-account', 'alice@example.org');
+    expect(restarted.view('recreated-account')).toMatchObject({ windowEndsAt: '2026-11-07T11:00:00.000Z', runs: { used: 2, limit: 2 } });
+    expect(() => restarted.take('recreated-account', 'runs')).toThrow(WebQuotaError);
+    expect(storage.listRecords(['usage-retained'])).toEqual([]);
+    restarted.forget('recreated-account', 'alice@example.org');
+    restarted.restore('third-account', 'alice@example.org');
+    expect(restarted.view('third-account').runs.used).toBe(2);
+    restarted.restore('different-account', 'bob@example.org');
+    expect(restarted.view('different-account').runs.used).toBe(0);
+  });
+
+  it('removes expired retained usage without requiring the deleted account to return', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-07T09:00:00Z'));
+    const storage = new WebStorage(), subject = quota(storage);
+    subject.take('account', 'runs'); subject.forget('account', 'alice@example.org');
+    vi.setSystemTime(new Date('2026-11-07T11:00:00Z'));
+    subject.prune();
+    expect(storage.listRecords(['usage-retained'])).toEqual([]);
+    subject.restore('new-account', 'alice@example.org');
+    expect(subject.view('new-account').runs.used).toBe(0);
+  });
+
+  it('continues an existing account-id ledger from before retained usage was introduced', () => {
+    const storage = new WebStorage(), subject = quota(storage);
+    subject.take('existing', 'runs');
+    const [file] = storage.listRecords(['usage']);
+    const record = storage.getRecord<Record<string, unknown>>(['usage', file!])!;
+    delete record.windowEnd;
+    storage.saveRecord(['usage', file!], record);
+    quota(storage).restore('existing', 'alice@example.org');
+    expect(subject.view('existing').runs.used).toBe(1);
+    expect(storage.listRecords(['usage-retained'])).toEqual([]);
+  });
 });

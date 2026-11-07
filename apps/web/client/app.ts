@@ -149,6 +149,7 @@ function chooseEntry(mode: 'natural' | 'lean') {
 async function loadNaturalResearch() {
   chatWorkspace = new ChatSession({
     request: api,
+    session: () => state.session,
     draftScope: state.session?.account?.email ?? 'anonymous',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
     onNavigate: (id, mode, attached) => {
@@ -443,6 +444,7 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
       throw error;
     });
     if (!response.ok) {
+      if (response.status === 428) { saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress()); }
       const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
         ? payload.error : response.status === 429 ? t('请求太频繁，请稍后再试。') : t('请求失败 ({0})', response.status);
       throw new ApiError(message, response.status);
@@ -2062,7 +2064,7 @@ function initialize(): Promise<void> {
       const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs');
       const session = localizeSession(reply);
       if (!currentConnection(epoch)) return;
-      if (session.auth === 'email' && !session.account) {
+      if (session.auth === 'email' && (!session.account || session.termsRequired)) {
         saveDraft(); draftReady = false; forgetKey(keyStorage);
         location.replace(loginAddress()); return;
       }
@@ -2170,7 +2172,17 @@ function openAccount() {
 /** The allowlist and beta totals; the server refuses every admin route to other accounts. */
 const admin: { overview?: WebAdminOverview; error?: string; busy?: string } = {};
 function renderAdmin() {
-  renderAdminPanel(element('#admin-content'), { ...admin, onAdd: email => changeAllowlist('POST', email), onRemove: email => void changeAllowlist('DELETE', email) });
+  renderAdminPanel(element('#admin-content'), { ...admin, onAdd: email => changeAllowlist('POST', email),
+    onRemove: email => void changeAllowlist('DELETE', email), onSuspend: (email, suspended) => void changeSuspended(email, suspended) });
+}
+async function changeSuspended(email: string, suspended: boolean) {
+  admin.busy = email; admin.error = undefined; renderAdmin();
+  try {
+    admin.overview = await api<WebAdminOverview>('/api/admin/accounts', { method: 'PATCH', body: JSON.stringify({ email, suspended }) });
+    toast(suspended ? t('账号已暂停') : t('账号已恢复'));
+  }
+  catch (error) { admin.error = message(error); }
+  finally { admin.busy = undefined; renderAdmin(); }
 }
 async function openAdmin() {
   const dialog = element<HTMLDialogElement>('#account-dialog');
@@ -2231,7 +2243,7 @@ async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonE
     try { localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner: state.session && ownerOfSession(state.session), nonce: crypto.randomUUID() })); } catch { /* Other tabs also detect session changes on their next request. */ }
     clearOwnedDrafts();
     try {
-      for (const key of Object.keys(sessionStorage)) if (key.startsWith('theorem-os.natural-research-draft.v1:') || key === entryStorageKey) sessionStorage.removeItem(key);
+      for (const key of Object.keys(sessionStorage)) if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.') || key === entryStorageKey) sessionStorage.removeItem(key);
     } catch { /* Session storage may be unavailable. */ }
     location.replace('login.html');
   }

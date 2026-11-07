@@ -7,6 +7,8 @@ import { DockerWebRunner, parseFormalizationMessage } from '../apps/web/runner';
 import { formalizationStopReason, formalizationWorkerInputSchema, webFormalizationPreparation } from '../apps/web/formalizationWorker';
 import { webFormalizationLimits, type WorkerFormalizationInput, type WorkerFormalizationMessage } from '../apps/web/formalizationTypes';
 import { readWebConfig } from '../apps/web/config';
+import { parse as parseToml } from 'smol-toml';
+import { prepareWebProviderProfile } from '../apps/web/worker';
 
 const input = (): WorkerFormalizationInput => ({ id: crypto.randomUUID(), original: '对每个自然数 n，证明 n + 0 = n。',
   environment: 'standard', model: 'deepseek-flash', effort: 'max', apiKey: 'sk-private-formalize-fixture',
@@ -19,10 +21,37 @@ describe('formalization worker input and protocol', () => {
     const request = input();
     expect(formalizationWorkerInputSchema.parse(request)).toEqual(request);
     for (const override of [{ original: ' ' }, { original: '原'.repeat(11_000) }, { apiKey: 'bad\nkey' },
-      { model: 'other' }, { reviewers: 1 }, { maxRounds: 0 }, { maxPlanningRounds: 0 }, { maxTotalTokens: 200_000 },
+      { model: 'other' }, { reviewers: 1 }, { maxRounds: 0 }, { maxPlanningRounds: 0 }, { maxTotalTokens: 9_999 },
+      { maxTotalTokens: webFormalizationLimits.maxTotalTokens + 1 },
       { maxRunSeconds: webFormalizationLimits.maxRunSeconds + 1 }, { profile: '/private/profile' }])
       expect(formalizationWorkerInputSchema.safeParse({ ...request, ...override }).success).toBe(false);
   });
+
+  it('preserves a configured HTTPS provider, model and reduced token budget through every independent role', () => {
+    const request = { ...input(), model: 'custom-reasoner', effort: 'high' as const, maxTotalTokens: 200_000,
+      provider: { id: 'compatible', name: 'Own provider', baseUrl: 'https://models.example.test/v1' } };
+    expect(formalizationWorkerInputSchema.parse(request)).toEqual(request);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'formalization-provider-profile-')), profile = path.join(directory, 'profile');
+    try {
+      prepareWebProviderProfile(profile, { provider: request.provider, input: request });
+      const config = parseToml(fs.readFileSync(path.join(profile, 'config.toml'), 'utf8'));
+      expect(config).toMatchObject({ model: request.model, model_reasoning_effort: 'high', model_provider: 'web_provider',
+        model_providers: { web_provider: { base_url: request.provider.baseUrl, wire_api: 'responses', env_key: 'THEOREMOS_PROVIDER_API_KEY' } } });
+      expect(config.model_catalog_json).toBeUndefined(); expect(JSON.stringify(config)).not.toContain(request.apiKey);
+      const prepared = webFormalizationPreparation(request, profile, '/private/manifest.json');
+      expect(prepared).toMatchObject({ model: request.model, effort: 'high', maxTotalTokens: 200_000 });
+      for (const role of [prepared.workflow!.planner, prepared.workflow!.backtranslator, ...prepared.workflow!.reviewers])
+        expect(role).toMatchObject({ model: request.model, effort: 'high', profile });
+      expect(JSON.stringify(prepared)).not.toContain(request.apiKey);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each(['http://models.example.test/v1', 'https://user:password@models.example.test/v1',
+    'https://models.example.test/v1?key=private', 'https://models.example.test/v1#fragment', 'not-a-url'])
+    ('rejects an invalid BYOK endpoint through schema validation: %s', baseUrl => {
+      expect(formalizationWorkerInputSchema.safeParse({ ...input(), model: 'custom-reasoner',
+        provider: { id: 'compatible', name: 'Fixture', baseUrl } }).success).toBe(false);
+    });
 
   it('keeps independent roles, planned fidelity review and exact provenance', () => {
     const request = input(), prepared = webFormalizationPreparation(request, '/private/profile', '/private/manifest.json');
@@ -63,7 +92,7 @@ describe('formalization worker input and protocol', () => {
 });
 
 describe('formalization container boundary', () => {
-  it.each(['complete', 'cancel', 'missing-result'] as const)('uses private stdin and removes the container (%s)', async mode => {
+  it.each(['complete', 'https-complete', 'cancel', 'missing-result'] as const)('uses private stdin and removes the container (%s)', async mode => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'formalization-docker-test-'));
     fs.writeFileSync(path.join(directory, 'docker'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
@@ -78,18 +107,20 @@ async function main() {
   fs.writeFileSync(path.join(__dirname, 'metadata.json'), JSON.stringify({ leaked: Object.values(process.env).some(value => value.includes(request.apiKey)) }));
   process.stdout.write(JSON.stringify({ type: 'progress', progress: { phase: 'planning', round: 1 } }) + '\\n');
   if (${JSON.stringify(mode)} === 'cancel') setInterval(() => {}, 1000);
-  if (${JSON.stringify(mode)} === 'complete') process.stdout.write(JSON.stringify({ type: 'result', status: 'exhausted', reason: 'formalization_rounds_exhausted' }) + '\\n');
+  if (${JSON.stringify(mode)}.endsWith('complete')) process.stdout.write(JSON.stringify({ type: 'result', status: 'exhausted', reason: 'formalization_rounds_exhausted' }) + '\\n');
 }
 main().catch(() => process.exit(1));
 `, { mode: 0o700 });
     vi.stubEnv('PATH', directory);
     try {
       const request = input(), messages: WorkerFormalizationMessage[] = [], controller = new AbortController();
+      if (mode === 'https-complete') Object.assign(request, { model: 'custom-reasoner', maxTotalTokens: 200_000,
+        provider: { id: 'compatible', name: 'Fixture', baseUrl: 'https://models.example.test/v1' } });
       const operation = new DockerWebRunner(readWebConfig({})).formalize(request, message => {
         messages.push(message);
         if (mode === 'cancel') controller.abort();
       }, controller.signal);
-      if (mode === 'complete') await operation;
+      if (mode.endsWith('complete')) await operation;
       else await expect(operation).rejects.toThrow(mode === 'cancel' ? 'formalization_cancelled' : 'formalization_worker_exited');
       const calls = fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(calls.map(args => args[0])).toEqual(['create', 'start', 'rm']);

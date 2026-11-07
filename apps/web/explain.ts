@@ -166,6 +166,7 @@ export class WebExplainer {
   private readonly busy = new Set<string>();
   private readonly asked = new Map<string, number[]>();
   constructor(private readonly timeoutMs = 180_000) {}
+  counts() { return { running: this.busy.size, queued: 0 }; }
 
   async ask(owner: string, call: Omit<WebExplainCall, 'timeoutMs'>, signal?: AbortSignal): Promise<WebExplainAnswer> {
     const now = Date.now(), recent = (this.asked.get(owner) ?? []).filter(at => now - at < pace.ms);

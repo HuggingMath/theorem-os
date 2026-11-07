@@ -38,7 +38,9 @@ import { parseLeanStatementContexts } from '../math/leanStatementContext';
 import { allowsOmittedLibraryContext, hasStructureContext } from '../math/leanStatementSemantic';
 import { assertFormalizationRetrieval, formalizationRetrievalSchema, retrieveFormalizationPlan } from '../math/formalizationRetrieval';
 import type { lookupLeanLibrarySymbols } from '../math/leanLibrarySymbols';
-import { allowanceReached, buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed, reportedTotalTokens, type UsageAccounting } from './usageBudget';
+import { allowanceReached, beginRequestUsage, buildTokenBudget, initializeRequestUsageAccounting, initializeUsageAccounting,
+  modelDispatchAllowed, reportedTotalTokens, type RequestUsageAccounting, type UsageAccounting } from './usageBudget';
+import { requestUsageAccountingSchema } from './archive';
 import { acquireMathModelSlot, configuredMathModelSlots, type MathModelSlot } from '../math/mathModelSlot';
 import { FORMALIZATION_FALSIFICATION_AUTHOR_INSTRUCTIONS, FORMALIZATION_FALSIFICATION_REVIEW_INSTRUCTIONS,
   FORMALIZATION_REFUTE_INSTRUCTIONS, formalizationRefutationInput, formalizationRefutationOutputSchema,
@@ -61,6 +63,7 @@ const sessionSchema = z.object({
   turns: z.number().int().nonnegative(), usage: z.record(z.unknown()),
   usageAccounting: z.object({ startedTurns: z.number().int().nonnegative(), reportedTurns: z.number().int().nonnegative(),
     pending: z.boolean(), incomplete: z.boolean() }).strict(),
+  requestUsageAccounting: requestUsageAccountingSchema.optional(),
 }).strict();
 const stateSchema = z.object({
   schema: z.literal('theorem-os.formalization-state.v1'), requestDigest: z.string(),
@@ -78,12 +81,15 @@ const stateSchema = z.object({
     retrievalDigest: z.string().optional(), elaborationDigest: z.string().optional(),
     referenceDigest: z.string().optional() }).strict().optional(),
 }).strict();
-type SessionRecord = Omit<z.infer<typeof sessionSchema>, 'turns' | 'usageAccounting'> & { turns: number; usageAccounting: UsageAccounting };
+type SessionRecord = Omit<z.infer<typeof sessionSchema>, 'turns' | 'usageAccounting' | 'requestUsageAccounting'> & {
+  turns: number; usageAccounting: UsageAccounting; requestUsageAccounting?: RequestUsageAccounting };
 type State = Omit<z.infer<typeof stateSchema>, 'sessions'> & { sessions: SessionRecord[] };
 const summarizeRun = (directory: string, request: FormalizationRequest, state: State) => ({
   status: state.status as 'approved' | 'exhausted' | 'stopped', directory, rounds: state.rounds,
   modelInvoked: request.execution === 'model' && state.sessions.some(item => item.turns > 0),
-  tokenBudget: buildTokenBudget(request.maxTotalTokens, state.sessions),
+  tokenBudget: buildTokenBudget(request.maxTotalTokens, state.sessions,
+    state.sessions.length > 0 && state.sessions.every(item => item.requestUsageAccounting)
+      ? 'provider-observed-upstream-request-limit' : 'provider-observed-dispatch-limit'),
   ...(request.workflow ? { candidateSelection: request.workflow.candidateSelection, candidatesTried: state.generatedCandidates ?? 0,
     firstCandidateApproved: state.status === 'approved' && state.generatedCandidates === 1,
     distinctModelConfigurations: distinctFormalizationModelConfigurations(request, request.workflow),
@@ -266,7 +272,7 @@ export async function runFormalization(directory: string, root: string, options:
         const instructionsText = (structured && role === 'compare' ? formalizationReviewInstructions('review', semanticContext, reviewStructureContext, request.fidelityPolicy) :
           structured && role === 'backtranslate' ? formalizationReviewInstructions('backtranslate', semanticContext, reviewStructureContext) : roleInstructions[role]) +
           (request.fidelityPolicy && role === 'plan' ? '\n' + [
-            'All source coordinates are offsets in the parsed INPUT.statement string, never INPUT.json file positions or JSON-escaped text. Use JavaScript to parse INPUT.json, set statement = input.statement, compute start = statement.indexOf(text) (choose the intended occurrence if repeated), end = start + text.length, and verify statement.slice(start,end) === text before submitting.',
+            'All source coordinates are UTF-16 code-unit offsets in the parsed INPUT.statement string, never INPUT.json file positions or JSON-escaped text. /usr/bin/python3 is available in this sandbox; Node.js is not provided. Parse INPUT.json with Python, set statement = input["statement"], find i = statement.index(text) (choose the intended occurrence if repeated), verify statement[i:i+len(text)] == text, then set start = len(statement[:i].encode("utf-16-le")) // 2 and end = start + len(text.encode("utf-16-le")) // 2. Python string indices alone are not UTF-16 offsets.',
             'conclusions.targetNames contains only the theorem/lemma names you will generate, with namespace qualification; map imported library constants/classes/types in definitions.leanNames instead.',
             'Different existing-definition records may cite the same imported constant for distinct source meanings. A new local definition name must remain unique across every definition record, including existing mappings; names within one record may not repeat.',
           ].join('\n') : '') +
@@ -306,6 +312,11 @@ export async function runFormalization(directory: string, root: string, options:
           ] : []),
           ...(request.fidelityPolicy && role === 'generate' ? [
             'Implement the supplied plan as declarations with erased theorem proofs. Once the final candidate type-checks, submit it. Repeat a successful Lean check only after changing a mathematical declaration or to resolve a new diagnostic; changing comments or notes does not require another check.',
+          ] : []),
+          ...(request.fidelityPolicy && role === 'backtranslate' ? [
+            'Use the host-observed elaborated types, binder dependencies, actual instances and supplied definition context as the primary evidence. Inspect an installed definition only to resolve a specific semantic uncertainty left by that context; do not repeat observations already supplied or recompile the snapshot merely to confirm it elaborates.',
+            'The candidate declarations are supplied in INPUT.json, not installed as a library module. A fresh file importing Init or Mathlib does not contain those target names; read their actual elaborated types from the snapshot.',
+            'In definitions, explain the mathematical meanings needed to interpret the statement. Do not turn the output into an inventory of kernel constructors or typeclass dispatch helpers; still examine any instance or local definition that can change the mathematical meaning. Once every target, domain, quantifier, hypothesis, conclusion and relevant definition has been interpreted, write OUTPUT.json and stop. Record any remaining uncertainty explicitly rather than repeatedly rechecking settled facts.',
           ] : []),
           'Write your complete final JSON atomically (write a temporary file, then rename it to OUTPUT.json).',
           'The first complete schema-valid OUTPUT.json is your submission: the host ends this role and validates it. Stop after submitting.',
@@ -383,10 +394,29 @@ export async function runFormalization(directory: string, root: string, options:
             ...(request.execution === 'model' ? { readIsolation: { environment: request.environment } } : {}),
             completedOutput: { file: outputFile, validate: value => { validateOutput(value); } },
             onUsage: usage => {
+              // Relayed roles settle each provider request; cumulative native notifications are observational.
+              if (record.requestUsageAccounting) return;
               record.usage = usage; save();
               if (spent()) for (const stopRole of running) stopRole();
-            }, onUsageIncomplete: () => { incomplete = true; },
+            }, onUsageIncomplete: () => {
+              incomplete = true;
+              if (record.requestUsageAccounting) record.requestUsageAccounting.incomplete = true;
+              save();
+            },
+            requestGate: identity => {
+              if (lease.signal.aborted || stopped || remaining() <= 0) return { allowed: false, reason: 'math_model_request_stopped' };
+              const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
+              if (!modelDispatchAllowed(budget)) return { allowed: false, reason: budget.reason! };
+              initializeRequestUsageAccounting(record);
+              const settle = beginRequestUsage(record, identity);
+              save();
+              return { allowed: true, settle: receipt => {
+                settle(receipt); save();
+                if (spent()) for (const stopRole of running) stopRole();
+              } };
+            },
           });
+          if (session.usageSource === 'upstream-requests') initializeRequestUsageAccounting(record);
           if (session.isolationReceipt) record.isolationReceipt = session.isolationReceipt;
           if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
           if (stopped || spent()) throw new Error('math_total_token_limit');

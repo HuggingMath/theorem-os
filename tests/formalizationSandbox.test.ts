@@ -86,7 +86,7 @@ beforeEach(() => {
       server.close(error => error ? reject(error) : resolve()); server.closeAllConnections();
     });
     relayClosers.push(close);
-    return { socketPath, apiKey, httpHost: 'formalization-relay.local', route: '/v1/responses', close };
+    return { socketPath, apiKey, httpHost: 'formalization-relay.local', route: '/v1/responses', receipt: { providerId: 'sub2api' }, close };
   });
 });
 afterEach(async () => {
@@ -173,6 +173,36 @@ print('synthetic relay passed')`);
     expect(config.model_providers.sub2api).toMatchObject({ base_url: 'http://127.0.0.1:18888/v1', env_key: 'FORMALIZATION_RELAY_CAPABILITY' });
     expect(config.model_providers.sub2api.auth).toBeUndefined();
     expect(Object.keys(sandbox.env).sort()).toEqual(['LANG', 'PATH']);
+  });
+
+  it('isolates HTTPS BYOK roles without exposing the upstream key, host profile or a Sub2API model catalog', async () => {
+    const relay = mocks.relay.getMockImplementation()!;
+    mocks.relay.mockImplementation(async input => ({ ...await relay(input), receipt: { providerId: 'web_provider' } }));
+    const secret = 'sk-upstream-https-fixture', f = fixture();
+    const requestGate = vi.fn(() => ({ allowed: false, reason: 'math_total_token_limit' })), onUsageIncomplete = vi.fn();
+    const sandbox = await prepare(f, { model: 'custom-reasoner', effort: 'high',
+      requestGate, onUsageIncomplete,
+      env: { PATH: '/usr/bin:/bin', THEOREMOS_PROVIDER_API_KEY: secret, SUB2API_WESTLAKE_API_KEY: 'other-upstream-fixture' } });
+    expect(mocks.relay.mock.calls[0][0]).toMatchObject({ profile: f.profile, model: 'custom-reasoner', effort: 'high',
+      requestGate, onUsageIncomplete,
+      env: { THEOREMOS_PROVIDER_API_KEY: secret } });
+    const config = parseToml(fs.readFileSync(path.join(sandbox.receipt.auditDirectory, 'config.toml'), 'utf8'));
+    expect(config).toMatchObject({ model: 'custom-reasoner', model_provider: 'web_provider', model_reasoning_effort: 'high',
+      model_providers: { web_provider: { base_url: 'http://127.0.0.1:18888/v1', env_key: 'FORMALIZATION_RELAY_CAPABILITY' } } });
+    expect(config.model_catalog_json).toBeUndefined(); expect(sandbox.modelCatalog).toBeUndefined();
+    expect(sandbox.receipt).toMatchObject({ providerId: 'web_provider', credentials: 'host-only', network: 'role-model-relay-only', canary: 'passed' });
+    expect(JSON.stringify({ config, args: sandbox.args, env: sandbox.env, receipt: sandbox.receipt })).not.toMatch(/sk-upstream-https-fixture|other-upstream-fixture/);
+    const result = await run(sandbox, `import http.client, json, os
+assert 'THEOREMOS_PROVIDER_API_KEY' not in os.environ
+assert 'SUB2API_WESTLAKE_API_KEY' not in os.environ
+assert not os.path.exists(${JSON.stringify(f.profile)})
+assert not os.path.exists('/profile/auth.json')
+connection = http.client.HTTPConnection('127.0.0.1', 18888)
+connection.request('POST', '/v1/responses', '{}', {'Authorization': 'Bearer ' + os.environ['FORMALIZATION_RELAY_CAPABILITY']})
+assert connection.getresponse().status == 200
+print('HTTPS provider role isolated')`);
+    expect(result).toMatchObject({ status: 0, stdout: 'HTTPS provider role isolated\n', stderr: '' });
+    expect(observed).toEqual([{ host: 'formalization-relay.local', route: '/v1/responses', authorized: true }]);
   });
 
   it('cannot reach a host loopback listener while the role relay remains available', async () => {

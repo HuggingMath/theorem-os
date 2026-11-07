@@ -98,7 +98,8 @@ try {
     await page.locator('.research-examples').waitFor();
     assert.equal(await page.locator('body').getAttribute('data-view'), 'draft');
     assert.equal(await page.locator('.research-example').count(), researchExamples.length);
-    const selected = researchExamples.find(example => example.id === 'schur-cubic')!;
+    const selected = researchExamples.find(example => example.id === 'add-zero')!;
+    assert.equal(await page.locator('.research-example [data-chat-template]').first().getAttribute('data-chat-template'), selected.id);
     await page.locator(`[data-chat-template="${selected.id}"]`).click();
     assert.equal(await page.locator('#source').inputValue(), selected.source);
     assert.equal(await page.locator('#environment').inputValue(), selected.environment);

@@ -500,6 +500,53 @@ describe('formalization generation and independent statement review', () => {
     }
   });
 
+  it('charges provider receipts once and ignores delayed native totals for a relayed role', async () => {
+    const f = fixture({ maxTotalTokens: 20 }), agent = preset({ tokens: 9999, submitted: true });
+    let requests = 0;
+    const openSession = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const session = await agent.open(config);
+      return { ...session, usageSource: 'upstream-requests', run: async (...args) => {
+        const admission = config.requestGate!({ requestId: 'request-' + ++requests, source: 'responses-relay' });
+        expect(admission.allowed).toBe(true);
+        if (admission.allowed) {
+          const receipt = { complete: true, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+          admission.settle(receipt); admission.settle(receipt);
+        }
+        return session.run(...args);
+      } };
+    };
+    expect(await runFormalization(f.directory, f.root, { openSession, elaborate }))
+      .toMatchObject({ status: 'approved', tokenBudget: { reportedTotalTokens: 6, usageComplete: true,
+        enforcement: 'provider-observed-upstream-request-limit' } });
+    const state = readFormalizationState(f.directory)!;
+    expect(state.sessions).toHaveLength(3);
+    for (const record of state.sessions) expect(record).toMatchObject({ usage: { totalTokens: 2 },
+      requestUsageAccounting: { startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false } });
+    const again = await runFormalization(f.directory, f.root, { openSession, elaborate });
+    expect(again.tokenBudget.reportedTotalTokens).toBe(6); expect(requests).toBe(3);
+  });
+
+  it.each(['exhausted', 'missing'] as const)('blocks the next upstream request after %s usage', async reason => {
+    const f = fixture({ maxTotalTokens: 2 }), agent = preset();
+    let attempted = 0;
+    const openSession = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const session = await agent.open(config);
+      return { ...session, usageSource: 'upstream-requests', run: async (...args) => {
+        args[3]('receipt-turn');
+        const first = config.requestGate!({ requestId: 'first', source: 'responses-relay' });
+        expect(first.allowed).toBe(true); attempted++;
+        if (first.allowed) first.settle(reason === 'missing' ? { complete: false, missingReason: 'provider-usage-missing' }
+          : { complete: true, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+        expect(config.requestGate!({ requestId: 'next', source: 'responses-relay' }).allowed).toBe(false);
+        return 'interrupted';
+      } };
+    };
+    const result = await runFormalization(f.directory, f.root, { openSession, elaborate });
+    expect(result.status).toBe('stopped'); expect(result.tokenBudget.status).toBe(reason === 'missing' ? 'usage-unavailable' : 'exhausted');
+    await runFormalization(f.directory, f.root, { openSession, elaborate });
+    expect(attempted).toBe(1);
+  });
+
   it('invalidates a run when the frozen problem, build or environment identity changes', async () => {
     const f = fixture(), agent = preset();
     await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });

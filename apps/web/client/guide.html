@@ -20,7 +20,7 @@
     <main id="main" class="guide-content" tabindex="-1">
       <header class="share-card guide-heading">
         <h1>使用说明</h1>
-        <p>TheoremOS 帮你证明 Lean 定理：你提交一个用 sorry 留出待证定理的 Lean 文件，用自己的模型 API 运行，Agent 分工写证明，最后由隔离的 Lean 环境检查完整原题。只有这一步「独立验收」通过，才算证明完成。</p>
+        <p>TheoremOS 把自然语言或 TeX 原题转成 Lean 陈述，经模型回译与审核后尝试构造证明，最后由隔离的 Lean 环境独立验收。你也可以从已有 Lean 文件开始。自然语言含义的审核与 Lean 证明验收分别展示。</p>
         <nav aria-label="本页目录"><ol class="guide-toc">
           <li><a href="#start">五步开始</a></li>
           <li><a href="#watch">运行时看什么</a></li>
@@ -36,11 +36,11 @@
       <section class="share-card" id="start" aria-labelledby="start-heading">
         <h2 id="start-heading">五步开始</h2>
         <ol class="guide-steps">
-          <li><strong>先看示例</strong><p>首页的「先看一次完整运行」是一次录制好的运行，不需要 API Key。可以逐个标签页浏览，了解一次研究从拆分任务到验收的全过程。</p></li>
-          <li><strong>写下原题</strong><p>点输入框上方的「原始题目」打开源码编辑器，或用回形针附加 .lean 文件，也可以直接选一道示例题目。要证明的定理用 sorry 留空；定理的声明在研究过程中不会被改动。</p></li>
-          <li><strong>确认原题能提交</strong><p>修改源码后，工作台会自动用 Lean 检查一遍原题，输入框上方显示结果。语法错误或缺少待证定理时会标出位置，改好之后才能提交。</p></li>
-          <li><strong>连接模型</strong><p>点滑杆图标打开研究配置，在「模型连接」里选服务商、填模型名和 API Key。「保存到我的账号」默认勾选：Key 加密保存在服务器，只有你的账号能用，下次不用再填；不想保存就取消勾选。</p></li>
-          <li><strong>设定预算并发送</strong><p>「执行配置」里的轮次上限、解题预算和用量上限，到达任一项运行就会停止。不确定时保持默认，在输入框写下研究任务后点发送。</p></li>
+          <li><strong>先看示例</strong><p>在经典题库浏览已有证明，或打开「先看一次完整运行」查看录制回放，都不需要 API Key。「试试例题」只把原题填入输入框，发送后才调用模型。</p></li>
+          <li><strong>写下原题</strong><p>直接在首页输入完整的自然语言或 TeX 原题，包括对象、假设与结论。已有 Lean 文件时，点输入框旁的 Lean 入口粘贴或导入源码，待证部分用 sorry 留空。</p></li>
+          <li><strong>选择服务商与模型</strong><p>打开「设置」选择模型服务商、模型与证明环境。模型名必须是该服务商为你的账号提供的名称；切换服务商会清空未保存的 Key。</p></li>
+          <li><strong>连接模型</strong><p>填写所选服务商的 API Key。OpenAI 提供创建 Key 的链接；网关账号与 Key 请向该网关管理员获取。可以先点「检查 Key 与模型」，此操作只读取模型列表，不调用模型；不支持模型列表的服务需在发送时确认。</p></li>
+          <li><strong>设定预算并发送</strong><p>形式化与随后证明各有时间和 Token 预算，发送前会显示两阶段上限。费用计入你的模型账户，按服务商已报告用量停止；进行中的请求可能超额，Token 预算不是金额封顶。发送后先核对原题含义，再自动开始证明。</p></li>
         </ol>
       </section>
 
@@ -62,7 +62,7 @@
         <dl class="guide-terms">
           <div><dt>原意与 Lean 对照</dt><dd>在「协作」的「原意与 Lean」分区选择一份声明审阅，查看数学原意、Lean 形式声明、独立回译和审阅结论。研究进行中就能查看已记录的审阅；没有记录时会显示空态。声明审阅通过后，完整证明仍需独立验收。</dd></div>
           <div><dt>Lean → 自然语言</dt><dd>验收通过后，点「结果」中验收证明标题旁或「源码」工具栏的「Lean → 自然语言」。讲解页可切换目标与中英文，逐步对照 Lean 行、引理和自然语言，下载已通过审核的 Markdown。生成前会显示时间与用量估算，由你手动开始。</dd></div>
-          <div><dt>自然语言 → Lean</dt><dd>在新建研究中打开「自然语言 / TeX → Lean」，输入完整原题，生成后对照 Lean 陈述、独立回译和审核结论。确认陈述后带入研究草稿，再设置研究要求并开始证明。在线生成目前需要 Sub2API、deepseek-flash 和支持形式化的运行环境；刷新可继续查看任务。</dd></div>
+          <div><dt>自然语言 → Lean</dt><dd>首页发送自然语言原题后，系统生成 Lean 陈述并由模型独立回译、审核，通过后自动开始证明。点「原题 / Lean」核对对应关系；「完整审核」保留各次模型结论。独立形式化页面也保留先由你核对确认、再带入 Lean 草稿的流程。</dd></div>
         </dl>
         <p class="guide-note">证明讲解目前仅支持使用 Sub2API 与 deepseek-flash 的已验收运行，服务也需提供讲解运行环境；不支持时页面会说明原因。示例运行可以打开对照页，但没有预生成讲解，也不能生成。</p>
       </section>
@@ -78,7 +78,7 @@
       <section class="share-card" id="results" aria-labelledby="results-heading">
         <h2 id="results-heading">看懂结果</h2>
         <dl class="guide-terms guide-status">
-          <div><dt><span class="badge passed">完整原题通过</span></dt><dd>所有目标定理都通过了独立验收。这是唯一算数的结论。</dd></div>
+          <div><dt><span class="badge passed">完整原题通过</span></dt><dd>所有冻结的 Lean 目标都通过了独立验收。自然语言输入还会单独显示陈述是由模型审核，还是由你确认；Lean 验收本身不验证翻译是否忠实。</dd></div>
           <div><dt><span class="badge failed">验收未通过</span></dt><dd>Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。</dd></div>
           <div><dt><span class="badge warning">运行结束</span></dt><dd>到达轮次、时间或用量上限时还没有完成证明，标签会写明原因，例如「解题时间用完」。已检查的成果保留在报告里，可以提高预算后重新运行。</dd></div>
           <div><dt><span class="badge failed">运行失败</span></dt><dd>Key 无效、服务商限流或环境故障等原因让运行无法继续。对话里会给出对应的处理按钮，例如「更换 API Key」或「减少 Agent 数量」。</dd></div>
@@ -92,7 +92,7 @@
         <dl class="guide-terms">
           <div><dt>本地复核</dt><dd>在「结果」的验收报告里下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。</dd></div>
           <div><dt>分享</dt><dd>验收通过的运行可以创建只读分享链接。链接不包含 API Key、服务地址、运行日志和 Agent 对话，可以随时停止分享。</dd></div>
-          <div><dt>继续研究</dt><dd>「复用任务配置」把原题和配置填进新草稿；「从这一版继续」则带上所选版本的代码供新运行参考。新运行都要重新检查和验收，后续运行可以与原运行对比代码。</dd></div>
+          <div><dt>继续研究</dt><dd>形式化已完成、证明队列未能接收时，点「继续证明」使用已有陈述，不重新生成形式化。已有运行可用「复用任务配置」或「从这一版继续」新建研究；新运行仍需重新检查和验收。</dd></div>
           <div><dt>保存与搬运</dt><dd>「新建研究」右上角可导出任务草稿，或导入草稿和运行档案 JSON；导入档案会提取原题与配置，不会恢复整次历史记录。「更多操作」可下载运行档案。草稿和档案不携带 API Key，使用前请确认模型连接。</dd></div>
           <div><dt>研究记录</dt><dd>左栏列出全部运行，可以搜索、按状态筛选；不需要的记录在运行详情的「更多操作」里删除。</dd></div>
         </dl>
@@ -114,7 +114,7 @@
       <section class="share-card" id="data" aria-labelledby="data-heading">
         <h2 id="data-heading">数据与费用</h2>
         <dl class="guide-terms">
-          <div><dt>API Key</dt><dd>服务器只用它调用你选择的服务商，费用计入你自己的 API 账户。Key 不会写进草稿、运行档案或分享链接。保存到账号的 Key 加密存放，只有你的账号能用，可以在「模型连接」里随时删除。</dd></div>
+          <div><dt>API Key</dt><dd>服务器用 Key 访问你选择的服务商，费用计入你的 API 账户。自然语言输入框中的 Key 只在当前页面内存中保留，刷新后清空。进阶版可选择加密保存到账号，并在「模型连接」里删除；Key 不进入草稿、运行档案或分享链接。</dd></div>
           <div><dt>运行记录</dt><dd>登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。</dd></div>
           <div><dt>草稿</dt><dd>未提交的草稿自动保存在当前标签页，刷新后可恢复，不会同步到账号。需要长期保留或换设备时，请导出任务草稿。</dd></div>
         </dl>

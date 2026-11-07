@@ -88,7 +88,7 @@ let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
 
-  const bob = await signedIn(browser, 'bob@example.org');
+  let bob = await signedIn(browser, 'bob@example.org');
   await bob.page.click('#open-account');
   await bob.page.locator('#account-dialog[open]').waitFor();
   assert.equal(await bob.page.locator('#open-admin').isVisible(), false, 'A tester sees the admin button');
@@ -127,6 +127,23 @@ try {
   assert.deepEqual(await contrastProblems(page, '#admin-dialog'), [], 'Admin dialog contrast below WCAG AA (light)');
   await page.screenshot({ path: path.join(output, 'admin-1440.png') });
   mark('the admin dialog lists the allowlist with its sources, the funnel and the accounts, and passes the accessibility and contrast rules');
+
+  const bobId = service.auth!.getAccount('bob@example.org')!.id;
+  const bobRow = page.locator('.admin-table tbody tr', { hasText: 'bob@example.org' });
+  await bobRow.getByRole('button', { name: '暂停 bob@example.org', exact: true }).click();
+  await bobRow.getByRole('button', { name: '确认暂停', exact: true }).click();
+  await bobRow.getByRole('button', { name: '恢复 bob@example.org', exact: true }).waitFor();
+  assert.equal((await bob.context.request.get(`${origin}/api/runs`)).status(), 401, 'Suspension must revoke existing sessions');
+  assert.ok(service.auth!.getAccount('bob@example.org')!.suspendedAt);
+  await bobRow.getByRole('button', { name: '恢复 bob@example.org', exact: true }).click();
+  await bobRow.getByRole('button', { name: '确认恢复', exact: true }).click();
+  await bobRow.getByRole('button', { name: '暂停 bob@example.org', exact: true }).waitFor();
+  const previousBob = bob;
+  bob = await signedIn(browser, 'bob@example.org');
+  await previousBob.context.close();
+  assert.equal(service.auth!.getAccount('bob@example.org')!.id, bobId);
+  assert.equal((await bob.context.request.get(`${origin}/api/runs`)).status(), 200);
+  mark('suspension revokes a tester session; restoration allows sign-in to the same account');
 
   await page.fill('#admin-email', ' Dave@Example.org ');
   await page.click('.admin-add button[type=submit]');

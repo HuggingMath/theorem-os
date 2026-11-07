@@ -5,8 +5,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig, webDefaults, webLimits, type WebConfig } from '../apps/web/config';
-import { WebFormalizations } from '../apps/web/formalizations';
-import { webFormalizationLimits, type WebFormalization, type WorkerFormalizationInput, type WorkerFormalizationMessage } from '../apps/web/formalizationTypes';
+import { WebFormalizations, verifyWebFormalizationEvidence } from '../apps/web/formalizations';
+import { webFormalizationDefaults, webFormalizationLimits, type WebFormalization, type WorkerFormalizationInput, type WorkerFormalizationMessage } from '../apps/web/formalizationTypes';
 import type { WebRunner } from '../apps/web/runner';
 import { WebKeyVault } from '../apps/web/keyVault';
 import { WebStorage } from '../apps/web/storage';
@@ -231,7 +231,7 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id, b.id]);
   });
 
-  it('reports automatic proof queue rejection without retrying or leaking credentials', async () => {
+  it('retries a queue-rejected proof with frozen evidence, once, without regenerating or leaking credentials', async () => {
     const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
     config.queueLimit = 0;
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
@@ -239,10 +239,21 @@ describe('online formalization ownership and evidence handoff', () => {
     const completed = (await (await request(alice, route)).json()).formalization as WebFormalization;
     expect(completed).toMatchObject({ status: 'confirmed', confirmation: 'automatic', researchError: 'formalization_research_queue_failed' });
     expect(completed.runId).toBeUndefined(); expect(runner.inputs[0].apiKey).toBe('');
+    expect((await request(alice, route + '/research', { apiKey: KEY })).status).toBe(429);
     config.queueLimit = 8;
     await request(alice, route + '/confirm', { evidenceSha256: completed.report!.evidenceSha256 });
     await request(alice, route); await request(alice, '/api/formalizations'); await settle();
     expect(runner.runs).toHaveLength(0);
+    const bob = await client();
+    expect((await request(bob, route + '/research', { apiKey: KEY })).status).toBe(404);
+    const resumed = await request(alice, route + '/research', { apiKey: KEY });
+    expect(resumed.status).toBe(200);
+    const restored = (await resumed.json()).formalization as WebFormalization;
+    expect(restored.runId).toBeTruthy(); expect(restored.researchError).toBeUndefined();
+    expect(restored.report?.evidenceSha256).toBe(completed.report?.evidenceSha256);
+    expect((await (await request(alice, route + '/research', {})).json()).formalization.runId).toBe(restored.runId);
+    await settle(); expect(runner.inputs).toHaveLength(1); expect(runner.runs).toHaveLength(1);
+    expect(runner.runs[0].input).toMatchObject(webFormalizationDefaults.research);
   });
 
   it('never starts proof research for cancelled, failed, exhausted or unverified automatic formalizations', async () => {
@@ -271,10 +282,10 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await (await request(alice, `/api/formalizations/${two.id}`)).json()).formalization.status).toBe('error');
   });
 
-  it('sets no token budget and still accepts evidence generated under the earlier 200,000-token budget', async () => {
+  it('binds new evidence to the chosen token budget while accepting persisted legacy budgets', async () => {
     const alice = await client(), current = await create(alice), pending = runner.pending.at(-1)!;
-    expect(pending.input.maxTotalTokens).toBe(0);
-    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence({ ...pending.input, maxTotalTokens: 200_000 }) });
+    expect(pending.input.maxTotalTokens).toBe(webFormalizationDefaults.maxTotalTokens);
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) });
     pending.resolve(); await settle();
     expect((await (await request(alice, `/api/formalizations/${current.id}`)).json()).formalization.status).toBe('review');
     const other = await create(alice), next = runner.pending.at(-1)!;
@@ -282,6 +293,46 @@ describe('online formalization ownership and evidence handoff', () => {
     next.resolve(); await settle();
     expect((await (await request(alice, `/api/formalizations/${other.id}`)).json()).formalization)
       .toMatchObject({ status: 'error', reason: 'formalization_binding_mismatch' });
+    const { maxRunSeconds: _seconds, maxTotalTokens: _tokens, ...legacy } = current;
+    for (const maxTotalTokens of [0, 200_000]) {
+      const evidence = webFormalizationEvidence({ ...pending.input, maxRunSeconds: 1800, maxTotalTokens });
+      expect(() => verifyWebFormalizationEvidence(evidence, legacy)).not.toThrow();
+      expect(() => verifyWebFormalizationEvidence(evidence, current)).toThrow('formalization_binding_mismatch');
+    }
+  });
+
+  it('preserves provider, model and the two submitted budgets through the proof handoff', async () => {
+    const alice = await client();
+    const generation = (await (await request(alice, '/api/formalizations')).json()).generation;
+    expect(generation.defaults).toEqual(webFormalizationDefaults);
+    expect(generation.providers).toContainEqual(expect.objectContaining({ id: 'openai', keyUrl: 'https://platform.openai.com/api-keys' }));
+    const research = { maxRunSeconds: 90, maxTurns: 2, maxTotalTokens: 30_000 };
+    const response = await request(alice, '/api/formalizations', { ...body, solve: true, providerId: 'openai', model: 'gpt-6.1-sol',
+      maxRunSeconds: 120, maxTotalTokens: 50_000, research });
+    expect(response.status).toBe(201); await settle();
+    const value = (await response.json()).formalization as WebFormalization, pending = runner.pending.at(-1)!;
+    expect(pending.input).toMatchObject({ model: 'gpt-6.1-sol', provider: { id: 'openai' }, maxRunSeconds: 120, maxTotalTokens: 50_000 });
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
+    const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization;
+    expect(completed.runId).toBeTruthy();
+    expect(runner.runs[0].input).toMatchObject({ providerId: 'openai', model: 'gpt-6.1-sol', ...research });
+    expect((await request(alice, '/api/formalizations', { ...body, maxTotalTokens: 0 })).status).toBe(400);
+    expect((await request(alice, '/api/formalizations', { ...body, providerId: 'sub2api', model: 'other' })).status).toBe(400);
+  });
+
+  it('drains accepted formalizations into proofs during maintenance while rejecting new work and keeping reads', async () => {
+    const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
+    service.storage.saveRecord(['operations', 'maintenance.json'], { enabled: true, updatedAt: new Date().toISOString() });
+    const ready = await fetch(base + '/readyz');
+    expect(ready.status).toBe(503); expect(await ready.json()).toMatchObject({ ready: false, maintenance: true });
+    expect((await (await request(alice, '/api/session')).json()).maintenance).toBe(true);
+    expect((await request(alice, '/api/formalizations', body)).status).toBe(503);
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
+    const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization;
+    expect(completed.runId).toBeTruthy(); expect(runner.runs).toHaveLength(1);
+    expect((await request(alice, `/api/runs/${completed.runId}/cancel`, {})).status).toBe(200);
+    service.storage.saveRecord(['operations', 'maintenance.json'], { enabled: false, updatedAt: new Date().toISOString() });
+    expect((await fetch(base + '/readyz')).status).toBe(200);
   });
 
   it('rejects otherwise valid evidence that omits the production fidelity review policy', async () => {

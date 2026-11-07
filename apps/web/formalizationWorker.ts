@@ -15,6 +15,7 @@ import { elaborateFormalization } from '../../src/solver/formalizationElaboratio
 import { reportedTotalTokens } from '../../src/solver/usageBudget';
 import { startGatewayForwarder } from './explanationWorker';
 import { createFormalizationActivity } from './formalizationActivity';
+import { prepareWebProviderProfile } from './worker';
 import { webFormalizationLimits, webFormalizationReason, type WorkerFormalizationInput,
   type WorkerFormalizationMessage, type WebFormalizationProgress } from './formalizationTypes';
 
@@ -22,15 +23,23 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const formalizationWorkerInputSchema = z.object({
   id: z.string().uuid(), original: z.string().min(1).max(webFormalizationLimits.maxOriginalBytes)
     .refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
-  environment: z.enum(['standard', 'mathlib']), model: z.literal(SUB2API_PROVIDER.defaultModel),
+  environment: z.enum(['standard', 'mathlib']), model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u),
   effort: z.enum(['low', 'high', 'max']), apiKey: z.string().regex(/^[\x21-\x7e]{8,4096}$/u),
-  provider: z.object({ id: z.literal(SUB2API_PROVIDER.id), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
+  provider: z.object({ id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/u), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
   maxRunSeconds: z.number().int().positive().max(webFormalizationLimits.maxRunSeconds),
-  maxTotalTokens: z.literal(webFormalizationLimits.maxTotalTokens),
+  maxTotalTokens: z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens),
   maxRounds: z.number().int().positive().max(webFormalizationLimits.maxRounds),
   maxPlanningRounds: z.number().int().positive().max(webFormalizationLimits.maxPlanningRounds),
   reviewers: z.literal(webFormalizationLimits.reviewers),
-}).strict();
+}).strict().superRefine((input, context) => {
+  let url: URL;
+  try { url = new URL(input.provider.baseUrl); }
+  catch { context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unsupported provider configuration' }); return; }
+  const gateway = input.provider.id === SUB2API_PROVIDER.id;
+  if (url.username || url.password || url.search || url.hash || (gateway
+    ? url.protocol !== 'http:' || url.pathname.replace(/\/$/u, '') !== '/v1' || input.model !== SUB2API_PROVIDER.defaultModel
+    : url.protocol !== 'https:')) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unsupported provider configuration' });
+});
 
 /** Keep the CLI's planned v3 fidelity protocol and unanimous independent review policy. */
 export function webFormalizationPreparation(input: WorkerFormalizationInput, profile: string, buildManifestRef: string,
@@ -94,8 +103,11 @@ async function main() {
   };
   try {
     report();
-    gateway = await startGatewayForwarder(input.provider.baseUrl);
-    prepareSub2apiProfile(profile, input.model, input.effort);
+    const sub2api = input.provider.id === SUB2API_PROVIDER.id;
+    if (sub2api) {
+      gateway = await startGatewayForwarder(input.provider.baseUrl);
+      prepareSub2apiProfile(profile, input.model, input.effort);
+    } else prepareWebProviderProfile(profile, { provider: input.provider, input: { model: input.model, effort: input.effort } });
     // This disposable container owns its profile and never loads a machine credential or environment file.
     process.env.DEEPSCIENTIST_MATH_ENV_FILE = path.join(scratch, 'math.env');
     fs.writeFileSync(process.env.DEEPSCIENTIST_MATH_ENV_FILE, '', { mode: 0o400, flag: 'wx' });
@@ -108,7 +120,7 @@ async function main() {
       send: entry => { void send({ type: 'activity', activity: entry }); } });
     const result = await runFormalization(directory, root, {
       openSession: activity.openSession(options => createCodexMathSession({ ...options,
-        environment: { ...options.environment, [SUB2API_PROVIDER.apiKeyEnvironment]: key } })),
+        environment: { ...options.environment, [sub2api ? SUB2API_PROVIDER.apiKeyEnvironment : 'THEOREMOS_PROVIDER_API_KEY']: key } })),
       elaborate: activity.elaborate(elaborateFormalization),
       onEvent: event => {
         activity.onEvent(event);

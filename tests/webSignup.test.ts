@@ -62,7 +62,7 @@ describe('open signup with a per-account allowance', () => {
     const anonymous = await session();
     expect((await code(anonymous, email)).status).toBe(200);
     const sent = mail.at(-1)!.text.match(/\b\d{6}\b/u)![0];
-    const verified = await request('/api/auth/verify', anonymous, { email, code: sent, ...(consent ? { terms: true } : {}) });
+    const verified = await request('/api/auth/verify', anonymous, { email, code: sent, ...(consent ? { terms: true, termsVersion: config.auth!.termsVersion } : {}) });
     expect(verified.status).toBe(200);
     const body = await verified.json();
     return { cookie: verified.headers.get('set-cookie')!.split(';')[0], csrf: body.csrfToken, session: anonymous.session };
@@ -122,5 +122,71 @@ describe('open signup with a per-account allowance', () => {
     expect((await (await request('/api/session', admin)).json() as WebSession).quota).toBeUndefined();
     expect((await request('/api/runs', admin, input('Admin run'))).status).toBe(201);
     expect((await request('/api/runs', admin, input('Second admin run'))).status).toBe(201);
+  });
+
+  it('keeps the current allowance after the same address deletes and recreates its account', async () => {
+    const first = await login('stranger@example.org');
+    const originalId = service.auth!.getAccount('stranger@example.org')!.id;
+    expect((await request('/api/runs', first, input())).status).toBe(201);
+    expect((await request('/api/auth/account', first, { email: 'stranger@example.org' }, 'DELETE')).status).toBe(200);
+    expect(service.auth!.getAccount('stranger@example.org')).toBeUndefined();
+    const recreated = await login('stranger@example.org');
+    expect(service.auth!.getAccount('stranger@example.org')!.id).not.toBe(originalId);
+    expect((await (await request('/api/session', recreated)).json() as WebSession).quota?.runs).toEqual({ used: 1, limit: 1 });
+    expect((await request('/api/runs', recreated, input('After recreation'))).status).toBe(429);
+    expect((await (await request('/api/runs', recreated)).json()).runs).toEqual([]);
+  });
+
+  it('requires current terms for old sessions while keeping logout and deletion available', async () => {
+    const client = await login('stranger@example.org');
+    const accountId = service.auth!.getAccount('stranger@example.org')!.id;
+    config.auth!.termsVersion = 'v2';
+    const pending = await (await request('/api/session', client)).json() as WebSession;
+    expect(pending).toMatchObject({ termsVersion: 'v2', termsRequired: true, account: { email: 'stranger@example.org' } });
+    expect((await request('/api/runs', client, input())).status).toBe(428);
+    expect((await request('/api/auth/terms', client, { terms: true, termsVersion: '2026-11-07' })).status).toBe(428);
+    expect((await request('/api/auth/terms', client, { terms: true, termsVersion: 'v2' })).status).toBe(200);
+    expect(service.auth!.getAccount('stranger@example.org')).toMatchObject({ id: accountId, termsVersion: 'v2' });
+    expect((await request('/api/runs', client, input())).status).toBe(201);
+    config.auth!.termsVersion = 'v3';
+    expect((await request('/api/auth/account', client, { email: 'stranger@example.org' }, 'DELETE')).status).toBe(200);
+    const other = await login('other@example.org');
+    config.auth!.termsVersion = 'v4';
+    expect((await request('/api/auth/logout', other, {})).status).toBe(200);
+  });
+
+  it('lets an admin suspend and restore an open-signup account, preserving its records', async () => {
+    const client = await login('stranger@example.org'), admin = await login('boss@example.org');
+    const accountId = service.auth!.getAccount('stranger@example.org')!.id;
+    const created = await request('/api/runs', client, input());
+    const run = (await created.json()).run;
+    expect((await request('/api/admin/accounts', client, { email: 'boss@example.org', suspended: true }, 'PATCH')).status).toBe(403);
+    const suspended = await request('/api/admin/accounts', admin, { email: 'stranger@example.org', suspended: true }, 'PATCH');
+    expect(suspended.status).toBe(200);
+    expect((await suspended.json()).accounts.find((item: { email: string }) => item.email === 'stranger@example.org')).toMatchObject({ suspended: true, allowed: false });
+    expect((await request('/api/runs', client)).status).toBe(401);
+    expect((await code(await session(), 'stranger@example.org')).status).toBe(403);
+    expect((await request('/api/admin/accounts', admin, { email: 'boss@example.org', suspended: true }, 'PATCH')).status).toBe(400);
+    expect((await request('/api/admin/accounts', admin, { email: 'stranger@example.org', suspended: false }, 'PATCH')).status).toBe(200);
+    const restored = await login('stranger@example.org');
+    expect(service.auth!.getAccount('stranger@example.org')!.id).toBe(accountId);
+    const saved = (await (await request(`/api/runs/${run.id}`, restored)).json()).run;
+    expect(saved.status).toBe('cancelled');
+  });
+
+  it('limits anonymous-session creation per visitor while preserving current sessions and other visitors', async () => {
+    config.clientIpHeader = 'x-fixture-ip';
+    const first = await fetch(`${baseUrl}/api/session`, { headers: { 'X-Fixture-IP': 'one' } });
+    const cookie = first.headers.get('set-cookie')!.split(';')[0];
+    await first.arrayBuffer();
+    const statuses: number[] = [];
+    for (let count = 0; count < 40; count++) {
+      const response = await fetch(`${baseUrl}/api/session`, { headers: { 'X-Fixture-IP': 'one' } });
+      statuses.push(response.status); await response.arrayBuffer();
+    }
+    expect(statuses).toContain(429);
+    expect(statuses).not.toContain(503);
+    expect((await fetch(`${baseUrl}/api/session`, { headers: { 'X-Fixture-IP': 'one', Cookie: cookie } })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/session`, { headers: { 'X-Fixture-IP': 'two' } })).status).toBe(200);
   });
 });

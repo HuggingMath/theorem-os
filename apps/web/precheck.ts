@@ -96,11 +96,15 @@ export class WebPrechecker {
   private readonly cache = new Map<string, WebPrecheck>();
   private readonly inflight = new Map<string, AbortController>();
   private readonly recent = new Map<string, number[]>();
-  private readonly waiting: Array<() => void> = [];
+  private readonly waiting: Array<{ start(): void; createdAt: string }> = [];
   private running = 0;
   constructor(private readonly runner: WebPrecheckRunner,
     private readonly limits = { concurrency: 2, queue: 6, perMinute: 20, cache: 200 }) {}
 
+  counts() {
+    const oldestQueuedAt = this.waiting[0]?.createdAt;
+    return { running: this.running, queued: this.waiting.length, ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
+  }
   async check(owner: string, input: { environment: WebEnvironment; source: string; checkScope?: string }, signal: AbortSignal): Promise<WebPrecheck> {
     signal.throwIfAborted();
     const scope = JSON.stringify([owner, input.checkScope ?? 'legacy']);
@@ -125,7 +129,7 @@ export class WebPrechecker {
       if (this.running >= this.limits.concurrency) {
         if (this.waiting.length >= this.limits.queue) return busy();
         await new Promise<void>((resolve, reject) => {
-          const turn = () => { controller.signal.removeEventListener('abort', leave); resolve(); };
+          const turn = { start: () => { controller.signal.removeEventListener('abort', leave); resolve(); }, createdAt: new Date().toISOString() };
           const leave = () => { this.waiting.splice(this.waiting.indexOf(turn), 1); reject(controller.signal.reason); };
           this.waiting.push(turn);
           controller.signal.addEventListener('abort', leave, { once: true });
@@ -147,7 +151,7 @@ export class WebPrechecker {
         return result;
       } finally {
         const next = this.waiting.shift();
-        if (next) next(); else this.running--;
+        if (next) next.start(); else this.running--;
       }
     } finally {
       signal.removeEventListener('abort', stop);

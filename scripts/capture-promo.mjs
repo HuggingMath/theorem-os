@@ -6,12 +6,12 @@ import { chromium } from 'playwright';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browser = await chromium.launch();
 try {
-  // The workbench interface is Chinese, so the English card shows the English verification replay instead.
+  // The captured workbench preview is Chinese; the English card uses the English verification replay.
   const cards = [
-    { locale: 'zh', lang: 'zh-CN', page: 'out/site/index.html', output: 'social-preview.png', tagline: '数学研究运行时',
-      footer: '在线工作台内测中 · Lean 4 + Mathlib · 自备模型 Key', alt: '工作台草稿预览' },
-    { locale: 'en', lang: 'en', page: 'out/site/en/index.html', output: 'social-preview-en.png', tagline: 'Research runtime for mathematics',
-      footer: 'Online workbench in beta · Lean 4 + Mathlib · Bring your own key', alt: 'Verification replay' },
+    { locale: 'zh', lang: 'zh-CN', page: 'out/site/index.html', output: 'social-preview.png', tagline: '数学研究工作台',
+      footer: '白名单 Beta · 模型审核陈述 · Lean 独立验收 · 自备 Key', alt: '自然语言入口预览，尚未提交任务' },
+    { locale: 'en', lang: 'en', page: 'out/site/en/index.html', output: 'social-preview-en.png', tagline: 'Mathematics workbench',
+      footer: 'Allowlist beta · Model-reviewed statements · Lean-checked proofs · BYOK', alt: 'Verification replay' },
   ];
   const mark = fs.readFileSync(path.join(root, 'docs/assets/mark.svg')).toString('base64');
   const css = fs.readFileSync(path.join(root, 'out/site/landing.css'), 'utf8');
@@ -39,7 +39,7 @@ try {
     .preview{font-size:14px;color:var(--muted)}
     .social h1{font-size:72px;line-height:1.1;margin:12px 0 7px}
     .social-category{font-size:22px;line-height:1.5}
-    .social-description{font-size:16px;margin-top:3px}
+    .social-description{font-size:16px;margin-top:3px;max-width:none}
     .social-product{position:absolute;left:70px;right:70px;top:225px}
     .social-product img{width:100%;height:auto}
     .social-bottom{position:absolute;left:70px;right:70px;bottom:10px;display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}

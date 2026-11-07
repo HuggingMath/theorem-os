@@ -4,13 +4,13 @@ import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
 import { webLimits } from './config';
 import { formalizationReport } from './formalizationReport';
-import { webFormalizationActivityLimits, webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization,
+import { webFormalizationActivityLimits, webFormalizationDefaults, webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization,
   type WebFormalizationActivity, type WebFormalizationRequest, type WorkerFormalizationInput, type WorkerFormalizationMessage } from './formalizationTypes';
 import type { WebRunner } from './runner';
 import type { WebProvider } from './shared';
 import { WebStorage, WebStorageError } from './storage';
 
-type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string };
+type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string; provider?: WebProvider };
 type Job = { record: Record; input: WorkerFormalizationInput; controller: AbortController; persistedAt: number };
 type StartResearch = (owner: string, formalization: WebFormalization, evidence: FormalizationEvidence, input: WorkerFormalizationInput) => string;
 const active = (value: WebFormalization) => value.status === 'queued' || value.status === 'running';
@@ -33,8 +33,9 @@ export function verifyWebFormalizationEvidence(value: unknown, formalization: We
     request.environmentDigest !== getLeanTaskEnvironment(formalization.environment).dependencyDigest ||
     request.model !== formalization.model || request.effort !== formalization.effort ||
     request.execution !== 'model' || evidence.execution !== 'model' || !evidence.modelInvoked ||
-    request.maxRounds !== webFormalizationLimits.maxRounds || request.maxRunSeconds !== webFormalizationLimits.maxRunSeconds ||
-    !webFormalizationTokenBudgets.includes(request.maxTotalTokens) || !workflow ||
+    request.maxRounds !== webFormalizationLimits.maxRounds || request.maxRunSeconds !== (formalization.maxRunSeconds ?? 1800) ||
+    (formalization.maxTotalTokens === undefined ? !webFormalizationTokenBudgets.includes(request.maxTotalTokens)
+      : request.maxTotalTokens !== formalization.maxTotalTokens) || !workflow ||
     workflow.maxPlanningRounds !== webFormalizationLimits.maxPlanningRounds || workflow.reviewers.length !== webFormalizationLimits.reviewers ||
     [workflow.planner, workflow.backtranslator, ...workflow.reviewers].some(role => role.model !== request.model ||
       role.effort !== request.effort || role.profile !== request.profile || role.executable !== request.executable))
@@ -69,6 +70,11 @@ export class WebFormalizations {
   list(owner: string): WebFormalization[] {
     return this.storage.listRecords(directory(owner)).map(id => this.record(owner, id)!.formalization)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  counts() {
+    const queued = [...this.jobs.values()].filter(job => job.record.formalization.status === 'queued');
+    const oldestQueuedAt = queued.map(job => job.record.formalization.createdAt).sort()[0];
+    return { running: this.running, queued: queued.length, ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
   }
   private record(owner: string, id: string): Record | undefined {
     return this.jobs.get(this.key(owner, id))?.record ?? this.storage.getRecord<Record>([...recordPath(owner, id), 'record.json']);
@@ -113,6 +119,28 @@ export class WebFormalizations {
     const evidence = this.evidence(record);
     return { formalization: { ...record.formalization, report: formalizationReport(evidence) }, evidence };
   }
+  /** Reuses the frozen statement after queue rejection or restart; it never calls the formalizer again. */
+  retryResearch(owner: string, id: string, provider: WebProvider, apiKey: string): WebFormalization {
+    const record = this.required(owner, id), item = record.formalization;
+    if (item.runId) return this.read(owner, id);
+    if (this.closing || !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
+    if (item.status !== 'confirmed' || item.workflow !== 'solve') throw new WebStorageError(409, '请先完成原题形式化与审核。');
+    if (provider.id !== (item.providerId ?? 'sub2api') || record.provider && record.provider.baseUrl !== provider.baseUrl)
+      throw new WebStorageError(409, '模型服务地址已改变，请创建新任务。');
+    const evidence = this.evidence(record);
+    const input: WorkerFormalizationInput = { id, original: item.original, environment: item.environment, model: item.model,
+      effort: item.effort, apiKey, provider, maxRunSeconds: item.maxRunSeconds ?? 1800,
+      maxTotalTokens: item.maxTotalTokens ?? evidence.request.maxTotalTokens,
+      maxRounds: webFormalizationLimits.maxRounds, maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
+    try {
+      item.runId = this.startResearch(owner, item, evidence, input);
+      delete item.researchError; item.updatedAt = new Date().toISOString(); this.save(record);
+      return this.read(owner, id);
+    } catch (error) {
+      if (!item.runId) { item.researchError = 'formalization_research_queue_failed'; this.save(record); }
+      throw error;
+    } finally { input.apiKey = ''; }
+  }
   create(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization {
     if (this.closing) throw new WebStorageError(503, '服务正在停止，请稍后重试。');
     if (request.solve && !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
@@ -121,14 +149,17 @@ export class WebFormalizations {
       throw new WebStorageError(429, '已有形式化任务正在进行，请等待结束。');
     if (this.list(owner).length >= this.limits.recordsPerOwner) throw new WebStorageError(429, '形式化记录已满，请先删除不需要的记录。');
     const now = new Date().toISOString(), id = crypto.randomUUID();
-    const formalization: WebFormalization = { id, original: request.original, environment: request.environment, model,
+    const formalization: WebFormalization = { id, original: request.original, environment: request.environment, model, providerId: provider.id,
+      maxRunSeconds: request.maxRunSeconds ?? webFormalizationDefaults.maxRunSeconds,
+      maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
+      research: { ...webFormalizationDefaults.research, ...request.research },
       effort: request.effort, status: 'queued', createdAt: now, updatedAt: now, progress: { phase: 'queued', updatedAt: now },
       ...(request.solve ? { workflow: 'solve' } : {}) };
-    const { solve: _solve, ...generation } = request;
-    const input: WorkerFormalizationInput = { ...generation, id, model, provider, maxRunSeconds: webFormalizationLimits.maxRunSeconds,
-      maxTotalTokens: webFormalizationLimits.maxTotalTokens, maxRounds: webFormalizationLimits.maxRounds,
+    const input: WorkerFormalizationInput = { original: request.original, environment: request.environment, effort: request.effort,
+      apiKey: request.apiKey, id, model, provider, maxRunSeconds: formalization.maxRunSeconds!,
+      maxTotalTokens: formalization.maxTotalTokens!, maxRounds: webFormalizationLimits.maxRounds,
       maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
-    const job: Job = { record: { owner, formalization }, input, controller: new AbortController(), persistedAt: 0 };
+    const job: Job = { record: { owner, formalization, provider: { ...provider } }, input, controller: new AbortController(), persistedAt: 0 };
     this.jobs.set(this.key(owner, id), job); this.persist(job, true);
     queueMicrotask(() => this.pump());
     return formalization;

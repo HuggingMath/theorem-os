@@ -12,6 +12,13 @@ on:
       - 'scripts/**'
       - 'resources/**'
       - 'docs/assets/**'
+      - 'docs/web/**'
+      - 'docs/archive.html'
+      - 'docs/en/archive.html'
+      - 'docs/site.css'
+      - 'research/openai-math/**'
+      - 'tests/**'
+      - 'vitest.config.ts'
       - 'package.json'
       - 'bun.lock'
       - 'tsconfig.json'
@@ -22,13 +29,38 @@ permissions:
   contents: read
   packages: write
 
-# The web service starts workers by tag, so both images of one commit are published together.
+# A deployment consumes the SHA pair only after the release job verifies both images.
 concurrency:
   group: images-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck && bun run typecheck:web
+      - name: Verify account, job, persistence and operations boundaries without models
+        run: bunx vitest run --maxWorkers=4 tests/webAuth.test.ts tests/webSignup.test.ts tests/webAuthPolicy.test.ts tests/webQuota.test.ts tests/webAdmission.test.ts tests/webAdmissionRace.test.ts tests/webProviderCheck.test.ts tests/webI18n.test.ts tests/webFonts.test.ts tests/webKeyVault.test.ts tests/webJobs.test.ts tests/webFormalizations.test.ts tests/webServer.test.ts tests/webRunner.test.ts tests/webPrecheck.test.ts tests/webOperations.test.ts tests/webOperationsApi.test.ts
+      - name: Verify isolated provider routing and usage accounting without models
+        run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts
+      - run: bun run build && bun run build:web
+      - run: bunx playwright install --with-deps chromium
+      - name: Verify the browser's login and research flows with local fixtures
+        run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-solve-process
+
   publish:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
@@ -49,22 +81,44 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/likc1606/theorem-os-${{ matrix.target }}
-          tags: |
-            type=ref,event=branch
-            type=sha,format=long,prefix=
-            type=semver,pattern=v{{version}}
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/web/Dockerfile
           target: ${{ matrix.target }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Inline cache keeps the 7.5 GB Mathlib layer reusable without the 10 GB Actions cache limit.
-          cache-from: type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:main
-          cache-to: type=inline
+          tags: ghcr.io/likc1606/theorem-os-${{ matrix.target }}:${{ github.sha }}
+          build-args: THEOREMOS_SOURCE_COMMIT=${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          # This tag is a build cache, never a deployable release alias.
+          cache-from: type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache,mode=min
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Record the complete image pair
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -eu
+          web="ghcr.io/likc1606/theorem-os-web:$RELEASE_COMMIT"
+          worker="ghcr.io/likc1606/theorem-os-worker:$RELEASE_COMMIT"
+          web_digest=$(docker buildx imagetools inspect "$web" --format '{{.Manifest.Digest}}')
+          worker_digest=$(docker buildx imagetools inspect "$worker" --format '{{.Manifest.Digest}}')
+          jq -n --arg commit "$RELEASE_COMMIT" --arg web "$web" --arg webDigest "$web_digest" \
+            --arg worker "$worker" --arg workerDigest "$worker_digest" \
+            '{schema:"theorem-os.image-release.v1",commit:$commit,web:{image:$web,digest:$webDigest},worker:{image:$worker,digest:$workerDigest}}' > image-release.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-release-${{ github.sha }}
+          path: image-release.json
+          if-no-files-found: error

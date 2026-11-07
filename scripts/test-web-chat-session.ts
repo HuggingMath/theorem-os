@@ -162,6 +162,11 @@ try {
     await page.evaluate(() => { (window as any).__chatComposer = document.querySelector('#formalize-original'); });
     await page.locator('#formalize-original').fill(original); await credentials(page);
     if (width === 1440) {
+      await page.locator('#formalize-minutes').fill('4'); await page.locator('#formalize-tokens').fill('120000');
+      await page.locator('#research-minutes').fill('3'); await page.locator('#research-tokens').fill('80000');
+      await page.locator('#research-turns').fill('4');
+    }
+    if (width === 1440) {
       await page.locator('#formalize-original').press('Shift+Enter'); assert.equal(writes.length, 0);
       await page.locator('#formalize-original').fill(original);
       await page.locator('#formalize-original').evaluate(node => {
@@ -177,11 +182,20 @@ try {
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     assert.equal((await conversation(page)).messages[0]?.text, original, 'Server message preserves the exact original');
     const pending = formalizations.at(-1)!;
+    if (width === 1440) {
+      assert.equal(pending.input.maxRunSeconds, 240); assert.equal(pending.input.maxTotalTokens, 120000);
+      assert.equal(pending.input.provider.id, 'sub2api'); assert.equal(pending.input.model, 'deepseek-flash');
+    }
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
     assert.equal((runs.at(-1)?.formalization as { request?: { statement?: string } } | undefined)?.request?.statement, original);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), String(width === 390));
+    assert.match(await page.locator('[data-statement-verdict]').innerText(), /模型审核通过，未经人工确认/u);
+    if (width === 1440) {
+      assert.equal(runs.at(-1)?.input.maxRunSeconds, 180); assert.equal(runs.at(-1)?.input.maxTotalTokens, 80000);
+      assert.equal(runs.at(-1)?.input.maxTurns, 4);
+    } else assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
     await assertSameComposer(page);
     const sessionUrl = page.url(), id = (await conversation(page)).id;
     await page.locator('#formalize-original').fill(question);
@@ -363,6 +377,34 @@ try {
       assert.equal(runs.length, formalizations.length);
       await page.screenshot({ path: path.join(output, `streaming-preserved-${width}.png`), fullPage: true });
       mark(`${width}px: incoming text preserves reading position; return-to-latest, pending refresh and stop retain partial output`);
+    }
+    if (width === 390) {
+      // Reproduce a retained, approved statement whose first proof enqueue failed. The retry reuses its task identity.
+      const savedConversation = await conversation(page);
+      const saved = await page.evaluate(async formalizationId => (await (await fetch(`/api/formalizations/${formalizationId}`)).json()).formalization,
+        savedConversation.formalizationId!);
+      let resumed = false, continueCalls = 0;
+      const formalizationCount = formalizations.length, proofCount = runs.length;
+      await page.route(`**/api/conversations/${id}`, route => route.fulfill({ json: { conversation: {
+        ...savedConversation, runId: resumed ? savedConversation.runId : undefined,
+      } } }));
+      await page.route(`**/api/formalizations/${saved.id}`, route => route.fulfill({ json: { formalization: resumed ? saved
+        : { ...saved, runId: undefined, researchError: 'formalization_research_queue_failed' } } }));
+      await page.route(`**/api/formalizations/${saved.id}/research`, route => {
+        continueCalls++; resumed = true; return route.fulfill({ json: { formalization: saved } });
+      });
+      await page.reload(); await page.locator('[data-research-continue]').waitFor();
+      assert.match(await page.locator('[data-formalization-failure]').innerText(), /继续证明/u);
+      await page.locator('[data-research-continue]').click();
+      await page.locator('#formalize-key').waitFor(); await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
+      await page.locator('#formalize-settings > summary').click();
+      await page.locator('[data-research-continue]').click();
+      await page.locator('[data-research-artifact="source"]:enabled').waitFor();
+      assert.equal(continueCalls, 1);
+      assert.equal(formalizations.length, formalizationCount, 'Continuing a retained statement does not pay for formalization again');
+      assert.equal(runs.length, proofCount, 'The browser uses the returned existing proof identity');
+      assert.equal(await page.locator('[data-research-continue]').count(), 0);
+      mark('a retained formalization offers one explicit continuation, requests a missing key, and returns to the saved proof without re-formalizing');
     }
     await context.close();
   }

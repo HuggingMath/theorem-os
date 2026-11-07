@@ -18,9 +18,10 @@ const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-web-login-'));
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const runner: WebRunner = { async readiness() { return { ready: true, message: '本地登录验证环境' }; }, async run() {} };
 const mail: { to: string; text: string }[] = [];
-const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
+const config = readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_AUTH: 'email', THEOREMOS_WEB_SMTP_URL: 'log:',
-  THEOREMOS_WEB_ALLOWLIST: 'alice@example.org', THEOREMOS_WEB_DATA_ROOT: data }), runner,
+  THEOREMOS_WEB_ALLOWLIST: 'alice@example.org', THEOREMOS_WEB_DATA_ROOT: data });
+const service = createWebService(config, runner,
 { mailer: async message => { mail.push(message); }, captchaAnswer: () => '24680' });
 // The workbench at the root address; it may already name the run it reopened (?run= or ?chat=) when the load event fires.
 const workbench = (url: URL) => url.origin === origin && url.pathname === '/';
@@ -31,7 +32,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  page.on('console', message => { if (message.type() === 'error' && !/status of 40[013]/u.test(message.text())) errors.push(message.text()); });
+  page.on('console', message => { if (message.type() === 'error' && !/status of (?:40[013]|428)/u.test(message.text())) errors.push(message.text()); });
 
   const firstVisit: string[] = [];
   const recordFirstVisit = (request: { url(): string }) => firstVisit.push(new URL(request.url()).pathname);
@@ -93,6 +94,71 @@ try {
   assert.equal(await page.locator('#open-account').innerText(), 'alice@example.org');
   await ready(page);
   mark('a wrong code is reported, the right code opens the workbench with the account in the top bar');
+
+  // A terms change gates an existing session too, and accepting it keeps the same account.
+  const accountId = service.auth!.getAccount('alice@example.org')!.id;
+  const editPendingDraft = async (name: string) => {
+    const draft = { source: `theorem ${name} : True := by sorry\n`, task: `Unsent instructions ${name}`, natural: `Unsent natural-language problem ${name}` };
+    if (await page.locator('body[data-entry="lean"]').count()) await page.locator('#open-natural-language').click();
+    await page.locator('#formalize-original').fill(draft.natural);
+    await page.evaluate(value => {
+      for (const id of ['source', 'task'] as const) {
+        const input = document.getElementById(id) as HTMLTextAreaElement;
+        input.value = value[id]; input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }, draft);
+    return draft;
+  };
+  const assertPendingDraft = async (draft: { source: string; task: string; natural: string }) => {
+    assert.equal(await page.locator('#source').inputValue(), draft.source);
+    assert.equal(await page.locator('#task').inputValue(), draft.task);
+    assert.equal(await page.locator('#formalize-original').inputValue(), draft.natural);
+  };
+  const initialDraft = await editPendingDraft('before_terms_reload');
+  config.auth!.termsVersion = 'browser-v2';
+  await page.reload();
+  await page.waitForURL(/\/login\.html/u);
+  await page.locator('#terms-step:not([hidden])').waitFor();
+  assert.equal(await page.locator('#accept-terms').isChecked(), false);
+  await page.click('#confirm-terms');
+  assert.match(await page.locator('#login-error').innerText(), /请先阅读/u);
+  assert.equal(service.auth!.getAccount('alice@example.org')!.termsVersion, undefined);
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Updated terms overflow at ${width}px`);
+    assert.deepEqual(await audit(page), [], 'Updated terms accessibility');
+  }
+  await page.locator('#accept-terms').check();
+  await page.click('#confirm-terms');
+  await page.waitForURL(workbench);
+  await ready(page);
+  assert.equal(service.auth!.getAccount('alice@example.org')!.id, accountId);
+  assert.equal(service.auth!.getAccount('alice@example.org')!.termsVersion, 'browser-v2');
+  await assertPendingDraft(initialDraft);
+  // A live request returning 428 takes the other redirect path and must flush edits before the debounce expires.
+  const liveDraft = await editPendingDraft('before_terms_response');
+  const blockedRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs' && response.status() === 428);
+  config.auth!.termsVersion = 'browser-v3';
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('#refresh-runs')!.click());
+  await blockedRead;
+  await page.waitForURL(/\/login\.html/u);
+  await page.locator('#terms-step:not([hidden])').waitFor();
+  await page.locator('#accept-terms').check();
+  await page.click('#confirm-terms');
+  await page.waitForURL(workbench);
+  await ready(page);
+  await assertPendingDraft(liveDraft);
+  config.auth!.termsVersion = undefined;
+  await page.setViewportSize({ width: 1440, height: 900 });
+  mark('an existing session confirms changed terms on desktop and mobile; reload and HTTP 428 preserve Lean and conversation drafts');
+  // The following mail-link scenarios start with the same empty draft as before this independent recovery check.
+  await page.locator('#open-natural-language').click();
+  await page.locator('#formalize-original').fill('');
+  await page.evaluate(() => {
+    for (const key of ['theorem-os.web-draft.v1', 'theorem-os.web-draft-recovery.v1', 'theorem-os.web-submission.v1']) sessionStorage.removeItem(key);
+  });
+  await page.goto(origin);
+  await ready(page);
 
   // Signed in, the account button joins the top bar; when the bar is full the address truncates, and every other control,
   // the search button included, keeps a target of at least 24px without overlapping its neighbour.

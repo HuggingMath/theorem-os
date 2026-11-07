@@ -6,6 +6,7 @@ import { connect } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyToml } from 'smol-toml';
 import { startFormalizationRelay, type FormalizationRelay } from '../src/runtime/formalizationRelay';
+import type { ModelRequestGate } from '../src/runtime/modelRequest';
 
 const secret = 'fixture-upstream-credential-0123456789';
 const model = 'deepseek-flash';
@@ -39,6 +40,11 @@ describe('host credential relay for isolated formalization roles', () => {
       model_providers: { sub2api: { base_url: 'http://127.0.0.1:8080/v1', wire_api: 'responses',
         env_key: 'SUB2API_WESTLAKE_API_KEY', ...provider } } }));
   }
+  function writeWebProfile(provider: Record<string, unknown> = {}, selectedModel = 'custom-reasoner') {
+    fs.writeFileSync(path.join(profile, 'config.toml'), stringifyToml({ model_provider: 'web_provider', model: selectedModel,
+      model_providers: { web_provider: { base_url: 'https://models.example.test/compatible/v1/', wire_api: 'responses',
+        env_key: 'THEOREMOS_PROVIDER_API_KEY', ...provider } } }));
+  }
   const start = async (extra: Partial<Parameters<typeof startFormalizationRelay>[0]> = {}) => {
     const relay = await startFormalizationRelay({ socketPath: path.join(root, 'r' + relays.length + '.sock'),
       profile, model, effort, env: { SUB2API_WESTLAKE_API_KEY: secret }, ...extra });
@@ -48,7 +54,8 @@ describe('host credential relay for isolated formalization roles', () => {
     body?: string; chunked?: boolean } = {}): Promise<{ status: number; headers: Record<string, unknown>; text: string }> {
     return new Promise((resolve, reject) => {
       const text = options.body ?? JSON.stringify(body);
-      const request = httpRequest({ socketPath: relay.socketPath, path: options.route ?? relay.route,
+      const target = relay.baseUrl ? new URL(relay.baseUrl) : undefined;
+      const request = httpRequest({ ...(target ? { hostname: target.hostname, port: Number(target.port) } : { socketPath: relay.socketPath }), path: options.route ?? relay.route,
         method: options.method ?? 'POST', headers: { Host: relay.httpHost, Authorization: 'Bearer ' + relay.apiKey,
           'Content-Type': 'application/json', ...(options.chunked ? {} : { 'Content-Length': String(Buffer.byteLength(text)) }),
           ...options.headers } }, response => {
@@ -81,6 +88,97 @@ describe('host credential relay for isolated formalization roles', () => {
     expect(result.text).toContain('response.completed');
     expect(fs.statSync(relay.socketPath).mode & 0o777).toBe(0o600);
     expect(fs.readdirSync(profile)).toEqual(['config.toml']);
+  });
+
+  it('binds an HTTPS BYOK role to its selected endpoint, model, effort and output budget using a host-only key', async () => {
+    writeWebProfile();
+    const fetch = vi.fn(async () => fakeResponse('data: {"type":"response.completed","text":"' + secret + '"}\n\n'));
+    vi.stubGlobal('fetch', fetch);
+    const request = { ...body, model: 'custom-reasoner', reasoning: { effort: 'high' }, max_output_tokens: 2048 };
+    const relay = await start({ model: request.model, effort: 'high', env: {
+      THEOREMOS_PROVIDER_API_KEY: secret, SUB2API_WESTLAKE_API_KEY: 'unused-sub2api-key',
+    } });
+    const result = await send(relay, { body: JSON.stringify(request), headers: { 'X-Upstream-Url': 'https://attacker.invalid', 'X-Api-Key': 'untrusted-key' } });
+    expect(result.status).toBe(200);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://models.example.test/compatible/v1/responses', expect.objectContaining({
+      body: JSON.stringify(request), redirect: 'error', headers: { Authorization: 'Bearer ' + secret,
+        'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    }));
+    expect(relay.receipt).toMatchObject({ providerId: 'web_provider', model: request.model, effort: 'high', credentialLocation: 'host-only', credentialSource: 'environment' });
+    expect(JSON.stringify({ ...relay, close: undefined, result })).not.toContain(secret);
+    expect(result.text).toContain('[redacted]'); expect(relay.apiKey).not.toBe(secret);
+    for (const override of [{ model: 'different-model' }, { reasoning: { effort: 'max' } }, { store: true }])
+      expect((await send(relay, { body: JSON.stringify({ ...request, ...override }) })).status).toBe(400);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { base_url: 'http://models.example.test/v1' }, { base_url: 'https://user:secret@models.example.test/v1' },
+    { base_url: 'https://models.example.test/v1?credential=private' }, { base_url: 'https://models.example.test/v1#fragment' },
+    { base_url: 'not a URL' }, { env_key: 'SUB2API_WESTLAKE_API_KEY' }, { env_key: 'OTHER_HOST_CREDENTIAL' },
+    { auth: { command: '/usr/bin/true', args: [] } }, { wire_api: 'chat' }, { requires_openai_auth: true },
+    { http_headers: { Authorization: secret } }, { env_http_headers: { Authorization: 'OTHER_HOST_CREDENTIAL' } },
+    { query_params: { api_key: secret } }, { experimental_bearer_token: secret },
+  ])('rejects unsupported HTTPS provider profiles without invoking fetch: %j', async provider => {
+    writeWebProfile(provider); const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    await expect(start({ model: 'custom-reasoner', env: { THEOREMOS_PROVIDER_API_KEY: secret } })).rejects.toThrow('formalization_relay_profile_unsupported');
+    expect(fetch).not.toHaveBeenCalled(); expect(fs.existsSync(path.join(root, 'r0.sock'))).toBe(false);
+  });
+
+  it('does not accept a model different from the generic provider profile or borrow another environment credential', async () => {
+    writeWebProfile(); const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    await expect(start({ model: 'other-model' })).rejects.toThrow('formalization_relay_profile_unsupported');
+    const relay = await start({ model: 'custom-reasoner', env: { SUB2API_WESTLAKE_API_KEY: secret } });
+    const result = await send(relay, { body: JSON.stringify({ ...body, model: 'custom-reasoner' }) });
+    expect(result.status).toBe(502); expect(result.text).toContain('host_credential_unavailable'); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  for (const providerId of ['sub2api', 'web_provider'] as const) {
+    for (const transport of ['unix-http', 'loopback-http'] as const) {
+      it(`settles actual upstream usage once for ${providerId} over ${transport}, preserving request admission`, async () => {
+        if (providerId === 'web_provider') writeWebProfile();
+        const selectedModel = providerId === 'sub2api' ? model : 'custom-reasoner';
+        const order: string[] = [], settle = vi.fn(() => { order.push('settle'); }), incomplete = vi.fn();
+        const beforeRequest = vi.fn(async () => { order.push('before'); });
+        const gate: ModelRequestGate = Object.assign(vi.fn(() => { order.push('admit'); return { allowed: true as const, settle }; }), { beforeRequest });
+        const terminal = 'data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'provider-fixture', status: 'completed',
+          usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, input_tokens_details: { cached_tokens: 3 }, output_tokens_details: { reasoning_tokens: 2 } } } }) + '\n\n';
+        const fetch = vi.fn(async () => { order.push('fetch'); return new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(Buffer.from(terminal.slice(0, 73))); controller.enqueue(Buffer.from(terminal.slice(73))); controller.close();
+        } }), { headers: { 'Content-Type': 'text/event-stream' } }); }); vi.stubGlobal('fetch', fetch);
+        const relay = await start({ transport, model: selectedModel, requestGate: gate, onUsageIncomplete: incomplete,
+          env: { [providerId === 'sub2api' ? 'SUB2API_WESTLAKE_API_KEY' : 'THEOREMOS_PROVIDER_API_KEY']: secret } });
+        const result = await send(relay, { body: JSON.stringify({ ...body, model: selectedModel }) });
+        expect(result.status).toBe(200); expect(result.text).toBe(terminal);
+        expect(order).toEqual(['before', 'admit', 'fetch', 'settle']);
+        expect(gate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: 'responses-relay', requestId: expect.any(String) }));
+        expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: true, outcome: 'completed', providerRequestId: 'provider-fixture',
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, cachedInputTokens: 3, reasoningOutputTokens: 2 } });
+        expect(incomplete).not.toHaveBeenCalled(); expect(relay.receipt.transport).toBe(transport);
+      });
+    }
+  }
+
+  it('rejects a generic-provider request at its token gate without an upstream call or a false usage settlement', async () => {
+    writeWebProfile(); const fetch = vi.fn(), incomplete = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const gate: ModelRequestGate = vi.fn(() => ({ allowed: false as const, reason: 'math_total_token_limit' as const }));
+    const relay = await start({ model: 'custom-reasoner', env: { THEOREMOS_PROVIDER_API_KEY: secret }, requestGate: gate, onUsageIncomplete: incomplete });
+    expect((await send(relay, { body: JSON.stringify({ ...body, model: 'custom-reasoner' }) })).status).toBe(403);
+    expect(gate).toHaveBeenCalledOnce(); expect(fetch).not.toHaveBeenCalled(); expect(incomplete).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing-usage', 'http-error'] as const)('marks HTTPS provider %s as incomplete accounting', async failure => {
+    writeWebProfile(); const settle = vi.fn(), incomplete = vi.fn();
+    const gate: ModelRequestGate = () => ({ allowed: true, settle });
+    const fetch = vi.fn(async () => failure === 'http-error' ? new Response('private failure ' + secret, { status: 429 })
+      : fakeResponse('data: {"type":"response.completed","response":{"id":"missing-usage","status":"completed"}}\n\n'));
+    vi.stubGlobal('fetch', fetch);
+    const relay = await start({ model: 'custom-reasoner', env: { THEOREMOS_PROVIDER_API_KEY: secret }, requestGate: gate, onUsageIncomplete: incomplete });
+    const result = await send(relay, { body: JSON.stringify({ ...body, model: 'custom-reasoner' }) });
+    expect(result.status).toBe(failure === 'http-error' ? 429 : 200);
+    expect(settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ complete: false,
+      missingReason: failure === 'http-error' ? 'upstream-http-error' : 'provider-usage-missing' }));
+    expect(incomplete).toHaveBeenCalledOnce(); expect(result.text).not.toContain(secret);
   });
 
   it.each([

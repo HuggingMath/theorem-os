@@ -242,7 +242,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let notificationFence: { promise: Promise<void>; release(): void } | undefined;
   let requestStateChanged = () => {};
   let cancelNotifications = () => {};
+  let drainSubmittedRequests: (() => void) | undefined;
   const requestGate: ModelRequestGate = identity => {
+    // Recheck synchronously: a submission can close admission after beforeRequest returned.
+    if (turnSettled || turnStopping) return { allowed: false, reason: 'math_model_request_stopped' };
     const admission = options.requestGate?.(identity) ?? { allowed: true as const, settle: () => {} };
     if (!admission.allowed) return admission;
     const request = {}; activeRequests.add(request);
@@ -343,7 +346,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     model_provider: isolated.providerId,
     [`model_providers.${isolated.providerId}.base_url`]: isolated.providerBaseUrl,
     [`model_providers.${isolated.providerId}.stream_idle_timeout_ms`]: RESPONSES_STREAM_IDLE_TIMEOUT_MS,
-    model_catalog_json: '/profile/models.json',
+    ...(isolated.modelCatalog ? { model_catalog_json: isolated.modelCatalog } : {}),
   } : providerId ? {
     model_provider: providerId,
     ...(responsesRelay ? { [`model_providers.${providerId}.stream_idle_timeout_ms`]: RESPONSES_STREAM_IDLE_TIMEOUT_MS } : {}),
@@ -409,7 +412,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         });
     });
   };
-  requestStateChanged = flushNotifications;
+  requestStateChanged = () => { drainSubmittedRequests?.(); flushNotifications(); };
   let lastStreamActivityAt = 0;
   const outputTails = new Map<string, string>();
   const reportedInvalidOutputs = new Set<string>();
@@ -535,6 +538,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         lastStreamActivityAt = 0; outputTails.clear();
         let checkpoint = false;
         let submitted = false;
+        let submissionDrain: Promise<void> | undefined;
+        let interruptionRequested = false;
         let cancelTimer: (() => void) | undefined;
         let outputWatcher: NodeJS.Timeout | undefined;
         let interruptDeadline: NodeJS.Timeout | undefined;
@@ -550,6 +555,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           activeTurn = turnId;
           onStarted(activeTurn);
           const requestInterruption = () => {
+            if (interruptionRequested) return;
+            interruptionRequested = true;
             turnStopping = true; cancelNotifications();
             // A cleanup deadline after submission/cancellation is independent of solving budgets.
             interruptDeadline = setTimeout(() => { void closeSession(); }, 10_000);
@@ -589,13 +596,26 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
                 return;
               }
               submitted = true;
-              requestInterruption();
+              // Stop new paid work first. Interrupting an in-flight request loses its final
+              // usage receipt, so let admitted requests settle before stopping the writer.
+              turnStopping = true; cancelNotifications();
+              submissionDrain = new Promise<void>(resolve => {
+                drainSubmittedRequests = () => {
+                  if (activeRequests.size) return;
+                  drainSubmittedRequests = undefined; resolve();
+                };
+                drainSubmittedRequests();
+              });
+              void submissionDrain.then(() => {
+                if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
+              });
             };
             outputWatcher = setInterval(checkOutput, 100);
             checkOutput();
           }
           if (options.turnTimeoutMs) cancelTimer = scheduleMathTimeout(() => {
-            if (submitted) return;
+            // Draining paid requests still consumes the existing turn allowance.
+            if (submitted && !activeRequests.size) return;
             checkpoint = true;
             // Only check sources after turn/completed confirms the writer stopped.
             requestInterruption();
@@ -604,6 +624,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           earlyCompletions.delete(activeTurn);
           if (early) resolve(early);
           const finished = await done;
+          await submissionDrain;
           if (typeof finished.status !== 'string') throw new Error('math_codex_turn_status_missing');
           if (finished.status === 'failed' && finished.error) {
             const error = object(finished.error);
@@ -617,6 +638,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           throw error;
         } finally {
           cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher);
+          drainSubmittedRequests = undefined;
           turnSettled = true; cancelNotifications();
           activeTurn = undefined; completion = undefined;
           earlyCompletions.clear();

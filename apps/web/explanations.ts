@@ -32,6 +32,11 @@ export class WebExplanations {
       }
   }
 
+  counts() {
+    const queued = [...this.jobs.values()].filter(job => job.explanation.status === 'queued');
+    const oldestQueuedAt = queued.map(job => job.explanation.createdAt).sort()[0];
+    return { running: this.running, queued: queued.length, ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
+  }
   /** The run's explanations without their documents, newest state first from memory. */
   list(owner: string, runId: string): WebExplanation[] {
     return this.storage.listExplanations(owner, runId).map(({ key, explanation }) => {

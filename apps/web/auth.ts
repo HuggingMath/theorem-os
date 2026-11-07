@@ -21,7 +21,7 @@ export type WebAllowlistEntry = { email: string; source: 'admin' | 'config' | 'f
  */
 export type WebAccount = { id: string; email: string; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; completionEmail?: boolean;
   /** When this account accepted the terms, and which version; an open signup records it before the account exists. */
-  termsAt?: string; termsVersion?: string };
+  termsAt?: string; termsVersion?: string; suspendedAt?: string };
 export type WebMilestone = 'firstRunAt' | 'firstAcceptedAt';
 export type WebMailer = (message: { to: string; subject: string; text: string }) => Promise<void>;
 export class WebAuthError extends Error {
@@ -102,7 +102,8 @@ export class WebAuth {
   }
   /** True when this address may sign in: an open signup takes any address, otherwise only the allowlist does. */
   allowed(email: string): boolean {
-    return this.config.signup === 'open' || this.allowlist().has(email);
+    if (this.isAdmin(email)) return true;
+    return !this.getAccount(email)?.suspendedAt && (this.config.signup === 'open' || this.allowlist().has(email));
   }
   admins(): Set<string> { return new Set(this.config.admins ?? []); }
   isAdmin(email: string): boolean { return this.admins().has(email); }
@@ -110,6 +111,34 @@ export class WebAuth {
   signup(): WebSignupMode { return this.config.signup ?? 'allowlist'; }
   /** The terms version a new account accepts; absent when the service does not ask. */
   get termsVersion(): string | undefined { return this.config.termsVersion; }
+  needsTerms(email: string): boolean {
+    return Boolean(this.termsVersion && this.getAccount(email)?.termsVersion !== this.termsVersion);
+  }
+  private checkTerms(body: { terms?: unknown; termsVersion?: unknown }, account?: WebAccount): string | undefined {
+    const version = this.termsVersion;
+    if (!version || account?.termsVersion === version) return undefined;
+    if (body.terms !== true) throw new WebAuthError(400, '请先阅读并同意使用条款与隐私说明。');
+    if (body.termsVersion !== version) throw new WebAuthError(428, '使用条款已更新，请刷新页面后重新确认。');
+    return version;
+  }
+  /** A signed-in account can accept the current terms without losing its running work or verifying its inbox again. */
+  acceptTerms(email: string, body: { terms?: unknown; termsVersion?: unknown }): WebAccount {
+    const account = this.getAccount(email);
+    if (!account || !this.allowed(email)) throw new WebAuthError(403, '这个账号目前无法使用，请联系支持。');
+    const version = this.checkTerms(body, account);
+    return version ? this.account(email, version) : account;
+  }
+  /** Suspension keeps records for restoration, blocks both login methods and invalidates admission on the next request. */
+  setSuspended(value: unknown, suspended: boolean): WebAccount {
+    const email = normalizeEmail(value), account = this.getAccount(email);
+    if (!account) throw new WebAuthError(404, '账号不存在。');
+    if (this.isAdmin(email) && suspended) throw new WebAuthError(400, '管理员账号不能暂停。');
+    const { suspendedAt: _previous, ...rest } = account;
+    const updated = suspended ? { ...rest, suspendedAt: account.suspendedAt ?? new Date().toISOString() } : rest;
+    this.storage.saveRecord(this.accountPath(email), updated);
+    if (suspended) this.codes.delete(email);
+    return updated;
+  }
   private fileLines(): string[] {
     const file = this.config.allowlistFile;
     const lines = file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : [];
@@ -169,7 +198,8 @@ export class WebAuth {
     if (!captcha || captcha.expiresAt <= Date.now() || String(body.captcha ?? '').trim() !== captcha.answer)
       throw new WebAuthError(400, '图形验证码不正确或已过期，请换一张重试。');
     const email = normalizeEmail(body.email);
-    if (!this.allowed(email)) throw new WebAuthError(403, '这个邮箱还没有内测资格。请先申请内测，通过后再登录。');
+    if (!this.allowed(email)) throw new WebAuthError(403, this.getAccount(email)?.suspendedAt
+      ? '这个账号目前无法使用，请联系支持。' : '这个邮箱还没有内测资格。请先申请内测，通过后再登录。');
     const previous = this.codes.get(email);
     if (previous && Date.now() - previous.sentAt < resendAfterMs) throw new WebAuthError(429, '验证码刚刚发送过，请稍后再试。');
     if (!this.allow(`code-email:${email}`, 5, 60 * 60_000)) throw new WebAuthError(429, '这个邮箱的验证码请求过多，请一小时后再试。');
@@ -183,7 +213,7 @@ export class WebAuth {
   }
 
   /** `terms` is the signup form's checkbox; an open signup requires it before the account exists. */
-  verifyCode(body: { email?: unknown; code?: unknown; terms?: unknown }): WebAccount {
+  verifyCode(body: { email?: unknown; code?: unknown; terms?: unknown; termsVersion?: unknown }): WebAccount {
     const email = normalizeEmail(body.email), pending = this.codes.get(email);
     if (!pending || pending.expiresAt <= Date.now()) throw new WebAuthError(400, '验证码已过期，请重新获取。');
     const code = String(body.code ?? '').trim();
@@ -195,9 +225,7 @@ export class WebAuth {
     // Removing an address from the allowlist also blocks its next login.
     if (!this.allowed(email)) throw new WebAuthError(403, '这个邮箱还没有内测资格。请先申请内测，通过后再登录。');
     // The terms are accepted before the account is created, so no account exists without a record of consent.
-    const terms = this.config.termsVersion;
-    if (terms && body.terms !== true) throw new WebAuthError(400, '请先阅读并同意使用条款与隐私说明。');
-    return this.account(email, terms && body.terms === true ? terms : undefined);
+    return this.account(email, this.checkTerms(body, this.getAccount(email)));
   }
 
   private accountPath(email: string) { return ['accounts', `${crypto.createHash('sha256').update(email).digest('hex')}.json`]; }
@@ -229,20 +257,22 @@ export class WebAuth {
     const actual = await derivePassword(value, salt);
     return Boolean(record) && crypto.timingSafeEqual(actual, expected);
   }
-  async loginPassword(ip: string, body: { email?: unknown; password?: unknown }): Promise<WebAccount> {
+  async loginPassword(ip: string, body: { email?: unknown; password?: unknown; terms?: unknown; termsVersion?: unknown }): Promise<WebAccount> {
     const email = normalizeEmail(body.email);
     if (!this.allow('password-ip:' + ip, 20, 60 * 60_000) || !this.allow('password-email:' + email, 5, 60 * 60_000))
       throw new WebAuthError(429, '密码尝试过多，请一小时后再试，或使用邮箱验证码登录。');
     if (typeof body.password !== 'string' || Buffer.byteLength(body.password, 'utf8') > 256)
       throw new WebAuthError(401, '邮箱或密码不正确。');
-    const record = this.passwordRecord(email);
+    const initialAccount = this.getAccount(email), record = this.passwordRecord(email);
     const matches = await this.matchesPassword(body.password, record);
     const account = this.getAccount(email);
-    if (!matches || !account || !this.allowed(email)) throw new WebAuthError(401, '邮箱或密码不正确。');
-    return account;
+    if (!matches || !account || account.id !== initialAccount?.id || !this.allowed(email)) throw new WebAuthError(401, '邮箱或密码不正确。');
+    const version = this.checkTerms(body, account);
+    return version ? this.account(email, version) : account;
   }
   async setPassword(email: string, next: unknown, current: unknown, verifiedByEmail: boolean) {
-    if (!this.getAccount(email)) throw new WebAuthError(404, '账号不存在。');
+    const account = this.getAccount(email);
+    if (!account) throw new WebAuthError(404, '账号不存在。');
     if (!validPassword(next)) throw new WebAuthError(400, '密码至少 12 位且不超过 256 字节。');
     if (!this.allow('password-change:' + email, 5, 60 * 60_000)) throw new WebAuthError(429, '密码修改过于频繁，请一小时后再试。');
     const record = this.passwordRecord(email);
@@ -250,6 +280,9 @@ export class WebAuth {
       throw new WebAuthError(403, '请输入当前密码；忘记密码请用邮箱验证码重新登录后设置。');
     const salt = crypto.randomBytes(16);
     const digest = await derivePassword(next, salt);
+    // Derivation yields; deletion, recreation or suspension must not leave a password written by the old session.
+    if (this.getAccount(email)?.id !== account.id) throw new WebAuthError(404, '账号不存在。');
+    if (!this.allowed(email)) throw new WebAuthError(403, '这个账号目前无法使用，请联系支持。');
     this.storage.saveRecord(this.passwordPath(email), { algorithm: 'scrypt', salt: salt.toString('hex'), digest: digest.toString('hex') } satisfies PasswordRecord);
   }
   /** Every account record; the funnel report and run milestones read these (a closed beta keeps the list short). */

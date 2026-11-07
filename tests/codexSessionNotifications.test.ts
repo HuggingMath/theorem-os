@@ -30,7 +30,7 @@ const request = async () => {
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + process.env[provider === 'sub2api'
         ? 'THEOREM_OS_MODEL_RELAY_CAPABILITY' : 'WESTLAKEHPC_API_KEY'] },
       body: JSON.stringify({ model: settings.model, input: 'fixture', stream: true, store: false, reasoning: { effort: 'max' } }) });
-    await response.text(); record('request-returned');
+    await response.text(); record('request-returned', { status: response.status });
     send({ method: 'item/started', params: { threadId: 'notice-thread', item: { id: 'tool', type: 'commandExecution' } } });
   } catch { record('local-request-cancelled'); }
 };
@@ -44,6 +44,7 @@ setInterval(() => {
   }
   if (command === 'complete') { controller?.abort(); finish('completed'); }
   if (command === 'cancel-request') { controller?.abort(); record('client-aborted'); }
+  if (command === 'request') void request();
   if (command === 'ack') { const reply = steerReply; steerReply = undefined; reply?.(); }
 }, 5);
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -71,28 +72,30 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 });
 `;
 
-type Stream = { finish(): void; ended: boolean };
+type Stream = { finish(options?: { missingUsage?: boolean }): void; ended: boolean };
 let directory: string, session: MathAgentSession | undefined;
 let streams: Stream[], receipts: ModelRequestReceipt[], cancelled: number[], sources: string[];
+let validatedOutputs: number, incompleteUsage: number;
 const trace = () => fs.existsSync(path.join(directory, 'trace.jsonl'))
   ? fs.readFileSync(path.join(directory, 'trace.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
 const control = (command: string) => fs.writeFileSync(path.join(directory, 'control'), command);
 
-async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: { holdAck?: boolean; turnTimeoutMs?: number } = {}) {
+async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: { holdAck?: boolean; turnTimeoutMs?: number; completedOutput?: boolean } = {}) {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-notice-'));
   const profile = path.join(directory, 'profile'), executable = path.join(directory, 'fake-codex');
   const selected = provider === 'sub2api' ? SUB2API_PROVIDER : WESTLAKE_PROVIDER;
   (provider === 'sub2api' ? prepareSub2apiProfile : prepareWestlakeProfile)(profile, 'deepseek-flash', 'max');
   fs.writeFileSync(executable, '#!' + process.execPath + '\n' + appServer, { mode: 0o700 });
-  streams = []; receipts = []; cancelled = []; sources = [];
+  streams = []; receipts = []; cancelled = []; sources = []; validatedOutputs = 0; incompleteUsage = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
     const index = streams.length;
     let source!: ReadableStreamDefaultController<Uint8Array>;
-    const stream: Stream = { ended: false, finish: () => {
+    const stream: Stream = { ended: false, finish: options => {
       if (stream.ended) return; stream.ended = true;
       const terminal = provider === 'sub2api'
         ? 'event: response.completed\ndata: ' + JSON.stringify({ type: 'response.completed', response: {
-          id: 'completed-' + index, status: 'completed', usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } }) + '\n\n'
+          id: 'completed-' + index, status: 'completed',
+          ...(!options?.missingUsage ? { usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } : {}) } }) + '\n\n'
         : [{ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
           { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }]
           .map(value => 'data: ' + JSON.stringify(value) + '\n\n').join('') + 'data: [DONE]\n\n';
@@ -112,6 +115,11 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: { ho
   });
   session = await createCodexMathSession({ executable, profile, workspace: directory, model: 'deepseek-flash', effort: 'max',
     instructions: 'offline fixture', onUsage: () => {}, turnTimeoutMs: extra.turnTimeoutMs,
+    onUsageIncomplete: () => { incompleteUsage++; },
+    ...(extra.completedOutput ? { completedOutput: { file: path.join(directory, 'OUTPUT.json'), validate: value => {
+      if ((value as { approved?: boolean }).approved !== true) throw new Error('invalid fixture output');
+      validatedOutputs++;
+    } } } : {}),
     environment: { PATH: process.env.PATH, [selected.apiKeyEnvironment]: 'offline-fixture-key',
       FIXTURE_TRACE: path.join(directory, 'trace.jsonl'), FIXTURE_CONTROL: path.join(directory, 'control'),
       ...(extra.holdAck ? { FIXTURE_HOLD_ACK: '1' } : {}) },
@@ -133,6 +141,44 @@ afterEach(async () => {
 });
 
 describe('soft notifications at real provider request boundaries', () => {
+  it.each(['sub2api', 'westlake'] as const)('settles paid %s requests before interrupting a valid file submission and closes later admission', async provider => {
+    const { running } = await fixture(provider, { completedOutput: true });
+    fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
+    await expect.poll(() => validatedOutputs).toBe(1);
+    await delay(30);
+    expect(cancelled).toEqual([]); expect(receipts).toEqual([]);
+    expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+    control('request');
+    await expect.poll(() => trace().filter(item => item.event === 'request-returned').length).toBe(1);
+    expect(trace().find(item => item.event === 'request-returned').status).toBeGreaterThanOrEqual(400);
+    expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+    streams[0].finish();
+    expect(await running).toBe('submitted');
+    expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
+  it('keeps missing upstream usage visible even when a valid output was submitted', async () => {
+    const { running } = await fixture('sub2api', { completedOutput: true });
+    fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
+    await expect.poll(() => validatedOutputs).toBe(1);
+    streams[0].finish({ missingUsage: true });
+    expect(await running).toBe('submitted');
+    expect(receipts).toMatchObject([{ complete: false, missingReason: 'provider-usage-missing' }]);
+    expect(incompleteUsage).toBe(1);
+  });
+
+  it('keeps the turn deadline active while submitted output waits for paid usage', async () => {
+    const { running } = await fixture('sub2api', { completedOutput: true, turnTimeoutMs: 500 });
+    fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
+    await expect.poll(() => validatedOutputs).toBe(1);
+    expect(cancelled).toEqual([]);
+    expect(await running).toBe('submitted');
+    expect(cancelled).toEqual([0]);
+    expect(receipts).toMatchObject([{ complete: false, missingReason: 'request-cancelled' }]);
+    expect(incompleteUsage).toBe(1);
+  });
+
   it.each(['sub2api', 'westlake'] as const)('delivers %s reminders after settlement without cancelling streamed reasoning', async provider => {
     const { running } = await fixture(provider);
     const delivered = session!.notify!('Save the current argument'); void delivered.catch(() => {});

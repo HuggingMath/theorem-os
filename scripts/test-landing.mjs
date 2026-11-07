@@ -60,7 +60,9 @@ const checkStart = async page => {
   assert.match(await start.innerText(), /已开放内测/);
   assert.doesNotMatch(await start.innerText(), /即将开放/);
   assert.equal(await start.locator('[data-command], .copy-command, pre').count(), 0, 'The start section must not offer deployment commands');
-  assert.equal(await page.locator('.nav-start').innerText(), '申请内测');
+  assert.equal(await page.locator('.nav-start').innerText(), '打开工作台');
+  assert.equal(await page.locator('.nav-start').getAttribute('href'), 'https://app.theoremos.top/');
+  assert.equal(await page.locator('.hero-actions .button').getAttribute('href'), 'https://app.theoremos.top/');
   const open = start.locator('.start-links a.button');
   assert.equal(await open.innerText(), '打开工作台');
   assert.equal(await open.getAttribute('href'), 'https://app.theoremos.top/');
@@ -83,7 +85,7 @@ const checkScreenshotPreview = async (page, width) => {
   });
   assert.match(preview.source, width <= 600 ? /workbench-full-mobile\.png/ : /workbench-full-desktop\.png/);
   assert.equal(await dialog.locator('.preview-original').getAttribute('href'), new URL(preview.source).pathname.split('/').slice(-2).join('/'));
-  assert.match(await dialog.locator('#preview-description').innerText(), /草稿 · 未提交/);
+  assert.match(await dialog.locator('#preview-description').innerText(), /自然语言入口 · 未提交/);
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('preview-open')), true);
   const media = dialog.locator('.preview-dialog-media');
   await dialog.getByRole('button', { name: '放大截图' }).click();
@@ -233,7 +235,7 @@ try {
   const hostingFaq = page.locator('.faq-list details').filter({ hasText: '可以直接在网页运行证明吗' });
   assert.equal(await hostingFaq.count(), 1);
   await hostingFaq.locator('summary').click();
-  assert.match(await hostingFaq.innerText(), /已开放内测/);
+  assert.match(await hostingFaq.innerText(), /白名单 Beta/);
   assert.equal(await hostingFaq.locator('a').getAttribute('href'), 'https://app.theoremos.top/');
   await hostingFaq.locator('summary').click();
   assert.equal(await page.locator('.proof-table tbody .proof-row[data-accepted-proof]').count(), accepted.length);
