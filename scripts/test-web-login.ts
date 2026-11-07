@@ -194,6 +194,9 @@ try {
   await page.context().clearCookies();
   await page.goto(link);
   await page.waitForURL(url => url.pathname === '/login.html' && url.search === `?run=${older}`);
+  // /api/session sets the anonymous cookie after the document loads. Let that response settle before restoring
+  // the authenticated cookies; otherwise it can overwrite them between addCookies() and the next reload.
+  await page.locator('#send-code:enabled').waitFor();
   // Signing in elsewhere and reloading this login page counts the same as signing in on it: it returns to the linked run.
   await page.context().addCookies(cookies);
   await page.reload();
@@ -211,6 +214,7 @@ try {
   await page.context().clearCookies();
   await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
   await page.waitForURL(url => url.pathname === '/login.html' && url.search === chatAddress);
+  await page.locator('#send-code:enabled').waitFor();
   await page.context().addCookies(signedIn);
   await page.reload();
   await page.waitForURL(url => workbench(url) && url.search === chatAddress);
