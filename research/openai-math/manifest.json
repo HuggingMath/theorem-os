@@ -1,6 +1,6 @@
 {
   "schema": "theoremos.campaign-archive.v1",
-  "capturedAt": "2026-11-02T09:31:54.105Z",
+  "capturedAt": "2026-11-07T16:32:08.577Z",
   "records": [
     {
       "id": "openai_cartier_chart_compactness_support",
@@ -496,6 +496,459 @@
       "processSummary": {
         "runs": 2,
         "tasks": 4
+      }
+    },
+    {
+      "id": "openai_three_state_supercritical",
+      "title": "Supercritical reconstruction on regular and Poisson trees",
+      "subtitle": "正则树与泊松树上的超临界重构",
+      "area": "概率论",
+      "summary": "在给定超临界条件下，分别证明正则树与泊松树模型的重构优势趋于正极限。",
+      "en": {
+        "subtitle": "Supercritical reconstruction on regular and Poisson trees",
+        "area": "Probability",
+        "summary": "Under the specified supercritical conditions, reconstruction advantages on regular and Poisson trees converge to positive limits."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-05T21:58:17.753Z",
+      "directory": "ThreeStateSupercritical",
+      "files": {
+        "Challenge.lean": "ba58eb22214f0b654fd1d5b4ca26b69b395c61409084e63c486f593c7e5330f8",
+        "Submission.lean": "7ed9c39ce9036a21f69e05178619450e822ab5c5cee99524f08c202a78894d48",
+        "Submission/Library/Auto/ThreeStateChannelSpectrum.lean": "91d863d881f984ba04fd45d4ae46aef58f7aa5aee3eb929c14d9865ece4c1b80",
+        "Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
+        "Submission/Library/TheoremOS/Analysis/Daugavet.lean": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
+        "Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+        "Submission/Library/TheoremOS/Analysis/MetricDistortion.lean": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
+        "Submission/Library/TheoremOS/BooleanCube/Fourier.lean": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
+        "Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+        "Submission/Library/TheoremOS/BooleanCube/Influence.lean": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015",
+        "Submission/Library/TheoremOS/BooleanCube/LevelOne.lean": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2",
+        "Submission/Library/TheoremOS/BooleanCube/Polynomial.lean": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970",
+        "Submission/Library/TheoremOS/BooleanCube/Product.lean": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6",
+        "Submission/Library/TheoremOS/BooleanCube/Relabel.lean": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff",
+        "Submission/Library/TheoremOS/BooleanCube/Sensitivity.lean": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454",
+        "Submission/Library/TheoremOS/Combinatorics/BinomialEntropy.lean": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
+        "Submission/Library/TheoremOS/Combinatorics/EditDistance.lean": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
+        "Submission/Library/TheoremOS/Combinatorics/GraphIndependence.lean": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
+        "Submission/Library/TheoremOS/Combinatorics/PerfectMatching.lean": "2c2b235dc645d6e9e7cecb03a70fa955d4932c214e3772a2749f76dde4b5cfa1",
+        "Submission/Library/TheoremOS/Combinatorics/Ramsey.lean": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
+        "Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+        "Submission/Library/TheoremOS/Geometry/EuclideanCoordinates.lean": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
+        "Submission/Library/TheoremOS/Geometry/EuclideanRamsey.lean": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
+        "Submission/Library/TheoremOS/Geometry/TranslativeCovering.lean": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
+        "Submission/Library/TheoremOS/InformationTheory/Divergence.lean": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+        "Submission/Library/TheoremOS/InformationTheory/Entropy.lean": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
+        "Submission/Library/TheoremOS/InformationTheory/Shearer.lean": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+        "Submission/Library/TheoremOS/LinearAlgebra/DensityMatrix.lean": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b",
+        "Submission/Library/TheoremOS/LinearAlgebra/NumericalRange.lean": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
+        "Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+        "Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+        "Submission/Library/TheoremOS/LinearAlgebra/VonNeumannEntropy.lean": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439",
+        "Submission/Library/TheoremOS/Probability/BiasedProduct.lean": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+        "Submission/Library/TheoremOS/Probability/Concentration.lean": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+        "Submission/Library/TheoremOS/Probability/Coupling.lean": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23",
+        "Submission/Library/TheoremOS/Probability/Dobrushin.lean": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450",
+        "Submission/Library/TheoremOS/Probability/FiniteProbability.lean": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996",
+        "Submission/Library/TheoremOS/Probability/GaussianIBP.lean": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+        "Submission/Library/TheoremOS/Probability/LocalLemma.lean": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+        "Submission/Library/TheoremOS/Probability/MixingLowerBound.lean": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d",
+        "Submission/Library/TheoremOS/Probability/RandomKSAT.lean": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
+        "Submission/Library/TheoremOS/Probability/RandomKSATThreshold.lean": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685",
+        "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
+        "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+        "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+        "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
+        "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
+        "process.json": "d7175643a01d81c87ac63d8f0b9a9ea90a6a058307fccd90ff4b0d50fdca38a1",
+        "verification.json": "2bbc977ba96005655ac8a01f9f38c434b1992d37816ced6350039506b5faf05f"
+      },
+      "declaration": "theorem channel_nonneg",
+      "campaign": {
+        "target": "ThreeStateSupercritical",
+        "runId": "76087917-e598-4ed8-be9e-06de27f4e5d0",
+        "targets": [
+          "OAI.ThreeState.channel_nonneg",
+          "OAI.ThreeState.channel_sum",
+          "OAI.ThreeState.regular_supercritical",
+          "OAI.ThreeState.poisson_supercritical"
+        ],
+        "proofCommit": "df13c8ec26003f2edca8d48c166ec67f13506609",
+        "proofSha256": "7ed9c39ce9036a21f69e05178619450e822ab5c5cee99524f08c202a78894d48",
+        "kernelReceiptIds": [
+          "lean-d8e50192f77df92d6f97d3a0",
+          "lean-946f3ae95d55abffec14661e",
+          "lean-86d59b3b156c5ef30b671244",
+          "lean-031d100630ef5eb620844732"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_three_state_supercritical/verification.json"
+      },
+      "processSummary": {
+        "runs": 4,
+        "tasks": 34
+      }
+    },
+    {
+      "id": "openai_triangle_face",
+      "title": "Face correspondence under triangle expansion",
+      "subtitle": "三角展开下匹配多面体的面对应",
+      "area": "组合优化",
+      "summary": "证明度三顶点三角展开下，原匹配多面体与展开后指定面线性对应，并保持最小面的运输关系。",
+      "en": {
+        "subtitle": "Face correspondence under triangle expansion",
+        "area": "Combinatorial optimization",
+        "summary": "For triangle expansion at a degree-three vertex, proves a linear correspondence between the original matching polytope and the specified face, together with transport of minimal faces."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-05T19:00:11.664Z",
+      "directory": "TriangleFace",
+      "files": {
+        "Challenge.lean": "0b6b19f837991da8842a33f72947e2feeb595ea31f912ce2d6f607f40422391b",
+        "Submission.lean": "1f05b4d19928f89030bbe1ef6430f9b06bcca2273e082c8e339f77e44cdcf450",
+        "Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
+        "Submission/Library/TheoremOS/Analysis/Daugavet.lean": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
+        "Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+        "Submission/Library/TheoremOS/Analysis/MetricDistortion.lean": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
+        "Submission/Library/TheoremOS/BooleanCube/Fourier.lean": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
+        "Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+        "Submission/Library/TheoremOS/BooleanCube/Influence.lean": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015",
+        "Submission/Library/TheoremOS/BooleanCube/LevelOne.lean": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2",
+        "Submission/Library/TheoremOS/BooleanCube/Polynomial.lean": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970",
+        "Submission/Library/TheoremOS/BooleanCube/Product.lean": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6",
+        "Submission/Library/TheoremOS/BooleanCube/Relabel.lean": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff",
+        "Submission/Library/TheoremOS/BooleanCube/Sensitivity.lean": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454",
+        "Submission/Library/TheoremOS/Combinatorics/BinomialEntropy.lean": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
+        "Submission/Library/TheoremOS/Combinatorics/EditDistance.lean": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
+        "Submission/Library/TheoremOS/Combinatorics/GraphIndependence.lean": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
+        "Submission/Library/TheoremOS/Combinatorics/Ramsey.lean": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
+        "Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+        "Submission/Library/TheoremOS/Geometry/EuclideanCoordinates.lean": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
+        "Submission/Library/TheoremOS/Geometry/EuclideanRamsey.lean": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
+        "Submission/Library/TheoremOS/Geometry/TranslativeCovering.lean": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
+        "Submission/Library/TheoremOS/InformationTheory/Divergence.lean": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+        "Submission/Library/TheoremOS/InformationTheory/Entropy.lean": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
+        "Submission/Library/TheoremOS/InformationTheory/Shearer.lean": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+        "Submission/Library/TheoremOS/LinearAlgebra/DensityMatrix.lean": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b",
+        "Submission/Library/TheoremOS/LinearAlgebra/NumericalRange.lean": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
+        "Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+        "Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+        "Submission/Library/TheoremOS/LinearAlgebra/VonNeumannEntropy.lean": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439",
+        "Submission/Library/TheoremOS/Probability/BiasedProduct.lean": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+        "Submission/Library/TheoremOS/Probability/Concentration.lean": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+        "Submission/Library/TheoremOS/Probability/Coupling.lean": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23",
+        "Submission/Library/TheoremOS/Probability/Dobrushin.lean": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450",
+        "Submission/Library/TheoremOS/Probability/FiniteProbability.lean": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996",
+        "Submission/Library/TheoremOS/Probability/GaussianIBP.lean": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+        "Submission/Library/TheoremOS/Probability/LocalLemma.lean": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+        "Submission/Library/TheoremOS/Probability/MixingLowerBound.lean": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d",
+        "Submission/Library/TheoremOS/Probability/RandomKSAT.lean": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
+        "Submission/Library/TheoremOS/Probability/RandomKSATThreshold.lean": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685",
+        "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
+        "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+        "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+        "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
+        "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
+        "process.json": "2be7f3388123358bcb3f9e6e863efb679f053a7dcaccb85a00be2df56a0be8aa",
+        "verification.json": "6c18f26ad2deaf95ddc6a61e9ab6233576ab2c622df80975ad1e641aa6e85c41"
+      },
+      "declaration": "theorem collapse_reattach",
+      "campaign": {
+        "target": "TriangleFace",
+        "runId": "d77dc453-baf2-4ffd-9afa-ae2af96decba",
+        "targets": [
+          "OAI.MatchingEntropyBounds.Refined.collapse_reattach",
+          "OAI.TriangleFace198.triangle_expansion_face"
+        ],
+        "proofCommit": "7792690dbf761951406a67695560452783c74317",
+        "proofSha256": "1f05b4d19928f89030bbe1ef6430f9b06bcca2273e082c8e339f77e44cdcf450",
+        "kernelReceiptIds": [
+          "lean-c27a5a7c58e050334893ac2d",
+          "lean-5261437e1876436adc49c3ab"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_triangle_face/verification.json"
+      },
+      "processSummary": {
+        "runs": 5,
+        "tasks": 36
+      }
+    },
+    {
+      "id": "openai_brennan_sharp",
+      "title": "Sharp endpoint divergence for the Koebe map",
+      "subtitle": "Koebe 映射的锐端点发散",
+      "area": "复分析",
+      "summary": "证明 Koebe 映射及其逆映射在题设端点指数下的导数面积矩发散。",
+      "en": {
+        "subtitle": "Sharp endpoint divergence for the Koebe map",
+        "area": "Complex analysis",
+        "summary": "Proves divergence of the derivative area moments of the Koebe map and its inverse at the specified endpoint exponents."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-04T19:43:04.679Z",
+      "directory": "BrennanSharp",
+      "files": {
+        "Challenge.lean": "638aad0c24a403921792b7932eb481c5368698ed97b2c49578fd7af17b4e9e23",
+        "Submission.lean": "63bc780a8b0092517aba26c608eb9c58dc1033600a800a35fb1d5693b8c86e4d",
+        "Submission/Library/Auto/KoebeDerivative.lean": "ca7d6045edf148efb1edf8a067a9075dcb2e9b24f2eaec4b101ba6a7708f5c79",
+        "Submission/Library/Auto/ThreeStateChannelSpectrum.lean": "91d863d881f984ba04fd45d4ae46aef58f7aa5aee3eb929c14d9865ece4c1b80",
+        "Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
+        "Submission/Library/TheoremOS/Analysis/Daugavet.lean": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
+        "Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+        "Submission/Library/TheoremOS/Analysis/MetricDistortion.lean": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
+        "Submission/Library/TheoremOS/BooleanCube/Fourier.lean": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
+        "Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+        "Submission/Library/TheoremOS/BooleanCube/Influence.lean": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015",
+        "Submission/Library/TheoremOS/BooleanCube/LevelOne.lean": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2",
+        "Submission/Library/TheoremOS/BooleanCube/Polynomial.lean": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970",
+        "Submission/Library/TheoremOS/BooleanCube/Product.lean": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6",
+        "Submission/Library/TheoremOS/BooleanCube/Relabel.lean": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff",
+        "Submission/Library/TheoremOS/BooleanCube/Sensitivity.lean": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454",
+        "Submission/Library/TheoremOS/Combinatorics/BinomialEntropy.lean": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
+        "Submission/Library/TheoremOS/Combinatorics/EditDistance.lean": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
+        "Submission/Library/TheoremOS/Combinatorics/GraphIndependence.lean": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
+        "Submission/Library/TheoremOS/Combinatorics/PerfectMatching.lean": "2c2b235dc645d6e9e7cecb03a70fa955d4932c214e3772a2749f76dde4b5cfa1",
+        "Submission/Library/TheoremOS/Combinatorics/Ramsey.lean": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
+        "Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+        "Submission/Library/TheoremOS/Geometry/EuclideanCoordinates.lean": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
+        "Submission/Library/TheoremOS/Geometry/EuclideanRamsey.lean": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
+        "Submission/Library/TheoremOS/Geometry/TranslativeCovering.lean": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
+        "Submission/Library/TheoremOS/InformationTheory/Divergence.lean": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+        "Submission/Library/TheoremOS/InformationTheory/Entropy.lean": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
+        "Submission/Library/TheoremOS/InformationTheory/Shearer.lean": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+        "Submission/Library/TheoremOS/LinearAlgebra/DensityMatrix.lean": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b",
+        "Submission/Library/TheoremOS/LinearAlgebra/NumericalRange.lean": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
+        "Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+        "Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+        "Submission/Library/TheoremOS/LinearAlgebra/VonNeumannEntropy.lean": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439",
+        "Submission/Library/TheoremOS/Probability/BiasedProduct.lean": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+        "Submission/Library/TheoremOS/Probability/Concentration.lean": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+        "Submission/Library/TheoremOS/Probability/Coupling.lean": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23",
+        "Submission/Library/TheoremOS/Probability/Dobrushin.lean": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450",
+        "Submission/Library/TheoremOS/Probability/FiniteProbability.lean": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996",
+        "Submission/Library/TheoremOS/Probability/GaussianIBP.lean": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+        "Submission/Library/TheoremOS/Probability/LocalLemma.lean": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+        "Submission/Library/TheoremOS/Probability/MixingLowerBound.lean": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d",
+        "Submission/Library/TheoremOS/Probability/RandomKSAT.lean": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
+        "Submission/Library/TheoremOS/Probability/RandomKSATThreshold.lean": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685",
+        "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
+        "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+        "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+        "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
+        "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
+        "process.json": "03b11512d497c438d9f34b164acb41bd0ba6cf736d0fe0d01241528021eccf2b",
+        "verification.json": "e25e13f8f706505165fef8ca883e94938068f05fe2b74cff3133a09487f53ead"
+      },
+      "declaration": "theorem sharp_endpoints",
+      "campaign": {
+        "target": "BrennanSharp",
+        "runId": "885e367e-04a9-49ca-b82f-d7367b12c10b",
+        "targets": [
+          "OAI.Brennan.Sharp.sharp_endpoints"
+        ],
+        "proofCommit": "fbe330ab1781c05df68ccbb6e3914db1b584b913",
+        "proofSha256": "63bc780a8b0092517aba26c608eb9c58dc1033600a800a35fb1d5693b8c86e4d",
+        "kernelReceiptIds": [
+          "lean-55993e46190858084d3e059a"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_brennan_sharp/verification.json"
+      },
+      "processSummary": {
+        "runs": 5,
+        "tasks": 10
+      }
+    },
+    {
+      "id": "openai_hilbert_crouzeix",
+      "title": "Numerical-range geometry and finite-compression support",
+      "subtitle": "数值域几何与有限压缩辅助结果",
+      "area": "泛函分析",
+      "summary": "证明数值域闭包几何性质、有限压缩、给定有理函数分母可逆性及零结论四项指定目标。",
+      "en": {
+        "subtitle": "Numerical-range geometry and finite-compression support",
+        "area": "Functional analysis",
+        "summary": "Proves four specified support targets concerning numerical-range closure geometry, finite compression, invertibility of rational denominators, and the zero conclusion."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-05T11:14:56.031Z",
+      "directory": "HilbertCrouzeix",
+      "files": {
+        "Challenge.lean": "23841ffc513082acb9bb26c50733c4efa852c41f94ec018d8271c0a74feae099",
+        "Submission.lean": "fc4c35ba96e2fef31d57635d0cd237498eaacf87bdeba7510a0daac5d6d663af",
+        "process.json": "4918ed7907f8ea66abb883427cd6aeb232aed41ade824e971c50a1d9c2f41d38",
+        "verification.json": "2b01d8e286e5a0760b474a331d7882e003cb23029bb5366ad835e7ca33428fa6"
+      },
+      "declaration": "theorem numericalClosure_geometry",
+      "campaign": {
+        "target": "HilbertCrouzeix",
+        "runId": "12ec8cde-d66b-40bb-84c7-a558d1af9cb6",
+        "targets": [
+          "OAI.HilbertCrouzeix.numericalClosure_geometry",
+          "OAI.HilbertCrouzeix.exists_finite_compression",
+          "OAI.HilbertCrouzeix.rational_denominator_isUnit",
+          "OAI.HilbertCrouzeix.zeroConclusion"
+        ],
+        "proofCommit": "2fb1e27563523481d03350b786b7e9562ad61005",
+        "proofSha256": "fc4c35ba96e2fef31d57635d0cd237498eaacf87bdeba7510a0daac5d6d663af",
+        "kernelReceiptIds": [
+          "lean-afa25f90a87414b03276e413",
+          "lean-0919b4355c6b7c706669b65d",
+          "lean-bc42a2f2ce81771ec1a59dde",
+          "lean-9d4b3fef223b12838c985dee"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_hilbert_crouzeix/verification.json"
+      },
+      "processSummary": {
+        "runs": 3,
+        "tasks": 56
+      }
+    },
+    {
+      "id": "openai_planar_anderson_spectrum",
+      "title": "Almost-sure spectrum of the planar Anderson operator",
+      "subtitle": "平面 Anderson 算子的几乎必然谱",
+      "area": "随机算子",
+      "summary": "对独立均匀分布于 [-h,h] 的势，构造平面 Anderson 自伴算子并证明几乎处处谱为 [-4-h,4+h]。",
+      "en": {
+        "subtitle": "Almost-sure spectrum of the planar Anderson operator",
+        "area": "Random operators",
+        "summary": "For independent uniform potentials on [-h,h], constructs the planar Anderson self-adjoint operator and proves that its spectrum is almost surely [-4-h,4+h]."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-04T20:31:33.186Z",
+      "directory": "PlanarAndersonSpectrum",
+      "files": {
+        "Challenge.lean": "476c0769acc7d2ba1dbb2ae1b451a4c03786cc79df4affaa9cdd03c5669ff2cf",
+        "Submission.lean": "2fd7e2d1c71eff673ce58cd82f694526f9d6ed0a4ace42f800b159b26482cfc7",
+        "process.json": "732c58ccb03164cb95c9802ccb7da1ed26cf62301c72eb804e9e486240b090c9",
+        "verification.json": "58385dc86efc93b1a83ea0cb7b87edefd40b62850a6747e41c08cea5234a5976"
+      },
+      "declaration": "theorem anderson_spectrum_ae",
+      "campaign": {
+        "target": "PlanarAndersonSpectrum",
+        "runId": "818b8243-22b1-4315-954c-d5610eff1e44",
+        "targets": [
+          "OAI.PlanarAnderson.anderson_spectrum_ae"
+        ],
+        "proofCommit": "9ffa70556f49392868ad54c5cb5982eabcf5bcf9",
+        "proofSha256": "2fd7e2d1c71eff673ce58cd82f694526f9d6ed0a4ace42f800b159b26482cfc7",
+        "kernelReceiptIds": [
+          "lean-1c988d3e17ea1e9aef7b3380"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_planar_anderson_spectrum/verification.json"
+      },
+      "processSummary": {
+        "runs": 1,
+        "tasks": 16
+      }
+    },
+    {
+      "id": "openai_ising_finiteness",
+      "title": "Finiteness of the Ising-perceptron variational value",
+      "subtitle": "Ising 感知器变分值的有限性",
+      "area": "概率与统计物理",
+      "summary": "在非负参数及连续有界函数的题设下，证明扩展实数形式的变分值等于某个有限实数。",
+      "en": {
+        "subtitle": "Finiteness of the Ising-perceptron variational value",
+        "area": "Probability and statistical physics",
+        "summary": "Under the stated nonnegative-parameter and continuous bounded-function hypotheses, proves that the extended-real variational value equals a finite real number."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-04T19:46:07.240Z",
+      "directory": "IsingFiniteness",
+      "files": {
+        "Challenge.lean": "dd2c0c85d60f2fcc732b9e15203a0db8c2d019bacde1dd1efbc2cebb79d908ca",
+        "Submission.lean": "9ae908672b96f937d19b4b2f6b74aa1952a57184e264e1a08c9a0bc847c2775a",
+        "Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
+        "Submission/Library/TheoremOS/Analysis/Daugavet.lean": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
+        "Submission/Library/TheoremOS/Analysis/MetricDistortion.lean": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
+        "Submission/Library/TheoremOS/BooleanCube/Fourier.lean": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
+        "Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+        "Submission/Library/TheoremOS/BooleanCube/Influence.lean": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015",
+        "Submission/Library/TheoremOS/BooleanCube/LevelOne.lean": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2",
+        "Submission/Library/TheoremOS/BooleanCube/Polynomial.lean": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970",
+        "Submission/Library/TheoremOS/BooleanCube/Product.lean": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6",
+        "Submission/Library/TheoremOS/BooleanCube/Relabel.lean": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff",
+        "Submission/Library/TheoremOS/BooleanCube/Sensitivity.lean": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454",
+        "Submission/Library/TheoremOS/Combinatorics/BinomialEntropy.lean": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
+        "Submission/Library/TheoremOS/Combinatorics/EditDistance.lean": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
+        "Submission/Library/TheoremOS/Combinatorics/GraphIndependence.lean": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
+        "Submission/Library/TheoremOS/Combinatorics/PerfectMatching.lean": "2c2b235dc645d6e9e7cecb03a70fa955d4932c214e3772a2749f76dde4b5cfa1",
+        "Submission/Library/TheoremOS/Combinatorics/Ramsey.lean": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
+        "Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+        "Submission/Library/TheoremOS/Geometry/EuclideanCoordinates.lean": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
+        "Submission/Library/TheoremOS/Geometry/EuclideanRamsey.lean": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
+        "Submission/Library/TheoremOS/Geometry/TranslativeCovering.lean": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
+        "Submission/Library/TheoremOS/InformationTheory/Divergence.lean": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+        "Submission/Library/TheoremOS/InformationTheory/Entropy.lean": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
+        "Submission/Library/TheoremOS/InformationTheory/Shearer.lean": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+        "Submission/Library/TheoremOS/LinearAlgebra/DensityMatrix.lean": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b",
+        "Submission/Library/TheoremOS/LinearAlgebra/NumericalRange.lean": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
+        "Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+        "Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+        "Submission/Library/TheoremOS/LinearAlgebra/VonNeumannEntropy.lean": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439",
+        "Submission/Library/TheoremOS/Probability/BiasedProduct.lean": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+        "Submission/Library/TheoremOS/Probability/Concentration.lean": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+        "Submission/Library/TheoremOS/Probability/Coupling.lean": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23",
+        "Submission/Library/TheoremOS/Probability/Dobrushin.lean": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450",
+        "Submission/Library/TheoremOS/Probability/FiniteProbability.lean": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996",
+        "Submission/Library/TheoremOS/Probability/GaussianIBP.lean": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+        "Submission/Library/TheoremOS/Probability/LocalLemma.lean": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+        "Submission/Library/TheoremOS/Probability/MixingLowerBound.lean": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d",
+        "Submission/Library/TheoremOS/Probability/RandomKSAT.lean": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
+        "Submission/Library/TheoremOS/Probability/RandomKSATThreshold.lean": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685",
+        "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
+        "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+        "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+        "process.json": "cc253270b388192ec10e270b5107db812023a39f86b2fa0bc894551965f96343",
+        "verification.json": "0cc2b33ee70f2548ae850cb13490af12d6322ab91474ed0f0d2fc692b0e4dee4"
+      },
+      "declaration": "theorem variationalValue_real_of_continuous",
+      "campaign": {
+        "target": "IsingFiniteness",
+        "runId": "f5737ab7-9d8d-4789-a18d-10cc5e6f7c6b",
+        "targets": [
+          "OAI.IsingPerceptron.variationalValue_real_of_continuous"
+        ],
+        "proofCommit": "833f10564c8bc1acd816da3226c6b207556bb4be",
+        "proofSha256": "9ae908672b96f937d19b4b2f6b74aa1952a57184e264e1a08c9a0bc847c2775a",
+        "kernelReceiptIds": [
+          "lean-3cb0737a13535afd28cb4c5e"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_ising_finiteness/verification.json"
+      },
+      "processSummary": {
+        "runs": 4,
+        "tasks": 19
       }
     }
   ]
