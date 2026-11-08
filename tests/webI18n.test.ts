@@ -15,6 +15,7 @@ import { process } from '../apps/web/i18n/process';
 import { release } from '../apps/web/i18n/release';
 import { server } from '../apps/web/i18n/server';
 import { localizeText, t } from '../apps/web/i18n';
+import type { WebExplanationDocument } from '../apps/web/shared';
 import { han, requiredKeys } from '../scripts/web-i18n';
 
 describe('workbench English dictionary', () => {
@@ -59,6 +60,29 @@ describe('server error messages in an English browser', () => {
     vi.stubGlobal('localStorage', { getItem: () => 'en' });
     return import('../apps/web/i18n');
   }
+
+  it('keeps explanation route labels in the document language independently of the interface', async () => {
+    await english();
+    const { explanationSolutionRoute } = await import('../apps/web/client/explainSolutionRoute');
+    const document: WebExplanationDocument = {
+      schema: 'theorem-os.web-explanation.v1', target: 'target', language: 'zh', toolchain: 'test', mathlibRevision: null,
+      overview: 'Recorded overview.', axioms: [], model: 'fixture', effort: 'max', auditors: 2, rounds: 1, tokens: 0,
+      metrics: { declarations: 1, steps: 1, citations: 0, excerptCoverage: 1, proofLines: 1, explainedLines: 1, ambiguousExcerpts: 0 },
+      sections: [{ name: 'target', kind: 'theorem', target: true, title: 'Target', statement: 'P holds.',
+        lines: { start: 1, end: 2 }, signature: { start: 1, end: 1 }, unexplained: [], statementReviews: [],
+        steps: [{ text: 'Recorded derivation.', lines: [{ start: 2, end: 2 }], uses: [], reviews: [],
+          goals: { before: ['⊢ P'], beforeCount: 1, after: ['⊢ P', '⊢ Q'], afterCount: 3, lines: { start: 2, end: 2 } } }] }],
+    };
+    const proof = 'theorem target : P := by\n  tactic\n';
+    const chineseRoute = explanationSolutionRoute(document, proof), englishRoute = explanationSolutionRoute({ ...document, language: 'en' }, proof);
+    expect(chineseRoute).toMatchObject({ locale: 'zh', title: '证明路线' });
+    expect(englishRoute).toMatchObject({ locale: 'en', title: 'Proof route' });
+    const step = (route: typeof chineseRoute) => route.nodes.find(node => node.id === 'derivation:target:0')!;
+    expect(step(chineseRoute)).toMatchObject({ title: '第 1 步', summary: 'Recorded derivation.' });
+    expect(step(englishRoute)).toMatchObject({ title: 'Step 1', summary: 'Recorded derivation.' });
+    expect(step(chineseRoute).sections).toContainEqual({ title: '这一步之后', text: '⊢ P\n\n⊢ Q\n另有 1 个目标', code: true });
+    expect(step(englishRoute).sections).toContainEqual({ title: 'Goals after', text: '⊢ P\n\n⊢ Q\n1 more goal', code: true });
+  });
 
   it('translates exact and filled-in messages and keeps the filled values', async () => {
     const { localizeMessage } = await english();

@@ -194,4 +194,19 @@ export const explain: Record<string, string> = {
   "写作轮次": "Writing rounds",
   "通过时间": "Approved at",
   "证据摘要": "Evidence digest",
+
+  // Solution route details
+  "引用的结论": "Cited results",
+  "陈述审阅": "Statement review",
+  "定位到证明": "Locate in proof",
+  "怎样推出来": "Derivation",
+  "这一步之前": "Goals before",
+  "这一步之后": "Goals after",
+  "这个目标已经证完。": "This goal is closed.",
+  "这一步使用的结论": "Results used in this step",
+  "对应源码": "Source for this step",
+  "逐步审阅": "Step review",
+  "定位到这一步": "Locate this step",
+  "第 {0} 步": "Step {0}",
+  "另有 {0} 个目标": "{0} more goals",
 };

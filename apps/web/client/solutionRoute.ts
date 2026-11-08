@@ -16,7 +16,6 @@ export type RecordedSolutionRouteInput = {
   coverage?: { sources: 'recorded' | 'partial'; checks: 'recorded' | 'partial' };
   roadmap?: ResearchRoadmap;
 };
-const label = (zh: string, en: string) => locale === 'en' ? en : zh;
 const taskId = (id: string) => `task:${id}`;
 const at = (value: number) => Number.isFinite(value) ? new Date(value).toISOString() : undefined;
 const section = (title: string, text: string | undefined, code = false): SolutionRouteSection[] =>
@@ -26,7 +25,7 @@ const state = (value: string): SolutionRouteStatus => ['passed', 'failed', 'cond
   ? value as SolutionRouteStatus : 'recorded';
 const deliveryState = (delivery: TrajectoryDelivery): SolutionRouteStatus => delivery.status === 'verified' || delivery.status === 'accepted' ? 'passed'
   : delivery.status === 'failed' || delivery.status === 'changes_requested' ? 'failed' : delivery.status === 'conditional' ? 'conditional' : 'recorded';
-const recordAction = (index: number, source = false) => ({ label: source ? label('打开这一版源码', 'Open this source version') : label('打开保存记录', 'Open saved record'), target: `step:${index}` });
+const recordAction = (index: number, source = false) => ({ label: source ? t('打开这一版源码') : t('打开保存记录'), target: `step:${index}` });
 function stepRecordId(step: TrajectoryStep): string {
   const identity = step.kind === 'plan' ? step.plan.observation : step.kind === 'edit' ? step.edit.id
     : step.kind === 'notice' || step.kind === 'stop' || step.kind === 'approval' ? step.event.sequence
@@ -37,17 +36,17 @@ function stepRecordId(step: TrajectoryStep): string {
 const dependencyText = (delivery: TrajectoryDelivery) => delivery.dependencies?.map(input => `${input.taskId} · ${input.taskDigest}`).join('\n');
 function deliverySections(delivery: TrajectoryDelivery): SolutionRouteSection[] {
   return [
-    ...section(label('交付内容', 'Delivery'), delivery.summary),
-    ...section(label('研究全文', 'Full finding'), delivery.finding && delivery.finding !== delivery.summary ? delivery.finding : undefined),
-    ...section(label('声明', 'Statement'), delivery.statement, true),
-    ...section(label('使用的前提', 'Premises'), strings(delivery.premises)),
-    ...section(label('输入版本', 'Input versions'), dependencyText(delivery), true),
-    ...section(label('尚待证明', 'Remaining obligations'), strings(delivery.remainingObligations)),
-    ...section(label('证据引用', 'Evidence references'), strings(delivery.evidenceRefs), true),
-    ...section(label('实际引用', 'Actual references'), delivery.actualReferences &&
+    ...section(t('交付内容'), delivery.summary),
+    ...section(t('研究全文'), delivery.finding && delivery.finding !== delivery.summary ? delivery.finding : undefined),
+    ...section(t('声明'), delivery.statement, true),
+    ...section(t('使用的前提'), strings(delivery.premises)),
+    ...section(t('输入版本'), dependencyText(delivery), true),
+    ...section(t('尚待证明'), strings(delivery.remainingObligations)),
+    ...section(t('证据引用'), strings(delivery.evidenceRefs), true),
+    ...section(t('实际引用'), delivery.actualReferences &&
       [...delivery.actualReferences.statement, ...delivery.actualReferences.proof].map(use => `${use.name} · ${use.file}`).join('\n'), true),
-    ...section(label('检查回执', 'Check receipts'), strings(delivery.evidence?.verification.results.map(result => result.receiptId)), true),
-    ...section(label('任务版本', 'Task version'), delivery.taskDigest, true),
+    ...section(t('检查回执'), strings(delivery.evidence?.verification.results.map(result => result.receiptId)), true),
+    ...section(t('任务版本'), delivery.taskDigest, true),
   ];
 }
 function recheckSections(results: readonly RecheckResult[], names: ReadonlyMap<string, string>): SolutionRouteSection[] {
@@ -55,23 +54,23 @@ function recheckSections(results: readonly RecheckResult[], names: ReadonlyMap<s
     const outcome = result.passed ? result.conditional ? t('有条件通过') : t('通过') : t('未通过');
     const headline = result.ref?.check?.headline;
     return [
-      ...section(`${names.get(result.taskId) ?? result.taskId} · ${label('重新检查', 'Recheck')}`, `${outcome}${headline ? `\n${headline}` : ''}`),
-      ...section(label('提交版本', 'Commit'), result.ref?.version.commit, true),
-      ...section(label('检查回执', 'Check receipts'), strings(result.ref?.check?.receiptIds), true),
+      ...section(`${names.get(result.taskId) ?? result.taskId} · ${t('重新检查')}`, `${outcome}${headline ? `\n${headline}` : ''}`),
+      ...section(t('提交版本'), result.ref?.version.commit, true),
+      ...section(t('检查回执'), strings(result.ref?.check?.receiptIds), true),
     ];
   });
 }
 function taskSections(item: TrajectoryPlanItem | undefined, detail?: TaskDetail): SolutionRouteSection[] {
   return [
-    ...section(label('要解决的问题', 'Objective'), detail?.objective ?? item?.objective),
-    ...section(label('数学陈述', 'Mathematical statement'), detail?.informalStatement ?? item?.informalStatement),
-    ...section(label('Lean 声明', 'Lean statement'), detail?.type ?? item?.type, true),
-    ...section(label('前提', 'Premises'), strings(detail?.premises ?? item?.premises)),
-    ...section(label('推导思路', 'Intended argument'), detail?.informalProof ?? item?.informalProof),
-    ...section(label('参考资料', 'References'), strings(detail?.citations ?? item?.citations)),
-    ...section(label('研究所服务的目标', 'Goals served by this research'), strings(item?.consumerGoalIds)),
-    ...section(label('研究发现', 'Finding'), detail?.finding),
-    ...section(label('最近的反馈', 'Latest feedback'), detail?.feedback),
+    ...section(t('要解决的问题'), detail?.objective ?? item?.objective),
+    ...section(t('数学陈述'), detail?.informalStatement ?? item?.informalStatement),
+    ...section(t('Lean 声明'), detail?.type ?? item?.type, true),
+    ...section(t('前提'), strings(detail?.premises ?? item?.premises)),
+    ...section(t('推导思路'), detail?.informalProof ?? item?.informalProof),
+    ...section(t('参考资料'), strings(detail?.citations ?? item?.citations)),
+    ...section(t('研究所服务的目标'), strings(item?.consumerGoalIds)),
+    ...section(t('研究发现'), detail?.finding),
+    ...section(t('最近的反馈'), detail?.feedback),
   ];
 }
 
@@ -106,18 +105,18 @@ export function recordedSolutionRoute(input: RecordedSolutionRouteInput): Soluti
       summary: node.kind === 'task' ? node.statement ?? node.type ?? node.objective : node.kind === 'problem' ? input.problem?.statement : guidance?.text ?? node.detail,
       at: node.at === undefined ? undefined : at(node.at),
       sections: node.kind === 'task' ? [
-        ...section(label('Lean 名称', 'Lean name'), node.theoremName, true), ...taskSections(item, detail),
-        ...(!detail?.type && !item?.type ? section(label('Lean 声明', 'Lean statement'), node.type, true) : []),
+        ...section(t('Lean 名称'), node.theoremName, true), ...taskSections(item, detail),
+        ...(!detail?.type && !item?.type ? section(t('Lean 声明'), node.type, true) : []),
       ] : node.kind === 'problem' ? [
-        ...section(label('原题', 'Problem'), input.problem?.statement), ...section(label('完整目标', 'Full target'), input.problem?.formalStatement, true),
-        ...section(label('假设', 'Assumptions'), strings(input.problem?.assumptions)), ...section(label('要证明的目标', 'Targets'), strings(data.context.targets), true),
+        ...section(t('原题'), input.problem?.statement), ...section(t('完整目标'), input.problem?.formalStatement, true),
+        ...section(t('假设'), strings(input.problem?.assumptions)), ...section(t('要证明的目标'), strings(data.context.targets), true),
       ] : guidance ? [
-        ...section(label('你的指导', 'Your guidance'), guidance.text),
-        ...section(label('投递状态', 'Delivery status'), node.detail),
-        ...section(label('接收者', 'Recipients'), strings(guidance.deliveredTo)),
-        ...section(label('针对的任务版本', 'Target task version'), guidance.taskRef?.version, true),
-      ] : section(label('保存的状态', 'Recorded status'), node.detail),
-      ...(stepIndex === undefined ? node.taskId ? { action: { label: label('打开任务记录', 'Open task record'), target: taskId(node.taskId) } } : {}
+        ...section(t('你的指导'), guidance.text),
+        ...section(t('投递状态'), node.detail),
+        ...section(t('接收者'), strings(guidance.deliveredTo)),
+        ...section(t('针对的任务版本'), guidance.taskRef?.version, true),
+      ] : section(t('保存的状态'), node.detail),
+      ...(stepIndex === undefined ? node.taskId ? { action: { label: t('打开任务记录'), target: taskId(node.taskId) } } : {}
         : { action: recordAction(stepIndex) }),
     });
   }
@@ -126,7 +125,7 @@ export function recordedSolutionRoute(input: RecordedSolutionRouteInput): Soluti
   for (const target of data.context.targets) if (!roadmap.nodes.some(node => node.theoremName === target)) {
     const targetType = sourceType?.(target);
     add({ id: `target:${target}`, kind: 'task', title: target.split('.').at(-1) ?? target, status: 'pending',
-      sections: [...section(label('目标', 'Target'), target, true), ...section(label('Lean 声明', 'Lean statement'), targetType, true)] });
+      sections: [...section(t('目标'), target, true), ...section(t('Lean 声明'), targetType, true)] });
     connect(byId.has('plan') ? 'plan' : 'problem', `target:${target}`, 'sequence');
   }
   for (const edge of roadmap.edges) {
@@ -153,15 +152,15 @@ export function recordedSolutionRoute(input: RecordedSolutionRouteInput): Soluti
         title: proof ? step.assembled ? t('组装完整证明') : t('完整证明') : `${t('第 {0} 次', step.number)}${step.reused ? ` · ${t('沿用上次检查')}` : ''}`,
         taskId: proof ? undefined : step.taskId, summary: step.kind === 'attempt' ? step.note ?? check?.headline : check?.headline,
         sections: [
-          ...section(label('Agent', 'Agent'), step.workerId),
-          ...section(label('检查结论', 'Check result'), check?.headline ?? (step.outcome === 'passed' ? t('Lean 检查通过')
+          ...section('Agent', step.workerId),
+          ...section(t('检查结论'), check?.headline ?? (step.outcome === 'passed' ? t('Lean 检查通过')
             : step.outcome === 'conditional' ? t('有条件通过：依赖的任务还没有证完') : step.outcome === 'failed' ? t('未通过') : t('检查中'))),
-          ...section(label('这一版的声明', 'Statement at this version'), snapshot?.type, true),
-          ...section(label('这一版的思路', 'Argument at this version'), snapshot?.informalProof),
-          ...(delivery ? deliverySections(delivery) : step.kind === 'attempt' ? section(label('提交说明', 'Submission note'), step.note) : []),
-          ...section(label('提交版本', 'Commit'), version?.commit, true),
-          ...section(label('检查回执', 'Check receipts'), strings(check?.receiptIds), true),
-          ...section(label('上一版', 'Previous version'), step.kind === 'attempt' ? step.previous?.commit : undefined, true),
+          ...section(t('这一版的声明'), snapshot?.type, true),
+          ...section(t('这一版的思路'), snapshot?.informalProof),
+          ...(delivery ? deliverySections(delivery) : step.kind === 'attempt' ? section(t('提交说明'), step.note) : []),
+          ...section(t('提交版本'), version?.commit, true),
+          ...section(t('检查回执'), strings(check?.receiptIds), true),
+          ...section(t('上一版'), step.kind === 'attempt' ? step.previous?.commit : undefined, true),
         ],
         ...(version ? { source: { name: version.file ?? 'Submission.lean', commit: version.commit, sha256: delivery?.sourceDigest }, action: recordAction(index, version.source !== undefined) } : {}),
       }, proof ? 'proof' : taskId(step.taskId));
@@ -170,10 +169,10 @@ export function recordedSolutionRoute(input: RecordedSolutionRouteInput): Soluti
       attach({ ...common, kind: step.kind === 'edit' ? 'decision' : 'plan', status: step.kind === 'edit' ? step.edit.status === 'rejected' ? 'failed' : 'human' : 'recorded',
         title: step.kind === 'edit' ? t('你修改了计划') : step.first ? t('拟定计划') : t('调整计划'),
         sections: [
-          ...section(label('新增任务', 'Added tasks'), plan?.added.map(item => `${item.name ?? item.id}\n${item.type ?? item.objective}\n${item.informalProof ?? ''}`).join('\n\n')),
-          ...section(label('修改的任务', 'Changed tasks'), plan?.changed.map(({ before, after }) => `${after.name ?? after.id}\n${before.type ?? before.objective}\n→ ${after.type ?? after.objective}\n${after.informalProof ?? ''}\n${label('依赖', 'Dependencies')}: ${before.dependsOn.join(', ')} → ${after.dependsOn.join(', ')}`).join('\n\n')),
-          ...section(label('移除任务', 'Removed tasks'), plan?.removed.map(item => item.name ?? item.id).join('\n')),
-          ...section(label('涉及任务', 'Affected tasks'), step.kind === 'edit' ? strings(step.edit.affectedTasks) : undefined),
+          ...section(t('新增任务'), plan?.added.map(item => `${item.name ?? item.id}\n${item.type ?? item.objective}\n${item.informalProof ?? ''}`).join('\n\n')),
+          ...section(t('修改的任务'), plan?.changed.map(({ before, after }) => `${after.name ?? after.id}\n${before.type ?? before.objective}\n→ ${after.type ?? after.objective}\n${after.informalProof ?? ''}\n${t('依赖')}: ${before.dependsOn.join(', ')} → ${after.dependsOn.join(', ')}`).join('\n\n')),
+          ...section(t('移除任务'), plan?.removed.map(item => item.name ?? item.id).join('\n')),
+          ...section(t('涉及任务'), step.kind === 'edit' ? strings(step.edit.affectedTasks) : undefined),
           ...(step.kind === 'edit' ? recheckSections(step.results, names) : []),
         ],
       }, 'plan');
@@ -184,15 +183,15 @@ export function recordedSolutionRoute(input: RecordedSolutionRouteInput): Soluti
     } else if (step.kind === 'approval') {
       add({ ...common, kind: 'decision', status: step.event.type === 'plan_approved' ? 'human' : 'pending',
         title: step.event.type === 'plan_approved' ? t('你批准了研究计划，Agent 开始工作') : t('研究计划等你批准'),
-        sections: section(label('保存的记录', 'Saved record'), localizeText(step.event.message)) });
+        sections: section(t('保存的记录'), localizeText(step.event.message)) });
       connect('plan', id, 'decision');
     } else if (step.kind === 'evaluation') {
       attach({ ...common, kind: 'acceptance', title: t('独立验收完整原题'), status: step.outcome,
-        sections: section(label('独立验收结论', 'Independent acceptance'), step.status ?? t('验收中')) }, 'evaluation');
+        sections: section(t('独立验收结论'), step.status ?? t('验收中')) }, 'evaluation');
     } else if (step.kind === 'notice' || step.kind === 'stop' || step.kind === 'end') {
       attach({ ...common, kind: step.kind === 'notice' ? 'finding' : 'outcome', title: step.kind === 'end' ? t('运行结束') : localizeText(step.event.message),
         status: step.kind === 'stop' && step.event.type !== 'cancelled' || step.kind === 'end' && step.status === 'error' ? 'failed' : 'recorded',
-        sections: step.kind === 'end' ? [] : section(label('保存的记录', 'Saved record'), localizeText(step.event.message)) },
+        sections: step.kind === 'end' ? [] : section(t('保存的记录'), localizeText(step.event.message)) },
       step.kind !== 'end' && step.event.details?.taskId ? taskId(step.event.details.taskId) : undefined);
     }
   });
@@ -210,7 +209,7 @@ export function recordedSolutionRoute(input: RecordedSolutionRouteInput): Soluti
   const routes = input.proofRoutes ?? plans.at(-1)?.proofRoutes ?? [];
   for (const route of routes) {
     const target = byId.get(taskId(route.targetTaskId));
-    if (target) (target.sections ??= []).push({ title: label('备选证明路线', 'Alternative proof route'),
+    if (target) (target.sections ??= []).push({ title: t('备选证明路线'),
       text: `${route.id}\n${route.prerequisiteTaskIds.map(id => names.get(id) ?? id).join(' + ')}\n→ ${names.get(route.closingTaskId) ?? route.closingTaskId}` });
     // A planned alternative is a reference until an actual checked integration uses it.
     connect(taskId(route.closingTaskId), taskId(route.targetTaskId), 'reference');
