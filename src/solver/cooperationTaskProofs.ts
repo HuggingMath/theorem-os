@@ -18,8 +18,8 @@ import { captureDeliveryArtifacts, diagnoseUnbackedLeanClaims, validateDeliveryA
 import { validateLemmaRequests } from './taskProposals';
 import { routeBlockerBasis, type BlockerBasis } from './routeControl';
 import { attributeTaskReferences } from './taskReferenceAttribution';
-import { captureObligationSnapshot } from './obligationProgress';
 import { checkpointCandidate } from './researchEvidence';
+import { researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest } from './researchCheckpoints';
 import { inspectKnowledgeUses, type KnowledgeUse } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
 import { bindMathematicalGap, mathematicalGaps } from './mathematicalGaps';
@@ -29,7 +29,7 @@ import { taskConnectionCheckCurrent, taskInputsMissingFromSeed } from './taskCon
 import { hasLeanResourceLimitFailure, hasLeanSourceDiagnostic } from './proofReuse';
 import { assumableLemma, taskReferenceDependencies, assignmentDeliveryFile, markTaskReferences, markTaskAcceptance, hasTaskAcceptance, type CooperativeTask,
   type TaskAssignment, type TaskRecord, type CooperativeAction } from './tasks';
-import { digest, FailedTaskInput, bounded, deliveryInputFields } from './cooperationShared';
+import { digest, FailedTaskInput, bounded } from './cooperationShared';
 import { CooperationStatements } from './cooperationStatements';
 import { prepareResearchDelivery, ResearchAdmissionError, type ResearchSubmission } from './researchAdmission';
 import { settleResearch } from './researchRecords';
@@ -54,31 +54,16 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   abstract interrupted(worker: ResearchWorker, action: CooperativeAction): void;
   abstract rejected(action: CooperativeAction, feedback: string, commit?: string, incomplete?: boolean): void;
   private checkpointInputDigest(task: CooperativeTask, workerId: string) {
-    const versions = this.taskVersions();
-    const deliveries = [...new Set((this.archive.deliveries ?? []).filter(record => record.producer !== workerId &&
-      this.deliveryVisible(record, task, versions)).map(record => canonicalMathJson(deliveryInputFields(record))))].sort();
-    return mathDigest(canonicalMathJson({ taskDigest: digest(task), environmentDigest: this.input.state.environmentDigest,
-      problemReceiptDigest: this.input.state.problem.receiptDigest,
-      sourceDigest: ownedSourceDigest(this.input.state.problem, this.lead.worktree, this.archive.canonicalCommit!),
-      dependencies: captureObligationSnapshot(this.dependencies(task), { environmentDigest: this.input.state.environmentDigest }).digest,
-      deliveries }));
+    return researchCheckpointInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
+      environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest,
+      problem: this.input.state.problem, worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit! });
   }
   private checkpointLocalInputDigest(task: CooperativeTask, workerId: string) {
-    const dependencies = this.dependencies(task), relevant = new Set([task.id, ...dependencies.map(node => node.task.id)]);
-    const versions = this.taskVersions();
-    const deliveries = [...new Set((this.archive.deliveries ?? []).filter(record => record.producer !== workerId &&
-      this.deliveryVisible(record, task, versions) && (relevant.has(record.taskId ?? '') ||
-        record.dependencies.some(reference => reference.taskId === task.id))).map(record => canonicalMathJson({
-      ...deliveryInputFields(record), findingDigest: record.findingDigest,
-    })))].sort();
-    return mathDigest(canonicalMathJson({ taskDigest: digest(task),
-      basis: routeBlockerBasis(task, this.archive.tasks, this.input.state.environmentDigest, this.input.state.problem.receiptDigest),
-      dependencies: captureObligationSnapshot(dependencies, { environmentDigest: this.input.state.environmentDigest }).digest,
-      deliveries }));
+    return researchCheckpointLocalInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
+      environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest });
   }
   private checkpointOutputDigest(worktree: string, commit: string) {
-    return mathDigest(canonicalMathJson({ sourceDigest: ownedSourceDigest(this.input.state.problem, worktree, commit),
-      notesBlob: git(worktree, ['ls-tree', '--format=%(objectname)', commit, '--', 'RESEARCH.md']) }));
+    return researchCheckpointOutputDigest(this.input.state.problem, worktree, commit);
   }
   private leanSourceDigest(worktree: string, commit: string) {
     const key = `${worktree}\0${commit}`, cached = this.leanSourceDigests.get(key);
