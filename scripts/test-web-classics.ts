@@ -133,7 +133,7 @@ async function inspectAll(page: Page, label: string) {
     await page.getByRole('tab', { name: '解题过程', exact: true }).click();
     await page.locator('.process-run').first().waitFor();
     assert.equal(await page.locator('.process-run').count(), record.process!.runs.length);
-    assert.ok((await page.locator('.process-run[open] .process-run-id').allInnerTexts()).includes(record.campaign!.runId));
+    assert.equal(await page.locator('.process-run[aria-pressed="true"]').getAttribute('data-process-run'), record.campaign!.runId);
     await page.getByRole('tab', { name: '验证证据', exact: true }).click();
     const evidence = await page.locator('.campaign-evidence').innerText();
     assert.ok(evidence.includes(record.campaign!.proofSha256));
@@ -227,9 +227,9 @@ try {
   currentCheck = 'Language switching keeps the shared archive available';
   await aliceArchive.locator('.lang-link').click();
   await aliceArchive.waitForURL(`${origin}/classics/en/archive.html*`);
-  await aliceArchive.locator('.proof-row').first().waitFor();
+  await aliceArchive.locator('.archive-process').waitFor();
   assert.deepEqual(await idsOnPage(aliceArchive), expectedIds);
-  await aliceArchive.locator(`[data-proof-id="${example.id}"]`).click();
+  assert.equal(await aliceArchive.locator('.process-run[aria-pressed="true"]').getAttribute('data-process-run'), example.campaign!.runId);
   await aliceArchive.getByRole('tab', { name: 'Research process', exact: true }).click();
   await aliceArchive.locator('.process-run').first().waitFor();
   assert.equal(await aliceArchive.getByRole('tab', { name: 'Research process', exact: true }).getAttribute('aria-selected'), 'true');

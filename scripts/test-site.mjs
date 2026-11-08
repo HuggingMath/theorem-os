@@ -47,6 +47,7 @@ try {
     await page.getByRole('tab', { name: '解题过程' }).click();
     await page.locator('.process-run').first().waitFor();
     assert.equal(await page.locator('.process-run').count(), record.process.runs.length);
+    await page.locator('[data-action="back-list"]').first().click();
   }
   const example = local.find(record => record.campaign.target === 'TotientCompanionZero');
   assert.ok(example, 'the completed Totient result must be displayed');
@@ -67,6 +68,7 @@ try {
   assert.equal(downloaded.sources.find(source => source.name === 'Submission.lean').code,
     example.sources.find(source => source.name === 'Submission.lean').code);
   await page.screenshot({ path: path.join(output, 'openai-process-desktop.png'), fullPage: true });
+  await page.locator('[data-action="back-list"]').first().click();
 
   await page.getByRole('radio', { name: /已验收/ }).check();
   assert.equal(await page.locator('.proof-row').count(), official.length);
@@ -176,13 +178,16 @@ try {
       await page.waitForFunction(() => document.activeElement?.id === 'inspector');
       assert.ok(Math.abs(await page.locator('#inspector').evaluate(element => element.getBoundingClientRect().top)) <= 1, 'Mobile proof links reveal details without manual scrolling');
       const proofLink = page.url();
-      await page.locator('[data-action="back-list"]').last().click();
-      assert.equal(page.url(), proofLink, 'Returning to the list keeps the selected record, filters and detail tab');
+      await page.locator('[data-action="back-list"]').first().click();
+      const previous = new URLSearchParams(new URL(proofLink).hash.slice(1));
+      const returned = new URLSearchParams(new URL(page.url()).hash.slice(1));
+      for (const key of ['proof', 'status', 'q', 'sort']) assert.equal(returned.get(key), previous.get(key), 'Returning to the list keeps the selected record and filters');
+      assert.equal(await page.locator('.catalog').isVisible(), true);
       assert.equal(await page.locator('.proof-row.is-selected').evaluate(element => document.activeElement === element), true);
       await page.keyboard.press('Enter');
       assert.equal(await page.locator('.archive-access a').getAttribute('href'), 'index.html#start');
     } else {
-      assert.equal(await page.evaluate(() => scrollY), 0, 'Desktop and tablet proof links retain the two-column overview');
+      assert.equal(await page.locator('.catalog').isVisible(), false, 'Desktop trajectories use the full reading width');
     }
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Process overflow at ${viewport.width}px`);
     await page.screenshot({ path: path.join(output, `openai-process-${viewport.width}.png`), fullPage: true });

@@ -476,6 +476,7 @@ try {
       assert.deepEqual(await cjkIn(page), [], `English mobile archive navigation at ${width}px`);
     }
 
+    await page.getByRole('tab', { name: 'Overview', exact: true }).click();
     const archiveAccess = page.locator('.archive-access a');
     assert.equal(await archiveAccess.getAttribute('href'), 'index.html#start');
     assert.equal(new URL(await archiveAccess.getAttribute('href'), page.url()).href, `${hosted}en/index.html#start`);

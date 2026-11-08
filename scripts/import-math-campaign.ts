@@ -7,6 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { ArchiveKnowledgeApplication, ArchiveLibraryUsage, ArchiveProcess, ArchiveRecord } from '../docs/web/types';
+import { archivedSourceReader, extractProcessEvidence } from './enrich-archive-process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -152,6 +153,13 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
     const audit = job.nativeAcceptanceAudit ? read(job.nativeAcceptanceAudit) : undefined;
     if (audit?.submissionSha256 && audit.submissionSha256 !== files['Submission.lean']) throw new Error(`Receipt hash mismatch: ${job.id}`);
     const runs = new Map<string, ArchiveProcess['runs'][number]>();
+    const processSources: NonNullable<ArchiveProcess['sources']> = {};
+    const readSource = archivedSourceReader(archived, project);
+    const recordedRun = (sourceState: any, sourceResult?: any, usage?: any) => {
+      const evidence = extractProcessEvidence(sourceState, readSource);
+      Object.assign(processSources, evidence.sources);
+      return { ...processRun(sourceState, sourceResult, usage), checks: evidence.checks, deliveries: evidence.deliveries };
+    };
     for (const run of archived.runs) {
       if (runs.has(run.runId)) continue;
       const bytes = gunzipSync(fs.readFileSync(path.join(campaign, 'trajectories', run.stateSnapshot.object)));
@@ -160,11 +168,14 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
       const sourceResultPath = run.state.replace(/\.runtime\/state\.json$/u, '');
       const resultFile = index.files[sourceResultPath]?.versions?.at(-1);
       const sourceResult = resultFile ? JSON.parse(gunzipSync(fs.readFileSync(path.join(campaign, 'trajectories', resultFile.object))).toString()) : undefined;
-      runs.set(run.runId, processRun(sourceState, sourceResult));
+      runs.set(run.runId, recordedRun(sourceState, sourceResult));
     }
     // The current accepted run may have advanced since the last incremental archive cycle.
-    runs.set(job.runId, processRun(native, result, job.autoLibraryUsage));
-    const process: ArchiveProcess = { runs: [...runs.values()].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? '')) };
+    runs.set(job.runId, recordedRun(native, result, job.autoLibraryUsage));
+    const usedSources = new Set([...runs.values()].flatMap(run => run.checks?.flatMap(check => check.sourceDigest ? [check.sourceDigest] : []) ?? []));
+    const sources = Object.fromEntries(Object.entries(processSources).filter(([digest]) => usedSources.has(digest)));
+    const process: ArchiveProcess = { runs: [...runs.values()].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? '')),
+      ...(Object.keys(sources).length ? { sources } : {}) };
     write('process.json', JSON.stringify(process, null, 2) + '\n');
     const assisted = job.externalMathematicalAssistance || (native.cooperation?.edits ?? []).some((edit: any) => /candidate|independent|reference/u.test(edit.id));
     const attribution = assisted

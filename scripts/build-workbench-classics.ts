@@ -31,9 +31,9 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
       .replace(/<link rel="alternate"[^>]+>/gu, '');
     page = english
       ? page.replaceAll('Proof archive', 'Classic problems').replaceAll('proof archive', 'classic problem library')
-        .replace('<span>Home</span>', '<span>Back to workbench</span>').replace('>Request access<', '>Research workbench<')
+        .replace(`<a href="${workbench}"><span>Home</span>`, `<a href="${workbench}" aria-label="Back to workbench"><i data-lucide="chevron-left"></i><span>Workbench</span>`).replace('>Request access<', '>Research workbench<')
         .replace('aria-label="TheoremOS home"', 'aria-label="Back to workbench"')
-      : page.replaceAll('证明档案', '经典题库').replace('<span>产品首页</span>', '<span>返回工作台</span>')
+      : page.replaceAll('证明档案', '经典题库').replace(`<a href="${workbench}"><span>产品首页</span>`, `<a href="${workbench}" aria-label="返回工作台"><i data-lucide="chevron-left"></i><span>工作台</span>`)
         .replace('>申请内测<', '>研究工作台<').replace('aria-label="TheoremOS 首页"', 'aria-label="返回工作台"');
     fs.mkdirSync(path.join(output, directory), { recursive: true });
     fs.writeFileSync(path.join(output, directory, 'archive.html'), page);
@@ -50,6 +50,7 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
 }
 `;
   fs.writeFileSync(path.join(output, 'site.css'), css);
+  fs.copyFileSync(path.join(root, 'docs/process.css'), path.join(output, 'process.css'));
   fs.copyFileSync(path.join(root, 'docs/replay.css'), path.join(output, 'replay.css'));
   fs.mkdirSync(path.join(output, 'assets'), { recursive: true });
   fs.cpSync(path.join(root, 'docs/assets/fonts'), path.join(output, 'assets/fonts'), { recursive: true });

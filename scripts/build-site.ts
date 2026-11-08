@@ -43,7 +43,7 @@ for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
     fs.writeFileSync(path.join(output, directory, file), page);
   }
 }
-for (const file of ['site.css', 'replay.css', 'feedback.css', 'legal.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
+for (const file of ['site.css', 'process.css', 'replay.css', 'feedback.css', 'legal.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
 // Embed the Latin fonts so the same typography works for file:// previews without font CORS errors.
 // The CJK subsets are too large to inline; file:// previews fall back to system CJK fonts for them.
 const landingCss = fs.readFileSync(path.join(root, 'docs/landing.css'), 'utf8')

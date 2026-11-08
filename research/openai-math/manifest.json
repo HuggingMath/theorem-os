@@ -32,7 +32,7 @@
         "OAI/AlgebraicGeometry/CartierSections/PolynomialValuation.lean": "0277ef0b5444948e581ae8605c11214e1f9204f0bda3c28b3e58d9043592e33b",
         "OAI/AlgebraicGeometry/CartierSections/Weights.lean": "8bb6abc631899789bb0b8af044752653e7c240fa1f000f7db242e2684f089bb3",
         "Submission.lean": "3f4987016064040ed126b75de0aea0dfa6b2bf74b7dd22dfa1722b7fcc525963",
-        "process.json": "5eeb250bc22ea56ef1a79cb4dd97a95dff389599462aa37747bc2f1e41e178b0",
+        "process.json": "d4bce754903ca5ebfecf0935c2f6d7f078b91cfa636dc8b5e0e289bf0cbebc25",
         "verification.json": "28a08f113613aa55190a834dbbb68bda971ddbf2a651e401116a98ed499c0103"
       },
       "declaration": "theorem isCompact_closedChartFieldRetraction_cone",
@@ -76,7 +76,7 @@
       "files": {
         "Challenge.lean": "591087a6b083d2b610bd863e0b5e7424f83d8ca8c3587cf77785570d06e8bedf",
         "Submission.lean": "b7dc0b2898b8d4ee8ed4a3b10394429f939ff9e4d73761dcd6968e46a4579751",
-        "process.json": "4cc57c5eb397f9ce19773661202fb0b5a61edd1ba250e78f36fadc71708f3972",
+        "process.json": "d7dd68e0db902bc357e5166bd192c6b3286282d27a53ec29bb721cc17b05e77c",
         "verification.json": "a7630c50d866bd6f7c631c127bfc52fb6bccad34da3c00366cdcf9e3ba5d2f2f"
       },
       "declaration": "theorem certificate_correct",
@@ -164,7 +164,7 @@
         "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
         "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
         "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
-        "process.json": "0d29dc6de4755dbbfc314611579be5755a598ff94ddf7c3214bc7e546136d159",
+        "process.json": "34e83972af1c4254714ae84fa4f984b59b6f0c8a46c5e8edd8ea8967cfbf56b7",
         "verification.json": "71a4845c20f1ce0a8dc17f9ff58e968f11b9c0f1853a0b73b4aa8380a92974d3"
       },
       "declaration": "theorem companion_zero_case",
@@ -208,7 +208,7 @@
       "files": {
         "Challenge.lean": "03fe8de8feab6eeb5144931898f079a0f900e695bf3f8c5d3de3dbc177e21169",
         "Submission.lean": "442334bfd22cf81c9582b071cd6b370f2b6969d961418e6b084a25cc87ae4a91",
-        "process.json": "a630c46098365acf0d542554ed6646aa0a176b981ddc52eb4de66ca360babeeb",
+        "process.json": "d2590763d3049d243e08311144717a6a37879f3249a8f0ef0e66255dbee9bf4c",
         "verification.json": "053c1d2513dd063d7e3717001755ad44db07c0ba9bdca205a21928940a93ac25"
       },
       "declaration": "theorem finite_execution_not_optimal",
@@ -252,7 +252,7 @@
       "files": {
         "Challenge.lean": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea",
         "Submission.lean": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae",
-        "process.json": "0bf6b134b337dcfa948a0e3348802659d481008bfa57c056c54eb5f5dac9d0c1",
+        "process.json": "684a5ee34421c9a48d1db28fec36e4cb33363da7ac835ae13bf74b93f381d542",
         "verification.json": "c070e5bc6b5e8a6b2f657792657e34ffa1f78514095468403604733a59058620"
       },
       "declaration": "theorem snaky_winning_strategy_with_legal_states",
@@ -296,7 +296,7 @@
       "files": {
         "Challenge.lean": "30d5989a93216f9aea4f6bb23846090e24bd87b797ea1620d661de2bd9f99f81",
         "Submission.lean": "1472d78c68ac552b7ec3ff4c3d307035cb30aa08c734c95eae7f66e6b4b3601c",
-        "process.json": "c388ce812b320b657cc1a1b72e9096a77711da46ce3314cce891b3dc3dc6eb02",
+        "process.json": "7c0a0bb024aa3007320a407c28cd9cac2c0cfe8836a0543849f1d1d2a3bcd6fe",
         "verification.json": "e36a23c663eb8f7d1fd73fce2416b6d7741cee201f40758c79ff2065e95e5786"
       },
       "declaration": "theorem logPartition_tendsto",
@@ -340,7 +340,7 @@
       "files": {
         "Challenge.lean": "868e71b127ba5bc82474130618483289ac29cc58c45898eb0216199080c9dc37",
         "Submission.lean": "3e842122e50547b602873e71db599cc6782414fec9c60a08c664d43586341d12",
-        "process.json": "8de3d30be744b7abc7f64d47285033ecf84d01eae54a4ba054a779a7ea538956",
+        "process.json": "4004d85dcae4dfb73ccb0f1f21bc1e8b7ae176d9b11f036286c47713b1c54a70",
         "verification.json": "07fc2e40e574af14e84bde2dc8c7c96b428e1970de32bec68e4a4866eee07570"
       },
       "declaration": "theorem properColoring_seven",
@@ -384,7 +384,7 @@
       "files": {
         "Challenge.lean": "2ee495def2e1228bf13df520f6c66699ec22b2cd3bc1ae7383a30957aae9f967",
         "Submission.lean": "6b32441db35b95aed73a9f7acdb44c57bc0f5c3e1556113478e96f921b022a3f",
-        "process.json": "ee866551a43032c8068c349f586bc6e7c31e144bc51ee5f3fbe45b1b0c2a9a61",
+        "process.json": "945abf8cbb56c9bca65dbcad14c44a8c7bb103f7d577f9915f946c7fc9b3ed42",
         "verification.json": "62c70ee83974aa282ca8be91418ee74e7584bc15776557d4212481671516472e"
       },
       "declaration": "theorem graph_criterion",
@@ -428,7 +428,7 @@
       "files": {
         "Challenge.lean": "9f412781be8b38c88a6efb3a4528d4c990071a233cd931612d4710213d6366a1",
         "Submission.lean": "d818e4c8217e53057b254f92285bb22930f2b47504ed68d7e8def9d2547fa3a1",
-        "process.json": "1f26540248b672786ec58141254e5cca5c9e704139e2aa5bc3056fb3f855ea8e",
+        "process.json": "0db5002a66395d1de8add7c7e86042e769e4cc3cc4857196a79feed823ab0369",
         "verification.json": "50edea09a1ab435df33ef1d7acffbc18234c0bef38b22728bdba747018b9bc37"
       },
       "declaration": "theorem rowRatio_cubeFiber_sum_zero",
@@ -472,7 +472,7 @@
       "files": {
         "Challenge.lean": "c75e9be97bcb12a6c289b6652337fc32398064fe8bef7cd910110a9d96fae56e",
         "Submission.lean": "bc4a1cec74196b46dd726a46dc467c40b8657527dbd235a49a3cf0b5e4355ac9",
-        "process.json": "53b28833251bc5ae2f51f211e3d16fdcc70d9213bac7d8da0e11f7de6b34960d",
+        "process.json": "593c382d0e4ac9a30ff9e745def70a10190ac32837cc89626461124ac11715ac",
         "verification.json": "4ae49258691771d60927a99c786e7d26b9fe5a69fef2009f89630509bf2f807b"
       },
       "declaration": "theorem candidate_ring_properties",
@@ -561,7 +561,7 @@
         "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
         "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
         "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
-        "process.json": "d7175643a01d81c87ac63d8f0b9a9ea90a6a058307fccd90ff4b0d50fdca38a1",
+        "process.json": "6f3310781c7065a4ddd463ce7fbf60584a3afd4e6db447808d3ca0569ac2dac1",
         "verification.json": "2bbc977ba96005655ac8a01f9f38c434b1992d37816ced6350039506b5faf05f"
       },
       "declaration": "theorem channel_nonneg",
@@ -654,7 +654,7 @@
         "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
         "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
         "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
-        "process.json": "2be7f3388123358bcb3f9e6e863efb679f053a7dcaccb85a00be2df56a0be8aa",
+        "process.json": "79b8aa4be2159c2a8aacbb1841e513a7accca406a549e180ac6cb5e6f710256b",
         "verification.json": "6c18f26ad2deaf95ddc6a61e9ab6233576ab2c622df80975ad1e641aa6e85c41"
       },
       "declaration": "theorem collapse_reattach",
@@ -746,7 +746,7 @@
         "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
         "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
         "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
-        "process.json": "03b11512d497c438d9f34b164acb41bd0ba6cf736d0fe0d01241528021eccf2b",
+        "process.json": "99d9e2205922e377bde4c5b3a1267e045f85fe2824f668b09a23cb3a5a341ef4",
         "verification.json": "e25e13f8f706505165fef8ca883e94938068f05fe2b74cff3133a09487f53ead"
       },
       "declaration": "theorem sharp_endpoints",
@@ -790,7 +790,7 @@
       "files": {
         "Challenge.lean": "23841ffc513082acb9bb26c50733c4efa852c41f94ec018d8271c0a74feae099",
         "Submission.lean": "fc4c35ba96e2fef31d57635d0cd237498eaacf87bdeba7510a0daac5d6d663af",
-        "process.json": "4918ed7907f8ea66abb883427cd6aeb232aed41ade824e971c50a1d9c2f41d38",
+        "process.json": "97f86b1823a5245f4c163ff9c5fdb70f801f5a6ec238890097e57d9f7b1e762b",
         "verification.json": "2b01d8e286e5a0760b474a331d7882e003cb23029bb5366ad835e7ca33428fa6"
       },
       "declaration": "theorem numericalClosure_geometry",
@@ -840,7 +840,7 @@
       "files": {
         "Challenge.lean": "476c0769acc7d2ba1dbb2ae1b451a4c03786cc79df4affaa9cdd03c5669ff2cf",
         "Submission.lean": "2fd7e2d1c71eff673ce58cd82f694526f9d6ed0a4ace42f800b159b26482cfc7",
-        "process.json": "732c58ccb03164cb95c9802ccb7da1ed26cf62301c72eb804e9e486240b090c9",
+        "process.json": "eea093b57b1c40f2d71c8419517402f954deef290845b2f37aa2d9b9dace49f7",
         "verification.json": "58385dc86efc93b1a83ea0cb7b87edefd40b62850a6747e41c08cea5234a5976"
       },
       "declaration": "theorem anderson_spectrum_ae",
@@ -925,7 +925,7 @@
         "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
         "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
         "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
-        "process.json": "cc253270b388192ec10e270b5107db812023a39f86b2fa0bc894551965f96343",
+        "process.json": "22621e0cb5b36f184cdb2d00d9c3bae6f81e6bdd70ad08c07dde215c839128a6",
         "verification.json": "0cc2b33ee70f2548ae850cb13490af12d6322ab91474ed0f0d2fc692b0e4dee4"
       },
       "declaration": "theorem variationalValue_real_of_continuous",
