@@ -11,7 +11,7 @@ const site = path.join(root, 'out/site');
 const catalog = JSON.parse(fs.readFileSync(path.join(site, 'data/catalog.json'), 'utf8'));
 const output = path.join(root, 'out/i18n-checks');
 fs.mkdirSync(output, { recursive: true });
-const base = '/theorem-os-site/';
+const base = '/TheoremOS/';
 const server = http.createServer((request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
   if (!pathname.startsWith(base)) { response.writeHead(404).end(); return; }
@@ -239,10 +239,10 @@ try {
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').isVisible(), true);
     assert.equal(await page.locator('.nav-start').getAttribute('href'), '#start');
-    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
+    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
     assert.equal(await page.locator('#start a[data-umami-event="open-workbench"]').getAttribute('href'), 'https://app.theoremos.top/');
     const apply = page.locator('#start a[data-umami-event="apply-github"]');
-    assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
+    assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
     const email = new URL(await page.locator('#start a[href^="mailto:"]').first().getAttribute('href'));
     assert.equal(email.protocol, 'mailto:');
     assert.equal(email.pathname, 'liuzhenhao@westlake.edu.cn');
@@ -312,7 +312,7 @@ try {
     await page.waitForURL(`${hosted}en/index.html#start`);
     await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
     assert.equal(await page.getAttribute('html', 'lang'), 'en');
-    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
+    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
     await open(page, `${hosted}en/archive.html#view=quickstart`);
     assert.equal(await page.locator('.quickstart-access a').getAttribute('href'), 'index.html#start');
     assert.equal(new URL(await page.locator('.quickstart-access a').getAttribute('href'), page.url()).href, `${hosted}en/index.html#start`);

@@ -35,7 +35,7 @@ if (import.meta.main) {
   if (manual !== undefined && !/^\d+$/u.test(manual)) throw new Error('--applications takes a whole number.');
   let applications = manual === undefined ? undefined : Number(manual);
   if (args.includes('--github')) {
-    const issues = JSON.parse(execFileSync('gh', ['issue', 'list', '--repo', 'LikC1606/theorem-os-site', '--label', 'early-access',
+    const issues = JSON.parse(execFileSync('gh', ['issue', 'list', '--repo', 'LikC1606/TheoremOS', '--label', 'early-access',
       '--state', 'all', '--limit', '1000', '--json', 'number'], { encoding: 'utf8' })) as unknown[];
     applications = (applications ?? 0) + issues.length;
   }

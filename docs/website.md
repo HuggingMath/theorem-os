@@ -1,22 +1,22 @@
 # 产品宣传网站与证明档案
 
-线上地址：<https://theoremos.top/>（英文 `/en/`）。网站在本仓库（私有）构建，产物与公开成果发布到公开仓库 [LikC1606/theorem-os-site](https://github.com/LikC1606/theorem-os-site)，再把同一份产物上传到 Cloudflare Workers 提供服务。公开仓库的 GitHub Pages 地址 <https://likc1606.github.io/theorem-os-site/> 保留，由仓库里的 `CNAME` 跳转到正式域名。公开仓库不包含运行时源码。
+线上地址：<https://theoremos.top/>（英文 `/en/`）。网站在本仓库（私有）构建，产物与公开成果发布到公开仓库 [LikC1606/TheoremOS](https://github.com/LikC1606/TheoremOS)，再把同一份产物上传到 Cloudflare Workers 提供服务。公开仓库的 GitHub Pages 地址 <https://likc1606.github.io/TheoremOS/> 保留，由仓库里的 `CNAME` 跳转到正式域名。公开仓库不包含运行时源码。
 
 静态网站包含三个入口：
 
-- `index.html`：中文产品宣传首页，包括可缩放的真实工作台截图、可播放和暂停的四步预设回放、官方证明成果、M1–M5 组件介绍，以及打开工作台（https://app.theoremos.top/）和“申请内测”的开始区。
+- `index.html`：中文产品宣传首页，首屏提供四步预设回放、申请内测和工作台入口（https://app.theoremos.top/），后续展示可缩放的真实工作台截图、证明成果、M1–M5 组件和内测申请流程。
 - `archive.html`：证明档案，支持搜索、按官方验收/本地通过/研究中筛选、源码查看、验收证据、解题过程、JSON 下载和本地回放记录。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。工作台用 `?kind=&area=&environment=` 预填类型、位置和环境，未知值忽略，环境可在发布前修改。
 
-三个入口都有英文版，位于 `en/` 下，与中文页共用样式、脚本和素材。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。工作台截图仍是中文界面，英文页的说明里注明了这一点。
+三个入口都有英文版，位于 `en/` 下，与中文页共用样式和脚本。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。中英文页面分别使用对应语言的工作台、源码、模型设置、模块和证明档案截图。
 
 网站独立于 CLI，不启动 Agent 或 Lean，不需要服务端或模型认证。
 
 ## 内测申请
 
-开始区、导航和常见问题提供“申请内测”入口，打开公开仓库的 Issue 表单 `.github/ISSUE_TEMPLATE/early-access.yml`（源文件在 `docs/site-repo/`）。表单是中英双语，提醒申请会公开，不收集 API Key 和联系方式。通过后在同一条 Issue 里回复，请申请人把登录邮箱私下发来，加入白名单后在 app.theoremos.top 登录。开始区的主按钮直接打开工作台，常见问题也链接到工作台。
+首屏和导航的“申请内测”入口跳转到开始区，开始区的主按钮打开公开仓库的 Issue 表单 `.github/ISSUE_TEMPLATE/early-access.yml`（源文件在 `docs/site-repo/`）。表单是中英双语，提醒申请会公开，不收集 API Key 和联系方式。通过后在同一条 Issue 里回复，请申请人把登录邮箱私下发来，加入白名单后在 app.theoremos.top 登录。首屏另有“打开工作台”入口，开始区也为已有资格的用户提供登录链接。
 
-不使用 GitHub 或希望私下申请的人可以发邮件至 liuzhenhao@westlake.edu.cn。地址写在开始区的提示、常见问题、Issue 表单说明和公开仓库 README 里，链接预填邮件主题。
+不使用 GitHub 或希望私下申请的人可以发邮件至 liuzhenhao@westlake.edu.cn。开始区提供“邮件申请”链接并预填主题，Issue 表单说明和公开仓库 README 也保留地址。
 
 ## 本地预览
 
@@ -25,7 +25,7 @@ bun install --frozen-lockfile
 bun run build:site
 ```
 
-打开 `out/site/index.html`。使用相对资源路径，档案数据打包进脚本，支持直接打开本地文件，也支持 GitHub Pages 的 `/theorem-os-site/` 子路径（检查仍按子路径运行，保证旧地址可用）。
+打开 `out/site/index.html`。使用相对资源路径，档案数据打包进脚本，支持直接打开本地文件，也支持 GitHub Pages 的 `/TheoremOS/` 子路径，浏览器检查覆盖该子路径。
 
 首页的成果数量、归属和官方结果链接由档案生成，构建时写入 HTML；浏览器不支持 JavaScript 时也能查看真实工作台截图、首页正文和成果入口。组件切换、回放与手机导航使用独立的小型脚本，档案源码在进入 `archive.html` 时加载。静态站点构建不依赖工作台服务。
 
@@ -35,10 +35,10 @@ bun run build:site
 - `accepted/*/verification.json`：已有的本地检查与来源记录。检查投影和最终归档文件的哈希可能不同，档案界面会标明差异；官方验收状态以官方响应为准。
 - `in-progress/snapshot.json` 与各题 `manifest.json`：研究快照的时间、轮数、worker 数量和任务状态。它们不构成整题验收，也不计入首页的官方通过数量。
 
-当前静态站点收录早期 6 道官方验收证明、OpenAI Math campaign 的 10 道本地原生验收解答和 1 道研究快照。
+当前静态站点收录 27 条档案：10 道官方验收证明、OpenAI Math campaign 的 16 道本地原生验收解答和 1 道研究快照。
 OpenAI Math 条目显示原题、最终证明、辅助模块、固定提交与证明哈希、Lean 收据、comparator 结果和按时间排列的研究尝试/引理任务/检查记录。
 它们使用单独的“本地验收通过”状态，不计入首页的官方通过数量；有外部代理数学辅助和续跑的记录保留归属。
-2026 年 10 月 16 日获官方 4/4 通过的 [#2144 四题](../submitted/README.md) 仍保留在原提交归档中。
+2026 年 10 月 16 日获官方 4/4 通过的 [#2144 四题](../submitted/README.md) 已计入官方通过，并保留原提交归档。
 
 从持续归档中更新已验收结果，再构建前端：
 
@@ -71,17 +71,17 @@ bun run build:site
 - `scripts/build-site.ts`：构建中英文页面、浏览器脚本和公开数据，并复制素材与许可证。
 - `docs/site-repo/`：公开仓库独有的文件（README、Issue 表单）。
 
-首页按 taste-skill 的大字排版方向组织内容，以白色品牌声明、浅青色回放与薄荷色组件区形成章节变化。首屏使用本地工作台真实的 Mathlib 草稿截图，明确标为未提交；手机和平板通过 `picture` 加载独立视口，平板采用画面与说明并排的构图。截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明在线工作台已上线白名单 Beta，按申请确认内测资格，尚未开放自由注册；提供内测申请、反馈入口与免模型的验收回放，不提供部署命令。
+首页以森林绿首屏、证明档案区和浅绿色工作台、组件区交替排布。首屏将原题到 Lean 证明的说明、申请与工作台入口和真实预设记录生成的四步回放并列展示，手机端按顺序排列。工作台区使用真实新会话截图，展示自然语言入口与两阶段预算；`picture` 按屏幕宽度加载独立的桌面或手机视口。截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明白名单内测、平台免费与自备模型 Key，提供申请流程、邮件申请和已有资格用户的工作台入口。
 
 四步回放的候选源码读取自 `src/math/localExample.ts`，回执读取自 `docs/assets/replay.json`；切换演示不会启动模型或 Lean。默认停在最终验收，点击播放后从候选开始，可暂停续播、手动选步和重新播放；离屏或页面隐藏会暂停，返回后由用户继续播放。反馈步骤是对预设示例的检查说明，并非原始诊断日志。手机端先展示已归档的最终回执，再展示选中步骤的源码。源码与回放记录改动后需要重新构建。
 
-首屏名称使用 GSAP 遮罩入场，成果按行出现，组件选项依次进入，产品图轻微缩放落定；组件和命令切换采用短过渡。系统启用减少动态效果时，内容即时切换，回放仍可按步骤阅读。GSAP 固定版本与锁文件一起管理，版权和许可链接随静态产物保留在 `assets/licenses/gsap-NOTICE.txt`。
+首屏两行标题使用 GSAP 遮罩入场，成果按行出现，组件选项依次进入，产品图轻微缩放落定；组件与回放步骤切换采用短过渡。系统启用减少动态效果时，内容即时切换，回放仍可按步骤阅读。GSAP 固定版本与锁文件一起管理，版权和许可链接随静态产物保留在 `assets/licenses/gsap-NOTICE.txt`。
 
 完整原题验收独立于五类研究决策。组件用大字号索引展示，手机端五个标签完整排列为网格，支持键盘选择。产品区补充实际 Lean 源码与模型配置截图，API Key 保持为空。档案区展示完整的真实界面，手机端使用单独的题目详情截图，避免放大裁切桌面图。参考官网与应用取舍记录在 [design-references.md](design-references.md)，本轮方向、素材来源与审查记录见 [design-taste.md](design-taste.md)。
 
 ## 用户反馈
 
-首页桌面导航、手机导航、页脚以及证明档案都链接到 `feedback.html`。反馈分为问题反馈、功能建议、使用咨询，可填写相关位置、标题、描述及可选环境。表单在本地整理 Markdown，预览确认后由用户进入固定仓库的 GitHub Issue 编辑页；最终发布需要用户登录 GitHub 并确认，静态网站不持有 GitHub Token，也不显示虚假的提交成功状态。
+首页手机导航、页脚以及证明档案都链接到 `feedback.html`。反馈分为问题反馈、功能建议、使用咨询，可填写相关位置、标题、描述及可选环境。表单在本地整理 Markdown，预览确认后由用户进入固定仓库的 GitHub Issue 编辑页；最终发布需要用户登录 GitHub 并确认，静态网站不持有 GitHub Token，也不显示虚假的提交成功状态。
 
 反馈将公开，页面提示不要填写 API Key 或个人敏感信息。不会自动读取工作台、浏览器查询参数、源码或认证信息，也不把表单写入浏览器存储。完整编码 URL 超过 7500 字符时不附带正文，页面明确提示先复制或下载全文，再到 GitHub 粘贴；全文始终保留在预览里，复制失败时会选中正文供手动复制。无 JavaScript 或脚本不可用时保留直接提交到 GitHub 的入口。此方案可直接部署到 GitHub Pages，不需要额外服务器；若后续需要匿名或私密反馈，应另接支持这些能力的接收服务。
 
@@ -93,7 +93,7 @@ bun run build:site
 
 正式域名 `theoremos.top` 在阿里云注册，DNS 托管在 Cloudflare（NS 为 `fay` / `houston.ns.cloudflare.com`）。站点是 Worker `theorem-os` 的静态资源，路由 `theoremos.top/*` 指向它；根域名的 AAAA `100::`（代理）只是让路由生效的占位记录，`www` 跳转到根域名。HTTP 一律 301 到 HTTPS，证书由 Cloudflare 自动签发。静态资源设置 `html_handling: auto-trailing-slash`（`/x.html` 307 到 `/x`，保留查询参数）和 `not_found_handling: 404-page`。
 
-页面源文件里的绝对地址统一写成 `https://likc1606.github.io/theorem-os-site`。`docs/web/site.ts` 的 `customDomain` 为 `theoremos.top`，构建时把所有页面的绝对地址（`og:image`、`hreflang`）换成正式域名，并写出 `CNAME`。换域名时改这一项、重新构建发布，再运行 `node scripts/capture-promo.mjs` 更新分享卡片上的网址。工作台里的官网链接在 `apps/web/client/feedback.ts` 的 `siteUrl` 和各页面的 `data-site` 链接里，需要一起改。
+`docs/web/site.ts` 的 `pagesOrigin` 为 `https://likc1606.github.io/TheoremOS`，`customDomain` 为 `theoremos.top`。首页直接使用正式域名，其余页面源文件中的 Pages 绝对地址（`og:image`、`hreflang`）由构建替换为正式域名，并写出 `CNAME`。换域名时同步更新首页绝对地址和 `customDomain`、重新构建发布，再运行 `node scripts/capture-promo.mjs` 更新分享卡片上的网址。工作台里的官网链接在 `apps/web/client/feedback.ts` 的 `siteUrl` 和各页面的 `data-site` 链接里，需要一起改。
 
 ## 验证
 
@@ -132,22 +132,22 @@ bun run test:site
 bun run export:site /home/lzh/theorem-os-site
 ```
 
-`export:site` 要求目标是 origin 为 `LikC1606/theorem-os-site` 且没有未提交改动的克隆。它清空除 `.git` 以外的内容，按上面的清单复制，再扫描本机路径、私有仓库链接、API Key 与内网地址；发现问题即停止并提示恢复方法。脚本不提交，检查 `git status` 后再手动提交推送。推送后把同一份目录上传到 Worker `theorem-os` 的静态资源（Cloudflare 的 assets upload session → upload → 更新脚本三步，API token 只需 Workers Scripts Write，用完撤回），并确认 `https://theoremos.top/` 已更新。公开仓库的 Pages 保持 **Deploy from a branch → main → / (root)**，用于旧地址跳转。
+`export:site` 要求目标是 origin 为 `LikC1606/TheoremOS` 且没有未提交改动的克隆。它清空除 `.git` 以外的内容，按上面的清单复制，再扫描本机路径、私有仓库链接、API Key 与内网地址；发现问题即停止并提示恢复方法。脚本不提交，检查 `git status` 后再手动提交推送。推送后把同一份目录上传到 Worker `theorem-os` 的静态资源（Cloudflare 的 assets upload session → upload → 更新脚本三步，API token 只需 Workers Scripts Write，用完撤回），并确认 `https://theoremos.top/` 已更新。公开仓库的 Pages 保持 **Deploy from a branch → main → / (root)**，用于旧地址跳转。
 
 ## 视觉素材
 
 `docs/assets/mark.svg` 是首页、档案与工作台共用的墨色项目标记（陶土色方块），`mark.png` 保留为位图版本。首页正文使用本地 Hanken Grotesk 字体，字面代码使用 Fira Code；档案页与工作台正文使用 Inter，工作台代码使用 JetBrains Mono。工作台加载的是 `InterVariable-latin.woff2`：保留两个可变轴与全部排版特性，只收录拉丁、拉丁扩展 A、希腊字母、通用标点、上下标、字母式符号、箭头与数学运算符（352 KB 降到 157 KB）；由 `pyftsubset InterVariable.woff2 --unicodes=U+0000-017F,U+0370-03FF,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-22FF,U+2318,U+FEFF,U+FFFD --layout-features='*' --flavor=woff2` 生成。档案页仍嵌入完整的 `InterVariable.woff2`。三处的中文正文都使用思源黑体（Noto Sans SC），以 “TheoremOS Sans SC” 的名称加载，覆盖 400–600 字重，同样按 `NotoSansSC-ui` 与 `NotoSansSC-common` 两个 unicode-range 子集拆分。标题与品牌名使用衬线字体：西文为 Lora 的拉丁子集，中文为思源宋体（Noto Serif SC）600 字重的两个子集。按 OFL 保留字体名的要求，修改后的 Lora 子集改名为 “TheoremOS Serif Latin”，中文子集为 “TheoremOS Serif SC”。中文子集按 unicode-range 拆分：`NotoSerifSC-ui` 收录工作台与官网源码中出现的汉字，`NotoSerifSC-common` 收录其余 GB2312 一级字，仅在标题用到时加载。界面新增而不在 `-ui` 子集中的汉字由额外子集承载，当前黑体包含 138 个码位、宋体包含 136 个码位，保存在 `NotoSansSC-ui-extra.woff2` 与 `NotoSerifSC-ui-extra.woff2`（黑体约 36 KB、宋体约 28 KB，官网样式不引用），并从 `app.css` 中 `-common` 的 unicode-range 里移除，否则中文界面首次打开就会因为「轨迹」「万」这类字多下载 760 KB 的 `-common`。`tests/webFonts.test.ts` 检查界面文字（`scripts/web-i18n.ts` 列出的全部中文键）只用到 `-ui` 与 `-ui-extra`。界面再出现新字时，`-common` 文件里仍有这些字形，从中重新取出：`pyftsubset NotoSansSC-common.woff2 --unicodes=<原有加新增的码位> --layout-features='*' --flavor=woff2 --output-file=NotoSansSC-ui-extra.woff2`（宋体同理），再把新增码位从 `app.css` 的 `-common` 范围移到 `-ui-extra`。黑体的 `-ui-extra` 另含「中」「文」两字：英文界面唯一可见的中文是语言切换上的「中文」，两字的 unicode-range 从 `-ui` 移到 `-ui-extra` 后，英文页只下载约 24 KB 的 `-ui-extra`，不再为两个字下载 217 KB 的 `-ui`。这两个字不在 `-common` 文件里，所以黑体的 `-ui-extra` 要从 [Noto Sans SC 原始可变字体](https://github.com/google/fonts/blob/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf)重新生成（当前字体版本为 2.004）：与 `-ui` 相同，先用 fontTools 的 instancer 把字重轴截到 400–600，再按全部码位子集化。字体及各自的 SIL Open Font License 保存在 `docs/assets/fonts/`。构建时将拉丁字体嵌入样式，确保直接打开本地文件时也能加载；中文子集体积较大，保留为外部文件，页面不依赖外部字体服务。
 
-`workbench-desktop.png` 和 `workbench-mobile.png` 来自真实本地工作台的新会话，分别是 1440×500 的桌面视口和 390×440 的手机视口。`workbench-full-desktop.png` 与 `workbench-full-mobile.png` 为弹窗使用的完整截图，视口分别是 1440×900 和 390×844。四张图均以 1 倍像素密度展示空白自然语言入口和两阶段默认预算，图注明确未提交。截图脚本启动一次性本地服务，阻止非 GET API 请求，不需要模型或 Key：
+`workbench-desktop.png` 和 `workbench-mobile.png` 来自真实本地工作台的新会话，分别是 1440×500 的桌面视口和 390×440 的手机视口。`workbench-full-desktop.png` 与 `workbench-full-mobile.png` 为弹窗使用的完整截图，视口分别是 1440×900 和 390×844；英文版使用对应的 `-en.png` 文件。两种语言均以 1 倍像素密度展示空白自然语言入口和两阶段默认预算。截图脚本启动一次性本地服务，阻止非 GET API 请求，不需要模型或 Key：
 
 ```bash
 bun run build:web
 bun scripts/capture-natural-entry.ts
 ```
 
-`workbench-source-detail.png` 是进阶 Lean 工作区的完整片段，保留未提交状态与 `sorry`；`workbench-settings-detail.png` 是进阶研究配置弹窗正常滚动后的可见区域，展示服务商、模型、空 Key 与预算。二者沿用此前以 2 倍像素密度导出的真实预览，验证零 API POST。旧的 `capture-workbench.mjs` 用于进阶视图；它会覆盖首页四张图，更新进阶素材后须重新运行 `capture-natural-entry.ts`。
+`workbench-source-detail.png` 是进阶 Lean 工作区的完整片段，保留未提交状态与 `sorry`；`workbench-settings-detail.png` 是进阶研究配置弹窗的可见区域，展示服务商、模型与空 Key。源码、设置、模块图谱和方案库均有独立的 `-en.png` 英文截图，验证零 API POST。旧的 `capture-workbench.mjs` 用于中文进阶视图；它会覆盖中文入口四张图，更新进阶素材后须重新运行 `capture-natural-entry.ts`。
 
-`social-preview.png` 是中文分享卡片，由上述工作台截图和首页排版生成；`social-preview-en.png` 是英文卡片，截取英文首页的验收回放窗口。工作台已支持中英文，官网当前使用的入口截图为中文。修改设计后运行：
+`social-preview.png` 是中文分享卡片，`social-preview-en.png` 是英文卡片，均截取对应语言首页的验收回放窗口；官网入口与产品细节截图也按语言对应。修改设计后运行：
 
 ```bash
 bun run build:site

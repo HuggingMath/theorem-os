@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const site = path.join(root, 'out/site');
 const url = pathToFileURL(path.join(site, 'feedback.html')).href;
 const output = path.join(root, 'out/feedback-checks');
-const issueDestination = 'https://github.com/LikC1606/theorem-os-site/issues/new';
+const issueDestination = 'https://github.com/LikC1606/TheoremOS/issues/new';
 fs.mkdirSync(output, { recursive: true });
 const errors = [];
 const unexpectedExternalRequests = [];
@@ -254,15 +254,15 @@ try {
   // Test resource loading and relative navigation under the GitHub Pages repository path.
   server = http.createServer((request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
-    if (!pathname.startsWith('/theorem-os/')) { response.writeHead(404).end(); return; }
-    const file = path.resolve(site, pathname.slice('/theorem-os/'.length) || 'index.html');
+    if (!pathname.startsWith('/TheoremOS/')) { response.writeHead(404).end(); return; }
+    const file = path.resolve(site, pathname.slice('/TheoremOS/'.length) || 'index.html');
     if (!file.startsWith(site + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { response.writeHead(404).end(); return; }
     const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.txt': 'text/plain' };
     response.writeHead(200, { 'Content-Type': mime[path.extname(file)] ?? 'application/octet-stream' });
     fs.createReadStream(file).pipe(response);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const hosted = `http://127.0.0.1:${server.address().port}/theorem-os/`;
+  const hosted = `http://127.0.0.1:${server.address().port}/TheoremOS/`;
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${hosted}feedback.html`);
   await ready(page);

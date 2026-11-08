@@ -105,7 +105,7 @@ const checkStart = async page => {
   assert.equal(await open.getAttribute('href'), 'https://app.theoremos.top/');
   const apply = start.locator('[data-umami-event="apply-github"]');
   assert.match(await apply.innerText(), /申请|内测/);
-  assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
+  assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
   assert.match(await start.innerText(), /公开/);
   const email = new URL(await start.locator('a[href^="mailto:"]').first().getAttribute('href'));
   assert.equal(email.protocol, 'mailto:');
@@ -378,7 +378,7 @@ try {
 
   await checkStart(page);
   const links = await page.locator('a[href*="github.com/LikC1606"]').evaluateAll(anchors => anchors.map(anchor => anchor.href));
-  assert.ok(links.length > 0 && links.every(href => href.startsWith('https://github.com/LikC1606/theorem-os-site')), `Only the public site repository may be linked: ${links}`);
+  assert.ok(links.length > 0 && links.every(href => href.startsWith('https://github.com/LikC1606/TheoremOS')), `Only the public site repository may be linked: ${links}`);
 
   const summary = page.locator('.faq-list summary').first();
   await summary.click();
@@ -504,15 +504,15 @@ try {
   // Test the repository subpath used by GitHub Pages, with real HTTP resource loading.
   server = http.createServer((request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
-    if (!pathname.startsWith('/theorem-os-site/')) { response.writeHead(404).end(); return; }
-    const file = path.resolve(site, pathname.slice('/theorem-os-site/'.length) || 'index.html');
+    if (!pathname.startsWith('/TheoremOS/')) { response.writeHead(404).end(); return; }
+    const file = path.resolve(site, pathname.slice('/TheoremOS/'.length) || 'index.html');
     if (!file.startsWith(site + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { response.writeHead(404).end(); return; }
     const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.txt': 'text/plain' };
     response.writeHead(200, { 'Content-Type': mime[path.extname(file)] ?? 'application/octet-stream' });
     fs.createReadStream(file).pipe(response);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const hosted = `http://127.0.0.1:${server.address().port}/theorem-os-site/`;
+  const hosted = `http://127.0.0.1:${server.address().port}/TheoremOS/`;
   await page.goto(hosted);
   await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
   await page.evaluate(() => document.fonts.ready);

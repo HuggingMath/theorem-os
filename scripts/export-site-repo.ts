@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Copy the built site and the public proof archive into a checkout of LikC1606/theorem-os-site.
+// Copy the built site and the public proof archive into a checkout of LikC1606/TheoremOS.
 // Only the allowed paths are copied, and the result is scanned for private data. Nothing is committed.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,11 +8,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const target = process.argv[2] && path.resolve(process.argv[2]);
-if (!target) throw new Error('Usage: bun scripts/export-site-repo.ts <theorem-os-site checkout>');
+if (!target) throw new Error('Usage: bun scripts/export-site-repo.ts <TheoremOS checkout>');
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
 const origin = git(target, 'remote', 'get-url', 'origin');
-if (!/github\.com[/:]LikC1606\/theorem-os-site(\.git)?$/.test(origin)) throw new Error(`Refusing to export: ${target} has origin ${origin}`);
+if (!/github\.com[/:]LikC1606\/TheoremOS(\.git)?$/.test(origin)) throw new Error(`Refusing to export: ${target} has origin ${origin}`);
 if (git(target, 'status', '--porcelain')) throw new Error(`Refusing to export: ${target} has uncommitted changes`);
 const site = path.join(root, 'out/site');
 if (!fs.existsSync(path.join(site, 'index.html')) || !fs.existsSync(path.join(site, 'en/index.html'))) throw new Error('Run bun run build:site first');
