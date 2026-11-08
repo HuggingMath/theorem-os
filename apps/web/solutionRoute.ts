@@ -1,6 +1,6 @@
 /** Recorded work and proof structure share this graph in the workbench and archive. */
 export type SolutionRouteStatus = 'passed' | 'failed' | 'running' | 'pending' | 'conditional' | 'human' | 'recorded';
-export type SolutionRouteKind = 'problem' | 'plan' | 'task' | 'finding' | 'attempt' | 'check' | 'decision' | 'proof' | 'review' | 'acceptance' | 'outcome' | 'declaration' | 'derivation';
+export type SolutionRouteKind = 'problem' | 'plan' | 'task' | 'finding' | 'attempt' | 'check' | 'decision' | 'proof' | 'review' | 'acceptance' | 'outcome' | 'declaration' | 'derivation' | 'group';
 export type SolutionRouteSection = { title: string; text: string; code?: boolean };
 export type SolutionRouteNode = {
   id: string; kind: SolutionRouteKind; title: string; status: SolutionRouteStatus;

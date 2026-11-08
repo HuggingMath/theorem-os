@@ -471,7 +471,10 @@ try {
       await page.locator('[data-solution-route-state="ready"]').waitFor();
       await page.waitForFunction(() => {
         const toolbar = document.querySelector('.process-view-toolbar');
-        return toolbar && document.activeElement === toolbar.querySelector('h4') && Math.abs(toolbar.getBoundingClientRect().top) <= 2;
+        const node = document.querySelector('[data-solution-node]'), bounds = node?.getBoundingClientRect();
+        return toolbar && document.activeElement === toolbar.querySelector('h4')
+          && Math.abs(toolbar.getBoundingClientRect().top - parseFloat(getComputedStyle(toolbar).scrollMarginTop)) <= 2
+          && bounds && bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth;
       });
       await assertGeometryState(page, selectedId, 'process');
       await page.locator('[data-action="back-list"]').last().click();

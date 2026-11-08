@@ -12,8 +12,8 @@ const statusNames = {
   en: { passed: 'Passed', failed: 'Failed', running: 'In progress', pending: 'Pending', conditional: 'Conditional', human: 'Human decision', recorded: 'Recorded' },
 };
 const kindNames = {
-  zh: { problem: '原题', plan: '研究计划', task: '数学任务', finding: '研究推导', attempt: '证明尝试', check: '检查', decision: '人类决策', proof: '完整证明', review: '审阅', acceptance: '独立验收', outcome: '运行结果', declaration: '证明声明', derivation: '推导步骤' },
-  en: { problem: 'Problem', plan: 'Plan', task: 'Mathematical task', finding: 'Research', attempt: 'Proof attempt', check: 'Check', decision: 'Human decision', proof: 'Complete proof', review: 'Review', acceptance: 'Independent acceptance', outcome: 'Run outcome', declaration: 'Declaration', derivation: 'Derivation step' },
+  zh: { problem: '原题', plan: '研究计划', task: '数学任务', finding: '研究推导', attempt: '证明尝试', check: '检查', decision: '人类决策', proof: '完整证明', review: '审阅', acceptance: '独立验收', outcome: '运行结果', declaration: '证明声明', derivation: '推导步骤', group: '源码分组' },
+  en: { problem: 'Problem', plan: 'Plan', task: 'Mathematical task', finding: 'Research', attempt: 'Proof attempt', check: 'Check', decision: 'Human decision', proof: 'Complete proof', review: 'Review', acceptance: 'Independent acceptance', outcome: 'Run outcome', declaration: 'Declaration', derivation: 'Derivation step', group: 'Source group' },
 };
 
 /** All main nodes keep their dependency ranks; the recorded work expands beneath its owning node. */
@@ -136,7 +136,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       <div class="solution-route-tools"><label class="solution-route-search"><span class="sr-only">${word('查找路线中的步骤', 'Find a route step')}</span><input type="search" data-solution-search placeholder="${word('查找目标、引理或推导', 'Find a goal, lemma or derivation')}" value="${html(state.query)}"></label>
         ${model.nodes.some(node => node.parentId) ? `<button type="button" data-solution-all aria-pressed="${state.all || state.opened.size > 0}">${state.all || state.opened.size ? word('收起步骤', 'Collapse steps') : word('展开全部步骤', 'Expand every step')}</button>` : ''}
         <div role="group" aria-label="${word('路线图缩放', 'Route zoom')}"><button type="button" data-solution-zoom="out" aria-label="${word('缩小', 'Zoom out')}">−</button><button type="button" data-solution-zoom="reset" aria-label="${word('恢复原始大小', 'Reset zoom')}"><output>${Math.round(state.zoom * 100)}%</output></button><button type="button" data-solution-zoom="in" aria-label="${word('放大', 'Zoom in')}">＋</button><button type="button" data-solution-zoom="fit">${word('查看全图', 'Fit route')}</button><button type="button" data-solution-expand aria-expanded="${expanded}">${expanded ? word('收起画布', 'Close canvas') : word('展开画布', 'Expand canvas')}</button></div></div>
-      <div class="solution-route-workspace"><div class="solution-route-viewport" tabindex="0" aria-label="${word('交互路线图，可拖动平移并选择步骤', 'Interactive route: drag to pan and select a step')}"><div class="solution-route-scaled" style="width:${layout.width * state.zoom}px;height:${layout.height * state.zoom}px"><div class="solution-route-canvas" style="width:${layout.width}px;height:${layout.height}px;transform:scale(${state.zoom})">
+      <div class="solution-route-workspace"><div class="solution-route-viewport" tabindex="0" aria-label="${word('交互路线图，可拖动平移并选择步骤', 'Interactive route: drag to pan and select a step')}"><div class="solution-route-scaled"><div class="solution-route-canvas">
       <svg class="solution-route-lines" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7"/></marker></defs>${model.edges.filter(edge => ids.has(edge.from) && ids.has(edge.to)).map(edge => {
         const a = layout.boxes.get(edge.from)!, b = layout.boxes.get(edge.to)!;
         const vertical = Math.abs(a.x - b.x) < 30;
@@ -146,11 +146,20 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
         const d = vertical ? `M${x1} ${y1} C${x1} ${y1 + 20},${x2} ${y2 - 20},${x2} ${y2}` : `M${x1} ${y1} C${x1 + bend} ${y1},${x2 - bend} ${y2},${x2} ${y2}`;
         return `<path d="${d}" data-solution-edge="${edge.kind}" data-from="${html(edge.from)}" data-to="${html(edge.to)}" data-connected="${edge.from === state.selected || edge.to === state.selected}" marker-end="url(#solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))})"/>`;
       }).join('')}</svg>${visible.map((node, index) => {
-        const box = layout.boxes.get(node.id)!;
-        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-status="${node.status}" data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}" style="left:${box.x}px;top:${box.y}px;width:${box.width}px;height:${box.height}px"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${kindNames[model.locale][node.kind]}</span><span>${statusNames[model.locale][node.status]}</span></span><strong>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary">${html(node.summary)}</span>` : ''}</button>`;
+        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-status="${node.status}" data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${kindNames[model.locale][node.kind]}</span><span>${statusNames[model.locale][node.status]}</span></span><strong>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary">${html(node.summary)}</span>` : ''}</button>`;
       }).join('')}</div></div>${!visible.length ? `<p class="solution-route-empty">${word('没有匹配的步骤。换一个关键词，或清空搜索。', 'No matching steps. Try another term or clear the search.')}</p>` : ''}</div>
       <aside class="solution-route-detail" data-solution-inspector aria-label="${word('路线步骤详情', 'Route step details')}" aria-live="polite">${inspector()}</aside></div>
       <footer class="solution-route-footer"><span>${word('实线：依赖或流程 · 虚线：依据或源码引用', 'Solid: dependencies or flow · Dashed: evidence or source references')}</span>${model.partial ? `<span>${word('当前记录尚未全部读取', 'Some records have not been loaded')}</span>` : ''}<div><button type="button" data-solution-step="previous">← ${word('上一步', 'Previous')}</button><button type="button" data-solution-step="next">${word('下一步', 'Next')} →</button></div></footer>`;
+    // Apply layout through CSSOM: the workbench CSP intentionally disallows HTML style attributes.
+    const space = root.querySelector<HTMLElement>('.solution-route-scaled')!;
+    space.style.width = `${layout.width * state.zoom}px`; space.style.height = `${layout.height * state.zoom}px`;
+    const canvas = root.querySelector<HTMLElement>('.solution-route-canvas')!;
+    canvas.style.width = `${layout.width}px`; canvas.style.height = `${layout.height}px`; canvas.style.transform = `scale(${state.zoom})`;
+    for (const button of root.querySelectorAll<HTMLElement>('[data-solution-node]')) {
+      const box = layout.boxes.get(button.dataset.solutionNode!)!;
+      button.style.left = `${box.x}px`; button.style.top = `${box.y}px`;
+      button.style.width = `${box.width}px`; button.style.height = `${box.height}px`;
+    }
     const viewport = root.querySelector<HTMLElement>('.solution-route-viewport')!;
     viewport.scrollLeft = state.left; viewport.scrollTop = state.top;
     for (const element of root.querySelectorAll<HTMLElement>('[data-solution-prose]')) render(h(Rich, { text: element.textContent ?? '' }), element);

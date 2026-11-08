@@ -192,7 +192,11 @@ try {
     return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= viewport.left && box.right <= viewport.right;
   }), 'the original problem is visible when the mobile roadmap opens');
   await shot('roadmap-mobile.png');
+  await map().locator('[data-solution-zoom="reset"]').click();
   const viewport = page.locator('.solution-route-viewport');
+  await viewport.scrollIntoViewIfNeeded();
+  assert.ok(await viewport.evaluate(element => element.scrollWidth > element.clientWidth + 200),
+    'Panning starts at readable size with enough canvas overflow to move');
   await viewport.evaluate(element => { element.scrollLeft = 100; });
   const area = (await viewport.boundingBox())!;
   await page.mouse.move(area.x + 170, area.y + 12); await page.mouse.down();

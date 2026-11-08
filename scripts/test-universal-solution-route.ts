@@ -379,9 +379,10 @@ try {
         const allDeclarations = sourceFiles.flatMap(file => file.declarations.map(declaration => ({ declaration, file })));
         const declarations = allDeclarations.length;
         const sourceSteps = allDeclarations.reduce((sum, item) => sum + item.declaration.steps.length, 0);
+        const sourceGroups = sourceFiles.reduce((sum, file) => sum + (file.declarations.length > 80 ? Math.ceil(file.declarations.length / 80) : 0), 0);
         assert.ok(declarations > 0, `${prefix}/${record.id}: no source declarations`);
         const count = (await page.locator('[data-solution-count]').innerText()).match(/(\d+)\s*\/\s*(\d+)/u);
-        assert.ok(count); assert.equal(Number(count[2]), declarations + sourceSteps + sourceFiles.length + 1, `${prefix}/${record.id}: source nodes were lost`);
+        assert.ok(count); assert.equal(Number(count[2]), declarations + sourceSteps + sourceGroups + sourceFiles.length + 1, `${prefix}/${record.id}: source nodes were lost`);
         const initialNodes = Number(count[1]);
         await page.locator('[data-solution-zoom="fit"]').click();
         const sourceLayout = await viewport(page).evaluate(view => ({ width: view.clientWidth, height: view.clientHeight,
@@ -434,7 +435,7 @@ try {
           assert.ok(size.width <= size.viewport, `${prefix}/${record.id}/${run.runId}: document overflow`);
           runs.push({ runId: run.runId, tasks: taskIds.length, nodes });
         }
-        records.push({ id: record.id, declarations, sourceSteps, initialNodes, totalNodes: Number(count[2]), lastDeclaration: last.declaration.name, sourceOpenMs, sourceLayout, runs });
+        records.push({ id: record.id, declarations, sourceSteps, sourceGroups, initialNodes, totalNodes: Number(count[2]), lastDeclaration: last.declaration.name, sourceOpenMs, sourceLayout, runs });
         console.log(`${prefix}/${record.id}: ${declarations} source declarations, ${runs.length} historical routes`);
       }
       assert.equal(errors.length, 0, JSON.stringify(errors));

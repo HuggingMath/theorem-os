@@ -134,6 +134,7 @@ async function global(page: Page, record: ArchiveRecord, run = finalRun(record))
   assert.equal(await page.locator('.global-history [aria-pressed="true"]').count(), 1);
   assert.equal(await page.locator('.catalog').isVisible(), false);
 }
+const enteredPages = new WeakSet<Page>();
 async function enter(page: Page, record: ArchiveRecord, locale: string, explicit = false) {
   const url = ordinary(locale);
   assert.equal(new URLSearchParams(new URL(url).hash.slice(1)).has('proof'), false);
@@ -141,9 +142,12 @@ async function enter(page: Page, record: ArchiveRecord, locale: string, explicit
   await page.evaluate(() => document.fonts.ready); await settled(page);
   assert.equal(await page.locator('.catalog').isVisible(), true);
   assert.equal(await page.locator('[data-solution-route-state]').count(), 0);
-  assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(resource =>
-    new URL(resource.name).pathname.endsWith('/data/solution-route.js'))), false,
-  'The catalog must defer the route renderer until a problem route is opened');
+  if (!enteredPages.has(page)) {
+    assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(resource =>
+      new URL(resource.name).pathname.endsWith('/data/solution-route.js'))), false,
+    'A fresh catalog page must defer the route renderer until a problem route is opened');
+    enteredPages.add(page);
+  }
   await page.locator(explicit ? '.row-route-open' + attr('data-proof-route', record.id) : '.proof-row' + attr('data-proof-id', record.id)).click();
   await global(page, record);
 }

@@ -131,16 +131,28 @@ function sourceRoute(record: RouteRecord, process: ArchiveProcess, run: Run | un
         ...(check ? [{ title: text(locale, '对应的检查结果', 'Corresponding check result'), text: check.status }] : []),
         ...(!file.declarations.length ? [{ title: text(locale, '保存的源码', 'Saved source'), text: code, code: true }] : [])], action });
     edges.push({ from: 'problem', to: fileId, kind: 'evidence' });
-    for (const declaration of file.declarations) {
+    const groupSize = 80, grouped = file.declarations.length > groupSize;
+    if (grouped) for (let start = 0; start < file.declarations.length; start += groupSize) {
+      const members = file.declarations.slice(start, start + groupSize), first = members[0], last = members.at(-1)!;
+      const groupId = `${fileId}:declarations:${start}`;
+      nodes.push({ id: groupId, parentId: fileId, kind: 'group', status: 'recorded',
+        title: text(locale, `声明 ${start + 1}–${start + members.length}`, `Declarations ${start + 1}–${start + members.length}`),
+        summary: `${first.name} … ${last.name}`,
+        source: { name: file.name, sha256: file.sha256, line: first.line, endLine: last.endLine },
+        sections: [{ title: text(locale, '声明范围', 'Declaration range'), text: `${first.name}\n…\n${last.name}`, code: true }], action });
+      edges.push({ from: fileId, to: groupId, kind: 'evidence' });
+    }
+    for (const [declarationIndex, declaration] of file.declarations.entries()) {
+      const parentId = grouped ? `${fileId}:declarations:${Math.floor(declarationIndex / groupSize) * groupSize}` : undefined;
       const references = declaration.references.filter(id => ids.has(id));
       nodes.push({ id: declaration.id, kind: 'declaration', title: declaration.name, status: 'recorded', summary: declaration.type,
-        ...(file.declarations.length > 80 ? { parentId: fileId } : {}),
+        ...(parentId ? { parentId } : {}),
         source: { name: file.name, sha256: file.sha256, line: declaration.line, endLine: declaration.endLine },
         sections: [{ title: text(locale, '声明类型', 'Declaration type'), text: declaration.type, code: true },
           { title: text(locale, '对应源码', 'Corresponding source'), text: lines.slice(declaration.line - 1, declaration.endLine).join('\n'), code: true },
           ...(references.length ? [{ title: text(locale, '源码中的引用', 'References in the source'),
             text: text(locale, '连线表示这段源码写到了相应声明的名字。', 'An edge means this source text mentions the named declaration.') }] : [])], action });
-      edges.push({ from: fileId, to: declaration.id, kind: 'evidence' });
+      edges.push({ from: parentId ?? fileId, to: declaration.id, kind: 'evidence' });
       for (const reference of references) edges.push({ from: reference, to: declaration.id, kind: 'reference' });
       for (const [index, step] of declaration.steps.entries()) {
         nodes.push({ id: step.id, kind: 'derivation', parentId: declaration.id, title: text(locale, `源码步骤 ${index + 1}`, `Source step ${index + 1}`),

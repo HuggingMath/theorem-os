@@ -194,7 +194,11 @@ describe('universal archive solution routes', () => {
     const route = archiveSolutionRoutes(value, value.process!, undefined, 'en')[0];
     const declarations = route.nodes.filter(node => node.kind === 'declaration'), steps = route.nodes.filter(node => node.kind === 'derivation');
     expect(declarations).toHaveLength(82);
-    expect(declarations.every(node => node.parentId === `source:${file.sha256}`)).toBe(true);
+    const groups = route.nodes.filter(node => node.kind === 'group');
+    expect(groups).toHaveLength(2);
+    expect(groups.every(node => node.parentId === `source:${file.sha256}`)).toBe(true);
+    expect(declarations.every(node => groups.some(group => group.id === node.parentId))).toBe(true);
+    expect(groups.map(group => declarations.filter(node => node.parentId === group.id).length)).toEqual([80, 2]);
     expect(steps).toHaveLength(83);
     const theorem = declarations.find(node => node.title === 'many_helpers')!, helper = declarations.find(node => node.title === 'helper_80')!;
     expect(steps.filter(node => node.parentId === theorem.id)).toHaveLength(2);
