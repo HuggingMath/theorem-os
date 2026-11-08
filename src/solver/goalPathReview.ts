@@ -1,9 +1,12 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
+import { splitStatement, type StatementShape } from './theoremKnowledgeGoal';
 import { buildProofContinuation, createRecordedTaskSettlement, recordedTaskProofStatus } from './progress';
 import type { ProofRoute } from './proofRoutes';
 import type { ProjectionDependencyConnection } from './projectionDependencyHints';
 import { allRoutesParked, assumableLemma, groupOpen, isAdvisoryTask, isDefinitionTask, taskGroup, taskVersion,
   type RouteRecord, type TaskRecord } from './tasks';
+
+export { splitStatement, type StatementShape } from './theoremKnowledgeGoal';
 
 /**
  * Original-goal path review. The proof-continuation frontier lists the nearest unfinished inputs of each goal;
@@ -183,115 +186,6 @@ export function reviewGoalPaths(tasks: readonly TaskRecord[], options: {
     stalledTaskIds: [...new Set(stalledGoals.flatMap(goal => goal.frontier.map(item => item.taskId)))].sort(),
     stalledPathTaskIds: [...new Set(stalledGoals.flatMap(goal => [...goalPaths.get(goal.node.task.id)!]))].sort(),
     ...(stallDigest ? { stallDigest } : {}) };
-}
-
-
-/*
- * A syntactic reading of a closed Lean type, used only to point the Lead at a checked lemma that may already
- * close a frontier input. Bound names are numbered by first later use, so `(N : Matrix …)` and `(M : Matrix …)` agree;
- * a shape this reader does not understand yields no suggestion rather than a guess. It never decides validity.
- */
-export type StatementShape = { parts: { key: string; text: string; binder: boolean }[]; conclusion: string };
-const OPEN = '([{⟨⦃', CLOSE = ')]}⟩⦄';
-// Each scopes over the rest of its expression, so a later depth-0 arrow belongs to its body.
-const SCOPING = ['∀', '∃', 'Σ', 'Π', 'λ', '∑', '∏', '⋃', '⋂', '⨆', '⨅', 'fun', 'let', 'have', 'show', 'forall', 'exists'];
-const ID = String.raw`\p{L}\p{N}_'!?ₐ-ₜ`;
-const NAME = new RegExp(`^[\\p{L}_][${ID}]*$`, 'u'), NAME_CHAR = new RegExp(`[${ID}.]`, 'u');
-const RELATION = /^(\S+?)\s*(∈|∉|<|≤|>|≥|≠|⊆|⊂)\s*(\S.*)$/su;
-const maxStatementLength = 20000;
-
-const scopingAt = (text: string, index: number) => SCOPING.some(word => text.startsWith(word, index) &&
-  !(/^\p{L}/u.test(word) && (index > 0 && NAME_CHAR.test(text[index - 1]!) || NAME_CHAR.test(text[index + word.length] ?? ''))));
-/** First depth-0 token at or after `from`; none once a depth-0 scoping binder starts. */
-function topLevel(text: string, tokens: readonly string[], from = 0) {
-  let depth = 0;
-  for (let index = from; index < text.length; index++) {
-    const char = text[index]!;
-    if (OPEN.includes(char)) depth++;
-    else if (CLOSE.includes(char)) { if (--depth < 0) return -1; }
-    else if (depth === 0) {
-      if (scopingAt(text, index)) return -1;
-      if (tokens.some(token => text.startsWith(token, index))) return index;
-    }
-  }
-  return -1;
-}
-/** Index of the bracket closing `text[0]`, or -1. */
-function closing(text: string) {
-  let depth = 0;
-  for (let index = 0; index < text.length; index++) {
-    if (OPEN.includes(text[index]!)) depth++;
-    else if (CLOSE.includes(text[index]!) && --depth === 0) return index;
-  }
-  return -1;
-}
-const squash = (text: string) => text.replace(/\s+/gu, ' ').replace(/([([{⟨⦃]) /gu, '$1').replace(/ ([)\]}⟩⦄])/gu, '$1').trim();
-function unwrap(text: string) {
-  text = text.trim();
-  while (text.startsWith('(') && closing(text) === text.length - 1) text = text.slice(1, -1).trim();
-  return text;
-}
-
-/** Read binders and arrow premises off a closed type; undefined when its shape is not understood. */
-export function splitStatement(type: string): StatementShape | undefined {
-  if (type.length > maxStatementLength) return;
-  const parts: StatementShape['parts'] = [], names = new Map<string, string>();
-  const reference = (name: string) => new RegExp(`(?<![${ID}.])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![${ID}])`, 'gu');
-  const rename = (text: string) => squash([...names].reduce((value, [from, to]) => value.replace(reference(from), to), unwrap(text)));
-  // Only names used later are numbered: an unused named hypothesis is an ordinary premise.
-  const bind = (binderNames: readonly string[], key: string, text: string, rest: string) => {
-    for (const name of binderNames) {
-      const used = name !== '_' && reference(name).test(rest);
-      if (used) names.set(name, `_b${names.size}`);
-      parts.push({ key, text, binder: used });
-    }
-  };
-  const group = (inner: string, bracket: string, rest: string) => {
-    const colon = topLevel(inner, [':']);
-    if (colon < 0) {
-      if (bracket === '[') { parts.push({ key: rename(inner), text: squash(inner), binder: true }); return true; }
-      // `∀ x y, P` leaves the binder types to elaboration.
-      const bare = inner.trim().split(/\s+/u);
-      if (bracket !== '{' && bare.every(name => NAME.test(name))) { bind(bare, '?', squash(inner), rest); return true; }
-      const relation = bracket ? undefined : RELATION.exec(inner.trim());
-      if (!relation || !NAME.test(relation[1]!)) return false;
-      bind([relation[1]!], `${relation[2]} ${rename(relation[3]!)}`, squash(inner), rest);
-      return true;
-    }
-    const binderNames = inner.slice(0, colon).trim().split(/\s+/u);
-    if (!binderNames.every(name => NAME.test(name))) return false;
-    bind(binderNames, rename(inner.slice(colon + 1)), squash(inner), rest);
-    return true;
-  };
-  let body = type.replace(/<->/gu, '↔').replace(/->/gu, '→').trim();
-  for (let guard = 0; guard < 256; guard++) {
-    body = body.trim();
-    if (body.startsWith('∀')) {
-      const comma = topLevel(body, [','], 1);
-      if (comma < 0) return;
-      let binders = body.slice(1, comma).trim();
-      const rest = body.slice(comma + 1);
-      while (binders) {
-        const bracket = binders[0]!;
-        if (!OPEN.includes(bracket)) { if (!group(binders, '', rest)) return; break; }
-        const end = closing(binders);
-        if (end < 0 || !group(binders.slice(1, end), bracket, binders.slice(end + 1) + rest)) return;
-        binders = binders.slice(end + 1).trim();
-      }
-      body = rest; continue;
-    }
-    // `→` binds tighter than `↔`, so a depth-0 iff anywhere makes the whole body the conclusion.
-    if (topLevel(body, ['↔']) >= 0) break;
-    const arrow = topLevel(body, ['→']);
-    if (arrow < 0) break;
-    const head = body.slice(0, arrow).trim(), tail = body.slice(arrow + 1);
-    // A dependent arrow `(h : P) → Q` names its premise.
-    if (head.startsWith('(') && closing(head) === head.length - 1 && topLevel(head.slice(1, -1), [':']) >= 0 &&
-        group(head.slice(1, -1), '(', tail)) { body = tail; continue; }
-    parts.push({ key: rename(head), text: squash(head), binder: false });
-    body = tail;
-  }
-  return { parts, conclusion: rename(body) };
 }
 
 /**

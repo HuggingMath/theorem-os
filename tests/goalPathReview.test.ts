@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reviewGoalPaths, splitStatement, statementCover } from '../src/solver/goalPathReview';
+import { splitStatement as knowledgeStatement } from '../src/solver/theoremKnowledgeGoal';
 import type { RouteRecord, TaskRecord } from '../src/solver/tasks';
 import { integratedProof } from './helpers/taskProof';
 
@@ -138,6 +139,12 @@ describe('original-goal path review', () => {
 });
 
 describe('closed-type statement reading', () => {
+  it('keeps the shared parser available through the goal-path review interface', () => {
+    expect(splitStatement).toBe(knowledgeStatement);
+    expect(statementCover(splitStatement('forall (n : Nat), P n → Q n'),
+      splitStatement('∀ (x : Nat), P x → R x → Q x'))).toEqual(['R x']);
+  });
+
   it('numbers bound names by later use, so renamed binders and named hypotheses agree', () => {
     const left = splitStatement('∀ {k : ℕ} (N : Matrix (Fin k) (Fin k) ℝ), k ≤ 29 → N.PosDef → IsUniversal N')!;
     const right = splitStatement('∀ {n : ℕ} (M : Matrix (Fin n) (Fin n) ℝ) (h : n ≤ 29), M.PosDef → IsUniversal M')!;

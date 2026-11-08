@@ -32,10 +32,11 @@ import type { ContinuationSnapshot } from './continuationInput';
 import type { MathTools } from '../math/mathTools';
 import { setWorkerResearchPhase, WorkerProofLifecycle } from './workerProofLifecycle';
 import { importAssignedProof, syncProofImports } from './proofImport';
-import type { TaskProof } from './cooperativeProof';
+import { checkTaskProof, type TaskProof } from './cooperativeProof';
 import { captureResearchBasis, researchSourceDigest, type ResearchBasis } from './researchRecords';
 import { writeOwnedDeclarationIndex } from './declarationIndex';
 import { LEAD_MAX_BACKOFF } from './leadWakes';
+import { applyOriginalLibraryTasks } from './libraryApplication';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -102,6 +103,7 @@ export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | und
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
   continuation?: ContinuationSnapshot; mathTools?: MathTools;
+  installedLibrary?: KnowledgeContextSnapshot;
   knowledgeFile?: string; knowledgeDigest?: string; knowledgeSnapshot?: KnowledgeContextSnapshot };
 
 /** Lead and isolated task workers share one budget; only a full canonical check grants acceptance. */
@@ -818,7 +820,7 @@ export async function runResearchWorkers(input: {
         emit('proof_checked', { passed: research.check.passed, commit: research.check.commit,
           reused: research.check === lastCheck || research.check.verification === lastCheck?.verification,
           durationMs: Date.now() - checkStarted });
-        if (access.knowledgeSnapshot) {
+        if (access.knowledgeSnapshot || access.installedLibrary) {
           let claims: unknown;
           try { claims = parseMathResponse(committedSource(worker.worktree, research.check.commit, 'RESEARCH.md'),
             'math-result', {}, 'summary').knowledgeUses; } catch { /* Ordinary notes need no usage response. */ }
@@ -828,7 +830,7 @@ export async function runResearchWorkers(input: {
               const task = state.cooperation?.tasks.find(node => node.task.kind === 'goal' && node.task.theoremName === target.theoremName &&
                 node.task.proofPath === target.proofPath)?.task ?? { id: `original_goal_${index + 1}`, kind: 'goal' as const,
                 objective: `Prove ${target.theoremName}`, revision: 0, dependsOn: [], ...target };
-              const observed = inspectKnowledgeUses(claims, access.knowledgeSnapshot, task, research.check);
+              const observed = inspectKnowledgeUses(claims, access.knowledgeSnapshot, task, research.check, access.installedLibrary);
               const checked = await checkKnowledgeApplications(observed.uses, { task, projectRoot: path.join(worker.worktree, state.problem.projectRelative),
                 env: access.environment, environmentDigest: state.environmentDigest, commit: research.check.commit,
                 signal, timeoutMs: input.proofTimeoutMs, originalContexts: state.problem.targets, previous: records,
@@ -860,6 +862,25 @@ export async function runResearchWorkers(input: {
         close, save, emit, checked: () => { retries = 0; } });
       try {
         await waitForRecovery(true);
+        if (!cooperation && !research.turns && access.installedLibrary && modules.M2.applyLibrary && budget().remainingMs > 0) {
+          const closed = await applyOriginalLibraryTasks({ problem: state.problem, library: access.installedLibrary,
+            taskText: input.taskText, environmentDigest: state.environmentDigest, worktree: worker.worktree, workerId: worker.id,
+            env: access.environment, signal, timeoutMs: Math.min(input.proofTimeoutMs ?? Infinity, budget().remainingMs),
+            prepare: modules.M2.applyLibrary, check: modules.M2.checkTask ?? checkTaskProof, emit,
+            onProof: (task, proof) => {
+              // A saved host proof still needs whole-problem acceptance after a restart.
+              setWorkerResearchPhase(state, research, 'checking');
+              const records = state.knowledgeUses ??= [];
+              for (const use of inspectKnowledgeUses(undefined, access.knowledgeSnapshot, task, proof, access.installedLibrary).uses) {
+                const record = { ...use, workerId: worker.id, commit: proof.commit };
+                if (!records.some(previous => canonicalMathJson(previous) === canonicalMathJson(record))) {
+                  records.push(record); emit('knowledge_use_observed', { ...record });
+                }
+              }
+              save();
+            } });
+          if ((closed || research.phase === 'checking') && !signal.aborted) await exclusiveCheck(() => checkWhole());
+        }
         while (!signal.aborted) {
           if (research.phase === 'checking') { setWorkerResearchPhase(state, research, 'running'); save(); }
           if (compactionRestart) {

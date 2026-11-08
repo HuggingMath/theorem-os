@@ -6,6 +6,7 @@ import { canonicalMathJson, mathDigest, readMathText, syncMathDirectory, writeMa
 import { assertMathCanonicalPath } from './paths';
 import { getLeanTaskEnvironment } from './leanTaskEnvironment';
 import { bootstrapLeanTask, readLeanTaskReceipt } from './leanTask';
+import { libraryPackDigest, parseLibraryPack, type LibraryPack } from './libraryPacks';
 import { eraseFormalizationProofs, formalizationTargets } from './formalizationSource';
 import { leanStatementContextCommands, leanStatementStructuresSchema, parseLeanStatementContexts } from './leanStatementContext';
 import { LEAN_STATEMENT_CONTEXT_PROTOCOL, allowsOmittedLibraryContext, hasStructureContext, leanStatementContextProtocolSchema,
@@ -449,15 +450,19 @@ export function readFormalizationArtifact(artifact: string): FormalizationEviden
 }
 
 /** Creates only a frozen proof task. Proof search and final S3 acceptance remain the native solver's responsibility. */
-export function bootstrapFormalizedProblem(directory: string) {
+export function bootstrapFormalizedProblem(directory: string, options: { libraryPack?: LibraryPack } = {}) {
   const artifact = path.join(directory, 'artifact'), evidence = readFormalizationArtifact(artifact);
+  const libraryPack = options.libraryPack && parseLibraryPack(options.libraryPack);
+  const expectedLibrary = libraryPack ? { digest: libraryPackDigest(libraryPack),
+    files: Object.fromEntries(libraryPack.modules.map(module => [module.file, mathDigest(module.source)])) } : null;
   const workspace = path.join(directory, 'workspace'), taskFile = path.join(directory, 'task.md');
   const shortTask = 'Prove every frozen target of ' + evidence.request.problemId + '.\nOriginal SHA256: ' +
     evidence.request.statementSha256 + '\nFormalization evidence SHA256: ' + formalizationDigest(evidence) +
     '\nStatement review authority: model. Preserve all definitions, assumptions and target declarations.';
   if (!fs.existsSync(workspace)) {
     const staging = path.join(path.resolve(directory), '.workspace-' + crypto.randomUUID());
-    const prepared = bootstrapLeanTask(staging, { source: evidence.candidate.source, task: shortTask, environment: evidence.request.environment });
+    const prepared = bootstrapLeanTask(staging, { source: evidence.candidate.source, task: shortTask,
+      environment: evidence.request.environment, libraryPack });
     writeMathJsonDurable(path.join(staging, 'active-problem.json'), { ...prepared, workspaceRoot: workspace,
       projectRoot: path.join(workspace, 'generated/problem'), activeProblemPath: path.join(workspace, 'active-problem.json') });
     fs.renameSync(staging, workspace);
@@ -465,7 +470,8 @@ export function bootstrapFormalizedProblem(directory: string) {
   }
   const receipt = readLeanTaskReceipt(path.join(workspace, 'active-problem.json'));
   if (receipt.contract.formalStatement !== evidence.candidate.source || receipt.contract.informalStatement !== shortTask ||
-      receipt.environmentDigest !== evidence.request.environmentDigest)
+      receipt.environmentDigest !== evidence.request.environmentDigest ||
+      canonicalMathJson(receipt.libraryPack ?? null) !== canonicalMathJson(expectedLibrary))
     throw new Error('formalization_solver_seed_changed');
   const task = shortTask + '\n\nOriginal problem (verbatim):\n\n' + evidence.request.statement + '\n';
   if (fs.existsSync(taskFile)) {

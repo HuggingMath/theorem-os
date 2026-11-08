@@ -1,0 +1,235 @@
+{
+  "schema": "theorem-os.library-authoring.v1",
+  "library": {
+    "id": "theorem-os/core",
+    "revision": "2902dec1e973bd70dad0444a8dc2320cf81d90fd-lean4.33.0-r4",
+    "catalogDigest": "615d45c2236296bb3e3bb7f22b0516022f7fb2d02f3444a55898a7250c728e6f",
+    "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+  },
+  "baseLibrary": {
+    "id": "theorem-os/core",
+    "revision": "2902dec1e973bd70dad0444a8dc2320cf81d90fd-lean4.33.0-r3",
+    "catalogDigest": "160ada5c0f4b088bc10612ebfe4e490043c5caa75731e43a9cacc560add24f17",
+    "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+  },
+  "environment": "mathlib",
+  "toolchain": "leanprover/lean4:v4.33.0",
+  "modules": [
+    {
+      "file": "Submission/Library/TheoremOS/Analysis/FiniteInequalities.lean",
+      "sourceFile": "authored/TheoremOS/Analysis/FiniteInequalities.lean",
+      "sourceSha256": "a179021dbf37cc89a206cf2a09d18104d7113168a7045ff5ee840b5f46b498df",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-Analysis-FiniteInequalities-20261108",
+        "commit": "0b8010b05c9c785596fcd12d769318cd69e79764",
+        "file": "Submission.lean",
+        "receiptDigest": "15772074131bb01825f56ef54af24429e557557f95a9d975f9d44d80a36e6e2b",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "a179021dbf37cc89a206cf2a09d18104d7113168a7045ff5ee840b5f46b498df",
+        "oleanSha256": "ce12fa48f0a921dd437617b965c4efb2850e3fdd85eaf13f6646a56f2d3d9763",
+        "authoringOleanSha256": "f2972231c97bbf708e6983a58cf80027bb71dd7e8727662eac4971d5ad862802",
+        "checkedAxiomDependencies": 25,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/Probability/FiniteMoments.lean",
+      "sourceFile": "authored/TheoremOS/Probability/FiniteMoments.lean",
+      "sourceSha256": "7c7729ba9d431d364091964b4953e3653f13d646633de21f69e36e76561cc124",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-Probability-FiniteMoments-20261108",
+        "commit": "d17d2673f9d3738550e8af5e6d089c7963dead61",
+        "file": "Submission.lean",
+        "receiptDigest": "f7d97e3949d738f8a5ddbd68a9bc5f485e951b206ed5dd6ca2eee735dedb3164",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "7c7729ba9d431d364091964b4953e3653f13d646633de21f69e36e76561cc124",
+        "oleanSha256": "bb140637dd654045d4989b33b879d5e16d79a5f627eea29d7d9e19a47c464b7c",
+        "authoringOleanSha256": "781970f69ec3ecd1b4853ecdd9284d27a3e75c42ac54eb9515eb1bd879dd6912",
+        "checkedAxiomDependencies": 30,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/NumberTheory/Divisibility.lean",
+      "sourceFile": "authored/TheoremOS/NumberTheory/Divisibility.lean",
+      "sourceSha256": "194e2291c672a8e26aa9712466c748188f8fdf292a66a332f9fb875816e41d62",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-NumberTheory-Divisibility-20261108",
+        "commit": "889bcc2555e62b01c9f82d9a3b4850cfa754cc4d",
+        "file": "Submission.lean",
+        "receiptDigest": "4ee5d953a0a31b5553ce12089681df5fb112c0ac6ee800611ff7be0ff8cd2b90",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "194e2291c672a8e26aa9712466c748188f8fdf292a66a332f9fb875816e41d62",
+        "oleanSha256": "1b47bcf4a87bd6d216f481d8a2b2f6219c1b9f13e8a935ae287cde5cbda91e5e",
+        "authoringOleanSha256": "0725b3aad967bd7f6ee17b0c9e801aa416786e2387793945aba309a2045c3d8d",
+        "checkedAxiomDependencies": 21,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/Algebra/PolynomialRoots.lean",
+      "sourceFile": "authored/TheoremOS/Algebra/PolynomialRoots.lean",
+      "sourceSha256": "3e54be77e5ff88a68165c0da00eba9f8470b98423c254acc6450005bb78cb322",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-Algebra-PolynomialRoots-20261108",
+        "commit": "c1fb397ea3f97ba0f38a099ada8d8b2d478f2e07",
+        "file": "Submission.lean",
+        "receiptDigest": "3dbc04b5103fa8cfe52a7c68c26182b959d27922e72c9e75b00477debc9d4852",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "3e54be77e5ff88a68165c0da00eba9f8470b98423c254acc6450005bb78cb322",
+        "oleanSha256": "8daf394141de40b5458d361698de537c4cfbb1c8849d66f4b7565dac9dc12de7",
+        "authoringOleanSha256": "1500fdb6d3a298bca79baa00625347b56a00d2c94ca5b696fb29caf025c4e8eb",
+        "checkedAxiomDependencies": 20,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/Combinatorics/FiniteCounting.lean",
+      "sourceFile": "authored/TheoremOS/Combinatorics/FiniteCounting.lean",
+      "sourceSha256": "538b52cbc919b06bb686863e754a1fa81b8b67767edc0bca7b24049e4edb1e3b",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-Combinatorics-FiniteCounting-20261108",
+        "commit": "50260b9b8818a4bde42a06a9c4cc76a5e8c0512d",
+        "file": "Submission.lean",
+        "receiptDigest": "58678ff30c1f0ade5e3c19a5c2c79be7646ca9dff56df2d21189e232ef0039e5",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "538b52cbc919b06bb686863e754a1fa81b8b67767edc0bca7b24049e4edb1e3b",
+        "oleanSha256": "4d407f3c92f23e2b6c20cd6eb352614009c8ef14ecc07b0d70fb3fdc70e32261",
+        "authoringOleanSha256": "dd9aa2de63d47ff84ddc7d690957a398b598dc1bdca3cfd533dd099824ee904c",
+        "checkedAxiomDependencies": 23,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/Algebra/FiniteSums.lean",
+      "sourceFile": "authored/TheoremOS/Algebra/FiniteSums.lean",
+      "sourceSha256": "bfbeadbbc68d114ea341f34c49095a4575dea2641901f9ddb7b06b3715d24e85",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-Algebra-FiniteSums-20261108",
+        "commit": "65da8944983f35402d133732133923e0b07a41d1",
+        "file": "Submission.lean",
+        "receiptDigest": "663580ee301925bab866433051381c1af08bb423295733c1fd19ad80b1cd7be8",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "bfbeadbbc68d114ea341f34c49095a4575dea2641901f9ddb7b06b3715d24e85",
+        "oleanSha256": "afe4e491fa7650f58dabe0575b7ee1996e4e4710d53872fd763f55e595637dd4",
+        "authoringOleanSha256": "012c3b39a8b9eed2ee93594cd2eabf84fa98c87992a053c8958f8128b6055924",
+        "checkedAxiomDependencies": 22,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/NumberTheory/Congruences.lean",
+      "sourceFile": "authored/TheoremOS/NumberTheory/Congruences.lean",
+      "sourceSha256": "26c26079c694d7f2dfed3d16a1082eb42a89303110374150e04f6ea7f0ef3a86",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-NumberTheory-Congruences-20261108",
+        "commit": "5bb9fcfd6abed12ad661e6c94ec5848050eb34a7",
+        "file": "Submission.lean",
+        "receiptDigest": "8092a1880956d74bcf12037c14f604d0770294fad77178f1acfa844cf2b9e1ab",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "26c26079c694d7f2dfed3d16a1082eb42a89303110374150e04f6ea7f0ef3a86",
+        "oleanSha256": "3a72808ff3a433d325cbb657442fb36b7b0e525338f7fddbc261c12e1e4e1c85",
+        "authoringOleanSha256": "7c00549d0580c58b499600fd4ada477a36a742d8773e5fc3259f005cf6fa3a13",
+        "checkedAxiomDependencies": 23,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/Analysis/FiniteConvexity.lean",
+      "sourceFile": "authored/TheoremOS/Analysis/FiniteConvexity.lean",
+      "sourceSha256": "d4829ab41942c8be057a899470f0ef8c093604e764967bfc87bd40a23d4c3345",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-Analysis-FiniteConvexity-20261108",
+        "commit": "99158a07939e34ece3b4e58ac4d5ff925f53043b",
+        "file": "Submission.lean",
+        "receiptDigest": "65a4c3c5e1d3820d542cbd32290d2d35c9b39fbc56b73c9c9a4fce7e58a4d606",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "d4829ab41942c8be057a899470f0ef8c093604e764967bfc87bd40a23d4c3345",
+        "oleanSha256": "a39e8e5fdbac26aea6c8d58b39b7c191e190811610c8d71530707af078116f52",
+        "authoringOleanSha256": "df11224552ac0d8a81aa28244cea655fc8aa4679ba46650cb717808fea225852",
+        "checkedAxiomDependencies": 22,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    },
+    {
+      "file": "Submission/Library/TheoremOS/LinearAlgebra/GramMatrix.lean",
+      "sourceFile": "authored/TheoremOS/LinearAlgebra/GramMatrix.lean",
+      "sourceSha256": "e1f357539f3452afa5ce96d3c641b0248d7c7f60a0046effb162d6c138cb6f5f",
+      "origin": {
+        "kind": "run",
+        "runId": "local-library-spec-LinearAlgebra-GramMatrix-20261108",
+        "commit": "87cfef3393b67b2a776330d624be6db5e6f79f0d",
+        "file": "Submission.lean",
+        "receiptDigest": "96fef302ce0580c4a3a6f81765909af6eea21c320a6e237aa11464216fb9d684",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "compilation": {
+        "status": "compiled",
+        "sourceSha256": "e1f357539f3452afa5ce96d3c641b0248d7c7f60a0046effb162d6c138cb6f5f",
+        "oleanSha256": "8989b32dc12233470fdd6e732218f7bb4474d55a96d92d8cf58730b96bd01684",
+        "authoringOleanSha256": "a25597b56dd7c7d830a135c8dcd71252cbb91acf5813c57f8034deda6198eba5",
+        "checkedAxiomDependencies": 22,
+        "sorryAxAbsent": true,
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+      },
+      "modelInvoked": false
+    }
+  ]
+}

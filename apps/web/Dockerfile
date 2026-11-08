@@ -51,6 +51,8 @@ ENV TMPDIR=/tmp \
     DEEPSCIENTIST_MATH_TRUSTED_ELAN_ROOTS=/opt/elan/toolchains/leanprover--lean4---v4.33.0 \
     DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS=/opt/theoremos-mathlib/.lake/packages
 COPY --from=source /opt/theorem-os /opt/theorem-os
+RUN bun scripts/prepare-web-library.ts \
+    && chmod -R a+rX /opt/theoremos-library
 # Use the installed binaries directly: the verifier mounts the toolchain read-only.
 # Agent shells cannot read /opt/theorem-os or /opt/runtime-state; they run the bundled commands instead.
 RUN bun scripts/build.ts --state-root /opt/runtime-state > /opt/theoremos-build.json \

@@ -1,0 +1,311 @@
+--- a/Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean
++++ b/Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean
+@@ -66,7 +66,7 @@
+   exact if_congr eq_comm rfl rfl
+ 
+ theorem norm_fourier_apply (n : ℤ) (t : AddCircle T) : ‖fourier n t‖ = 1 := by
+-  simp [fourier_apply]
++  simp only [fourier_apply, Circle.norm_coe]
+ 
+ /-- Every point of the unit circle is `e_1 t` for some `t`. -/
+ theorem exists_fourier_one_eq [hT : Fact (0 < T)] {z : ℂ} (hz : ‖z‖ = 1) : ∃ t : AddCircle T, fourier 1 t = z := by
+@@ -237,14 +237,14 @@
+     intro l
+     rw [zeroExtend_coe]
+     by_cases h : (l : ℕ) + m < N
+-    · rw [Finset.sum_eq_single ⟨l + m, h⟩, ite_eq_left (by push_cast; ring), zeroExtend_of_lt a h]
++    · rw [Finset.sum_eq_single ⟨l + m, h⟩, if_pos (by push_cast; ring), zeroExtend_of_lt a h]
+       · intro j _ hj
+-        refine ite_eq_right fun hc => hj (Fin.ext ?_)
++        refine if_neg fun hc => hj (Fin.ext ?_)
+         simp only
+         omega
+       · simp
+     · rw [zeroExtend_of_le a (by omega), zero_mul]
+-      refine Finset.sum_eq_zero fun j _ => ite_eq_right fun hc => ?_
++      refine Finset.sum_eq_zero fun j _ => if_neg fun hc => ?_
+       have := j.2
+       omega
+   simp_rw [inner]
+@@ -274,7 +274,7 @@
+   refine Finset.sum_congr rfl fun j _ => ?_
+   rw [Finset.sum_comm (s := Ioo (-(N : ℤ)) N)]
+   refine Finset.sum_congr rfl fun l _ => ?_
+-  rw [Finset.sum_ite_eq, ite_eq_left]
++  rw [Finset.sum_ite_eq, if_pos]
+   simp only [Finset.mem_Ioo]
+   have := j.2
+   have := l.2
+--- a/Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean
++++ b/Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean
+@@ -132,9 +132,9 @@
+       refine average_congr fun x => ?_
+       rw [← mul_prod_erase S (fun j => sign (x j)) hiS]
+       linear_combination (derivative i f x * ∏ j ∈ S.erase i, sign (x j)) * sign_mul_self (x i)
+-    rw [key, fourierCoeff_derivative, ite_eq_right (notMem_erase i S)]
++    rw [key, fourierCoeff_derivative, if_neg (notMem_erase i S)]
+   · have key := fourierCoeff_derivative i f (insert i S)
+-    rw [ite_eq_left (mem_insert_self i S)] at key
++    rw [if_pos (mem_insert_self i S)] at key
+     rw [← key]
+     simp only [fourierCoeff, coordDerivative, character]
+     refine average_congr fun x => ?_
+--- a/Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean
++++ b/Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean
+@@ -72,7 +72,7 @@
+   rw [Fintype.prod_boole]
+   by_cases h : x = y
+   · simp [h]
+-  · rw [ite_eq_right (fun hxy => h (funext hxy)), ite_eq_right h]
++  · rw [if_neg (fun hxy => h (funext hxy)), if_neg h]
+ 
+ theorem trace_piTensor [DecidableEq ι] [Fintype m] (a : ι → Matrix m m R) :
+     (piTensor a).trace = ∏ i, (a i).trace := by
+@@ -178,7 +178,7 @@
+   rw [siteOp, piTensor_apply, ← Finset.mul_prod_erase _ _ (Finset.mem_univ q)]
+   simp only [↓reduceIte]
+   congr 1
+-  rw [Finset.prod_congr rfl fun i hi => by rw [ite_eq_right (Finset.ne_of_mem_erase hi), one_apply],
++  rw [Finset.prod_congr rfl fun i hi => by rw [if_neg (Finset.ne_of_mem_erase hi), one_apply],
+     Finset.prod_boole]
+   simp
+ 
+@@ -265,7 +265,7 @@
+   rw [Finset.sum_eq_single (σ.symm x)]
+   · simp
+   · intro y _ hy
+-    rw [ite_eq_right]
++    rw [if_neg]
+     rintro rfl
+     exact hy (by simp)
+   · simp
+--- a/Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean
++++ b/Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean
+@@ -189,7 +189,7 @@
+   by_cases h : s = t
+   · subst h
+     simp
+-  · rw [ite_eq_right (fun hst => h (funext hst)), ite_eq_right h]
++  · rw [if_neg (fun hst => h (funext hst)), if_neg h]
+ 
+ lemma trace_pauliString (s : ι → Fin 4) :
+     (pauliString s).trace = if s = 0 then 2 ^ Fintype.card ι else 0 := by
+@@ -209,7 +209,7 @@
+         by_cases h : x = w ∧ y = z
+         · obtain ⟨rfl, rfl⟩ := h
+           simp
+-        · rw [ite_eq_right h, ite_eq_right]
++        · rw [if_neg h, if_neg]
+           intro hi
+           exact h ⟨funext fun i => (hi i).1, funext fun i => (hi i).2⟩
+ 
+--- a/Submission/Library/TheoremOS/InformationTheory/Shearer.lean
++++ b/Submission/Library/TheoremOS/InformationTheory/Shearer.lean
+@@ -72,10 +72,10 @@
+         w j * (f (insert a U ∩ F j) - f (U ∩ F j)) := by
+       intro j hj
+       by_cases haF : a ∈ F j
+-      · rw [ite_eq_left haF, insert_inter_of_mem haF]
++      · rw [if_pos haF, insert_inter_of_mem haF]
+         exact mul_le_mul_of_nonneg_left
+           (submodular_insert_sub_le hsub inter_subset_left haU) (hw j hj)
+-      · rw [ite_eq_right haF, insert_inter_of_notMem haF, sub_self, mul_zero, zero_mul]
++      · rw [if_neg haF, insert_inter_of_notMem haF, sub_self, mul_zero, zero_mul]
+     have hsum : δ ≤ ∑ j ∈ s, w j * (f (insert a U ∩ F j) - f (U ∩ F j)) := by
+       calc δ ≤ (∑ j ∈ s with a ∈ F j, w j) * δ := le_mul_of_one_le_left hδ0 ha
+         _ = ∑ j ∈ s, (if a ∈ F j then w j else 0) * δ := by rw [sum_filter, sum_mul]
+@@ -265,7 +265,7 @@
+     by_contra hx
+     have hab : g a = h b := hsupp (a, b) hx
+     obtain ⟨h1, h2, h3⟩ := hpos a b hx
+-    rw [hq, ite_eq_left hab] at hqx
++    rw [hq, if_pos hab] at hqx
+     exact (div_pos (mul_pos h1 h2) h3).ne' hqx
+   have hqsum : ∑ x, q x ≤ ∑ x, r x := by
+     rw [hrd.sum_eq_one, Fintype.sum_prod_type]
+@@ -275,9 +275,9 @@
+           refine sum_congr rfl fun b _ => ?_
+           rw [hq]
+           by_cases hab : g a = h b
+-          · rw [ite_eq_left hab, ite_eq_left hab.symm]
++          · rw [if_pos hab, if_pos hab.symm]
+             ring
+-          · rw [ite_eq_right hab, ite_eq_right (Ne.symm hab)]
++          · rw [if_neg hab, if_neg (Ne.symm hab)]
+       _ = ∑ a, r₁ a / L (g a) * L (g a) := by
+           refine sum_congr rfl fun a _ => ?_
+           rw [← hLY]
+@@ -298,7 +298,7 @@
+     by_cases hx : r (a, b) = 0
+     · simp [hx]
+     obtain ⟨h1, h2, h3⟩ := hpos a b hx
+-    rw [hq, ite_eq_left (hsupp (a, b) hx), log_div (mul_pos h1 h2).ne' h3.ne',
++    rw [hq, if_pos (hsupp (a, b) hx), log_div (mul_pos h1 h2).ne' h3.ne',
+       log_mul h1.ne' h2.ne']
+     ring
+   have hs1 : ∑ x, r x * log (r₁ x.1) = -entropy r₁ := by
+@@ -518,7 +518,7 @@
+     · exact hA a haA
+   have hcross : ∑ a, q a * log (if a ∈ A then (#A : ℝ)⁻¹ else 0) = -log #A := by
+     rw [← sum_subset (subset_univ A) fun a _ ha => by simp [hA a ha]]
+-    rw [sum_congr rfl fun a ha => by rw [ite_eq_left ha, log_inv], ← sum_mul, hsum]
++    rw [sum_congr rfl fun a ha => by rw [if_pos ha, log_inv], ← sum_mul, hsum]
+     ring
+   rw [hcross, neg_neg] at h
+   exact h
+--- a/Submission/Library/TheoremOS/Probability/BiasedProduct.lean
++++ b/Submission/Library/TheoremOS/Probability/BiasedProduct.lean
+@@ -177,7 +177,7 @@
+     biasedMass p s * biasedMass q t ≤ biasedMass p (s ∩ t) * biasedMass q (s ∪ t) := by
+   unfold biasedMass
+   rw [← Finset.prod_mul_distrib, ← Finset.prod_mul_distrib]
+-  refine Finset.prod_le_prod₀ (fun x _ => by split_ifs <;> nlinarith) fun x _ => ?_
++  refine Finset.prod_le_prod (fun x _ => by split_ifs <;> nlinarith) fun x _ => ?_
+   by_cases hs : x ∈ s <;> by_cases ht : x ∈ t <;> simp [hs, ht]
+   all_goals nlinarith
+ 
+@@ -305,7 +305,8 @@
+         · simpa [hy] using (hasDerivAt_id' (x := p)).const_sub 1
+     exact h
+   have h := HasDerivAt.fun_sum (u := univ) fun s _ => (hμ s).mul_const (F s)
+-  convert h using 1
++  refine h.congr_deriv ?_
++  symm
+   simp only [Finset.sum_mul]
+   conv_rhs => rw [Finset.sum_comm]
+   refine Finset.sum_congr rfl fun x _ => ?_
+--- a/Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean
++++ b/Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean
+@@ -89,7 +89,7 @@
+       refine le_trans ?_ (Finset.single_le_sum (f := fun A =>
+         ((if edgesIn A ⊆ s then (1 : ℝ) else 0) + if Disjoint s (edgesIn A) then 1 else 0))
+         (fun A _ => by positivity) hA𝒜)
+-      rw [ite_eq_left (edgesIn_subset_of_isClique hA.isClique)]
++      rw [if_pos (edgesIn_subset_of_isClique hA.isClique)]
+       split_ifs <;> norm_num
+     · have hA𝒜 : A ∈ 𝒜 := mem_powersetCard.2 ⟨subset_univ _, hA.card_eq⟩
+       refine le_trans ?_ (Finset.single_le_sum (f := fun A =>
+@@ -98,7 +98,7 @@
+       have hd : Disjoint s (edgesIn A) :=
+         disjoint_comm.1 (subset_compl_iff_disjoint_right.1 (edgesIn_subset_compl_of_isIndepSet
+           hA.isIndepSet))
+-      rw [ite_eq_left hd]
++      rw [if_pos hd]
+       split_ifs <;> norm_num
+   have h1 : (1 : ℝ) ≤ 2 * (N.choose k : ℝ) * (1 / 2) ^ k.choose 2 := by
+     calc (1 : ℝ) = ∑ s, biasedMass (1 / 2) s * 1 := by simp [sum_biasedMass]
+--- a/Submission/Library/TheoremOS/Probability/Concentration.lean
++++ b/Submission/Library/TheoremOS/Probability/Concentration.lean
+@@ -113,14 +113,14 @@
+     rw [Finset.mul_sum, exp_sum,
+       ← Finset.prod_mul_prod_compl s (fun x => exp (t * (d x * ((if x ∈ s then 1 else 0) - p))))]
+     congr 1
+-    · exact Finset.prod_congr rfl fun x hx => by rw [ite_eq_left hx]; ring_nf
++    · exact Finset.prod_congr rfl fun x hx => by rw [if_pos hx]; ring_nf
+     · exact Finset.prod_congr rfl fun x hx => by
+-        rw [ite_eq_right (Finset.mem_compl.mp hx)]; ring_nf
++        rw [if_neg (Finset.mem_compl.mp hx)]; ring_nf
+   simp_rw [key]
+   rw [sum_biasedMass_mul_prod_mul_prod]
+   calc ∏ x, (p * exp (t * d x * (1 - p)) + (1 - p) * exp (-(t * d x * p)))
+       ≤ ∏ x, exp ((t * d x) ^ 2 / 8) :=
+-        Finset.prod_le_prod₀ (fun x _ => add_nonneg (mul_nonneg hp₀ (exp_pos _).le)
++        Finset.prod_le_prod (fun x _ => add_nonneg (mul_nonneg hp₀ (exp_pos _).le)
+           (mul_nonneg (by linarith) (exp_pos _).le)) fun x _ => bernoulli_exp_le hp₀ hp₁ _
+     _ = exp ((∑ x, d x ^ 2) / 4 * t ^ 2 / 2) := by
+         rw [← exp_sum]
+--- a/Submission/Library/TheoremOS/Probability/LocalLemma.lean
++++ b/Submission/Library/TheoremOS/Probability/LocalLemma.lean
+@@ -124,7 +124,7 @@
+     rw [← Finset.prod_sdiff (Finset.inter_subset_right (s₁ := T))]
+     exact mul_le_of_le_one_left
+       (Finset.prod_nonneg fun j _ => sub_nonneg.2 (hx1 j))
+-      (Finset.prod_le_one₀ (fun j _ => sub_nonneg.2 (hx1 j))
++      (Finset.prod_le_one (fun j _ => sub_nonneg.2 (hx1 j))
+         fun j _ => sub_le_self _ (hx0 j))
+   have hU : Disjoint (T \ N i) (N i) := Finset.sdiff_disjoint
+   have hiU : i ∉ T \ N i := fun h => hiT (Finset.mem_sdiff.1 h).1
+@@ -348,18 +348,18 @@
+       ∏ k, (if k ∈ V then (if ω k = a k then μ (ω k) else 0) else μ (ω k)) := fun ω => by
+     unfold productWeight
+     by_cases h : ∀ k ∈ V, ω k = a k
+-    · rw [ite_eq_left h]
++    · rw [if_pos h]
+       refine Finset.prod_congr rfl fun k _ => ?_
+       by_cases hk : k ∈ V
+-      · rw [ite_eq_left hk, ite_eq_left (h k hk)]
+-      · rw [ite_eq_right hk]
+-    · rw [ite_eq_right h]
++      · rw [if_pos hk, if_pos (h k hk)]
++      · rw [if_neg hk]
++    · rw [if_neg h]
+       obtain ⟨k, hk, hne⟩ : ∃ k ∈ V, ω k ≠ a k := by
+         by_contra hc
+         exact h fun k hk => by_contra fun hne => hc ⟨k, hk, hne⟩
+       symm
+       refine Finset.prod_eq_zero (Finset.mem_univ k) ?_
+-      rw [ite_eq_left hk, ite_eq_right hne]
++      rw [if_pos hk, if_neg hne]
+   have hfac := (Finset.prod_univ_sum (fun _ : κ => (Finset.univ : Finset α))
+     fun k b => if k ∈ V then (if b = a k then μ b else 0) else μ b).symm
+   rw [Fintype.piFinset_univ] at hfac
+--- a/Submission/Library/TheoremOS/Probability/SphereLaw.lean
++++ b/Submission/Library/TheoremOS/Probability/SphereLaw.lean
+@@ -132,7 +132,7 @@
+ 
+ instance isProbabilityMeasure_ambientSphereLaw [Nontrivial E] :
+     IsProbabilityMeasure (ambientSphereLaw E) := by
+-  unfold ambientSphereLaw; infer_instance
++  exact Measure.isProbabilityMeasure_map measurable_subtype_coe.aemeasurable
+ 
+ lemma ambientSphereLaw_apply {s : Set E} (hs : MeasurableSet s) :
+     ambientSphereLaw E s = sphereLaw E ((↑) ⁻¹' s) :=
+@@ -260,7 +260,7 @@
+     ENNReal.toReal_pos (measure_ball_pos _ _ one_pos).ne' measure_ball_lt_top.ne
+   have h := (volume : Measure E).toSphereBallBound_mul_measureReal_unitBall_le_toSphere_ball hε x
+   have hbound : (Measure.toSphereBallBound d ε : ℝ) = d * (min ε 2 / 4) ^ d := by
+-    rw [Measure.toSphereBallBound, ite_eq_left ⟨Module.finrank_pos.ne', hε⟩]
++    rw [Measure.toSphereBallBound, if_pos ⟨Module.finrank_pos.ne', hε⟩]
+     push_cast
+     rw [Real.coe_toNNReal _ hε.le]
+   rw [hbound] at h
+--- a/Submission/Library/TheoremOS/Probability/GaussianIBP.lean
++++ b/Submission/Library/TheoremOS/Probability/GaussianIBP.lean
+@@ -91,7 +91,7 @@
+     simpa using (this.neg).div_const (2 * (v : ℝ))
+   have h2 := (h.exp).const_mul (√(2 * π * v))⁻¹
+   rw [gaussianPDFReal_def]
+-  convert h2 using 1
++  convert! h2 using 1
+   by_cases hv : (v : ℝ) = 0
+   · simp [hv]
+   · field_simp
+@@ -253,7 +253,7 @@
+         Real.exp (-(1 / 2 : ℝ) * ‖y‖ ^ 2) := by
+     funext y; rw [gaussianDensity]; congr 2; ring
+   rw [he]
+-  convert h1 using 1
++  convert! h1 using 1
+   ext u
+   simp
+   ring
+--- a/Submission/Library/TheoremOS/Probability/TreeReconstruction.lean
++++ b/Submission/Library/TheoremOS/Probability/TreeReconstruction.lean
+@@ -958,7 +958,7 @@
+     HasSum (fun k : ℕ => Real.exp (-d) * d ^ k / k ! * k) d := by
+   rw [← hasSum_nat_add_iff' 1]
+   simp only [Finset.sum_range_one, Nat.cast_zero, mul_zero, sub_zero]
+-  convert (hasSum_poissonWeight d).mul_left d using 1
++  convert! (hasSum_poissonWeight d).mul_left d using 1
+   swap; · ring
+   funext n
+   have h := (Nat.cast_pos (α := ℝ)).2 (Nat.factorial_pos n)
+@@ -973,7 +973,7 @@
+   rw [← hasSum_nat_add_iff' 2]
+   simp only [Finset.sum_range_succ, Finset.sum_range_zero, Nat.zero_sub, mul_zero, Nat.cast_zero,
+     zero_add, Nat.sub_self, sub_zero]
+-  convert (hasSum_poissonWeight d).mul_left (d ^ 2) using 1
++  convert! (hasSum_poissonWeight d).mul_left (d ^ 2) using 1
+   swap; · ring
+   funext n
+   have h := (Nat.cast_pos (α := ℝ)).2 (Nat.factorial_pos n)

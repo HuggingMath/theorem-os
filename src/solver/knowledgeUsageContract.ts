@@ -23,6 +23,8 @@ export const knowledgeApplicationCheckSchema = z.object({
 });
 export type KnowledgeApplicationCheck = z.infer<typeof knowledgeApplicationCheckSchema>;
 export const knowledgeUseSchema = z.object({
+  /** Older records without a source refer to the separately pinned historical catalog. */
+  source: z.enum(['catalog', 'installed-library']).optional(),
   id: z.string(), catalogDigest: z.string(), consumer: z.object({ taskId: z.string(), taskDigest: z.string() }),
   declaration: z.object({ name: z.string(), file: z.string() }), status: z.enum(['reported-attempt', 'checked-reference']),
   attribution: z.enum(['model-reported-origin', 'host-observed-reference']),

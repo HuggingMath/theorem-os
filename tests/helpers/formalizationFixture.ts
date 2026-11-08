@@ -76,7 +76,9 @@ export function syntheticElaboration(input: string, environment: LeanTaskEnviron
     '.lake/formalization-context.json', { detailedContext: options.detailedContext,
       semanticContext: options.semanticContext, structureContext: options.structureContext,
       ...(options.boundedLibraryContext ? { boundedLibraryContext: true } : {}) }) + '\n';
-  const configuration = LAKE_CONFIGURATION_FILES.map(file => ({ file, digest: config.files[file] ? mathDigest(config.files[file]!) : null }));
+  const configuration = LAKE_CONFIGURATION_FILES.map(file => ({ file, digest:
+    file === '.lake/package-overrides.json' && environment === 'mathlib' ? mathDigest('synthetic-mathlib-package-overrides') :
+      config.files[file] ? mathDigest(config.files[file]!) : null }));
   const sourceFiles = [{ file: 'Formalization.lean', digest: sourceSha256 }, { file: 'FormalizationContext.lean', digest: mathDigest(query) }];
   const sourceDigest = mathDigest(JSON.stringify([configuration.map(item => item.digest ?? ''), sourceFiles.map(item => [item.file, item.digest])]));
   const artifact = { schema: 'theoremos.lean-diagnostics.v1', authority: 'advisory-lean-process', sourceDigest,

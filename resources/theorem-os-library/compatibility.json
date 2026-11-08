@@ -1,0 +1,177 @@
+{
+  "schema": "theorem-os.web-library-compatibility.v1",
+  "originCommit": "2902dec1e973bd70dad0444a8dc2320cf81d90fd",
+  "environment": "mathlib",
+  "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db",
+  "toolchain": "leanprover/lean4:v4.33.0",
+  "mathlibRevision": "db584cd6d46c92f209a44c0f1c829460d327499d",
+  "release": {
+    "id": "theorem-os/core",
+    "revision": "2902dec1e973bd70dad0444a8dc2320cf81d90fd-lean4.33.0-r4",
+    "catalogDigest": "615d45c2236296bb3e3bb7f22b0516022f7fb2d02f3444a55898a7250c728e6f",
+    "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db"
+  },
+  "modules": 53,
+  "entries": 1964,
+  "additions": [
+    {
+      "file": "TheoremOS/Analysis/LittlewoodPolynomial.lean",
+      "upstreamSourceSha256": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+      "importRenamedSourceSha256": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+      "sourceSha256": "2749040850b6f2e4f7de1abf7317911b62bdd5da4b7b4feccf7ceab30ec313df",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "8790ff4ea9eca00489f91446c3ccbd45191d7d53fe90d652ea8529daa9b20c9c"
+      }
+    },
+    {
+      "file": "TheoremOS/BooleanCube/Hypercontractivity.lean",
+      "upstreamSourceSha256": "01b36de486dab65d6b96349770b0c99ae0ac01b86be7fd91cb098399c74dd9fb",
+      "importRenamedSourceSha256": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+      "sourceSha256": "e34f3798611240512dd609201870b46747be4a937b97055d6ec2beb75604c8c0",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "397a554406943e5a014be8d085c9b45dc7eb39ec37fa7a060ce9cf0eedd4a857"
+      }
+    },
+    {
+      "file": "TheoremOS/LinearAlgebra/PiTensor.lean",
+      "upstreamSourceSha256": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+      "importRenamedSourceSha256": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+      "sourceSha256": "22c52b5262712c46c1a5ec9dae24ede60be864b9d1f682cd817eb4fa9e1b3859",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "829c84bdc2f52dd22f68a287193f4f8e7fcba4a340d0e68945de8e56d4bc8709"
+      }
+    },
+    {
+      "file": "TheoremOS/LinearAlgebra/Pauli.lean",
+      "upstreamSourceSha256": "e14f08c0f98127e41b5403b98bca599af79806b86de2fffe69d76548e52ffee5",
+      "importRenamedSourceSha256": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+      "sourceSha256": "ed6621adf73595592cae28590f633f3066371e2e2166ce06b923d67b6750249d",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "27bae9814fc5536d7d6b8151d8547f55aafb9d4c4fd2c3fa8a33a54d9f043d54"
+      }
+    },
+    {
+      "file": "TheoremOS/InformationTheory/Shearer.lean",
+      "upstreamSourceSha256": "b3098600cb960f126694f7e42723e44410aa98b33d0f69ecc9987ab92539664c",
+      "importRenamedSourceSha256": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+      "sourceSha256": "667be8cc1e4a268fb0bc2755c87c47cff7b0ff15c320462d0f66533d2cb14ad8",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "e684612c9401030478bff4e5c063a5e3b0f07f423c4838974cce0ceda1a3ba79"
+      }
+    },
+    {
+      "file": "TheoremOS/Probability/BiasedProduct.lean",
+      "upstreamSourceSha256": "e2894cb5ee689c12b30e6aedb2a0f5f2f9938ed6940b1fe48d4111eb0d7ae6c5",
+      "importRenamedSourceSha256": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+      "sourceSha256": "a8739fbeb0615c8fcd1f6aef183bf15b2b9eb7f151789a3608e0b6d30f957278",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "0b23b4623b040b6b39b4a334742bf8a596b6e6c3cbf06f542939e4a80bed8e97"
+      }
+    },
+    {
+      "file": "TheoremOS/Combinatorics/RamseyLower.lean",
+      "upstreamSourceSha256": "d21f804760eb6321cc881d37e13677b16b3f8bb37626b351d96d850a2072bd45",
+      "importRenamedSourceSha256": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+      "sourceSha256": "0bfbea4f2cc0fb14068bce3c50c736727707bf79359aaf1f1b229d1df5f3d81b",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "227731ee5c91851fd70b3d56fa2591a6b3e382e1331026ce6df7c8d12e4e0273"
+      }
+    },
+    {
+      "file": "TheoremOS/Probability/Concentration.lean",
+      "upstreamSourceSha256": "67a3444833069538a7de9c07c09926510e88ddc6a50b4dbddeba95078228c189",
+      "importRenamedSourceSha256": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+      "sourceSha256": "7bc2540161cb898e92a1fd4c822dc8f5048d9cc5dcb2086e20ba27a13a4046b1",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "bd8ffbbbc076a90097310af0248bc4e86b7afbac6d3d3170f3e7920e0ecd17e8"
+      }
+    },
+    {
+      "file": "TheoremOS/InformationTheory/Divergence.lean",
+      "upstreamSourceSha256": "156fa27cb115f43ee861be8def872b3d70b312dcf1d90d4cf87c1867b06fddc8",
+      "importRenamedSourceSha256": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+      "sourceSha256": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+      "proofAdapted": false,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "2f1b002c828e104e4367791c519f5832048b5825c344a9b575def4ef51d49ea1"
+      }
+    },
+    {
+      "file": "TheoremOS/Probability/LocalLemma.lean",
+      "upstreamSourceSha256": "3b411fad6d2db4b8fe26b7c6958cdc198918f04f4429da74acddcc5cfeb19633",
+      "importRenamedSourceSha256": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+      "sourceSha256": "db500be9d975635235705897769f341628251a3068b3248233b3fde9aab00e89",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "b85d15dd65e28b4120de75ed1b2b86209952579a9a77dc26e7ee4e797a7ea725"
+      }
+    },
+    {
+      "file": "TheoremOS/Probability/SphereLaw.lean",
+      "upstreamSourceSha256": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+      "importRenamedSourceSha256": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+      "sourceSha256": "3c569900ec867ad38d4f388aca9b648c3bfd18710a1280d506699e3659acce4a",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "063849d2be5c20f74e3214b570f35ab7931144b5879025d383bda05af5af5ef6"
+      }
+    },
+    {
+      "file": "TheoremOS/Probability/GaussianIBP.lean",
+      "upstreamSourceSha256": "bca8177980d05aac4b341ee355c6d72df55fee3aed8e9c85978906ef996c8a9a",
+      "importRenamedSourceSha256": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+      "sourceSha256": "cf278a6410cf6e19609002b889d756c8e5ed425f57c7bc822f73ac1a7344f4bf",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "fc141cd517312cca80d05b3b641f7ee541e68e26ff7cec8fa1fbd2d93d3feebe"
+      }
+    },
+    {
+      "file": "TheoremOS/Probability/TreeReconstruction.lean",
+      "upstreamSourceSha256": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+      "importRenamedSourceSha256": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+      "sourceSha256": "68ac1bf40522a747f5905b2ffa7ed7de2d9ae19d3415abdcf0d92ea43552beba",
+      "proofAdapted": true,
+      "declarationInterfacesPreserved": true,
+      "compilation": {
+        "status": "compiled",
+        "oleanSha256": "c528cfc79864aba99c4a5c7b6e04a01fe1f33863dc1e8ef8274e5db8eea0391a"
+      }
+    }
+  ],
+  "compatibilityPatch": "lean4.33.0.patch",
+  "excluded": [],
+  "authoredModules": "authoring.json"
+}

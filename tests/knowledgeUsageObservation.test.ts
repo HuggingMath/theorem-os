@@ -91,3 +91,63 @@ describe('knowledge use from checked Lean references', () => {
     expect(unknown.selection.checkedReferences).toBe(0);
   });
 });
+
+describe('installed library usage', () => {
+  const installedEntry = { ...entry, id: 'installed-entry', name: 'Frozen.good', file: 'Submission/Library/Fixture/Facts.lean' };
+  const installed: KnowledgeContextSnapshot = { ...knowledge, digest: 'installed-source-snapshot',
+    base: { ...knowledge.base, entries: [installedEntry] } };
+  const installedReference = { name: installedEntry.name, file: installedEntry.file };
+  const installedClaim = { id: installedEntry.id, catalogDigest: installed.digest, declaration: installedReference };
+
+  it('records actual installed proof references without an external catalog or model claim', () => {
+    const observed = inspectKnowledgeUses(undefined, undefined, task, proof([installedReference]), installed);
+    expect(observed).toMatchObject({ rejected: 0, referenceCoverage: 'available', uses: [{ source: 'installed-library',
+      id: installedEntry.id, catalogDigest: installed.digest, declaration: installedReference,
+      status: 'checked-reference', attribution: 'host-observed-reference', checkedCommit: commit }] });
+    expect(knowledgeUseSchema.parse(observed.uses[0])).toEqual(observed.uses[0]);
+    const { source: _source, ...legacy } = inspectKnowledgeUses(undefined, knowledge, task, proof([reference])).uses[0];
+    expect(knowledgeUseSchema.parse(legacy)).toEqual(legacy);
+  });
+
+  it('does not count an installed candidate, an import or statement-only references as proof use', () => {
+    const statementOnly = proof([]);
+    statementOnly.verification.results[0].declarationReferences!.statement = [installedReference];
+    for (const check of [undefined, proof([]), proof(), { ...proof([installedReference]), passed: false },
+      statementOnly])
+      expect(inspectKnowledgeUses(undefined, undefined, task, check, installed).uses).toEqual([]);
+  });
+
+  it('requires the installed declaration itself for checked use and preserves an adapted claim as an attempt', () => {
+    const adapted = { name: 'Current.adapted', file: task.proofPath! };
+    const observed = inspectKnowledgeUses([{ ...installedClaim, declaration: adapted }], undefined, task, proof([adapted]), installed);
+    expect(observed.uses).toMatchObject([{ source: 'installed-library', status: 'reported-attempt',
+      attribution: 'model-reported-origin', catalogDeclarationMatch: false }]);
+    expect(inspectKnowledgeUses(undefined, undefined, task, proof([
+      { ...installedReference, file: 'Other.lean' }, { ...installedReference, name: 'Other.good' },
+    ]), installed).uses).toEqual([]);
+  });
+
+  it('keeps catalog and installed observations separate when both snapshots contain a declaration', () => {
+    const catalog = { ...knowledge, base: { ...knowledge.base, entries: [installedEntry] } };
+    const observed = inspectKnowledgeUses(undefined, catalog, task, proof([installedReference]), installed);
+    expect(observed.uses).toMatchObject([
+      { source: 'catalog', id: installedEntry.id, catalogDigest: catalog.digest },
+      { source: 'installed-library', id: installedEntry.id, catalogDigest: installed.digest },
+    ]);
+  });
+
+  it('checks optional application claims only against their source snapshot and digest', () => {
+    const application = { expression: installedEntry.name, expectedType: 'True',
+      context: { file: task.proofPath!, declaration: task.theoremName! } };
+    const catalog = { ...knowledge, base: { ...knowledge.base, entries: [installedEntry] } };
+    const observed = inspectKnowledgeUses([
+      { ...installedClaim, source: 'installed-library', application },
+      { ...installedClaim, source: 'catalog', application },
+      { ...installedClaim, source: 'installed-library', catalogDigest: catalog.digest, application },
+    ], catalog, task, undefined, installed);
+    expect(observed.rejected).toBe(2);
+    expect(observed.uses).toMatchObject([{ source: 'installed-library', catalogDigest: installed.digest,
+      status: 'reported-attempt', application }]);
+    expect(observed.uses[0].application!.check).toBeUndefined();
+  });
+});

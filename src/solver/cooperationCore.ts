@@ -66,6 +66,7 @@ export abstract class CooperationCore {
   }>();
   /** Exact helper contracts already tried by the host tactic battery in this process. */
   protected readonly tacticBatteryAttempts = new Set<string>();
+  protected readonly libraryApplicationAttempts = new Set<string>();
   /** Exact family contracts whose host assembly was already checked in this process. */
   protected readonly familyAssemblyAttempts = new Set<string>();
   protected invalidTaskTypes = new Map<TaskRecord, { canonical: string; environment: string; taskDigest: string;
@@ -122,7 +123,7 @@ export abstract class CooperationCore {
   protected abstract canAssemble(commit: string): boolean;
   abstract contextState(action?: CooperativeAction, worker?: ResearchWorker, versions?: TaskVersions): CooperationState;
   constructor(protected readonly input: { state: SolverRunState; workers: readonly ResearchWorker[];
-    access: ReadonlyMap<string, WorkerAccess>; signal: AbortSignal; timeoutMs?: number;
+    access: ReadonlyMap<string, WorkerAccess>; signal: AbortSignal; timeoutMs?: number; taskText?: string;
     /** Fresh, unconditional continuation checks already verified in this process. */
     freshContinuationChecks?: readonly TaskProof[];
     continuousResearch?: boolean;

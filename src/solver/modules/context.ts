@@ -13,7 +13,7 @@ import type { SolverRunState } from '../archive';
 import { committedSource, type SolverProblem } from '../problem';
 import type { ProofCheck } from './evidence';
 import { solverProofFeedback, type SolverFailure } from '../feedback';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, taskGroup, taskVersion, type CooperativeAction } from '../tasks';
+import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, isFinalCandidateReview, taskGroup, taskVersion, type CooperativeAction } from '../tasks';
 import type { CooperationState } from '../cooperation';
 import { leadPlanPublicationFeedback } from '../cooperationShared';
 import { contextCheckpointRejectionFeedback } from '../contextCheckpoint';
@@ -26,6 +26,7 @@ import { knowledgeContextConsumers, knowledgeContextSections, type KnowledgeCont
 import { continuationContextSection, readContinuationSnapshot, type ContinuationSnapshot } from '../continuationInput';
 import { continuationReferenceSection, referenceQuery } from '../continuationSearch';
 import { knowledgeApplicationContextSections } from '../knowledgeApplications';
+import { installedLibraryContextSections } from '../installedLibraryContext';
 import { compileContextSections, compileTaskContext, frozenSourceContext, leadResearchInputSection, TaskContextError,
   type CompiledContext, type ContextManifest, type ContextSection, type TaskContextInput } from '../contextCompiler';
 import type { CustomResearchModule, ResearchModuleSlot } from './policy';
@@ -49,6 +50,7 @@ export type ContextAccess = Readonly<{
   knowledgeFile?: string;
   knowledgeDigest?: string;
   knowledgeSnapshot?: KnowledgeContextSnapshot;
+  installedLibrary?: KnowledgeContextSnapshot;
   retrievalRoot: string;
   sourceFeedback?: string;
   previousCheck?: ProofCheck;
@@ -150,12 +152,12 @@ export function buildResearchContext(task: SolverProblem, state: Readonly<Solver
     `Inspect historical consumers with ${command} knowledge consumers --catalog ${shellArgument(access.knowledgeFile)} --sha256 ${shellArgument(access.knowledgeDigest!)} --id 'THEOREM_ID' --max-bytes 16000; follow nextOffset with --offset to continue. These are same-context local reference closures, not instantiated applications. Read each consumer's complete type, elaboration and source with its handles, then check the proposed application and remaining premises in the current problem. ` +
     `Read a dependency or definition in bounded excerpts with ${command} knowledge source --catalog ${shellArgument(access.knowledgeFile)} --sha256 ${shellArgument(access.knowledgeDigest!)} --id 'THEOREM_ID' --file 'ARCHIVED_FILE' --name 'QUALIFIED_DECLARATION' --max-bytes 16000; use --start-line 1 to inspect file context, or --offset NEXT_OFFSET to continue a truncated excerpt without repeating text. Excerpts do not establish complete context. ` +
     'Saved route findings are advisory research records with exact scopes, not accepted theorems. Search with --include-findings and inspect one with knowledge finding --catalog CATALOG --sha256 DIGEST --id FINDING_ID; follow its pagination to read the complete record. Recheck its assumptions, counterexample and reopening conditions against the current problem. ' +
-    'A hit with kind:"definition" is a checked def body of the recorded type, not a proposition to apply: read its full source with knowledge source, adapt the def and its own dependencies into an owned file, and prove each needed property of it in the current problem. Its knowledge consumers list historical theorems stated about it. ' +
+    'A hit with installation.status:"installed-frozen" already exists in the current project with matching source bytes: use its provided import and qualified name, never copy or redeclare it. A hit with kind:"definition" is a def body, not a proposition to apply; use an installed definition by name, or read and adapt an archived definition and its dependencies into an owned file, then prove the needed properties. Its knowledge consumers list historical theorems stated about it. ' +
     'When you try a saved theorem, optionally add knowledgeUses:[{id:"THEOREM_ID",catalogDigest:"PINNED_DIGEST",declaration:{name:"Qualified.adaptedHelper",file:"Owned/File.lean"}}] to the same JSON research/proof response in RESEARCH.md. The host records this as a reported origin and separately checks actual Lean references; a citation alone is not proof acceptance. ' +
     'For a specific application, add application:{expression:"CLOSED_LEAN_TERM",expectedType:"CLOSED_EXPECTED_TYPE",context:{file:"Owned/File.lean",declaration:"ASSIGNED_THEOREM"},arguments:[{parameter:"PARAMETER",value:"ACTUAL_ARGUMENT"}],additionalPremises:[],typeclassIssues:[],adaptationSteps:[],remainingGoals:[],reconsiderWhen:[]} inside that knowledgeUses item. Close local variables with explicit binders and lambdas. The host checks up to four selected expressions in isolated proof-erased snapshots and retains scoped successes and failures. This checks the requested type only: it does not establish that the type closes the original consumer, or accept any erased helper proof. Changed inputs require a fresh check. ' +
     `You may inspect one expression beforehand with ${command} check-lean --workspace ${shellArgument(path.join(access.worktree, task.projectRelative))} --file 'Owned/File.lean' --context 'ASSIGNED_THEOREM' --type 'CLOSED_EXPECTED_TYPE' --expression 'CLOSED_LEAN_TERM'. Do not scan all catalog entries with application checks. ` +
     'The task context may include bounded saved-theorem candidates already searched by the host for this exact assignment or the original-goal frontier. Inspect these candidates before repeating the same search; the manifest records hints omitted for context budget. An input-not-searched status or zero lexical matches does not establish that no useful theorem exists. ' +
-    'Inspect the complete type, all premises and statement/proof dependencies before reuse. source-header types require the archived context and are not closed types. Search is lexical and a missing hit does not establish a missing theorem. These are historical checked sources, not declarations installed in this problem. Adapt only needed declarations into owned files, respect the frozen problem and allowed imports, then check their actual application with Lean and return for independent host acceptance. Never copy an entire archived Submission over current goals or inherit historical receipts. Record the knowledge theorem id and the consumer in RESEARCH.md.\n' : '';
+    'Inspect the complete type, all premises and statement/proof dependencies before reuse. source-header types require the complete source context and are not closed types. Search is lexical and a missing hit does not establish a missing theorem. For entries without an installed-frozen match, adapt only needed declarations from their historical sources into owned files. Respect the frozen problem and allowed imports, then check the actual application with Lean and return for independent host acceptance. Never copy an entire archived Submission over current goals or inherit historical receipts. Record the knowledge theorem id and the consumer in RESEARCH.md.\n' : '';
   const proofSearchRules = access.environment.DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST ?
     `For a materialized plain helper lemma with a closed task type, use ${command} proof-search --workspace ${shellArgument(path.join(access.worktree, task.projectRelative))} --request-file 'REQUEST.json'. ` +
     'Write a finite request {branches:[{tactics:["intro n","simp"]}],limits:{timeoutMs:30000,maxTransitions:64}}. You generate candidates within this research turn; the tool never calls a model. ' +
@@ -175,7 +177,7 @@ export function buildResearchContext(task: SolverProblem, state: Readonly<Solver
 Edit only ${editableOwnedFiles(task.ownedFiles, file => path.join(access.worktree, task.projectRelative, file), task.frozenFiles).join(', ')}, ${path.join(access.worktree, 'RESEARCH.md')}${access.assignment?.kind === 'task' ? `, ${path.join(access.worktree, assignmentDeliveryFile(access.assignment.assignment))}` : ''}.
 Save RESEARCH.md and delivery logs at these exact worktree-root paths, including when a diagnostic command runs inside the Lean project subdirectory.
 Temporary probes, backups and diagnostic output may be written under ${path.join(access.worktree, '.scratch', 'tmp')} or the Lean project's .scratch/tmp directory. The shell's TMPDIR points to the worktree-local directory; run mkdir -p "$TMPDIR" before creating temporary files. /tmp is read-only. Untracked regular scratch files stay advisory and remain outside formal proof checkpoints. Do not git add scratch files or use symlinks there. Retain reusable proof code and findings in RESEARCH.md or owned Lean files before returning.
-Preserve original declaration kinds, names, parameters, types, assumptions, existing imports, options and namespace/section context. Original goals may include def declarations whose bodies must be filled; retain all other original definition bodies. You may add explicit Mathlib.* imports from the pinned library, frozen local modules already imported by the original owned files, or other owned modules, without import cycles; do not edit trusted problem or package files. Completed proofs must not use sorry, admit, native_decide, unsafe or new axioms. Do not read external candidate solutions.
+Preserve original declaration kinds, names, parameters, types, assumptions, existing imports, options and namespace/section context. Original goals may include def declarations whose bodies must be filled; retain all other original definition bodies. You may add explicit Mathlib.* imports from the pinned library, installed frozen Submission.Library.* modules, frozen local modules already imported by the original owned files, or other owned modules, without import cycles; do not edit trusted problem or package files. Completed proofs must not use sorry, admit, native_decide, unsafe or new axioms. Do not read external candidate solutions.
 ${taskRules}${knowledgeRules}${proofSearchRules}${strategyAdvice(access, 'M1', 'Use installed library lemmas and test uncertain bridges early. Batch independent searches and reads, reuse results, bound output in bytes and show the earliest Lean error and goal.')} The host launches the cooperative agents; do not spawn agents inside this session. ${strategyAdvice(access, 'M5', 'Lead planning saves a task graph and returns promptly; assigned workers investigate and prove it.', Boolean(state.cooperation))}
 For diagnostics, run ${command} check-lean --workspace ${shellArgument(path.join(access.worktree, task.projectRelative))} --file 'OWNED_FILE.lean' --timeout-seconds 0. It compiles saved sources with pinned imports and bounded output. Read firstBlocking and its exact position; follow diagnosticArtifacts for captured messages, local hypotheses and goals when previews are incomplete. Source/environment digests identify the checked inputs; inspect captureComplete before treating captured output as complete. To preflight an uncertain closed task type, add --type 'CLOSED_LEAN_TYPE' --context 'EXISTING_QUALIFIED_DECLARATION' with exactly one --file. This elaborates a type in a disposable proof-erased snapshot using that declaration's scopes; it does not check a proof or make future helper names available. Keep unavailable future dependencies explicit and revise an invalid interface before sending workers to prove it. Poll a returned process ID. A timeout is inconclusive. ${strategyAdvice(access, 'M3', 'Repair the earliest error; avoid rebuilding dependencies or repeating unchanged checks.')} For math_original_context_changed or math_original_declaration_changed, use the reported file and recovery instructions to restore the offending context or declaration from the seed commit while preserving new proof work, then retry the saved-file check. Keep helper-specific scopes and instances inside their proofs. If the environment is unavailable or the same startup error remains after a repair, report it and return.
 For a finite Boolean inference, use ${command} check-finite --json 'JSON' --witnesses 16. Supply {"schema":"theorem-os.finite-boolean-cnf.v1","variables":["A"],"fixed":[],"clauses":[[{"variable":"A","value":true}]]}. Each clause is a disjunction of matching literals and all clauses must hold. Preserve the exact input data and returned digests, satisfyingCount and complete witnesses in your research evidence. A satisfying assignment can refute only a claimed contradiction of those constraints; it does not refute their geometric construction or the original theorem. Size-unsupported results are inconclusive. Enumeration and its translation remain advisory and must be formalized for proof acceptance.
@@ -218,8 +220,14 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
       JSON.stringify(residualSnapshot.omissions) });
   const knowledgeSections = access.knowledgeSnapshot ? knowledgeContextSections({ problem: task, cooperation, action: access.assignment,
     knowledge: access.knowledgeSnapshot, environmentDigest: state.environmentDigest, residualGoals,
+    installedLibrary: access.installedLibrary,
     residualOmissions: residualSnapshot.omissions }) : [];
-  const applicationSections = access.knowledgeSnapshot ? knowledgeApplicationContextSections({
+  const librarySections = access.installedLibrary ? installedLibraryContextSections({ problem: task, cooperation, action: access.assignment,
+    library: access.installedLibrary, taskText: access.taskText, environmentDigest: state.environmentDigest, residualGoals,
+    residualOmissions: residualSnapshot.omissions }) : [];
+  const allowKnowledgeApplications = !access.assignment || access.assignment.kind === 'lead' ||
+    access.assignment.kind === 'task' && !isFinalCandidateReview(access.assignment.task);
+  const applicationSections = access.knowledgeSnapshot && allowKnowledgeApplications ? knowledgeApplicationContextSections({
     uses: cooperation ? cooperation.deliveries?.flatMap(delivery => delivery.knowledgeUses ?? []) ?? [] : state.knowledgeUses ?? [],
     projectRoot: path.join(access.worktree, task.projectRelative), env: access.environment,
     environmentDigest: state.environmentDigest, catalogDigest: access.knowledgeSnapshot.digest,
@@ -234,7 +242,7 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
     maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes,
     environmentDigest: state.environmentDigest,
     ...(continuation ? { mandatory: [continuationContextSection(continuation, command, task.projectRelative)] } : {}),
-    optional: [...residualSections, ...knowledgeSections, ...applicationSections, ...(reference ? [reference] : [])] };
+    optional: [...residualSections, ...librarySections, ...knowledgeSections, ...applicationSections, ...(reference ? [reference] : [])] };
   const compileFull = (checkpointInstruction?: string) => compileTaskContext({ ...compilation, instructions,
     mandatory: [...dispatchPrefix(checkpointInstruction), ...(compilation.mandatory ?? [])] });
   const compiled = access.assignment && cooperation ? buildCooperativeContext(task, cooperation, bundle, access.assignment,
@@ -288,7 +296,8 @@ function libraryModuleRules(task: SolverProblem): string {
   if (!modules.length) return '';
   const listed = modules.length > 8 ? `${modules.slice(0, 8).join(', ')} and ${modules.length - 8} more` : modules.join(', ');
   return `${listed} ${modules.length > 1 ? 'are' : 'is a'} frozen host librar${modules.length > 1 ? 'ies' : 'y'} that Lean rechecked before this run: import the module that holds a declaration and use it, never edit, copy or redeclare it. ` +
-    'Find its names and types in the declaration index; lines whose file starts with Submission/Library/ are library declarations.\n';
+    'Inspect the installed-library candidates for this goal before proposing a new helper or declaring a library gap. Proof workers should test the strongest relevant candidate with its current arguments and premises; if it fails to fit, record the exact mismatch in RESEARCH.md and continue. ' +
+    'Find additional names and types in the declaration index; lines whose file starts with Submission/Library/ are library declarations.\n';
 }
 
 function theoryModuleRules(task: SolverProblem): string {
@@ -626,11 +635,15 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
           text: 'Original-goal focus (advisory, not proof acceptance):\n' + JSON.stringify(focusPacket) }] : [])] });
   const full = compileFull();
   const researchInputs = action.kind === 'lead' ? leadResearchInputSection(compilation) : undefined;
+  // Goals and diagnostics can change within the same thread; their fresh library candidates are new input.
+  const currentLibraryHint = (section: ContextSection) => ['installed-library:', 'knowledge:',
+    'knowledge-application:', 'knowledge-application-hints:'].some(prefix => section.id.startsWith(prefix));
+  const continuationOptional = (compilation.optional ?? []).filter(section => section.kind === 'feedback' || currentLibraryHint(section));
   const compileContinuation = (checkpointInstruction?: string) => compileContextSections({ instructions,
     mandatory: [...dispatchPrefix(checkpointInstruction), { id: 'same-thread-continuation', kind: 'continuation',
       text: continuationText! }, ...(researchInputs ? [researchInputs] : []), ...receiptIndex],
-    optional: [...receiptDetails, ...(compilation.optional ?? []).filter(section => section.kind === 'feedback')],
-    omitted: (compilation.optional ?? []).filter(section => section.kind !== 'feedback')
+    optional: [...receiptDetails, ...continuationOptional].sort((a, b) => (a.priority ?? 20) - (b.priority ?? 20)),
+    omitted: (compilation.optional ?? []).filter(section => !continuationOptional.includes(section))
       .map(section => ({ id: section.id, kind: section.kind, reason: 'outside-task-scope' as const })),
     requiredTaskIds: full.manifest.requiredTaskIds, maxContextBytes: compilation.maxContextBytes,
     maxOptionalContextBytes: compilation.maxOptionalContextBytes,

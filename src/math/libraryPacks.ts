@@ -42,6 +42,7 @@ const origin = z.discriminatedUnion('kind', [
     receiptDigest: hash.optional(), environmentDigest: hash.optional(), dropped: z.array(dropped).max(4096).optional() }).strict(),
   z.object({ kind: z.literal('upstream'), repository: z.string().min(1).max(512), commit: oid, file: relative }).strict(),
 ]);
+export const libraryPackOriginSchema = origin;
 const packSchema = z.object({
   schema: z.literal(LIBRARY_PACK_SCHEMA),
   modules: z.array(z.object({ file: z.string(), source: z.string(), origin }).strict()).min(1).max(MAX_LIBRARY_PACK_MODULES),

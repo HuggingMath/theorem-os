@@ -1,6 +1,6 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
-import { knowledgeGoalSurfaceShape, knowledgeResidualViews } from './theoremKnowledgeGoal';
+import { knowledgeGoalSurfaceShape, knowledgeResidualViews, splitStatement } from './theoremKnowledgeGoal';
 import type { TheoremKnowledgeBase, TheoremKnowledgeEntry } from './theoremKnowledge';
 import { createKnowledgeRelationIndex, type KnowledgeRelation } from './theoremKnowledgeRelations';
 
@@ -8,6 +8,8 @@ export type KnowledgeSearchOptions = {
   goal?: string; limit?: number; problemId?: string; environmentDigest?: string; problemReceiptDigest?: string;
   /** Display diversity only; declaration identities and contextual versions remain separate. */
   displayGrouping?: 'exact-interface';
+  /** Select distinct source modules before applying the result limit; keep each module's best declaration. */
+  resultGrouping?: 'module';
 };
 export type KnowledgeSearchRequest = { query: string; goal?: string };
 type KnowledgeSearchBase = Pick<TheoremKnowledgeBase, 'entries' | 'evidence'> & Partial<Pick<TheoremKnowledgeBase, 'contexts'>>;
@@ -76,6 +78,12 @@ function goalTarget(value: string): string {
   return views.length === 1 ? views[0]!.target : views.map(view => view.target).join('\n');
 }
 
+/** Premises remain in the full goal score; its primary terms describe the conclusion being proved. */
+function conclusion(value: string): string {
+  const shape = splitStatement(value);
+  return shape ? shape.conclusion.replace(/\b_b\d+\b/gu, '') : value;
+}
+
 function goalShape(value: string) {
   const views = knowledgeResidualViews(value);
   return views.length === 1 ? knowledgeGoalSurfaceShape(views[0]!.goal) : undefined;
@@ -120,12 +128,13 @@ function validateQuery(query: string, options: KnowledgeSearchOptions): void {
   if (typeof query !== 'string' || typeof goal !== 'string' || !Number.isInteger(limit) || limit < 1 || limit > 32 ||
       Buffer.byteLength(query) > 4000 || Buffer.byteLength(goal) > 16000 || (!query.trim() && !goal.trim()) ||
       (options.displayGrouping !== undefined && options.displayGrouping !== 'exact-interface') ||
+      (options.resultGrouping !== undefined && options.resultGrouping !== 'module') ||
       [options.environmentDigest, options.problemReceiptDigest].some(value => value !== undefined &&
         (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > 256))) throw new Error('math_knowledge_invalid_query');
 }
 
 function prepareSearch(base: KnowledgeSearchBase, options: Omit<KnowledgeSearchOptions, 'goal'>,
-  relevant: ReadonlySet<string>, includeSurfaceShapes: boolean) {
+  relevant: ReadonlySet<string> | undefined, includeSurfaceShapes: boolean) {
   const texts = new Map<string, string>(), plainTerms = new Map<string, Set<string>>(), boundTerms = new Map<string, Set<string>>();
   const text = (value: string) => {
     let result = texts.get(value);
@@ -145,20 +154,79 @@ function prepareSearch(base: KnowledgeSearchBase, options: Omit<KnowledgeSearchO
         ? knowledgeInterfaceGroup(item) : group, fields: [field(item.name), field(type, true),
         field([...item.dependencies.statement, ...item.dependencies.proof].map(reference => reference.name).join(' ')),
         field(item.description), field(item.provenance.map(origin => origin.problemId).join(' '))],
+        conclusionTerms: field(conclusion(type), true),
         normalizedType: text(type).toLowerCase().replace(/\s+/gu, ''), surfaceShape: includeSurfaceShapes ? knowledgeGoalSurfaceShape(type) : undefined };
     });
   const groupsByToken = new Map<string, Set<string>>();
   for (const document of documents) {
     for (const field of document.fields) for (const token of field) {
-      if (!relevant.has(token)) continue;
+      if (relevant && !relevant.has(token)) continue;
       let groups = groupsByToken.get(token);
       if (!groups) { groups = new Set(); groupsByToken.set(token, groups); }
       groups.add(document.corpusGroup);
     }
   }
-  return { documents, relations: createKnowledgeRelationIndex(base),
+  const byId = new Map(documents.map(document => [document.item.id, document]));
+  const byGroup = new Map<string, typeof documents>();
+  for (const document of documents) {
+    const group = byGroup.get(document.corpusGroup);
+    if (group) group.push(document);
+    else byGroup.set(document.corpusGroup, [document]);
+  }
+  return { documents, byId, byGroup, relations: createKnowledgeRelationIndex(base),
     groupCount: new Set(documents.map(document => document.corpusGroup)).size,
     frequencies: new Map([...groupsByToken].map(([token, groups]) => [token, groups.size])) };
+}
+
+type PreparedDocument = ReturnType<typeof prepareSearch>['documents'][number];
+type DocumentLookup = (input: { primary: readonly string[]; goalOnly: boolean; normalizedGoal: string;
+  goalSurface: string | undefined; identifier: string; nameQuery: boolean }) => readonly PreparedDocument[];
+
+/** Copy metadata once; a caller's later edits and archived source objects never enter this index. */
+export function createTheoremKnowledgeSearchIndex(base: KnowledgeSearchBase,
+  options: Pick<KnowledgeSearchOptions, 'displayGrouping' | 'problemId'> = {}) {
+  const fixed = { displayGrouping: options.displayGrouping, problemId: options.problemId };
+  validateQuery('index', fixed);
+  const snapshot = structuredClone({ entries: base.entries, evidence: base.evidence, contexts: base.contexts });
+  const prepared = prepareSearch(snapshot, fixed, undefined, true);
+  const postings = new Map<string, PreparedDocument[]>(), mainPostings = new Map<string, PreparedDocument[]>(),
+    names = new Map<string, PreparedDocument[]>(), types = new Map<string, PreparedDocument[]>(),
+    shapes = new Map<string, PreparedDocument[]>();
+  const add = (index: Map<string, PreparedDocument[]>, key: string, document: PreparedDocument) => {
+    const rows = index.get(key);
+    if (rows) rows.push(document);
+    else index.set(key, [document]);
+  };
+  for (const document of prepared.documents) {
+    for (const token of new Set(document.fields.flatMap(field => [...field]))) add(postings, token, document);
+    for (const token of new Set([...document.fields[0]!, ...document.fields[1]!])) add(mainPostings, token, document);
+    const parts = document.item.name.replace(/^_root_\./u, '').toLowerCase().split('.');
+    for (let start = 0; start < parts.length; start++) add(names, parts.slice(start).join('.'), document);
+    add(types, document.normalizedType, document);
+    if (document.surfaceShape !== undefined) add(shapes, document.surfaceShape, document);
+  }
+  const lookup: DocumentLookup = ({ primary, goalOnly, normalizedGoal, goalSurface, identifier, nameQuery }) => {
+    const selected = new Set<PreparedDocument>();
+    const include = (rows: readonly PreparedDocument[] | undefined) => rows?.forEach(row => selected.add(row));
+    for (const token of primary) include((goalOnly ? mainPostings : postings).get(token));
+    if (goalOnly) {
+      if (normalizedGoal) include(types.get(normalizedGoal));
+      if (goalSurface !== undefined) include(shapes.get(goalSurface));
+      // Suffix matching is part of the existing API; retain it even for goals without searchable words.
+      if (normalizedGoal.length >= 8) for (const document of prepared.documents)
+        if (document.normalizedType.endsWith(normalizedGoal)) selected.add(document);
+    } else if (nameQuery) include(names.get(identifier));
+    return [...selected];
+  };
+  return {
+    search(requests: readonly KnowledgeSearchRequest[],
+      options: Pick<KnowledgeSearchOptions, 'limit' | 'environmentDigest' | 'problemReceiptDigest' | 'resultGrouping'> = {}) {
+      const selectedOptions = { ...options, ...fixed };
+      return knowledgeRequestBatch(requests, (query, goal) => validateQuery(query, { ...selectedOptions, goal }), () =>
+        (query, goal) => searchPrepared(prepared, snapshot.evidence, query, { ...selectedOptions, goal },
+          goal ? goalShape(goal) : undefined, lookup));
+    },
+  };
 }
 
 /** Lexical and goal-shape ranking is advisory; matching metadata never establishes applicability. */
@@ -198,7 +266,7 @@ export function searchTheoremKnowledgeRequests(base: KnowledgeSearchBase, reques
     for (const request of requests) {
       const { query } = request, goal = request.goal ?? '';
       for (const term of terms(goal, true)) relevant.add(term);
-      for (const term of terms(query.trim() ? query : goalTarget(goal), !query.trim())) relevant.add(term);
+      for (const term of terms(query.trim() ? query : conclusion(goalTarget(goal)), !query.trim())) relevant.add(term);
       if (!goalSurfaces.has(goal)) goalSurfaces.set(goal, goal ? goalShape(goal) : undefined);
     }
     const prepared = prepareSearch(base, options, relevant, [...goalSurfaces.values()].some(Boolean));
@@ -207,9 +275,10 @@ export function searchTheoremKnowledgeRequests(base: KnowledgeSearchBase, reques
 }
 
 function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: KnowledgeSearchBase['evidence'], query: string,
-  options: KnowledgeSearchOptions, goalSurface: string | undefined) {
+  options: KnowledgeSearchOptions, goalSurface: string | undefined, lookup?: DocumentLookup, focusConclusion = true) {
   const limit = options.limit ?? 10, goal = options.goal ?? '', { documents, groupCount, frequencies } = prepared;
-  const goalOnly = !query.trim(), primary = terms(goalOnly ? goalTarget(goal) : query, goalOnly),
+  const goalOnly = !query.trim(), focused = goalOnly && focusConclusion;
+  const primary = terms(goalOnly ? focused ? conclusion(goalTarget(goal)) : goalTarget(goal) : query, goalOnly),
     goalTerms = terms(goal, true), normalizedGoal = canonical(goalTarget(goal));
   const identifier = query.trim().replace(/^_root_\./u, '').toLowerCase();
   const nameQuery = /^[\p{L}_][\p{L}\p{M}\p{N}_'.]*$/u.test(identifier);
@@ -217,22 +286,24 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
   const idf = new Map(relevant.map(term => [term, 1 + Math.log((groupCount + 1) /
     (1 + (frequencies.get(term) ?? 0)))]));
   const primaryWeight = primary.reduce((sum, term) => sum + idf.get(term)!, 0);
-  const assessed = documents.map(document => {
+  const assess = (document: PreparedDocument) => {
     const { item, fields } = document, normalizedName = item.name.replace(/^_root_\./u, '').toLowerCase();
     const nameScore = !goalOnly && nameQuery ? normalizedName === identifier ? 5000 :
       normalizedName.split('.').at(-1) === identifier ? 4500 : normalizedName.endsWith(`.${identifier}`) ? 4700 : 0 : 0;
     const matched = primary.filter(term => fields.some(field => field.has(term)));
-    const main = primary.filter(term => fields[0]!.has(term) || fields[1]!.has(term));
+    const typeTerms = focused ? document.conclusionTerms : fields[1]!;
+    const main = primary.filter(term => fields[0]!.has(term) || typeTerms.has(term));
     const dependencies = primary.filter(term => fields[2]!.has(term));
     const exactGoal = Boolean(normalizedGoal && normalizedGoal === document.normalizedType),
       trailingGoal = Boolean(normalizedGoal.length >= 8 && document.normalizedType.endsWith(normalizedGoal)),
       surfaceMatch = goalSurface !== undefined && goalSurface === document.surfaceShape;
-    const eligible = goalOnly ? Boolean(main.length || exactGoal || trailingGoal || surfaceMatch) : Boolean(nameScore || matched.length);
+    const eligible = goalOnly ? Boolean(main.length || primary.some(term => fields[1]!.has(term)) ||
+      exactGoal || trailingGoal || surfaceMatch) : Boolean(nameScore || matched.length);
     const coverage = primaryWeight ? main.reduce((sum, term) => sum + idf.get(term)!, 0) / primaryWeight : 0;
     let score = nameScore;
     for (const term of primary) {
       const significance = idf.get(term)!;
-      score += significance * ((fields[0]!.has(term) ? 8 : 0) + (fields[1]!.has(term) ? 5 : 0)) * (0.1 + coverage * coverage);
+      score += significance * ((fields[0]!.has(term) ? focused ? 1 : 8 : 0) + (typeTerms.has(term) ? 5 : 0)) * (0.1 + coverage * coverage);
       score += significance * ((fields[2]!.has(term) ? 1 : 0) + (fields[3]!.has(term) ? 0.15 : 0) + (fields[4]!.has(term) ? 0.05 : 0));
     }
     score += 100 * coverage * coverage;
@@ -246,7 +317,11 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
     const tier = goalOnly ? 1 : nameScore ? 4 : main.length ? 3 : dependencies.length ? 2 : matched.length ? 1 : 0;
     const exactMatch: 'name' | 'type' | undefined = nameScore ? 'name' : exactGoal ? 'type' : undefined;
     return { ...document, score, tier, matched, eligible: eligible && score > 0, exactMatch };
-  });
+  };
+  const assessed = (lookup ? lookup({ primary, goalOnly, normalizedGoal, goalSurface, identifier, nameQuery }) : documents).map(assess);
+  // A general theorem can still apply by definitional reduction even when its conclusion has no searchable terms.
+  if (focused && !assessed.some(hit => hit.eligible))
+    return searchPrepared(prepared, evidence, query, options, goalSurface, lookup, false);
   const compareRelevance = (left: typeof assessed[number], right: typeof assessed[number]) =>
     right.tier - left.tier || right.score - left.score || left.item.id.localeCompare(right.item.id);
   const scored = assessed.filter(hit => hit.eligible).sort(compareRelevance);
@@ -275,19 +350,27 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
     const versions = declarations[0]!;
     return { group, declarations, versions, row: versions[0]!, relation: undefined as KnowledgeRelation | undefined };
   };
-  const lexical = [...groups.values()].slice(0, limit).map(selectVersion);
+  const moduleKey = (item: TheoremKnowledgeEntry) => `${item.contextDigest}:${item.file}`;
+  const lexical: ReturnType<typeof selectVersion>[] = [], selectedModules = new Set<string>();
+  for (const group of groups.values()) {
+    const selected = selectVersion(group), module = moduleKey(selected.row.item);
+    if (options.resultGrouping === 'module' && selectedModules.has(module)) continue;
+    lexical.push(selected); selectedModules.add(module);
+    if (lexical.length === limit) break;
+  }
   // Seeds are concrete versions, chosen before graph expansion. No name-only or cross-context joins.
   const seedIds = lexical.slice(0, 3).map(hit => hit.row.item.id), expansion = prepared.relations.expand(seedIds, 12);
-  const byId = new Map(assessed.map(hit => [hit.item.id, hit]));
   const relatedGroups = new Set(expansion.relations.flatMap(relation => {
-    const row = byId.get(relation.entryId); return row ? [row.corpusGroup] : [];
+    const row = prepared.byId.get(relation.entryId); return row ? [row.corpusGroup] : [];
   }));
-  const relationGroups = groupRows(assessed.filter(hit => relatedGroups.has(hit.corpusGroup)).sort(compareRelevance));
+  const relationGroups = groupRows([...relatedGroups].flatMap(group => prepared.byGroup.get(group) ?? []).map(assess).sort(compareRelevance));
   const related = [...relationGroups.values()].flatMap(group => {
     const selected = lexical.find(hit => hit.group.key === group.key) ?? selectVersion(group);
     // Interface grouping can choose a different contextual version. Its edge must also exist.
     const relation = expansion.relations.find(item => item.entryId === selected.row.item.id);
-    return relation ? [{ ...selected, relation }] : [];
+    const sameModule = options.resultGrouping === 'module' && lexical.find(hit =>
+      moduleKey(hit.row.item) === moduleKey(selected.row.item) && hit.row.item.id !== selected.row.item.id);
+    return relation && !sameModule ? [{ ...selected, relation }] : [];
   }).sort((left, right) => compareRelevance(left.row, right.row));
   const supplement = related[0];
   let selected = lexical;
@@ -307,6 +390,8 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
   return { schema: 'theorem-os.theorem-knowledge-search.v1', evidence, requiresFreshCheck: true,
     preferenceEvidence: 'recorded-metadata-not-applicability', total: declarationCount,
     totalVersions: matchedRows.length,
+    ...(options.resultGrouping ? { resultGrouping: options.resultGrouping,
+      totalModules: new Set(matchedRows.map(row => moduleKey(row.item))).size } : {}),
     ...(options.displayGrouping ? { displayGrouping: options.displayGrouping, totalInterfaces: matchedGroups.size } : {}),
     relationSearch: { referenceSemantics: 'local-transitive-closure' as const, seedIds,
       considered: expansion.relations.length, unresolved: expansion.unresolved, truncated: expansion.truncated },

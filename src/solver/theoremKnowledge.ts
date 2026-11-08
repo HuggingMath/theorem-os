@@ -139,19 +139,24 @@ export function buildTheoremKnowledge(candidates: readonly KnowledgeCandidate[],
     entries: [], contexts: {}, sources: {},
   };
   const entries = new Map(result.entries.map(item => [item.id, item]));
+  const sharedContexts = new WeakMap<Record<string, string>, string>();
   for (const candidate of candidates) {
     const { files, provenance: origin, ...raw } = candidate;
     const details = theorem.parse(raw);
     provenance.parse(origin);
     if (!allowedKnowledgeFile(details.file) || !files[details.file]) throw new Error('math_knowledge_root_source_missing');
-    const context: Record<string, string> = {};
-    for (const file of Object.keys(files).sort()) {
-      if (!allowedKnowledgeFile(file)) throw new Error('math_knowledge_forbidden_source');
-      const source = files[file]!, digest = mathDigest(source);
-      context[file] = digest; result.sources[digest] = source;
+    let contextDigest = sharedContexts.get(files);
+    if (contextDigest === undefined) {
+      const context: Record<string, string> = {};
+      for (const file of Object.keys(files).sort()) {
+        if (!allowedKnowledgeFile(file)) throw new Error('math_knowledge_forbidden_source');
+        const source = files[file]!, digest = mathDigest(source);
+        context[file] = digest; result.sources[digest] = source;
+      }
+      contextDigest = mathDigest(canonicalMathJson(context));
+      result.contexts[contextDigest] = context;
+      sharedContexts.set(files, contextDigest);
     }
-    const contextDigest = mathDigest(canonicalMathJson(context));
-    result.contexts[contextDigest] = context;
     const value = { ...details, contextDigest, ...(origin.environmentDigest ? { environmentDigest: origin.environmentDigest } : {}),
       declaration: knowledgeDeclaration(files[details.file]!, details.name) };
     const id = entryIdentity(value), existing = entries.get(id);

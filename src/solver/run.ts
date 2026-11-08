@@ -12,6 +12,7 @@ import { MATH_TOOLS_ROOT_ENV, MATH_TOOLS_SHA256_ENV, readMathTools } from '../ma
 import { checkResolvedLeanToolchainReadiness } from '../math/leanToolchainReadiness';
 import { prepareMathProofEnvironment, MATH_PROOF_ENVIRONMENT_ENV } from '../math/mathProofEnvironment';
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
+import { DEFAULT_LEAN_LIBRARY_CACHE_ROOT } from '../math/leanCompilationCache';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { bindLeanPackages, prepareLeanDiagnosticOverrides, runLeanDiagnostics } from '../math/leanDiagnostics';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
@@ -32,6 +33,8 @@ import { selectedDeepSeekProfile } from '../runtime/deepseek';
 import { selectedWestlakeProfile } from '../runtime/westlake';
 import { selectedSub2apiProfile } from '../runtime/sub2api';
 import { copyKnowledgeSnapshot, readKnowledgeCatalog } from './theoremKnowledgeStore';
+import { readInstalledLibrarySnapshot } from './installedLibraryContext';
+import { indexKnowledgeContextSnapshot } from './knowledgeContext';
 import { copyContinuationSnapshot, freezeContinuationInput, readContinuationInput, readContinuationSnapshot,
   type ContinuationSnapshot } from './continuationInput';
 import { seedSolverContinuation } from './continuationSeed';
@@ -316,7 +319,9 @@ export async function runSolver(args: string[], root: string, customModules?: So
       if (problem.frozenFiles && Object.keys(problem.frozenFiles).length) {
         emit('library_pack_check', { files: Object.keys(problem.frozenFiles).length });
         const library = await runLeanDiagnostics({ projectRoot: project, files: Object.keys(problem.frozenFiles), env, signal,
-          timeoutMs: preparationMs - (Date.now() - preparationStarted), onProgress: file => emit('library_pack_check', { file }) });
+          timeoutMs: preparationMs - (Date.now() - preparationStarted), onProgress: file => emit('library_pack_check', { file }),
+          sharedLibraryCache: { root: DEFAULT_LEAN_LIBRARY_CACHE_ROOT, files: problem.frozenFiles },
+          onSharedCache: (phase, file) => emit('library_pack_cache', { phase, ...(file ? { file } : {}) }) });
         writeMathJsonDurable(path.join(directory, 'library-pack-diagnostics.json'), library);
         const sorry = 'messages' in library && library.messages?.find(message => /declaration uses '?sorry'?/u.test(message.message));
         if (library.exitCode !== 0 || library.timedOut || sorry) {
@@ -362,6 +367,9 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (!corpusCreated) assertMathRetrievalCorpus(retrievalRoot, corpus);
         emit('library_index', { phase: 'ready', sourceFiles: corpus!.sources.length });
       }
+      const installedLibrary = readInstalledLibrarySnapshot(problem, state.environmentDigest);
+      const knowledgeSnapshot = knowledge && indexKnowledgeContextSnapshot({ digest: knowledge.digest, base: { entries: knowledge.base.entries,
+        evidence: knowledge.base.evidence, contexts: knowledge.base.contexts, routeFindings: knowledge.base.routeFindings } });
       const workerAccess = new Map<string, WorkerAccess>();
       const prepareAccess = (workerId: string, workerRoot: string, workerProject: string, workerCorpus?: string) => {
         const workerContinuation = continuation && copyContinuationSnapshot(continuation, workerProject);
@@ -377,10 +385,10 @@ export async function runSolver(args: string[], root: string, customModules?: So
         workerAccess.set(workerId, { environment: resolveMathematicsRuntimeEnvironment(environment), corpusFile: workerCorpus,
           retrievalRoot: corpus?.projectSubdirectory ? workerRoot : workerProject,
           ...(mathTools ? { mathTools } : {}),
+          ...(installedLibrary ? { installedLibrary } : {}),
           ...(workerContinuation ? { continuation: workerContinuation } : {}),
           ...(knowledge ? { knowledgeFile, knowledgeDigest: knowledge.digest,
-            knowledgeSnapshot: { digest: knowledge.digest, base: { entries: knowledge.base.entries, evidence: knowledge.base.evidence,
-              contexts: knowledge.base.contexts, routeFindings: knowledge.base.routeFindings } } } : {}) });
+            knowledgeSnapshot } : {}) });
       };
       prepareAccess('solver', state.worktree, project, corpusFile);
       const peerPreparation = await Promise.allSettled(workers.slice(1).map(async worker => {

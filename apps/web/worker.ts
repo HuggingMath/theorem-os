@@ -193,7 +193,7 @@ export function webSolverModules(request: WorkerInput, actions?: { sink: (action
         // Item ids are only unique within one Codex thread; a restarted session numbers its own.
         const session = ++sessions;
         return createCodexMathSession({ ...options,
-          ...(isolation ? { hiddenRoots: isolation.hiddenRoots } : {}),
+          ...(isolation ? { hiddenRoots: [...(options.hiddenRoots ?? []), ...isolation.hiddenRoots] } : {}),
           environment: { ...options.environment, THEOREMOS_PROVIDER_API_KEY: request.input.apiKey },
           ...(context ? { onItem: (phase, item) => {
             const action = sanitizeAgentItem(phase, { ...item, id: typeof item.id === 'string' ? `${session}:${item.id}` : item.id }, context);

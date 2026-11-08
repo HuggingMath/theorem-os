@@ -8,7 +8,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readSolverRunState } from '../src/solver/archive';
 import { hashMathFormalSourceDeclaration, type MathematicsVerifierBatchRequest, type MathematicsVerifierBatchResult } from '../src/math/verifier';
 import * as verifier from '../src/math/verifier';
-import { readSolverProblem, assertSolverSources, assertSolverProjectSources, commitSolverSources, git, withSolverWorktree, SolverSourceError, type SolverProblem } from '../src/solver/problem';
+import { readSolverProblem, assertSolverSources, assertSolverProjectSources, committedSource, commitSolverSources, git, withSolverWorktree, SolverSourceError, type SolverProblem } from '../src/solver/problem';
 import { ownedSourceDeclarations } from '../src/solver/declarationIndex';
 import { checkProjectedDeclarations, checkSolverProof } from '../src/solver/modules/evidence';
 import { assessTaskResponsibility } from '../src/solver/modules/organization';
@@ -453,10 +453,10 @@ describe('isolated solver and host acceptance', () => {
         contextDigest: expect.any(String) }),
     ]));
     expect(recorded.knowledgeUses).toEqual([
-      { ...claim, consumer: { taskId: 'original_goal_1', taskDigest: expect.any(String) },
+      { ...claim, source: 'catalog', consumer: { taskId: 'original_goal_1', taskDigest: expect.any(String) },
         status: 'checked-reference', attribution: 'model-reported-origin', catalogDeclarationMatch: false, workerId: 'solver',
         commit: recorded.check!.commit, checkedCommit: recorded.check!.commit, checkedSourceDigest: recorded.check!.sourceDigest },
-      { ...claim, consumer: { taskId: 'original_goal_2', taskDigest: expect.any(String) },
+      { ...claim, source: 'catalog', consumer: { taskId: 'original_goal_2', taskDigest: expect.any(String) },
         status: 'reported-attempt', attribution: 'model-reported-origin', catalogDeclarationMatch: false, workerId: 'solver', commit: recorded.check!.commit },
     ]);
     expect(vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(line)).filter(item => item.event === 'knowledge_use_rejected'))
@@ -6549,6 +6549,42 @@ describe('isolated solver and host acceptance', () => {
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('error: unknown module prefix Mathlib'));
   });
 
+  it('records installed library proof references without a historical catalog or a model usage report', async () => {
+    vi.spyOn(directSolverModules.M2, 'applyLibrary').mockResolvedValue({ status: 'skipped', reason: 'fixture-model-reference', candidates: [] });
+    const lib = 'Submission/Library/Fixture/Lemmas.lean';
+    const source = 'namespace Frozen\ntheorem library_true : True := trivial\nend Frozen\n';
+    fs.mkdirSync(path.join(project, path.dirname(lib)), { recursive: true });
+    fs.writeFileSync(path.join(project, lib), source);
+    const receipt = JSON.parse(fs.readFileSync(problem.activeProblemPath, 'utf8'));
+    fs.writeFileSync(problem.activeProblemPath, JSON.stringify({ ...receipt, solverOwnedFiles: ['Submission.lean', lib],
+      libraryPack: { digest: 'c'.repeat(64), files: { [lib]: mathDigest(source) } } }));
+    git(workspace, ['add', 'generated']);
+    commitFixture(workspace, 'Install library for reference observation');
+    host.createSession.mockImplementation(session('installed-library-use', async options => {
+      fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'),
+        'import Submission.Library.Fixture.Lemmas\n' + original
+          .replace('first : True := by sorry', 'first : True := by exact Frozen.library_true')
+          .replace('second : True := by sorry', 'second : True := by trivial'));
+      return 'completed';
+    }));
+    host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) => {
+      const result = verified(request);
+      return { ...result, results: result.results.map(item => ({ ...item, declarationReferences: { statement: [],
+        proof: item.theoremName === 'Submission.first' ? [{ name: 'Frozen.library_true', file: lib }] : [] } })) };
+    });
+
+    expect(await runSolver(args, directory)).toBe(0);
+
+    const recorded = readSolverRunState(`${output}.runtime/state.json`);
+    expect(recorded.knowledgeDigest).toBeUndefined();
+    expect(recorded.knowledgeUses).toEqual([expect.objectContaining({ source: 'installed-library',
+      declaration: { name: 'Frozen.library_true', file: lib }, consumer: { taskId: 'original_goal_1', taskDigest: expect.any(String) },
+      status: 'checked-reference', attribution: 'host-observed-reference', checkedCommit: recorded.check!.commit,
+    })]);
+    expect(recorded.knowledgeUses![0].application).toBeUndefined();
+    expect(host.officialGate).toHaveBeenCalledOnce();
+  });
+
   it('rechecks frozen library-pack modules at startup and stops before the model when one uses sorry', async () => {
     const lib = 'Submission/Library/Fixture/Lemmas.lean', source = 'namespace Submission\ntheorem library_true : True := trivial\nend Submission\n';
     fs.mkdirSync(path.join(project, path.dirname(lib)), { recursive: true });
@@ -6558,7 +6594,15 @@ describe('isolated solver and host acceptance', () => {
       libraryPack: { digest: 'c'.repeat(64), files: { [lib]: mathDigest(source) } } }));
     git(workspace, ['add', 'generated']);
     commitFixture(workspace, 'Install library pack');
+    host.createSession.mockImplementation(() => { throw new Error('fixture-library-should-close-before-model'); });
     expect(await runSolver(args, directory)).toBe(0);
+    expect(host.createSession).not.toHaveBeenCalled();
+    const solved = readSolverRunState(`${output}.runtime/state.json`);
+    const savedSource = committedSource(solved.worktree, solved.check!.commit, `${solved.problem.projectRelative}/Submission.lean`);
+    expect(savedSource).toContain('import Submission.Library.Fixture.Lemmas');
+    expect(savedSource).toContain('exact _root_.Submission.library_true');
+    expect(savedSource).not.toContain('by sorry');
+    expect(solved.turns).toBe(0);
     const libraryCheck = host.prepare.mock.calls.find(([input]) => input.files.includes(lib));
     expect(libraryCheck?.[0]).toMatchObject({ files: [lib] });
     expect(libraryCheck?.[0]).not.toHaveProperty('dependenciesOnly');

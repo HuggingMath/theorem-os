@@ -5,6 +5,7 @@ import { getLeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { isLibraryPackFile, MAX_LIBRARY_MODULE_BYTES } from '../math/libraryPacks';
 import { mathGitBytes } from '../math/mathGit';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../math/leanSource';
+import { leanScopeCommands, maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import { canonicalMathJson, mathDigest, parseMathJson, readMathFile } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import { buildTheoremKnowledge, theoremKnowledgeStats, type KnowledgeCandidate } from './theoremKnowledge';
@@ -32,6 +33,58 @@ export type PrepareLibraryKnowledgeOptions = {
   /** Settled build directories, or snapshots containing request/state/base-pack and published round records. */
   autoLibraryBuilds?: readonly string[];
 };
+
+/** Module headers default to private; visibility sections and declaration modifiers override that default. */
+function importableLibraryNames(source: string): Set<string> {
+  const masked = maskLeanCommentsAndStrings(source), commands = leanScopeCommands(masked);
+  const regions = inspectLeanDeclarationRegions(source), names = new Set<string>();
+  const visibility = [!/^\s*(?:prelude\s+)?module\b/u.test(masked)];
+  let command = commands.next(), precedingEnd = 0;
+  for (const declaration of inspectScopedLeanDeclarations(source)) {
+    while (!command.done && command.value.index < declaration.startOffset) {
+      const current = command.value;
+      if (!regions.some(region => current.index >= region.bodyOffset && current.index < region.endOffset)) {
+        if (current[1] === 'end') { if (visibility.length > 1) visibility.pop(); }
+        else if (['namespace', 'section', 'mutual'].includes(current[1]!)) {
+          const modifier = /\b(public|private)\b/u.exec(current[0].slice(0, current[0].indexOf(current[1]!)))?.[1];
+          visibility.push(modifier ? modifier === 'public' : visibility.at(-1)!);
+        }
+      }
+      command = commands.next();
+    }
+    const prefix = masked.slice(precedingEnd, declaration.startOffset);
+    const modifier = /\b(public|private)(?:\s+(?:noncomputable|nonrec|partial|protected))*\s*$/u.exec(prefix)?.[1];
+    if (modifier ? modifier === 'public' : visibility.at(-1)) names.add(declaration.qualifiedName);
+    precedingEnd = regions.find(region => region.startOffset === declaration.startOffset)?.endOffset ?? declaration.startOffset;
+  }
+  return names;
+}
+
+/** Share the frozen module interfaces between offline catalogs and current-run library retrieval. */
+export function libraryKnowledgeCandidates(files: Record<string, string>, provenance: KnowledgeCandidate['provenance'],
+  options: { publicOnly?: boolean } = {}) {
+  const candidates: KnowledgeCandidate[] = [], skipped: { source: string; name?: string; reason: string }[] = [];
+  for (const file of Object.keys(files).filter(isLibraryPackFile).sort()) {
+    const source = files[file], regions = new Map(inspectLeanDeclarationRegions(source).map(item => [item.startOffset, item]));
+    const declarations = inspectScopedLeanDeclarations(source), counts = new Map<string, number>();
+    const publicNames = options.publicOnly ? importableLibraryNames(source) : undefined;
+    const description = libraryDescription(file, source.slice(0, declarations[0]?.startOffset ?? source.length));
+    for (const item of declarations) counts.set(item.qualifiedName, (counts.get(item.qualifiedName) ?? 0) + 1);
+    for (const item of declarations) {
+      if (item.kind !== 'theorem' && item.kind !== 'definition') continue;
+      if (publicNames && !publicNames.has(item.qualifiedName)) continue;
+      const region = regions.get(item.startOffset);
+      if (!region || counts.get(item.qualifiedName) !== 1) {
+        skipped.push({ source: file, name: item.qualifiedName, reason: 'declaration-missing-or-ambiguous' });
+        continue;
+      }
+      candidates.push({ name: item.qualifiedName, file, type: region.declarationType, typeKind: 'source-header',
+        kind: item.kind === 'definition' ? 'definition' : 'lemma', description, premises: [],
+        dependencies: { statement: [], proof: [], tasks: [], coverage: 'unavailable' }, files, provenance });
+    }
+  }
+  return { candidates, skipped };
+}
 
 /** Index the selected frozen library and explicit historical evidence; never scan unrelated runs or solutions. */
 export function prepareLibraryKnowledge(workspaceInput: string, outputInput: string, options: PrepareLibraryKnowledgeOptions = {}) {
@@ -62,28 +115,13 @@ export function prepareLibraryKnowledge(workspaceInput: string, outputInput: str
     environmentDigest: receipt.environmentDigest ?? getLeanTaskEnvironment(receipt.environment ?? 'standard').dependencyDigest,
     problemReceiptDigest: mathDigest(canonicalMathJson(receipt)), receiptIds: [],
   };
-  const candidates: KnowledgeCandidate[] = [], skipped: { source: string; name?: string; reason: string }[] = [];
+  const { candidates, skipped } = libraryKnowledgeCandidates(files, provenance);
   const applications = readLibraryApplicationHints(options.autoLibraryBuilds ?? [], receipt, files, provenance.environmentDigest!);
   skipped.push(...applications.skipped);
-  for (const file of libraryFiles) {
-    const source = files[file], regions = new Map(inspectLeanDeclarationRegions(source).map(item => [item.startOffset, item]));
-    const declarations = inspectScopedLeanDeclarations(source), counts = new Map<string, number>();
-    const description = libraryDescription(file, source.slice(0, declarations[0]?.startOffset ?? source.length));
-    for (const item of declarations) counts.set(item.qualifiedName, (counts.get(item.qualifiedName) ?? 0) + 1);
-    for (const item of declarations) {
-      if (item.kind !== 'theorem' && item.kind !== 'definition') continue;
-      const region = regions.get(item.startOffset);
-      if (!region || counts.get(item.qualifiedName) !== 1) {
-        skipped.push({ source: file, name: item.qualifiedName, reason: 'declaration-missing-or-ambiguous' });
-        continue;
-      }
-      const hints = applications.hints.filter(hint => hint.declaration.file === file && hint.declaration.name === item.qualifiedName);
-      if (hints.length > 64) skipped.push({ source: file, name: item.qualifiedName, reason: 'math_library_application_hint_limit' });
-      candidates.push({ name: item.qualifiedName, file, type: region.declarationType, typeKind: 'source-header',
-        kind: item.kind === 'definition' ? 'definition' : 'lemma',
-        description, premises: [], ...(hints.length ? { applicationHints: hints.slice(0, 64) } : {}),
-        dependencies: { statement: [], proof: [], tasks: [], coverage: 'unavailable' }, files, provenance });
-    }
+  for (const candidate of candidates) {
+    const hints = applications.hints.filter(hint => hint.declaration.file === candidate.file && hint.declaration.name === candidate.name);
+    if (hints.length > 64) skipped.push({ source: candidate.file, name: candidate.name, reason: 'math_library_application_hint_limit' });
+    if (hints.length) candidate.applicationHints = hints.slice(0, 64);
   }
   const stateDigest = (source: string) => {
     try { assertMathCanonicalPath(source); return mathDigest(readMathFile(source, 32 * 1024 * 1024).bytes); }

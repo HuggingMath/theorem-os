@@ -155,7 +155,7 @@ export class DockerWebRunner implements WebRunner {
     const mathlib = environment === 'mathlib';
     const memory = mathlib ? '6g' : '2g';
     const script = 'cat > /tmp/Submission.lean && ' + (mathlib
-      ? 'LP=; for d in /opt/theoremos-mathlib/.lake/packages/*/.lake/build/lib/lean; do LP="$LP:$d"; done; LEAN_PATH="${LP#:}" '
+      ? 'LP=/opt/theoremos-library/.lake/build/lib/lean; for d in /opt/theoremos-mathlib/.lake/packages/*/.lake/build/lib/lean; do LP="$LP:$d"; done; LEAN_PATH="$LP" '
       : '') + 'exec lean --json /tmp/Submission.lean';
     const remove = () => execute('docker', ['rm', '--force', name], { timeout: 15_000 }).then(() => {}, () => {});
     try {

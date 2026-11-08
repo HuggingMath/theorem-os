@@ -82,7 +82,7 @@ describe('statement check container', () => {
   const leak = '#eval show IO Unit from do\n  let text ← IO.FS.readFile "/opt/theorem-os/LICENSE"\n  throw (IO.userError (text.take 200).toString)\n' +
     'theorem t : True := trivial\n';
 
-  it('covers the image\'s own code and build state', async () => {
+  it.each(['standard', 'mathlib'] as const)('covers the image\'s own code and build state (%s)', async environment => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-check-'));
     fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
 const fs = require('node:fs');
@@ -92,12 +92,13 @@ if (args[0] === 'start') process.stdin.on('data', () => {}).on('end', () => proc
 `, { mode: 0o700 });
     vi.stubEnv('PATH', root);
     try {
-      await new DockerWebRunner(readWebConfig({})).check!({ environment: 'standard', source: leak }, new AbortController().signal);
+      await new DockerWebRunner(readWebConfig({})).check!({ environment, source: leak }, new AbortController().signal);
       const create = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[])
         .find(args => args[0] === 'create')!;
       const mounts = create.flatMap((arg, index) => arg === '--tmpfs' ? [create[index + 1]!.split(':')[0]] : []);
       expect(mounts).toEqual(['/tmp', ...webPrivateImagePaths]);
       expect(create).toContain('--network=none');
+      expect(create.at(-1)!.includes('/opt/theoremos-library/.lake/build/lib/lean')).toBe(environment === 'mathlib');
     } finally {
       vi.unstubAllEnvs();
       fs.rmSync(root, { recursive: true, force: true });

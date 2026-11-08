@@ -926,8 +926,9 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     let value: unknown;
     try { value = parseMathResponse(committedSource(worker.worktree, commit, 'RESEARCH.md'), 'math-result', {}, 'summary').knowledgeUses; }
     catch { /* Host reference observation also works without optional model reports. */ }
-    // Consume the pinned catalog now; only normalized uses cross the async seam.
-    const { uses, rejected } = inspectKnowledgeUses(value, this.input.access.get(worker.id)?.knowledgeSnapshot, task, proof);
+    // Consume the pinned source snapshots now; only normalized uses cross the async seam.
+    const access = this.input.access.get(worker.id);
+    const { uses, rejected } = inspectKnowledgeUses(value, access?.knowledgeSnapshot, task, proof, access?.installedLibrary);
     const worktree = worker.worktree, projectRelative = this.input.state.problem.projectRelative;
     return { uses, rejected, input: { task, projectRoot: path.join(worktree, projectRelative),
       env: { ...this.input.access.get(worker.id)?.environment }, environmentDigest: this.input.state.environmentDigest,
