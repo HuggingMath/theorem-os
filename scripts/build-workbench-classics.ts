@@ -16,7 +16,8 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
   const output = path.join(webOutput, 'classics');
   await buildArchive(root, output, catalog);
   fs.writeFileSync(path.join(output, 'process.css'), fs.readFileSync(path.join(root, 'docs/process.css'), 'utf8')
-    + '\n' + fs.readFileSync(path.join(root, 'apps/web/solutionRoute.css'), 'utf8'));
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/solutionRoute.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
   const archiveVersions = archiveAssetVersions(output);
   const replay = JSON.parse(fs.readFileSync(path.join(root, 'docs/assets/replay.json'), 'utf8'));
   for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {

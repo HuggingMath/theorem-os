@@ -1,9 +1,11 @@
 import { archiveSolutionRoutes } from './archiveSolutionRoute';
 import { mountSolutionRoute } from '../../apps/web/solutionRouteView';
 import type { ArchiveSolutionRuntime } from './solutionRouteClient';
+import { typesetProse } from '../../apps/web/client/typesetProse';
 
 const modes = new Map<string, string>();
 const runtime: ArchiveSolutionRuntime = {
+  typeset: typesetProse,
   mount(root, record, process, runId, locale) {
     const run = process.runs.find(item => item.runId === runId);
     const models = archiveSolutionRoutes(record, process, run, locale);

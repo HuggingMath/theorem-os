@@ -77,6 +77,10 @@ async function open(browser: Browser, file: string, options: { locale?: 'zh' | '
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => requests.push(request.url()));
   await page.goto(pathToFileURL(file).href);
+  await page.locator('.explain-content:not([hidden])').waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('.math')]
+    .every(formula => ['ready', 'source'].includes(formula.dataset.mathState ?? '')));
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
   return { context, page, requests };
 }
 /** The text of each range of a CSS highlight. */
@@ -120,6 +124,8 @@ try {
   const { page, requests } = await open(browser, explainFile, { locale: 'zh' });
   await page.locator('#explain-content:not([hidden])').waitFor();
   await page.locator('#explain-prose .explain-document').waitFor();
+  assert.ok(await page.locator('.explain-document .math[data-math-state="ready"] math').count() > 0, 'offline formulas render semantic MathML');
+  assert.equal(await page.locator('.explain-document .math-source').count(), 0, 'the report has all the assets needed to render its formulas');
   assert.deepEqual(outside(requests), [pathToFileURL(explainFile).href], 'the page loads nothing but itself');
   assert.equal(await page.title(), 'synthetic_addition · 证明讲解 · TheoremOS');
   assert.equal(await page.locator('#explain-run-title').innerText(), 'synthetic_addition');
@@ -199,7 +205,11 @@ try {
   const statementLink = addition.locator('.explain-statement [data-action="link"]');
   assert.equal(await statementLink.count(), 1);
   assert.equal(await statementLink.locator('.math').count(), 1, 'a phrase and a formula form one link');
-  assert.equal((await statementLink.innerText()).replace(/\s+/gu, ' '), '自然数 n');
+  assert.equal(await statementLink.evaluate(link => {
+    const prose = link.cloneNode(true) as HTMLElement;
+    for (const formula of prose.querySelectorAll('.math')) formula.replaceWith(document.createTextNode(formula.getAttribute('title') ?? ''));
+    return prose.textContent?.replace(/\s+/gu, ' ');
+  }), '自然数 n', 'the linked phrase retains its original text and formula');
   await statementLink.click();
   assert.deepEqual(await highlighted(page, 'explain-use'), ['(n : Nat)']);
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-active'), [3]);
@@ -509,6 +519,8 @@ try {
   }
   mark('printed, both reports are one document in the light colours, the whole Lean on its own pages and wrapped, without controls');
 
+  assert.deepEqual(outside(requests), [pathToFileURL(explainFile).href], 'explanation interactions keep the report self-contained');
+  assert.deepEqual(outside(formal.requests), [pathToFileURL(formalFile).href], 'formalization interactions keep the report self-contained');
   assert.deepEqual(errors, [], 'no page errors or console errors');
   console.log('Report checks passed: both offline pages load nothing from outside, 原题 fragments, linked phrases, goal checks, '
     + 'Markdown download, keyboard, Back after a jump, a11y, contrast in both themes, phone panes, printing and English.');

@@ -114,13 +114,13 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     };
     const children = model.nodes.filter(item => item.parentId === node.id);
     const source = node.source;
-    return `<header class="solution-route-detail-heading"><p>${kindNames[model.locale][node.kind]}<span data-status="${node.status}">${statusNames[model.locale][node.status]}</span></p><h4 tabindex="-1">${html(node.title)}</h4></header>
+    return `<header class="solution-route-detail-heading"><p>${kindNames[model.locale][node.kind]}<span data-status="${node.status}">${statusNames[model.locale][node.status]}</span></p><h4 tabindex="-1" data-solution-prose>${html(node.title)}</h4></header>
       ${node.summary ? `<p class="solution-route-summary" data-solution-prose>${html(node.summary)}</p>` : ''}
       ${node.at ? `<time>${html(node.at)}</time>` : ''}
       ${relation(true)}
       ${(node.sections ?? []).filter(section => section.text.trim()).map(section => `<section class="solution-route-section"><h5>${html(section.title)}</h5>${section.code ? `<pre tabindex="0"><code>${html(section.text)}</code></pre>` : `<p data-solution-prose>${html(section.text)}</p>`}</section>`).join('')}
       ${source ? `<details class="solution-route-source"><summary>${html(source.name)}${source.line ? `:${source.line}${source.endLine && source.endLine !== source.line ? `–${source.endLine}` : ''}` : ''}</summary>${source.sha256 ? `<p>SHA-256 <code>${html(source.sha256)}</code></p>` : ''}${source.commit ? `<p>commit <code>${html(source.commit)}</code></p>` : ''}</details>` : ''}
-      ${children.length ? `<section class="solution-route-records"><h5>${word('这一步的完整记录', 'Every record for this step')} <span>${children.length}</span></h5><button type="button" class="solution-route-children" data-solution-children="${html(node.id)}" aria-expanded="${state.all || state.opened.has(node.id)}">${state.all || state.opened.has(node.id) ? word('收起这些步骤', 'Collapse these steps') : word('在图中展开这些步骤', 'Expand these steps in the graph')}</button><ol>${children.map(child => `<li><button type="button" data-solution-select="${html(child.id)}" data-status="${child.status}"><span>${kindNames[model.locale][child.kind]} · ${statusNames[model.locale][child.status]}</span><strong>${html(child.title)}</strong>${child.summary ? `<span class="solution-route-record-preview">${html(child.summary)}</span>` : ''}</button></li>`).join('')}</ol></section>` : ''}
+      ${children.length ? `<section class="solution-route-records"><h5>${word('这一步的完整记录', 'Every record for this step')} <span>${children.length}</span></h5><button type="button" class="solution-route-children" data-solution-children="${html(node.id)}" aria-expanded="${state.all || state.opened.has(node.id)}">${state.all || state.opened.has(node.id) ? word('收起这些步骤', 'Collapse these steps') : word('在图中展开这些步骤', 'Expand these steps in the graph')}</button><ol>${children.map(child => `<li><button type="button" data-solution-select="${html(child.id)}" data-status="${child.status}"><span>${kindNames[model.locale][child.kind]} · ${statusNames[model.locale][child.status]}</span><strong data-solution-prose>${html(child.title)}</strong>${child.summary ? `<span class="solution-route-record-preview" data-solution-prose>${html(child.summary)}</span>` : ''}</button></li>`).join('')}</ol></section>` : ''}
       ${relation(false)}
       ${node.action ? `<button type="button" class="solution-route-open" data-solution-open="${html(node.id)}">${html(node.action.label)} ↗</button>` : ''}`;
   }
@@ -146,7 +146,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
         const d = vertical ? `M${x1} ${y1} C${x1} ${y1 + 20},${x2} ${y2 - 20},${x2} ${y2}` : `M${x1} ${y1} C${x1 + bend} ${y1},${x2 - bend} ${y2},${x2} ${y2}`;
         return `<path d="${d}" data-solution-edge="${edge.kind}" data-from="${html(edge.from)}" data-to="${html(edge.to)}" data-connected="${edge.from === state.selected || edge.to === state.selected}" marker-end="url(#solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))})"/>`;
       }).join('')}</svg>${visible.map((node, index) => {
-        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-status="${node.status}" data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${kindNames[model.locale][node.kind]}</span><span>${statusNames[model.locale][node.status]}</span></span><strong>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary">${html(node.summary)}</span>` : ''}</button>`;
+        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-status="${node.status}" data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${kindNames[model.locale][node.kind]}</span><span>${statusNames[model.locale][node.status]}</span></span><strong data-solution-prose>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary" data-solution-prose>${html(node.summary)}</span>` : ''}</button>`;
       }).join('')}</div></div>${!visible.length ? `<p class="solution-route-empty">${word('没有匹配的步骤。换一个关键词，或清空搜索。', 'No matching steps. Try another term or clear the search.')}</p>` : ''}</div>
       <aside class="solution-route-detail" data-solution-inspector aria-label="${word('路线步骤详情', 'Route step details')}" aria-live="polite">${inspector()}</aside></div>
       <footer class="solution-route-footer"><span>${word('实线：依赖或流程 · 虚线：依据或源码引用', 'Solid: dependencies or flow · Dashed: evidence or source references')}</span>${model.partial ? `<span>${word('当前记录尚未全部读取', 'Some records have not been loaded')}</span>` : ''}<div><button type="button" data-solution-step="previous">← ${word('上一步', 'Previous')}</button><button type="button" data-solution-step="next">${word('下一步', 'Next')} →</button></div></footer>`;
@@ -162,7 +162,11 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     }
     const viewport = root.querySelector<HTMLElement>('.solution-route-viewport')!;
     viewport.scrollLeft = state.left; viewport.scrollTop = state.top;
-    for (const element of root.querySelectorAll<HTMLElement>('[data-solution-prose]')) render(h(Rich, { text: element.textContent ?? '' }), element);
+    for (const element of root.querySelectorAll<HTMLElement>('[data-solution-prose]')) {
+      const text = element.textContent ?? '';
+      element.replaceChildren();
+      render(h(Rich, { text }), element);
+    }
   }
   function select(id: string, focus = false) {
     const node = nodesById().get(id); if (!node) return;

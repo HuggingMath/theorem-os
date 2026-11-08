@@ -1,2 +1,5 @@
-/** KaTeX in its own file: the workbench loads it when a chat answer first shows a formula, not on every first visit. */
-export { render } from 'katex';
+import { render } from 'katex';
+import type { MathRuntime } from './mathAssets';
+
+/** Shared by chat, research, explanations and archives; loaded only when a formula is displayed. */
+window.theoremosMath = { render } satisfies MathRuntime;

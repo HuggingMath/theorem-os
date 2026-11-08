@@ -6,6 +6,8 @@ import {
 } from 'lucide';
 import catalog from 'virtual:archive';
 import figuresVersion from 'virtual:proof-figures';
+import mathVersion from 'virtual:math';
+import { configureMathAssets } from '../../apps/web/client/mathAssets';
 import type { ArchiveIndexRecord, ArchiveIndexSource, ArchiveProcess } from './types';
 import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './site';
 import { initializeReplay } from './replay';
@@ -13,7 +15,7 @@ import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from 
 import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
 import { mountProofReading } from './proofReading';
 import { mountProofFigures } from './proofFigures';
-import { mountArchiveSolutionRoutes } from './solutionRouteClient';
+import { mountArchiveSolutionRoutes, typesetArchiveProse } from './solutionRouteClient';
 
 const iconSet = {
   ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
@@ -22,6 +24,7 @@ const iconSet = {
   Pause, Play, RotateCcw, SearchX, ShieldCheck,
 };
 const locale = localeOf(document.documentElement.lang);
+configureMathAssets({ script: `${rootOf(locale)}data/math.js?v=${mathVersion}`, stylesheet: `${rootOf(locale)}assets/katex/katex.min.css` });
 document.documentElement.classList.add('js');
 const replayController = initializeReplay(locale);
 const strings = {
@@ -136,6 +139,8 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
 }
 const icons = () => {
   createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
+  const inspector = document.querySelector<HTMLElement>('#inspector');
+  if (inspector) void typesetArchiveProse(inspector, locale);
   const record = selectedRecord(), process = record && window.theoremosProcesses?.[record.id];
   if (record && process) void mountArchiveSolutionRoutes(record, process, locale).then(() => {
     const toolbar = document.querySelector<HTMLElement>('.process-view-toolbar');

@@ -21,6 +21,9 @@ function build(edit: Record<string, string | null> = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'static-report-'))); roots.push(root);
   const files: Record<string, string | null> = {
     'out/web/theme.js': 'document.documentElement.dataset.theme = "light";', 'out/web/app.css': CSS,
+    'out/web/math.js': 'window.theoremosMath = { render() {} };',
+    'out/web/assets/katex/katex.min.css': '@font-face{font-family:KaTeX_Main;src:url(fonts/KaTeX_Main-Regular.woff2) format("woff2"),url(fonts/KaTeX_Main-Regular.woff) format("woff"),url(fonts/KaTeX_Main-Regular.ttf) format("truetype")}',
+    'out/web/assets/katex/fonts/KaTeX_Main-Regular.woff2': 'math-font',
     'out/web/assets/mark.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>',
     'out/web/assets/fonts/InterVariable-latin.woff2': 'inter', 'out/web/assets/fonts/TheoremOSSerif-latin.woff2': 'serif',
     'out/web/assets/fonts/JetBrainsMono.woff2': 'mono', 'out/web/assets/fonts/NotoSansSC-ui.woff2': 'noto',
@@ -54,9 +57,10 @@ describe('static report pages', () => {
     // The Chinese faces are dropped, so the fallback stacks use system fonts.
     expect(html).not.toContain('NotoS');
     expect(html).toContain('.lean{font-family:"JetBrains Mono"}');
-    expect(html).toMatch(/<script type="application\/json" id="report-data">[^<]*<\/script>\n {2}<script>window\.formalizationBundle = 1;<\/script>/u);
+    expect(html).toContain(`<style data-theoremos-math-style>@font-face{font-family:KaTeX_Main;src:url("data:font/woff2;base64,${base64('math-font')}") format("woff2")}</style>`);
+    expect(html).toMatch(/<script type="application\/json" id="report-data">[^<]*<\/script>\n {2}<script>window\.theoremosMath = \{ render\(\) \{\} \};<\/script><script>window\.formalizationBundle = 1;<\/script>/u);
     expect(html).not.toMatch(/\ssrc="(?!data:)|<link[^>]*\shref="(?!data:)/u);
-    expect(html.match(/<script/gu)).toHaveLength(3);
+    expect(html.match(/<script/gu)).toHaveLength(4);
     expect(payloadOf(html)).toEqual(PAYLOAD);
   });
 
@@ -76,6 +80,9 @@ describe('static report pages', () => {
     ['a missing bundle', { 'out/web-report/formalization.js': null }, /^static_report_build_missing: .*\/out\/web-report\/formalization\.js \(run bun run build:web\)$/u],
     ['a missing font', { 'out/web/assets/fonts/JetBrainsMono.woff2': null }, /^static_report_build_missing: .*JetBrainsMono\.woff2/u],
     ['a missing mark', { 'out/web/assets/mark.svg': null }, /^static_report_build_missing: .*mark\.svg/u],
+    ['a missing formula runtime', { 'out/web/math.js': null }, /^static_report_build_missing: .*math\.js/u],
+    ['a missing formula font', { 'out/web/assets/katex/fonts/KaTeX_Main-Regular.woff2': null }, /^static_report_build_missing: .*KaTeX_Main-Regular\.woff2/u],
+    ['an external formula stylesheet asset', { 'out/web/assets/katex/katex.min.css': 'body{background:url(https://example.com/image.png)}' }, 'static_report_math_stylesheet_reference'],
     ['a bundle tag that changed', { 'out/web-report/formalization.html': page('formalization').replace(' defer>', '>') },
       'static_report_template_changed: <script src="formalization.js" defer></script>'],
     ['a second mark image', { 'out/web-report/formalization.html': page('formalization', '<img src="assets/mark.svg">') },
