@@ -3,6 +3,7 @@ import type { Locale } from './site';
 import { compareSources } from '../../apps/web/client/sourceDiff';
 import { buildArchiveRoadmap, renderArchiveRoadmap } from './processRoadmap';
 import { archiveRoadmapTaskLabel } from './roadmapLabels';
+import { renderGlobalTrajectory } from './globalTrajectory';
 
 type Run = ArchiveProcess['runs'][number];
 type Task = Run['tasks'][number];
@@ -14,10 +15,10 @@ export interface ProcessSelection {
   step: string;
   filter: 'all' | 'checks' | 'decisions';
   code: 'closed' | 'source' | 'diff';
-  view: 'roadmap' | 'steps';
+  view: 'global' | 'roadmap' | 'steps';
   node: string;
 }
-export const emptyProcessSelection = (): ProcessSelection => ({ run: '', task: '', step: '', filter: 'all', code: 'closed', view: 'roadmap', node: '' });
+export const emptyProcessSelection = (): ProcessSelection => ({ run: '', task: '', step: '', filter: 'all', code: 'closed', view: 'global', node: '' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 const choose = (locale: Locale, zh: string, en: string) => locale === 'en' ? en : zh;
 const short = (value: string) => value.slice(0, 12);
@@ -223,8 +224,10 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
   const taskCount = new Set(process.runs.flatMap(run => run.tasks.map(task => task.id))).size;
   const checks = process.runs.reduce((sum, run) => sum + (run.checks?.length ?? run.events.filter(event => event.kind === 'lean-check').length), 0);
   const meaningfulEvents = run.events.filter(event => event.kind === 'baseline' || event.kind === 'transition' && !event.message?.trim());
+  const viewToolbar = `<div class="process-view-toolbar"><h4>${selection.view === 'global' ? choose(locale, '全局解题轨迹', 'Whole-problem trajectory') : choose(locale, '解题路线', 'Proof roadmap')}</h4><div class="process-step-filters" role="group" aria-label="${choose(locale, '轨迹视图', 'Process view')}"><button data-process-view="global" aria-pressed="${selection.view === 'global'}">${choose(locale, '全局轨迹', 'Global trajectory')}</button><button data-process-view="roadmap" aria-pressed="${selection.view === 'roadmap'}">${icon('git-branch')}${choose(locale, '本轮路线图', 'Run roadmap')}</button><button data-process-view="steps" aria-pressed="${selection.view === 'steps'}">${choose(locale, '逐步记录', 'Step records')}</button></div></div>`;
+  if (selection.view === 'global') return `<div class="archive-process" data-process-layout="global" data-process-run-id="${escape(run.runId)}">${viewToolbar}${renderGlobalTrajectory(record, process, locale, value => processStatus(value, locale))}</div>`;
   return `<div class="archive-process" data-process-run-id="${escape(run.runId)}" data-process-layout="${selection.view}">
-    <div class="process-introduction"><p>${escape(record.summary)}</p>${record.campaign ? `<div class="process-final-mark">${icon('shield-check')}<span>${choose(locale, '完整原题', 'Original problem')}<strong>${choose(locale, '本地验收通过', 'Locally accepted')}</strong></span></div>` : ''}</div>
+    ${viewToolbar}<div class="process-introduction"><p>${escape(record.summary)}</p>${record.campaign ? `<div class="process-final-mark">${icon('shield-check')}<span>${choose(locale, '完整原题', 'Original problem')}<strong>${choose(locale, '本地验收通过', 'Locally accepted')}</strong></span></div>` : ''}</div>
     <dl class="process-overview"><div><dt>${choose(locale, '记录运行', 'Recorded runs')}</dt><dd>${process.runs.length}</dd></div><div><dt>${choose(locale, '归档任务', 'Archived tasks')}</dt><dd>${taskCount}</dd></div>
       <div><dt>${choose(locale, '已存检查', 'Saved checks')}</dt><dd>${checks}</dd></div><div><dt>${choose(locale, '最终验收', 'Final acceptance')}</dt><dd class="process-overview-date">${escape(new Date(record.updatedAt).toISOString().slice(0, 10))}</dd></div></dl>
     <nav class="process-run-nav ${process.runs.length === 1 ? 'process-single-run' : ''}" aria-label="${choose(locale, '选择运行记录', 'Choose a recorded run')}">${process.runs.map((item, index) => `<button class="process-run" data-process-run="${escape(item.runId)}" aria-pressed="${item === run}">
@@ -233,7 +236,6 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
     <section class="process-current-run"><header class="process-run-header"><div><h3>${choose(locale, `第 ${current + 1} 次运行`, `Run ${current + 1}`)}</h3><p>${escape(time(run.startedAt, locale))}${run.finishedAt ? ` — ${escape(time(run.finishedAt, locale))}` : ''} UTC${duration(run, locale) ? ` · ${escape(duration(run, locale))}` : ''}</p></div>
       <a class="inline-link" href="${escape((locale === 'en' ? '../' : '') + record.archiveUrl)}" target="_blank" rel="noreferrer">${choose(locale, '原始记录', 'Original records')}${icon('arrow-up-right')}</a></header>
       ${run.reason ? `<p class="process-run-reason">${escape(readableProcessText(run.reason, 650))}</p>` : ''}
-      <div class="process-view-toolbar"><h4>${choose(locale, '解题路线', 'Proof roadmap')}</h4><div class="process-step-filters" role="group" aria-label="${choose(locale, '轨迹视图', 'Process view')}"><button data-process-view="roadmap" aria-pressed="${selection.view === 'roadmap'}">${icon('git-branch')}${choose(locale, '路线图', 'Roadmap')}</button><button data-process-view="steps" aria-pressed="${selection.view === 'steps'}">${choose(locale, '逐步记录', 'Step records')}</button></div></div>
       ${selection.view === 'roadmap' ? roadmap(record, process, run, steps, selection, locale) : `${taskBrowser(run, selection, locale)}
       <div class="process-timeline-toolbar"><h4>${choose(locale, '研究步骤', 'Research steps')} <span>${filtered.length}</span></h4><div class="process-step-filters" role="group" aria-label="${choose(locale, '筛选研究步骤', 'Filter research steps')}">${([
         ['all', choose(locale, '全部', 'All')], ['checks', choose(locale, '证明检查', 'Proof checks')], ['decisions', choose(locale, '计划与交付', 'Plans and deliveries')],

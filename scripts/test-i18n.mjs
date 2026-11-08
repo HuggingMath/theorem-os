@@ -452,8 +452,8 @@ try {
     assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
     assert.deepEqual(await cjkIn(page), [], `English local acceptance at ${width}px`);
     assert.equal(await page.locator('.campaign-evidence a').getAttribute('href'), '../data/proofs/openai_totient_companion_zero/verification.json');
-    await page.getByRole('tab', { name: 'Research process' }).click();
-    await page.locator('.process-run').first().waitFor();
+    await page.getByRole('tab', { name: 'Routes and trajectory' }).click();
+    await page.locator('.global-run-lane').first().waitFor();
     await checkOverflow(page, `English research process at ${width}px`);
 
     if (width <= 700) {

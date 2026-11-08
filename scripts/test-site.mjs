@@ -44,9 +44,9 @@ try {
     assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
     assert.match(await page.locator('.campaign-evidence').innerText(), new RegExp(record.campaign.proofSha256));
     assert.equal(await page.locator('.official-result-link').count(), 0);
-    await page.getByRole('tab', { name: '解题过程' }).click();
-    await page.locator('.process-run').first().waitFor();
-    assert.equal(await page.locator('.process-run').count(), record.process.runs.length);
+    await page.getByRole('tab', { name: '路线与轨迹' }).click();
+    await page.locator('.global-run-lane').first().waitFor();
+    assert.equal(await page.locator('.global-run-lane').count(), record.process.runs.length);
     await page.locator('[data-action="back-list"]').first().click();
   }
   const example = local.find(record => record.campaign.target === 'TotientCompanionZero');
@@ -56,10 +56,10 @@ try {
   await page.locator('#source-file').waitFor();
   assert.equal(await page.locator('#source-file option').count(), example.sources.length);
   assert.match(await page.locator('.source-code').innerText(), /companion_zero_case/);
-  await page.getByRole('tab', { name: '解题过程' }).click();
+  await page.getByRole('tab', { name: '路线与轨迹' }).click();
   const processLink = page.url();
   await page.reload();
-  await page.locator('.process-run').first().waitFor();
+  await page.locator('.global-run-lane').first().waitFor();
   assert.equal(page.url(), processLink);
   const localDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载此题档案 JSON' }).click();
@@ -172,7 +172,7 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Source overflow at ${viewport.width}px`);
     await page.screenshot({ path: path.join(output, `source-${viewport.width}.png`), fullPage: true });
     await page.goto(`${url}?deep-link=${viewport.width}#proof=${example.id}&tab=process&status=verified`);
-    await page.locator('.process-run').first().waitFor();
+    await page.locator('.global-run-lane').first().waitFor();
     await page.evaluate(() => document.fonts.ready);
     if (viewport.width <= 700) {
       await page.waitForFunction(() => document.activeElement?.id === 'inspector');

@@ -8,7 +8,7 @@ import { buildSiteCatalog } from '../docs/web/catalog';
 import { acceptedProofRows, featuredProof, researchReplay } from '../docs/web/presentation';
 import { LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
 import { analyticsWebsiteId, customDomain, pagesOrigin } from '../docs/web/site';
-import { archiveCounts, buildArchive } from './site-archive';
+import { archiveAssetVersions, archiveCounts, buildArchive, versionArchivePage } from './site-archive';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
@@ -16,6 +16,8 @@ const catalog = buildSiteCatalog(root, revision);
 const output = path.join(root, 'out/site');
 fs.mkdirSync(output, { recursive: true });
 await buildArchive(root, output, catalog);
+fs.copyFileSync(path.join(root, 'docs/process.css'), path.join(output, 'process.css'));
+const archiveVersions = archiveAssetVersions(output);
 await build({
   entryPoints: [path.join(root, 'docs/web/landing.ts')], outfile: path.join(output, 'landing.js'),
   bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true,
@@ -38,12 +40,12 @@ for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
   fs.writeFileSync(path.join(output, directory, 'index.html'), homepage);
   for (const file of ['archive.html', 'feedback.html', 'privacy.html']) {
     let page = fs.readFileSync(path.join(root, 'docs', directory, file), 'utf8');
-    if (file === 'archive.html') page = archiveCounts(page, catalog)
-      .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale, 'archive'));
+    if (file === 'archive.html') page = versionArchivePage(archiveCounts(page, catalog)
+      .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale, 'archive')), archiveVersions);
     fs.writeFileSync(path.join(output, directory, file), page);
   }
 }
-for (const file of ['site.css', 'process.css', 'replay.css', 'feedback.css', 'legal.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
+for (const file of ['site.css', 'replay.css', 'feedback.css', 'legal.css']) fs.copyFileSync(path.join(root, 'docs', file), path.join(output, file));
 // Embed the Latin fonts so the same typography works for file:// previews without font CORS errors.
 // The CJK subsets are too large to inline; file:// previews fall back to system CJK fonts for them.
 const landingCss = fs.readFileSync(path.join(root, 'docs/landing.css'), 'utf8')

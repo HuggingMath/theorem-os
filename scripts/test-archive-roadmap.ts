@@ -50,7 +50,7 @@ const hash = (page: Page) => new URLSearchParams(new URL(page.url()).hash.slice(
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const mark = (message: string) => { checks.push(message); console.log(`PASS ${message}`); };
 const urlFor = (record: ArchiveRecord, locale: string, params: Record<string, string> = {}) =>
-  `${origin}/classics/${locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: record.id, tab: 'process', status: 'verified', ...params })}`;
+  `${origin}/classics/${locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: record.id, tab: 'process', mode: 'roadmap', status: 'verified', ...params })}`;
 async function observe(context: BrowserContext, label: string) {
   await context.route(/^https?:\/\//u, route => {
     const request = route.request(), url = new URL(request.url());
@@ -69,7 +69,7 @@ async function open(page: Page, record: ArchiveRecord, locale: string, params: R
   await page.goto(urlFor(record, locale, params));
   await page.locator('.process-roadmap').waitFor(); await page.evaluate(() => document.fonts.ready); await settled(page);
   assert.equal(await page.locator('[data-process-view="roadmap"]').getAttribute('aria-pressed'), 'true');
-  assert.equal(await page.locator('.process-step-list').isVisible(), false, 'The default experience must be a graph');
+  assert.equal(await page.locator('.process-step-list').isVisible(), false, 'Run roadmap mode must show a graph');
   assert.equal(await page.locator('#tab-process').getAttribute('aria-selected'), 'true');
 }
 async function selectRun(page: Page, run: Run) {
@@ -135,9 +135,9 @@ try {
       const dependencies = await verifyGraph(page, complex.record, complex.run);
       assert.ok(dependencies > 4, 'The complex example must exercise multiple real dependency edges');
       assert.equal(await page.locator('.catalog').isVisible(), false);
-      await fits(page, `${label}: default graph`);
+      await fits(page, `${label}: run graph`);
       await shot(page, `roadmap-${locale}-${width}.png`);
-      mark(`${label}: the default graph contains every real task and exactly ${dependencies} archived dependencies`);
+      mark(`${label}: the run graph contains every real task and exactly ${dependencies} archived dependencies`);
 
       const blocked = complex.run.tasks.find(task => task.status === 'blocked')!;
       await node(page, `task:${blocked.id}`).click();
@@ -241,7 +241,7 @@ try {
     assert.equal(raw.status(), 200); assert.deepEqual(await raw.json(), record.process);
   }
   await context.close(); active = undefined;
-  mark(`all 16 accepted problems open real default roadmaps with ${taskNodes} task nodes and ${dependencyEdges} saved dependency edges`);
+  mark(`all 16 accepted problems open real run roadmaps with ${taskNodes} task nodes and ${dependencyEdges} saved dependency edges`);
   assert.equal(runnerCalls, 0); assert.deepEqual(writes, []); assert.deepEqual(apiReads, []); assert.deepEqual(external, []); assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
     checks, screenshots, records: catalog.records.length, taskNodes, dependencyEdges, paidModelCalls: false,

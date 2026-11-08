@@ -53,7 +53,7 @@ const strings = {
     empty: '没有可显示的记录', details: '档案详情', backList: '返回题目列表',
     accessPrompt: '想用 TheoremOS 研究自己的题目？', requestAccess: '申请内测',
     copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
-    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '解题过程' },
+    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '路线与轨迹' },
     copied: '已复制', copyFailed: '复制失败，请检查浏览器剪贴板权限',
     loadingSource: '正在载入 Lean 源码…', sourceUnavailable: '源码载入失败。可以通过原文件链接查看。',
     row: (title: string, accepted: boolean) => `${title}，${accepted ? '官方已验收' : '尚未官方验收'}`,
@@ -90,7 +90,7 @@ const strings = {
     empty: 'No records to show', details: 'Record details', backList: 'Back to results',
     accessPrompt: 'Have a problem to research with TheoremOS?', requestAccess: 'Request access',
     copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
-    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Research process' },
+    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Routes and trajectory' },
     copied: 'Copied', copyFailed: 'Copy failed. Check the clipboard permission of your browser.',
     loadingSource: 'Loading the Lean source…', sourceUnavailable: 'The source could not be loaded. You can use the original file link.',
     row: (title: string, accepted: boolean) => `${title}, ${accepted ? 'officially accepted' : 'not yet officially accepted'}`,
@@ -170,13 +170,15 @@ function readLocation() {
   state.filter = ['accepted', 'verified', 'progress'].includes(params.get('status') ?? '') ? params.get('status') as Filter : 'all';
   state.query = params.get('q') ?? '';
   state.sort = ['title', 'recent'].includes(params.get('sort') ?? '') ? params.get('sort') as Sort : 'verified';
-  state.tab = ['source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
+  state.tab = ['overview', 'source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
   const id = params.get('proof');
   state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
+  if (id && !params.has('tab') && selectedRecord()?.processSummary) state.tab = 'process';
   state.sourceName = '';
   processRecordId = state.selected;
   processSelection = { ...emptyProcessSelection(), run: params.get('run') ?? '', task: params.get('task') ?? '', step: params.get('step') ?? '',
-    view: params.get('mode') === 'steps' ? 'steps' : 'roadmap', node: params.get('node') ?? '',
+    view: params.get('mode') === 'steps' ? 'steps' : params.get('mode') === 'roadmap' ? 'roadmap'
+      : params.get('mode') === 'global' ? 'global' : ['run', 'node', 'task', 'step'].some(key => params.has(key)) ? 'roadmap' : 'global', node: params.get('node') ?? '',
     filter: params.get('filter') === 'checks' ? 'checks' : params.get('filter') === 'decisions' ? 'decisions' : 'all' };
   return id === state.selected ? id : undefined;
 }
@@ -186,17 +188,19 @@ function writeLocation(push = false) {
   if (state.view === 'quickstart') params.set('view', 'quickstart');
   else {
     if (state.selected) params.set('proof', state.selected);
-    if (state.tab !== 'overview') params.set('tab', state.tab);
+    params.set('tab', state.tab);
     if (state.filter !== 'all') params.set('status', state.filter);
     if (state.query) params.set('q', state.query);
     if (state.sort !== 'verified') params.set('sort', state.sort);
     if (state.tab === 'process') {
-      if (processSelection.run) params.set('run', processSelection.run);
-      if (processSelection.task) params.set('task', processSelection.task);
-      if (processSelection.step) params.set('step', processSelection.step);
-      if (processSelection.view === 'steps') params.set('mode', 'steps');
-      if (processSelection.node && processSelection.node !== 'problem') params.set('node', processSelection.node);
-      if (processSelection.filter !== 'all') params.set('filter', processSelection.filter);
+      params.set('mode', processSelection.view);
+      if (processSelection.view !== 'global') {
+        if (processSelection.run) params.set('run', processSelection.run);
+        if (processSelection.task) params.set('task', processSelection.task);
+        if (processSelection.step) params.set('step', processSelection.step);
+        if (processSelection.node && processSelection.node !== 'problem') params.set('node', processSelection.node);
+        if (processSelection.filter !== 'all') params.set('filter', processSelection.filter);
+      }
     }
   }
   const url = `#${params.toString() || 'view=archive'}`;
@@ -226,7 +230,7 @@ function renderList(shown: ArchiveRecord[]) {
       <span class="row-symbol ${verified(record) ? '' : 'progress'}">${icon(verified(record) ? 'file-check-2' : 'file-clock')}</span>
       <span><span class="row-title">${html(record.title)}</span><span class="row-subtitle">${html(record.subtitle)}<span class="area-label">${html(record.area)}</span></span></span>
       <span class="row-end">${statusBadge(record)}<span class="row-date">${date(record.updatedAt)}</span></span>
-    </button></li>`).join('');
+    </button>${record.processSummary ? `<button class="row-route-open" data-proof-route="${record.id}" aria-label="${html((locale === 'en' ? 'Open routes and trajectory: ' : '打开路线与轨迹：') + record.title)}">${icon('git-branch')}<span>${locale === 'en' ? 'Routes & trajectory' : '路线图与全局轨迹'}</span>${icon('arrow-right')}</button>` : ''}</li>`).join('');
   element('#empty-state').hidden = shown.length > 0;
   element('#result-count').textContent = strings.results(shown.length, state.query);
 }
@@ -363,12 +367,13 @@ function processView(record: ArchiveRecord): string {
       icons();
       writeLocation();
       revealProcessStep();
+      if (!failed && revealProcessAfterLoad) { revealProcessAfterLoad = false; revealProcessContent(); }
     };
     void loadProcess(record).then(() => refresh(false), () => refresh(true));
     return `<p class="source-loading" role="status">${strings.loadingProcess}</p>`;
   }
   const run = selectedProcessRun(process, record, processSelection);
-  processSelection.run = run?.runId ?? '';
+  if (processSelection.view !== 'global') processSelection.run = run?.runId ?? '';
   if (processSelection.task && !run?.tasks.some(task => task.id === processSelection.task)) processSelection.task = '';
   return renderArchiveProcess(record, process, processSelection, locale, run ? processEvidenceView(run) : '');
 }
@@ -383,6 +388,12 @@ function refreshProcess(record: ArchiveRecord, target?: HTMLElement) {
   if (list) list.scrollTop = scroll;
   revealProcessStep();
   if (attribute && value !== null) document.querySelector<HTMLElement>(`#detail-panel [${attribute}="${CSS.escape(value ?? '')}"]`)?.focus({ preventScroll: true });
+}
+
+let revealProcessAfterLoad = false;
+function revealProcessContent() {
+  const content = document.querySelector<HTMLElement>('.process-view-toolbar');
+  content?.scrollIntoView({ block: 'start' });
 }
 
 function revealProcessStep() {
@@ -517,7 +528,7 @@ function download(name: string, content: string, type: string) {
 }
 
 document.addEventListener('click', event => {
-  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
+  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-global-run], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
   if (!target) return;
   if (target.dataset.viewLink) {
     event.preventDefault();
@@ -527,11 +538,15 @@ document.addEventListener('click', event => {
     render();
     return;
   }
-  if (target.dataset.proofId) {
-    state.selected = target.dataset.proofId;
+  if (target.dataset.proofId || target.dataset.proofRoute) {
+    state.selected = target.dataset.proofId ?? target.dataset.proofRoute!;
     state.sourceName = '';
+    if (selectedRecord()?.processSummary) { state.tab = 'process'; processSelection = emptyProcessSelection(); processRecordId = state.selected; revealProcessAfterLoad = true; }
+    else if (state.tab === 'process') state.tab = 'overview';
     render();
-    if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
+    if (state.tab === 'process') {
+      if (document.querySelector('.process-view-toolbar')) { revealProcessAfterLoad = false; revealProcessContent(); }
+    } else if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
     return;
   }
   if (target.dataset.tab) {
@@ -545,6 +560,11 @@ document.addEventListener('click', event => {
     return;
   }
   const record = selectedRecord();
+  if (record && target.dataset.globalRun) {
+    processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: target.dataset.globalRun, node: target.dataset.globalNode ?? 'problem', step: target.dataset.globalStep ?? '' };
+    refreshProcess(record); revealProcessContent();
+    return;
+  }
   if (record && Object.keys(target.dataset).some(key => key.startsWith('process'))) {
     if (target.dataset.processOpenTab) {
       state.tab = target.dataset.processOpenTab as Tab;
@@ -558,8 +578,8 @@ document.addEventListener('click', event => {
         else download(`${record.id}-${digest.slice(0, 12)}.lean`, source.code, 'text/plain;charset=utf-8');
       }
     } else {
-      if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), view: processSelection.view, run: target.dataset.processRun };
-      if (target.dataset.processView) processSelection.view = target.dataset.processView as 'roadmap' | 'steps';
+      if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), view: processSelection.view === 'global' ? 'roadmap' : processSelection.view, run: target.dataset.processRun };
+      if (target.dataset.processView) processSelection.view = target.dataset.processView as typeof processSelection.view;
       if (target.dataset.processNode !== undefined) {
         const process = window.theoremosProcesses?.[record.id];
         const run = process && selectedProcessRun(process, record, processSelection);

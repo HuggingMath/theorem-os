@@ -3,7 +3,7 @@ import path from 'node:path';
 import { campaignRecords } from '../docs/web/campaignCatalog';
 import { siteRepository } from '../docs/web/site';
 import type { ArchiveCatalog } from '../docs/web/types';
-import { archiveCounts, buildArchive } from './site-archive';
+import { archiveAssetVersions, archiveCounts, buildArchive, versionArchivePage } from './site-archive';
 import { researchReplay } from '../docs/web/presentation';
 import { LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
 
@@ -15,6 +15,8 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
     snapshotAt: campaign.capturedAt!, records: campaign.records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
   const output = path.join(webOutput, 'classics');
   await buildArchive(root, output, catalog);
+  fs.copyFileSync(path.join(root, 'docs/process.css'), path.join(output, 'process.css'));
+  const archiveVersions = archiveAssetVersions(output);
   const replay = JSON.parse(fs.readFileSync(path.join(root, 'docs/assets/replay.json'), 'utf8'));
   for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
     const english = locale === 'en', workbench = english ? '../../' : '../', home = `https://theoremos.top/${english ? 'en/' : ''}`;
@@ -36,7 +38,7 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
       : page.replaceAll('证明档案', '经典题库').replace(`<a href="${workbench}"><span>产品首页</span>`, `<a href="${workbench}" aria-label="返回工作台"><i data-lucide="chevron-left"></i><span>工作台</span>`)
         .replace('>申请内测<', '>研究工作台<').replace('aria-label="TheoremOS 首页"', 'aria-label="返回工作台"');
     fs.mkdirSync(path.join(output, directory), { recursive: true });
-    fs.writeFileSync(path.join(output, directory, 'archive.html'), page);
+    fs.writeFileSync(path.join(output, directory, 'archive.html'), versionArchivePage(page, archiveVersions));
   }
   // Zero official/snapshot counts stay in the DOM for the shared archive renderer, without empty filters in this library.
   const css = fs.readFileSync(path.join(root, 'docs/site.css'), 'utf8') + `
@@ -50,7 +52,6 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
 }
 `;
   fs.writeFileSync(path.join(output, 'site.css'), css);
-  fs.copyFileSync(path.join(root, 'docs/process.css'), path.join(output, 'process.css'));
   fs.copyFileSync(path.join(root, 'docs/replay.css'), path.join(output, 'replay.css'));
   fs.mkdirSync(path.join(output, 'assets'), { recursive: true });
   fs.cpSync(path.join(root, 'docs/assets/fonts'), path.join(output, 'assets/fonts'), { recursive: true });
