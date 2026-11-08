@@ -1,5 +1,5 @@
 import {
-  createIcons, ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
+  createIcons, ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code2,
   Download, ExternalLink, FileCheck2, FileCode2, FileJson2, Files, FlaskConical, FolderOpen, GitFork, Globe, History, Info,
   KeyRound, Maximize2, Menu, Network, Pause, Play, Plus, RotateCcw, ScanLine, ShieldCheck, Wallet, X, ZoomIn, ZoomOut,
 } from 'lucide';
@@ -8,7 +8,7 @@ import { createSelectionIndicator } from './selectionIndicator';
 import { keepHashOnLanguageSwitch, localeOf, rootOf } from './site';
 
 const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
-  Download, ExternalLink, FileCheck2, FileCode2, FileJson2, Files, FlaskConical, FolderOpen, GitFork, Globe, History, Info, KeyRound, Maximize2, Menu, Network, Pause, Play, Plus,
+  ChevronDown, Download, ExternalLink, FileCheck2, FileCode2, FileJson2, Files, FlaskConical, FolderOpen, GitFork, Globe, History, Info, KeyRound, Maximize2, Menu, Network, Pause, Play, Plus,
   RotateCcw, ScanLine, ShieldCheck, Wallet, X, ZoomIn, ZoomOut };
 const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
 const element = <T extends HTMLElement = HTMLElement>(selector: string): T => {
@@ -37,6 +37,9 @@ const text = {
 icons();
 document.documentElement.classList.add('js');
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+if (matchMedia('(max-width: 600px)').matches) {
+  document.querySelectorAll<HTMLDetailsElement>('[data-mobile-disclosure]').forEach(disclosure => { disclosure.open = false; });
+}
 const selectionTargets = new Set<Element>();
 function animateSelection(targets: Element[], distance = 7) {
   for (const target of targets) selectionTargets.add(target);
@@ -62,7 +65,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
     gsap.set('.hero-actions', { opacity: 0, y: 10 });
     gsap.set('.workbench-preview', { opacity: 0, y: 20 });
     gsap.timeline({ defaults: { duration: .65, ease: 'power3.out', clearProps: 'opacity,transform' } })
-      .to('.hero-name', { yPercent: 0, duration: .85 }, 0)
+      .to('.hero-name', { yPercent: 0, duration: .85, stagger: .1 }, 0)
       .to('.hero-category, .hero-description', { opacity: 1, y: 0, stagger: .06 }, .16)
       .to('.hero-actions', { opacity: 1, y: 0 }, .28)
       .to('.workbench-preview', { opacity: 1, y: 0, duration: .8 }, .32);
@@ -99,43 +102,43 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
       });
     }
   }, { rootMargin: '0px 0px -35px 0px', threshold: .08 });
-  document.querySelectorAll('.section-heading, .audience-grid, .replay-window, .proof-row, .component-explorer, .product-fragment, .archive-showcase, .record-notes, .start-copy, .start-terminal, .faq-list')
+  document.querySelectorAll('.section-heading, .audience-grid, .replay-window, .proof-row, .featured-proof, .component-explorer, .product-fragment, .archive-showcase, .record-notes, .start-copy, .start-terminal, .faq-list')
     .forEach(target => observer.observe(target));
   return () => observer.disconnect();
 });
 
 const components = {
   zh: {
-  m1: { contract: 'M1 · 证明构造接口', title: '把想法，写成候选证明。',
+  m1: { contract: 'M1 · 证明构造接口', title: '构造与修复候选',
     description: '调用模型会话，在隔离工作区中构造和修复 Lean 候选。研究你的生成方式、提示和修复策略。',
     input: '题目 · 上下文 · 操作 · 模型会话', output: '候选记录 · 工作区中的证明' },
-  m2: { contract: 'M2 · 检查反馈接口', title: '让诊断，成为研究线索。',
+  m2: { contract: 'M2 · 检查反馈接口', title: '整理 Lean 诊断',
     description: '检查候选与辅助证明，把 Lean 诊断交还研究过程。局部检查之后，集成结果仍需接受完整原题的独立验收。',
     input: '固定题目 · 候选源码 · 检查环境', output: '绑定源码摘要的检查与诊断' },
-  m3: { contract: 'M3 · 搜索接口', title: '让下一步，有章可循。',
-    description: '选择就绪任务，决定继续、重试或停止。把任务排序与路线、预算约束放在一起研究。',
+  m3: { contract: 'M3 · 搜索接口', title: '选择下一步任务',
+    description: '选择就绪任务，决定继续、重试或停止，结合路线与共享预算安排尝试。',
     input: '研究状态 · 候选操作 · 共享预算', output: '下一步操作 · 有序就绪任务' },
-  m4: { contract: 'M4 · 上下文接口', title: '把相关证据，带入思考。',
+  m4: { contract: 'M4 · 上下文接口', title: '选择研究上下文',
     description: '从题目、已有成果与失败记录中整理上下文。比较信息选择、上下文压缩和检索策略。',
     input: '题目 · 当前任务 · 可见证据', output: '带来源身份的上下文包' },
-  m5: { contract: 'M5 · 协作复用接口', title: '让分工与交接，可以研究。',
+  m5: { contract: 'M5 · 协作复用接口', title: '分工与复用证明',
     description: '组织隔离工作区、任务分配与独立审阅。比较单 Agent、独立并行与任务协作的研究方法。',
     input: '就绪任务 · Worker · 路线约束', output: '工作区配置 · 任务与审阅分配' },
   },
   en: {
-  m1: { contract: 'M1 · Proof construction', title: 'Turn ideas into candidate proofs.',
+  m1: { contract: 'M1 · Proof construction', title: 'Build and repair candidates',
     description: 'Calls a model session to build and repair Lean candidates in an isolated workspace. Study your generation method, prompts and repair strategy.',
     input: 'Statement · context · operation · model session', output: 'Candidate record · proof in the workspace' },
-  m2: { contract: 'M2 · Check feedback', title: 'Make diagnostics a research signal.',
+  m2: { contract: 'M2 · Check feedback', title: 'Inspect Lean diagnostics',
     description: 'Checks candidates and helper proofs and returns Lean diagnostics to the research process. After local checks, the integrated result still has to pass independent verification of the full original statement.',
     input: 'Fixed statement · candidate source · check environment', output: 'Checks and diagnostics bound to a source digest' },
-  m3: { contract: 'M3 · Search', title: 'Give the next step a rule.',
-    description: 'Picks ready tasks and decides whether to continue, retry or stop. Study task ordering together with route and budget constraints.',
+  m3: { contract: 'M3 · Search', title: 'Choose the next task',
+    description: 'Select ready tasks and decide whether to continue, retry or stop within route constraints and a shared budget.',
     input: 'Research state · candidate operations · shared budget', output: 'Next operation · ordered ready tasks' },
-  m4: { contract: 'M4 · Context', title: 'Bring the relevant evidence into reasoning.',
+  m4: { contract: 'M4 · Context', title: 'Select the research context',
     description: 'Assembles context from the statement, earlier results and failure records. Compare information selection, context compression and retrieval strategies.',
     input: 'Statement · current task · visible evidence', output: 'Context bundle with source identities' },
-  m5: { contract: 'M5 · Collaboration and reuse', title: 'Make division of labor and handoff researchable.',
+  m5: { contract: 'M5 · Collaboration and reuse', title: 'Assign tasks and review results',
     description: 'Organizes isolated workspaces, task assignment and independent review. Compare single-agent, independent parallel and task-collaboration methods.',
     input: 'Ready tasks · workers · route constraints', output: 'Workspace configuration · task and review assignment' },
   },
@@ -216,10 +219,11 @@ function selectModulePreview(id: ModulePreview, focus = false) {
   }
   modulePreviewPanel.setAttribute('aria-labelledby', `module-preview-tab-${id}`);
   const image = modulePreviewLink.querySelector('img')!;
-  image.src = `${root}assets/workbench-${id}-desktop.png`;
+  const suffix = locale === 'en' ? '-en' : '';
+  image.src = `${root}assets/workbench-${id}-desktop${suffix}.png`;
   image.alt = content.alt;
-  modulePreviewLink.querySelector('source')!.srcset = `${root}assets/workbench-${id}-mobile.png`;
-  modulePreviewLink.href = `${root}assets/workbench-${id}-${narrow.matches ? 'mobile' : 'desktop'}.png`;
+  modulePreviewLink.querySelector('source')!.srcset = `${root}assets/workbench-${id}-mobile${suffix}.png`;
+  modulePreviewLink.href = `${root}assets/workbench-${id}-${narrow.matches ? 'mobile' : 'desktop'}${suffix}.png`;
   modulePreviewLink.setAttribute('aria-label', text.previewLabel(content.label));
   element('#module-preview-caption').textContent = content.caption;
   if (changed) animateSelection([image, element('#module-preview-caption')], 6);
@@ -366,7 +370,7 @@ const previewDialog = element<HTMLDialogElement>('#workbench-dialog');
 const previewMedia = element('.preview-dialog-media');
 const previewZoom = element<HTMLButtonElement>('.preview-zoom');
 const updatePreviewSource = () => {
-  const source = `${root}assets/workbench-full-${narrow.matches ? 'mobile' : 'desktop'}.png`;
+  const source = `${root}assets/workbench-full-${narrow.matches ? 'mobile' : 'desktop'}${locale === 'en' ? '-en' : ''}.png`;
   previewLink.href = source;
   element<HTMLAnchorElement>('.preview-original').href = source;
 };
@@ -380,7 +384,7 @@ function zoomPreview(zoomed: boolean) {
   previewZoom.setAttribute('aria-pressed', String(zoomed));
   previewZoom.setAttribute('aria-label', zoomed ? text.fit : text.zoom);
   previewZoom.title = zoomed ? text.fit : text.zoom;
-  previewMedia.scrollTo({ left: zoomed ? left : 0, top: zoomed ? top : 0 });
+  requestAnimationFrame(() => previewMedia.scrollTo({ left: zoomed ? left : 0, top: zoomed ? top : 0 }));
 }
 previewLink.addEventListener('click', event => {
   if (!previewDialog.showModal || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;

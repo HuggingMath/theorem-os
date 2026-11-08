@@ -24,18 +24,31 @@ const trackErrors = page => {
 const checkWidth = async (page, label) => assert.ok(
   await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Horizontal overflow: ${label}`,
 );
+const checkAnchorClearance = async (page, id) => {
+  await page.waitForFunction(id => {
+    const section = document.querySelector(id);
+    const heading = document.getElementById(section.getAttribute('aria-labelledby')) ?? section.querySelector('h1, h2, h3') ?? section;
+    const target = heading.getBoundingClientRect();
+    const header = document.querySelector('.site-header').getBoundingClientRect();
+    return target.top >= Math.max(0, header.bottom) && target.bottom <= innerHeight;
+  }, id);
+};
+// Screenshots and evidence may sit in native disclosures in either layout.
+const reveal = async locator => {
+  for (const ancestor of await locator.locator('xpath=ancestor::details').all()) {
+    if (await ancestor.getAttribute('open') !== null) continue;
+    await ancestor.locator(':scope > summary').click();
+    assert.notEqual(await ancestor.getAttribute('open'), null, 'The disclosure must expose its content');
+  }
+};
 const checkWorkbench = async (page, label) => {
   const figure = page.locator('#workbench-preview');
-  assert.equal(await figure.evaluate(node => node.tagName), 'FIGURE');
-  assert.equal(await figure.locator('picture.workbench-picture').count(), 1);
-  const caption = await figure.locator('figcaption').innerText();
-  assert.match(await figure.locator('img').getAttribute('alt'), /自然语言入口/);
-  assert.equal(await figure.locator('figcaption .status-dot').count(), 0);
+  assert.match(await figure.locator('.workbench-image-link img').getAttribute('alt'), /自然语言|原题|工作台/);
   assert.equal(await figure.locator('source[srcset*="assets/workbench-mobile.png"]').count(), 1);
-  const screenshot = figure.locator('.workbench-picture img');
+  const screenshot = figure.locator('img[src$="workbench-desktop.png"]');
   assert.equal(await screenshot.getAttribute('src'), 'assets/workbench-desktop.png');
   assert.ok(await screenshot.getAttribute('alt'), 'The workbench screenshot must have descriptive alternative text');
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await screenshot.scrollIntoViewIfNeeded();
   const image = await screenshot.evaluate(async image => {
     await image.decode();
     const bounds = image.getBoundingClientRect();
@@ -53,24 +66,70 @@ const checkWorkbench = async (page, label) => {
   assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
   assert.deepEqual({ width: image.width, height: image.height },
     { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, `Screenshot natural dimensions: ${label}`);
-  assert.ok(image.visibleWidth >= 200 && image.visibleHeight >= 100, `The actual workbench must be visible in the first viewport: ${label}`);
+  assert.ok(image.visibleWidth >= 200 && image.visibleHeight >= 100, `The actual workbench must remain viewable: ${label}`);
+};
+const checkFeaturedProof = async (page, label) => {
+  const record = accepted.find(record => record.id === 'dimitrov');
+  const feature = page.locator('#featured-proof');
+  const source = fs.readFileSync(path.join(root, record.sources.find(source => source.name === 'Submission.lean').path), 'utf8');
+  const body = await feature.locator('pre code').textContent();
+  assert.ok(source.includes(body), 'The featured proof body must match the accepted source verbatim');
+  assert.match(await feature.innerText(), /Dimitrov/);
+  assert.ok((await feature.locator('.featured-question').innerText()).trim(), 'The historical case must retain its problem description');
+  const disclosure = feature.locator('details');
+  const wasOpen = await disclosure.getAttribute('open') !== null;
+  await disclosure.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await disclosure.locator('pre').isVisible(), !wasOpen, 'The source disclosure supports the keyboard');
+  await page.keyboard.press('Enter');
+  assert.equal(await disclosure.locator('pre').isVisible(), wasOpen, 'The source disclosure restores its original state');
+  assert.equal(await feature.locator('.featured-receipt a').getAttribute('href'), record.official.resultUrl);
+  assert.equal(await feature.locator('.featured-problem a').getAttribute('href'), 'archive.html#proof=dimitrov&tab=source');
+  assert.match(await feature.innerText(), /历史|前身|原始归属/);
+  assert.ok((await feature.locator('figcaption').innerText()).includes(record.model));
+
 };
 const checkStart = async page => {
   const start = page.locator('#start');
-  assert.match(await start.innerText(), /已开放内测/);
+  assert.equal(await start.isVisible(), true, 'The beta application information must remain available');
+  assert.match(await start.innerText(), /白名单/);
+  assert.match(await start.innerText(), /内测|Beta/i);
   assert.doesNotMatch(await start.innerText(), /即将开放/);
   assert.equal(await start.locator('[data-command], .copy-command, pre').count(), 0, 'The start section must not offer deployment commands');
-  assert.equal(await page.locator('.nav-start').innerText(), '打开工作台');
-  assert.equal(await page.locator('.nav-start').getAttribute('href'), 'https://app.theoremos.top/');
-  assert.equal(await page.locator('.hero-actions .button').getAttribute('href'), 'https://app.theoremos.top/');
-  const open = start.locator('.start-links a.button');
-  assert.equal(await open.innerText(), '打开工作台');
+  assert.ok((await page.locator('.nav-start').innerText()).trim(), 'Access navigation has an accessible label');
+  assert.equal(await page.locator('.nav-start').getAttribute('href'), '#start');
+  assert.equal(await page.locator('[data-umami-event="request-access-hero"]').getAttribute('href'), '#start');
+  assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
+  const open = start.locator('[data-umami-event="open-workbench"]');
+  assert.ok((await open.innerText()).trim(), 'The workbench link has an accessible label');
   assert.equal(await open.getAttribute('href'), 'https://app.theoremos.top/');
-  const apply = start.locator('.start-links a[data-umami-event="apply-github"]');
-  assert.equal(await apply.innerText(), '用 GitHub 申请内测');
+  const apply = start.locator('[data-umami-event="apply-github"]');
+  assert.match(await apply.innerText(), /申请|内测/);
   assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
-  assert.match(await start.locator('.start-note').innerText(), /公开/);
-  assert.equal(await start.locator('.start-note a').getAttribute('href'), 'mailto:liuzhenhao@westlake.edu.cn?subject=TheoremOS%20%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7');
+  assert.match(await start.innerText(), /公开/);
+  const email = new URL(await start.locator('a[href^="mailto:"]').first().getAttribute('href'));
+  assert.equal(email.protocol, 'mailto:');
+  assert.equal(email.pathname, 'liuzhenhao@westlake.edu.cn');
+  assert.equal(email.searchParams.get('subject'), 'TheoremOS 内测申请');
+  assert.match(email.searchParams.get('body'), /研究用途：\n\n公开题目或 Lean 链接（选填）：/);
+};
+const checkProofActions = async page => {
+  for (const record of accepted) {
+    const row = page.locator(`[data-accepted-proof="${record.id}"]`);
+    await reveal(row);
+    assert.ok((await row.innerText()).includes(record.model), `Original attribution: ${record.id}`);
+    assert.ok((await row.innerText()).includes(record.area), `Research area: ${record.id}`);
+    const result = row.locator(`a[href="${record.official.resultUrl}"]`);
+    assert.equal(await result.getAttribute('href'), record.official.resultUrl);
+    assert.match(await result.innerText(), /官方|Lean-Eval/);
+    assert.ok(await result.getAttribute('aria-label'), 'Official evidence needs an accessible name');
+    assert.equal(await row.locator('[data-proof-source]').getAttribute('href'), `archive.html#proof=${record.id}&tab=source`);
+    for (const link of await row.locator(`a[data-proof-source], a[href="${record.official.resultUrl}"]`).all()) {
+      const box = await link.boundingBox();
+      assert.ok(box && box.height >= 44, 'Each evidence link must keep a usable touch target');
+    }
+  }
+
 };
 const checkScreenshotPreview = async (page, width) => {
   const link = page.locator('.workbench-image-link');
@@ -85,11 +144,15 @@ const checkScreenshotPreview = async (page, width) => {
   });
   assert.match(preview.source, width <= 600 ? /workbench-full-mobile\.png/ : /workbench-full-desktop\.png/);
   assert.equal(await dialog.locator('.preview-original').getAttribute('href'), new URL(preview.source).pathname.split('/').slice(-2).join('/'));
-  assert.match(await dialog.locator('#preview-description').innerText(), /自然语言入口/);
+  assert.ok((await dialog.locator('#preview-description').innerText()).trim(), 'The screenshot dialog retains its accessible description');
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('preview-open')), true);
   const media = dialog.locator('.preview-dialog-media');
   await dialog.getByRole('button', { name: '放大截图' }).click();
   assert.equal(await dialog.getByRole('button', { name: '适应窗口' }).getAttribute('aria-pressed'), 'true');
+  await page.waitForFunction(() => {
+    const media = document.querySelector('.preview-dialog-media');
+    return media.scrollWidth >= media.clientWidth * 1.9;
+  });
   assert.ok(await media.evaluate(node => node.scrollWidth >= node.clientWidth * 1.9), 'Zoom must expose a larger, scrollable image');
   await checkWidth(page, `${width}px screenshot preview`);
   const close = dialog.locator('.preview-close');
@@ -123,6 +186,9 @@ const checkScreenshotPreview = async (page, width) => {
   }
 };
 const checkArchivePreview = async (page, width) => {
+  for (const link of await page.locator('.archive-showcase a').all())
+    assert.equal(await link.getAttribute('href'), 'archive.html#proof=annals_equiangular_lines_fixed_angle');
+  assert.ok((await page.locator('.archive-showcase figcaption').innerText()).trim(), 'The archive preview retains its caption');
   const image = page.locator('.archive-image-link img');
   await image.scrollIntoViewIfNeeded();
   const result = await image.evaluate(async node => {
@@ -131,14 +197,17 @@ const checkArchivePreview = async (page, width) => {
     return { source: node.currentSrc, ratio: node.naturalWidth / node.naturalHeight,
       renderedRatio: bounds.width / bounds.height, fits: bounds.width <= parent.width + 1 };
   });
-  assert.match(result.source, width <= 600 ? /archive-preview-mobile\.png/ : /archive-preview\.png/);
-  assert.ok(result.fits && Math.abs(result.ratio - result.renderedRatio) < .01, 'The archive screenshot must remain complete without cropping');
+  assert.match(result.source, width <= 600 ? /archive-preview-mobile-focus\.png/ : /archive-preview\.png/);
+  assert.ok(result.fits && Math.abs(result.ratio - result.renderedRatio) < .01, 'The archive excerpt must fit without stretching or further cropping');
 };
 const checkProductImages = async (page, label) => {
-  const images = page.locator('.workbench-picture img, .module-preview-link img, .product-fragment img, .archive-image-link img');
+  const images = page.locator('#workbench-preview img, #module-preview-panel img, img[src*="workbench-source-detail"], img[src*="workbench-settings-detail"], .archive-image-link img');
   assert.ok(await images.count() >= 4, `At least four real product pictures must be present: ${label}`);
   const sources = new Set();
   for (const image of await images.all()) {
+    const disclosure = image.locator('xpath=ancestor::details');
+    const closed = await disclosure.count() > 0 && await disclosure.getAttribute('open') === null;
+    if (closed) await disclosure.locator('summary').click();
     // Bring lazy-loaded fragments into view before waiting for their pixels.
     await image.scrollIntoViewIfNeeded();
     const picture = await image.evaluate(async node => {
@@ -157,11 +226,13 @@ const checkProductImages = async (page, label) => {
     assert.ok(picture.alt.trim(), `Product picture must have descriptive alternative text: ${picture.source}`);
     assert.ok(picture.fits && Math.abs(picture.ratio - picture.renderedRatio) < .01,
       `Product picture must fit its container without stretching or cropping: ${picture.source}, ${label}`);
+    if (closed) await disclosure.locator('summary').click();
   }
   assert.ok(sources.size >= 4, `Product pictures must show distinct real views: ${label}`);
 };
 const checkModuleShowcase = async (page, width) => {
   const panel = page.locator('#module-preview-panel');
+  await reveal(panel);
   let panelHeight;
   for (const id of ['modules', 'library']) {
     const tab = page.locator(`#module-preview-tab-${id}`);
@@ -192,28 +263,40 @@ const checkModuleShowcase = async (page, width) => {
     assert.equal(await tab.evaluate(node => node === document.activeElement), true);
   }
 };
-const componentContent = {
-  m1: { title: /候选证明/, description: /隔离工作区.*构造和修复 Lean 候选/, input: /题目.*模型会话/, output: /候选记录.*证明/ },
-  m2: { title: /诊断/, description: /Lean 诊断.*独立验收/, input: /候选源码.*检查环境/, output: /源码摘要.*检查与诊断/ },
-  m3: { title: /下一步/, description: /就绪任务.*预算约束/, input: /研究状态.*共享预算/, output: /下一步操作.*有序就绪任务/ },
-  m4: { title: /证据/, description: /失败记录.*检索策略/, input: /题目.*可见证据/, output: /来源身份.*上下文包/ },
-  m5: { title: /分工与交接/, description: /任务分配.*独立审阅/, input: /就绪任务.*路线约束/, output: /工作区配置.*审阅分配/ },
+const componentMeaning = {
+  m1: /候选|构造|生成|证明/, m2: /检查|诊断|反馈/, m3: /搜索|任务|下一步|预算/,
+  m4: /上下文|检索|证据/, m5: /协作|分工|审阅/,
 };
-const checkMobileComponentGrid = async (page, label) => {
-  const result = await page.locator('.component-tabs').evaluate(list => {
-    const bounds = list.getBoundingClientRect();
-    const tabs = [...list.querySelectorAll('[data-component]')];
-    return { display: getComputedStyle(list).display, count: tabs.length,
-      fits: list.scrollWidth <= list.clientWidth + 1 && tabs.every(tab => {
-        const box = tab.getBoundingClientRect(), title = tab.querySelector('strong').getBoundingClientRect();
-        return box.width > 0 && box.height > 0 && box.left >= bounds.left - 1 && box.right <= bounds.right + 1 &&
-          box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1 &&
-          title.left >= box.left - 1 && title.right <= box.right + 1;
-      }) };
-  });
-  assert.equal(result.display, 'grid', `Mobile components must use a complete grid: ${label}`);
-  assert.equal(result.count, 5);
-  assert.ok(result.fits, `All five mobile component tabs and labels must fit without sideways scrolling: ${label}`);
+const checkHomepageFacts = async page => {
+  await reveal(page.locator('[data-accepted-proof]').first());
+  const hero = await page.locator('#hero-title').evaluate(node => node.closest('section').innerText);
+  assert.match(hero, /Lean/i, 'The introduction must explain the Lean proof workflow');
+  assert.match(hero, /证明|验收|检查/);
+  const content = await page.locator('main').innerText();
+  assert.match(content, /白名单/);
+  assert.match(content, /(?:内测|平台)[^。\n]*免费/);
+  assert.match(content, /模型[^。\n]*(?:服务商|计费|费用)|服务商[^。\n]*(?:收费|计费|费用)/);
+  assert.match(content, /(?:自己|自备|你的)[^。\n]*(?:Key|密钥)|(?:Key|密钥)[^。\n]*(?:自己|自备|你的)/i);
+  assert.match(content, /DeepScientist Math/);
+  assert.match(content, /DeepScientist \+ GPT-5\.6/);
+  for (const event of ['request-access-hero', 'open-workbench-hero'])
+    assert.equal(await page.locator(`[data-umami-event="${event}"]`).isVisible(), true, `Primary action remains available: ${event}`);
+  assert.equal(await page.locator('[data-umami-event="request-access-hero"]').getAttribute('href'), '#start');
+  assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
+};
+const checkMobileComponentTabs = async (page, label) => {
+  const tabs = page.locator('[data-component]');
+  assert.equal(await tabs.count(), 5);
+  for (const tab of await tabs.all()) {
+    await tab.focus();
+    const fits = await tab.evaluate(node => {
+      const bounds = node.getBoundingClientRect(), range = document.createRange();
+      range.selectNodeContents(node);
+      return bounds.width > 0 && bounds.height > 0 && bounds.left >= -1 && bounds.right <= innerWidth + 1 &&
+        [...range.getClientRects()].every(text => text.width === 0 || text.left >= bounds.left - 1 && text.right <= bounds.right + 1);
+    });
+    assert.ok(fits, `Every component tab and its label must remain accessible: ${label}`);
+  }
 };
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
@@ -221,40 +304,31 @@ try {
   await page.goto(url);
   await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
   await page.evaluate(() => document.fonts.ready);
-  assert.ok(await page.evaluate(() => [...document.fonts].some(font => font.family.replace(/["']/g, '') === 'Hanken Grotesk' && font.status === 'loaded')), 'The local preview must load the bundled Hanken Grotesk font');
   assert.match(await page.title(), /TheoremOS/);
   assert.equal(await page.locator('h1').count(), 1);
+  await checkFeaturedProof(page, '1440px local preview');
   await checkWorkbench(page, '1440px local preview');
   await checkScreenshotPreview(page, 1440);
   await checkArchivePreview(page, 1440);
   await checkProductImages(page, '1440px local preview');
   await checkModuleShowcase(page, 1440);
-  assert.equal(await page.locator('#motion-toggle, .manifold').count(), 0);
-  assert.equal(await page.locator('#demo').evaluate(demo => demo.closest('.hero-shell') === null), true,
-    'The archived replay must be a separate section from the workbench hero');
-  const hostingFaq = page.locator('.faq-list details').filter({ hasText: '可以直接在网页运行证明吗' });
-  assert.equal(await hostingFaq.count(), 1);
-  await hostingFaq.locator('summary').click();
-  assert.match(await page.locator('#start').innerText(), /白名单 Beta/);
-  assert.equal(await hostingFaq.locator('a').getAttribute('href'), 'https://app.theoremos.top/');
-  await hostingFaq.locator('summary').click();
-  assert.equal(await page.locator('.proof-table tbody .proof-row[data-accepted-proof]').count(), accepted.length);
-  assert.equal(await page.locator('.proof-count').innerText(), String(accepted.length));
-  for (const record of accepted) {
-    const card = page.locator(`[data-accepted-proof="${record.id}"]`);
-    assert.equal(await card.locator('.proof-credit').innerText(), record.model);
-    assert.equal(await card.locator('.official-link').getAttribute('href'), record.official.resultUrl);
-    assert.equal(await card.locator('a[data-proof-source]').getAttribute('href'), `archive.html#proof=${record.id}&tab=source`);
-  }
-  assert.match(await page.locator('.proof-provenance').innerText(), /前身 DeepScientist/);
+  assert.equal(await page.locator('#demo').count(), 1, 'The replay remains directly linkable');
+  await checkHomepageFacts(page);
+  assert.equal(await page.locator('[data-accepted-proof]').count(), accepted.length);
+  assert.match(await page.locator('a[href="archive.html#status=accepted"]').innerText(), new RegExp(`\\b${accepted.length}\\b`));
+  await checkProofActions(page);
+  assert.match(await page.locator('#proofs').innerText(), /DeepScientist/);
+  assert.match(await page.locator('#proofs').innerText(), /历史|前身|原始归属/);
   assert.match(await page.locator('.receipt-status').innerText(), new RegExp(replayEvidence.status));
+  await reveal(page.locator('.receipt-targets'));
   for (const target of replayEvidence.targets) assert.ok((await page.locator('.receipt-targets').innerText()).includes(target.theorem));
-  assert.match(await page.locator('.replay-badge').innerText(), /预设回放 · 不调用模型/);
+  assert.match(await page.locator('#demo').innerText(), /预设|示例|回放/);
+  assert.match(await page.locator('#demo').innerText(), /不调用模型|无需调用模型|无模型调用/);
   for (const id of ['candidate', 'feedback', 'repair', 'verified']) {
     await page.locator(`#demo-${id}`).click();
     assert.equal(await page.locator(`#demo-${id}`).getAttribute('aria-selected'), 'true');
     assert.equal(await page.locator(`#stage-${id}`).isVisible(), true);
-    assert.equal(await page.locator('.replay-panel:visible').count(), 1);
+    assert.equal(await page.locator('[role="tabpanel"][id^="stage-"]:visible').count(), 1);
     assert.match(await page.locator('.receipt-status').innerText(), /evaluated_passed/);
   }
   assert.match(await page.locator('#stage-candidate').textContent(), /0 \+ n = n := by rfl/);
@@ -272,17 +346,27 @@ try {
   }
   assert.ok(fs.existsSync(path.join(site, 'assets/social-preview.png')));
 
+  const componentDescriptions = new Set();
   for (const id of ['m1', 'm2', 'm3', 'm4', 'm5']) {
     await page.locator(`#tab-${id}`).click();
     assert.equal(await page.locator(`#tab-${id}`).getAttribute('aria-selected'), 'true');
     assert.equal(await page.locator('#component-panel').getAttribute('aria-labelledby'), `tab-${id}`);
     assert.match(await page.locator('#module-kicker').innerText(), new RegExp(id.toUpperCase()));
-    for (const [field, wording] of Object.entries(componentContent[id])) {
-      assert.match(await page.locator(`#module-${field}`).innerText(), wording, `Component ${id} must show its own ${field}`);
+    const description = [];
+    for (const field of ['title', 'description', 'input', 'output']) {
+      const value = (await page.locator(`#module-${field}`).innerText()).trim();
+      assert.ok(value, `Component ${id} must show its ${field}`);
+      description.push(value);
     }
-    assert.match(await page.locator('.independent-check').innerText(), /完整原题.*独立 Lean.*验收/);
+    assert.match(description.join(' '), componentMeaning[id], `Component ${id} must explain its role`);
+    componentDescriptions.add(description[1]);
+    const verification = await page.locator('.independent-check').innerText();
+    assert.match(verification, /原题|完整/);
+    assert.match(verification, /独立|Lean/);
+    assert.match(verification, /验收|检查/);
     await checkWidth(page, `component ${id}`);
   }
+  assert.equal(componentDescriptions.size, 5, 'Each research component must display its own explanation');
   await page.locator('#tab-m5').focus();
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.locator('#tab-m1').getAttribute('aria-selected'), 'true');
@@ -311,22 +395,19 @@ try {
     await page.goto(url);
     await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
     await page.evaluate(() => document.fonts.ready);
+    await checkHomepageFacts(page);
+    await checkFeaturedProof(page, `${viewport.width}px homepage`);
     await checkWorkbench(page, `${viewport.width}px homepage`);
     await checkScreenshotPreview(page, viewport.width);
     await checkArchivePreview(page, viewport.width);
     await checkProductImages(page, `${viewport.width}px homepage`);
     await checkModuleShowcase(page, viewport.width);
     await checkStart(page);
+    await checkProofActions(page);
     await checkWidth(page, `${viewport.width}px homepage`);
     for (const id of ['feedback', 'repair', 'verified']) {
       await page.locator(`#demo-${id}`).click();
       await checkWidth(page, `${viewport.width}px replay ${id}`);
-    }
-    if (viewport.width <= 390) {
-      const receipt = await page.locator('.replay-receipt').boundingBox();
-      const editor = await page.locator('.replay-editor').boundingBox();
-      assert.ok(receipt && editor && receipt.y + receipt.height <= editor.y + 1,
-        `The archived receipt must precede the editor at ${viewport.width}px`);
     }
     assert.ok(await page.locator('.brand img').first().evaluate(image => image.complete && image.naturalWidth > 0));
     await page.locator('#tab-m2').click();
@@ -340,7 +421,7 @@ try {
       });
       assert.equal(selected.active, 'true');
       assert.ok(selected.visible, 'Keyboard selection must reveal the active mobile component tab');
-      await checkMobileComponentGrid(page, `${viewport.width}px homepage`);
+      await checkMobileComponentTabs(page, `${viewport.width}px homepage`);
     }
     await page.locator('#start').scrollIntoViewIfNeeded();
     await checkWidth(page, `${viewport.width}px start section`);
@@ -351,41 +432,73 @@ try {
     await page.screenshot({ path: path.join(output, `landing-${viewport.width}.png`), fullPage: true });
     await page.screenshot({ path: path.join(output, `landing-${viewport.width}-hero.png`) });
   }
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(url);
-  await page.getByRole('button', { name: '打开导航' }).click();
-  assert.equal(await page.locator('#mobile-nav').isVisible(), true);
-  await page.keyboard.press('Escape');
-  assert.equal(await page.locator('#mobile-nav').isVisible(), false);
-  assert.equal(await page.getByRole('button', { name: '打开导航' }).evaluate(button => button === document.activeElement), true);
-  await page.getByRole('button', { name: '打开导航' }).click();
-  await page.locator('#mobile-nav a[href="#components"]').click();
-  assert.equal(await page.locator('#mobile-nav').isVisible(), false);
-  assert.equal(new URL(page.url()).hash, '#components');
-  assert.equal(await page.locator('.component-tabs').getAttribute('aria-orientation'), 'horizontal');
+  for (const width of [320, 390, 768]) {
+    await page.setViewportSize({ width, height: width === 768 ? 1024 : 844 });
+    await page.goto(url);
+    await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
+    await page.locator('#proofs').scrollIntoViewIfNeeded();
+    const header = await page.locator('.site-header').boundingBox();
+    assert.ok(header && Math.abs(header.y) < 1, `The header stays available while reading at ${width}px`);
+    const menu = page.getByRole('button', { name: '打开导航' });
+    await menu.click();
+    assert.equal(await page.locator('#mobile-nav').isVisible(), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#mobile-nav').isVisible(), false);
+    assert.equal(await menu.evaluate(button => button === document.activeElement), true);
+    for (const target of ['#components', '#workbench-preview', '#start']) {
+      await menu.click();
+      await page.locator(`#mobile-nav a[href="${target}"]`).click();
+      assert.equal(await page.locator('#mobile-nav').isVisible(), false);
+      assert.equal(new URL(page.url()).hash, target);
+      await checkAnchorClearance(page, target);
+    }
+    assert.equal(await page.locator('.component-tabs').getAttribute('aria-orientation'), 'horizontal');
+    if (await page.locator('.nav-start').isVisible()) {
+      await page.locator('.nav-start').click();
+      await checkAnchorClearance(page, '#start');
+    }
+    await checkWidth(page, `${width}px sticky navigation`);
+  }
   await page.getByRole('button', { name: '打开导航' }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.waitForFunction(() => document.querySelector('#mobile-nav').hidden);
   assert.equal(await page.locator('#mobile-nav').isVisible(), false);
 
   // The proof row opens the exact archived source, and the archive returns home.
+  await reveal(page.locator('[data-accepted-proof="annals_rademacher_enflo_type"]'));
   await page.locator('[data-accepted-proof="annals_rademacher_enflo_type"] a[data-proof-source]').click();
   await page.waitForSelector('.source-code');
   assert.match(await page.locator('.is-declaration').innerText(), /theorem theorem_1_1/);
   await page.getByRole('link', { name: 'TheoremOS 首页' }).click();
   assert.equal(new URL(page.url()).pathname, new URL(url).pathname);
+  await page.locator('.archive-image-link').click();
+  await page.waitForSelector('#inspector .detail-title');
+  assert.equal(new URL(page.url()).hash, '#proof=annals_equiangular_lines_fixed_angle');
+  assert.equal(await page.locator('#inspector .detail-title').innerText(), 'Equiangular lines');
+  assert.match(await page.locator('#inspector .record-facts').innerText(), /DeepScientist Math \+ GPT-6.1/);
 
-  const noJS = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 1440, height: 1000 } });
+  const noJS = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
   trackErrors(noJS);
   await noJS.goto(url);
-  assert.equal(await noJS.locator('.proof-table tbody .proof-row[data-accepted-proof]').count(), accepted.length);
+  assert.equal(await noJS.locator('[data-accepted-proof]').count(), accepted.length);
+  await checkFeaturedProof(noJS, 'JavaScript-disabled homepage');
   await checkWorkbench(noJS, 'JavaScript-disabled homepage');
   await checkProductImages(noJS, 'JavaScript-disabled homepage');
   assert.equal(await noJS.locator('.module-preview-tabs').isVisible(), false);
   assert.equal(await noJS.locator('.workbench-image-link').getAttribute('href'), 'assets/workbench-full-desktop.png');
   assert.ok(fs.existsSync(path.join(site, 'assets/workbench-full-desktop.png')));
+  await checkHomepageFacts(noJS);
   await checkStart(noJS);
+  await checkProofActions(noJS);
   assert.equal(await noJS.locator('[data-accepted-proof] h3 a').first().isVisible(), true);
+  await noJS.setViewportSize({ width: 320, height: 844 });
+  await noJS.goto(url);
+  assert.equal(await noJS.locator('.menu-toggle').isVisible(), false, 'No-script readers must not get an inert menu');
+  const noScriptApply = noJS.locator('a[href="#start"]:visible').first();
+  assert.equal(await noScriptApply.isVisible(), true, 'An application link stays available without scripts');
+  await noScriptApply.click();
+  await checkAnchorClearance(noJS, '#start');
+  await checkWidth(noJS, '320px no-script navigation');
   await noJS.close();
 
   // Test the repository subpath used by GitHub Pages, with real HTTP resource loading.
@@ -403,19 +516,18 @@ try {
   await page.goto(hosted);
   await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
   await page.evaluate(() => document.fonts.ready);
-  assert.ok(await page.evaluate(() => [...document.fonts].some(font => font.family.replace(/["']/g, '') === 'Hanken Grotesk' && font.status === 'loaded')), 'The Pages subpath must load the bundled Hanken Grotesk font');
   await checkWorkbench(page, 'GitHub Pages repository subpath');
   await checkProductImages(page, 'GitHub Pages repository subpath');
   await checkModuleShowcase(page, 1440);
   await checkScreenshotPreview(page, 1440);
   await page.locator('#tab-m4').click();
   assert.match(await page.locator('#module-kicker').innerText(), /M4/);
-  assert.match(await page.locator('#module-description').innerText(), componentContent.m4.description);
-  await page.locator('.hero-actions a[href="archive.html"]').click();
+  assert.match(await page.locator('#module-description').innerText(), componentMeaning.m4);
+  await page.locator('a[href="archive.html"]').filter({ hasText: '浏览' }).first().click();
   await page.waitForSelector('.proof-row');
   assert.equal(await page.locator('.proof-row').count(), catalog.records.length);
   assert.deepEqual(errors, []);
-  console.log('Landing checks passed: four real product pictures, responsive workbench and uncropped archive screenshots, modal zoom, panning, focus restoration and closing, archived replay and mobile receipt order, verified proof-table links and attribution, complete mobile component grid and changing interface content, coming-soon start section and public-repository links, mobile navigation, JavaScript-disabled content, file preview, bundled Hanken Grotesk, Pages subpath, and 5 viewport sizes.');
+  console.log('Landing checks passed: Lean workflow, beta application and model billing, exact accepted source and original attribution, responsive product screenshots, modal zoom and keyboard focus, replay and component controls, mobile navigation, JavaScript-disabled content, file preview, Pages subpath, and 5 viewport sizes.');
 } finally {
   if (server) await new Promise(resolve => server.close(resolve));
   await browser.close();

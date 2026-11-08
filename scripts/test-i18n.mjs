@@ -69,6 +69,136 @@ const newPage = async width => {
   page.on('response', response => { if (response.status() >= 400) problems.push(`${response.status()} ${response.url()}`); });
   return page;
 };
+// Screenshots and evidence may sit in native disclosures in either layout.
+const reveal = async locator => {
+  for (const ancestor of await locator.locator('xpath=ancestor::details').all()) {
+    if (await ancestor.getAttribute('open') !== null) continue;
+    await ancestor.locator(':scope > summary').click();
+    assert.notEqual(await ancestor.getAttribute('open'), null, 'The disclosure must expose its content');
+  }
+};
+const checkEnglishWorkbench = async (page, width) => {
+  const image = page.locator('.workbench-image-link img');
+  await image.scrollIntoViewIfNeeded();
+  const picture = await image.evaluate(async node => {
+    await node.decode();
+    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
+  });
+  assert.equal(path.basename(new URL(picture.source).pathname), `workbench-${width <= 900 ? 'mobile' : 'desktop'}-en.png`);
+  assert.deepEqual([picture.width, picture.height], width <= 900 ? [390, 440] : [1440, 500]);
+  assert.match(await image.getAttribute('alt'), /natural.language|problem.*input|workbench/i);
+  const dialog = page.locator('#workbench-dialog');
+  await page.locator('.workbench-image-link').click();
+  assert.equal(await dialog.isVisible(), true);
+  const full = await dialog.locator('img').evaluate(async node => {
+    await node.decode();
+    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
+  });
+  const expected = `workbench-full-${width <= 600 ? 'mobile' : 'desktop'}-en.png`;
+  assert.equal(path.basename(new URL(full.source).pathname), expected);
+  assert.deepEqual([full.width, full.height], width <= 600 ? [390, 844] : [1440, 900]);
+  for (const selector of ['.workbench-image-link', '.preview-original'])
+    assert.equal(path.basename(new URL(await page.locator(selector).getAttribute('href'), page.url()).pathname), expected);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#workbench-dialog').open);
+};
+const checkEnglishAdvancedWorkbench = async (page, width) => {
+  const device = width <= 600 ? 'mobile' : 'desktop';
+  await reveal(page.locator('#module-preview-panel'));
+  for (const id of ['modules', 'library']) {
+    await page.locator(`[data-module-preview="${id}"]`).click();
+    const image = page.locator('#module-preview-panel img');
+    await image.scrollIntoViewIfNeeded();
+    const picture = await image.evaluate(async node => {
+      await node.decode();
+      return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
+    });
+    const expected = `workbench-${id}-${device}-en.png`;
+    assert.equal(path.basename(new URL(picture.source).pathname), expected);
+    assert.deepEqual([picture.width, picture.height], device === 'mobile' ? [780, 1688] : [2880, 1800]);
+    assert.equal(path.basename(new URL(await page.locator('.module-preview-link').getAttribute('href'), page.url()).pathname), expected);
+    assert.match(await image.getAttribute('alt'), /module|strateg|Mathlib/i);
+  }
+  assert.ok((await page.locator('#module-preview-caption').innerText()).trim(), 'The selected module view retains its caption');
+  await reveal(page.locator('img[src$="workbench-settings-detail-en.png"]'));
+  for (const name of ['source', 'settings']) {
+    const expected = `workbench-${name}-detail-en.png`;
+    const image = page.locator(`img[src$="${expected}"]`);
+    await image.scrollIntoViewIfNeeded();
+    const picture = await image.evaluate(async node => {
+      await node.decode();
+      return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
+    });
+    assert.equal(path.basename(new URL(picture.source).pathname), expected);
+    assert.ok(picture.width > 0 && picture.height > 0);
+    assert.equal(path.basename(new URL(await image.locator('..').getAttribute('href'), page.url()).pathname), expected);
+  }
+};
+const checkEnglishArchivePreview = async (page, width) => {
+  const figure = page.locator('.archive-showcase');
+  for (const link of await figure.locator('a').all())
+    assert.equal(await link.getAttribute('href'), 'archive.html#proof=annals_equiangular_lines_fixed_angle');
+  assert.ok((await figure.locator('figcaption').innerText()).trim(), 'The English archive preview retains its caption');
+  const image = figure.locator('img');
+  await image.scrollIntoViewIfNeeded();
+  const picture = await image.evaluate(async node => {
+    await node.decode();
+    const box = node.getBoundingClientRect();
+    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight,
+      renderedRatio: box.width / box.height };
+  });
+  const asset = width <= 600 ? 'archive-preview-mobile-focus-en.png' : 'archive-preview-en.png';
+  assert.equal(path.basename(new URL(picture.source).pathname), asset);
+  const png = fs.readFileSync(path.join(site, 'assets', asset));
+  assert.deepEqual([picture.width, picture.height], [png.readUInt32BE(16), png.readUInt32BE(20)]);
+  assert.ok(Math.abs(picture.width / picture.height - picture.renderedRatio) < .01,
+    'The English archive excerpt must retain its actual proportions');
+};
+const checkEnglishHomepageFacts = async page => {
+  const hero = await page.locator('#hero-title').evaluate(node => node.closest('section').innerText);
+  assert.match(hero, /Lean/i);
+  assert.match(hero, /proof|verif|check/i);
+  const content = await page.locator('main').innerText();
+  assert.match(content, /allowlist/i);
+  assert.match(content, /(?:beta|platform)[^.\n]*free|free[^.\n]*(?:beta|platform)/i);
+  assert.match(content, /provider[^.\n]*(?:bill|charg)|model[^.\n]*(?:bill|cost|fee)/i);
+  assert.match(content, /(?:your|own)[^.\n]*(?:API key|model key)|bring[^.\n]*key/i);
+  for (const event of ['request-access-hero', 'open-workbench-hero'])
+    assert.equal(await page.locator(`[data-umami-event="${event}"]`).isVisible(), true, `English primary action remains available: ${event}`);
+  for (const record of catalog.records.filter(record => record.status === 'official_accepted')) {
+    const row = page.locator(`[data-accepted-proof="${record.id}"]`);
+    await reveal(row);
+    assert.ok((await row.innerText()).includes(record.model),
+      `English original attribution: ${record.id}`);
+  }
+};
+const mobileInspectorReady = async page => {
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForFunction(() => {
+    const inspector = document.querySelector('#inspector');
+    return inspector && document.activeElement === inspector && Math.abs(inspector.getBoundingClientRect().top) <= 2;
+  });
+};
+const selectedRowReady = async page => {
+  await page.waitForFunction(() => {
+    const row = document.querySelector('.proof-row.is-selected');
+    if (!row || document.activeElement !== row) return false;
+    const bounds = row.getBoundingClientRect();
+    return bounds.top >= 0 && bounds.bottom <= innerHeight;
+  });
+};
+const assertGeometryState = async (page, proof) => {
+  await page.waitForFunction(proof => {
+    const params = new URLSearchParams(location.hash.slice(1));
+    return params.get('proof') === proof && params.get('q') === 'geometry' &&
+      params.get('status') === 'accepted' && params.get('sort') === 'title' && params.get('tab') === 'evidence';
+  }, proof);
+  assert.equal(await page.locator('#search').inputValue(), 'geometry');
+  assert.equal(await page.locator('input[name="status"][value="accepted"]').isChecked(), true);
+  assert.equal(await page.locator('#sort').inputValue(), 'title');
+  assert.equal(await page.locator('.detail-tabs #tab-evidence').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('.proof-row.is-selected').getAttribute('data-proof-id'), proof);
+};
 
 try {
   for (const width of [1440, 390, 320]) {
@@ -76,6 +206,27 @@ try {
 
     await open(page, `${hosted}en/`, 'landingReady');
     assert.equal(await page.getAttribute('html', 'lang'), 'en');
+    await checkEnglishHomepageFacts(page);
+    assert.equal(await page.locator('[data-umami-event="request-access-hero"]').getAttribute('href'), '#start');
+    assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
+    assert.match(await page.locator('#featured-proof').innerText(), /Official Lean-Eval pass/);
+    const original = catalog.records.find(record => record.id === 'dimitrov');
+    assert.ok((await page.locator('#featured-proof').innerText()).includes(original.model));
+    assert.match(await page.locator('#featured-proof').innerText(), /histor|archiv|original|predecessor/i);
+    assert.ok((await page.locator('.featured-question').innerText()).trim());
+    if (width < 600) {
+      assert.equal(await page.locator('.featured-source').getAttribute('open'), null);
+      await page.locator('.featured-source > summary').click();
+      assert.equal(await page.locator('.featured-code').isVisible(), true);
+      await page.locator('.featured-source > summary').click();
+      const settings = page.locator('img[src$="workbench-settings-detail-en.png"]');
+      await reveal(settings);
+      assert.equal(await settings.isVisible(), true);
+
+    }
+    await checkEnglishWorkbench(page, width);
+    await checkEnglishAdvancedWorkbench(page, width);
+    await checkEnglishArchivePreview(page, width);
     for (const id of ['m1', 'm2', 'm4', 'm5']) await page.locator(`[data-component="${id}"]`).click();
     await page.locator('[data-module-preview="library"]').click();
     await page.locator('#replay-next').scrollIntoViewIfNeeded();
@@ -83,18 +234,34 @@ try {
     await page.locator('.faq-list summary').first().click();
     if (width < 900) await page.locator('.menu-toggle').click();
     assert.deepEqual(await cjkIn(page), [], `English homepage at ${width}px`);
-    assert.equal(await page.locator('#module-preview-panel img').getAttribute('src'), '../assets/workbench-library-desktop.png');
-    assert.equal(await page.locator('#start .start-links a.button').getAttribute('href'), 'https://app.theoremos.top/');
-    const apply = page.locator('#start .start-links a[data-umami-event="apply-github"]');
+    assert.equal(await page.locator('#module-preview-panel img').getAttribute('src'), '../assets/workbench-library-desktop-en.png');
+    assert.equal(await page.locator('[data-umami-event="request-access-hero"]').getAttribute('href'), '#start');
+    assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
+    assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').isVisible(), true);
+    assert.equal(await page.locator('.nav-start').getAttribute('href'), '#start');
+    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
+    assert.equal(await page.locator('#start a[data-umami-event="open-workbench"]').getAttribute('href'), 'https://app.theoremos.top/');
+    const apply = page.locator('#start a[data-umami-event="apply-github"]');
     assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
-    assert.equal(await page.locator('#start .start-note a').getAttribute('href'), 'mailto:liuzhenhao@westlake.edu.cn?subject=TheoremOS%20early%20access');
+    const email = new URL(await page.locator('#start a[href^="mailto:"]').first().getAttribute('href'));
+    assert.equal(email.protocol, 'mailto:');
+    assert.equal(email.pathname, 'liuzhenhao@westlake.edu.cn');
+    assert.equal(email.searchParams.get('subject'), 'TheoremOS early access');
+    assert.match(email.searchParams.get('body'), /Research use:\n\nPublic problem or Lean link \(optional\):/);
     assert.equal(await page.locator('[data-accepted-proof]').count(), catalog.records.filter(record => record.status === 'official_accepted').length);
-    assert.match(await page.locator('.proof-table').innerText(), /Discrete geometry/);
+    assert.match(await page.locator('#proofs').innerText(), /Discrete geometry/);
     await checkOverflow(page, `English homepage at ${width}px`);
     await page.screenshot({ path: path.join(output, `en-index-${width}.png`), fullPage: true });
     if (width < 900) await page.locator('.menu-toggle').click();
 
+    await page.locator('.archive-image-link').click();
+    await page.waitForSelector('#inspector .detail-title');
+    assert.equal(new URL(page.url()).hash, '#proof=annals_equiangular_lines_fixed_angle');
+    assert.equal(await page.locator('#inspector .detail-title').innerText(), 'Equiangular lines');
+    assert.deepEqual(await cjkIn(page), [], `English preview destination at ${width}px`);
+
     await open(page, `${hosted}en/archive.html#proof=hopf_rinow&tab=evidence`);
+    if (width <= 700) await mobileInspectorReady(page);
     assert.equal(await page.getAttribute('html', 'lang'), 'en');
     assert.match(await page.locator('#inspector').innerText(), /Lean-Eval official result/);
     assert.deepEqual(await cjkIn(page), [], `English archive evidence at ${width}px`);
@@ -117,7 +284,38 @@ try {
     await page.getByRole('tab', { name: 'Research process' }).click();
     await page.locator('.process-run').first().waitFor();
     await checkOverflow(page, `English research process at ${width}px`);
+
+    if (width <= 700) {
+      await open(page, `${hosted}en/archive.html#proof=hopf_rinow&status=accepted&q=geometry&sort=title&tab=evidence`);
+      await mobileInspectorReady(page);
+      await assertGeometryState(page, 'hopf_rinow');
+      await page.locator('[data-action="back-list"]').first().click();
+      await selectedRowReady(page);
+      await assertGeometryState(page, 'hopf_rinow');
+
+      const row = page.locator('.proof-row').first();
+      const selectedId = await row.getAttribute('data-proof-id');
+      assert.notEqual(selectedId, 'hopf_rinow', 'The geometry filter must offer a second proof to open');
+      await row.click();
+      await mobileInspectorReady(page);
+      await assertGeometryState(page, selectedId);
+      await page.locator('[data-action="back-list"]').last().click();
+      await selectedRowReady(page);
+      await assertGeometryState(page, selectedId);
+      assert.deepEqual(await cjkIn(page), [], `English mobile archive navigation at ${width}px`);
+    }
+
+    const archiveAccess = page.locator('.archive-access a');
+    assert.equal(await archiveAccess.getAttribute('href'), 'index.html#start');
+    assert.equal(new URL(await archiveAccess.getAttribute('href'), page.url()).href, `${hosted}en/index.html#start`);
+    await archiveAccess.click();
+    await page.waitForURL(`${hosted}en/index.html#start`);
+    await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
+    assert.equal(await page.getAttribute('html', 'lang'), 'en');
+    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
     await open(page, `${hosted}en/archive.html#view=quickstart`);
+    assert.equal(await page.locator('.quickstart-access a').getAttribute('href'), 'index.html#start');
+    assert.equal(new URL(await page.locator('.quickstart-access a').getAttribute('href'), page.url()).href, `${hosted}en/index.html#start`);
     assert.deepEqual(await cjkIn(page), [], `English replay view at ${width}px`);
 
     await open(page, `${hosted}en/feedback.html`, 'feedbackReady');
@@ -146,6 +344,25 @@ try {
     await page.close();
   }
 
+  const noScript = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 320, height: 844 }, reducedMotion: 'reduce' });
+  await noScript.goto(`${hosted}en/`);
+  await noScript.evaluate(() => document.fonts.ready);
+  await checkEnglishHomepageFacts(noScript);
+  assert.equal(await noScript.locator('[data-accepted-proof]').count(), catalog.records.filter(record => record.status === 'official_accepted').length);
+  assert.equal(await noScript.locator('.menu-toggle').isVisible(), false);
+  const noScriptApply = noScript.locator('a[href="#start"]:visible').first();
+  assert.equal(await noScriptApply.isVisible(), true, 'English readers can request access without scripts');
+  await noScriptApply.click();
+  assert.equal(new URL(noScript.url()).hash, '#start');
+  await noScript.waitForFunction(() => {
+    const title = document.querySelector('#start-title').getBoundingClientRect();
+    const header = document.querySelector('.site-header').getBoundingClientRect();
+    return title.top >= Math.max(0, header.bottom) && title.bottom <= innerHeight;
+  });
+  await checkEnglishArchivePreview(noScript, 320);
+  await checkOverflow(noScript, '320px English no-script navigation and archive');
+  await noScript.close();
+
   // Language links point at each other, and switching keeps the section or record in view.
   const page = await newPage(1440);
   for (const [zh, en] of [['', 'en/'], ['archive.html', 'en/archive.html'], ['feedback.html', 'en/feedback.html'], ['privacy.html', 'en/privacy.html']]) {
@@ -173,7 +390,7 @@ try {
   await page.close();
 
   assert.deepEqual(problems, [], 'Pages must load without errors or missing files');
-  console.log('i18n checks passed: English homepage, archive (overview, source, evidence, snapshot, replay), feedback and privacy at 3 widths, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
+  console.log('i18n checks passed: English homepage, archive (overview, source, evidence, snapshot, replay), feedback and privacy at 3 widths, mobile deep-link focus and return to the selected filtered row, localized access links, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
   console.log(`Screenshots: ${path.relative(root, output)}`);
 } finally {
   await browser.close();

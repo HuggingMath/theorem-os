@@ -269,9 +269,8 @@ try {
   await page.getByRole('link', { name: 'TheoremOS 首页' }).click();
   await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
   assert.equal(page.url(), `${hosted}index.html`);
-  assert.ok(await page.locator('.desktop-nav a[href="feedback.html"]').isVisible());
   assert.ok(await page.locator('.site-footer a[href="feedback.html"]').isVisible());
-  await page.locator('.desktop-nav a[href="feedback.html"]').click();
+  await page.locator('.site-footer a[href="feedback.html"]').click();
   await ready(page);
   await page.locator('.feedback-nav a[href="archive.html"]').click();
   await page.waitForSelector('.proof-row');

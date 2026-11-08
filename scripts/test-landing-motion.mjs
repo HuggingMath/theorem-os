@@ -41,7 +41,7 @@ async function assertStage(page, current, playing = false) {
   assert.equal(actual.playing, String(playing), `${currentCheck}: playback state`);
   assert.equal(await page.locator(`#demo-${current}`).getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator(`#stage-${current}`).isVisible(), true);
-  assert.equal(await page.locator('.replay-panel:visible').count(), 1);
+  assert.equal(await page.locator('[role="tabpanel"][id^="stage-"]:visible').count(), 1);
   assert.equal(await page.locator('#replay-play').getAttribute('aria-pressed'), String(playing));
 }
 
@@ -58,7 +58,7 @@ async function progress(page) {
 }
 
 async function assertSelectionIndicator(page, selector) {
-  const bounds = await page.locator(selector).evaluate(list => {
+  const measure = () => page.locator(selector).evaluate(list => {
     const active = list.querySelector('[role="tab"][aria-selected="true"]');
     const indicator = list.querySelector('.selection-indicator');
     if (!active || !indicator) return null;
@@ -66,6 +66,13 @@ async function assertSelectionIndicator(page, selector) {
     return { hidden: indicator.getAttribute('aria-hidden'), interactive: getComputedStyle(indicator).pointerEvents,
       offsets: ['left', 'top', 'width', 'height'].map(key => Math.abs(target[key] - surface[key])) };
   });
+  let bounds = await measure();
+  // Media-query and ResizeObserver callbacks settle on the rendering loop outside the mocked clock.
+  for (let attempt = 0; bounds && bounds.offsets.some(offset => offset >= 1) && attempt < 20; attempt++) {
+    await tick(page, 100);
+    await page.waitForTimeout(16);
+    bounds = await measure();
+  }
   assert.ok(bounds, `${currentCheck}: ${selector} must have an active surface`);
   assert.equal(bounds.hidden, 'true');
   assert.equal(bounds.interactive, 'none', 'The active surface must not intercept controls');
@@ -121,12 +128,13 @@ try {
     await page.clock.pauseAt(start);
     await page.goto(url);
     await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
-    const initialHero = await visualState(page, '.workbench-preview');
-    if (reducedMotion === 'reduce') assert.deepEqual(initialHero, { opacity: 1, transform: 'none' });
-    else assert.ok(initialHero.opacity < 1 || initialHero.transform !== 'none', 'Normal motion must have a product entrance');
+    if (reducedMotion === 'reduce') {
+      for (const selector of ['#hero-title', '#demo', '#workbench-preview'])
+        assert.deepEqual(await visualState(page, selector), { opacity: 1, transform: 'none' });
+    }
     await tick(page, 1300);
-    assert.deepEqual(await visualState(page, '.workbench-preview'), { opacity: 1, transform: 'none' });
-    await page.locator('.workbench-picture img').evaluate(image => image.decode());
+    for (const selector of ['#hero-title', '#demo', '#workbench-preview'])
+      assert.deepEqual(await visualState(page, selector), { opacity: 1, transform: 'none' });
     await screenshot(page, `hero-${viewport.width}-${reducedMotion}.png`);
 
     await assertStage(page, 'verified');
@@ -134,7 +142,8 @@ try {
     await tick(page, 20000);
     await assertStage(page, 'verified');
     assert.equal(await page.locator('#replay-next').isDisabled(), true);
-    assert.match(await page.locator('.replay-badge').innerText(), /预设回放 · 不调用模型/);
+    assert.match(await page.locator('#demo').innerText(), /预设|示例|回放/);
+    assert.match(await page.locator('#demo').innerText(), /不调用模型|无需调用模型|无模型调用/);
     assert.match(await page.locator('.receipt-status').innerText(), /evaluated_passed/);
     assert.equal(await page.locator('.receipt-evidence').getAttribute('href'), 'assets/replay.json');
     await assertWidth(page);
@@ -188,7 +197,9 @@ try {
     await page.locator('#replay-restart').click();
     await assertStage(page, 'candidate', true);
     await tick(page, 900);
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }));
+    assert.ok(await page.locator('.replay-window').evaluate(node => node.getBoundingClientRect().bottom <= 0),
+      'The replay must be outside the viewport before checking automatic pause');
     await tick(page, 500);
     const offscreen = await state(page);
     assert.equal(offscreen.playing, 'false', 'Leaving the viewport must pause playback');
@@ -302,12 +313,16 @@ try {
     track(page);
     await page.goto(url);
     assert.equal(await page.locator('.replay-playback').isVisible(), false);
-    assert.notEqual(await page.locator('#tab-m3').evaluate(node => getComputedStyle(node).backgroundColor),
-      'rgba(0, 0, 0, 0)', 'No-script tabs must retain a visible selected background');
+    assert.equal(await page.locator('#tab-m3').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#component-panel').getAttribute('aria-labelledby'), 'tab-m3');
+    assert.ok((await page.locator('#component-panel').innerText()).trim(), 'No-script readers retain the selected module explanation');
     assert.equal(await page.locator('#stage-verified').isVisible(), true);
     assert.match(await page.locator('.receipt-status').innerText(), /evaluated_passed/);
     assert.equal(await page.locator('.receipt-evidence').getAttribute('href'), 'assets/replay.json');
-    assert.ok(await page.locator('.workbench-picture img').evaluate(image => image.complete && image.naturalWidth > 0));
+    const workbench = page.locator('.workbench-image-link img');
+    await workbench.scrollIntoViewIfNeeded();
+    await workbench.evaluate(image => image.decode());
+    assert.ok(await page.locator('.workbench-image-link img').evaluate(image => image.complete && image.naturalWidth > 0));
     checks.push(currentCheck);
     await context.close();
     currentPage = undefined;

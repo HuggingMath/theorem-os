@@ -6,18 +6,49 @@ const escape = (value: string) => value.replace(/[&<>"']/g, character => ({
 }[character]!));
 
 const rowText = {
-  zh: { pass: '官方通过', source: 'Lean 源码', result: '官方结果', resultLabel: (title: string) => `${title} 官方验收记录` },
-  en: { pass: 'Official pass', source: 'Lean source', result: 'Official result', resultLabel: (title: string) => `Official result for ${title}` },
+  zh: { pass: '官方通过', source: 'Lean 源码', resultLabel: (title: string) => `${title} 官方验收记录` },
+  en: { pass: 'Official pass', source: 'Lean source', resultLabel: (title: string) => `Official result for ${title}` },
 };
 
 export function acceptedProofRows(catalog: ArchiveCatalog, locale: Locale = 'zh') {
   const text = rowText[locale];
   return catalog.records.filter(record => record.status === 'official_accepted').map(entry => localizeRecord(entry, locale)).map(record => `
     <tr class="proof-row" data-accepted-proof="${record.id}">
-      <th scope="row"><h3><a href="archive.html#proof=${record.id}">${escape(record.title)}</a></h3><p class="proof-subtitle">${escape(record.subtitle)}</p><p class="proof-credit">${escape(record.model)}</p></th>
-      <td class="proof-area">${escape(record.area)}</td>
-      <td><span class="proof-pass"><i data-lucide="check"></i>${text.pass}</span><div class="proof-links"><a data-proof-source href="archive.html#proof=${record.id}&tab=source">${text.source}<i data-lucide="arrow-right"></i></a><a class="official-link" href="${escape(record.official!.resultUrl)}" target="_blank" rel="noreferrer" aria-label="${escape(text.resultLabel(record.title))}">${text.result}<i data-lucide="arrow-up-right"></i></a></div></td>
+      <th scope="row"><h3><a href="archive.html#proof=${record.id}">${escape(record.title)}</a></h3><p class="proof-subtitle">${escape(record.subtitle)}<span class="proof-area"> · ${escape(record.area)}</span></p><p class="proof-credit">${escape(record.model)}</p></th>
+      <td><div class="proof-links"><a data-proof-source href="archive.html#proof=${record.id}&tab=source">${text.source}<i data-lucide="arrow-right"></i></a><a class="official-link proof-pass" href="${escape(record.official!.resultUrl)}" target="_blank" rel="noreferrer" aria-label="${escape(text.resultLabel(record.title))}"><i data-lucide="check"></i>${text.pass}<i data-lucide="arrow-up-right"></i></a></div></td>
     </tr>`).join('');
+}
+
+/** Show the archived proof body and its official result without reconstructing a model run. */
+export function featuredProof(catalog: ArchiveCatalog, locale: Locale = 'zh') {
+  const record = catalog.records.find(record => record.id === 'dimitrov');
+  const source = record?.sources.find(source => source.name === 'Submission.lean');
+  const proofStart = source?.code.indexOf(':= by\n') ?? -1;
+  if (record?.status !== 'official_accepted' || !record.official || !source || proofStart < 0) {
+    throw new Error('The featured proof needs the archived Dimitrov source and its official result.');
+  }
+  const proof = source.code.slice(proofStart + 3).replace(/\nend Submission\s*$/, '').trimEnd();
+  const text = {
+    zh: {
+      title: '共轭最大模的下界',
+      problem: '对非零且非单位根的代数整数，证明其所有代数共轭的最大绝对值（house）的下界。',
+      statement: 'Dimitrov · 历史验收案例', proof: 'Lean 证明体节选', verified: 'Lean-Eval 官方通过',
+      source: '查看完整题目与源码', result: '核对官方结果', attribution: '历史成果 · 原始归属：',
+    },
+    en: {
+      title: 'A bound on conjugate size',
+      problem: 'For a nonzero algebraic integer that is not a root of unity, prove a lower bound for the largest absolute value among its algebraic conjugates (its house).',
+      statement: 'Dimitrov · Archived proof', proof: 'Lean proof body excerpt', verified: 'Official Lean-Eval pass',
+      source: 'Read the statement and source', result: 'Check the official result', attribution: 'Archived result · Original attribution: ',
+    },
+  }[locale];
+  return `<figure class="featured-proof" id="featured-proof" data-featured-proof="${record.id}" aria-labelledby="featured-proof-title">
+    <div class="featured-proof-sheet">
+      <div class="featured-problem"><h2 id="featured-proof-title">${text.title}</h2><p class="featured-statement">${text.statement}</p><p class="featured-question">${text.problem}</p><a class="text-link" href="archive.html#proof=${record.id}&tab=source">${text.source}<i data-lucide="arrow-up-right"></i></a></div>
+      <div class="featured-answer"><div class="featured-receipt"><p><i data-lucide="shield-check"></i>${text.verified}</p><a class="text-link" href="${escape(record.official.resultUrl)}" target="_blank" rel="noreferrer">${text.result}<i data-lucide="arrow-up-right"></i></a></div><details class="featured-source" data-mobile-disclosure open><summary class="featured-code-heading"><span>${text.proof}</span><span class="featured-file"><code>${source.name}</code><i data-lucide="chevron-down"></i></span></summary><pre class="featured-code"><code>${escape(proof)}</code></pre></details></div>
+    </div>
+    <figcaption>${text.attribution}${escape(record.model)}</figcaption>
+  </figure>`;
 }
 
 type ReplayEvidence = {
@@ -41,7 +72,7 @@ function leanCode(source: string) {
 const replayText = {
   zh: {
     stages: [['候选证明', '预设候选 01'], ['Lean 反馈', '检查过程讲解'], ['修复候选', '预设候选 02'], ['完整原题验收', '验收源码']],
-    feedback: '<span class="diagnostic-label"><i data-lucide="info"></i>对预设候选的检查说明</span><h3>一处通过，<br>一处还需继续。</h3><p><code>add_zero</code> 可由 <code>rfl</code> 完成；<br><code>zero_add</code> 需要已有引理。</p>',
+    feedback: '<h3>还需证明左侧加零</h3><p><code>add_zero</code> 可由 <code>rfl</code> 完成；<br><code>zero_add</code> 需要已有引理。</p>',
     hint: '下一份候选使用 <code>Nat.zero_add n</code>。',
     badge: '预设回放 · 不调用模型', steps: '预设回放的四个步骤',
     play: '播放预设回放', previous: '回放上一步', next: '回放下一步', restart: '重新播放', archived: '已归档',
@@ -53,7 +84,7 @@ const replayText = {
   },
   en: {
     stages: [['Candidate', 'Preset candidate 01'], ['Lean feedback', 'What the check found'], ['Repair', 'Preset candidate 02'], ['Full verification', 'Verified source']],
-    feedback: '<span class="diagnostic-label"><i data-lucide="info"></i>What the check found in the preset candidate</span><h3>One goal passes,<br>one needs more work.</h3><p><code>add_zero</code> closes with <code>rfl</code>;<br><code>zero_add</code> needs an existing lemma.</p>',
+    feedback: '<h3>Left addition still needs a proof</h3><p><code>add_zero</code> closes with <code>rfl</code>;<br><code>zero_add</code> needs an existing lemma.</p>',
     hint: 'The next candidate uses <code>Nat.zero_add n</code>.',
     badge: 'Preset replay · no model calls', steps: 'The four steps of the preset replay',
     play: 'Play the preset replay', previous: 'Previous step', next: 'Next step', restart: 'Replay from the start', archived: 'Archived',
@@ -82,12 +113,11 @@ export function researchReplay(failedSource: string, proofSource: string, eviden
   ].map((stage, index) => ({ ...stage, label: text.stages[index][0], note: text.stages[index][1] }));
   const feedback = `<div class="demo-diagnostic">${text.feedback}<pre><code>n : Nat\n⊢ 0 + n = n</code></pre><p class="diagnostic-hint">${text.hint}</p></div>`;
   return `<div class="replay-window" data-ui data-replay-playing="false" data-replay-current="verified" data-replay-state="paused">
-    <div class="replay-chrome"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="mono">theoremos / local-replay</span><span class="replay-badge"><span class="status-dot"></span>${text.badge}</span></div>
-    <div class="replay-tabs" role="tablist" aria-label="${text.steps}">${stages.map((stage, index) => `<button type="button" role="tab" id="demo-${stage.id}" aria-controls="stage-${stage.id}" aria-selected="${stage.id === 'verified'}" tabindex="${stage.id === 'verified' ? '0' : '-1'}" data-replay-stage="${stage.id}" data-step-state="${stage.id === 'verified' ? 'current' : 'complete'}"><span class="replay-step-number mono">0${index + 1}</span><span>${stage.label}</span><i data-lucide="${stage.id === 'verified' ? 'shield-check' : 'arrow-right'}"></i></button>`).join('')}</div>
+    <div class="replay-chrome"><span class="replay-badge"><span class="status-dot"></span>${text.badge}</span></div>
+    <div class="replay-tabs" role="tablist" aria-label="${text.steps}">${stages.map(stage => `<button type="button" role="tab" id="demo-${stage.id}" aria-controls="stage-${stage.id}" aria-selected="${stage.id === 'verified'}" tabindex="${stage.id === 'verified' ? '0' : '-1'}" data-replay-stage="${stage.id}" data-step-state="${stage.id === 'verified' ? 'current' : 'complete'}"><span>${stage.label}</span><i data-lucide="${stage.id === 'verified' ? 'shield-check' : 'arrow-right'}"></i></button>`).join('')}</div>
     <div class="replay-toolbar"><div class="replay-playback" hidden><button type="button" id="replay-play" aria-label="${text.play}" title="${text.play}" aria-pressed="false"><i data-lucide="play"></i><i data-lucide="pause"></i></button><button type="button" id="replay-prev" aria-label="${text.previous}" title="${text.previous}"><i data-lucide="chevron-left"></i></button><button type="button" id="replay-next" aria-label="${text.next}" title="${text.next}" disabled><i data-lucide="chevron-right"></i></button><button type="button" id="replay-restart" aria-label="${text.restart}" title="${text.restart}"><i data-lucide="rotate-ccw"></i></button></div><span class="replay-position"><span class="mono" id="replay-step-number">04 / 04</span><span id="replay-step-label">${text.stages[3][0]}</span></span><span class="replay-state" id="replay-status" role="status" aria-live="polite" aria-atomic="true">${text.archived}</span></div>
     <div class="replay-progress" id="replay-progress" role="progressbar" aria-label="${text.progress}" aria-valuemin="1" aria-valuemax="4" aria-valuenow="4" aria-valuetext="${text.progressText(text.stages[3][0])}"><span class="replay-progress-fill"></span></div>
     <div class="replay-layout"><div class="replay-editor">${stages.map(stage => `<div class="replay-panel" id="stage-${stage.id}" role="tabpanel" aria-labelledby="demo-${stage.id}" tabindex="0"${stage.id === 'verified' ? '' : ' hidden'}><div class="editor-heading"><span><i data-lucide="file-code-2"></i>${stage.file}</span><span>${stage.note}</span></div>${stage.code ? `<pre class="demo-code"><code>${leanCode(stage.code)}</code></pre>` : feedback}</div>`).join('')}</div>
-    <aside class="replay-receipt" aria-label="${text.receipt}"><div class="receipt-title"><i data-lucide="shield-check"></i><span>${text.receiptTitle}</span><span class="receipt-local">LOCAL</span></div><div class="receipt-status"><span class="receipt-check"><i data-lucide="check"></i></span><div><strong>${text.passed}</strong><code>${escape(evidence.status)}</code></div></div><div class="receipt-targets">${evidence.targets.map(target => `<div><i data-lucide="check"></i><span><strong>${escape(target.theorem)}</strong><code>${escape(target.declaration.replace(target.theorem + ' ', ''))}</code></span></div>`).join('')}</div><dl class="receipt-facts"><div><dt>${text.method}</dt><dd>${text.methodValue}</dd></div><div><dt>sorryCount</dt><dd>${evidence.targets.reduce((sum, target) => sum + target.sorryCount, 0)}</dd></div><div><dt>${text.checked}</dt><dd>${escape(evidence.checkedAt.slice(0, 10))} UTC</dd></div></dl><div class="receipt-links"><a href="archive.html#view=quickstart" class="receipt-link">${text.record}<i data-lucide="arrow-up-right"></i></a><a href="${root}assets/replay.json" class="receipt-link receipt-evidence" target="_blank" rel="noreferrer" title="${text.rawTitle}">${text.raw}<i data-lucide="file-json-2"></i></a></div></aside></div>
-    <div class="replay-caption"><span>${text.caption}</span><a href="archive.html#view=quickstart">${text.captionLink}<i data-lucide="arrow-up-right"></i></a></div>
+    <aside class="replay-receipt" aria-label="${text.receipt}"><div class="receipt-summary"><div class="receipt-status"><span class="receipt-check"><i data-lucide="check"></i></span><div><strong>${text.passed}</strong><code>${escape(evidence.status)}</code></div></div><div class="receipt-links"><a href="archive.html#view=quickstart" class="receipt-link">${text.record}<i data-lucide="arrow-up-right"></i></a><a href="${root}assets/replay.json" class="receipt-link receipt-evidence" target="_blank" rel="noreferrer" title="${text.rawTitle}">${text.raw}<i data-lucide="file-json-2"></i></a></div></div><details class="receipt-details"><summary class="receipt-title"><i data-lucide="shield-check"></i><span>${text.receiptTitle}</span><span class="receipt-local">LOCAL</span><i data-lucide="chevron-down"></i></summary><div class="receipt-targets">${evidence.targets.map(target => `<div><i data-lucide="check"></i><span><strong>${escape(target.theorem)}</strong><code>${escape(target.declaration.replace(target.theorem + ' ', ''))}</code></span></div>`).join('')}</div><dl class="receipt-facts"><div><dt>${text.method}</dt><dd>${text.methodValue}</dd></div><div><dt>sorryCount</dt><dd>${evidence.targets.reduce((sum, target) => sum + target.sorryCount, 0)}</dd></div><div><dt>${text.checked}</dt><dd>${escape(evidence.checkedAt.slice(0, 10))} UTC</dd></div></dl></details></aside></div>
   </div>`;
 }
