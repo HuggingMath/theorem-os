@@ -427,6 +427,7 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
       },
       {
         id: 'cover-with-four-corner-candidates',
+        figure: 'four-corner-cover',
         title: { zh: '在斜坐标的四个整数角中找覆盖格点', en: 'Find a covering center among four integer corners' },
         given: { zh: '任取 x=(X,Y)，反解斜坐标 α=4X/3−4Y/(3√3)、β=8Y/(3√3)，取小数部分 p,q∈[0,1)。', en: 'For x=(X,Y), invert the lattice coordinates: α=4X/3−4Y/(3√3), β=8Y/(3√3). Their fractional parts p,q lie in [0,1).' },
         claim: {

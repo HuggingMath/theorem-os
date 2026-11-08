@@ -82,6 +82,8 @@ const assetVersions = Object.fromEntries(await Promise.all(['site.js', 'process.
 const processAssetVersions = Object.fromEntries(await Promise.all(catalog.records.map(async record =>
   [record.id, digest(await fs.readFile(path.join(staticRoot, 'classics/data/process', record.id + '.js'))).slice(0, 16)])));
 const processAssetRequests: string[] = [];
+const figureAssetVersion = digest(await fs.readFile(path.join(staticRoot, 'classics/data/proof-figures.js'))).slice(0, 16);
+const figureAssetRequests: string[] = [];
 
 async function observe(context: BrowserContext, label: string, cacheEnabled = false) {
   // Routing disables HTTP caching; the cache scenario only observes request events.
@@ -96,6 +98,7 @@ async function observe(context: BrowserContext, label: string, cacheEnabled = fa
     if (!['GET', 'HEAD'].includes(request.method())) writes.push({ method: request.method(), path: url.pathname });
     if (url.pathname.startsWith('/api/')) apiReads.push(url.pathname);
     if (/\/data\/process\/[^/]+\.js$/u.test(url.pathname)) processAssetRequests.push(url.href);
+    if (url.pathname.endsWith('/data/proof-figures.js')) figureAssetRequests.push(url.href);
     if (cacheEnabled && /\/(?:site\.js|process\.css)$/u.test(url.pathname)) cacheAssets.push(url.href);
   });
   context.on('page', page => {
@@ -235,6 +238,101 @@ async function reading(page: Page, walkthrough: ProofWalkthrough, id: string, lo
     String(walkthrough.stages.findIndex(stage => stage.stepIds.includes(id))), 'The overview follows the current mathematical stage');
   await visible(page, '#proof-derivation-' + id + ' h5', current + ': reading heading');
 }
+async function verifyProofFigure(page: Page, record: ArchiveRecord, locale: 'zh' | 'en', label: string) {
+  const step = record.process!.walkthrough!.steps.find(step => step.figure)!;
+  assert.ok(step?.figure, record.id + ': an actual accepted proof step must own the figure');
+  const location = page.url(), figure = page.locator(attr('data-proof-figure', step.figure));
+  await page.locator('[data-proof-figures-state="ready"]').waitFor();
+  await figure.scrollIntoViewIfNeeded(); await settled(page);
+  const diagram = await figure.locator('.proof-figure-svg').evaluate(svg => {
+    const box = svg.getBoundingClientRect(), parent = svg.parentElement!.getBoundingClientRect();
+    return { width: box.width, height: box.height, left: box.left, right: box.right, parentLeft: parent.left, parentRight: parent.right };
+  });
+  assert.ok(diagram.width >= 150 && diagram.height >= 100 && diagram.left >= diagram.parentLeft - 1 && diagram.right <= diagram.parentRight + 1,
+    'The mathematical SVG must use the full column and fit the screen: ' + JSON.stringify(diagram));
+  if (step.figure === 'triangle-matchings') {
+    for (const choice of ['0', '1', '2', 'all']) {
+      const button = figure.locator(attr('data-triangle-choice', choice));
+      await button.focus(); await button.press(choice === '1' ? 'Space' : 'Enter');
+      assert.equal(await button.evaluate(node => node === document.activeElement), true, 'Changing a matching preserves its control and keyboard focus');
+      assert.equal(await figure.getAttribute('data-triangle-choice'), choice);
+      assert.equal(await figure.locator('[aria-pressed="true"]').count(), 1);
+      assert.equal(await button.getAttribute('aria-pressed'), 'true');
+      const k = choice === 'all' ? 3 : 1, t = choice === 'all' ? 0 : 1;
+      assert.equal(await figure.locator('[data-edge-kind="old"][data-selected="true"]').count(), k);
+      assert.equal(await figure.locator('[data-edge-kind="new"][data-selected="true"]').count(), t);
+      assert.equal(await figure.locator('[data-triangle-equation]').textContent(), k + ' + 2 × ' + t + ' = 3');
+    }
+  } else if (step.figure === 'four-corner-cover') {
+    const p = figure.locator('[data-cover-coordinate="p"]'), q = figure.locator('[data-cover-coordinate="q"]');
+    for (const [a, b, corner] of [[0.1, 0.1, '00'], [0.9, 0.9, '11'], [0.8, 0.2, '10'], [0.2, 0.8, '01']] as const) {
+      const svg = figure.locator('[data-cover-picture]');
+      await svg.scrollIntoViewIfNeeded();
+      const click = await svg.evaluate((node, coordinates) => {
+        const svg = node as SVGSVGElement;
+        const [a, b] = coordinates;
+        const point = new DOMPoint(34 + 148 * a + 74 * b, 196 - 74 * Math.sqrt(3) * b).matrixTransform(svg.getScreenCTM()!);
+        return { x: point.x, y: point.y };
+      }, [a, b]);
+      await page.mouse.click(click.x, click.y);
+      assert.equal(await figure.getAttribute('data-cover-corner'), corner);
+      assert.equal(await p.inputValue(), String(a)); assert.equal(await q.inputValue(), String(b));
+      assert.equal(await figure.locator('[data-cover-region][data-selected="true"]').getAttribute('data-cover-region'), corner);
+      assert.equal(await figure.locator('[data-cover-corner]').textContent(), '(' + corner[0] + ', ' + corner[1] + ')');
+      const selected = await figure.locator('[data-cover-point]').evaluate(node => [Number(node.getAttribute('cx')), Number(node.getAttribute('cy'))]);
+      assert.ok(Math.abs(selected[0] - (34 + 148 * a + 74 * b)) < 0.00001);
+      assert.ok(Math.abs(selected[1] - (196 - 74 * Math.sqrt(3) * b)) < 0.00001);
+    }
+    await p.focus(); await p.press('ArrowRight');
+    assert.equal(await p.inputValue(), '0.21');
+    assert.equal(await p.evaluate(node => node === document.activeElement), true, 'Slider calculations preserve native keyboard focus');
+    assert.equal(await figure.locator('[data-cover-output="p"]').textContent(), '0.21');
+    assert.ok((await figure.locator('[data-cover-quadratic]').textContent())!.includes('0.04210'));
+    await p.press('Home'); await q.focus(); await q.press('End');
+    assert.equal(await p.inputValue(), '0'); assert.equal(await q.inputValue(), '1');
+    assert.equal(await figure.getAttribute('data-cover-corner'), '01');
+    assert.ok((await figure.locator('[data-cover-distance]').textContent())!.includes('0.0000'));
+    const svg = figure.locator('[data-cover-picture]'); await svg.scrollIntoViewIfNeeded();
+    const drag = await svg.evaluate(node => {
+      const transform = (node as SVGSVGElement).getScreenCTM()!;
+      return [[0, 1], [0.42, 0.28]].map(([a, b]) => {
+        const point = new DOMPoint(34 + 148 * a + 74 * b, 196 - 74 * Math.sqrt(3) * b).matrixTransform(transform);
+        return { x: point.x, y: point.y };
+      });
+    });
+    await page.mouse.move(drag[0].x, drag[0].y); await page.mouse.down();
+    await page.mouse.move(drag[1].x, drag[1].y, { steps: 8 }); await page.mouse.up();
+    assert.equal(await p.inputValue(), '0.42'); assert.equal(await q.inputValue(), '0.28');
+    assert.equal(await figure.getAttribute('data-cover-corner'), '10');
+  } else {
+    const expected = [
+      { stage: 'base', gap: '(0,0)', height: '1', first: '1,0', absent: '0,0' },
+      { stage: 'placed', gap: '(-4,-1)', height: '1', first: '0,0', absent: '-4,-1' },
+      { stage: 'fork', gap: '(0,0)', height: '2', first: '-4,-1', absent: '0,0' },
+    ];
+    for (const item of expected) {
+      const button = figure.locator(attr('data-snaky-stage', item.stage));
+      await button.focus(); await button.press(item.stage === 'placed' ? 'Space' : 'Enter');
+      assert.equal(await button.evaluate(node => node === document.activeElement), true);
+      assert.equal(await figure.getAttribute('data-snaky-current'), item.stage);
+      assert.equal(await figure.locator('[aria-pressed="true"]').count(), 1);
+      assert.equal(await button.getAttribute('aria-pressed'), 'true');
+      assert.equal(await figure.locator('[data-snaky-cell]').count(), 6);
+      assert.equal(await figure.locator('[data-snaky-cell-role="required"]').count(), 5);
+      assert.equal(await figure.locator(attr('data-snaky-cell', item.first)).getAttribute('data-snaky-cell-role'), 'required');
+      assert.equal(await figure.locator(attr('data-snaky-cell', item.absent)).getAttribute('data-snaky-cell-role'), 'gap');
+      assert.equal(await figure.locator('[data-snaky-gap]').textContent(), item.gap);
+      assert.equal(await figure.locator('[data-snaky-height]').textContent(), item.height);
+    }
+  }
+  assert.equal(page.url(), location, 'A mathematical illustration must retain the exact selected proof and run URL');
+  assert.equal(await page.locator(attr('data-proof-derivation', step.id) + ' .proof-walkthrough-calculation').isVisible(), true);
+  await fits(page, label + ': ' + step.figure);
+  await figure.evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }));
+  // Place the figure below both sticky reading controls for a readable screenshot.
+  await page.evaluate(() => scrollBy(0, -200));
+  await shot(page, 'figure-' + locale + '-' + page.viewportSize()!.width + '-' + step.figure + '.png');
+}
 async function verifyAssets(page: Page) {
   const urls = await page.locator('script[src],link[rel="stylesheet"][href]').evaluateAll(nodes =>
     nodes.map(node => node.getAttribute('src') ?? node.getAttribute('href')!));
@@ -296,6 +394,8 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
       assert.deepEqual(await row.locator('.proof-walkthrough-statement').allTextContents(), step.derivation.map(line => line.statement[locale]));
       assert.deepEqual(await row.locator('.proof-walkthrough-justification').allTextContents(), step.derivation.map(line => line.reason[locale]));
       assert.deepEqual(await row.locator('[data-proof-dependency]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofDependency)), step.dependsOn);
+      assert.equal(await row.locator('[data-proof-figure]').count(), Number(Boolean(step.figure)));
+      if (step.figure) assert.equal(await row.locator('[data-proof-figure]').getAttribute('data-proof-figure'), step.figure);
       assert.deepEqual(await row.locator('[data-proof-consumer]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofConsumer)),
         walkthrough.steps.filter(candidate => candidate.dependsOn.includes(step.id)).map(candidate => candidate.id),
         record.id + '/' + step.id + ': later-result links must be the exact reverse of the dependency relation');
@@ -540,6 +640,10 @@ try {
       await page.locator('[data-process-open-tab="source"]').click(); await page.locator('.source-code').waitFor();
       assert.equal(hash(page).get('tab'), 'source');
       await page.locator('#tab-process').click(); await global(page, honeycomb, finalRun(honeycomb));
+      for (const record of catalog.records.filter(record => record.process!.walkthrough!.steps.some(step => step.figure))) {
+        await enter(page, record, locale); await verifyProofFigure(page, record, locale, label);
+      }
+      mark(label + ': all three mathematical figures support real pointer or keyboard interaction, update exact objects and calculations, and preserve proof identity and focus');
       const overview = new URL(ordinary(locale)); overview.hash = new URLSearchParams({ proof: triangle.id, status: 'verified', tab: 'overview' }).toString();
       await page.goto(overview.href); await page.locator('#tab-overview[aria-selected="true"]').waitFor();
       assert.equal(await page.locator('.global-workflow').count(), 0);
@@ -599,6 +703,9 @@ try {
   mark('normal cache-enabled navigation and refresh keep the chosen run and use final content-versioned assets');
   assert.equal(runnerCalls, 0); assert.deepEqual(writes, []); assert.deepEqual(apiReads, []); assert.deepEqual(external, []); assert.deepEqual(errors, []);
   assert.ok(processAssetRequests.length >= 16);
+  assert.ok(figureAssetRequests.length > 0);
+  assert.ok(figureAssetRequests.every(value => new URL(value).searchParams.get('v') === figureAssetVersion),
+    'Mathematical controls must load their separate script with its final content version');
   for (const value of processAssetRequests) {
     const url = new URL(value), id = url.pathname.split('/').at(-1)!.slice(0, -3);
     assert.equal(url.searchParams.get('v'), processAssetVersions[id], 'Lazy proof explanations must use the final process content version');
@@ -608,7 +715,8 @@ try {
     derivationLines: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.derivation.length, 0), 0),
     readingStages: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.stages.length, 0),
     proofDependencies: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.dependsOn.length, 0), 0),
-    assetVersions, cacheAssets, processAssetVersions, processAssetRequests, paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
+    assetVersions, cacheAssets, processAssetVersions, processAssetRequests, figureAssetVersion, figureAssetRequests,
+    paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
     failureExample: { record: failure.record.id, run: failure.run.runId, check: failure.check.id },
     revisionExample: { record: revision.record.id, run: revision.run.runId, before: revision.before.id, after: revision.check.id } }, null, 2) + '\n');
   console.log('Complete research workflows passed ' + checks.length + ' checks without models, Lean, mail or runtime writes.');

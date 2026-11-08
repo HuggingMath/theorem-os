@@ -5,12 +5,14 @@ import {
   ListStart, MessageCircle, Pause, Play, RotateCcw, Search, SearchX, ShieldCheck,
 } from 'lucide';
 import catalog from 'virtual:archive';
+import figuresVersion from 'virtual:proof-figures';
 import type { ArchiveIndexRecord, ArchiveIndexSource, ArchiveProcess } from './types';
 import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './site';
 import { initializeReplay } from './replay';
 import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from './process';
 import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
 import { mountProofReading } from './proofReading';
+import { mountProofFigures } from './proofFigures';
 
 const iconSet = {
   ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
@@ -133,6 +135,7 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
 }
 const icons = () => {
   createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
+  mountProofFigures(`${rootOf(locale)}data/proof-figures.js?v=${figuresVersion}`);
 };
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({

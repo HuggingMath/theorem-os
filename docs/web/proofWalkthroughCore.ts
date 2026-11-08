@@ -57,6 +57,7 @@ export const coreProofWalkthroughs: ProofWalkthrough[] = [{
     evidence: { theorems: ['OAI.TriangleFace198.cutMass_triangleVertices'], taskIds: ['cutMass_triangleVertices'], checkIds: ['check-eabf122f7f3f7b3fffab'], source: { name: 'Submission.lean', line: 232, endLine: 247 } },
   }, {
     id: 'count-the-three-tips',
+    figure: 'triangle-matchings',
     title: text('三个顶点只允许两种局部匹配方式', 'The three tips allow only two local matching patterns'),
     given: text('M 是 H 的完美匹配，k 是它选中的跨割旧边数，t 是选中的三角形内部边数。这里讨论的是匹配指示向量。', 'Let M be a perfect matching of H, with k selected crossing old edges and t selected internal triangle edges. At this step we consider matching indicators.'),
     claim: text('每个三角形顶点恰被覆盖一次，所以 k+2t=3；任意两条三角形边共享顶点，所以 t≤1。因此 (k,t) 只能是 (1,1) 或 (3,0)，L(1ₘ)∈{1,3}。', 'Each tip is covered exactly once, so k+2t=3. Any two triangle edges share a tip, so t≤1. Hence (k,t) is either (1,1) or (3,0), and L(1ₘ)∈{1,3}.'),

@@ -410,6 +410,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
       },
       {
         id: 'reconstruct-the-fork',
+        figure: 'snaky',
         title: { zh: '用旋转、平移与分叉重建行', en: 'Reconstruct rows by placement and forking' },
         given: { zh: '各 child 行已经确定；一个 Term 指定 child、八种方向之一和整数平移。', en: 'Child rows are already known; each term specifies a child, one of eight orientations and an integer translation.' },
         claim: {

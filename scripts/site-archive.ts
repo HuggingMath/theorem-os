@@ -8,17 +8,25 @@ import type { ArchiveCatalog } from '../docs/web/types';
 /** The website and the account workbench publish the same checked proof files and lazy research records. */
 export async function buildArchive(root: string, output: string, catalog: ArchiveCatalog) {
   fs.mkdirSync(output, { recursive: true });
+  const data = path.join(output, 'data');
+  fs.rmSync(data, { recursive: true, force: true });
+  for (const directory of ['sources', 'process', 'proofs']) fs.mkdirSync(path.join(data, directory), { recursive: true });
+  const figures = path.join(data, 'proof-figures.js');
+  await build({
+    entryPoints: [path.join(root, 'docs/web/proofFigureRuntime.ts')], outfile: figures,
+    bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, charset: 'utf8', legalComments: 'eof',
+  });
+  const figuresVersion = createHash('sha256').update(fs.readFileSync(figures)).digest('hex').slice(0, 16);
   await build({
     entryPoints: [path.join(root, 'docs/web/app.ts')], outfile: path.join(output, 'site.js'),
     bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, charset: 'utf8', legalComments: 'eof',
     plugins: [{ name: 'public-archive', setup(builder) {
-      builder.onResolve({ filter: /^virtual:archive$/ }, () => ({ path: 'archive', namespace: 'public-archive' }));
-      builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, () => ({ contents: JSON.stringify(archiveIndex(catalog)), loader: 'json' }));
+      builder.onResolve({ filter: /^virtual:(archive|proof-figures)$/ }, args => ({ path: args.path, namespace: 'public-archive' }));
+      builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, args => ({
+        contents: JSON.stringify(args.path === 'virtual:archive' ? archiveIndex(catalog) : figuresVersion), loader: 'json',
+      }));
     } }],
   });
-  const data = path.join(output, 'data');
-  fs.rmSync(data, { recursive: true, force: true });
-  for (const directory of ['sources', 'process', 'proofs']) fs.mkdirSync(path.join(data, directory), { recursive: true });
   fs.writeFileSync(path.join(data, 'catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
   for (const record of catalog.records) {
     fs.writeFileSync(path.join(data, 'sources', `${record.id}.js`), archiveSourceScript(record));

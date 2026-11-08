@@ -16,6 +16,9 @@ export interface ProofWalkthroughStep {
   because: Localized;
   dependsOn: string[];
   derivation: ProofDerivationLine[];
+  figure?: 'triangle-matchings' | 'four-corner-cover' | 'snaky';
+  /** Built into the record's lazy process asset, using the same renderer as its controls. */
+  figureHtml?: Localized;
   next: Localized;
   evidence: {
     theorems: string[];

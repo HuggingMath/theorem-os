@@ -4,6 +4,7 @@ import { coreProofWalkthroughs } from './proofWalkthroughCore';
 import { analysisProofWalkthroughs } from './proofWalkthroughAnalysis';
 import { geometryProofWalkthroughs } from './proofWalkthroughGeometry';
 import { foundationProofWalkthroughs } from './proofWalkthroughFoundations';
+import { renderProofFigure } from './proofFigureRender';
 
 export const proofWalkthroughs = [...coreProofWalkthroughs, ...analysisProofWalkthroughs, ...geometryProofWalkthroughs, ...foundationProofWalkthroughs];
 
@@ -36,5 +37,7 @@ export function withProofWalkthrough(record: Pick<ArchiveRecord, 'id' | 'campaig
     for (const id of step.evidence.deliveryIds ?? []) if (!run.deliveries?.some(delivery => delivery.id === id)) fail(`${step.id}/delivery ${id}`);
     for (const id of step.evidence.checkIds ?? []) if (!run.checks?.some(check => check.id === id)) fail(`${step.id}/check ${id}`);
   }
-  return { ...process, walkthrough };
+  return { ...process, walkthrough: { ...walkthrough, steps: walkthrough.steps.map(step => step.figure ? { ...step,
+    figureHtml: { zh: renderProofFigure(step.figure, 'zh'), en: renderProofFigure(step.figure, 'en') },
+  } : step) } };
 }
