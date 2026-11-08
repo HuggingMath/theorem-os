@@ -293,6 +293,7 @@ function follow(from: 'lean' | 'prose') {
   if (from !== driver || !state.sync || narrow() || performance.now() < holdUntil || frame) return;
   frame = requestAnimationFrame(() => {
     frame = 0;
+    if (from !== driver || !state.sync || narrow() || performance.now() < holdUntil) return;
     const explained = currentDocument();
     if (!explained || !leanRows.length) return;
     if (from === 'prose') alignLean(explained); else alignProse(explained);
