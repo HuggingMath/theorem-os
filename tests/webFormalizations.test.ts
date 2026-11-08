@@ -56,11 +56,12 @@ describe('online formalization ownership and evidence handoff', () => {
   });
   afterEach(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   async function client(): Promise<Client> {
-    const response = await fetch(base + '/api/session'), value = await response.json() as WebSession;
+    const response = await fetch(base + '/api/session', { headers: { Connection: 'close' } }), value = await response.json() as WebSession;
     return { cookie: response.headers.get('set-cookie')!.split(';')[0], csrf: value.csrfToken };
   }
   function request(client: Client, route: string, value?: unknown, method = value === undefined ? 'GET' : 'POST') {
-    return fetch(base + route, { method, headers: { Cookie: client.cookie, 'X-CSRF-Token': client.csrf,
+    // Restarts must not reuse a keep-alive connection from the previous service instance.
+    return fetch(base + route, { method, headers: { Connection: 'close', Cookie: client.cookie, 'X-CSRF-Token': client.csrf,
       ...(value === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: value === undefined ? undefined : JSON.stringify(value) });
   }
   async function create(client: Client, solve = false, humanReview?: boolean) {
