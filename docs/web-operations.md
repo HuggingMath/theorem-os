@@ -6,7 +6,7 @@
 
 GitHub Actions 先运行 TypeScript 检查、账号/额度/队列/HTTP/恢复测试、运行时与网页构建，以及登录、聊天、解题过程的离线浏览器检查。求解器的超时、检查点续跑、证明冻结、依赖投影、类型预检和独立验收回归另在 Lean 4.33.0 与 4.34.1 上执行；缺少指定工具链会直接失败。两组检查全部通过后分别构建 web 和 worker，两个镜像都使用完整源码 SHA，并把它写入镜像标签及 `THEOREMOS_SOURCE_COMMIT`。两张镜像都发布成功后，才产生 `image-release-<SHA>` 构建产物，其中的 `image-release.json` 保存版本与两个 registry digest。
 
-本地可执行同一组无模型求解器回归，包含协作回放脚本的研究决策协议检查。先安装相应 elan 工具链，再显式选择版本，避免机器上较新的 Lean 候选版替代实际支持的版本：
+本地可执行同一组无模型求解器回归，包含协作回放脚本的研究决策协议检查。Linux CI 与 Worker 构建使用 `scripts/install-elan.sh` 安装固定的 elan 4.2.4，校验官方发布包 SHA-256，并通过 Lean 的发布 JSON 获取工具链，避免旧版 elan 抓取 GitHub 发布页面失败。先安装相应 elan 工具链，再显式选择版本，避免机器上较新的 Lean 候选版替代实际支持的版本：
 
 ```bash
 THEOREMOS_TEST_LEAN_VERSION=4.33.0 bun run test:solver-reliability

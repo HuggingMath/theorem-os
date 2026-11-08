@@ -25,7 +25,9 @@ ENV ELAN_HOME=/opt/elan \
     HOME=/work/home \
     DEEPSCIENTIST_MATH_SANDBOX_BACKEND=bwrap \
     DEEPSCIENTIST_MATH_TRUSTED_ELAN_ROOTS=/opt/elan
+COPY scripts/install-elan.sh ./scripts/install-elan.sh
 RUN npm install --global @openai/codex@0.162.0 \
+    && sh scripts/install-elan.sh \
     && elan toolchain install leanprover/lean4:v4.33.0 \
     && chmod -R a+rX /opt/elan \
     && mkdir -p /work && chown 10001:10001 /work
