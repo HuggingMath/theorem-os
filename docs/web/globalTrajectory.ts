@@ -4,6 +4,7 @@ import { archiveRoadmapTaskLabel } from './roadmapLabels';
 import { buildArchiveRoadmap, renderArchiveRoadmap, roadmapTone } from './processRoadmap';
 import { processMessage, readableProcessText } from './processText';
 import { workflowNote } from './workflowNotes';
+import { renderProofWalkthrough, selectedProofWalkthrough } from './proofWalkthrough';
 
 type Run = ArchiveProcess['runs'][number];
 type Check = NonNullable<Run['checks']>[number];
@@ -40,6 +41,7 @@ export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: Arch
   const run = process.runs.find(item => item.runId === options.run)
     ?? process.runs.find(item => item.runId === record.campaign?.runId) ?? process.runs.at(-1);
   if (!run) return '';
+  const walkthrough = selectedProofWalkthrough(record, process, run);
   const index = process.runs.indexOf(run), final = run.runId === record.campaign?.runId;
   const sharedSources = index ? retainedTaskSources(process.runs[index - 1]!, run) : 0;
   const title = (taskId?: string) => {
@@ -84,23 +86,28 @@ export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: Arch
     : item.resultStatus === 'evaluated_passed' ? text(locale, '本轮通过', 'Run passed')
       : item.resultStatus === 'limit_reached' ? text(locale, '未完成', 'Incomplete')
         : item.phase === 'prepared' ? text(locale, '准备', 'Prepared') : statusLabel(item.resultStatus ?? item.phase);
+  const planSection = `<section class="workflow-section" id="global-plan" data-workflow-stage="plan">${sectionHeading(walkthrough ? '02' : '01', text(locale, '任务路线', 'Task roadmap'), run.tasks.length)}
+    <div class="workflow-section-actions"><p>${text(locale, '本轮保存的任务拆分与依赖', 'The saved task decomposition and dependencies for this run')}</p><button class="global-research" ${destination(run, 'problem')}>${text(locale, '展开节点详情', 'Open node details')}${icon('arrow-up-right')}</button></div>
+    ${renderArchiveRoadmap(buildArchiveRoadmap(record, run, locale), run, '', locale)}
+    ${run.tasks.length ? `<details class="workflow-task-objectives"><summary>${text(locale, '阅读全部任务目标', 'Read every task objective')} (${run.tasks.length})</summary><dl>${run.tasks.map(task => `<div data-workflow-task="${html(task.id)}"><dt><button ${destination(run, `task:${task.id}`)}>${html(archiveRoadmapTaskLabel(task, locale))}</button><span data-tone="${roadmapTone(task.status)}">${html(statusLabel(task.status))}</span></dt><dd>${html(readableProcessText(task.objective, Number.MAX_SAFE_INTEGER))}${task.dependencies.length ? `<div class="workflow-task-dependencies">${text(locale, '依赖：', 'Depends on: ')}${task.dependencies.map(id => `<button ${destination(run, `task:${id}`)}>${html(title(id))}</button>`).join('')}</div>` : ''}</dd></div>`).join('')}</dl></details>` : `<p class="workflow-empty">${text(locale, '本轮没有保存任务拆分。', 'No task decomposition was saved for this run.')}</p>`}
+    ${planEdits.length ? `<ol class="workflow-records">${planEdits.map(event => `<li class="workflow-record" data-workflow-entry="event:${event.index}"><div class="workflow-record-meta">${stamp(event.at)}</div><h6>${text(locale, '调整任务计划', 'Revise the task plan')}</h6>${prose(event.message!, locale)}<button class="workflow-record-link" ${destination(run, 'plan', `event:${event.index}`)}>${text(locale, '查看这次计划调整', 'Inspect this plan revision')}${icon('arrow-up-right')}</button></li>`).join('')}</ol>` : ''}
+  </section>`;
+  const researchSection = `<section class="workflow-section" id="global-findings" data-workflow-stage="research">${sectionHeading(walkthrough ? '01' : '02', walkthrough ? text(locale, '逐步推导', 'Proof derivation') : text(locale, '研究发现与进展', 'Research findings and progress'), walkthrough?.steps.length ?? research.length)}
+    ${walkthrough ? renderProofWalkthrough(walkthrough, process, run, locale) + `<h6 class="workflow-journal-heading">${text(locale, '研究记录', 'Research journal')}<span>${research.length}</span></h6>` : ''}
+    ${research.length ? `<ol class="workflow-records">${research.map(deliveryEntry).join('')}</ol>` : `<p class="workflow-empty">${text(locale, '本轮没有保存研究发现正文。', 'No research finding text was saved for this run.')}</p>`}${other.length ? `<ol class="workflow-records">${other.map(deliveryEntry).join('')}</ol>` : ''}${options.evidence ?? ''}
+  </section>`;
+  const stages = walkthrough ? [
+    ['global-findings', text(locale, '逐步推导', 'Proof derivation')], ['global-plan', text(locale, '任务路线', 'Task roadmap')],
+  ] : [['global-plan', text(locale, '任务路线', 'Task roadmap')], ['global-findings', text(locale, '研究发现', 'Research findings')]];
   return `<section class="process-global-trajectory" aria-label="${text(locale, '整题全局轨迹', 'Whole-problem trajectory')}">
     <div class="global-trajectory-origin">${icon('book-open')}<p>${html(record.summary)}</p></div>
     <nav class="global-history" aria-label="${text(locale, '历次运行', 'Recorded runs')}"><p>${text(locale, '历次运行', 'Recorded runs')}</p><ol class="global-run-lanes">${process.runs.map((item, i) => `<li class="global-run-lane" data-global-run-id="${html(item.runId)}" data-final="${item.runId === record.campaign?.runId}"><button data-global-select="${html(item.runId)}" aria-pressed="${item === run}"><span>${text(locale, `第 ${i + 1} 轮`, `Run ${i + 1}`)}</span><strong>${html(shortStatus(item))}</strong>${icon('arrow-right')}</button></li>`).join('')}</ol></nav>
     <article class="global-workflow" data-global-selected-run="${html(run.runId)}"><header class="global-workflow-heading"><div><h5>${text(locale, `第 ${index + 1} 轮 · 完整研究流程`, `Run ${index + 1} · Research workflow`)}</h5><p>${date(run.startedAt)}${run.startedAt ? ' UTC' : ''}${sharedSources ? ` · ${text(locale, `${sharedSources} 份检查源码与前轮相同`, `${sharedSources} checked sources match the previous run`)}` : ''}</p></div><span data-tone="${final ? 'passed' : roadmapTone(run.resultStatus ?? run.phase)}">${html(final ? text(locale, '本地验收通过', 'Locally accepted') : statusLabel(run.resultStatus ?? run.phase))}</span></header>
       <nav class="global-workflow-stages" aria-label="${text(locale, '研究流程阶段', 'Workflow stages')}">${[
-        ['global-plan', text(locale, '任务路线', 'Task roadmap')], ['global-findings', text(locale, '研究发现', 'Research findings')],
+        ...stages,
         ['global-implementation', text(locale, '证明与检查', 'Proofs and checks')], ['global-review', text(locale, '审阅与验收', 'Review and acceptance')],
       ].map(([id, label], i) => `<button data-global-scroll="${id}"><span>0${i + 1}</span>${label}${icon('chevron-right')}</button>`).join('')}</nav>
-      <section class="workflow-section" id="global-plan" data-workflow-stage="plan">${sectionHeading('01', text(locale, '任务路线', 'Task roadmap'), run.tasks.length)}
-        <div class="workflow-section-actions"><p>${text(locale, '本轮保存的任务拆分与依赖', 'The saved task decomposition and dependencies for this run')}</p><button class="global-research" ${destination(run, 'problem')}>${text(locale, '展开节点详情', 'Open node details')}${icon('arrow-up-right')}</button></div>
-        ${renderArchiveRoadmap(buildArchiveRoadmap(record, run, locale), run, '', locale)}
-        ${run.tasks.length ? `<details class="workflow-task-objectives"><summary>${text(locale, '阅读全部任务目标', 'Read every task objective')} (${run.tasks.length})</summary><dl>${run.tasks.map(task => `<div data-workflow-task="${html(task.id)}"><dt><button ${destination(run, `task:${task.id}`)}>${html(archiveRoadmapTaskLabel(task, locale))}</button><span data-tone="${roadmapTone(task.status)}">${html(statusLabel(task.status))}</span></dt><dd>${html(readableProcessText(task.objective, Number.MAX_SAFE_INTEGER))}${task.dependencies.length ? `<div class="workflow-task-dependencies">${text(locale, '依赖：', 'Depends on: ')}${task.dependencies.map(id => `<button ${destination(run, `task:${id}`)}>${html(title(id))}</button>`).join('')}</div>` : ''}</dd></div>`).join('')}</dl></details>` : `<p class="workflow-empty">${text(locale, '本轮没有保存任务拆分。', 'No task decomposition was saved for this run.')}</p>`}
-        ${planEdits.length ? `<ol class="workflow-records">${planEdits.map(event => `<li class="workflow-record" data-workflow-entry="event:${event.index}"><div class="workflow-record-meta">${stamp(event.at)}</div><h6>${text(locale, '调整任务计划', 'Revise the task plan')}</h6>${prose(event.message!, locale)}<button class="workflow-record-link" ${destination(run, 'plan', `event:${event.index}`)}>${text(locale, '查看这次计划调整', 'Inspect this plan revision')}${icon('arrow-up-right')}</button></li>`).join('')}</ol>` : ''}
-      </section>
-      <section class="workflow-section" id="global-findings" data-workflow-stage="research">${sectionHeading('02', text(locale, '研究发现与进展', 'Research findings and progress'), research.length)}
-        ${research.length ? `<ol class="workflow-records">${research.map(deliveryEntry).join('')}</ol>` : `<p class="workflow-empty">${text(locale, '本轮没有保存研究发现正文。', 'No research finding text was saved for this run.')}</p>`}${other.length ? `<ol class="workflow-records">${other.map(deliveryEntry).join('')}</ol>` : ''}${options.evidence ?? ''}
-      </section>
+      ${walkthrough ? researchSection + planSection : planSection + researchSection}
       <section class="workflow-section" id="global-implementation" data-workflow-stage="implementation">${sectionHeading('03', text(locale, '证明候选、检查与后续版本', 'Proof candidates, checks and later versions'), implementation.length)}
         ${implementation.length ? `<ol class="workflow-records">${implementation.map(item => item.body).join('')}</ol>` : `<p class="workflow-empty">${text(locale, '本轮没有保存证明候选或检查记录。', 'No proof candidates or checks were saved for this run.')}</p>`}
       </section>

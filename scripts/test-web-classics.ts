@@ -187,7 +187,7 @@ try {
   const reuseTexts: string[] = [];
   for (const context of [alice.context, bob.context]) {
     const page = await context.newPage();
-    await page.route(`**/classics/data/process/${example.id}.js`, route => route.fulfill({ contentType: 'application/javascript',
+    await page.route(`**/classics/data/process/${example.id}.js*`, route => route.fulfill({ contentType: 'application/javascript',
       body: `(window.theoremosProcesses??={})[${JSON.stringify(example.id)}]=${JSON.stringify(evidenceFixture)};` }));
     await page.goto(`${origin}/classics/archive.html#proof=${example.id}&tab=process&status=verified&mode=roadmap`);
     const panel = page.locator('.process-research-evidence').first();

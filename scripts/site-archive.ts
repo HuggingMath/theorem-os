@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
-import { archiveIndex, archiveSourceScript } from '../docs/web/catalog';
+import { archiveIndex, archiveSourceScript, archiveProcessScript } from '../docs/web/catalog';
 import type { ArchiveCatalog } from '../docs/web/types';
 
 /** The website and the account workbench publish the same checked proof files and lazy research records. */
@@ -32,8 +32,7 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
     }
     for (const name of ['process.json', 'verification.json']) fs.copyFileSync(
       path.join(root, 'research/openai-math', record.campaign.target, name), path.join(proofs, name));
-    fs.writeFileSync(path.join(data, 'process', `${record.id}.js`),
-      `(window.theoremosProcesses??={})[${JSON.stringify(record.id)}]=${JSON.stringify(record.process)};\n`);
+    fs.writeFileSync(path.join(data, 'process', `${record.id}.js`), archiveProcessScript(record));
   }
 }
 

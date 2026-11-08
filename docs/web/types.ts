@@ -1,3 +1,5 @@
+import type { ProofWalkthrough } from './proofWalkthroughTypes';
+
 export interface ArchiveSource {
   name: string;
   path: string;
@@ -34,7 +36,7 @@ export interface ArchiveRecord {
     attributionEn?: string;
     evidenceUrl: string;
   };
-  processSummary?: { runs: number; tasks: number };
+  processSummary?: { runs: number; tasks: number; version?: string };
   process?: ArchiveProcess;
   official?: {
     statementRevision: number;
@@ -105,6 +107,7 @@ export interface ArchiveLibraryUsage {
 }
 
 export interface ArchiveProcess {
+  walkthrough?: ProofWalkthrough;
   /** Exact checked files recovered from immutable archived commits, keyed by their SHA-256. */
   sources?: Record<string, { path: string; code: string; sha256: string }>;
   runs: {

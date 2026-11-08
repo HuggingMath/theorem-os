@@ -1,0 +1,87 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import { campaignRecords } from '../docs/web/campaignCatalog';
+import { archiveIndex, archiveProcessScript } from '../docs/web/catalog';
+import { proofWalkthroughs, withProofWalkthrough } from '../docs/web/proofWalkthroughCatalog';
+import { renderGlobalTrajectory } from '../docs/web/globalTrajectory';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const escaped = (value: string) => value.replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+
+describe('mathematical walkthroughs of accepted classic proofs', () => {
+  it('binds every step to the accepted proof and existing record identities without altering native archives', () => {
+    const records = campaignRecords(root).records;
+    expect(proofWalkthroughs).toHaveLength(16);
+    expect(new Set(proofWalkthroughs.map(item => item.recordId)).size).toBe(16);
+    let steps = 0;
+    for (const record of records) {
+      const walkthrough = record.process!.walkthrough!;
+      expect(walkthrough.recordId).toBe(record.id);
+      expect(walkthrough.proofSha256).toBe(record.campaign!.proofSha256);
+      const final = record.process!.runs.find(run => run.runId === walkthrough.runId)!;
+      const source = record.sources.find(source => source.name === 'Submission.lean')!;
+      expect(hash(source.code)).toBe(walkthrough.proofSha256);
+      expect(final.checks!.some(check => check.scope === 'original' && check.sourceDigest === source.sha256 && check.status === 'kernel_verified')).toBe(true);
+      const native = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math', record.campaign!.target, 'process.json'), 'utf8'));
+      expect(native).not.toHaveProperty('walkthrough');
+      expect(record.process!.runs).toEqual(native.runs);
+      expect(record.process!.sources).toEqual(native.sources);
+      for (const step of walkthrough.steps) {
+        expect(step.evidence.source.name).toBe('Submission.lean');
+        expect(step.evidence.source.endLine).toBeGreaterThanOrEqual(step.evidence.source.line);
+        expect(source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).join('\n').trim()).not.toBe('');
+        for (const locale of ['zh', 'en'] as const) for (const field of ['title', 'given', 'claim', 'because', 'next'] as const) {
+          expect(step[field][locale].trim(), record.id + '/' + step.id + '/' + field).not.toBe('');
+        }
+        steps++;
+      }
+    }
+    expect(steps).toBeGreaterThanOrEqual(60);
+  });
+
+  it('renders the complete derivation before the task map, including exact source excerpts and links', () => {
+    for (const record of campaignRecords(root).records) for (const locale of ['zh', 'en'] as const) {
+      const process = record.process!, walkthrough = process.walkthrough!;
+      const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records: [record] }).records[0];
+      const output = renderGlobalTrajectory(index, process, locale, value => value ?? '');
+      expect(output.indexOf('data-workflow-stage="research"')).toBeLessThan(output.indexOf('data-workflow-stage="plan"'));
+      expect((output.match(/data-proof-derivation=/gu) ?? []).length).toBe(walkthrough.steps.length);
+      const source = process.sources![walkthrough.proofSha256];
+      for (const step of walkthrough.steps) {
+        for (const field of ['given', 'claim', 'because', 'next'] as const) expect(output).toContain(escaped(step[field][locale]));
+        const excerpt = step.evidence.source;
+        for (const line of source.code.split('\n').slice(excerpt.line - 1, excerpt.endLine)) if (line) expect(output).toContain(escaped(line));
+        expect(output).toContain('data-proof-source-lines="' + excerpt.line + ':' + excerpt.endLine + '"');
+        expect(output).toContain('data-global-scroll="proof-derivation-' + step.id + '"');
+      }
+      expect(output).toContain('data-global-code="source"');
+      for (const run of process.runs.filter(run => run.runId !== walkthrough.runId)) {
+        const historical = renderGlobalTrajectory(index, process, locale, value => value ?? '', { run: run.runId });
+        expect(historical).not.toContain('data-proof-walkthrough=');
+        expect(historical).not.toContain('data-global-code="source"');
+      }
+    }
+  });
+
+  it('refuses a walkthrough attached to another run or changed proof bytes', () => {
+    const record = campaignRecords(root).records[0];
+    expect(() => withProofWalkthrough({ ...record, campaign: { ...record.campaign!, runId: 'another-run' } }, record.process!)).toThrow('accepted identity');
+    const changed = structuredClone(record.process!);
+    changed.sources![record.campaign!.proofSha256].code += '\n-- changed after checking\n';
+    expect(() => withProofWalkthrough(record, changed)).toThrow('checked source');
+  });
+
+  it('versions the exact lazy process script and changes its URL when the derivation changes', () => {
+    const record = campaignRecords(root).records[0];
+    const catalog = { schema: 'theoremos.public-archive.v1' as const, repository: '', archiveRevision: '', snapshotAt: '', records: [record] };
+    const before = archiveIndex(catalog).records[0].processSummary!.version;
+    expect(before).toBe(hash(archiveProcessScript(record)).slice(0, 16));
+    const next = structuredClone(catalog);
+    next.records[0].process!.walkthrough!.steps[0].because.zh += ' 补充推导。';
+    expect(archiveIndex(next).records[0].processSummary!.version).not.toBe(before);
+  });
+});

@@ -122,7 +122,7 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   let request = processRequests.get(record.id);
   if (!request) processRequests.set(record.id, request = new Promise<ArchiveProcess>((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = `${rootOf(locale)}data/process/${record.id}.js`;
+    script.src = `${rootOf(locale)}data/process/${record.id}.js${record.processSummary?.version ? `?v=${record.processSummary.version}` : ''}`;
     script.onload = () => { script.remove(); const value = window.theoremosProcesses?.[record.id];
       if (value) resolve(value); else { processRequests.delete(record.id); reject(new Error('Missing process')); } };
     script.onerror = () => { script.remove(); processRequests.delete(record.id); reject(new Error('Missing process')); };
@@ -182,6 +182,7 @@ function readLocation() {
   state.sourceName = '';
   processRecordId = state.selected;
   processSelection = { ...emptyProcessSelection(), run: params.get('run') ?? '', task: params.get('task') ?? '', step: params.get('step') ?? '',
+    code: params.get('code') === 'source' ? 'source' : params.get('code') === 'diff' ? 'diff' : 'closed',
     view: params.get('mode') === 'steps' ? 'steps' : params.get('mode') === 'roadmap' ? 'roadmap'
       : params.get('mode') === 'global' ? 'global' : ['run', 'node', 'task', 'step'].some(key => params.has(key)) ? 'roadmap' : 'global', node: params.get('node') ?? '',
     filter: params.get('filter') === 'checks' ? 'checks' : params.get('filter') === 'decisions' ? 'decisions' : 'all' };
@@ -205,6 +206,7 @@ function writeLocation(push = false) {
         if (processSelection.step) params.set('step', processSelection.step);
         if (processSelection.node && processSelection.node !== 'problem') params.set('node', processSelection.node);
         if (processSelection.filter !== 'all') params.set('filter', processSelection.filter);
+        if (processSelection.code !== 'closed') params.set('code', processSelection.code);
       }
     }
   }
@@ -578,7 +580,8 @@ document.addEventListener('click', event => {
     return;
   }
   if (record && target.dataset.globalRun) {
-    processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: target.dataset.globalRun, node: target.dataset.globalNode ?? 'problem', step: target.dataset.globalStep ?? '' };
+    processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: target.dataset.globalRun, node: target.dataset.globalNode ?? 'problem', step: target.dataset.globalStep ?? '',
+      code: target.dataset.globalCode === 'source' ? 'source' : 'closed' };
     refreshProcess(record);
     const detail = document.querySelector<HTMLElement>('#process-step-detail, #process-map-inspector');
     detail?.setAttribute('tabindex', '-1');

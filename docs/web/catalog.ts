@@ -342,10 +342,16 @@ export function archiveIndex(catalog: ArchiveCatalog): ArchiveIndex {
     const lines = main.code.split('\n');
     const start = Math.max(0, lines.findIndex(line => record.declaration && line.startsWith(record.declaration)));
     const { process: _process, ...summary } = record;
-    return { ...summary, excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
+    return { ...summary, ...(record.process && record.processSummary ? { processSummary: { ...record.processSummary,
+      version: crypto.createHash('sha256').update(archiveProcessScript(record)).digest('hex').slice(0, 16) } } : {}),
+      excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
   }) };
 }
 /** One script per record, so the archive also loads sources from file:// previews where fetch is unavailable. */
 export function archiveSourceScript(record: ArchiveRecord): string {
   return `(window.theoremosSources??={})[${JSON.stringify(record.id)}]=${JSON.stringify(Object.fromEntries(record.sources.map(source => [source.name, source.code])))};\n`;
+}
+
+export function archiveProcessScript(record: ArchiveRecord): string {
+  return `(window.theoremosProcesses??={})[${JSON.stringify(record.id)}]=${JSON.stringify(record.process)};\n`;
 }

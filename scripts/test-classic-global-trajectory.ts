@@ -78,6 +78,9 @@ const digest = (value: string | Buffer) => createHash('sha256').update(value).di
 const byTime = <T extends { at: string }>(values: T[]) => values.slice().sort((a, b) => a.at.localeCompare(b.at));
 const assetVersions = Object.fromEntries(await Promise.all(['site.js', 'process.css'].map(async file =>
   [file, digest(await fs.readFile(path.join(staticRoot, 'classics', file))).slice(0, 16)])));
+const processAssetVersions = Object.fromEntries(await Promise.all(catalog.records.map(async record =>
+  [record.id, digest(await fs.readFile(path.join(staticRoot, 'classics/data/process', record.id + '.js'))).slice(0, 16)])));
+const processAssetRequests: string[] = [];
 
 async function observe(context: BrowserContext, label: string, cacheEnabled = false) {
   // Routing disables HTTP caching; the cache scenario only observes request events.
@@ -91,6 +94,7 @@ async function observe(context: BrowserContext, label: string, cacheEnabled = fa
     if (url.origin !== origin) external.push(url.href);
     if (!['GET', 'HEAD'].includes(request.method())) writes.push({ method: request.method(), path: url.pathname });
     if (url.pathname.startsWith('/api/')) apiReads.push(url.pathname);
+    if (/\/data\/process\/[^/]+\.js$/u.test(url.pathname)) processAssetRequests.push(url.href);
     if (cacheEnabled && /\/(?:site\.js|process\.css)$/u.test(url.pathname)) cacheAssets.push(url.href);
   });
   context.on('page', page => {
@@ -160,7 +164,7 @@ async function firstViewport(page: Page, label: string, locale: string) {
   viewportEvidence.push({ label, title, selection, phase });
 }
 async function phase(page: Page, name: string, id: string) {
-  const location = page.url(), button = page.locator(attr('data-global-scroll', id));
+  const location = page.url(), button = page.locator('.global-workflow-stages ' + attr('data-global-scroll', id));
   await button.focus(); await button.press('Enter'); await settled(page);
   assert.equal(page.url(), location, 'A phase jump must keep the selected run and evidence location');
   const heading = stage(page, name).locator('.workflow-section-heading > h5');
@@ -197,7 +201,22 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
     taskNodes: [...workflow.querySelectorAll<HTMLElement>('.process-roadmap button[data-process-node^="task:"]')].map(node => node.dataset.processNode),
     edges: [...workflow.querySelectorAll<SVGElement>('.process-roadmap path[data-map-edge][data-kind="dependency"]')].map(edge => edge.dataset.from + '->' + edge.dataset.to).sort(),
   }));
-  assert.deepEqual(actual.stages, ['plan', 'research', 'implementation', 'review']);
+  const walkthrough = record.process?.walkthrough?.runId === run.runId ? record.process.walkthrough : undefined;
+  assert.deepEqual(actual.stages, walkthrough ? ['research', 'plan', 'implementation', 'review'] : ['plan', 'research', 'implementation', 'review']);
+  assert.equal(await page.locator('[data-proof-walkthrough]').count(), Number(Boolean(walkthrough)));
+  if (walkthrough) {
+    assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), record.campaign!.proofSha256);
+    assert.equal(await page.locator('[data-proof-derivation]').count(), walkthrough.steps.length);
+    for (const step of walkthrough.steps) {
+      const row = page.locator(attr('data-proof-derivation', step.id));
+      assert.equal(await row.locator('.proof-walkthrough-claim > p').textContent(), step.claim[locale]);
+      assert.equal(await row.locator('.proof-walkthrough-reason > p').textContent(), step.because[locale]);
+      assert.equal(await row.locator('.proof-walkthrough-next > p').textContent(), step.next[locale]);
+      const source = record.process!.sources![walkthrough.proofSha256];
+      assert.deepEqual(await row.locator('.proof-walkthrough-source > ol code').allTextContents(),
+        source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).map(line => line || ' '));
+    }
+  }
   const expectedPlan = run.events.flatMap((event, index) => event.kind === 'plan-edit' && event.message?.trim() ? ['event:' + index] : []);
   const expected = [...expectedPlan, ...(run.deliveries ?? []).map(delivery => 'delivery:' + delivery.id), ...(run.checks ?? []).map(check => 'check:' + check.id)].sort();
   assert.deepEqual(actual.entries.map(row => row.id).sort(), expected, record.id + ': every actual delivery and check appears exactly once');
@@ -275,7 +294,33 @@ try {
       assert.ok(complete.proseCharacters > 2_000, 'A complete complex workflow must expose actual research prose');
       await shot(page, 'workflow-' + locale + '-' + width + '-entry.png');
       mark(label + ': ordinary classics entry defaults to final research with a complete DAG, objectives and actual saved prose');
-
+      const walkthrough = triangle.process!.walkthrough!;
+      const selectedStep = walkthrough.steps[2], followingStep = walkthrough.steps[3];
+      const routeStep = page.locator('.proof-walkthrough-route ' + attr('data-global-scroll', 'proof-derivation-' + selectedStep.id));
+      const beforeStep = page.url(); await routeStep.focus(); await routeStep.press('Enter');
+      const derivation = page.locator(attr('data-proof-derivation', selectedStep.id));
+      assert.equal(await derivation.locator('h5').evaluate(element => element === document.activeElement), true);
+      assert.equal(page.url(), beforeStep);
+      await shot(page, 'derivation-' + locale + '-' + width + '-reason.png');
+      await derivation.locator('.proof-walkthrough-source > summary').focus();
+      await derivation.locator('.proof-walkthrough-source > summary').press('Enter');
+      assert.equal(await derivation.locator('.proof-walkthrough-source').getAttribute('open'), '');
+      await fits(page, label + ': proof derivation and exact source excerpt');
+      await shot(page, 'derivation-' + locale + '-' + width + '-source.png');
+      await derivation.locator('.proof-walkthrough-next > button').click();
+      assert.equal(await page.locator(attr('data-proof-derivation', followingStep.id) + ' h5').evaluate(element => element === document.activeElement), true);
+      await page.locator(attr('data-proof-derivation', followingStep.id) + ' .proof-walkthrough-source-open').click();
+      await page.locator('.process-code:not(.process-diff) code').waitFor();
+      assert.equal(hash(page).get('code'), 'source');
+      assert.equal(await page.locator('.process-code:not(.process-diff) code').textContent(), triangle.process!.sources![walkthrough.proofSha256].code);
+      assert.equal(hash(page).get('run'), walkthrough.runId);
+      const checkedSourceLink = page.url(); await page.reload();
+      await page.locator('.process-code:not(.process-diff) code').waitFor();
+      assert.equal(page.url(), checkedSourceLink);
+      assert.equal(await page.locator('.process-code:not(.process-diff) code').textContent(), triangle.process!.sources![walkthrough.proofSha256].code);
+      await back(page, triangle, finalRun(triangle));
+      await phase(page, 'research', 'global-findings');
+      mark(label + ': each mathematical claim, derivation and next-step explanation matches the accepted proof; route navigation and exact-source links work');
       for (const [name, id] of [['plan', 'global-plan'], ['research', 'global-findings'], ['implementation', 'global-implementation'], ['review', 'global-review']]) {
         await phase(page, name, id); await fits(page, label + ': ' + name);
         await shot(page, 'workflow-' + locale + '-' + width + '-' + name + '.png');
@@ -386,9 +431,14 @@ try {
   await cached.close(); active = undefined;
   mark('normal cache-enabled navigation and refresh keep the chosen run and use final content-versioned assets');
   assert.equal(runnerCalls, 0); assert.deepEqual(writes, []); assert.deepEqual(apiReads, []); assert.deepEqual(external, []); assert.deepEqual(errors, []);
+  assert.ok(processAssetRequests.length >= 16);
+  for (const value of processAssetRequests) {
+    const url = new URL(value), id = url.pathname.split('/').at(-1)!.slice(0, -3);
+    assert.equal(url.searchParams.get('v'), processAssetVersions[id], 'Lazy proof explanations must use the final process content version');
+  }
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
     checks, screenshots, viewportEvidence, records: catalog.records.length, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
-    assetVersions, cacheAssets, paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
+    assetVersions, cacheAssets, processAssetVersions, processAssetRequests, paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
     failureExample: { record: failure.record.id, run: failure.run.runId, check: failure.check.id },
     revisionExample: { record: revision.record.id, run: revision.run.runId, before: revision.before.id, after: revision.check.id } }, null, 2) + '\n');
   console.log('Complete research workflows passed ' + checks.length + ' checks without models, Lean, mail or runtime writes.');

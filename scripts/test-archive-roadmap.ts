@@ -238,7 +238,8 @@ try {
     await node(page, 'acceptance').click();
     assert.equal(await page.locator('[data-process-acceptance]').count(), 1);
     const raw = await page.request.get(`${origin}/classics/data/proofs/${record.id}/process.json`);
-    assert.equal(raw.status(), 200); assert.deepEqual(await raw.json(), record.process);
+    const { walkthrough: _walkthrough, ...nativeProcess } = record.process!;
+    assert.equal(raw.status(), 200); assert.deepEqual(await raw.json(), nativeProcess);
   }
   await context.close(); active = undefined;
   mark(`all 16 accepted problems open real run roadmaps with ${taskNodes} task nodes and ${dependencyEdges} saved dependency edges`);

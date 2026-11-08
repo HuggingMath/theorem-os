@@ -284,7 +284,8 @@ try {
     assert.equal(await page.locator('.process-step-list [data-process-step^="delivery:"]').count(), final.deliveries!.length);
     assert.ok(final.checks?.some(check => check.scope === 'original' && check.status === 'kernel_verified'), 'The accepted final run must retain an original-problem check');
     const response = await page.request.get(`${origin}/classics/data/proofs/${record.id}/process.json`);
-    assert.equal(response.status(), 200); assert.deepEqual(await response.json(), record.process);
+    const { walkthrough: _walkthrough, ...nativeProcess } = record.process!;
+    assert.equal(response.status(), 200); assert.deepEqual(await response.json(), nativeProcess);
   }
   await context.close(); active = undefined;
   mark(`all ${catalog.records.length} accepted problems open their own final run and complete original process JSON`);
