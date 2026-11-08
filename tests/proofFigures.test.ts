@@ -1,10 +1,13 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { triangleMatching } from '../docs/web/proofTriangleFigure';
 import { coveringCase, coveringPlotPoint, coveringRegions, type CoverCorner } from '../docs/web/proofCoverFigure';
-import { snakyFigureModel, type SnakyCell } from '../docs/web/proofSnakyFigure';
+import { convexMassModel } from '../docs/web/proofConvexFigure';
+import { separationModel } from '../docs/web/proofSeparationFigure';
+import { snakyFigureModel, snakyForkModel, type SnakyCell } from '../docs/web/proofSnakyFigure';
 import { proofWalkthroughs } from '../docs/web/proofWalkthroughCatalog';
 import { campaignRecords } from '../docs/web/campaignCatalog';
 
@@ -55,6 +58,53 @@ describe('interactive local triangle matchings', () => {
     });
     expect(displayed.sort()).toEqual(valid.sort());
     expect(new Set(displayed).size).toBe(4);
+  });
+});
+
+describe('the mass-one section of the matching convex hull', () => {
+  it('preserves the lower bound and reaches the section only at μ=0 for every slider state', () => {
+    for (let i = 0; i <= 100; i++) {
+      const mu = i / 100, state = convexMassModel(mu);
+      expect(state.mu).toBe(mu);
+      expect(state.oneWeight).toBeGreaterThanOrEqual(0);
+      expect(state.threeWeight).toBeGreaterThanOrEqual(0);
+      expect(state.oneWeight + state.threeWeight).toBeCloseTo(1, 14);
+      expect(state.oneWeight).toBeCloseTo((100 - i) / 100, 14);
+      expect(state.threeWeight).toBe(mu);
+      expect(state.mass).toBeCloseTo((100 - i + 3 * i) / 100, 14);
+      expect(state.excess).toBeCloseTo((100 - i + 3 * i - 100) / 100, 14);
+      expect(state.mass).toBeGreaterThanOrEqual(1);
+      expect(state.mass).toBeLessThanOrEqual(3);
+      expect(state.excess).toBeGreaterThanOrEqual(0);
+      expect(state.onSection).toBe(i === 0);
+    }
+  });
+
+  it('agrees with independent finite weighted sums, including zero weights and either absent group', () => {
+    // Group arbitrary finite families after summing integer numerators, independently
+    // of the two-group model. All-one families cover graphs with no mass-three generator.
+    for (let length = 1; length <= 17; length++) for (let seed = 0; seed < 11; seed++) for (let mode = 0; mode < 3; mode++) {
+      const generators = Array.from({ length }, (_, index) => ({
+        mass: mode === 0 ? 1 : mode === 1 ? 3 : (index + seed) % 3 === 0 ? 3 : 1,
+        weight: (index * 7 + seed * 3) % 13,
+      }));
+      const total = generators.reduce((sum, item) => sum + item.weight, 0);
+      if (total === 0) continue;
+      const massNumerator = generators.reduce((sum, item) => sum + item.mass * item.weight, 0);
+      const oneNumerator = generators.filter(item => item.mass === 1).reduce((sum, item) => sum + item.weight, 0);
+      const threeNumerator = generators.filter(item => item.mass === 3).reduce((sum, item) => sum + item.weight, 0);
+      const excessNumerator = generators.reduce((sum, item) => sum + (item.mass - 1) * item.weight, 0);
+      expect(oneNumerator + threeNumerator).toBe(total);
+      expect(excessNumerator).toBe(massNumerator - total);
+      const state = convexMassModel(threeNumerator / total);
+      expect(state.oneWeight).toBeCloseTo(oneNumerator / total, 14);
+      expect(state.threeWeight).toBeCloseTo(threeNumerator / total, 14);
+      expect(state.mass).toBeCloseTo(massNumerator / total, 14);
+      expect(state.excess).toBeCloseTo(excessNumerator / total, 14);
+      const allPositiveTermsHaveMassOne = generators.every(item => item.weight === 0 || item.mass === 1);
+      expect(state.onSection).toBe(allPositiveTermsHaveMassOne);
+      expect(state.onSection).toBe(massNumerator === total);
+    }
   });
 });
 
@@ -155,6 +205,58 @@ describe('four-corner covering in the triangular lattice', () => {
   });
 });
 
+describe('the two final distance contradictions for the seven-color construction', () => {
+  it('bounds a shared-center path below the required unit distance', () => {
+    const state = separationModel('shared');
+    // The cell's triple boundary attains the covering radius in physical coordinates.
+    const radiusSquared = distanceSquared(physicalPoint(1 / 3, 1 / 3), physicalPoint(0, 0));
+    expect(radiusSquared).toBeCloseTo(3 / 16, 14);
+    expect(state.kind).toBe('shared');
+    expect(state.radius).toBeCloseTo(Math.sqrt(radiusSquared), 14);
+    expect(state.radius).toBeCloseTo(3 / (4 * Math.sqrt(3)), 14);
+    expect(state.segments).toHaveLength(2);
+    for (const segment of state.segments) expect(segment).toBeCloseTo(Math.sqrt(radiusSquared), 14);
+    expect(state.upper).toBeCloseTo(state.segments.reduce((sum, segment) => sum + segment, 0), 14);
+    expect(state.upper ** 2).toBeCloseTo(3 / 4, 14);
+    expect(state.lower).toBe(1);
+    expect(state.upper).toBeLessThan(state.lower);
+    expect(state.gap).toBeCloseTo((1 - 3 / 4) / (state.lower + state.upper), 14);
+    expect(state.gap).toBeGreaterThan(0);
+  });
+
+  it('uses the attained same-color lattice bound 63/16 above the path bound 1+√3/2', () => {
+    const state = separationModel('distinct');
+    const norms: number[] = [];
+    for (let p = -14; p <= 14; p++) for (let q = -14; q <= 14; q++) {
+      if ((p === 0 && q === 0) || (p - 2 * q) % 7 !== 0) continue;
+      const norm = p * p + p * q + q * q;
+      expect(norm).toBeGreaterThanOrEqual(7);
+      norms.push(norm);
+    }
+    expect(Math.min(...norms)).toBe(7);
+    // (-1,3) has the same color as (0,0), and its exact norm is 7.
+    expect((-1 - 2 * 3) % 7 === 0).toBe(true);
+    expect((-1) ** 2 + (-1) * 3 + 3 ** 2).toBe(7);
+    const attainedSquared = distanceSquared(physicalPoint(-1, 3), physicalPoint(0, 0));
+    expect(attainedSquared).toBeCloseTo(63 / 16, 14);
+    expect(state.kind).toBe('distinct');
+    expect(state.lower ** 2).toBeCloseTo(attainedSquared, 14);
+    expect(state.radius ** 2).toBeCloseTo(3 / 16, 14);
+    expect(state.segments).toEqual([state.radius, 1, state.radius]);
+    expect(state.upper).toBeCloseTo(state.segments.reduce((sum, segment) => sum + segment, 0), 14);
+    expect(state.upper).toBeCloseTo(1 + Math.sqrt(3) / 2, 14);
+    expect(state.upper ** 2).toBeCloseTo(7 / 4 + Math.sqrt(3), 14);
+    // 63/16 − (1+√3/2)² = 35/16 − √3 > 0:
+    // both terms are positive and 35²−3·16²=457>0, using exact integers.
+    expect(35 ** 2 - 3 * 16 ** 2).toBeGreaterThan(0);
+    const squaredGap = 35 / 16 - Math.sqrt(3);
+    expect(state.lower ** 2 - state.upper ** 2).toBeCloseTo(squaredGap, 14);
+    expect(state.gap).toBeCloseTo(squaredGap / (state.lower + state.upper), 14);
+    expect(state.lower).toBeGreaterThan(state.upper);
+    expect(state.gap).toBeGreaterThan(0);
+  });
+});
+
 describe('Snaky certificate entry 6', () => {
   it('uses the exact accepted six-cell shape and the encoded child-0 placement', () => {
     const source = fs.readFileSync(path.join(root, 'research/openai-math/SnakyCertificate/Submission.lean'), 'utf8');
@@ -199,13 +301,84 @@ describe('Snaky certificate entry 6', () => {
   });
 });
 
-it('attaches the three figures only to their corresponding accepted mathematical steps', () => {
+describe('Snaky certificate entry 7 with two children', () => {
+  const source = fs.readFileSync(path.join(root, 'research/openai-math/SnakyCertificate/Submission.lean'), 'utf8');
+  const cells = (text: string): SnakyCell[] => [...text.matchAll(/\((-?\d+),\s*(-?\d+)\)/gu)]
+    .map(match => [Number(match[1]), Number(match[2])]);
+  function acceptedRow(index: number) {
+    const declaration = source.match(new RegExp('^def mr_' + index + ' : RowData := by\\n[\\s\\S]*?exact ⟨\\(\\[(.*?)\\] : List Cell\\)\\.toFinset, \\(\\[(.*?)\\] : List Cell\\)\\.toFinset, (\\d+)⟩', 'mu'));
+    expect(declaration, 'accepted explicit row ' + index).not.toBeNull();
+    return { required: cells(declaration![1]), envelope: cells(declaration![2]), height: Number(declaration![3]) };
+  }
+  const translated = (points: readonly SnakyCell[], [dx, dy]: SnakyCell): SnakyCell[] => points.map(([x, y]) => [x + dx, y + dy]);
+
+  it('uses the accepted entry_7 terms and the exact row 4 and row 6 placements', () => {
+    const walkthrough = proofWalkthroughs.find(item => item.recordId === 'openai_snaky_certificate')!;
+    expect(createHash('sha256').update(source).digest('hex')).toBe(walkthrough.proofSha256);
+    const declaration = source.match(/^def entry_7 : Entry := ⟨7, \[(.+)\]⟩$/mu)?.[1];
+    expect(declaration).toBeDefined();
+    const terms = [...declaration!.matchAll(/⟨(\d+),\s*(\d+),\s*(\d+),\s*(\d+)⟩/gu)]
+      .map(match => match.slice(1).map(Number));
+    expect(terms).toEqual([[4, 0, 3, 4], [6, 0, 5, 4]]);
+    for (const stage of ['child4', 'child6', 'combine', 'fork'] as const) {
+      const model = snakyForkModel(stage);
+      expect(model.stage).toBe(stage);
+      for (const [index, child] of [model.child4, model.child6].entries()) {
+        const [rowIndex, orientation, xDigit, yDigit] = terms[index];
+        const reference = acceptedRow(rowIndex), shift: SnakyCell = [xDigit - 4, yDigit - 4];
+        expect(orientation).toBe(0);
+        expect(child.child).toBe(rowIndex);
+        expect(child.shift).toEqual(shift);
+        expect(sortedCells(child.source.required)).toEqual(sortedCells(reference.required));
+        expect(sortedCells(child.source.envelope)).toEqual(sortedCells(reference.envelope));
+        expect(child.source.height).toBe(reference.height);
+        expect(sortedCells(child.required)).toEqual(sortedCells(translated(reference.required, shift)));
+        expect(sortedCells(child.envelope)).toEqual(sortedCells(translated(reference.envelope, shift)));
+        expect(child.height).toBe(reference.height);
+      }
+    }
+  });
+
+  it('matches the accepted A₇, H₇ and height, retaining all three envelope-only cells', () => {
+    const row4 = acceptedRow(4), row6 = acceptedRow(6), row7 = acceptedRow(7);
+    const a4 = new Set(sortedCells(translated(row4.required, [-1, 0]))), a6 = new Set(sortedCells(translated(row6.required, [1, 0])));
+    const h4 = new Set(sortedCells(translated(row4.envelope, [-1, 0]))), h6 = new Set(sortedCells(translated(row6.envelope, [1, 0])));
+    const unionA = [...new Set([...a4, ...a6])].sort(), unionH = [...new Set([...h4, ...h6])].sort();
+    const commonH = [...h4].filter(cell => h6.has(cell)).sort();
+    expect(unionA).toEqual(['-1,-1', '-2,-1', '-3,-1', '-4,-1', '0,-1', '0,0']);
+    expect(commonH).toEqual(['-1,-1', '-2,-1', '-3,-1', '0,0']);
+    expect(unionH).toEqual(sortedCells(row7.envelope));
+    expect([...new Set([...unionA, ...commonH])].filter(cell => cell !== '0,0').sort()).toEqual(sortedCells(row7.required));
+    expect(row7.height).toBe(3);
+    for (const stage of ['child4', 'child6', 'combine', 'fork'] as const) {
+      const model = snakyForkModel(stage);
+      expect(sortedCells(model.unionRequired)).toEqual(unionA);
+      expect(sortedCells(model.unionEnvelope)).toEqual(unionH);
+      expect(sortedCells(model.commonEnvelope)).toEqual(commonH);
+      expect(sortedCells(model.parent.required)).toEqual(sortedCells(row7.required));
+      expect(sortedCells(model.parent.envelope)).toEqual(sortedCells(row7.envelope));
+      expect(model.parent.height).toBe(row7.height);
+      expect(model.addedRequired).toEqual([]);
+      expect(sortedCells(model.removedRequired)).toEqual(['0,0']);
+      const required = new Set(sortedCells(model.parent.required));
+      const envelopeOnly = sortedCells(model.parent.envelope).filter(cell => !required.has(cell));
+      expect(model.parent.required).toHaveLength(5);
+      expect(model.parent.envelope).toHaveLength(8);
+      expect(envelopeOnly).toEqual(['-1,0', '0,0', '1,0']);
+    }
+  });
+});
+
+it('attaches the six figures only to their corresponding accepted mathematical steps', () => {
   const attached = proofWalkthroughs.flatMap(walkthrough => walkthrough.steps.filter(step => step.figure)
     .map(step => [walkthrough.recordId, step.id, step.figure]));
   expect(attached).toEqual([
     ['openai_triangle_face', 'count-the-three-tips', 'triangle-matchings'],
+    ['openai_triangle_face', 'take-the-slice-of-the-hull', 'convex-mass-section'],
     ['openai_plane_coloring', 'cover-with-four-corner-candidates', 'four-corner-cover'],
+    ['openai_plane_coloring', 'exclude-distinct-centers-and-finish', 'color-separation'],
     ['openai_snaky_certificate', 'reconstruct-the-fork', 'snaky'],
+    ['openai_snaky_certificate', 'reconstruct-two-children', 'snaky-fork'],
   ]);
   const records = campaignRecords(root).records;
   for (const [recordId] of attached) {

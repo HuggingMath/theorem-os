@@ -355,7 +355,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     stages: [{
       title: text('按顺序重建证书', 'Reconstruct the certificate in order'),
       summary: text('非空且索引递减的表项保证递归可求值；放置与分叉公式把六个基础行依次扩展为全部行。', 'Nonempty entries with decreasing child indices make the recursion evaluable. Placement and fork formulas extend the six base rows to every later row.'),
-      stepIds: ['validate-the-recursion-table', 'reconstruct-the-fork'],
+      stepIds: ['validate-the-recursion-table', 'reconstruct-the-fork', 'reconstruct-two-children'],
     }, {
       title: text('核验集合与关键局面', 'Check sets and distinguished positions'),
       summary: text('逐行验证所需点、包络和高度界，再读出四个关键行的精确大小与避让区域，提供目标所需的几何证据。', 'Check required cells, envelopes and height bounds row by row, then verify the exact sizes and omitted regions of the four distinguished rows.'),
@@ -452,12 +452,31 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
             reason: text("先预留父行的一步，再取最深 child；本例的唯一 child 高度为 1。me_6 确认上面的两个有限集与高度，后续 meᵢ 也把递归公式化成可逐点核验的数据。", "Reserve one move for the parent, then take the deepest child; this sole child has height 1. The equality me_6 confirms both displayed sets and the height. Later meᵢ equalities likewise turn the recursion into data that can be checked point by point."),
           },
         ],
-        next: { zh: '把递归定义转为可逐点核验的集合与整数数据。', en: 'Reduce recursive rows to finite sets and integer data that can be checked directly.' },
+        next: { zh: '行 6 只有一个 child。下一步用实际表项 entry₇ 对照两个 child 的并集、交集和父行。', en: 'Row 6 has one child. Next, use the actual entry₇ to compare two children, their unions and intersection, and the parent row.' },
         evidence: {
           theorems: ['OAI.SnakyCertificate.snaky', 'OAI.SnakyCertificate.entry_6', 'OAI.SnakyCertificate.forkRow', 'OAI.SnakyCertificate.me_6', 'OAI.SnakyCertificate.me_615'],
           taskIds: ['initial_goal_1'], checkIds: ['check-b900b20d4968e7ec561d'],
           source: { name: 'Submission.lean', line: 1532, endLine: 1542 },
         },
+      },
+      {
+        id: 'reconstruct-two-children',
+        figure: 'snaky-fork',
+        title: { zh: '把两个已放置的子行合成父行 7', en: 'Combine two placed children into parent row 7' },
+        given: { zh: '行 4 是第 5 个基础行，行 6 已在上一步重建。entry₇ 的两项分别引用它们，方向均为 0。', en: 'Row 4 is the fifth base row, and row 6 was reconstructed above. The two terms of entry₇ refer to them with orientation zero.' },
+        claim: { zh: '两个所需集先并成 6 格，共同包络的 4 格已在其中；删去 o 后，A₇ 是 y=−1 上的连续五格，H₇ 有 8 格，h₇=3。', en: 'The required sets unite into six cells, already containing the four common-envelope cells. Removing o leaves five consecutive cells on y=−1 in A₇; H₇ has eight cells and h₇=3.' },
+        because: { zh: '把 entry₇ 的数字解码为平移 (−1,0) 与 (1,0)，分别作用于基础行 4 和上一步的行 6。列出两组有限集后，逐点取并集 U 与共同包络 C，得到 C⊆U，因此 forkRow 的所需集只需从 U 删除 o。包络取两个 H 的并集，高度由较深的 child 6 再加一步。me_7 用 me_4、me_6 重写后，核对的正是这些集合与高度。', en: 'Decode the digits of entry₇ as translations (−1,0) and (1,0), applied to base row 4 and the preceding row 6. Taking unions and intersections cell by cell gives the required union U and common envelope C with C⊆U, so forkRow only removes o from U. Unite the two envelopes and add one to the deeper child’s height. After rewriting with me_4 and me_6, me_7 checks these exact sets and height.' },
+        dependsOn: ['reconstruct-the-fork'],
+        derivation: [
+          { statement: text('entry₇=⟨7,[⟨4,0,3,4⟩,⟨6,0,5,4⟩]⟩ ⇒ P₄(x,y)=(x−1,y)，P₆(x,y)=(x+1,y)。', 'entry₇=⟨7,[⟨4,0,3,4⟩,⟨6,0,5,4⟩]⟩ gives P₄(x,y)=(x−1,y) and P₆(x,y)=(x+1,y).'), reason: text('每个数字字段减 4，得到 (3−4,4−4) 与 (5−4,4−4)；方向 0 保持坐标不变。两个 child 索引 4、6 都严格小于 7。', 'Subtract four from each digit pair to obtain (3−4,4−4) and (5−4,4−4). Orientation zero preserves coordinates. Both child indices, 4 and 6, are below 7.') },
+          { statement: text('A₄′={(-4,-1),(-3,-1),(-2,-1),(-1,-1),o}，H₄′=A₄′∪{(-1,0)}，h₄′=1。', 'A₄′={(-4,-1),(-3,-1),(-2,-1),(-1,-1),o}, H₄′=A₄′∪{(-1,0)}, h₄′=1.'), reason: text('基础行 4 先把 S 的格 (3,1) 移到 o 并从所需集删去 o，再按本表项向左平移一格。因此新所需集缺少 (-1,0)，但已经包含父行落点 o。', 'Base row 4 moves cell (3,1) of S to o and removes o from its required set. The term then translates it one cell left. Its new required set omits (-1,0) but already contains the parent move o.') },
+          { statement: text('A₆′={(-3,-1),(-2,-1),(-1,-1),(0,-1),o}，H₆′=A₆′∪{(1,0)}，h₆′=2。', 'A₆′={(-3,-1),(-2,-1),(-1,-1),(0,-1),o}, H₆′=A₆′∪{(1,0)}, h₆′=2.'), reason: text('将上一步 A₆、H₆ 的每个 x 坐标加一。原来从 A₆ 中删去的 o 移到 (1,0)；平移不改变已经核对的高度 2。', 'Add one to the x coordinate of each cell of A₆ and H₆ from the preceding step. The original omitted o moves to (1,0), while translation preserves the verified height two.') },
+          { statement: text('U=A₄′∪A₆′={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(0,-1),o}；C=H₄′∩H₆′={(-3,-1),(-2,-1),(-1,-1),o}⊆U。', 'U=A₄′∪A₆′={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(0,-1),o}; C=H₄′∩H₆′={(-3,-1),(-2,-1),(-1,-1),o}⊆U.'), reason: text('按坐标分别取并集和交集：只有 H₄′ 含 (-1,0)，只有 H₆′ 含 (1,0)。四个共同包络点都已由至少一个 child 列入所需集，所以并入 C 不会新增所需格。', 'Take the union and intersection by coordinates. Only H₄′ contains (-1,0), and only H₆′ contains (1,0). Every common-envelope cell is already required by a child, so adjoining C adds no new required cell.') },
+          { statement: text('A₇=(U∪C)∖{o}={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(0,-1)}；H₇=H₄′∪H₆′，|H₇|=8，h₇=1+max(1,2)=3。', 'A₇=(U∪C)∖{o}={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(0,-1)}; H₇=H₄′∪H₆′, |H₇|=8, h₇=1+max(1,2)=3.'), reason: text('C⊆U 使所需集公式化为 U∖{o}。o 已在两个包络中，插入它不会扩大并集；H₇∖A₇ 是 {(-1,0),o,(1,0)} 三格，不能再当作单一缺口。', 'Since C⊆U, the required set reduces to U∖{o}. Both envelopes already contain o, so inserting it does not enlarge their union. H₇∖A₇ consists of three cells, {(-1,0),o,(1,0)}, rather than a single gap.') },
+          { statement: text('me_7：rowAt 7=mr_7，其中 mr_7 正是上面列出的 (A₇,H₇,3)。', 'me_7: rowAt 7=mr_7, where mr_7 is exactly the displayed (A₇,H₇,3).'), reason: text('源码展开 entry₇ 的两个放置，再以 me_4、me_6 代入 child 的显式数据，最后对有限集与高度执行内核判定。后续行也沿相同的严格递减索引复用这些等式。', 'The source unfolds the two placements of entry₇, substitutes explicit child data using me_4 and me_6, then checks the finite sets and height by kernel decision. Later rows reuse such equalities along the same decreasing indices.') },
+        ],
+        next: { zh: '单 child 与双 child 的重建都化成了明确数据；接下来按同样方式对全部 616 行核对集合关系和高度。', en: 'Both the one-child and two-child reconstructions now give explicit data. Check set relations and heights in the same way for all 616 rows.' },
+        evidence: { theorems: ['OAI.SnakyCertificate.entry_7', 'OAI.SnakyCertificate.mr_7', 'OAI.SnakyCertificate.me_7'], taskIds: ['initial_goal_1'], checkIds: ['check-b900b20d4968e7ec561d'], source: { name: 'Submission.lean', line: 1543, endLine: 1553 } },
       },
       {
         id: 'verify-all-row-invariants',
@@ -471,7 +490,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
           zh: 'mvᵢ 对各显式有限集证明这四项条件；memo_allRows 对 i 做 interval_cases，先用 meᵢ 重写，再引用相应 mvᵢ，将四项条件推广到表中全部行。',
           en: 'Each mvᵢ proves the four conditions for its explicit finite sets. memo_allRows splits every possible i with interval_cases, rewrites using meᵢ and applies mvᵢ, covering all rows.',
         },
-        dependsOn: ["reconstruct-the-fork"],
+        dependsOn: ["reconstruct-the-fork", "reconstruct-two-children"],
         derivation: [
           {
             statement: text("Aᵢ⊆Hᵢ：对显式 mrᵢ 的每个所需点检查包络成员关系。", "Aᵢ⊆Hᵢ: check envelope membership for every required cell of explicit mrᵢ."),

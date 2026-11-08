@@ -88,6 +88,7 @@ export const coreProofWalkthroughs: ProofWalkthrough[] = [{
     evidence: { theorems: ['OAI.TriangleFace198.oldPart_perfect', 'OAI.TriangleFace198.indicator_eq_localExtension_of_mass_one', 'OAI.TriangleFace198.localExtension_indicator_eq'], taskIds: ['triangle_face_goal'], checkIds: ['check-eabf122f7f3f7b3fffab'], source: { name: 'Submission.lean', line: 997, endLine: 1017 } },
   }, {
     id: 'take-the-slice-of-the-hull',
+    figure: 'convex-mass-section',
     title: text('凸组合达到质量一时只能使用质量一的生成元', 'A mass-one convex combination only uses mass-one generators'),
     given: text('任取 y=Σⱼwⱼsⱼ∈R，其中 sⱼ 是匹配指示向量、wⱼ≥0、Σⱼwⱼ=1，并假设 L(y)=1。', 'Take y=Σⱼwⱼsⱼ∈R, with matching indicators sⱼ, weights wⱼ≥0 and Σⱼwⱼ=1, and assume L(y)=1.'),
     claim: text('所有正权项都满足 L(sⱼ)=1，故 Q=R∩{L=1}=conv{s∈生成元:L(s)=1}=f(P)。一般 y∈R 的割质量可取中间值，并不局限于一或三。', 'Every positive-weight term satisfies L(sⱼ)=1. Hence Q=R∩{L=1}=conv{generators s:L(s)=1}=f(P). A general point of R may have an intermediate cut mass, rather than only one or three.'),

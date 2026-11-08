@@ -507,6 +507,7 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
       },
       {
         id: 'exclude-distinct-centers-and-finish',
+        figure: 'color-separation',
         title: { zh: '不同同色中心也与单位距离矛盾', en: 'Distinct equal-color centers give the final contradiction' },
         given: { zh: '两个中心不同；triColor 的相等和中心颜色等式给出 colorOf(a,b)=colorOf(c,d)。', en: 'The centers differ. Equality of triColor and the center-color identities imply colorOf(a,b)=colorOf(c,d).' },
         claim: { zh: '单位距离的点必异色，因此 triColor 见证 ProperColoring 7。', en: 'Points at distance one have different colors, so triColor witnesses ProperColoring 7.' },

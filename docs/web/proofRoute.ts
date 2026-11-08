@@ -19,7 +19,7 @@ export function renderProofRoute(walkthrough: ProofWalkthrough, locale: Locale):
       ? `${text('用到', 'Uses')} ${step.dependsOn.map(id => numbers.get(id)!).join(text('、', ', '))}`
       : text('起点', 'Starting point');
     return `<li data-proof-route-node="${html(step.id)}"><button type="button" data-global-scroll="${html(target)}" data-proof-route-step="${html(step.id)}" data-proof-route-number="${number}" data-proof-route-title="${html(title)}" aria-controls="${html(target)}"${index === 0 ? ' aria-current="step"' : ''}>
-      <span class="proof-route-number">${number}</span><span class="proof-route-node-copy"><strong class="proof-route-title">${html(title)}</strong><small class="proof-route-dependencies">${html(dependencies)}</small></span>${index === walkthrough.steps.length - 1 ? `<span class="proof-route-finish" role="img" aria-label="${text('证明完成', 'Proof complete')}">✓</span>` : ''}
+      <span class="proof-route-number">${number}</span><span class="proof-route-node-copy"><strong class="proof-route-title">${html(title)}</strong><small class="proof-route-dependencies">${html(dependencies)}${step.figure ? `<span class="proof-route-figure">${text('图示', 'Figure')}</span>` : ''}</small></span>${index === walkthrough.steps.length - 1 ? `<span class="proof-route-finish" role="img" aria-label="${text('证明完成', 'Proof complete')}">✓</span>` : ''}
     </button></li>`;
   }).join('');
 

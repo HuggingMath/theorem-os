@@ -21,6 +21,8 @@ const output = path.join(root, 'out/classic-global-trajectory');
 const staticRoot = path.join(root, 'out/web');
 const catalog = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/data/catalog.json'), 'utf8')) as ArchiveCatalog;
 assert.equal(catalog.records.length, 16);
+const figureCount = catalog.records.reduce((sum, record) => sum + (record.process?.walkthrough?.steps.filter(step => step.figure).length ?? 0), 0);
+assert.equal(figureCount, 6, 'The built archive must include all six mathematical figures');
 assert.ok((await fs.readFile(path.join(staticRoot, 'classics/site.js'), 'utf8')).includes('data-workflow-stage'),
   'Build the complete archived research workflow before running this browser check');
 await fs.mkdir(output, { recursive: true });
@@ -239,99 +241,299 @@ async function reading(page: Page, walkthrough: ProofWalkthrough, id: string, lo
   await visible(page, '#proof-derivation-' + id + ' h5', current + ': reading heading');
 }
 async function verifyProofFigure(page: Page, record: ArchiveRecord, locale: 'zh' | 'en', label: string) {
-  const step = record.process!.walkthrough!.steps.find(step => step.figure)!;
-  assert.ok(step?.figure, record.id + ': an actual accepted proof step must own the figure');
-  const location = page.url(), figure = page.locator(attr('data-proof-figure', step.figure));
-  await page.locator('[data-proof-figures-state="ready"]').waitFor();
-  await figure.scrollIntoViewIfNeeded(); await settled(page);
-  const diagram = await figure.locator('.proof-figure-svg').evaluate(svg => {
-    const box = svg.getBoundingClientRect(), parent = svg.parentElement!.getBoundingClientRect();
-    return { width: box.width, height: box.height, left: box.left, right: box.right, parentLeft: parent.left, parentRight: parent.right };
-  });
-  assert.ok(diagram.width >= 150 && diagram.height >= 100 && diagram.left >= diagram.parentLeft - 1 && diagram.right <= diagram.parentRight + 1,
-    'The mathematical SVG must use the full column and fit the screen: ' + JSON.stringify(diagram));
-  if (step.figure === 'triangle-matchings') {
-    for (const choice of ['0', '1', '2', 'all']) {
-      const button = figure.locator(attr('data-triangle-choice', choice));
-      await button.focus(); await button.press(choice === '1' ? 'Space' : 'Enter');
-      assert.equal(await button.evaluate(node => node === document.activeElement), true, 'Changing a matching preserves its control and keyboard focus');
-      assert.equal(await figure.getAttribute('data-triangle-choice'), choice);
-      assert.equal(await figure.locator('[aria-pressed="true"]').count(), 1);
-      assert.equal(await button.getAttribute('aria-pressed'), 'true');
-      const k = choice === 'all' ? 3 : 1, t = choice === 'all' ? 0 : 1;
-      assert.equal(await figure.locator('[data-edge-kind="old"][data-selected="true"]').count(), k);
-      assert.equal(await figure.locator('[data-edge-kind="new"][data-selected="true"]').count(), t);
-      assert.equal(await figure.locator('[data-triangle-equation]').textContent(), k + ' + 2 × ' + t + ' = 3');
-    }
-  } else if (step.figure === 'four-corner-cover') {
-    const p = figure.locator('[data-cover-coordinate="p"]'), q = figure.locator('[data-cover-coordinate="q"]');
-    for (const [a, b, corner] of [[0.1, 0.1, '00'], [0.9, 0.9, '11'], [0.8, 0.2, '10'], [0.2, 0.8, '01']] as const) {
-      const svg = figure.locator('[data-cover-picture]');
-      await svg.scrollIntoViewIfNeeded();
-      const click = await svg.evaluate((node, coordinates) => {
-        const svg = node as SVGSVGElement;
-        const [a, b] = coordinates;
-        const point = new DOMPoint(34 + 148 * a + 74 * b, 196 - 74 * Math.sqrt(3) * b).matrixTransform(svg.getScreenCTM()!);
-        return { x: point.x, y: point.y };
-      }, [a, b]);
-      await page.mouse.click(click.x, click.y);
-      assert.equal(await figure.getAttribute('data-cover-corner'), corner);
-      assert.equal(await p.inputValue(), String(a)); assert.equal(await q.inputValue(), String(b));
-      assert.equal(await figure.locator('[data-cover-region][data-selected="true"]').getAttribute('data-cover-region'), corner);
-      assert.equal(await figure.locator('[data-cover-corner]').textContent(), '(' + corner[0] + ', ' + corner[1] + ')');
-      const selected = await figure.locator('[data-cover-point]').evaluate(node => [Number(node.getAttribute('cx')), Number(node.getAttribute('cy'))]);
-      assert.ok(Math.abs(selected[0] - (34 + 148 * a + 74 * b)) < 0.00001);
-      assert.ok(Math.abs(selected[1] - (196 - 74 * Math.sqrt(3) * b)) < 0.00001);
-    }
-    await p.focus(); await p.press('ArrowRight');
-    assert.equal(await p.inputValue(), '0.21');
-    assert.equal(await p.evaluate(node => node === document.activeElement), true, 'Slider calculations preserve native keyboard focus');
-    assert.equal(await figure.locator('[data-cover-output="p"]').textContent(), '0.21');
-    assert.ok((await figure.locator('[data-cover-quadratic]').textContent())!.includes('0.04210'));
-    await p.press('Home'); await q.focus(); await q.press('End');
-    assert.equal(await p.inputValue(), '0'); assert.equal(await q.inputValue(), '1');
-    assert.equal(await figure.getAttribute('data-cover-corner'), '01');
-    assert.ok((await figure.locator('[data-cover-distance]').textContent())!.includes('0.0000'));
-    const svg = figure.locator('[data-cover-picture]'); await svg.scrollIntoViewIfNeeded();
-    const drag = await svg.evaluate(node => {
-      const transform = (node as SVGSVGElement).getScreenCTM()!;
-      return [[0, 1], [0.42, 0.28]].map(([a, b]) => {
-        const point = new DOMPoint(34 + 148 * a + 74 * b, 196 - 74 * Math.sqrt(3) * b).matrixTransform(transform);
-        return { x: point.x, y: point.y };
-      });
+  const walkthrough = record.process!.walkthrough!, steps = walkthrough.steps.filter(step => step.figure);
+  assert.ok(steps.length > 0, record.id + ': actual accepted proof steps must own the figures');
+  for (const step of steps) {
+    const location = page.url(), row = page.locator(attr('data-proof-derivation', step.id));
+    const figure = row.locator(attr('data-proof-figure', step.figure!));
+    const identity = async () => {
+      assert.equal(page.url(), location, 'A mathematical illustration must retain the exact selected proof and run URL');
+      const parameters = new URLSearchParams(new URL(page.url()).hash.slice(1));
+      assert.equal(parameters.get('proof'), record.id);
+      assert.equal(parameters.get('run') ?? record.campaign!.runId, walkthrough.runId);
+      assert.equal(await page.locator('.archive-process').getAttribute('data-process-run-id'), walkthrough.runId);
+      assert.equal(await page.locator('.global-workflow').getAttribute('data-global-selected-run'), walkthrough.runId);
+      assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), walkthrough.proofSha256);
+    };
+    await identity();
+    await page.locator('[data-proof-figures-state="ready"]').waitFor();
+    await figure.scrollIntoViewIfNeeded(); await settled(page);
+    const diagram = await figure.locator('.proof-figure-svg').evaluate(svg => {
+      const box = svg.getBoundingClientRect(), parent = svg.parentElement!.getBoundingClientRect();
+      return { width: box.width, height: box.height, left: box.left, right: box.right, parentLeft: parent.left, parentRight: parent.right };
     });
-    await page.mouse.move(drag[0].x, drag[0].y); await page.mouse.down();
-    await page.mouse.move(drag[1].x, drag[1].y, { steps: 8 }); await page.mouse.up();
-    assert.equal(await p.inputValue(), '0.42'); assert.equal(await q.inputValue(), '0.28');
-    assert.equal(await figure.getAttribute('data-cover-corner'), '10');
-  } else {
-    const expected = [
-      { stage: 'base', gap: '(0,0)', height: '1', first: '1,0', absent: '0,0' },
-      { stage: 'placed', gap: '(-4,-1)', height: '1', first: '0,0', absent: '-4,-1' },
-      { stage: 'fork', gap: '(0,0)', height: '2', first: '-4,-1', absent: '0,0' },
-    ];
-    for (const item of expected) {
-      const button = figure.locator(attr('data-snaky-stage', item.stage));
-      await button.focus(); await button.press(item.stage === 'placed' ? 'Space' : 'Enter');
-      assert.equal(await button.evaluate(node => node === document.activeElement), true);
-      assert.equal(await figure.getAttribute('data-snaky-current'), item.stage);
-      assert.equal(await figure.locator('[aria-pressed="true"]').count(), 1);
-      assert.equal(await button.getAttribute('aria-pressed'), 'true');
-      assert.equal(await figure.locator('[data-snaky-cell]').count(), 6);
-      assert.equal(await figure.locator('[data-snaky-cell-role="required"]').count(), 5);
-      assert.equal(await figure.locator(attr('data-snaky-cell', item.first)).getAttribute('data-snaky-cell-role'), 'required');
-      assert.equal(await figure.locator(attr('data-snaky-cell', item.absent)).getAttribute('data-snaky-cell-role'), 'gap');
-      assert.equal(await figure.locator('[data-snaky-gap]').textContent(), item.gap);
-      assert.equal(await figure.locator('[data-snaky-height]').textContent(), item.height);
+    assert.ok(diagram.width >= 150 && diagram.height >= 100 && diagram.left >= diagram.parentLeft - 1 && diagram.right <= diagram.parentRight + 1,
+      'The mathematical SVG must use the full column and fit the screen: ' + JSON.stringify(diagram));
+    if (step.figure === 'triangle-matchings') {
+      for (const choice of ['0', '1', '2', 'all']) {
+        const button = figure.locator(attr('data-triangle-choice', choice));
+        await button.focus(); await button.press(choice === '1' ? 'Space' : 'Enter');
+        assert.equal(await button.evaluate(node => node === document.activeElement), true, 'Changing a matching preserves its control and keyboard focus');
+        assert.equal(await figure.getAttribute('data-triangle-choice'), choice);
+        assert.equal(await figure.locator('[aria-pressed="true"]').count(), 1);
+        assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        const k = choice === 'all' ? 3 : 1, t = choice === 'all' ? 0 : 1;
+        assert.equal(await figure.locator('[data-edge-kind="old"][data-selected="true"]').count(), k);
+        assert.equal(await figure.locator('[data-edge-kind="new"][data-selected="true"]').count(), t);
+        assert.equal(await figure.locator('[data-triangle-equation]').textContent(), k + ' + 2 × ' + t + ' = 3');
+      }
+    } else if (step.figure === 'four-corner-cover') {
+      const p = figure.locator('[data-cover-coordinate="p"]'), q = figure.locator('[data-cover-coordinate="q"]');
+      for (const [a, b, corner] of [[0.1, 0.1, '00'], [0.9, 0.9, '11'], [0.8, 0.2, '10'], [0.2, 0.8, '01']] as const) {
+        const svg = figure.locator('[data-cover-picture]');
+        await svg.scrollIntoViewIfNeeded();
+        const click = await svg.evaluate((node, coordinates) => {
+          const svg = node as SVGSVGElement;
+          const [a, b] = coordinates;
+          const point = new DOMPoint(34 + 148 * a + 74 * b, 196 - 74 * Math.sqrt(3) * b).matrixTransform(svg.getScreenCTM()!);
+          return { x: point.x, y: point.y };
+        }, [a, b]);
+        await page.mouse.click(click.x, click.y);
+        assert.equal(await figure.getAttribute('data-cover-corner'), corner);
+        assert.equal(await p.inputValue(), String(a)); assert.equal(await q.inputValue(), String(b));
+        assert.equal(await figure.locator('[data-cover-region][data-selected="true"]').getAttribute('data-cover-region'), corner);
+        assert.equal(await figure.locator('[data-cover-corner]').textContent(), '(' + corner[0] + ', ' + corner[1] + ')');
+        const selected = await figure.locator('[data-cover-point]').evaluate(node => [Number(node.getAttribute('cx')), Number(node.getAttribute('cy'))]);
+        assert.ok(Math.abs(selected[0] - (34 + 148 * a + 74 * b)) < 0.00001);
+        assert.ok(Math.abs(selected[1] - (196 - 74 * Math.sqrt(3) * b)) < 0.00001);
+      }
+      await p.focus(); await p.press('ArrowRight');
+      assert.equal(await p.inputValue(), '0.21');
+      assert.equal(await p.evaluate(node => node === document.activeElement), true, 'Slider calculations preserve native keyboard focus');
+      assert.equal(await figure.locator('[data-cover-output="p"]').textContent(), '0.21');
+      assert.ok((await figure.locator('[data-cover-quadratic]').textContent())!.includes('0.04210'));
+      await p.press('Home'); await q.focus(); await q.press('End');
+      assert.equal(await p.inputValue(), '0'); assert.equal(await q.inputValue(), '1');
+      assert.equal(await figure.getAttribute('data-cover-corner'), '01');
+      assert.ok((await figure.locator('[data-cover-distance]').textContent())!.includes('0.0000'));
+      const svg = figure.locator('[data-cover-picture]'); await svg.scrollIntoViewIfNeeded();
+      const drag = await svg.evaluate(node => {
+        const transform = (node as SVGSVGElement).getScreenCTM()!;
+        return [[0, 1], [0.42, 0.28]].map(([a, b]) => {
+          const point = new DOMPoint(34 + 148 * a + 74 * b, 196 - 74 * Math.sqrt(3) * b).matrixTransform(transform);
+          return { x: point.x, y: point.y };
+        });
+      });
+      await page.mouse.move(drag[0].x, drag[0].y); await page.mouse.down();
+      await page.mouse.move(drag[1].x, drag[1].y, { steps: 8 }); await page.mouse.up();
+      assert.equal(await p.inputValue(), '0.42'); assert.equal(await q.inputValue(), '0.28');
+      assert.equal(await figure.getAttribute('data-cover-corner'), '10');
+    } else if (step.figure === 'snaky') {
+      const expected = [
+        { stage: 'base', gap: '(0,0)', height: '1', first: '1,0', absent: '0,0' },
+        { stage: 'placed', gap: '(-4,-1)', height: '1', first: '0,0', absent: '-4,-1' },
+        { stage: 'fork', gap: '(0,0)', height: '2', first: '-4,-1', absent: '0,0' },
+      ];
+      for (const item of expected) {
+        const button = figure.locator(attr('data-snaky-stage', item.stage));
+        await button.focus(); await button.press(item.stage === 'placed' ? 'Space' : 'Enter');
+        assert.equal(await button.evaluate(node => node === document.activeElement), true);
+        assert.equal(await figure.getAttribute('data-snaky-current'), item.stage);
+        assert.equal(await figure.locator('[aria-pressed="true"]').count(), 1);
+        assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        assert.equal(await figure.locator('[data-snaky-cell]').count(), 6);
+        assert.equal(await figure.locator('[data-snaky-cell-role="required"]').count(), 5);
+        assert.equal(await figure.locator(attr('data-snaky-cell', item.first)).getAttribute('data-snaky-cell-role'), 'required');
+        assert.equal(await figure.locator(attr('data-snaky-cell', item.absent)).getAttribute('data-snaky-cell-role'), 'gap');
+        assert.equal(await figure.locator('[data-snaky-gap]').textContent(), item.gap);
+        assert.equal(await figure.locator('[data-snaky-height]').textContent(), item.height);
+      }
+    } else if (step.figure === 'convex-mass-section') {
+      const input = figure.locator('input[data-convex-mu]'), reset = figure.locator('button[data-convex-reset]');
+      const normalize = (value: string | null) => (value ?? '').replace(/\s/gu, '');
+      const verifyMass = async (mu: number) => {
+        const one = (1 - mu).toFixed(2), three = mu.toFixed(2), mass = (1 + 2 * mu).toFixed(2), excess = (2 * mu).toFixed(2);
+        assert.equal(Number(await input.inputValue()), mu);
+        assert.equal(await figure.getAttribute('data-convex-mu'), String(mu));
+        assert.equal(await figure.getAttribute('data-convex-section'), String(mu === 0));
+        assert.equal(await figure.locator('[data-convex-output]').textContent(), three);
+        assert.equal(await input.getAttribute('aria-valuetext'), locale === 'en' ? 'Total mass-three weight ' + three : '质量三组总权重 ' + three);
+        assert.equal(normalize(await figure.locator('[data-convex-one-weight]').textContent()), '1−μ=' + one);
+        assert.equal(normalize(await figure.locator('[data-convex-three-weight]').textContent()), 'μ=' + three);
+        assert.equal(normalize(await figure.locator('[data-convex-equation]').textContent()), 'L(y)=(1−μ)+3μ=' + one + '+3×' + three + '=' + mass);
+        assert.equal(normalize(await figure.locator('[data-convex-excess]').textContent()), 'L(y)−1=2μ=' + excess + '≥0');
+        const graphic = await figure.locator('[data-convex-picture]').evaluate(svg => ({
+          one: Number(svg.querySelector('[data-convex-weight="one"]')!.getAttribute('width')),
+          three: Number(svg.querySelector('[data-convex-weight="three"]')!.getAttribute('width')),
+          mass: Number(svg.querySelector('[data-convex-mass-point]')!.getAttribute('cx')),
+          excessStart: Number(svg.querySelector('[data-convex-excess-segment]')!.getAttribute('x1')),
+          excessEnd: Number(svg.querySelector('[data-convex-excess-segment]')!.getAttribute('x2')),
+          lower: Number(svg.querySelector('[data-convex-lower-bound]')!.getAttribute('x1')),
+        }));
+        assert.ok(Math.abs(graphic.one - 272 * (1 - mu)) < 0.00001 && Math.abs(graphic.three - 272 * mu) < 0.00001,
+          'The SVG weight bars must represent the same grouped weights as the calculation');
+        assert.ok(Math.abs(graphic.mass - (24 + 272 * mu)) < 0.00001 && Math.abs(graphic.excessEnd - graphic.mass) < 0.00001);
+        assert.equal(graphic.excessStart, 24); assert.equal(graphic.lower, 24);
+        if (mu === 0) assert.equal(normalize(await figure.locator('[data-convex-bridge]').textContent()), 'Q=R∩{L=1}=conv{f(1ₙ)}=f(P)',
+          'The zero mass-three weight must expose the actual generator-to-f(P) bridge');
+        else assert.equal(await figure.locator('.proof-figure-equation[data-convex-bridge]').count(), 0);
+        await identity();
+      };
+      await verifyMass(0.25);
+      for (const [key, mu] of [['Home', 0], ['ArrowRight', 0.01], ['End', 1]] as const) {
+        await input.focus(); await input.press(key); await verifyMass(mu);
+        assert.equal(await input.evaluate(node => node === document.activeElement), true, 'Native range keys must keep slider focus');
+      }
+      await reset.click(); await verifyMass(0);
+      assert.equal(await reset.evaluate(node => node === document.activeElement), true, 'Pointer reset must retain the section control');
+      const sliderBox = await input.boundingBox(); assert.ok(sliderBox);
+      await input.click({ position: { x: sliderBox.width / 2, y: sliderBox.height / 2 } }); await verifyMass(0.5);
+      assert.equal(await input.evaluate(node => node === document.activeElement), true);
+      await reset.focus(); await reset.press('Space'); await verifyMass(0);
+      assert.equal(await reset.evaluate(node => node === document.activeElement), true, 'Keyboard reset must keep focus while updating the section');
+    } else if (step.figure === 'color-separation') {
+      const radius = Math.sqrt(3) / 4;
+      const verifySeparation = async (kind: 'shared' | 'distinct') => {
+        const shared = kind === 'shared', upper = shared ? 2 * radius : 1 + 2 * radius;
+        const lower = shared ? 1 : Math.sqrt(63) / 4, gap = lower - upper, scale = 266 / (shared ? 1.2 : 2.25);
+        const button = figure.locator(attr('data-separation-case', kind));
+        assert.equal(await figure.getAttribute('data-separation-current'), kind);
+        assert.equal(await figure.locator('.proof-figure-controls [aria-pressed="true"]').count(), 1);
+        assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        assert.equal(await button.evaluate(node => node === document.activeElement), true, 'Changing center cases preserves the activated control and focus');
+        assert.equal(await figure.locator('[data-separation-upper]').textContent(), upper.toFixed(4));
+        assert.equal(await figure.locator('[data-separation-lower]').textContent(), lower.toFixed(4));
+        assert.equal(await figure.locator('[data-separation-gap]').textContent(), gap.toFixed(4) + ' > 0');
+        assert.equal(await figure.locator('[data-separation-inequality]').textContent(), shared ? '1 = dist(x,y) ≤ 2r < 1'
+          : 'dist(Cₓ,Cᵧ) ≥ 3√7/4 > 1+2rdist(Cₓ,Cᵧ) ≤ r+1+r = 1+2r');
+        const graphic = await figure.locator('[data-separation-picture]').evaluate(svg => ({
+          segments: [...svg.querySelectorAll('[data-segment]')].map(node => ({ kind: node.getAttribute('data-segment'),
+            x: Number(node.getAttribute('x')), width: Number(node.getAttribute('width')), label: node.nextElementSibling!.textContent })),
+          gapX: Number(svg.querySelector('.proof-distance-gap')!.getAttribute('x')),
+          gapWidth: Number(svg.querySelector('.proof-distance-gap')!.getAttribute('width')),
+          lowerX: Number(svg.querySelector('circle')!.getAttribute('cx')),
+          guides: [...svg.querySelectorAll('.proof-distance-guide')].map(node => Number(node.getAttribute('x1'))),
+        }));
+        assert.deepEqual(graphic.segments.map(segment => segment.kind), shared ? ['cover', 'cover'] : ['cover', 'unit', 'cover']);
+        assert.deepEqual(graphic.segments.map(segment => segment.label), shared ? ['≤r', '≤r'] : ['≤r', '1', '≤r']);
+        let distance = 0;
+        for (const [index, segment] of graphic.segments.entries()) {
+          const length = !shared && index === 1 ? 1 : radius;
+          assert.ok(Math.abs(segment.x - (24 + distance * scale)) < 0.00001 && Math.abs(segment.width - length * scale) < 0.00001,
+            'The two or three visible route segments must match the covering/unit distance bounds');
+          distance += length;
+        }
+        assert.ok(Math.abs(distance - upper) < 0.00001 && Math.abs(graphic.gapX - (24 + upper * scale)) < 0.00001);
+        assert.ok(Math.abs(graphic.gapWidth - gap * scale) < 0.00001 && Math.abs(graphic.lowerX - (24 + lower * scale)) < 0.00001);
+        assert.deepEqual(graphic.guides.map(value => Math.round(value * 100000)), [24 + upper * scale, 24 + lower * scale].map(value => Math.round(value * 100000)));
+        await identity();
+      };
+      for (const kind of ['shared', 'distinct'] as const) {
+        const button = figure.locator(attr('data-separation-case', kind));
+        await button.focus(); await button.press(kind === 'shared' ? 'Enter' : 'Space'); await verifySeparation(kind);
+        const premise = kind === 'shared' ? 'exclude-a-shared-center' : 'separate-equal-color-centers';
+        assert.ok(walkthrough.steps.some(previous => previous.id === premise) && step.dependsOn.includes(premise),
+          'The dynamic illustration reference must identify a real mathematical premise of this step');
+        const reference = figure.locator('button.proof-figure-reference[data-global-scroll]');
+        assert.equal(await reference.getAttribute('data-global-scroll'), 'proof-derivation-' + premise);
+        if (kind === 'shared') { await reference.focus(); await reference.press('Enter'); } else await reference.click();
+        await settled(page);
+        const premiseRow = page.locator(attr('data-proof-derivation', premise)), heading = premiseRow.locator('header > h5');
+        const jump = await heading.evaluate(node => { const box = node.getBoundingClientRect(); return {
+          focused: node === document.activeElement, top: box.top, bottom: box.bottom, height: innerHeight,
+        }; });
+        assert.ok(jump.focused && jump.top >= 0 && jump.bottom <= jump.height,
+          'A dynamically generated reference must scroll to and focus the real premise heading: ' + JSON.stringify(jump));
+        await identity();
+        const returnButton = premiseRow.locator('button' + attr('data-proof-consumer', step.id));
+        await returnButton.click(); await settled(page);
+        assert.equal(await row.locator('header > h5').evaluate(node => node === document.activeElement), true,
+          'The premise’s actual consumer link returns to the illustrated proof step');
+        await identity(); await figure.scrollIntoViewIfNeeded();
+      }
+      for (const kind of ['shared', 'distinct'] as const) {
+        await figure.locator(attr('data-separation-case', kind)).click(); await verifySeparation(kind);
+      }
+    } else if (step.figure === 'snaky-fork') {
+      // Independent expected coordinates from accepted mr_4/mr_6/mr_7 and entry_7's two shifts.
+      const source4 = { a: ['-3,-1', '-2,-1', '-1,-1', '0,-1', '1,0'], h: ['-3,-1', '-2,-1', '-1,-1', '0,-1', '0,0', '1,0'] };
+      const source6 = { a: ['-4,-1', '-3,-1', '-2,-1', '-1,-1', '-1,0'], h: ['-4,-1', '-3,-1', '-2,-1', '-1,-1', '-1,0', '0,0'] };
+      const placed4 = { a: ['-4,-1', '-3,-1', '-2,-1', '-1,-1', '0,0'], h: ['-4,-1', '-3,-1', '-2,-1', '-1,-1', '-1,0', '0,0'] };
+      const placed6 = { a: ['-3,-1', '-2,-1', '-1,-1', '0,-1', '0,0'], h: ['-3,-1', '-2,-1', '-1,-1', '0,-1', '0,0', '1,0'] };
+      const union = ['-4,-1', '-3,-1', '-2,-1', '-1,-1', '0,-1', '0,0'], common = ['-3,-1', '-2,-1', '-1,-1', '0,0'];
+      const parent = { a: ['-4,-1', '-3,-1', '-2,-1', '-1,-1', '0,-1'], h: ['-4,-1', '-3,-1', '-2,-1', '-1,-1', '-1,0', '0,-1', '0,0', '1,0'] };
+      const cells = (value: string | null) => [...(value ?? '').matchAll(/\((-?\d+),\s*(-?\d+)\)/gu)].map(match => match[1] + ',' + match[2]).sort();
+      const verifyFork = async (kind: 'child4' | 'child6' | 'combine' | 'fork') => {
+        const expected = kind === 'child4' ? placed4 : kind === 'child6' ? placed6 : kind === 'combine' ? { a: union, h: parent.h } : parent;
+        const button = figure.locator(attr('data-snaky-fork-stage', kind));
+        assert.equal(await figure.getAttribute('data-snaky-fork-current'), kind);
+        assert.equal(await figure.locator('.proof-figure-controls [aria-pressed="true"]').count(), 1);
+        assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        assert.equal(await button.evaluate(node => node === document.activeElement), true, 'Fork layer changes preserve the original button and focus');
+        const graphic = await figure.locator('[data-snaky-fork-cell]').evaluateAll(nodes => nodes.map(node => ({
+          cell: node.getAttribute('data-snaky-fork-cell')!, required: node.getAttribute('data-snaky-fork-required') === 'true',
+          common: node.getAttribute('data-snaky-fork-common') === 'true', removed: node.getAttribute('data-snaky-fork-removed') === 'true',
+          x: Number(node.querySelector('rect')!.getAttribute('x')), y: Number(node.querySelector('rect')!.getAttribute('y')),
+          label: node.querySelector('text')?.textContent, outlines: node.querySelectorAll('rect').length,
+        })));
+        assert.deepEqual(graphic.map(cell => cell.cell).sort(), expected.h.slice().sort());
+        assert.deepEqual(graphic.filter(cell => cell.required).map(cell => cell.cell).sort(), expected.a.slice().sort());
+        for (const cell of graphic) {
+          const [x, y] = cell.cell.split(',').map(Number);
+          assert.equal(cell.x, 150 + 24 * x - 10); assert.equal(cell.y, 112 - 24 * y - 10);
+        }
+        if (kind === 'combine') {
+          assert.deepEqual(cells(await figure.locator('[data-snaky-fork-union-a]').textContent()), union.slice().sort());
+          assert.deepEqual(cells(await figure.locator('[data-snaky-fork-common-h]').textContent()), common.slice().sort());
+          assert.deepEqual(cells(await figure.locator('[data-snaky-fork-union-h]').textContent()), parent.h.slice().sort());
+          assert.equal(graphic.filter(cell => cell.required).length, 6); assert.equal(graphic.filter(cell => cell.common).length, 4);
+          assert.deepEqual(graphic.filter(cell => cell.common).map(cell => cell.cell).sort(), common.slice().sort());
+          assert.ok(graphic.filter(cell => cell.common).every(cell => cell.outlines === 2 && cell.required), 'Common H already lies inside the six-cell union A');
+          for (const [cell, label] of [['-4,-1', '4'], ['0,-1', '6'], ['-3,-1', '4+6'], ['-2,-1', '4+6'], ['-1,-1', '4+6']])
+            assert.equal(graphic.find(item => item.cell === cell)!.label, label, 'The union layer must identify the actual contributing children');
+          assert.ok((await figure.locator('[data-snaky-fork-readout]').textContent())!.includes('C⊆U ⇒ U∪C=U'));
+        } else {
+          assert.deepEqual(cells(await figure.locator('[data-snaky-fork-a]').textContent()), expected.a.slice().sort());
+          assert.deepEqual(cells(await figure.locator('[data-snaky-fork-h]').textContent()), expected.h.slice().sort());
+          assert.equal(await figure.locator('[data-snaky-fork-height]').textContent(), kind === 'child4' ? '1' : kind === 'child6' ? '2' : '3');
+          const envelopeOnly = expected.h.filter(cell => !expected.a.includes(cell)).sort();
+          assert.deepEqual(cells(await figure.locator('[data-snaky-fork-envelope-only]').textContent()), envelopeOnly);
+          assert.deepEqual(graphic.filter(cell => !cell.required).map(cell => cell.cell).sort(), envelopeOnly);
+          if (kind === 'fork') {
+            assert.equal(graphic.filter(cell => cell.required).length, 5); assert.equal(graphic.length, 8);
+            assert.deepEqual(envelopeOnly, ['-1,0', '0,0', '1,0']);
+            assert.deepEqual(graphic.filter(cell => cell.removed).map(cell => cell.cell), ['0,0']);
+            assert.equal(graphic.find(cell => cell.cell === '0,0')!.required, false);
+            assert.equal(await figure.locator('[data-snaky-fork-added]').textContent(), '∅');
+            assert.deepEqual(cells(await figure.locator('[data-snaky-fork-removed-a]').textContent()), ['0,0']);
+            assert.ok((await figure.locator('[data-snaky-fork-readout]').textContent())!.includes('h₇=1+max(1,2)=3'));
+          } else {
+            const original = kind === 'child4' ? source4 : source6;
+            assert.deepEqual(cells(await figure.locator('[data-snaky-fork-source-a]').textContent()), original.a.slice().sort());
+            assert.deepEqual(cells(await figure.locator('[data-snaky-fork-source-h]').textContent()), original.h.slice().sort());
+            assert.ok((await figure.locator('[data-snaky-fork-readout]').textContent())!.includes(kind === 'child4' ? 'P₄(x,y)=(x−1,y)' : 'P₆(x,y)=(x+1,y)'));
+          }
+        }
+        await identity();
+      };
+      for (const kind of ['child4', 'child6', 'combine', 'fork'] as const) {
+        const button = figure.locator(attr('data-snaky-fork-stage', kind));
+        if (kind === 'combine') await button.click(); else { await button.focus(); await button.press(kind === 'child6' ? 'Space' : 'Enter'); }
+        await verifyFork(kind);
+        if (kind === 'child4' || kind === 'child6') {
+          const details = figure.locator('[data-snaky-fork-readout] details'), summary = details.locator('summary');
+          await summary.focus(); await summary.press('Enter');
+          assert.equal(await details.getAttribute('open'), '');
+          assert.equal(await figure.locator('[data-snaky-fork-source-a]').isVisible(), true);
+          assert.equal(await figure.locator('[data-snaky-fork-source-h]').isVisible(), true);
+          assert.equal(await summary.evaluate(node => node === document.activeElement), true);
+          await summary.press('Enter'); await button.focus(); await identity();
+        }
+      }
+      for (const kind of ['child4', 'fork'] as const) {
+        await figure.locator(attr('data-snaky-fork-stage', kind)).click(); await verifyFork(kind);
+      }
+    } else {
+      assert.fail('No browser interaction check for ' + step.figure);
     }
+    await identity();
+    assert.equal(await page.locator(attr('data-proof-derivation', step.id) + ' .proof-walkthrough-calculation').isVisible(), true);
+    await fits(page, label + ': ' + step.figure);
+    await figure.evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }));
+    // Place the figure below both sticky reading controls for a readable screenshot.
+    await page.evaluate(() => scrollBy(0, -200));
+    await shot(page, 'figure-' + locale + '-' + page.viewportSize()!.width + '-' + step.figure + '.png');
   }
-  assert.equal(page.url(), location, 'A mathematical illustration must retain the exact selected proof and run URL');
-  assert.equal(await page.locator(attr('data-proof-derivation', step.id) + ' .proof-walkthrough-calculation').isVisible(), true);
-  await fits(page, label + ': ' + step.figure);
-  await figure.evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }));
-  // Place the figure below both sticky reading controls for a readable screenshot.
-  await page.evaluate(() => scrollBy(0, -200));
-  await shot(page, 'figure-' + locale + '-' + page.viewportSize()!.width + '-' + step.figure + '.png');
 }
 async function verifyAssets(page: Page) {
   const urls = await page.locator('script[src],link[rel="stylesheet"][href]').evaluateAll(nodes =>
@@ -643,7 +845,7 @@ try {
       for (const record of catalog.records.filter(record => record.process!.walkthrough!.steps.some(step => step.figure))) {
         await enter(page, record, locale); await verifyProofFigure(page, record, locale, label);
       }
-      mark(label + ': all three mathematical figures support real pointer or keyboard interaction, update exact objects and calculations, and preserve proof identity and focus');
+      mark(label + ': all six mathematical figures support real pointer or keyboard interaction, update exact objects and calculations, and preserve proof identity and focus');
       const overview = new URL(ordinary(locale)); overview.hash = new URLSearchParams({ proof: triangle.id, status: 'verified', tab: 'overview' }).toString();
       await page.goto(overview.href); await page.locator('#tab-overview[aria-selected="true"]').waitFor();
       assert.equal(await page.locator('.global-workflow').count(), 0);
@@ -711,7 +913,7 @@ try {
     assert.equal(url.searchParams.get('v'), processAssetVersions[id], 'Lazy proof explanations must use the final process content version');
   }
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
-    checks, screenshots, viewportEvidence, records: catalog.records.length, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
+    checks, screenshots, viewportEvidence, records: catalog.records.length, figureCount, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
     derivationLines: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.derivation.length, 0), 0),
     readingStages: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.stages.length, 0),
     proofDependencies: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.dependsOn.length, 0), 0),
@@ -723,7 +925,7 @@ try {
 } catch (error) {
   await active?.screenshot({ path: path.join(output, 'failure.png'), fullPage: false }).catch(() => {});
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'failed', checkedAt: new Date().toISOString(), current,
-    error: error instanceof Error ? error.message : String(error), checks, viewportEvidence, paidModelCalls: false,
+    error: error instanceof Error ? error.message : String(error), checks, viewportEvidence, figureCount, paidModelCalls: false,
     runnerCalls, writes, apiReads, external, errors }, null, 2) + '\n');
   throw error;
 } finally {
