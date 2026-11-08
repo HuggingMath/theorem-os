@@ -16,7 +16,7 @@ const ongoing = catalog.records.filter(record => record.status === 'in_progress_
 const local = catalog.records.filter(record => record.status === 'locally_verified');
 // The shared replay, roadmap layout and bilingual node labels are UI code. Lean sources still load per record.
 const archiveBundle = fs.readFileSync(path.join(root, 'out/site/site.js'), 'utf8');
-assert.ok(Buffer.byteLength(archiveBundle) < 350_000, 'site.js with the replay and roadmap must not bundle the archive sources');
+assert.ok(Buffer.byteLength(archiveBundle) < 390_000, 'site.js with the replay, roadmap and translated research summaries must not bundle the archive sources');
 assert.equal(archiveBundle.includes('The no-seed alternative of the weighted totient companion theorem.'), false,
   'The Totient Lean source must stay in its lazy source asset');
 const errors = [];

@@ -1,12 +1,17 @@
 import type { ArchiveIndexRecord, ArchiveProcess } from './types';
 import type { Locale } from './site';
 import { archiveRoadmapTaskLabel } from './roadmapLabels';
-import { roadmapTone } from './processRoadmap';
+import { buildArchiveRoadmap, renderArchiveRoadmap, roadmapTone } from './processRoadmap';
+import { processMessage, readableProcessText } from './processText';
+import { workflowNote } from './workflowNotes';
 
 type Run = ArchiveProcess['runs'][number];
+type Check = NonNullable<Run['checks']>[number];
+type Delivery = NonNullable<Run['deliveries']>[number];
 const text = (locale: Locale, zh: string, en: string) => locale === 'en' ? en : zh;
 const html = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
+const date = (at?: string) => at && Number.isFinite(Date.parse(at)) ? new Date(at).toISOString().slice(5, 19).replace('T', ' ') : '';
 
 /** Shared checked bytes and task identity establish retained evidence, not a guessed parent run. */
 export function retainedTaskSources(before: Run, after: Run): number {
@@ -15,41 +20,94 @@ export function retainedTaskSources(before: Run, after: Run): number {
   return new Set((after.checks ?? []).filter(check => check.taskId && check.sourceDigest && identities.has(`${check.taskId}\0${check.sourceDigest}`))
     .map(check => `${check.taskId}\0${check.sourceDigest}`)).size;
 }
+function destination(run: Run, node: string, step = ''): string {
+  return `data-global-run="${html(run.runId)}" data-global-node="${html(node)}"${step ? ` data-global-step="${html(step)}"` : ''}`;
+}
+function prose(value: string, locale: Locale, note?: string): string {
+  const full = processMessage(value, locale);
+  if (!full && !note) return '';
+  const preview = note ?? (full.length > 720 ? `${full.slice(0, 720).trimEnd()}…` : full);
+  return `<p class="workflow-prose">${html(preview)}</p>${note || full.length > 720 ? `<details class="workflow-full-text"><summary>${text(locale, '展开原始记录', 'Read the full record')}</summary><p class="workflow-prose">${html(full)}</p></details>` : ''}`;
+}
+function checkExcerpt(check: Check): string {
+  const lines = (check.diagnostics ?? '').split('\n');
+  const first = Math.max(0, lines.findIndex(line => /error:|error\(|unsolved goals|sorry|admit/iu.test(line)));
+  return lines.slice(first, first + 8).join('\n').slice(0, 550);
+}
+
 export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: ArchiveProcess, locale: Locale,
-  statusLabel: (value: string | undefined) => string): string {
-  const taskCount = process.runs.reduce((sum, run) => sum + run.tasks.length, 0);
-  const checkCount = process.runs.reduce((sum, run) => sum + (run.checks?.length ?? 0), 0);
+  statusLabel: (value: string | undefined) => string, options: { run?: string; acceptance?: string; evidence?: string } = {}): string {
+  const run = process.runs.find(item => item.runId === options.run)
+    ?? process.runs.find(item => item.runId === record.campaign?.runId) ?? process.runs.at(-1);
+  if (!run) return '';
+  const index = process.runs.indexOf(run), final = run.runId === record.campaign?.runId;
+  const sharedSources = index ? retainedTaskSources(process.runs[index - 1]!, run) : 0;
+  const title = (taskId?: string) => {
+    const task = run.tasks.find(task => task.id === taskId);
+    return task ? archiveRoadmapTaskLabel(task, locale) : taskId ?? '';
+  };
+  const earlierIds = new Set(process.runs.slice(0, index).flatMap(item => (item.deliveries ?? []).map(delivery => delivery.id)));
+  const retained = (at: string, id?: string) => (id && earlierIds.has(id)) || (run.startedAt && at < run.startedAt);
+  const stamp = (at: string, id?: string) => `<time datetime="${html(at)}">${date(at)} UTC</time>${retained(at, id) ? `<span class="workflow-retained">${text(locale, '较早保存的记录', 'Earlier saved record')}</span>` : ''}`;
+  const deliveryEntry = (delivery: Delivery) => {
+    const node = delivery.taskId ? `task:${delivery.taskId}` : delivery.kind === 'review' ? 'review' : 'problem';
+    const kind = { research: text(locale, '研究发现', 'Research finding'), progress: text(locale, '保存研究进展', 'Research progress'),
+      proof: text(locale, '证明候选', 'Proof candidate'), failure: text(locale, '尝试受阻', 'Attempt blocked'), review: text(locale, '审阅意见', 'Review') }[delivery.kind] ?? delivery.kind;
+    return `<li class="workflow-record" data-workflow-entry="delivery:${html(delivery.id)}" data-workflow-kind="${html(delivery.kind)}" data-tone="${roadmapTone(delivery.status)}">
+      <div class="workflow-record-meta">${stamp(delivery.at, delivery.id)}<span>${html(delivery.workerId ?? delivery.role ?? '')}</span></div>
+      <div class="workflow-record-heading"><span class="workflow-record-kind">${kind}</span><h6>${html(title(delivery.taskId) || text(locale, '完整原题', 'Original problem'))}</h6><span class="workflow-record-status">${html(statusLabel(delivery.status))}</span></div>
+      ${prose(delivery.summary, locale, workflowNote(delivery.id, locale))}
+      <button class="workflow-record-link" ${destination(run, node, `delivery:${delivery.id}`)}>${text(locale, '查看这份交付', 'Inspect this delivery')}${icon('arrow-up-right')}</button>
+    </li>`;
+  };
+  const checkEntry = (check: Check) => {
+    const node = check.scope === 'original' ? 'original' : check.taskId ? `task:${check.taskId}` : 'problem';
+    const before = (run.checks ?? []).filter(item => item.id !== check.id && item.at < check.at && item.taskId === check.taskId && item.scope === check.scope)
+      .sort((a, b) => b.at.localeCompare(a.at)).find(item => item.sourceDigest && check.sourceDigest &&
+        process.sources?.[item.sourceDigest]?.path === process.sources?.[check.sourceDigest]?.path);
+    const changed = before && before.sourceDigest !== check.sourceDigest;
+    return `<li class="workflow-record" data-workflow-entry="check:${html(check.id)}" data-workflow-kind="check" data-tone="${roadmapTone(check.status)}">
+      <div class="workflow-record-meta">${stamp(check.at)}${changed ? `<span>${text(locale, '后续源码版本', 'Later source version')}</span>` : ''}</div>
+      <div class="workflow-record-heading"><span class="workflow-record-kind">${check.scope === 'original' ? text(locale, '整题检查', 'Whole-problem check') : text(locale, 'Lean 检查', 'Lean check')}</span><h6>${html(title(check.taskId) || text(locale, '完整原题', 'Original problem'))}</h6><span class="workflow-record-status">${html(statusLabel(check.status))}</span></div>
+      ${check.status === 'failed' && checkExcerpt(check) ? `<pre class="workflow-check-excerpt" tabindex="0">${html(checkExcerpt(check))}</pre>` : check.sourceDigest ? `<p class="workflow-check-result">${text(locale, '这次检查对应的源码与回执已保存。', 'The checked source and receipt are saved for this check.')}</p>` : ''}
+      <button class="workflow-record-link" ${destination(run, node, `check:${check.id}`)}>${text(locale, changed ? '查看反馈与源码变化' : '查看反馈、源码与回执', changed ? 'Inspect feedback and source changes' : 'Inspect feedback, source and receipt')}${icon('arrow-up-right')}</button>
+    </li>`;
+  };
+  const research = (run.deliveries ?? []).filter(delivery => ['research', 'progress'].includes(delivery.kind)).sort((a, b) => a.at.localeCompare(b.at));
+  const implementation = [...(run.deliveries ?? []).filter(delivery => ['proof', 'failure'].includes(delivery.kind)).map(delivery => ({ at: delivery.at, body: deliveryEntry(delivery) })),
+    ...(run.checks ?? []).map(check => ({ at: check.at, body: checkEntry(check) }))].sort((a, b) => a.at.localeCompare(b.at));
+  const reviews = (run.deliveries ?? []).filter(delivery => delivery.kind === 'review').sort((a, b) => a.at.localeCompare(b.at));
+  const other = (run.deliveries ?? []).filter(delivery => !['research', 'progress', 'proof', 'failure', 'review'].includes(delivery.kind));
+  const planEdits = run.events.map((event, i) => ({ ...event, index: i })).filter(event => event.kind === 'plan-edit' && event.message?.trim());
+  const sectionHeading = (number: string, heading: string, count?: number) => `<div class="workflow-section-heading"><span>${number}</span><h5 tabindex="-1">${heading}</h5>${count === undefined ? '' : `<small>${count}</small>`}</div>`;
+  const shortStatus = (item: Run) => item.runId === record.campaign?.runId ? text(locale, '最终通过', 'Accepted')
+    : item.resultStatus === 'evaluated_passed' ? text(locale, '本轮通过', 'Run passed')
+      : item.resultStatus === 'limit_reached' ? text(locale, '未完成', 'Incomplete')
+        : item.phase === 'prepared' ? text(locale, '准备', 'Prepared') : statusLabel(item.resultStatus ?? item.phase);
   return `<section class="process-global-trajectory" aria-label="${text(locale, '整题全局轨迹', 'Whole-problem trajectory')}">
-    <div class="global-trajectory-origin">${icon('book-open')}<div><strong>${text(locale, '原题', 'Original problem')}</strong><p>${html(record.summary)}</p></div>
-      <span>${text(locale, `${process.runs.length} 轮运行 · ${taskCount} 项任务记录 · ${checkCount} 次检查`, `${process.runs.length} runs · ${taskCount} task records · ${checkCount} checks`)}</span></div>
-    <div class="global-stage-headings" aria-hidden="true"><span>${text(locale, '历史运行', 'Recorded runs')}</span><span>${text(locale, '研究与引理分支', 'Research and lemma branches')}</span><span>${text(locale, '检查与审阅', 'Checks and reviews')}</span><span>${text(locale, '本轮结果', 'Run outcome')}</span></div>
-    <ol class="global-run-lanes">${process.runs.map((run, index) => {
-      const failed = (run.checks ?? []).filter(check => check.status === 'failed');
-      const original = (run.checks ?? []).filter(check => check.scope === 'original');
-      const reviews = (run.deliveries ?? []).filter(delivery => delivery.kind === 'review');
-      const blocked = run.tasks.filter(task => task.status === 'blocked');
-      const integrated = run.tasks.filter(task => task.status === 'integrated');
-      const final = run.runId === record.campaign?.runId;
-      const selectedCheck = failed[0] ?? original.at(-1) ?? run.checks?.at(-1);
-      const checkNode = selectedCheck?.scope === 'original' ? 'original' : selectedCheck?.taskId ? `task:${selectedCheck.taskId}` : 'problem';
-      const samples = [...run.tasks.filter(task => task.status === 'integrated' && !run.tasks.some(other => other.status === 'integrated' && other.dependencies.includes(task.id))),
-        ...run.tasks.filter(task => task.status === 'blocked')].slice(0, 3);
-      const retained = index ? retainedTaskSources(process.runs[index - 1]!, run) : 0;
-      const date = run.startedAt ? new Date(run.startedAt).toISOString().slice(5, 16).replace('T', ' ') : '';
-      return `<li class="global-run-lane" data-global-run-id="${html(run.runId)}" data-final="${final}">
-        <div class="global-run-label"><span>${String(index + 1).padStart(2, '0')}</span><strong>${text(locale, `第 ${index + 1} 轮`, `Run ${index + 1}`)}</strong>${date ? `<time>${date} UTC</time>` : ''}
-          ${retained ? `<small>${text(locale, `保留前轮 ${retained} 份检查源码`, `${retained} checked sources retained`)}</small>` : ''}</div>
-        <button class="global-stage global-research" data-global-run="${html(run.runId)}" data-global-node="problem"><span class="global-stage-kind">${icon('git-branch')}${text(locale, '研究路线', 'Research route')}<b>${run.tasks.length}</b></span>
-          <strong>${run.tasks.length ? text(locale, `${run.tasks.length} 个引理与研究任务`, `${run.tasks.length} lemma and research tasks`) : text(locale, '准备与候选记录', 'Preparation and candidates')}</strong>
-          ${samples.length ? `<span class="global-branch-names">${samples.map(task => `<span data-tone="${roadmapTone(task.status)}">${html(archiveRoadmapTaskLabel(task, locale))}</span>`).join('')}</span>`
-            : `<span class="global-stage-meta">${text(locale, `保存 ${run.deliveries?.length ?? 0} 条交付`, `${run.deliveries?.length ?? 0} saved deliveries`)}</span>`}
-          <span class="global-stage-meta">${integrated.length ? text(locale, `${integrated.length} 已集成`, `${integrated.length} integrated`) : ''}${blocked.length ? ` · ${text(locale, `${blocked.length} 受阻`, `${blocked.length} blocked`)}` : ''}<em>${text(locale, '展开路线图', 'Open roadmap')} ${icon('arrow-up-right')}</em></span></button>
-        <button class="global-stage global-checks" data-global-run="${html(run.runId)}" data-global-node="${html(checkNode)}" ${selectedCheck ? `data-global-step="check:${html(selectedCheck.id)}"` : ''}><span class="global-stage-kind">${icon('file-check-2')}${text(locale, '验证与反馈', 'Verification and feedback')}</span>
-          <strong>${text(locale, `${run.checks?.length ?? 0} 次检查 · ${reviews.length} 次审阅`, `${run.checks?.length ?? 0} checks · ${reviews.length} reviews`)}</strong><span class="global-stage-meta">${original.length ? text(locale, `${original.length} 次完整原题检查`, `${original.length} whole-problem checks`) : text(locale, '保存的局部检查', 'Saved task checks')}</span>
-          ${failed.length ? `<span class="global-stage-alert">${text(locale, `${failed.length} 次未通过，查看反馈`, `${failed.length} failed checks · inspect feedback`)}</span>` : `<span class="global-stage-meta">${selectedCheck ? text(locale, '查看源码与回执', 'Inspect source and receipts') : text(locale, '本轮未保存检查记录', 'No saved checks in this run')}</span>`}</button>
-        <button class="global-stage global-outcome" data-tone="${final ? 'passed' : roadmapTone(run.resultStatus ?? run.phase)}" data-global-run="${html(run.runId)}" data-global-node="${final ? 'acceptance' : 'end'}"><span class="global-stage-kind">${icon(final ? 'shield-check' : 'clock')}${final ? text(locale, '最终独立验收', 'Final independent acceptance') : text(locale, '运行记录', 'Run record')}</span>
-          <strong>${final ? text(locale, '完整原题通过', 'Original problem accepted') : html(statusLabel(run.resultStatus ?? run.phase))}</strong><span class="global-stage-meta">${final ? text(locale, '完整证明 · Lean 回执 · 原题验收', 'Final proof · Lean receipt · acceptance') : text(locale, '保留本轮结果与尝试', 'Saved outcome and attempts')}</span>${final ? `<span class="global-final-badge">${icon('check')}${text(locale, '本地验收通过', 'Locally accepted')}</span>` : ''}</button>
-      </li>`;
-    }).join('')}</ol>
+    <div class="global-trajectory-origin">${icon('book-open')}<p>${html(record.summary)}</p></div>
+    <nav class="global-history" aria-label="${text(locale, '历次运行', 'Recorded runs')}"><p>${text(locale, '历次运行', 'Recorded runs')}</p><ol class="global-run-lanes">${process.runs.map((item, i) => `<li class="global-run-lane" data-global-run-id="${html(item.runId)}" data-final="${item.runId === record.campaign?.runId}"><button data-global-select="${html(item.runId)}" aria-pressed="${item === run}"><span>${text(locale, `第 ${i + 1} 轮`, `Run ${i + 1}`)}</span><strong>${html(shortStatus(item))}</strong>${icon('arrow-right')}</button></li>`).join('')}</ol></nav>
+    <article class="global-workflow" data-global-selected-run="${html(run.runId)}"><header class="global-workflow-heading"><div><h5>${text(locale, `第 ${index + 1} 轮 · 完整研究流程`, `Run ${index + 1} · Research workflow`)}</h5><p>${date(run.startedAt)}${run.startedAt ? ' UTC' : ''}${sharedSources ? ` · ${text(locale, `${sharedSources} 份检查源码与前轮相同`, `${sharedSources} checked sources match the previous run`)}` : ''}</p></div><span data-tone="${final ? 'passed' : roadmapTone(run.resultStatus ?? run.phase)}">${html(final ? text(locale, '本地验收通过', 'Locally accepted') : statusLabel(run.resultStatus ?? run.phase))}</span></header>
+      <nav class="global-workflow-stages" aria-label="${text(locale, '研究流程阶段', 'Workflow stages')}">${[
+        ['global-plan', text(locale, '任务路线', 'Task roadmap')], ['global-findings', text(locale, '研究发现', 'Research findings')],
+        ['global-implementation', text(locale, '证明与检查', 'Proofs and checks')], ['global-review', text(locale, '审阅与验收', 'Review and acceptance')],
+      ].map(([id, label], i) => `<button data-global-scroll="${id}"><span>0${i + 1}</span>${label}${icon('chevron-right')}</button>`).join('')}</nav>
+      <section class="workflow-section" id="global-plan" data-workflow-stage="plan">${sectionHeading('01', text(locale, '任务路线', 'Task roadmap'), run.tasks.length)}
+        <div class="workflow-section-actions"><p>${text(locale, '本轮保存的任务拆分与依赖', 'The saved task decomposition and dependencies for this run')}</p><button class="global-research" ${destination(run, 'problem')}>${text(locale, '展开节点详情', 'Open node details')}${icon('arrow-up-right')}</button></div>
+        ${renderArchiveRoadmap(buildArchiveRoadmap(record, run, locale), run, '', locale)}
+        ${run.tasks.length ? `<details class="workflow-task-objectives"><summary>${text(locale, '阅读全部任务目标', 'Read every task objective')} (${run.tasks.length})</summary><dl>${run.tasks.map(task => `<div data-workflow-task="${html(task.id)}"><dt><button ${destination(run, `task:${task.id}`)}>${html(archiveRoadmapTaskLabel(task, locale))}</button><span data-tone="${roadmapTone(task.status)}">${html(statusLabel(task.status))}</span></dt><dd>${html(readableProcessText(task.objective, Number.MAX_SAFE_INTEGER))}${task.dependencies.length ? `<div class="workflow-task-dependencies">${text(locale, '依赖：', 'Depends on: ')}${task.dependencies.map(id => `<button ${destination(run, `task:${id}`)}>${html(title(id))}</button>`).join('')}</div>` : ''}</dd></div>`).join('')}</dl></details>` : `<p class="workflow-empty">${text(locale, '本轮没有保存任务拆分。', 'No task decomposition was saved for this run.')}</p>`}
+        ${planEdits.length ? `<ol class="workflow-records">${planEdits.map(event => `<li class="workflow-record" data-workflow-entry="event:${event.index}"><div class="workflow-record-meta">${stamp(event.at)}</div><h6>${text(locale, '调整任务计划', 'Revise the task plan')}</h6>${prose(event.message!, locale)}<button class="workflow-record-link" ${destination(run, 'plan', `event:${event.index}`)}>${text(locale, '查看这次计划调整', 'Inspect this plan revision')}${icon('arrow-up-right')}</button></li>`).join('')}</ol>` : ''}
+      </section>
+      <section class="workflow-section" id="global-findings" data-workflow-stage="research">${sectionHeading('02', text(locale, '研究发现与进展', 'Research findings and progress'), research.length)}
+        ${research.length ? `<ol class="workflow-records">${research.map(deliveryEntry).join('')}</ol>` : `<p class="workflow-empty">${text(locale, '本轮没有保存研究发现正文。', 'No research finding text was saved for this run.')}</p>`}${other.length ? `<ol class="workflow-records">${other.map(deliveryEntry).join('')}</ol>` : ''}${options.evidence ?? ''}
+      </section>
+      <section class="workflow-section" id="global-implementation" data-workflow-stage="implementation">${sectionHeading('03', text(locale, '证明候选、检查与后续版本', 'Proof candidates, checks and later versions'), implementation.length)}
+        ${implementation.length ? `<ol class="workflow-records">${implementation.map(item => item.body).join('')}</ol>` : `<p class="workflow-empty">${text(locale, '本轮没有保存证明候选或检查记录。', 'No proof candidates or checks were saved for this run.')}</p>`}
+      </section>
+      <section class="workflow-section" id="global-review" data-workflow-stage="review">${sectionHeading('04', text(locale, '审阅与原题验收', 'Review and original-problem acceptance'))}
+        ${reviews.length ? `<ol class="workflow-records">${reviews.map(deliveryEntry).join('')}</ol>` : run.review?.summary ? prose(run.review.summary, locale) : `<p class="workflow-empty">${text(locale, '本轮没有保存独立审阅正文。', 'No independent review text was saved for this run.')}</p>`}
+        ${final ? `<div class="global-final-badge">${options.acceptance ?? `<button ${destination(run, 'acceptance')}>${text(locale, '完整原题通过 · 查看证明与验收', 'Original problem accepted · inspect proof and acceptance')}</button>`}</div>` : `<div class="workflow-run-outcome"><strong>${html(statusLabel(run.resultStatus ?? run.phase))}</strong>${prose(run.reason ?? '', locale)}<button class="global-outcome" ${destination(run, 'end')}>${text(locale, '查看本轮结束记录', 'Inspect the run outcome')}${icon('arrow-up-right')}</button></div>`}
+      </section>
+    </article>
   </section>`;
 }

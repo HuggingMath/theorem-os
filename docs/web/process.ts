@@ -4,6 +4,7 @@ import { compareSources } from '../../apps/web/client/sourceDiff';
 import { buildArchiveRoadmap, renderArchiveRoadmap } from './processRoadmap';
 import { archiveRoadmapTaskLabel } from './roadmapLabels';
 import { renderGlobalTrajectory } from './globalTrajectory';
+import { readableProcessText } from './processText';
 
 type Run = ArchiveProcess['runs'][number];
 type Task = Run['tasks'][number];
@@ -24,18 +25,7 @@ const choose = (locale: Locale, zh: string, en: string) => locale === 'en' ? en 
 const short = (value: string) => value.slice(0, 12);
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 
-/** Loader commands and encoded candidates are retained in the downloadable record, not in the reading column. */
-export function readableProcessText(value: string, limit = 1000): string {
-  const lines = value.replace(/\r\n?/gu, '\n').split('\n');
-  const kept: string[] = [];
-  for (const line of lines) {
-    if (/^\s*(?:```|(?:\/usr\/bin\/)?python3?\b|from pathlib import|import (?:base64|Mathlib)|Reconstruct (?:from|with)|.*PAYLOAD_BEGIN|.*<<['"]?\w)/iu.test(line)
-      || /\S{240}/u.test(line)) break;
-    kept.push(line);
-  }
-  const text = kept.join('\n').trim();
-  return text.length <= limit ? text : `${text.slice(0, limit).trimEnd()}…`;
-}
+export { readableProcessText } from './processText';
 
 export function processStatus(value: string | undefined, locale: Locale): string {
   const labels: Record<string, [string, string]> = {
@@ -225,7 +215,7 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
   const checks = process.runs.reduce((sum, run) => sum + (run.checks?.length ?? run.events.filter(event => event.kind === 'lean-check').length), 0);
   const meaningfulEvents = run.events.filter(event => event.kind === 'baseline' || event.kind === 'transition' && !event.message?.trim());
   const viewToolbar = `<div class="process-view-toolbar"><h4>${selection.view === 'global' ? choose(locale, '全局解题轨迹', 'Whole-problem trajectory') : choose(locale, '解题路线', 'Proof roadmap')}</h4><div class="process-step-filters" role="group" aria-label="${choose(locale, '轨迹视图', 'Process view')}"><button data-process-view="global" aria-pressed="${selection.view === 'global'}">${choose(locale, '全局轨迹', 'Global trajectory')}</button><button data-process-view="roadmap" aria-pressed="${selection.view === 'roadmap'}">${icon('git-branch')}${choose(locale, '本轮路线图', 'Run roadmap')}</button><button data-process-view="steps" aria-pressed="${selection.view === 'steps'}">${choose(locale, '逐步记录', 'Step records')}</button></div></div>`;
-  if (selection.view === 'global') return `<div class="archive-process" data-process-layout="global" data-process-run-id="${escape(run.runId)}">${viewToolbar}${renderGlobalTrajectory(record, process, locale, value => processStatus(value, locale))}</div>`;
+  if (selection.view === 'global') return `<div class="archive-process" data-process-layout="global" data-process-run-id="${escape(run.runId)}">${viewToolbar}${renderGlobalTrajectory(record, process, locale, value => processStatus(value, locale), { run: run.runId, acceptance: acceptance(record, locale), evidence: researchEvidence })}</div>`;
   return `<div class="archive-process" data-process-run-id="${escape(run.runId)}" data-process-layout="${selection.view}">
     ${viewToolbar}<div class="process-introduction"><p>${escape(record.summary)}</p>${record.campaign ? `<div class="process-final-mark">${icon('shield-check')}<span>${choose(locale, '完整原题', 'Original problem')}<strong>${choose(locale, '本地验收通过', 'Locally accepted')}</strong></span></div>` : ''}</div>
     <dl class="process-overview"><div><dt>${choose(locale, '记录运行', 'Recorded runs')}</dt><dd>${process.runs.length}</dd></div><div><dt>${choose(locale, '归档任务', 'Archived tasks')}</dt><dd>${taskCount}</dd></div>
