@@ -45,7 +45,9 @@ const strings = {
     differs: '此记录的源码哈希与当前归档不同。官方验收以官方结果链接为准。',
     submission: '原始提交来源', submissionLink: '原始提交', discussion: '提交讨论', production: '来源与人工参与',
     resumed: '此结果包含已保存候选的恢复或续跑。', checksums: '归档文件校验', copyChecksum: (file: string) => `复制 ${file} 校验值`,
-    empty: '没有可显示的记录', details: '档案详情', copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
+    empty: '没有可显示的记录', details: '档案详情', backList: '返回题目列表',
+    accessPrompt: '想用 TheoremOS 研究自己的题目？', requestAccess: '申请内测',
+    copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
     detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '解题过程' },
     copied: '已复制', copyFailed: '复制失败，请检查浏览器剪贴板权限',
     loadingSource: '正在载入 Lean 源码…', sourceUnavailable: '源码载入失败。可以通过原文件链接查看。',
@@ -80,7 +82,9 @@ const strings = {
     differs: 'The source hashes of this record differ from the current archive. The official result link is authoritative.',
     submission: 'Original submission', submissionLink: 'Original commit', discussion: 'Submission discussion', production: 'Provenance and human involvement',
     resumed: 'This result includes resuming or continuing from saved candidates.', checksums: 'Archived file checksums', copyChecksum: (file: string) => `Copy the ${file} checksum`,
-    empty: 'No records to show', details: 'Record details', copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
+    empty: 'No records to show', details: 'Record details', backList: 'Back to results',
+    accessPrompt: 'Have a problem to research with TheoremOS?', requestAccess: 'Request access',
+    copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
     detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Research process' },
     copied: 'Copied', copyFailed: 'Copy failed. Check the clipboard permission of your browser.',
     loadingSource: 'Loading the Lean source…', sourceUnavailable: 'The source could not be loaded. You can use the original file link.',
@@ -163,6 +167,7 @@ function readLocation() {
   const id = params.get('proof');
   state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
   state.sourceName = '';
+  return id === state.selected ? id : undefined;
 }
 
 function writeLocation(push = false) {
@@ -360,14 +365,16 @@ function renderInspector(record?: ArchiveRecord) {
     return;
   }
   if (state.tab === 'process' && !record.processSummary) state.tab = 'overview';
-  element('#inspector').innerHTML = `<div class="detail-topline"><span class="detail-topline-label">${icon('files')}${strings.details}</span><div class="detail-actions">${iconButton('copy-link', strings.copyLink, 'link-2')}${iconButton('download-record', strings.downloadRecord, 'download')}</div></div>
+  const backToList = `<button type="button" class="back-to-results" data-action="back-list">${icon('list-start')}${strings.backList}</button>`;
+  element('#inspector').innerHTML = `<div class="detail-topline"><span class="detail-topline-label">${icon('files')}${strings.details}</span>${backToList}<div class="detail-actions">${iconButton('copy-link', strings.copyLink, 'link-2')}${iconButton('download-record', strings.downloadRecord, 'download')}</div></div>
     <h2 class="detail-title">${html(record.title)}</h2><p class="detail-subtitle">${html(record.subtitle)}</p><p class="detail-id">${record.id}</p>
     <div class="detail-statusline">${statusBadge(record)}<span>${record.campaign ? 'OpenAI Math' : 'Lean-Eval'} · ${html(record.area)}</span></div>
     <div class="detail-tabs" role="tablist" aria-label="${strings.detailTabs}">${([
       ['overview', strings.tabs.overview], ['source', strings.tabs.source], ['evidence', strings.tabs.evidence],
       ...(record.processSummary ? [['process', strings.tabs.process] as const] : []),
     ] as const).map(([tab, label]) => `<button type="button" role="tab" id="tab-${tab}" aria-controls="detail-panel" aria-selected="${state.tab === tab}" tabindex="${state.tab === tab ? 0 : -1}" data-tab="${tab}">${label}</button>`).join('')}</div>
-    <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>`;
+    <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>
+    <div class="archive-access"><p>${strings.accessPrompt}</p><div class="archive-access-actions"><a class="inline-link" href="index.html#start">${strings.requestAccess}${icon('arrow-up-right')}</a>${backToList}</div></div>`;
   if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => jumpToDeclaration(record));
 }
 
@@ -406,6 +413,28 @@ function render() {
   renderInspector(selectedRecord());
   icons();
   writeLocation();
+}
+
+function revealRecord() {
+  if (!matchMedia('(max-width: 700px)').matches || state.view !== 'archive' || !selectedRecord()) return false;
+  const inspector = element('#inspector');
+  inspector.focus({ preventScroll: true });
+  inspector.scrollIntoView({ block: 'start' });
+  return true;
+}
+
+function restoreLocation() {
+  // Only an explicit, valid proof link should bypass the mobile list.
+  const requested = readLocation();
+  render();
+  if (requested) {
+    const record = selectedRecord();
+    // processView renders the loaded process or its failure message before revealing it.
+    const ready = state.tab === 'process' && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
+    void ready.then(() => document.fonts.ready).then(() => {
+      if (state.selected === requested) revealRecord();
+    });
+  }
 }
 
 let toastTimeout: ReturnType<typeof setTimeout>;
@@ -462,8 +491,7 @@ document.addEventListener('click', event => {
     state.selected = target.dataset.proofId;
     state.sourceName = '';
     render();
-    element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
-    if (matchMedia('(max-width: 700px)').matches) element('#inspector').scrollIntoView({ block: 'start' });
+    if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
     return;
   }
   if (target.dataset.tab) {
@@ -476,6 +504,12 @@ document.addEventListener('click', event => {
   }
   const record = selectedRecord();
   switch (target.dataset.action) {
+    case 'back-list': {
+      const row = element(`[data-proof-id="${state.selected}"]`);
+      row.focus({ preventScroll: true });
+      row.scrollIntoView({ block: 'center' });
+      break;
+    }
     case 'quickstart': state.view = 'quickstart'; writeLocation(true); render(); break;
     case 'reset': state.query = ''; state.filter = 'all'; render(); element('#search').focus(); break;
     case 'copy-link': void copy(location.href); break;
@@ -535,10 +569,9 @@ document.addEventListener('keydown', event => {
 });
 window.addEventListener('hashchange', () => {
   if (!location.hash.includes('=')) return;
-  readLocation();
-  render();
+  restoreLocation();
 });
-window.addEventListener('popstate', () => { readLocation(); render(); });
+window.addEventListener('popstate', restoreLocation);
 
 const acceptedCount = catalog.records.filter(accepted).length;
 const localCount = catalog.records.filter(record => record.status === 'locally_verified').length;
@@ -551,6 +584,5 @@ const counts: Record<string, string> = {
   '#snapshot-date': date(catalog.snapshotAt),
 };
 for (const [selector, value] of Object.entries(counts)) element(selector).textContent = value;
-readLocation();
-render();
+restoreLocation();
 keepHashOnLanguageSwitch();

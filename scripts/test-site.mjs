@@ -126,6 +126,8 @@ try {
   await page.locator('[data-view-link="quickstart"]').click();
   assert.equal(await page.locator('#quickstart-view').isVisible(), true);
   assert.match(await page.locator('#quickstart-view').innerText(), /不调用模型/);
+  assert.match(await page.locator('.quickstart-access').innerText(), /申请内测/);
+  assert.equal(await page.locator('.quickstart-access a').getAttribute('href'), 'index.html#start');
   assert.equal(await page.locator('#quickstart-view pre, [data-action^="copy-install"], [data-action^="copy-replay"]').count(), 0);
   await page.locator('.replay-evidence img').scrollIntoViewIfNeeded();
   await page.waitForFunction(() => { const image = document.querySelector('.replay-evidence img'); return image.complete && image.naturalWidth > 0; });
@@ -133,10 +135,12 @@ try {
   await page.goBack();
   assert.equal(await page.locator('#archive-view').isVisible(), true);
 
-  for (const viewport of [{ width: 1920, height: 1080 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
+  for (const viewport of [{ width: 1920, height: 1080 }, { width: 768, height: 1000 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
     await page.setViewportSize(viewport);
     await page.goto(url);
     await page.waitForSelector('.proof-row');
+    await page.evaluate(() => document.fonts.ready);
+    assert.equal(await page.evaluate(() => scrollY), 0, `The generic archive starts at the list at ${viewport.width}px`);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Horizontal overflow at ${viewport.width}px`);
     assert.ok(await page.locator('.brand-mark').evaluate(image => image.complete && image.naturalWidth > 0));
     await page.screenshot({ path: path.join(output, `archive-${viewport.width}.png`), fullPage: true });
@@ -144,17 +148,37 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Search overflow at ${viewport.width}px`);
     await page.getByRole('searchbox').fill('');
     await page.locator('[data-proof-id="hopf_rinow"]').click();
+    if (viewport.width <= 700) {
+      assert.equal(await page.locator('#inspector').evaluate(element => document.activeElement === element), true);
+      assert.ok(Math.abs(await page.locator('#inspector').evaluate(element => element.getBoundingClientRect().top)) <= 1);
+      await page.locator('[data-action="back-list"]').first().click();
+      assert.equal(await page.locator('[data-proof-id="hopf_rinow"]').evaluate(element => document.activeElement === element), true);
+      await page.keyboard.press('Enter');
+      assert.equal(await page.locator('#inspector').evaluate(element => document.activeElement === element), true);
+    }
     await page.getByRole('tab', { name: 'Lean 源码' }).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Source overflow at ${viewport.width}px`);
     await page.screenshot({ path: path.join(output, `source-${viewport.width}.png`), fullPage: true });
-    await page.goto(`${url}#proof=${example.id}&tab=process&status=verified`);
+    await page.goto(`${url}?deep-link=${viewport.width}#proof=${example.id}&tab=process&status=verified`);
     await page.locator('.process-run').first().waitFor();
-    await page.locator('#inspector').scrollIntoViewIfNeeded();
+    await page.evaluate(() => document.fonts.ready);
+    if (viewport.width <= 700) {
+      await page.waitForFunction(() => document.activeElement?.id === 'inspector');
+      assert.ok(Math.abs(await page.locator('#inspector').evaluate(element => element.getBoundingClientRect().top)) <= 1, 'Mobile proof links reveal details without manual scrolling');
+      const proofLink = page.url();
+      await page.locator('[data-action="back-list"]').last().click();
+      assert.equal(page.url(), proofLink, 'Returning to the list keeps the selected record, filters and detail tab');
+      assert.equal(await page.locator('.proof-row.is-selected').evaluate(element => document.activeElement === element), true);
+      await page.keyboard.press('Enter');
+      assert.equal(await page.locator('.archive-access a').getAttribute('href'), 'index.html#start');
+    } else {
+      assert.equal(await page.evaluate(() => scrollY), 0, 'Desktop and tablet proof links retain the two-column overview');
+    }
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Process overflow at ${viewport.width}px`);
     await page.screenshot({ path: path.join(output, `openai-process-${viewport.width}.png`), fullPage: true });
   }
   assert.deepEqual(errors, []);
-  console.log('Site checks passed: filters, search, provenance, evidence, source files, clipboard, JSON download, links, navigation, and 4 viewport sizes.');
+  console.log('Site checks passed: filters, search, provenance, evidence, source files, clipboard, JSON download, mobile proof links and focus, return to results, access links, navigation, and 5 viewport sizes.');
   console.log(`Screenshots: ${path.relative(root, output)}`);
 } finally {
   await browser.close();
