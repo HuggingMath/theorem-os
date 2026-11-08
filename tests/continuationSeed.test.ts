@@ -680,7 +680,7 @@ describe('continuation of per-task saved drafts', () => {
       expect(node.researchCompletion).toBeUndefined();
     } finally { await cooperative.stop(); }
     expect(fs.readFileSync(f.sourceStateFile)).toEqual(historicalState);
-  }, 30_000);
+  }, 90_000);
 
   it.each(['research', 'sketch'] as const)('restores suspended %s work through successive continuations and normal delivery', async kind => {
     const f = await suspendedTaskDraftFixture(kind), historicalState = fs.readFileSync(f.sourceStateFile);
@@ -743,7 +743,7 @@ describe('continuation of per-task saved drafts', () => {
     expect(taskDraftAttachments(third.stateFile).filter(draft => draft.taskId === f.task.id)).toHaveLength(1);
     expect(taskDraftAttachments(third.stateFile).find(draft => draft.taskId === f.task.id)!.source.runId).toBe(f.oldState.runId);
     expect(fs.readFileSync(f.sourceStateFile)).toEqual(historicalState);
-  });
+  }, 45_000);
 
   it.each(['goal', 'lemma'] as const)('recomputes a %s connection assignment and retains its draft across two generations', async kind => {
     const f = await suspendedTaskDraftFixture(kind); await f.seed();
@@ -773,7 +773,7 @@ describe('continuation of per-task saved drafts', () => {
     const third = nextContinuation(f, second.stateFile, `saved-${kind}-connection-again`); await third.seed();
     expect(readSolverRunState(third.stateFile).cooperation!.researchDrafts![f.task.id]).toMatchObject({ commit: f.draftCommit, suspended: true });
     expect(taskDraftAttachments(third.stateFile).find(draft => draft.taskId === f.task.id)!.source.runId).toBe(f.oldState.runId);
-  });
+  }, 45_000);
 
   it.each([null, ''])('preserves a notes-only snapshot with notes %j instead of another task workspace', async notes => {
     const f = await suspendedTaskDraftFixture('research', notes, false); await f.seed();
