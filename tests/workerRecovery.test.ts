@@ -172,6 +172,79 @@ describe('bounded role session recovery', () => {
     expect(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).not.toContain('private provider response');
   });
 
+  it.each([
+    'upstream request failed: completed turn had no assistant output or tool operation',
+    'opaque provider failure',
+  ])('retries an empty failed turn using its upstream diagnostic: %s', async error => {
+    const diagnostic: MathAgentFailureDiagnostic = { code: 'other', reason: 'upstream_request_failed' };
+    host.open.mockImplementationOnce(async (options: MathAgentOptions) => ({
+      ...session(options, async () => 'failed', error), lastFailureDiagnostic: diagnostic,
+    }));
+    host.open.mockImplementationOnce(async (options: MathAgentOptions) => session(options, async () => {
+      expect(options.threadId).toBeUndefined();
+      expect(fs.readFileSync(proof(options), 'utf8')).toBe(original);
+      fs.writeFileSync(proof(options), completed);
+      return 'completed';
+    }));
+    expect(await runSolver(args, directory)).toBe(0);
+    expect(result().status).toBe('evaluated_passed');
+    expect(state()).toMatchObject({ turns: 2, previousThreadIds: ['thread-1'],
+      lastFailure: { reason: 'math_model_request_failed', diagnostic } });
+    expect(host.open).toHaveBeenCalledTimes(2);
+    expect(host.delay).toHaveBeenCalledOnce();
+    expect(host.delay).toHaveBeenCalledWith(10_000, undefined, { signal: expect.any(AbortSignal) });
+    expect(events().filter(event => event.event === 'turn_failed')).toEqual([
+      expect.objectContaining({ reason: 'math_model_request_failed', diagnostic }),
+    ]);
+    for (const eventName of ['worker_recovering', 'turn_retry'])
+      expect(events().filter(event => event.event === eventName)).toEqual([
+        expect.objectContaining({ reason: 'math_model_request_failed', attempt: 1, delayMs: 10_000 }),
+      ]);
+    expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
+    expect(host.official).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a cooperative proof worker available after an empty upstream failure', async () => {
+    const assignments = new Map<string, CooperativeAction>();
+    let proofTurns = 0;
+    let failedWorkspace: string | undefined;
+    host.open.mockImplementation(async (options: MathAgentOptions) => {
+      let diagnostic: MathAgentFailureDiagnostic | undefined;
+      return { ...session(options, async () => {
+        const action = assignments.get(options.workspace)!;
+        if (action.kind === 'lead') research(options, { tasks: [claim] });
+        else if (action.kind === 'task') {
+          if (++proofTurns === 1) {
+            failedWorkspace = options.workspace;
+            diagnostic = { code: 'other', reason: 'upstream_request_failed' };
+            return 'failed';
+          }
+          expect(options.workspace).toBe(failedWorkspace);
+          expect(options.threadId).toBeUndefined();
+          expect(fs.readFileSync(proof(options), 'utf8')).toBe(original);
+          fs.writeFileSync(proof(options), completed);
+        } else if (action.kind === 'review') research(options, { commit: action.seedCommit, verdict: 'accepted' });
+        else throw new Error(`unexpected recovery action: ${action.kind}`);
+        return 'completed';
+      }, 'upstream request failed: completed turn had no assistant output or tool operation'),
+      get lastFailureDiagnostic() { return diagnostic; } };
+    });
+    expect(await cooperate(assignments)).toBe(0);
+    expect(proofTurns).toBe(2);
+    expect(result().status).toBe('evaluated_passed');
+    expect(events().filter(event => event.event === 'worker_recovering')).toEqual([
+      expect.objectContaining({ reason: 'math_model_request_failed', attempt: 1, delayMs: 10_000 }),
+    ]);
+    expect(events().filter(event => event.event === 'turn_retry')).toHaveLength(1);
+    expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
+    expect(state().workers.some((worker: { lastFailure?: { reason: string; diagnostic?: MathAgentFailureDiagnostic } }) =>
+      worker.lastFailure?.reason === 'math_model_request_failed' &&
+      worker.lastFailure.diagnostic?.reason === 'upstream_request_failed')).toBe(true);
+    expect(state().cooperation.tasks[0].status).toBe('integrated');
+    expect(state().cooperation.review.status).toBe('accepted');
+    expect(host.official).toHaveBeenCalledOnce();
+  });
+
   it('resumes an accepted check saved after restoring the running phase without another model turn', async () => {
     host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
       fs.writeFileSync(proof(options), completed); return 'completed';
@@ -632,11 +705,41 @@ describe('recoverable failure classification', () => {
     [{ code: 'httpConnectionFailed', httpStatusCode: 400 }, 'math_model_turn_failed'],
     [{ code: 'contextWindowExceeded' }, 'math_model_context_window_exceeded'],
     [{ code: 'sandboxError' }, 'math_model_turn_failed'],
+    [{ code: 'other', reason: 'upstream_request_failed' }, 'math_model_request_failed'],
+    [{ code: 'other', reason: 'upstream_request_failed', httpStatusCode: 401 }, 'math_model_authentication_failed'],
+    [{ code: 'other', reason: 'upstream_request_failed', httpStatusCode: 403 }, 'math_model_authentication_failed'],
+    [{ code: 'other', reason: 'upstream_request_failed', httpStatusCode: 429 }, 'math_model_concurrency_limit'],
+    [{ code: 'other', reason: 'upstream_request_failed', httpStatusCode: 408 }, 'math_model_request_timeout'],
+    [{ code: 'other', reason: 'upstream_request_failed', httpStatusCode: 400 }, 'math_model_turn_failed'],
+    [{ code: 'unauthorized', reason: 'upstream_request_failed' }, 'math_model_authentication_failed'],
+    [{ code: 'rateLimitExceeded', reason: 'upstream_request_failed' }, 'math_model_concurrency_limit'],
+    [{ code: 'contextWindowExceeded', reason: 'upstream_request_failed' }, 'math_model_context_window_exceeded'],
+    [{ code: 'sandboxError', reason: 'upstream_request_failed' }, 'math_model_turn_failed'],
   ] as const)('uses structured provider metadata before arbitrary message text: %j', (diagnostic, expected) => {
     const error = 'Invalid authentication; stream disconnected; rate limit';
     expect(researchFailureReason(error, diagnostic as MathAgentFailureDiagnostic)).toBe(expected);
     expect(researchFailureDetail(new Error('math_model_turn_failed'), error, diagnostic as MathAgentFailureDiagnostic)).toBe(expected);
   });
+
+  it('keeps host integrity and trusted local stops ahead of an empty upstream failure', () => {
+    const diagnostic: MathAgentFailureDiagnostic = { code: 'other', reason: 'upstream_request_failed' };
+    for (const reason of localStops) {
+      expect(researchFailureDetail(new Error('math_model_turn_failed'), 'opaque provider failure', diagnostic, reason)).toBe(reason);
+      expect(researchFailureDetail(new Error('math_source_outside_ownership'), undefined, diagnostic, reason))
+        .toBe('math_source_outside_ownership');
+    }
+    expect(researchFailureReason('math_candidate_identity_changed', diagnostic)).toBe('math_candidate_identity_changed');
+    expect(researchFailureDetail(new Error('math_source_outside_ownership'), undefined, diagnostic))
+      .toBe('math_source_outside_ownership');
+  });
+
+  it.each([{ code: 'other' }, { code: 'other', reason: 'invalid_tool_call_arguments' }] as const)(
+    'does not retry an unspecified upstream failure: %j', diagnostic => {
+      const error = 'opaque provider failure';
+      expect(researchFailureReason(error, diagnostic)).toBe('math_model_turn_failed');
+      const detail = researchFailureDetail(new Error(error), undefined, diagnostic);
+      expect(recoverableResearchFailure(detail)).toBe(false);
+    });
 
   it('uses a concrete cause or same-turn session error without guessing from a generic failure', () => {
     const tool = 'Error parsing function call: invalid JSON arguments';

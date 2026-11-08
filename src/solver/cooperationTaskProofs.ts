@@ -2,6 +2,7 @@ import { isAdvisoryTask as advisory } from './tasks';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { mathGitResult } from '../math/mathGit';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { projectMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions } from '../math/leanSource';
@@ -298,9 +299,20 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   }
   protected researchWorkspaceChanged(worker: ResearchWorker, node: TaskRecord) {
     const session = this.input.state.workers?.find(record => record.id === worker.id);
-    if (session?.sessionTaskId) return session.sessionTaskId !== node.task.id ||
-      Boolean(session.sessionTaskVersion && session.sessionTaskVersion !== digest(node.task));
-    if (session?.sessionStatementReview || session?.sessionRole && session.sessionRole !== 'researcher') return true;
+    if (session?.sessionTaskId && (session.sessionTaskId !== node.task.id ||
+        session.sessionTaskVersion && session.sessionTaskVersion !== digest(node.task))) return true;
+    if (!session?.sessionTaskId &&
+        (session?.sessionStatementReview || session?.sessionRole && session.sessionRole !== 'researcher')) return true;
+    // Restoring another task's draft can move HEAD behind this assignment's seed.
+    // Session metadata alone does not establish ownership of the current checkout.
+    if (node.assignment) {
+      const ancestry = mathGitResult(worker.worktree, ['merge-base', '--is-ancestor', node.assignment.seedCommit, 'HEAD'],
+        { maxBuffer: 4096 });
+      if (ancestry.error) throw ancestry.error;
+      if (ancestry.status === 1) return true;
+      if (ancestry.status !== 0) throw new Error('math_research_workspace_unavailable');
+    }
+    if (session?.sessionTaskId) return false;
     const checkpoint = this.archive.researchCheckpoints?.[node.task.id];
     return Boolean(checkpoint && checkpoint.outputDigest !==
       this.checkpointOutputDigest(worker.worktree, git(worker.worktree, ['rev-parse', 'HEAD'])));
@@ -321,9 +333,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
           throw new Error('math_research_draft_output_changed');
         captureDeliveryArtifacts({ problem, worktree: checkout, commit: draft.commit, assignment });
         return { notes: git(checkout, ['ls-tree', '--format=%(objectname)', draft.commit, '--', 'RESEARCH.md'])
-          ? committedSource(checkout, draft.commit, 'RESEARCH.md') : '',
-          sources: new Map(problem.ownedFiles.map(file => [file,
-            committedSource(checkout, draft.commit, `${problem.projectRelative}/${file}`)])),
+          ? committedSource(checkout, draft.commit, 'RESEARCH.md') : undefined,
           canonicalSourceDigest: ownedSourceDigest(problem, checkout, draft.canonicalCommit ?? draft.seedCommit) };
       });
       if (!this.archive.tasks.includes(node) || node.assignment !== assignment || digest(node.task) !== draft.taskDigest ||
@@ -340,9 +350,14 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '');
         const seedCommit = this.seed(worker, this.archive.canonicalCommit!, node.task);
         node.assignment = { ...assignment, assignmentId: crypto.randomUUID(), seedCommit, canonicalCommit: this.archive.canonicalCommit };
-      } else for (const [file, source] of saved.sources)
-        fs.writeFileSync(path.join(worker.worktree, problem.projectRelative, file), source);
-      fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), saved.notes);
+      } else {
+        // Restore the validated snapshot so its frozen seed remains an ancestor.
+        git(worker.worktree, ['reset', '--hard', draft.commit]);
+      }
+      // Preserve the distinction between missing notes and an empty tracked file.
+      const notesFile = path.join(worker.worktree, 'RESEARCH.md');
+      if (saved.notes === undefined) fs.rmSync(notesFile, { force: true });
+      else fs.writeFileSync(notesFile, saved.notes);
       const commit = commitSolverSources(problem, worker.worktree);
       this.preserveResearchDraft(worker, { kind: 'task', task: node.task, assignment: node.assignment! }, commit,
         captureDeliveryArtifacts({ problem, worktree: worker.worktree, commit, assignment: node.assignment! }));

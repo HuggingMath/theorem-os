@@ -12,7 +12,8 @@ fs.writeFileSync(path.join(root, 'pid'), String(process.pid));
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const record = value => fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify(value) + '\n');
 let turn, startReply, interruptError, lastControl;
-const complete = status => send({ method: 'turn/completed', params: { threadId: 'checkpoint-thread', turn: { ...turn, status } } });
+const complete = status => send({ method: 'turn/completed', params: { threadId: 'checkpoint-thread', turn: { ...turn, status,
+  ...(status === 'completed' ? { items: [{ id: 'final-' + turn.id, type: 'agentMessage', text: 'Proof draft saved.' }] } : {}) } } });
 setInterval(() => {
   if (!fs.existsSync(path.join(root, 'control'))) return;
   const control = fs.readFileSync(path.join(root, 'control'), 'utf8');

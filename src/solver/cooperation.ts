@@ -608,7 +608,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (node.assignment && node.alternativeRoutes?.length && node.assignment.routeId !== selectedRoute?.id)
       node.assignment = undefined;
     let resuming = node.assignment?.workerId === worker.id;
-    if (resuming && advisory(node.task) &&
+    if (resuming &&
         (this.archive.researchDrafts?.[node.task.id]?.suspended || this.researchWorkspaceChanged(worker, node))) {
       const previousAssignment = node.assignment;
       const restored = await this.restoreResearchDraft(worker, node);

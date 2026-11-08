@@ -21,6 +21,14 @@ import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpSta
 export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
 
 type Json = Record<string, unknown>;
+const outputToolItems = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall',
+  'webSearch', 'imageView', 'collabAgentToolCall']);
+const isTurnOutputItem = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Json;
+  return item.type === 'agentMessage' ? typeof item.text === 'string' && Boolean(item.text.trim()) :
+    typeof item.type === 'string' && outputToolItems.has(item.type);
+};
 const RELAY_CAPABILITY_ENV = 'THEOREM_OS_MODEL_RELAY_CAPABILITY';
 // Responses may remain silent between completed reasoning and their next tool/output event.
 // Restore Codex's default idle tolerance per session, preserving frozen provider profiles.
@@ -379,6 +387,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   })();
   const aborted = () => { void closeSession().catch(() => {}); };
   let activeTurn: string | undefined;
+  let turnHasOutput = false;
+  const earlyOutputTurns = new Set<string>();
   let completion: { resolve: (turn: Json) => void; reject: (error: Error) => void } | undefined;
   const earlyCompletions = new Map<string, Json>();
   let lastError: string | undefined;
@@ -450,6 +460,14 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     lastStreamActivityAt = now;
     options.onActivity({ event, ...(itemType && /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(itemType) ? { itemType } : {}) });
   };
+  const recordTurnOutput = (turnId: unknown) => {
+    if (!completion) return;
+    if (typeof turnId !== 'string') { turnHasOutput = true; return; }
+    if (activeTurn) { if (turnId === activeTurn) turnHasOutput = true; return; }
+    // Items may precede the turn/start response, just like early completions.
+    if (earlyOutputTurns.size >= 32) earlyOutputTurns.delete(earlyOutputTurns.values().next().value!);
+    earlyOutputTurns.add(turnId);
+  };
   rpc.onFailure = error => {
     cancelNotifications();
     transportFailure = error; lastError = error.message; lastFailureDiagnostic = undefined; completion?.reject(error);
@@ -460,6 +478,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     if (threadId !== undefined && params.threadId !== undefined && params.threadId !== threadId) return;
     if (method === 'item/started' || method === 'item/completed') {
       const item = object(params.item);
+      if (isTurnOutputItem(item)) recordTurnOutput(params.turnId);
       activity(method === 'item/started' ? 'item_started' : 'item_completed', typeof item.type === 'string' ? item.type : undefined);
       if (method === 'item/completed' && typeof item.id === 'string') outputTails.delete(item.id);
       if (options.onItem && threadId !== undefined) {
@@ -468,10 +487,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     } else if (method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') {
       activity('reasoning', undefined, true);
     } else if (method === 'item/agentMessage/delta') {
+      if (typeof params.delta === 'string' && params.delta.trim()) recordTurnOutput(params.turnId);
       activity('message', undefined, true);
     } else if (method === 'item/commandExecution/outputDelta') {
       const key = typeof params.itemId === 'string' ? params.itemId : '';
       const delta = typeof params.delta === 'string' ? params.delta : '';
+      if (delta) recordTurnOutput(params.turnId);
       let tail = (outputTails.get(key) ?? '') + delta;
       let reported = false;
       for (const event of ['lean_lock_waiting', 'lean_lock_acquired'] as const) {
@@ -509,7 +530,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     const settings = {
       model: options.model, cwd: isolated?.workspace ?? options.workspace,
       approvalPolicy: 'never', ...(isolated ? { sandbox: 'danger-full-access' } : {}),
-      developerInstructions: options.instructions,
+      developerInstructions: options.instructions + '\n\n' +
+        'Shell execution: login shells are disabled to preserve the prepared proof environment. ' +
+        'For every exec_command call, explicitly set "login": false; do not use login: true or rely on the default. ' +
+        'If a command is rejected because login shells are disabled, it did not execute: retry it with login: false and continue the task.',
       config: {
         mcp_servers: disabled,
         'features.apps': false,
@@ -556,6 +580,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         if (temporaryDirectory) prepareWorkerTemporaryDirectory(options.workspace);
         lastError = undefined;
         lastFailureDiagnostic = undefined;
+        turnHasOutput = false; earlyOutputTurns.clear();
         let resolve!: (turn: Json) => void;
         let reject!: (error: Error) => void;
         const done = new Promise<Json>((yes, no) => { resolve = yes; reject = no; });
@@ -584,6 +609,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
           activeTurn = turnId;
+          turnHasOutput ||= earlyOutputTurns.has(turnId);
+          earlyOutputTurns.clear();
           const requestInterruption = () => {
             if (interruptionRequested) return;
             interruptionRequested = true;
@@ -663,6 +690,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           await submissionDrain;
           options.signal?.throwIfAborted();
           if (typeof finished.status !== 'string') throw new Error('math_codex_turn_status_missing');
+          if (finished.status === 'completed' && !submitted && !turnHasOutput &&
+              !(Array.isArray(finished.items) && finished.items.some(isTurnOutputItem))) {
+            lastError = 'upstream request failed: completed turn had no assistant output or tool operation';
+            lastFailureDiagnostic = { code: 'other', reason: 'upstream_request_failed' };
+            return 'failed';
+          }
           if (finished.status === 'failed' && finished.error) {
             const error = object(finished.error);
             lastFailureDiagnostic = failureDiagnostic(error);
@@ -682,6 +715,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           turnSettled = true; cancelNotifications();
           activeTurn = undefined; completion = undefined;
           earlyCompletions.clear();
+          earlyOutputTurns.clear();
           outputTails.clear();
         }
       },
