@@ -64,7 +64,7 @@ const checks: string[] = [], errors: string[] = [], writes: { method: string; pa
 let browser: Browser | undefined, active: Page | undefined, current = 'browser start';
 const mark = (message: string) => { checks.push(message); console.log(`PASS ${message}`); };
 const urlFor = (record: ArchiveRecord, locale: string, params: Record<string, string> = {}) =>
-  `${origin}/classics/${locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: record.id, tab: 'process', status: 'verified', ...params })}`;
+  `${origin}/classics/${locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: record.id, tab: 'process', status: 'verified', mode: 'steps', ...params })}`;
 const attr = (name: string, value: string) => `[${name}=${JSON.stringify(value)}]`;
 const processRoot = (page: Page) => page.locator('.archive-process');
 const step = (page: Page, id: string) => page.locator(`.process-step-list ${attr('data-process-step', id)}`);

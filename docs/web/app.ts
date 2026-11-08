@@ -1,6 +1,6 @@
 import {
   createIcons, ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck,
-  CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
+  BookOpen, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
   FileJson2, Files, FlaskConical, GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2,
   ListStart, MessageCircle, Pause, Play, RotateCcw, Search, SearchX, ShieldCheck,
 } from 'lucide';
@@ -9,9 +9,10 @@ import type { ArchiveIndexRecord, ArchiveIndexSource, ArchiveProcess } from './t
 import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './site';
 import { initializeReplay } from './replay';
 import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from './process';
+import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
 
 const iconSet = {
-  ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, CalendarDays, Check,
+  ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
   ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2, FileJson2, Files, FlaskConical,
   GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2, ListStart, MessageCircle, Search,
   Pause, Play, RotateCcw, SearchX, ShieldCheck,
@@ -129,7 +130,7 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   }));
   return request;
 }
-const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
+const icons = () => { createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); };
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -175,6 +176,7 @@ function readLocation() {
   state.sourceName = '';
   processRecordId = state.selected;
   processSelection = { ...emptyProcessSelection(), run: params.get('run') ?? '', task: params.get('task') ?? '', step: params.get('step') ?? '',
+    view: params.get('mode') === 'steps' ? 'steps' : 'roadmap', node: params.get('node') ?? '',
     filter: params.get('filter') === 'checks' ? 'checks' : params.get('filter') === 'decisions' ? 'decisions' : 'all' };
   return id === state.selected ? id : undefined;
 }
@@ -192,6 +194,8 @@ function writeLocation(push = false) {
       if (processSelection.run) params.set('run', processSelection.run);
       if (processSelection.task) params.set('task', processSelection.task);
       if (processSelection.step) params.set('step', processSelection.step);
+      if (processSelection.view === 'steps') params.set('mode', 'steps');
+      if (processSelection.node && processSelection.node !== 'problem') params.set('node', processSelection.node);
       if (processSelection.filter !== 'all') params.set('filter', processSelection.filter);
     }
   }
@@ -513,7 +517,7 @@ function download(name: string, content: string, type: string) {
 }
 
 document.addEventListener('click', event => {
-  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab]');
+  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
   if (!target) return;
   if (target.dataset.viewLink) {
     event.preventDefault();
@@ -554,9 +558,24 @@ document.addEventListener('click', event => {
         else download(`${record.id}-${digest.slice(0, 12)}.lean`, source.code, 'text/plain;charset=utf-8');
       }
     } else {
-      if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), run: target.dataset.processRun };
-      if (target.dataset.processTask !== undefined) { processSelection.task = target.dataset.processTask; processSelection.step = ''; processSelection.code = 'closed'; }
-      if (target.dataset.processStep !== undefined) { processSelection.step = target.dataset.processStep; processSelection.code = 'closed'; }
+      if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), view: processSelection.view, run: target.dataset.processRun };
+      if (target.dataset.processView) processSelection.view = target.dataset.processView as 'roadmap' | 'steps';
+      if (target.dataset.processNode !== undefined) {
+        const process = window.theoremosProcesses?.[record.id];
+        const run = process && selectedProcessRun(process, record, processSelection);
+        const node = run && buildArchiveRoadmap(record, run, locale).nodes.find(node => node.id === target.dataset.processNode);
+        if (node) { processSelection.node = node.id; processSelection.task = node.taskId ?? ''; processSelection.step = node.stepId ?? ''; processSelection.code = 'closed'; }
+      }
+      if (target.dataset.processTask !== undefined) { processSelection.task = target.dataset.processTask; processSelection.node = target.dataset.processTask ? `task:${target.dataset.processTask}` : 'problem'; processSelection.step = ''; processSelection.code = 'closed'; }
+      if (target.dataset.processStep !== undefined) {
+        processSelection.step = target.dataset.processStep; processSelection.code = 'closed';
+        const process = window.theoremosProcesses?.[record.id];
+        const run = process && selectedProcessRun(process, record, processSelection);
+        const model = run && buildArchiveRoadmap(record, run, locale);
+        const step = target.dataset.processStep;
+        const node = model?.nodes.find(node => step === node.stepId || node.checkIds.some(id => `check:${id}` === step) || node.deliveryIds.some(id => `delivery:${id}` === step));
+        if (node) processSelection.node = node.id;
+      }
       if (target.dataset.processFilter !== undefined) { processSelection.filter = target.dataset.processFilter as typeof processSelection.filter; processSelection.step = ''; processSelection.code = 'closed'; }
       if (target.dataset.processCode !== undefined) processSelection.code = target.dataset.processCode as typeof processSelection.code;
       refreshProcess(record, target);

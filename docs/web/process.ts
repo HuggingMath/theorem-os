@@ -1,6 +1,8 @@
 import type { ArchiveIndexRecord, ArchiveProcess } from './types';
 import type { Locale } from './site';
 import { compareSources } from '../../apps/web/client/sourceDiff';
+import { buildArchiveRoadmap, renderArchiveRoadmap } from './processRoadmap';
+import { archiveRoadmapTaskLabel } from './roadmapLabels';
 
 type Run = ArchiveProcess['runs'][number];
 type Task = Run['tasks'][number];
@@ -12,8 +14,10 @@ export interface ProcessSelection {
   step: string;
   filter: 'all' | 'checks' | 'decisions';
   code: 'closed' | 'source' | 'diff';
+  view: 'roadmap' | 'steps';
+  node: string;
 }
-export const emptyProcessSelection = (): ProcessSelection => ({ run: '', task: '', step: '', filter: 'all', code: 'closed' });
+export const emptyProcessSelection = (): ProcessSelection => ({ run: '', task: '', step: '', filter: 'all', code: 'closed', view: 'roadmap', node: '' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 const choose = (locale: Locale, zh: string, en: string) => locale === 'en' ? en : zh;
 const short = (value: string) => value.slice(0, 12);
@@ -177,6 +181,34 @@ function taskBrowser(run: Run, selection: ProcessSelection, locale: Locale): str
     <p class="process-task-footnote">${choose(locale, '任务状态来自本轮结束时的记录。原题的最终验收见轨迹终点。', 'Task statuses are recorded at the end of this run. Final acceptance of the original problem appears at the end of the trajectory.')}</p></details>`;
 }
 
+function roadmap(record: ArchiveIndexRecord, process: ArchiveProcess, run: Run, steps: Step[], selection: ProcessSelection, locale: Locale): string {
+  const model = buildArchiveRoadmap(record, run, locale);
+  const requested = steps.find(step => step.id === selection.step);
+  const nodeId = selection.node || (selection.task ? `task:${selection.task}` : requested?.taskId ? `task:${requested.taskId}`
+    : requested?.kind === 'acceptance' ? 'acceptance' : requested?.check?.scope === 'original' ? 'original' : 'problem');
+  const node = model.nodes.find(node => node.id === nodeId) ?? model.nodes[0]!;
+  selection.node = node.id;
+  const task = run.tasks.find(task => task.id === node.taskId);
+  const related = steps.filter(step => task ? step.taskId === task.id : node.kind === 'plan' ? step.kind === 'plan'
+    : node.checkIds.includes(step.check?.id ?? '') || node.deliveryIds.includes(step.delivery?.id ?? '') || step.id === node.stepId);
+  const selected = related.find(step => step.id === selection.step) ?? related.at(-1);
+  const context = node.kind === 'problem'
+    ? `<p>${escape(record.summary)}</p><div class="process-targets">${record.campaign?.targets.map(target => `<code>${escape(target)}</code>`).join('') ?? ''}</div>`
+    : task ? `<p class="process-message">${escape(readableProcessText(task.objective, 1600))}</p>
+      ${task.dependencies.length ? `<div class="process-dependencies"><span>${choose(locale, '依赖', 'Depends on')}</span>${task.dependencies.map(id => {
+        const dependency = run.tasks.find(item => item.id === id);
+        return dependency ? `<button data-process-node="task:${escape(id)}">${escape(archiveRoadmapTaskLabel(dependency, locale))}</button>` : '';
+      }).join('')}</div>` : ''}`
+      : node.kind === 'plan' ? `<p>${choose(locale, `本轮有 ${run.tasks.length} 项任务。图中的实线保留归档中的引理依赖。`, `${run.tasks.length} tasks in this run. Solid arrows preserve the recorded lemma dependencies.`)}</p>`
+        : node.kind === 'review' && run.review?.summary && !related.length ? `<p class="process-message">${escape(readableProcessText(run.review.summary, 1600))}</p>` : '';
+  return `${renderArchiveRoadmap(model, run, node.id, locale)}
+    <section class="process-map-inspector" id="process-map-inspector" aria-label="${choose(locale, '路线节点详情', 'Roadmap node details')}">
+      <div class="process-map-context"><div class="process-map-context-heading"><h4>${escape(node.title)}</h4>${node.status ? `<span data-tone="${tone(node.status)}">${escape(processStatus(node.status, locale))}</span>` : ''}</div>${context}
+        ${related.length ? `<div class="process-map-task-records" aria-label="${choose(locale, '这个节点的记录', 'Records for this node')}">${related.map(step => `<button data-process-step="${escape(step.id)}" aria-pressed="${step === selected}" data-tone="${tone(step.status)}"><time>${escape(time(step.at, locale, true))}</time><strong>${escape(step.title)}</strong>${step.status ? `<span>${escape(processStatus(step.status, locale))}</span>` : ''}</button>`).join('')}</div>` : ''}</div>
+      ${selected ? `<article class="process-step-detail" id="process-step-detail" tabindex="-1" aria-live="polite">${stepDetail(selected, run, record, process, selection, locale)}</article>` : ''}
+    </section>`;
+}
+
 export function renderArchiveProcess(record: ArchiveIndexRecord, process: ArchiveProcess, selection: ProcessSelection, locale: Locale, researchEvidence = ''): string {
   const run = selectedProcessRun(process, record, selection);
   if (!run) return `<p class="process-empty">${choose(locale, '没有保存运行记录。', 'No run records were saved.')}</p>`;
@@ -191,7 +223,7 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
   const taskCount = new Set(process.runs.flatMap(run => run.tasks.map(task => task.id))).size;
   const checks = process.runs.reduce((sum, run) => sum + (run.checks?.length ?? run.events.filter(event => event.kind === 'lean-check').length), 0);
   const meaningfulEvents = run.events.filter(event => event.kind === 'baseline' || event.kind === 'transition' && !event.message?.trim());
-  return `<div class="archive-process" data-process-run-id="${escape(run.runId)}">
+  return `<div class="archive-process" data-process-run-id="${escape(run.runId)}" data-process-layout="${selection.view}">
     <div class="process-introduction"><p>${escape(record.summary)}</p>${record.campaign ? `<div class="process-final-mark">${icon('shield-check')}<span>${choose(locale, '完整原题', 'Original problem')}<strong>${choose(locale, '本地验收通过', 'Locally accepted')}</strong></span></div>` : ''}</div>
     <dl class="process-overview"><div><dt>${choose(locale, '记录运行', 'Recorded runs')}</dt><dd>${process.runs.length}</dd></div><div><dt>${choose(locale, '归档任务', 'Archived tasks')}</dt><dd>${taskCount}</dd></div>
       <div><dt>${choose(locale, '已存检查', 'Saved checks')}</dt><dd>${checks}</dd></div><div><dt>${choose(locale, '最终验收', 'Final acceptance')}</dt><dd class="process-overview-date">${escape(new Date(record.updatedAt).toISOString().slice(0, 10))}</dd></div></dl>
@@ -201,7 +233,8 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
     <section class="process-current-run"><header class="process-run-header"><div><h3>${choose(locale, `第 ${current + 1} 次运行`, `Run ${current + 1}`)}</h3><p>${escape(time(run.startedAt, locale))}${run.finishedAt ? ` — ${escape(time(run.finishedAt, locale))}` : ''} UTC${duration(run, locale) ? ` · ${escape(duration(run, locale))}` : ''}</p></div>
       <a class="inline-link" href="${escape((locale === 'en' ? '../' : '') + record.archiveUrl)}" target="_blank" rel="noreferrer">${choose(locale, '原始记录', 'Original records')}${icon('arrow-up-right')}</a></header>
       ${run.reason ? `<p class="process-run-reason">${escape(readableProcessText(run.reason, 650))}</p>` : ''}
-      ${taskBrowser(run, selection, locale)}
+      <div class="process-view-toolbar"><h4>${choose(locale, '解题路线', 'Proof roadmap')}</h4><div class="process-step-filters" role="group" aria-label="${choose(locale, '轨迹视图', 'Process view')}"><button data-process-view="roadmap" aria-pressed="${selection.view === 'roadmap'}">${icon('git-branch')}${choose(locale, '路线图', 'Roadmap')}</button><button data-process-view="steps" aria-pressed="${selection.view === 'steps'}">${choose(locale, '逐步记录', 'Step records')}</button></div></div>
+      ${selection.view === 'roadmap' ? roadmap(record, process, run, steps, selection, locale) : `${taskBrowser(run, selection, locale)}
       <div class="process-timeline-toolbar"><h4>${choose(locale, '研究步骤', 'Research steps')} <span>${filtered.length}</span></h4><div class="process-step-filters" role="group" aria-label="${choose(locale, '筛选研究步骤', 'Filter research steps')}">${([
         ['all', choose(locale, '全部', 'All')], ['checks', choose(locale, '证明检查', 'Proof checks')], ['decisions', choose(locale, '计划与交付', 'Plans and deliveries')],
       ] as const).map(([value, label]) => `<button data-process-filter="${value}" aria-pressed="${selection.filter === value}">${label}</button>`).join('')}</div></div>
@@ -213,7 +246,7 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
       <article class="process-step-detail" id="process-step-detail" tabindex="-1" aria-live="polite">${selected ? stepDetail(selected, run, record, process, selection, locale)
         : `<p class="process-empty">${choose(locale, '这个筛选条件下没有保存的步骤。', 'No saved steps match this filter.')}</p>`}
         ${filtered.length > 1 ? `<nav class="process-step-navigation" aria-label="${choose(locale, '逐步阅读', 'Read step by step')}"><button data-process-step="${escape(filtered[Math.max(0, selectedIndex - 1)].id)}" ${selectedIndex <= 0 ? 'disabled' : ''}>${icon('chevron-left')}${choose(locale, '上一步', 'Previous')}</button>
-          <span>${selectedIndex + 1} / ${filtered.length}</span><button data-process-step="${escape(filtered[Math.min(filtered.length - 1, selectedIndex + 1)].id)}" ${selectedIndex === filtered.length - 1 ? 'disabled' : ''}>${choose(locale, '下一步', 'Next')}${icon('chevron-right')}</button></nav>` : ''}</article></div>
+          <span>${selectedIndex + 1} / ${filtered.length}</span><button data-process-step="${escape(filtered[Math.min(filtered.length - 1, selectedIndex + 1)].id)}" ${selectedIndex === filtered.length - 1 ? 'disabled' : ''}>${choose(locale, '下一步', 'Next')}${icon('chevron-right')}</button></nav>` : ''}</article></div>`}
       <div class="process-supporting-records">${run.review ? `<details class="process-review"><summary>${icon('badge-check')}${choose(locale, '本轮审阅记录', 'Review record')}<span>${escape(processStatus(run.review.status, locale))}</span></summary><p class="process-message">${escape(readableProcessText(run.review.summary ?? '', 12_000))}</p></details>` : ''}
       ${researchEvidence}
       ${meaningfulEvents.length ? `<details class="process-raw-events"><summary>${choose(locale, '进度快照', 'Progress snapshots')}<span>${meaningfulEvents.length}</span></summary><ol>${meaningfulEvents.map(event => `<li><time>${escape(time(event.at, locale))} UTC</time><span>${escape(event.kind)} · ${escape(event.status ?? '')}</span></li>`).join('')}</ol></details>` : ''}

@@ -14,9 +14,9 @@ const replayEvidence = JSON.parse(fs.readFileSync(path.join(root, 'out/site/asse
 const official = catalog.records.filter(record => record.status === 'official_accepted');
 const ongoing = catalog.records.filter(record => record.status === 'in_progress_not_officially_accepted');
 const local = catalog.records.filter(record => record.status === 'locally_verified');
-// The shared replay adds GSAP; Lean sources still load per record from data/sources.
+// The shared replay, roadmap layout and bilingual node labels are UI code. Lean sources still load per record.
 const archiveBundle = fs.readFileSync(path.join(root, 'out/site/site.js'), 'utf8');
-assert.ok(Buffer.byteLength(archiveBundle) < 300_000, 'site.js with the shared replay must not bundle the archive sources');
+assert.ok(Buffer.byteLength(archiveBundle) < 350_000, 'site.js with the replay and roadmap must not bundle the archive sources');
 assert.equal(archiveBundle.includes('The no-seed alternative of the weighted totient companion theorem.'), false,
   'The Totient Lean source must stay in its lazy source asset');
 const errors = [];
