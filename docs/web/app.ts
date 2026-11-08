@@ -130,7 +130,12 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   }));
   return request;
 }
-const icons = () => { createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); };
+const icons = () => {
+  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap();
+  const selected = document.querySelector<HTMLElement>('[data-global-select][aria-pressed="true"]');
+  const rail = selected?.closest<HTMLElement>('.global-run-lanes');
+  if (rail && selected) rail.scrollLeft = selected.offsetLeft - rail.offsetLeft - (rail.clientWidth - selected.offsetWidth) / 2;
+};
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -194,8 +199,8 @@ function writeLocation(push = false) {
     if (state.sort !== 'verified') params.set('sort', state.sort);
     if (state.tab === 'process') {
       params.set('mode', processSelection.view);
+      if (processSelection.run) params.set('run', processSelection.run);
       if (processSelection.view !== 'global') {
-        if (processSelection.run) params.set('run', processSelection.run);
         if (processSelection.task) params.set('task', processSelection.task);
         if (processSelection.step) params.set('step', processSelection.step);
         if (processSelection.node && processSelection.node !== 'problem') params.set('node', processSelection.node);
@@ -528,7 +533,7 @@ function download(name: string, content: string, type: string) {
 }
 
 document.addEventListener('click', event => {
-  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-global-run], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
+  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-global-run], [data-global-select], [data-global-scroll], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
   if (!target) return;
   if (target.dataset.viewLink) {
     event.preventDefault();
@@ -560,9 +565,25 @@ document.addEventListener('click', event => {
     return;
   }
   const record = selectedRecord();
+  if (target.dataset.globalScroll) {
+    const section = document.getElementById(target.dataset.globalScroll);
+    section?.scrollIntoView({ block: 'start' });
+    section?.querySelector<HTMLElement>('h5')?.focus({ preventScroll: true });
+    return;
+  }
+  if (record && target.dataset.globalSelect) {
+    processSelection = { ...emptyProcessSelection(), run: target.dataset.globalSelect };
+    refreshProcess(record);
+    document.querySelector<HTMLElement>(`[data-global-select="${CSS.escape(target.dataset.globalSelect)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
   if (record && target.dataset.globalRun) {
     processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: target.dataset.globalRun, node: target.dataset.globalNode ?? 'problem', step: target.dataset.globalStep ?? '' };
-    refreshProcess(record); revealProcessContent();
+    refreshProcess(record);
+    const detail = document.querySelector<HTMLElement>('#process-step-detail, #process-map-inspector');
+    detail?.setAttribute('tabindex', '-1');
+    detail?.focus({ preventScroll: true });
+    detail?.scrollIntoView({ block: 'start' });
     return;
   }
   if (record && Object.keys(target.dataset).some(key => key.startsWith('process'))) {
@@ -581,6 +602,7 @@ document.addEventListener('click', event => {
       if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), view: processSelection.view === 'global' ? 'roadmap' : processSelection.view, run: target.dataset.processRun };
       if (target.dataset.processView) processSelection.view = target.dataset.processView as typeof processSelection.view;
       if (target.dataset.processNode !== undefined) {
+        if (processSelection.view === 'global') processSelection.view = 'roadmap';
         const process = window.theoremosProcesses?.[record.id];
         const run = process && selectedProcessRun(process, record, processSelection);
         const node = run && buildArchiveRoadmap(record, run, locale).nodes.find(node => node.id === target.dataset.processNode);
