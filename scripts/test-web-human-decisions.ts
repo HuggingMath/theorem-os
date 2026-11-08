@@ -262,6 +262,26 @@ try {
     await closeArtifacts(page);
     const decision = page.locator('[data-chat-plan-decision]'); await decision.waitFor();
     assert.ok((await decision.innerText()).includes(initial.tasks[0]!.objective), 'The decision shows actual plan tasks');
+    if (locale === 'zh' && width === 1440) {
+      currentCheck = `${label}: an observation without a cooperative plan does not advertise guidance`;
+      const planned = structuredClone(control.observation);
+      control.observation.plan = null;
+      control.observation.inspection.phase = 'preparing';
+      control.observation.inspection.tasks = [];
+      delete control.observation.inspection.planVersion;
+      control.observation.inspection.planApproval = { required: true, status: 'awaiting-plan', rejections: [], leadRevising: false };
+      control.emit();
+      await page.locator('[data-chat-review-plan]').waitFor({ state: 'detached' });
+      assert.equal(await page.locator('[data-chat-guidance-mode-open], [data-research-guidance]').count(), 0,
+        'Two configured workers and a preparing observation do not yet provide a cooperative guidance recipient');
+      control.observation.plan = planned.plan;
+      control.observation.inspection = planned.inspection;
+      control.emit();
+      await page.locator('[data-chat-review-plan]').waitFor();
+      await page.locator('[data-chat-guidance-mode-open]').waitFor();
+      assert.equal(guidance.length, 0, 'Preparing and restoring the plan sends no guidance command');
+      mark(`${label}: preparing observation hides guidance until the cooperative plan exists`);
+    }
     assert.equal(control.observation.inspection.workers.find(worker => worker.id === 'engineer')!.turns, 0);
     await fit(page, '[data-chat-plan-decision]', label);
     await page.screenshot({ path: path.join(output, `plan-${locale}-${width}.png`), fullPage: true });

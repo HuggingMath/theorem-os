@@ -564,7 +564,7 @@ export class ChatSession {
     const pending = Boolean(this.conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending'));
     const canDecide = !!this.run && ['queued', 'running'].includes(this.run.status) && this.run.coordination === 'cooperative'
       && this.run.workers > 1 && !this.options.isSample(this.run);
-    const canGuide = canDecide && !!this.conversation && this.run?.status === 'running' && !!this.run.observation;
+    const canGuide = canDecide && !!this.conversation && this.run?.status === 'running' && !!this.run.observation?.plan;
     const task = this.run?.observation?.inspection.tasks.find(item => item.id === this.guidanceTarget);
     const staleTarget = !!this.guidanceTarget && (!task || task.version !== this.guidanceVersion);
     const unresolvedGuidance = !!this.pendingGuidance || this.conversation?.messages.some(message => message.kind === 'guidance' && message.status === 'pending');
