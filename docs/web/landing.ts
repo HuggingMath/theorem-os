@@ -83,8 +83,6 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
         } else if (target.matches('.component-explorer')) {
           gsap.fromTo(target.querySelectorAll('.component-tab'), { opacity: .35, x: -20 },
             { ...settle, opacity: 1, x: 0, stagger: .07 });
-          gsap.fromTo(target.querySelector('.component-panel'), { opacity: .4, y: 16 },
-            { ...settle, opacity: 1, y: 0, delay: .2 });
         } else if (target.matches('.product-fragment')) {
           gsap.fromTo(target.querySelector('img'), { opacity: .5, scale: .98 },
             { ...settle, opacity: 1, scale: 1, duration: .8 });
@@ -102,7 +100,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
       });
     }
   }, { rootMargin: '0px 0px -35px 0px', threshold: .08 });
-  document.querySelectorAll('.section-heading, .workflow-steps li, .workbench-preview, .replay-window, .proof-row, .featured-proof, .component-explorer, .product-fragment, .module-media, .archive-footer, .start-copy, .faq-list')
+  document.querySelectorAll('.section-heading, .workflow-steps li, .workbench-preview, .replay-window, .proof-row, .featured-proof, .component-explorer, .component-panel, .product-fragment, .module-media, .archive-footer, .start-copy, .faq-list')
     .forEach(target => observer.observe(target));
   return () => observer.disconnect();
 });
@@ -147,6 +145,24 @@ type Component = keyof typeof components;
 const narrow = matchMedia('(max-width: 600px)');
 const componentTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-component]'));
 const componentIndicator = createSelectionIndicator(element('.component-tabs'), reducedMotion);
+const graphNodes = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-graph-component]'));
+const graphEdges = Array.from(document.querySelectorAll<SVGPathElement>('[data-graph-from]'));
+const graphRoutes = {
+  zh: {
+    m1: 'M1 → M2 · 候选证明交给 Lean 检查。',
+    m2: 'M2 → M3 · 诊断反馈用于下一轮决策，集成结果交给 S3 独立验收。',
+    m3: 'M3 → M4 · 根据就绪任务，整理下一步所需的上下文。',
+    m4: 'M4 → M1 · 将带来源的上下文交给证明构造。',
+    m5: 'M5 · 为研究循环分配任务、隔离工作区与独立审阅。',
+  },
+  en: {
+    m1: 'M1 → M2 · Lean checks the candidate proof.',
+    m2: 'M2 → M3 · Diagnostics guide the next decision. The integrated proof goes to S3.',
+    m3: 'M3 → M4 · Ready tasks guide the context selection.',
+    m4: 'M4 → M1 · Context with source identities informs proof construction.',
+    m5: 'M5 · Assign tasks, isolated workspaces and independent review across the research loop.',
+  },
+}[locale];
 function selectComponent(id: Component, focus = false) {
   const content = components[id];
   if (!content) return;
@@ -162,6 +178,13 @@ function selectComponent(id: Component, focus = false) {
     description: content.description, input: content.input, output: content.output })) {
     element(`#module-${key}`).textContent = value;
   }
+  for (const node of graphNodes) node.setAttribute('aria-pressed', String(node.dataset.graphComponent === id));
+  for (const edge of graphEdges) {
+    const active = edge.dataset.graphFrom === id || edge.dataset.graphTo === id;
+    edge.dataset.active = String(active);
+    edge.setAttribute('marker-end', `url(#module-graph-arrow${active ? '-active' : ''})`);
+  }
+  element('#module-graph-route').textContent = graphRoutes[id];
   componentIndicator.update();
   if (changed) animateSelection([element('.module-details')]);
 }
@@ -180,25 +203,64 @@ function handleTabKeys(event: KeyboardEvent, tabs: HTMLButtonElement[], select: 
   select(tabs[next]);
 }
 
+for (const node of graphNodes) {
+  node.disabled = false;
+  node.addEventListener('click', () => selectComponent(node.dataset.graphComponent as Component));
+}
+element('.module-graph').addEventListener('keydown', event => handleTabKeys(event, graphNodes, node => {
+  selectComponent(node.dataset.graphComponent as Component);
+  node.focus({ preventScroll: true });
+}));
+const graphCanvas = element('.module-graph-canvas');
+const graphSvg = graphCanvas.querySelector<SVGSVGElement>('.module-graph-edges')!;
+function drawGraphEdges() {
+  const canvas = graphCanvas.getBoundingClientRect();
+  if (!canvas.width || !canvas.height) return;
+  const bounds = (id: string) => {
+    const node = id === 's3' ? element('[data-graph-terminal="s3"]') : element(`[data-graph-component="${id}"]`);
+    const rect = node.getBoundingClientRect();
+    return { left: rect.left - canvas.left, right: rect.right - canvas.left,
+      top: rect.top - canvas.top, bottom: rect.bottom - canvas.top,
+      x: rect.left + rect.width / 2 - canvas.left, y: rect.top + rect.height / 2 - canvas.top };
+  };
+  graphSvg.setAttribute('viewBox', `0 0 ${canvas.width} ${canvas.height}`);
+  for (const edge of graphEdges) {
+    const fromId = edge.dataset.graphFrom!;
+    const toId = edge.dataset.graphTo!;
+    const from = bounds(fromId), to = bounds(toId);
+    let path: string;
+    if (fromId === 'm5') path = `M ${to.x} ${from.bottom + 7} V ${to.top - 9}`;
+    else if (toId === 's3') path = `M ${from.x} ${from.bottom + 7} V ${to.top - 9}`;
+    else if (fromId === 'm3' && toId === 'm4' || fromId === 'm1' && toId === 'm2') {
+      const forward = to.x > from.x;
+      path = `M ${forward ? from.right + 7 : from.left - 7} ${from.y} H ${forward ? to.left - 9 : to.right + 9}`;
+    } else {
+      const forward = to.y > from.y;
+      path = `M ${from.x} ${forward ? from.bottom + 7 : from.top - 7} V ${forward ? to.top - 9 : to.bottom + 9}`;
+    }
+    edge.setAttribute('d', path);
+  }
+  graphSvg.dataset.ready = 'true';
+}
+new ResizeObserver(drawGraphEdges).observe(graphCanvas);
+document.fonts.ready.then(drawGraphEdges);
+selectComponent('m3');
+
 const modulePreviews = {
   zh: {
   modules: {
     label: '模块图谱', caption: '研究模块与独立验收',
-    alt: '模块图谱：M1–M5 研究决策连接到固定的 S3 独立验收。',
   },
   library: {
     label: '方案库', caption: 'Mathlib 代数研究 · 2 项自定义策略',
-    alt: '模块方案库：Mathlib 代数研究方案，启用两项自定义策略。',
   },
   },
   en: {
   modules: {
     label: 'Module map', caption: 'Research modules and independent verification',
-    alt: 'Module map: the M1–M5 research decisions connect to the fixed S3 independent verification.',
   },
   library: {
     label: 'Strategy library', caption: 'Mathlib algebra study · 2 custom strategies',
-    alt: 'Strategy library: a saved Mathlib algebra study with two custom strategies enabled.',
   },
   },
 }[locale];
@@ -218,15 +280,13 @@ function selectModulePreview(id: ModulePreview, focus = false) {
     if (selected && focus) tab.focus({ preventScroll: true });
   }
   modulePreviewPanel.setAttribute('aria-labelledby', `module-preview-tab-${id}`);
-  const image = modulePreviewLink.querySelector('img')!;
+  element('.module-graph').hidden = id !== 'modules';
+  element('.module-library').hidden = id !== 'library';
   const suffix = locale === 'en' ? '-en' : '';
-  image.src = `${root}assets/workbench-${id}-desktop${suffix}.png`;
-  image.alt = content.alt;
-  modulePreviewLink.querySelector('source')!.srcset = `${root}assets/workbench-${id}-mobile${suffix}.png`;
-  modulePreviewLink.href = `${root}assets/workbench-${id}-${narrow.matches ? 'mobile' : 'desktop'}${suffix}.png`;
-  modulePreviewLink.setAttribute('aria-label', text.previewLabel(content.label));
+  modulePreviewLink.href = `${root}assets/workbench-library-${narrow.matches ? 'mobile' : 'desktop'}${suffix}.png`;
   element('#module-preview-caption').textContent = content.caption;
-  if (changed) animateSelection([image, element('#module-preview-caption')], 6);
+  if (id === 'modules') drawGraphEdges();
+  if (changed) animateSelection([element(id === 'modules' ? '.module-graph' : '.module-library')], 6);
 }
 element('.module-preview-tabs').hidden = false;
 modulePreviewTabs.forEach(tab => tab.addEventListener('click', () => selectModulePreview(tab.dataset.modulePreview as ModulePreview)));

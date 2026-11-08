@@ -114,28 +114,201 @@ const checkEnglishWorkbench = async (page, width) => {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('#workbench-dialog').open);
 };
-const checkEnglishAdvancedWorkbench = async (page, width) => {
-  const device = width <= 600 ? 'mobile' : 'desktop';
-  assert.equal(await page.locator('.module-media').isVisible(), true);
-  for (const id of ['modules', 'library']) {
-    await page.locator(`[data-module-preview="${id}"]`).click();
-    const image = page.locator('#module-preview-panel img');
-    const picture = await checkRetinaImage(image, `${width}px English ${id}`);
-    const expected = `workbench-${id}-${device}-en.png`;
-    assert.equal(path.basename(new URL(picture.source).pathname), expected);
-    assert.equal(path.basename(new URL(await page.locator('.module-preview-link').getAttribute('href'), page.url()).pathname), expected);
-    assert.match(await image.getAttribute('alt'), /module|strateg|Mathlib/i);
+const componentMeaning = {
+  m1: /proof|candidate|construct|build/i, m2: /check|diagnos|feedback/i, m3: /search|task|next|budget/i,
+  m4: /context|retriev|evidence/i, m5: /collaborat|role|review/i,
+};
+const graphOrder = ['m5', 'm3', 'm4', 'm1', 'm2'];
+const graphEdges = ['m5->m3', 'm5->m4', 'm3->m4', 'm4->m1', 'm1->m2', 'm2->m3', 'm2->s3'];
+const checkGraphSelection = async (page, id) => {
+  assert.equal(await page.locator('[data-component][aria-selected="true"]').getAttribute('data-component'), id);
+  assert.equal(await page.locator('[data-graph-component][aria-pressed="true"]').getAttribute('data-graph-component'), id);
+  assert.equal(await page.locator('[data-component][aria-selected="true"]').count(), 1);
+  assert.equal(await page.locator('[data-graph-component][aria-pressed="true"]').count(), 1);
+  assert.equal(await page.locator('#component-panel').getAttribute('aria-labelledby'), `tab-${id}`);
+  assert.match(await page.locator('#module-kicker').innerText(), new RegExp(id.toUpperCase()));
+  const content = [];
+  for (const field of ['title', 'description', 'input', 'output']) {
+    const value = (await page.locator(`#module-${field}`).innerText()).trim();
+    assert.ok(value, `Graph selection ${id} must update the component ${field}`);
+    content.push(value);
   }
-  assert.ok((await page.locator('#module-preview-caption').innerText()).trim(), 'The selected module view retains its caption');
+  assert.match(content.join(' '), componentMeaning[id], `The graph selection explains ${id}`);
+  const active = await page.locator('path[data-graph-from][data-graph-to][data-active="true"]').evaluateAll(paths =>
+    paths.map(path => `${path.dataset.graphFrom}->${path.dataset.graphTo}`).sort());
+  assert.deepEqual(active, graphEdges.filter(edge => edge.split('->').includes(id)).sort(), `Only directly related graph edges are active for ${id}`);
+  const route = (await page.locator('#module-graph-route').innerText()).trim();
+  assert.ok(route, `Graph selection ${id} has a readable route`);
+  return { content, route };
+};
+const checkGraphReadability = async (page, label, interactive = true) => {
+  const graph = page.locator('.module-graph');
+  assert.equal(await graph.isVisible(), true);
+  assert.notEqual(await graph.getAttribute('data-ui'), null, 'The module map is a real interface');
+  const buttons = graph.locator('[data-graph-component]');
+  assert.deepEqual(await buttons.evaluateAll(nodes => nodes.map(node => node.dataset.graphComponent)), graphOrder);
+  const description = await graph.locator('#module-graph-description').textContent();
+  for (const id of [...graphOrder, 's3']) assert.match(description, new RegExp(id.toUpperCase()));
+  for (const button of await buttons.all()) {
+    assert.equal(await button.evaluate(node => node.tagName), 'BUTTON');
+    assert.equal(await button.getAttribute('aria-controls'), 'component-panel');
+    assert.equal(await button.isEnabled(), interactive);
+    assert.ok((await button.innerText()).trim(), 'Every graph node has a readable label');
+    const fits = await button.evaluate(node => {
+      const box = node.getBoundingClientRect(), canvas = node.closest('.module-graph-canvas').getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return box.width >= 44 && box.height >= 44 && node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1 &&
+        box.left >= Math.max(0, canvas.left) - 1 && box.right <= Math.min(innerWidth, canvas.right) + 1 &&
+        box.top >= canvas.top - 1 && box.bottom <= canvas.bottom + 1 && [...range.getClientRects()].every(text =>
+          text.width === 0 || text.left >= box.left - 1 && text.right <= box.right + 1 && text.top >= box.top - 1 && text.bottom <= box.bottom + 1);
+    });
+    assert.ok(fits, `Graph nodes and labels fit with at least 44px touch targets: ${label}`);
+  }
+  const clipped = await graph.evaluate(node => {
+    const box = node.getBoundingClientRect(), walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT), clipped = [];
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      const parent = text.parentElement;
+      if (!text.textContent.trim() || parent.closest('.sr-only, svg') || !parent.getClientRects().length) continue;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      if ([...range.getClientRects()].some(rect => rect.width > 0 && (rect.left < Math.max(0, box.left) - 1 ||
+        rect.right > Math.min(innerWidth, box.right) + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1))) clipped.push(text.textContent.trim());
+    }
+    return clipped;
+  });
+  assert.deepEqual(clipped, [], `Graph text must remain readable: ${label}`);
+};
+const checkGraphVerification = async page => {
+  const disclosure = page.locator('details.graph-verification');
+  const summary = disclosure.locator('summary');
+  const paragraph = disclosure.locator('p');
+  const wasOpen = await disclosure.getAttribute('open') !== null;
+  if (!wasOpen) await summary.click();
+  assert.equal(await paragraph.isVisible(), true);
+  const explanation = await disclosure.innerText();
+  for (const meaning of [/S3/, /full.*(?:problem|statement)|complete.*(?:problem|statement)/i, /independent/i, /Lean/]) assert.match(explanation, meaning);
+  assert.deepEqual(await cjkIn(page), [], 'The expanded English verification disclosure has no Chinese interface copy');
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await paragraph.isVisible(), false, 'Native verification disclosure closes with Enter');
+  await page.keyboard.press('Space');
+  assert.equal(await paragraph.isVisible(), true, 'Native verification disclosure opens with Space');
+  if (!wasOpen) await summary.click();
+};
+const checkModuleGraph = async (page, width) => {
+  await page.locator('.module-graph-edges[data-ready="true"]').waitFor({ state: 'attached' });
+  const edges = await page.locator('path[data-graph-from][data-graph-to]').evaluateAll(paths =>
+    paths.map(path => `${path.dataset.graphFrom}->${path.dataset.graphTo}`).sort());
+  assert.deepEqual(edges, [...graphEdges].sort());
+  await checkGraphReadability(page, `${width}px module map`);
+  await checkGraphSelection(page, 'm3');
+  const routes = new Set();
+  for (const id of graphOrder) {
+    await page.locator(`[data-component="${id}"]`).click();
+    const fromTab = await checkGraphSelection(page, id);
+    await page.locator(`[data-graph-component="${graphOrder[(graphOrder.indexOf(id) + 1) % graphOrder.length]}"]`).click();
+    await page.locator(`[data-graph-component="${id}"]`).click();
+    const fromGraph = await checkGraphSelection(page, id);
+    assert.deepEqual(fromGraph, fromTab, `Graph and left tab select the same component ${id}`);
+    routes.add(fromGraph.route);
+  }
+  assert.equal(routes.size, 5, 'Each graph selection explains its own route');
+  await page.locator('[data-graph-component="m5"]').focus();
+  for (const [key, id] of [['ArrowRight', 'm3'], ['ArrowDown', 'm4'], ['ArrowLeft', 'm3'], ['ArrowUp', 'm5'],
+    ['End', 'm2'], ['ArrowRight', 'm5'], ['ArrowUp', 'm2'], ['Home', 'm5']]) {
+    await page.keyboard.press(key);
+    await checkGraphSelection(page, id);
+    assert.equal(await page.locator(`[data-graph-component="${id}"]`).evaluate(node => node === document.activeElement), true,
+      `${key} moves focus through graph DOM order`);
+  }
+  for (const [key, id] of [['Enter', 'm4'], ['Space', 'm1']]) {
+    await page.locator(`[data-graph-component="${id}"]`).focus();
+    await page.keyboard.press(key);
+    await checkGraphSelection(page, id);
+  }
+  await page.locator('#tab-m5').focus();
+  for (const [key, id] of [['ArrowDown', 'm1'], ['End', 'm5'], ['Home', 'm1']]) {
+    await page.keyboard.press(key);
+    await checkGraphSelection(page, id);
+  }
+  await checkGraphVerification(page);
+  await page.locator('[data-component="m3"]').click();
+  await checkGraphSelection(page, 'm3');
+};
+const checkEnglishAdvancedWorkbench = async (page, width) => {
+  const requests = [];
+  const trackRequest = request => {
+    if (['fetch', 'xhr'].includes(request.resourceType()) || !['GET', 'HEAD'].includes(request.method())) {
+      requests.push({ type: request.resourceType(), method: request.method(), url: request.url() });
+    }
+  };
+  page.on('request', trackRequest);
+  try {
+    const device = width <= 600 ? 'mobile' : 'desktop';
+    assert.equal(await page.locator('.module-media').isVisible(), true);
+    assert.equal(await page.locator('#module-preview-tab-modules').getAttribute('aria-selected'), 'true');
+    await checkEnglishProductImages(page, width);
+    await checkModuleGraph(page, width);
+    for (const id of ['modules', 'library']) {
+      const tab = page.locator(`[data-module-preview="${id}"]`);
+      await tab.click();
+      assert.equal(await tab.getAttribute('aria-selected'), 'true');
+      assert.equal(await tab.getAttribute('tabindex'), '0');
+      assert.equal(await page.locator('#module-preview-panel').getAttribute('aria-labelledby'), `module-preview-tab-${id}`);
+      assert.equal(await page.locator('[data-module-preview][aria-selected="true"]').count(), 1);
+      assert.equal(await page.locator('.module-graph').isVisible(), id === 'modules');
+      assert.equal(await page.locator('.module-library').isVisible(), id === 'library');
+      assert.deepEqual(await cjkIn(page), [], `${width}px English ${id} view`);
+      await checkGraphSelection(page, 'm3');
+      if (id === 'library') {
+        const image = page.locator('.module-library img');
+        const picture = await checkRetinaImage(image, `${width}px English strategy library`);
+        const expected = `workbench-library-${device}-en.png`;
+        assert.equal(path.basename(new URL(picture.source).pathname), expected);
+        assert.equal(await image.getAttribute('src'), '../assets/workbench-library-desktop-en.png');
+        assert.equal(path.basename(new URL(await page.locator('.module-preview-link').getAttribute('href'), page.url()).pathname), expected);
+        assert.match(await image.getAttribute('alt'), /module|strateg|Mathlib/i);
+      }
+      await checkEnglishProductImages(page, width);
+    }
+    assert.ok((await page.locator('#module-preview-caption').innerText()).trim(), 'The selected module view retains its caption');
+    await page.locator('[data-component="m4"]').click();
+    await checkGraphSelection(page, 'm4');
+    await page.locator('#module-preview-tab-library').focus();
+    for (const [key, id] of [['ArrowRight', 'modules'], ['End', 'library'], ['Home', 'modules']]) {
+      await page.keyboard.press(key);
+      assert.equal(await page.locator(`#module-preview-tab-${id}`).getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator(`#module-preview-tab-${id}`).evaluate(node => node === document.activeElement), true);
+      assert.equal(await page.locator('.module-graph').isVisible(), id === 'modules');
+      assert.equal(await page.locator('.module-library').isVisible(), id === 'library');
+      await checkGraphSelection(page, 'm4');
+    }
+    await page.locator('[data-component="m3"]').click();
+  } finally {
+    page.off('request', trackRequest);
+  }
+  assert.deepEqual(requests, [], 'Module graph interactions must not fetch data, invoke models or send mutations');
+  console.log(`Module graph ${width}px: synchronized selection, keyboard focus, related edges and zero fetch/XHR/mutation requests.`);
+};
+const checkEnglishProductImages = async (page, width) => {
+  const device = width <= 600 ? 'mobile' : 'desktop';
   const source = page.locator('.source-fragment img');
   const picture = await checkRetinaImage(source, `${width}px English Lean workspace`);
   assert.equal(path.basename(new URL(picture.source).pathname), `workbench-source-${device === 'mobile' ? 'mobile' : 'detail'}-en.png`);
   assert.equal(await page.locator('.source-fragment source').getAttribute('media'), '(max-width: 600px)');
   assert.equal(await page.locator('.source-fragment a').getAttribute('href'), '../assets/workbench-source-detail-en.png');
-  const images = page.locator('.workbench-image-link img, .source-fragment img, #module-preview-panel img');
-  assert.equal(await images.count(), 3, 'The English homepage shows the entry, Lean source and selected module view');
-  const sources = await images.evaluateAll(nodes => nodes.map(node => node.currentSrc));
-  assert.equal(new Set(sources).size, 3, 'The English product pictures show distinct real views');
+  const expectedCount = await page.locator('.module-library').isVisible() ? 3 : 2;
+  const images = page.locator('.workbench-image-link img:visible, .source-fragment img:visible, .module-library img:visible');
+  assert.equal(await images.count(), expectedCount, 'The English homepage shows only the entry, source and visible strategy library pictures');
+  const sources = new Set();
+  for (const image of await images.all()) {
+    const picture = await checkRetinaImage(image, `${width}px English product picture`);
+    assert.ok((await image.getAttribute('alt')).trim(), 'English product pictures retain descriptive alternatives');
+    assert.ok(picture.source.startsWith(new URL('../assets/', page.url()).href), 'English product pictures use local assets');
+    sources.add(picture.source);
+  }
+  assert.equal(sources.size, expectedCount, 'The visible English product pictures show distinct real views');
 };
 const checkEnglishArchiveEntry = async page => {
   const footer = page.locator('.archive-footer');
@@ -195,7 +368,7 @@ const assertGeometryState = async (page, proof) => {
 };
 
 try {
-  for (const width of [1440, 390, 320]) {
+  for (const width of [1440, 768, 390, 320]) {
     const page = await newPage(width);
 
     await open(page, `${hosted}en/`, 'landingReady');
@@ -344,6 +517,11 @@ try {
   await noScript.goto(`${hosted}en/`);
   await noScript.evaluate(() => document.fonts.ready);
   await checkEnglishHomepageFacts(noScript);
+  await checkEnglishProductImages(noScript, 320);
+  await checkGraphReadability(noScript, '320px English JavaScript-disabled module map', false);
+  await checkGraphVerification(noScript);
+  assert.equal(await noScript.locator('.module-preview-tabs').isVisible(), false);
+  assert.equal(await noScript.locator('.module-library').isVisible(), false);
   assert.equal(await noScript.locator('[data-accepted-proof]').count(), catalog.records.filter(record => record.status === 'official_accepted').length);
   assert.equal(await noScript.locator('.menu-toggle').isVisible(), false);
   const noScriptApply = noScript.locator('a[href="#start"]:visible').first();
@@ -386,7 +564,7 @@ try {
   await page.close();
 
   assert.deepEqual(problems, [], 'Pages must load without errors or missing files');
-  console.log('i18n checks passed: English homepage, archive (overview, source, evidence, snapshot, replay), feedback and privacy at 3 widths, mobile deep-link focus and return to the selected filtered row, localized access links, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
+  console.log('i18n checks passed: English interactive module map and static no-script map, no graph API or mutation calls, homepage, archive (overview, source, evidence, snapshot, replay), feedback and privacy at 4 widths, mobile deep-link focus and return to the selected filtered row, localized access links, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
   console.log(`Screenshots: ${path.relative(root, output)}`);
 } finally {
   await browser.close();

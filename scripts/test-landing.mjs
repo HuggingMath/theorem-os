@@ -212,8 +212,9 @@ const checkArchiveEntry = async page => {
   assert.equal(await page.locator('[data-accepted-proof]').count(), accepted.length);
 };
 const checkProductImages = async (page, label) => {
-  const images = page.locator('.workbench-image-link img, .source-fragment img, #module-preview-panel img');
-  assert.equal(await images.count(), 3, `The entry, Lean source and selected module view are the three product pictures: ${label}`);
+  const expectedCount = await page.locator('.module-library').isVisible() ? 3 : 2;
+  const images = page.locator('.workbench-image-link img:visible, .source-fragment img:visible, .module-library img:visible');
+  assert.equal(await images.count(), expectedCount, `Only the entry, source and visible strategy library are product pictures: ${label}`);
   const sources = new Set();
   for (const image of await images.all()) {
     await checkRetinaImage(image, label);
@@ -229,49 +230,237 @@ const checkProductImages = async (page, label) => {
       };
     });
     sources.add(picture.source);
+    assert.ok(picture.source.startsWith(new URL('assets/', page.url()).href), `Product pictures use local assets: ${picture.source}`);
     assert.ok(picture.complete && picture.width > 0 && picture.height > 0, `Product picture must load: ${picture.source}, ${label}`);
     assert.ok(picture.alt.trim(), `Product picture must have descriptive alternative text: ${picture.source}`);
     assert.ok(picture.fits && Math.abs(picture.ratio - picture.renderedRatio) < .01,
       `Product picture must fit its container without stretching or cropping: ${picture.source}, ${label}`);
   }
-  assert.equal(sources.size, 3, `Product pictures must show three distinct real views: ${label}`);
+  assert.equal(sources.size, expectedCount, `Visible product pictures show distinct real views: ${label}`);
   const source = page.locator('.source-fragment img');
   const device = await page.evaluate(() => innerWidth <= 600 ? 'mobile' : 'detail');
   assert.equal(path.basename(new URL(await source.evaluate(node => node.currentSrc)).pathname), `workbench-source-${device}.png`);
   assert.equal(await page.locator('.source-fragment source').getAttribute('media'), '(max-width: 600px)');
 };
-const checkModuleShowcase = async (page, width) => {
-  const panel = page.locator('#module-preview-panel');
-  assert.equal(await page.locator('.module-media').isVisible(), true);
-  let panelHeight;
-  for (const id of ['modules', 'library']) {
-    const tab = page.locator(`#module-preview-tab-${id}`);
-    await tab.click();
-    assert.equal(await tab.getAttribute('aria-selected'), 'true');
-    assert.equal(await tab.getAttribute('tabindex'), '0');
-    assert.equal(await panel.getAttribute('aria-labelledby'), `module-preview-tab-${id}`);
-    assert.equal(await page.locator('[data-module-preview][aria-selected="true"]').count(), 1);
-    assert.equal(await page.locator('.module-preview-link').getAttribute('href'), `assets/workbench-${id}-${width <= 600 ? 'mobile' : 'desktop'}.png`);
-    const image = await panel.locator('img').evaluate(async image => {
-      await image.decode();
-      const bounds = image.getBoundingClientRect();
-      return { src: image.currentSrc, ratio: image.naturalWidth / image.naturalHeight,
-        renderedRatio: bounds.width / bounds.height, height: bounds.height, alt: image.alt };
-    });
-    assert.match(image.src, new RegExp(`workbench-${id}-${width <= 600 ? 'mobile' : 'desktop'}\\.png$`));
-    await checkRetinaImage(panel.locator('img'), `${width}px module showcase ${id}`);
-    assert.match(image.alt, /模块|Mathlib/);
-    assert.ok(Math.abs(image.ratio - image.renderedRatio) < .01, 'Module pictures must remain complete without stretching');
-    if (panelHeight !== undefined) assert.ok(Math.abs(image.height - panelHeight) < 1, 'Switching module views must preserve the panel size');
-    panelHeight = image.height;
-    await checkWidth(page, `${width}px module showcase ${id}`);
+const graphOrder = ['m5', 'm3', 'm4', 'm1', 'm2'];
+const graphEdges = ['m5->m3', 'm5->m4', 'm3->m4', 'm4->m1', 'm1->m2', 'm2->m3', 'm2->s3'];
+const checkGraphSelection = async (page, id) => {
+  assert.equal(await page.locator('[data-component][aria-selected="true"]').getAttribute('data-component'), id);
+  assert.equal(await page.locator('[data-graph-component][aria-pressed="true"]').getAttribute('data-graph-component'), id);
+  assert.equal(await page.locator('[data-component][aria-selected="true"]').count(), 1);
+  assert.equal(await page.locator('[data-graph-component][aria-pressed="true"]').count(), 1);
+  assert.equal(await page.locator('#component-panel').getAttribute('aria-labelledby'), `tab-${id}`);
+  assert.match(await page.locator('#module-kicker').innerText(), new RegExp(id.toUpperCase()));
+  const content = [];
+  for (const field of ['title', 'description', 'input', 'output']) {
+    const value = (await page.locator(`#module-${field}`).innerText()).trim();
+    assert.ok(value, `Graph selection ${id} must update the component ${field}`);
+    content.push(value);
   }
-  await page.locator('#module-preview-tab-library').focus();
-  for (const [key, id] of [['ArrowRight', 'modules'], ['End', 'library'], ['Home', 'modules']]) {
+  assert.match(content.join(' '), componentMeaning[id], `The graph selection explains ${id}`);
+  const active = await page.locator('path[data-graph-from][data-graph-to][data-active="true"]').evaluateAll(paths =>
+    paths.map(path => `${path.dataset.graphFrom}->${path.dataset.graphTo}`).sort());
+  assert.deepEqual(active, graphEdges.filter(edge => edge.split('->').includes(id)).sort(), `Only directly related graph edges are active for ${id}`);
+  const route = (await page.locator('#module-graph-route').innerText()).trim();
+  assert.ok(route, `Graph selection ${id} has a readable route`);
+  return { content, route };
+};
+const checkGraphReadability = async (page, label, interactive = true) => {
+  const graph = page.locator('.module-graph');
+  assert.equal(await graph.isVisible(), true);
+  assert.notEqual(await graph.getAttribute('data-ui'), null, 'The module map is a real interface');
+  const buttons = graph.locator('[data-graph-component]');
+  assert.deepEqual(await buttons.evaluateAll(nodes => nodes.map(node => node.dataset.graphComponent)), graphOrder);
+  const description = await graph.locator('#module-graph-description').textContent();
+  for (const id of [...graphOrder, 's3']) assert.match(description, new RegExp(id.toUpperCase()));
+  for (const button of await buttons.all()) {
+    assert.equal(await button.evaluate(node => node.tagName), 'BUTTON');
+    assert.equal(await button.getAttribute('aria-controls'), 'component-panel');
+    assert.equal(await button.isEnabled(), interactive);
+    assert.ok((await button.innerText()).trim(), 'Every graph node has a readable label');
+    const fits = await button.evaluate(node => {
+      const box = node.getBoundingClientRect(), canvas = node.closest('.module-graph-canvas').getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return box.width >= 44 && box.height >= 44 && node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1 &&
+        box.left >= Math.max(0, canvas.left) - 1 && box.right <= Math.min(innerWidth, canvas.right) + 1 &&
+        box.top >= canvas.top - 1 && box.bottom <= canvas.bottom + 1 && [...range.getClientRects()].every(text =>
+          text.width === 0 || text.left >= box.left - 1 && text.right <= box.right + 1 && text.top >= box.top - 1 && text.bottom <= box.bottom + 1);
+    });
+    assert.ok(fits, `Graph nodes and labels fit with at least 44px touch targets: ${label}`);
+  }
+  const clipped = await graph.evaluate(node => {
+    const box = node.getBoundingClientRect(), walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT), clipped = [];
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      const parent = text.parentElement;
+      if (!text.textContent.trim() || parent.closest('.sr-only, svg') || !parent.getClientRects().length) continue;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      if ([...range.getClientRects()].some(rect => rect.width > 0 && (rect.left < Math.max(0, box.left) - 1 ||
+        rect.right > Math.min(innerWidth, box.right) + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1))) clipped.push(text.textContent.trim());
+    }
+    return clipped;
+  });
+  assert.deepEqual(clipped, [], `Graph text must remain readable: ${label}`);
+};
+const checkGraphVerification = async page => {
+  const disclosure = page.locator('details.graph-verification');
+  const summary = disclosure.locator('summary');
+  const paragraph = disclosure.locator('p');
+  const wasOpen = await disclosure.getAttribute('open') !== null;
+  if (!wasOpen) await summary.click();
+  assert.equal(await paragraph.isVisible(), true);
+  const explanation = await disclosure.innerText();
+  for (const meaning of [/S3/, /完整原题/, /独立/, /Lean/]) assert.match(explanation, meaning);
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await paragraph.isVisible(), false, 'Native verification disclosure closes with Enter');
+  await page.keyboard.press('Space');
+  assert.equal(await paragraph.isVisible(), true, 'Native verification disclosure opens with Space');
+  if (!wasOpen) await summary.click();
+};
+const checkModuleGraph = async (page, width) => {
+  await page.locator('.module-graph-edges[data-ready="true"]').waitFor({ state: 'attached' });
+  const edges = await page.locator('path[data-graph-from][data-graph-to]').evaluateAll(paths =>
+    paths.map(path => `${path.dataset.graphFrom}->${path.dataset.graphTo}`).sort());
+  assert.deepEqual(edges, [...graphEdges].sort());
+  await checkGraphReadability(page, `${width}px module map`);
+  await checkGraphSelection(page, 'm3');
+  const routes = new Set();
+  for (const id of graphOrder) {
+    await page.locator(`[data-component="${id}"]`).click();
+    const fromTab = await checkGraphSelection(page, id);
+    await page.locator(`[data-graph-component="${graphOrder[(graphOrder.indexOf(id) + 1) % graphOrder.length]}"]`).click();
+    await page.locator(`[data-graph-component="${id}"]`).click();
+    const fromGraph = await checkGraphSelection(page, id);
+    assert.deepEqual(fromGraph, fromTab, `Graph and left tab select the same component ${id}`);
+    routes.add(fromGraph.route);
+  }
+  assert.equal(routes.size, 5, 'Each graph selection explains its own route');
+  await page.locator('[data-graph-component="m5"]').focus();
+  for (const [key, id] of [['ArrowRight', 'm3'], ['ArrowDown', 'm4'], ['ArrowLeft', 'm3'], ['ArrowUp', 'm5'],
+    ['End', 'm2'], ['ArrowRight', 'm5'], ['ArrowUp', 'm2'], ['Home', 'm5']]) {
     await page.keyboard.press(key);
-    const tab = page.locator(`#module-preview-tab-${id}`);
-    assert.equal(await tab.getAttribute('aria-selected'), 'true');
-    assert.equal(await tab.evaluate(node => node === document.activeElement), true);
+    await checkGraphSelection(page, id);
+    assert.equal(await page.locator(`[data-graph-component="${id}"]`).evaluate(node => node === document.activeElement), true,
+      `${key} moves focus through graph DOM order`);
+  }
+  for (const [key, id] of [['Enter', 'm4'], ['Space', 'm1']]) {
+    await page.locator(`[data-graph-component="${id}"]`).focus();
+    await page.keyboard.press(key);
+    await checkGraphSelection(page, id);
+  }
+  await page.locator('#tab-m5').focus();
+  for (const [key, id] of [['ArrowDown', 'm1'], ['End', 'm5'], ['Home', 'm1']]) {
+    await page.keyboard.press(key);
+    await checkGraphSelection(page, id);
+  }
+  await checkGraphVerification(page);
+  await page.locator('[data-component="m3"]').click();
+  await checkGraphSelection(page, 'm3');
+};
+const checkModuleShowcase = async (page, width) => {
+  const requests = [];
+  const trackRequest = request => {
+    if (['fetch', 'xhr'].includes(request.resourceType()) || !['GET', 'HEAD'].includes(request.method())) {
+      requests.push({ type: request.resourceType(), method: request.method(), url: request.url() });
+    }
+  };
+  page.on('request', trackRequest);
+  try {
+    const panel = page.locator('#module-preview-panel');
+    assert.equal(await page.locator('.module-media').isVisible(), true);
+    assert.equal(await page.locator('#module-preview-tab-modules').getAttribute('aria-selected'), 'true');
+    await checkModuleGraph(page, width);
+    for (const id of ['modules', 'library']) {
+      const tab = page.locator(`#module-preview-tab-${id}`);
+      await tab.click();
+      assert.equal(await tab.getAttribute('aria-selected'), 'true');
+      assert.equal(await tab.getAttribute('tabindex'), '0');
+      assert.equal(await panel.getAttribute('aria-labelledby'), `module-preview-tab-${id}`);
+      assert.equal(await page.locator('[data-module-preview][aria-selected="true"]').count(), 1);
+      assert.equal(await panel.locator('.module-graph').isVisible(), id === 'modules');
+      assert.equal(await panel.locator('.module-library').isVisible(), id === 'library');
+      await checkGraphSelection(page, 'm3');
+      if (id === 'library') {
+        const image = panel.locator('.module-library img');
+        const picture = await checkRetinaImage(image, `${width}px strategy library`);
+        assert.equal(path.basename(new URL(picture.source).pathname), `workbench-library-${width <= 600 ? 'mobile' : 'desktop'}.png`);
+        assert.equal(await page.locator('.module-preview-link').getAttribute('href'), `assets/workbench-library-${width <= 600 ? 'mobile' : 'desktop'}.png`);
+        assert.match(await image.getAttribute('alt'), /方案|模块|Mathlib/);
+      }
+      await checkProductImages(page, `${width}px ${id} view`);
+      await checkWidth(page, `${width}px module showcase ${id}`);
+    }
+    await page.locator('[data-component="m4"]').click();
+    await checkGraphSelection(page, 'm4');
+    await page.locator('#module-preview-tab-modules').click();
+    await checkGraphSelection(page, 'm4');
+    await page.locator('#module-preview-tab-library').focus();
+    for (const [key, id] of [['ArrowRight', 'modules'], ['End', 'library'], ['Home', 'modules']]) {
+      await page.keyboard.press(key);
+      const tab = page.locator(`#module-preview-tab-${id}`);
+      assert.equal(await tab.getAttribute('aria-selected'), 'true');
+      assert.equal(await tab.evaluate(node => node === document.activeElement), true);
+      assert.equal(await panel.locator('.module-graph').isVisible(), id === 'modules');
+      assert.equal(await panel.locator('.module-library').isVisible(), id === 'library');
+      await checkGraphSelection(page, 'm4');
+    }
+    await page.locator('[data-component="m3"]').click();
+  } finally {
+    page.off('request', trackRequest);
+  }
+  assert.deepEqual(requests, [], 'Module graph interactions must not fetch data, invoke models or send mutations');
+  console.log(`Module graph ${width}px: synchronized selection, keyboard focus, related edges and zero fetch/XHR/mutation requests.`);
+};
+const checkHoveredGraphEdges = async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'no-preference' });
+  trackErrors(page);
+  try {
+    await page.goto(url);
+    await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
+    await page.evaluate(() => document.fonts.ready);
+    await page.locator('.module-graph').scrollIntoViewIfNeeded();
+    await page.locator('.module-graph-edges[data-ready="true"]').waitFor({ state: 'attached' });
+    const summary = page.locator('.graph-verification summary');
+    await summary.focus();
+    await page.locator('[data-graph-component="m1"]').hover();
+    await page.waitForFunction(() => {
+      const transform = getComputedStyle(document.querySelector('[data-graph-component="m1"]')).transform;
+      return transform !== 'none' && new DOMMatrixReadOnly(transform).m42 < -1.9;
+    });
+    await page.keyboard.press('Enter');
+    assert.notEqual(await page.locator('.graph-verification').getAttribute('open'), null);
+    for (const width of [1440, 1420]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.waitForFunction(() => {
+        const canvas = document.querySelector('.module-graph-canvas'), svg = canvas.querySelector('.module-graph-edges');
+        return Math.abs(canvas.getBoundingClientRect().height - svg.viewBox.baseVal.height) < 1 &&
+          Math.abs(canvas.getBoundingClientRect().width - svg.viewBox.baseVal.width) < 1;
+      });
+      assert.equal(await page.locator('[data-graph-component="m1"]').evaluate(node => node.matches(':hover')), true);
+      const lines = await page.locator('path[data-graph-from][data-graph-to]').evaluateAll(paths => paths
+        .filter(path => ['m3->m4', 'm1->m2'].includes(`${path.dataset.graphFrom}->${path.dataset.graphTo}`))
+        .map(path => {
+          const start = path.getPointAtLength(0).matrixTransform(path.getScreenCTM());
+          const end = path.getPointAtLength(path.getTotalLength()).matrixTransform(path.getScreenCTM());
+          const minX = Math.min(start.x, end.x), maxX = Math.max(start.x, end.x);
+          const intersections = [...document.querySelectorAll('[data-graph-component], [data-graph-terminal]')].filter(node => {
+            const box = node.getBoundingClientRect();
+            return maxX > box.left + .5 && minX < box.right - .5 && start.y > box.top + .5 && start.y < box.bottom - .5;
+          }).map(node => node.dataset.graphComponent ?? node.dataset.graphTerminal);
+          return { edge: `${path.dataset.graphFrom}->${path.dataset.graphTo}`, d: path.getAttribute('d'),
+            horizontal: /\bH\b/.test(path.getAttribute('d')) && Math.abs(start.y - end.y) < .5, intersections };
+        }));
+      assert.equal(lines.length, 2);
+      for (const line of lines) {
+        assert.ok(line.horizontal, `Hover and S3 resize preserve horizontal topology: ${line.edge}, ${line.d}`);
+        assert.deepEqual(line.intersections, [], `The ${line.edge} relationship stays between nodes at ${width}px`);
+      }
+    }
+    console.log('Module graph motion: hovered M1, expanded S3 and resize preserve horizontal edges without crossing nodes.');
+  } finally {
+    await page.close();
   }
 };
 const componentMeaning = {
@@ -440,6 +629,7 @@ try {
     await page.screenshot({ path: path.join(output, `landing-${viewport.width}.png`), fullPage: true });
     await page.screenshot({ path: path.join(output, `landing-${viewport.width}-hero.png`) });
   }
+  await checkHoveredGraphEdges();
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: width === 768 ? 1024 : 844 });
     await page.goto(url);
@@ -496,6 +686,9 @@ try {
   await checkFeaturedProof(noJS, 'JavaScript-disabled homepage');
   await checkWorkbench(noJS, 'JavaScript-disabled homepage');
   await checkProductImages(noJS, 'JavaScript-disabled homepage');
+  await checkGraphReadability(noJS, '1440px JavaScript-disabled module map', false);
+  await checkGraphVerification(noJS);
+  assert.equal(await noJS.locator('.module-library').isVisible(), false);
   await checkArchiveEntry(noJS);
   assert.equal(await noJS.locator('.module-preview-tabs').isVisible(), false);
   assert.equal(await noJS.locator('.workbench-image-link').getAttribute('href'), 'assets/workbench-full-desktop.png');
@@ -506,6 +699,8 @@ try {
   assert.equal(await noJS.locator('[data-accepted-proof] h3 a').first().isVisible(), true);
   await noJS.setViewportSize({ width: 320, height: 844 });
   await noJS.goto(url);
+  await checkGraphReadability(noJS, '320px JavaScript-disabled module map', false);
+  await checkGraphVerification(noJS);
   assert.equal(await noJS.locator('.menu-toggle').isVisible(), false, 'No-script readers must not get an inert menu');
   const noScriptApply = noJS.locator('a[href="#start"]:visible').first();
   assert.equal(await noScriptApply.isVisible(), true, 'An application link stays available without scripts');
@@ -540,7 +735,7 @@ try {
   await page.waitForSelector('.proof-row');
   assert.equal(await page.locator('.proof-row').count(), catalog.records.length);
   assert.deepEqual(errors, []);
-  console.log('Landing checks passed: Lean workflow, beta application and model billing, exact accepted source and original attribution, responsive product screenshots, modal zoom and keyboard focus, replay and component controls, mobile navigation, JavaScript-disabled content, file preview, Pages subpath, and 5 viewport sizes.');
+  console.log('Landing checks passed: interactive module graph and static no-script graph, no graph API or mutation calls, Lean workflow, beta application and model billing, exact accepted source and original attribution, responsive product screenshots, modal zoom and keyboard focus, replay and component controls, mobile navigation, JavaScript-disabled content, file preview, Pages subpath, and 5 viewport sizes.');
 } finally {
   if (server) await new Promise(resolve => server.close(resolve));
   await browser.close();
