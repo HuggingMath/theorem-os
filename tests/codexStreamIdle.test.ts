@@ -42,6 +42,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   idleTimer = setTimeout(() => complete('failed'), idleMs / 1000);
   if (params.input[0].text === 'gap') returnTimer = setTimeout(() => {
     notify('thread/tokenUsage/updated', { tokenUsage: { total: { totalTokens: 12 }, last: { inputTokens: 10 } } });
+    notify('item/completed', { item: { id: 'response-after-gap', type: 'agentMessage', text: 'Response after the idle gap.' } });
     complete('completed');
   }, 120);
 });
