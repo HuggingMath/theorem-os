@@ -11,6 +11,15 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
   const data = path.join(output, 'data');
   fs.rmSync(data, { recursive: true, force: true });
   for (const directory of ['sources', 'process', 'proofs']) fs.mkdirSync(path.join(data, directory), { recursive: true });
+  const math = path.join(data, 'math.js');
+  await build({ entryPoints: [path.join(root, 'apps/web/client/math.ts')], outfile: math,
+    bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, legalComments: 'eof' });
+  const mathVersion = createHash('sha256').update(fs.readFileSync(math)).digest('hex').slice(0, 16);
+  fs.mkdirSync(path.join(output, 'assets/katex'), { recursive: true });
+  fs.cpSync(path.join(root, 'node_modules/katex/dist/fonts'), path.join(output, 'assets/katex/fonts'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'node_modules/katex/dist/katex.min.css'), path.join(output, 'assets/katex/katex.min.css'));
+  fs.mkdirSync(path.join(output, 'assets/licenses'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'node_modules/katex/LICENSE'), path.join(output, 'assets/licenses/katex-LICENSE.txt'));
   const figures = path.join(data, 'proof-figures.js');
   await build({
     entryPoints: [path.join(root, 'docs/web/proofFigureRuntime.ts')], outfile: figures,
@@ -27,9 +36,9 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
     entryPoints: [path.join(root, 'docs/web/app.ts')], outfile: path.join(output, 'site.js'),
     bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, charset: 'utf8', legalComments: 'eof',
     plugins: [{ name: 'public-archive', setup(builder) {
-      builder.onResolve({ filter: /^virtual:(archive|proof-figures|solution-route)$/ }, args => ({ path: args.path, namespace: 'public-archive' }));
+      builder.onResolve({ filter: /^virtual:(archive|proof-figures|solution-route|math)$/ }, args => ({ path: args.path, namespace: 'public-archive' }));
       builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, args => ({
-        contents: JSON.stringify(args.path === 'virtual:archive' ? archiveIndex(catalog) : args.path === 'virtual:proof-figures' ? figuresVersion : routesVersion), loader: 'json',
+        contents: JSON.stringify(args.path === 'virtual:archive' ? archiveIndex(catalog) : args.path === 'virtual:proof-figures' ? figuresVersion : args.path === 'virtual:math' ? mathVersion : routesVersion), loader: 'json',
       }));
     } }],
   });

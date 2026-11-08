@@ -4,6 +4,7 @@ import type { ArchiveIndexRecord, ArchiveProcess } from './types';
 
 export interface ArchiveSolutionRuntime {
   mount(root: HTMLElement, record: ArchiveIndexRecord, process: ArchiveProcess, runId: string, locale: Locale): { destroy(): void };
+  typeset(root: HTMLElement): void;
 }
 declare global { interface Window { theoremosSolutionRoutes?: ArchiveSolutionRuntime } }
 let request: Promise<ArchiveSolutionRuntime> | undefined;
@@ -18,6 +19,14 @@ function load(locale: Locale) {
     document.head.append(script);
   });
   return request;
+}
+
+/** Old prose and interactive routes share the same lazy math renderer. */
+export async function typesetArchiveProse(root: HTMLElement, locale: Locale): Promise<void> {
+  try {
+    const runtime = await load(locale);
+    if (root.isConnected) runtime.typeset(root);
+  } catch { /* The original prose remains readable if the optional renderer cannot load. */ }
 }
 
 /** A single lazy renderer serves any imported problem and any selected historical run. */
