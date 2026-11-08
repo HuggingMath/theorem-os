@@ -47,6 +47,44 @@ function fixture() {
   return { root, write, accepted };
 }
 
+function submittedFixture() {
+  const data = fixture();
+  const ids = ['annals_improved_bounds_sunflower_lemma', 'annals_lorentzian_polynomials',
+    'annals_optimal_moebius', 'annals_algebraic_integers'];
+  const submissionUrl = 'https://example.com/submission/four-proofs';
+  const submitted = ids.map(id => {
+    const proof = `theorem ${id} : True := by trivial\n`;
+    const files = { 'Submission.lean': { sha256: sha256(proof), bytes: Buffer.byteLength(proof) } };
+    const local = JSON.stringify({
+      schema: 'theoremos.lean-eval-submission-provenance.v1',
+      problem: {
+        problemId: id, solverCommit: 'c'.repeat(40), files,
+        localOfficialReceipt: { problemId: id, proofHash: sha256(proof), receiptId: `official-${id}`,
+          status: 'official_verified', verifier: 'official-comparator', exitCode: 0, timedOut: false },
+      },
+    });
+    data.write(`submitted/${id}/Submission.lean`, proof);
+    data.write(`submitted/${id}/verification.json`, local);
+    return {
+      problem_id: id, directory: id, statement_revision: 1, model: 'Original project + continuation model',
+      status: 'local_verified_pending_official', submission_url: submissionUrl,
+      original_source_url: `https://example.com/original/${id}`, original_source_commit: 'b'.repeat(40),
+      source_sha256: { 'Submission.lean': sha256(proof), 'verification.json': sha256(local) },
+    };
+  });
+  const manifest = JSON.stringify(submitted);
+  data.write('submitted/submitted.json', manifest);
+  const result = {
+    schema: 'theoremos.lean-eval-official-results.v1', submission_manifest_sha256: sha256(manifest),
+    submission_url: submissionUrl, result_url: `${submissionUrl}#official-result`,
+    result_reported_at: '2026-10-16T19:07:41Z', result_author: 'github-actions[bot]',
+    result_body: ids.map(id => `- ${id}: pass`).join('\n'),
+    problems: ids.map(problem_id => ({ problem_id, statement_revision: 1, status: 'official_accepted' })),
+  };
+  data.write('submitted/official-results.json', result);
+  return { ...data, submitted, result };
+}
+
 describe('GitHub Pages archive catalog', () => {
   it('preserves provenance and keeps completed research tasks separate from official acceptance', () => {
     const { root } = fixture();
@@ -152,5 +190,66 @@ describe('GitHub Pages archive catalog', () => {
     expect(() => buildSiteCatalog(root, revision)).toThrow();
     write('accepted/accepted.json', [{ ...accepted[0], directory: 'different_problem' }]);
     expect(() => buildSiteCatalog(root, revision)).toThrow('Archive identity mismatch');
+  });
+
+  it('includes four independently accepted submitted packages with their original paths and evidence', () => {
+    const { root, submitted, result } = submittedFixture();
+    const files = ['submitted/submitted.json', ...submitted.flatMap(entry =>
+      Object.keys(entry.source_sha256).map(file => `submitted/${entry.directory}/${file}`))];
+    const before = files.map(file => fs.readFileSync(path.join(root, file)));
+    const records = buildSiteCatalog(root, revision).records;
+    expect(records.filter(record => record.status === 'official_accepted')).toHaveLength(5);
+    for (const entry of submitted) {
+      const record = records.find(record => record.id === entry.problem_id)!;
+      expect(record).toMatchObject({
+        status: 'official_accepted', model: entry.model, updatedAt: result.result_reported_at,
+        archiveUrl: `https://github.com/LikC1606/theorem-os-site/tree/main/submitted/${entry.directory}`,
+        official: { statementRevision: 1, resultUrl: result.result_url, resultBody: result.result_body,
+          sourceCommit: entry.original_source_commit, checksums: entry.source_sha256 },
+        local: { kernelVerified: true, sourceBinding: 'matches', receipt: `official-${entry.problem_id}` },
+      });
+      expect(record.sources[0].path).toBe(`submitted/${entry.directory}/Submission.lean`);
+      expect(record.en?.summary).not.toBe('A Lean-Eval proof archive.');
+    }
+    files.forEach((file, index) => expect(fs.readFileSync(path.join(root, file))).toEqual(before[index]));
+  });
+
+  it('does not treat local official-comparator receipts as hosted acceptance', () => {
+    const { root, submitted } = submittedFixture();
+    fs.rmSync(path.join(root, 'submitted/official-results.json'));
+    const records = buildSiteCatalog(root, revision).records;
+    expect(records.filter(record => record.status === 'official_accepted')).toHaveLength(1);
+    expect(records.some(record => submitted.some(entry => entry.problem_id === record.id))).toBe(false);
+  });
+
+  it('accepts only problems explicitly named in the hosted result', () => {
+    const { root, write, submitted, result } = submittedFixture();
+    write('submitted/official-results.json', { ...result, problems: [result.problems[0]] });
+    const records = buildSiteCatalog(root, revision).records;
+    expect(records.find(record => record.id === submitted[0].problem_id)?.status).toBe('official_accepted');
+    expect(records.filter(record => record.status === 'official_accepted')).toHaveLength(2);
+  });
+
+  it.each(['problem_id', 'statement_revision', 'submission_url'] as const)(
+    'rejects a hosted result with a different %s', field => {
+      const { root, write, result } = submittedFixture();
+      if (field === 'submission_url') result.submission_url = 'https://example.com/another-submission';
+      else if (field === 'problem_id') result.problems[0].problem_id = 'another_problem';
+      else result.problems[0].statement_revision = 2;
+      write('submitted/official-results.json', result);
+      expect(() => buildSiteCatalog(root, revision)).toThrow('Official result identity mismatch');
+    });
+
+  it('rejects a changed submission manifest even when the proof files are unchanged', () => {
+    const { root, write, submitted } = submittedFixture();
+    write('submitted/submitted.json', submitted.map(entry => ({ ...entry, statement_revision: 2 })));
+    expect(() => buildSiteCatalog(root, revision)).toThrow('Archive checksum mismatch: submitted/submitted.json');
+  });
+
+  it('rejects submitted proof bytes that differ from the officially bound package', () => {
+    const { root, write, submitted } = submittedFixture();
+    const proofPath = `submitted/${submitted[0].directory}/Submission.lean`;
+    write(proofPath, 'theorem altered : False := by sorry\n');
+    expect(() => buildSiteCatalog(root, revision)).toThrow(`Archive checksum mismatch: ${proofPath}`);
   });
 });

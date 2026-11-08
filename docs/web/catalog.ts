@@ -11,7 +11,7 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
 const date = z.string().datetime({ offset: true });
 const httpsUrl = z.string().url().refine(value => new URL(value).protocol === 'https:');
-const acceptedSchema = z.array(z.object({
+const acceptedEntrySchema = z.object({
   problem_id: identifier,
   directory: identifier,
   statement_revision: z.number().int().positive(),
@@ -24,7 +24,25 @@ const acceptedSchema = z.array(z.object({
   original_source_url: httpsUrl,
   original_source_commit: commit,
   source_sha256: z.record(digest),
-}));
+});
+const acceptedSchema = z.array(acceptedEntrySchema);
+const submittedSchema = z.array(acceptedEntrySchema.omit({
+  status: true, result_url: true, result_reported_at: true, result_body: true,
+}).extend({ status: z.literal('local_verified_pending_official') }));
+const submittedResultsSchema = z.object({
+  schema: z.literal('theoremos.lean-eval-official-results.v1'),
+  submission_manifest_sha256: digest,
+  submission_url: httpsUrl,
+  result_url: httpsUrl,
+  result_reported_at: date,
+  result_author: z.literal('github-actions[bot]'),
+  result_body: z.string().min(1),
+  problems: z.array(z.object({
+    problem_id: identifier,
+    statement_revision: z.number().int().positive(),
+    status: z.literal('official_accepted'),
+  })),
+});
 const snapshotSchema = z.object({
   schema: z.literal('lean-eval.in-progress-snapshot.v1'),
   status: z.literal('in_progress_not_officially_accepted'),
@@ -160,6 +178,34 @@ const descriptions: Record<string, Pick<ArchiveRecord, 'title' | 'subtitle' | 'a
     en: { subtitle: 'Geodesic and metric completeness', area: 'Riemannian geometry',
       summary: 'Under the Riemannian manifold hypotheses of the statement, proves that geodesic completeness and metric completeness are equivalent. The archive keeps the final submission package and its official result.' },
   },
+  annals_improved_bounds_sunflower_lemma: {
+    title: 'Sunflower lemma', subtitle: '向日葵引理的改进界', area: '组合数学',
+    summary: '证明原题 theorem_1_4 中关于集合族规模与向日葵存在性的改进界。证明沿用已保存的同题工作，经继续运行和独立审阅后提交。',
+    declaration: 'theorem theorem_1_4',
+    en: { subtitle: 'Improved bounds for the sunflower lemma', area: 'Combinatorics',
+      summary: 'Proves the improved bound relating family size to the existence of a sunflower in theorem_1_4. The proof reuses saved work on the same problem, followed by continuation and independent review.' },
+  },
+  annals_lorentzian_polynomials: {
+    title: 'Lorentzian polynomials', subtitle: 'Lorentzian 多项式', area: '代数组合',
+    summary: '证明严格 Lorentzian 多项式的闭包等于 Lorentzian 多项式集合，对应原题 theorem_2_25。结果来自已有研究的继续运行。',
+    declaration: 'theorem theorem_2_25',
+    en: { subtitle: 'Closure of strictly Lorentzian polynomials', area: 'Algebraic combinatorics',
+      summary: 'Proves that the closure of strictly Lorentzian polynomials is the set of Lorentzian polynomials, theorem_2_25. The result comes from a continuation of earlier research.' },
+  },
+  annals_optimal_moebius: {
+    title: 'Optimal paper Möbius band', subtitle: '纸带 Möbius 环的长宽比下界', area: '几何',
+    summary: '在原题的等距嵌入条件下证明纸带 Möbius 环的长宽比下界，对应 theorem_1_1。结果来自已有研究的继续运行。',
+    declaration: 'theorem theorem_1_1',
+    en: { subtitle: 'An aspect-ratio bound for paper Möbius bands', area: 'Geometry',
+      summary: 'Proves the aspect-ratio lower bound for a paper Möbius band under the archived isometric embedding hypotheses, theorem_1_1. The result comes from a continuation of earlier research.' },
+  },
+  annals_algebraic_integers: {
+    title: 'Algebraic integers', subtitle: '代数整数：λ_SSS 的上界', area: '代数数论',
+    summary: '证明原题中的 λ_SSS < 1.89831，对应 theorem_1_1。结果来自已有研究的继续运行，档案保留原始证明与官方回复。',
+    declaration: 'theorem theorem_1_1',
+    en: { subtitle: 'An upper bound for λ_SSS', area: 'Algebraic number theory',
+      summary: 'Proves λ_SSS < 1.89831, theorem_1_1 of the archived statement. The result comes from a continuation of earlier research, with the original proof and official response preserved.' },
+  },
   szemeredi: {
     title: 'Szemerédi', subtitle: '正上密度集合中的等差数列', area: '组合数学',
     summary: '正上密度的自然数集合包含任意长等差数列。当前档案记录研究过程，尚未获得官方验收。',
@@ -192,7 +238,7 @@ function checkedFile(root: string, relative: string, expected: string): Buffer {
 
 export function buildSiteCatalog(root: string, archiveRevision: string): ArchiveCatalog {
   commit.parse(archiveRevision);
-  // Sources link to the public site repository, which mirrors accepted/ and the referenced in-progress files.
+  // Sources link to the public repository, preserving each proof package's original directory.
   const repository = siteRepository;
   const sourceUrl = (relative: string) => `${repository}/blob/main/${relative}`;
   const source = (relative: string, name: string, expected: string): ArchiveSource => {
@@ -200,11 +246,28 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
     return { name, path: relative, url: sourceUrl(relative), sha256: expected,
       lines: code.split('\n').length - Number(code.endsWith('\n')), code };
   };
-  const accepted = acceptedSchema.parse(readJson(root, 'accepted/accepted.json'));
+  const accepted = acceptedSchema.parse(readJson(root, 'accepted/accepted.json'))
+    .map(entry => ({ entry, base: `accepted/${entry.directory}` }));
+  const submittedResults = 'submitted/official-results.json';
+  if (fs.existsSync(path.join(root, submittedResults))) {
+    const result = submittedResultsSchema.parse(readJson(root, submittedResults));
+    const submitted = submittedSchema.parse(JSON.parse(checkedFile(root, 'submitted/submitted.json',
+      result.submission_manifest_sha256).toString('utf8')));
+    for (const problem of result.problems) {
+      const entry = submitted.find(entry => entry.problem_id === problem.problem_id);
+      if (!entry || entry.statement_revision !== problem.statement_revision || entry.submission_url !== result.submission_url) {
+        throw new Error(`Official result identity mismatch: ${problem.problem_id}`);
+      }
+      accepted.push({
+        entry: acceptedEntrySchema.parse({ ...entry, ...problem,
+          result_url: result.result_url, result_reported_at: result.result_reported_at, result_body: result.result_body }),
+        base: `submitted/${entry.directory}`,
+      });
+    }
+  }
   const snapshot = snapshotSchema.parse(readJson(root, 'in-progress/snapshot.json'));
-  const records: ArchiveRecord[] = accepted.map(entry => {
+  const records: ArchiveRecord[] = accepted.map(({ entry, base }) => {
     if (entry.directory !== entry.problem_id) throw new Error(`Archive identity mismatch: ${entry.problem_id}`);
-    const base = `accepted/${entry.directory}`;
     for (const [file, expected] of Object.entries(entry.source_sha256)) checkedFile(root, `${base}/${file}`, expected);
     const sources = Object.entries(entry.source_sha256)
       .filter(([file]) => file.endsWith('.lean'))
@@ -238,7 +301,7 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
     }
     return record;
   });
-  const acceptedIds = new Set(accepted.map(entry => entry.problem_id));
+  const acceptedIds = new Set(accepted.map(({ entry }) => entry.problem_id));
   for (const entry of snapshot.problems) {
     // Historical snapshots remain intact after their final proofs receive acceptance.
     if (acceptedIds.has(entry.problemId)) continue;

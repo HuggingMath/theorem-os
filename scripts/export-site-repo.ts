@@ -24,7 +24,11 @@ const copy = (file: string) => {
   fs.mkdirSync(path.dirname(path.join(target, file)), { recursive: true });
   fs.copyFileSync(path.join(root, file), path.join(target, file));
 };
-for (const file of git(root, 'ls-files', 'accepted', 'submitted').split('\n').filter(Boolean)) copy(file);
+const proofArchiveFiles = new Set([
+  ...git(root, 'ls-files', 'accepted', 'submitted').split('\n').filter(Boolean),
+  'submitted/official-results.json',
+]);
+for (const file of proofArchiveFiles) copy(file);
 // Of the research snapshots, publish only the Lean files the archive shows; never runtime state.
 const catalog = JSON.parse(fs.readFileSync(path.join(site, 'data/catalog.json'), 'utf8')) as { records: { sources: { path: string }[] }[] };
 const snapshots = [...new Set(catalog.records.flatMap(record => record.sources.map(source => source.path)))].filter(file => file.startsWith('in-progress/'));

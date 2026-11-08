@@ -9,7 +9,7 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
   fs.mkdirSync(output, { recursive: true });
   await build({
     entryPoints: [path.join(root, 'docs/web/app.ts')], outfile: path.join(output, 'site.js'),
-    bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, legalComments: 'eof',
+    bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, charset: 'utf8', legalComments: 'eof',
     plugins: [{ name: 'public-archive', setup(builder) {
       builder.onResolve({ filter: /^virtual:archive$/ }, () => ({ path: 'archive', namespace: 'public-archive' }));
       builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, () => ({ contents: JSON.stringify(archiveIndex(catalog)), loader: 'json' }));

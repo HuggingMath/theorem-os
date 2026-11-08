@@ -88,7 +88,7 @@ try {
     const apply = page.locator('#start .start-links a[data-umami-event="apply-github"]');
     assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
     assert.equal(await page.locator('#start .start-note a').getAttribute('href'), 'mailto:liuzhenhao@westlake.edu.cn?subject=TheoremOS%20early%20access');
-    assert.equal(await page.locator('[data-accepted-proof]').count(), 6);
+    assert.equal(await page.locator('[data-accepted-proof]').count(), catalog.records.filter(record => record.status === 'official_accepted').length);
     assert.match(await page.locator('.proof-table').innerText(), /Discrete geometry/);
     await checkOverflow(page, `English homepage at ${width}px`);
     await page.screenshot({ path: path.join(output, `en-index-${width}.png`), fullPage: true });
