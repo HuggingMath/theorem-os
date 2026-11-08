@@ -175,15 +175,45 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     return regions.get(file)!.map(region => {
       const declaration = scoped.find(item => item.startOffset === region.startOffset)!;
       const header = source.slice(region.startOffset, region.bodyOffset);
-      // A name appearing in the result type is a dependency, not a local binder.
-      // In particular, frozen definitions can depend on excluded original goals;
-      // their type-level consumers must be removed along with their body-level callers.
-      const bound = new Set([...maskLeanCommentsAndStrings(header).matchAll(
-        /[({\[]\s*([\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\s+[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*)\s*:/gu,
-      )].flatMap(match => identifiers(match[1]!)));
-      return { ...declaration, endOffset: region.endOffset, file, id: key(file, declaration.qualifiedName),
+      // Only declaration parameters bind throughout the remaining declaration.
+      // A parameter is not in scope in its own type, and `(value : Type)` in
+      // the result is a type ascription rather than another parameter.
+      const clean = maskLeanCommentsAndStrings(header);
+      const bound: { name: string; offset: number; scope: number }[] = [];
+      let cursor = /^\S+\s+/u.exec(clean)![0].length + declaration.name.length;
+      while (cursor < clean.length) {
+        if (/\s/u.test(clean[cursor]!)) { cursor++; continue; }
+        if (clean[cursor] === ':') break;
+        const start = cursor, opening = '([{⦃'.indexOf(clean[cursor]!);
+        if (opening < 0) {
+          const name = /^[\p{L}_][\p{L}\p{M}\p{N}_'?!]*/u.exec(clean.slice(cursor));
+          if (name) {
+            cursor += name[0].length;
+            bound.push({ name: name[0], offset: region.startOffset + start, scope: region.startOffset + cursor });
+          } else cursor++;
+          continue;
+        }
+        const stack = [')]}⦄'[opening]];
+        for (cursor++; cursor < clean.length && stack.length; cursor++) {
+          const nested = '([{⦃'.indexOf(clean[cursor]!);
+          if (nested >= 0) stack.push(')]}⦄'[nested]);
+          else if (clean[cursor] === stack.at(-1)) stack.pop();
+        }
+        // Universe levels are not term parameters; an anonymous instance supplies a type, not names.
+        if (clean[start - 1] === '.') continue;
+        const names = /^\s*([\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\s+[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*)\s*(?::|$)/u
+          .exec(clean.slice(start + 1, cursor - 1));
+        if (opening === 1 && !names?.[0].endsWith(':')) continue;
+        if (names) for (const name of names[1]!.matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_'?!]*/gu)) bound.push({
+          name: name[0], offset: region.startOffset + start + 1 + names[0].indexOf(names[1]!) + name.index,
+          scope: region.startOffset + cursor,
+        });
+      }
+      return { ...declaration, bodyOffset: region.bodyOffset, endOffset: region.endOffset, file, id: key(file, declaration.qualifiedName),
         theorem: /^(?:theorem|lemma)\s/u.test(header), bound,
-        references: identifiers(source.slice(region.startOffset, region.endOffset)) };
+        references: [...maskLeanCommentsAndStrings(source.slice(region.startOffset, region.endOffset))
+          .matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*/gu)]
+          .map(match => ({ name: match[0], offset: region.startOffset + match.index })) };
     });
   });
   const byOffset = new Map(declarations.map(item => [`${item.file}\0${item.startOffset}`, item]));
@@ -269,13 +299,15 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     // Dot notation can reference an owned declaration through a receiver or as a prefix of a chain:
     // `trace.finiteIdeal.topologicalClosure` and `existsWitness.choose` both carry dependencies.
     // Candidate groups are conservative for removal; only a unique group may become an advisory hint.
-    const referenceGroups = (declaration: typeof declarations[number], name: string): string[][] => {
-      if (!name.includes('.') && declaration.bound.has(name)) return [];
+    const isBound = (declaration: typeof declarations[number], name: string, offset: number) =>
+      declaration.bound.some(binding => binding.name === name && (binding.offset === offset || binding.scope <= offset));
+    const referenceGroups = (declaration: typeof declarations[number], { name, offset }: { name: string; offset: number }): string[][] => {
+      if (!name.includes('.') && isBound(declaration, name, offset)) return [];
       const parts = name.split('.'), groups: string[][] = [];
       let prefixLength = 0;
       for (let length = parts.length; length > 0; length--) {
         const prefix = parts.slice(0, length).join('.');
-        if (length === 1 && declaration.bound.has(prefix)) continue;
+        if (length === 1 && isBound(declaration, prefix, offset)) continue;
         const candidates = scopedReferences(declaration, prefix);
         if (candidates.length) { groups.push(candidates); prefixLength = length; break; }
       }
@@ -290,13 +322,13 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     };
     // Body substitution must match an actual name, not replace `receiver.field` with a bare assumption:
     // Lean decides the receiver argument's position, which source-only dependency lookup cannot infer.
-    const referenceKey = (declaration: typeof declarations[number], name: string) => {
-      if (!name.includes('.') && declaration.bound.has(name)) return;
+    const referenceKey = (declaration: typeof declarations[number], name: string, offset: number) => {
+      if (!name.includes('.') && isBound(declaration, name, offset)) return;
       const candidates = scopedReferences(declaration, name);
       return candidates.length === 1 ? candidates[0] : undefined;
     };
     for (const item of declarations) if (item.theorem && !keep.has(item.id) &&
-        item.references.some(name => name === 'sorry' || name === 'admit')) {
+        item.references.some(({ name }) => name === 'sorry' || name === 'admit')) {
       removed.add(item.id);
       if (removalRoots && !removalRoots.has(item.id)) removalRoots.set(item.id, 'draft-declaration');
     }
@@ -304,7 +336,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     const changed = new Set([...removed, ...(conditions.length ? [target] : [])]);
     for (;;) {
       const affected = declarations.filter(item => !keep.has(item.id) && !removed.has(item.id) &&
-        item.references.some(name => referenceGroups(item, name).some(candidates => candidates.some(reference => changed.has(reference)))));
+        item.references.some(reference => referenceGroups(item, reference).some(candidates => candidates.some(reference => changed.has(reference)))));
       if (!affected.length) break;
       for (const item of affected) { removed.add(item.id); changed.add(item.id); }
     }
@@ -344,11 +376,15 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           // A closed task type supplies qualified references even when the written source header uses
           // a short name that the projector deliberately treats as possibly bound.
           const names = current === consumer ? [...current.references,
-            ...identifiers(task.type ?? '').filter(name => name.includes('.'))] : current.references;
-          const bound = localBindings(current);
-          for (const name of new Set(names)) {
+            ...identifiers(task.type ?? '').filter(name => name.includes('.')).map(name => ({ name, offset: current.bodyOffset }))] : current.references;
+          const bound = localBindings(current), seen = new Set<string>();
+          for (const reference of names) {
+            const { name } = reference;
+            const lookup = `${name}\0${isBound(current, name.split('.')[0]!, reference.offset)}`;
+            if (seen.has(lookup)) continue;
+            seen.add(lookup);
             if (!name.includes('.') && bound.has(name)) continue;
-            for (const candidates of referenceGroups(current, name)) {
+            for (const candidates of referenceGroups(current, reference)) {
               const reference = candidates.length === 1 ? candidates[0] : undefined;
               if (reference && reference !== target && removed.has(reference) && unique.has(reference) && !route.includes(reference))
                 pending.push([...route, reference]);
@@ -375,7 +411,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           const references = [...maskLeanCommentsAndStrings(body).matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*/gu)];
           for (const reference of references.reverse()) {
             const dependency = conditions.find(item => item.theoremName === reference[0]) ??
-              assumptions.get(referenceKey(declaration, reference[0]) ?? '');
+              assumptions.get(referenceKey(declaration, reference[0], region.bodyOffset + reference.index) ?? '');
             if (dependency) body = body.slice(0, reference.index) + local(dependency.theoremName!) + body.slice(reference.index + reference[0].length);
           }
           source = source.slice(0, region.startOffset) + name[0] + ' ' + binders + header.slice(name[0].length) + ':=' + body + source.slice(region.endOffset);

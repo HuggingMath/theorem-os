@@ -3,7 +3,7 @@ import path from 'node:path';
 import { assertMathConstructionSources, LAKE_CONFIGURATION_FILES as configs, mathLocalModuleBuildOrder } from '../math/mathConstructionSources';
 import { canonicalMathJson, mathArtifactCurrent as artifactCurrent, mathDigest, readMathFile } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations, leanDeclarationContextCommands } from '../math/leanSource';
-import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
+import { leanScopeCommands, leanScopeNamespace, maskLeanCommentsAndStrings, updateLeanScopes, type LeanScope } from '../math/leanSyntax';
 import { checkLeanType, leanTypeDiagnosticProjection } from '../math/leanTypeDiagnostics';
 import { formalVerificationToolIdentity } from '../math/verifier';
 import { renderLeanDiagnosticMessage } from '../math/leanDiagnosticMessages';
@@ -40,6 +40,45 @@ function unsupportedScope(source: string, offset: number): boolean {
         /^@\[[^\]]*\blocal\b/u.test(line)) frames[frames.length - 1] = true;
   }
   return frames.some(Boolean);
+}
+
+/** Imports do not restore aliases for private declarations in the queried file. */
+function privateLookupError(source: string, context: string, offset: number, namespace: string, message: string): boolean {
+  const unknown = /^unknown (?:identifier|constant) `([^`\n]+)`/iu.exec(message.trim())?.[1];
+  if (!unknown) return false;
+  const prefixes = (name: string) => ['', ...name.split('.').filter(Boolean).map((_, index, parts) => parts.slice(0, index + 1).join('.'))];
+  const lookups = new Set(prefixes(namespace)), lookupScopes: LeanScope[] = [];
+  for (const command of leanScopeCommands(leanDeclarationContextCommands(source, context).before.join('\n'))) {
+    if (command[1] !== 'open') { updateLeanScopes(lookupScopes, command[1], command[2]?.trim()); continue; }
+    const specification = command[2]?.trim().split(/\s+/u) ?? [], hiding = specification.indexOf('hiding');
+    const names = hiding < 0 ? specification : specification.slice(0, hiding);
+    // Hidden members are exclusions, not additional namespaces to open.
+    if (hiding >= 0 && specification.slice(hiding + 1).includes(unknown)) continue;
+    if (names[0] === 'scoped' || specification.some(name => !/^[\p{L}\p{M}\p{N}_'.?!]+$/u.test(name))) continue;
+    for (const name of names) for (const prefix of prefixes(leanScopeNamespace(lookupScopes)))
+      lookups.add(name.startsWith('_root_.') ? name.slice(7) : [prefix, name].filter(Boolean).join('.'));
+  }
+  const candidates = new Set(unknown.startsWith('_root_.') ? [unknown.slice(7)] :
+    [...lookups].map(prefix => [prefix, unknown].filter(Boolean).join('.')));
+  const clean = maskLeanCommentsAndStrings(source), scopes: LeanScope[] = [];
+  const regions = inspectLeanDeclarationRegions(source);
+  const commands = [...leanScopeCommands(clean)].filter(command => !regions.some(region =>
+    command.index >= region.startOffset && command.index < region.endOffset));
+  let next = 0;
+  const declarations = /(?<![\p{L}\p{M}\p{N}_'.?!])private\s+(?:(?:noncomputable|protected|nonrec|unsafe|partial|meta)\s+)*(def|abbrev|opaque|theorem|lemma|instance|structure|class|inductive|constant|axiom)\s+([\p{L}\p{M}\p{N}_'][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}\p{M}\p{N}_'][\p{L}\p{M}\p{N}_'?!]*)*)/gu;
+  for (const declaration of clean.slice(0, offset).matchAll(declarations)) {
+    while (next < commands.length && commands[next]!.index < declaration.index!) {
+      const command = commands[next++]!; updateLeanScopes(scopes, command[1], command[2]?.trim());
+    }
+    const name = declaration[2], qualified = name.startsWith('_root_.') ? name.slice(7) :
+      [leanScopeNamespace(scopes), name].filter(Boolean).join('.');
+    if (candidates.has(qualified)) return true;
+    // Constructors and projections share their private data type's namespace.
+    // An imported query cannot establish whether any such member is valid in the original file.
+    if (['structure', 'class', 'inductive'].includes(declaration[1]) &&
+        [...candidates].some(candidate => candidate.startsWith(qualified + '.'))) return true;
+  }
+  return false;
 }
 
 function prepare(input: Input) {
@@ -96,7 +135,8 @@ function prepare(input: Input) {
           canonicalMathJson(files.filter(file => configs.includes(file)));
     } catch { return false; }
   };
-  return { key, projectionKey, projection, project, taskDigest, sourceDigest, environment, tools, context: anchor?.qualifiedName, reason, current };
+  return { key, projectionKey, projection, project, taskDigest, sourceDigest, environment, tools, context: anchor?.qualifiedName, reason, current,
+    privateLookupError: (message: string) => Boolean(anchor && privateLookupError(source, anchor.qualifiedName, anchor.startOffset, anchor.namespace, message)) };
 }
 
 /** A normal compiler exit also carries resource, internal and IO errors; those do not invalidate a type. */
@@ -196,7 +236,9 @@ export class TaskTypePreflightCache {
           checked.firstBlocking.file && path.basename(checked.firstBlocking.file) === 'TypeDiagnostic.lean' &&
           definiteTypeError(checked.firstBlocking.message) &&
           checked.diagnosticArtifacts.length > 0 && checked.diagnosticArtifacts.every(item => item.captureComplete === true)) {
-        value = result(snapshot.environment.reusable ? 'invalid' : 'deferred',
+        const privateContext = snapshot.privateLookupError(checked.firstBlocking.message);
+        value = result(privateContext ? 'deferred' : 'invalid',
+          (privateContext ? 'declaration-private-context-not-reproducible\n' : '') +
           renderLeanDiagnosticMessage(checked.firstBlocking), { artifact: checked.artifact });
       } else value = result(checked.exitCode === 1 && !checked.timedOut ? 'deferred' : 'unavailable',
         checked.firstBlocking ? renderLeanDiagnosticMessage(checked.firstBlocking) : 'type-check-inconclusive', { artifact: checked.artifact });

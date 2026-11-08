@@ -44,7 +44,8 @@ const HELPER_PROOF = 'by\n  intro n\n  induction n with\n  | zero => rfl\n  | su
 const BAD_HELPER_PROOF = 'by\n  intro n\n  exact Nat.zero_ne_one';
 
 export type CooperativeReplayScenario = 'clean' | 'repair-once' | 'next-check';
-type ScopedCooperation = { tasks: TaskRecord[]; deliveries?: { kind: string; lemmaRequests?: CooperativeTask[] }[]; nextChecks?: NextCheckRecord[] };
+type ScopedCooperation = { tasks: TaskRecord[]; nextChecks?: NextCheckRecord[] };
+type ReplayResearchInput = { deliveryId: string; finding?: string; lemmaRequests?: CooperativeTask[] };
 export type CooperativeReplayTurn = { index: number; workerId: string; role: 'lead' | 'researcher' | 'engineer' | 'reviewer';
   threadId: string; turnId: string; action: CooperativeAction; context: string; output: string; source: string;
   injectedFailure: boolean };
@@ -57,6 +58,13 @@ export function cooperativeReplayAssignment(message: string): CooperativeAction 
   if (!['lead', 'task', 'review'].includes(action?.kind)) throw new Error('cooperative_replay_unexpected_assignment');
   return action;
 }
+
+/** Answer the publications actually shown on this turn, including saved-thread continuations. */
+function replayResearchInputs(message: string): ReplayResearchInput[] {
+  const matches = [...message.matchAll(/(?:^|\n)Research inputs for this planning decision[^\n]*\n([^\n]+)/gu)];
+  return matches.length ? JSON.parse(matches.at(-1)![1]).inputs : [];
+}
+const exactHelper = (task: CooperativeTask) => taskVersion(task) === taskVersion({ ...HELPER, groupId: task.groupId });
 
 /** Only M1.open changes. M1.execute, scheduling, proof checks, integration and S3 remain the normal runtime. */
 export function cooperativeReplayActors(scenario: CooperativeReplayScenario, traceDirectory: string) {
@@ -80,11 +88,20 @@ export function cooperativeReplayActors(scenario: CooperativeReplayScenario, tra
         if (!view.tasks.length) output = { tasks: [QUESTION, GOAL] };
         else {
           const helper = view.tasks.find(node => node.task.id === HELPER.id);
-          const proposal = view.deliveries?.flatMap(delivery => delivery.lemmaRequests ?? []).find(task => task.id === HELPER.id);
+          const inputs = replayResearchInputs(message);
+          const proposal = inputs.flatMap(input => input.lemmaRequests ?? []).find(exactHelper);
           // Keep a live original frontier; conditional:false waits for genuine helper integration.
           const changes = !helper && proposal
             ? [proposal, { id: GOAL.id, status: 'active', dependsOn: [HELPER.id] }] : [];
           output = { baseVersion: action.planVersion, upsert: changes,
+            researchDecisions: inputs.map(input => !helper && proposal && input.lemmaRequests?.some(exactHelper)
+              ? { deliveryId: input.deliveryId, outcome: 'adopt', taskIds: [proposal.id],
+                reason: 'Assign the exact universally quantified climb identity and connect it to the original target.' }
+              : { deliveryId: input.deliveryId, outcome: 'decline',
+                reason: scenario === 'next-check' && input.finding && JSON.parse(input.finding).conclusion === 'inconclusive'
+                  ? 'The inconclusive invariant is handled by the host next-check before assigning its formal proof.'
+                  : helper ? 'The exact climb identity is already assigned; this finding needs no further task change.'
+                    : 'This finding does not supply the exact universally quantified climb identity needed by Replay.target.' }),
             ...(scenario === 'next-check' ? { nextCheckDecisions: (view.nextChecks ?? [])
               .filter(check => check.status === 'awaiting-decision').map(check => ({ checkId: check.id,
                 outcomeDeliveryId: check.outcome!.deliveryId, action: 'continue',

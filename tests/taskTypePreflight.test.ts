@@ -313,6 +313,52 @@ describe('content-bound typed helper preflight', () => {
     expect((await cache.check(request())).result.status).toBe('elaborated');
   });
 
+  it.each(['private def Hidden := Nat', 'section\nprivate abbrev Hidden := Nat\nend',
+    '@[reducible] private def Hidden := Nat', 'namespace Types\nprivate def Hidden := Nat\nend Types\nopen Types',
+    'namespace Types\nprivate def Hidden := Nat\ndef Public := Nat\nend Types\nopen Types hiding Public'])
+  ('defers a query error for a visible same-file private name: %s', async declaration => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('theorem original', declaration + '\ntheorem original'));
+    check.mockImplementation(async () => failure({ firstBlocking: {
+      severity: 'error', format: 'lean-json', file: 'TypeDiagnostic.lean', message: 'Unknown identifier `Hidden`' } }));
+    const first = await cache.check(request());
+    expect(first.result).toMatchObject({ status: 'deferred', reason: expect.stringContaining('private-context-not-reproducible') });
+    await cache.check(request());
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['private inductive Hidden where\n  | mk : Hidden', 'Hidden.mk'],
+    ['private structure Hidden where\n  value : Nat', 'Hidden.mk'],
+    ['private structure Hidden where\n  value : Nat', 'Hidden.value'],
+  ])('defers member lookups under a private data declaration: %s', async (declaration, name) => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('theorem original', declaration + '\ntheorem original'));
+    check.mockImplementation(async () => failure({ firstBlocking: {
+      severity: 'error', format: 'lean-json', file: 'TypeDiagnostic.lean', message: `Unknown identifier \`${name}\`` } }));
+    expect((await cache.check(request())).result).toMatchObject({
+      status: 'deferred', reason: expect.stringContaining('private-context-not-reproducible') });
+  });
+
+  it.each([
+    ['private def Unrelated := Nat\n', 'Unknown identifier `Missing`'],
+    ['private def Hidden := Nat\n', 'Type mismatch: expected Nat, found Int'],
+    ['private def Hidden := Nat\n', 'Unknown identifier `_root_.Hidden`'],
+    ['private def Hidden := Nat\n', 'Unknown identifier `Hidden.mk`'],
+    ['private structure Hidden where\n  value : Nat\n', 'Unknown identifier `_root_.Hidden.mk`'],
+    ['namespace Other\nprivate def Hidden := Nat\nend Other\n', 'Unknown identifier `Hidden`'],
+    ['namespace Types\ndef Other := Nat\nend Types\nnamespace Other\nprivate def Hidden := Nat\nend Other\nopen Types hiding Other\n',
+      'Unknown identifier `Hidden`'],
+    ['', 'Unknown identifier `Hidden`'],
+    ['', 'Unknown identifier `HiddenLater`'],
+  ])('keeps genuine type errors invalid despite unrelated private context: %s', async (declaration, message) => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('theorem original', declaration + 'theorem original')
+      .replace('end Geometry', 'private def HiddenLater := Nat\nend Geometry'));
+    check.mockImplementation(async () => failure({ firstBlocking: {
+      severity: 'error', format: 'lean-json', file: 'TypeDiagnostic.lean', message } }));
+    expect((await cache.check(request())).result.status).toBe('invalid');
+    await cache.check(request());
+    expect(check).toHaveBeenCalledOnce();
+  });
+
   it.each(['noncomputable section\nend', 'mutual\ndef even : Nat → Bool\n  | 0 => true\n  | n + 1 => odd n\n' +
     'def odd : Nat → Bool\n  | 0 => false\n  | n + 1 => even n\nend'])
   ('keeps a namespace scope limitation after a closed block: %s', async block => {

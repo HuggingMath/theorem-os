@@ -8,11 +8,23 @@ import type { MathAgentOptions } from '../src/runtime/codexSession';
 import type { SolverRunState } from '../src/solver/archive';
 import { directSolverModules } from '../src/solver/modules';
 import { taskCanStart } from '../src/solver/modules/search';
-import { leadPlanDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
+import { leadResearchInputSection, type TaskContextInput } from '../src/solver/contextCompiler';
+import type { DeliveryRecord } from '../src/solver/deliveries';
+import { answerResearchInputs } from '../src/solver/researchDecisions';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { leadPlanDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 
 const directories: string[] = [];
 const temporary = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cooperative-replay-')); directories.push(directory); return directory; };
 const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'));
+const researchDelivery = (id: string, task: CooperativeTask,
+  finding: { summary: string; lemmaRequests?: CooperativeTask[] } & Record<string, unknown>): DeliveryRecord => ({
+  id, producer: task.ownerId!, taskId: task.id, taskDigest: taskVersion(task), findingDigest: mathDigest(JSON.stringify(finding)),
+  kind: 'research', status: 'advisory', statement: '', premises: [], dependencies: [], remainingObligations: [],
+  summary: finding.summary, evidenceRefs: [], createdAt: 1, finding: JSON.stringify(finding), lemmaRequests: finding.lemmaRequests,
+});
+const researchContext = (tasks: TaskRecord[], deliveries: DeliveryRecord[], leadResearchInputIds?: string[]) =>
+  leadResearchInputSection({ cooperation: { tasks, deliveries, leadResearchInputIds } as TaskContextInput['cooperation'] })?.text ?? '';
 afterEach(() => { vi.restoreAllMocks(); for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 
 describe('scripted cooperative replay', () => {
@@ -41,7 +53,9 @@ describe('scripted cooperative replay', () => {
       const session = await actors.modules.M1.open({ workspace: directory, executable: 'must-not-start-a-process', profile: directory,
         model: 'scripted-zero-model', effort: 'none', instructions: 'Frozen fixture instructions.', onUsage: usage,
         environment: { DEEPSCIENTIST_MATH_WORKER_ID: workerId } } as MathAgentOptions);
-      expect(await session.run('Cooperative assignment:\n' + JSON.stringify(action), 'message', directory, started)).toBe('completed');
+      const viewFile = path.join(directory, 'COOPERATION.json'), view = fs.existsSync(viewFile) ? read(viewFile) : undefined;
+      const context = action.kind === 'lead' && view ? researchContext(view.tasks, view.deliveries) : '';
+      expect(await session.run('Cooperative assignment:\n' + JSON.stringify(action) + '\n' + context, 'message', directory, started)).toBe('completed');
       await session.close();
       return fs.readFileSync(path.join(directory, 'RESEARCH.md'), 'utf8');
     };
@@ -59,14 +73,18 @@ describe('scripted cooperative replay', () => {
     writeView(tasks.map(task => ({ task, status: 'pending', attempts: 0 })));
     const finding = JSON.parse(await run('researcher-2', assignment(question)));
     expect(finding).toMatchObject({ conclusion: 'supporting', needsDecision: true, lemmaRequests: [{ theoremName: 'Replay.climb_eq' }] });
-    const helper = finding.lemmaRequests[0] as CooperativeTask;
-    const deliveries = [{ kind: 'research', lemmaRequests: [helper] }];
+    // Host-published proposals carry their normalized group in the actual prompt.
+    const helper = { ...finding.lemmaRequests[0], groupId: 'main' } as CooperativeTask;
+    const deliveries = [researchDelivery('published-helper', question, { ...finding, lemmaRequests: [helper] })];
     writeView([{ task: question, status: 'completed', attempts: 1 }, { task: goal, status: 'pending', attempts: 0 }], deliveries);
     const adoption: CooperativeAction = { kind: 'lead', seedCommit: 'seed', planNonce: 'adopt', planVersion: 'v1' };
     await run('solver', adoption);
-    expect(read(path.join(directory, leadPlanDeliveryFile(adoption)!))).toMatchObject({ baseVersion: 'v1', upsert: [helper,
+    const adopted = read(path.join(directory, leadPlanDeliveryFile(adoption)!));
+    expect(adopted).toMatchObject({ baseVersion: 'v1', upsert: [helper,
       { id: goal.id, status: 'active', dependsOn: [helper.id] } ] });
     const activeGoal = { ...goal, status: 'active' as const, dependsOn: [helper.id] };
+    expect(answerResearchInputs(adopted, deliveries, tasks, [question, helper, activeGoal], [], 'v1'))
+      .toMatchObject([{ deliveryId: 'published-helper', outcome: 'adopt', taskIds: [helper.id] }]);
     const dependencies = [{ task: helper, status: 'pending' as const, attempts: 0 },
       { task: activeGoal, status: 'pending' as const, attempts: 0 }];
     expect(taskCanStart(activeGoal, dependencies)).toBe(false);
@@ -93,6 +111,44 @@ describe('scripted cooperative replay', () => {
     expect(read(path.join(trace, 'turns.json'))).toHaveLength(7);
     for (const turn of actors.turns) for (const file of [turn.context, turn.output, turn.source]) expect(fs.existsSync(file)).toBe(true);
     expect(usage).toHaveBeenCalledTimes(7); expect(started).toHaveBeenCalledTimes(7);
+  });
+
+  it('answers the current research page and leaves an inconclusive gap to its next-check', async () => {
+    const directory = temporary();
+    fs.mkdirSync(path.join(directory, 'generated/problem'), { recursive: true });
+    fs.writeFileSync(path.join(directory, 'generated/problem/Submission.lean'), COOPERATIVE_REPLAY_SOURCE);
+    const question: CooperativeTask = { id: 'research_bridge', kind: 'research', ownerId: 'researcher-2',
+      objective: 'Check the recursion.', dependsOn: [], revision: 0 };
+    const goal: CooperativeTask = { id: 'original', kind: 'goal', objective: 'Prove Replay.target.', status: 'paused',
+      proofPath: 'Submission.lean', theoremName: 'Replay.target', dependsOn: [], revision: 0 };
+    const helper: CooperativeTask = { id: 'climb_identity', kind: 'lemma', ownerId: 'engineer',
+      objective: 'Induct on n to prove climb is the identity; Replay.target consumes two instances at n.',
+      proofPath: 'Submission.lean', theoremName: 'Replay.climb_eq', type: '∀ n : Nat, Replay.climb n = n',
+      dependsOn: [], revision: 0, groupId: 'main' };
+    const tasks: TaskRecord[] = [{ task: question, status: 'completed', attempts: 1 }, { task: goal, status: 'pending', attempts: 0 }];
+    const gap = researchDelivery('gap', question, { summary: 'The induction invariant needs a construction check.',
+      conclusion: 'inconclusive', needsDecision: true, mathematicalGap: { nextCheck: { action: 'construction-check' } } });
+    const wrong = researchDelivery('wrong-interface', question, { summary: 'A pointwise instance is insufficient.',
+      conclusion: 'supporting', lemmaRequests: [{ ...helper, type: 'Replay.climb 0 = 0' }] });
+    const late = researchDelivery('not-shown', question, { summary: 'A later helper publication.',
+      conclusion: 'supporting', lemmaRequests: [helper] });
+    const deliveries = [gap, wrong, late];
+    fs.writeFileSync(path.join(directory, 'COOPERATION.json'), JSON.stringify({ tasks, deliveries }));
+    const actors = cooperativeReplayActors('next-check', path.join(directory, 'trace'));
+    const session = await actors.modules.M1.open({ workspace: directory, executable: 'must-not-start-a-process', profile: directory,
+      model: 'scripted-zero-model', effort: 'none', instructions: 'Frozen fixture instructions.', onUsage: vi.fn(),
+      environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'solver' } } as MathAgentOptions);
+    const action: CooperativeAction = { kind: 'lead', seedCommit: 'seed', planNonce: 'current-page', planVersion: 'v1' };
+    await session.run('Cooperative assignment:\n' + JSON.stringify(action) + '\n' +
+      researchContext(tasks, deliveries, [late.id]) + '\n' + researchContext(tasks, deliveries, [gap.id, wrong.id]),
+    'message', directory, vi.fn());
+    await session.close();
+    const plan = read(path.join(directory, leadPlanDeliveryFile(action)!));
+    expect(plan.upsert).toEqual([]);
+    const decisions = answerResearchInputs(plan, [wrong, gap], [question, goal], [question, goal], [], 'v1');
+    expect(decisions).toMatchObject([{ deliveryId: wrong.id, outcome: 'decline' }, { deliveryId: gap.id, outcome: 'decline' }]);
+    expect(plan.researchDecisions).toHaveLength(2);
+    expect(decisions.find(decision => decision.deliveryId === gap.id)?.reason).toContain('next-check');
   });
 
   it('does not treat scripted completion or an accepted review as independent final acceptance', () => {

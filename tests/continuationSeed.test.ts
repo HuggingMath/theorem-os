@@ -27,6 +27,7 @@ import { bindMathematicalGap } from '../src/solver/mathematicalGaps';
 import { proposedNextChecks } from '../src/solver/nextChecks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
+import { VerificationCheckpointError, withVerificationCheckpoints } from '../src/solver/verificationCheckpoint';
 import { failedBatch, receiptBatch, verifiedBatch } from './helpers/verifier';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), build: vi.fn(), prepare: vi.fn(), dispose: vi.fn(),
@@ -261,13 +262,14 @@ function replaceHelperCandidates(f: ReturnType<typeof fixture>, count: number) {
   return tasks;
 }
 
-function cooperationFor(f: ReturnType<typeof fixture>, state: SolverRunState, freshContinuationChecks: readonly TaskProof[] = []) {
+function cooperationFor(f: ReturnType<typeof fixture>, state: SolverRunState, freshContinuationChecks: readonly TaskProof[] = [],
+  options: { timeoutMs?: number; save?: () => void } = {}) {
   const workers = state.workers!.map(worker => ({ id: worker.id, role: worker.role, worktree: worker.worktree,
     ownedFiles: state.problem.ownedFiles }));
   const environment = { PATH: '/usr/bin:/bin', DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages,
     [MATH_PROOF_ENVIRONMENT_ENV]: 'live-host-proof-environment' };
   return cooperativeResearch({ state, workers, retrievalRoot: f.root, signal: f.controller.signal,
-    freshContinuationChecks, access: new Map(workers.map(worker => [worker.id, { environment, retrievalRoot: f.root }])) });
+    freshContinuationChecks, access: new Map(workers.map(worker => [worker.id, { environment, retrievalRoot: f.root }])), ...options });
 }
 
 function publishCompletedResearch(state: SolverRunState, taskId: string, id: string) {
@@ -1603,6 +1605,112 @@ describe('bounded continuation verification batches', () => {
 });
 
 describe('continuation of a host-frozen unfinished delivery', () => {
+  async function resumeFrozen(f: ReturnType<typeof fixture>, stateFile: string,
+    emit: (event: string, details?: Record<string, unknown>) => void = () => {}) {
+    const state = readSolverRunState(stateFile), save = () => writeSolverRunState(stateFile, state);
+    const cooperation = cooperationFor(f, state, [], { timeoutMs: 1000, save }), worker = state.workers![1]!;
+    const descriptor = { id: worker.id, role: worker.role, worktree: worker.worktree, ownedFiles: state.problem.ownedFiles };
+    let action: Awaited<ReturnType<typeof cooperation.next>>;
+    try {
+      await cooperation.restore();
+      action = await cooperation.next(descriptor, { maxTurns: Infinity, remainingMs: Infinity });
+      expect(action?.kind).toBe('task');
+      const lifecycle = new WorkerProofLifecycle({ state, research: worker, worker: descriptor, cooperation,
+        close: async () => {}, save, emit, checked: () => {} });
+      return await withVerificationCheckpoints({ environmentDigest: state.environmentDigest,
+        problemReceiptDigest: state.problem.receiptDigest, checkpoints: state.verificationCheckpoints ??= [], save, emit },
+      () => lifecycle.resumeFrozen(action));
+    } finally {
+      if (action?.kind === 'task' && state.cooperation!.proofReadyRecords?.some(ready => ready.status === 'frozen'))
+        cooperation.release(descriptor, action);
+      cooperation.stopped(descriptor);
+      await cooperation.stop();
+      state.phase = 'finished';
+      for (const worker of state.workers!) worker.phase = 'finished';
+      save();
+    }
+  }
+
+  function timeOutVerification() {
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const batch = freshReceipts(request);
+      if (!request.items.some(item => item.theoremName === 'Submission.original')) return batch;
+      return { ...batch, status: 'blocked', results: batch.results.map(result => ({ ...result,
+        status: 'blocked', error: 'Lean verification timed out.' })) };
+    });
+  }
+
+  it('carries the verification deadline through two continuations of the same frozen proof', async () => {
+    const f = frozenGoalFixture(); await f.seed();
+    const started: { key: unknown; timeoutMs: unknown }[] = [];
+    const emit = (event: string, details?: Record<string, unknown>) => {
+      if (event === 'verification_started') started.push({ key: details!.key, timeoutMs: details!.timeoutMs });
+    };
+    timeOutVerification();
+    await expect(resumeFrozen(f, f.stateFile, emit)).rejects.toBeInstanceOf(VerificationCheckpointError);
+    const first = readSolverRunState(f.stateFile), key = first.verificationCheckpoints![0]!.key;
+    const firstGoal = first.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    expect(firstGoal.status).toBe('pending'); expect(firstGoal.assignment).toBeUndefined();
+    const historical = fs.readFileSync(f.stateFile);
+    host.verify.mockImplementation(freshReceipts);
+    const second = nextContinuation(f, f.stateFile, 'deadline-second'); await second.seed(); await second.seed();
+    expect(fs.readFileSync(f.stateFile)).toEqual(historical);
+    timeOutVerification();
+    await expect(resumeFrozen(f, second.stateFile, emit)).rejects.toBeInstanceOf(VerificationCheckpointError);
+    host.verify.mockImplementation(freshReceipts);
+    const third = nextContinuation(f, second.stateFile, 'deadline-third'); await third.seed(); await third.seed();
+    const pending = readSolverRunState(third.stateFile);
+    expect(pending.cooperation!.proofReadyRecords).toHaveLength(1);
+    expect(pending.cooperation!.proofReadyRecords![0]).toMatchObject({ status: 'frozen', snapshotCommit: f.snapshotCommit });
+    expect(pending.cooperation!.proofReadyRecords![0]!.receiptIds).toBeUndefined();
+    expect(await resumeFrozen(f, third.stateFile, emit)).toBe(true);
+    expect(started.filter(item => item.key === key).map(item => item.timeoutMs).slice(0, 3)).toEqual([1000, 2000, 4000]);
+    const checked = readSolverRunState(third.stateFile).cooperation!.proofReadyRecords!;
+    expect(checked).toHaveLength(1); expect(checked[0]!.status).toBe('checked');
+    expect(checked[0]!.receiptIds?.length).toBeGreaterThan(0);
+  });
+
+  it.each(['cancellation', 'environment preparation failure'] as const)(
+    'retries a continuation after %s without multiplying its inherited verification budget', async failure => {
+      const f = frozenGoalFixture(); await f.seed(); timeOutVerification();
+      await expect(resumeFrozen(f, f.stateFile)).rejects.toBeInstanceOf(VerificationCheckpointError);
+      const checkpoints = readSolverRunState(f.stateFile).verificationCheckpoints!;
+      const next = nextContinuation(f, f.stateFile, `retry-${failure === 'cancellation' ? 'cancel' : 'failure'}`);
+      host.verify.mockImplementation(freshReceipts);
+      const controller = new AbortController();
+      if (failure === 'environment preparation failure') host.prepare.mockRejectedValueOnce(new Error('fixture_environment_failure'));
+      const interrupted = seedSolverContinuation({ ...f.options, sourceRun: f.stateFile, run: next.stateFile,
+        signal: controller.signal, onProgress: event => {
+          if (failure === 'cancellation' && event === 'continuation_seed_checked') controller.abort();
+        } });
+      if (failure === 'cancellation') await expect(interrupted).rejects.toMatchObject({ name: 'AbortError' });
+      else await expect(interrupted).rejects.toThrow('fixture_environment_failure');
+      const changedSource = readSolverRunState(f.stateFile);
+      changedSource.verificationCheckpoints![0]!.timeoutMs *= 16;
+      writeSolverRunState(f.stateFile, changedSource);
+      await next.seed(); await next.seed();
+      const state = readSolverRunState(next.stateFile);
+      expect(state.verificationCheckpoints).toEqual(checkpoints);
+      expect(state.cooperation!.proofReadyRecords).toHaveLength(1);
+      expect(state.cooperation!.proofReadyRecords![0]!.status).toBe('frozen');
+      expect(state.cooperation!.proofReadyRecords![0]!.receiptIds).toBeUndefined();
+    });
+
+  it.each(['environment', 'problem receipt'] as const)('does not carry verification budgets into a different %s', async change => {
+    const f = frozenGoalFixture(); await f.seed(); timeOutVerification();
+    await expect(resumeFrozen(f, f.stateFile)).rejects.toBeInstanceOf(VerificationCheckpointError);
+    host.verify.mockImplementation(freshReceipts);
+    const next = change === 'problem receipt' ? rebootstrapped(f) : nextContinuation(f, f.stateFile, 'changed-environment');
+    if (change === 'environment') {
+      const state = readSolverRunState(next.stateFile);
+      state.environmentDigest = mathDigest('different-runtime-environment'); writeSolverRunState(next.stateFile, state);
+    }
+    await seedSolverContinuation({ ...f.options, sourceRun: f.stateFile, run: next.stateFile });
+    const state = readSolverRunState(next.stateFile);
+    expect(state.verificationCheckpoints ?? []).toEqual([]);
+    expect(state.cooperation!.proofReadyRecords).toBeUndefined();
+  });
+
   async function lostFrozenAssignmentFixture() {
     const f = frozenGoalFixture(); await f.seed();
     const source = readSolverRunState(f.stateFile), node = source.cooperation!.tasks.find(node => node.task.id === 'goal')!;

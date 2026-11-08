@@ -57,6 +57,72 @@ describe('owned source projection through dot notation', () => {
     'end Fixture', '',
   ].join('\n');
 
+  it.skipIf(!newestLeanBinary())('tracks global dependencies before a same-named parameter enters scope', () => {
+    const source = [
+      'namespace Fixture', 'theorem input : True := by sorry',
+      'def witness : Nat := by have := input; exact 0',
+      'theorem goal : True := by sorry', 'end Fixture', '',
+    ].join('\n');
+    const solved = source.replaceAll('by sorry', 'by trivial').replace('theorem goal',
+      'theorem typed (witness : {n : Nat // n = witness}) : True := by trivial\n' +
+      'theorem grouped (witness companion : Fin (witness + 1)) : True := by trivial\n' +
+      'theorem nested (h : (witness : Nat) = 0) : True := by trivial\n' +
+      'theorem defaulted (n : Nat := witness) : True := by trivial\n' +
+      'theorem anonymous [Decidable (witness = 0)] : True := by trivial\n' +
+      'theorem cast : (witness : Nat) = 0 := by rfl\n' +
+      'theorem shadowed (witness : Nat) : witness = witness := by rfl\n' +
+      'theorem goal');
+    const f = fixture(source, solved);
+    leanCheck(f, solved, 'Fixture.goal');
+    const projected = f.project(f.task('Fixture.goal'), []).get('Submission.lean')!;
+    expect(projected).not.toContain('def witness');
+    expect(projected).not.toContain('theorem typed');
+    expect(projected).not.toContain('theorem grouped');
+    expect(projected).not.toContain('theorem nested');
+    expect(projected).not.toContain('theorem defaulted');
+    expect(projected).not.toContain('theorem anonymous');
+    expect(projected).not.toContain('theorem cast');
+    expect(projected).toContain('theorem shadowed');
+    leanCheck(f, projected, 'Fixture.goal');
+  });
+
+  it.skipIf(!newestLeanBinary()).each([
+    ['inferred', '(witness) (h : witness = (0 : Nat))'],
+    ['bare', 'witness (h : witness = (0 : Nat))'],
+    ['implicit', '{witness} (h : witness = (0 : Nat))'],
+    ['strict implicit', '⦃witness : Nat⦄'],
+    ['grouped', '(witness companion : Nat)'],
+    ['instance', '[witness : Inhabited Nat]'],
+  ])('keeps %s parameters that shadow an excluded global definition', (_kind, parameters) => {
+    const source = [
+      'namespace Fixture', 'theorem input : True := by sorry',
+      'def witness : Nat := by have := input; exact 0',
+      'theorem goal : True := by sorry', 'end Fixture', '',
+    ].join('\n');
+    const solved = source.replaceAll('by sorry', 'by trivial').replace('theorem goal',
+      `theorem kept ${parameters} : True := by trivial\n` + 'theorem goal');
+    const f = fixture(source, solved);
+    leanCheck(f, solved, 'Fixture.kept');
+    const projected = f.project(f.task('Fixture.goal'), []).get('Submission.lean')!;
+    expect(projected).not.toContain('def witness');
+    expect(projected).toContain('theorem kept');
+    leanCheck(f, projected, 'Fixture.kept');
+  });
+
+  it.skipIf(!newestLeanBinary())('orders a goal after the original used by its same-named parameter type', () => {
+    const source = [
+      'namespace Fixture', 'theorem input : True := by sorry',
+      'def witness : Nat := by have := input; exact 0',
+      'theorem goal (witness : {n : Nat // n = witness}) : True := by sorry', 'end Fixture', '',
+    ].join('\n');
+    const f = fixture(source, source.replaceAll('by sorry', 'by trivial'));
+    const task = f.task('Fixture.goal'), input = { task: f.task('Fixture.input'), status: 'pending' as const, attempts: 0 };
+    expect(projectedGoalInputs(f.project, task, [input])).toEqual([input]);
+    expect(f.project.dependencyHints(task, []).map(hint => hint.path.map(item => item.name)))
+      .toEqual([['Fixture.goal', 'Fixture.witness', 'Fixture.input']]);
+    leanCheck(f, f.project(task, ['Fixture.input']).get('Submission.lean')!, 'Fixture.goal');
+  });
+
   it.skipIf(!newestLeanBinary())('removes consumers whose types reference a removed frozen definition', () => {
     const solved = typedConsumerSource.replace('by sorry', 'by exact Nat.zero_le n')
       .replace('theorem headline',

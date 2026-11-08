@@ -107,8 +107,9 @@ export async function checkLeanType(input: { projectRoot: string; file: string; 
       throw new Error('math_type_diagnostics_environment_changed');
   }
   fs.writeFileSync(path.join(clone, projection.query), projection.commands, { mode: 0o600 });
-  const diagnostics = await runLeanDiagnostics({ projectRoot: clone, files: [projection.query], env,
+  const checked = await runLeanDiagnostics({ projectRoot: clone, files: [projection.query], env,
     signal: input.signal, timeoutMs: input.timeoutMs, onProgress: input.onProgress });
+  const diagnostics = { ...checked, aborted: Boolean(input.signal?.aborted || 'aborted' in checked && checked.aborted) };
   // A snapshot can finish after its live consumer or package/tool binding has changed.
   for (const file of snapshot) {
     const current = readMathFile(path.join(project, file.file), 4_000_000);
@@ -121,7 +122,7 @@ export async function checkLeanType(input: { projectRoot: string; file: string; 
     throw new Error('math_type_diagnostics_environment_or_sources_changed');
   sealed?.verify();
   let elaboratedType: string | undefined, constants: string[] | undefined;
-  if (diagnostics.exitCode === 0 && !diagnostics.timedOut) {
+  if (diagnostics.exitCode === 0 && !diagnostics.timedOut && !diagnostics.aborted) {
     const value = readMathJson(path.join(clone, projection.output)) as Record<string, unknown>;
     if (typeof value.type !== 'string' || !value.type.trim() || Buffer.byteLength(value.type) > 24000)
       throw new Error('math_type_diagnostics_export_invalid');

@@ -121,6 +121,116 @@ describe.skipIf(!lean)('local Lean closed-type preflight', () => {
     expect(next.result.projectionReuse!.sourceDigest).not.toBe(manifest.sourceDigest);
   });
 
+  it('defers a valid same-file private type instead of rejecting it from an imported query', async () => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), 'namespace Geometry\nsection\n' +
+      'private def Hidden := Nat\nend\n' +
+      'theorem original : ∀ n : Hidden, n = n := fun n => Eq.refl n\nend Geometry\n');
+    const actual = await runLeanProcess(lean!, ['--json', 'Submission.lean'], {
+      cwd: root, env: process.env, timeoutMs: 30_000,
+    });
+    expect(actual.exitCode, actual.stdout + actual.stderr).toBe(0);
+    const task: CooperativeTask = { id: 'helper', kind: 'lemma', objective: 'Prove helper', dependsOn: [], revision: 0,
+      theoremName: 'Geometry.helper', proofPath: 'Submission.lean', type: '∀ n : Hidden, n = n' };
+    const result = await new TaskTypePreflightCache().check({ task,
+      problem: { targets: [{ theoremName: 'Geometry.original', proofPath: 'Submission.lean' }] } as SolverProblem,
+      projectRoot: root, dependencies: [], environmentDigest: 'test-environment',
+      env: { DEEPSCIENTIST_MATH_ENV_FILE: path.join(root, 'fixture.env') }, timeoutMs: 30_000 });
+    expect(result.result).toMatchObject({ status: 'deferred', reason: expect.stringContaining('private-context-not-reproducible') });
+    expect(run).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['namespace Types\nprivate def Hidden := Nat\ndef Public := Nat\nend Types\nopen Types hiding Public',
+      '∀ n : Hidden, n = n', 'fun n => Eq.refl n'],
+    ['private inductive Hidden where\n  | mk : Hidden', 'Hidden.mk = Hidden.mk', 'rfl'],
+    ['private structure Hidden where\n  value : Nat', 'Hidden.mk 0 = Hidden.mk 0', 'rfl'],
+    ['private structure Hidden where\n  value : Nat', 'Hidden.value (Hidden.mk 0) = 0', 'rfl'],
+  ])('defers valid private lookup context for %s', async (declaration, type, proof) => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), `namespace Geometry\n${declaration}\n` +
+      `theorem original : ${type} := ${proof}\nend Geometry\n`);
+    const actual = await runLeanProcess(lean!, ['--json', 'Submission.lean'], {
+      cwd: root, env: process.env, timeoutMs: 30_000,
+    });
+    expect(actual.exitCode, actual.stdout + actual.stderr).toBe(0);
+    const task: CooperativeTask = { id: 'helper', kind: 'lemma', objective: 'Prove helper', dependsOn: [], revision: 0,
+      theoremName: 'Geometry.helper', proofPath: 'Submission.lean', type };
+    const result = await new TaskTypePreflightCache().check({ task,
+      problem: { targets: [{ theoremName: 'Geometry.original', proofPath: 'Submission.lean' }] } as SolverProblem,
+      projectRoot: root, dependencies: [], environmentDigest: 'test-environment',
+      env: { DEEPSCIENTIST_MATH_ENV_FILE: path.join(root, 'fixture.env') }, timeoutMs: 30_000 });
+    expect(result.result).toMatchObject({ status: 'deferred', reason: expect.stringContaining('private-context-not-reproducible') });
+  });
+
+  it('keeps a missing type invalid when an open hides a public member matching an unrelated namespace', async () => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), 'namespace Geometry\nnamespace Types\n' +
+      'def Other := Nat\nend Types\nnamespace Other\nprivate def Hidden := Nat\nend Other\n' +
+      'open Types hiding Other\ntheorem original : True := True.intro\nend Geometry\n');
+    const actual = await runLeanProcess(lean!, ['--json', 'Submission.lean'], {
+      cwd: root, env: process.env, timeoutMs: 30_000,
+    });
+    expect(actual.exitCode, actual.stdout + actual.stderr).toBe(0);
+    const task: CooperativeTask = { id: 'helper', kind: 'lemma', objective: 'Prove helper', dependsOn: [], revision: 0,
+      theoremName: 'Geometry.helper', proofPath: 'Submission.lean', type: '∀ n : Hidden, n = n' };
+    const result = await new TaskTypePreflightCache().check({ task,
+      problem: { targets: [{ theoremName: 'Geometry.original', proofPath: 'Submission.lean' }] } as SolverProblem,
+      projectRoot: root, dependencies: [], environmentDigest: 'test-environment',
+      env: { DEEPSCIENTIST_MATH_ENV_FILE: path.join(root, 'fixture.env') }, timeoutMs: 30_000 });
+    expect(result.result).toMatchObject({ status: 'invalid', reason: expect.stringContaining('Unknown identifier `Hidden`') });
+  });
+
+  it.each(['invocation', 'signal'] as const)('does not export a completed type after %s cancellation', async mode => {
+    const previous = run.getMockImplementation()!, controller = new AbortController();
+    run.mockImplementation(async input => {
+      const result = await previous(input);
+      if (input.args.at(-1).includes('TypeDiagnostic.lean') && result.exitCode === 0) {
+        if (mode === 'signal') controller.abort();
+        return { ...result, aborted: mode === 'invocation' };
+      }
+      return result;
+    });
+    const result = await checkLeanType({ projectRoot: root, file: 'Submission.lean', context: 'Geometry.original',
+      type: 'True', expression: 'True.intro', signal: controller.signal, timeoutMs: 30_000 });
+    expect(result).toMatchObject({ status: 'failed', exitCode: 0, aborted: true, proofAcceptance: 'not-assessed' });
+    expect(result.type).toBeUndefined();
+    expect(result.constants).toBeUndefined();
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, result.artifact.path), 'utf8'));
+    expect(manifest.elaboratedType).toBeUndefined();
+    expect(manifest.diagnostics.aborted).toBe(true);
+  });
+
+  it('does not seed exact or projection caching from a cancelled Lean success export', async () => {
+    const previous = run.getMockImplementation()!;
+    let cancelled = false;
+    run.mockImplementation(async input => {
+      const result = await previous(input);
+      if (!cancelled && input.args.at(-1).includes('TypeDiagnostic.lean') && result.exitCode === 0) {
+        cancelled = true;
+        return { ...result, aborted: true };
+      }
+      return result;
+    });
+    const task: CooperativeTask = { id: 'helper', kind: 'lemma', objective: 'Prove helper', dependsOn: [], revision: 0,
+      theoremName: 'Geometry.helper', proofPath: 'Submission.lean', type: 'True' };
+    const cache = new TaskTypePreflightCache(), input = { task,
+      problem: { targets: [{ theoremName: 'Geometry.original', proofPath: 'Submission.lean' }] } as SolverProblem,
+      projectRoot: root, dependencies: [], environmentDigest: 'test-environment',
+      env: { DEEPSCIENTIST_MATH_ENV_FILE: path.join(root, 'fixture.env') }, timeoutMs: 30_000 };
+    const first = await cache.check(input), commands = run.mock.calls.length;
+    expect(first.result.status).toBe('unavailable');
+    const retry = await cache.check(input);
+    expect(retry.result.status).toBe('elaborated');
+    expect(retry.result.projectionReuse).toBeUndefined();
+    expect(run.mock.calls.length).toBeGreaterThan(commands);
+    expect(retry.result.artifact).not.toEqual(first.result.artifact);
+    const successfulCommands = run.mock.calls.length;
+    fs.writeFileSync(path.join(root, 'Submission.lean'), fs.readFileSync(path.join(root, 'Submission.lean'), 'utf8')
+      .replace('exact nonexistent_proof', 'exact True.intro'));
+    const projected = await cache.check(input);
+    expect(run).toHaveBeenCalledTimes(successfulCommands);
+    expect(projected.result.artifact).toEqual(retry.result.artifact);
+    expect(projected.result.projectionReuse?.originInputDigest).toBe(retry.result.inputDigest);
+  });
+
   it('accepts explicit Nat binders and reports ambiguous or incorrect types before proof work', async () => {
     const explicit = await check('\u2200 (a : Nat \u2192 Nat) (n : Nat), a (n + 1) = a (n + 1)');
     expect(explicit.status, explicit.stdout + explicit.stderr).toBe('elaborated');

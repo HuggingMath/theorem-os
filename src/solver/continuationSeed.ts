@@ -142,6 +142,11 @@ const sourceSchema = z.object({
     conditions: z.array(handoffReference).nonempty(), dependencies: z.array(handoffReference),
     sources: z.record(z.string()).optional(), seedSources: z.record(z.string()).optional(), captureError: z.string().optional() }).strict()).optional(),
   frozenCandidates: z.array(frozenCandidate).optional(),
+  verificationCheckpoints: z.array(z.object({ key: hash,
+    timeoutMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    attempts: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    at: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    targetCommit: z.string(), receiptIds: z.array(z.string()) }).strict()).max(32).optional(),
   workers: z.array(z.object({ id, role: z.string(), headBefore: oid, headAfter: oid,
     sources: z.record(z.string()), notes: z.string().nullable(), assignment: z.unknown().optional() }).strict()),
   history: z.unknown(),
@@ -599,6 +604,8 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
       planVersion: archived.cooperation.planVersion },
     plan, ...(initialPlanning ? { initialPlanning: true } : {}), canonicalSources, workers, conditionalCandidates,
     ...(frozenCandidates.length ? { frozenCandidates } : {}),
+    ...(sameProblem && archived.environmentDigest === state.environmentDigest && archived.verificationCheckpoints?.length
+      ? { verificationCheckpoints: archived.verificationCheckpoints } : {}),
     candidateIds: planned.filter(node => !isAdvisoryTask(node.task) &&
       ((node.proof?.passed && !node.proof.conditions?.length) ||
         (node.integratedCheck?.passed && !node.integratedCheck.conditions?.length) ||
@@ -655,6 +662,7 @@ function freezeSource(source: SeedSource, directory: string) {
     { id: 'seed-canonical', kind: 'proof-source' as const, text: canonicalMathJson({ sources: source.canonicalSources }) },
     { id: 'seed-task-graph', kind: 'diagnostics' as const, text: canonicalMathJson(source.plan) },
     { id: 'seed-history', kind: 'diagnostics' as const, text: canonicalMathJson({ source: source.source, history: source.history,
+      ...(source.verificationCheckpoints ? { verificationCheckpoints: source.verificationCheckpoints } : {}),
       capturedAt: source.capturedAt, capture: 'canonical-commit-and-individually-stable-advisory-worker-files' }) },
     ...source.workers.map(worker => ({ id: `draft-${worker.id}`, kind: 'proof-source' as const, text: canonicalMathJson(worker) })),
     ...(source.conditionalCandidates ?? []).map(candidate => ({ id: `conditional-${candidate.taskId}`, kind: 'proof-source' as const,
@@ -808,6 +816,12 @@ export async function seedSolverContinuation(options: {
       for (const node of source.nextChecks?.tasks ?? []) tasks.push({ task: node.task, nextCheckId: node.nextCheckId,
         attempts: 0, status: node.status === 'completed' ? 'completed' : node.status === 'blocked' ? 'blocked' : 'pending',
         ...(node.finding ? { finding: node.finding } : {}) });
+      // A timeout only grants more time to the identical tree/items/environment key;
+      // it never restores proof acceptance. Reinitialization reuses these frozen budgets.
+      if (source.verificationCheckpoints) state.verificationCheckpoints = source.verificationCheckpoints.map(record => ({
+        key: record.key, timeoutMs: record.timeoutMs, attempts: record.attempts, at: record.at,
+        targetCommit: record.targetCommit, receiptIds: [...record.receiptIds],
+      }));
       state.continuationDigest = snapshot.digest;
       state.cooperation = { tasks, groups: plan.groups.map(group => ({ group, turns: 0 })), proofRoutes: plan.proofRoutes,
         canonicalCommit: canonical, leadSeedCommit: canonical, planVersion, planEdited: !source.initialPlanning,

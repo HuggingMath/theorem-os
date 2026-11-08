@@ -90,6 +90,7 @@
     "test:web-admin": "bun scripts/test-web-admin.ts",
     "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",
     "test": "vitest run",
+    "test:solver-reliability": "THEOREMOS_TEST_REQUIRE_LEAN=1 vitest run --maxWorkers=4 tests/leanTestEnvironment.test.ts tests/continuationSeed.test.ts tests/continuationInput.test.ts tests/continuationContext.test.ts tests/continuationSearch.test.ts tests/taskSourceProjection.test.ts tests/taskTypePreflight.test.ts tests/solverTaskTypePreflight.test.ts tests/leanTypeDiagnostics.test.ts tests/leanTypeDiagnosticsEnvironment.test.ts tests/verificationCheckpoint.test.ts tests/workerProofCheckpoint.test.ts tests/solverProofReady.test.ts tests/solverProofReadyIntake.test.ts tests/solverProofImport.test.ts tests/solverRestore.test.ts tests/solverCooperativeCheckpoints.test.ts tests/solverHumanEditRecovery.test.ts tests/solverIntegrationRecovery.test.ts tests/solverIntegrationConcurrency.test.ts tests/solverIntegrationBatch.test.ts tests/solverCanonicalTaskProof.test.ts tests/solverConditionalIntegration.test.ts tests/proofReuseEnvironment.test.ts tests/cooperativeReplay.test.ts",
     "test:formalization": "bun scripts/test-formalization.ts",
     "typecheck": "tsc --noEmit"
   },

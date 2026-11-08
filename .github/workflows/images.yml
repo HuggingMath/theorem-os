@@ -60,8 +60,41 @@ jobs:
       - name: Verify the browser's login and research flows with local fixtures
         run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-solve-process
 
+  verify-solver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        lean: ['4.33.0', '4.34.1']
+    env:
+      THEOREMOS_TEST_LEAN_VERSION: ${{ matrix.lean }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Install the pinned native Lean toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends elan
+      - uses: actions/cache@v4
+        with:
+          path: ~/.elan/toolchains
+          key: ${{ runner.os }}-solver-lean-${{ matrix.lean }}
+      - run: elan toolchain install "leanprover/lean4:v$THEOREMOS_TEST_LEAN_VERSION"
+      - run: elan run "leanprover/lean4:v$THEOREMOS_TEST_LEAN_VERSION" lean --version
+      - name: Verify solver timeout, recovery, projection and acceptance without models
+        run: bun run test:solver-reliability
+
   publish:
-    needs: verify
+    needs: [verify, verify-solver]
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
