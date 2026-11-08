@@ -536,12 +536,28 @@ try {
     page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`); });
     try {
       const calls = providerCalls.length, started = formalizations.length;
+      // The first conversation response can precede proof enqueue and arrive after formalization ends.
+      // Hold that snapshot so a confirmed task cannot silently switch to idle polling before it gets its run.
+      let releaseConversation!: () => void, capturedConversation!: () => void;
+      const conversationResponse = new Promise<void>(resolve => { capturedConversation = resolve; });
+      const conversationRelease = new Promise<void>(resolve => { releaseConversation = resolve; });
+      await page.route('**/api/conversations', async route => {
+        if (route.request().method() !== 'POST') { await route.continue(); return; }
+        const response = await route.fetch();
+        assert.equal((await response.json()).conversation.runId, undefined, 'The delayed conversation predates proof enqueue');
+        capturedConversation(); await conversationRelease;
+        await route.fulfill({ response });
+      });
       await page.goto(origin); await page.locator('#formalize-original').fill(original); await credentials(page);
       await page.locator('#formalize-start').click();
       await eventually(() => formalizations.length === started + 1, 'The history fixture starts its statement');
-      const pending = formalizations.at(-1)!;
+      await conversationResponse;
+      const pending = formalizations.at(-1)!, proofCount = runs.length;
       pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
+      await eventually(() => runs.length > proofCount, 'The held conversation statement starts its proof');
+      releaseConversation();
       await page.locator('[data-research-artifact="source"]:enabled').waitFor();
+      mark(`${width}px: a delayed conversation response still attaches its completed proof before idle polling`);
       const saved = await conversation(page);
       assert.ok(saved.runId && saved.formalizationId);
       await openChatHistory(page);

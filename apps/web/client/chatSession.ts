@@ -320,9 +320,12 @@ export class ChatSession {
   private schedule() {
     clearTimeout(this.timer);
     const pending = this.conversation?.messages.some(message => message.status === 'pending');
+    // A completed formalization can overtake the conversation response that first linked it.
+    // Keep refreshing until that conversation has also attached the proof run.
+    const unlinkedRun = Boolean(this.formalization?.runId && this.conversation && !this.conversation.runId);
     // Nothing in progress: a slow check, since returning to the tab refreshes at once. A fast idle poll on every open tab
     // reached the site's per-address request limit.
-    this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) ? 1500 : 30_000);
+    this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) || unlinkedRun ? 1500 : 30_000);
   }
   async refresh() {
     if (this.refreshing || this.submitting || this.startingResearch || document.hidden) { this.schedule(); return; }
