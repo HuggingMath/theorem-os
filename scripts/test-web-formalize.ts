@@ -8,6 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebFormalizationReport } from '../apps/web/shared';
 import { webFormalizationLimits, type WebFormalization, type WebFormalizationCapabilities } from '../apps/web/formalizationTypes';
+import type { WebConversation } from '../apps/web/conversationTypes';
 import { localeStorageKey } from '../apps/web/i18n';
 import { researchExamples } from '../apps/web/problemExamples';
 import { freePort, startBrowser, ready } from './web-scenario';
@@ -36,7 +37,8 @@ const baseItem: WebFormalization = { id: '11111111-1111-4111-8111-111111111111',
 const capabilities: WebFormalizationCapabilities = { available: true, model: 'deepseek-flash', providerId: 'sub2api', key: 'required', limits: webFormalizationLimits };
 const errors: string[] = [];
 let browser: Browser | undefined;
-async function setup(browser: Browser, options: { width?: number; locale?: string; items?: WebFormalization[]; actualSession?: boolean; capabilities?: WebFormalizationCapabilities } = {}) {
+async function setup(browser: Browser, options: { width?: number; locale?: string; items?: WebFormalization[]; actualSession?: boolean;
+  capabilities?: WebFormalizationCapabilities; conversation?: WebConversation } = {}) {
   const context = await browser.newContext({ viewport: { width: options.width ?? 1440, height: 1000 } });
   await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [localeStorageKey, options.locale ?? 'zh']);
   const page = await context.newPage(); page.on('pageerror', cause => errors.push(cause.message));
@@ -53,6 +55,15 @@ async function setup(browser: Browser, options: { width?: number; locale?: strin
       writes.push({ path: url.pathname, body: request.postDataJSON() ?? {} });
     }
     if (!url.pathname.startsWith('/api/formalizations')) {
+      if (options.conversation && url.pathname === '/api/conversations') {
+        if (method === 'POST') {
+          assert.deepEqual(request.postDataJSON(), { formalizationId: options.conversation.formalizationId });
+          return json({ conversation: options.conversation }, 201);
+        }
+        const { messages: _, ...summary } = options.conversation;
+        return json({ conversations: [{ ...summary, answering: false }] });
+      }
+      if (options.conversation && url.pathname === `/api/conversations/${options.conversation.id}`) return json({ conversation: options.conversation });
       if (method === 'POST' && url.pathname === '/api/runs') return json({ error: 'Fixture captured request; no model started.' }, 422);
       return route.continue();
     }
@@ -167,6 +178,33 @@ try {
     await context.close();
   }
   console.log('PASS exact original input, key lifecycle, persisted read-only refresh, reviewed evidence and explicit confirmation');
+  {
+    const conversation: WebConversation = { id: '22222222-2222-4222-8222-222222222222', formalizationId: baseItem.id,
+      title: original.trim(), createdAt: baseItem.createdAt, updatedAt: baseItem.updatedAt, messages: [] };
+    const { page, context, writes } = await setup(browser, { actualSession: true, conversation,
+      items: [{ ...baseItem, status: 'review', workflow: 'solve', humanReview: true, report }] });
+    await page.locator('#formalize-confirmation').waitFor();
+    assert.match(await page.locator('#formalize-progress').innerText(), /待你确认/u);
+    assert.equal(await page.locator('#formalize-research-status').isVisible(), false);
+    await page.locator('#formalize-checked').check(); await page.locator('#formalize-confirm').click();
+    await page.locator('#formalize-use').filter({ hasText: '返回对话' }).waitFor();
+    assert.equal(writes.length, 1); assert.equal(writes[0]!.path, `/api/formalizations/${baseItem.id}/confirm`);
+    assert.match(await page.locator('#formalize-progress').innerText(), /已确认陈述/u);
+    assert.doesNotMatch(await page.locator('#formalize-confirmed').innerText(), /带入研究草稿/u);
+    assert.match(await page.locator('#formalize-confirmed').innerText(), /双 Agent 研究.*审核研究计划/u);
+    await page.reload(); await page.locator('#formalize-use').filter({ hasText: '返回对话' }).waitFor();
+    await page.clock.install();
+    const reads: string[] = [];
+    page.on('request', request => { if (request.method() === 'GET' && new URL(request.url()).pathname.startsWith('/api/formalizations')) reads.push(request.url()); });
+    await page.clock.fastForward(15_000);
+    assert.deepEqual(reads, [], 'Confirmed human review waits for the user without polling for automatic research');
+    assert.equal(writes.length, 1, 'Review and refresh must never start guided research');
+    assert.equal(await page.locator('#formalize-use').getAttribute('href'), '/');
+    await page.locator('#formalize-use').click(); await page.waitForURL(`${origin}/?chat=${conversation.id}`);
+    assert.deepEqual(writes.map(write => write.path), [`/api/formalizations/${baseItem.id}/confirm`, '/api/conversations']);
+    await context.close();
+  }
+  console.log('PASS human review preserves confirmation, stops automatic polling and returns to its chat without starting research');
   {
     const { page, context, writes } = await setup(browser, { actualSession: true,
       items: [{ ...baseItem, status: 'review', report }], capabilities: { ...capabilities, key: 'server' } });

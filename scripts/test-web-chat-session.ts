@@ -90,6 +90,8 @@ async function eventually(check: () => boolean, description: string) {
   while (!check()) { assert.ok(Date.now() < until, description); await new Promise(resolve => setTimeout(resolve, 40)); }
 }
 async function credentials(page: Page) {
+  const automatic = page.locator('input[name="chat-participation"][value="automatic"]');
+  if (await automatic.isVisible()) await automatic.check();
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');

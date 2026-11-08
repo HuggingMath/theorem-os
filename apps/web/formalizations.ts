@@ -61,7 +61,7 @@ export class WebFormalizations {
         if (saved > (stored.formalization.activity?.count ?? 0)) stored.formalization.activity = { ...stored.formalization.activity, count: saved };
         this.save(stored);
       }
-      if (stored?.formalization.workflow === 'solve' && stored.formalization.status === 'confirmed'
+      if (stored?.formalization.workflow === 'solve' && !stored.formalization.humanReview && stored.formalization.status === 'confirmed'
         && !stored.formalization.runId && !stored.formalization.researchError) {
         stored.formalization.researchError = 'formalization_research_interrupted'; this.save(stored);
       }
@@ -119,7 +119,7 @@ export class WebFormalizations {
     const evidence = this.evidence(record);
     return { formalization: { ...record.formalization, report: formalizationReport(evidence) }, evidence };
   }
-  /** Reuses the frozen statement after queue rejection or restart; it never calls the formalizer again. */
+  /** Starts or retries research from confirmed frozen evidence; it never calls the formalizer again. */
   retryResearch(owner: string, id: string, provider: WebProvider, apiKey: string): WebFormalization {
     const record = this.required(owner, id), item = record.formalization;
     if (item.runId) return this.read(owner, id);
@@ -143,6 +143,7 @@ export class WebFormalizations {
   }
   create(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization {
     if (this.closing) throw new WebStorageError(503, '服务正在停止，请稍后重试。');
+    if (request.humanReview && !request.solve) throw new WebStorageError(400, '人工审核模式需要启用证明研究。');
     if (request.solve && !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
     if (this.jobs.size >= this.limits.queueLimit) throw new WebStorageError(429, '形式化队列已满，请稍后重试。');
     if ([...this.jobs.values()].filter(job => job.record.owner === owner).length >= this.limits.perOwner)
@@ -154,7 +155,7 @@ export class WebFormalizations {
       maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
       research: { ...webFormalizationDefaults.research, ...request.research },
       effort: request.effort, status: 'queued', createdAt: now, updatedAt: now, progress: { phase: 'queued', updatedAt: now },
-      ...(request.solve ? { workflow: 'solve' } : {}) };
+      ...(request.solve ? { workflow: 'solve' } : {}), ...(request.humanReview ? { humanReview: true } : {}) };
     const input: WorkerFormalizationInput = { original: request.original, environment: request.environment, effort: request.effort,
       apiKey: request.apiKey, id, model, provider, maxRunSeconds: formalization.maxRunSeconds!,
       maxTotalTokens: formalization.maxTotalTokens!, maxRounds: webFormalizationLimits.maxRounds,
@@ -236,7 +237,7 @@ export class WebFormalizations {
       formalizationReport(evidence);
       this.storage.saveRecord([...recordPath(job.record.owner, job.record.formalization.id), 'evidence.json'], evidence, true);
       job.record.evidenceSha256 = formalizationDigest(evidence);
-      if (job.record.formalization.workflow === 'solve') {
+      if (job.record.formalization.workflow === 'solve' && !job.record.formalization.humanReview) {
         Object.assign(job.record.formalization, { confirmation: 'automatic', confirmedAt: new Date().toISOString() });
         this.finish(job, 'confirmed');
         try { job.record.formalization.runId = this.startResearch!(job.record.owner, job.record.formalization, evidence, job.input); }

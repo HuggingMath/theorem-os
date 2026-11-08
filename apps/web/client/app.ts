@@ -151,6 +151,7 @@ async function loadNaturalResearch() {
   chatWorkspace = new ChatSession({
     request: api,
     session: () => state.session,
+    connected: () => state.connected,
     draftScope: state.session?.account?.email ?? 'anonymous',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
     onNavigate: (id, mode, attached) => {
@@ -183,6 +184,12 @@ async function loadNaturalResearch() {
     agentActivity, formalizationActivity,
     onLean: () => { chooseEntry('lean'); startDraft(); },
     onGuidance: (run, text?: string, taskId?: string) => openGuidance(run, text, undefined, taskId),
+    planApproval: approvalProps,
+    onApprovePlan: run => void approvePlan(run),
+    onPlan: (run, edit) => {
+      openChatArtifact('plan');
+      if (edit && !collaborationView.editPlan(run.id)) element('#detail-tab-collaboration').focus({ preventScroll: true });
+    },
     onCancelRun: openCancellation,
     isSample,
   });
@@ -200,8 +207,9 @@ function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget, a
   if (kind === 'original') { element('#close-research-output').focus({ preventScroll: true }); return; }
   // The live workspace replaces the run detail for the time it is open, on any screen size.
   if (kind === 'live') { if (!auto) element('#close-research-output').focus({ preventScroll: true }); return; }
-  state.tab = kind === 'result' ? 'result' : kind === 'roadmap' ? 'trajectory' : 'source'; state.sourceView = 'proof';
+  state.tab = kind === 'result' ? 'result' : kind === 'roadmap' ? 'trajectory' : kind === 'plan' ? 'collaboration' : 'source'; state.sourceView = 'proof';
   setMobileView('runs'); renderDetail(true);
+  if (kind === 'plan') { collaborationView.showSection(run!.id, 'tasks'); return; }
   if (task && kind === 'roadmap') {
     element('#detail-tab-trajectory').focus({ preventScroll: true });
     void trajectoryView.showTask(run!.id, task.id);
@@ -541,8 +549,9 @@ function syncSettingsNavigation() {
 function openSettings(focusId?: string) {
   if (!state.session || state.submitting) return;
   if (researchEntry === 'natural' || currentRun() && !focusId) {
-    if (currentRun()) setMobileView('compose');
-    void (currentRun() ? naturalPage ?? Promise.resolve() : openNaturalResearch()).then(() => {
+    if (currentRun() || chatWorkspace?.id) setMobileView('compose');
+    // The statement may still be waiting for its owner, with a conversation but no proof run yet.
+    void (naturalPage ?? openNaturalResearch()).then(() => {
       const settings = document.querySelector<HTMLDetailsElement>('#formalize-settings');
       if (settings) settings.open = true;
       const key = document.querySelector<HTMLElement>('#formalize-key');

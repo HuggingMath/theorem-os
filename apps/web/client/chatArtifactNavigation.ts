@@ -1,7 +1,7 @@
 import type { WebRun } from '../shared';
 import { headingLine, leanOutline } from './leanOutline';
 
-export type ChatArtifactKind = 'roadmap' | 'original' | 'source' | 'live' | 'result';
+export type ChatArtifactKind = 'roadmap' | 'original' | 'source' | 'live' | 'result' | 'plan';
 export type ChatArtifactTarget = { taskId?: string; messageId?: string };
 
 /** Artifact links resolve task identities from the recorded plan, never from a display name. */

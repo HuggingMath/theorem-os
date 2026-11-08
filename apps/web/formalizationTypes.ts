@@ -14,8 +14,8 @@ export type WebFormalization = {
   progress?: WebFormalizationProgress; report?: WebFormalizationReport;
   /** How many process records are stored (read them from /activity) and how many arrived past the limit. */
   activity?: { count: number; dropped?: number };
-  /** Explicit authorization to formalize and then start proof research automatically. */
-  workflow?: 'solve'; confirmation?: 'automatic' | 'manual'; runId?: string; researchError?: string;
+  /** Authorizes proof research after formalization, with an optional manual statement and plan review. */
+  workflow?: 'solve'; humanReview?: boolean; confirmation?: 'automatic' | 'manual'; runId?: string; researchError?: string;
   /** Absent on older records; new generations bind the exact submitted budgets and provider. */
   providerId?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget;
 };
@@ -23,9 +23,9 @@ export type WebFormalizationCapabilities = { available: boolean; reason?: 'provi
   model: string; key: 'required' | 'saved' | 'server'; limits: typeof webFormalizationLimits;
   providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
   defaults?: typeof webFormalizationDefaults };
-export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean;
+export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean; humanReview?: boolean;
   providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
-export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
+export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number };
 /**
  * The roles of one formalization round (src/solver/formalization.ts): plan reads the problem, generate writes the Lean
