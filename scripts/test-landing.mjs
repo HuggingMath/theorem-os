@@ -29,8 +29,8 @@ const checkWorkbench = async (page, label) => {
   assert.equal(await figure.evaluate(node => node.tagName), 'FIGURE');
   assert.equal(await figure.locator('picture.workbench-picture').count(), 1);
   const caption = await figure.locator('figcaption').innerText();
-  for (const wording of [/工作台/, /截图/]) assert.match(caption, wording);
-  assert.match(caption, /未提交/);
+  assert.match(await figure.locator('img').getAttribute('alt'), /自然语言入口/);
+  assert.equal(await figure.locator('figcaption .status-dot').count(), 0);
   assert.equal(await figure.locator('source[srcset*="assets/workbench-mobile.png"]').count(), 1);
   const screenshot = figure.locator('.workbench-picture img');
   assert.equal(await screenshot.getAttribute('src'), 'assets/workbench-desktop.png');
@@ -69,7 +69,7 @@ const checkStart = async page => {
   const apply = start.locator('.start-links a[data-umami-event="apply-github"]');
   assert.equal(await apply.innerText(), '用 GitHub 申请内测');
   assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/theorem-os-site/issues/new?template=early-access.yml');
-  assert.match(await start.locator('.start-note').innerText(), /公开显示/);
+  assert.match(await start.locator('.start-note').innerText(), /公开/);
   assert.equal(await start.locator('.start-note a').getAttribute('href'), 'mailto:liuzhenhao@westlake.edu.cn?subject=TheoremOS%20%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7');
 };
 const checkScreenshotPreview = async (page, width) => {
@@ -85,7 +85,7 @@ const checkScreenshotPreview = async (page, width) => {
   });
   assert.match(preview.source, width <= 600 ? /workbench-full-mobile\.png/ : /workbench-full-desktop\.png/);
   assert.equal(await dialog.locator('.preview-original').getAttribute('href'), new URL(preview.source).pathname.split('/').slice(-2).join('/'));
-  assert.match(await dialog.locator('#preview-description').innerText(), /自然语言入口 · 未提交/);
+  assert.match(await dialog.locator('#preview-description').innerText(), /自然语言入口/);
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('preview-open')), true);
   const media = dialog.locator('.preview-dialog-media');
   await dialog.getByRole('button', { name: '放大截图' }).click();
@@ -178,7 +178,7 @@ const checkModuleShowcase = async (page, width) => {
         renderedRatio: bounds.width / bounds.height, height: bounds.height, alt: image.alt };
     });
     assert.match(image.src, new RegExp(`workbench-${id}-${width <= 600 ? 'mobile' : 'desktop'}\\.png$`));
-    assert.match(image.alt, /尚未提交/);
+    assert.match(image.alt, /模块|Mathlib/);
     assert.ok(Math.abs(image.ratio - image.renderedRatio) < .01, 'Module pictures must remain complete without stretching');
     if (panelHeight !== undefined) assert.ok(Math.abs(image.height - panelHeight) < 1, 'Switching module views must preserve the panel size');
     panelHeight = image.height;
@@ -235,7 +235,7 @@ try {
   const hostingFaq = page.locator('.faq-list details').filter({ hasText: '可以直接在网页运行证明吗' });
   assert.equal(await hostingFaq.count(), 1);
   await hostingFaq.locator('summary').click();
-  assert.match(await hostingFaq.innerText(), /白名单 Beta/);
+  assert.match(await page.locator('#start').innerText(), /白名单 Beta/);
   assert.equal(await hostingFaq.locator('a').getAttribute('href'), 'https://app.theoremos.top/');
   await hostingFaq.locator('summary').click();
   assert.equal(await page.locator('.proof-table tbody .proof-row[data-accepted-proof]').count(), accepted.length);

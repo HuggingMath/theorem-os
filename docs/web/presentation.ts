@@ -49,7 +49,7 @@ const replayText = {
     receipt: '已归档回放的最终验收', receiptTitle: '已归档的最终验收', passed: '完整原题，通过。',
     method: '验收方式', methodValue: '独立 Lean 内核检查', checked: '检查日期',
     record: '查看完整回放记录', raw: '原始回执', rawTitle: '打开原始 JSON 回执',
-    caption: '预设示例 · 已归档的最终回执 · 非实时运行', captionLink: '回放记录',
+    caption: '已保存的验收回执', captionLink: '回放记录',
   },
   en: {
     stages: [['Candidate', 'Preset candidate 01'], ['Lean feedback', 'What the check found'], ['Repair', 'Preset candidate 02'], ['Full verification', 'Verified source']],
@@ -61,7 +61,7 @@ const replayText = {
     receipt: 'Final verification of the archived replay', receiptTitle: 'Archived final verification', passed: 'Full statement passed.',
     method: 'Method', methodValue: 'Independent Lean kernel check', checked: 'Checked',
     record: 'Full replay record', raw: 'Raw receipt', rawTitle: 'Open the raw JSON receipt',
-    caption: 'Preset example · archived final receipt · not a live run', captionLink: 'Replay record',
+    caption: 'Saved verification receipt', captionLink: 'Replay record',
   },
 };
 

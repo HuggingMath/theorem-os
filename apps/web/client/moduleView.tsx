@@ -129,7 +129,7 @@ function Scaffold() {
       <p class="module-live-event"><strong data-module-live-name /><span data-module-live-message /></p>
     </section>
     <div class="module-layout">
-      <div class="module-graph" role="group" aria-label={t('搜索决策、上下文选择、证明构造、检查与反馈组成研究循环，协作与复用负责协调，最后独立验收')} aria-describedby="module-graph-note">
+      <div class="module-graph" role="group" aria-label={t('搜索决策、上下文选择、证明构造、检查与反馈组成研究循环，协作与复用负责协调，最后独立验收')}>
         <Node id="M5" /><Edge from="M5" to="research" direction="down" class="module-coordination-edge" />
         <div class="module-research"><div class="module-cycle"><Node id="M3" /><Edge from="M3" to="M4" direction="right" class="module-edge-context" /><Node id="M4" /><Edge from="M2" to="M3" direction="up" class="module-edge-retry" />
           <span class="module-cycle-label"><Icon name="refresh-cw" /><span>{t('研究循环')}</span></span><Edge from="M4" to="M1" direction="down" class="module-edge-construction" /><Node id="M2" />
@@ -137,14 +137,13 @@ function Scaffold() {
         <div class="module-acceptance-edge"><Edge from="M2" to="S3" direction="down" class="" /><span>{t('候选检查通过后')}</span></div><Node id="S3" />
         <div class="module-legend"><span><i class="module-selected-key" />{t('查看中')}</span><span><i class="module-recent-key" />{t('最新记录')}</span><span><i data-tone="active" />{t('进行中')}</span>
           <span><i data-tone="observed" />{t('已有记录')}</span><span><i data-tone="pending" />{t('尚无记录')}</span></div>
-        <p class="module-graph-note" id="module-graph-note">{t('点击模块查看记录 · 连线表示结构关系')}</p>
         <section class="module-customizations" aria-labelledby="module-customizations-title" hidden><header><h4 id="module-customizations-title">{t('自定义策略')}</h4><span data-module-custom-count /></header><ol /></section>
       </div>
       <section class="module-inspector" id="module-inspector" aria-labelledby="module-inspector-title" tabIndex={-1}>
         <header><h4 id="module-inspector-title" /><span class="module-inspector-state" role="status" aria-atomic="true" />
           <button type="button" class="icon-button module-policy-add" data-module-policy-add aria-haspopup="dialog" aria-controls="run-settings" hidden><Icon name="plus" /></button>
           <button type="button" class="icon-button module-graph-return" data-module-return title={t('返回模块图')} aria-label={t('返回模块图')}><Icon name="arrow-up" /></button></header>
-        <p class="module-output" /><section class="module-policies" aria-label={t('当前模块的自定义策略')} hidden><div /></section><dl class="module-facts" />
+        <section class="module-policies" aria-label={t('当前模块的自定义策略')} hidden><div /></section><dl class="module-facts" />
         <section class="module-workers" hidden aria-labelledby="module-workers-title"><header><h4 id="module-workers-title" title={t('依据已收到的开始和结束事件，不代表实时请求占用')}>{t('未结束的 Agent 记录')}</h4><span data-module-worker-count /></header><ul /></section>
         <p class="module-verification-note" hidden />
         <div class="module-history-heading"><h4>{t('最近活动')}</h4><button type="button" class="icon-button" data-module-destination="events" title={t('打开活动记录')} aria-label={t('打开活动记录')}><Icon name="list" /></button></div>
@@ -266,7 +265,7 @@ export class ModuleView {
     text(root.querySelector('[data-module-configuration]')!, t('5 个研究模块 · {0} 个 Agent · {1}', configuredWorkers, input.coordination === 'cooperative' ? t('任务协作') : t('独立并行')));
     root.querySelector<HTMLButtonElement>('[data-module-configure]')!.hidden = Boolean(run);
     root.dataset.stale = String(!input.connected);
-    text(root.querySelector('.module-observation')!, !input.connected ? t('连接中断 · 最近状态') : !run ? t('未提交')
+    text(root.querySelector('.module-observation')!, !input.connected ? t('连接中断 · 最近状态') : !run ? t('草稿')
       : `${runProgress(run).phaseLabel} · ${timestamp(run.updatedAt)}`);
     for (const module of modules) {
       const button = root.querySelector<HTMLButtonElement>(`[data-module-id="${module.id}"]`)!;
@@ -279,6 +278,7 @@ export class ModuleView {
       button.setAttribute('aria-current', String(latest?.id === module.id));
       button.title = `${module.name} · ${value.label}${latest?.id === module.id ? t(' · 最新模块记录') : ''}${rules.length ? ` · ${rules.map(rule => rule.name).join(t('、'))}` : ''}`;
       text(button.querySelector('.module-node-subject')!, rules.length ? t('{0} 个自定义策略', rules.length) : module.subject);
+      button.querySelector<HTMLElement>('.module-node-state')!.hidden = !run;
       text(button.querySelector('[data-module-state]')!, value.label);
     }
     for (const connector of root.querySelectorAll<HTMLElement>('.module-edge'))
@@ -294,13 +294,11 @@ export class ModuleView {
     add.dataset.modulePolicyAdd = this.selected; add.disabled = plan.custom.length >= 8;
     add.title = add.disabled ? t('最多保存 8 个自定义策略') : t('为「{0}」新增策略', module.name);
     add.setAttribute('aria-label', add.title);
-    const outputs: Record<WebModuleId, string> = { M1: t('输出：候选源码与研究进展'), M2: t('输出：候选检查结果与 Lean 反馈'), M3: t('输出：下一步研究动作'), M4: t('输出：当前尝试的研究上下文'), M5: t('输出：任务分配、审阅与集成记录'), S3: t('验收范围：固定的完整原题') };
-    text(inspector.querySelector('.module-output')!, outputs[this.selected]);
     const note = inspector.querySelector<HTMLElement>('.module-verification-note')!;
-    note.hidden = !['M1', 'M2', 'S3'].includes(this.selected);
-    text(note, this.selected === 'S3' ? t('完整原题通过独立 Lean 验收，才记为验收通过。') : t('候选、局部任务和条件性检查结果均不代表完整原题验收通过。'));
+    note.hidden = !run || !['M2', 'S3'].includes(this.selected);
+    text(note, this.selected === 'S3' ? t('完整原题须通过独立 Lean 验收。') : t('局部检查通过后，仍须验收完整原题。'));
     const details = snapshot?.lastEvent.details;
-    const facts: Array<[string, string]> = [[t('状态'), value.label], [t('活动事件'), String(snapshot?.eventCount ?? 0)]];
+    const facts: Array<[string, string]> = [[t('活动事件'), String(snapshot?.eventCount ?? 0)]];
     if (this.selected === 'M1') facts.push([t('模型'), input.model || t('未设置')]);
     if (this.selected === 'M2' || this.selected === 'S3') facts.push([t('证明环境'), input.environment]);
     if (this.selected === 'M3' && details?.operation) facts.push([t('最近决策'), operations[details.operation]]);
@@ -319,12 +317,14 @@ export class ModuleView {
     const events = run?.events.filter(event => webEventModule(event.type) === this.selected).slice(-6).reverse() ?? [];
     this.renderEvents(events, names);
     const cumulative = Boolean(run?.modules?.[this.selected]);
-    text(inspector.querySelector('.module-retention')!, events.length
+    const retention = inspector.querySelector<HTMLElement>('.module-retention')!;
+    retention.hidden = !snapshot || snapshot.eventCount <= events.length;
+    text(retention, events.length
       ? t('显示最近 {0} 条{1}', events.length, snapshot && snapshot.eventCount > events.length ? t(' · {0} {1} 条', cumulative ? t('累计') : t('保留窗口内'), snapshot.eventCount) : '')
       : snapshot ? t('累计 {0} 条 · 较早活动已移出保留范围', snapshot.eventCount) : '');
     const empty = inspector.querySelector<HTMLElement>('.module-events-empty')!;
-    empty.hidden = Boolean(events.length);
-    text(empty, run ? snapshot ? readableMessage(snapshot.lastEvent, names) : t('该模块暂无活动记录') : t('提交后记录真实模块活动'));
+    empty.hidden = !run || Boolean(events.length);
+    text(empty, snapshot ? readableMessage(snapshot.lastEvent, names) : t('该模块暂无活动记录'));
     inspector.querySelector<HTMLButtonElement>('[data-module-destination="events"]')!.hidden = !run;
     const destination = inspector.querySelector<HTMLButtonElement>('.module-destination')!;
     destination.dataset.moduleDestination = this.selected === 'S3' && run ? 'report' : 'source';

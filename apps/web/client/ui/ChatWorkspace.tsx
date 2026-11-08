@@ -89,7 +89,7 @@ function TaskMessage(props: ChatThreadProps) {
   const proof = run?.result?.proof || run?.artifact?.source;
   const solve = props.solve, wide = solve?.wide && solve.process.active;
   return <div class="chat-task">
-    {props.sample && <p class="sample-note" data-chat-sample-note>{t('这是只读示例：Agent 由离线脚本代替模型，Lean 检查与独立验收来自真实执行。浏览示例不调用模型，也不消耗你的额度。')}</p>}
+    {props.sample && <p class="sample-note" data-chat-sample-note>{t('预设示例 · 附 Lean 验收记录')}</p>}
     <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
       <p class="research-conversation-state" role="status" aria-atomic="true">
         <Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : 'square'} /><strong>{title}</strong></p>
@@ -174,13 +174,12 @@ function ChatThread(props: ChatThreadProps) {
   if (!conversation) return <div class="chat-start">
     {loading ? <p role="status">{t("正在读取对话…")}</p> : <>
       <h1>{t("今天想证明什么？")}</h1>
-      <p>{t("用自然语言描述题目，逐步得到可验证的 Lean 证明。")}</p>
+      <p>{t('用自然语言或 TeX 写下题目。')}</p>
       <div class="chat-start-actions">
         <button type="button" class="button" data-chat-configure onClick={props.onConfigure}><Icon name="sliders-horizontal" />{t('配置模型')}</button>
         <button type="button" class="button" data-chat-first-example onClick={props.onFirstExample}><Icon name="plus" />{t('试一道简单题')}</button>
       </div>
-      <p class="chat-start-note">{t('先配置模型，再发送题目。例题只填入草稿，发送后才调用模型。')}</p>
-      {props.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample onClick={props.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('无需 API Key，不消耗额度')}</span></button>}
+      {props.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample title={t('无需 API Key')} onClick={props.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('免费浏览')}</span></button>}
     </>}
     {errorNotice}
   </div>;
@@ -269,31 +268,29 @@ function ChatComposer(props: ChatComposerProps) {
               {props.providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select></label><label for="formalize-model">{t('模型')}<input id="formalize-model" type="text" value={props.model} spellcheck={false}
               onInput={event => props.onModel(event.currentTarget.value)} disabled={props.hasConversation || props.submitting} required maxlength={160}
-              list="chat-model-options" aria-describedby="chat-model-note" /></label></div>
+              list="chat-model-options" /></label></div>
             <datalist id="chat-model-options">{provider?.defaultModel && <option value={provider.defaultModel} />}</datalist>
-            <p id="chat-model-note" class="field-note">{provider?.defaultModel ? t('默认模型：{0}。也可填写此服务商支持的其他模型。', provider.defaultModel) : t('填写所选服务商支持的模型名称。')}</p>
             <div class="chat-settings-options"><label for="formalize-environment">{t("证明环境")}<select id="formalize-environment" value={props.environment} onChange={event => props.onEnvironment(event.currentTarget.value as ChatComposerProps['environment'])} disabled={props.hasConversation}><option value="standard">{t("标准库")}</option><option value="mathlib">Mathlib</option></select></label>
               <label for="formalize-effort">{t("推理强度")}<select id="formalize-effort" value={props.effort} onChange={event => props.onEffort(event.currentTarget.value as ChatComposerProps['effort'])} disabled={props.hasConversation}><option value="max">{t("最高")}</option><option value="high">{t("高")}</option><option value="low">{t("低")}</option></select></label></div>
             <label for="formalize-key">API Key {props.keyRequired && <span>{t("（必填）")}</span>}</label>
-            <input id="formalize-key" type="password" autocomplete="off" spellcheck={false} value={props.apiKey} onInput={event => props.onKey(event.currentTarget.value)} placeholder={t("仅本次使用，不在浏览器保存")} aria-describedby="chat-key-help" />
-            <p id="chat-key-help" class="field-note">{provider?.keyUrl ? <><a href={provider.keyUrl} target="_blank" rel="noopener noreferrer">{t('到服务商后台创建 API Key')}</a>{' '}{t('请使用所选服务商的 Key，不同服务商的 Key 不能通用。')}</>
-              : t('请向所选网关的管理员取得账号与 API Key；已有 OpenAI Key 可切换服务商。')}
+            <input id="formalize-key" type="password" autocomplete="off" spellcheck={false} value={props.apiKey} onInput={event => props.onKey(event.currentTarget.value)} placeholder={t('临时使用的 API Key')} aria-describedby="chat-key-help" />
+            <p id="chat-key-help" class="field-note">{provider?.keyUrl ? <a href={provider.keyUrl} target="_blank" rel="noopener noreferrer">{t('创建 API Key')}</a>
+              : t('网关 Key 请向管理员获取。')}
               {' '}{provider?.key === 'saved' ? t('留空使用账号中已保存的 Key。') : provider?.key === 'server' ? t('留空使用管理员已配置的 Key。') : ''}</p>
             {props.keyManagement && <div class="chat-key-management">
-              <p class="field-note">{props.keyManagement.ending ? t('账号已保存 Key，末四位：{0}', props.keyManagement.ending)
-                : t('当前 Key 仅本次使用。你可以选择加密保存到账号。')}</p>
+              {props.keyManagement.ending && <p class="field-note">{t('已保存 Key · 末四位 {0}', props.keyManagement.ending)}</p>}
               <div class="chat-task-actions">
                 <button type="button" class="button" id="chat-save-key" disabled={props.keyManagement.busy || !props.apiKey.trim()}
                   onClick={props.keyManagement.onSave}>{props.keyManagement.busy ? t('正在保存…') : props.keyManagement.ending ? t('替换已保存的 Key') : t('保存到我的账号')}</button>
                 {props.keyManagement.ending && <button type="button" class="text-button" id="chat-delete-key" disabled={props.keyManagement.busy}
                   onClick={props.keyManagement.onDelete}>{t('删除已保存的 Key')}</button>}
               </div>
-              <p class="field-note">{t('加密保存在服务器，只有你的账号能使用；浏览器只显示末四位，换设备或重新登录也不用再填。')}</p>
+              <p class="field-note">{t('保存后加密存入你的账号，可随时删除。')}</p>
               {props.keyManagement.notice && <p class="field-note" id="chat-key-notice" role="status">{props.keyManagement.notice}</p>}
             </div>}
             <div class="chat-connection-check"><button type="button" class="button" id="check-model-connection" onClick={props.onCheckConnection}
-              disabled={props.checkingConnection || !props.model.trim() || props.keyRequired && !props.apiKey.trim()}>{props.checkingConnection ? t('正在检查连接…') : t('检查 Key 与模型')}</button>
-              <span class="field-note">{t('只读取模型列表，不调用模型。')}</span></div>
+              title={t('通过模型列表检查连接')}
+              disabled={props.checkingConnection || !props.model.trim() || props.keyRequired && !props.apiKey.trim()}>{props.checkingConnection ? t('正在检查连接…') : t('检查 Key 与模型')}</button></div>
             {props.connection && <p class="field-note" id="chat-connection-result" role="status" data-status={props.connection.status}>{props.connection.message}</p>}
             {!props.hasConversation && <>
               <fieldset class="chat-budget-fields"><legend>{t('形式化预算')}</legend><div class="chat-settings-options">
@@ -310,6 +307,7 @@ function ChatComposer(props: ChatComposerProps) {
                 <label for="research-turns">{t('最多研究轮次')}<input id="research-turns" type="number" min={1} max={props.budgetLimits.research.maxTurns} step={1}
                   value={props.budgets.research.maxTurns} onInput={event => props.onBudget('research', 'maxTurns', Number(event.currentTarget.value))} /></label>
               </div></fieldset>
+              <p class="field-note">{t('按已报告用量停止，在途请求可能超额；Token 上限不代表金额封顶。')}</p>
             </>}
           </div>
         </details>
@@ -319,11 +317,11 @@ function ChatComposer(props: ChatComposerProps) {
           : <button id="formalize-start" type="submit" class="chat-send" disabled={!canSend} aria-label={props.guidance ? t('发送证明要求') : t("发送")} title={props.guidance ? t('发送证明要求') : t("发送")}>{props.submitting ? <span class="spinner" /> : <Icon name="arrow-up" />}</button>}</div>
       </div>
     </form>
-    {!props.hasConversation && <p class="chat-budget-summary" data-chat-budget>{t('形式化最多 {0} 分钟 / {1} Token；随后证明最多 {2} 分钟 / {3} Token。',
+    {!props.hasConversation && <p class="chat-budget-summary" data-chat-budget>{t('形式化 {0} 分钟 / {1} Token；证明 {2} 分钟 / {3} Token。',
       props.budgets.maxRunSeconds / 60, formatTokens(props.budgets.maxTotalTokens), props.budgets.research.maxRunSeconds / 60, formatTokens(props.budgets.research.maxTotalTokens))}
-      {' '}{t('费用由模型服务商收取。按已报告用量停止，进行中的请求可能超出 Token 上限；这不是金额上限。')}</p>}
+      {' '}{t('模型费用由所选服务商收取。')}</p>}
     {!props.hasConversation && !validBudget && <p class="chat-send-status" role="alert">{t('请把两阶段预算设为允许范围内的正整数。')}</p>}
-    {(props.sendStatus || (props.keyRequired && !props.apiKey.trim())) && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus || t("请在设置中填写 API Key 后发送。")}</p>}
+    {(props.sendStatus || (props.input.trim() && props.keyRequired && !props.apiKey.trim())) && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus || t("请在设置中填写 API Key 后发送。")}</p>}
     {!props.hasConversation && <details class="chat-examples"><summary>{t("试试例题")}</summary><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select></details>}
   </div>;
 }

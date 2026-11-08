@@ -681,10 +681,10 @@ function renderBudgetEstimate() {
   if (!Number.isSafeInteger(turns) || turns < 1 || !Number.isSafeInteger(seconds) || seconds < 30) { patchText(element('#budget-estimate'), ''); return; }
   const cap = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
   const estimate = usageEstimate(state.runs, model, turns);
-  const limits = t('最长约 {0} 分钟，全部 Agent 合计最多 {1} 轮模型调用。', Math.ceil(seconds / 60), turns);
-  const usage = estimate ? t('按你最近 {0} 次 {1} 运行的平均每轮 {2} Token，本次约 {3} Token 以内。', estimate.samples, model, formatTokens(estimate.perTurn), formatTokens(estimate.ceiling))
-    : t('还没有这个模型的用量记录，费用按服务商实际计费。');
-  patchText(element('#budget-estimate'), sentences(limits, usage, cap ? t('达到 {0} Token 后停止新的调用。', formatTokens(cap)) : ''));
+  const limits = t('最多 {0} 分钟，全部 Agent 合计 {1} 轮。', Math.ceil(seconds / 60), turns);
+  const target = element('#budget-estimate');
+  target.title = estimate ? t('根据最近 {0} 次 {1} 运行，预计约 {2} Token。', estimate.samples, model, formatTokens(estimate.ceiling)) : '';
+  patchText(target, sentences(limits, cap ? t('按已报告用量在 {0} Token 停止，在途请求可能超额；不代表金额封顶。', formatTokens(cap)) : ''));
 }
 function focusProofInstructions(preventScroll = false) {
   element<HTMLDetailsElement>('#proof-instructions').open = true;
@@ -785,7 +785,7 @@ function providerAddress() {
   key.placeholder = saved ? t('已保存 ····{0}，留空即使用', saved.ending) : held ? t('留空使用服务器保存的 Key') : '';
   element('#server-key-note').hidden = !held;
   const savedNote = element('#saved-key-note');
-  savedNote.hidden = !saved; savedNote.textContent = saved ? t('这个服务商已保存 Key（末四位 {0}）。留空即使用它；填写新 Key 并保存会替换它。', saved.ending) : '';
+  savedNote.hidden = !saved; savedNote.textContent = saved ? t('已保存 Key · 末四位 {0}', saved.ending) : '';
   // With an account that can save keys, the tab-only memory gives way to saving on the server.
   const vault = Boolean(account?.keyVault);
   element('#key-save-row').hidden = !vault; element('#key-save-note').hidden = !vault; element('#delete-saved-key').hidden = !saved;

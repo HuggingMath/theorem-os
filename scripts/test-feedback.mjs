@@ -106,7 +106,7 @@ try {
   assert.equal(await page.locator('h1').count(), 1);
   assert.equal(await page.locator('#feedback-export-status').getAttribute('role'), 'status');
   assert.match(await page.locator('.feedback-destination').innerText(), /公开.*GitHub Issues/s);
-  assert.match(await page.locator('.feedback-destination').innerText(), /登录 GitHub/);
+  assert.match(await page.locator('.feedback-destination').innerText(), /GitHub 账号/);
   assert.equal(await page.locator('#feedback-markdown').getAttribute('readonly'), '');
   assert.ok(await page.locator('.brand img').evaluate(image => image.complete && image.naturalWidth > 0));
   await page.locator('.feedback-product img').evaluate(image => image.decode());
@@ -147,7 +147,7 @@ try {
   assert.equal(await page.locator('#feedback-markdown').inputValue(), `# [Bug] ${subject}\n\n${body}\n`);
   assert.equal(await page.evaluate(() => window.feedbackInjected), undefined, 'Feedback must stay inert text');
   assert.equal(await page.locator('#feedback-review script').count(), 0);
-  assert.match(await page.locator('#feedback-review-note').innerText(), /确认后.*公开发布/);
+  assert.match(await page.locator('#feedback-review-note').innerText(), /提交后公开/);
   await page.locator('#feedback-copy').click();
   assert.equal(await page.evaluate(() => window.feedbackClipboard), await page.locator('#feedback-markdown').inputValue());
   assert.match(await page.locator('#feedback-export-status').innerText(), /已复制/);
@@ -181,7 +181,7 @@ try {
   await page.locator('input[name="feedback-kind"][value="feature"]').focus();
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('input[value="question"]').isChecked(), true);
-  assert.match(await page.locator('#feedback-description-hint').innerText(), /疑问/);
+  assert.match(await page.locator('#feedback-description-hint').innerText(), /查阅.*资料|尝试.*方法/);
   await page.locator('#feedback-environment').fill('');
   await submit(page);
   assert.equal((await readDestination(page)).searchParams.get('title'), `[Question] ${subject}`);

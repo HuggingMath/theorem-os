@@ -78,8 +78,7 @@
             </aside>
             <div class="chat-input-shell">
               <div class="composer-source-row"><button type="button" id="edit-draft-source" class="source-attachment" title="编辑原始 Lean 题目"><i data-lucide="file-code-2"></i><span>原始 Lean 题目</span></button><span id="source-check-status" class="source-check-status"></span><span id="draft-status" class="draft-status" role="status">未保存草稿</span></div><div id="draft-continuation" class="composer-continuation" hidden><span class="source-attachment continuation-attachment" title="新运行会把这一版的代码交给每个 Agent 参考；它不是证据，仍要重新通过 Lean 检查。"><i data-lucide="git-branch"></i><span id="draft-continuation-label"></span><button type="button" id="clear-continuation" class="continuation-clear" aria-label="不从这一版继续" title="不从这一版继续"><i data-lucide="x"></i></button></span></div>
-              <details id="proof-instructions" class="proof-instructions"><summary>补充证明要求</summary><label for="task" class="sr-only">补充证明要求</label><textarea id="task" name="task" class="chat-input" rows="3" required spellcheck="false" aria-label="补充证明要求" aria-describedby="task-help task-count task-validation" placeholder="例如希望采用的证明方法、需要解释的步骤…"></textarea>
-              <p id="task-help" class="field-note composer-task-note">这里只补充证明方法或偏好。新的数学题目请从自然语言原题开始。</p>
+              <details id="proof-instructions" class="proof-instructions"><summary>补充证明要求</summary><label for="task" class="sr-only">补充证明要求</label><textarea id="task" name="task" class="chat-input" rows="3" required spellcheck="false" aria-label="补充证明要求" aria-describedby="task-count task-validation" placeholder="例如希望采用的证明方法、需要解释的步骤…"></textarea>
               <button id="task-as-original" type="button" class="text-button">将这段文字作为新原题</button></details>
               <p id="draft-formalization" class="composer-task-note field-note" hidden><a id="draft-formalization-link" href="formalize.html">原题已确认 · 查看原意与 Lean 对照</a></p>
               <p id="task-validation" class="field-validation task-validation" role="alert" hidden></p>
@@ -102,15 +101,15 @@
                   <div class="field-grid model-grid"><div><label for="model">模型</label><input id="model" name="model" type="text" required autocomplete="off" spellcheck="false" aria-describedby="model-validation"><p id="model-validation" class="field-validation" role="alert" hidden></p></div><div><label for="effort">推理强度</label><select id="effort" name="effort"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">很高</option><option value="max">最高</option></select></div></div>
                   <label for="api-key" class="credential-label">API Key</label><div class="password-field"><input id="api-key" name="apiKey" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="API Key" aria-describedby="credential-note api-key-validation"><button type="button" id="toggle-key" class="icon-button" title="显示 API Key" aria-label="显示 API Key" aria-pressed="false"><i data-lucide="eye"></i></button></div>
                   <p id="api-key-validation" class="field-validation" role="alert" hidden></p>
-                  <p class="field-note server-key-note" id="server-key-note" hidden>留空即使用服务器为管理员保存的 Key；服务器不会把它发给浏览器。</p>
+                  <p class="field-note server-key-note" id="server-key-note" hidden>留空使用管理员 Key。</p>
                   <p class="field-note saved-key-note" id="saved-key-note" hidden></p>
                   <div class="key-memory" id="key-save-row" hidden><label class="checkbox-option"><input type="checkbox" id="save-key" checked aria-describedby="key-save-note"><span>保存到我的账号</span></label>
                     <button type="button" class="text-button" id="delete-saved-key" hidden>删除已保存的 Key</button></div>
-                  <p class="field-note" id="key-save-note" hidden>加密保存在服务器，只有你的账号能使用；浏览器只显示末四位，换设备或重新登录也不用再填。</p>
+                  <p class="field-note" id="key-save-note" hidden>保存后加密存入你的账号，可随时删除。</p>
                   <div class="key-memory" id="key-memory-row"><label class="key-memory-option"><input type="checkbox" id="remember-key" aria-describedby="key-memory-note"><span>在此标签页记住</span></label>
                     <button type="button" class="text-button" id="forget-key" hidden>清除已记住的 Key</button></div>
-                  <p class="field-note" id="key-memory-note">只存在这个标签页里，关闭标签页即清除；不会写入草稿，也不会带给其他服务商或地址。</p>
-                  <p class="field-note" id="credential-note">密钥经服务器调用所选服务商，费用计入对应 API 账户。</p>
+                  <p class="field-note" id="key-memory-note">关闭标签页后清除，限当前服务商使用。</p>
+                  <p class="field-note" id="credential-note">模型费用由所选服务商收取。</p>
                 </div>
                 <div class="form-section execution-section" id="settings-execution" tabindex="-1">
                   <div class="section-heading"><i data-lucide="sliders-horizontal"></i><h2>执行配置</h2><button type="button" class="term-hint" data-term="budget" aria-label="预算是什么" aria-expanded="false"><span aria-hidden="true">?</span></button></div>
@@ -118,7 +117,7 @@
                   <div class="token-cap"><label for="max-tokens">用量上限 / 万 Token</label><input id="max-tokens" name="maxTotalTokens" type="number" min="1" step="1" inputmode="numeric" placeholder="不限" aria-describedby="budget-estimate max-tokens-validation"><p id="max-tokens-validation" class="field-validation" role="alert" hidden></p><p id="budget-estimate" class="field-note budget-estimate" aria-live="polite"></p></div>
                   <fieldset class="coordination"><legend>协作模式</legend><button type="button" class="term-hint" data-term="coordination" aria-label="协作模式是什么" aria-expanded="false"><span aria-hidden="true">?</span></button><div class="segmented"><label><input type="radio" name="coordination" value="cooperative" checked><span><i data-lucide="network"></i>任务协作</span></label><label><input type="radio" name="coordination" value="independent"><span><i data-lucide="git-branch"></i>独立并行</span></label></div></fieldset>
                   <div class="plan-approval-option"><label class="checkbox-option"><input type="checkbox" id="plan-approval" aria-describedby="plan-approval-note"><span>先审计划再开始</span></label>
-                    <p class="field-note" id="plan-approval-note">Lead 拟好研究计划后先停下来等你批准；批准前可以修改计划或给 Lead 留言。需要任务协作和至少 2 个 Agent，等待的时间也计入解题预算。</p></div>
+                    <p class="field-note" id="plan-approval-note">需要任务协作及至少 2 个 Agent。等待批准也计入预算。</p></div>
                 </div>
                 <section class="form-section module-plan-section" id="module-plan" aria-labelledby="module-plan-heading" tabindex="-1">
                   <div class="section-heading module-plan-heading"><i data-lucide="network"></i><h2 id="module-plan-heading">模块方案</h2><button type="button" class="term-hint" data-term="modules" aria-label="模块方案是什么" aria-expanded="false"><span aria-hidden="true">?</span></button><span class="module-plan-count mono" data-module-plan-count></span><div class="module-plan-view-actions"><button type="button" class="icon-button" data-module-plan-expand-all title="展开全部策略" aria-label="展开全部策略" aria-controls="module-plan-list" disabled><i data-lucide="chevron-down"></i></button><button type="button" class="icon-button" data-module-plan-collapse-all title="收起全部策略" aria-label="收起全部策略" aria-controls="module-plan-list" disabled><i data-lucide="chevron-up"></i></button></div></div>

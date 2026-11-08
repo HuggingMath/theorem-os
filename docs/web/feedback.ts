@@ -12,28 +12,28 @@ const locale = localeOf(document.documentElement.lang);
 const text = {
   zh: {
     kinds: {
-  bug: { name: '问题反馈', prefix: '[Bug]', hint: '可附上复现步骤、错误信息与预期结果。', placeholder: '发生了什么？如何复现？你期望的结果是什么？' },
-  feature: { name: '功能建议', prefix: '[Feature]', hint: '描述使用场景、希望的改进与它能解决的问题。', placeholder: '你希望增加或改进什么？会在什么场景下使用？' },
-  question: { name: '使用咨询', prefix: '[Question]', hint: '描述疑问，以及已经尝试过的方法。', placeholder: '你想了解什么？已经查阅或尝试了哪些方法？' },
+  bug: { name: '问题反馈', prefix: '[Bug]', hint: '附上复现步骤、错误信息和预期结果，方便排查。', placeholder: '请描述遇到的问题' },
+  feature: { name: '功能建议', prefix: '[Feature]', hint: '说明使用场景，以及这项改进能解决的问题。', placeholder: '你希望增加或改进什么？' },
+  question: { name: '使用咨询', prefix: '[Question]', hint: '附上已经查阅的资料或尝试过的方法。', placeholder: '你想了解什么？' },
     },
     missingSubject: '请填写反馈标题。', missingDescription: '请填写详细描述。',
     headings: { kind: '反馈类型', area: '相关位置', description: '详细描述', environment: '环境与版本' },
     footer: '来自 TheoremOS 反馈页。',
     longNote: '内容较长，请先复制或下载全文，再到 GitHub 粘贴发布。',
-    note: '将在 GitHub 打开草稿，确认后才会公开发布。截图和附件可在 GitHub 补充。',
+    note: '将在 GitHub 打开草稿，提交后公开。',
     copied: '已复制反馈全文。', copyFailed: '未能自动复制，已选中全文，可手动复制。', downloaded: '已准备反馈 Markdown 下载。',
   },
   en: {
     kinds: {
-      bug: { name: 'Bug report', prefix: '[Bug]', hint: 'Include the steps to reproduce, any error message and what you expected.', placeholder: 'What happened? How can we reproduce it? What did you expect?' },
-      feature: { name: 'Feature request', prefix: '[Feature]', hint: 'Describe the use case, the change you want and the problem it solves.', placeholder: 'What would you like added or improved? When would you use it?' },
-      question: { name: 'Question', prefix: '[Question]', hint: 'Describe your question and what you have already tried.', placeholder: 'What would you like to know? What have you read or tried so far?' },
+      bug: { name: 'Bug report', prefix: '[Bug]', hint: 'Add steps to reproduce, error messages and the expected result.', placeholder: 'Describe the problem' },
+      feature: { name: 'Feature request', prefix: '[Feature]', hint: 'Explain when you would use this and the problem it would solve.', placeholder: 'What would you like added or improved?' },
+      question: { name: 'Question', prefix: '[Question]', hint: 'Add what you have read or tried so far.', placeholder: 'What would you like to know?' },
     },
     missingSubject: 'Enter a title for your feedback.', missingDescription: 'Enter a description.',
     headings: { kind: 'Type', area: 'Area', description: 'Description', environment: 'Environment' },
     footer: 'Sent from the TheoremOS feedback page.',
     longNote: 'This is too long for a link. Copy or download the full text, then paste it on GitHub.',
-    note: 'A draft opens on GitHub. Nothing is public until you submit it there. Add screenshots and attachments on GitHub.',
+    note: 'A draft opens on GitHub. It becomes public when you submit it there.',
     copied: 'Copied the full text.', copyFailed: 'Could not copy automatically. The full text is selected so you can copy it.', downloaded: 'The Markdown download is ready.',
   },
 }[locale];

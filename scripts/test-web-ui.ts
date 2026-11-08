@@ -90,7 +90,7 @@ try {
   // The Lean editor is one centred column; its preview opens from 预览 in place of the composer.
   await showArtifacts(page);
   await page.locator('#draft-preview').waitFor();
-  assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '未提交');
+  assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '草稿');
   await assertPreviewSource();
   await assertPreviewConnection();
   for (const width of initialWidths) {
@@ -124,7 +124,7 @@ try {
       assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width + 1, `${selector} overflows initial ${width}px view`);
     }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `initial preview overflows ${width}px`);
-    assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '未提交');
+    assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '草稿');
     await assertPreviewSource();
     await screenshot(width === 1440 ? 'desktop-initial-source.png' : `mobile-${width}-initial-source.png`);
     await showChat(page);
@@ -217,7 +217,7 @@ try {
   await selectConfig(page, 'template', template.id);
   assert.equal(await page.locator('#source').inputValue(), template.source);
   await showArtifacts(page);
-  assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '未提交');
+  assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '草稿');
   await assertPreviewSource();
   await assertPreviewConnection();
   assert.equal(creationRequests, 0, 'preview changes and reset must not submit runs');

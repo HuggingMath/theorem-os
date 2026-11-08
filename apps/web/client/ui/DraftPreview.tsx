@@ -24,7 +24,7 @@ function DraftPreview(props: DraftPreviewProps) {
     <button type="button" role="tab" id={id} data-draft-view={view} aria-selected={props.view === view} aria-controls={panel} tabIndex={props.view === view ? 0 : -1}>{fill(label, <Icon name={icon} />)}</button>;
   return <div class="detail-empty draft-preview" id="draft-preview">
     <header class="preview-heading"><div><span class="preview-eyebrow">{t('Lean 工作区')}</span><h2>{props.title}</h2></div>
-      <div class="detail-actions"><span class="badge preview-status">{fill(t('{0}未提交'), <Icon name="file-code-2" />)}</span>
+      <div class="detail-actions"><span class="badge preview-status">{fill(t('{0}草稿'), <Icon name="file-code-2" />)}</span>
         <button type="button" class="icon-button" data-draft-action="edit" aria-label={t('编辑原始题目')} title={t('编辑原始题目')}><Icon name="square-pen" /></button>
         <button type="button" class="icon-button" data-draft-action="settings" aria-label={t('配置证明环境')} title={t('配置证明环境')}><Icon name="sliders-horizontal" /></button></div></header>
     <dl class="preview-facts">{props.facts.map(([id, label, value, mono]) => <div key={id}><dt>{label}</dt><dd data-preview-value={id} class={mono ? 'mono' : undefined} title={value}>{value}</dd></div>)}</dl>

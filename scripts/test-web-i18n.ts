@@ -176,7 +176,7 @@ try {
   await Promise.all([reader.waitForEvent('load'), reader.locator('#locale-switch').click()]);
   await reader.locator('#share-content:not([hidden])').waitFor();
   assert.equal(await reader.evaluate(() => document.documentElement.lang), 'zh-CN');
-  assert.match(await reader.locator('body').innerText(), /独立 Lean 验收/u);
+  assert.match(await reader.locator('body').innerText(), /Lean 陈述证明通过/u);
   assert.equal(await reader.locator('#locale-switch').innerText(), 'English');
   await visitor.close();
   mark('the share page follows the reader\'s language, fits 320px, and switches to Chinese');
@@ -263,7 +263,7 @@ try {
   await Promise.all([page.waitForEvent('load'), page.locator('#locale-switch').click()]);
   await page.locator('#send-code:enabled').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');
-  assert.match(await page.locator('body').innerText(), /内测期间仅限/u);
+  assert.match(await page.locator('body').innerText(), /已获准的内测邮箱/u);
   assert.deepEqual(errors, []);
   mark('the login page follows the browser language, fits 320px, and switches to Chinese');
 } finally {

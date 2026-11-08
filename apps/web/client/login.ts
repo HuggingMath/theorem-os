@@ -71,8 +71,8 @@ async function start() {
   // An open signup admits any inbox, so the page says so and asks for consent; the allowlist keeps its beta wording.
   const openSignup = session.signup === 'open';
   $('#login-lead').textContent = openSignup
-    ? t('用邮箱注册或登录：输入邮箱，收到 6 位验证码即可开始。第一次登录会自动创建账号。')
-    : t('内测期间仅限已通过申请的邮箱。可用邮箱验证码或已设置的密码登录。');
+    ? t('用邮箱登录，新用户会自动创建账号。')
+    : t('请使用已获准的内测邮箱。');
   // The password form waits for the session cookie and CSRF token; sent earlier, it reads as an expired page.
   passwordSubmit.disabled = false;
   await loadCaptcha();

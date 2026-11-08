@@ -23,7 +23,7 @@ try {
   await page.evaluate(() => document.fonts.ready);
   assert.equal(await page.locator('#environment').inputValue(), 'mathlib');
   assert.equal(await page.locator('#api-key').inputValue(), '');
-  assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '未提交');
+  assert.equal(await page.locator('#draft-preview .preview-status').innerText(), '草稿');
   await page.locator('#edit-draft-source').click();
   await page.locator('#expanded-source').fill(draftSource);
   await page.locator('#apply-editor').click();
@@ -56,7 +56,7 @@ try {
   await detail.locator('#submit-run:enabled').waitFor();
   await detail.evaluate(() => document.fonts.ready);
   assert.equal(await detail.locator('#api-key').inputValue(), '');
-  assert.equal(await detail.locator('#draft-preview .preview-status').innerText(), '未提交');
+  assert.equal(await detail.locator('#draft-preview .preview-status').innerText(), '草稿');
   await detail.locator('#edit-draft-source').click();
   await detail.locator('#expanded-source').fill(draftSource);
   await detail.locator('#apply-editor').click();
@@ -74,7 +74,7 @@ try {
   await detail.locator('#draft-preview').evaluate(node => { node.scrollTop = 0; });
   assert.equal(await detail.locator('#environment').inputValue(), 'mathlib');
   assert.equal(await detail.locator('#api-key').inputValue(), '');
-  assert.equal(await detail.locator('#draft-preview .preview-status').innerText(), '未提交');
+  assert.equal(await detail.locator('#draft-preview .preview-status').innerText(), '草稿');
   const sourceDetail = await detail.locator('.draft-source-scroll').evaluate(node => ({
     value: node.querySelector('code').textContent,
     scrollHeight: node.scrollHeight, clientHeight: node.clientHeight,
@@ -150,7 +150,7 @@ try {
       assert.ok(coordinator.y >= 100 && receipt.y + receipt.height <= height + 1,
         'The mobile module screenshot must show the complete research graph and independent acceptance');
     }
-    assert.equal(await detail.locator('#draft-preview .preview-status').innerText(), '未提交');
+    assert.equal(await detail.locator('#draft-preview .preview-status').innerText(), '草稿');
     await detail.screenshot({ path: path.join(root, `docs/assets/workbench-modules-${device}.png`) });
   }
   assert.equal(await detail.locator('#api-key').inputValue(), '');

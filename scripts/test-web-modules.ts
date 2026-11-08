@@ -203,13 +203,13 @@ try {
     await page.locator('#draft-tab-modules[aria-selected="true"]').waitFor();
     assert.equal(await page.locator('#draft-tab-modules').evaluate(element => document.activeElement === element), true);
     assert.equal(await page.locator('.module-node').count(), moduleIds.length);
-    assert.equal(await page.locator('.module-observation').innerText(), '未提交');
+    assert.equal(await page.locator('.module-observation').innerText(), '草稿');
     assert.equal(await page.locator('.module-live').isVisible(), false);
     for (const id of moduleIds) {
       await state(page, id, 'pending', '未运行'); await selectModule(page, id);
       assert.equal((await facts(page))['活动事件'], '0');
       assert.equal(await page.locator('.module-events li').count(), 0);
-      assert.equal(await page.locator('.module-events-empty').isVisible(), true);
+      assert.equal(await page.locator('.module-events-empty').isVisible(), false);
       assert.equal(await page.locator('[data-module-destination="events"]').isVisible(), false);
     }
     await graphReadability(page);
@@ -362,7 +362,7 @@ try {
     await sync(h, run.id); await state(page, 'M2', 'observed', '局部通过'); await state(page, 'S3', 'pending');
     control.progress('proof_checked', 'Complete candidate check passed', { workerId: 'worker1', passed: true, conditional: false });
     await sync(h, run.id); await state(page, 'M2', 'observed', '候选通过'); await state(page, 'S3', 'pending');
-    await selectModule(page, 'M2'); assert.match(await page.locator('.module-verification-note').innerText(), /不代表完整原题验收通过/);
+    await selectModule(page, 'M2'); assert.match(await page.locator('.module-verification-note').innerText(), /仍须验收完整原题/);
     assert.equal(await page.locator('.module-node[data-tone="passed"]').count(), 0);
   });
 

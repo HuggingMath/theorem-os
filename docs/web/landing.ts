@@ -181,21 +181,21 @@ const modulePreviews = {
   zh: {
   modules: {
     label: '模块图谱', caption: '研究模块与独立验收',
-    alt: '新版工作台的真实模块图谱：M1–M5 研究决策连接到固定的 S3 独立验收，当前配置尚未提交运行。',
+    alt: '模块图谱：M1–M5 研究决策连接到固定的 S3 独立验收。',
   },
   library: {
     label: '方案库', caption: 'Mathlib 代数研究 · 2 项自定义策略',
-    alt: '新版工作台的真实模块方案库：已保存 Mathlib 代数研究方案，启用两项自定义策略，配置尚未提交运行。',
+    alt: '模块方案库：Mathlib 代数研究方案，启用两项自定义策略。',
   },
   },
   en: {
   modules: {
     label: 'Module map', caption: 'Research modules and independent verification',
-    alt: 'The module map of the current workbench: the M1–M5 research decisions connect to the fixed S3 independent verification. The configuration has not been submitted yet.',
+    alt: 'Module map: the M1–M5 research decisions connect to the fixed S3 independent verification.',
   },
   library: {
     label: 'Strategy library', caption: 'Mathlib algebra study · 2 custom strategies',
-    alt: 'The strategy library of the current workbench: a saved Mathlib algebra study with two custom strategies enabled. The configuration has not been submitted yet.',
+    alt: 'Strategy library: a saved Mathlib algebra study with two custom strategies enabled.',
   },
   },
 }[locale];

@@ -72,7 +72,8 @@ try {
   await page.goto(origin);
   await ready(page);
 
-  assert.match(await estimate(page), /还没有这个模型的用量记录/u);
+  assert.match(await estimate(page), /最多 5 分钟，全部 Agent 合计 5 轮。/u);
+  assert.equal(await withSettings(page, () => page.locator('#budget-estimate').getAttribute('title')), '');
   // New drafts start without a source; the token cap is then the first thing submission stops at.
   await fillConfig(page, 'source', 'theorem long_run_fixture : True := by\n  sorry\n');
   await fillConfig(page, 'max-tokens', '0');
@@ -82,7 +83,7 @@ try {
   await page.locator('#max-tokens-validation:not([hidden])').waitFor();
   assert.match(await page.locator('#max-tokens-validation').innerText(), /留空表示不限/u);
   await page.locator('#max-tokens').fill('50');
-  assert.match(await page.locator('#budget-estimate').innerText(), /最长约 5 分钟，全部 Agent 合计最多 5 轮模型调用。.*达到 50 万 Token 后停止新的调用/u);
+  assert.match(await page.locator('#budget-estimate').innerText(), /最多 5 分钟，全部 Agent 合计 5 轮。.*按已报告用量在 50 万 Token 停止/u);
   await page.screenshot({ path: path.join(output, 'long-run-budget-1440.png') });
   await page.locator('#settings-submit').click();
   await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });
@@ -108,7 +109,7 @@ try {
   await page.waitForFunction(() => document.title.endsWith(' · TheoremOS') && !/^\(|项进行中/u.test(document.title));
   mark('a run that ends in a hidden tab sends one desktop notification and marks the tab title until the tab is shown');
 
-  assert.match(await estimate(page), /按你最近 1 次 deepseek-flash 运行的平均每轮 10 万 Token，本次约 50 万 Token 以内/u);
+  assert.match(await withSettings(page, () => page.locator('#budget-estimate').getAttribute('title')) ?? '', /根据最近 1 次 deepseek-flash 运行，预计约 50 万 Token/u);
   mark('the next estimate uses the tokens per turn of the account\'s finished run on the same model');
 
   const older = await postRun({ page }, input('older')), away = await postRun({ page }, input('away'));
