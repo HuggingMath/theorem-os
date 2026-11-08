@@ -118,8 +118,8 @@
 .proof-walkthrough-claim > span { display: block; font-size: 11px; color: var(--green); margin-bottom: 8px; }
 .proof-walkthrough-claim > p { font-size: 17px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
 .proof-walkthrough-reason > h6 { color: var(--muted); font-size: 12px; font-weight: 400; margin: 0 0 8px; }
-.proof-walkthrough-reason > p { font-size: 15px; line-height: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
-.proof-walkthrough-calculation { margin: 18px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.proof-walkthrough-reason > p { margin-top: 16px !important; font-size: 15px; line-height: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
+.proof-walkthrough-calculation { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .proof-walkthrough-calculation > li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 13px; padding: 15px 0; border-bottom: 1px solid var(--line); }
 .proof-walkthrough-calculation > li > span { padding-top: 5px; color: var(--muted); font: 11px/1.8 var(--mono); }
 .proof-walkthrough-statement { font: 500 17px/1.9 var(--serif); white-space: pre-wrap; overflow-wrap: anywhere; }
