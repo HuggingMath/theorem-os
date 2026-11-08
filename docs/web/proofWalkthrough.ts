@@ -22,12 +22,22 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
   const original = run.checks!.find(check => check.scope === 'original' && check.status === 'kernel_verified' && check.sourceDigest === walkthrough.proofSha256)!;
   const destination = (node: string, step?: string) => `data-global-run="${html(run.runId)}" data-global-node="${html(node)}"${step ? ` data-global-step="${html(step)}"` : ''}`;
   const positions = new Map(walkthrough.steps.map((step, index) => [step.id, { step, number: String(index + 1).padStart(2, '0') }]));
+  const stages = new Map(walkthrough.stages.flatMap((stage, index) => stage.stepIds.map(id => [id, { stage, index }] as const)));
   return `<div class="proof-walkthrough" data-proof-walkthrough="${html(walkthrough.recordId)}" data-proof-sha="${walkthrough.proofSha256}">
-    <header class="proof-walkthrough-intro"><div class="proof-walkthrough-heading"><h6>${html(label(walkthrough.title, locale))}</h6><span>${text(locale, `${walkthrough.steps.length} 步 · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} 行推导`, `${walkthrough.steps.length} steps · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} derivation lines`)}</span></div><details class="proof-walkthrough-problem"><summary>${text(locale, '题目与符号', 'Problem and notation')}</summary><p class="proof-walkthrough-goal">${html(label(walkthrough.goal, locale))}</p>${walkthrough.notation ? `<p class="proof-walkthrough-notation">${html(label(walkthrough.notation, locale))}</p>` : ''}</details></header>
+    <header class="proof-walkthrough-intro"><div class="proof-walkthrough-heading workflow-section-heading"><h5 tabindex="-1">${html(label(walkthrough.title, locale))}</h5></div>
+      <p class="proof-walkthrough-strategy">${html(label(walkthrough.strategy, locale))}</p>
+      <div class="proof-walkthrough-meta"><span>${text(locale, `${walkthrough.steps.length} 步 · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} 行推导`, `${walkthrough.steps.length} steps · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} lines`)}</span><details class="proof-walkthrough-problem"><summary>${text(locale, '题目与符号', 'Problem and notation')}</summary><p class="proof-walkthrough-goal">${html(label(walkthrough.goal, locale))}</p>${walkthrough.notation ? `<p class="proof-walkthrough-notation">${html(label(walkthrough.notation, locale))}</p>` : ''}</details></div>
+      <ol class="proof-overview" aria-label="${text(locale, '证明主线', 'Proof outline')}">${walkthrough.stages.map((stage, index) => {
+        const first = stage.stepIds[0], last = stage.stepIds.at(-1)!;
+        const range = [positions.get(first)!.number, positions.get(last)!.number].filter((value, i, values) => i === 0 || value !== values[0]).join('–');
+        return `<li><button type="button" data-proof-overview-stage="${index}" data-proof-overview-steps="${stage.stepIds.join(' ')}" data-global-scroll="${stepId(first)}" aria-controls="${stepId(first)}"${index === 0 ? ' aria-current="step"' : ''}><span class="proof-overview-range">${range}</span><span class="proof-overview-copy"><strong>${html(label(stage.title, locale))}</strong><span>${html(label(stage.summary, locale))}</span></span><span class="proof-overview-link" aria-hidden="true">↗</span></button></li>`;
+      }).join('')}</ol>
+    </header>
     <div class="proof-reading-layout"><aside class="proof-route-sidebar">${renderProofRoute(walkthrough, locale)}</aside><div class="proof-reading-content">
     <nav class="proof-reading-bar" aria-label="${text(locale, '阅读位置', 'Reading position')}"><button type="button" data-proof-reader="previous" data-global-scroll="" aria-label="${text(locale, '上一步', 'Previous step')}" disabled>←</button><span data-proof-reading-count>01 / ${String(walkthrough.steps.length).padStart(2, '0')}</span><span data-proof-reading-title>${html(label(walkthrough.steps[0].title, locale))}</span><button type="button" data-proof-reader="next" data-global-scroll="${stepId(walkthrough.steps[1]?.id ?? walkthrough.steps[0].id)}" data-next-label="${text(locale, '下一步', 'Next step')}" data-acceptance-label="${text(locale, '查看原题验收', 'Inspect original-problem acceptance')}" aria-label="${text(locale, '下一步', 'Next step')}">→</button></nav>
     <ol class="proof-walkthrough-steps">${walkthrough.steps.map((step, index) => {
       const next = walkthrough.steps[index + 1];
+      const readingStage = stages.get(step.id)!;
       const consumers = walkthrough.steps.filter(candidate => candidate.dependsOn.includes(step.id));
       const excerpt = step.evidence.source;
       const checkLinks = (step.evidence.checkIds ?? []).filter(id => id !== original.id).map(id => {
@@ -35,7 +45,7 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
         const node = check.scope === 'original' ? 'original' : check.taskId ? `task:${check.taskId}` : 'problem';
         return `<button ${destination(node, `check:${id}`)}>${text(locale, '相关检查', 'Related check')}</button>`;
       }).join('');
-      return `<li class="proof-walkthrough-step" id="${stepId(step.id)}" data-proof-derivation="${html(step.id)}"><header><span>${String(index + 1).padStart(2, '0')}</span><h5 tabindex="-1">${html(label(step.title, locale))}</h5></header>
+      return `<li class="proof-walkthrough-step" id="${stepId(step.id)}" data-proof-derivation="${html(step.id)}" data-proof-reading-stage="${readingStage.index}">${readingStage.stage.stepIds[0] === step.id ? `<p class="proof-walkthrough-stage-label">${text(locale, `阶段 ${readingStage.index + 1}`, `Part ${readingStage.index + 1}`)} · ${html(label(readingStage.stage.title, locale))}</p>` : ''}<header><span>${String(index + 1).padStart(2, '0')}</span><h5 tabindex="-1">${html(label(step.title, locale))}</h5></header>
         ${step.dependsOn.length ? `<nav class="proof-walkthrough-inputs" aria-label="${text(locale, '这一步用到的结论', 'Earlier results used in this step')}"><span>${text(locale, '用到', 'Uses')}</span>${step.dependsOn.map(id => {
           const previous = positions.get(id)!;
           return `<button data-proof-dependency="${html(id)}" data-global-scroll="${stepId(id)}"><span>${previous.number}</span>${html(label(previous.step.title, locale))} ↑</button>`;

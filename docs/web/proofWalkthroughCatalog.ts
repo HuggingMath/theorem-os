@@ -19,6 +19,9 @@ export function withProofWalkthrough(record: Pick<ArchiveRecord, 'id' | 'campaig
     || createHash('sha256').update(source.code).digest('hex') !== walkthrough.proofSha256
     || !run.checks?.some(check => check.scope === 'original' && check.status === 'kernel_verified' && check.sourceDigest === walkthrough.proofSha256)) return fail('checked source');
   const lines = source.code.split('\n');
+  const stagedIds = walkthrough.stages.flatMap(stage => stage.stepIds);
+  if (!walkthrough.stages.length || walkthrough.stages.some(stage => !stage.stepIds.length)
+    || stagedIds.length !== walkthrough.steps.length || stagedIds.some((id, index) => id !== walkthrough.steps[index].id)) fail('reading stages');
   const ids = new Set<string>();
   for (const step of walkthrough.steps) {
     if (ids.has(step.id) || !/^[a-z0-9-]+$/u.test(step.id)) fail(`step ${step.id}`);

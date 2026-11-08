@@ -63,6 +63,10 @@ export function mountProofReading(): void {
     }
     for (const edge of edges) edge.dataset.proofRelation = edge.dataset.to === id ? 'input' : edge.dataset.from === id ? 'output' : 'other';
     for (const section of sections) section.classList.toggle('is-reading', section.dataset.proofDerivation === id);
+    root.querySelectorAll<HTMLElement>('[data-proof-overview-steps]').forEach(stage => {
+      if (stage.dataset.proofOverviewSteps!.split(' ').includes(id)) stage.setAttribute('aria-current', 'step');
+      else stage.removeAttribute('aria-current');
+    });
     root.querySelectorAll('[data-proof-reading-count]').forEach(node => { node.textContent = button.dataset.proofRouteNumber + ' / ' + String(buttons.length).padStart(2, '0'); });
     root.querySelectorAll('[data-proof-reading-title]').forEach(node => { node.textContent = button.dataset.proofRouteTitle!; });
     const previous = root.querySelector<HTMLButtonElement>('[data-proof-reader="previous"]')!;

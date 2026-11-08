@@ -8,6 +8,20 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
     runId: '885e367e-04a9-49ca-b82f-d7367b12c10b',
     proofSha256: '63bc780a8b0092517aba26c608eb9c58dc1033600a800a35fb1d5693b8c86e4d',
     title: { zh: '由 Koebe 映射的两处边界奇性得到端点发散', en: 'Obtain endpoint divergence from two boundary singularities of the Koebe map' },
+    strategy: t('在边界点 +1、−1 附近分别比较 Koebe 导数与临界奇性 |z−a|⁻²，证明两个端点面积矩都发散。逆映射的面积换元把 p 次逆导数积分变为 2−p 次导数面积矩，因此得到 p=4 和 4/3 的不可积性。', 'Compare the Koebe derivative near +1 and −1 with the critical singularity |z−a|⁻² to prove divergence of both endpoint moments. Change of area converts the inverse derivative to moment 2−p of the original derivative, giving nonintegrability at p=4 and 4/3.'),
+    stages: [{
+      title: t('映射与发散模型', 'Map and divergence model'),
+      summary: t('证明 Koebe 映射单叶、归一化且导数不为零；另构造互不相交的边界圆盘，建立临界二次奇性的发散模型。', 'Prove univalence, normalization and a nonzero derivative for the Koebe map. Separately, disjoint boundary balls establish divergence for the critical quadratic singularity.'),
+      stepIds: ['establish-the-koebe-map-and-inverse', 'sum-disjoint-boundary-balls'],
+    }, {
+      title: t('两个端点分别发散', 'Divergence at both endpoints'),
+      summary: t('+1 附近给出 M(2/3)=∞，−1 附近给出 M(−2)=∞；两条比较支线为逆映射的两个指数准备输入。', 'Comparison near +1 gives M(2/3)=∞, while comparison near −1 gives M(−2)=∞. These separate branches supply the two inverse-map exponents.'),
+      stepIds: ['make-the-positive-endpoint-diverge', 'make-the-negative-endpoint-diverge'],
+    }, {
+      title: t('换元传递不可积性', 'Transfer nonintegrability by change of variables'),
+      summary: t('用 g′∘k=1/k′ 和面积 Jacobian |k′|² 得到指数 2−p，再代入 p=4、4/3，汇合全部五项结论。', 'Combine g′∘k=1/k′ with the area Jacobian |k′|² to obtain exponent 2−p. Substituting p=4 and 4/3 assembles all five conclusions.'),
+      stepIds: ['compute-the-inverse-jacobian-weights', 'transfer-divergence-and-assemble-the-endpoints'],
+    }],
     goal: {
       zh: '证明 k(z)=z/(1−z)² 是归一化单叶函数，且 ∫_D|k′|⁻²、∫_D|k′|²ᐟ³ 均为无穷；其逆映射 g 在 k(D) 上的 |g′|⁴、|g′|⁴ᐟ³ 也均不可积。',
       en: 'Prove that k(z)=z/(1−z)² is normalized and univalent, that ∫_D|k′|⁻² and ∫_D|k′|²ᐟ³ are infinite, and that |g′|⁴ and |g′|⁴ᐟ³ are not integrable on k(D) for its inverse g.',
@@ -162,6 +176,20 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
     runId: '24910705-72c7-4d57-9d54-d8c3d6cb4e2e',
     proofSha256: '6b32441db35b95aed73a9f7acdb44c57bc0f5c3e1556113478e96f921b022a3f',
     title: { zh: '在有限代数的同余格与带颜色图见证之间往返', en: 'Pass between finite congruence representations and colored graph witnesses' },
+    strategy: t('从有限代数出发，用主同余给点对着色，并把生成同余解释成兼容映射的连接链。反过来，把图上全部不增色映射列为一元操作，第五条图公理恢复所有同余，分离公理再把对应提升为序同构。', 'Starting with a finite algebra, color pairs by principal congruences and describe generated congruences by chains of compatible images. Conversely, use every color-nonincreasing map as a unary operation: the fifth graph axiom recovers all congruences, and separation makes the correspondence an order isomorphism.'),
+    stages: [{
+      title: t('从表示得到颜色图', 'From a representation to a colored graph'),
+      summary: t('主同余给出前四条颜色公理，种子的兼容像边所成等价闭包给出第五条，完成“可表示推出图见证”。', 'Principal congruences give the first four color axioms; the equivalence closure of compatible seed images gives the fifth, proving that a representation yields a graph witness.'),
+      stepIds: ['read-principal-congruences-as-colors', 'turn-generated-congruence-into-chains', 'obtain-the-fifth-color-axiom'],
+    }, {
+      title: t('从颜色图构造代数', 'Construct an algebra from the graph'),
+      summary: t('取全部不增色自映射为一元基本操作，证明每个颜色阈值关系 ρ(a) 都是这个有限代数的同余。', 'Take every color-nonincreasing self-map as a unary basic operation and prove that each threshold relation ρ(a) is a congruence of the finite algebra.'),
+      stepIds: ['construct-the-unary-witness-algebra'],
+    }, {
+      title: t('恢复全部同余与格序', 'Recover all congruences and the order'),
+      summary: t('由 θ 内点对颜色的 join 证明 ρ 满射，再用分离边证明它反映序，得到同余格的序同构并合并两个方向。', 'The join of colors of pairs in θ proves surjectivity of ρ. Separating edges make ρ reflect order, yielding the congruence-lattice isomorphism and completing both directions.'),
+      stepIds: ['recover-every-congruence-from-its-pair-colors', 'reflect-order-and-combine-directions'],
+    }],
     goal: {
       zh: '对有限带底格 L，证明它可表示为某个非空有限代数的全部同余组成的格，当且仅当 L 存在满足五条公理的非空有限带颜色图见证。',
       en: 'For a finite lattice L with bottom, prove that L is the full congruence lattice of a nonempty finite algebra exactly when it has a nonempty finite colored graph witness satisfying the five stated axioms.',
@@ -321,6 +349,20 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
     runId: '58e5a793-5940-4b38-aa6a-2a71ae0cac3f',
     proofSha256: '3e842122e50547b602873e71db599cc6782414fec9c60a08c664d43586341d12',
     title: { zh: '用三角格点的模 7 颜色覆盖整个平面', en: 'Extend a seven-color triangular lattice to the whole plane' },
+    strategy: t('先用整数二次型证明不同同色格点足够远，再证明每个平面点距某格点不超过 r=√3/4，并继承该格点的颜色。若单位距离两点同色，共享中心会使两点太近，不同中心又会违背同色格点的分离下界。', 'Use an integer quadratic form to separate distinct lattice centers of one color. Cover every plane point within r=√3/4 of a center and inherit its color; equal centers would make two unit-distance points too close, while distinct centers would violate the same-color separation bound.'),
+    stages: [{
+      title: t('分离同色格点', 'Separate same-color centers'),
+      summary: t('把距离写为 (9/16)Q，把同色写为模 7 整除；正的 7 倍数给出不同同色中心距大于 1+2r。', 'Express squared distance as (9/16)Q and equal colors as divisibility by seven. A positive multiple of seven makes distinct same-color centers farther apart than 1+2r.'),
+      stepIds: ['encode-distance-and-color', 'separate-equal-color-centers'],
+    }, {
+      title: t('覆盖并着色全平面', 'Cover and color the plane'),
+      summary: t('在斜坐标的四个整数角中找到距离不超过 r 的中心，再固定选择并继承其模 7 颜色，同时保留距离证据。', 'Find a center within r among four integer corners in oblique coordinates, then choose one and inherit its color while retaining the distance bound.'),
+      stepIds: ['cover-with-four-corner-candidates', 'transfer-a-chosen-center-color'],
+    }, {
+      title: t('排除单位距离同色', 'Exclude equal colors at unit distance'),
+      summary: t('中心相同时用 2r<1，中心不同时用分离下界与三角不等式；两种情形都矛盾，因此得到七色着色。', 'For a shared center use 2r<1; for distinct centers use their separation and the triangle inequality. Both cases contradict unit distance and give a seven-coloring.'),
+      stepIds: ['exclude-a-shared-center', 'exclude-distinct-centers-and-finish'],
+    }],
     goal: {
       zh: '构造平面到 Fin 7 的着色，使任意距离恰为 1 的两点颜色不同。',
       en: 'Construct a coloring of the plane by Fin 7 such that points at distance exactly one have different colors.',
@@ -392,22 +434,27 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           en: 'One of the four integer corners adjacent to (⌊α⌋,⌊β⌋) satisfies dist(x,P(m,n))≤r.',
         },
         because: {
-          zh: '四个候选误差为 (p,q)、(p−1,q)、(p,q−1)、(p−1,q−1)。按 2p+q、p+2q 与 1、2 的比较，再按 p 与 q 的大小分区，四角引理给出其中一个 Q≤1/3。代入 dist²=(9/16)Q(α−m,β−n)，得到 dist²≤3/16=r²，故 dist≤r。',
-          en: 'The candidate errors are (p,q), (p−1,q), (p,q−1) and (p−1,q−1). Comparing 2p+q and p+2q with one and two, then comparing p with q, selects a corner with Q≤1/3. Substitution into dist²=(9/16)Q(α−m,β−n) gives dist²≤3/16=r², hence dist≤r.',
+          zh: '四个候选误差为 (p,q)、(p−1,q)、(p,q−1)、(p−1,q−1)。Q 是凸函数：00 区域的四个顶点上最大值为 1/3，11 区域用反射归回 00；其余点按 p、q 大小分到 10 或 01，前者由五个顶点估计，后者交换坐标。四个区域覆盖整个小数部分方格，各自都有 Q≤1/3。最后代入 dist²=(9/16)Q≤3/16=r²，得到距离不超过 r。',
+          en: 'The candidate errors are (p,q), (p−1,q), (p,q−1) and (p−1,q−1). The form Q is convex: its four vertex values in region 00 are at most 1/3, and reflection reduces region 11 to 00. The remaining points split by the order of p and q into region 10, bounded using five vertices, and region 01, obtained by swapping coordinates. These regions cover the fractional-coordinate square and each gives Q≤1/3. Finally dist²=(9/16)Q≤3/16=r² yields distance at most r.',
         },
         dependsOn: [],
         derivation: [
           { statement: t("α=4X/3−4Y/(3√3)、β=8Y/(3√3) ⇒ X=3α/4+3β/8、Y=3√3β/8。", "α=4X/3−4Y/(3√3) and β=8Y/(3√3) give X=3α/4+3β/8 and Y=3√3β/8."), reason: t("直接代回两个线性式，得到任意平面点的实斜坐标，而不是先假设该点属于格点。", "Substitution verifies these two linear equations, giving real oblique coordinates for any plane point without assuming it is a lattice point.") },
           { statement: t("令 p=α−⌊α⌋、q=β−⌊β⌋∈[0,1)；四角误差为 (p,q)、(p−1,q)、(p,q−1)、(p−1,q−1)。", "Let p=α−⌊α⌋ and q=β−⌊β⌋ lie in [0,1). The four corner errors are (p,q), (p−1,q), (p,q−1), (p−1,q−1)."), reason: t("分别选择每个坐标的下整数或上整数，便把找任意整数中心的问题缩成四个具体候选。", "Choose either floor or floor plus one in each coordinate, reducing the search for an integer center to four explicit candidates.") },
-          { statement: t("若 2p+q≤1 且 p+2q≤1，选角 (0,0)；若 2p+q≥2 且 p+2q≥2，选角 (1,1)。", "If 2p+q≤1 and p+2q≤1, choose corner (0,0); if both are at least two, choose corner (1,1)."), reason: t("第一组条件由 corner00 给出 Q(p,q)≤1/3；第二组对 1−p、1−q 使用同一估计，得到 Q(p−1,q−1)≤1/3。", "The first conditions give Q(p,q)≤1/3 by corner00. In the second case, apply the same estimate to 1−p,1−q to obtain Q(p−1,q−1)≤1/3.") },
-          { statement: t("其余情形，q≤p 时选 (1,0)，p≤q 时选 (0,1)；相应误差的 Q 都≤1/3。", "Otherwise choose (1,0) when q≤p and (0,1) when p≤q; the corresponding error has Q≤1/3."), reason: t("排除前两区后，q≤p 强制 1≤2p+q、p+2q≤2，恰是 corner10 的条件；另一情形交换 p,q，使用 corner01。", "Outside the first two regions, q≤p forces 1≤2p+q and p+2q≤2, precisely the corner10 conditions. The other case swaps p,q and uses corner01.") },
+          { statement: t("Q(u,v)=u²+uv+v²=(u+v/2)²+3v²/4，因此 Q 是凸函数，Q(p−1,q) 也凸。", "Q(u,v)=u²+uv+v²=(u+v/2)²+3v²/4, so Q is convex, as is Q(p−1,q)."), reason: t("平方是凸函数，线性式的平方与非负加权和仍凸。多边形内任一点都是顶点的凸组合，所以函数值不超过顶点值的最大值；下面用这个事实读出 1/3 的具体来源。", "Squares of linear forms and their nonnegative sums are convex. Every point of a polygon is a convex combination of its vertices, so its value is bounded by the largest vertex value. This explains the numerical bound 1/3 below.") },
+          { statement: t("00 区域为 p,q≥0、2p+q≤1、p+2q≤1；顶点依次是 (0,0)、(1/2,0)、(1/3,1/3)、(0,1/2)，Q 值依次为 0、1/4、1/3、1/4。", "Region 00 is p,q≥0, 2p+q≤1, p+2q≤1. Its successive vertices are (0,0), (1/2,0), (1/3,1/3), (0,1/2), with Q values 0, 1/4, 1/3, 1/4."), reason: t("把相邻边界联立得到四个顶点，再逐一代入 Q。凸性使整个区域都有 Q(p,q)≤1/3；这就是 corner00 使用的不等式。", "Intersect adjacent boundary lines to find the four vertices and substitute them into Q. Convexity gives Q(p,q)≤1/3 throughout the region, the inequality used in corner00.") },
+          { statement: t("在 00 区域选角 (0,0)；若 2p+q≥2 且 p+2q≥2，则选角 (1,1)，并有 Q(p−1,q−1)≤1/3。", "Choose corner (0,0) in region 00. If 2p+q≥2 and p+2q≥2, choose (1,1), with Q(p−1,q−1)≤1/3."), reason: t("第二种情形令 u=1−p、v=1−q，则 u,v≥0、2u+v≤1、u+2v≤1，落入 00 区域。又 Q(p−1,q−1)=Q(u,v)，所以 corner11 由同一个 1/3 上界得到。", "In the second case set u=1−p, v=1−q. Then u,v≥0, 2u+v≤1 and u+2v≤1, putting them in region 00. Since Q(p−1,q−1)=Q(u,v), the same bound proves corner11.") },
+          { statement: t("排除 00、11 后，q≤p 时有 1≤2p+q、p+2q≤2，选角 (1,0)；p≤q 时选角 (0,1)。", "Outside regions 00 and 11, q≤p gives 1≤2p+q and p+2q≤2, selecting (1,0); when p≤q select (0,1)."), reason: t("q≤p 使 2p+q≥p+2q：排除 00 迫使较大者大于 1，排除 11 迫使较小者小于 2。交换 p、q 得到另一支；全序比较保证剩下的点都进入其中一支。", "When q≤p, 2p+q≥p+2q. Excluding 00 forces the larger expression above one, and excluding 11 forces the smaller below two. Swap p and q for the other branch; their total order covers every remaining point.") },
+          { statement: t("10 区域为 q≥0、p≤1、q≤p、2p+q≥1、p+2q≤2；其顶点是 (1/2,0)、(1,0)、(1,1/2)、(2/3,2/3)、(1/3,1/3)。", "Region 10 is q≥0, p≤1, q≤p, 2p+q≥1, p+2q≤2. Its vertices are (1/2,0), (1,0), (1,1/2), (2/3,2/3), (1/3,1/3)."), reason: t("这五条线性界恰是 corner10 的假设；相邻边界相交得到所列五边形。它包含前一行 q≤p 分支的全部点，因此还需在这个区域上估计对应误差。", "These five linear bounds are precisely the assumptions of corner10. Adjacent boundary intersections give the listed pentagon, containing the entire q≤p branch from the preceding line.") },
+          { statement: t("在上述五个顶点，Q(p−1,q) 依次为 1/4、0、1/4、1/3、1/3；故整个 10 区域都有 Q(p−1,q)≤1/3。", "At these five vertices, Q(p−1,q) has values 1/4, 0, 1/4, 1/3, 1/3. Thus Q(p−1,q)≤1/3 throughout region 10."), reason: t("逐点代入平移后的二次型，再用其凸性将顶点界传到整个五边形。这给出了选择右下角 (1,0) 时的覆盖估计。", "Evaluate the translated quadratic form at each vertex and use convexity to extend their bound to the whole pentagon. This gives the covering estimate for corner (1,0).") },
+          { statement: t("01 分支交换 p、q 后落入 10 区域，且 Q(p,q−1)=Q(q−1,p)≤1/3。", "Swapping p and q maps branch 01 into region 10, and Q(p,q−1)=Q(q−1,p)≤1/3."), reason: t("Q 对两个变量对称；交换后的五条假设就是 corner01 调用 corner10 时的条件。因此左上角 (0,1) 也已覆盖，并与 00、11、10 一起穷尽整个方格。", "The form Q is symmetric in its two variables. The swapped five hypotheses are exactly those used when corner01 invokes corner10. This covers corner (0,1) and, together with 00, 11 and 10, exhausts the square.") },
           { statement: t("对选中的整数角 (m,n)，dist(x,P(m,n))²=(9/16)Q(α−m,β−n)≤3/16=r²。", "For the selected integer corner (m,n), dist(x,P(m,n))²=(9/16)Q(α−m,β−n)≤3/16=r²."), reason: t("使用实斜坐标的距离公式与已选角的 Q 界，再由距离和 r 均非负取平方根，得到 dist≤r。", "Use the distance formula in real oblique coordinates and the chosen corner bound. Since distance and r are nonnegative, take square roots to obtain dist≤r.") },
         ],
         next: { zh: '对每个平面点固定这样一个覆盖格点，并把格点颜色赋给它。', en: 'Choose such a covering center for each point and transfer its color.' },
         evidence: {
-          theorems: ['OAI.Problem160.planeEis_corners', 'OAI.Problem160.covering'],
+          theorems: ['OAI.Problem160.planeEis_corner00', 'OAI.Problem160.planeEis_corner10', 'OAI.Problem160.planeEis_corner01', 'OAI.Problem160.planeEis_corner11', 'OAI.Problem160.planeEis_corners', 'OAI.Problem160.covering'],
           taskIds: ['covering'], deliveryIds: ['f26f1ed8-7f0f-462c-a1af-fcffd7d3a30a'], checkIds: ['check-186cf3d786ab8ebb8f82'],
-          source: { name: 'Submission.lean', line: 231, endLine: 252 },
+          source: { name: 'Submission.lean', line: 138, endLine: 196 },
         },
       },
       {

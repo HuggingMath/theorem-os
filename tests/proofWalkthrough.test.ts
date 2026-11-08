@@ -31,6 +31,15 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
       expect(native).not.toHaveProperty('walkthrough');
       expect(record.process!.runs).toEqual(native.runs);
       expect(record.process!.sources).toEqual(native.sources);
+      expect(walkthrough.stages.flatMap(stage => stage.stepIds)).toEqual(walkthrough.steps.map(step => step.id));
+      for (const locale of ['zh', 'en'] as const) {
+        expect(walkthrough.strategy[locale].trim()).not.toBe('');
+        for (const stage of walkthrough.stages) {
+          expect(stage.title[locale].trim()).not.toBe('');
+          expect(stage.summary[locale].trim()).not.toBe('');
+          expect(stage.stepIds.length).toBeGreaterThan(0);
+        }
+      }
       for (const step of walkthrough.steps) {
         expect(step.evidence.source.name).toBe('Submission.lean');
         expect(step.evidence.source.endLine).toBeGreaterThanOrEqual(step.evidence.source.line);
@@ -56,6 +65,12 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
       const output = renderGlobalTrajectory(index, process, locale, value => value ?? '');
       expect(output.indexOf('data-workflow-stage="research"')).toBeLessThan(output.indexOf('data-workflow-stage="plan"'));
       expect((output.match(/data-proof-derivation=/gu) ?? []).length).toBe(walkthrough.steps.length);
+      expect(output).toContain(escaped(walkthrough.strategy[locale]));
+      expect(output.indexOf('class="proof-overview"')).toBeLessThan(output.indexOf('class="proof-reading-layout"'));
+      for (const [index, stage] of walkthrough.stages.entries()) {
+        expect(output).toContain(`data-proof-overview-stage="${index}" data-proof-overview-steps="${stage.stepIds.join(' ')}" data-global-scroll="proof-derivation-${stage.stepIds[0]}"`);
+        expect(output).toContain(escaped(stage.summary[locale]));
+      }
       const source = process.sources![walkthrough.proofSha256];
       for (const step of walkthrough.steps) {
         for (const field of ['given', 'claim', 'because', 'next'] as const) expect(output).toContain(escaped(step[field][locale]));
@@ -120,6 +135,21 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
       }
     } finally {
       first.dependsOn = dependencies;
+    }
+  });
+
+  it('rejects a reading outline that omits, repeats or reorders proof steps', () => {
+    const record = campaignRecords(root).records[0];
+    const walkthrough = proofWalkthroughs.find(item => item.recordId === record.id)!;
+    const stages = walkthrough.stages;
+    try {
+      for (const stepIds of [[], walkthrough.steps.slice(1).map(step => step.id),
+        walkthrough.steps.map(step => step.id).reverse(), [...walkthrough.steps.map(step => step.id), walkthrough.steps[0].id]]) {
+        walkthrough.stages = [{ title: { zh: '分组', en: 'Part' }, summary: { zh: '说明', en: 'Explanation' }, stepIds }];
+        expect(() => withProofWalkthrough(record, record.process!)).toThrow('reading stages');
+      }
+    } finally {
+      walkthrough.stages = stages;
     }
   });
 

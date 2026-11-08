@@ -8,6 +8,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     runId: '25c5cc6c-ec05-439c-bb42-7dd1ebeea45f',
     proofSha256: '3f4987016064040ed126b75de0aea0dfa6b2bf74b7dd22dfa1722b7fcc525963',
     title: { zh: '把坐标图回缩识别为已知的紧致赋值族', en: 'Identify chart retractions with a known compact valuation family' },
+    strategy: text('严格正的归一化系数把非负权重限制在一个紧盒中；单射坐标展开使每个非零元素的赋值可写为有限个线性权重的最小值。分式上的评价因此逐点连续，紧致参数集的像就是所需回缩族。', 'Positive normalization coefficients confine the nonnegative weights to a compact box. The injective chart expansion expresses each nonzero-element valuation as a finite minimum of linear weights, making fraction evaluations continuous; the image of the compact parameter set is the required retraction family.'),
+    stages: [{
+      title: text('固定坐标与权重', 'Fix the chart and weights'),
+      summary: text('由坐标图假设取得单射展开 θ，并从归一化等式推出 wᵢ≤1/aᵢ，明确紧致性要使用的参数集。', 'Obtain the injective expansion θ from the chart hypotheses and derive wᵢ≤1/aᵢ from normalization, identifying the parameter set for compactness.'),
+      stepIds: ['fix-the-chart-hypotheses'],
+    }, {
+      title: text('证明赋值族紧致', 'Prove compactness of the valuation family'),
+      summary: text('归一化截面是紧集；支撑上的有限最小公式与分式差公式给出逐点评价连续性，因此展开赋值族紧致。', 'The normalized section is compact. A finite-minimum support formula and the difference formula for fractions give pointwise continuity, so the expanded valuation family is compact.'),
+      stepIds: ['instantiate-the-compact-family'],
+    }, {
+      title: text('识别题设回缩族', 'Identify the stated retraction family'),
+      summary: text('展开局部回缩、分式延拓与坐标展开的定义，证明两族逐点相同，将一般紧致性结论转回原目标。', 'Unfold the local retraction, fraction extension and chart expansion to identify the two families pointwise and transfer compactness to the target.'),
+      stepIds: ['identify-the-retraction'],
+    }],
     goal: {
       zh: '在声明中的局部代数、形式 étale 与分式域条件下，对每个严格正的归一化系数 a，证明权重集合 {w ≥ 0 : ∑ᵢ aᵢwᵢ = 1} 对应的 K 上回缩族在逐点评价拓扑中紧致。',
       en: 'Under the stated local-algebra, formally étale and fraction-field hypotheses, prove that the retractions on K indexed by {w ≥ 0 : ∑ᵢ aᵢwᵢ = 1}, for strictly positive a, form a compact set in the topology of pointwise evaluation.',
@@ -140,6 +154,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     runId: 'de7a57e9-becf-4f94-9276-2090ab3f2738',
     proofSha256: '442334bfd22cf81c9582b071cd6b370f2b6969d961418e6b084a25cc87ae4a91',
     title: { zh: '两次被强制的消元仍得到非最优解', en: 'Two forced eliminations still yield a nonoptimal output' },
+    strategy: text('把具体 max-plus 系统写成两个普通不等式，核对规则只能依次令 w₁=w₂、w₀=1+w₂。归一化后输出成本为 1，而原约束还允许成本为 0 的点，因此这次合法且终止的执行产生了非最优输出。', 'Write the concrete max-plus system as two ordinary inequalities and show the rules force w₁=w₂ followed by w₀=1+w₂. The normalized output costs one, while another point satisfying the original constraints costs zero, so this legal terminating execution is nonoptimal.'),
+    stages: [{
+      title: text('读出合法反例系统', 'Specify the counterexample system'),
+      summary: text('从三列系数读出两条约束与目标 c(w)=w₀，并核对 crossRowRestriction，确定反例满足题设前提。', 'Read the two constraints and objective c(w)=w₀ from the coefficient rows and verify crossRowRestriction, establishing the required hypotheses.'),
+      stepIds: ['write-the-concrete-system'],
+    }, {
+      title: text('跟踪唯一消元路线', 'Follow the forced eliminations'),
+      summary: text('第一步代换 w₁=w₂，第二步代换 w₀=1+w₂；同时更新约束与目标，得到无剩余变量的终止状态。', 'Substitute w₁=w₂ and then w₀=1+w₂, updating constraints and objective together until no variables remain and the execution stops.'),
+      stepIds: ['force-the-first-elimination', 'force-the-second-elimination'],
+    }, {
+      title: text('比较两个原可行点', 'Compare two originally feasible points'),
+      summary: text('代回得到可行输出 (1,0,0)，再直接核验 (0,−1,0) 也满足原约束；成本 0<1 完成非最优性反例。', 'Reconstruct the feasible output (1,0,0) and verify that (0,−1,0) also satisfies the original constraints. The comparison 0<1 proves nonoptimality.'),
+      stepIds: ['reconstruct-the-output', 'exhibit-the-better-point'],
+    }],
     goal: {
       zh: '给出满足 crossRowRestriction 的具体 max-plus 系统，证明其执行只能依次消去变量 1、0 并停止，但重建的可行输出成本为 1，另有成本为 0 的可行点。',
       en: 'Exhibit a max-plus system satisfying crossRowRestriction whose forced execution eliminates variables 1 then 0 and stops, while its reconstructed feasible output has cost 1 and another feasible point has cost 0.',
@@ -323,6 +351,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     runId: '6d22ec7c-5c2b-41a4-911d-dcf3f0b7ddf0',
     proofSha256: 'b7dc0b2898b8d4ee8ed4a3b10394429f939ff9e4d73761dcd6968e46a4579751',
     title: { zh: '逐层重建 Snaky 有限证书', en: 'Reconstruct the finite Snaky certificate' },
+    strategy: text('先证明所有 child 索引严格向前引用，再按旋转、平移与分叉公式重建 616 行。对重建后的有限集合逐行核验包络、深度和四个指定几何输出，最后与放置项总数合成证书正确性。', 'Verify that every child refers to an earlier row, then reconstruct all 616 rows by orientation, translation and forking. Check their finite envelopes, heights and four specified geometric outputs, and combine these with the total placement count to establish certificate correctness.'),
+    stages: [{
+      title: text('按顺序重建证书', 'Reconstruct the certificate in order'),
+      summary: text('非空且索引递减的表项保证递归可求值；放置与分叉公式把六个基础行依次扩展为全部行。', 'Nonempty entries with decreasing child indices make the recursion evaluable. Placement and fork formulas extend the six base rows to every later row.'),
+      stepIds: ['validate-the-recursion-table', 'reconstruct-the-fork'],
+    }, {
+      title: text('核验集合与关键局面', 'Check sets and distinguished positions'),
+      summary: text('逐行验证所需点、包络和高度界，再读出四个关键行的精确大小与避让区域，提供目标所需的几何证据。', 'Check required cells, envelopes and height bounds row by row, then verify the exact sizes and omitted regions of the four distinguished rows.'),
+      stepIds: ['verify-all-row-invariants', 'check-the-distinguished-rows'],
+    }, {
+      title: text('合成完整核验结果', 'Assemble the complete verification'),
+      summary: text('将 1,837 个放置项的计数与索引、四个输出、全部行不变量汇合，完成 certificate_correct 的七项结论。', 'Combine the count of 1,837 placements with table validity, the four outputs and all-row invariants to obtain the seven conjuncts of certificate_correct.'),
+      stepIds: ['assemble-the-certificate'],
+    }],
     goal: {
       zh: '核验 610 条递归表项、1,837 个放置项、四个指定局面的精确几何数据，以及全部 616 个局面的集合关系与深度 ≤ 34。',
       en: 'Verify 610 recursive table entries, 1,837 placements, the exact geometry of four specified rows, and the set invariants and depth bound ≤ 34 for all 616 rows.',
@@ -375,29 +417,45 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
           en: 'Place each child’s A and H, then set A = (⋃Aᵢ ∪ ⋂Hᵢ) ∖ {o}, H = {o} ∪ ⋃Hᵢ and h = 1 + max hᵢ.',
         },
         because: {
-          zh: '这正是 placeRow、commonH、forkRow 与 rowAt 的定义。me_615 等重建等式展开对应表项，再用已证明的 child 等式把递归值改写为显式有限集。',
-          en: 'These are the definitions of placeRow, commonH, forkRow and rowAt. Reconstruction equalities such as me_615 unfold the entry and rewrite its children using earlier equalities, yielding explicit finite sets.',
+          zh: '这正是 placeRow、commonH、forkRow 与 rowAt 的定义。先从原六格图形写出基础行 0，再把 entry₆ 的四个字段逐一代入：其 child 是行 0、方向为恒等、平移为 (−4,−1)，所以能直接列出新 A、H 与高度 2。me_6 核对这个具体结果，me_615 等后续重建等式再按相同方式使用更早的 child 等式。',
+          en: 'These are the definitions of placeRow, commonH, forkRow and rowAt. Start with base row 0 of the six-cell shape, then substitute the four fields of entry₆: child 0, identity orientation and translation (−4,−1). This gives explicit new sets A and H and height 2. The equality me_6 verifies this result; later reconstructions such as me_615 use earlier child equalities in the same way.',
         },
         dependsOn: ["validate-the-recursion-table"],
         derivation: [
           {
+            statement: text("S={(0,0),(1,0),(2,0),(3,0),(3,1),(4,1)}；H₀=S，A₀=S∖{o}，h₀=1。", "S={(0,0),(1,0),(2,0),(3,0),(3,1),(4,1)}; H₀=S, A₀=S∖{o}, h₀=1."),
+            reason: text("原 Snaky 由 y=0 上的四格和 y=1 上向右错开的两格组成。第 i 个基础行把第 i 格平移到 o，再从所需集删去 o；第 0 格本来就是 o，因此行 0 无须平移。", "The original Snaky has four cells on y=0 and two cells shifted to the right on y=1. Base row i translates its ith cell to o and removes o from its required set. Cell 0 already equals o, so row 0 needs no translation."),
+          },
+          {
             statement: text("Term.shift=(xDigit−4,yDigit−4)，P(p)=orient(rotation,p)+shift。", "Term.shift=(xDigit−4,yDigit−4), with P(p)=orient(rotation,p)+shift."),
             reason: text("数字字段先解码成整数平移，再用同一个格点放置 P 作用于 child 的 A 和 H；高度保持不变。", "Decode the digit fields as an integer translation, then apply the same placement P to both child sets A and H; preserve the height."),
+          },
+          {
+            statement: text("entry₆=⟨6,[⟨0,0,0,3⟩]⟩ ⇒ child=0，rotation=0，shift=(0−4,3−4)=(−4,−1)。", "entry₆=⟨6,[⟨0,0,0,3⟩]⟩ gives child=0, rotation=0 and shift=(0−4,3−4)=(−4,−1)."),
+            reason: text("这是第一条递归表项的实际字段。方向 0 不改变坐标，所以本例的放置就是 P(x,y)=(x−4,y−1)，可直接作用于已知的基础行 0。", "These are the actual fields of the first recursive entry. Orientation 0 is the identity, so its placement is P(x,y)=(x−4,y−1), applied directly to base row 0."),
+          },
+          {
+            statement: text("放置后 H′={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(-1,0),(0,0)}，A′=H′∖{(-4,-1)}，h′=1。", "After placement, H′={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(-1,0),(0,0)}, A′=H′∖{(-4,-1)}, and h′=1."),
+            reason: text("对 S 的六个坐标分别减去 (4,1)，得到完整包络。基础行缺少的所需格是 o，平移后缺少的就是 P(o)=(-4,-1)；放置本身保持高度。", "Subtract (4,1) from each of the six coordinates of S to obtain the envelope. The cell omitted from the base required set was o, so the translated omission is P(o)=(-4,-1). Placement preserves height."),
           },
           {
             statement: text("A=(⋃ᵢAᵢ∪⋂ᵢHᵢ)∖{o}，H={o}∪⋃ᵢHᵢ。", "A=(⋃ᵢAᵢ∪⋂ᵢHᵢ)∖{o}, while H={o}∪⋃ᵢHᵢ."),
             reason: text("forkRow 把各 child 的所需点以及共同包络点并入 A，再删去本轮落点 o；H 则保留所有 child 包络和 o。", "forkRow combines child requirements with common-envelope cells, then removes the current move o from A. Its envelope retains all child envelopes and o."),
           },
           {
-            statement: text("h=1+maxᵢhᵢ；child 等式代入后得到 rowAt(i)=mrᵢ。", "h=1+maxᵢhᵢ; substituting child equalities gives rowAt(i)=mrᵢ."),
-            reason: text("先预留父行的一步，再取最深 child。meᵢ 的作用是把这条递归公式化成后续可逐点判定的显式有限集。", "Reserve one move for the parent and then take the deepest child. Each meᵢ turns the recursive formula into explicit finite sets for later checks."),
+            statement: text("本例只有一个 child，因此 A₆=(A′∪H′)∖{o}=H′∖{o}={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(-1,0)}，H₆=H′。", "With one child, A₆=(A′∪H′)∖{o}=H′∖{o}={(-4,-1),(-3,-1),(-2,-1),(-1,-1),(-1,0)}, and H₆=H′."),
+            reason: text("单个包络的交与并都等于 H′，而 A′⊆H′，所以所需集先补全 H′，再删去父行落点 o。又因 o 已在 H′ 中，插入 o 不改变包络。", "The intersection and union of a single envelope both equal H′, and A′⊆H′. Thus the required set first fills H′ and then removes the parent move o. Since o already belongs to H′, inserting it leaves the envelope unchanged."),
+          },
+          {
+            statement: text("h₆=1+h′=2；一般地 h=1+maxᵢhᵢ，child 等式代入后得到 rowAt(i)=mrᵢ。", "Here h₆=1+h′=2. In general h=1+maxᵢhᵢ, and substituting child equalities gives rowAt(i)=mrᵢ."),
+            reason: text("先预留父行的一步，再取最深 child；本例的唯一 child 高度为 1。me_6 确认上面的两个有限集与高度，后续 meᵢ 也把递归公式化成可逐点核验的数据。", "Reserve one move for the parent, then take the deepest child; this sole child has height 1. The equality me_6 confirms both displayed sets and the height. Later meᵢ equalities likewise turn the recursion into data that can be checked point by point."),
           },
         ],
         next: { zh: '把递归定义转为可逐点核验的集合与整数数据。', en: 'Reduce recursive rows to finite sets and integer data that can be checked directly.' },
         evidence: {
-          theorems: ['OAI.SnakyCertificate.me_615'],
+          theorems: ['OAI.SnakyCertificate.snaky', 'OAI.SnakyCertificate.entry_6', 'OAI.SnakyCertificate.forkRow', 'OAI.SnakyCertificate.me_6', 'OAI.SnakyCertificate.me_615'],
           taskIds: ['initial_goal_1'], checkIds: ['check-b900b20d4968e7ec561d'],
-          source: { name: 'Submission.lean', line: 1356, endLine: 1377 },
+          source: { name: 'Submission.lean', line: 1532, endLine: 1542 },
         },
       },
       {
@@ -509,6 +567,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     runId: '41f80030-d1b0-4b66-acb6-3f0ddc1f26de',
     proofSha256: '7d3509714928edd3f6b6a634c42d9dbeefd01c17a65d0e152fc09d97e6568a20',
     title: { zh: '没有种子时，计数与权重都逐项归零', en: 'Without a seed, both counts and weights vanish term by term' },
+    strategy: text('把不存在种子的假设改写为每个 totient 值的最小原像满足 ℓ(d)≤kd。这个上界一方面与计数所需的严格不等式冲突，另一方面使两个截断商都等于 1，因此计数与极限权重分别归零。', 'Rewrite the no-seed hypothesis as ℓ(d)≤kd for every totient value. This bound contradicts the strict counting condition and makes both truncated quotients equal one, so the count and the limiting weighted quantity vanish in separate branches.'),
+    stages: [{
+      title: text('取得共同原像上界', 'Obtain the common preimage bound'),
+      summary: text('由种子不存在推出 ℓ(d)≤kd，并确认 d 与 ℓ(d) 都为正，为计数比较和后续除法提供条件。', 'Derive ℓ(d)≤kd from absence of a seed and prove positivity of d and ℓ(d), supplying the conditions for the counting comparison and divisions.'),
+      stepIds: ['bound-every-preimage'],
+    }, {
+      title: text('分别消去计数与权重', 'Eliminate counts and weights separately'),
+      summary: text('计数支线得到空集 N(k,x)=0；权重支线得到 0<ℓ(d)/d≤k，使 fₖ 的两个截断值相消为零。', 'The counting branch gives an empty set and N(k,x)=0. The weight branch gives 0<ℓ(d)/d≤k, making the two truncated terms in fₖ cancel.'),
+      stepIds: ['empty-the-counting-set', 'cancel-the-weight'],
+    }, {
+      title: text('把逐项为零传到极限', 'Pass termwise zero to the limit'),
+      summary: text('零权重使每个有限阶段 AH 都为零，恒零序列的 limUnder 也为零；与独立的计数结论合并完成原题。', 'Zero weights make every finite-stage AH vanish, so its constant-zero sequence has limUnder zero. Combine this with the separate counting result to finish.'),
+      stepIds: ['take-the-zero-limit'],
+    }],
     goal: {
       zh: '给定正整数 k，假设不存在 Euler φ 的正整数像 d 满足 kd < ℓ(d)，证明所有 x > 0 都有 N(k,x) = 0，且 0 ≤ s < 1 时 A(fₖ,s) = 0。',
       en: 'For a positive integer k, assume no totient value d has kd < ℓ(d). Prove N(k,x) = 0 for every x > 0 and A(fₖ,s) = 0 for 0 ≤ s < 1.',
@@ -649,6 +721,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     runId: 'e2b78e94-e26d-4b02-a8e5-53375547ef4d',
     proofSha256: 'dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae',
     title: { zh: '从有限威胁证书推出合法的 35 手策略', en: 'From finite threats to a legal 35-move policy' },
+    strategy: text('把每行证书解释为一个威胁：所需格已归 Maker、包络未被 Breaker 占据时即可完成目标。对手一手总会留出一个未受阻的 child，这使递归表与根开局合成为 35 手必胜性，再提取始终选择空格的策略。', 'Interpret each certificate row as a threat that succeeds when Maker owns its required cells and Breaker avoids its envelope. Every reply leaves some child unblocked, so the table and root opening give a 35-move win from which an always-legal policy can be extracted.'),
+    stages: [{
+      title: text('赋予基础行与分叉语义', 'Interpret base rows and forks'),
+      summary: text('缺一个格子的图形是一手威胁；包络交集条件保证对手回复后仍有可用 child，因此分叉也保持威胁语义。', 'A shape missing one cell is a one-move threat. The envelope-intersection condition leaves a usable child after any reply, so forks preserve threat semantics.'),
+      stepIds: ['give-base-rows-a-game-meaning', 'choose-an-unblocked-branch'],
+    }, {
+      title: text('合成空棋盘必胜性', 'Assemble the empty-board win'),
+      summary: text('按递减 child 索引解释全部 616 行，再组合 escape 与 24 个根分支，得到从空棋盘出发的 35 手 Winning。', 'Interpret all 616 rows using decreasing child indices, then combine escape with the 24 root branches to obtain Winning in 35 moves from the empty board.'),
+      stepIds: ['interpret-the-whole-table', 'close-the-empty-board-opening'],
+    }, {
+      title: text('提取策略并核对合法性', 'Extract the policy and check legality'),
+      summary: text('将 Winning 见证转成始终选空格的策略，逐手维持合法状态；第 35 手完成 Snaky，并与 Breaker 已下的前 34 子不交。', 'Turn Winning witnesses into a policy that always selects a free cell and maintain legal states at each move. Move 35 completes Snaky while remaining disjoint from Breaker’s first 34 cells.'),
+      stepIds: ['extract-the-legal-policy'],
+    }],
     goal: {
       zh: '构造始终选择空格的 Maker 策略 σ；对最后一手之前所有合法的 Breaker 回复，Maker 在第 35 手时包含一个旋转平移后的 Snaky，且先前各局面与落子数满足精确的合法性结论。',
       en: 'Construct a Maker policy σ that always chooses an unoccupied cell. Against every sequence of legal Breaker replies before the final move, Maker has a rotated and translated Snaky after move 35, with the stated legal-state and cardinality guarantees.',
@@ -841,6 +927,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     runId: '3f2c13eb-fbf3-47d4-bff5-aed2489d23aa',
     proofSha256: 'd818e4c8217e53057b254f92285bb22930f2b47504ed68d7e8def9d2547fa3a1',
     title: { zh: '用两个消失矩隔离一个三次方纤维', en: 'Use two vanishing moments to isolate a cubic fiber' },
+    strategy: text('H 与其逐项平方的行正交性分别给出 ∑vₖ=0 和 ∑vₖ²=0。利用 |vₖ|=1 构造只保留 vₖ³=a 分支的逐点恒等式，求和后两个矩消失，再约去 a−b 得到纤维和为零。', 'Row orthogonality of H and its entrywise square gives ∑vₖ=0 and ∑vₖ²=0. Use |vₖ|=1 to build a pointwise identity selecting the branch vₖ³=a; summing kills both moments, and cancelling a−b gives the zero fiber sum.'),
+    stages: [{
+      title: text('取得两个消失矩', 'Obtain two vanishing moments'),
+      summary: text('先把方阵的列正交转为行正交，再对逐项平方重复论证，得到一阶矩与共轭平方矩都为零。', 'Convert column orthogonality of the square matrix to row orthogonality and repeat for its entrywise square, obtaining zero first and conjugate-square moments.'),
+      stepIds: ['derive-the-first-moment', 'derive-the-second-moment'],
+    }, {
+      title: text('构造纤维筛选恒等式', 'Build the fiber-selecting identity'),
+      summary: text('单位模长把 v³conj(v)² 化为 v；分别代入立方为 a 或 b，得到只在 a 纤维上保留 (a−b)v 的等式。', 'Unit modulus reduces v³conj(v)² to v. Splitting on cube values a and b gives an identity retaining (a−b)v only on the a-fiber.'),
+      stepIds: ['reduce-cubes-using-unit-modulus', 'build-the-fiber-indicator'],
+    }, {
+      title: text('求和并消去非零因子', 'Sum and cancel the nonzero factor'),
+      summary: text('将逐点恒等式求和，两个独立的消失矩使右端为零；a≠b 允许消去公共因子，得到目标行比值的纤维和。', 'Sum the pointwise identity; the two independent vanishing moments make its right side zero. Since a≠b, cancel the common factor to obtain the required row-ratio fiber sum.'),
+      stepIds: ['sum-and-cancel'],
+    }],
     goal: {
       zh: '设 6×6 矩阵 H 和其逐项平方 H² 都是复 Hadamard 矩阵。取不同两行的比值 vₖ=Hᵢₖ·conj(Hⱼₖ)，若每个 vₖ³ 只可能为两个不同值 a、b，证明 ∑_{vₖ³=a}vₖ=0。',
       en: 'Let H and its entrywise square H² be 6×6 complex Hadamard matrices. For distinct rows let vₖ=Hᵢₖ·conj(Hⱼₖ). If every vₖ³ equals one of two distinct values a,b, prove ∑_{vₖ³=a}vₖ=0.',
@@ -1012,6 +1112,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
     runId: 'cbfa1f3c-2760-4d7e-987a-97b48698fd49',
     proofSha256: 'bc4a1cec74196b46dd726a46dc467c40b8657527dbd235a49a3cf0b5e4355ac9',
     title: { zh: '用三元复幂级数环实现全部环论条件', en: 'Realize the ring properties with three-variable complex power series' },
+    strategy: text('选 R=ℂ⟦X₀,X₁,X₂⟧，分别计算维数、极大理想进完备性和剩余域。整闭性通过一元幂级数归纳证明：先从统一分母逐个恢复系数，再把分式域中的整元拉回原环，最后汇合这些性质。', 'Choose R=ℂ⟦X₀,X₁,X₂⟧ and separately establish its dimension, maximal-ideal completeness and residue field. Prove integral closedness by adjoining one power-series variable at a time: recover coefficients using a common denominator, pull integral fraction-field elements back into the ring, then assemble the properties.'),
+    stages: [{
+      title: text('计算维数、完备性与剩余域', 'Compute dimension, completeness and residue field'),
+      summary: text('每加一个变量维数增加一；常数项映射识别极大理想与剩余域，分别得到三维、极大理想进完备和剩余域为 ℂ。', 'Each variable adds one to the dimension. The constant-coefficient map identifies the maximal ideal and residue field, giving dimension three, maximal-ideal completeness and residue field ℂ.'),
+      stepIds: ['compute-the-dimension', 'identify-the-completion-ideal', 'identify-the-residue-field'],
+    }, {
+      title: text('证明一元整闭性保持', 'Preserve integral closedness in one variable'),
+      summary: text('统一非零分母使每个系数依次落回 S；再借分式域单射把任意整元拉回 S⟦X⟧，证明添一个变量仍整闭。', 'A common nonzero denominator brings each coefficient back to S. An injective fraction-field map then pulls every integral element into S⟦X⟧, preserving integral closedness after one variable.'),
+      stepIds: ['descend-almost-integral-coefficients', 'prove-power-series-integral-closedness'],
+    }, {
+      title: text('选定三元环并汇合性质', 'Choose the three-variable ring and assemble its properties'),
+      summary: text('从 ℂ 起迭代一元整闭性结论，取三元幂级数环为见证，再填入前面独立得到的维数、完备性与剩余域结论。', 'Iterate the one-variable integral-closedness result from ℂ, choose the three-variable power-series ring as witness, and combine the separate dimension, completeness and residue-field results.'),
+      stepIds: ['assemble-the-explicit-witness'],
+    }],
     goal: {
       zh: '构造一个 ℂ-代数 R，证明它是 Noether 局部整环、整闭、关于极大理想进完备、Krull 维数为3，并且 ℂ 到其剩余域的自然映射是双射。最终见证为 R=ℂ⟦X₀,X₁,X₂⟧。',
       en: 'Construct a ℂ-algebra R that is a Noetherian local domain, integrally closed, complete for its maximal ideal, of Krull dimension 3, with a bijective natural map from ℂ to its residue field. The witness is R=ℂ⟦X₀,X₁,X₂⟧.',

@@ -133,9 +133,6 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
 }
 const icons = () => {
   createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
-  const selected = document.querySelector<HTMLElement>('[data-global-select][aria-pressed="true"]');
-  const rail = selected?.closest<HTMLElement>('.global-run-lanes');
-  if (rail && selected) rail.scrollLeft = selected.offsetLeft - rail.offsetLeft - (rail.clientWidth - selected.offsetWidth) / 2;
 };
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({
@@ -577,7 +574,7 @@ document.addEventListener('click', event => {
   if (record && target.dataset.globalSelect) {
     processSelection = { ...emptyProcessSelection(), run: target.dataset.globalSelect };
     refreshProcess(record);
-    document.querySelector<HTMLElement>(`[data-global-select="${CSS.escape(target.dataset.globalSelect)}"]`)?.focus({ preventScroll: true });
+    document.querySelector<HTMLElement>('.global-history-panel > summary')?.focus({ preventScroll: true });
     return;
   }
   if (record && target.dataset.globalRun) {

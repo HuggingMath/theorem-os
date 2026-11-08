@@ -129,12 +129,14 @@ async function enter(page: Page, record: ArchiveRecord, locale: string, explicit
   await global(page, record);
 }
 async function chooseRun(page: Page, record: ArchiveRecord, run: Run, key?: 'Enter' | 'Space') {
+  const history = page.locator('.global-history-panel');
+  if (!await history.evaluate(element => (element as HTMLDetailsElement).open)) await history.locator('summary').click();
   const button = runButton(page, run);
   if (key) { await button.focus(); await button.press(key); } else await button.click();
   await global(page, record, run);
   assert.equal(hash(page).get('run'), run.runId, 'An explicit selected run must be saved in the link');
-  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.globalSelect), run.runId,
-    'Repainting the selected run must restore focus to the same run button');
+  assert.equal(await page.locator('.global-history-panel > summary').evaluate(element => element === document.activeElement), true,
+    'Selecting a run closes its history and restores focus to the history control');
 }
 async function back(page: Page, record: ArchiveRecord, run: Run) {
   await page.locator('[data-process-view="global"]').click(); await global(page, record, run);
@@ -159,10 +161,12 @@ async function visible(page: Page, selector: string, label: string) {
 }
 async function firstViewport(page: Page, label: string, locale: string) {
   assert.equal(await page.locator('.process-view-toolbar h4').innerText(), locale === 'en' ? 'Whole-problem trajectory' : '全局解题轨迹');
-  const title = await visible(page, '.process-view-toolbar h4', label);
-  const selection = await visible(page, '.global-history [aria-pressed="true"]', label);
+  const title = await visible(page, '.proof-walkthrough-heading h5', label);
+  const selection = await visible(page, '.global-workflow-heading', label);
   const phase = await visible(page, '[data-global-scroll="global-plan"]', label);
-  viewportEvidence.push({ label, title, selection, phase });
+  const outline = await visible(page, '.proof-overview > li:first-child', label);
+  assert.ok(outline.top < outline.height * 0.65, label + ': the mathematical route must appear in the first part of the viewport');
+  viewportEvidence.push({ label, title, selection, phase, outline });
 }
 async function phase(page: Page, name: string, id: string) {
   const location = page.url(), button = page.locator('.global-workflow-stages ' + attr('data-global-scroll', id));
@@ -227,6 +231,8 @@ async function reading(page: Page, walkthrough: ProofWalkthrough, id: string, lo
   const count = String(index + 1).padStart(2, '0') + ' / ' + String(walkthrough.steps.length).padStart(2, '0');
   assert.deepEqual(state.counts, [count, count], 'Desktop and mobile reading counters must stay synchronized');
   assert.deepEqual(state.titles, [step.title[locale], step.title[locale]]);
+  assert.equal(await page.locator('.proof-overview [aria-current="step"]').getAttribute('data-proof-overview-stage'),
+    String(walkthrough.stages.findIndex(stage => stage.stepIds.includes(id))), 'The overview follows the current mathematical stage');
   await visible(page, '#proof-derivation-' + id + ' h5', current + ': reading heading');
 }
 async function verifyAssets(page: Page) {
@@ -265,6 +271,14 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
   if (walkthrough) {
     assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), record.campaign!.proofSha256);
     assert.equal(await page.locator('[data-proof-derivation]').count(), walkthrough.steps.length);
+    assert.equal(await page.locator('.proof-walkthrough-strategy').textContent(), walkthrough.strategy[locale]);
+    assert.deepEqual(await page.locator('[data-proof-overview-stage]').evaluateAll(buttons => buttons.map(button => ({
+      steps: (button as HTMLElement).dataset.proofOverviewSteps!.split(' '),
+      target: (button as HTMLElement).dataset.globalScroll,
+      title: button.querySelector('strong')!.textContent,
+      summary: button.querySelector('.proof-overview-copy > span')!.textContent,
+    }))), walkthrough.stages.map(stage => ({ steps: stage.stepIds, target: 'proof-derivation-' + stage.stepIds[0],
+      title: stage.title[locale], summary: stage.summary[locale] })));
     const route = page.locator('.proof-walkthrough-route');
     assert.deepEqual(await route.locator('[data-proof-route-step]').evaluateAll(buttons => buttons.map(button => ({
       id: (button as HTMLElement).dataset.proofRouteStep, title: (button as HTMLElement).dataset.proofRouteTitle,
@@ -368,6 +382,16 @@ try {
       await shot(page, 'workflow-' + locale + '-' + width + '-entry.png');
       mark(label + ': ordinary classics entry defaults to final research with a complete DAG, objectives and actual saved prose');
       const walkthrough = triangle.process!.walkthrough!;
+      const outlineUrl = page.url();
+      for (const index of [2, 0]) {
+        const outline = page.locator('[data-proof-overview-stage="' + index + '"]');
+        await outline.focus(); await outline.press('Enter');
+        const id = walkthrough.stages[index].stepIds[0];
+        await reading(page, walkthrough, id, locale);
+        assert.equal(await page.locator(attr('data-proof-derivation', id) + ' h5').evaluate(element => element === document.activeElement), true);
+        await visible(page, '#' + 'proof-derivation-' + id + ' h5', label + ': outline jump');
+        assert.equal(page.url(), outlineUrl, 'The overview navigates within the same accepted proof and run');
+      }
       const selectedStep = walkthrough.steps[2], followingStep = walkthrough.steps[3];
       const routeStep = page.locator('.proof-walkthrough-route ' + attr('data-global-scroll', 'proof-derivation-' + selectedStep.id));
       const panel = page.locator('.proof-route-panel'), compact = width <= 1100, beforeStep = page.url();
@@ -582,6 +606,7 @@ try {
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
     checks, screenshots, viewportEvidence, records: catalog.records.length, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
     derivationLines: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.derivation.length, 0), 0),
+    readingStages: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.stages.length, 0),
     proofDependencies: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.dependsOn.length, 0), 0),
     assetVersions, cacheAssets, processAssetVersions, processAssetRequests, paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
     failureExample: { record: failure.record.id, run: failure.run.runId, check: failure.check.id },

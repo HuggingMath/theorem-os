@@ -7,6 +7,20 @@ export const coreProofWalkthroughs: ProofWalkthrough[] = [{
   runId: 'd77dc453-baf2-4ffd-9afa-ae2af96decba',
   proofSha256: '1f05b4d19928f89030bbe1ef6430f9b06bcca2273e082c8e339f77e44cdcf450',
   title: text('把三角展开的匹配截面还原为原多面体', 'Recovering the original polytope inside the triangle expansion'),
+  strategy: text('先在匹配指示向量上计算三角形割的质量，再用凸组合证明质量为一的截面恰是 f(P)。最后用旧边限制还原输入，把最小面随这组互逆映射传递。', 'Count crossings at the three triangle tips. Convex combinations identify the mass-one face with f(P); restriction supplies the inverse and transfers minimal faces.'),
+  stages: [{
+    title: text('构造与局部计数', 'Construction and local counts'),
+    summary: text('定义展开映射 f，并由三个顶点的覆盖次数得到割质量至少为一；这个下界将用于识别面。', 'Define f and count tip incidences: every matching has cut mass at least one.'),
+    stepIds: ['label-and-extend', 'identify-the-cut', 'count-the-three-tips'],
+  }, {
+    title: text('从匹配得到面', 'From matchings to a face'),
+    summary: text('质量一的匹配与原图匹配对应；取凸包得到 Q=f(P)，再由线性下界证明 Q 是展开多面体的面。', 'Match mass-one generators with old matchings. Convex hulls give Q=f(P); the lower bound makes Q a face.'),
+    stepIds: ['match-the-generators', 'take-the-slice-of-the-hull', 'prove-the-face-property'],
+  }, {
+    title: text('互逆与最小面', 'Inverse maps and minimal faces'),
+    summary: text('旧边限制给出 f 在 Q 上的逆，因而 P 与 Q 的面一一对应；结合 Q 本身是面，得到原题的最小面等式。', 'Restriction inverts f on Q. Transfer faces between P and Q to obtain the minimal-face equality.'),
+    stepIds: ['recover-the-inverse', 'transport-minimal-faces'],
+  }],
   goal: text(
     '设有限无自环图 G 的顶点 v 恰有三条关联边，且 G 有完美匹配。把 v 展开为三个顶点组成的三角形，构造线性映射 f，使原匹配多面体 P 的像恰是展开图匹配多面体中割质量为一的面 Q，并证明限制映射是其逆、最小面随 f 传递。',
     'Let G be a finite loopless graph with exactly three edges incident to v and at least one perfect matching. Replace v by a triangle. Construct a linear map f taking the original matching polytope P onto the cut-mass-one face Q of the expanded matching polytope, with restriction as its inverse, and show that minimal faces are transported by f.'),
@@ -136,6 +150,20 @@ export const coreProofWalkthroughs: ProofWalkthrough[] = [{
   runId: '42061240-6393-47da-b4bf-a58bef9080ea',
   proofSha256: '1472d78c68ac552b7ec3ff4c3d307035cb30aa08c734c95eae7f66e6b4b3601c',
   title: text('从偶数长度的次可加性推出全部长度的自由能极限', 'From even-length subadditivity to the full free-energy limit'),
+  strategy: text('先把长游走拆为前后两段，在偶数长度上得到对数次可加性和有限下界，再用 Fekete 得到偶子列极限。固定的一步代价把奇数长度夹在相邻偶数长度之间，从而分别完成两类起点的全序列收敛。', 'Split walks to obtain logarithmic subadditivity and a finite lower bound at even lengths, then apply Fekete. A fixed one-step cost squeezes odd lengths between adjacent even lengths, proving full convergence separately for the two starting classes.'),
+  stages: [{
+    title: text('建立拆分估计', 'Establish the splitting bound'),
+    summary: text('证明配分和为正、同类起点的值相同，再将长游走权重拆成乘积；后续的对数与奇偶比较都有了依据。', 'Prove positivity and translation invariance within each class, then factor split-walk weights to obtain the bounds needed for logarithms and parity comparisons.'),
+    stepIds: ['positive-partition', 'translate-within-a-class', 'split-a-walk'],
+  }, {
+    title: text('求偶数长度极限', 'Find the even-length limit'),
+    summary: text('偶数前缀保持起点类别，给出次可加性；直线游走给出下界，Fekete 因而得到按实际步数归一化的极限 A/2。', 'Even prefixes preserve the starting class and give subadditivity. A spine walk gives a lower bound, so Fekete yields the actual-length-normalized limit A/2.'),
+    stepIds: ['even-subadditivity', 'bound-even-growth-from-below', 'fekete-even-limit'],
+  }, {
+    title: text('覆盖奇数与任意起点', 'Include odd lengths and all starts'),
+    summary: text('用相邻偶数长度夹逼奇数长度，再合并两条子列；同类平移将结论传给任意起点，并识别为 freeEnergy。', 'Squeeze odd lengths using their even neighbours, combine the subsequences, and use translation within each class to identify the limit at every start with freeEnergy.'),
+    stepIds: ['squeeze-the-odd-lengths', 'all-lengths-all-starts'],
+  }],
   goal: text(
     '对蜂窝图任意起点 o、参数 e∈ℂ 与 s∈ℝ，证明 log Zₒ(n)/n 收敛到 freeEnergy(o,e,s)。最终证明分别处理 up、down 两类起点，并用单步拆分估计把偶数长度的极限延伸到奇数长度。',
     'For every honeycomb vertex o and parameters e∈ℂ and s∈ℝ, prove that log Zₒ(n)/n converges to freeEnergy(o,e,s). The final proof handles the up and down starting classes separately and extends the even-length limit to odd lengths using one-step splitting bounds.'),
@@ -264,6 +292,20 @@ export const coreProofWalkthroughs: ProofWalkthrough[] = [{
   runId: '76087917-e598-4ed8-be9e-06de27f4e5d0',
   proofSha256: '7ed9c39ce9036a21f69e05178619450e822ab5c5cee99524f08c202a78894d48',
   title: text('用叶节点的信号与二阶矩证明超临界重构', 'Proving supercritical reconstruction from leaf signal and second moments'),
+  strategy: text('用中心化叶计数保留根状态的均值信号，分别控制正则树与 Poisson 树的二阶矩。均值差与二阶矩给出不随深度消失的总变差下界，再由信息单调性得到正的重构优势极限。', 'Retain the root signal in a centred leaf count and bound second moments separately for regular and Poisson trees. The mean gap and moment bounds give a uniform TV lower bound; information monotonicity then yields a positive reconstruction limit.'),
+  stages: [{
+    title: text('提取根状态信号', 'Extract the root signal'),
+    summary: text('验证 Kφ=λφ，构造实际叶数中心化的统计量，并精确算出两种根状态的均值差 (aλ)ⁿ。', 'Verify Kφ=λφ, centre by the actual leaf count, and compute the exact conditional mean gap (aλ)ⁿ between two root states.'),
+    stepIds: ['channel-and-signal', 'leaf-statistic', 'mean-separation'],
+  }, {
+    title: text('分别控制两类树', 'Bound the two tree models'),
+    summary: text('正则分支与 Poisson 分支各自建立二阶矩递推，分别得到 Qsⁿ、Csⁿ 上界；两条支线随后使用同一分布距离估计。', 'Derive separate second-moment recurrences with bounds Qsⁿ and Csⁿ. Both branches then feed the same estimate for the distance between observation laws.'),
+    stepIds: ['regular-second-moment', 'poisson-second-moment'],
+  }, {
+    title: text('得到正的重构极限', 'Obtain a positive reconstruction limit'),
+    summary: text('先推出 TV≥1/(4D)，再转为优势 Aₙ≥1/(12D)；优势单调不增，因此收敛且极限仍严格为正。', 'Obtain TV≥1/(4D), then Aₙ≥1/(12D). Since the advantage is nonincreasing, it converges and its limit remains strictly positive.'),
+    stepIds: ['separate-observation-laws', 'posterior-advantage-bound', 'positive-limit'],
+  }],
   goal: text(
     '三状态对称信道满足 −1/2≤λ≤1。证明在 b≥2 的正则树上，bλ²>1 蕴含重构优势趋于正极限；在均值 d>1 的 Poisson 分支树上，dλ²>1 也蕴含同样结论。',
     'For the symmetric three-state channel with −1/2≤λ≤1, prove that the reconstruction advantage tends to a positive limit when bλ²>1 on a b-regular tree with b≥2, and when dλ²>1 on a Poisson branching tree with mean d>1.'),

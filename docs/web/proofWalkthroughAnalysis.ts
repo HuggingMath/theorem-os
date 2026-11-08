@@ -8,6 +8,20 @@ export const analysisProofWalkthroughs: ProofWalkthrough[] = [
     runId: '12ec8cde-d66b-40bb-84c7-a558d1af9cb6',
     proofSha256: 'fc4c35ba96e2fef31d57635d0cd237498eaacf87bdeba7510a0daac5d6d663af',
     title: t('从数值域几何到精确有限压缩', 'From numerical-range geometry to exact finite compression'),
+    strategy: t('把二维数值域写成球的线性像，得到一般情形的紧凸闭包与谱包含；另用有限条算子轨道构造精确压缩。谱包含用于证明有理分母可逆，零空间分支则单独完成退化情形的范数界。', 'Express the two-dimensional numerical range as an image of a ball to obtain a compact convex closure containing the spectrum. Separately, finite operator orbits give exact compression; spectral inclusion inverts rational denominators, while the zero-space branch supplies the degenerate norm bounds.'),
+    stages: [{
+      title: t('数值域与谱', 'Numerical range and spectrum'),
+      summary: t('先证明二维数值域凸，再推广到 Hilbert 空间，得到紧凸闭包 K 及 σ(A)⊆K，为分母可逆性提供依据。', 'Prove convexity in dimension two, extend it to Hilbert space, and obtain a compact convex closure K with σ(A)⊆K for the denominator argument.'),
+      stepIds: ['bloch-convexity', 'closed-range-geometry'],
+    }, {
+      title: t('精确有限压缩', 'Exact finite compression'),
+      summary: t('收集给定张量所需的有限条 A 的轨道；压缩在这些中间向量上不丢分量，因此精确复现该张量上的多项式作用。', 'Collect the finitely many A-orbits needed by the given tensor. Compression loses no components along these vectors and exactly reproduces the polynomial action on that tensor.'),
+      stepIds: ['krylov-space', 'exact-compression'],
+    }, {
+      title: t('其余两项支撑结论', 'The remaining support results'),
+      summary: t('用谱包含与谱映射排除分母的零谱点；另在零空间上证明各类求值及其范数均为零，完成指定的支撑目标。', 'Use spectral inclusion and mapping to exclude zero from each denominator spectrum. Separately, show that all evaluations and norms vanish on the zero space, completing the stated support goals.'),
+      stepIds: ['rational-denominator', 'zero-space'],
+    }],
     goal: t('证明四项支撑结论：数值域闭包紧且凸并包含谱；矩阵多项式在给定代数张量上的作用可由有限维压缩精确复现；无极点有理函数的分母在 A 处可逆；零空间上的各类求值和相应范数界成立。', 'Prove four supporting results: compact convex numerical closure containing the spectrum; exact finite compression on a given algebraic tensor; invertibility of pole-free rational denominators at A; and the evaluations and norm bounds in the zero-space case.'),
     notation: t('W(A)={⟨x,Ax⟩: ‖x‖=1}，K=闭包 W(A)。P(A)=Σ Aᵏ⊗Bₖ；压缩 A_E=P_E A|E，J_E 是张量完成空间间的等距包含。', 'W(A)={⟨x,Ax⟩: ‖x‖=1} and K=closure W(A). Write P(A)=Σ Aᵏ⊗Bₖ, A_E=P_E A|E, and J_E for the isometric inclusion of completed tensor products.'),
     steps: [
@@ -113,6 +127,20 @@ export const analysisProofWalkthroughs: ProofWalkthrough[] = [
     runId: '818b8243-22b1-4315-954c-d5610eff1e44',
     proofSha256: '2fd7e2d1c71eff673ce58cd82f694526f9d6ed0a4ace42f800b159b26482cfc7',
     title: t('用近常值方块填满 Anderson 谱区间', 'Fill the Anderson spectral interval using nearly constant boxes'),
+    strategy: t('算子范数先把谱限制在 [−4−h,4+h] 内。独立随机势几乎处处含有任意大的近常值方块，将截断平面波移入这些方块就能为区间中每个值构造近似特征向量，从而证明反向包含。', 'The operator norm first confines the spectrum to [−4−h,4+h]. Almost surely, the independent potential has arbitrarily large nearly constant boxes; translating truncated plane waves into them gives approximate eigenvectors for every value in the interval and proves the reverse inclusion.'),
+    stages: [{
+      title: t('谱上界与随机方块', 'Spectral upper bound and random boxes'),
+      summary: t('在满测度事件上构造有界自伴算子并得到谱上界；另一条支线保证同一个势同时含有所需的所有近常值方块。', 'Construct a bounded self-adjoint operator and its spectral upper bound on a full-measure event. A separate argument supplies all required nearly constant boxes in the same potential.'),
+      stepIds: ['bounded-self-adjoint', 'simultaneous-boxes'],
+    }, {
+      title: t('构造近似特征向量', 'Construct approximate eigenvectors'),
+      summary: t('截断平面波的残差只在边界，随方块变大趋零；把它移入近常值方块后，势的扰动也可任意小。', 'The truncated plane wave has only boundary residual, which vanishes as the box grows. Moving it into a nearly constant box also makes the potential perturbation arbitrarily small.'),
+      stepIds: ['truncated-plane-wave', 'box-perturbation'],
+    }, {
+      title: t('闭合谱区间等式', 'Complete the spectral equality'),
+      summary: t('单位向量上的残差趋零排除了有界逆，得到区间内每个值都在谱中；在同一个满测度事件上合并两侧包含。', 'Vanishing residuals on unit vectors rule out a bounded inverse, putting every interval value in the spectrum. Combine both inclusions on the same full-measure event.'),
+      stepIds: ['spectral-lower-bound', 'almost-sure-equality'],
+    }],
     goal: t('对 h>0、在 ℤ² 上独立均匀取值于 [−h,h] 的势 v，证明几乎处处存在相应的有界自伴算子 H，其谱恰为实区间 [−4−h,4+h]。', 'For h>0 and independent uniform potentials v(x)∈[−h,h] on ℤ², prove that almost every configuration has a bounded self-adjoint Anderson operator H with spectrum exactly the real interval [−4−h,4+h].'),
     notation: t('Hᵥu(x)=Σ_{|e|₁=1}u(x+e)+v(x)u(x)，作用于 ℓ²(ℤ²;ℂ)。H_c 表示常势 c 的算子；Bₙ={x: |x₁|,|x₂|≤n}。', 'Hᵥu(x)=Σ_{|e|₁=1}u(x+e)+v(x)u(x) on ℓ²(ℤ²;ℂ). Write H_c for constant potential c and Bₙ={x: |x₁|,|x₂|≤n}.'),
     steps: [
@@ -218,6 +246,20 @@ export const analysisProofWalkthroughs: ProofWalkthrough[] = [
     runId: 'f5737ab7-9d8d-4789-a18d-10cc5e6f7c6b',
     proofSha256: '9ae908672b96f937d19b4b2f6b74aa1952a57184e264e1a08c9a0bc847c2775a',
     title: t('用统一下界和零路径证明变分值有限', 'Prove finiteness using a uniform lower bound and the zero path'),
+    strategy: t('高斯递归保留有界区间，即使不额外证明离散模式收敛，也能控制 P_f(q)。零场给出所有候选的共同下界，场递归的代价抵消则让零路径成为有限候选，由此把变分下确界夹在两个实数之间。', 'Gaussian recursion preserves bounded intervals and controls P_f(q) without an extra convergence theorem for the discrete patterns. The zero field gives a common lower bound, while cancellation of the field-recursion costs makes the zero path a finite competitor, trapping the infimum between two real numbers.'),
+    stages: [{
+      title: t('控制模式函数', 'Bound the pattern functional'),
+      summary: t('逐层保持 |Pₙ|≤K，再按 limUnder 的收敛与回退两种分支得到统一实数界 L≤P_f(q)≤U。', 'Preserve |Pₙ|≤K through every layer, then handle the convergent and fallback branches of limUnder to obtain uniform real bounds L≤P_f(q)≤U.'),
+      stepIds: ['uniform-gaussian-bound', 'limunder-finite-bounds'],
+    }, {
+      title: t('建立熵项的两侧依据', 'Establish the entropy bounds'),
+      summary: t('零场使 S(q)≥0；另用高斯矩母函数与 Jensen 逐层估计场递归，得到任意场的 R(h)≤0。', 'The zero field gives S(q)≥0. Separately, Gaussian exponential moments and Jensen bound each recursion layer, proving R(h)≤0 for every field.'),
+      stepIds: ['entropy-nonnegative', 'field-recursion-upper'],
+    }, {
+      title: t('夹住变分下确界', 'Bound the variational infimum'),
+      summary: t('在零路径上两条熵估计汇合为 S(0)=0；结合 α≥0，得到 αL≤V≤αU，排除正负无穷。', 'At the zero path the entropy estimates give S(0)=0. With α≥0, they imply αL≤V≤αU and exclude both infinities.'),
+      stepIds: ['zero-path-competitor', 'finite-extended-infimum'],
+    }],
     goal: t('设 α≥0，f:ℝ→ℝ 连续且有界。证明已定义的扩展实数变分值 V=inf_q[αP_f(q)+S(q)] 等于某个实数 p，因而既不是 +∞ 也不是 −∞。', 'For α≥0 and continuous bounded f:ℝ→ℝ, prove that the defined extended-real variational value V=inf_q[αP_f(q)+S(q)] equals a real number p, excluding both +∞ and −∞.'),
     notation: t('Z 为标准高斯。G_{s,d}U(x)=log E exp(dU(x+√s Z))/d（d≠0），d=0 时为 E U(x+√s Z)。P_f(q)=limUnder_n Pₙ(f,q)，S 为场阶梯函数给出的上确界。', 'Z is standard Gaussian. G_{s,d}U(x)=log E exp(dU(x+√s Z))/d for d≠0, and E U(x+√s Z) for d=0. Define P_f(q)=limUnder_n Pₙ(f,q); S is the supremum over field steps.'),
     steps: [

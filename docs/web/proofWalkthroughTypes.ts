@@ -26,12 +26,21 @@ export interface ProofWalkthroughStep {
   };
 }
 
+/** Ordered reading groups; mathematical dependencies remain on each step. */
+export interface ProofWalkthroughStage {
+  title: Localized;
+  summary: Localized;
+  stepIds: string[];
+}
+
 /** A reading of the accepted proof, separate from the dated research journal. */
 export interface ProofWalkthrough {
   recordId: string;
   runId: string;
   proofSha256: string;
   title: Localized;
+  strategy: Localized;
+  stages: ProofWalkthroughStage[];
   goal: Localized;
   notation?: Localized;
   steps: ProofWalkthroughStep[];
