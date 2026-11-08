@@ -4,6 +4,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCodexMathSession, type MathAgentSession } from '../src/runtime/codexSession';
+import * as mathTimers from '../src/math/mathTimers';
 import type { ModelRequestReceipt } from '../src/runtime/modelRequest';
 import { prepareSub2apiProfile, SUB2API_PROVIDER } from '../src/runtime/sub2api';
 import { prepareWestlakeProfile, WESTLAKE_PROVIDER } from '../src/runtime/westlake';
@@ -292,10 +293,20 @@ describe('soft notifications at real provider request boundaries', () => {
   });
 
   it.each(['complete', 'interrupt', 'timeout'] as const)('drops old-turn queued notices on %s while preserving explicit stops', async stop => {
+    let expire: (() => void) | undefined;
+    if (stop === 'timeout') vi.spyOn(mathTimers, 'scheduleMathTimeout').mockImplementationOnce((callback, timeoutMs) => {
+      expect(timeoutMs).toBe(250);
+      expire = callback;
+      return () => { expire = undefined; };
+    });
     const { running } = await fixture('sub2api', { ...(stop === 'timeout' ? { turnTimeoutMs: 250 } : {}) });
     const delivered = session!.notify!('Old assignment reminder'); void delivered.catch(() => {});
     if (stop === 'complete') control('complete');
     else if (stop === 'interrupt') await session!.interrupt();
+    else {
+      // Queue the notice before expiring the turn; child startup may exceed 250ms on CI.
+      expect(expire).toBeTypeOf('function'); expire!();
+    }
     expect(await running).toBe(stop === 'complete' ? 'completed' : stop === 'timeout' ? 'checkpoint' : 'interrupted');
     // This case checks completion before request settlement. Aborting HTTP in the child before
     // sending stdout's completion races independent transports and may legitimately deliver a
