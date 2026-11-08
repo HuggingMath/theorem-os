@@ -100,6 +100,8 @@ jobs:
       - run: elan run "leanprover/lean4:v$THEOREMOS_TEST_LEAN_VERSION" lean --version
       - name: Verify solver timeout, recovery, projection and acceptance without models
         run: bun run test:solver-reliability
+      - name: Verify dependency snapshots and receipt cache bindings
+        run: bunx vitest run --maxWorkers=4 tests/verifierSealedEnvironmentCache.test.ts tests/mathProofEnvironment.test.ts tests/leanProbeSnapshot.test.ts
 
   publish:
     needs: [verify, verify-solver]

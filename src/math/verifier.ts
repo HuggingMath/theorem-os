@@ -2072,6 +2072,8 @@ const isUnavailableProcess = (result: ProcessResult): boolean => {
 const leanModuleEnvironmentDigest = (input: {
   projectRoot: string; verifierCommand: string; env: NodeJS.ProcessEnv; lakePackagesPath?: string;
 }): string | undefined => {
+  const sealedEnvironment = resolveMathProofEnvironment(input.projectRoot, input.env);
+  if (sealedEnvironment && input.lakePackagesPath !== sealedEnvironment.packagesRoot) return undefined;
   const toolIdentity = formalVerificationToolIdentity(input.projectRoot, input.env);
   if (!toolIdentity) return undefined;
   const executable = resolveCommandForFingerprint(input.verifierCommand, input.env);
@@ -2083,7 +2085,8 @@ const leanModuleEnvironmentDigest = (input: {
       const absolute = path.join(input.projectRoot, file);
       return [file, fs.existsSync(absolute) ? mathDigest(fs.readFileSync(absolute)) : null];
     }),
-    packages: fingerprintLakePackages(input.projectRoot, input.lakePackagesPath),
+    packages: sealedEnvironment ? { sealed: sealedEnvironment.identity }
+      : fingerprintLakePackages(input.projectRoot, input.lakePackagesPath),
     testAxioms: input.env.DEEPSCIENTIST_TEST_LEAN_AXIOMS ?? null,
   }));
 };
@@ -2905,8 +2908,16 @@ async function buildFormalVerificationCacheKey(
       }
     })
     .filter((item): item is [string, string] => Boolean(item));
+  let sealedEnvironment: ReturnType<typeof resolveMathProofEnvironment>;
+  try {
+    sealedEnvironment = resolveMathProofEnvironment(projectRoot, options.env);
+  } catch {
+    // Let the uncached verifier reject invalid or expired seals through its
+    // normal preparation path; they must never reuse a successful receipt.
+    return undefined;
+  }
   const dependencyPaths = [
-    ['.lake/packages', fingerprintLakePackages(projectRoot)],
+    ['.lake/packages', sealedEnvironment ? { sealed: sealedEnvironment.identity } : fingerprintLakePackages(projectRoot)],
     // Lake build output is generated and is deliberately excluded from the
     // sandbox; it cannot affect the cache key for a clean target commit.
     ['.lake/build', 'generated-output-excluded'],
@@ -2959,7 +2970,9 @@ async function buildFormalVerificationCacheKey(
       environment,
       toolchainFiles,
       dependencyPaths,
-      trustedLakePackages: (options.trustedLakePackagesRoots ?? []).map((root) => [
+      // A verified immutable snapshot supplies all packages. Mutable source
+      // caches are used only when no sealed environment is bound.
+      trustedLakePackages: sealedEnvironment ? [] : (options.trustedLakePackagesRoots ?? []).map((root) => [
         root,
         fingerprintLakePackages(projectRoot, root),
       ]),

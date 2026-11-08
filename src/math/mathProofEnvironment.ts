@@ -443,8 +443,6 @@ async function prepareEnvironment(
     );
     if (!cached) {
       fs.writeFileSync(path.join(source, METADATA), metadataBytes, { flag: 'wx', mode: 0o400 });
-      report('verifying_source', { files: files.length, bytes });
-      await verifySource();
     }
     checkpoint();
     report(cached ? 'mounting_cached_image' : 'building_image', { cacheHit: Boolean(cached) });
