@@ -3085,51 +3085,6 @@ code.explain-use:hover{text-decoration:none}
 .explain-dialog-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:12px 0 10px}
 .explain-dialog-note{margin-bottom:12px}
 .explain-dialog label{margin-top:4px}
-/* TeX read by explainText.ts, drawn with plain elements. Math letters need real italics, so synthesis is allowed here. */
-.math{font-family:"Cambria Math","STIX Two Math","Latin Modern Math","Times New Roman",var(--serif);font-synthesis:style weight;font-size:1.06em;white-space:nowrap;line-height:1}
-/* A formula with break points wraps only at its <wbr>s; each piece between them stays on one line. */
-.math-wraps{white-space:normal}
-.math-piece{white-space:nowrap}
-.math-display{display:block;margin:8px 0;text-align:center;white-space:nowrap;overflow-x:auto;overflow-y:hidden;padding:4px 0;line-height:1.4}
-.math var,.math .math-italic{font-style:italic}
-.math-roman var,.math-roman .math-italic{font-style:normal}
-.math-bold{font-weight:700}
-.math-text{font-family:var(--sans);font-style:normal;font-size:.94em;white-space:pre-wrap}
-.math-op{margin:0 .22em}
-.math-punct{margin-right:.17em}
-.math-fn+:not(sup):not(sub){margin-left:.17em}
-.math-big{font-size:1.25em;vertical-align:-.08em}
-.math-operator-script{margin-right:.17em}
-.math sup .math-op,.math sub .math-op{margin:0 .06em}
-.math sup,.math sub{font-size:.72em;line-height:0}
-/* Stacked scripts and fractions centre on the line's middle, so the bar sits on the maths axis. */
-.math-scripts{display:inline-flex;flex-direction:column;align-items:flex-start;vertical-align:middle;line-height:1}
-.math-scripts sup,.math-scripts sub{font-size:.72em;line-height:1.05;vertical-align:baseline}
-.math-frac{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle;margin:0 .12em;font-size:.88em;line-height:1.15}
-.math-frac>span{padding:0 .2em}
-.math-frac>span:first-child{border-bottom:.07em solid currentColor}
-.math-frac-plain>span:first-child{border-bottom:0}
-.math-sqrt{white-space:nowrap}
-.math-radical{margin-right:.04em}
-.math-radicand{border-top:.07em solid currentColor;padding:0 .1em}
-.math-root-index{margin-right:-.4em;font-size:.55em;vertical-align:.9em}
-.math-accent{position:relative;display:inline-block}
-.math-accent::after{content:attr(data-mark);position:absolute;left:50%;top:-.55em;transform:translateX(-50%)}
-.math-overline{border-top:.07em solid currentColor;padding-top:.05em}
-.math-underline{border-bottom:.07em solid currentColor;padding-bottom:.05em}
-.math-stack{display:inline-flex;align-items:center;vertical-align:-.1em}
-.math-stack-over{flex-direction:column}
-.math-stack-under{flex-direction:column-reverse;vertical-align:.6em}
-.math-stack-note{font-size:.65em;line-height:1}
-.math-table-wrap{display:inline-flex;align-items:center;vertical-align:middle;gap:.15em;margin:0 .1em}
-.math-fence{font-size:2em;font-weight:200;line-height:1}
-.math-table{display:inline-table;border-collapse:separate;border-spacing:.7em .2em;margin:0 -.5em}
-.math-table-row{display:table-row}
-.math-table-cell{display:table-cell;text-align:center;line-height:1.35}
-.math-table-left .math-table-cell{text-align:left}
-.math-table-pairs .math-table-cell:nth-child(odd){text-align:right}
-.math-table-pairs .math-table-cell:nth-child(even){text-align:left}
-.math-source{font-family:var(--mono);font-size:.88em;color:var(--gray-600);white-space:pre-wrap}
 /* Phrase alignment: a linked phrase, a matched fragment of the original problem, and the goals the auditors checked. */
 .explain-link{text-decoration:underline dotted var(--blue-300);text-decoration-thickness:1.5px;text-underline-offset:3px;cursor:pointer;border-radius:3px}
 .explain-link:hover,.explain-link:focus-visible{background:var(--blue-50);text-decoration-color:var(--blue-500)}

@@ -1,9 +1,10 @@
 import { Fragment, type ComponentChildren } from 'preact';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useId, useMemo, useState } from 'preact/hooks';
 import { Marked, type Token, type Tokens, type TokenizerExtension } from 'marked';
 import { t } from '../../i18n';
 import { leanTokens } from '../sourceText';
 import { Icon } from './Icon';
+import { MathFormula, inlineMathPunctuation } from './MathFormula';
 
 type MathToken = { type: 'chat_math'; raw: string; text: string; display: boolean; closed: boolean };
 
@@ -41,36 +42,9 @@ function safeLink(href: string): string | undefined {
   return /^(?:https?:\/\/|mailto:|\/(?![\/\\])|#)/iu.test(value) && !/[\u0000-\u0020\u007f]/u.test(value) ? value : undefined;
 }
 
-type Katex = typeof import('../math');
-let katex: Katex | undefined, loading: Promise<Katex> | undefined;
-// Built separately as /math.js (scripts/build-web.ts); one request is shared by every formula on the page.
-const loadKatex = () => loading ??= (import('/math.js' as string) as Promise<Katex>).then(module => katex = module,
-  error => { loading = undefined; throw error; });
-
-function Formula({ token }: { token: MathToken }) {
-  const element = useRef<HTMLSpanElement>(null);
-  const [failed, setFailed] = useState<string>();
-  const [, setLoaded] = useState(Boolean(katex));
-  const rendered = token.closed && failed !== token.text && Boolean(katex);
-  useEffect(() => {
-    // Until KaTeX arrives, or if it cannot load, the formula stays readable as its source.
-    if (token.closed && !katex) void loadKatex().then(() => setLoaded(true), () => {});
-  }, [token.closed]);
-  useLayoutEffect(() => {
-    if (!rendered || !element.current || !katex) return;
-    const { render } = katex;
-    try {
-      // KaTeX builds the formula as DOM nodes; no HTML string is parsed, and model HTML stays literal text below.
-      render(token.text, element.current, { displayMode: token.display, throwOnError: true,
-        trust: false, strict: 'ignore', maxSize: 20, maxExpand: 1000, output: 'htmlAndMathml' });
-    } catch {
-      element.current.textContent = '';
-      setFailed(token.text);
-    }
-  }, [rendered, token.text, token.display]);
-  const className = 'chat-math' + (token.display ? ' chat-math-display' : '');
-  return rendered ? <span ref={element} class={className} />
-    : <span class={className + ' chat-math-source'}>{token.raw}</span>;
+function Formula({ token, suffix }: { token: MathToken; suffix?: string }) {
+  return <MathFormula source={token.text} fallback={token.raw} display={token.display} complete={token.closed}
+    className={`chat-math${token.display ? ' chat-math-display' : ''}`} suffix={suffix} />;
 }
 
 function highlightedLean(source: string): ComponentChildren[] {
@@ -120,12 +94,22 @@ function CodeBlock({ token }: { token: Tokens.Code }) {
   </section>;
 }
 
-function Inline({ tokens }: { tokens: Token[] }): preact.JSX.Element {
-  return <>{tokens.map((token, index) => <Fragment key={index}>{renderToken(token)}</Fragment>)}</>;
+function formulaPunctuation(tokens: Token[], index: number): string {
+  const token = tokens[index] as MathToken | undefined, next = tokens[index + 1] as Tokens.Text | undefined;
+  if (token?.type !== 'chat_math' || token.display || !token.closed || !next || next.tokens || (next.type !== 'text' && next.type !== 'escape')) return '';
+  return inlineMathPunctuation(plain(next.text));
 }
-function renderToken(token: Token): ComponentChildren {
+function Inline({ tokens }: { tokens: Token[] }): preact.JSX.Element {
+  return <>{tokens.map((token, index) => {
+    const consumed = formulaPunctuation(tokens, index - 1);
+    // Work on the decoded leaf text exactly once; neither the stored Markdown nor Marked's tokens are mutated.
+    const content = consumed ? plain((token as Tokens.Text).text).slice(consumed.length) : renderToken(token, formulaPunctuation(tokens, index));
+    return <Fragment key={index}>{content}</Fragment>;
+  })}</>;
+}
+function renderToken(token: Token, suffix?: string): ComponentChildren {
   switch (token.type) {
-    case 'chat_math': return <Formula token={token as MathToken} />;
+    case 'chat_math': return <Formula token={token as MathToken} suffix={suffix} />;
     case 'space': case 'def': return null;
     case 'code': return <CodeBlock token={token as Tokens.Code} />;
     case 'heading': {

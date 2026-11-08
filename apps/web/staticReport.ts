@@ -51,6 +51,15 @@ function stylesheet(web: string): string {
   return css;
 }
 
+function mathStylesheet(web: string): string {
+  const directory = path.join(web, 'assets/katex');
+  // Modern browsers use woff2; keep offline formula fonts inside the report's single file.
+  const css = read(path.join(directory, 'katex.min.css')).replace(/src:url\(fonts\/([^()]+\.woff2)\) format\("woff2"\)(?:,url\([^)]*\) format\("[^"]+"\))*/gu,
+    (_match, font: string) => `src:url("${dataUri('font/woff2', bytes(path.join(directory, 'fonts', font)))}") format("woff2")`);
+  if (/url\(\s*(?!["']?data:)/iu.test(css) || /<\/style/iu.test(css)) throw new Error('static_report_math_stylesheet_reference');
+  return css;
+}
+
 /** The report page as one self-contained HTML document. `root` is the repository, whose out/ holds the built pages. */
 export function staticReportHtml(root: string, report: StaticReportPage): string {
   const web = path.join(root, 'out/web'), pages = path.join(root, templates[report.page]);
@@ -58,9 +67,9 @@ export function staticReportHtml(root: string, report: StaticReportPage): string
   // The template's tags are swapped for placeholders and checked first, so nothing inlined is read as markup.
   const inlined: Record<string, string> = {
     theme: `<script>${scriptText(read(path.join(web, 'theme.js')))}</script>`,
-    style: `<style>${stylesheet(web)}</style>`,
+    style: `<style>${stylesheet(web)}</style><style data-theoremos-math-style>${mathStylesheet(web)}</style>`,
     data: `<script type="application/json" id="report-data">${embeddedJson(report.data)}</script>`,
-    bundle: `<script>${scriptText(read(path.join(pages, `${report.page}.js`)))}</script>` };
+    bundle: `<script>${scriptText(read(path.join(web, 'math.js')))}</script><script>${scriptText(read(path.join(pages, `${report.page}.js`)))}</script>` };
   let html = read(path.join(pages, `${report.page}.html`));
   if (html.includes('\0')) throw new Error('static_report_template_changed');
   html = once(html, '<meta charset="utf-8">', `<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="${policy}">`);

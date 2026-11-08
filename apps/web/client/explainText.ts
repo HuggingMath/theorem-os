@@ -3,7 +3,7 @@ import { leanTokens, type LeanToken } from './sourceText';
 
 /**
  * Pure helpers for the explanation page (explain.html): the proof split into highlighted lines, the mapping between
- * Lean lines and explanation steps, and a small TeX reader for the `$…$` mathematics the writer is asked to use.
+ * Lean lines and explanation steps, and source-preserving prose segments for the shared math renderer.
  * Nothing here touches the DOM, so model text can only ever reach the page as text nodes.
  */
 export type LeanSegment = { text: string; kind?: LeanToken['kind'] };
@@ -132,7 +132,7 @@ export function explanationEstimate(declarations: number, reference: { declarati
   return { seconds: Math.min(limits.maxRunSeconds, Math.round(reference.seconds * scale)),
     tokens: Math.min(limits.maxTotalTokens, Math.round(reference.tokens * scale)) };
 }
-/** Prose split at inline code, bold, and `$…$`, `$$…$$`, `\(…\)`, `\[…\]` mathematics. */
+/** Prose split at code, bold, delimited mathematics and unambiguous mathematical expressions in older records. */
 export type ProseSegment = { kind: 'text' | 'code' | 'strong' | 'math' | 'display'; text: string };
 const delimiters = [['$$', '$$', 'display'], ['\\[', '\\]', 'display'], ['\\(', '\\)', 'math'], ['$', '$', 'math']] as const;
 function closing(text: string, close: string, from: number) {
@@ -142,12 +142,102 @@ function closing(text: string, close: string, from: number) {
   }
   return -1;
 }
+// Bare expressions have no Markdown boundaries. Limit words to mathematical functions and the named Greek variables
+// used in the saved research records, so a following English sentence cannot become part of the formula.
+const mathWords = new Set('sin cos tan cot sec csc sinh cosh tanh log ln exp lim sup inf max min det dim ker gcd lcm arg Pr mod conj area rank tr diag card alpha beta gamma delta epsilon theta lambda lam mu nu xi pi rho sigma tau phi psi omega TV'.split(' '));
+const mathCommand = /^(?:frac|dfrac|tfrac|binom|sqrt|sum|prod|coprod|int|iint|iiint|oint|lim|limits|nolimits|left|right|big|Big|bigg|Bigg|mathbb|mathcal|mathscr|mathfrak|mathrm|mathbf|mathit|mathsf|mathtt|text|operatorname|overline|underline|overbrace|underbrace|hat|widehat|bar|vec|dot|ddot|tilde|widetilde|substack|boxed|infty|partial|nabla|forall|exists|in|notin|subset|subseteq|supset|supseteq|cup|cap|setminus|le|leq|ge|geq|ne|neq|equiv|approx|sim|simeq|cong|propto|times|cdot|div|pm|mp|to|mapsto|rightarrow|leftarrow|Rightarrow|Leftarrow|leftrightarrow|Leftrightarrow|alpha|beta|gamma|delta|epsilon|varepsilon|theta|vartheta|lambda|mu|nu|xi|pi|rho|sigma|tau|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega|sin|cos|tan|log|ln|exp|max|min|sup|inf|det|dim|ker|quad|qquad|ldots|cdots|dots)$/u;
+const mathLetter = /[\p{Script=Greek}\u2102-\u2149\u{1d400}-\u{1d7ff}]/u;
+const unicodeScript = /[\u00b2\u00b3\u00b9\u1d2c-\u1d6a\u2070-\u209f]/u;
+const mathOperator = /[\u2200-\u22ff\u27c0-\u27ef\u2190-\u21d4\u00b1\u00d7\u00f7\u00b7\u2212]/u;
+const bigOperator = /[∑∏∐∫∬∭∮⋃⋂√]/u;
+const mathConstant = /[∞∅⊤⊥]/u;
+/** A lexical candidate, including rejected candidates so their suffix cannot be mistaken for a separate formula. */
+function bareMath(text: string, start: number): { end: number; math: boolean } | undefined {
+  const previous = text[start - 1] ?? '';
+  if (/[A-Za-z0-9_./\\@:^]/u.test(previous) || mathLetter.test(previous) || unicodeScript.test(previous)) return;
+  const first = String.fromCodePoint(text.codePointAt(start)!);
+  if (!/[A-Za-z0-9\\([|+-]/u.test(first) && !mathLetter.test(first) && !mathOperator.test(first)) return;
+  let index = start, clear = false, operand = false, unsafe = false, tex = false, scriptable = false;
+  let last: 'operand' | 'operator' | 'command' | 'script' | 'open' | 'close' = 'open';
+  const brackets: string[] = [];
+  while (index < text.length) {
+    const character = String.fromCodePoint(text.codePointAt(index)!);
+    if (/[A-Za-z]/u.test(character)) {
+      const word = /^[A-Za-z]+/u.exec(text.slice(index))![0];
+      if (word.length > 1 && !mathWords.has(word) && !brackets.includes('}')) {
+        if (index === start) index += word.length;
+        break;
+      }
+      index += word.length; operand = scriptable = true; last = 'operand'; continue;
+    }
+    if (/[0-9]/u.test(character) || mathLetter.test(character) || mathConstant.test(character)) {
+      index += character.length; operand = scriptable = true; last = 'operand'; continue;
+    }
+    if (unicodeScript.test(character)) {
+      if (!scriptable) unsafe = true;
+      clear = true; index += character.length; last = 'operand'; continue;
+    }
+    if (character === '\\') {
+      const command = /^\\([A-Za-z]+)/u.exec(text.slice(index));
+      if (!command || !mathCommand.test(command[1]!)) break;
+      index += command[0].length; clear = tex = scriptable = true; last = 'command'; continue;
+    }
+    if (character === '_' || character === '^') {
+      if (!scriptable) unsafe = true;
+      const next = text[index + 1];
+      if (next === '{') { clear = true; index++; last = 'script'; continue; }
+      // TeX takes one token after an unbraced script. Never silently turn `_children` into just `_c`, or `^(a+b)` into `^(`.
+      const script = /^[A-Za-z0-9]+/u.exec(text.slice(index + 1))?.[0];
+      if (script) {
+        // In E_qX the subscript is q and X is the next factor, exactly as TeX reads it; `_children` stays ambiguous.
+        const followedByFactor = /^[a-z][A-Z]$/u.test(script);
+        if (script.length !== 1 && !followedByFactor) unsafe = true;
+        index += followedByFactor ? 2 : script.length + 1; operand = scriptable = true; last = 'operand'; continue;
+      }
+      if (next === '\\') { index++; last = 'script'; continue; }
+      unsafe = true; index++; last = 'script'; continue;
+    }
+    if ('([{'.includes(character)) {
+      // Ordinary set/indicator braces need explicit TeX escapes; treating them as groups would hide their visible braces.
+      if (character === '{' && last !== 'script' && last !== 'command' && !(tex && last === 'close') && !brackets.includes('}')) unsafe = true;
+      brackets.push(character === '(' ? ')' : character === '[' ? ']' : '}');
+      index++; scriptable = false; last = 'open'; continue;
+    }
+    if (')]}'.includes(character)) {
+      if (brackets.at(-1) !== character) break;
+      brackets.pop(); index++; operand = scriptable = true; last = 'close'; continue;
+    }
+    if (/\s/u.test(character)) {
+      if (character === '\n' || character === '\r') break;
+      const next = text.slice(index).match(/^\s*(\S)/u)?.[1];
+      if (!next) break;
+      const word = text.slice(index).match(/^\s*([A-Za-z]+)/u)?.[1];
+      if (!brackets.length && word && word.length > 1 && !mathWords.has(word)) break;
+      if (!brackets.length && !/[A-Za-z0-9\\(+*/=<>|^_-]/u.test(next) && !mathLetter.test(next) && !unicodeScript.test(next) && !mathOperator.test(next)) break;
+      index++; continue;
+    }
+    if (character === '.' && /[0-9]/u.test(text[index - 1] ?? '') && /[0-9]/u.test(text[index + 1] ?? '')) { index++; continue; }
+    if (character === '|' || character === '′' || character === "'") { index++; continue; }
+    if (brackets.length && /[,;:&]/u.test(character)) { index++; scriptable = false; last = 'operator'; continue; }
+    if (/[+*/=<>-]/u.test(character) || mathOperator.test(character)) {
+      if (mathOperator.test(character)) clear = true;
+      index += character.length; scriptable = bigOperator.test(character); last = 'operator'; continue;
+    }
+    if (tex && brackets.includes('}') && !/[$`]/u.test(character)) { index += character.length; operand = scriptable = true; last = 'operand'; continue; }
+    break;
+  }
+  while (index > start && /\s/u.test(text[index - 1]!)) index--;
+  if (index === start) return;
+  // A filename suffix belongs to the original identifier/path, even when its basename contains a braced script.
+  if (/^\.[A-Za-z][A-Za-z0-9]*/u.test(text.slice(index))) unsafe = true;
+  return { end: index, math: clear && operand && !unsafe && !brackets.length && last !== 'operator' && last !== 'script' };
+}
 /** A piece of prose as written, `[start, end)` in the raw text: one character of text, or a whole code, bold or formula. */
 type ProseAtom = { kind: ProseSegment['kind']; start: number; end: number; text: string };
 function proseAtoms(text: string): ProseAtom[] {
   const atoms: ProseAtom[] = [];
   const fence = /`+/y;
-  let index = 0;
+  let index = 0, unclosedMath = false;
   while (index < text.length) {
     const start = index;
     if (text.startsWith('\\$', index)) { atoms.push({ kind: 'text', start, end: index += 2, text: '$' }); continue; }
@@ -163,10 +253,18 @@ function proseAtoms(text: string): ProseAtom[] {
       const end = text.indexOf('**', index + 2);
       if (end > index + 2) { atoms.push({ kind: 'strong', start, end: index = end + 2, text: text.slice(start + 2, end) }); continue; }
     }
-    const delimiter = delimiters.find(([open]) => text.startsWith(open, index));
+    const delimiter = !unclosedMath && delimiters.find(([open]) => text.startsWith(open, index));
     if (delimiter) {
       const [open, close, kind] = delimiter, end = closing(text, close, index + open.length);
       if (end > index + open.length) { atoms.push({ kind, start, end: index = end + close.length, text: text.slice(start + open.length, end) }); continue; }
+      // An unfinished explicit formula remains source text, including any commands/scripts it contains.
+      unclosedMath = true;
+    }
+    const bare = !unclosedMath && bareMath(text, index);
+    if (bare) {
+      if (bare.math) { atoms.push({ kind: 'math', start, end: index = bare.end, text: text.slice(start, bare.end) }); continue; }
+      while (index < bare.end) atoms.push({ kind: 'text', start: index, end: ++index, text: text[index - 1]! });
+      continue;
     }
     atoms.push({ kind: 'text', start, end: ++index, text: text[start]! });
   }
@@ -313,314 +411,4 @@ export function quotePieces(text: string,
     const wider = groups.filter(group => !own.has(group) && group.start <= piece.start && piece.end <= group.end).map(group => group.members);
     return [{ ...piece, quote: lead(run.owner), quotes: [run.owner, ...merged].flatMap(listed), wider }];
   });
-}
-/** A parsed `$…$` formula; the page renders it with plain elements and falls back to the source text on anything odd. */
-export type MathStyle = 'text' | 'roman' | 'italic' | 'bold';
-export type MathNode =
-  | { type: 'text'; text: string; style?: MathStyle; role?: 'op' | 'punct' | 'big' | 'fn' }
-  | { type: 'row'; children: MathNode[]; style?: MathStyle }
-  | { type: 'script'; base: MathNode; sup?: MathNode; sub?: MathNode }
-  | { type: 'frac'; top: MathNode; bottom: MathNode; bar: boolean }
-  | { type: 'sqrt'; body: MathNode; index?: MathNode }
-  | { type: 'accent'; body: MathNode; mark: string }
-  | { type: 'line'; body: MathNode; position: 'over' | 'under' }
-  | { type: 'stack'; base: MathNode; note: MathNode; position: 'over' | 'under' }
-  | { type: 'table'; rows: MathNode[][]; open: string; close: string; align: 'center' | 'left' | 'pairs' };
-
-const table = (spec: string) => new Map(spec.trim().split(/\s+/u).map(pair => { const at = pair.indexOf(':'); return [pair.slice(0, at), pair.slice(at + 1)] as [string, string]; }));
-const greek = table(`alpha:α beta:β gamma:γ delta:δ epsilon:ϵ varepsilon:ε zeta:ζ eta:η theta:θ vartheta:ϑ iota:ι kappa:κ lambda:λ mu:μ
-  nu:ν xi:ξ pi:π varpi:ϖ rho:ρ varrho:ϱ sigma:σ varsigma:ς tau:τ upsilon:υ phi:ϕ varphi:φ chi:χ psi:ψ omega:ω
-  Gamma:Γ Delta:Δ Theta:Θ Lambda:Λ Xi:Ξ Pi:Π Sigma:Σ Upsilon:Υ Phi:Φ Psi:Ψ Omega:Ω`);
-const ordinary = table(`infty:∞ emptyset:∅ varnothing:∅ nabla:∇ partial:∂ forall:∀ exists:∃ nexists:∄ neg:¬ lnot:¬ top:⊤ bot:⊥
-  ell:ℓ hbar:ℏ aleph:ℵ Re:ℜ Im:ℑ wp:℘ prime:′ angle:∠ triangle:△ square:□ Box:□ checkmark:✓ dagger:† ddagger:‡ star:⋆
-  ldots:… dots:… cdots:⋯ vdots:⋮ ddots:⋱ dotsc:… dotsb:⋯ langle:⟨ rangle:⟩ lceil:⌈ rceil:⌉ lfloor:⌊ rfloor:⌋ lvert:| rvert:|
-  vert:| lVert:‖ rVert:‖ Vert:‖ lbrace:{ rbrace:} backslash:∖ S:§ P:¶ circ:∘ bullet:∙ diamond:⋄ ast:∗ colon:: natural:♮`);
-const operators = table(`pm:± mp:∓ times:× div:÷ cdot:⋅ ast:∗ cup:∪ cap:∩ setminus:∖ smallsetminus:∖ wedge:∧ land:∧ vee:∨ lor:∨
-  oplus:⊕ ominus:⊖ otimes:⊗ odot:⊙ uplus:⊎ sqcup:⊔ sqcap:⊓ amalg:⨿ triangleleft:◁ triangleright:▷
-  le:≤ leq:≤ ge:≥ geq:≥ leqslant:⩽ geqslant:⩾ ne:≠ neq:≠ lt:< gt:> ll:≪ gg:≫ equiv:≡ approx:≈ cong:≅ sim:∼ simeq:≃ propto:∝
-  doteq:≐ in:∈ notin:∉ ni:∋ subset:⊂ supset:⊃ subseteq:⊆ supseteq:⊇ subsetneq:⊊ supsetneq:⊋ sqsubseteq:⊑ mid:∣ nmid:∤
-  parallel:∥ perp:⊥ vdash:⊢ dashv:⊣ models:⊨ prec:≺ succ:≻ preceq:⪯ succeq:⪰ to:→ gets:← rightarrow:→ leftarrow:←
-  Rightarrow:⇒ Leftarrow:⇐ leftrightarrow:↔ Leftrightarrow:⇔ implies:⟹ impliedby:⟸ iff:⟺ mapsto:↦ longmapsto:⟼
-  longrightarrow:⟶ longleftarrow:⟵ Longrightarrow:⟹ Longleftarrow:⟸ longleftrightarrow:⟷ Longleftrightarrow:⟺ hookrightarrow:↪
-  twoheadrightarrow:↠ uparrow:↑ downarrow:↓ nearrow:↗ searrow:↘ coloneqq:≔ eqqcolon:≕ triangleq:≜ defeq:≝ lhd:⊲ rhd:⊳ unlhd:⊴ unrhd:⊵`);
-const big = table(`sum:∑ prod:∏ coprod:∐ int:∫ iint:∬ iiint:∭ oint:∮ bigcup:⋃ bigcap:⋂ bigoplus:⨁ bigotimes:⨂ bigodot:⨀
-  bigvee:⋁ bigwedge:⋀ biguplus:⨄ bigsqcup:⨆`);
-const functions = new Set(`sin cos tan cot sec csc arcsin arccos arctan sinh cosh tanh coth log ln lg exp lim sup inf max min det dim ker
-  deg gcd lcm hom arg Pr mod`.split(/\s+/u));
-const negated = table(`=:≠ in:∉ subset:⊄ subseteq:⊈ supset:⊅ supseteq:⊉ equiv:≢ le:≰ leq:≰ ge:≱ geq:≱ <:≮ >:≯ sim:≁ approx:≉
-  cong:≇ mid:∤ exists:∄ parallel:∦ vdash:⊬ models:⊭`);
-const accents = new Map(Object.entries({ hat: '\u0302', widehat: '\u0302', tilde: '\u0303', widetilde: '\u0303', bar: '\u0304',
-  vec: '\u20d7', dot: '\u0307', ddot: '\u0308', check: '\u030c', breve: '\u0306', acute: '\u0301', grave: '\u0300', mathring: '\u030a' }));
-// Written as escapes: the spacing characters are invisible and `\s` would split them.
-const spaces = new Map(Object.entries({ quad: '\u2003', qquad: '\u2003\u2003', enspace: '\u2002', thinspace: '\u2009',
-  medspace: '\u205f', thickspace: '\u2004', space: ' ', ' ': ' ', ',': '\u2009', ':': '\u205f', '>': '\u205f', ';': '\u2004', '!': '' }));
-const controls = new Map(Object.entries({ '{': '{', '}': '}', '%': '%', '&': '&', '#': '#', '_': '_', '$': '$', '|': '‖' }));
-const operatorText = new Set('+−=<>±∓×÷⋅∗∪∩∖∧∨⊕⊗≤≥≠≡≈≅∼≃∝∈∉∋⊂⊃⊆⊇⊊⊋∣∤∥⊢⊨→←⇒⇐↔⇔⟹⟸⟺↦⟶⟷↪↠≔∘'.split(''));
-const environments: Record<string, { open: string; close: string; align: 'center' | 'left' | 'pairs' }> = {
-  matrix: { open: '', close: '', align: 'center' }, smallmatrix: { open: '', close: '', align: 'center' },
-  pmatrix: { open: '(', close: ')', align: 'center' }, bmatrix: { open: '[', close: ']', align: 'center' },
-  Bmatrix: { open: '{', close: '}', align: 'center' }, vmatrix: { open: '|', close: '|', align: 'center' },
-  Vmatrix: { open: '‖', close: '‖', align: 'center' }, cases: { open: '{', close: '', align: 'left' },
-  dcases: { open: '{', close: '', align: 'left' }, array: { open: '', close: '', align: 'center' },
-  aligned: { open: '', close: '', align: 'pairs' }, align: { open: '', close: '', align: 'pairs' }, 'align*': { open: '', close: '', align: 'pairs' },
-  alignedat: { open: '', close: '', align: 'pairs' }, split: { open: '', close: '', align: 'pairs' }, gathered: { open: '', close: '', align: 'center' },
-  gather: { open: '', close: '', align: 'center' }, 'gather*': { open: '', close: '', align: 'center' }, eqnarray: { open: '', close: '', align: 'pairs' },
-};
-const alphabets: Record<string, { upper: number; lower?: number; digit?: number; except?: Record<string, string> }> = {
-  bb: { upper: 0x1d538, lower: 0x1d552, digit: 0x1d7d8, except: { C: 'ℂ', H: 'ℍ', N: 'ℕ', P: 'ℙ', Q: 'ℚ', R: 'ℝ', Z: 'ℤ' } },
-  cal: { upper: 0x1d49c, except: { B: 'ℬ', E: 'ℰ', F: 'ℱ', H: 'ℋ', I: 'ℐ', L: 'ℒ', M: 'ℳ', R: 'ℛ' } },
-  frak: { upper: 0x1d504, lower: 0x1d51e, except: { C: 'ℭ', H: 'ℌ', I: 'ℑ', R: 'ℜ', Z: 'ℨ' } },
-};
-const fonts: Record<string, string> = { mathbb: 'bb', mathbbm: 'bb', Bbb: 'bb', mathcal: 'cal', mathscr: 'cal', mathfrak: 'frak' };
-function letters(text: string, name: string) {
-  const alphabet = alphabets[name]!;
-  return [...text].map(character => {
-    if (alphabet.except?.[character]) return alphabet.except[character];
-    const code = character.charCodeAt(0);
-    if (code >= 65 && code <= 90) return String.fromCodePoint(alphabet.upper + code - 65);
-    if (code >= 97 && code <= 122 && alphabet.lower) return String.fromCodePoint(alphabet.lower + code - 97);
-    if (code >= 48 && code <= 57 && alphabet.digit) return String.fromCodePoint(alphabet.digit + code - 48);
-    return character;
-  }).join('');
-}
-type Stop = '}' | ']' | 'cell';
-class TexParser {
-  index = 0;
-  /** Open groups and arguments, `\\text` math included, so a deep formula fails here rather than in the renderer. */
-  private nesting: number;
-  constructor(readonly source: string, nesting = 0) { this.nesting = nesting; }
-  private enter() { if (++this.nesting > 48) throw new Error('math_too_deep'); }
-  private peek(text: string) { return this.source.startsWith(text, this.index); }
-  private skipSpace() { while (/\s/u.test(this.source[this.index] ?? '')) this.index++; }
-  private name() {
-    const match = /^[A-Za-z]+/u.exec(this.source.slice(this.index, this.index + 40));
-    if (!match) { this.index++; return this.source[this.index - 1] ?? ''; }
-    this.index += match[0].length;
-    let name = match[0];
-    if (name === 'operatorname' && this.source[this.index] === '*') { this.index++; name += '*'; }
-    this.skipSpace();
-    return name;
-  }
-  /** Nodes up to the stop (not consumed); a cell stop also ends at `&`, `\\` and `\end`. */
-  list(stop?: Stop): MathNode[] {
-    this.enter();
-    const nodes: MathNode[] = [];
-    while (this.index < this.source.length) {
-      const character = this.source[this.index]!;
-      if (stop === '}' && character === '}' || stop === ']' && character === ']') break;
-      if (stop === 'cell' && (character === '&' || this.peek('\\\\') || this.peek('\\end'))) break;
-      if (character === '^' || character === '_') {
-        this.index++;
-        this.attach(nodes, character === '^' ? 'sup' : 'sub', this.argument());
-        continue;
-      }
-      if (character === "'") {
-        let primes = '';
-        while (this.source[this.index] === "'") { primes += '′'; this.index++; }
-        this.attach(nodes, 'sup', { type: 'text', text: primes, style: 'roman' });
-        continue;
-      }
-      nodes.push(...this.atom());
-    }
-    this.nesting--;
-    return nodes;
-  }
-  private attach(nodes: MathNode[], slot: 'sup' | 'sub', value: MathNode) {
-    const last = nodes.at(-1);
-    if (last?.type === 'script' && !last[slot]) { last[slot] = value; return; }
-    const script: MathNode = { type: 'script', base: last && last.type !== 'script' ? nodes.pop()! : { type: 'text', text: '' } };
-    script[slot] = value;
-    nodes.push(script);
-  }
-  /** A braced group, one command, or one character, as TeX reads a script or macro argument. */
-  argument(): MathNode {
-    this.enter();
-    this.skipSpace();
-    const nodes = this.source[this.index] === '{' ? [this.group()] : this.source[this.index] === '\\' ? this.atom() : this.character(true);
-    this.nesting--;
-    return nodes.length === 1 ? nodes[0]! : { type: 'row', children: nodes };
-  }
-  private group(): MathNode {
-    this.index++;
-    const children = this.list('}');
-    if (this.source[this.index] !== '}') throw new Error('math_group_open');
-    this.index++;
-    return { type: 'row', children };
-  }
-  private optional(): MathNode | undefined {
-    this.skipSpace();
-    if (this.source[this.index] !== '[') return undefined;
-    this.index++;
-    const children = this.list(']');
-    if (this.source[this.index] !== ']') throw new Error('math_option_open');
-    this.index++;
-    return { type: 'row', children };
-  }
-  /** A group's source text, for commands whose argument is text rather than mathematics. */
-  private raw(): string {
-    this.skipSpace();
-    if (this.source[this.index] !== '{') {
-      const start = this.index;
-      if (this.source[this.index] === '\\') { this.index++; this.name(); } else this.index += this.codePointLength();
-      return this.source.slice(start, this.index);
-    }
-    let depth = 0;
-    const start = this.index + 1;
-    for (; this.index < this.source.length; this.index++) {
-      const character = this.source[this.index];
-      if (character === '\\') { this.index++; continue; }
-      if (character === '{') depth++;
-      if (character === '}' && --depth === 0) { this.index++; return this.source.slice(start, this.index - 1); }
-    }
-    throw new Error('math_group_open');
-  }
-  private codePointLength() { return (this.source.codePointAt(this.index) ?? 0) > 0xffff ? 2 : 1; }
-  /** A letter or digit run (one character when reading an argument), or a symbol. */
-  private character(single = false): MathNode[] {
-    const rest = this.source.slice(this.index, this.index + 200);
-    const run = single ? undefined : /^(?:[A-Za-zα-ωΑ-Ω]+|\d+(?:\.\d+)?)/u.exec(rest)?.[0];
-    const text = run ?? String.fromCodePoint(this.source.codePointAt(this.index)!);
-    this.index += text.length;
-    if (/^[A-Za-zα-ωΑ-Ω]+$/u.test(text)) return [{ type: 'text', text, style: 'italic' }];
-    if (/^[\d.]+$/u.test(text)) return [{ type: 'text', text, style: 'roman' }];
-    if (/\s/u.test(text) || text === '&') return [];
-    if (text === '{') { this.index--; return [this.group()]; }
-    if (text === '}') throw new Error('math_group_close');
-    if (text === '~') return [{ type: 'text', text: ' ' }];
-    if (text === '-') return [{ type: 'text', text: '−', role: 'op' }];
-    if (text === '*') return [{ type: 'text', text: '∗', role: 'op' }];
-    if (text === ',' || text === ';') return [{ type: 'text', text, role: 'punct' }];
-    if (text === ':') return [{ type: 'text', text, role: 'op' }];
-    if (operatorText.has(text)) return [{ type: 'text', text, role: 'op' }];
-    return [{ type: 'text', text, style: /\p{Script=Han}/u.test(text) ? 'text' : 'roman' }];
-  }
-  private atom(): MathNode[] {
-    if (this.source[this.index] !== '\\') return this.character();
-    if (this.peek('\\\\')) { this.index += 2; if (this.source[this.index] === '[') this.optional(); return []; }
-    this.index++;
-    const name = this.name();
-    const roman = (text: string, role?: 'fn' | 'big' | 'op'): MathNode[] => [{ type: 'text', text, style: 'roman', ...(role ? { role } : {}) }];
-    if (spaces.has(name)) return spaces.get(name) ? [{ type: 'text', text: spaces.get(name)! }] : [];
-    if (controls.has(name)) return roman(controls.get(name)!);
-    if (greek.has(name)) return [{ type: 'text', text: greek.get(name)!, style: /^[A-Z]/u.test(name) ? 'roman' : 'italic' }];
-    if (operators.has(name)) return roman(operators.get(name)!, 'op');
-    if (ordinary.has(name)) return roman(ordinary.get(name)!);
-    if (big.has(name)) return roman(big.get(name)!, 'big');
-    if (functions.has(name)) return roman(name, 'fn');
-    if (name === 'liminf' || name === 'limsup') return roman(`lim ${name.slice(3)}`, 'fn');
-    if (name === 'operatorname' || name === 'operatorname*') return roman(plainTex(this.raw()), 'fn');
-    if (['text', 'textrm', 'textnormal', 'textup', 'mbox', 'hbox', 'textsf', 'texttt'].includes(name)) return [this.text(this.raw(), 'text')];
-    if (['textit', 'emph', 'textsl'].includes(name)) return [this.text(this.raw(), 'italic')];
-    if (name === 'textbf') return [this.text(this.raw(), 'bold')];
-    if (['mathrm', 'mathsf', 'mathtt', 'mathup'].includes(name)) return [{ type: 'row', children: [this.argument()], style: 'roman' }];
-    if (['mathit', 'mathnormal'].includes(name)) return [{ type: 'row', children: [this.argument()], style: 'italic' }];
-    if (['mathbf', 'boldsymbol', 'bm', 'pmb'].includes(name)) return [{ type: 'row', children: [this.argument()], style: 'bold' }];
-    if (fonts[name]) return roman(letters(plainTex(this.raw()), fonts[name]!));
-    if (['frac', 'dfrac', 'tfrac', 'cfrac'].includes(name)) return [{ type: 'frac', top: this.argument(), bottom: this.argument(), bar: true }];
-    if (['binom', 'dbinom', 'tbinom'].includes(name))
-      return [{ type: 'row', children: [...roman('('), { type: 'frac', top: this.argument(), bottom: this.argument(), bar: false }, ...roman(')')] }];
-    if (name === 'sqrt') { const index = this.optional(); return [{ type: 'sqrt', body: this.argument(), ...(index ? { index } : {}) }]; }
-    if (accents.has(name)) {
-      const argument = this.argument(), body = argument.type === 'row' && argument.children.length === 1 ? argument.children[0]! : argument;
-      return [body.type === 'text' && [...body.text].length === 1 ? { ...body, text: body.text + accents.get(name)! } : { type: 'accent', body, mark: accents.get(name)! }];
-    }
-    if (name === 'overline' || name === 'underline') return [{ type: 'line', body: this.argument(), position: name === 'overline' ? 'over' : 'under' }];
-    if (name === 'overbrace' || name === 'underbrace') return [{ type: 'line', body: this.argument(), position: name === 'overbrace' ? 'over' : 'under' }];
-    if (name === 'overset' || name === 'stackrel' || name === 'underset') {
-      const note = this.argument();
-      return [{ type: 'stack', note, base: this.argument(), position: name === 'underset' ? 'under' : 'over' }];
-    }
-    if (name === 'not') {
-      this.skipSpace();
-      const start = this.index;
-      let next = this.source[this.index++] ?? '';
-      if (next === '\\') next = this.name();
-      if (negated.has(next)) return roman(negated.get(next)!, 'op');
-      this.index = start;
-      const [node] = this.atom();
-      return node?.type === 'text' ? [{ ...node, text: `${node.text}\u0338` }] : node ? [node, { type: 'text', text: '\u0338' }] : [];
-    }
-    if (['left', 'right', 'middle', 'big', 'Big', 'bigg', 'Bigg', 'bigl', 'bigr', 'Bigl', 'Bigr', 'biggl', 'biggr', 'Biggl', 'Biggr', 'bigm', 'Bigm'].includes(name)) {
-      this.skipSpace();
-      if (this.source[this.index] === '.') this.index++;
-      return [];
-    }
-    if (['displaystyle', 'textstyle', 'scriptstyle', 'limits', 'nolimits', 'nonumber', 'notag', 'qedhere', 'allowbreak'].includes(name)) return [];
-    if (['label', 'tag', 'phantom', 'hphantom', 'vphantom', 'hspace', 'vspace', 'kern', 'mkern', 'hskip'].includes(name)) { this.raw(); return []; }
-    if (name === 'pmod') return [{ type: 'row', children: [...roman(' ('), ...roman('mod', 'fn'), this.argument(), ...roman(')')] }];
-    if (name === 'bmod') return roman('mod', 'op');
-    if (name === 'mathop' || name === 'boxed' || name === 'mathclap' || name === 'substack') return [this.argument()];
-    if (name === 'begin') return [this.environment()];
-    if (name === 'end') { this.raw(); return []; }
-    return roman(`\\${name}`);
-  }
-  /** `\text{…}` content: words in the text font, with any `$…$` inside read as mathematics again. */
-  private text(source: string, style: MathStyle): MathNode {
-    const children = source.split(/(?<!\\)\$/u).map((piece, index): MathNode => index % 2
-      ? { type: 'row', children: new TexParser(piece, this.nesting + 1).list() }
-      : { type: 'text', text: plainTex(piece), style });
-    return children.length === 1 ? children[0]! : { type: 'row', children, style };
-  }
-  private environment(): MathNode {
-    const name = plainTex(this.raw()).trim(), shape = environments[name] ?? { open: '', close: '', align: 'center' as const };
-    if (name === 'array' || name === 'alignedat') this.raw();
-    const rows: MathNode[][] = [[]];
-    for (;;) {
-      const cell = this.list('cell');
-      rows.at(-1)!.push(cell.length === 1 ? cell[0]! : { type: 'row', children: cell });
-      if (this.index >= this.source.length) throw new Error('math_environment_open');
-      if (this.source[this.index] === '&') { this.index++; continue; }
-      if (this.peek('\\\\')) {
-        this.index += 2;
-        if (this.source[this.index] === '[') this.optional();
-        rows.push([]);
-        continue;
-      }
-      this.index += '\\end'.length;
-      if (plainTex(this.raw()).trim() !== name) throw new Error('math_environment_mismatch');
-      break;
-    }
-    const last = rows.at(-1)!;
-    if (rows.length > 1 && last.length === 1 && last[0]!.type === 'row' && !last[0]!.children.length) rows.pop();
-    return { type: 'table', rows, open: shape.open, close: shape.close, align: shape.align };
-  }
-}
-
-/** Source text with symbol commands replaced, for `\text{…}` and font arguments. */
-function plainTex(source: string): string {
-  // A control word swallows the spaces after it; a control symbol such as `\,` does not.
-  return source.replace(/\\(?:([A-Za-z]+)\s*|(.))/gu, (match, word: string | undefined, symbol: string | undefined) => {
-    const name = word ?? symbol!;
-    return greek.get(name) ?? ordinary.get(name) ?? operators.get(name) ?? controls.get(name) ?? spaces.get(name) ?? (name === '\\' ? ' ' : match);
-  }).replace(/[{}]/gu, '').replaceAll('~', ' ');
-}
-
-/** The formula as nodes, or undefined when it does not parse; the caller then shows the source as written. */
-export function parseMath(source: string): MathNode | undefined {
-  if (source.length > 4000) return undefined;
-  try {
-    const parser = new TexParser(source), children = parser.list();
-    return parser.index >= source.length ? { type: 'row', children } : undefined;
-  } catch { return undefined; }
-}
-const openBrackets = new Set('([{⟨⌈⌊'), closeBrackets = new Set(')]}⟩⌉⌋');
-/**
- * Where an inline formula may wrap, as TeX lets it: after a relation, an operator or a comma outside brackets, between
- * two operands (so not after a leading sign or inside `:=`). The top-level nodes of `formula`, cut into pieces at those
- * places; one piece when there are none.
- */
-export function mathPieces(formula: MathNode): MathNode[][] {
-  const nodes = formula.type === 'row' ? formula.children : [formula], pieces: MathNode[][] = [[]];
-  const role = (node: MathNode | undefined) => node?.type === 'text' ? node.role : undefined;
-  const breaks = (node: MathNode | undefined) => role(node) === 'op' || role(node) === 'punct';
-  // A bracket is plain text, or the base of the scripts after it, as in `(a + b)^2`.
-  const bracket = (node: MathNode) => { const base = node.type === 'script' ? node.base : node; return base.type === 'text' && !base.role ? base.text : ''; };
-  let depth = 0;
-  nodes.forEach((node, index) => {
-    pieces.at(-1)!.push(node);
-    depth = Math.max(0, depth + (openBrackets.has(bracket(node)) ? 1 : closeBrackets.has(bracket(node)) ? -1 : 0));
-    const before = nodes[index - 1], after = nodes[index + 1];
-    if (depth === 0 && breaks(node) && before && !breaks(before) && after && !breaks(after)) pieces.push([]);
-  });
-  return pieces;
 }
