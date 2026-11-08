@@ -72,6 +72,8 @@ jobs:
         lean: ['4.33.0', '4.34.1']
     env:
       THEOREMOS_TEST_LEAN_VERSION: ${{ matrix.lean }}
+      # Mocked project fixtures also probe elan; use the installed matrix release.
+      ELAN_TOOLCHAIN: leanprover/lean4:v${{ matrix.lean }}
     steps:
       - name: Free disk for the native Lean toolchain and solver fixtures
         run: |
