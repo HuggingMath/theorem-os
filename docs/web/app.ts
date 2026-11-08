@@ -1,20 +1,25 @@
 import {
-  createIcons, ArrowDownWideNarrow, ArrowUpRight, BadgeCheck,
-  CalendarDays, Check, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
-  Files, FlaskConical, GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2,
-  ListStart, MessageCircle, Search, SearchX, ShieldCheck,
+  createIcons, ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck,
+  BookOpen, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
+  FileJson2, Files, FlaskConical, GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2,
+  ListStart, MessageCircle, Pause, Play, RotateCcw, Search, SearchX, ShieldCheck,
 } from 'lucide';
 import catalog from 'virtual:archive';
 import type { ArchiveIndexRecord, ArchiveIndexSource, ArchiveProcess } from './types';
 import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './site';
+import { initializeReplay } from './replay';
+import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from './process';
+import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
 
 const iconSet = {
-  ArrowDownWideNarrow, ArrowUpRight, BadgeCheck, CalendarDays, Check,
-  ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2, Files, FlaskConical,
+  ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
+  ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2, FileJson2, Files, FlaskConical,
   GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2, ListStart, MessageCircle, Search,
-  SearchX, ShieldCheck,
+  Pause, Play, RotateCcw, SearchX, ShieldCheck,
 };
 const locale = localeOf(document.documentElement.lang);
+document.documentElement.classList.add('js');
+const replayController = initializeReplay(locale);
 const strings = {
   zh: {
     accepted: '官方已验收', verified: '本地验收通过', nativeAt: '本地验收', snapshot: '研究快照', notAccepted: '尚未官方验收',
@@ -48,7 +53,7 @@ const strings = {
     empty: '没有可显示的记录', details: '档案详情', backList: '返回题目列表',
     accessPrompt: '想用 TheoremOS 研究自己的题目？', requestAccess: '申请内测',
     copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
-    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '解题过程' },
+    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '路线与轨迹' },
     copied: '已复制', copyFailed: '复制失败，请检查浏览器剪贴板权限',
     loadingSource: '正在载入 Lean 源码…', sourceUnavailable: '源码载入失败。可以通过原文件链接查看。',
     row: (title: string, accepted: boolean) => `${title}，${accepted ? '官方已验收' : '尚未官方验收'}`,
@@ -85,7 +90,7 @@ const strings = {
     empty: 'No records to show', details: 'Record details', backList: 'Back to results',
     accessPrompt: 'Have a problem to research with TheoremOS?', requestAccess: 'Request access',
     copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
-    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Research process' },
+    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Routes and trajectory' },
     copied: 'Copied', copyFailed: 'Copy failed. Check the clipboard permission of your browser.',
     loadingSource: 'Loading the Lean source…', sourceUnavailable: 'The source could not be loaded. You can use the original file link.',
     row: (title: string, accepted: boolean) => `${title}, ${accepted ? 'officially accepted' : 'not yet officially accepted'}`,
@@ -125,7 +130,7 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   }));
   return request;
 }
-const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
+const icons = () => { createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); };
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -156,6 +161,8 @@ const state = {
   tab: 'overview' as Tab, sourceName: '',
 };
 const selectedRecord = () => records.find(record => record.id === state.selected);
+let processSelection = emptyProcessSelection();
+let processRecordId = '';
 
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -163,10 +170,16 @@ function readLocation() {
   state.filter = ['accepted', 'verified', 'progress'].includes(params.get('status') ?? '') ? params.get('status') as Filter : 'all';
   state.query = params.get('q') ?? '';
   state.sort = ['title', 'recent'].includes(params.get('sort') ?? '') ? params.get('sort') as Sort : 'verified';
-  state.tab = ['source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
+  state.tab = ['overview', 'source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
   const id = params.get('proof');
   state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
+  if (id && !params.has('tab') && selectedRecord()?.processSummary) state.tab = 'process';
   state.sourceName = '';
+  processRecordId = state.selected;
+  processSelection = { ...emptyProcessSelection(), run: params.get('run') ?? '', task: params.get('task') ?? '', step: params.get('step') ?? '',
+    view: params.get('mode') === 'steps' ? 'steps' : params.get('mode') === 'roadmap' ? 'roadmap'
+      : params.get('mode') === 'global' ? 'global' : ['run', 'node', 'task', 'step'].some(key => params.has(key)) ? 'roadmap' : 'global', node: params.get('node') ?? '',
+    filter: params.get('filter') === 'checks' ? 'checks' : params.get('filter') === 'decisions' ? 'decisions' : 'all' };
   return id === state.selected ? id : undefined;
 }
 
@@ -175,10 +188,20 @@ function writeLocation(push = false) {
   if (state.view === 'quickstart') params.set('view', 'quickstart');
   else {
     if (state.selected) params.set('proof', state.selected);
-    if (state.tab !== 'overview') params.set('tab', state.tab);
+    params.set('tab', state.tab);
     if (state.filter !== 'all') params.set('status', state.filter);
     if (state.query) params.set('q', state.query);
     if (state.sort !== 'verified') params.set('sort', state.sort);
+    if (state.tab === 'process') {
+      params.set('mode', processSelection.view);
+      if (processSelection.view !== 'global') {
+        if (processSelection.run) params.set('run', processSelection.run);
+        if (processSelection.task) params.set('task', processSelection.task);
+        if (processSelection.step) params.set('step', processSelection.step);
+        if (processSelection.node && processSelection.node !== 'problem') params.set('node', processSelection.node);
+        if (processSelection.filter !== 'all') params.set('filter', processSelection.filter);
+      }
+    }
   }
   const url = `#${params.toString() || 'view=archive'}`;
   if (push) history.pushState(null, '', url);
@@ -207,7 +230,7 @@ function renderList(shown: ArchiveRecord[]) {
       <span class="row-symbol ${verified(record) ? '' : 'progress'}">${icon(verified(record) ? 'file-check-2' : 'file-clock')}</span>
       <span><span class="row-title">${html(record.title)}</span><span class="row-subtitle">${html(record.subtitle)}<span class="area-label">${html(record.area)}</span></span></span>
       <span class="row-end">${statusBadge(record)}<span class="row-date">${date(record.updatedAt)}</span></span>
-    </button></li>`).join('');
+    </button>${record.processSummary ? `<button class="row-route-open" data-proof-route="${record.id}" aria-label="${html((locale === 'en' ? 'Open routes and trajectory: ' : '打开路线与轨迹：') + record.title)}">${icon('git-branch')}<span>${locale === 'en' ? 'Routes & trajectory' : '路线图与全局轨迹'}</span>${icon('arrow-right')}</button>` : ''}</li>`).join('');
   element('#empty-state').hidden = shown.length > 0;
   element('#result-count').textContent = strings.results(shown.length, state.query);
 }
@@ -305,6 +328,7 @@ function evidence(record: ArchiveRecord) {
 }
 
 function processEvidenceView(run: ArchiveProcess['runs'][number]): string {
+  if (!run.sourceUses?.length && !run.lemmaRequests?.length && !run.knowledgeApplications?.length && !run.libraryUsage) return '';
   const list = <T>(values: T[] | undefined, render: (value: T) => string) => values === undefined
     ? `<p>${strings.unknownEvidence}</p>` : values.length ? `<ul>${values.map(value => `<li>${render(value)}</li>`).join('')}</ul>`
       : `<p>${strings.noEntries}</p>`;
@@ -334,37 +358,61 @@ function processEvidenceView(run: ArchiveProcess['runs'][number]): string {
 }
 
 function processView(record: ArchiveRecord): string {
+  if (processRecordId !== record.id) { processRecordId = record.id; processSelection = emptyProcessSelection(); }
   const process = window.theoremosProcesses?.[record.id];
   if (!process) {
     const refresh = (failed: boolean) => {
       if (state.tab !== 'process' || selectedRecord() !== record) return;
       element('#detail-panel').innerHTML = failed ? `<p role="status">${strings.processUnavailable}</p>` : processView(record);
       icons();
+      writeLocation();
+      revealProcessStep();
+      if (!failed && revealProcessAfterLoad) { revealProcessAfterLoad = false; revealProcessContent(); }
     };
     void loadProcess(record).then(() => refresh(false), () => refresh(true));
     return `<p class="source-loading" role="status">${strings.loadingProcess}</p>`;
   }
-  return `<p class="process-intro">${strings.processNote}</p><ol class="process-runs">${process.runs.map((run, index) => `
-    <li><details class="process-run" ${run.runId === record.campaign?.runId ? 'open' : ''}><summary><strong>${index + 1} · ${html(run.resultStatus ?? run.phase)}</strong>
-      <span>${run.startedAt ? timestamp(run.startedAt) : ''}</span></summary>
-      <p class="process-run-id mono">${html(run.runId)}</p><p>${strings.turns(run.turns, run.workers)}</p>
-      ${run.reason ? `<p>${html(run.reason)}</p>` : ''}
-      <ol class="process-tasks">${run.tasks.map(task => `<li><h3>${html(task.theorem ?? task.id)}</h3><p>${html(task.objective)}</p>
-        <p class="process-task-meta">${html(strings.tasks[task.status] ?? task.status)} · ${strings.attempts}: ${task.attempts}${task.checkStatus ? ` · Lean: ${html(task.checkStatus)}` : ''}</p>
-        ${task.dependencies.length ? `<p>${strings.dependencies}: ${task.dependencies.map(html).join(', ')}</p>` : ''}</li>`).join('')}</ol>
-      ${run.review ? `<details class="process-review"><summary>Review · ${html(run.review.status)}</summary><p>${html(run.review.summary ?? '')}</p></details>` : ''}
-      ${processEvidenceView(run)}
-      <ol class="process-events">${run.events.map(event => `<li><time>${timestamp(event.at)}</time><span>${html(event.kind)}${event.taskId ? ` · ${html(event.taskId)}` : ''}${event.status ? ` · ${html(event.status)}` : ''}</span>${event.message ? `<p>${html(event.message)}</p>` : ''}</li>`).join('')}</ol>
-      ${run.finishedAt ? `<p class="process-run-end">${timestamp(run.finishedAt)}</p>` : ''}</details></li>`).join('')}</ol>
-      <div class="detail-links">${external(record.archiveUrl, 'process.json', 'button')}</div>`;
+  const run = selectedProcessRun(process, record, processSelection);
+  if (processSelection.view !== 'global') processSelection.run = run?.runId ?? '';
+  if (processSelection.task && !run?.tasks.some(task => task.id === processSelection.task)) processSelection.task = '';
+  return renderArchiveProcess(record, process, processSelection, locale, run ? processEvidenceView(run) : '');
+}
+
+function refreshProcess(record: ArchiveRecord, target?: HTMLElement) {
+  const scroll = document.querySelector('#process-step-list')?.scrollTop ?? 0;
+  const attribute = target?.getAttributeNames().find(name => name.startsWith('data-process-'));
+  const value = attribute && target?.getAttribute(attribute);
+  element('#detail-panel').innerHTML = processView(record);
+  icons(); writeLocation();
+  const list = document.querySelector('#process-step-list');
+  if (list) list.scrollTop = scroll;
+  revealProcessStep();
+  if (attribute && value !== null) document.querySelector<HTMLElement>(`#detail-panel [${attribute}="${CSS.escape(value ?? '')}"]`)?.focus({ preventScroll: true });
+}
+
+let revealProcessAfterLoad = false;
+function revealProcessContent() {
+  const content = document.querySelector<HTMLElement>('.process-view-toolbar');
+  content?.scrollIntoView({ block: 'start' });
+}
+
+function revealProcessStep() {
+  const list = document.querySelector<HTMLElement>('#process-step-list');
+  const selected = list?.querySelector<HTMLElement>('[aria-pressed="true"]');
+  if (!list || !selected) return;
+  const item = selected.getBoundingClientRect(), viewport = list.getBoundingClientRect();
+  if (item.top < viewport.top || item.bottom > viewport.bottom)
+    list.scrollTop += item.top - viewport.top - (list.clientHeight - item.height) / 2;
 }
 
 function renderInspector(record?: ArchiveRecord) {
   if (!record) {
+    element('#archive-view').classList.remove('reading-process');
     element('#inspector').innerHTML = `<div class="inspector-empty">${icon('files')}<span>${strings.empty}</span></div>`;
     return;
   }
   if (state.tab === 'process' && !record.processSummary) state.tab = 'overview';
+  element('#archive-view').classList.toggle('reading-process', state.tab === 'process');
   const backToList = `<button type="button" class="back-to-results" data-action="back-list">${icon('list-start')}${strings.backList}</button>`;
   element('#inspector').innerHTML = `<div class="detail-topline"><span class="detail-topline-label">${icon('files')}${strings.details}</span>${backToList}<div class="detail-actions">${iconButton('copy-link', strings.copyLink, 'link-2')}${iconButton('download-record', strings.downloadRecord, 'download')}</div></div>
     <h2 class="detail-title">${html(record.title)}</h2><p class="detail-subtitle">${html(record.subtitle)}</p><p class="detail-id">${record.id}</p>
@@ -376,6 +424,7 @@ function renderInspector(record?: ArchiveRecord) {
     <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>
     <div class="archive-access"><p>${strings.accessPrompt}</p><div class="archive-access-actions"><a class="inline-link" href="index.html#start">${strings.requestAccess}${icon('arrow-up-right')}</a>${backToList}</div></div>`;
   if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => jumpToDeclaration(record));
+  if (state.tab === 'process') revealProcessStep();
 }
 
 function showLoadedSource(record: ArchiveRecord, failed = false) {
@@ -401,6 +450,7 @@ function render() {
   }
   element('#archive-view').hidden = state.view !== 'archive';
   element('#quickstart-view').hidden = state.view !== 'quickstart';
+  if (state.view !== 'quickstart') replayController.pause();
   document.querySelectorAll<HTMLAnchorElement>('[data-view-link]').forEach(link => {
     const active = link.dataset.viewLink === state.view;
     link.classList.toggle('is-active', active);
@@ -478,33 +528,85 @@ function download(name: string, content: string, type: string) {
 }
 
 document.addEventListener('click', event => {
-  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-tab], [data-action], [data-view-link]');
+  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-global-run], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
   if (!target) return;
   if (target.dataset.viewLink) {
     event.preventDefault();
     state.view = target.dataset.viewLink;
+    if (state.view === 'archive' && state.tab === 'process') state.tab = 'overview';
     writeLocation(true);
     render();
     return;
   }
-  if (target.dataset.proofId) {
-    state.selected = target.dataset.proofId;
+  if (target.dataset.proofId || target.dataset.proofRoute) {
+    state.selected = target.dataset.proofId ?? target.dataset.proofRoute!;
     state.sourceName = '';
+    if (selectedRecord()?.processSummary) { state.tab = 'process'; processSelection = emptyProcessSelection(); processRecordId = state.selected; revealProcessAfterLoad = true; }
+    else if (state.tab === 'process') state.tab = 'overview';
     render();
-    if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
+    if (state.tab === 'process') {
+      if (document.querySelector('.process-view-toolbar')) { revealProcessAfterLoad = false; revealProcessContent(); }
+    } else if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
     return;
   }
   if (target.dataset.tab) {
+    const enteringProcess = target.dataset.tab === 'process' && state.tab !== 'process';
     state.tab = target.dataset.tab as Tab;
     renderInspector(selectedRecord());
     icons();
     writeLocation();
     element(`#tab-${state.tab}`).focus({ preventScroll: true });
+    if (enteringProcess) element('#inspector').scrollIntoView({ block: 'start' });
     return;
   }
   const record = selectedRecord();
+  if (record && target.dataset.globalRun) {
+    processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: target.dataset.globalRun, node: target.dataset.globalNode ?? 'problem', step: target.dataset.globalStep ?? '' };
+    refreshProcess(record); revealProcessContent();
+    return;
+  }
+  if (record && Object.keys(target.dataset).some(key => key.startsWith('process'))) {
+    if (target.dataset.processOpenTab) {
+      state.tab = target.dataset.processOpenTab as Tab;
+      renderInspector(record); icons(); writeLocation();
+      element(`#tab-${state.tab}`).focus({ preventScroll: true });
+    } else if (target.dataset.processCopySource || target.dataset.processDownloadSource) {
+      const digest = target.dataset.processCopySource ?? target.dataset.processDownloadSource!;
+      const source = window.theoremosProcesses?.[record.id]?.sources?.[digest];
+      if (source) {
+        if (target.dataset.processCopySource) void copy(source.code);
+        else download(`${record.id}-${digest.slice(0, 12)}.lean`, source.code, 'text/plain;charset=utf-8');
+      }
+    } else {
+      if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), view: processSelection.view === 'global' ? 'roadmap' : processSelection.view, run: target.dataset.processRun };
+      if (target.dataset.processView) processSelection.view = target.dataset.processView as typeof processSelection.view;
+      if (target.dataset.processNode !== undefined) {
+        const process = window.theoremosProcesses?.[record.id];
+        const run = process && selectedProcessRun(process, record, processSelection);
+        const node = run && buildArchiveRoadmap(record, run, locale).nodes.find(node => node.id === target.dataset.processNode);
+        if (node) { processSelection.node = node.id; processSelection.task = node.taskId ?? ''; processSelection.step = node.stepId ?? ''; processSelection.code = 'closed'; }
+      }
+      if (target.dataset.processTask !== undefined) { processSelection.task = target.dataset.processTask; processSelection.node = target.dataset.processTask ? `task:${target.dataset.processTask}` : 'problem'; processSelection.step = ''; processSelection.code = 'closed'; }
+      if (target.dataset.processStep !== undefined) {
+        processSelection.step = target.dataset.processStep; processSelection.code = 'closed';
+        const process = window.theoremosProcesses?.[record.id];
+        const run = process && selectedProcessRun(process, record, processSelection);
+        const model = run && buildArchiveRoadmap(record, run, locale);
+        const step = target.dataset.processStep;
+        const node = model?.nodes.find(node => step === node.stepId || node.checkIds.some(id => `check:${id}` === step) || node.deliveryIds.some(id => `delivery:${id}` === step));
+        if (node) processSelection.node = node.id;
+      }
+      if (target.dataset.processFilter !== undefined) { processSelection.filter = target.dataset.processFilter as typeof processSelection.filter; processSelection.step = ''; processSelection.code = 'closed'; }
+      if (target.dataset.processCode !== undefined) processSelection.code = target.dataset.processCode as typeof processSelection.code;
+      refreshProcess(record, target);
+      if (target.dataset.processStep !== undefined && matchMedia('(max-width: 700px)').matches)
+        element('#process-step-detail').scrollIntoView({ block: 'start' });
+    }
+    return;
+  }
   switch (target.dataset.action) {
     case 'back-list': {
+      if (state.tab === 'process') { state.tab = 'overview'; renderInspector(record); icons(); writeLocation(); }
       const row = element(`[data-proof-id="${state.selected}"]`);
       row.focus({ preventScroll: true });
       row.scrollIntoView({ block: 'center' });

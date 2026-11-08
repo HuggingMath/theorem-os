@@ -75,6 +75,7 @@ async function eventually(check: () => boolean, description: string) {
   while (!check()) { assert.ok(Date.now() < until, description); await sleep(40); }
 }
 async function credentials(page: Page) {
+  await page.locator('input[name="chat-participation"][value="automatic"]').check();
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');

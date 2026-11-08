@@ -105,6 +105,8 @@ export interface ArchiveLibraryUsage {
 }
 
 export interface ArchiveProcess {
+  /** Exact checked files recovered from immutable archived commits, keyed by their SHA-256. */
+  sources?: Record<string, { path: string; code: string; sha256: string }>;
   runs: {
     runId: string;
     startedAt?: string;
@@ -118,6 +120,10 @@ export interface ArchiveProcess {
       dependencies: string[]; proofCommit?: string; checkStatus?: string; receiptIds: string[] }[];
     review?: { status: string; summary?: string };
     events: { at: string; kind: string; taskId?: string; status?: string; message?: string }[];
+    checks?: { id: string; at: string; scope: 'task' | 'original'; taskId?: string; commit?: string;
+      status: string; receiptIds: string[]; diagnostics?: string; sourceDigest?: string }[];
+    deliveries?: { id: string; at: string; kind: string; status: string; taskId?: string; workerId?: string;
+      role?: string; commit?: string; summary: string }[];
     sourceUses?: ArchiveSourceUse[];
     lemmaRequests?: { deliveryId: string; deliveryStatus: string; id: string; objective: string;
       theorem?: string; type?: string; proofPath?: string; dependencies: string[] }[];

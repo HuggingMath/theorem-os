@@ -63,8 +63,9 @@ describe('online formalization ownership and evidence handoff', () => {
     return fetch(base + route, { method, headers: { Cookie: client.cookie, 'X-CSRF-Token': client.csrf,
       ...(value === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: value === undefined ? undefined : JSON.stringify(value) });
   }
-  async function create(client: Client, solve = false) {
-    const response = await request(client, '/api/formalizations', { ...body, ...(solve ? { solve: true } : {}) });
+  async function create(client: Client, solve = false, humanReview?: boolean) {
+    const response = await request(client, '/api/formalizations', { ...body, ...(solve ? { solve: true } : {}),
+      ...(humanReview === undefined ? {} : { humanReview }) });
     expect(response.status).toBe(201);
     await settle();
     return (await response.json() as { formalization: WebFormalization }).formalization;
@@ -184,8 +185,19 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(alice, route, undefined, 'DELETE')).status).toBe(200);
   });
 
-  it('automatically creates exactly one proof with verified original evidence and the same in-memory key', async () => {
-    const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
+  it('requires a solve workflow for human review without accepting formalization work', async () => {
+    const alice = await client();
+    for (const solve of [undefined, false]) {
+      expect((await request(alice, '/api/formalizations', { ...body, humanReview: true, ...(solve === undefined ? {} : { solve }) })).status).toBe(400);
+    }
+    const provider = config.providers.find(item => item.id === 'sub2api')!;
+    expect(() => service.formalizations.create('owner', { ...body, environment: 'standard', effort: 'max', humanReview: true }, provider, 'deepseek-flash'))
+      .toThrow('人工审核模式需要启用证明研究');
+    await settle(); expect(runner.inputs).toHaveLength(0); expect(runner.runs).toHaveLength(0);
+  });
+
+  it.each([undefined, false])('automatically creates exactly one proof with verified evidence when humanReview is %s', async humanReview => {
+    const alice = await client(), value = await create(alice, true, humanReview), pending = runner.pending.at(-1)!;
     expect(value.workflow).toBe('solve'); expect(runner.runs).toHaveLength(0);
     const evidence = webFormalizationEvidence(pending.input);
     pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
@@ -212,6 +224,92 @@ describe('online formalization ownership and evidence handoff', () => {
     await service.close(); service = createWebService(config, new Runner(), { sample: null });
     await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
     expect((await (await request(alice, route)).json()).formalization.runId).toBe(completed.runId);
+  });
+
+  it('waits for current statement confirmation and an explicit start before gated two-agent research', async () => {
+    expect(webLimits.maxWorkers).toBeGreaterThanOrEqual(2);
+    const alice = await client(), research = { maxRunSeconds: 90, maxTurns: 2, maxTotalTokens: 30_000 };
+    const response = await request(alice, '/api/formalizations', { ...body, solve: true, humanReview: true,
+      providerId: 'openai', model: 'gpt-6.1-sol', maxRunSeconds: 120, maxTotalTokens: 50_000, research });
+    expect(response.status).toBe(201); await settle();
+    const value = (await response.json()).formalization as WebFormalization, route = `/api/formalizations/${value.id}`;
+    const pending = runner.pending.at(-1)!, evidence = webFormalizationEvidence(pending.input);
+    expect(value).toMatchObject({ workflow: 'solve', humanReview: true, maxRunSeconds: 120, maxTotalTokens: 50_000, research });
+    expect(pending.input).toMatchObject({ provider: { id: 'openai' }, model: 'gpt-6.1-sol', maxRunSeconds: 120, maxTotalTokens: 50_000 });
+    expect(pending.input).not.toHaveProperty('humanReview'); expect(pending.input).not.toHaveProperty('solve');
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const review = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    expect(review).toMatchObject({ status: 'review', workflow: 'solve', humanReview: true });
+    expect(review.confirmation).toBeUndefined(); expect(review.confirmedAt).toBeUndefined(); expect(review.runId).toBeUndefined();
+    expect(runner.runs).toHaveLength(0); expect(runner.inputs[0].apiKey).toBe('');
+    expect((await request(alice, route + '/research', { apiKey: KEY })).status).toBe(409);
+    expect((await request(alice, route + '/confirm', { evidenceSha256: 'a'.repeat(64) })).status).toBe(409);
+    expect((await request(alice, '/api/runs', runBody(review))).status).toBe(409);
+    const confirmation = await request(alice, route + '/confirm', { evidenceSha256: review.report!.evidenceSha256 });
+    expect(confirmation.status).toBe(200);
+    const confirmed = (await confirmation.json()).formalization as WebFormalization;
+    expect(confirmed).toMatchObject({ status: 'confirmed', confirmation: 'manual', humanReview: true });
+    await settle(); expect(runner.runs).toHaveLength(0);
+    const starts = await Promise.all([request(alice, route + '/research', { apiKey: KEY }), request(alice, route + '/research', { apiKey: KEY })]);
+    expect(starts.map(start => start.status)).toEqual([200, 200]);
+    const started = await Promise.all(starts.map(async start => (await start.json()).formalization as WebFormalization));
+    expect(started[0].runId).toBeTruthy(); expect(started[1].runId).toBe(started[0].runId);
+    expect((await (await request(alice, route + '/research', {})).json()).formalization.runId).toBe(started[0].runId);
+    await settle(); expect(runner.runs).toHaveLength(1); expect(runner.inputs).toHaveLength(1);
+    expect(runner.runs[0].input).toMatchObject({ ...research, providerId: 'openai', model: 'gpt-6.1-sol', effort: 'max', apiKey: KEY,
+      workers: 2, coordination: 'cooperative', planApproval: true, environment: 'standard', source: evidence.candidate.source, formalizationId: value.id });
+    expect(runner.runs[0].formalization).toEqual(evidence);
+    const run = (await (await request(alice, `/api/runs/${started[0].runId}`)).json()).run as WebRun;
+    expect(run.formalization).toMatchObject({ original: body.original, evidenceSha256: review.report!.evidenceSha256,
+      confirmedAt: confirmed.confirmedAt, confirmation: 'manual' });
+    const persisted = fs.readdirSync(config.dataRoot!, { recursive: true }).filter(file => String(file).endsWith('.json'))
+      .map(file => fs.readFileSync(path.join(config.dataRoot!, String(file)), 'utf8')).join('\n');
+    expect(persisted).not.toContain(KEY);
+  });
+
+  it('preserves human confirmation waits and gated research budgets through restart and retry', async () => {
+    const alice = await client(), research = { maxRunSeconds: 90, maxTurns: 2, maxTotalTokens: 30_000 };
+    const created = await request(alice, '/api/formalizations', { ...body, solve: true, humanReview: true,
+      providerId: 'openai', model: 'gpt-6.1-sol', maxRunSeconds: 120, maxTotalTokens: 50_000, research });
+    expect(created.status).toBe(201); await settle();
+    const value = (await created.json()).formalization as WebFormalization, route = `/api/formalizations/${value.id}`;
+    const pending = runner.pending.at(-1)!, evidence = webFormalizationEvidence(pending.input), digest = formalizationDigest(evidence);
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const restart = async () => {
+      await service.close(); runner = new Runner(); service = createWebService(config, runner, { sample: null });
+      await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    };
+    await restart();
+    const review = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    expect(review).toMatchObject({ status: 'review', humanReview: true, report: { evidenceSha256: digest } });
+    expect((await request(alice, route + '/research', { apiKey: KEY })).status).toBe(409);
+    expect((await request(alice, route + '/confirm', { evidenceSha256: digest })).status).toBe(200);
+    expect(runner.runs).toHaveLength(0);
+    await restart();
+    const confirmed = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    expect(confirmed).toMatchObject({ status: 'confirmed', confirmation: 'manual', humanReview: true, research });
+    expect(confirmed.researchError).toBeUndefined(); expect(confirmed.runId).toBeUndefined(); expect(runner.runs).toHaveLength(0);
+    config.queueLimit = 0;
+    expect((await request(alice, route + '/research', { apiKey: KEY })).status).toBe(429);
+    expect((await (await request(alice, route)).json()).formalization.researchError).toBe('formalization_research_queue_failed');
+    await restart(); config.queueLimit = 8;
+    expect((await (await request(alice, route)).json()).formalization).toMatchObject({ humanReview: true, researchError: 'formalization_research_queue_failed' });
+    const retryKey = 'sk-synthetic-guided-research-retry';
+    const resumed = await request(alice, route + '/research', { apiKey: retryKey });
+    expect(resumed.status).toBe(200);
+    const restored = (await resumed.json()).formalization as WebFormalization;
+    expect(restored.runId).toBeTruthy(); expect(restored.researchError).toBeUndefined();
+    expect(restored.report?.evidenceSha256).toBe(digest); expect(restored.confirmedAt).toBe(confirmed.confirmedAt);
+    await settle(); expect(runner.inputs).toHaveLength(0); expect(runner.runs).toHaveLength(1);
+    expect(runner.runs[0].input).toMatchObject({ ...research, providerId: 'openai', model: 'gpt-6.1-sol', apiKey: retryKey,
+      workers: 2, coordination: 'cooperative', planApproval: true, source: evidence.candidate.source, environment: 'standard' });
+    expect(runner.runs[0].formalization).toEqual(evidence);
+    await restart();
+    expect((await (await request(alice, route + '/research', {})).json()).formalization.runId).toBe(restored.runId);
+    await settle(); expect(runner.runs).toHaveLength(0); expect(runner.inputs).toHaveLength(0);
+    const persisted = fs.readdirSync(config.dataRoot!, { recursive: true }).filter(file => String(file).endsWith('.json'))
+      .map(file => fs.readFileSync(path.join(config.dataRoot!, String(file)), 'utf8')).join('\n');
+    expect(persisted).not.toContain(KEY); expect(persisted).not.toContain(retryKey);
   });
 
   it('queues two accounts behind one formalization slot and hands each to its own proof in the separate proof queue', async () => {

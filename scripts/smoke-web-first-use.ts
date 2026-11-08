@@ -217,6 +217,7 @@ try {
   });
   await page.goto(base.href, { waitUntil: 'load' }); await page.locator('#formalize-original').waitFor();
   assert.equal(await page.locator('body').getAttribute('data-entry'), 'natural');
+  await page.locator('input[name="chat-participation"][value="automatic"]').check();
   await page.locator('#formalize-original').fill(original); await page.locator('#formalize-settings > summary').click();
   await page.locator('#formalize-provider').selectOption('sub2api'); await page.locator('#formalize-model').fill('deepseek-flash');
   await page.locator('#formalize-environment').selectOption('standard'); await page.locator('#formalize-effort').selectOption('max');

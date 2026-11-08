@@ -86,7 +86,7 @@ const formalizationSchema = z.object({
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
   environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('max'),
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
-  solve: z.boolean().optional(),
+  solve: z.boolean().optional(), humanReview: z.boolean().optional(),
   providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),
   maxRunSeconds: z.number().int().min(30).max(webFormalizationLimits.maxRunSeconds).optional(),
   maxTotalTokens: z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens).optional(),
@@ -250,6 +250,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom);
     if (existing) return existing.id;
     const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
+      ...(formalization.humanReview ? { workers: 2, coordination: 'cooperative' as const, planApproval: true } : {}),
       providerId: input.provider.id, apiKey: input.apiKey,
       model: input.model, effort: input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
       task: '依据自然语言原题及其已审核的 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
@@ -642,6 +643,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (request.method === 'POST') {
             const parsed = formalizationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查原题、证明环境与 API Key。');
+            if (parsed.data.humanReview && !parsed.data.solve) throw new HttpError(400, '人工审核模式需要启用证明研究。');
             const provider = parsed.data.providerId ? providers.find(item => item.id === parsed.data.providerId) : defaultProvider;
             if (!provider) throw new HttpError(409, '当前服务没有配置这个题目使用的模型服务。');
             const model = parsed.data.model ?? providerModel(provider);

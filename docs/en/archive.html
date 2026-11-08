@@ -13,6 +13,8 @@
   <link rel="alternate" hreflang="en" href="https://likc1606.github.io/TheoremOS/en/archive.html">
   <link rel="icon" type="image/svg+xml" href="../assets/mark.svg">
   <link rel="stylesheet" href="../site.css">
+  <link rel="stylesheet" href="../process.css">
+  <link rel="stylesheet" href="../replay.css">
   <title>TheoremOS | Lean proof archive</title>
 </head>
 <body>
@@ -27,7 +29,7 @@
       <a href="index.html"><span>Home</span></a>
       <a href="feedback.html"><span>Feedback</span></a>
       <a class="lang-link" href="../archive.html" hreflang="zh-CN" lang="zh-CN" aria-label="中文版"><span>中文</span></a>
-      <a href="https://github.com/LikC1606/TheoremOS" target="_blank" rel="noreferrer"><i data-lucide="git-fork"></i><span>GitHub</span><i class="external-arrow" data-lucide="arrow-up-right"></i></a>
+      <a href="https://github.com/LikC1606/TheoremOS" target="_blank" rel="noreferrer" aria-label="GitHub"><i data-lucide="git-fork"></i><span>GitHub</span><i class="external-arrow" data-lucide="arrow-up-right"></i></a>
     </nav>
   </header>
 
@@ -101,16 +103,13 @@
           <div><p class="breadcrumb">Workspace <i data-lucide="chevron-right"></i> Verification replay</p><h1 id="quickstart-title">Verification replay</h1><p class="page-description">A replay of a natural-number addition proof</p></div>
         </div>
         <div class="quickstart-layout">
+          <div class="replay-evidence"><!-- research-replay --></div>
           <div class="quickstart-commands">
             <div class="section-title"><h2>What the replay shows</h2><span class="small muted">Recorded example</span></div>
             <dl class="requirements"><div><dt>Problem</dt><dd>Natural-number addition · Lean standard library</dd></div><div><dt>Candidates</dt><dd>A failing candidate first, then the repaired proof</dd></div><div><dt>Model</dt><dd>No model calls and no API key</dd></div><div><dt>Verification</dt><dd>An independent Lean pipeline checks the full statement</dd></div></dl>
             <p class="quickstart-access">To study your own problem, <a class="inline-link" href="index.html#start">request beta access</a> and connect your model service once approved.</p>
           </div>
-          <div class="replay-evidence">
-            <div class="section-title"><h2>Replay verification record</h2><span class="status-badge accepted"><i data-lucide="circle-check"></i>Independent Lean check</span></div>
-            <figure><img src="../assets/replay.png" alt="The structured result of the TheoremOS recorded replay: final status evaluated_passed, both statement targets kernel_verified, official false." width="1100" height="640" loading="lazy"><figcaption>Replay receipt <a href="../assets/replay.json" target="_blank">Raw record</a></figcaption></figure>
-            <div class="verification-rule"><i data-lucide="shield-check"></i><div><strong>evaluated_passed</strong><p>The full example statement passed independent Lean checks.</p></div></div>
-          </div>
+
         </div>
       </section>
 

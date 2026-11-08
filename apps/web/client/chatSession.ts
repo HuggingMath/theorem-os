@@ -13,6 +13,7 @@ import { buildSolveProcess, type SolveProcess } from './solveProcess';
 import { nextSteps, summarizeGoals } from '../report';
 import type { ChatArtifactKind } from './chatArtifactNavigation';
 import { clockTime } from './collaborationUi';
+import type { PlanApprovalProps } from './ui/RunHeader';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -22,6 +23,7 @@ type Options = {
   draftScope: string;
   keyRequired(providerId: string): boolean;
   session(): WebSession | undefined;
+  connected(): boolean;
   onSelection(run?: WebRun): void;
   /** A conversation was opened or replaced; one without a run still names the page. */
   onConversation(): void;
@@ -38,6 +40,9 @@ type Options = {
   formalizationActivity: FormalizationActivityStore;
   onLean(): void;
   onGuidance(run: WebRun): void;
+  planApproval(run: WebRun): PlanApprovalProps | undefined;
+  onApprovePlan(run: WebRun): void;
+  onPlan(run: WebRun, edit: boolean): void;
   onCancelRun(run: WebRun): void;
   isSample(run: WebRun): boolean;
 };
@@ -57,6 +62,7 @@ export class ChatSession {
   private draft = '';
   private environment: 'standard' | 'mathlib' = 'mathlib';
   private effort: 'low' | 'high' | 'max' = 'max';
+  private participation: 'guided' | 'automatic' = 'guided';
   private apiKey = '';
   private keyBusy = false;
   private keyNotice = '';
@@ -225,9 +231,10 @@ export class ChatSession {
     } catch (error) { if (revision === this.connectionRevision) this.connection = { status: 'error', message: reason(error) }; }
     finally { if (revision === this.connectionRevision) { this.checkingConnection = false; this.draw(); } }
   }
-  private async startResearch() {
+  private async startResearch(confirmStatement = false) {
     const item = this.formalization;
-    if (!item || item.status !== 'confirmed' || item.runId || this.startingResearch) return;
+    if (!item || item.runId || this.startingResearch || (item.status !== 'confirmed'
+      && !(confirmStatement && item.humanReview && item.status === 'review' && item.report))) return;
     if (!this.apiKey && this.options.keyRequired(this.activeProviderId())) {
       this.error = t('请在设置中填写 API Key 后发送。'); this.draw();
       const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
@@ -238,6 +245,12 @@ export class ChatSession {
     const generation = this.generation;
     this.readRevision++; this.startingResearch = true; this.error = ''; this.draw();
     try {
+      if (item.status === 'review') {
+        const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${item.id}/confirm`,
+          { evidenceSha256: item.report!.evidenceSha256 });
+        if (generation !== this.generation) return;
+        this.formalization = formalization; this.draw();
+      }
       const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${item.id}/research`, { apiKey: this.apiKey });
       if (generation !== this.generation) return;
       this.formalization = formalization;
@@ -397,7 +410,8 @@ export class ChatSession {
       } else {
         // A lost response is reconciled before another paid formalization can be created.
         const uncertain = this.uncertainSubmission;
-        const settings = { providerId: this.providerId, model: this.model.trim(), environment: this.environment, effort: this.effort, ...this.budgets };
+        const settings = { providerId: this.providerId, model: this.model.trim(), environment: this.environment, effort: this.effort, ...this.budgets,
+          ...(this.participation === 'guided' ? { humanReview: true } : {}) };
         const signature = JSON.stringify(settings);
         if (uncertain?.original === text && uncertain.settings === signature && !this.seed) {
           const { formalizations } = await this.options.request<{ formalizations: WebFormalization[] }>('/api/formalizations');
@@ -406,7 +420,7 @@ export class ChatSession {
             && item.providerId === settings.providerId && item.model === settings.model && item.environment === settings.environment && item.effort === settings.effort
             && item.maxRunSeconds === settings.maxRunSeconds && item.maxTotalTokens === settings.maxTotalTokens
             && item.research?.maxRunSeconds === settings.research.maxRunSeconds && item.research?.maxTotalTokens === settings.research.maxTotalTokens
-            && item.research?.maxTurns === settings.research.maxTurns);
+            && item.research?.maxTurns === settings.research.maxTurns && Boolean(item.humanReview) === Boolean(settings.humanReview));
         }
         let formalization = this.seed;
         if (!formalization) {
@@ -611,7 +625,9 @@ export class ChatSession {
   }
   private draw() {
     const pending = Boolean(this.conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending'));
-    const canGuide = !!this.conversation && this.run?.status === 'running' && this.run.coordination === 'cooperative' && !this.options.isSample(this.run);
+    const canDecide = !!this.run && ['queued', 'running'].includes(this.run.status) && this.run.coordination === 'cooperative'
+      && this.run.workers > 1 && !this.options.isSample(this.run);
+    const canGuide = canDecide && !!this.conversation && this.run?.status === 'running' && !!this.run.observation?.plan;
     const task = this.run?.observation?.inspection.tasks.find(item => item.id === this.guidanceTarget);
     const staleTarget = !!this.guidanceTarget && (!task || task.version !== this.guidanceVersion);
     const unresolvedGuidance = !!this.pendingGuidance || this.conversation?.messages.some(message => message.kind === 'guidance' && message.status === 'pending');
@@ -648,8 +664,13 @@ export class ChatSession {
           onAction: (action: string, button: HTMLButtonElement) => this.options.onRecover(this.run!, action, button) },
       } : {}),
       ...(canGuide ? { onGuidance: (text?: string, taskId?: string) => this.beginGuidance(text, taskId) } : {}),
+      ...(canDecide ? { planDecision: { approval: this.options.planApproval(this.run!), connected: this.options.connected(),
+        onReview: () => this.options.onPlan(this.run!, false), onEdit: () => this.options.onPlan(this.run!, true),
+        onApprove: () => this.options.onApprovePlan(this.run!) } } : {}),
       onGuidanceReceipt: message => this.recoverGuidance(message),
-      ...(this.formalization?.status === 'confirmed' && !this.formalization.runId && this.formalization.researchError
+      ...(this.formalization?.humanReview && this.formalization.status === 'review'
+        ? { onConfirmStatement: () => void this.startResearch(true), startingResearch: this.startingResearch } : {}),
+      ...(this.formalization?.status === 'confirmed' && !this.formalization.runId && (this.formalization.humanReview || this.formalization.researchError)
         ? { onStartResearch: () => void this.startResearch(), startingResearch: this.startingResearch } : {}),
       ...(running(this.formalization) || running(this.run) && !this.options.isSample(this.run!) ? { onCancelTask: () => void this.cancelTask() } : {}),
       onEditProblem: () => {
@@ -676,6 +697,8 @@ export class ChatSession {
         || newProblem && (!this.capabilities?.available || busyFormalization)
         || this.guidanceMode && (!canGuide || !this.run?.observation || staleTarget || !!unresolvedGuidance),
       hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
+      participation: this.participation, participationLocked: Boolean(this.seed || this.uncertainSubmission || this.run),
+      onParticipation: value => { this.participation = value; this.draw(); },
       keyRequired: this.guidanceMode ? false : this.options.keyRequired(this.activeProviderId()),
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
       onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.draw(); },
@@ -700,13 +723,13 @@ export class ChatSession {
         onCancel: () => { this.guidanceMode = false; this.draw(); this.focus(); },
         ...(staleTarget && task ? { onConfirmTarget: () => { this.selectGuidanceTarget(task.id); this.error = ''; this.draw(); } } : {}),
       } } : {}),
-      sendStatus: this.guidanceMode ? unresolvedGuidance ? t('先核对上一条证明要求的回执。')
+      sendStatus: this.guidanceMode ? unresolvedGuidance ? t('先核对上一条研究指导的回执。')
         : staleTarget ? t('任务版本已变化，请核对指导内容，再确认当前任务版本。')
           : !canGuide ? t('运行尚未开始或已结束，暂时无法发送指导。')
-            : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('要求将发送给证明任务，投递状态会留在对话中。')
+            : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('指导会交给研究组参考，送达状态会显示在对话中。')
         : this.options.session()?.maintenance ? t('工作台正在维护，暂不开始新任务或回答；已有记录仍可查看和下载。')
         : busyFormalization ? t("上一道题正在形式化，你可以先写下一条消息。")
-        : newProblem && !this.capabilities ? t("正在连接…") : undefined,
+        : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导研究」。') : undefined,
       onEnvironment: value => { this.environment = value; this.draw(); }, onEffort: value => { this.effort = value; this.draw(); },
       onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },
       onExample: id => this.useExample(id),

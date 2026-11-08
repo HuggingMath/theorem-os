@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { archiveIndex, archiveSourceScript } from '../docs/web/catalog';
 import type { ArchiveCatalog } from '../docs/web/types';
@@ -34,6 +35,22 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
     fs.writeFileSync(path.join(data, 'process', `${record.id}.js`),
       `(window.theoremosProcesses??={})[${JSON.stringify(record.id)}]=${JSON.stringify(record.process)};\n`);
   }
+}
+
+type ArchiveAssetVersions = Record<'site.js' | 'process.css', string>;
+
+export function archiveAssetVersions(output: string): ArchiveAssetVersions {
+  const digest = (file: string) => createHash('sha256').update(fs.readFileSync(path.join(output, file))).digest('hex').slice(0, 16);
+  return { 'site.js': digest('site.js'), 'process.css': digest('process.css') };
+}
+
+export function versionArchivePage(page: string, versions: ArchiveAssetVersions): string {
+  return page.replace(/(\s(?:src|href)\s*=\s*)(["'])((?:\.\.?\/)*(site\.js|process\.css))(\?[^"'#]*)?(#[^"']*)?\2/gu,
+    (_match, attribute: string, quote: string, assetPath: string, asset: keyof ArchiveAssetVersions, query = '', fragment = '') => {
+      const parameters = new URLSearchParams(query.slice(1).replaceAll('&amp;', '&'));
+      parameters.set('v', versions[asset]);
+      return `${attribute}${quote}${assetPath}?${parameters.toString().replaceAll('&', '&amp;')}${fragment}${quote}`;
+    });
 }
 
 export function archiveCounts(page: string, catalog: ArchiveCatalog): string {

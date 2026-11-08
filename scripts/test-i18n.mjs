@@ -4,11 +4,13 @@ import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { checkArchiveReplay, checkStaticArchiveReceipt } from './archive-replay-checks.mjs';
 
 // The English pages share the root bundles; check that every visible string they render is English.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const site = path.join(root, 'out/site');
 const catalog = JSON.parse(fs.readFileSync(path.join(site, 'data/catalog.json'), 'utf8'));
+const replayEvidence = JSON.parse(fs.readFileSync(path.join(site, 'assets/replay.json'), 'utf8'));
 const output = path.join(root, 'out/i18n-checks');
 fs.mkdirSync(output, { recursive: true });
 const base = '/TheoremOS/';
@@ -450,8 +452,8 @@ try {
     assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
     assert.deepEqual(await cjkIn(page), [], `English local acceptance at ${width}px`);
     assert.equal(await page.locator('.campaign-evidence a').getAttribute('href'), '../data/proofs/openai_totient_companion_zero/verification.json');
-    await page.getByRole('tab', { name: 'Research process' }).click();
-    await page.locator('.process-run').first().waitFor();
+    await page.getByRole('tab', { name: 'Routes and trajectory' }).click();
+    await page.locator('.global-run-lane').first().waitFor();
     await checkOverflow(page, `English research process at ${width}px`);
 
     if (width <= 700) {
@@ -474,6 +476,7 @@ try {
       assert.deepEqual(await cjkIn(page), [], `English mobile archive navigation at ${width}px`);
     }
 
+    await page.getByRole('tab', { name: 'Overview', exact: true }).click();
     const archiveAccess = page.locator('.archive-access a');
     assert.equal(await archiveAccess.getAttribute('href'), 'index.html#start');
     assert.equal(new URL(await archiveAccess.getAttribute('href'), page.url()).href, `${hosted}en/index.html#start`);
@@ -513,7 +516,21 @@ try {
     await page.close();
   }
 
+  for (const width of [1440, 320]) {
+    const replayPage = await newPage(width);
+    await replayPage.emulateMedia({ reducedMotion: width === 1440 ? 'no-preference' : 'reduce' });
+    await checkArchiveReplay(replayPage, `${hosted}en/archive.html#proof=openai_totient_companion_zero&status=verified&tab=overview&sort=title`, {
+      english: true, evidence: replayEvidence, label: `English public archive at ${width}px`,
+    });
+    assert.deepEqual(await cjkIn(replayPage), [], `English interactive replay at ${width}px`);
+    await replayPage.screenshot({ path: path.join(output, `en-replay-${width}.png`), fullPage: true });
+    await replayPage.close();
+  }
+
   const noScript = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 320, height: 844 }, reducedMotion: 'reduce' });
+  noScript.on('pageerror', error => problems.push(error.message));
+  noScript.on('console', message => { if (message.type() === 'error') problems.push(message.text()); });
+  noScript.on('response', response => { if (response.status() >= 400) problems.push(`${response.status()} ${response.url()}`); });
   await noScript.goto(`${hosted}en/`);
   await noScript.evaluate(() => document.fonts.ready);
   await checkEnglishHomepageFacts(noScript);
@@ -535,6 +552,11 @@ try {
   });
   await checkEnglishArchiveEntry(noScript);
   await checkOverflow(noScript, '320px English no-script navigation and archive');
+  await checkStaticArchiveReceipt(noScript, `${hosted}en/archive.html#view=quickstart`, {
+    english: true, evidence: replayEvidence, label: 'English public no-script archive at 320px',
+  });
+  assert.deepEqual(await cjkIn(noScript), [], 'English no-script replay receipt');
+  await noScript.screenshot({ path: path.join(output, 'en-replay-no-script-320.png'), fullPage: true });
   await noScript.close();
 
   // Language links point at each other, and switching keeps the section or record in view.
@@ -564,7 +586,7 @@ try {
   await page.close();
 
   assert.deepEqual(problems, [], 'Pages must load without errors or missing files');
-  console.log('i18n checks passed: English interactive module map and static no-script map, no graph API or mutation calls, homepage, archive (overview, source, evidence, snapshot, replay), feedback and privacy at 4 widths, mobile deep-link focus and return to the selected filtered row, localized access links, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
+  console.log('i18n checks passed: English interactive module map and static no-script map, no graph API or mutation calls, homepage, archive (overview, source, evidence, snapshot, interactive replay and no-script receipt), feedback and privacy at 4 widths, mobile deep-link focus and return to the selected filtered row, localized access links, no CJK interface text, English search and Markdown, reciprocal language links and hreflang, hash kept on switch, Pages subpath with directory index, no missing files or console errors.');
   console.log(`Screenshots: ${path.relative(root, output)}`);
 } finally {
   await browser.close();

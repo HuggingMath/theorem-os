@@ -1,5 +1,6 @@
 import type { WebSession, WebFormalizationReport } from '../shared';
 import type { WebFormalization, WebFormalizationCapabilities, WebFormalizationRequest } from '../formalizationTypes';
+import type { WebConversation } from '../conversationTypes';
 import { locale, localeTag, localizeDocument, localizeMessage, mountLocaleSwitch, sentences, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
 import { renderFormalization } from './formalizationView';
@@ -77,7 +78,7 @@ let timer: ReturnType<typeof setTimeout> | undefined, rows: HTMLElement[] = [], 
 let autoOpen = '';
 let conversationGeneration = 0;
 const ladder = fragmentLadder();
-const solving = (item: WebFormalization) => item.workflow === 'solve';
+const solving = (item: WebFormalization) => item.workflow === 'solve' && !item.humanReview;
 const active = (item: WebFormalization) => item.status === 'queued' || item.status === 'running'
   || solving(item) && item.status === 'confirmed' && !item.runId && !item.researchError;
 const statusNames: Record<WebFormalization['status'], string> = { queued: t('等待执行'), running: t('生成中'), review: t('待你确认'), confirmed: t('已确认陈述'), exhausted: t('未在预算内完成'), cancelled: t('已取消'), error: t('生成失败') };
@@ -125,8 +126,12 @@ function controls() {
   if (changed) checked.checked = false;
   const use = $<HTMLAnchorElement>('#formalize-use');
   const usable = state.item?.status === 'confirmed' && !changed && !state.busy;
+  const guided = Boolean(state.item?.humanReview);
+  use.textContent = guided ? t('返回对话') : embedded ? t('继续证明研究') : t('带入研究草稿');
+  $('#formalize-confirmed .field-note').textContent = guided ? t('在原对话中启动双 Agent 研究，并审核研究计划。')
+    : t('带入后可设置研究要求，不会自动启动证明。');
   use.setAttribute('aria-disabled', String(!usable));
-  if (usable) use.href = `/?formalization=${encodeURIComponent(state.item!.id)}`;
+  if (usable) use.href = guided ? '/' : `/?formalization=${encodeURIComponent(state.item!.id)}`;
   else use.removeAttribute('href');
   $<HTMLButtonElement>('#formalize-start').disabled = state.busy || !caps?.available || !original.value.trim() || state.items.some(active)
     || (!embedded && caps.key === 'required' && !key.value.trim());
@@ -349,10 +354,20 @@ effort.addEventListener('change', saveDraft);
 key.addEventListener('input', controls);
 $('#formalize-use').addEventListener('click', event => {
   if (state.busy || state.item?.status !== 'confirmed' || !matchesInput(state.item)) { event.preventDefault(); controls(); return; }
+  if (state.item.humanReview) { event.preventDefault(); void returnToConversation(state.item); return; }
   if (!embedded) return;
   event.preventDefault();
   window.postMessage({ type: 'theoremos:formalization-confirmed', id: state.item.id }, location.origin);
 });
+async function returnToConversation(item: WebFormalization) {
+  state.busy = true; controls(); error();
+  try {
+    // Association creation is idempotent: an existing problem returns its original conversation.
+    const { conversation } = await call<{ conversation: WebConversation }>('/api/conversations', 'POST', { formalizationId: item.id });
+    location.assign(`/?chat=${encodeURIComponent(conversation.id)}`);
+  } catch (cause) { failure(cause); }
+  finally { state.busy = false; controls(); }
+}
 $('#formalize-result-link').addEventListener('click', event => {
   if (!embedded || !state.item?.runId) return;
   event.preventDefault(); window.postMessage({ type: 'theoremos:natural-run', id: state.item.runId }, location.origin);

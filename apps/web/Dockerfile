@@ -65,7 +65,7 @@ ENTRYPOINT ["/opt/theorem-os/apps/web/worker-entrypoint.sh"]
 FROM source AS web
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY docs/web ./docs/web
-COPY docs/archive.html docs/site.css ./docs/
+COPY docs/archive.html docs/site.css docs/process.css docs/replay.css ./docs/
 COPY docs/en/archive.html ./docs/en/archive.html
 COPY research/openai-math ./research/openai-math
 RUN bun scripts/build-web.ts

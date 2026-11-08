@@ -31,8 +31,8 @@ export const guide: Record<string, string> = {
   "填写所选服务商的 API Key。OpenAI 提供创建 Key 的链接；网关账号与 Key 请向该网关管理员获取。可以先点「检查 Key 与模型」，此操作只读取模型列表，不调用模型；不支持模型列表的服务需在发送时确认。":
     "Enter the selected provider’s API key. OpenAI has a link to create one; ask the gateway administrator for a gateway account and key. “Check key and model” reads the model list without calling a model. Providers without that endpoint are checked when you send.",
   "设定预算并发送": "Set a budget and send",
-  "形式化与随后证明各有时间和 Token 预算，发送前会显示两阶段上限。费用计入你的模型账户，按服务商已报告用量停止；进行中的请求可能超额，Token 预算不是金额封顶。发送后先核对原题含义，再自动开始证明。":
-    "Formalization and proof each have a time and token budget, shown before you send. The provider bills your model account. Work stops based on reported usage; requests already in progress may exceed the cap, so token budgets are not monetary caps. Sending starts meaning review followed automatically by proof.",
+  "形式化与证明各有时间和 Token 预算，发送前可在「设置」调整。默认「共同推进」会等你确认题意、批准初始计划，再展开证明；「自动推进」通过模型核对后直接开始。费用由模型服务商收取，进行中的请求可能超过设定用量。":
+    "Set separate time and token budgets for formalization and proof in Settings. Work together is the default: confirm the statement and approve the initial plan before proving begins. Run automatically starts after model review. Your model provider bills usage; requests already in progress can exceed the limit.",
   "左栏是研究记录，打开一次运行后，右侧有结果、路线图、协作、源码和活动五个标签页。运行中随时可以点右上角的「取消运行」停下。":
     "The left column lists your research runs. Open one and the right side has five tabs: Result, Roadmap, Collaboration, Source and Activity. Stop a run at any time with \"Cancel run\" at the top right.",
   "谁在做哪个子任务、在等什么。从分区导航查看任务、原意与 Lean、Agent、指导和知识；详细视图还包含任务合同、交付、变更和归档记录。":
@@ -50,15 +50,15 @@ export const guide: Record<string, string> = {
   "验收通过后，点「结果」中验收证明标题旁或「源码」工具栏的「Lean → 自然语言」。讲解页可切换目标与中英文，逐步对照 Lean 行、引理和自然语言，下载已通过审核的 Markdown。生成前会显示时间与用量估算，由你手动开始。":
     "After acceptance, choose Lean → Natural language beside the accepted proof heading in Result or in the Source toolbar. Switch targets and Chinese or English, compare prose steps with Lean lines and lemmas, and download approved explanations as Markdown. Generation starts only when you choose it, after a time and usage estimate is shown.",
   "自然语言 → Lean": "Natural language → Lean",
-  "首页发送自然语言原题后，系统生成 Lean 陈述并由模型独立回译、审核，通过后自动开始证明。点「原题 / Lean」核对对应关系；「完整审核」保留各次模型结论。独立形式化页面也保留先由你核对确认、再带入 Lean 草稿的流程。":
-    "Send a natural-language problem from the home page. The system generates a Lean statement, independently back-translates and reviews it with models, then starts proof automatically. Open “Problem / Lean” to compare the meaning; “Full review” keeps the model verdicts. The standalone formalization page also lets you review and confirm first, then open a Lean draft.",
+  "首页发送原题后，系统生成 Lean 陈述，并独立回译、审核。在「共同推进」中，你会先看到回译的题意，可核对原题与 Lean、修改题目，或确认后拟定研究计划。「完整审核」保留每次模型审核的结论。":
+    "Send a problem from the home page to generate a Lean statement with independent back-translation and review. In Work together, read the translated meaning first. Compare the problem and Lean, edit the problem, or confirm it to draft a research plan. Full review preserves each model’s verdict.",
   "证明讲解目前仅支持使用 Sub2API 与 deepseek-flash 的已验收运行，服务也需提供讲解运行环境；不支持时页面会说明原因。示例运行可以打开对照页，但没有预生成讲解，也不能生成。":
     "Proof explanations currently require an accepted run using Sub2API and deepseek-flash, with an explanation runtime provided by the service. The page explains why generation is unavailable when these conditions are not met. Sample runs can open the comparison page, but have no pre-generated explanations and cannot generate them.",
   "审阅研究计划": "Review the research plan",
-  "在执行配置勾选「先审计划再开始」，Lead 拟好计划后会等待你批准。可以查看或修改计划，也可以留言让 Lead 修改；等待也计入解题预算。此模式需要任务协作和至少 2 个 Agent。":
-    "Enable Review plan before starting under Execution. The Lead then waits for your approval after drafting a plan. Read or edit it, or leave a note asking the Lead to revise it; waiting counts toward the solving budget. This mode requires task cooperation and at least 2 Agents.",
-  "运行中可在协作区给 Lead、某个任务或 Agent 留言，并引用相关代码与检查记录。发送后查看回执，确认是否收到和采用；运行结束后仍可阅读指导记录。":
-    "During a run, leave guidance for the Lead, a task or an Agent in Collaboration and reference relevant code and checks. Read the receipt to see whether it was received and used. Guidance records remain readable after the run ends.",
+  "「共同推进」使用 2 个 Agent，初始计划直接显示在对话中。你可以查看全部任务、修改任务与依赖，再批准开始证明；等待也计入证明预算。后续修改计划会继续生效，不会每次重新等待批准。Lean 入口也可在执行配置中勾选「先审计划再开始」。":
+    "Work together uses 2 Agents and shows the initial plan in the conversation. Review all tasks, edit tasks and dependencies, then approve the plan to start proving. Waiting counts toward the proof budget. Later edits update the plan without another approval gate. The Lean entry also offers Review plan before starting under Execution.",
+  "运行中在对话输入框选择「指导研究」，给负责人或具体任务发送方法建议，并查看送达回执。指导供 Agent 参考；「讨论思路」用于交流想法，不会改动运行计划。协作区还可向具体 Agent 留言、引用代码与检查记录。":
+    "During a run, choose Guide research in the chat composer to suggest methods to the lead or a task, then check delivery receipts. Agents consider this guidance. Discuss ideas is for exploring the problem and does not change the running plan. In Collaboration, you can also address an Agent and reference code and checks.",
   "归档与知识": "Archives and knowledge",
   "协作区可归档研究证据、下载归档包，并在「知识」中搜索历史定理、引理与路线发现。引用知识时会带上来源和记录环境；历史检查通过不代表当前题目通过，使用前仍需重新检查。":
     "In Collaboration, archive research evidence, download an archive and search historical theorems, lemmas and route findings under Knowledge. References include their source and recorded environment. A historical check does not establish the current problem; reused work must be checked again.",
