@@ -11,6 +11,7 @@ import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import { compareSources } from '../apps/web/client/sourceDiff';
 import { processMessage, readableProcessText } from '../docs/web/processText';
+import type { ProofWalkthrough } from '../docs/web/proofWalkthroughTypes';
 import type { ArchiveCatalog, ArchiveProcess, ArchiveRecord } from '../docs/web/types';
 import { workflowNote } from '../docs/web/workflowNotes';
 import { freePort, settled, startBrowser } from './web-scenario';
@@ -171,6 +172,63 @@ async function phase(page: Page, name: string, id: string) {
   assert.equal(await heading.evaluate(element => element === document.activeElement), true, 'Phase navigation must move keyboard focus to its heading');
   await visible(page, '#' + id + ' .workflow-section-heading > h5', current + ': ' + name);
 }
+async function openProofRoute(page: Page) {
+  const panel = page.locator('.proof-route-panel');
+  if (!await panel.evaluate(element => (element as HTMLDetailsElement).open)) await panel.locator('summary').click();
+  await settled(page);
+  assert.equal(await panel.evaluate(element => (element as HTMLDetailsElement).open), true);
+  assert.equal(await panel.locator('summary').getAttribute('aria-expanded'), 'true');
+  const diagram = await panel.locator('.proof-route-map').evaluate(map => {
+    const svg = map.querySelector<SVGSVGElement>('.proof-route-edges')!, box = svg.getBoundingClientRect();
+    const edges = [...map.querySelectorAll<SVGPathElement>('[data-proof-edge]')];
+    const buttons = new Map([...map.querySelectorAll<HTMLElement>('[data-proof-route-step]')].map(button => [button.dataset.proofRouteStep, button]));
+    return {
+      mapWidth: map.clientWidth, contentHeight: map.querySelector<HTMLElement>('.proof-route-nodes')!.offsetHeight,
+      width: box.width, height: box.height,
+      drawn: edges.every(edge => !!edge.getAttribute('d') && !/NaN|Infinity/u.test(edge.getAttribute('d')!)),
+      highlighted: edges.filter(edge => ['input', 'output'].includes(edge.dataset.proofRelation!)).map(edge => {
+        const from = buttons.get(edge.dataset.from)!.getBoundingClientRect(), to = buttons.get(edge.dataset.to)!.getBoundingClientRect();
+        const rendered = edge.getBoundingClientRect();
+        return { width: rendered.width, height: rendered.height, nodeDistance: Math.abs(from.top + from.height / 2 - to.top - to.height / 2) };
+      }),
+    };
+  });
+  assert.equal(diagram.drawn, true, 'Opening the route must draw its dependency arrows from the visible nodes');
+  assert.ok(diagram.width >= diagram.mapWidth - 2 && diagram.height >= diagram.contentHeight - 2,
+    'The dependency SVG must cover the real diagram content, not inherit an icon-sized viewport: ' + JSON.stringify(diagram));
+  assert.ok(diagram.highlighted.length > 0, 'The selected step must have visible incoming or outgoing dependency arrows');
+  for (const edge of diagram.highlighted) assert.ok(edge.width > 1 && edge.height >= edge.nodeDistance * 0.9,
+    'Highlighted arrows must span their actual nodes after SVG scaling: ' + JSON.stringify(edge));
+}
+async function reading(page: Page, walkthrough: ProofWalkthrough, id: string, locale: 'zh' | 'en') {
+  const index = walkthrough.steps.findIndex(step => step.id === id), step = walkthrough.steps[index];
+  assert.ok(step, 'Reading must identify a real proof step');
+  await page.waitForFunction(id => document.querySelector<HTMLElement>('[data-proof-walkthrough]')?.dataset.proofActive === id, id);
+  await settled(page);
+  const state = await page.locator('[data-proof-walkthrough]').evaluate(root => {
+    const ids = (selector: string) => [...root.querySelectorAll<HTMLElement>(selector)].map(node => node.dataset.proofRouteStep).sort();
+    const edgeIds = (relation: string) => [...root.querySelectorAll<SVGElement>('[data-proof-edge][data-proof-relation="' + relation + '"]')]
+      .map(edge => edge.dataset.from + '->' + edge.dataset.to).sort();
+    return {
+      current: ids('[data-proof-route-step][aria-current="step"]'),
+      inputs: ids('[data-proof-route-step][data-proof-relation="input"]'),
+      outputs: ids('[data-proof-route-step][data-proof-relation="output"]'),
+      inputEdges: edgeIds('input'), outputEdges: edgeIds('output'),
+      counts: [...root.querySelectorAll('[data-proof-reading-count]')].map(node => node.textContent),
+      titles: [...root.querySelectorAll('[data-proof-reading-title]')].map(node => node.textContent),
+    };
+  });
+  const consumers = walkthrough.steps.filter(candidate => candidate.dependsOn.includes(id)).map(candidate => candidate.id).sort();
+  assert.deepEqual(state.current, [id], 'The diagram must identify only the step being read');
+  assert.deepEqual(state.inputs, [...step.dependsOn].sort());
+  assert.deepEqual(state.outputs, consumers);
+  assert.deepEqual(state.inputEdges, step.dependsOn.map(previous => previous + '->' + id).sort());
+  assert.deepEqual(state.outputEdges, consumers.map(next => id + '->' + next).sort());
+  const count = String(index + 1).padStart(2, '0') + ' / ' + String(walkthrough.steps.length).padStart(2, '0');
+  assert.deepEqual(state.counts, [count, count], 'Desktop and mobile reading counters must stay synchronized');
+  assert.deepEqual(state.titles, [step.title[locale], step.title[locale]]);
+  await visible(page, '#proof-derivation-' + id + ' h5', current + ': reading heading');
+}
 async function verifyAssets(page: Page) {
   const urls = await page.locator('script[src],link[rel="stylesheet"][href]').evaluateAll(nodes =>
     nodes.map(node => node.getAttribute('src') ?? node.getAttribute('href')!));
@@ -207,14 +265,26 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
   if (walkthrough) {
     assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), record.campaign!.proofSha256);
     assert.equal(await page.locator('[data-proof-derivation]').count(), walkthrough.steps.length);
+    const route = page.locator('.proof-walkthrough-route');
+    assert.deepEqual(await route.locator('[data-proof-route-step]').evaluateAll(buttons => buttons.map(button => ({
+      id: (button as HTMLElement).dataset.proofRouteStep, title: (button as HTMLElement).dataset.proofRouteTitle,
+      controls: button.getAttribute('aria-controls'),
+    }))), walkthrough.steps.map(step => ({ id: step.id, title: step.title[locale], controls: 'proof-derivation-' + step.id })));
+    assert.deepEqual(await route.locator('[data-proof-edge]').evaluateAll(edges => edges.map(edge =>
+      (edge as SVGElement).dataset.from + '->' + (edge as SVGElement).dataset.to).sort()),
+    walkthrough.steps.flatMap(step => step.dependsOn.map(previous => previous + '->' + step.id)).sort(),
+    record.id + ': proof arrows must preserve every actual dependency without adding sequential edges');
     for (const step of walkthrough.steps) {
       const row = page.locator(attr('data-proof-derivation', step.id));
       assert.equal(await row.locator('.proof-walkthrough-claim > p').textContent(), step.claim[locale]);
-      assert.equal(await row.locator('.proof-walkthrough-reason > p').textContent(), step.because[locale]);
+      assert.equal(await row.locator('.proof-walkthrough-explanation > p').textContent(), step.because[locale]);
       assert.equal(await row.locator('.proof-walkthrough-next > p').textContent(), step.next[locale]);
       assert.deepEqual(await row.locator('.proof-walkthrough-statement').allTextContents(), step.derivation.map(line => line.statement[locale]));
       assert.deepEqual(await row.locator('.proof-walkthrough-justification').allTextContents(), step.derivation.map(line => line.reason[locale]));
       assert.deepEqual(await row.locator('[data-proof-dependency]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofDependency)), step.dependsOn);
+      assert.deepEqual(await row.locator('[data-proof-consumer]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofConsumer)),
+        walkthrough.steps.filter(candidate => candidate.dependsOn.includes(step.id)).map(candidate => candidate.id),
+        record.id + '/' + step.id + ': later-result links must be the exact reverse of the dependency relation');
       const source = record.process!.sources![walkthrough.proofSha256];
       assert.deepEqual(await row.locator('.proof-walkthrough-source > ol code').allTextContents(),
         source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).map(line => line || ' '));
@@ -300,18 +370,64 @@ try {
       const walkthrough = triangle.process!.walkthrough!;
       const selectedStep = walkthrough.steps[2], followingStep = walkthrough.steps[3];
       const routeStep = page.locator('.proof-walkthrough-route ' + attr('data-global-scroll', 'proof-derivation-' + selectedStep.id));
-      const beforeStep = page.url(); await routeStep.focus(); await routeStep.press('Enter');
+      const panel = page.locator('.proof-route-panel'), compact = width <= 1100, beforeStep = page.url();
+      assert.equal(await panel.evaluate(element => (element as HTMLDetailsElement).open), !compact,
+        'The complete route starts open on desktop and collapsed on narrow screens');
+      await openProofRoute(page); await shot(page, 'derivation-' + locale + '-' + width + '-route.png');
+      const routeButtons = panel.locator('[data-proof-route-step]');
+      await routeStep.focus(); await page.keyboard.press('End');
+      assert.equal(await routeButtons.last().evaluate(element => element === document.activeElement), true);
+      await page.keyboard.press('Home');
+      assert.equal(await routeButtons.first().evaluate(element => element === document.activeElement), true);
+      await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
+      assert.equal(await routeStep.evaluate(element => element === document.activeElement), true);
+      await page.keyboard.press('Enter');
       const derivation = page.locator(attr('data-proof-derivation', selectedStep.id));
       assert.equal(await derivation.locator('h5').evaluate(element => element === document.activeElement), true);
+      await reading(page, walkthrough, selectedStep.id, locale);
       assert.equal(page.url(), beforeStep);
+      assert.equal(await panel.evaluate(element => (element as HTMLDetailsElement).open), !compact);
+      if (compact) {
+        await openProofRoute(page); await routeStep.focus(); await page.keyboard.press('Escape'); await settled(page);
+        assert.equal(await panel.evaluate(element => (element as HTMLDetailsElement).open), false);
+        assert.equal(await panel.locator('summary').getAttribute('aria-expanded'), 'false');
+        assert.equal(await panel.locator('summary').evaluate(element => element === document.activeElement), true,
+          'Escape must dismiss the mobile diagram and return focus to its summary');
+      }
       const dependency = selectedStep.dependsOn[0];
       assert.ok(dependency, 'The counting argument uses an earlier result');
       const dependencyButton = derivation.locator(attr('data-proof-dependency', dependency));
       await dependencyButton.focus(); await dependencyButton.press('Enter');
       assert.equal(await page.locator(attr('data-proof-derivation', dependency) + ' h5').evaluate(element => element === document.activeElement), true);
+      await reading(page, walkthrough, dependency, locale);
       assert.equal(page.url(), beforeStep, 'Reading a prerequisite preserves the selected archived run');
-      await routeStep.click();
+      await page.locator(attr('data-proof-derivation', dependency) + ' ' + attr('data-proof-consumer', selectedStep.id)).press('Space');
+      await reading(page, walkthrough, selectedStep.id, locale);
+      const scrolledStep = walkthrough.steps[4];
+      await page.locator(attr('data-proof-derivation', scrolledStep.id)).evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
+      await reading(page, walkthrough, scrolledStep.id, locale);
+      assert.equal(page.url(), beforeStep, 'Ordinary scrolling and result links preserve the selected archived run and URL');
+      await page.locator(attr('data-proof-derivation', walkthrough.steps.at(-1)!.id)).evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
+      await reading(page, walkthrough, walkthrough.steps.at(-1)!.id, locale);
+      await openProofRoute(page);
+      const lastNode = await routeButtons.last().evaluate(button => {
+        const row = button.getBoundingClientRect(), map = button.closest('.proof-route-map')!.getBoundingClientRect();
+        return { top: row.top, bottom: row.bottom, mapTop: map.top, mapBottom: map.bottom };
+      });
+      assert.ok(lastNode.top >= lastNode.mapTop - 1 && lastNode.bottom <= lastNode.mapBottom + 1,
+        'The selected last step must remain visible in a scrolled route: ' + JSON.stringify(lastNode));
+      await openProofRoute(page); await routeStep.click(); await reading(page, walkthrough, selectedStep.id, locale);
+      assert.equal(await panel.evaluate(element => (element as HTMLDetailsElement).open), !compact,
+        'Choosing a route node closes the mobile diagram');
       await shot(page, 'derivation-' + locale + '-' + width + '-reason.png');
+      const explanation = derivation.locator('.proof-walkthrough-explanation');
+      assert.equal(await explanation.evaluate(element => (element as HTMLDetailsElement).open), false);
+      await explanation.locator('summary').focus(); await explanation.locator('summary').press('Enter');
+      assert.equal(await explanation.evaluate(element => (element as HTMLDetailsElement).open), true);
+      assert.equal(await explanation.locator('p').isVisible(), true);
+      assert.equal(await derivation.locator('.proof-walkthrough-calculation').isVisible(), true,
+        'The line-by-line calculations stay expanded independently of the supporting explanation');
+      await explanation.locator('summary').press('Space');
       await derivation.locator('.proof-walkthrough-source > summary').focus();
       await derivation.locator('.proof-walkthrough-source > summary').press('Enter');
       assert.equal(await derivation.locator('.proof-walkthrough-source').getAttribute('open'), '');
@@ -319,6 +435,8 @@ try {
       await shot(page, 'derivation-' + locale + '-' + width + '-source.png');
       await derivation.locator('.proof-walkthrough-next > button').click();
       assert.equal(await page.locator(attr('data-proof-derivation', followingStep.id) + ' h5').evaluate(element => element === document.activeElement), true);
+      await reading(page, walkthrough, followingStep.id, locale);
+      assert.equal(page.url(), beforeStep);
       await page.locator(attr('data-proof-derivation', followingStep.id) + ' .proof-walkthrough-source-open').click();
       await page.locator('.process-code:not(.process-diff) code').waitFor();
       assert.equal(hash(page).get('code'), 'source');
@@ -330,7 +448,7 @@ try {
       assert.equal(await page.locator('.process-code:not(.process-diff) code').textContent(), triangle.process!.sources![walkthrough.proofSha256].code);
       await back(page, triangle, finalRun(triangle));
       await phase(page, 'research', 'global-findings');
-      mark(label + ': each mathematical claim, derivation and next-step explanation matches the accepted proof; route navigation and exact-source links work');
+      mark(label + ': exact derivations and source excerpts, real dependency arrows and result links, keyboard route selection, unobscured headings and scroll-synchronized reading positions work');
       for (const [name, id] of [['plan', 'global-plan'], ['research', 'global-findings'], ['implementation', 'global-implementation'], ['review', 'global-review']]) {
         await phase(page, name, id); await fits(page, label + ': ' + name);
         await shot(page, 'workflow-' + locale + '-' + width + '-' + name + '.png');

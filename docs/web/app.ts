@@ -10,6 +10,7 @@ import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './si
 import { initializeReplay } from './replay';
 import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from './process';
 import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
+import { mountProofReading } from './proofReading';
 
 const iconSet = {
   ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
@@ -131,7 +132,7 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   return request;
 }
 const icons = () => {
-  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap();
+  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
   const selected = document.querySelector<HTMLElement>('[data-global-select][aria-pressed="true"]');
   const rail = selected?.closest<HTMLElement>('.global-run-lanes');
   if (rail && selected) rail.scrollLeft = selected.offsetLeft - rail.offsetLeft - (rail.clientWidth - selected.offsetWidth) / 2;

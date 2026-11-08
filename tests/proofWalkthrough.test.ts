@@ -7,6 +7,7 @@ import { campaignRecords } from '../docs/web/campaignCatalog';
 import { archiveIndex, archiveProcessScript } from '../docs/web/catalog';
 import { proofWalkthroughs, withProofWalkthrough } from '../docs/web/proofWalkthroughCatalog';
 import { renderGlobalTrajectory } from '../docs/web/globalTrajectory';
+import { renderProofRoute } from '../docs/web/proofRoute';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const escaped = (value: string) => value.replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -84,6 +85,28 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
     const changed = structuredClone(record.process!);
     changed.sources![record.campaign!.proofSha256].code += '\n-- changed after checking\n';
     expect(() => withProofWalkthrough(record, changed)).toThrow('checked source');
+  });
+
+  it('renders a branched route without inventing reading-order edges and safely links its native reading controls', () => {
+    const walkthrough = structuredClone(proofWalkthroughs[0]);
+    walkthrough.steps = walkthrough.steps.slice(0, 3);
+    const [first, branch, last] = walkthrough.steps;
+    first.dependsOn = []; branch.dependsOn = []; last.dependsOn = [first.id];
+    first.title = { zh: '起点 <a & "b">', en: 'Start <a & "b">' };
+    for (const locale of ['zh', 'en'] as const) {
+      const output = renderProofRoute(walkthrough, locale);
+      expect([...output.matchAll(/data-proof-edge data-from="([^"]+)" data-to="([^"]+)"/gu)].map(match => [match[1], match[2]]))
+        .toEqual([[first.id, last.id]]);
+      expect(output).not.toMatch(/<path[^>]*\sd=/u);
+      expect((output.match(/aria-current="step"/gu) ?? []).length).toBe(1);
+      expect((output.match(/class="proof-route-finish"/gu) ?? []).length).toBe(1);
+      expect(output).toContain('data-proof-route-title="' + escaped(first.title[locale]) + '"');
+      expect(output).toContain('data-proof-reading-title>' + escaped(first.title[locale]) + '</span>');
+      expect(output).toContain('data-proof-reading-count>01 / 03</span>');
+      expect(output).toContain('<summary aria-controls="proof-route-map">');
+      expect(output).toContain('class="proof-route-map" id="proof-route-map"');
+      expect(output).toContain('aria-controls="proof-derivation-' + last.id + '"');
+    }
   });
 
   it('rejects dependencies that cannot lead back to an earlier result', () => {
