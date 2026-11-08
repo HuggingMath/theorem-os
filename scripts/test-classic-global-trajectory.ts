@@ -22,7 +22,7 @@ const staticRoot = path.join(root, 'out/web');
 const catalog = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/data/catalog.json'), 'utf8')) as ArchiveCatalog;
 assert.equal(catalog.records.length, 16);
 const figureCount = catalog.records.reduce((sum, record) => sum + (record.process?.walkthrough?.steps.filter(step => step.figure).length ?? 0), 0);
-assert.equal(figureCount, 6, 'The built archive must include all six mathematical figures');
+assert.equal(figureCount, 8, 'The built archive must include all eight mathematical figures');
 assert.ok((await fs.readFile(path.join(staticRoot, 'classics/site.js'), 'utf8')).includes('data-workflow-stage'),
   'Build the complete archived research workflow before running this browser check');
 await fs.mkdir(output, { recursive: true });
@@ -523,6 +523,155 @@ async function verifyProofFigure(page: Page, record: ArchiveRecord, locale: 'zh'
       for (const kind of ['child4', 'fork'] as const) {
         await figure.locator(attr('data-snaky-fork-stage', kind)).click(); await verifyFork(kind);
       }
+    } else if (step.figure === 'truffet-elimination') {
+      const expected = [
+        { kind: 'initial', state: 'initial', remaining: '{0, 1}', objective: 'c(w)=w₀', reference: 'write-the-concrete-system',
+          rows: ['0 ≤ max(w₀,w₁)', 'max(1+w₁,−2) ≤ w₀'], points: [] },
+        { kind: 'first', state: 'middle', remaining: '{0}', objective: 'c(w)=w₀', reference: 'force-the-first-elimination',
+          rows: ['0 ≤ max(w₀,0)', 'max(1+0,−2)=1 ≤ w₀'], points: [] },
+        { kind: 'second', state: 'finalState', remaining: '∅', objective: 'c(w)=1+w₂=1', reference: 'force-the-second-elimination',
+          rows: ['0 ≤ max(1,0)=1', 'max(1+0,−2)=1 ≤ 1'], points: ['output'] },
+        { kind: 'compare', state: 'finalState', remaining: '∅', objective: 'c(w)=1+w₂=1', reference: 'exhibit-the-better-point',
+          rows: [], points: ['output', 'better'] },
+      ] as const;
+      const original = (w0: number, w1: number) => ({ row0: { rhs: 0, lhs: Math.max(w0, w1) },
+        row1: { rhs: Math.max(1 + w1, -2), lhs: w0 }, cost: w0 });
+      const verifyTruffet = async (kind: typeof expected[number]['kind']) => {
+        const item = expected.find(item => item.kind === kind)!, button = figure.locator(attr('data-truffet-stage', kind));
+        assert.equal(await figure.getAttribute('data-truffet-current'), kind);
+        assert.equal(await figure.getAttribute('data-truffet-state'), item.state);
+        assert.equal(await figure.locator('[data-truffet-remaining]').textContent(), item.remaining,
+          'The normalized third coordinate must never become a remaining elimination variable');
+        assert.equal(await figure.locator('[data-truffet-objective]').textContent(), item.objective);
+        assert.equal(await figure.locator('.proof-figure-controls [aria-pressed="true"]').count(), 1);
+        assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        assert.equal(await button.evaluate(node => node === document.activeElement), true,
+          'Real elimination controls must preserve focus while updating the saved state');
+        assert.equal(await figure.locator('[data-truffet-region]').getAttribute('points'), '52,214 116,214 276,54 52,54',
+          'All stages must retain the original feasible region w₀≥max(0,1+w₁)');
+        assert.equal(await figure.locator('[data-truffet-boundary]').getAttribute('points'), '52,214 116,214 276,54');
+        assert.deepEqual(await figure.locator('[data-truffet-row]').allTextContents(), [...item.rows]);
+        assert.equal(await figure.locator('[data-truffet-first-line]').count(), Number(kind !== 'initial'));
+        assert.equal(await figure.locator('[data-truffet-first-feasible]').count(), Number(kind !== 'initial'));
+        if (kind !== 'initial') {
+          const line = await figure.locator('[data-truffet-first-line]').evaluate(node => ['x1', 'x2', 'y1', 'y2'].map(name => Number(node.getAttribute(name))));
+          const ray = await figure.locator('[data-truffet-first-feasible]').evaluate(node => ['x1', 'x2', 'y1', 'y2'].map(name => Number(node.getAttribute(name))));
+          assert.deepEqual(line, [180, 180, 54, 246]); assert.deepEqual(ray, [180, 180, 54, 150],
+            'The saved choice w₁=0 lifts middle to the feasible ray w₀≥1, rather than changing the original system');
+        }
+        const points = await figure.locator('[data-truffet-point]').evaluateAll(nodes => nodes.map(node => ({
+          name: node.getAttribute('data-truffet-point'), w0: Number(node.getAttribute('data-w0')), w1: Number(node.getAttribute('data-w1')),
+          x: Number(node.getAttribute('cx')), y: Number(node.getAttribute('cy')), cost: Number(node.getAttribute('data-cost')),
+        })));
+        assert.deepEqual(points.map(point => point.name), [...item.points]);
+        for (const point of points) {
+          const coordinates = point.name === 'output' ? [1, 0] : [0, -1];
+          assert.deepEqual([point.w0, point.w1], coordinates);
+          const values = original(point.w0, point.w1);
+          assert.ok(values.row0.rhs <= values.row0.lhs && values.row1.rhs <= values.row1.lhs,
+            'Both plotted witnesses must satisfy both original max constraints');
+          assert.equal(point.cost, values.cost);
+          assert.equal(point.x, 180 + 64 * point.w1); assert.equal(point.y, 214 - 64 * point.w0);
+        }
+        if (kind === 'first') assert.equal(await figure.locator('[data-truffet-substitution]').textContent(), 'w₁=w₂=0');
+        if (kind === 'second') {
+          assert.equal(await figure.locator('[data-truffet-substitution]').textContent(), 'w₀=1+w₂=1');
+          assert.ok((await figure.locator('[data-truffet-readout]').textContent())!.includes('⊥≤⊥'),
+            'stop must be explained by the null rows’ reference columns');
+        }
+        if (kind === 'compare') {
+          assert.deepEqual(original(1, 0), { row0: { rhs: 0, lhs: 1 }, row1: { rhs: 1, lhs: 1 }, cost: 1 });
+          assert.deepEqual(original(0, -1), { row0: { rhs: 0, lhs: 0 }, row1: { rhs: 0, lhs: 0 }, cost: 0 });
+          assert.equal(await figure.locator('[data-truffet-output]').textContent(), '(1,0,0)');
+          assert.equal(await figure.locator('[data-truffet-better]').textContent(), '(0,−1,0)');
+          assert.deepEqual(await figure.locator('[data-truffet-output-row]').allTextContents(), ['0 ≤ max(1,0)=1', 'max(1+0,−2)=1 ≤ 1']);
+          assert.deepEqual(await figure.locator('[data-truffet-better-row]').allTextContents(), ['0 ≤ max(0,−1)=0', 'max(1−1,−2)=0 ≤ 0']);
+          assert.equal(await figure.locator('[data-truffet-output-cost]').textContent(), '1');
+          assert.equal(await figure.locator('[data-truffet-better-cost]').textContent(), '0');
+          assert.equal(await figure.locator('[data-truffet-cost-gap]').textContent(), '1');
+        }
+        const labels = await figure.locator('[data-truffet-board]').evaluate(svg => {
+          const box = svg.getBoundingClientRect();
+          return [...svg.querySelectorAll('text')].map(node => {
+            const text = node.getBoundingClientRect();
+            return { value: node.textContent, fits: text.left >= box.left - 1 && text.right <= box.right + 1 };
+          });
+        });
+        assert.ok(labels.every(label => label.fits), 'All plot labels must fit the SVG at the current viewport: ' + JSON.stringify(labels));
+        await identity();
+      };
+      for (const item of expected) {
+        const button = figure.locator(attr('data-truffet-stage', item.kind));
+        if (item.kind === 'second') await button.click(); else { await button.focus(); await button.press(item.kind === 'first' ? 'Space' : 'Enter'); }
+        await verifyTruffet(item.kind);
+        assert.ok(walkthrough.steps.some(previous => previous.id === item.reference), 'The stage reference must name an actual proof step');
+        const reference = figure.locator('button.proof-figure-reference[data-global-scroll]');
+        assert.equal(await reference.getAttribute('data-global-scroll'), 'proof-derivation-' + item.reference);
+        if (item.kind === 'compare') await reference.click(); else { await reference.focus(); await reference.press('Enter'); }
+        await settled(page);
+        assert.equal(await page.locator(attr('data-proof-derivation', item.reference) + ' header > h5').evaluate(node => node === document.activeElement), true,
+          'The dynamically rendered stage reference must focus its real mathematical heading');
+        await identity();
+        if (item.reference !== step.id) {
+          const route = page.locator('.proof-route-panel');
+          if (!await route.evaluate(node => (node as HTMLDetailsElement).open)) await route.locator('summary').click();
+          await route.locator('button' + attr('data-proof-route-step', step.id)).click(); await settled(page);
+          assert.equal(await row.locator('header > h5').evaluate(node => node === document.activeElement), true);
+          await identity();
+        }
+        await figure.scrollIntoViewIfNeeded();
+      }
+      for (const kind of ['initial', 'compare'] as const) {
+        await figure.locator(attr('data-truffet-stage', kind)).click(); await verifyTruffet(kind);
+      }
+    } else if (step.figure === 'hadamard-fiber') {
+      const changeStage = async (kind: 'unit' | 'select' | 'sum') => {
+        const button = figure.locator(attr('data-fiber-stage', kind));
+        await button.focus(); await button.press(kind === 'select' ? 'Space' : 'Enter');
+        assert.equal(await button.evaluate(node => node === document.activeElement), true);
+        assert.equal(await figure.getAttribute('data-fiber-current'), kind);
+        assert.equal(await figure.locator('[data-fiber-stage][aria-pressed="true"]').count(), 1);
+        assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        assert.equal(await figure.locator('[data-fiber-cases]').isVisible(), kind !== 'sum');
+        await identity();
+      };
+      for (const kind of ['unit', 'select'] as const) {
+        await changeStage(kind);
+        for (const branch of ['a', 'b'] as const) {
+          const button = figure.locator(attr('data-fiber-branch', branch));
+          await button.focus(); await button.press(branch === 'a' ? 'Enter' : 'Space');
+          assert.equal(await button.evaluate(node => node === document.activeElement), true);
+          assert.equal(await figure.getAttribute('data-fiber-case'), branch);
+          assert.equal(await figure.locator('[data-fiber-branch][aria-pressed="true"]').count(), 1);
+          assert.equal(await figure.locator('[data-fiber-lane][data-active="true"]').getAttribute('data-fiber-lane'), branch);
+          const actual = (await figure.locator('[data-fiber-local]').textContent())!.replace(/\s/gu, '');
+          if (kind === 'unit') assert.equal(actual, 'v³=' + branch + '⇒' + branch + '·conj(v)²=v');
+          else {
+            assert.equal(await figure.locator('[data-fiber-selected]').textContent(), 'F(v) = ' + (branch === 'a' ? '(a−b)v' : '0'));
+            assert.ok(actual.includes(branch === 'a' ? '=av−b(a·conj(v)²)=av−bv=(a−b)v' : 'F(v)=a(v−v)=0'));
+          }
+          await fits(page, label + ': fiber ' + kind + '/' + branch); await identity();
+        }
+      }
+      await changeStage('sum');
+      assert.deepEqual(await figure.locator('[data-fiber-total] > li').allTextContents(), [
+        '(a−b)Sₐ = Σₖ F(vₖ)', '= aΣₖvₖ − abΣₖconj(vₖ)²', '= a·0 − ab·0 = 0', 'a−b≠0 ⇒ Sₐ=0',
+      ]);
+      for (const premise of ['derive-the-first-moment', 'derive-the-second-moment']) {
+        await figure.locator('button' + attr('data-global-scroll', 'proof-derivation-' + premise)).click(); await settled(page);
+        const premiseRow = page.locator(attr('data-proof-derivation', premise));
+        assert.equal(await premiseRow.locator('header > h5').evaluate(node => node === document.activeElement), true);
+        await premiseRow.locator('button' + attr('data-proof-consumer', 'sum-and-cancel')).click(); await settled(page);
+        const sum = page.locator('[data-proof-derivation="sum-and-cancel"]');
+        assert.equal(await sum.locator('header > h5').evaluate(node => node === document.activeElement), true);
+        await sum.locator('button' + attr('data-proof-dependency', step.id)).click(); await settled(page);
+        assert.equal(await row.locator('header > h5').evaluate(node => node === document.activeElement), true);
+        await identity();
+      }
+      await figure.locator('[data-fiber-stage="select"]').click();
+      await figure.locator('[data-fiber-branch="a"]').click();
+      assert.equal(await figure.locator('[data-fiber-selected]').textContent(), 'F(v) = (a−b)v');
+      await figure.locator('[data-fiber-stage="sum"]').click();
     } else {
       assert.fail('No browser interaction check for ' + step.figure);
     }
@@ -845,7 +994,7 @@ try {
       for (const record of catalog.records.filter(record => record.process!.walkthrough!.steps.some(step => step.figure))) {
         await enter(page, record, locale); await verifyProofFigure(page, record, locale, label);
       }
-      mark(label + ': all six mathematical figures support real pointer or keyboard interaction, update exact objects and calculations, and preserve proof identity and focus');
+      mark(label + ': all eight mathematical figures support real pointer or keyboard interaction, update exact objects and calculations, and preserve proof identity and focus');
       const overview = new URL(ordinary(locale)); overview.hash = new URLSearchParams({ proof: triangle.id, status: 'verified', tab: 'overview' }).toString();
       await page.goto(overview.href); await page.locator('#tab-overview[aria-selected="true"]').waitFor();
       assert.equal(await page.locator('.global-workflow').count(), 0);

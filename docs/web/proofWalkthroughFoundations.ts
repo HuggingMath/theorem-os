@@ -214,7 +214,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
       {
         id: 'force-the-first-elimination',
         title: { zh: '唯一允许的第一步令 w₁ = w₂', en: 'The unique first elimination sets w₁ = w₂' },
-        given: { zh: '变量 1 同时有 lower 与 upper 行，是初始系统唯一的 dominating 变量。', en: 'Variable 1 has both a lower row and an upper row and is the only dominating variable initially.' },
+        given: { zh: '待消元变量为 {0,1}；第三坐标 w₂ 是参考列。变量 1 同时有 lower 与 upper 行，是初始系统唯一的 dominating 变量。', en: 'The eliminable variables are {0,1}; w₂ is the reference column. Variable 1 has both a lower row and an upper row and is the only dominating variable initially.' },
         claim: {
           zh: 'eligible(initial,r,j) 当且仅当 (r,j)=(0,1)。其 lowerForm 求值为 w₂；代入后得到 middle：第一行被清理，第二行变成 1+w₂ ≤ w₀，目标仍为 w₀。',
           en: 'eligible(initial,r,j) holds exactly for (r,j)=(0,1). Its lowerForm evaluates to w₂. Substitution yields middle: the first row is removed, the remaining inequality is 1+w₂ ≤ w₀, and the objective remains w₀.',
@@ -234,6 +234,10 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
             reason: text("该 lowerForm 只有第三列的系数 0 有限；其余两列为 ⊥，求值只剩 0+w₂。", "Only the third-column coefficient zero is finite; the other two coefficients are ⊥, leaving 0+w₂."),
           },
           {
+            statement: text('“唯一”指算法只允许这次代换；原可行域仍允许 w₁≠w₂。', 'Uniqueness is about the eligible algorithmic step; the original feasible set still allows w₁≠w₂.'),
+            reason: text('例如后面要核对的 (0,−1,0) 满足原约束，却不满足 w₁=w₂。不能把保存的代回等式当作原约束推出的等式。', 'The later point (0,−1,0) satisfies the original constraints but not w₁=w₂. The saved reconstruction equality is not an equality implied by the original constraints.'),
+          },
+          {
             statement: text("w₂≤max(w₀,w₂) 自动成立；max(1+w₂,−2+w₂)=1+w₂。", "w₂≤max(w₀,w₂) is automatic; max(1+w₂,−2+w₂)=1+w₂."),
             reason: text("第一行被 cleanup 删除；第二行的两个系数比较为 1>−2，所以保留约束 1+w₂≤w₀，得到 middle。", "cleanup removes the first row. In the second row, 1>−2 leaves the single inequality 1+w₂≤w₀, giving middle."),
           },
@@ -247,6 +251,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
       },
       {
         id: 'force-the-second-elimination',
+        figure: 'truffet-elimination',
         title: { zh: '第二步令 w₀ = 1+w₂ 并终止', en: 'The second elimination sets w₀ = 1+w₂ and terminates' },
         given: { zh: 'middle 只有变量 0 未消去，其唯一 lower 行是第 1 行。', en: 'Only variable 0 remains in middle, with row 1 its sole lower row.' },
         claim: {
@@ -269,7 +274,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
           },
           {
             statement: text("1+w₂≤1+w₂，remaining=∅，c_final(w)=1+w₂。", "1+w₂≤1+w₂, remaining=∅ and c_final(w)=1+w₂."),
-            reason: text("剩余约束变成恒等不等式而被清理；目标原为 w₀，随同一代换变为 1+w₂。没有剩余变量，stop 成立。", "The remaining inequality is tautological and is removed. The original objective w₀ becomes 1+w₂ under the same substitution. With no variables left, stop holds."),
+            reason: text("剩余约束变成恒等不等式而被清理；目标原为 w₀，随同一代换变为 1+w₂。两个空行的参考列都满足 ⊥≤⊥，因此本例的 stop 成立；remaining=∅ 则另行核对。", "The remaining inequality is tautological and removed. The original objective w₀ becomes 1+w₂. Both cleared rows satisfy ⊥≤⊥ in the reference column, establishing stop in this example; remaining=∅ is checked separately."),
           },
         ],
         next: { zh: '固定 w₂=0，按两个代回等式得到算法的具体输出。', en: 'Set w₂=0 and reconstruct the output using the two substitution equations.' },
@@ -324,6 +329,10 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
         },
         dependsOn: ["write-the-concrete-system", "reconstruct-the-output"],
         derivation: [
+          {
+            statement: text('在 w₂=0 的截面，原约束等价于 w₀≥0、w₁≤w₀−1。', 'On the section w₂=0, the original constraints are equivalent to w₀≥0 and w₁≤w₀−1.'),
+            reason: text('第二行给出 w₀≥1+w₁ 和 w₀≥−2。若 w₀<0，第一行 0≤max(w₀,w₁) 就要求 w₁≥0，进而 w₀≥1，矛盾。因此 w₀≥0；反向代入则两行都成立。', 'The second row gives w₀≥1+w₁ and w₀≥−2. If w₀<0, the first row requires w₁≥0, forcing w₀≥1, a contradiction. Thus w₀≥0. Conversely these two inequalities imply both original rows.'),
+          },
           {
             statement: text("better=(0,−1,0)：0≤max(0,−1)=0。", "At better=(0,−1,0), 0≤max(0,−1)=0."),
             reason: text("保留同一个归一化 w₂=0，第一条原约束恰好取等号。", "The normalization w₂=0 is unchanged, and the first original constraint holds with equality."),
@@ -1065,6 +1074,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
       },
       {
         id: 'build-the-fiber-indicator',
+        figure: 'hadamard-fiber',
         title: { zh: '构造逐点恒等式，筛出 a 纤维', en: 'Construct a pointwise identity selecting the a-fiber' },
         given: { zh: 'a≠b，且每个 vₖ³ 都等于 a 或 b。', en: 'a≠b and every vₖ³ is a or b.' },
         claim: { zh: '对每个 k，1_{vₖ³=a}(a−b)vₖ = a(vₖ−b·conj(vₖ)²)。', en: 'For each k, 1_{vₖ³=a}(a−b)vₖ = a(vₖ−b·conj(vₖ)²).' },
@@ -1079,7 +1089,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
             reason: text("把 vₖ³=a 代入上一阶段的 vₖ³conj(vₖ)²=vₖ，得到可替换右侧乘积的等式。", "Substitute vₖ³=a into vₖ³conj(vₖ)²=vₖ to obtain the needed replacement."),
           },
           {
-            statement: text("a(vₖ−b·conj(vₖ)²)=avₖ−bvₖ=(a−b)vₖ。", "a(vₖ−b·conj(vₖ)²)=avₖ−bvₖ=(a−b)vₖ."),
+            statement: text("a(vₖ−b·conj(vₖ)²)\n= avₖ−b(a·conj(vₖ)²)\n= avₖ−bvₖ = (a−b)vₖ。", "a(vₖ−b·conj(vₖ)²)\n= avₖ−b(a·conj(vₖ)²)\n= avₖ−bvₖ = (a−b)vₖ."),
             reason: text("在 a 纤维上，用前一行把 ab·conj(vₖ)² 改写为 bvₖ；指示函数在此处取 1。", "On the a-fiber, replace ab·conj(vₖ)² by bvₖ using the preceding equality. The indicator is one in this case."),
           },
           {
@@ -1110,7 +1120,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
             reason: text("把有限过滤求和改成全指标集上的条件求和，再把公共因子移入；这就是 cubeFiber 与 Finset.sum_filter 的展开。", "Expand cubeFiber using Finset.sum_filter and move the common factor inside, turning the filtered sum into a conditional sum over all indices."),
           },
           {
-            statement: text("右边= a(Σₖvₖ−bΣₖconj(vₖ)²)=a(0−b·0)=0。", "The right side is a(Σₖvₖ−bΣₖconj(vₖ)²)=a(0−b·0)=0."),
+            statement: text("Σₖa(vₖ−b·conj(vₖ)²)\n= aΣₖvₖ−abΣₖconj(vₖ)²\n= a·0−ab·0 = 0。", "Σₖa(vₖ−b·conj(vₖ)²)\n= aΣₖvₖ−abΣₖconj(vₖ)²\n= a·0−ab·0 = 0."),
             reason: text("逐项使用前一阶段的恒等式，再分配有限和；两个独立得到的消失矩在这里汇合。", "Apply the pointwise identity, distribute the finite sum, and use the two independently established vanishing moments."),
           },
           {

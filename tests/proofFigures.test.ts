@@ -7,6 +7,8 @@ import { triangleMatching } from '../docs/web/proofTriangleFigure';
 import { coveringCase, coveringPlotPoint, coveringRegions, type CoverCorner } from '../docs/web/proofCoverFigure';
 import { convexMassModel } from '../docs/web/proofConvexFigure';
 import { separationModel } from '../docs/web/proofSeparationFigure';
+import { fiberModel } from '../docs/web/proofHadamardFigure';
+import { truffetModel, truffetPoint } from '../docs/web/proofTruffetFigure';
 import { snakyFigureModel, snakyForkModel, type SnakyCell } from '../docs/web/proofSnakyFigure';
 import { proofWalkthroughs } from '../docs/web/proofWalkthroughCatalog';
 import { campaignRecords } from '../docs/web/campaignCatalog';
@@ -369,7 +371,170 @@ describe('Snaky certificate entry 7 with two children', () => {
   });
 });
 
-it('attaches the six figures only to their corresponding accepted mathematical steps', () => {
+describe('the original Truffet counterexample and its forced substitutions', () => {
+  const source = fs.readFileSync(path.join(root, 'research/openai-math/TruffetCounterexample/Submission.lean'), 'utf8');
+  function form(text: string): readonly [number, number, number] {
+    const values = text.split(',').map(value => value.includes('⊥') ? Number.NEGATIVE_INFINITY : Number(value.match(/-?\d+/u)![0]));
+    expect(values).toHaveLength(3);
+    return [values[0], values[1], values[2]];
+  }
+  const evaluate = (coefficients: readonly number[], w: readonly number[]) => Math.max(...coefficients.map((coefficient, i) => coefficient + w[i]));
+  const initial = source.slice(source.indexOf('def initial : State'), source.indexOf('def middle : State'));
+  const middle = source.slice(source.indexOf('def middle : State'), source.indexOf('def finalState : State'));
+  const final = source.slice(source.indexOf('def finalState : State'), source.indexOf('def crossRowRestriction'));
+  const originalRows = [...initial.matchAll(/⟨!\[([^\]]+)\], !\[([^\]]+)\]⟩/gu)].map(match => ({ lhs: form(match[1]), rhs: form(match[2]) }));
+  const originalCost = form(initial.match(/cost := !\[([^\]]+)\]/u)![1]);
+  const finalCost = form(final.match(/cost := !\[([^\]]+)\]/u)![1]);
+  const sourcePoint = (name: string) => form(source.match(new RegExp('^def ' + name + ' : Fin 3 → ℝ := !\\[([^\\]]+)\\]$', 'mu'))![1]);
+  const remaining = (block: string) => {
+    const expression = block.match(/remaining := (.+)/u)![1];
+    return expression.includes('True') ? [0, 1] : expression.includes('False') ? [] : [Number(expression.match(/= (\d+)/u)![1])];
+  };
+
+  it('matches the accepted original forms on a normalized grid and the exact feasible-region boundary', () => {
+    const walkthrough = proofWalkthroughs.find(item => item.recordId === 'openai_truffet_counterexample')!;
+    expect(createHash('sha256').update(source).digest('hex')).toBe(walkthrough.proofSha256);
+    expect(originalRows).toHaveLength(2);
+    expect(source).toContain('abbrev Var := Fin 2');
+    for (let i = -16; i <= 24; i++) for (let j = -24; j <= 16; j++) {
+      const w0 = i / 8, w1 = j / 8, w = [w0, w1, 0], model = truffetPoint(w0, w1);
+      const rows = originalRows.map(row => ({ lhs: evaluate(row.lhs, w), rhs: evaluate(row.rhs, w) }));
+      expect(model.coordinates).toEqual(w);
+      expect(model.cost).toBe(evaluate(originalCost, w));
+      for (const [index, actual] of [model.row0, model.row1].entries()) {
+        expect(actual.lhs).toBe(rows[index].lhs);
+        expect(actual.rhs).toBe(rows[index].rhs);
+        expect(actual.holds).toBe(rows[index].rhs <= rows[index].lhs);
+      }
+      expect(model.feasible).toBe(rows.every(row => row.rhs <= row.lhs));
+      expect(model.feasible).toBe(w0 >= Math.max(0, 1 + w1));
+    }
+  });
+
+  it('retains the correct active variables, executed pairs and objectives without treating w₂ as eliminated', () => {
+    const first = source.match(/lemma forced_step_initial : ForcedSingletonStep initial middle (\d) (\d)/u)!.slice(1).map(Number);
+    const second = source.match(/lemma forced_step_middle : ForcedSingletonStep middle finalState (\d) (\d)/u)!.slice(1).map(Number);
+    const firstLower = form(source.match(/lemma lowerForm_initial : lowerForm initial 0 1 = !\[([^\]]+)\]/u)![1]);
+    const secondLower = form(source.match(/lemma lowerForm_middle : lowerForm middle 1 0 = !\[([^\]]+)\]/u)![1]);
+    expect(remaining(initial)).toEqual([0, 1]);
+    expect(remaining(middle)).toEqual([0]);
+    expect(remaining(final)).toEqual([]);
+    for (const stage of ['initial', 'first', 'second', 'compare'] as const) {
+      const model = truffetModel(stage), finished = stage === 'second' || stage === 'compare';
+      const block = stage === 'initial' ? initial : finished ? final : middle;
+      expect(model.stage).toBe(stage);
+      expect(model.state).toBe(stage === 'initial' ? 'initial' : finished ? 'finalState' : 'middle');
+      expect(model.remaining).toEqual(remaining(block));
+      expect(model.executedStep).toEqual(stage === 'first' ? first : stage === 'second' ? second : null);
+      expect(model.fixedW1).toBe(stage === 'initial' ? null : evaluate(firstLower, [0, 0, 0]));
+      expect(model.fixedW0).toBe(finished ? evaluate(secondLower, [0, 0, 0]) : null);
+      expect(model.objective).toBe(finished ? '1+w₂' : 'w₀');
+      expect(model.normalizedObjective).toBe(finished ? '1' : 'w₀');
+      expect(model.showOutput).toBe(finished);
+      expect(model.showBetter).toBe(stage === 'compare');
+    }
+    const firstModel = truffetModel('first');
+    for (let i = -16; i <= 24; i++) {
+      const x = i / 8, w = [x, firstModel.fixedW1!, 0];
+      const originalAtSlice = originalRows.every(row => evaluate(row.rhs, w) <= evaluate(row.lhs, w));
+      expect(truffetPoint(x, firstModel.fixedW1!).feasible).toBe(originalAtSlice);
+      expect(originalAtSlice).toBe(x >= 1);
+    }
+    for (const w2 of [-4, 0.5, 3]) {
+      expect(evaluate(firstLower, [9, 8, w2])).toBe(w2);
+      expect(evaluate(secondLower, [9, 8, w2])).toBe(1 + w2);
+      expect(evaluate(finalCost, [9, 8, w2])).toBe(1 + w2);
+    }
+  });
+
+  it('uses the accepted feasible endpoints, original costs and normalized reference coordinate', () => {
+    const output = sourcePoint('output'), better = sourcePoint('better');
+    expect(output).toEqual([1, 0, 0]);
+    expect(better).toEqual([0, -1, 0]);
+    for (const stage of ['initial', 'first', 'second', 'compare'] as const) {
+      const model = truffetModel(stage);
+      expect(model.output.coordinates).toEqual(output);
+      expect(model.better.coordinates).toEqual(better);
+      expect(model.output.feasible).toBe(true);
+      expect(model.better.feasible).toBe(true);
+      expect(model.output.cost).toBe(evaluate(originalCost, output));
+      expect(model.better.cost).toBe(evaluate(originalCost, better));
+      expect(evaluate(finalCost, output)).toBe(model.output.cost);
+      expect(model.costGap).toBe(evaluate(originalCost, output) - evaluate(originalCost, better));
+      expect(model.costGap).toBeGreaterThan(0);
+    }
+    // Evaluating the original rows still supports a nonzero reference column;
+    // the two receipt endpoints alone were normalized to w₂=0 for comparison.
+    for (const endpoint of [output, better]) for (const shift of [-4, 0.5, 3]) {
+      const w = endpoint.map(value => value + shift), actual = truffetPoint(w[0], w[1], w[2]);
+      expect(actual.coordinates).toEqual(w);
+      expect(actual.feasible).toBe(originalRows.every(row => evaluate(row.rhs, w) <= evaluate(row.lhs, w)));
+      expect(actual.feasible).toBe(true);
+      expect(actual.cost).toBe(evaluate(originalCost, w));
+    }
+  });
+});
+
+describe('the pointwise cubic-fiber selector', () => {
+  it('anchors the general symbolic cases and their sum to the accepted proof without prescribing fiber sizes', () => {
+    const source = fs.readFileSync(path.join(root, 'research/openai-math/HadamardCubeFiber/Submission.lean'), 'utf8');
+    const walkthrough = proofWalkthroughs.find(item => item.recordId === 'openai_hadamard_cube_fiber')!;
+    expect(createHash('sha256').update(source).digest('hex')).toBe(walkthrough.proofSha256);
+    const theorem = source.slice(source.indexOf('lemma rowRatio_cubeFiber_sum_zero'), source.indexOf(':= by', source.indexOf('lemma rowRatio_cubeFiber_sum_zero')));
+    expect(theorem).toContain('(a b : ℂ) (hne : a ≠ b)');
+    expect(theorem).toContain('(hab : ∀ k, rowRatio H i j k ^ 3 = a ∨ rowRatio H i j k ^ 3 = b)');
+    expect(theorem).not.toMatch(/\.card|cardinality|Nonempty/u);
+    const pointwise = source.slice(source.indexOf('    have hpoint'), source.indexOf('    have hsum'));
+    expect(pointwise).toContain('(if v k ^ 3 = c then (c - d) * v k else 0)');
+    expect(pointwise).toContain('c * (v k - d * (star (v k)) ^ 2)');
+    const evidence = walkthrough.steps.find(step => step.id === 'build-the-fiber-indicator')!.evidence.source!;
+    const excerpt = source.split('\n').slice(evidence.line - 1, evidence.endLine).join('\n');
+    expect(excerpt).toContain('have hpoint');
+    expect(excerpt).toContain('rcases hab k with ha | hb');
+    // Stages change the explanation, not membership; the model never fixes
+    // how many of the six actual row ratios belong to either fiber.
+    for (const stage of ['unit', 'select', 'sum'] as const) for (const branch of ['a', 'b'] as const) {
+      const state = fiberModel(stage, branch);
+      expect(state.stage).toBe(stage);
+      expect(state.branch).toBe(branch);
+      expect(state.inFiber).toBe(branch === 'a');
+      expect(state.indicator).toBe(Number(state.inFiber));
+    }
+  });
+
+  it('selects exactly the a branch for independent unit-circle cube values and each of their three roots', () => {
+    type Complex = readonly [number, number];
+    const polar = (angle: number): Complex => [Math.cos(angle), Math.sin(angle)];
+    const multiply = ([ar, ai]: Complex, [br, bi]: Complex): Complex => [ar * br - ai * bi, ar * bi + ai * br];
+    const subtract = ([ar, ai]: Complex, [br, bi]: Complex): Complex => [ar - br, ai - bi];
+    const close = (actual: Complex, expected: Complex) => {
+      expect(actual[0]).toBeCloseTo(expected[0], 12);
+      expect(actual[1]).toBeCloseTo(expected[1], 12);
+    };
+    const angles = [0, Math.PI / 7, Math.PI / 3, Math.PI / 2, Math.PI, 1.83 * Math.PI];
+    // These scalar cases test the accepted hpoint identity. They are not a
+    // fabricated Hadamard matrix or an assumed three-and-three row partition.
+    for (const angleA of angles) for (const angleB of angles) {
+      if (angleA === angleB) continue;
+      const a = polar(angleA), b = polar(angleB);
+      for (const branch of ['a', 'b'] as const) for (let rootIndex = 0; rootIndex < 3; rootIndex++) {
+        const v = polar(((branch === 'a' ? angleA : angleB) + 2 * Math.PI * rootIndex) / 3);
+        const conjugate: Complex = [v[0], -v[1]], q = multiply(conjugate, conjugate);
+        close(multiply(v, conjugate), [1, 0]);
+        close(multiply(multiply(v, v), v), branch === 'a' ? a : b);
+        close(multiply(branch === 'a' ? a : b, q), v);
+        const actual = multiply(a, subtract(v, multiply(b, q)));
+        for (const stage of ['unit', 'select', 'sum'] as const) {
+          const indicator = fiberModel(stage, branch).indicator;
+          const selected = multiply([indicator, 0], multiply(subtract(a, b), v));
+          close(actual, selected);
+        }
+      }
+    }
+  });
+});
+
+it('attaches the eight figures only to their corresponding accepted mathematical steps', () => {
   const attached = proofWalkthroughs.flatMap(walkthrough => walkthrough.steps.filter(step => step.figure)
     .map(step => [walkthrough.recordId, step.id, step.figure]));
   expect(attached).toEqual([
@@ -377,8 +542,10 @@ it('attaches the six figures only to their corresponding accepted mathematical s
     ['openai_triangle_face', 'take-the-slice-of-the-hull', 'convex-mass-section'],
     ['openai_plane_coloring', 'cover-with-four-corner-candidates', 'four-corner-cover'],
     ['openai_plane_coloring', 'exclude-distinct-centers-and-finish', 'color-separation'],
+    ['openai_truffet_counterexample', 'force-the-second-elimination', 'truffet-elimination'],
     ['openai_snaky_certificate', 'reconstruct-the-fork', 'snaky'],
     ['openai_snaky_certificate', 'reconstruct-two-children', 'snaky-fork'],
+    ['openai_hadamard_cube_fiber', 'build-the-fiber-indicator', 'hadamard-fiber'],
   ]);
   const records = campaignRecords(root).records;
   for (const [recordId] of attached) {

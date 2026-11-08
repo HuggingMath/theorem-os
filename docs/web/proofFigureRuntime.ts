@@ -4,6 +4,8 @@ import { mountSnakyFigure, mountSnakyForkFigure } from './proofSnakyFigure';
 import { mountTriangleFigure } from './proofTriangleFigure';
 import { mountConvexFigure } from './proofConvexFigure';
 import { mountSeparationFigure } from './proofSeparationFigure';
+import { mountHadamardFigure } from './proofHadamardFigure';
+import { mountTruffetFigure } from './proofTruffetFigure';
 
 const runtime: ProofFigureRuntime = {
   mount(root, signal) {
@@ -14,6 +16,8 @@ const runtime: ProofFigureRuntime = {
       else if (figure.dataset.proofFigure === 'color-separation') mountSeparationFigure(figure, signal);
       else if (figure.dataset.proofFigure === 'snaky') mountSnakyFigure(figure, signal);
       else if (figure.dataset.proofFigure === 'snaky-fork') mountSnakyForkFigure(figure, signal);
+      else if (figure.dataset.proofFigure === 'truffet-elimination') mountTruffetFigure(figure, signal);
+      else if (figure.dataset.proofFigure === 'hadamard-fiber') mountHadamardFigure(figure, signal);
     });
   },
 };
