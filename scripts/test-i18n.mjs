@@ -477,7 +477,7 @@ try {
           && bounds && bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth;
       });
       await assertGeometryState(page, selectedId, 'process');
-      await page.locator('[data-action="back-list"]').last().click();
+      await page.locator('#inspector .detail-topline [data-action="back-list"]').click();
       await selectedRowReady(page);
       await assertGeometryState(page, selectedId, 'overview');
       assert.deepEqual(await cjkIn(page), [], `English mobile archive navigation at ${width}px`);
