@@ -22,6 +22,8 @@ export function withProofWalkthrough(record: Pick<ArchiveRecord, 'id' | 'campaig
   const ids = new Set<string>();
   for (const step of walkthrough.steps) {
     if (ids.has(step.id) || !/^[a-z0-9-]+$/u.test(step.id)) fail(`step ${step.id}`);
+    for (const dependency of step.dependsOn) if (!ids.has(dependency)) fail(`${step.id}/dependency ${dependency}`);
+    if (!step.derivation.length) fail(`${step.id}/derivation`);
     ids.add(step.id);
     const excerpt = step.evidence.source;
     if (excerpt.name !== 'Submission.lean' || !Number.isInteger(excerpt.line) || !Number.isInteger(excerpt.endLine)

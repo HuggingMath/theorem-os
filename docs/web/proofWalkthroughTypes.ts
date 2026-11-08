@@ -3,12 +3,19 @@ export interface Localized {
   en: string;
 }
 
+export interface ProofDerivationLine {
+  statement: Localized;
+  reason: Localized;
+}
+
 export interface ProofWalkthroughStep {
   id: string;
   title: Localized;
   given: Localized;
   claim: Localized;
   because: Localized;
+  dependsOn: string[];
+  derivation: ProofDerivationLine[];
   next: Localized;
   evidence: {
     theorems: string[];

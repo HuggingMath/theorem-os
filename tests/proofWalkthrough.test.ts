@@ -37,6 +37,11 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
         for (const locale of ['zh', 'en'] as const) for (const field of ['title', 'given', 'claim', 'because', 'next'] as const) {
           expect(step[field][locale].trim(), record.id + '/' + step.id + '/' + field).not.toBe('');
         }
+        expect(step.derivation.length).toBeGreaterThanOrEqual(2);
+        for (const line of step.derivation) for (const locale of ['zh', 'en'] as const) {
+          expect(line.statement[locale].trim(), record.id + '/' + step.id + '/statement').not.toBe('');
+          expect(line.reason[locale].trim(), record.id + '/' + step.id + '/reason').not.toBe('');
+        }
         steps++;
       }
     }
@@ -53,6 +58,12 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
       const source = process.sources![walkthrough.proofSha256];
       for (const step of walkthrough.steps) {
         for (const field of ['given', 'claim', 'because', 'next'] as const) expect(output).toContain(escaped(step[field][locale]));
+        for (const [index, line] of step.derivation.entries()) {
+          expect(output).toContain('data-proof-calculation="' + step.id + ':' + (index + 1) + '"');
+          expect(output).toContain(escaped(line.statement[locale]));
+          expect(output).toContain(escaped(line.reason[locale]));
+        }
+        for (const dependency of step.dependsOn) expect(output).toContain('data-proof-dependency="' + dependency + '" data-global-scroll="proof-derivation-' + dependency + '"');
         const excerpt = step.evidence.source;
         for (const line of source.code.split('\n').slice(excerpt.line - 1, excerpt.endLine)) if (line) expect(output).toContain(escaped(line));
         expect(output).toContain('data-proof-source-lines="' + excerpt.line + ':' + excerpt.endLine + '"');
@@ -75,13 +86,27 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
     expect(() => withProofWalkthrough(record, changed)).toThrow('checked source');
   });
 
+  it('rejects dependencies that cannot lead back to an earlier result', () => {
+    const record = campaignRecords(root).records[0];
+    const walkthrough = proofWalkthroughs.find(item => item.recordId === record.id)!;
+    const first = walkthrough.steps[0], dependencies = first.dependsOn;
+    try {
+      for (const dependency of [first.id, walkthrough.steps[1].id, 'missing-result']) {
+        first.dependsOn = [dependency];
+        expect(() => withProofWalkthrough(record, record.process!)).toThrow('dependency ' + dependency);
+      }
+    } finally {
+      first.dependsOn = dependencies;
+    }
+  });
+
   it('versions the exact lazy process script and changes its URL when the derivation changes', () => {
     const record = campaignRecords(root).records[0];
     const catalog = { schema: 'theoremos.public-archive.v1' as const, repository: '', archiveRevision: '', snapshotAt: '', records: [record] };
     const before = archiveIndex(catalog).records[0].processSummary!.version;
     expect(before).toBe(hash(archiveProcessScript(record)).slice(0, 16));
     const next = structuredClone(catalog);
-    next.records[0].process!.walkthrough!.steps[0].because.zh += ' 补充推导。';
+    next.records[0].process!.walkthrough!.steps[0].derivation[0].statement.zh += ' 补充推导。';
     expect(archiveIndex(next).records[0].processSummary!.version).not.toBe(before);
   });
 });

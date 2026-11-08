@@ -212,6 +212,9 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
       assert.equal(await row.locator('.proof-walkthrough-claim > p').textContent(), step.claim[locale]);
       assert.equal(await row.locator('.proof-walkthrough-reason > p').textContent(), step.because[locale]);
       assert.equal(await row.locator('.proof-walkthrough-next > p').textContent(), step.next[locale]);
+      assert.deepEqual(await row.locator('.proof-walkthrough-statement').allTextContents(), step.derivation.map(line => line.statement[locale]));
+      assert.deepEqual(await row.locator('.proof-walkthrough-justification').allTextContents(), step.derivation.map(line => line.reason[locale]));
+      assert.deepEqual(await row.locator('[data-proof-dependency]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofDependency)), step.dependsOn);
       const source = record.process!.sources![walkthrough.proofSha256];
       assert.deepEqual(await row.locator('.proof-walkthrough-source > ol code').allTextContents(),
         source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).map(line => line || ' '));
@@ -301,6 +304,13 @@ try {
       const derivation = page.locator(attr('data-proof-derivation', selectedStep.id));
       assert.equal(await derivation.locator('h5').evaluate(element => element === document.activeElement), true);
       assert.equal(page.url(), beforeStep);
+      const dependency = selectedStep.dependsOn[0];
+      assert.ok(dependency, 'The counting argument uses an earlier result');
+      const dependencyButton = derivation.locator(attr('data-proof-dependency', dependency));
+      await dependencyButton.focus(); await dependencyButton.press('Enter');
+      assert.equal(await page.locator(attr('data-proof-derivation', dependency) + ' h5').evaluate(element => element === document.activeElement), true);
+      assert.equal(page.url(), beforeStep, 'Reading a prerequisite preserves the selected archived run');
+      await routeStep.click();
       await shot(page, 'derivation-' + locale + '-' + width + '-reason.png');
       await derivation.locator('.proof-walkthrough-source > summary').focus();
       await derivation.locator('.proof-walkthrough-source > summary').press('Enter');
@@ -416,6 +426,21 @@ try {
   mark('all 16 problems and all ' + runs + ' saved runs preserve ' + deliveries + ' deliveries, ' + savedChecks
     + ' checks, full objectives, true DAGs, chronological stages, inherited markers and run-bound acceptance');
 
+  for (const locale of ['zh', 'en'] as const) {
+    const narrow = await browser.newContext({ viewport: { width: 320, height: 844 }, reducedMotion: 'reduce' });
+    await observe(narrow, locale + ' all derivations at 320px');
+    const narrowPage = await narrow.newPage(); active = narrowPage;
+    try {
+      for (const record of catalog.records) {
+        current = locale + '/320/' + record.id;
+        await enter(narrowPage, record, locale);
+        await verifyWorkflow(narrowPage, record, finalRun(record), locale);
+        await fits(narrowPage, current + ': every derivation line and prerequisite');
+      }
+      mark(locale + ': all 16 proof derivations, line-by-line explanations and dependencies fit a 320px screen');
+    } finally { await narrow.close(); active = undefined; }
+  }
+
   current = 'cache-enabled normal entry and run refresh';
   const cached = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
   await observe(cached, current, true); const cachedPage = await cached.newPage(); active = cachedPage;
@@ -438,6 +463,8 @@ try {
   }
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
     checks, screenshots, viewportEvidence, records: catalog.records.length, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
+    derivationLines: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.derivation.length, 0), 0),
+    proofDependencies: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.dependsOn.length, 0), 0),
     assetVersions, cacheAssets, processAssetVersions, processAssetRequests, paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
     failureExample: { record: failure.record.id, run: failure.run.runId, check: failure.check.id },
     revisionExample: { record: revision.record.id, run: revision.run.runId, before: revision.before.id, after: revision.check.id } }, null, 2) + '\n');

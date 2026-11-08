@@ -1,5 +1,7 @@
 import type { ProofWalkthrough } from './proofWalkthroughTypes';
 
+const t = (zh: string, en: string) => ({ zh, en });
+
 export const geometryProofWalkthroughs: ProofWalkthrough[] = [
   {
     recordId: 'openai_brennan_sharp',
@@ -24,6 +26,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '商法则把导数化成上述有理式。若 k(z)=k(w)，清分母并因式分解得 (z−w)(1−zw)=0。第一因子为零即 z=w；第二因子为零则 |z||w|=1，与 |z|,|w|<1 矛盾。导数公式也给出 D 内处处可微，代入 0 得两个归一化等式。',
           en: 'The quotient rule gives the displayed derivative. If k(z)=k(w), clearing denominators and factoring yields (z−w)(1−zw)=0. The first factor gives z=w; the second would give |z||w|=1, impossible inside D. The derivative formula also gives differentiability throughout D, and evaluation at zero supplies the two normalization equations.',
         },
+        dependsOn: [],
+        derivation: [
+          { statement: t("k′(z)=[(1−z)²+2z(1−z)]/(1−z)⁴=(1+z)/(1−z)³。", "k′(z)=[(1−z)²+2z(1−z)]/(1−z)⁴=(1+z)/(1−z)³."), reason: t("商法则先对分子 z 和分母 (1−z)² 求导，再约去一个 1−z；D 内 z≠1，故约分合法。", "Apply the quotient rule to z and (1−z)², then cancel one factor 1−z, which is nonzero on D.") },
+          { statement: t("k(z)=k(w) ⇒ z(1−w)²=w(1−z)² ⇒ (z−w)(1−zw)=0。", "k(z)=k(w) implies z(1−w)²=w(1−z)² and then (z−w)(1−zw)=0."), reason: t("两处分母都非零，可以交叉相乘；展开后一次项抵消，余式恰好分解为这两个因子。", "Both denominators are nonzero. Cross-multiply and expand: the first-order terms cancel, leaving these two factors.") },
+          { statement: t("|zw|=|z||w|<1，因此 1−zw≠0，只能 z=w。", "Since |zw|=|z||w|<1, one has 1−zw≠0 and therefore z=w."), reason: t("第二因子为零会迫使 |zw|=1，与两点都在开单位圆盘内矛盾，得到单射性。", "Vanishing of the second factor would force |zw|=1, contradicting that both points lie in the open unit disk. This proves injectivity.") },
+          { statement: t("k(0)=0，k′(0)=1；并且 D 内 k′(z)≠0。", "k(0)=0 and k′(0)=1; also k′(z)≠0 throughout D."), reason: t("代入导数公式得到归一化；导数为零只可能在 z=−1，而该点不在 D 内。这也为后续逆函数求导准备了非零条件。", "Substitution gives normalization. The derivative could vanish only at z=−1, outside D; this supplies the nonvanishing condition for later inverse differentiation.") },
+        ],
         next: { zh: '接着建立一个可重复使用的边界发散模型，分别应用到边界点 +1 与 −1。', en: 'Build a reusable boundary-divergence model, to be applied at +1 and −1.' },
         evidence: {
           theorems: ['OAI.Brennan.Sharp.schlicht_hasDerivAt_koebeMap', 'OAI.Brennan.Sharp.koebe_schlicht'],
@@ -40,6 +49,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '在 Bₙ 上 |z|<1−rₙ+rₙ/4<1，且 |z−a|≤5rₙ/4。若 n<m，则 rₘ≤rₙ/2，中心距 rₙ−rₘ≥rₙ/2，大于半径和≤3rₙ/8，所以圆盘不交。每个圆盘的面积为 π(rₙ/4)²，积分至少 c(5rₙ/4)⁻²π(rₙ/4)²=cπ/25；把无穷多个固定正贡献相加，积分必发散。',
           en: 'On Bₙ, |z|<1−rₙ+rₙ/4<1 and |z−a|≤5rₙ/4. For n<m, rₘ≤rₙ/2, so center distance rₙ−rₘ≥rₙ/2 exceeds the sum of radii, at most 3rₙ/8. Each ball has area π(rₙ/4)² and integral at least c(5rₙ/4)⁻²π(rₙ/4)²=cπ/25. Summing infinitely many disjoint, fixed positive contributions forces divergence.',
         },
+        dependsOn: [],
+        derivation: [
+          { statement: t("z∈Bₙ ⇒ |z|<1−rₙ+rₙ/4=1−3rₙ/4<1，故 Bₙ⊆D。", "If z∈Bₙ, then |z|<1−rₙ+rₙ/4=1−3rₙ/4<1, so Bₙ⊆D."), reason: t("圆心模长为 1−rₙ，半径为 rₙ/4，rₙ=2⁻ⁿ∈(0,1]；用三角不等式即可。", "The center has modulus 1−rₙ, the radius is rₙ/4, and rₙ=2⁻ⁿ∈(0,1]. Apply the triangle inequality.") },
+          { statement: t("z∈Bₙ ⇒ |z−a|≤|z−(1−rₙ)a|+rₙ≤5rₙ/4。", "For z∈Bₙ, |z−a|≤|z−(1−rₙ)a|+rₙ≤5rₙ/4."), reason: t("圆心距边界点 a 恰好为 rₙ，所以整个小圆盘都落在以 a 为中心、半径 5rₙ/4 的范围内。", "The center is exactly rₙ from the boundary point a, placing the whole small ball within distance 5rₙ/4 of a.") },
+          { statement: t("n<m ⇒ rₘ≤rₙ/2；中心距 rₙ−rₘ≥rₙ/2>rₙ/4+rₘ/4。", "If n<m, then rₘ≤rₙ/2, and center distance rₙ−rₘ≥rₙ/2>rₙ/4+rₘ/4."), reason: t("半径和至多为 3rₙ/8，小于中心距，因此任意两个圆盘都不相交。", "The sum of radii is at most 3rₙ/8, strictly below the center distance, proving pairwise disjointness.") },
+          { statement: t("∫_{Bₙ}F≥c(5rₙ/4)⁻²·π(rₙ/4)²=cπ/25>0；故 ∫_D F≥Σₙcπ/25=∞。", "∫_{Bₙ}F≥c(5rₙ/4)⁻²·π(rₙ/4)²=cπ/25>0, hence ∫_D F≥Σₙcπ/25=∞."), reason: t("半径缩小带来的面积因子 rₙ² 恰被奇性 rₙ⁻² 抵消；可测非负函数在不交集合上的积分可以相加。", "The area factor rₙ² exactly cancels the singular factor rₙ⁻². Integrals of a measurable nonnegative function add over disjoint sets.") },
+        ],
         next: { zh: '在 a=+1 附近把 |k′|²ᐟ³ 与这个临界 |z−1|⁻² 模型比较。', en: 'Near a=+1, compare |k′|²ᐟ³ with the critical model |z−1|⁻².' },
         evidence: {
           theorems: ['OAI.Brennan.Sharp.lintegral_eq_top_of_ball_ge', 'OAI.Brennan.Sharp.lintegral_norm_sub_unit_top'],
@@ -56,6 +72,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '在 U=D∩{|z−1|≤1/2} 上，反三角不等式给出 |1+z|≥2−|1−z|≥3/2≥1，因此 |k′|²ᐟ³≥|z−1|⁻²。在 D 中 U 以外，模型函数 |z−1|⁻²≤4，而 D 面积有限，所以这部分积分有限。总模型积分无穷，故 U 上模型积分无穷；再用逐点比较，|k′|²ᐟ³ 的圆盘积分也无穷。',
           en: 'On U=D∩{|z−1|≤1/2}, the reverse triangle inequality gives |1+z|≥2−|1−z|≥3/2≥1, hence |k′|²ᐟ³≥|z−1|⁻². On D outside U, the model is at most four and D has finite area, so that part has finite integral. Its total integral is infinite, forcing the integral over U to be infinite. Pointwise comparison then gives the claimed moment divergence.',
         },
+        dependsOn: ["establish-the-koebe-map-and-inverse", "sum-disjoint-boundary-balls"],
+        derivation: [
+          { statement: t("U=D∩{|z−1|≤1/2} 上，|1+z|≥2−|1−z|≥3/2≥1。", "On U=D∩{|z−1|≤1/2}, |1+z|≥2−|1−z|≥3/2≥1."), reason: t("将 2 写成 (1+z)+(1−z)，使用反三角不等式，得到导数分子远离零的具体下界。", "Write 2=(1+z)+(1−z) and use the reverse triangle inequality to bound the derivative numerator away from zero.") },
+          { statement: t("|k′(z)|²ᐟ³=|1+z|²ᐟ³/|1−z|²≥|z−1|⁻²，在 U 上成立。", "|k′(z)|²ᐟ³=|1+z|²ᐟ³/|1−z|²≥|z−1|⁻² on U."), reason: t("导数分母的三次幂乘上 2/3 得到临界二次幂；上一行保证分子的 2/3 次幂至少为一。", "The cubic denominator raised to 2/3 gives the critical inverse-square power, while the numerator power is at least one by the preceding bound.") },
+          { statement: t("D∖U 上 |z−1|⁻²≤4，所以 ∫_{D∖U}|z−1|⁻²≤4·area(D)<∞。", "On D∖U, |z−1|⁻²≤4, so ∫_{D∖U}|z−1|⁻²≤4·area(D)<∞."), reason: t("模型的圆盘总积分无穷，而远离 +1 的部分积分有限，因此无穷只能来自 U。", "The model has infinite integral on the disk but finite integral away from +1, so its integral on U must be infinite.") },
+          { statement: t("M(2/3)≥∫_U|k′|²ᐟ³≥∫_U|z−1|⁻²=∞。", "M(2/3)≥∫_U|k′|²ᐟ³≥∫_U|z−1|⁻²=∞."), reason: t("先限制非负积分到 U，再使用已建立的逐点比较，便把模型的发散传给面积矩。", "Restrict the nonnegative integral to U, then apply the pointwise comparison to transfer the model divergence to the moment.") },
+        ],
         next: { zh: '另一个指数 −2 对应导数在 −1 的零点，改在 a=−1 的圆盘上取下界。', en: 'The exponent −2 instead detects the derivative’s zero at −1; estimate it on the balls with a=−1.' },
         evidence: {
           theorems: ['OAI.Brennan.Sharp.two_thirds_pointwise_bound_near_one', 'OAI.Brennan.Sharp.areaMoment_two_thirds_top'],
@@ -72,6 +95,12 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '由 2=|(1−z)+(1+z)|≤|1−z|+|1+z| 及 |1+z|≤5/4，得到 |1−z|≥3/4。因此 |k′|⁻²≥(3/4)⁶(5rₙ/4)⁻²。第 2 步的发散引理可取固定 c=(3/4)⁶>0，每个不交圆盘贡献至少 cπ/25，故负端点面积矩无穷。',
           en: 'Since 2=|(1−z)+(1+z)|≤|1−z|+|1+z| and |1+z|≤5/4, we have |1−z|≥3/4. Therefore |k′|⁻²≥(3/4)⁶(5rₙ/4)⁻². Apply Step 2 with the fixed positive constant c=(3/4)⁶: every disjoint ball contributes at least cπ/25, forcing this moment to be infinite.',
         },
+        dependsOn: ["establish-the-koebe-map-and-inverse", "sum-disjoint-boundary-balls"],
+        derivation: [
+          { statement: t("在朝向 −1 的 Bₙ 上，|1+z|≤5rₙ/4≤5/4，故 |1−z|≥2−5/4=3/4。", "On the balls directed toward −1, |1+z|≤5rₙ/4≤5/4, hence |1−z|≥2−5/4=3/4."), reason: t("rₙ≤1 给出统一常数界；2≤|1−z|+|1+z| 将它转成另一个因子的下界。", "Use rₙ≤1 for a uniform bound, then 2≤|1−z|+|1+z| to bound the other factor below.") },
+          { statement: t("|k′|⁻²=|1−z|⁶/|1+z|²≥(3/4)⁶(5rₙ/4)⁻²。", "|k′|⁻²=|1−z|⁶/|1+z|²≥(3/4)⁶(5rₙ/4)⁻²."), reason: t("导数公式取负二次幂会交换分子分母；分子用统一正下界，分母用每个圆盘上的上界。", "Taking the negative second power of the derivative swaps numerator and denominator. Use the uniform lower bound upstairs and the ball-wise upper bound downstairs.") },
+          { statement: t("取 c=(3/4)⁶，则每个 Bₙ 的积分至少为 cπ/25；因此 M(−2)=∞。", "With c=(3/4)⁶, every Bₙ contributes at least cπ/25; therefore M(−2)=∞."), reason: t("c 严格为正且不随 n 改变，完全满足不交圆盘发散模型的假设。", "The constant c is strictly positive and independent of n, exactly meeting the disjoint-ball divergence criterion.") },
+        ],
         next: { zh: '两个面积矩都已发散；接下来通过逆导数公式和实 Jacobian 把它们转成逆映射的积分。', en: 'With both moments divergent, use the inverse derivative and real Jacobian to transfer them to integrals of the inverse map.' },
         evidence: {
           theorems: ['OAI.Brennan.Sharp.neg_two_uniform_bound', 'OAI.Brennan.Sharp.areaMoment_neg_two_top'],
@@ -88,6 +117,12 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '单射性给出 g(k(z))=z，局部逆函数求导得到 g′(k(z))=(1−z)³/(1+z)。复数乘法 k′=u+iv 在实平面上的矩阵为 ((u,−v),(v,u))，行列式 u²+v²=|k′|²。相乘后指数相减：p=4 时为 2−4=−2；p=4/3 时为 2−4/3=2/3，正好是前两步已发散的面积矩。',
           en: 'Injectivity gives g(k(z))=z, and the local inverse theorem gives g′(k(z))=(1−z)³/(1+z). Multiplication by k′=u+iv has real matrix ((u,−v),(v,u)), whose determinant is u²+v²=|k′|². Multiplying powers gives exponent 2−p: −2 for p=4 and 2/3 for p=4/3, exactly the two divergent moments above.',
         },
+        dependsOn: ["establish-the-koebe-map-and-inverse"],
+        derivation: [
+          { statement: t("g(k(z))=z ⇒ g′(k(z))·k′(z)=1 ⇒ g′(k(z))=(1−z)³/(1+z)。", "g(k(z))=z implies g′(k(z))·k′(z)=1, hence g′(k(z))=(1−z)³/(1+z)."), reason: t("单射给出逆函数，D 内 k′≠0 允许使用局部逆函数求导并除以 k′。", "Injectivity supplies the inverse, and k′≠0 on D permits local inverse differentiation and division by k′.") },
+          { statement: t("若 k′=u+iv，则 Dℝk 的矩阵为 ((u,−v),(v,u))，行列式 u²+v²=|k′|²。", "If k′=u+iv, the matrix of Dℝk is ((u,−v),(v,u)), with determinant u²+v²=|k′|²."), reason: t("复可微函数的实导数是复数乘法；直接计算这个 2×2 实矩阵的行列式，得到面积换元所需权重。", "The real derivative of a complex differentiable map is complex multiplication. Computing this real 2×2 determinant gives the area-change weight.") },
+          { statement: t("|det Dℝk|·|g′∘k|ᵖ=|k′|²·|k′|⁻ᵖ=|k′|²⁻ᵖ；p=4 得 −2，p=4/3 得 2/3。", "|det Dℝk|·|g′∘k|ᵖ=|k′|²·|k′|⁻ᵖ=|k′|²⁻ᵖ; p=4 gives −2, and p=4/3 gives 2/3."), reason: t("k′ 的模长为正，实数幂的乘法与逆幂运算合法；这两次代入把逆导数问题准确接到已知发散指数。", "Since |k′|>0, real-power multiplication and inversion apply. These substitutions match the inverse-derivative problems to the established divergent exponents.") },
+        ],
         next: { zh: '将这些逐点权重等式放进面积换元公式，证明两个逆导数积分均为无穷。', en: 'Insert these pointwise weights into the area change-of-variable formula to obtain two infinite inverse-derivative integrals.' },
         evidence: {
           theorems: ['OAI.Brennan.Sharp.deriv_koebeInverse', 'OAI.Brennan.Sharp.inv43_jacobian_weight_mul', 'OAI.Brennan.Sharp.inv4_jacobian_weight_mul'],
@@ -105,6 +140,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '实二维面积换元公式给出 ∫_{k(D)}|g′(w)|ᵖdA(w)=∫_D|det Dℝk(z)|·|g′(k(z))|ᵖdA(z)=M(2−p)。p=4、4/3 时右端分别为 M(−2)、M(2/3)，均是无穷。若对应函数 IntegrableOn，其非负积分必须有限，与无穷矛盾。最终定理把单叶归一化、两次面积矩发散和两次不可积性组成定义所需的五个合取项。',
           en: 'The real two-dimensional change-of-variable formula gives ∫_{k(D)}|g′(w)|ᵖdA(w)=∫_D|det Dℝk(z)|·|g′(k(z))|ᵖdA(z)=M(2−p). For p=4 and 4/3, these are M(−2) and M(2/3), both infinite. IntegrableOn would make the nonnegative integral finite, a contradiction. The final theorem combines normalization and univalence, two infinite moments and two nonintegrability results into the five required conjuncts.',
         },
+        dependsOn: ["make-the-positive-endpoint-diverge", "make-the-negative-endpoint-diverge", "compute-the-inverse-jacobian-weights"],
+        derivation: [
+          { statement: t("∫_{k(D)}|g′(w)|ᵖdA(w)=∫_D|det Dℝk(z)|·|g′(k(z))|ᵖdA(z)。", "∫_{k(D)}|g′(w)|ᵖdA(w)=∫_D|det Dℝk(z)|·|g′(k(z))|ᵖdA(z)."), reason: t("k 在可测开圆盘内可微且单射，满足实二维非负积分换元公式的条件。", "The map is differentiable and injective on the measurable open disk, meeting the real two-dimensional change-of-variable assumptions for nonnegative integrals.") },
+          { statement: t("p=4 时右端为 M(−2)=∞；p=4/3 时为 M(2/3)=∞。", "For p=4 the right side is M(−2)=∞; for p=4/3 it is M(2/3)=∞."), reason: t("代入上一步的 Jacobian 权重等式，再分别使用 −1 和 +1 附近的发散结论。", "Substitute the Jacobian-weight identity and apply the divergence results at −1 and +1 respectively.") },
+          { statement: t("若 |g′|ᵖ 在 k(D) 可积，则其非负积分有限，与上面的无穷值矛盾。", "If |g′|ᵖ were integrable on k(D), its nonnegative integral would be finite, contradicting the infinite value above."), reason: t("这一步由积分等式推出的是两种指定幂的不可积性，无须假定它们存在有限的普通积分。", "The integral equality proves nonintegrability of the two specified powers without assuming either ordinary integral is finite.") },
+          { statement: t("sharp_endpoints=(Schlicht，M(−2)=∞，M(2/3)=∞，¬Integrable |g′|⁴，¬Integrable |g′|⁴ᐟ³)。", "sharp_endpoints combines Schlicht, M(−2)=∞, M(2/3)=∞, nonintegrability of |g′|⁴, and nonintegrability of |g′|⁴ᐟ³."), reason: t("五项结论各由前面的对应支线提供，将它们按原目标的合取顺序组装即可。", "The earlier branches provide the five conclusions, which are assembled in the conjunction order required by the target.") },
+        ],
         next: { zh: '完成 Koebe 映射的端点反例结论：两个给定面积矩发散，逆映射的两个给定幂不可积。', en: 'This completes the Koebe endpoint result: the two specified area moments diverge and the two specified inverse-derivative powers are nonintegrable.' },
         evidence: {
           theorems: ['OAI.Brennan.Sharp.inv_deriv_four_not_integrable', 'OAI.Brennan.Sharp.inv_deriv_four_thirds_not_integrable', 'OAI.Brennan.Sharp.sharp_endpoints'],
@@ -141,6 +183,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: 'Cg(x,y) 是所有包含 (x,y) 的同余之交，故 Cg(x,y)≤θ 当且仅当 x θ y。交换 x,y 不改变这个交，底同余是相等关系。包含 (x,z)、(z,y) 的 join 由传递性包含 (x,y)，给出三角界。若 a≰b，则 e(a) 中存在 e(b) 不含的点对；它的主同余在 e(a) 以下却不在 e(b) 以下。经 e⁻¹ 拉回即得四条颜色性质。',
           en: 'Cg(x,y) intersects all congruences containing (x,y), so Cg(x,y)≤θ iff x θ y. Swapping the pair preserves this intersection, and the bottom congruence is equality. The join containing (x,z) and (z,y) contains (x,y) by transitivity. If a≰b, some pair belongs to e(a) but not e(b); its principal congruence lies below e(a) but not e(b). Applying e⁻¹ gives the four color properties.',
         },
+        dependsOn: [],
+        derivation: [
+          { statement: t("Cg(x,y)≤θ ⇔ x θ y；定义 c(x,y)=e⁻¹(Cg(x,y))。", "Cg(x,y)≤θ iff x θ y; define c(x,y)=e⁻¹(Cg(x,y))."), reason: t("主同余是所有包含该点对的同余之交；它包含自己的生成点对，并且小于每个包含它的同余。", "The principal congruence intersects all congruences containing the pair. It contains its generating pair and lies below every congruence containing that pair.") },
+          { statement: t("Cg(x,y)=Cg(y,x)，且 Cg(x,y)=⊥ ⇔ x=y。", "Cg(x,y)=Cg(y,x), and Cg(x,y)=⊥ iff x=y."), reason: t("每个同余都是对称关系，所以交换生成点对不改变最小同余；底同余恰是相等关系。", "Every congruence is symmetric, so swapping the generating pair leaves the least congruence unchanged. The bottom congruence is equality.") },
+          { statement: t("Cg(x,y)≤Cg(x,z)∨Cg(z,y)，因此 c(x,y)≤c(x,z)∨c(z,y)。", "Cg(x,y)≤Cg(x,z)∨Cg(z,y), hence c(x,y)≤c(x,z)∨c(z,y)."), reason: t("右边同余同时包含 x∼z 和 z∼y，传递性给出 x∼y；再用主同余最小性及序同构保持 join。", "The congruence on the right contains x∼z and z∼y, hence x∼y by transitivity. Use the least-congruence property and preservation of joins by the order isomorphism.") },
+          { statement: t("a≰b ⇒ e(a)≰e(b) ⇒ 存在 (x,y)∈e(a)∖e(b)，故 c(x,y)≤a 且 c(x,y)≰b。", "If a≰b, then e(a)≰e(b), so some (x,y) lies in e(a) but not e(b), giving c(x,y)≤a and c(x,y)≰b."), reason: t("同余的序是关系包含；不包含便有具体点对见证，再由第一行的等价把成员关系转回颜色的序界。", "Congruence order is relation inclusion. Failed inclusion supplies a pair, and the first equivalence converts membership into the color-order bounds.") },
+        ],
         next: { zh: '第五条要求颜色的 join 界产生一条连接链；先构造能实现生成同余的链关系。', en: 'The fifth axiom must turn a join bound into a connecting chain; construct a chain relation that captures generated congruences.' },
         evidence: {
           theorems: ['OAI.FiniteCongruence.principal_rel_iff', 'OAI.FiniteCongruence.Principal_le_iff', 'OAI.FiniteCongruence.principal_bot_iff', 'OAI.FiniteCongruence.principal_isGraphWitness'],
@@ -158,6 +207,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '恒等映射使种子边进入 TranslateRel，映射复合使其对兼容一元映射封闭，等价闭包也继承这种封闭。对任意原代数操作，固定其他输入只改变一个坐标得到兼容一元映射；依次替换有限个坐标，再用传递性，就证明这个等价闭包对原操作兼容。因此它本身是包含 S 的同余，可直接代入给定的“每个同余”条件。',
           en: 'Identity places seeds in TranslateRel; composition makes it closed under compatible unary maps, and its equivalence closure retains that closure. For any basic operation, fixing all but one input gives a compatible unary map. Replace the finitely many coordinates one at a time and use transitivity: the closure respects every operation. It is therefore itself a congruence containing S, so the assumed universal condition applies to it.',
         },
+        dependsOn: [],
+        derivation: [
+          { statement: t("令 R=EqvGen(TranslateRel(S))；恒等映射把 S 放入 R，兼容映射的复合使 R 在这些映射下封闭。", "Let R=EqvGen(TranslateRel(S)). Identity places S in R, and composition of compatible maps makes R closed under those maps."), reason: t("TranslateRel 的边是 f(u),f(v)，其中 (u,v)∈S；再作用 g 后只需把映射替换为 g∘f。等价闭包的自反、对称、传递步骤也保留这一性质。", "An edge has endpoints f(u),f(v) for (u,v)∈S. Applying g replaces f by g∘f; reflexive, symmetric and transitive closure steps retain the same property.") },
+          { statement: t("对任意基本操作 ω，固定其余输入所得 fᵢ(t)=ω(z₀,…,zᵢ₋₁,t,zᵢ₊₁,…) 保持全部同余。", "For any basic operation ω, each map fᵢ(t)=ω(z₀,…,zᵢ₋₁,t,zᵢ₊₁,…) preserves every congruence."), reason: t("两个输入列表只有第 i 项相关，其余项与自身相关；将这些关系交给同余的操作兼容性即可。", "The two input lists are related in coordinate i, with identical entries elsewhere. Congruence compatibility with the operation gives the result.") },
+          { statement: t("若各坐标 uᵢ R vᵢ，按 i 逐一替换得到 ω(u) R ω(v)。", "If uᵢ R vᵢ in every coordinate, replace coordinates one at a time to obtain ω(u) R ω(v)."), reason: t("每次替换使用上一行的兼容一元映射；有限多个替换由 R 的传递性拼接，所以 R 本身也是同余。", "Each replacement uses a compatible unary map from the preceding line. Transitivity joins the finitely many replacements, proving that R is a congruence.") },
+          { statement: t("将 θ=R 代入“每个包含 S 的同余都包含 (x,y)”的假设，得到 x R y。", "Apply the hypothesis to θ=R to obtain x R y."), reason: t("第一行已使 R 包含所有种子，上一行已证明它是同余，因此它正是这个全称假设允许代入的对象。", "The first line places every seed in R and the preceding line makes R a congruence, so it is a valid instance of the universal assumption.") },
+        ],
         next: { zh: '把颜色的 join 上界转成“所有包含种子的同余都包含目标点对”，再应用这个链引理。', en: 'Convert the color join bound into the universal congruence condition and apply this chain lemma.' },
         evidence: {
           theorems: ['OAI.FiniteCongruence.coord_map_polyCompatible', 'OAI.FiniteCongruence.eqvGenTranslate_compatible', 'OAI.FiniteCongruence.poly_generated_eqvGen'],
@@ -169,12 +225,19 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
       {
         id: 'obtain-the-fifth-color-axiom',
         title: { zh: '从种子颜色的上界得到 Marked 连接链', en: 'Obtain a Marked chain from the seed-color join bound' },
-        given: { zh: '设 T=∨_{(u,v)∈S}c(u,v)，且 c(x,y)≤T；颜色仍由主同余经 e⁻¹ 定义。', en: 'Let T=∨_{(u,v)∈S}c(u,v) and assume c(x,y)≤T, using the principal-congruence colors.' },
+        given: { zh: '设 S 是非空有限种子集，T=∨_{(u,v)∈S}c(u,v)，且 c(x,y)≤T；颜色仍由主同余经 e⁻¹ 定义。', en: 'Let S be a nonempty finite seed set, T=∨_{(u,v)∈S}c(u,v), and assume c(x,y)≤T, using the principal-congruence colors.' },
         claim: { zh: 'x,y 满足 Connected c S；五条图公理因而全部成立，表示可推出图见证。', en: 'Connected c S holds for x,y. All five graph axioms follow, giving a graph witness from a representation.' },
         because: {
           zh: '任意包含 S 的同余 θ 都满足 Cg(u,v)≤θ，故 T≤e⁻¹θ。由 c(x,y)≤T 得 Cg(x,y)≤θ，即 x θ y。第 2 步给出 TranslateRel 链。对其中每个 f，保持所有同余意味着 (fx,fy)∈Cg(x,y)，所以 Cg(fx,fy)≤Cg(x,y)；经 e⁻¹ 即证明 f admissible。因此每条 TranslateRel 边也是 Marked 边，整条等价闭包链转成 Connected。',
           en: 'Every congruence θ containing S has Cg(u,v)≤θ for each seed, hence T≤e⁻¹θ. The assumed bound gives Cg(x,y)≤θ, or x θ y. Step 2 supplies a TranslateRel chain. For each map f in that chain, preservation of Cg(x,y) gives Cg(fx,fy)≤Cg(x,y); applying e⁻¹ proves f admissible. Each TranslateRel edge is therefore Marked, so the whole equivalence-closure chain is Connected.',
         },
+        dependsOn: ["read-principal-congruences-as-colors", "turn-generated-congruence-into-chains"],
+        derivation: [
+          { statement: t("对非空有限 S，设 T=∨_{(u,v)∈S}c(u,v)。若 θ 包含 S，则每项 c(u,v)≤e⁻¹θ，故 T≤e⁻¹θ。", "For nonempty finite S, put T=∨_{(u,v)∈S}c(u,v). If θ contains S, every c(u,v)≤e⁻¹θ, hence T≤e⁻¹θ."), reason: t("种子在 θ 内等价于它的主同余在 θ 以下；有限 join 也仍低于这个共同上界。", "A seed belongs to θ exactly when its principal congruence is below θ. The finite join is therefore below this common upper bound.") },
+          { statement: t("c(x,y)≤T≤e⁻¹θ ⇒ Cg(x,y)≤θ ⇒ x θ y。", "c(x,y)≤T≤e⁻¹θ implies Cg(x,y)≤θ and then x θ y."), reason: t("这对每个包含 S 的同余 θ 都成立，因而满足上一大步产生 TranslateRel 链的条件。", "This holds for every congruence θ containing S, meeting the previous step’s condition for a TranslateRel chain.") },
+          { statement: t("若 f 保持全部同余，则 Cg(fu,fv)≤Cg(u,v)，因此 c(fu,fv)≤c(u,v)。", "If f preserves all congruences, Cg(fu,fv)≤Cg(u,v), hence c(fu,fv)≤c(u,v)."), reason: t("将 f 的保持性用于 Cg(u,v) 中自己的生成点对；所得像点对仍在该同余内，主同余最小性给出所需界。", "Apply preservation by f to the generating pair in Cg(u,v). Its image pair remains in that congruence, and minimality of the new principal congruence gives the bound.") },
+          { statement: t("每条 TranslateRel 边都是 admissible 像种子边，故整条链也是 Connected c S。", "Every TranslateRel edge is an admissible image of a seed, so the entire chain is Connected c S."), reason: t("上一行正是 admissible 的定义；逐条保留等价闭包的四种构造，就把链变成第五图公理要求的 Marked 连接。", "The preceding inequality is exactly admissibility. Preserving each equivalence-closure constructor converts the chain into the Marked connection required by the fifth axiom.") },
+        ],
         next: { zh: '转向反方向：从任意满足五条公理的颜色图构造有限代数及其同余。', en: 'For the reverse direction, construct a finite algebra and its congruences from any witness satisfying the five axioms.' },
         evidence: {
           theorems: ['OAI.FiniteCongruence.principal_isGraphWitness', 'OAI.FiniteCongruence.representable_witness'],
@@ -192,6 +255,12 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '对角颜色为 ⊥，所以自反；颜色对称给出关系对称。若 c(x,y)≤a、c(y,z)≤a，则三角公理给出 c(x,z)≤c(x,y)∨c(y,z)≤a，故传递。任一基本操作 f 都不增色，所以 c(fx,fy)≤c(x,y)≤a，保证与所有操作兼容。',
           en: 'Diagonal color ⊥ gives reflexivity, and color symmetry gives symmetry. If c(x,y)≤a and c(y,z)≤a, the triangle axiom gives c(x,z)≤c(x,y)∨c(y,z)≤a, establishing transitivity. Each basic operation f is admissible, so c(fx,fy)≤c(x,y)≤a; hence the relation respects every operation.',
         },
+        dependsOn: [],
+        derivation: [
+          { statement: t("基本操作取 {f:Fin n→Fin n | ∀x,y，c(fx,fy)≤c(x,y)} 中的全部映射，每个操作元数为 1。", "Take every f:Fin n→Fin n satisfying c(fx,fy)≤c(x,y) as a unary basic operation."), reason: t("Fin n 的自映射只有 nⁿ 个，因此这个子集有限，可以逐个编号成为所需有限代数的操作表。", "There are only nⁿ self-maps of Fin n, so this subset is finite and can be enumerated as the operation table of a finite algebra.") },
+          { statement: t("定义 ρ(a)(x,y) ⇔ c(x,y)≤a；由零色、对称和三角界得到自反、对称、传递。", "Define ρ(a)(x,y) iff c(x,y)≤a. Zero color, symmetry and the triangle bound give reflexivity, symmetry and transitivity."), reason: t("传递性具体为 c(x,z)≤c(x,y)∨c(y,z)≤a；因此每个 ρ(a) 先是等价关系。", "Transitivity reads c(x,z)≤c(x,y)∨c(y,z)≤a, making each ρ(a) an equivalence relation.") },
+          { statement: t("x ρ(a) y ⇒ c(fx,fy)≤c(x,y)≤a ⇒ fx ρ(a) fy。", "If x ρ(a) y, then c(fx,fy)≤c(x,y)≤a, so fx ρ(a) fy."), reason: t("每个基本操作按定义不增色，故该等价关系与全部基本操作兼容，确实成为一个同余。", "Every basic operation is color-nonincreasing by construction, so the equivalence relation respects all basic operations and is a congruence.") },
+        ],
         next: { zh: '要得到全部同余组成的格，还需证明任意同余 θ 都能写成某个 ρ(a)。', en: 'To represent the full congruence lattice, show that every congruence θ equals some ρ(a).' },
         evidence: {
           theorems: ['OAI.FiniteCongruence.witnessAlgebra', 'OAI.FiniteCongruence.witnessRho'],
@@ -208,6 +277,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '若 x θ y，它的颜色是有限 join 的一项，当然≤a。反之 c(x,y)≤a 时，第五图公理给出由 S 产生的 Marked 连接链。θ 包含所有种子；每条 Marked 边由 admissible 映射得到，而这些映射全是基本操作，故 θ 仍包含其像。θ 的自反、对称、传递性又沿等价闭包传播，最终得到 x θ y。',
           en: 'If x θ y, its color is one term of the finite join and is at most a. Conversely, c(x,y)≤a invokes the fifth graph axiom to give a Marked chain generated by S. The congruence contains every seed and its admissible images, since all such maps are basic operations. Reflexivity, symmetry and transitivity propagate membership through the equivalence closure, yielding x θ y.',
         },
+        dependsOn: ["construct-the-unary-witness-algebra"],
+        derivation: [
+          { statement: t("S={(u,v):u θ v}，a=∨_{(u,v)∈S}c(u,v)；n>0 使 (x,x)∈S，故 S 非空。", "Let S={(u,v):u θ v} and a=∨_{(u,v)∈S}c(u,v). Since n>0, a diagonal pair (x,x) belongs to S, so S is nonempty."), reason: t("顶点集有限使 S 可用有限 join；θ 自反且存在顶点，保证可以使用只针对非空种子的第五图公理。", "Finiteness permits the finite join. Reflexivity of θ and existence of a vertex supply the nonempty-seed hypothesis required by the fifth axiom.") },
+          { statement: t("x θ y ⇒ (x,y)∈S ⇒ c(x,y)≤a，即 θ≤ρ(a)。", "If x θ y, then (x,y)∈S and c(x,y)≤a; thus θ≤ρ(a)."), reason: t("任一有限 join 的项都在该 join 以下，所以 θ 中的每个点对都落入 ρ(a)。", "Every term lies below its finite join, so every pair in θ belongs to ρ(a).") },
+          { statement: t("反之 c(x,y)≤a ⇒ Connected c S x y；每条 Marked 边仍在 θ 内。", "Conversely c(x,y)≤a gives Connected c S x y, and every Marked edge remains in θ."), reason: t("种子按定义属于 θ；admissible 映射全被列为基本操作，同余兼容性保证种子的每个允许像仍属于 θ。", "The seeds belong to θ by definition, and every admissible map was included as a basic operation. Congruence compatibility therefore preserves each allowed seed image.") },
+          { statement: t("θ 的自反、对称、传递性沿整条连接传播，得 x θ y；所以 θ=ρ(a)。", "Reflexivity, symmetry and transitivity of θ propagate along the connection, yielding x θ y; hence θ=ρ(a)."), reason: t("两侧包含逐点相等，因此任意同余都由某个 a 产生，ρ 是到全部同余的满射。", "The two inclusions give equality pointwise. Every congruence is therefore produced by some a, proving surjectivity of ρ onto all congruences.") },
+        ],
         next: { zh: '满射排除了遗漏同余；最后用颜色分离公理证明 ρ 还准确反映 L 的序。', en: 'Surjectivity accounts for every congruence; use color separation to show that ρ also reflects the order on L.' },
         evidence: {
           theorems: ['OAI.FiniteCongruence.mem_iff_rho_thetaSeeds', 'OAI.FiniteCongruence.witnessRho_surjective'],
@@ -224,6 +300,12 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: 'a≤b 时，由 c(x,y)≤a≤b 立即得到关系包含。若 ρ(a)≤ρ(b) 但 a≰b，分离边在 ρ(a) 内却不在 ρ(b) 内，矛盾。因此 ρ 是保序嵌入，再与第 5 步的满射合成序同构，给出图见证到表示的方向。第 1–3 步已证明反向，将二者装入 iff 即是 graph_criterion。',
           en: 'If a≤b, then c(x,y)≤a≤b gives relation inclusion. If ρ(a)≤ρ(b) but a≰b, a separating edge belongs to ρ(a) and not ρ(b), a contradiction. Hence ρ is an order embedding; Step 5 makes it an order isomorphism, giving a representation from the witness. Steps 1–3 gave the other direction, and the two implications form graph_criterion.',
         },
+        dependsOn: ["obtain-the-fifth-color-axiom", "recover-every-congruence-from-its-pair-colors"],
+        derivation: [
+          { statement: t("a≤b ⇒ [c(x,y)≤a ⇒ c(x,y)≤b] ⇒ ρ(a)≤ρ(b)。", "If a≤b, then c(x,y)≤a implies c(x,y)≤b, so ρ(a)≤ρ(b)."), reason: t("同余上的序就是点对关系的包含，因此只需逐点使用序的传递性。", "Congruence order is inclusion of pair relations, so transitivity of the lattice order proves monotonicity pointwise.") },
+          { statement: t("若 ρ(a)≤ρ(b) 但 a≰b，分离公理给出 c(x,y)≤a、c(x,y)≰b，与关系包含矛盾。", "If ρ(a)≤ρ(b) but a≰b, separation supplies c(x,y)≤a and c(x,y)≰b, contradicting relation inclusion."), reason: t("该点对在 ρ(a) 内却不在 ρ(b) 内，所以 ρ 也反映序，并因此单射。", "That pair belongs to ρ(a) but not ρ(b), so ρ reflects order and is consequently injective.") },
+          { statement: t("ρ 是满射序嵌入，故 L≃oCon(A_c)；与主同余着色方向合并，得到 Representable L↔HasGraphWitness L。", "The map ρ is a surjective order embedding, hence L≃oCon(A_c). Combine this with the principal-color construction to obtain Representable L↔HasGraphWitness L."), reason: t("恢复任意同余的步骤提供满射，当前步骤提供序反映；另一方向由前面已完成的五条颜色公理给出。", "Recovery of arbitrary congruences supplies surjectivity, and this step supplies order reflection. The five color axioms proved in the other branch give the reverse implication.") },
+        ],
         next: { zh: '完成这个有限格的表示判别：存在表示与存在指定颜色图见证彼此等价。', en: 'This completes the criterion equating finite congruence representability with existence of the specified graph witness.' },
         evidence: {
           theorems: ['OAI.FiniteCongruence.witnessOrderIso', 'OAI.FiniteCongruence.witness_representable', 'OAI.FiniteCongruence.graph_criterion_from_directions', 'OAI.FiniteCongruence.graph_criterion'],
@@ -260,6 +342,12 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '坐标差为 (3p/4+3q/8,3√3q/8)。平方相加得 9p²/16+9pq/16+(9+27)q²/64=(9/16)Q(p,q)。模 7 的两个剩余类相等，等价于它们的差 p−2q 是 7 的倍数。',
           en: 'The coordinate difference is (3p/4+3q/8,3√3q/8). Summing its squared coordinates gives 9p²/16+9pq/16+36q²/64=(9/16)Q(p,q). Equality of residues means that their difference p−2q is a multiple of seven.',
         },
+        dependsOn: [],
+        derivation: [
+          { statement: t("设 p=a−c、q=b−d，则 P(a,b)−P(c,d)=(3p/4+3q/8，3√3q/8)。", "Put p=a−c and q=b−d. Then P(a,b)−P(c,d)=(3p/4+3q/8, 3√3q/8)."), reason: t("两个格点的坐标公式逐项相减，把四个整数变量化成一个整数差向量。", "Subtract the coordinate formulas to reduce four integer variables to one integer difference vector.") },
+          { statement: t("dist²=(3p/4+3q/8)²+(3√3q/8)²=(9/16)(p²+pq+q²)。", "dist²=(3p/4+3q/8)²+(3√3q/8)²=(9/16)(p²+pq+q²)."), reason: t("展开平方，q² 的系数为 9/64+27/64=9/16，交叉项为 9pq/16。", "Expand the squares: the q² coefficient is 9/64+27/64=9/16 and the cross term is 9pq/16.") },
+          { statement: t("colorOf(a,b)=colorOf(c,d) ⇔ 7∣[(a−2b)−(c−2d)] ⇔ 7∣(p−2q)。", "colorOf(a,b)=colorOf(c,d) iff 7 divides (a−2b)−(c−2d), equivalently p−2q."), reason: t("颜色是模 7 的剩余类；两个剩余类相等，恰好要求它们的整数差为 7 的倍数。", "Colors are residue classes modulo seven, whose equality is equivalent to divisibility of the integer difference by seven.") },
+        ],
         next: { zh: '把同色的整除条件代入 Q，得到不同同色格点之间的距离下界。', en: 'Substitute the divisibility condition into Q to bound the distance between distinct points of one color.' },
         evidence: {
           theorems: ['OAI.Problem160.colorOf_sanity', 'OAI.Problem160.triPoint_sanity', 'OAI.Problem160.lattice_norm'],
@@ -280,6 +368,13 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '由 p=2q+7k，展开得 Q=7(q²+5qk+7k²)。又有 4Q=(2p+q)²+3q²；非零整数对使 Q>0。因此 Q 是正的 7 倍数，至少为 7。距离公式给出 d²≥63/16；r²=3/16 且 (1+2r)²<63/16，取非负平方根便得 d>1+2r。',
           en: 'Substitution of p=2q+7k gives Q=7(q²+5qk+7k²). Also 4Q=(2p+q)²+3q²>0 for a nonzero pair. Thus Q is a positive multiple of seven and is at least seven. The distance formula gives d²≥63/16. Since r²=3/16 and (1+2r)²<63/16, nonnegative square roots give d>1+2r.',
         },
+        dependsOn: ["encode-distance-and-color"],
+        derivation: [
+          { statement: t("p−2q=7k ⇒ p=2q+7k ⇒ Q(p,q)=7(q²+5qk+7k²)。", "p−2q=7k implies p=2q+7k and Q(p,q)=7(q²+5qk+7k²)."), reason: t("把整除条件给出的整数 k 代入 Q=p²+pq+q²，再展开并提出因子 7。", "Substitute the integer k from divisibility into Q=p²+pq+q², expand, and factor out seven.") },
+          { statement: t("4Q=(2p+q)²+3q²>0；Q 是正整数且为 7 的倍数，所以 Q≥7。", "4Q=(2p+q)²+3q²>0. Since Q is a positive integer divisible by seven, Q≥7."), reason: t("若右端为零，则 q=0、p=0，与中心坐标对不同矛盾；正的 7 倍数最小为 7。", "If the right side vanished, both q and p would be zero, contradicting distinct coordinate pairs. The least positive multiple of seven is seven.") },
+          { statement: t("dist(P(a,b),P(c,d))²=(9/16)Q≥63/16。", "dist(P(a,b),P(c,d))²=(9/16)Q≥63/16."), reason: t("将整数下界送入格点距离公式，乘上正系数 9/16，不等号方向不变。", "Insert the integer lower bound into the distance formula and multiply by positive 9/16.") },
+          { statement: t("r²=3/16、r<1/2 ⇒ (1+2r)²=7/4+4r<15/4<63/16≤dist²。", "r²=3/16 and r<1/2 give (1+2r)²=7/4+4r<15/4<63/16≤dist²."), reason: t("r=√3/4 为非负实数，r<1/2 由 3<4 得到；两边距离非负，比较平方即可推出 dist>1+2r。", "Here r=√3/4≥0, and r<1/2 follows from 3<4. Both distances are nonnegative, so comparison of squares yields dist>1+2r.") },
+        ],
         next: { zh: '为了给任意平面点着色，还需证明每一点距某个格点不超过 r。', en: 'To color arbitrary points, prove that every point lies within r of a lattice center.' },
         evidence: {
           theorems: ['OAI.Problem160.sameColor_norm', 'OAI.Problem160.sameColor_dist_large'],
@@ -300,6 +395,14 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '四个候选误差为 (p,q)、(p−1,q)、(p,q−1)、(p−1,q−1)。按 2p+q、p+2q 与 1、2 的比较，再按 p 与 q 的大小分区，四角引理给出其中一个 Q≤1/3。代入 dist²=(9/16)Q(α−m,β−n)，得到 dist²≤3/16=r²，故 dist≤r。',
           en: 'The candidate errors are (p,q), (p−1,q), (p,q−1) and (p−1,q−1). Comparing 2p+q and p+2q with one and two, then comparing p with q, selects a corner with Q≤1/3. Substitution into dist²=(9/16)Q(α−m,β−n) gives dist²≤3/16=r², hence dist≤r.',
         },
+        dependsOn: [],
+        derivation: [
+          { statement: t("α=4X/3−4Y/(3√3)、β=8Y/(3√3) ⇒ X=3α/4+3β/8、Y=3√3β/8。", "α=4X/3−4Y/(3√3) and β=8Y/(3√3) give X=3α/4+3β/8 and Y=3√3β/8."), reason: t("直接代回两个线性式，得到任意平面点的实斜坐标，而不是先假设该点属于格点。", "Substitution verifies these two linear equations, giving real oblique coordinates for any plane point without assuming it is a lattice point.") },
+          { statement: t("令 p=α−⌊α⌋、q=β−⌊β⌋∈[0,1)；四角误差为 (p,q)、(p−1,q)、(p,q−1)、(p−1,q−1)。", "Let p=α−⌊α⌋ and q=β−⌊β⌋ lie in [0,1). The four corner errors are (p,q), (p−1,q), (p,q−1), (p−1,q−1)."), reason: t("分别选择每个坐标的下整数或上整数，便把找任意整数中心的问题缩成四个具体候选。", "Choose either floor or floor plus one in each coordinate, reducing the search for an integer center to four explicit candidates.") },
+          { statement: t("若 2p+q≤1 且 p+2q≤1，选角 (0,0)；若 2p+q≥2 且 p+2q≥2，选角 (1,1)。", "If 2p+q≤1 and p+2q≤1, choose corner (0,0); if both are at least two, choose corner (1,1)."), reason: t("第一组条件由 corner00 给出 Q(p,q)≤1/3；第二组对 1−p、1−q 使用同一估计，得到 Q(p−1,q−1)≤1/3。", "The first conditions give Q(p,q)≤1/3 by corner00. In the second case, apply the same estimate to 1−p,1−q to obtain Q(p−1,q−1)≤1/3.") },
+          { statement: t("其余情形，q≤p 时选 (1,0)，p≤q 时选 (0,1)；相应误差的 Q 都≤1/3。", "Otherwise choose (1,0) when q≤p and (0,1) when p≤q; the corresponding error has Q≤1/3."), reason: t("排除前两区后，q≤p 强制 1≤2p+q、p+2q≤2，恰是 corner10 的条件；另一情形交换 p,q，使用 corner01。", "Outside the first two regions, q≤p forces 1≤2p+q and p+2q≤2, precisely the corner10 conditions. The other case swaps p,q and uses corner01.") },
+          { statement: t("对选中的整数角 (m,n)，dist(x,P(m,n))²=(9/16)Q(α−m,β−n)≤3/16=r²。", "For the selected integer corner (m,n), dist(x,P(m,n))²=(9/16)Q(α−m,β−n)≤3/16=r²."), reason: t("使用实斜坐标的距离公式与已选角的 Q 界，再由距离和 r 均非负取平方根，得到 dist≤r。", "Use the distance formula in real oblique coordinates and the chosen corner bound. Since distance and r are nonnegative, take square roots to obtain dist≤r.") },
+        ],
         next: { zh: '对每个平面点固定这样一个覆盖格点，并把格点颜色赋给它。', en: 'Choose such a covering center for each point and transfer its color.' },
         evidence: {
           theorems: ['OAI.Problem160.planeEis_corners', 'OAI.Problem160.covering'],
@@ -319,6 +422,12 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: 'triColor 用 Classical.choose 固定 covering 的两个整数见证；Classical.choose_spec 原样保留距离不等式，因此 triColor_sanity 可以把中心、距离、同色一起取出。另由 3²< (2√3)²=12 且两边为正，得到 3<2√3，即 r<1/2。',
           en: 'triColor uses Classical.choose for the two integer witnesses. Classical.choose_spec retains their distance bound, so triColor_sanity returns the center, bound and color equality together. Finally 3²< (2√3)²=12 implies 3<2√3, giving r<1/2.',
         },
+        dependsOn: ["cover-with-four-corner-candidates"],
+        derivation: [
+          { statement: t("为每个 x 固定覆盖见证 aₓ,bₓ，记 Cₓ=P(aₓ,bₓ)；则 dist(x,Cₓ)≤r。", "For each x fix covering witnesses aₓ,bₓ and put Cₓ=P(aₓ,bₓ), with dist(x,Cₓ)≤r."), reason: t("Classical.choose 选取整数见证，choose_spec 同时保留距离界；定义着色后仍能取回这条证据。", "Classical.choose selects the integer witnesses, while choose_spec retains the distance bound so it remains available after defining the coloring.") },
+          { statement: t("triColor(x)=colorOf(aₓ,bₓ)∈Fin 7。", "triColor(x)=colorOf(aₓ,bₓ)∈Fin 7."), reason: t("颜色直接取所选中心的模 7 颜色；因此每个点都能拿出一个与自己同色、距离不超过 r 的中心。", "Assign the modulo-seven color of the chosen center. Every point thus has a center of the same color within distance r.") },
+          { statement: t("r²=3/16<1/4=(1/2)²，且 r≥0，所以 2r<1。", "r²=3/16<1/4=(1/2)² and r≥0, so 2r<1."), reason: t("这个严格不等式将用于排除同一中心覆盖两个单位距离点；它与前面较大的同色中心间隔分别控制两种情况。", "This strict inequality excludes two unit-distance points sharing a center. Together with the larger equal-color center separation, it controls the two cases separately.") },
+        ],
         next: { zh: '反设两个单位距离点同色；先排除它们选中了同一个格点的情形。', en: 'Assume two points at distance one have one color; first exclude a shared chosen center.' },
         evidence: {
           theorems: ['OAI.Problem160.triColor', 'OAI.Problem160.triColor_sanity', 'OAI.Problem160.covering_radius_lt_half'],
@@ -336,6 +445,11 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '坐标对相同给出同一个中心 P。三角不等式将两点距离分成 dist(x,P)+dist(P,y)；由覆盖界和距离对称性，两项均≤r。因此 dist(x,y)≤2r<1，而它又等于 1。',
           en: 'Equal coordinate pairs give a common center P. The triangle inequality yields dist(x,y)≤dist(x,P)+dist(P,y)≤2r<1, using the two covering bounds and symmetry of distance. This contradicts dist(x,y)=1.',
         },
+        dependsOn: ["transfer-a-chosen-center-color"],
+        derivation: [
+          { statement: t("若 Cₓ=Cᵧ=C，则 dist(x,C)≤r 且 dist(C,y)=dist(y,C)≤r。", "If Cₓ=Cᵧ=C, then dist(x,C)≤r and dist(C,y)=dist(y,C)≤r."), reason: t("把同一个中心代入两份覆盖证据，并用距离对称性使两条路段首尾相接。", "Use the shared center in both covering bounds and symmetry of distance to join the two segments.") },
+          { statement: t("1=dist(x,y)≤dist(x,C)+dist(C,y)≤2r<1，矛盾。", "1=dist(x,y)≤dist(x,C)+dist(C,y)≤2r<1, a contradiction."), reason: t("三角不等式将单位距离压到严格小于一，故两个所选中心的整数坐标对不能相同。", "The triangle inequality makes the unit distance strictly less than one, so the integer coordinate pairs of the chosen centers cannot agree.") },
+        ],
         next: { zh: '剩下中心坐标对不同的情形；此时同色格点的严格分离下界会产生另一矛盾。', en: 'For different center pairs, use the strict separation bound for equal-color lattice points.' },
         evidence: {
           theorems: ['OAI.Problem160.proper_coloring'],
@@ -352,6 +466,12 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
           zh: '第 2 步给出 dist(P(a,b),P(c,d))>1+2r。但沿 P(a,b)→x→y→P(c,d) 两次用三角不等式，得到中心距≤r+1+r=1+2r，矛盾。中心相同与不同已穷尽，所以 proper_coloring 成立；将 triColor 与它配对即得最终存在性结论。',
           en: 'Step 2 gives dist(P(a,b),P(c,d))>1+2r. The route P(a,b)→x→y→P(c,d), with two triangle inequalities, gives the opposite bound r+1+r=1+2r. Both cases are impossible, proving proper_coloring. Pairing it with triColor supplies the required existence statement.',
         },
+        dependsOn: ["separate-equal-color-centers", "transfer-a-chosen-center-color", "exclude-a-shared-center"],
+        derivation: [
+          { statement: t("若 triColor(x)=triColor(y)，则 colorOf(aₓ,bₓ)=colorOf(aᵧ,bᵧ)。", "If triColor(x)=triColor(y), then colorOf(aₓ,bₓ)=colorOf(aᵧ,bᵧ)."), reason: t("分别展开两点颜色等于所选中心颜色的定义，使平面点的同色假设变成格点的同色条件。", "Expand each point’s color as its chosen center’s color, converting the plane-color assumption into equality of lattice colors.") },
+          { statement: t("中心坐标对不同时，dist(Cₓ,Cᵧ)>1+2r；但 dist(Cₓ,Cᵧ)≤dist(Cₓ,x)+1+dist(y,Cᵧ)≤1+2r。", "For distinct center pairs, dist(Cₓ,Cᵧ)>1+2r, but dist(Cₓ,Cᵧ)≤dist(Cₓ,x)+1+dist(y,Cᵧ)≤1+2r."), reason: t("严格下界来自同色格点分离；上界沿 Cₓ→x→y→Cᵧ 使用两次三角不等式和两份覆盖界。", "The strict lower bound comes from equal-color lattice separation. The upper bound follows along Cₓ→x→y→Cᵧ from two triangle inequalities and the covering bounds.") },
+          { statement: t("中心相同与不同两支都矛盾，故 dist(x,y)=1 ⇒ triColor(x)≠triColor(y)；取这个 triColor 作为七色着色。", "Both center cases contradict equal colors, so dist(x,y)=1 implies triColor(x)≠triColor(y). Use triColor as the seven-color witness."), reason: t("前一步排除了相同坐标对，本步排除了不同坐标对，穷尽所有可能，正好得到 ProperColoring 7 的要求。", "The previous step excluded equal coordinate pairs and this step excludes unequal pairs, exhausting the possibilities and establishing ProperColoring 7.") },
+        ],
         next: { zh: '证明完成：结论是存在一种七色着色，所有单位距离点均异色。', en: 'The proof establishes a seven-color plane coloring separating every unit-distance pair.' },
         evidence: {
           theorems: ['OAI.Problem160.sameColor_dist_large', 'OAI.Problem160.proper_coloring', 'OAI.Problem160.properColoring_seven'],
