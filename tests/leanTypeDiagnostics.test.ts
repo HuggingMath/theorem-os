@@ -231,15 +231,20 @@ describe.skipIf(!lean)('local Lean closed-type preflight', () => {
     expect(projected.result.projectionReuse?.originInputDigest).toBe(retry.result.inputDigest);
   });
 
-  it('accepts explicit Nat binders and reports ambiguous or incorrect types before proof work', async () => {
+  it('accepts explicit Nat binders before proof work', async () => {
     const explicit = await check('\u2200 (a : Nat \u2192 Nat) (n : Nat), a (n + 1) = a (n + 1)');
     expect(explicit.status, explicit.stdout + explicit.stderr).toBe('elaborated');
+  });
+
+  it('reports a mismatched index type before proof work', async () => {
     const mismatch = await check('\u2200 (a : Nat \u2192 Nat) (n : Int), a (n + 1) = a n');
     expect(mismatch).toMatchObject({ status: 'failed', exitCode: 1, proofAcceptance: 'not-assessed',
       firstBlocking: { severity: 'error', format: 'lean-json' } });
     expect(mismatch.stdout).toContain('Type mismatch');
-    expect((await check('\u2200 n, n = n')).status).toBe('failed');
-    expect((await check('undeclaredType')).status).toBe('failed');
+  });
+
+  it.each(['\u2200 n, n = n', 'undeclaredType'])('rejects an ambiguous or unknown type before proof work: %s', async type => {
+    expect((await check(type)).status).toBe('failed');
   });
 
   it('requires a quantified term instead of a declaration header for implicit and explicit helper binders', async () => {
