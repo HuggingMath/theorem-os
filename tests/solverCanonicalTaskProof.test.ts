@@ -221,9 +221,15 @@ describe('canonical helper checks before model dispatch', () => {
     if (kind === 'ambiguous-leaf') writeCanonical(source('lemma Other.helper : True := by trivial\nlemma helper : True := by trivial'));
     if (kind === 'sorry' || kind === 'admit') writeCanonical(source(`lemma helper : True := by ${kind}`));
     if (kind === 'conditional') node().task = { ...node().task, conditional: true };
-    if (kind === 'saved-assignment') node().assignment = { taskId: 'helper', taskDigest: taskVersion(node().task),
-      workerId: workers[1].id, seedCommit: state.cooperation!.canonicalCommit!, assignmentId: 'saved' };
+    if (kind === 'saved-assignment') {
+      // A resumable assignment owns a checkout descended from its recorded seed.
+      git(workers[1].worktree, ['reset', '--hard', state.cooperation!.canonicalCommit!]);
+      node().assignment = { taskId: 'helper', taskDigest: taskVersion(node().task),
+        workerId: workers[1].id, seedCommit: state.cooperation!.canonicalCommit!, assignmentId: 'saved' };
+    }
+    const savedAssignment = node().assignment;
     expect(await next()).toMatchObject({ kind: 'task', task: { id: 'helper' } });
+    if (kind === 'saved-assignment') expect(node().assignment).toBe(savedAssignment);
     expect(host.verify).not.toHaveBeenCalled(); noDelivery();
   });
 
