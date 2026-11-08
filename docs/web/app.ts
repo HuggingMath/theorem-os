@@ -13,6 +13,7 @@ import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from 
 import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
 import { mountProofReading } from './proofReading';
 import { mountProofFigures } from './proofFigures';
+import { mountArchiveSolutionRoutes } from './solutionRouteClient';
 
 const iconSet = {
   ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
@@ -33,7 +34,7 @@ const strings = {
     installedModules: '已安装', draftModules: '草稿引用（未验证）', canonicalModules: '集成提交引用', checkedModules: '通过检查的提交引用',
     lexicalMentions: '源码名称提及', moduleNote: '模块引用和名称提及仅反映保存的源码。',
     applicationChecks: { elaborated: '局部表达式检查通过', failed: '局部表达式检查失败', unavailable: '局部检查不可用' } as Record<string, string>,
-    processCount: (runs: number, tasks: number) => `${runs} 次记录运行 · ${tasks} 项任务`,
+    processCount: (runs: number, tasks: number) => runs ? `${runs} 次记录运行 · ${tasks} 项任务` : '证明结构与步骤',
     loadingProcess: '正在载入解题过程…', processUnavailable: '解题过程载入失败，请重新打开此视图重试。',
     objectives: '原题目标', attempts: '尝试次数', dependencies: '依赖任务', rawSource: '证明原文件',
     nativeEvidence: '本地独立验收', nativeScope: '原题通过 Lean 内核检查和原题 comparator 验收。',
@@ -70,7 +71,7 @@ const strings = {
     installedModules: 'Installed', draftModules: 'Draft imports (unchecked)', canonicalModules: 'Integrated commit imports', checkedModules: 'Checked commit imports',
     lexicalMentions: 'Names mentioned in source', moduleNote: 'Imports and name mentions describe the saved source.',
     applicationChecks: { elaborated: 'Local expression elaborated', failed: 'Local expression check failed', unavailable: 'Local check unavailable' } as Record<string, string>,
-    processCount: (runs: number, tasks: number) => `${runs} recorded runs · ${tasks} tasks`,
+    processCount: (runs: number, tasks: number) => runs ? `${runs} recorded runs · ${tasks} tasks` : 'Proof structure and steps',
     loadingProcess: 'Loading the research process…', processUnavailable: 'The research process could not be loaded. Reopen this view to retry.',
     objectives: 'Original targets', attempts: 'Attempts', dependencies: 'Dependencies', rawSource: 'Original proof file',
     nativeEvidence: 'Independent local acceptance', nativeScope: 'The original targets passed the Lean kernel checks and the original comparator.',
@@ -135,6 +136,12 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
 }
 const icons = () => {
   createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
+  const record = selectedRecord(), process = record && window.theoremosProcesses?.[record.id];
+  if (record && process) void mountArchiveSolutionRoutes(record, process, locale).then(() => {
+    const toolbar = document.querySelector<HTMLElement>('.process-view-toolbar');
+    if (selectedRecord() === record && state.tab === 'process' && document.activeElement === toolbar?.querySelector('h4'))
+      toolbar?.scrollIntoView({ block: 'start' });
+  });
   mountProofFigures(`${rootOf(locale)}data/proof-figures.js?v=${figuresVersion}`);
 };
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
@@ -402,6 +409,8 @@ let revealProcessAfterLoad = false;
 function revealProcessContent() {
   const content = document.querySelector<HTMLElement>('.process-view-toolbar');
   content?.scrollIntoView({ block: 'start' });
+  const heading = content?.querySelector<HTMLElement>('h4');
+  heading?.setAttribute('tabindex', '-1'); heading?.focus({ preventScroll: true });
 }
 
 function revealProcessStep() {
@@ -535,6 +544,33 @@ function download(name: string, content: string, type: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+document.addEventListener('theoremos-solution-open', event => {
+  const record = selectedRecord();
+  if (!record) return;
+  const detail = (event as CustomEvent<{ run?: string; node?: string; step?: string; code?: string; sourceName?: string; sourceDigest?: string }>).detail;
+  const process = window.theoremosProcesses?.[record.id];
+  let run = process?.runs.find(candidate => candidate.runId === detail.run);
+  let check = run?.checks?.find(candidate => `check:${candidate.id}` === detail.step);
+  if (!run && detail.sourceDigest) {
+    run = process?.runs.find(candidate => candidate.checks?.some(item => item.sourceDigest === detail.sourceDigest));
+    check = run?.checks?.find(candidate => candidate.sourceDigest === detail.sourceDigest);
+  }
+  if (run && (detail.node || check)) {
+    processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: run.runId,
+      node: detail.node ?? (check!.scope === 'original' ? 'original' : check!.taskId ? `task:${check!.taskId}` : 'problem'),
+      step: detail.step ?? (check ? `check:${check.id}` : ''), code: detail.code === 'source' || check && detail.sourceDigest ? 'source' : 'closed' };
+    refreshProcess(record);
+    const panel = document.querySelector<HTMLElement>('#process-step-detail, #process-map-inspector');
+    panel?.setAttribute('tabindex', '-1'); panel?.focus({ preventScroll: true }); panel?.scrollIntoView({ block: 'start' });
+    return;
+  }
+  if (detail.sourceName && record.sources.some(source => source.name === detail.sourceName && (!detail.sourceDigest || source.sha256 === detail.sourceDigest))) {
+    state.sourceName = detail.sourceName; state.tab = 'source';
+    renderInspector(record); icons(); writeLocation();
+    document.querySelector<HTMLElement>('#tab-source')?.focus({ preventScroll: true });
+  }
+});
+
 document.addEventListener('click', event => {
   const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-global-run], [data-global-select], [data-global-scroll], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
   if (!target) return;
@@ -647,7 +683,8 @@ document.addEventListener('click', event => {
     case 'download-source': if (record) download(`${record.id}-${currentSource(record).name.replaceAll('/', '-')}`, currentSource(record).code, 'text/plain;charset=utf-8'); break;
     case 'download-record': if (record) void Promise.all([loadSources(record.id), loadProcess(record)]).then(([, process]) => {
       const { excerpt: _excerpt, ...full } = record;
-      download(`${record.id}.json`, JSON.stringify({ ...full, ...(process ? { process } : {}), sources: record.sources.map(source => withCode(record, source)) }, null, 2), 'application/json');
+      const { sourceRoute: _routeIndex, ...nativeProcess } = process ?? {};
+      download(`${record.id}.json`, JSON.stringify({ ...full, ...(process ? { process: nativeProcess } : {}), sources: record.sources.map(source => withCode(record, source)) }, null, 2), 'application/json');
     }, () => toast(strings.sourceUnavailable)); break;
   }
 });

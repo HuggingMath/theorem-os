@@ -185,6 +185,7 @@ try {
   await card.locator('[data-action="generate"]').waitFor();
   assert.match(await card.locator('.explain-estimate').innerText(), /^预计约 [\d.]+ 小时，约 [\d.]+ 万 Token。$/u);
   assert.equal(await page.locator('#explain-lean-legend').isVisible(), false, 'no margin legend before there is an explanation');
+  assert.equal(await page.locator('#explain-prose .solution-route').count(), 0, 'an unapproved source does not install a mathematical explanation graph');
   mark('the page opens on the full Lean proof with an estimate and a generate button, nothing generated yet');
 
   // Generation asks for a Key, shows the run's model, and never echoes the Key.
@@ -206,6 +207,7 @@ try {
   { apiKey: credential, target: 'target_thm', language: 'zh', model: 'deepseek-flash', proof });
   assert.equal((await page.content()).includes(credential), false, 'the Key never reaches the page');
   await page.locator('#explain-prose .explain-progress').waitFor();
+  assert.equal(await page.locator('#explain-prose .solution-route').count(), 0, 'generation progress is not a completed derivation');
   explains[0]!.send({ type: 'progress', progress: { phase: 'auditing', batches: 1, approvedBatches: 0, round: 1, tokens: 1234 } });
   await page.locator('.explain-phases li.active').filter({ hasText: '正在审核' }).waitFor({ timeout: 15_000 });
   await page.screenshot({ path: path.join(output, 'explain-progress-1440.png') });
@@ -243,6 +245,21 @@ try {
   assert.ok(titled.some(([title, text]) => title === 'a, b \\in \\mathbb{N}' && text?.includes('ℕ') && text.includes('∈')), 'a formula keeps its source as the title');
   assert.equal(await page.locator('.explain-document strong').filter({ hasText: '前三个引理' }).count(), 1);
   mark('formulas, bold and code render as elements and an unparseable formula shows its source');
+
+  const route = page.locator('#explain-prose .solution-route');
+  await route.waitFor();
+  assert.equal(await route.getAttribute('data-solution-route-basis'), 'explanation');
+  assert.equal(await route.locator('[data-solution-edge="dependency"][data-to="declaration:target_thm"]').count(), 6,
+    'the common graph connects each cited helper to the target');
+  await route.locator('[data-solution-select="derivation:target_thm:0"]').click();
+  assert.match(await route.locator('[data-solution-inspector]').innerText(), /前三个引理/u, 'the graph retains the full saved derivation');
+  assert.match(await route.locator('[data-solution-inspector]').innerText(), /have k1 := step_1 a b/u, 'the graph shows the exact source of this step');
+  await route.locator('[data-solution-open]').click();
+  const graphLines = explained.sections.at(-1)!.steps[0]!.lines.flatMap(item => range(item.start, item.end));
+  await until(async () => JSON.stringify(await marked(page, 'active')) === JSON.stringify(graphLines), 'the graph selects its exact Lean step');
+  assert.equal(await page.locator('.explain-steps > li.is-active[data-step="0"]').getAttribute('data-anchor'), '6');
+  await route.locator('[data-solution-node="declaration:target_thm"]').click();
+  mark('the same graph displays saved derivations and opens their exact Lean lines in the explanation reader');
 
   // Clicking a step marks its Lean lines and scrolls the proof to them; clicking a Lean line does the reverse.
   const sections = explained.sections, last = sections.length - 1;

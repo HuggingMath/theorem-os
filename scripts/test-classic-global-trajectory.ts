@@ -20,8 +20,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/classic-global-trajectory');
 const staticRoot = path.join(root, 'out/web');
 const catalog = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/data/catalog.json'), 'utf8')) as ArchiveCatalog;
-assert.equal(catalog.records.length, 16);
-const figureCount = catalog.records.reduce((sum, record) => sum + (record.process?.walkthrough?.steps.filter(step => step.figure).length ?? 0), 0);
+// Keep the existing reviewed explanations as a fixed regression set. Universal imported-problem coverage lives in
+// test-universal-solution-route.ts; adding a problem must not require adding a hand-authored walkthrough here.
+const detailedRecords = catalog.records.filter(record => record.process?.walkthrough);
+assert.equal(detailedRecords.length, 16, 'Retain all sixteen existing detailed proof explanations');
+assert.equal(detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.length, 0), 94,
+  'Retain all ninety-four reviewed derivation steps');
+const figureCount = detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.filter(step => step.figure).length, 0);
 assert.equal(figureCount, 8, 'The built archive must include all eight mathematical figures');
 assert.ok((await fs.readFile(path.join(staticRoot, 'classics/site.js'), 'utf8')).includes('data-workflow-stage'),
   'Build the complete archived research workflow before running this browser check');
@@ -38,14 +43,14 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
 type Run = ArchiveProcess['runs'][number];
 type Check = NonNullable<Run['checks']>[number];
 const realRecord = (id: string) => {
-  const record = catalog.records.find(record => record.id === id);
+  const record = detailedRecords.find(record => record.id === id);
   assert.ok(record, 'Missing actual archived problem ' + id); return record;
 };
 const triangle = realRecord('openai_triangle_face');
 const threeState = realRecord('openai_three_state_supercritical');
 const honeycomb = realRecord('openai_honeycomb_free_energy');
 const finalRun = (record: ArchiveRecord) => record.process!.runs.find(run => run.runId === record.campaign!.runId)!;
-const all = catalog.records.flatMap(record => record.process!.runs.map(run => ({ record, run })));
+const all = detailedRecords.flatMap(record => record.process!.runs.map(run => ({ record, run })));
 const failure = all.flatMap(({ record, run }) => (run.checks ?? []).filter(check => check.status === 'failed' && check.diagnostics
   && check.sourceDigest && record.process!.sources?.[check.sourceDigest] && check.taskId && run.tasks.some(task => task.id === check.taskId))
   .map(check => ({ record, run, check }))).sort((a, b) => a.check.diagnostics!.length - b.check.diagnostics!.length)[0];
@@ -86,6 +91,8 @@ const processAssetVersions = Object.fromEntries(await Promise.all(catalog.record
 const processAssetRequests: string[] = [];
 const figureAssetVersion = digest(await fs.readFile(path.join(staticRoot, 'classics/data/proof-figures.js'))).slice(0, 16);
 const figureAssetRequests: string[] = [];
+const solutionAssetVersion = digest(await fs.readFile(path.join(staticRoot, 'classics/data/solution-route.js'))).slice(0, 16);
+const solutionAssetRequests: string[] = [];
 
 async function observe(context: BrowserContext, label: string, cacheEnabled = false) {
   // Routing disables HTTP caching; the cache scenario only observes request events.
@@ -101,7 +108,8 @@ async function observe(context: BrowserContext, label: string, cacheEnabled = fa
     if (url.pathname.startsWith('/api/')) apiReads.push(url.pathname);
     if (/\/data\/process\/[^/]+\.js$/u.test(url.pathname)) processAssetRequests.push(url.href);
     if (url.pathname.endsWith('/data/proof-figures.js')) figureAssetRequests.push(url.href);
-    if (cacheEnabled && /\/(?:site\.js|process\.css)$/u.test(url.pathname)) cacheAssets.push(url.href);
+    if (url.pathname.endsWith('/data/solution-route.js')) solutionAssetRequests.push(url.href);
+    if (cacheEnabled && /\/(?:site\.js|process\.css|solution-route\.js)$/u.test(url.pathname)) cacheAssets.push(url.href);
   });
   context.on('page', page => {
     page.on('pageerror', error => errors.push(label + ': ' + error.message));
@@ -111,6 +119,8 @@ async function observe(context: BrowserContext, label: string, cacheEnabled = fa
 }
 async function global(page: Page, record: ArchiveRecord, run = finalRun(record)) {
   await page.locator('.process-global-trajectory').waitFor(); await settled(page);
+  await page.locator(attr('data-solution-route-record', record.id) + attr('data-solution-route-run', run.runId)
+    + '[data-solution-route-state="ready"]').waitFor();
   assert.equal(hash(page).get('proof'), record.id);
   assert.equal(hash(page).get('tab'), 'process'); assert.equal(hash(page).get('mode'), 'global');
   assert.equal(hash(page).get('run') ?? record.campaign!.runId, run.runId);
@@ -130,6 +140,10 @@ async function enter(page: Page, record: ArchiveRecord, locale: string, explicit
   await page.goto(url); await page.locator('.proof-row').first().waitFor();
   await page.evaluate(() => document.fonts.ready); await settled(page);
   assert.equal(await page.locator('.catalog').isVisible(), true);
+  assert.equal(await page.locator('[data-solution-route-state]').count(), 0);
+  assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(resource =>
+    new URL(resource.name).pathname.endsWith('/data/solution-route.js'))), false,
+  'The catalog must defer the route renderer until a problem route is opened');
   await page.locator(explicit ? '.row-route-open' + attr('data-proof-route', record.id) : '.proof-row' + attr('data-proof-id', record.id)).click();
   await global(page, record);
 }
@@ -165,13 +179,15 @@ async function visible(page: Page, selector: string, label: string) {
   return evidence;
 }
 async function firstViewport(page: Page, label: string, locale: string) {
+  await page.locator('[data-solution-route-state="ready"]').waitFor();
   assert.equal(await page.locator('.process-view-toolbar h4').innerText(), locale === 'en' ? 'Whole-problem trajectory' : '全局解题轨迹');
-  const title = await visible(page, '.proof-walkthrough-heading h5', label);
+  const title = await visible(page, '.solution-route-heading h3', label);
   const selection = await visible(page, '.global-workflow-heading', label);
-  const phase = await visible(page, '[data-global-scroll="global-plan"]', label);
-  const outline = await visible(page, '.proof-overview > li:first-child', label);
-  assert.ok(outline.top < outline.height * 0.65, label + ': the mathematical route must appear in the first part of the viewport');
-  viewportEvidence.push({ label, title, selection, phase, outline });
+  const routeEntry = await visible(page, '[data-solution-mode="recorded"]', label);
+  const expand = await visible(page, '[data-solution-expand]', label);
+  assert.equal(await page.locator('.solution-route').getAttribute('data-solution-route-basis'), 'recorded');
+  assert.ok(title.top < title.height * 0.65, label + ': the shared solution route must appear in the first part of the viewport');
+  viewportEvidence.push({ label, title, selection, routeEntry, expand });
 }
 async function phase(page: Page, name: string, id: string) {
   const location = page.url(), button = page.locator('.global-workflow-stages ' + attr('data-global-scroll', id));
@@ -692,6 +708,11 @@ async function verifyAssets(page: Page) {
     assert.ok(url, 'The page must load ' + file);
     assert.equal(url.searchParams.get('v'), assetVersions[file], file + ' must use its final content hash');
   }
+  const routes = await page.evaluate(() => performance.getEntriesByType('resource').map(resource => resource.name)
+    .filter(value => new URL(value).pathname.endsWith('/data/solution-route.js')));
+  assert.equal(routes.length, 1, 'Opening and switching saved runs must reuse one lazy route renderer per page');
+  assert.equal(new URL(routes[0]!).searchParams.get('v'), solutionAssetVersion,
+    'The lazy route renderer must use its final content hash');
 }
 async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, locale: 'zh' | 'en') {
   await global(page, record, run);
@@ -991,7 +1012,7 @@ try {
       await page.locator('[data-process-open-tab="source"]').click(); await page.locator('.source-code').waitFor();
       assert.equal(hash(page).get('tab'), 'source');
       await page.locator('#tab-process').click(); await global(page, honeycomb, finalRun(honeycomb));
-      for (const record of catalog.records.filter(record => record.process!.walkthrough!.steps.some(step => step.figure))) {
+      for (const record of detailedRecords.filter(record => record.process!.walkthrough!.steps.some(step => step.figure))) {
         await enter(page, record, locale); await verifyProofFigure(page, record, locale, label);
       }
       mark(label + ': all eight mathematical figures support real pointer or keyboard interaction, update exact objects and calculations, and preserve proof identity and focus');
@@ -1008,7 +1029,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
   await observe(context, 'all archived runs'); const page = await context.newPage(); active = page;
   let runs = 0, deliveries = 0, savedChecks = 0, tasks = 0, retained = 0, proseCharacters = 0;
-  for (const record of catalog.records) {
+  for (const record of detailedRecords) {
     await enter(page, record, 'zh');
     for (const run of record.process!.runs) {
       current = record.id + '/' + run.runId;
@@ -1020,7 +1041,7 @@ try {
   }
   assert.equal(runs, 45); assert.ok(deliveries > 400 && savedChecks > 300 && retained > 0);
   await context.close(); active = undefined;
-  mark('all 16 problems and all ' + runs + ' saved runs preserve ' + deliveries + ' deliveries, ' + savedChecks
+  mark('the 16 existing detailed explanations and their ' + runs + ' saved runs preserve ' + deliveries + ' deliveries, ' + savedChecks
     + ' checks, full objectives, true DAGs, chronological stages, inherited markers and run-bound acceptance');
 
   for (const locale of ['zh', 'en'] as const) {
@@ -1028,13 +1049,13 @@ try {
     await observe(narrow, locale + ' all derivations at 320px');
     const narrowPage = await narrow.newPage(); active = narrowPage;
     try {
-      for (const record of catalog.records) {
+      for (const record of detailedRecords) {
         current = locale + '/320/' + record.id;
         await enter(narrowPage, record, locale);
         await verifyWorkflow(narrowPage, record, finalRun(record), locale);
         await fits(narrowPage, current + ': every derivation line and prerequisite');
       }
-      mark(locale + ': all 16 proof derivations, line-by-line explanations and dependencies fit a 320px screen');
+      mark(locale + ': the 16 existing proof derivations, line-by-line explanations and dependencies fit a 320px screen');
     } finally { await narrow.close(); active = undefined; }
   }
 
@@ -1043,13 +1064,16 @@ try {
   await observe(cached, current, true); const cachedPage = await cached.newPage(); active = cachedPage;
   await enter(cachedPage, threeState, 'zh'); await verifyAssets(cachedPage);
   const history = threeState.process!.runs.find(run => run.runId !== threeState.campaign!.runId && run.tasks.length > 0)!;
-  await chooseRun(cachedPage, threeState, history); await cachedPage.reload();
+  await chooseRun(cachedPage, threeState, history); await verifyAssets(cachedPage); await cachedPage.reload();
   await global(cachedPage, threeState, history); await verifyWorkflow(cachedPage, threeState, history, 'zh'); await verifyAssets(cachedPage);
   for (const file of ['site.js', 'process.css']) {
     const requests = cacheAssets.map(value => new URL(value)).filter(url => url.pathname.endsWith('/' + file));
     assert.ok(requests.length >= 2);
     assert.ok(requests.every(url => url.searchParams.get('v') === assetVersions[file]));
   }
+  const cachedRoutes = cacheAssets.map(value => new URL(value)).filter(url => url.pathname.endsWith('/data/solution-route.js'));
+  assert.equal(cachedRoutes.length, 2, 'Each document loads the lazy route renderer once, including a normal cached refresh');
+  assert.ok(cachedRoutes.every(url => url.searchParams.get('v') === solutionAssetVersion));
   await cached.close(); active = undefined;
   mark('normal cache-enabled navigation and refresh keep the chosen run and use final content-versioned assets');
   assert.equal(runnerCalls, 0); assert.deepEqual(writes, []); assert.deepEqual(apiReads, []); assert.deepEqual(external, []); assert.deepEqual(errors, []);
@@ -1057,16 +1081,20 @@ try {
   assert.ok(figureAssetRequests.length > 0);
   assert.ok(figureAssetRequests.every(value => new URL(value).searchParams.get('v') === figureAssetVersion),
     'Mathematical controls must load their separate script with its final content version');
+  assert.ok(solutionAssetRequests.length > 0);
+  assert.ok(solutionAssetRequests.every(value => new URL(value).searchParams.get('v') === solutionAssetVersion),
+    'All lazy route loads must use the final renderer content version');
   for (const value of processAssetRequests) {
     const url = new URL(value), id = url.pathname.split('/').at(-1)!.slice(0, -3);
     assert.equal(url.searchParams.get('v'), processAssetVersions[id], 'Lazy proof explanations must use the final process content version');
   }
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
-    checks, screenshots, viewportEvidence, records: catalog.records.length, figureCount, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
-    derivationLines: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.derivation.length, 0), 0),
-    readingStages: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.stages.length, 0),
-    proofDependencies: catalog.records.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.dependsOn.length, 0), 0),
-    assetVersions, cacheAssets, processAssetVersions, processAssetRequests, figureAssetVersion, figureAssetRequests,
+    checks, screenshots, viewportEvidence, catalogRecords: catalog.records.length, detailedExplanationRecords: detailedRecords.length,
+    figureCount, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
+    derivationLines: detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.derivation.length, 0), 0),
+    readingStages: detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.stages.length, 0),
+    proofDependencies: detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.dependsOn.length, 0), 0),
+    assetVersions, cacheAssets, processAssetVersions, processAssetRequests, figureAssetVersion, figureAssetRequests, solutionAssetVersion, solutionAssetRequests,
     paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
     failureExample: { record: failure.record.id, run: failure.run.runId, check: failure.check.id },
     revisionExample: { record: revision.record.id, run: revision.run.runId, before: revision.before.id, after: revision.check.id } }, null, 2) + '\n');

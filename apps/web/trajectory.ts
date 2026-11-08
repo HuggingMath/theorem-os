@@ -1,4 +1,4 @@
-import type { WebCheckReceipt, WebDelivery, WebGuidanceRecord, WebHumanEdit, WebObservation, WebPlanTask, WebTaskSource } from './collaboration';
+import type { WebCheckReceipt, WebDelivery, WebGuidanceRecord, WebHumanEdit, WebObservation, WebPlanTask, WebProofRoute, WebTaskSource } from './collaboration';
 import type { WebEvent } from './shared';
 
 /**
@@ -27,7 +27,7 @@ export const trajectoryLimits = {
   events: 10_000, versions: 4_000, checks: 100, receipts: 200, plans: 300, planItems: 200,
   deliveries: 1_000, guidance: 300, edits: 300, workers: 64, targets: 200,
 } as const;
-const textLimits = { objective: 400, summary: 600, finding: 4_000, guidance: 2_000, headline: 160 } as const;
+const textLimits = { guidance: 2_000, headline: 160 } as const;
 const readLimits = { events: 5_000, observations: 40 } as const;
 
 /** One Lean check of a version; receipts recorded at the same verification time (one per target theorem) form one check. */
@@ -36,13 +36,18 @@ export type TrajectoryCheck = { at: number; passed: boolean; status: string; rec
 export type TrajectoryVersion = {
   key: string; taskId: string; commit: string; file?: string; source?: number; firstAt: number; checks: TrajectoryCheck[]; revision: number;
 };
-export type TrajectoryPlanItem = { id: string; kind: WebPlanTask['kind']; name?: string; objective: string; dependsOn: string[]; status?: string };
+export type TrajectoryPlanItem = { id: string; kind: WebPlanTask['kind']; name?: string; objective: string; dependsOn: string[]; status?: string;
+  revision?: number; taskDigest?: string; proofPath?: string; type?: string; premises?: readonly string[];
+  informalStatement?: string; informalProof?: string; citations?: readonly string[]; consumerGoalIds?: readonly string[]; groupId?: string };
 /** A plan as first observed, then each observed change; `previousAt` and `at` bracket when the change happened. */
 export type TrajectoryPlan = {
   observation: number; at: number; previousAt?: number; added: TrajectoryPlanItem[];
   changed: { before: TrajectoryPlanItem; after: TrajectoryPlanItem }[]; removed: TrajectoryPlanItem[]; omitted: number; revision: number;
+  proofRoutes?: WebProofRoute[];
 };
-export type TrajectoryDelivery = Pick<WebDelivery, 'id' | 'kind' | 'status' | 'producer' | 'taskId' | 'commit' | 'createdAt' | 'summary' | 'finding'> & { revision: number };
+export type TrajectoryDelivery = Pick<WebDelivery, 'id' | 'kind' | 'status' | 'producer' | 'taskId' | 'commit' | 'createdAt' | 'summary' | 'finding'> &
+  Partial<Pick<WebDelivery, 'taskDigest' | 'sourceDigest' | 'statement' | 'premises' | 'dependencies' | 'remainingObligations' |
+  'evidenceRefs' | 'evidence' | 'actualReferences'>> & { revision: number };
 export type TrajectoryGuidance = Pick<WebGuidanceRecord, 'id' | 'recipient' | 'taskRef' | 'text' | 'status' | 'createdAt' | 'updatedAt' | 'deliveredTo'> & { revision: number };
 /** The edit receipt's own recheck list is not kept: it reports each task's latest state, not what the edit rechecked. */
 export type TrajectoryEdit = Pick<WebHumanEdit, 'id' | 'status' | 'receivedAt' | 'appliedAt' | 'affectedTasks'> & { revision: number };
@@ -153,16 +158,25 @@ function foldCheck(index: TrajectoryIndex, receipt: WebCheckReceipt, observation
   version.revision = index.revision;
 }
 
-const planItem = (task: WebPlanTask): TrajectoryPlanItem => ({ id: task.id, kind: task.kind, ...(task.theoremName ? { name: task.theoremName } : {}),
-  objective: clip(task.objective, textLimits.objective) ?? '', dependsOn: task.dependsOn.slice(0, 32), ...(task.status ? { status: task.status } : {}) });
-const samePlanItem = (a: TrajectoryPlanItem, b: TrajectoryPlanItem) => JSON.stringify(a) === JSON.stringify(b);
+const planItem = (task: WebPlanTask, taskDigest?: string): TrajectoryPlanItem => ({ id: task.id, kind: task.kind, ...(task.theoremName ? { name: task.theoremName } : {}),
+  objective: task.objective, dependsOn: [...task.dependsOn], ...(task.status ? { status: task.status } : {}),
+  revision: task.revision, ...(taskDigest ? { taskDigest } : {}),
+  ...Object.fromEntries((['proofPath', 'type', 'premises', 'informalStatement', 'informalProof', 'citations', 'consumerGoalIds', 'groupId'] as const)
+    .filter(key => task[key] !== undefined).map(key => [key, task[key]])) });
+const samePlanItem = (a: TrajectoryPlanItem, b: TrajectoryPlanItem) => {
+  // A revision bump alone schedules revalidation; it does not change the displayed mathematical plan.
+  const { revision: _aRevision, taskDigest: _aDigest, ...before } = a;
+  const { revision: _bRevision, taskDigest: _bDigest, ...after } = b;
+  return JSON.stringify(before) === JSON.stringify(after);
+};
 
 function foldPlan(index: TrajectoryIndex, observation: WebObservation, at: number) {
   const tasks = observation.plan?.tasks;
   if (!tasks) return;
   const planVersion = observation.inspection.planVersion;
   if (planVersion && planVersion === index.planVersion && index.plan) return;
-  const next = new Map(tasks.map(task => [task.id, planItem(task)]));
+  const versions = new Map(observation.inspection.tasks.map(task => [task.id, task.version]));
+  const next = new Map(tasks.map(task => [task.id, planItem(task, versions.get(task.id))]));
   const previous = index.plan;
   const added: TrajectoryPlanItem[] = [], changed: TrajectoryPlan['changed'] = [], removed: TrajectoryPlanItem[] = [];
   let omitted = 0;
@@ -174,20 +188,25 @@ function foldPlan(index: TrajectoryIndex, observation: WebObservation, at: numbe
   }
   for (const [id, item] of previous ?? []) if (!next.has(id)) keep(removed, item);
   index.plan = next; index.planVersion = planVersion;
-  if (!added.length && !changed.length && !removed.length) return;
+  const proofRoutes = observation.plan?.proofRoutes ?? [];
+  if (!added.length && !changed.length && !removed.length && JSON.stringify(index.plans.at(-1)?.proofRoutes ?? []) === JSON.stringify(proofRoutes)) return;
   index.plans.push({ observation: observation.sequence, at, ...(index.lastObservedAt !== undefined ? { previousAt: index.lastObservedAt } : {}),
-    added, changed, removed, omitted, revision: index.revision });
+    added, changed, removed, omitted, revision: index.revision, ...(proofRoutes.length ? { proofRoutes } : {}) });
   // The first plan stays, so later revisions always read against it.
   if (index.plans.length > trajectoryLimits.plans) { index.plans.splice(1, 1); index.dropped.plans++; }
 }
 
 function foldDelivery(index: TrajectoryIndex, delivery: WebDelivery) {
   const previous = index.deliveries.get(delivery.id);
-  if (previous ? previous.status === delivery.status : retired(index, 'deliveries', delivery.id)) return;
-  index.deliveries.set(delivery.id, { id: delivery.id, kind: delivery.kind, status: delivery.status, producer: delivery.producer,
+  if (!previous && retired(index, 'deliveries', delivery.id)) return;
+  const next: TrajectoryDelivery = { id: delivery.id, kind: delivery.kind, status: delivery.status, producer: delivery.producer,
     ...(delivery.taskId ? { taskId: delivery.taskId } : {}), ...(delivery.commit ? { commit: delivery.commit } : {}), createdAt: delivery.createdAt,
-    summary: clip(delivery.summary, textLimits.summary) ?? '', ...(delivery.finding ? { finding: clip(delivery.finding, textLimits.finding) } : {}),
-    revision: index.revision });
+    summary: delivery.summary, ...(delivery.finding ? { finding: delivery.finding } : {}),
+    ...Object.fromEntries((['taskDigest', 'sourceDigest', 'statement', 'premises', 'dependencies', 'remainingObligations',
+      'evidenceRefs', 'evidence', 'actualReferences'] as const).filter(key => delivery[key] !== undefined).map(key => [key, delivery[key]])),
+    revision: index.revision };
+  if (previous && JSON.stringify({ ...previous, revision: 0 }) === JSON.stringify({ ...next, revision: 0 })) return;
+  index.deliveries.set(delivery.id, next);
   trim(index, 'deliveries', index.deliveries, trajectoryLimits.deliveries);
 }
 

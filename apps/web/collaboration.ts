@@ -4,6 +4,7 @@ export type WebPlanTask = {
   dependsOn: readonly string[]; revision: number; proofPath?: string; theoremName?: string; type?: string;
   groupId?: string; sharing?: 'group' | 'problem'; status?: 'active' | 'paused' | 'stopped'; ownerId?: string;
   premises?: readonly string[]; conditional?: boolean; statementReview?: boolean; informalStatement?: string;
+  informalProof?: string; citations?: readonly string[]; consumerGoalIds?: readonly string[];
   reviewScope?: 'final-candidate' | 'feasibility'; declaration?: 'definition';
 };
 export type WebPlanGroup = { id: string; objective: string; status: 'active' | 'paused' | 'stopped'; revision: number;
@@ -26,6 +27,7 @@ export type WebProofReferences = {
 export type WebInspectedTask = {
   id: string; kind: WebPlanTask['kind']; objective: string; group: string; status: string; control: string;
   owner?: string; version: string; theorem?: string; type?: string; informalStatement?: string;
+  informalProof?: string; citations?: readonly string[];
   premises: readonly string[]; plannedDependencies: readonly string[]; attempts: number;
   proof: { status: string; failureCategory?: string; commit?: string; sourceDigest?: string;
     conditions?: WebTaskReference[]; receiptIds?: string[]; actualReferences?: WebProofReferences };
@@ -119,6 +121,7 @@ export type WebDelivery = {
   statement: string; premises: readonly string[]; dependencies: WebTaskReference[]; remainingObligations: readonly string[];
   summary: string; evidenceRefs: readonly string[]; createdAt: number; commit?: string; sourceDigest?: string; finding?: string;
   evidence?: { passed: boolean; verification: { status: string; targetCommit: string; results: { receiptId: string }[] } };
+  actualReferences?: WebProofReferences;
 };
 export type WebTaskSource = {
   taskId: string; taskVersion: string; commit: string; sourceDigest: string;
