@@ -8,6 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput } from '../apps/web/shared';
+import { shareSnapshot } from '../apps/web/share';
 import { selectHistoryRun } from './web-ui-controls';
 import { audit } from './web-a11y';
 import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
@@ -67,7 +68,7 @@ try {
   await open(page, rejected.id);
   assert.equal(await page.locator('[data-action="share-run"]').count(), 0, 'Only accepted runs offer a share link');
   const accepted: WebRun = await postRun({ page }, input('accepted'));
-  await finished(page, accepted.id);
+  const verified = await finished(page, accepted.id);
   await open(page, accepted.id);
   await page.locator('[data-action="share-run"]').click();
   await page.locator('#share-dialog[open]').waitFor();
@@ -91,7 +92,7 @@ try {
   await reader.goto(url);
   await reader.locator('#share-content:not([hidden])').waitFor();
   const text = await reader.locator('body').innerText();
-  assert.match(text, /完整原题通过独立 Lean 验收/u);
+  assert.match(text, /Lean 陈述证明通过/u);
   assert.match(text, /Lean 内核 · 全部目标/u);
   assert.equal(await reader.locator('#share-code').textContent(), proof);
   for (const secret of [credential, 'PRIVATE', accepted.id]) assert.ok(!text.includes(secret), `Share page shows ${secret}`);
@@ -123,6 +124,37 @@ try {
   await reader.goto(`${origin}/share.html#short`);
   await reader.locator('#share-missing-text', { hasText: '链接不完整' }).waitFor();
   mark('stopping the share ends the link at once, and a damaged link explains itself');
+
+  // Public snapshots may have automatic, manual or legacy confirmation. Render each without upgrading its meaning.
+  const original = '证明真命题 True 成立。 <img src=x onerror="window.shareInjected=true">';
+  const token = 'N'.repeat(32);
+  const snapshot = shareSnapshot({ ...verified, formalization: { id: 'PRIVATE-FORMALIZATION', original,
+    evidenceSha256: 'a'.repeat(64), confirmedAt: new Date().toISOString(), confirmation: 'automatic' } })!;
+  snapshot.formalization!.review = { backtranslation: { mathematics: 'True holds.', assumptions: [], definitions: [],
+    targets: [{ name: 'fixture', mathematics: 'True holds.' }] },
+  correspondences: [{ aspect: 'conclusions', relation: 'direct', original, originalStart: 0, originalEnd: original.length,
+    leanText: 'True', lean: [{ line: 1, start: 18, end: 22 }], reviewers: 2, explanations: ['The conclusion is True.'] }] };
+  await reader.route(`**/api/share/${token}`, route => route.fulfill({ json: { share: snapshot } }));
+  await reader.setViewportSize({ width: 1440, height: 900 });
+  for (const [confirmation, expected] of [['automatic', /模型审核通过，未经人工确认/u], ['manual', /分享者已确认/u], [undefined, /未记录确认方式/u]] as const) {
+    snapshot.formalization!.confirmation = confirmation;
+    await reader.goto(`${origin}/share.html?confirmation=${confirmation ?? 'legacy'}#${token}`);
+    await reader.locator('#share-content:not([hidden])').waitFor();
+    assert.equal(await reader.locator('#share-task').textContent(), original, 'The original is public text, preserving every character');
+    assert.match(await reader.locator('#share-confirmation').innerText(), expected);
+    assert.match(await reader.locator('#share-verdict').innerText(), /Lean 陈述证明通过/u);
+    await reader.locator('#share-review > summary').click();
+    assert.equal(await reader.locator('#share-backtranslation').innerText(), 'True holds.');
+    assert.equal(await reader.locator('#share-correspondences blockquote').textContent(), original);
+    assert.equal(await reader.locator('#share-task img, #share-correspondences img').count(), 0);
+    assert.equal(await reader.evaluate(() => Boolean((window as any).shareInjected)), false);
+    if (confirmation === 'automatic') await reader.screenshot({ path: path.join(output, 'share-natural-1440.png'), fullPage: true });
+  }
+  await reader.setViewportSize({ width: 320, height: 760 });
+  assert.ok(await reader.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert.deepEqual(await audit(reader), []);
+  await reader.screenshot({ path: path.join(output, 'share-natural-320.png'), fullPage: true });
+  mark('natural-language shares preserve original text and review, distinguish all confirmation states and render content safely at narrow widths');
   assert.deepEqual(errors.filter(message => !/status of 404/u.test(message)), []);
   console.log('Share checks passed: eligibility, dialog, copy, signed-out view, private fields, narrow layout and revocation.');
 } finally {

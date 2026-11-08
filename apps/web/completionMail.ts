@@ -26,20 +26,24 @@ const stoppedReasons: Record<string, Pick<Outcome, 'detailZh' | 'detailEn'>> = {
 };
 const outcome = (run: WebRun): Outcome => {
   if (run.status === 'completed' && run.result?.status === 'evaluated_passed')
-    return { zh: '已通过验收', en: 'accepted', detailZh: '完整原题通过独立 Lean 验收。', detailEn: 'The full statement passed independent Lean verification.' };
+    return run.formalization
+      ? { zh: 'Lean 陈述已通过验收', en: 'has an accepted Lean statement', detailZh: '冻结的 Lean 陈述通过独立 Lean 验收。',
+        detailEn: 'The frozen Lean statement passed independent Lean verification.' }
+      : { zh: '已通过验收', en: 'accepted', detailZh: '完整原题通过独立 Lean 验收。', detailEn: 'The full statement passed independent Lean verification.' };
   if (run.status === 'error')
     return { zh: '运行出错', en: 'stopped with an error', detailZh: '运行环境或模型会话发生错误，详情见运行页面。', detailEn: 'The run environment or model session failed; see the run page.' };
   if (run.result?.status === 'evaluated_failed')
-    return { zh: '未通过验收', en: 'not accepted', detailZh: '候选证明未通过独立 Lean 验收。', detailEn: 'The candidate proof did not pass independent Lean verification.' };
+    return { zh: run.formalization ? 'Lean 陈述未通过验收' : '未通过验收', en: 'not accepted', detailZh: '候选证明未通过独立 Lean 验收。', detailEn: 'The candidate proof did not pass independent Lean verification.' };
   if (run.result?.status === 'evaluated_rejected')
-    return { zh: '未通过验收', en: 'not accepted', detailZh: '候选未满足验收约束，详情见报告。', detailEn: 'The candidate did not meet the verification constraints; see the report.' };
+    return { zh: run.formalization ? 'Lean 陈述未通过验收' : '未通过验收', en: 'not accepted', detailZh: '候选未满足验收约束，详情见报告。', detailEn: 'The candidate did not meet the verification constraints; see the report.' };
   const cause = stopCause(run);
   // The owner was mailed when the plan was ready; a budget that ran out on that wait is theirs to know about.
   if (cause === 'time' && run.observation?.inspection.planApproval?.status === 'pending')
     return { ...stopped.time, detailZh: '研究计划直到解题时间用完都没有批准，Agent 没有开始工作。',
       detailEn: 'The research plan was not approved before the solve time ran out, so the Agents never started.' };
   if (cause) return { ...stopped[cause], ...stoppedReasons[run.failure?.reason ?? ''] };
-  return { zh: '已结束', en: 'finished', detailZh: '本次研究尚未得到通过完整原题验收的证明。', detailEn: 'This run did not produce a proof that passed verification.' };
+  return { zh: '已结束', en: 'finished', detailZh: run.formalization ? '本次研究尚未得到通过 Lean 陈述验收的证明。' : '本次研究尚未得到通过完整原题验收的证明。',
+    detailEn: 'This run did not produce a proof that passed verification.' };
 };
 
 const minutes = (run: WebRun) => {
@@ -53,13 +57,25 @@ const minutes = (run: WebRun) => {
  */
 export function completionMail(run: WebRun, publicUrl: string): { subject: string; text: string } {
   const result = outcome(run), took = minutes(run);
+  const meaning = run.formalization && {
+    zh: run.formalization.confirmation === 'manual' ? '原题含义：你已确认 Lean 陈述。'
+      : run.formalization.confirmation === 'automatic' ? '原题含义：模型审核通过，未经人工确认。'
+        : '原题含义：未记录确认方式，请核对 Lean 陈述。',
+    en: run.formalization.confirmation === 'manual' ? 'Problem meaning: you confirmed the Lean statement.'
+      : run.formalization.confirmation === 'automatic' ? 'Problem meaning: model review passed; not confirmed by a person.'
+        : 'Problem meaning: the confirmation method was not recorded; please check the Lean statement.',
+  };
   const title = run.title.replace(/\s+/gu, ' ').trim().slice(0, 80) || 'TheoremOS';
   const link = new URL(`/?run=${encodeURIComponent(run.id)}`, publicUrl).href;
   return {
     subject: `TheoremOS · ${result.zh}：${title}`,
     text: [
-      `你的研究「${title}」${result.zh}。`, result.detailZh, ...(took ? [`用时约 ${took} 分钟。`] : []), '', `查看结果：${link}`, '',
-      `Your research "${title}" ${result.en}. ${result.detailEn}${took ? ` It took about ${took} min.` : ''}`, `View the result: ${link}`, '',
+      `你的研究「${title}」${run.formalization ? '：' : ''}${result.zh}。`, result.detailZh,
+      ...(meaning ? [meaning.zh, 'Lean 验收不能替代对自然语言原意的核对。'] : []),
+      ...(took ? [`用时约 ${took} 分钟。`] : []), '', `查看结果：${link}`, '',
+      `Your research "${title}" ${result.en}. ${result.detailEn}`
+        + (meaning ? ` ${meaning.en} Lean verification does not replace checking the original natural-language meaning.` : '')
+        + (took ? ` It took about ${took} min.` : ''), `View the result: ${link}`, '',
       '不想收到这类邮件，可以在工作台的账号菜单里关闭「研究结束时发邮件」。',
       'To stop these emails, turn off "Email me when research ends" in the account menu.',
     ].join('\n'),

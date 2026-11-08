@@ -454,10 +454,20 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
           }
           const savedKey = /^\/api\/auth\/keys\/([a-z][a-z0-9-]{0,39})$/u.exec(url.pathname);
-          if (savedKey && request.method === 'DELETE') {
+          if (savedKey && ['PUT', 'DELETE'].includes(request.method ?? '')) {
             if (!session.account) throw new HttpError(401, '请先登录。');
             if (!vault) throw new HttpError(404, '当前服务未启用保存 Key。');
-            vault.forget(session.account.id, savedKey[1]);
+            if (request.method === 'PUT') {
+              if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+              const provider = config.providers.find(item => item.id === savedKey[1]);
+              if (!provider) throw new HttpError(400, '请选择可用的服务商');
+              const body = z.object({ apiKey: inputSchema.shape.apiKey.min(8) }).strict().safeParse(await readJson(request));
+              if (!body.success) throw new HttpError(400, '请填写有效的 API Key。');
+              // Reading the body yields; a logout, suspension or account deletion must prevent a later save.
+              if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+              if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+              vault.save(session.account.id, provider.id, provider.baseUrl, body.data.apiKey);
+            } else vault.forget(session.account.id, savedKey[1]);
             json(response, 200, { savedKeys: savedKeysFor(session) }); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
@@ -547,6 +557,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (conversationMatch) {
           const [, id, action] = conversationMatch;
           if (!action && request.method === 'GET') { json(response, 200, { conversation: conversations.read(owner, id) }); return; }
+          if (!action && request.method === 'PATCH') {
+            conversations.read(owner, id);
+            const parsed = z.object({ title: z.string() }).strict().safeParse(await readJson(request));
+            if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+            if (!parsed.success) throw new HttpError(400, '请输入不超过 80 字的对话标题。');
+            json(response, 200, { conversation: conversations.rename(owner, id, parsed.data.title) }); return;
+          }
+          if (!action && request.method === 'DELETE') {
+            conversations.delete(owner, id); json(response, 200, { deleted: true }); return;
+          }
           if (action === 'stop' && request.method === 'POST') { json(response, 200, { conversation: conversations.stop(owner, id) }); return; }
           if (action === 'guidance' && request.method === 'POST') {
             const parsed = webGuidanceSchema.safeParse(await readJson(request));
@@ -1032,7 +1052,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (request.method === 'POST') {
             const existing = storage.getOwnShare(owner, run.id);
             if (existing) { json(response, 200, { share: link(existing.token, existing.createdAt) }); return; }
-            const createdAt = new Date().toISOString(), snapshot = shareSnapshot(run, createdAt);
+            let review;
+            if (run.formalization) {
+              try { review = formalizations.read(owner, run.formalization.id).report; }
+              catch (error) { if (!(error instanceof WebStorageError && error.status === 404)) throw error; }
+            }
+            const createdAt = new Date().toISOString(), snapshot = shareSnapshot(run, createdAt, review);
             if (!snapshot) throw new HttpError(409, '只有通过独立验收的运行可以分享。');
             const token = crypto.randomBytes(24).toString('base64url');
             storage.saveShare(owner, run.id, { token, createdAt, snapshot });

@@ -5,7 +5,7 @@ export const legal: Record<string, string> = {
   "使用条款 · TheoremOS": "Terms of Use · TheoremOS",
   "隐私说明 · TheoremOS": "Privacy Notice · TheoremOS",
   "版本 2026-11-07 · 适用于在线工作台 app.theoremos.top": "Version 2026-11-07 · applies to the workbench at app.theoremos.top",
-  "更新于 2026-11-07 · 适用于在线工作台 app.theoremos.top": "Updated 2026-11-07 · applies to the workbench at app.theoremos.top",
+  "更新于 2026-11-08 · 适用于在线工作台 app.theoremos.top": "Updated 2026-11-08 · applies to the workbench at app.theoremos.top",
   "这份条款约定你使用 TheoremOS 在线工作台时双方的关系。登录或使用工作台即表示你同意这份条款；不同意请不要登录。":
     "These terms set out the relationship between you and us when you use the TheoremOS workbench. By signing in or using the workbench you agree to them; if you do not agree, please do not sign in.",
   "这份说明讲工作台保存哪些数据、为什么保存、谁能看到，以及你怎样删除它们。":
@@ -40,10 +40,10 @@ export const legal: Record<string, string> = {
   "二、API Key": "2. API keys",
   "API Key 不写入日志、不写入运行记录，也不会出现在分享链接里。":
     "API keys are never written to logs or run records, and never appear in share links.",
-  "未保存到账号的 Key 只用于本次任务及当前对话，存在于当前页面内存、服务器执行输入和隔离运行容器中；不写入持久记录，刷新页面后需重新填写。":
-    "Unsaved keys are used for this task and the current conversation. They remain in page memory, server execution inputs and isolated worker containers, never persisted records. Refreshing the page clears the input.",
-  "在进阶版勾选「保存到我的账号」时，Key 用 AES-256-GCM 加密后保存在服务器；界面只显示末四位，可在「模型连接」中删除。服务器需在调用时解密 Key，服务运营方负责保护加密密钥。":
-    "Selecting “Save to my account” in advanced mode stores the key encrypted with AES-256-GCM. The interface shows only its last four characters; remove it under Model connection. The server decrypts keys when making calls, and the operator is responsible for protecting the encryption key.",
+  "Key 默认仅本次使用。未保存到账号的 Key 只用于本次任务及当前对话，存在于当前页面内存、服务器执行输入和隔离运行容器中；不写入持久记录，刷新页面后需重新填写。":
+    "Keys are temporary by default. Unsaved keys are used for this task and the current conversation. They remain in page memory, server execution inputs and isolated worker containers, never persisted records. Refreshing the page clears the input.",
+  "登录后，可在自然语言「设置」或 Lean「模型连接」中主动保存、替换或删除账号 Key。保存时使用 AES-256-GCM 加密存放在服务器；界面只显示末四位。服务器需在调用时解密 Key，服务运营方负责保护加密密钥。":
+    "After signing in, use natural-language Settings or Lean Model connection to save a key to your account, replace it or delete it. Saved keys are encrypted with AES-256-GCM on the server; only the last four characters are shown. The server decrypts keys when making calls, and the operator is responsible for protecting the encryption key.",
 
   "三、合理使用": "3. Acceptable use",
   "不要用工作台提交违法内容、侵犯他人权利的内容，或试图让服务替你访问你无权访问的系统。":
@@ -58,8 +58,8 @@ export const legal: Record<string, string> = {
     "Problems, Lean source, conversations, activity, candidate proofs and results are isolated by account and inaccessible to other users. Relevant content is sent to your selected model provider to perform the task, subject to its processing and retention policies. The service operator can access stored server data for maintenance, backups and troubleshooting.",
   "运行时的 Lean 检查、Agent 动作和形式化过程保存在你的账号目录下，只用于给你显示过程记录。":
     "Lean checks, Agent actions and formalization activity from a run are kept under your account and used only to show you the process record.",
-  "分享链接由你主动创建，任何持有链接的人可查看原题、Lean 证明、验收结论、模型、环境及耗时与用量。分享页不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话；撤销后链接失效。":
-    "You create share links explicitly. Anyone with a link can read the problem, Lean proof, acceptance result, model, environment, duration and usage. Shares exclude keys, email, provider addresses, run logs and Agent conversations. Revoking a link disables it.",
+  "分享链接由你主动创建，任何持有链接的人可查看 Lean 原题、证明、验收结论、模型、环境及耗时与用量，以及自然语言原题、确认方式、形式化回译和对应关系（如有）。分享页不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话；撤销后链接失效。":
+    "You create share links explicitly. Anyone with a link can read the Lean problem, proof, acceptance result, model, environment, duration and usage, plus the natural-language problem, confirmation method, back-translation and formalization correspondences when available. Shares exclude keys, email, provider addresses, run logs and Agent conversations. Revoking a link disables it.",
   "产品内的管理员面板只展示账号资料、状态与用量，不提供其他账号题目、证明或对话的读取入口；这不限制服务运营方对服务器的维护权限。":
     "The product’s admin panel shows account details, status and usage, with no route to read another account’s problems, proofs or conversations. This does not limit the operator’s server maintenance access.",
 

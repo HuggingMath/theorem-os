@@ -61,8 +61,28 @@ try {
   assert.equal(footer.length, 1);
   assert.ok(footer.every(href => href.startsWith('https://theoremos.top/')), `Login footer links leave the site: ${footer}`);
   assert.ok(footer.some(href => href.includes('feedback.html?') && href.includes('area=workbench')), 'Login footer lacks the prefilled feedback link');
+  const access = page.locator('#login-access'), accessLink = access.getByRole('link');
+  assert.equal(await access.isVisible(), true, 'Allowlist visitors need a way to request access');
+  assert.equal(await accessLink.innerText(), '申请内测');
+  assert.equal(await accessLink.getAttribute('href'), 'https://theoremos.top/#start');
+  await page.locator('#locale-switch').click();
+  await page.locator('#send-code:enabled').waitFor();
+  assert.equal(await access.locator('span').innerText(), 'Need beta access?');
+  assert.equal(await accessLink.innerText(), 'Request access');
+  assert.equal(await accessLink.getAttribute('href'), 'https://theoremos.top/en/#start');
+  await page.locator('#locale-switch').click();
+  await page.locator('#send-code:enabled').waitFor();
+  const previousSignup = config.auth!.signup;
+  config.auth!.signup = 'open';
+  await page.reload();
+  await page.locator('#send-code:enabled').waitFor();
+  assert.equal(await access.isVisible(), false, 'Open signup does not need a beta application prompt');
+  config.auth!.signup = previousSignup;
+  await page.reload();
+  await page.locator('#send-code:enabled').waitFor();
+  assert.equal(await access.isVisible(), true);
   assert.deepEqual(await audit(page), [], 'Login page accessibility');
-  mark('the workbench sends a visitor without an account to the login page, which shows a captcha image, the usage guide and site links and passes the accessibility audit');
+  mark('the login page shows a localized beta application link only for allowlist visitors, and passes the accessibility audit');
 
   await page.fill('#login-email', 'mallory@example.org');
   await page.fill('#login-captcha', '24680');
@@ -119,6 +139,7 @@ try {
   await page.reload();
   await page.waitForURL(/\/login\.html/u);
   await page.locator('#terms-step:not([hidden])').waitFor();
+  assert.equal(await page.locator('#login-access').isVisible(), false, 'Terms confirmation must not ask an existing account to apply');
   assert.equal(await page.locator('#accept-terms').isChecked(), false);
   await page.click('#confirm-terms');
   assert.match(await page.locator('#login-error').innerText(), /请先阅读/u);

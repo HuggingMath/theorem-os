@@ -99,6 +99,10 @@ async function conversation(page: Page): Promise<WebConversation> {
   const id = new URL(page.url()).searchParams.get('chat'); assert.ok(id, 'Conversation has a stable URL');
   return page.evaluate(async id => (await (await fetch(`/api/conversations/${id}`)).json()).conversation, id);
 }
+async function openChatHistory(page: Page) {
+  if (!await page.locator('#chat-history-list').isVisible()) await page.locator('#open-history').click();
+  await page.locator('[data-chat-search]').waitFor();
+}
 async function expectMessage(page: Page, value: string) {
   await page.waitForFunction(value => document.querySelector('#research-chat-thread')?.textContent?.includes(value), value);
 }
@@ -191,7 +195,7 @@ try {
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
     assert.equal((runs.at(-1)?.formalization as { request?: { statement?: string } } | undefined)?.request?.statement, original);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), String(width === 390));
-    assert.match(await page.locator('[data-statement-verdict]').innerText(), /模型审核通过，未经人工确认/u);
+    assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /模型审核通过，未经人工确认/u);
     if (width === 1440) {
       assert.equal(runs.at(-1)?.input.maxRunSeconds, 180); assert.equal(runs.at(-1)?.input.maxTotalTokens, 80000);
       assert.equal(runs.at(-1)?.input.maxTurns, 4);
@@ -522,6 +526,99 @@ try {
       await page.goto(`${origin}/?chat=${missing}`);
       await page.getByText('请求太频繁，请稍后再试。').first().waitFor();
       mark('a failed history load says so and retries; a rate-limited read names the limit');
+    } finally { await context.close(); }
+  }
+  for (const width of [1440, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`); });
+    try {
+      const calls = providerCalls.length, started = formalizations.length;
+      await page.goto(origin); await page.locator('#formalize-original').fill(original); await credentials(page);
+      await page.locator('#formalize-start').click();
+      await eventually(() => formalizations.length === started + 1, 'The history fixture starts its statement');
+      const pending = formalizations.at(-1)!;
+      pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
+      await page.locator('[data-research-artifact="source"]:enabled').waitFor();
+      const saved = await conversation(page);
+      assert.ok(saved.runId && saved.formalizationId);
+      await openChatHistory(page);
+      const row = page.locator(`[data-chat-row="${saved.id}"]`), title = `History ${width}: additive identity`;
+      await row.locator('[data-chat-rename]').click();
+      await row.locator('[data-chat-title]').fill(title);
+      await row.locator('[data-chat-history-confirm]').click();
+      await row.locator('a.chat-history-item').filter({ hasText: title }).waitFor();
+      await page.locator('[data-chat-search]').fill('NO MATCHING CONVERSATION');
+      await row.waitFor({ state: 'detached' });
+      await page.getByText('没有匹配的对话', { exact: true }).waitFor();
+      await page.locator('[data-chat-search]').fill('ADDITIVE IDENTITY');
+      await row.waitFor();
+      await page.reload(); await expectMessage(page, webFormalizationStatement);
+      assert.equal((await conversation(page)).title, title, 'The renamed conversation persists after refresh');
+      await openChatHistory(page);
+      assert.equal(await row.locator('a.chat-history-item').innerText(), title);
+      mark(`${width}px: conversation search filters titles and a renamed title survives refresh`);
+
+      await page.locator('#chat-problem-records > summary').click();
+      const linked = page.locator(`[data-chat-record="${saved.formalizationId}"]`);
+      await linked.locator('[data-chat-delete-record]:enabled').waitFor();
+      await linked.locator('[data-chat-delete-record]').click();
+      const rejected = page.waitForResponse(response => response.request().method() === 'DELETE'
+        && new URL(response.url()).pathname === `/api/formalizations/${saved.formalizationId}`);
+      await linked.locator('[data-chat-history-confirm]').click();
+      assert.equal((await rejected).status(), 409);
+      await linked.locator('[role="alert"]').filter({ hasText: '已有研究使用这份原题' }).waitFor();
+      await linked.getByRole('button', { name: '取消', exact: true }).click();
+      await row.locator('[data-chat-delete]').click();
+      assert.match(await row.locator('.chat-history-edit').innerText(), /只删除这段对话，题目、证明任务和分享链接仍保留。/u);
+      await row.locator('[data-chat-history-confirm]').click();
+      await page.waitForURL(url => !url.search);
+      await row.waitFor({ state: 'detached' });
+      const retained = await page.evaluate(async ({ id, runId, formalizationId }) => ({
+        conversation: (await fetch(`/api/conversations/${id}`)).status,
+        run: (await fetch(`/api/runs/${runId}`)).status,
+        formalization: (await fetch(`/api/formalizations/${formalizationId}`)).status,
+      }), saved);
+      assert.deepEqual(retained, { conversation: 404, run: 200, formalization: 200 });
+      mark(`${width}px: a linked statement refuses deletion with a reason; deleting the current conversation returns home and keeps the proof task and statement`);
+
+      if (width <= 850 && await page.locator('#history-dialog[open]').count()) await page.keyboard.press('Escape');
+      assert.equal(await page.locator('#chat-problem-records[open]').count(), 1, 'Record management remains expanded while a new statement is created');
+      await page.locator('#formalize-original').fill(original); await credentials(page);
+      await page.locator('#formalize-start').click();
+      await eventually(() => formalizations.length === started + 2, 'The removable statement fixture starts');
+      const stopped = formalizations.at(-1)!;
+      stopped.send({ type: 'result', status: 'exhausted', reason: 'formalization_token_limit' }); stopped.resolve();
+      await page.locator('[data-formalization-failure]').waitFor();
+      const unlinked = await conversation(page);
+      assert.equal(unlinked.runId, undefined);
+      await openChatHistory(page);
+      assert.equal(await page.locator('#chat-problem-records[open]').count(), 1, 'The expanded record list updates without toggling it');
+      const record = page.locator(`[data-chat-record="${unlinked.formalizationId}"]`);
+      await record.locator('[data-chat-delete-record]:enabled').waitFor();
+      await record.locator('[data-chat-delete-record]').click();
+      const removed = page.waitForResponse(response => response.request().method() === 'DELETE'
+        && new URL(response.url()).pathname === `/api/formalizations/${unlinked.formalizationId}`);
+      await record.locator('[data-chat-history-confirm]').click();
+      assert.equal((await removed).status(), 200);
+      await record.waitFor({ state: 'detached' });
+      assert.equal(await page.evaluate(async id => (await fetch(`/api/formalizations/${id}`)).status, unlinked.formalizationId), 404);
+      const kept = await conversation(page);
+      assert.equal(kept.id, unlinked.id);
+      assert.equal(kept.messages[0]?.text, original, 'Removing a statement retains the original conversation');
+      if (width <= 850) await page.keyboard.press('Escape');
+      else await page.locator('#open-history').click();
+      await page.locator('#research-chat-thread .research-conversation-state').filter({ hasText: '关联任务记录已删除' }).waitFor();
+      assert.equal(await page.getByText('正在读取任务', { exact: true }).count(), 0, 'A removed record has a terminal state rather than an endless load');
+      await page.locator('#research-chat-thread').getByRole('button', { name: '修改题目', exact: true }).click();
+      await page.waitForURL(url => !url.search);
+      assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Editing the retained conversation restores the exact original draft');
+      assert.equal(formalizations.length, started + 2, 'Restoring the draft does not create a statement');
+      assert.equal(providerCalls.length, calls, 'History management never invokes the model');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      mark(`${width}px: an expanded record list shows the new statement; removal has a terminal state and restores the original for editing`);
     } finally { await context.close(); }
   }
   assert.deepEqual(errors, []);

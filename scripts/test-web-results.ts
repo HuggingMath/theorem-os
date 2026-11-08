@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { openRunMenu, refresh, refreshHistory, runMenu, selectHistoryRun, showArtifacts } from './web-ui-controls';
+import { closeDialog, openRunMenu, refresh, refreshHistory, runMenu, selectHistoryRun, showArtifacts } from './web-ui-controls';
 import { deferred, freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -159,6 +159,74 @@ const writeReport = (status: 'passed' | 'failed', error?: unknown) => writeScena
   { workerStarts, checks, widths, screenshots, archiveDownloads });
 try {
   browser = await startBrowser(service.server, port);
+
+  await scenario('The conversation opens accepted results, explanation, verification download and sharing directly', async h => {
+    const run = await createRun(h, 'Accepted conversation actions', result({
+      candidateCheck: { passed: true, results: [{ theoremName: 'result_fixture', status: 'kernel_verified' }] },
+      evaluator: { status: 'passed', method: 'host-lean-kernel-all-targets' },
+    }, 'evaluated_passed'));
+    await refresh(h); await select(h, run.id);
+    await h.page.locator('#close-research-output').click();
+    const report = h.page.locator('[data-research-artifact="result"]');
+    await report.waitFor();
+    const writes = h.requests.filter(runtimeWrite).length;
+    for (const width of widths) {
+      await h.page.setViewportSize({ width, height: width > 850 ? 900 : 812 });
+      assert.equal((await report.innerText()).trim(), '查看验收报告');
+      await assertHorizontalFit(h.page, '.chat-task-actions', width);
+      await report.click();
+      await h.page.locator('#detail-panel[data-tab="result"] .result-verdict.passed').waitFor();
+      assert.equal(await h.page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
+      await h.page.locator('#close-research-output').click();
+      await report.waitFor();
+    }
+    await h.page.setViewportSize({ width: 1440, height: 900 });
+    const popup = h.page.waitForEvent('popup');
+    await h.page.locator('[data-chat-explain]').click();
+    const explanation = await popup;
+    await explanation.locator('#explain-lean-code .lean-row').first().waitFor();
+    assert.equal(new URL(explanation.url()).searchParams.get('run'), run.id);
+    assert.match(await explanation.locator('#explain-lean-code').innerText(), /theorem result_fixture/u);
+    await explanation.close();
+    const download = h.page.waitForEvent('download');
+    await h.page.locator('[data-chat-download-kit]').click();
+    const kit = await download;
+    assert.equal(kit.suggestedFilename(), `theoremos-${run.id.slice(0, 8)}-verify.zip`);
+    const archive = await fs.readFile((await kit.path())!);
+    assert.ok(archive.includes(Buffer.from('Original.lean')) && archive.includes(Buffer.from('Submission.lean')));
+    assert.equal(archive.includes(Buffer.from(credential)), false);
+    await h.page.locator('[data-chat-share]').click();
+    await h.page.locator('#share-dialog[open]').waitFor();
+    await h.page.locator('#create-share:enabled').waitFor();
+    assert.equal(await h.page.locator('#share-run-title').textContent(), run.title);
+    await closeDialog(h.page, '#share-dialog', () => h.page.locator('#close-share').click());
+    assert.equal(h.requests.filter(runtimeWrite).length, writes, 'opening result actions must not start research or create a share');
+  });
+
+  await scenario('The conversation opens a failed run report and recovers its original settings with a higher time budget', async h => {
+    const run = await createRun(h, 'Conversation budget recovery', result({ stopReason: 'math_run_stopped' }, 'limit_reached'));
+    await refresh(h); await select(h, run.id);
+    await h.page.locator('#close-research-output').click();
+    const report = h.page.locator('[data-research-artifact="result"]');
+    await report.waitFor();
+    assert.equal((await report.innerText()).trim(), '查看原因与报告');
+    assert.equal(await h.page.locator('[data-chat-explain], [data-chat-download-kit], [data-chat-share]').count(), 0,
+      'a stopped run must not offer accepted-proof actions');
+    const writes = h.requests.filter(runtimeWrite).length;
+    await report.click();
+    await h.page.locator('#detail-panel[data-tab="result"] .result-verdict').filter({ hasText: '已达到解题时间预算' }).waitFor();
+    await h.page.locator('#close-research-output').click();
+    await h.page.locator('[data-chat-recovery="budget"]').click();
+    await h.page.locator('#run-settings[open]').waitFor();
+    assert.equal(await h.page.locator('body').getAttribute('data-view'), 'draft');
+    assert.equal(await h.page.evaluate(() => document.activeElement?.id), 'max-seconds');
+    assert.equal(await h.page.locator('#max-seconds').inputValue(), String(run.maxRunSeconds * 2));
+    for (const [id, value] of Object.entries({ source: run.source, task: run.task, provider: run.providerId, model: run.model,
+      environment: run.environment, effort: run.effort, 'max-turns': run.maxTurns, workers: run.workers }))
+      assert.equal(await h.page.locator(`#${id}`).inputValue(), String(value), `budget recovery changed ${id}`);
+    assert.equal(await h.page.locator('#api-key').inputValue(), '');
+    assert.equal(h.requests.filter(runtimeWrite).length, writes, 'recovery prepares a draft without submitting another run');
+  });
 
   await scenario('Candidate acceptance stays separate from failed independent evaluation; diagnostics and JSON remain intact', async h => {
     const run = await createRun(h, 'Failed independent evaluation', result(failedReport, 'evaluated_failed'));

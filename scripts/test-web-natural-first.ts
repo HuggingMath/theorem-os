@@ -74,9 +74,26 @@ try {
     await page.screenshot({ path: path.join(output, `natural-${locale}-${width}.png`), fullPage: true });
     mark(`${locale} ${width}px: blank natural home, centred heading, collapsed choices, visible new chat and no overflow`);
 
+    await page.locator('[data-chat-first-example]').click();
+    const starter = researchExamples.find(example => example.id === 'add-zero')!;
+    assert.equal(await page.locator('#formalize-original').inputValue(), locale === 'en' ? starter.originalEn : starter.original);
+    assert.equal(await page.locator('#formalize-environment').inputValue(), 'standard');
+    assert.equal(writes.length, 0, 'The first-use example only fills the draft');
+    await page.locator('#topbar-draft').click();
+    await page.locator('[data-chat-sample]').click();
+    await page.locator('[data-chat-sample-note]').waitFor();
+    assert.equal(new URL(page.url()).search, '?sample');
+    assert.equal(await page.locator('[data-chat-share]').count(), 0);
+    assert.equal(await page.locator('#formalize-start').isDisabled(), true);
+    await page.locator('[data-research-artifact="result"]').click();
+    await page.locator('.result-verdict').waitFor();
+    assert.equal(writes.length, 0, 'Opening the sample and its acceptance report creates no paid task');
+    await page.locator('#topbar-draft').click();
+    mark(`${locale} ${width}px: visible first-use actions fill an editable starter or open a read-only example and its report without a key`);
+
     // The composer sits under the heading here, so its settings open below it, and a short screen scrolls them into view.
     if (width === 320) await page.setViewportSize({ width, height: 640 });
-    await page.locator('#formalize-settings > summary').click();
+    await page.locator('[data-chat-configure]').click();
     await page.locator('.chat-settings-fields').waitFor(); await page.waitForTimeout(100);
     const placement = await page.evaluate(() => {
       const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();

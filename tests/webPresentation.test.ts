@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes, stoppedLabel } from '../apps/web/presentation';
+import { acceptedTitle, endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes, stoppedLabel } from '../apps/web/presentation';
 import type { WebRun } from '../apps/web/shared';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16) + seconds * 1000).toISOString();
@@ -22,6 +22,23 @@ describe('workbench phase and elapsed-time presentation', () => {
       expect(resultDescription(value)).not.toBe('完整原题通过独立 Lean 验收。');
     }
     expect(isAcceptedRun(run({ status: 'completed', result }))).toBe(true);
+  });
+
+  it.each(['automatic', 'manual', undefined] as const)('describes an accepted %s formalization as a proved Lean statement', confirmation => {
+    const accepted = run({ status: 'completed', phase: 'evaluation_finished',
+      result: { status: 'evaluated_passed', proof: 'by trivial', report: {} },
+      formalization: { id: 'formalization', original: 'Prove that True holds.', evidenceSha256: 'f'.repeat(64), confirmedAt: at(0),
+        ...(confirmation ? { confirmation } : {}) } });
+    expect(isAcceptedRun(accepted)).toBe(true);
+    for (const text of [acceptedTitle(accepted), resultDescription(accepted), endedSummary(accepted)]) {
+      expect(text).toContain('Lean 陈述');
+      expect(text).not.toContain('原题已通过');
+      expect(text).not.toContain('完整原题');
+    }
+    const directLean = { ...accepted, formalization: undefined };
+    expect(acceptedTitle(directLean)).toContain('完整原题');
+    expect(resultDescription(directLean)).toBe('完整原题通过独立 Lean 验收。');
+    expect(endedSummary(directLean)).toBe('研究已结束，原题已通过验收。');
   });
 
   it('keeps queue and Mathlib preparation separate from the solving clock', () => {

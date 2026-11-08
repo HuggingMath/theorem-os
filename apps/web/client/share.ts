@@ -1,5 +1,5 @@
 import { createIcons, Copy, Download, ShieldCheck } from 'lucide';
-import { effortLabels, formatDateTime, readableMetric } from '../presentation';
+import { effortLabels, formatDateTime, readableMetric, statementConfirmation } from '../presentation';
 import { webShareToken, type WebShareSnapshot } from '../share';
 import { localizeMessage, localizeText, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
@@ -72,6 +72,31 @@ function show(share: WebShareSnapshot) {
     [t('完成时间'), formatDateTime(share.finishedAt ?? share.createdAt)], [t('分享时间'), formatDateTime(share.sharedAt)],
   ]);
   $('#share-task').textContent = share.task;
+  const formalization = share.formalization;
+  $('#share-verdict').textContent = t('Lean 陈述证明通过');
+  $('#share-confirmation').textContent = formalization ? statementConfirmation(formalization.confirmation, true)
+    : t('此分享仅包含 Lean 陈述与证明，未提供自然语言原题的确认记录。');
+  if (formalization) {
+    $('#share-task-heading').textContent = t('自然语言原题');
+    $('#share-task').textContent = formalization.original;
+    const review = formalization.review;
+    if (review) {
+      $('#share-review').hidden = false;
+      $('#share-backtranslation').textContent = [review.backtranslation.mathematics, ...review.backtranslation.assumptions,
+        ...review.backtranslation.definitions].join('\n\n');
+      const relations = { direct: t('直接对应'), equivalent: t('等价表达'), unresolved: t('待核对'), mismatch: t('不一致') };
+      $('#share-correspondences').replaceChildren(...review.correspondences.map(item => {
+        const row = document.createElement('article'), heading = document.createElement('strong');
+        heading.textContent = relations[item.relation]; row.dataset.relation = item.relation;
+        const original = document.createElement('blockquote'), lean = document.createElement('pre');
+        original.textContent = item.original; original.translate = false; lean.textContent = item.leanText; lean.translate = false;
+        row.append(heading, original, lean, ...item.explanations.map(text => {
+          const explanation = document.createElement('p'); explanation.textContent = text; explanation.translate = false; return explanation;
+        }));
+        return row;
+      }));
+    }
+  }
   $('#share-checks').replaceChildren(...share.checks.map(check => {
     const item = document.createElement('li'), heading = document.createElement('div'), label = document.createElement('strong');
     const badge = document.createElement('span');

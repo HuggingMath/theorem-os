@@ -33,6 +33,7 @@ export type ReportPanelProps =
 type ResultFact = { label: string; value: string; mono: boolean };
 export type ResultPanelProps = {
   verdict: Banner & { /** The run it is about: a verdict reached while its reader watches is sealed, one shown later is not. */ run: string; active: boolean; candidate: boolean;
+    meaning?: string;
     /** The newest progress message while the run is active. */ latest?: { at: string; time: string; message: string };
     /** While Agents work: the page can be closed, and how the reader hears the run has ended. */ away?: string };
   /** Next steps for a run that ended without an accepted proof (report.ts nextSteps). */ recovery: { id: string; label: string }[];
@@ -161,6 +162,7 @@ function ResultDocument(props: ResultPanelProps) {
       <VerdictMark run={verdict.run} active={verdict.active} symbol={verdict.symbol} tone={verdict.tone} />
       <div class="result-verdict-copy">
         <h3 id="result-verdict-heading">{verdict.title}</h3><p>{verdict.description}<TermHint id="acceptance" /></p>
+        {verdict.meaning && <p class="chat-statement-verdict" data-statement-verdict>{verdict.meaning} {t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}</p>}
         {verdict.latest && <p class="result-latest"><time dateTime={verdict.latest.at}>{verdict.latest.time}</time><span>{verdict.latest.message}</span></p>}
         {verdict.candidate && <span class="candidate-notice">{t('候选源码已更新 · 尚未验收')}</span>}
         {verdict.away && <p class="result-away" data-result-away>{verdict.away}</p>}

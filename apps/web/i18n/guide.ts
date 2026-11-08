@@ -76,8 +76,8 @@ export const guide: Record<string, string> = {
   "在「结果」的验收报告里下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。":
     "Download the verification kit from the acceptance report in Result and follow its instructions to recheck the proof with Lean on your own computer.",
   "分享": "Share",
-  "验收通过的运行可以创建只读分享链接。链接不包含 API Key、服务地址、运行日志和 Agent 对话，可以随时停止分享。":
-    "An accepted run can get a read-only share link. It leaves out the API key, service address, run logs and Agent conversations, and you can stop sharing at any time.",
+  "验收通过的运行可以创建只读分享链接，公开 Lean 原题、证明和验收结论，以及自然语言原题、确认方式、形式化回译和对应关系（如有）。链接不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话，可以随时停止分享。":
+    "An accepted run can get a read-only share link showing the Lean problem, proof and acceptance result, plus the natural-language problem, confirmation method, back-translation and formalization correspondences when available. It excludes API keys, email, provider addresses, run logs and Agent conversations. You can stop sharing at any time.",
   "继续研究": "Keep researching",
   "形式化已完成、证明队列未能接收时，点「继续证明」使用已有陈述，不重新生成形式化。已有运行可用「复用任务配置」或「从这一版继续」新建研究；新运行仍需重新检查和验收。":
     "If formalization finished but the proof queue could not accept it, choose “Continue proof” to reuse the statement without formalizing again. Existing runs can start a new task through “Reuse task settings” or “Continue from this version”; new runs still require fresh checks and acceptance.",
@@ -93,8 +93,8 @@ export const guide: Record<string, string> = {
   "跳转到指定行号。": "Go to a line number.",
   "减少 / 增加缩进。": "Decrease / increase indentation.",
   "关闭当前弹窗或查找栏。": "Close the current dialog or find bar.",
-  "服务器用 Key 访问你选择的服务商，费用计入你的 API 账户。自然语言输入框中的 Key 只在当前页面内存中保留，刷新后清空。进阶版可选择加密保存到账号，并在「模型连接」里删除；Key 不进入草稿、运行档案或分享链接。":
-    "The server uses your key with the selected provider, which bills your API account. A key entered in the natural-language composer stays only in page memory and clears on refresh. Advanced mode can save it encrypted to your account and remove it under Model connection. Keys never enter drafts, run archives or share links.",
+  "服务器用 Key 访问你选择的服务商，费用计入你的 API 账户。Key 默认仅本次使用，未保存的 Key 刷新后清空。登录后可在自然语言「设置」或 Lean「模型连接」中主动加密保存、替换或删除；界面只显示已保存 Key 的末四位。Key 不进入草稿、运行档案或分享链接。":
+    "The server uses your key with the selected provider, which bills your API account. Keys are temporary by default; unsaved keys clear on refresh. After signing in, use natural-language Settings or Lean Model connection to save an encrypted key to your account, replace it or delete it. Only the last four characters are shown. Keys never enter drafts, run archives or share links.",
   "登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。":
     "When you sign in, records belong to your email account, and the account page can delete the account with all its records. Without sign-in, records belong only to the current browser session.",
   "未提交的草稿自动保存在当前标签页，刷新后可恢复，不会同步到账号。需要长期保留或换设备时，请导出任务草稿。":

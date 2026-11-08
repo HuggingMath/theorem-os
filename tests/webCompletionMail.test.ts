@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig, type WebConfig } from '../apps/web/config';
 import { completionMail, mailsCompletion, planApprovalMail } from '../apps/web/completionMail';
+import { WebJobs } from '../apps/web/jobs';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun, WebRunInput, WebSession, WorkerInput, WorkerMessage } from '../apps/web/shared';
 
@@ -68,6 +69,30 @@ describe('completion mail content', () => {
     expect(text(unapproved)).not.toMatch(/secret_source|Prove it|sk-/u);
   });
 
+  it.each([
+    ['automatic', '模型审核通过，未经人工确认', 'model review passed; not confirmed by a person'],
+    ['manual', '你已确认 Lean 陈述', 'you confirmed the Lean statement'],
+    [undefined, '未记录确认方式', 'confirmation method was not recorded'],
+  ] as const)('keeps Lean acceptance separate from %s meaning confirmation in natural-language completion mail', (confirmation, zh, en) => {
+    const formalization: NonNullable<WebRun['formalization']> = { id: 'formalization-id', evidenceSha256: 'a'.repeat(64),
+      original: 'private natural-language original', confirmedAt: '2026-10-27T10:00:00.000Z', ...(confirmation ? { confirmation } : {}) };
+    const mail = completionMail(run({ formalization, result: { status: 'evaluated_passed', proof: secretProof, report: {} } as WebRun['result'] }),
+      'https://app.theoremos.top');
+    expect(mail.subject).toBe('TheoremOS · Lean 陈述已通过验收：Infinitely many primes');
+    expect(mail.text).toContain('冻结的 Lean 陈述通过独立 Lean 验收');
+    expect(mail.text).toContain(zh);
+    expect(mail.text).toContain(en);
+    expect(mail.text).toContain('Lean 验收不能替代对自然语言原意的核对');
+    expect(mail.text).toContain('Lean verification does not replace checking the original natural-language meaning');
+    expect(mail.text).not.toMatch(/完整原题通过|private natural-language original|secret_source|trivial|sk-/u);
+    if (confirmation !== 'automatic') expect(mail.text).not.toContain('模型审核通过');
+    const failed = completionMail(run({ formalization, result: { status: 'evaluated_failed', proof: secretProof, report: {} } as WebRun['result'] }),
+      'https://app.theoremos.top');
+    expect(failed.subject).toContain('Lean 陈述未通过验收');
+    expect(failed.text).toContain(zh);
+    expect(failed.text).not.toContain('Lean 陈述通过独立 Lean 验收');
+  });
+
   it('asks to approve a plan with a link back, and leaves out the plan, source and key', () => {
     const mail = planApprovalMail(run({ status: 'running', phase: 'plan_approval_requested', finishedAt: undefined }), 'https://app.theoremos.top');
     expect(mail.subject).toBe('TheoremOS · 研究计划等你批准：Infinitely many primes');
@@ -82,6 +107,33 @@ describe('completion mail content', () => {
     expect(mailsCompletion(run({ status: 'error', phase: 'failed' }))).toBe(true);
     expect(mailsCompletion(run({ status: 'cancelled', phase: 'cancelled' }))).toBe(false);
     expect(mailsCompletion(run({ status: 'error', phase: 'interrupted' }))).toBe(false);
+  });
+});
+
+describe('natural-language final event acceptance wording', () => {
+  it.each([
+    ['automatic', '仅经模型审核，未经人工确认'],
+    ['manual', '已由你确认'],
+    [undefined, '未记录确认方式'],
+  ] as const)('reports Lean acceptance and %s meaning confirmation in the finished event', async (confirmation, meaning) => {
+    const jobs = new WebJobs(new ScriptedRunner(), { concurrency: 1, queueLimit: 8 });
+    const provider = { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' };
+    try {
+      const natural = jobs.create('owner', input('pass'), provider, undefined, undefined, { evidence: {}, provenance: {
+        id: 'formalization-id', evidenceSha256: 'a'.repeat(64), original: 'private natural-language original',
+        confirmedAt: '2026-10-27T10:00:00.000Z', ...(confirmation ? { confirmation } : {}),
+      } });
+      const direct = jobs.create('owner', input('pass'), provider);
+      for (let attempt = 0; attempt < 10 && direct.status !== 'completed'; attempt++) await tick();
+      expect(natural.status).toBe('completed');
+      const message = natural.events.find(event => event.type === 'finished')?.message;
+      expect(message).toContain('Lean 陈述通过独立 Lean 验收');
+      expect(message).toContain(meaning);
+      expect(message).toContain('Lean 验收不能替代自然语言原意核对');
+      expect(message).not.toMatch(/完整原题通过|private natural-language original|trivial|sk-/u);
+      if (confirmation !== 'automatic') expect(message).not.toContain('模型审核');
+      expect(direct.events.find(event => event.type === 'finished')?.message).toBe('完整原题通过独立 Lean 验收');
+    } finally { await jobs.close(); }
   });
 });
 

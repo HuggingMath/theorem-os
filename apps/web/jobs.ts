@@ -390,7 +390,11 @@ export class WebJobs {
         if (!job.run.result) throw new Error(job.run.error || '没有收到运行结果。');
         job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
         const accepted = job.run.result.status === 'evaluated_passed';
-        this.event(job.run, 'finished', accepted ? '完整原题通过独立 Lean 验收' : '运行结束，请查看验收状态');
+        const acceptance = !job.run.formalization ? '完整原题通过独立 Lean 验收'
+          : job.run.formalization.confirmation === 'manual' ? 'Lean 陈述通过独立 Lean 验收；原题含义已由你确认。Lean 验收不能替代自然语言原意核对。'
+            : job.run.formalization.confirmation === 'automatic' ? 'Lean 陈述通过独立 Lean 验收；原题含义仅经模型审核，未经人工确认。Lean 验收不能替代自然语言原意核对。'
+              : 'Lean 陈述通过独立 Lean 验收；原题含义未记录确认方式，请核对 Lean 陈述。Lean 验收不能替代自然语言原意核对。';
+        this.event(job.run, 'finished', accepted ? acceptance : '运行结束，请查看验收状态');
         if (accepted) this.onAccepted?.(job.owner);
       }
     } catch (error) {

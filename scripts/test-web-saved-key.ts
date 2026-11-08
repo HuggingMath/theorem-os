@@ -21,9 +21,12 @@ await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error
 await fs.mkdir(output, { recursive: true });
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-web-saved-key-'));
 const credential = 'sk-saved-key-browser-check-never-publish-K9z4';
+const replacement = 'sk-replacement-browser-check-never-publish-R7m2';
 const keys: string[] = [];
+let formalizationCalls = 0;
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: 'Local saved key fixture; no model or Lean' }; },
+  async formalize() { formalizationCalls++; throw new Error('Saving an account key must not start formalization.'); },
   async run(input, send) { keys.push(input.input.apiKey); send({ type: 'result', result: { status: 'incomplete', proof: '', report: { fixture: true } } }); },
 };
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
@@ -35,7 +38,7 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
 const mark = (check: string) => console.log(`PASS ${check}`);
 
 /** A signed-in browser context, as on a separate device; the login page itself is covered by test:web-login. */
-async function signedIn(browser: Browser, email: string, options: { locale?: 'zh' | 'en'; theme?: 'light' | 'dark' } = {}) {
+async function signedIn(browser: Browser, email: string, options: { locale?: 'zh' | 'en'; theme?: 'light' | 'dark'; entry?: 'natural' | 'lean' } = {}) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
   await context.addInitScript(([localeKey, locale, themeKey, theme]) => {
     if (locale && localStorage.getItem(localeKey) === null) localStorage.setItem(localeKey, locale);
@@ -54,7 +57,11 @@ async function signedIn(browser: Browser, email: string, options: { locale?: 'zh
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/runs') posted.push(request.postData() ?? ''); });
   await page.goto(origin);
-  await ready(page);
+  if (options.entry === 'natural') {
+    await page.locator('#formalize-original').waitFor();
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#formalize-provider')?.value === 'sub2api');
+    await page.locator('#chat-save-key').waitFor({ state: 'attached' });
+  } else await ready(page);
   return { context, page, errors, posted };
 }
 async function submit(page: Page, posted: string[], task: string, key?: string) {
@@ -76,6 +83,64 @@ const stores = (page: Page) => page.evaluate(() => JSON.stringify(localStorage) 
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
+
+  const natural = await signedIn(browser, 'alice@example.org', { locale: 'zh', entry: 'natural' });
+  await natural.page.locator('#open-settings').click();
+  await natural.page.locator('#formalize-settings[open]').waitFor();
+  assert.equal(await natural.page.locator('body').getAttribute('data-entry'), 'natural', 'key management stays in the main chat');
+  assert.equal(await natural.page.locator('#chat-save-key').isDisabled(), true);
+  assert.equal(await natural.page.locator('#chat-delete-key').count(), 0);
+  await natural.page.locator('#formalize-original').fill('For every natural number n, n + 0 = n.');
+  assert.equal(await natural.page.locator('#formalize-start').isDisabled(), true, 'a new account must supply a key before sending');
+
+  for (const key of [credential, replacement]) {
+    if (key === replacement) assert.equal(await natural.page.locator('#chat-save-key').innerText(), '替换已保存的 Key');
+    await natural.page.locator('#formalize-key').fill(key);
+    const saved = natural.page.waitForResponse(response => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === '/api/auth/keys/sub2api');
+    await natural.page.locator('#chat-save-key').click();
+    const response = await saved;
+    assert.equal(response.status(), 200);
+    assert.deepEqual(await response.json(), { savedKeys: [{ providerId: 'sub2api', ending: key.slice(-4) }] });
+    await natural.page.locator('#chat-key-notice').filter({ hasText: 'Key 已保存到你的账号' }).waitFor();
+    assert.equal(await natural.page.locator('#formalize-key').inputValue(), '', 'saving clears the typed key');
+    assert.match(await natural.page.locator('.chat-key-management').innerText(), new RegExp(key.slice(-4), 'u'));
+    assert.equal(await natural.page.locator('#chat-delete-key').isVisible(), true);
+    assert.equal(await natural.page.locator('#formalize-start').isEnabled(), true, 'a saved key can be used with the field empty');
+    assert.deepEqual(keys, [], 'saving or replacing a key must not start a proof worker');
+    assert.equal(formalizationCalls, 0, 'saving or replacing a key must not start formalization');
+    assert.deepEqual(natural.posted, [], 'saving a key does not submit a Lean task');
+    for (const secret of [credential, replacement]) assert.ok(!(await stores(natural.page)).includes(secret), 'a main-chat key is in browser storage');
+    assert.ok(!(await natural.page.content()).includes(key), 'the saved key returns to the page in full');
+  }
+  mark('the natural-language chat saves and replaces an account key directly, shows only its ending and starts no worker');
+
+  await natural.page.reload();
+  await natural.page.locator('#formalize-original').waitFor();
+  await natural.page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#formalize-provider')?.value === 'sub2api');
+  await natural.page.locator('#open-settings').click();
+  await natural.page.locator('#chat-delete-key').waitFor();
+  assert.equal(await natural.page.locator('#formalize-key').inputValue(), '', 'reload never fills a plaintext key');
+  assert.match(await natural.page.locator('.chat-key-management').innerText(), /R7m2/u);
+  assert.match(await natural.page.locator('#chat-key-help').innerText(), /留空使用账号中已保存的 Key/u);
+  assert.equal(await natural.page.locator('#formalize-start').isEnabled(), true);
+  assert.equal(await natural.page.locator('#chat-save-key').isDisabled(), true, 'replacement requires a newly typed key');
+  for (const secret of [credential, replacement]) assert.ok(!(await stores(natural.page)).includes(secret));
+  await natural.page.screenshot({ path: path.join(output, 'chat-saved-1440.png') });
+
+  const deletion = natural.page.waitForResponse(response => response.request().method() === 'DELETE'
+    && new URL(response.url()).pathname === '/api/auth/keys/sub2api');
+  await natural.page.locator('#chat-delete-key').click();
+  assert.deepEqual(await (await deletion).json(), { savedKeys: [] });
+  await natural.page.locator('#chat-key-notice').filter({ hasText: '已删除账号中保存的 Key' }).waitFor();
+  assert.equal(await natural.page.locator('#chat-delete-key').count(), 0);
+  assert.equal(await natural.page.locator('#formalize-start').isDisabled(), true, 'deletion requires a new key before sending');
+  assert.equal((await (await natural.context.request.get(`${origin}/api/session`)).json()).account.savedKeys, undefined);
+  assert.deepEqual(await fs.readdir(path.join(data, 'keys')), []);
+  assert.deepEqual(keys, []); assert.equal(formalizationCalls, 0);
+  assert.deepEqual(natural.errors, []);
+  await natural.context.close();
+  mark('the main chat restores saved-key state on reload and deletes it without model or worker activity; browser storage has no plaintext key');
 
   const first = await signedIn(browser, 'alice@example.org');
   await openSettings(first.page);
@@ -145,7 +210,8 @@ try {
   await english.page.screenshot({ path: path.join(output, 'saved-en-dark-1440.png') });
   assert.deepEqual(english.errors, []);
   mark('in English and the dark theme the saved key settings have no Chinese text and pass contrast');
-  console.log('Saved key checks passed: default save, ending only, reload and another device, other account, delete, English and dark theme.');
+  assert.equal(formalizationCalls, 0);
+  console.log('Saved key checks passed: direct main-chat save and replacement without workers, ending only, reload, delete, browser storage, Lean submission, another device, other account, English and dark theme.');
 } finally {
   await browser?.close();
   await service.close();

@@ -239,6 +239,8 @@ export const pages: Record<string, string> = {
   "登录 · TheoremOS 研究工作台": "Sign in · TheoremOS research workbench",
   "登录研究工作台": "Sign in to the research workbench",
   "内测期间仅限已通过申请的邮箱。可用邮箱验证码或已设置的密码登录。": "During the private beta, only approved emails can sign in. Use an email code or a password you have set.",
+  "还没有内测资格？": "Need beta access?",
+  "申请内测": "Request access",
   "邮箱": "Email",
   "图形验证码": "Image code",
   "输入图中的 5 位数字。看不清可以换一张。": "Enter the 5 digits in the image. Get a new one if it is hard to read.",

@@ -48,6 +48,7 @@ async function loadCaptcha() {
 async function start() {
   const session = await call<WebSession>('/api/session');
   if (session.auth !== 'email' || (session.account && !session.termsRequired)) { location.replace(workbench); return; }
+  $('#login-access').hidden = session.signup === 'open' || Boolean(session.termsRequired);
   csrf = session.csrfToken;
   if (termsVersion !== session.termsVersion) acceptTerms.checked = false;
   termsVersion = session.termsVersion;

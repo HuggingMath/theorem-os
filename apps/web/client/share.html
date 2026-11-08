@@ -24,13 +24,19 @@
     </section>
     <article id="share-content" class="share-content" hidden aria-labelledby="share-title">
       <header class="share-card share-heading">
-        <span class="badge passed"><i data-lucide="shield-check"></i>完整原题通过独立 Lean 验收</span>
+        <span class="badge passed"><i data-lucide="shield-check"></i><span id="share-verdict">Lean 陈述证明通过</span></span>
         <h1 id="share-title" translate="no"></h1>
         <dl id="share-facts" class="facts share-facts"></dl>
       </header>
       <section class="share-card" aria-labelledby="share-task-heading">
         <h2 id="share-task-heading">研究任务</h2>
         <p id="share-task" class="task-content" translate="no"></p>
+        <p id="share-confirmation" class="chat-statement-verdict"></p>
+        <p class="field-note">Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。</p>
+        <details id="share-review" hidden><summary>形式化审核</summary>
+          <h3>独立回译</h3><div id="share-backtranslation" class="task-content" translate="no"></div>
+          <h3>具体对应关系</h3><div id="share-correspondences" class="chat-correspondences"></div>
+        </details>
       </section>
       <section class="share-card" aria-labelledby="share-source-heading">
         <div class="share-source-top">

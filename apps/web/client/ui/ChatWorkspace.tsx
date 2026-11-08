@@ -1,10 +1,12 @@
 import { render } from 'preact';
-import { useLayoutEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { WebConversation, WebConversationMessage, WebConversationSummary } from '../../conversationTypes';
 import type { WebFormalization } from '../../formalizationTypes';
 import type { WebProvider, WebRun } from '../../shared';
 import { researchExamples } from '../../problemExamples';
 import { formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
+import { acceptedTitle, statementConfirmation } from '../../presentation';
+import type { NextStep } from '../../report';
 import { locale, localizeText, t } from '../../i18n';
 import type { SolveProcess } from '../solveProcess';
 import { formalizationReasonText } from '../formalizationReasons';
@@ -17,11 +19,15 @@ export type ChatThreadProps = {
   conversation?: WebConversation;
   run?: WebRun;
   formalization?: WebFormalization;
+  sample?: boolean;
+  missingTask?: boolean;
   loading: boolean;
   error?: string;
   /** The solving process of the task this thread shows, when it has one. */
   solve?: { process: SolveProcess; loading?: boolean; failed?: boolean; wide: boolean; time: (at: string) => string; onRetry?(): void; onCheck?(id: string): void };
-  onArtifact(kind: 'roadmap' | 'original' | 'source' | 'live', target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
+  onArtifact(kind: 'roadmap' | 'original' | 'source' | 'live' | 'result', target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
+  onShare?(): void;
+  recovery?: { steps: NextStep[]; onAction(id: string, button: HTMLButtonElement): void };
   onGuidance?(text?: string, taskId?: string): void;
   onGuidanceReceipt?(message: WebConversationMessage): void;
   onEditProblem?(): void;
@@ -29,6 +35,10 @@ export type ChatThreadProps = {
   onStartResearch?(): void;
   startingResearch?: boolean;
   onRetry?(): void;
+  onConfigure?(): void;
+  onFirstExample?(): void;
+  onSample?(): void;
+  onManageRecords?(): void;
 };
 
 /** Where a formalization stopped, why, what was kept and what the reader can do; the code is the diagnostic. */
@@ -64,13 +74,13 @@ function TaskMessage(props: ChatThreadProps) {
     compiling: t("检查 Lean 陈述"), translating: t("核对自然语言与 Lean"),
     reviewing: t("审核原题一致性"), finishing: t("整理形式化结果"),
   };
-  const title = run ? accepted ? natural ? t('Lean 陈述证明通过') : t('完整原题通过') : active ? runProgress(run).phaseLabel
+  const title = run ? accepted ? acceptedTitle(run) : active ? runProgress(run).phaseLabel
     : run.status === 'cancelled' ? t('已取消') : failed ? t('运行失败') : stoppedLabel(run)
     : failed ? t("形式化未完成") : item?.status === 'cancelled' ? t('已取消')
       : active ? phaseNames[item?.progress?.phase ?? 'queued']
         : item?.status === 'review' ? t("陈述待核对")
-          : item?.status === 'confirmed' ? t("陈述已确认") : t("正在读取任务");
-  const description = run ? accepted && natural ? t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。') : resultDescription(run) : failed
+          : item?.status === 'confirmed' ? t("陈述已确认") : props.missingTask ? t('关联任务记录已删除') : t("正在读取任务");
+  const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? accepted && natural ? t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。') : resultDescription(run) : failed
     ? item?.researchError ? t("Lean 陈述已生成，但证明研究未能启动。")
       : t("本次未能完成原题形式化，可查看详情后修改题目重试。")
     : item?.status === 'cancelled' ? t("任务已停止，已保存的消息仍可查看。")
@@ -79,6 +89,7 @@ function TaskMessage(props: ChatThreadProps) {
   const proof = run?.result?.proof || run?.artifact?.source;
   const solve = props.solve, wide = solve?.wide && solve.process.active;
   return <div class="chat-task">
+    {props.sample && <p class="sample-note" data-chat-sample-note>{t('这是只读示例：Agent 由离线脚本代替模型，Lean 检查与独立验收来自真实执行。浏览示例不调用模型，也不消耗你的额度。')}</p>}
     <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
       <p class="research-conversation-state" role="status" aria-atomic="true">
         <Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : 'square'} /><strong>{title}</strong></p>
@@ -91,7 +102,7 @@ function TaskMessage(props: ChatThreadProps) {
       </p>}
       <p class="research-conversation-description">{description}</p>
       {natural && (item?.report || run?.formalization) && <p class="chat-statement-verdict" data-statement-verdict>
-        {confirmation === 'manual' ? t('原题含义：你已确认 Lean 陈述。') : t('原题含义：模型审核通过，未经人工确认。')}
+        {statementConfirmation(confirmation)}
         {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}
       </p>}
     </div>
@@ -104,6 +115,18 @@ function TaskMessage(props: ChatThreadProps) {
       {run && <button type="button" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{accepted ? t('验收证明') : t('候选源码')}</span><Icon name="arrow-up-right" /></button>}
     </div>}
     <div class="chat-task-actions">
+      {run && !active && <>
+        <button type="button" class="button" data-research-artifact="result" onClick={() => props.onArtifact('result')}>
+          <Icon name="shield-check" />{accepted ? t('查看验收报告') : t('查看原因与报告')}</button>
+        {accepted && <>
+          <a class="button" data-chat-explain href={`explain.html?${new URLSearchParams({ run: run.id })}`} target="_blank" rel="noopener">{t('Lean → 自然语言')}</a>
+          <a class="button" data-chat-download-kit href={`/api/runs/${encodeURIComponent(run.id)}/verification-kit`} download>{t('下载本地复核包')}</a>
+          {props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
+        </>}
+        {!accepted && <a class="text-button" href={`/api/runs/${encodeURIComponent(run.id)}/download`} download>{t('下载运行档案')}</a>}
+        {props.recovery?.steps.map(step => <button key={step.id} type="button" class="button" data-chat-recovery={step.id}
+          onClick={event => props.recovery!.onAction(step.id, event.currentTarget)}>{step.label}</button>)}
+      </>}
       {props.onStartResearch && <button type="button" class="button button-primary" data-research-continue disabled={props.startingResearch} onClick={props.onStartResearch}>
         {props.startingResearch ? t('正在进入证明队列…') : t('继续证明')}</button>}
       {active && run && props.onGuidance && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('补充证明要求')}</button>}
@@ -132,7 +155,8 @@ function GuidanceReceipt({ message, onGuidanceReceipt }: { message: WebConversat
 function ChatThread(props: ChatThreadProps) {
   const { conversation, loading, error } = props;
   const errorNotice = error && <div id="formalize-error" class="chat-error" role="alert"><p>{error}</p>
-    {props.onRetry && <button type="button" class="text-button" onClick={props.onRetry}>{t("重试")}</button>}</div>;
+    {props.onRetry && <button type="button" class="text-button" onClick={props.onRetry}>{t("重试")}</button>}
+    {props.onManageRecords && <button type="button" class="text-button" data-chat-error-records onClick={props.onManageRecords}>{t('管理题目记录')}</button>}</div>;
   if (!conversation && (props.run || props.formalization)) {
     const original = props.formalization?.original ?? props.run?.formalization?.original;
     return <div class="chat-messages" data-research-conversation={props.run?.id}>
@@ -151,6 +175,12 @@ function ChatThread(props: ChatThreadProps) {
     {loading ? <p role="status">{t("正在读取对话…")}</p> : <>
       <h1>{t("今天想证明什么？")}</h1>
       <p>{t("用自然语言描述题目，逐步得到可验证的 Lean 证明。")}</p>
+      <div class="chat-start-actions">
+        <button type="button" class="button" data-chat-configure onClick={props.onConfigure}><Icon name="sliders-horizontal" />{t('配置模型')}</button>
+        <button type="button" class="button" data-chat-first-example onClick={props.onFirstExample}><Icon name="plus" />{t('试一道简单题')}</button>
+      </div>
+      <p class="chat-start-note">{t('先配置模型，再发送题目。例题只填入草稿，发送后才调用模型。')}</p>
+      {props.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample onClick={props.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('无需 API Key，不消耗额度')}</span></button>}
     </>}
     {errorNotice}
   </div>;
@@ -187,6 +217,7 @@ export type ChatComposerProps = {
   onProvider(value: string): void; onModel(value: string): void;
   budgets: ChatBudgets; budgetLimits: ChatBudgets; onBudget(stage: 'formalization' | 'research', field: 'maxRunSeconds' | 'maxTotalTokens' | 'maxTurns', value: number): void;
   checkingConnection: boolean; connection?: { status: 'available' | 'unknown' | 'error'; message: string }; onCheckConnection(): void;
+  keyManagement?: { busy: boolean; ending?: string; notice?: string; onSave(): void; onDelete(): void };
   onGuidance?(): void;
   guidance?: { target: string; targets: { id: string; label: string }[]; onTarget(id: string): void; onCancel(): void; onConfirmTarget?(): void };
 };
@@ -237,7 +268,10 @@ function ChatComposer(props: ChatComposerProps) {
               onChange={event => props.onProvider(event.currentTarget.value)} disabled={props.hasConversation || props.submitting}>
               {props.providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select></label><label for="formalize-model">{t('模型')}<input id="formalize-model" type="text" value={props.model} spellcheck={false}
-              onInput={event => props.onModel(event.currentTarget.value)} disabled={props.hasConversation || props.submitting} required maxlength={160} /></label></div>
+              onInput={event => props.onModel(event.currentTarget.value)} disabled={props.hasConversation || props.submitting} required maxlength={160}
+              list="chat-model-options" aria-describedby="chat-model-note" /></label></div>
+            <datalist id="chat-model-options">{provider?.defaultModel && <option value={provider.defaultModel} />}</datalist>
+            <p id="chat-model-note" class="field-note">{provider?.defaultModel ? t('默认模型：{0}。也可填写此服务商支持的其他模型。', provider.defaultModel) : t('填写所选服务商支持的模型名称。')}</p>
             <div class="chat-settings-options"><label for="formalize-environment">{t("证明环境")}<select id="formalize-environment" value={props.environment} onChange={event => props.onEnvironment(event.currentTarget.value as ChatComposerProps['environment'])} disabled={props.hasConversation}><option value="standard">{t("标准库")}</option><option value="mathlib">Mathlib</option></select></label>
               <label for="formalize-effort">{t("推理强度")}<select id="formalize-effort" value={props.effort} onChange={event => props.onEffort(event.currentTarget.value as ChatComposerProps['effort'])} disabled={props.hasConversation}><option value="max">{t("最高")}</option><option value="high">{t("高")}</option><option value="low">{t("低")}</option></select></label></div>
             <label for="formalize-key">API Key {props.keyRequired && <span>{t("（必填）")}</span>}</label>
@@ -245,6 +279,18 @@ function ChatComposer(props: ChatComposerProps) {
             <p id="chat-key-help" class="field-note">{provider?.keyUrl ? <><a href={provider.keyUrl} target="_blank" rel="noopener noreferrer">{t('到服务商后台创建 API Key')}</a>{' '}{t('请使用所选服务商的 Key，不同服务商的 Key 不能通用。')}</>
               : t('请向所选网关的管理员取得账号与 API Key；已有 OpenAI Key 可切换服务商。')}
               {' '}{provider?.key === 'saved' ? t('留空使用账号中已保存的 Key。') : provider?.key === 'server' ? t('留空使用管理员已配置的 Key。') : ''}</p>
+            {props.keyManagement && <div class="chat-key-management">
+              <p class="field-note">{props.keyManagement.ending ? t('账号已保存 Key，末四位：{0}', props.keyManagement.ending)
+                : t('当前 Key 仅本次使用。你可以选择加密保存到账号。')}</p>
+              <div class="chat-task-actions">
+                <button type="button" class="button" id="chat-save-key" disabled={props.keyManagement.busy || !props.apiKey.trim()}
+                  onClick={props.keyManagement.onSave}>{props.keyManagement.busy ? t('正在保存…') : props.keyManagement.ending ? t('替换已保存的 Key') : t('保存到我的账号')}</button>
+                {props.keyManagement.ending && <button type="button" class="text-button" id="chat-delete-key" disabled={props.keyManagement.busy}
+                  onClick={props.keyManagement.onDelete}>{t('删除已保存的 Key')}</button>}
+              </div>
+              <p class="field-note">{t('加密保存在服务器，只有你的账号能使用；浏览器只显示末四位，换设备或重新登录也不用再填。')}</p>
+              {props.keyManagement.notice && <p class="field-note" id="chat-key-notice" role="status">{props.keyManagement.notice}</p>}
+            </div>}
             <div class="chat-connection-check"><button type="button" class="button" id="check-model-connection" onClick={props.onCheckConnection}
               disabled={props.checkingConnection || !props.model.trim() || props.keyRequired && !props.apiKey.trim()}>{props.checkingConnection ? t('正在检查连接…') : t('检查 Key 与模型')}</button>
               <span class="field-note">{t('只读取模型列表，不调用模型。')}</span></div>
@@ -282,14 +328,63 @@ function ChatComposer(props: ChatComposerProps) {
   </div>;
 }
 
-export type ChatHistoryProps = { items: WebConversationSummary[]; selectedId?: string; onOpen(id: string): void; failed?: boolean; onRetry?(): void };
-function ChatHistory({ items, selectedId, onOpen, failed, onRetry }: ChatHistoryProps) {
+export type ChatHistoryProps = {
+  items: WebConversationSummary[]; selectedId?: string; onOpen(id: string): void; failed?: boolean; onRetry?(): void;
+  onRename(id: string, title: string): Promise<void>; onDelete(id: string): Promise<void>;
+  records: WebFormalization[]; recordLimit: number; onDeleteRecord(id: string): Promise<void>; onRefreshRecords(): void;
+};
+function ChatHistory(props: ChatHistoryProps) {
+  const { items, selectedId, onOpen, failed, onRetry } = props;
+  const [query, setQuery] = useState('');
+  const [editing, setEditing] = useState<{ id: string; action: 'rename' | 'delete' | 'record'; title: string }>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const matching = items.filter(item => item.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const edit = (id: string, action: 'rename' | 'delete' | 'record', title: string) => { setEditing({ id, action, title }); setError(''); setNotice(''); };
+  const apply = async () => {
+    if (!editing || busy) return;
+    setBusy(true); setError('');
+    try {
+      if (editing.action === 'rename') await props.onRename(editing.id, editing.title);
+      else if (editing.action === 'delete') await props.onDelete(editing.id);
+      else { await props.onDeleteRecord(editing.id); setNotice(t('题目记录已删除，对话仍保留。')); }
+      setEditing(undefined);
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const confirmation = (id: string) => editing?.id === id && <form class="chat-history-edit" onSubmit={event => { event.preventDefault(); void apply(); }}>
+    {editing.action === 'rename' ? <label>{t('对话标题')}<input data-chat-title value={editing.title} maxlength={80} required disabled={busy}
+      onInput={event => setEditing({ ...editing, title: event.currentTarget.value })} /></label>
+      : <p>{editing.action === 'delete' ? t('只删除这段对话，题目、证明任务和分享链接仍保留。') : t('删除这份题目与形式化审核记录？对话记录仍保留。')}</p>}
+    <div><button type="submit" class="button" data-chat-history-confirm disabled={busy || !editing.title.trim()}>{busy ? t('正在处理…') : editing.action === 'rename' ? t('保存') : t('确认删除')}</button>
+      <button type="button" class="text-button" disabled={busy} onClick={() => { setEditing(undefined); setError(''); }}>{t('取消')}</button></div>
+    {error && <p class="chat-history-error" role="alert">{error}</p>}
+  </form>;
   return <nav class="chat-history" aria-label={t("对话历史")}>
     <p class="chat-history-heading">{t("对话")}</p>
-    {items.length ? items.map(item => <a key={item.id} href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
-      onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}><span translate={false}>{item.title}</span>{item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>)
+    <label class="chat-history-search"><span class="sr-only">{t('搜索对话标题')}</span><Icon name="search" /><input type="search" data-chat-search placeholder={t('搜索对话标题')} value={query} onInput={event => setQuery(event.currentTarget.value)} /></label>
+    {items.length ? matching.length ? matching.map(item => <div key={item.id} class="chat-history-row" data-chat-row={item.id}>
+      <div class="chat-history-line"><a href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
+        onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}><span translate={false}>{item.title}</span>{item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>
+        <button type="button" class="icon-button" data-chat-rename disabled={busy} aria-label={t('重命名对话')} title={t('重命名对话')} onClick={() => edit(item.id, 'rename', item.title)}><Icon name="square-pen" /></button>
+        <button type="button" class="icon-button" data-chat-delete disabled={busy} aria-label={t('删除对话')} title={t('删除对话')} onClick={() => edit(item.id, 'delete', item.title)}><Icon name="trash-2" /></button></div>
+      {confirmation(item.id)}
+    </div>) : <p class="chat-history-empty">{t('没有匹配的对话')}</p>
       : failed ? <p class="chat-history-empty" role="alert">{t("对话列表暂时没有加载出来。")}<button type="button" class="text-button" data-chat-history-retry onClick={onRetry}>{t("重试")}</button></p>
       : <p class="chat-history-empty">{t("新对话会保存在这里")}</p>}
+    <details id="chat-problem-records" class="chat-problem-records" onToggle={event => { if (event.currentTarget.open) props.onRefreshRecords(); }}>
+      <summary>{t('管理题目记录')}<span>{props.records.length} / {props.recordLimit}</span></summary>
+      <p class="chat-history-empty">{t('记录满后可在这里清理。有研究使用的题目，需要先删除关联研究。')}</p>
+      {props.records.map(item => <div class="chat-problem-record" key={item.id} data-chat-record={item.id}>
+        <a href={`formalize.html?id=${encodeURIComponent(item.id)}`} target="_blank" rel="noreferrer" translate={false}>{item.original}</a>
+        <div>{item.runId && <a class="text-button" href={`?run=${encodeURIComponent(item.runId)}`}>{t('查看关联研究')}</a>}
+          <button type="button" class="text-button" data-chat-delete-record disabled={busy || ['queued', 'running'].includes(item.status)} onClick={() => edit(item.id, 'record', item.original)}>{t('删除题目')}</button></div>
+        {confirmation(item.id)}
+      </div>)}
+      {!props.records.length && <p class="chat-history-empty">{t('还没有形式化记录。')}</p>}
+      {notice && <p class="chat-history-empty" role="status">{notice}</p>}
+    </details>
   </nav>;
 }
 
@@ -310,8 +405,7 @@ function ChatOriginal({ formalization, run }: ChatOriginalProps) {
     <header class="chat-original-header"><h2>{t("原题与 Lean")}</h2>
       {formalizationId && <a class="text-button" href={`formalize.html?id=${encodeURIComponent(formalizationId)}`} target="_blank" rel="noreferrer">{t("完整审核")}<Icon name="arrow-up-right" /></a>}
     </header>
-    {(report || run?.formalization) && <p class="chat-statement-verdict">{(formalization?.confirmation ?? run?.formalization?.confirmation) === 'manual'
-      ? t('原题含义：你已确认 Lean 陈述。') : t('原题含义：模型审核通过，未经人工确认。')}
+    {(report || run?.formalization) && <p class="chat-statement-verdict">{statementConfirmation(formalization?.confirmation ?? run?.formalization?.confirmation)}
       {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}</p>}
     <div class="chat-original-columns">
       <section><h3>{t("自然语言原题")}</h3><div class="chat-message-text" translate={false}>{original ?? t("此题直接从 Lean 陈述开始。")}</div></section>

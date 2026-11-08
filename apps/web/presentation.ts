@@ -2,6 +2,15 @@ import { webLimits, webPreparationSeconds, type WebEffort, type WebFailureKind, 
 import { locale, localeTag, localizeMessage, localizeText, t } from './i18n';
 
 export const isAcceptedRun = (run: WebRun) => run.status === 'completed' && run.result?.status === 'evaluated_passed';
+/** Acceptance proves the frozen Lean statement; natural-language meaning has its own confirmation. */
+export const acceptedTitle = (run: Pick<WebRun, 'formalization'>) => run.formalization ? t('Lean 陈述证明通过') : t('完整原题通过');
+export const acceptedDescription = (run: Pick<WebRun, 'formalization'>) => run.formalization
+  ? t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。')
+  : t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。');
+export function statementConfirmation(confirmation: 'automatic' | 'manual' | undefined, shared = false): string {
+  if (confirmation === 'manual') return shared ? t('原题含义：分享者已确认 Lean 陈述。') : t('原题含义：你已确认 Lean 陈述。');
+  return confirmation === 'automatic' ? t('原题含义：模型审核通过，未经人工确认。') : t('原题含义：未记录确认方式，请核对 Lean 陈述。');
+}
 export const isRejectedRun = (run: WebRun) => ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '');
 /** A run that ended on an error or on a classified failure the user has to act on; running out of time or usage is an expected end. */
 export const isFaultedRun = (run: WebRun) => run.status === 'error'
@@ -31,7 +40,7 @@ const endedSummaries: Record<StopCause, string> = {
 };
 /** One line for an ended run under its route map: accepted, rejected at acceptance, or why it stopped before a verdict. */
 export function endedSummary(run: WebRun): string {
-  if (isAcceptedRun(run)) return t('研究已结束，原题已通过验收。');
+  if (isAcceptedRun(run)) return run.formalization ? t('研究已结束，Lean 陈述已通过验收。') : t('研究已结束，原题已通过验收。');
   if (isRejectedRun(run)) return t('研究已结束，候选证明没有通过验收。');
   if (run.status === 'cancelled') return t('研究已取消，没有得到通过验收的完整证明。');
   if (run.status === 'error') return t('运行出错后中止，没有得到通过验收的完整证明。');
@@ -292,7 +301,7 @@ export function resultDescription(run: WebRun): string {
     if (run.observation?.inspection.planApproval?.status === 'awaiting-plan') return t('Lead 正在拟定研究计划，拟好后会请你批准。');
     return t('正在构造与检查候选证明。');
   }
-  if (isAcceptedRun(run)) return t('完整原题通过独立 Lean 验收。');
+  if (isAcceptedRun(run)) return run.formalization ? acceptedDescription(run) : t('完整原题通过独立 Lean 验收。');
   if (run.result?.status === 'evaluated_failed') return t('候选证明未通过独立 Lean 验收。');
   if (run.result?.status === 'evaluated_rejected') return t('候选未满足验收约束，详情见报告。');
   if (run.status === 'error') return t('运行环境或模型会话发生错误。');

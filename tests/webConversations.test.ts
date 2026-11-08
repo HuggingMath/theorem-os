@@ -41,6 +41,89 @@ const guidanceInput = (): WebGuidanceInput => ({ id: 'chat-guidance-1', recipien
   taskRef: { id: 'lemma-bridge', version: 'bridge-v3' }, text: '  请先使用交换律。\n保留原来的假设。  ',
   observationRef: { sequence: 3, stateDigest: mathDigest('recorded-guidance-observation') } });
 
+describe('owned conversation names and deletion', () => {
+  it('persists an edited title without changing the original problem, and validates names and ownership', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-conversation-name-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const { service, run, resources } = fixture(new WebStorage(root));
+    const conversation = service.create('alice', { runId: run.id });
+    expect(() => service.rename('bob', conversation.id, 'Someone else')).toThrow('不存在');
+    for (const title of ['', ' \n\t ', '题'.repeat(81)]) expect(() => service.rename('alice', conversation.id, title)).toThrow('80');
+    expect(service.read('alice', conversation.id).title).toBe(conversation.title);
+    const renamed = service.rename('alice', conversation.id, '  我的证明\n  交换律  ');
+    expect(renamed).toMatchObject({ id: conversation.id, title: '我的证明 交换律', messages: conversation.messages });
+    expect(run.title).toBe('Original problem');
+    const restarted = new WebConversations(new WebStorage(root), resources, async () => ({ answer: 'unused' }));
+    expect(restarted.list('alice')[0]?.title).toBe('我的证明 交换律');
+    expect(restarted.rename('alice', conversation.id, '题'.repeat(80)).title).toHaveLength(80);
+  });
+
+  it('keeps a renamed title when a streaming answer completes', async () => {
+    let input!: WebExplainCall, finish!: (answer: { answer: string }) => void;
+    const { service, run } = fixture(undefined, (_owner, request) => {
+      input = request; return new Promise(resolve => { finish = resolve; });
+    });
+    cleanups.push(() => { finish?.({ answer: 'cleanup' }); return service.close(); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '解释当前证明', call); await tick();
+    input.onText!('先使用交换律');
+    service.rename('alice', conversation.id, '已改名的对话');
+    finish({ answer: '先使用交换律，再核对目标。' }); await tick();
+    expect(service.read('alice', conversation.id)).toMatchObject({ title: '已改名的对话' });
+    expect(service.read('alice', conversation.id).messages.at(-1)).toMatchObject({ status: 'complete', text: '先使用交换律，再核对目标。' });
+  });
+
+  it('deletes only the owned conversation and allows its retained task to open a new conversation', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-conversation-delete-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const { service, run, formalization, storage, resources } = fixture(new WebStorage(root));
+    run.formalizationId = formalization.id; formalization.runId = run.id;
+    storage.saveRun('alice', run);
+    const formalizationPath = ['owners', mathDigest('alice'), 'formalizations', formalization.id, 'record.json'];
+    storage.saveRecord(formalizationPath, { owner: 'alice', formalization });
+    const conversation = service.create('alice', { formalizationId: formalization.id });
+    expect(() => service.delete('bob', conversation.id)).toThrow('不存在');
+    expect(service.list('alice')).toHaveLength(1);
+    service.delete('alice', conversation.id);
+    expect(() => service.read('alice', conversation.id)).toThrow('不存在');
+    expect(service.list('alice')).toEqual([]);
+    expect(storage.getRun('alice', run.id)).toMatchObject({ id: run.id, status: 'running' });
+    expect(storage.getRecord(formalizationPath)).toEqual({ owner: 'alice', formalization });
+    expect(resources.formalization('alice', formalization.id)).toBe(formalization);
+    const restarted = new WebConversations(new WebStorage(root), resources, async () => ({ answer: 'unused' }));
+    expect(restarted.list('alice')).toEqual([]);
+    const reopened = restarted.create('alice', { runId: run.id });
+    expect(reopened.id).not.toBe(conversation.id);
+    expect(reopened.messages).toHaveLength(2);
+  });
+
+  it('aborts a deleted answer and ignores buffered text, late output and provider completion', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-conversation-delete-stream-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    let input!: WebExplainCall, signal!: AbortSignal, finish!: (answer: { answer: string }) => void;
+    const { service, run, storage, resources } = fixture(new WebStorage(root), (_owner, request, active) => {
+      input = request; signal = active; return new Promise(resolve => { finish = resolve; });
+    });
+    cleanups.push(() => { finish?.({ answer: 'cleanup' }); return service.close(); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '逐步解释', call); await tick();
+    input.onText!('已保存'); input.onText!('尚未刷新的最后一段');
+    expect(storedConversation(storage, conversation.id).messages.at(-1)?.text).toBe('已保存');
+    service.delete('alice', conversation.id);
+    expect(signal.aborted).toBe(true);
+    input.onText!('删除后到达的内容');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(storedConversation(storage, conversation.id)).toBeUndefined();
+    finish({ answer: '删除后到达的完整回答' }); await tick();
+    expect(storedConversation(storage, conversation.id)).toBeUndefined();
+    expect(service.list('alice')).toEqual([]);
+    const restarted = new WebConversations(new WebStorage(root), resources, async () => ({ answer: 'unused' }));
+    expect(restarted.list('alice')).toEqual([]);
+    expect(run.status).toBe('running');
+  });
+});
+
 describe('streaming conversation persistence', () => {
   it('persists onText before completion, coalesces updates, and saves the final answer and truncation state', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
@@ -364,5 +447,70 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     expect((await fetch(route + '/guidance', { method: 'POST', headers: { ...headers, Cookie: otherCookie, 'X-CSRF-Token': otherSession.csrfToken }, body: JSON.stringify(guidance) })).status).toBe(404);
     expect((await fetch(route + '/guidance', { method: 'POST', headers, body: JSON.stringify({ ...guidance, receipt: { status: 'delivered' } }) })).status).toBe(400);
     expect((await (await fetch(route, { headers })).json() as { conversation: WebConversation }).conversation.messages).toHaveLength(saved.messages.length);
+    const title = { title: '  我的证明\n  第一版  ' };
+    expect((await fetch(route, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(title) })).status).toBe(401);
+    expect((await fetch(route, { method: 'PATCH', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(title) })).status).toBe(403);
+    const otherHeaders = { ...headers, Cookie: otherCookie, 'X-CSRF-Token': otherSession.csrfToken };
+    expect((await fetch(route, { method: 'PATCH', headers: otherHeaders, body: JSON.stringify(title) })).status).toBe(404);
+    for (const body of [{}, { title: 3 }, { title: 'Valid', messages: [] }, { title: ' \n ' }, { title: '题'.repeat(81) }]) {
+      expect((await fetch(route, { method: 'PATCH', headers, body: JSON.stringify(body) })).status).toBe(400);
+    }
+    const renamed = await fetch(route, { method: 'PATCH', headers, body: JSON.stringify(title) });
+    expect(renamed.status).toBe(200);
+    expect((await renamed.json() as { conversation: WebConversation }).conversation).toMatchObject({
+      id: conversation.id, title: '我的证明 第一版', messages: saved.messages,
+    });
+    expect((await fetch(route, { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(403);
+    expect((await fetch(route, { method: 'DELETE', headers: otherHeaders })).status).toBe(404);
+    const deleted = await fetch(route, { method: 'DELETE', headers });
+    expect(deleted.status).toBe(200); expect(await deleted.json()).toEqual({ deleted: true });
+    expect((await fetch(route, { headers })).status).toBe(404);
+    expect(service.jobs.get(owner, run.id)?.status).toBe('running');
+    const reopened = await fetch(`${base}/api/conversations`, { method: 'POST', headers, body: JSON.stringify({ runId: run.id }) });
+    expect(reopened.status).toBe(201);
+    expect((await reopened.json() as { conversation: WebConversation }).conversation.id).not.toBe(conversation.id);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('refuses a rename after logout while its body is still arriving', async () => {
+    const reservation = net.createServer();
+    await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+    const port = (reservation.address() as net.AddressInfo).port;
+    await new Promise<void>(resolve => reservation.close(() => resolve()));
+    const base = `http://127.0.0.1:${port}`, mail: { text: string }[] = [];
+    const config = readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: base,
+      THEOREMOS_WEB_AUTH: 'email', THEOREMOS_WEB_SMTP_URL: 'log:', THEOREMOS_WEB_ALLOWLIST: 'alice@example.org' });
+    const runner: WebRunner = { readiness: async () => ({ ready: true, message: 'fixture' }),
+      run: async (_input, _send, signal) => new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })) };
+    const service = createWebService(config, runner, { sample: null, captchaAnswer: () => '12345', mailer: async message => { mail.push(message); } });
+    await new Promise<void>(resolve => service.server.listen(port, '127.0.0.1', resolve));
+    cleanups.push(() => service.close());
+    const visitor = await fetch(`${base}/api/session`), visitorSession = await visitor.json() as WebSession;
+    const visitorHeaders = { Cookie: visitor.headers.get('set-cookie')!.split(';')[0]!, 'X-CSRF-Token': visitorSession.csrfToken, 'Content-Type': 'application/json' };
+    const captcha = await (await fetch(`${base}/api/auth/captcha`, { method: 'POST', headers: visitorHeaders, body: '{}' })).json() as { id: string };
+    expect((await fetch(`${base}/api/auth/code`, { method: 'POST', headers: visitorHeaders,
+      body: JSON.stringify({ email: 'alice@example.org', captchaId: captcha.id, captcha: '12345' }) })).status).toBe(200);
+    const verified = await fetch(`${base}/api/auth/verify`, { method: 'POST', headers: visitorHeaders,
+      body: JSON.stringify({ email: 'alice@example.org', code: mail.at(-1)!.text.match(/\b\d{6}\b/u)![0] }) });
+    expect(verified.status).toBe(200);
+    const signedIn = await verified.json() as { csrfToken: string };
+    const headers = { ...visitorHeaders, Cookie: verified.headers.get('set-cookie')!.split(';')[0]!, 'X-CSRF-Token': signedIn.csrfToken };
+    const owner = `account:${service.auth!.getAccount('alice@example.org')!.id}`;
+    const run = service.jobs.create(owner, { ...webDefaults, apiKey: key, providerId: config.providers[0]!.id,
+      source: 'theorem fixture : True := by sorry', task: 'Prove fixture' }, config.providers[0]!);
+    const conversation = service.conversations.create(owner, { runId: run.id });
+    const started = new Promise<void>(resolve => service.server.once('request', () => setImmediate(resolve)));
+    const upload = http.request(`${base}/api/conversations/${conversation.id}`, { method: 'PATCH', headers });
+    cleanups.push(() => { upload.destroy(); });
+    const completed = new Promise<number | undefined>((resolve, reject) => {
+      upload.on('error', reject);
+      upload.on('response', response => { response.resume(); response.on('end', () => resolve(response.statusCode)); response.on('error', reject); });
+    });
+    upload.write('{"title":'); await started;
+    expect((await fetch(`${base}/api/auth/logout`, { method: 'POST', headers, body: '{}' })).status).toBe(200);
+    upload.end('"Signed out title"}');
+    expect(await completed).toBe(401);
+    expect(service.conversations.read(owner, conversation.id).title).toBe(conversation.title);
+    expect(service.jobs.get(owner, run.id)).toBeDefined();
   });
 });

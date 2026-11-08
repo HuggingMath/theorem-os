@@ -8,6 +8,7 @@ import { workbenchReturn } from '../shared';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../share';
+import { acceptedTitle, acceptedDescription, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
 import { continuationsOf, filterRuns, ownerFirst, type RunFilter } from './history';
@@ -174,6 +175,11 @@ async function loadNaturalResearch() {
     },
     onConversation: renderShell,
     onArtifact: openChatArtifact,
+    onShare: run => void openSharing(run),
+    onRecover: recoverRun,
+    onKeysChanged: keys => { if (state.session?.account) state.session.account.savedKeys = keys; providerAddress(); },
+    onSample: () => void openSample(),
+    onHistory: openHistory,
     agentActivity, formalizationActivity,
     onLean: () => { chooseEntry('lean'); startDraft(); },
     onGuidance: (run, text?: string, taskId?: string) => openGuidance(run, text, undefined, taskId),
@@ -194,7 +200,7 @@ function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget, a
   if (kind === 'original') { element('#close-research-output').focus({ preventScroll: true }); return; }
   // The live workspace replaces the run detail for the time it is open, on any screen size.
   if (kind === 'live') { if (!auto) element('#close-research-output').focus({ preventScroll: true }); return; }
-  state.tab = kind === 'roadmap' ? 'trajectory' : 'source'; state.sourceView = 'proof';
+  state.tab = kind === 'result' ? 'result' : kind === 'roadmap' ? 'trajectory' : 'source'; state.sourceView = 'proof';
   setMobileView('runs'); renderDetail(true);
   if (task && kind === 'roadmap') {
     element('#detail-tab-trajectory').focus({ preventScroll: true });
@@ -1233,7 +1239,7 @@ function renderRuntime() {
   sourceCheck.schedule();
 }
 function status(run: WebRun) {
-  if (passed(run)) return { label: t('完整原题通过'), tone: 'passed', symbol: 'circle-check' };
+  if (passed(run)) return { label: acceptedTitle(run), tone: 'passed', symbol: 'circle-check' };
   if (run.status === 'queued') return { label: run.queue ? t('排队中 · 第 {0} 位', run.queue.position) : t('排队中'), tone: '', symbol: 'clock-3' };
   if (run.status === 'running') return planAwaitingApproval(run) ? { label: runProgress(run).phaseLabel, tone: 'warning', symbol: 'list-ordered' }
     : { label: runProgress(run).phaseLabel, tone: 'running', symbol: 'refresh-cw' };
@@ -1398,14 +1404,12 @@ const awayNote = () => state.session?.account && state.session.account.completio
 function resultTitle(run: WebRun) {
   const guide = failureGuide(run);
   if (guide) return guide.title;
-  return passed(run) ? t('完整原题已通过独立验收')
+  return passed(run) ? run.formalization ? acceptedTitle(run) : t('完整原题已通过独立验收')
     : activeRun(run) ? run.status === 'queued' ? t('任务已排队') : planGated(run) ? t('证明尚未开始') : t('研究正在运行')
       : run.status === 'cancelled' ? t('运行已取消')
         : run.status === 'error' ? t('运行发生错误')
           : isRejectedRun(run) ? t('完整原题验收未通过') : t('运行已结束，完整原题尚未验收通过');
 }
-/** Under the accepted title, what the acceptance checked, as the glossary entry for 独立验收 states it. */
-const acceptedDescription = () => t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。');
 /** The result tab of one run: verdict, proof, route, report, then the task and how it was run. */
 function resultProps(run: WebRun): ResultPanelProps {
   const progress = runProgress(run), value = status(run), working = activeRun(run), guide = failureGuide(run);
@@ -1417,7 +1421,8 @@ function resultProps(run: WebRun): ResultPanelProps {
   const compare = compareProps(run, later);
   return {
     // The plan waiting on its owner has nothing running: no spinner, unless the Lead is revising it from their note.
-    verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: passed(run) && !guide ? acceptedDescription() : resultDescription(run),
+    verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: passed(run) && !guide ? acceptedDescription(run) : resultDescription(run),
+      ...(run.formalization ? { meaning: statementConfirmation(run.formalization.confirmation) } : {}),
       active: working && (!approval || approval.leadRevising), candidate: Boolean(run.artifact && working),
       ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}),
       ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
@@ -1429,7 +1434,7 @@ function resultProps(run: WebRun): ResultPanelProps {
     ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom!.label, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
       comparable: Boolean(proof && candidateSource(item)) })) } : {}),
     ...(compare ? { compare } : {}),
-    active: working, report: reportProps(run), task: run.task,
+    active: working, report: reportProps(run), task: run.formalization?.original ?? run.task,
     // Helpers are declared in the proof, the original targets in both; before a proof exists the problem names them.
     written: writtenNames(headingsOf(run.result?.proof ?? proof ?? run.source)),
     route: working || (run.observation?.inspection.tasks.length ?? 0) > 0 || Boolean(run.actions?.count) || agentRoutes(run.events).length > 0,
@@ -2699,6 +2704,15 @@ const recoveryFields: Record<Exclude<RecoveryAction['id'], 'report'>, string> = 
   retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'workers', source: 'source', task: 'task' };
 /** 提高: twice the run's own limit, up to what a run may ask for. */
 const raised = (value: number, highest: number) => Math.min(highest, Math.max(1, value) * 2);
+function recoverRun(run: WebRun, action: string, button: HTMLButtonElement) {
+  const step = nextSteps(run, summarizeGoals(run)).find(item => item.id === action);
+  if (step?.id === 'continue-checked') void continueChecked(run, step.tasks, button);
+  else if (step?.id === 'ask-failed') {
+    openChatArtifact('roadmap');
+    trajectoryView.showStep(run.id, 'failed', step.tasks);
+    if (!document.activeElement?.closest('.trajectory-workspace')) element('#detail-tab-trajectory').focus({ preventScroll: true });
+  } else if (action in recoveryFields) reuseRun(run, action as keyof typeof recoveryFields);
+}
 /** Loads `run`'s problem and settings into a new draft; with `from`, the new run also starts from that recorded version. */
 /** 从已检查的代码继续: a new draft from the latest code the run's own Lean check passed, read from its trajectory. */
 async function continueChecked(run: WebRun, taskIds: readonly string[], button: HTMLButtonElement) {
@@ -2836,13 +2850,7 @@ element('#run-detail').addEventListener('click', event => {
     void copyText(candidateSource(run), run.result?.proof && passed(run) ? t('验收证明已复制') : t('候选源码已复制'));
   if (target.dataset.action === 'notify') void toggleNotifications();
   if (target.dataset.action === 'recover') {
-    const action = target.dataset.recovery, step = nextSteps(run, summarizeGoals(run)).find(item => item.id === action);
-    if (step?.id === 'continue-checked') void continueChecked(run, step.tasks, target as HTMLButtonElement);
-    else if (step?.id === 'ask-failed') {
-      state.tab = 'trajectory'; renderDetail(true);
-      trajectoryView.showStep(run.id, 'failed', step.tasks);
-      if (!document.activeElement?.closest('.trajectory-workspace')) element('#detail-tab-trajectory').focus({ preventScroll: true });
-    } else if (action && action in recoveryFields) reuseRun(run, action as keyof typeof recoveryFields);
+    if (target.dataset.recovery) recoverRun(run, target.dataset.recovery, target as HTMLButtonElement);
     return;
   }
   if (target.dataset.action === 'show-modules' || target.dataset.action === 'open-source') {

@@ -141,6 +141,19 @@ export class WebConversations {
       ] };
     this.save(owner, conversation); return conversation;
   }
+  rename(owner: string, id: string, title: string): WebConversation {
+    const conversation = this.read(owner, id), normalized = title.replace(/\s+/gu, ' ').trim();
+    if (!normalized || normalized.length > 80) throw new WebStorageError(400, '请输入不超过 80 字的对话标题。');
+    conversation.title = normalized; conversation.updatedAt = now(); this.save(owner, conversation);
+    return conversation;
+  }
+  delete(owner: string, id: string): void {
+    this.read(owner, id);
+    this.storage.deleteRecord([...directory(owner), `${id}.json`]);
+    // Stream flushes only update an existing reply; deleting first prevents abort handlers and late output from
+    // restoring this record. Keep the pending job until provider cleanup finishes before another answer starts.
+    this.pending.get(this.key(owner, id))?.controller.abort();
+  }
   send(owner: string, id: string, text: string, provider: Pick<WebExplainCall, 'baseUrl' | 'apiKey' | 'model'>): WebConversation {
     const conversation = this.read(owner, id);
     if (!text.trim() || text.length > webConversationLimits.question) throw new WebStorageError(400, '请输入不超过 4000 字的问题。');

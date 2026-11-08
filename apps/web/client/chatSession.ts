@@ -1,7 +1,7 @@
 import type { WebConversation, WebConversationMessage, WebConversationSummary } from '../conversationTypes';
 import type { WebGuidanceInput } from '../collaboration';
-import { webFormalizationDefaults, type WebFormalization, type WebFormalizationCapabilities } from '../formalizationTypes';
-import type { WebRun, WebSession } from '../shared';
+import { webFormalizationDefaults, webFormalizationLimits, type WebFormalization, type WebFormalizationCapabilities } from '../formalizationTypes';
+import type { WebRun, WebSavedKey, WebSession } from '../shared';
 import { locale, localizeMessage, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
 import { renderChatComposer, renderChatHistory, renderChatOriginal, renderChatThread, type ChatBudgets, type ChatProvider } from './ui/ChatWorkspace';
@@ -10,6 +10,8 @@ import { ChatReadingPosition } from './chatReadingPosition';
 import type { AgentActivity } from './agentActivity';
 import type { FormalizationActivityStore } from './formalizationActivityStore';
 import { buildSolveProcess, type SolveProcess } from './solveProcess';
+import { nextSteps, summarizeGoals } from '../report';
+import type { ChatArtifactKind } from './chatArtifactNavigation';
 import { clockTime } from './collaborationUi';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
@@ -25,7 +27,12 @@ type Options = {
   onConversation(): void;
   /** `attached` names the conversation of a run already on screen, which the reader may still be browsing to from the history. */
   onNavigate(id: string, mode: 'push' | 'replace', attached?: boolean): void;
-  onArtifact(kind: 'roadmap' | 'original' | 'source' | 'live', target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
+  onArtifact(kind: ChatArtifactKind, target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
+  onShare(run: WebRun): void;
+  onRecover(run: WebRun, action: string, button: HTMLButtonElement): void;
+  onKeysChanged(keys: WebSavedKey[]): void;
+  onSample(): void;
+  onHistory(): void;
   /** What the formalization and the Agents of this conversation did; both are owner-only reads, so a sample run has none. */
   agentActivity: AgentActivity;
   formalizationActivity: FormalizationActivityStore;
@@ -49,6 +56,8 @@ export class ChatSession {
   private environment: 'standard' | 'mathlib' = 'mathlib';
   private effort: 'low' | 'high' | 'max' = 'max';
   private apiKey = '';
+  private keyBusy = false;
+  private keyNotice = '';
   private providerId = '';
   private model = '';
   private budgets: ChatBudgets = structuredClone(webFormalizationDefaults);
@@ -144,9 +153,32 @@ export class ChatSession {
     try { return this.drafts.get(id) ?? sessionStorage.getItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`) ?? ''; } catch { return this.drafts.get(id) ?? ''; }
   }
   private providers(): ChatProvider[] {
-    return this.capabilities?.providers ?? (this.options.session()?.providers ?? []).map(provider => ({ ...provider,
+    const providers = this.capabilities?.providers ?? (this.options.session()?.providers ?? []).map(provider => ({ ...provider,
       defaultModel: provider.id === this.capabilities?.providerId ? this.capabilities.model : '',
-      key: this.options.keyRequired(provider.id) ? 'required' : 'saved' }));
+      key: this.options.keyRequired(provider.id) ? 'required' as const : 'saved' as const }));
+    const account = this.options.session()?.account;
+    return account ? providers.map(provider => ({ ...provider, key: account.savedKeys?.some(key => key.providerId === provider.id) ? 'saved'
+      : account.serverKeys?.includes(provider.id) ? 'server' : 'required' })) : providers;
+  }
+  private async manageKey(method: 'PUT' | 'DELETE') {
+    if (this.keyBusy || !this.options.session()?.account?.keyVault) return;
+    const providerId = this.activeProviderId(), key = this.apiKey, generation = this.generation;
+    if (method === 'PUT' && !key.trim()) return;
+    const owner = this.options.session()?.draftOwner;
+    this.keyBusy = true; this.keyNotice = ''; this.draw();
+    try {
+      const { savedKeys } = await this.options.request<{ savedKeys: WebSavedKey[] }>(`/api/auth/keys/${encodeURIComponent(providerId)}`,
+        { method, ...(method === 'PUT' ? { body: JSON.stringify({ apiKey: key.trim() }) } : {}) });
+      if (this.options.session()?.draftOwner !== owner) return;
+      this.options.onKeysChanged(savedKeys);
+      if (generation === this.generation && providerId === this.activeProviderId()) {
+        if (this.apiKey === key) this.apiKey = '';
+        this.keyNotice = method === 'PUT' ? t('Key 已保存到你的账号') : t('已删除账号中保存的 Key');
+        this.clearConnection();
+      }
+    } catch (error) {
+      if (generation === this.generation && providerId === this.activeProviderId()) this.keyNotice = reason(error);
+    } finally { this.keyBusy = false; this.draw(); }
   }
   private activeProviderId() { return this.run?.providerId ?? this.formalization?.providerId ?? this.providerId; }
   private activeModel() { return this.run?.model ?? this.formalization?.model ?? this.model; }
@@ -191,7 +223,7 @@ export class ChatSession {
     this.rememberDraft(); this.generation++; this.currentId = ''; this.conversation = undefined;
     this.run = undefined; this.formalization = undefined; this.seed = undefined; this.uncertainSubmission = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
-    this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.startingResearch = false; this.clearConnection();
+    this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.keyNotice = ''; this.startingResearch = false; this.clearConnection();
     this.draft = reset ? '' : this.restoredDraft('home');
     if (reset) { this.drafts.set('home', ''); this.rememberDraft(); }
     document.body.dataset.chatArtifact = '';
@@ -221,7 +253,7 @@ export class ChatSession {
     this.currentId = id; this.conversation = undefined; this.run = undefined; this.formalization = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
     this.seed = undefined; this.uncertainSubmission = undefined; this.attachRunId = '';
-    this.loading = true; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.startingResearch = false; this.clearConnection();
+    this.loading = true; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.keyNotice = ''; this.startingResearch = false; this.clearConnection();
     this.draft = this.restoredDraft(id);
     this.options.onNavigate(id, mode); this.options.onSelection(); this.draw();
     try {
@@ -240,7 +272,7 @@ export class ChatSession {
     this.currentId = ''; this.conversation = undefined; this.run = run; this.formalization = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
     this.seed = undefined; this.uncertainSubmission = undefined; this.attachRunId = run.id;
-    this.loading = !this.options.isSample(run); this.error = ''; this.readError = ''; this.draft = ''; this.apiKey = ''; this.submitting = false; this.startingResearch = false; this.clearConnection();
+    this.loading = !this.options.isSample(run); this.error = ''; this.readError = ''; this.draft = ''; this.apiKey = ''; this.keyNotice = ''; this.submitting = false; this.startingResearch = false; this.clearConnection();
     this.draw();
     if (this.options.isSample(run)) return;
     try {
@@ -269,6 +301,7 @@ export class ChatSession {
       && !(result.reason && typeof result.reason === 'object' && result.reason.status === 404));
     if (failed?.status === 'rejected') throw failed.reason;
     this.formalization = formal.status === 'fulfilled' ? formal.value?.formalization : undefined;
+    if (this.formalization) this.formalizations = [this.formalization, ...this.formalizations.filter(item => item.id !== this.formalization!.id)];
     const next = run.status === 'fulfilled' ? run.value?.run : undefined;
     const hadRun = this.run;
     this.run = next;
@@ -339,6 +372,8 @@ export class ChatSession {
           ({ formalization } = await this.post<{ formalization: WebFormalization }>('/api/formalizations', {
             original: text, ...settings, apiKey: key, solve: true,
           }));
+          const createdId = formalization.id;
+          this.formalizations = [formalization, ...this.formalizations.filter(item => item.id !== createdId)];
           if (generation === this.generation) this.seed = formalization;
         }
         ({ conversation: next } = await this.post<{ conversation: WebConversation }>('/api/conversations', { formalizationId: formalization.id }));
@@ -418,7 +453,60 @@ export class ChatSession {
   }
   private drawHistory() {
     renderChatHistory(this.list, { items: this.summaries, selectedId: this.currentId, onOpen: id => void this.open(id),
-      failed: this.historyFailed, onRetry: () => void this.refreshHistory() });
+      failed: this.historyFailed, onRetry: () => void this.refreshHistory(),
+      onRename: (id, title) => this.renameConversation(id, title), onDelete: id => this.deleteConversation(id),
+      records: this.formalizations, recordLimit: this.capabilities?.limits.recordsPerOwner ?? webFormalizationLimits.recordsPerOwner,
+      onRefreshRecords: () => void this.loadCapabilities(), onDeleteRecord: id => this.deleteRecord(id) });
+  }
+  private async renameConversation(id: string, title: string) {
+    try {
+      const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${encodeURIComponent(id)}`,
+        { method: 'PATCH', body: JSON.stringify({ title }) });
+      this.summaries = this.summaries.map(item => item.id === id ? { ...item, title: conversation.title, updatedAt: conversation.updatedAt } : item);
+      if (this.currentId === id && this.conversation) this.setConversation({ ...this.conversation, title: conversation.title });
+      this.drawHistory();
+    } catch (error) { throw new Error(reason(error)); }
+  }
+  private async deleteConversation(id: string) {
+    try {
+      try { await this.options.request(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+      catch (error) {
+        // A lost DELETE response is resolved by reading the list before offering another action.
+        const { conversations } = await this.options.request<{ conversations: WebConversationSummary[] }>('/api/conversations');
+        this.summaries = conversations;
+        if (conversations.some(item => item.id === id)) throw error;
+      }
+      this.summaries = this.summaries.filter(item => item.id !== id);
+      if (this.currentId === id) { this.home(false); this.options.onNavigate('', 'replace'); this.options.onSelection(); }
+      this.drafts.delete(id);
+      try {
+        sessionStorage.removeItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`);
+        sessionStorage.removeItem(`theorem-os.chat-reading.${this.options.draftScope}.${id}`);
+      } catch { /* Server deletion does not depend on browser storage. */ }
+      this.drawHistory();
+    } catch (error) { throw new Error(reason(error)); }
+  }
+  private async deleteRecord(id: string) {
+    try {
+      try { await this.options.request(`/api/formalizations/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+      catch (error) {
+        const { formalizations } = await this.options.request<{ formalizations: WebFormalization[] }>('/api/formalizations');
+        this.formalizations = formalizations;
+        if (formalizations.some(item => item.id === id)) throw error;
+      }
+      this.formalizations = this.formalizations.filter(item => item.id !== id);
+      if (this.formalization?.id === id) { this.formalization = undefined; this.draw(); }
+      this.drawHistory();
+    } catch (error) { throw new Error(reason(error)); }
+  }
+  private openRecords() {
+    this.options.onHistory();
+    const details = this.list.querySelector<HTMLDetailsElement>('#chat-problem-records');
+    if (details) { details.open = true; details.querySelector<HTMLElement>('summary')?.focus(); details.scrollIntoView({ block: 'nearest' }); }
+  }
+  private useExample(id: string) {
+    const example = researchExamples.find(item => item.id === id);
+    if (example) { this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
   }
   /** One more frame at most: a store notifies once per page it reads, and a keystroke redraws on top of that. */
   private redraw() {
@@ -476,15 +564,30 @@ export class ChatSession {
     }
     renderChatThread(this.thread, {
       conversation: this.conversation, run: this.run, formalization: this.formalization ?? this.seed,
+      sample: !!this.run && this.options.isSample(this.run),
+      missingTask: !!this.conversation && !this.loading && !this.submitting && !this.readError && !this.formalization && !this.run,
       loading: this.loading, error: this.error || this.readError, ...(solve ? { solve } : {}),
+      onConfigure: () => {
+        const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
+        if (settings) settings.open = true;
+        this.composer.querySelector<HTMLInputElement>(this.options.keyRequired(this.activeProviderId()) ? '#formalize-key' : '#formalize-model')?.focus();
+      },
+      onFirstExample: () => this.useExample('add-zero'),
+      ...(this.options.session()?.sample ? { onSample: this.options.onSample } : {}),
+      ...(this.error === t('形式化记录已满，请先删除不需要的记录。') ? { onManageRecords: () => this.openRecords() } : {}),
       onArtifact: (kind, target, auto) => { this.reading.capture(); this.drawOriginal(); this.options.onArtifact(kind, target, auto); },
+      ...(this.run && !this.options.isSample(this.run) ? {
+        onShare: () => this.options.onShare(this.run!),
+        recovery: { steps: nextSteps(this.run, summarizeGoals(this.run)),
+          onAction: (action: string, button: HTMLButtonElement) => this.options.onRecover(this.run!, action, button) },
+      } : {}),
       ...(canGuide ? { onGuidance: (text?: string, taskId?: string) => this.beginGuidance(text, taskId) } : {}),
       onGuidanceReceipt: message => this.recoverGuidance(message),
       ...(this.formalization?.status === 'confirmed' && !this.formalization.runId && this.formalization.researchError
         ? { onStartResearch: () => void this.startResearch(), startingResearch: this.startingResearch } : {}),
       ...(running(this.formalization) || running(this.run) && !this.options.isSample(this.run!) ? { onCancelTask: () => void this.cancelTask() } : {}),
       onEditProblem: () => {
-        const original = this.formalization?.original ?? this.run?.formalization?.original ?? '';
+        const original = this.formalization?.original ?? this.run?.formalization?.original ?? this.conversation?.messages.find(message => message.role === 'user')?.text ?? '';
         this.home(); this.options.onNavigate('', 'push'); this.options.onSelection(); this.fillOriginal(original);
       },
       onRetry: () => {
@@ -509,7 +612,7 @@ export class ChatSession {
       hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
       keyRequired: this.guidanceMode ? false : this.options.keyRequired(this.activeProviderId()),
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
-      onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.clearConnection(); this.draw(); },
+      onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.draw(); },
       onModel: value => { this.model = value; this.clearConnection(); this.draw(); },
       budgets: this.budgets, budgetLimits: { maxRunSeconds: this.capabilities?.limits.maxRunSeconds ?? 1800,
         maxTotalTokens: this.capabilities?.limits.maxTotalTokens || 2_000_000,
@@ -521,6 +624,9 @@ export class ChatSession {
         this.draw();
       },
       checkingConnection: this.checkingConnection, connection: this.connection, onCheckConnection: () => void this.checkConnection(),
+      ...(this.options.session()?.account?.keyVault ? { keyManagement: { busy: this.keyBusy,
+        ending: this.options.session()?.account?.savedKeys?.find(key => key.providerId === this.activeProviderId())?.ending,
+        notice: this.keyNotice, onSave: () => void this.manageKey('PUT'), onDelete: () => void this.manageKey('DELETE') } } : {}),
       ...(canGuide ? { onGuidance: () => this.beginGuidance() } : {}),
       ...(this.guidanceMode ? { guidance: { target: this.guidanceTarget,
         targets: (this.run?.observation?.inspection.tasks ?? []).map(item => ({ id: item.id, label: item.theorem || item.objective || item.id })),
@@ -536,11 +642,8 @@ export class ChatSession {
         : busyFormalization ? t("上一道题正在形式化，你可以先写下一条消息。")
         : newProblem && !this.capabilities ? t("正在连接…") : undefined,
       onEnvironment: value => { this.environment = value; this.draw(); }, onEffort: value => { this.effort = value; this.draw(); },
-      onKey: value => { this.apiKey = value; this.clearConnection(); this.draw(); },
-      onExample: id => {
-        const example = researchExamples.find(item => item.id === id);
-        if (example) { this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
-      },
+      onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },
+      onExample: id => this.useExample(id),
       onLean: this.options.onLean,
     });
     this.reading.rendered();
