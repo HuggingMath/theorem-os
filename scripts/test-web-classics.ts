@@ -12,6 +12,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunInput, WebSession } from '../apps/web/shared';
 import type { ArchiveCatalog, ArchiveRecord } from '../docs/web/types';
 import { freePort, settled, startBrowser } from './web-scenario';
+import { checkArchiveReplay, checkStaticArchiveReceipt } from './archive-replay-checks.mjs';
 
 // Real workbench HTTP and email login, with disposable accounts and a runner that never calls a provider or Lean.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,9 +21,10 @@ const staticRoot = path.join(root, 'out/web');
 const catalogFile = path.join(staticRoot, 'classics/data/catalog.json');
 await fs.access(catalogFile).catch(() => { throw new Error('Run bun run build:web before the classic problems check.'); });
 const catalog = JSON.parse(await fs.readFile(catalogFile, 'utf8')) as ArchiveCatalog;
+const replayEvidence = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/assets/replay.json'), 'utf8'));
 const expectedIds = catalog.records.map(record => record.id).sort();
-assert.equal(catalog.records.length, 10, 'The workbench must ship the ten completed campaign problems');
-assert.equal(new Set(expectedIds).size, 10, 'Every classic problem has its own stable identity');
+assert.equal(catalog.records.length, 16, 'The workbench must ship the sixteen completed campaign problems');
+assert.equal(new Set(expectedIds).size, catalog.records.length, 'Every classic problem has its own stable identity');
 assert.ok(catalog.records.every(record => record.status === 'locally_verified' && record.campaign && record.process),
   'Every classic problem must retain its local acceptance and recorded process');
 const example = catalog.records.find(record => record.campaign?.target === 'TotientCompanionZero');
@@ -49,6 +51,7 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_ALLOWLIST: 'alice@example.org,bob@example.org', THEOREMOS_WEB_DATA_ROOT: data }), runner,
 { mailer: async message => { mail.push(message); }, captchaAnswer: () => '24680' });
 const checks: string[] = [], errors: string[] = [];
+const replayChecks: unknown[] = [];
 let browser: Browser | undefined, activePage: Page | undefined, currentCheck = 'Start browser';
 const mark = (check: string) => { checks.push(check); currentCheck = check; console.log(`PASS ${check}`); };
 const digest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
@@ -138,7 +141,7 @@ async function inspectAll(page: Page, label: string) {
     assert.match(evidence, /evaluated_passed/u);
     assert.equal(await page.locator('.official-result-link').count(), 0, 'Local acceptance must not become an official result');
   }
-  mark(`${label} opens the same ten proofs, recorded processes and local acceptance records without a key`);
+  mark(`${label} opens the same ${catalog.records.length} proofs, recorded processes and local acceptance records without a key`);
 }
 
 async function rawDownloads(page: Page, record: ArchiveRecord) {
@@ -160,7 +163,7 @@ try {
   const aliceArchive = await openClassics(alice.page), bobArchive = await openClassics(bob.page);
   await inspectAll(aliceArchive, 'Alice');
   await inspectAll(bobArchive, 'Bob');
-  assert.equal(runnerCalls, 0, 'All twenty problem views must be read-only');
+  assert.equal(runnerCalls, 0, 'All problem views from both accounts must be read-only');
 
   currentCheck = 'Recorded references, typed requests, application checks and import stages';
   const evidenceFixture = structuredClone(example.process!);
@@ -241,7 +244,7 @@ try {
   assert.equal(await alice.page.locator('#open-classics').getAttribute('href'), 'classics/en/archive.html#status=verified');
   const englishArchive = await openClassics(alice.page, true);
   await englishArchive.close();
-  mark('The workbench and archive language switches open the same ten shared classics in English');
+  mark(`The workbench and archive language switches open the same ${catalog.records.length} shared classics in English`);
 
   currentCheck = '320 pixel workbench entry and Chinese/English process layouts';
   for (const page of [alice.page, bob.page]) {
@@ -267,7 +270,46 @@ try {
   assert.deepEqual(await readRuns(bob.page), []);
   mark('The permanent entry and full research process fit 320 pixels in Chinese and English without creating runs');
 
+  currentCheck = 'Interactive classic replay through real authenticated service paths';
+  for (const english of [false, true]) {
+    for (const width of [1440, 320]) {
+      const page = await alice.context.newPage();
+      activePage = page;
+      await page.setViewportSize({ width, height: 900 });
+      await page.emulateMedia({ reducedMotion: width === 1440 ? 'no-preference' : 'reduce' });
+      replayChecks.push(await checkArchiveReplay(page,
+        `${origin}/classics/${english ? 'en/' : ''}archive.html#proof=${example.id}&status=verified&tab=overview&sort=title`, {
+          english, evidence: replayEvidence, label: `${english ? 'English' : 'Chinese'} workbench classics at ${width}px`,
+        }));
+      assert.equal(runnerCalls, 0, 'Interactive replay must not invoke the research runner');
+      await page.screenshot({ path: path.join(output, `classic-replay-${english ? 'en' : 'zh'}-${width}.png`), fullPage: true });
+      await page.close();
+    }
+  }
+  const noScriptContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 844 },
+    storageState: await alice.context.storageState() });
+  noScriptContext.on('page', page => {
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`); });
+  });
+  for (const english of [false, true]) {
+    const page = await noScriptContext.newPage();
+    activePage = page;
+    replayChecks.push(await checkStaticArchiveReceipt(page, `${origin}/classics/${english ? 'en/' : ''}archive.html#view=quickstart`, {
+      english, evidence: replayEvidence, label: `${english ? 'English' : 'Chinese'} workbench no-script classics at 320px`,
+    }));
+    await page.screenshot({ path: path.join(output, `classic-replay-no-script-${english ? 'en' : 'zh'}-320.png`), fullPage: true });
+    await page.close();
+  }
+  await noScriptContext.close();
+  assert.equal(runnerCalls, 0);
+  assert.deepEqual(await readRuns(alice.page), []);
+  assert.deepEqual(await readRuns(bob.page), []);
+  mark('Chinese and English classic replays support playback, keyboard, history, raw receipts and no-script reading without API calls or new runs');
+
   currentCheck = 'Shared classics preserve account ownership of private research';
+  activePage = alice.page;
   const session = await readSession(alice.page);
   const input: WebRunInput = { providerId: 'openai', apiKey: credential, model: 'fixture-classics', effort: 'low',
     source: 'theorem private_fixture : True := by sorry\n', task: privateTask, environment: 'standard',
@@ -305,7 +347,7 @@ try {
   mark('Shared classics stay identical while Bob cannot list, open or download Alice’s private run, trajectory or source');
   assert.deepEqual(errors, [], 'No page, resource or CSP errors');
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(), checks,
-    accounts: 2, classicProblems: catalog.records.length, fixtureRunnerCalls: runnerCalls, paidModelCalls: false,
+    accounts: 2, classicProblems: catalog.records.length, replayChecks, fixtureRunnerCalls: runnerCalls, paidModelCalls: false,
     leanProcesses: 0, mode: 'Real workbench HTTP and Chromium with email login and disposable ordinary accounts' }, null, 2) + '\n');
   console.log(`Classic problems account checks passed. Report and screenshots: ${path.relative(root, output)}`);
 } catch (error) {

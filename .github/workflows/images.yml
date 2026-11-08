@@ -17,6 +17,7 @@ on:
       - 'docs/archive.html'
       - 'docs/en/archive.html'
       - 'docs/site.css'
+      - 'docs/replay.css'
       - 'research/openai-math/**'
       - 'tests/**'
       - 'vitest.config.ts'

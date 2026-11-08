@@ -4,6 +4,8 @@ import { campaignRecords } from '../docs/web/campaignCatalog';
 import { siteRepository } from '../docs/web/site';
 import type { ArchiveCatalog } from '../docs/web/types';
 import { archiveCounts, buildArchive } from './site-archive';
+import { researchReplay } from '../docs/web/presentation';
+import { LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
 
 /** A shared, read-only library shipped with the web image, independent of account-owned runs. */
 export async function buildWorkbenchClassics(root: string, webOutput: string) {
@@ -13,9 +15,11 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
     snapshotAt: campaign.capturedAt!, records: campaign.records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
   const output = path.join(webOutput, 'classics');
   await buildArchive(root, output, catalog);
+  const replay = JSON.parse(fs.readFileSync(path.join(root, 'docs/assets/replay.json'), 'utf8'));
   for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
     const english = locale === 'en', workbench = english ? '../../' : '../', home = `https://theoremos.top/${english ? 'en/' : ''}`;
     let page = archiveCounts(fs.readFileSync(path.join(root, 'docs', directory, 'archive.html'), 'utf8'), catalog)
+      .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale, 'archive'))
       .replace('<body>', '<body class="shared-classics">')
       .replaceAll('href="index.html"', `href="${workbench}"`)
       .replaceAll('href="index.html#start"', `href="${workbench}"`)
@@ -46,6 +50,7 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
 }
 `;
   fs.writeFileSync(path.join(output, 'site.css'), css);
+  fs.copyFileSync(path.join(root, 'docs/replay.css'), path.join(output, 'replay.css'));
   fs.mkdirSync(path.join(output, 'assets'), { recursive: true });
   fs.cpSync(path.join(root, 'docs/assets/fonts'), path.join(output, 'assets/fonts'), { recursive: true });
   for (const file of ['mark.svg', 'replay.png', 'replay.json']) fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));

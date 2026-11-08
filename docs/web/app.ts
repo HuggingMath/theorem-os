@@ -1,20 +1,23 @@
 import {
-  createIcons, ArrowDownWideNarrow, ArrowUpRight, BadgeCheck,
-  CalendarDays, Check, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
-  Files, FlaskConical, GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2,
-  ListStart, MessageCircle, Search, SearchX, ShieldCheck,
+  createIcons, ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck,
+  CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
+  FileJson2, Files, FlaskConical, GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2,
+  ListStart, MessageCircle, Pause, Play, RotateCcw, Search, SearchX, ShieldCheck,
 } from 'lucide';
 import catalog from 'virtual:archive';
 import type { ArchiveIndexRecord, ArchiveIndexSource, ArchiveProcess } from './types';
 import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './site';
+import { initializeReplay } from './replay';
 
 const iconSet = {
-  ArrowDownWideNarrow, ArrowUpRight, BadgeCheck, CalendarDays, Check,
-  ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2, Files, FlaskConical,
+  ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, CalendarDays, Check,
+  ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2, FileJson2, Files, FlaskConical,
   GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2, ListStart, MessageCircle, Search,
-  SearchX, ShieldCheck,
+  Pause, Play, RotateCcw, SearchX, ShieldCheck,
 };
 const locale = localeOf(document.documentElement.lang);
+document.documentElement.classList.add('js');
+const replayController = initializeReplay(locale);
 const strings = {
   zh: {
     accepted: '官方已验收', verified: '本地验收通过', nativeAt: '本地验收', snapshot: '研究快照', notAccepted: '尚未官方验收',
@@ -401,6 +404,7 @@ function render() {
   }
   element('#archive-view').hidden = state.view !== 'archive';
   element('#quickstart-view').hidden = state.view !== 'quickstart';
+  if (state.view !== 'quickstart') replayController.pause();
   document.querySelectorAll<HTMLAnchorElement>('[data-view-link]').forEach(link => {
     const active = link.dataset.viewLink === state.view;
     link.classList.toggle('is-active', active);

@@ -13,6 +13,7 @@
   <link rel="alternate" hreflang="en" href="https://likc1606.github.io/TheoremOS/en/archive.html">
   <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
   <link rel="stylesheet" href="site.css">
+  <link rel="stylesheet" href="replay.css">
   <title>TheoremOS | Lean 证明档案</title>
 </head>
 <body>
@@ -101,16 +102,13 @@
           <div><p class="breadcrumb">工作区 <i data-lucide="chevron-right"></i> 验收回放</p><h1 id="quickstart-title">验收回放</h1><p class="page-description">自然数加法证明回放</p></div>
         </div>
         <div class="quickstart-layout">
+          <div class="replay-evidence"><!-- research-replay --></div>
           <div class="quickstart-commands">
             <div class="section-title"><h2>回放内容</h2><span class="small muted">预设示例</span></div>
             <dl class="requirements"><div><dt>题目</dt><dd>自然数加法小题 · Lean 标准库</dd></div><div><dt>候选</dt><dd>先提交一份失败候选，再提交修复后的证明</dd></div><div><dt>模型</dt><dd>不调用模型，不需要 API Key</dd></div><div><dt>验收</dt><dd>完整原题由独立 Lean 流程检查</dd></div></dl>
             <p class="quickstart-access">要研究自己的题目，可<a class="inline-link" href="index.html#start">申请内测</a>，获准后连接模型服务。</p>
           </div>
-          <div class="replay-evidence">
-            <div class="section-title"><h2>回放验收记录</h2><span class="status-badge accepted"><i data-lucide="circle-check"></i>独立 Lean 检查</span></div>
-            <figure><img src="assets/replay.png" alt="TheoremOS 预设回放的结构化结果：最终状态 evaluated_passed，两个原题目标均为 kernel_verified，official 为 false。" width="1100" height="640" loading="lazy"><figcaption>回放回执 <a href="assets/replay.json" target="_blank">原始记录</a></figcaption></figure>
-            <div class="verification-rule"><i data-lucide="shield-check"></i><div><strong>evaluated_passed</strong><p>示例的完整原题通过独立 Lean 检查。</p></div></div>
-          </div>
+
         </div>
       </section>
 

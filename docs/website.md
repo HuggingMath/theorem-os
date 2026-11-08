@@ -5,7 +5,7 @@
 静态网站包含三个入口：
 
 - `index.html`：中文产品宣传首页，首屏提供四步预设回放、申请内测和工作台入口（https://app.theoremos.top/），后续展示可缩放的真实工作台截图、证明成果、M1–M5 组件和内测申请流程。
-- `archive.html`：证明档案，支持搜索、按官方验收/本地通过/研究中筛选、源码查看、验收证据、解题过程、JSON 下载和本地回放记录。
+- `archive.html`：证明档案，支持搜索、按官方验收/本地通过/研究中筛选、源码查看、验收证据、解题过程、JSON 下载和四步验收回放。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。工作台用 `?kind=&area=&environment=` 预填类型、位置和环境，未知值忽略，环境可在发布前修改。
 
 三个入口都有英文版，位于 `en/` 下，与中文页共用样式和脚本。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。首页的自然语言入口、Lean 源码和模块图谱/方案库使用对应语言的真实截图。
@@ -64,7 +64,8 @@ bun run build:site
 - `docs/en/*.html`：三个页面的英文版。改中文页时同步修改英文页。
 - `docs/web/site.ts`：公开仓库地址、内测入口、站点域名与访问统计开关、语言判断与切换。
 - `docs/privacy.html`、`docs/legal.css`、`docs/web/legal.ts`：隐私与条款页。页面内容描述 `apps/web` 的实际行为（Key 经 stdin 传入容器、运行记录 30 天会话过期后整目录删除），改动这些行为时同步修改页面。
-- `docs/web/landing.ts`：回放步骤与组件切换、截图预览和手机导航。
+- `docs/web/landing.ts`：组件切换、截图预览和手机导航。
+- `docs/web/replay.ts`、`docs/replay.css`：首页、证明档案和工作台经典解答共用的四步回放与播放控制。
 - `docs/web/presentation.ts`：预设回放展示和从真实档案生成的成果表格。
 - `docs/archive.html`、`docs/site.css`、`docs/web/app.ts`：证明档案界面。
 - `docs/feedback.html`、`docs/feedback.css`、`docs/web/feedback.ts`：反馈表单、全文预览和 GitHub Issues 跳转。
@@ -73,7 +74,7 @@ bun run build:site
 
 首页沿用暖纸色底、墨色文字、陶土色主按钮与衬线标题，组件区使用原有浅色底。首屏将原题到 Lean 证明的说明、申请与工作台入口和真实预设记录生成的四步回放并列展示，手机端按顺序排列。工作台区用自然语言入口和 Lean 源码片段说明操作流程；入口的 `picture` 在 900 像素及以下加载手机近景，限制其显示宽度不超过 350 CSS 像素，源码、模块和完整预览的手机断点为 600 像素。入口截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明白名单内测、平台免费与自备模型 Key，提供申请流程、邮件申请和已有资格用户的工作台入口。
 
-四步回放的候选源码读取自 `src/math/localExample.ts`，回执读取自 `docs/assets/replay.json`；切换演示不会启动模型或 Lean。默认停在最终验收，点击播放后从候选开始，可暂停续播、手动选步和重新播放；离屏或页面隐藏会暂停，返回后由用户继续播放。反馈步骤是对预设示例的检查说明，并非原始诊断日志。手机端先展示已归档的最终回执，再展示选中步骤的源码。源码与回放记录改动后需要重新构建。
+四步回放的候选源码读取自 `src/math/localExample.ts`，回执读取自 `docs/assets/replay.json`；切换演示不会启动模型或 Lean。首页、档案的「验收回放」和工作台经典解答使用同一套播放器。默认停在最终验收，点击播放后从候选开始，可暂停续播、手动选步和重新播放；离屏、页面隐藏或切回档案列表会暂停，返回后由用户继续播放。反馈步骤是对预设示例的检查说明，并非原始诊断日志。首页手机端先展示已归档的最终回执，再展示选中步骤的源码。未启用 JavaScript 时仍能阅读最终证明和原始回执。源码与回放记录改动后需要重新构建。
 
 首屏两行标题使用 GSAP 遮罩入场，成果按行出现，组件选项依次进入，产品图轻微缩放落定；组件与回放步骤切换采用短过渡。系统启用减少动态效果时，内容即时切换，回放仍可按步骤阅读。GSAP 固定版本与锁文件一起管理，版权和许可链接随静态产物保留在 `assets/licenses/gsap-NOTICE.txt`。
 
@@ -155,7 +156,7 @@ node scripts/capture-promo.mjs
 bun run build:site
 ```
 
-`replay.png` 来自一次真实的预设回放，其公开记录字段保存在 `replay.json`，明确注明没有调用模型、不是官方评测。首页通过文字链接进入实际档案。需要独立的档案素材时，`capture-archive.mjs` 可生成 2 倍像素密度的桌面 `archive-preview.png` 和手机题目详情 `archive-preview-mobile.png`：
+`replay.png` 是保留的历史回放素材；页面中的播放器直接展示候选源码、修复和验收回执，不再以该截图代替播放。公开记录字段保存在 `replay.json`，明确注明没有调用模型、不是官方评测。首页通过文字链接进入实际档案。需要独立的档案素材时，`capture-archive.mjs` 可生成 2 倍像素密度的桌面 `archive-preview.png` 和手机题目详情 `archive-preview-mobile.png`：
 
 ```bash
 bun run build:site

@@ -3,17 +3,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import { checkArchiveReplay, checkStaticArchiveReceipt } from './archive-replay-checks.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const url = pathToFileURL(path.join(root, 'out/site/archive.html')).href;
 const output = path.join(root, 'out/site-checks');
 fs.mkdirSync(output, { recursive: true });
 const catalog = JSON.parse(fs.readFileSync(path.join(root, 'out/site/data/catalog.json'), 'utf8'));
+const replayEvidence = JSON.parse(fs.readFileSync(path.join(root, 'out/site/assets/replay.json'), 'utf8'));
 const official = catalog.records.filter(record => record.status === 'official_accepted');
 const ongoing = catalog.records.filter(record => record.status === 'in_progress_not_officially_accepted');
 const local = catalog.records.filter(record => record.status === 'locally_verified');
-// Lean sources load per record from data/sources; the archive script must not bundle them again.
-assert.ok(fs.statSync(path.join(root, 'out/site/site.js')).size < 200_000, 'site.js must not bundle the archive sources');
+// The shared replay adds GSAP; Lean sources still load per record from data/sources.
+const archiveBundle = fs.readFileSync(path.join(root, 'out/site/site.js'), 'utf8');
+assert.ok(Buffer.byteLength(archiveBundle) < 300_000, 'site.js with the shared replay must not bundle the archive sources');
+assert.equal(archiveBundle.includes('The no-seed alternative of the weighted totient companion theorem.'), false,
+  'The Totient Lean source must stay in its lazy source asset');
 const errors = [];
 const browser = await chromium.launch();
 try {
@@ -123,17 +128,22 @@ try {
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.getByRole('tab', { name: '验证证据' }).getAttribute('aria-selected'), 'true');
 
+  const beforeReplay = page.url();
+  const beforeReplayProof = await page.locator('.proof-row.is-selected').getAttribute('data-proof-id');
   await page.locator('[data-view-link="quickstart"]').click();
   assert.equal(await page.locator('#quickstart-view').isVisible(), true);
   assert.match(await page.locator('#quickstart-view').innerText(), /不调用模型/);
   assert.match(await page.locator('.quickstart-access').innerText(), /申请内测/);
   assert.equal(await page.locator('.quickstart-access a').getAttribute('href'), 'index.html#start');
-  assert.equal(await page.locator('#quickstart-view pre, [data-action^="copy-install"], [data-action^="copy-replay"]').count(), 0);
-  await page.locator('.replay-evidence img').scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => { const image = document.querySelector('.replay-evidence img'); return image.complete && image.naturalWidth > 0; });
+  assert.equal(await page.locator('[data-action^="copy-install"], [data-action^="copy-replay"]').count(), 0);
+  assert.match(await page.locator('#stage-verified').innerText(), /exact Nat.zero_add n/u);
+  assert.equal(await page.locator('.replay-playback').isVisible(), true);
+  assert.equal(await page.locator('.receipt-evidence').getAttribute('href'), 'assets/replay.json');
   await page.screenshot({ path: path.join(output, 'quickstart.png'), fullPage: true });
   await page.goBack();
   assert.equal(await page.locator('#archive-view').isVisible(), true);
+  assert.equal(page.url(), beforeReplay);
+  assert.equal(await page.locator('.proof-row.is-selected').getAttribute('data-proof-id'), beforeReplayProof);
 
   for (const viewport of [{ width: 1920, height: 1080 }, { width: 768, height: 1000 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
     await page.setViewportSize(viewport);
@@ -177,8 +187,23 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Process overflow at ${viewport.width}px`);
     await page.screenshot({ path: path.join(output, `openai-process-${viewport.width}.png`), fullPage: true });
   }
+  for (const width of [1440, 320]) {
+    const replayPage = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: width === 1440 ? 'no-preference' : 'reduce' });
+    replayPage.on('pageerror', error => errors.push(error.message));
+    replayPage.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+    await checkArchiveReplay(replayPage, `${url}#proof=${example.id}&status=verified&tab=overview&sort=title`, {
+      evidence: replayEvidence, label: `Chinese public archive at ${width}px`,
+    });
+    await replayPage.screenshot({ path: path.join(output, `replay-${width}.png`), fullPage: true });
+    await replayPage.close();
+  }
+  const noScript = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 320, height: 844 } });
+  noScript.on('pageerror', error => errors.push(error.message));
+  await checkStaticArchiveReceipt(noScript, `${url}#view=quickstart`, { evidence: replayEvidence, label: 'Chinese public no-script archive at 320px' });
+  await noScript.screenshot({ path: path.join(output, 'replay-no-script-320.png'), fullPage: true });
+  await noScript.close();
   assert.deepEqual(errors, []);
-  console.log('Site checks passed: filters, search, provenance, evidence, source files, clipboard, JSON download, mobile proof links and focus, return to results, access links, navigation, and 5 viewport sizes.');
+  console.log('Site checks passed: filters, search, provenance, evidence, source files, clipboard, JSON download, mobile proof links and focus, return to results, access links, interactive replay with zero API/write requests, no-script receipt, navigation, and 5 viewport sizes.');
   console.log(`Screenshots: ${path.relative(root, output)}`);
 } finally {
   await browser.close();
