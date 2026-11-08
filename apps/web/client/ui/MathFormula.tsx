@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import { loadMath } from '../mathAssets';
 
 /** Closing punctuation can travel with an inline formula without becoming part of its TeX source. */
-export const inlineMathPunctuation = (text: string) => /^[,.;:!?，。；：！？、…'"\p{Pe}\p{Pf}]+/u.exec(text)?.[0] ?? '';
+export const inlineMathPunctuation = (text: string) => /^[,.;:!?\u3001\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u2026'"\p{Pe}\p{Pf}]+/u.exec(text)?.[0] ?? '';
 
 /** Render DOM through KaTeX, retaining the original formula for copying and failed/incomplete input. */
 export function MathFormula(props: { source: string; display?: boolean; fallback?: string; complete?: boolean; className?: string; suffix?: string }) {
