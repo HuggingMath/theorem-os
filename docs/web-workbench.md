@@ -13,14 +13,14 @@ worker 还通过 `scripts/build-pantograph.ts` 从固定 Pantograph commit `0ee7
 目前仅 Mathlib worker 注入 `DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST`，由运行时校验产物并把后端摘要纳入运行身份。Agent 通过独立工具包中的 `proof-search` 对已物化、类型闭合的普通 helper lemma 执行有预算的 tactic 搜索。候选和断点是 advisory，仍须经过 ready、停写、冻结、独立 Lean 检查、集成和 S3。标准库 worker 没有 sealed/FUSE 环境，因此保持后端未配置，调用会返回 `proof_search_backend_not_configured`；未放宽其设备或文件权限。
 
 ```bash
-git clone https://github.com/LikC1606/theorem-os.git
+git clone https://github.com/HuggingMath/theorem-os.git
 cd theorem-os
 docker compose -f apps/web/compose.yml build worker web
 docker compose -f apps/web/compose.yml up -d web
 docker compose -f apps/web/compose.yml ps
 ```
 
-不想在本机构建时，可拉取 GitHub Actions 发布到 GHCR 的镜像。`.github/workflows/images.yml` 在 `main` 推送、`v*` 标签和手动触发时构建 `web` 与 `worker` 两个目标，发布为 `ghcr.io/likc1606/theorem-os-web` 和 `ghcr.io/likc1606/theorem-os-worker`，标签为分支名、完整 commit SHA 和版本号。worker 镜像约 16 GB，其中 Mathlib 层约 7.5 GB，首次拉取较慢。
+不想在本机构建时，可拉取 GitHub Actions 发布到 GHCR 的镜像。`.github/workflows/images.yml` 在 `main` 推送、`v*` 标签和手动触发时构建 `web` 与 `worker` 两个目标，发布为 `ghcr.io/huggingmath/theorem-os-web` 和 `ghcr.io/huggingmath/theorem-os-worker`，标签使用完整 commit SHA。仓库迁移后，旧 `likc1606` 地址仅作为构建缓存的读取来源。worker 镜像约 16 GB，其中 Mathlib 层约 7.5 GB，首次拉取较慢。
 
 ```bash
 export THEOREMOS_IMAGE_TAG=<完整的40位提交SHA>

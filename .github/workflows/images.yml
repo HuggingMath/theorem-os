@@ -129,12 +129,14 @@ jobs:
           file: apps/web/Dockerfile
           target: ${{ matrix.target }}
           push: true
-          tags: ghcr.io/likc1606/theorem-os-${{ matrix.target }}:${{ github.sha }}
+          tags: ghcr.io/huggingmath/theorem-os-${{ matrix.target }}:${{ github.sha }}
           build-args: THEOREMOS_SOURCE_COMMIT=${{ github.sha }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           # This tag is a build cache, never a deployable release alias.
-          cache-from: type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache,mode=min
+          cache-from: |
+            type=registry,ref=ghcr.io/huggingmath/theorem-os-${{ matrix.target }}:buildcache
+            type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/huggingmath/theorem-os-${{ matrix.target }}:buildcache,mode=min
 
   release:
     needs: publish
@@ -152,8 +154,8 @@ jobs:
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
           set -eu
-          web="ghcr.io/likc1606/theorem-os-web:$RELEASE_COMMIT"
-          worker="ghcr.io/likc1606/theorem-os-worker:$RELEASE_COMMIT"
+          web="ghcr.io/huggingmath/theorem-os-web:$RELEASE_COMMIT"
+          worker="ghcr.io/huggingmath/theorem-os-worker:$RELEASE_COMMIT"
           web_digest=$(docker buildx imagetools inspect "$web" --format '{{.Manifest.Digest}}')
           worker_digest=$(docker buildx imagetools inspect "$worker" --format '{{.Manifest.Digest}}')
           jq -n --arg commit "$RELEASE_COMMIT" --arg web "$web" --arg webDigest "$web_digest" \

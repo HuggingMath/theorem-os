@@ -246,7 +246,7 @@ export async function main(argv: string[]) {
   if (command === 'images') {
     const commit = required('commit'); if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('full_commit_sha_required');
     const images = ['web', 'worker'].map(kind => {
-      const image = values[kind === 'web' ? 'web-image' : 'worker-image'] ?? `ghcr.io/likc1606/theorem-os-${kind}:${commit}`;
+      const image = values[kind === 'web' ? 'web-image' : 'worker-image'] ?? `ghcr.io/huggingmath/theorem-os-${kind}:${commit}`;
       const revision = docker(['image', 'inspect', '--format', '{{index .Config.Labels "org.opencontainers.image.revision"}}', image]).trim();
       if (revision !== commit) throw new Error(`${kind}_image_revision_mismatch`);
       return { kind, image, id: docker(['image', 'inspect', '--format', '{{.Id}}', image]).trim(), revision };
