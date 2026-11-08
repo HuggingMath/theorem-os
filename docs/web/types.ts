@@ -106,8 +106,32 @@ export interface ArchiveLibraryUsage {
     modules: { name: string; file: string; direct: boolean; mentioned: string[] }[] } | null;
 }
 
+/** A build-time index of archived source bytes. References are lexical, not proof dependencies. */
+export interface ArchiveSourceRoute {
+  files: {
+    name: string;
+    path: string;
+    sha256: string;
+    recordSource: boolean;
+    /** Checked versions already live in ArchiveProcess.sources and are not copied here. */
+    code?: string;
+    declarations: {
+      id: string;
+      name: string;
+      kind: 'theorem' | 'definition' | 'instance';
+      type: string;
+      line: number;
+      endLine: number;
+      references: string[];
+      /** Contiguous original proof blocks; their order describes source reading only. */
+      steps: { id: string; line: number; endLine: number; code: string }[];
+    }[];
+  }[];
+}
+
 export interface ArchiveProcess {
   walkthrough?: ProofWalkthrough;
+  sourceRoute?: ArchiveSourceRoute;
   /** Exact checked files recovered from immutable archived commits, keyed by their SHA-256. */
   sources?: Record<string, { path: string; code: string; sha256: string }>;
   runs: {

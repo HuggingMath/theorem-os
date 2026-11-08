@@ -22,6 +22,8 @@ import { SideViewer } from './ui/SideViewer';
 import { localizeText, t } from '../i18n';
 import { buildResearchRoadmap } from './researchRoadmap';
 import { ResearchRoadmap } from './ui/ResearchRoadmap';
+import { recordedSolutionRoute } from './solutionRoute';
+import { SolutionRouteGraph } from './ui/SolutionRouteGraph';
 
 // A running run is re-read at most this often; each read only fetches what changed since the last one.
 const pollMs = 1_500;
@@ -670,12 +672,24 @@ export class TrajectoryView {
       const selected = model.nodes.find(node => node.id === state.mapNode);
       const selectedTask = selected?.taskId && run.observation?.inspection.tasks.find(task => task.id === selected.taskId);
       const details = (selected?.stepIndexes ?? []).map(index => items[index]).filter((item): item is Item => Boolean(item));
+      const route = this.overviewAction ? undefined : recordedSolutionRoute({ id: run.id, data: state.data, steps: built.steps, status: run.status,
+        taskDetails: run.observation?.inspection.tasks, originalSource: run.source, problem: run.observation?.inspection.problem,
+        proofRoutes: run.observation?.plan?.proofRoutes, coverage: run.observation?.coverage, roadmap: model });
+      if (route && state.mapNode && route.nodes.some(node => node.id === state.mapNode)) route.initial = state.mapNode;
       return <div class="trajectory-layout" data-mode="roadmap" data-viewer-host>
         <section class="trajectory trajectory-roadmap">
           {!this.overviewAction && heading()}{failure}
-          <ResearchRoadmap key={run.id} model={model} names={names} selected={selected?.id} onSelect={id => {
-            if (this.overviewAction) this.overviewAction(id); else this.showNode(run.id, id);
-          }} />
+          {route ? <SolutionRouteGraph key={run.id} model={route} onSelect={id => { state.mapNode = id; state.panel = undefined; this.render(); }}
+            onOpen={target => {
+              if (target.startsWith('task:')) { this.showNode(run.id, target); return; }
+              const match = /^step:(\d+)$/u.exec(target), index = match ? Number(match[1]) : -1;
+              const step = built.steps[index], key = built.keys[index];
+              if (!step || !key) return;
+              state.open.set(key, true);
+              const modes = this.modes(step, run), mode = modes.includes('code') ? 'code' : modes[0];
+              if (mode) { state.panel = { key, mode }; this.render(); }
+              else this.reveal(key);
+            }} /> : <ResearchRoadmap key={run.id} model={model} names={names} selected={selected?.id} onSelect={id => this.overviewAction?.(id)} />}
           {!this.overviewAction && selected && <section class="roadmap-detail" aria-label={t('节点详情')}>
             <header><div><span>{t('节点详情')}</span><h4>{selected.theoremName ?? selected.title}</h4></div>
               <button type="button" class="icon-button" aria-label={t('关闭节点详情')}

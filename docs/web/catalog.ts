@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { ArchiveCatalog, ArchiveIndex, ArchiveRecord, ArchiveSource } from './types';
 import { siteRepository } from './site';
 import { campaignRecords } from './campaignCatalog';
+import { withArchiveSourceRoute } from './archiveSourceRoute';
 
 const identifier = z.string().regex(/^[a-z0-9_]+$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -331,7 +332,8 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
   if (new Set(records.map(record => record.id)).size !== records.length) throw new Error('Duplicate archive problem');
   return {
     schema: 'theoremos.public-archive.v1', repository, archiveRevision,
-    snapshotAt: [snapshot.captureFinishedAt, campaign.capturedAt ?? ''].sort().at(-1)!, records: records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    snapshotAt: [snapshot.captureFinishedAt, campaign.capturedAt ?? ''].sort().at(-1)!,
+    records: records.map(record => record.process?.sourceRoute ? record : withArchiveSourceRoute(record)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   };
 }
 

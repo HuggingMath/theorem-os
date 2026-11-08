@@ -1,4 +1,5 @@
 import { Component, render } from 'preact';
+import { useMemo } from 'preact/hooks';
 import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationLink, WebExplanationOverview,
   WebExplanationSection, WebExplanationUse } from '../shared';
 import { effortLabels, formatDuration, formatTokens } from '../presentation';
@@ -8,6 +9,8 @@ import { ChosenBar, ProblemCard, type FragmentStep } from './correspondence';
 import { LeanName, Rich, type RichLink } from './richText';
 import { Icon, Spinner } from './ui/Icon';
 import { fill } from './ui/Section';
+import { explanationSolutionRoute } from './explainSolutionRoute';
+import { SolutionRouteGraph } from './ui/SolutionRouteGraph';
 
 /** What explain.ts draws from; every button carries a data-action that explain.ts handles. */
 export type ExplainView = {
@@ -19,6 +22,7 @@ export type ExplainView = {
   dialog?: 'generate' | 'cancel' | 'delete'; busy: boolean; error?: string; now: number;
   /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
   /** The reader followed a cited lemma and can go back to where they cited it. */ canReturn?: boolean;
+  onRouteOpen?: (target: string) => void;
 };
 
 const reasons: Record<string, string> = {
@@ -87,7 +91,8 @@ function Prose(view: ExplainView) {
   const { generation } = view.overview, explanation = view.explanation;
   const declarations = view.overview.targets.find(item => item.name === view.target)?.declarations ?? 1;
   if (explanation?.status === 'approved') {
-    if (view.document) return <DocumentView document={view.document} active={view.active} gap={view.gap} chosen={view.chosen} />;
+    if (view.document) return <DocumentView document={view.document} proof={view.overview.run.proof} runId={view.overview.run.id}
+      active={view.active} gap={view.gap} chosen={view.chosen} onRouteOpen={view.onRouteOpen} />;
     return view.documentError ? <div class="inline-error" role="alert">{view.documentError}</div>
       : <p class="explain-state" role="status"><Spinner />{t('正在读取讲解…')}</p>;
   }
@@ -148,8 +153,9 @@ const richLinks = (links: readonly WebExplanationLink[] | undefined, at: Record<
     title: t('在 Lean 中标出') }));
 // Which section explains each declaration, once per document, so a section's props stay the same between draws.
 const ownedBy = new WeakMap<WebExplanationDocument, Map<string, number>>();
-function DocumentView({ document, active, gap, chosen }: { document: WebExplanationDocument; active?: StepRef; gap?: number;
-  chosen?: ReadonlySet<number> }) {
+function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen }: { document: WebExplanationDocument; proof: string; runId: string;
+  active?: StepRef; gap?: number; chosen?: ReadonlySet<number>; onRouteOpen?: (target: string) => void }) {
+  const route = useMemo(() => explanationSolutionRoute(document, proof, `${runId}:explanation:${document.target}:${document.language}`), [document, proof, runId]);
   let owned = ownedBy.get(document);
   if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
   return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
@@ -160,6 +166,7 @@ function DocumentView({ document, active, gap, chosen }: { document: WebExplanat
       <p class="explain-rich"><Rich text={document.overview} /></p>
       {linkedDocument(document) && <p class="formal-note"><Icon name="locate-fixed" />
         <span>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</span></p>}</section>
+    <SolutionRouteGraph model={route} onOpen={onRouteOpen} />
     {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
     <Footer document={document} />
