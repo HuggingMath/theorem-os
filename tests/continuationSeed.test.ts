@@ -1603,6 +1603,92 @@ describe('bounded continuation verification batches', () => {
 });
 
 describe('continuation of a host-frozen unfinished delivery', () => {
+  async function lostFrozenAssignmentFixture() {
+    const f = frozenGoalFixture(); await f.seed();
+    const source = readSolverRunState(f.stateFile), node = source.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    const assignment = node.assignment!, ready = source.cooperation!.proofReadyRecords![0]!;
+    source.phase = 'finished'; source.turns = 3;
+    source.verificationCheckpoints = [{ key: mathDigest('timed-out-projected-goal'), timeoutMs: 1_800_000,
+      attempts: 1, at: ready.requestedAt + 1, targetCommit: source.cooperation!.canonicalCommit!, receiptIds: ['timeout-only'] }];
+    delete node.assignment;
+    for (const worker of source.workers!) {
+      worker.phase = 'finished';
+      delete worker.sessionTaskId; delete worker.sessionTaskVersion; delete worker.sessionAssignmentId;
+    }
+    writeSolverRunState(f.stateFile, source); host.verify.mockClear();
+    return { ...f, source, assignment, frozenReady: ready };
+  }
+
+  it('recovers a frozen continuation after its timed-out assignment and worker session were dropped', async () => {
+    const f = await lostFrozenAssignmentFixture(), historical = fs.readFileSync(f.stateFile);
+    expect(f.source.verificationCheckpoints![0]!.targetCommit).not.toBe(f.snapshotCommit);
+    const next = nextContinuation(f, f.stateFile, 'recovered-frozen-goal'), report = await next.seed();
+    await next.seed();
+    const state = readSolverRunState(next.stateFile), node = state.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    const ready = state.cooperation!.proofReadyRecords![0]!;
+    expect(report.checked).not.toContain('goal');
+    expect(state.cooperation!.proofReadyRecords).toHaveLength(1);
+    expect(node.status).toBe('pending'); expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined();
+    expect(node.assignment!.dependencies).toEqual(f.assignment.dependencies);
+    expect(node.assignment!.assignmentId).not.toBe(f.assignment.assignmentId);
+    expect(ready).toMatchObject({ status: 'frozen', snapshotCommit: f.snapshotCommit, sourceDigest: f.frozenReady.sourceDigest });
+    expect(ready.id).not.toBe(f.frozenReady.id); expect(ready.receiptIds).toBeUndefined();
+    expect(host.verify.mock.calls.some(call => call[0].items.some(item => item.theoremName === 'Submission.original'))).toBe(false);
+    const cooperation = cooperationFor(f, state), worker = state.workers![1]!;
+    await cooperation.restore();
+    const descriptor = { id: worker.id, role: worker.role, worktree: worker.worktree, ownedFiles: state.problem.ownedFiles };
+    const action = await cooperation.next(descriptor, { maxTurns: Infinity, remainingMs: Infinity });
+    const checked = vi.fn();
+    const lifecycle = new WorkerProofLifecycle({ state, research: worker, worker: descriptor, cooperation,
+      close: async () => {}, save: () => {}, emit: () => {}, checked });
+    try {
+      expect(await lifecycle.resumeFrozen(action)).toBe(true);
+      expect(checked).toHaveBeenCalledOnce();
+      expect(ready.status).toBe('checked'); expect(ready.receiptIds?.length).toBeGreaterThan(0);
+      expect(host.verify.mock.calls.some(call => call[0].items.some(item => item.theoremName === 'Submission.original'))).toBe(true);
+    } finally { await cooperation.stop(); }
+    expect(fs.readFileSync(f.stateFile)).toEqual(historical);
+  });
+
+  it.each(['assignment', 'submission', 'ready-id', 'snapshot', 'digest', 'seed', 'task-version', 'environment'] as const)(
+    'rejects a missing-assignment continuation with changed %s identity', async kind => {
+      const f = await lostFrozenAssignmentFixture(), ready = f.source.cooperation!.proofReadyRecords![0]!;
+      if (kind === 'assignment') ready.assignmentKey = 'DELIVERIES-wrong.jsonl';
+      else if (kind === 'submission') ready.submissionId = mathDigest('different-submission');
+      else if (kind === 'ready-id') ready.id = mathDigest('different-ready');
+      else if (kind === 'snapshot') {
+        const worker = f.source.workers![1]!;
+        fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'Different commit with identical owned proof sources.\n');
+        ready.snapshotCommit = commit(worker.worktree, 'Different frozen identity');
+      } else if (kind === 'digest') ready.sourceDigest = '0'.repeat(64);
+      else if (kind === 'seed') ready.seedCommit = f.base;
+      else if (kind === 'task-version') ready.taskDigest = '0'.repeat(64);
+      else ready.environmentDigest = '0'.repeat(64);
+      writeSolverRunState(f.stateFile, f.source);
+      const next = nextContinuation(f, f.stateFile, `changed-frozen-${kind}`);
+      await expect(next.seed()).rejects.toThrow('math_continuation_seed_frozen_identity_changed');
+      expect(host.verify).not.toHaveBeenCalled();
+    });
+
+  it('requires an intact digest-bound frozen attachment to recover a missing assignment', async () => {
+    const f = await lostFrozenAssignmentFixture();
+    const snapshot = readContinuationSnapshot(path.join(f.directory, 'continuation.json'), f.source.continuationDigest!);
+    const attachment = snapshot.manifest.attachments.find(item => item.id === 'frozen-goal')!;
+    const file = path.join(f.directory, attachment.contentPath);
+    fs.chmodSync(file, 0o600); fs.writeFileSync(file, 'x'.repeat(attachment.bytes)); fs.chmodSync(file, 0o400);
+    const next = nextContinuation(f, f.stateFile, 'corrupted-frozen-attachment');
+    await expect(next.seed()).rejects.toThrow('math_continuation_content_changed');
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing assignment without trusted continuation metadata', async () => {
+    const f = frozenGoalFixture();
+    delete f.oldState.cooperation!.tasks.find(node => node.task.id === 'goal')!.assignment;
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await expect(f.seed()).rejects.toThrow('math_continuation_seed_frozen_identity_changed');
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
   it('defers its exact goal snapshot to the ordinary lifecycle without a new model writer', async () => {
     const f = frozenGoalFixture(), historical = fs.readFileSync(f.sourceStateFile);
     const report = await f.seed(), state = readSolverRunState(f.stateFile);

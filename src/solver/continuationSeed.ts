@@ -408,6 +408,15 @@ function restoredResearchDeliveries(source: SeedSource, state: SolverRunState): 
   return [...deliveries.values()];
 }
 
+function frozenTaskAssignment(candidate: z.infer<typeof frozenCandidate>, task: CooperativeTask,
+  identity: { runId: string; sourceRunId: string; canonicalCommit: string }): TaskAssignment {
+  return { taskId: candidate.taskId, taskDigest: candidate.taskDigest, workerId: candidate.workerId,
+    seedCommit: candidate.seedCommit, canonicalCommit: identity.canonicalCommit,
+    assignmentId: mathDigest(canonicalMathJson({ runId: identity.runId, sourceRunId: identity.sourceRunId,
+      readyId: candidate.readyId, snapshotCommit: candidate.snapshotCommit })),
+    groupId: taskGroup(task), dependencies: candidate.dependencies };
+}
+
 function captureSource(sourceStateFile: string, stateFile: string, state: SolverRunState, sourceLease?: MathLease): SeedSource {
   const archived = readSolverRunState(sourceStateFile);
   const sameProblem = archived.problem.receiptDigest === state.problem.receiptDigest &&
@@ -443,6 +452,8 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     added?.includes(file) ? committedSource(state.worktree, state.problem.baseCommit, `${state.problem.projectRelative}/${file}`)
       : committedSource(archived.worktree, commit, `${state.problem.projectRelative}/${file}`)]));
   const canonicalSources = historicalSources(archived.cooperation.canonicalCommit);
+  const snapshot = archived.continuationDigest ? readContinuationSnapshot(path.join(sourceDirectory, 'continuation.json'),
+    archived.continuationDigest, { taskDigest: archived.taskDigest, problemReceiptDigest: archived.problem.receiptDigest }) : undefined;
   const frozenCandidates: z.infer<typeof frozenCandidate>[] = [];
   const frozenRecords = (archived.cooperation.proofReadyRecords ?? []).filter(record => record.status === 'frozen');
   if (frozenRecords.length) {
@@ -452,7 +463,29 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
       throw new Error('math_continuation_seed_frozen_writer_unconfirmed');
     for (const ready of frozenRecords) {
       if (!proofReadyRecordSchema.safeParse(ready).success) throw new Error('math_continuation_seed_frozen_identity_changed');
-      const node = planned.find(node => node.task.id === ready.taskId), assignment = node?.assignment;
+      const node = planned.find(node => node.task.id === ready.taskId);
+      let assignment = node?.assignment;
+      // Timeout recovery can release scheduling assignments while retaining a frozen proof.
+      // Only its pinned prior continuation can reconstruct the exact imported assignment.
+      const attachment = snapshot?.manifest.attachments.find(item => item.id === `frozen-${ready.taskId}` && item.kind === 'proof-source');
+      if (node && !assignment && attachment?.provenance.runId) {
+        const bytes = readMathFile(path.join(sourceDirectory, attachment.contentPath), attachment.bytes).bytes;
+        if (bytes.length !== attachment.bytes || mathDigest(bytes) !== attachment.sha256)
+          throw new Error('math_continuation_content_changed');
+        const candidate = frozenCandidate.parse(JSON.parse(bytes.toString('utf8')));
+        assignment = frozenTaskAssignment(candidate, node.task, { runId: archived.runId,
+          sourceRunId: attachment.provenance.runId, canonicalCommit: archived.cooperation.canonicalCommit });
+        const expected = proofReadyRecord({ assignment, workerId: candidate.workerId,
+          submissionId: mathDigest(canonicalMathJson({ sourceRunId: attachment.provenance.runId,
+            readyId: candidate.readyId, runId: archived.runId })),
+          problemReceiptDigest: candidate.problemReceiptDigest, environmentDigest: candidate.environmentDigest,
+          now: ready.requestedAt });
+        if (attachment.provenance.commit !== candidate.snapshotCommit || candidate.snapshotCommit !== ready.snapshotCommit ||
+            candidate.sourceDigest !== ready.sourceDigest || candidate.environmentDigest !== ready.environmentDigest ||
+            candidate.problemReceiptDigest !== ready.problemReceiptDigest || expected.id !== ready.id ||
+            expected.submissionId !== ready.submissionId)
+          throw new Error('math_continuation_seed_frozen_identity_changed');
+      }
       const worker = archived.workers.find(worker => worker.id === ready.workerId);
       if (!node || !assignment || !worker || ready.taskDigest !== taskVersion(node.task) ||
           assignment.taskId !== ready.taskId || assignment.taskDigest !== ready.taskDigest ||
@@ -507,9 +540,7 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
   const capacities = capturedCapacityRecords(archived);
   let previousCapacity: z.infer<typeof capacitySource> | undefined;
   let previousResearch: CompletedResearchRecord[] | undefined;
-  if (archived.continuationDigest) {
-    const snapshot = readContinuationSnapshot(path.join(sourceDirectory, 'continuation.json'), archived.continuationDigest,
-      { taskDigest: archived.taskDigest, problemReceiptDigest: archived.problem.receiptDigest });
+  if (snapshot) {
     const attachment = snapshot.manifest.attachments.find(item => item.id === 'seed-capacity-explorations');
     if (attachment) {
       const bytes = readMathFile(path.join(sourceDirectory, attachment.contentPath), attachment.bytes).bytes;
@@ -699,13 +730,9 @@ export async function seedSolverContinuation(options: {
         canonicalMathJson(Object.keys(candidate.seedSources ?? {}).sort()) !==
           canonicalMathJson([...state.problem.ownedFiles].sort())))) throw new Error('math_continuation_seed_candidates_invalid');
     const planVersion = source.initialPlanning ? undefined : mathDigest(canonicalMathJson(plan));
-    const frozenAssignment = (candidate: z.infer<typeof frozenCandidate>, canonicalCommit: string): TaskAssignment => ({
-      taskId: candidate.taskId, taskDigest: candidate.taskDigest, workerId: candidate.workerId,
-      seedCommit: candidate.seedCommit, canonicalCommit,
-      assignmentId: mathDigest(canonicalMathJson({ runId: state.runId, sourceRunId: source.source.runId,
-        readyId: candidate.readyId, snapshotCommit: candidate.snapshotCommit })),
-      groupId: taskGroup(plan.tasks.find(task => task.id === candidate.taskId)!), dependencies: candidate.dependencies,
-    });
+    const frozenAssignment = (candidate: z.infer<typeof frozenCandidate>, canonicalCommit: string) =>
+      frozenTaskAssignment(candidate, plan.tasks.find(task => task.id === candidate.taskId)!,
+        { runId: state.runId, sourceRunId: source.source.runId, canonicalCommit });
     const pendingResearch = new Map<string, z.infer<typeof immutableCompletedResearchRecord>>();
     const restoredResearch = state.cooperation ? currentCompletedResearch(source, state, plan.tasks,
       state.cooperation.tasks, restoredResearchDeliveries(source, state)) : pendingResearch;

@@ -175,8 +175,14 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     return regions.get(file)!.map(region => {
       const declaration = scoped.find(item => item.startOffset === region.startOffset)!;
       const header = source.slice(region.startOffset, region.bodyOffset);
+      // A name appearing in the result type is a dependency, not a local binder.
+      // In particular, frozen definitions can depend on excluded original goals;
+      // their type-level consumers must be removed along with their body-level callers.
+      const bound = new Set([...maskLeanCommentsAndStrings(header).matchAll(
+        /[({\[]\s*([\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\s+[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*)\s*:/gu,
+      )].flatMap(match => identifiers(match[1]!)));
       return { ...declaration, endOffset: region.endOffset, file, id: key(file, declaration.qualifiedName),
-        theorem: /^(?:theorem|lemma)\s/u.test(header), header: identifiers(header),
+        theorem: /^(?:theorem|lemma)\s/u.test(header), bound,
         references: identifiers(source.slice(region.startOffset, region.endOffset)) };
     });
   });
@@ -264,12 +270,12 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     // `trace.finiteIdeal.topologicalClosure` and `existsWitness.choose` both carry dependencies.
     // Candidate groups are conservative for removal; only a unique group may become an advisory hint.
     const referenceGroups = (declaration: typeof declarations[number], name: string): string[][] => {
-      if (!name.includes('.') && declaration.header.includes(name)) return [];
+      if (!name.includes('.') && declaration.bound.has(name)) return [];
       const parts = name.split('.'), groups: string[][] = [];
       let prefixLength = 0;
       for (let length = parts.length; length > 0; length--) {
         const prefix = parts.slice(0, length).join('.');
-        if (length === 1 && declaration.header.includes(prefix)) continue;
+        if (length === 1 && declaration.bound.has(prefix)) continue;
         const candidates = scopedReferences(declaration, prefix);
         if (candidates.length) { groups.push(candidates); prefixLength = length; break; }
       }
@@ -285,7 +291,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     // Body substitution must match an actual name, not replace `receiver.field` with a bare assumption:
     // Lean decides the receiver argument's position, which source-only dependency lookup cannot infer.
     const referenceKey = (declaration: typeof declarations[number], name: string) => {
-      if (!name.includes('.') && declaration.header.includes(name)) return;
+      if (!name.includes('.') && declaration.bound.has(name)) return;
       const candidates = scopedReferences(declaration, name);
       return candidates.length === 1 ? candidates[0] : undefined;
     };

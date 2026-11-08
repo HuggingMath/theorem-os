@@ -362,6 +362,19 @@ describe('content-bound typed helper preflight', () => {
 describe('type parser diagnostic excerpt', () => {
   // Lean's runParserCategory column is a 0-based codepoint offset into the type string (ℝ and → are one each).
   const reason = (column: number) => `TypeDiagnostic.lean:9:1: error: <input>:1:${column}: expected '(', '_' or identifier`;
+  it('explains declaration-header binders without silently changing a helper contract', () => {
+    const type = '{s d : ℕ} (a : Fin s → Space d) : True';
+    const diagnostic = "TypeDiagnostic.lean:9:1: error: <input>:1:10: expected '→', '->'";
+    const excerpt = typeDiagnosticExcerpt(type, diagnostic)!;
+    expect(excerpt).toContain('⟦(⟧a : Fin s → Space d)');
+    expect(excerpt).toContain('declaration-header binders');
+    expect(excerpt).toContain('∀ {s d : ℕ} (a : T), P');
+    expect(excerpt).toContain('submit a task revision');
+    expect(excerpt).toContain('host has not changed this contract');
+    expect(typeDiagnosticExcerpt('∀ {s d : ℕ} (a : Fin s → Space d), True', diagnostic))
+      .not.toContain('declaration-header binders');
+    expect(typeDiagnosticExcerpt(type, reason(10))).not.toContain('declaration-header binders');
+  });
   it('quotes the reserved token a bound variable used and says to rename it', () => {
     const type = '∀ (ε : ℝ), 0 < ε → ∃ λ : ℝ, 0 < λ ∧ λ ≤ 48 * ε';
     const excerpt = typeDiagnosticExcerpt(type, reason(Array.from(type).indexOf('λ')))!;
