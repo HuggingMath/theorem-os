@@ -8,7 +8,7 @@
 - `archive.html`：证明档案，支持搜索、按官方验收/本地通过/研究中筛选、源码查看、验收证据、解题过程、JSON 下载和本地回放记录。
 - `feedback.html`：问题反馈、功能建议和使用咨询，预览后前往 GitHub Issues 确认发布。工作台用 `?kind=&area=&environment=` 预填类型、位置和环境，未知值忽略，环境可在发布前修改。
 
-三个入口都有英文版，位于 `en/` 下，与中文页共用样式和脚本。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。中英文页面分别使用对应语言的工作台、源码、模型设置、模块和证明档案截图。
+三个入口都有英文版，位于 `en/` 下，与中文页共用样式和脚本。页眉的“EN / 中文”切换保留当前锚点和档案选择，`<link rel="alternate" hreflang>` 标明两种语言。脚本按 `<html lang>` 选择界面文案（`docs/web/site.ts` 的 `localeOf`），档案条目的英文标题与摘要写在 `docs/web/catalog.ts` 的 `en` 字段。首页的自然语言入口、Lean 源码和模块图谱/方案库使用对应语言的真实截图。
 
 网站独立于 CLI，不启动 Agent 或 Lean，不需要服务端或模型认证。
 
@@ -71,13 +71,13 @@ bun run build:site
 - `scripts/build-site.ts`：构建中英文页面、浏览器脚本和公开数据，并复制素材与许可证。
 - `docs/site-repo/`：公开仓库独有的文件（README、Issue 表单）。
 
-首页沿用暖纸色底、墨色文字、陶土色主按钮与衬线标题，组件区使用原有浅色底。首屏将原题到 Lean 证明的说明、申请与工作台入口和真实预设记录生成的四步回放并列展示，手机端按顺序排列。工作台区使用真实新会话截图，展示自然语言入口与两阶段预算；`picture` 按屏幕宽度加载独立的桌面或手机视口。截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明白名单内测、平台免费与自备模型 Key，提供申请流程、邮件申请和已有资格用户的工作台入口。
+首页沿用暖纸色底、墨色文字、陶土色主按钮与衬线标题，组件区使用原有浅色底。首屏将原题到 Lean 证明的说明、申请与工作台入口和真实预设记录生成的四步回放并列展示，手机端按顺序排列。工作台区用自然语言入口和 Lean 源码片段说明操作流程；入口的 `picture` 在 900 像素及以下加载手机近景，限制其显示宽度不超过 350 CSS 像素，源码、模块和完整预览的手机断点为 600 像素。入口截图可打开完整界面预览，支持缩放、鼠标拖动和触屏滚动，关闭后恢复焦点；无 JavaScript 时仍可打开原图。开始区说明白名单内测、平台免费与自备模型 Key，提供申请流程、邮件申请和已有资格用户的工作台入口。
 
 四步回放的候选源码读取自 `src/math/localExample.ts`，回执读取自 `docs/assets/replay.json`；切换演示不会启动模型或 Lean。默认停在最终验收，点击播放后从候选开始，可暂停续播、手动选步和重新播放；离屏或页面隐藏会暂停，返回后由用户继续播放。反馈步骤是对预设示例的检查说明，并非原始诊断日志。手机端先展示已归档的最终回执，再展示选中步骤的源码。源码与回放记录改动后需要重新构建。
 
 首屏两行标题使用 GSAP 遮罩入场，成果按行出现，组件选项依次进入，产品图轻微缩放落定；组件与回放步骤切换采用短过渡。系统启用减少动态效果时，内容即时切换，回放仍可按步骤阅读。GSAP 固定版本与锁文件一起管理，版权和许可链接随静态产物保留在 `assets/licenses/gsap-NOTICE.txt`。
 
-完整原题验收独立于五类研究决策。组件用大字号索引展示，手机端五个标签完整排列为网格，支持键盘选择。产品区补充实际 Lean 源码与模型配置截图，API Key 保持为空。档案区展示完整的真实界面，手机端使用单独的题目详情截图，避免放大裁切桌面图。参考官网与应用取舍记录在 [design-references.md](design-references.md)，本轮方向、素材来源与审查记录见 [design-taste.md](design-taste.md)。
+完整原题验收独立于五类研究决策。组件用大字号索引展示，手机端五个标签完整排列为网格，支持键盘选择。模块图谱与方案库共用一个可切换的图片面板。首页同时呈现自然语言入口、Lean 源码和选中的模块视图三种真实画面，使用对应设备的区域截图。证明区保留 Dimitrov 案例、全部官方验收表格与原始归属说明，并以原生链接进入完整档案，查看 10 条官方验收、16 条本地验收和 1 条研究快照。参考官网与应用取舍记录在 [design-references.md](design-references.md)，本轮方向、素材来源与审查记录见 [design-taste.md](design-taste.md)。
 
 ## 用户反馈
 
@@ -105,7 +105,7 @@ bunx playwright install chromium --only-shell
 bun run test:site
 ```
 
-浏览器检查覆盖响应式截图、首屏可见、原图预览的缩放与拖动、弹窗关闭和焦点恢复、档案图片无裁切、手机组件标签的键盘可见性、开始区的工作台入口与仅链接公开仓库、预设回放与记录的一致性、移动端回执顺序、首页成果的真实归属、手机导航、本地文件预览、无 JavaScript 内容与 GitHub Pages 子路径，以及证明档案的搜索、筛选、源码、来源、下载和链接恢复。检查 320、390、768、1440、1920 像素宽度，截图输出到 `out/site-checks/`。这些检查不调用模型。
+浏览器检查覆盖三种真实产品画面的响应式加载、PNG 原始尺寸与至少两倍 CSS 显示尺寸的清晰度、首屏可见、原图预览的缩放与拖动、弹窗关闭和焦点恢复、档案原生入口与记录计数、手机组件标签的键盘可见性、开始区的工作台入口与仅链接公开仓库、预设回放与记录的一致性、移动端回执顺序、首页成果的真实归属、手机导航、本地文件预览、无 JavaScript 内容与 GitHub Pages 子路径，以及证明档案的搜索、筛选、源码、来源、下载和链接恢复。检查 320、390、768、1440、1920 像素宽度，截图输出到 `out/site-checks/`。这些检查不调用模型。
 
 `test:site` 还运行 `test-landing-motion.mjs`，检查首屏入场、回放的暂停续播与结束、手动选步、键盘焦点，以及离屏、页面隐藏和减少动态效果设置；报告与截图输出到 `out/site-motion-checks/`。
 
@@ -138,14 +138,14 @@ bun run export:site /home/lzh/theorem-os-site
 
 `docs/assets/mark.svg` 是首页、档案与工作台共用的墨色项目标记（陶土色方块），`mark.png` 保留为位图版本。首页正文使用本地 Hanken Grotesk 字体，字面代码使用 Fira Code；档案页与工作台正文使用 Inter，工作台代码使用 JetBrains Mono。工作台加载的是 `InterVariable-latin.woff2`：保留两个可变轴与全部排版特性，只收录拉丁、拉丁扩展 A、希腊字母、通用标点、上下标、字母式符号、箭头与数学运算符（352 KB 降到 157 KB）；由 `pyftsubset InterVariable.woff2 --unicodes=U+0000-017F,U+0370-03FF,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-22FF,U+2318,U+FEFF,U+FFFD --layout-features='*' --flavor=woff2` 生成。档案页仍嵌入完整的 `InterVariable.woff2`。三处的中文正文都使用思源黑体（Noto Sans SC），以 “TheoremOS Sans SC” 的名称加载，覆盖 400–600 字重，同样按 `NotoSansSC-ui` 与 `NotoSansSC-common` 两个 unicode-range 子集拆分。标题与品牌名使用衬线字体：西文为 Lora 的拉丁子集，中文为思源宋体（Noto Serif SC）600 字重的两个子集。按 OFL 保留字体名的要求，修改后的 Lora 子集改名为 “TheoremOS Serif Latin”，中文子集为 “TheoremOS Serif SC”。中文子集按 unicode-range 拆分：`NotoSerifSC-ui` 收录工作台与官网源码中出现的汉字，`NotoSerifSC-common` 收录其余 GB2312 一级字，仅在标题用到时加载。界面新增而不在 `-ui` 子集中的汉字由额外子集承载，当前黑体包含 138 个码位、宋体包含 136 个码位，保存在 `NotoSansSC-ui-extra.woff2` 与 `NotoSerifSC-ui-extra.woff2`（黑体约 36 KB、宋体约 28 KB，官网样式不引用），并从 `app.css` 中 `-common` 的 unicode-range 里移除，否则中文界面首次打开就会因为「轨迹」「万」这类字多下载 760 KB 的 `-common`。`tests/webFonts.test.ts` 检查界面文字（`scripts/web-i18n.ts` 列出的全部中文键）只用到 `-ui` 与 `-ui-extra`。界面再出现新字时，`-common` 文件里仍有这些字形，从中重新取出：`pyftsubset NotoSansSC-common.woff2 --unicodes=<原有加新增的码位> --layout-features='*' --flavor=woff2 --output-file=NotoSansSC-ui-extra.woff2`（宋体同理），再把新增码位从 `app.css` 的 `-common` 范围移到 `-ui-extra`。黑体的 `-ui-extra` 另含「中」「文」两字：英文界面唯一可见的中文是语言切换上的「中文」，两字的 unicode-range 从 `-ui` 移到 `-ui-extra` 后，英文页只下载约 24 KB 的 `-ui-extra`，不再为两个字下载 217 KB 的 `-ui`。这两个字不在 `-common` 文件里，所以黑体的 `-ui-extra` 要从 [Noto Sans SC 原始可变字体](https://github.com/google/fonts/blob/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf)重新生成（当前字体版本为 2.004）：与 `-ui` 相同，先用 fontTools 的 instancer 把字重轴截到 400–600，再按全部码位子集化。字体及各自的 SIL Open Font License 保存在 `docs/assets/fonts/`。构建时将拉丁字体嵌入样式，确保直接打开本地文件时也能加载；中文子集体积较大，保留为外部文件，页面不依赖外部字体服务。
 
-`workbench-desktop.png` 和 `workbench-mobile.png` 来自真实本地工作台的新会话，分别是 1440×500 的桌面视口和 390×440 的手机视口。`workbench-full-desktop.png` 与 `workbench-full-mobile.png` 为弹窗使用的完整截图，视口分别是 1440×900 和 390×844；英文版使用对应的 `-en.png` 文件。两种语言均以 1 倍像素密度展示空白自然语言入口和两阶段默认预算。截图脚本启动一次性本地服务，阻止非 GET API 请求，不需要模型或 Key：
+`workbench-desktop.png` 和 `workbench-mobile.png` 来自真实本地工作台新会话中的原题输入区域，桌面近景为 900×520 逻辑像素，手机近景为 350×520。`workbench-full-desktop.png` 与 `workbench-full-mobile.png` 为弹窗使用的完整截图，视口分别是 1440×900 和 390×844；英文版使用对应的 `-en.png` 文件。入口与完整预览按 2 倍像素密度捕获，保留真实界面比例；测试从 PNG 读取实际像素尺寸，再与页面中的 CSS 显示尺寸比较。截图脚本启动一次性本地服务，阻止非 GET API 请求，不需要模型或 Key：
 
 ```bash
 bun run build:web
 bun scripts/capture-natural-entry.ts
 ```
 
-`workbench-source-detail.png` 是进阶 Lean 工作区的完整片段，保留未提交状态与 `sorry`；`workbench-settings-detail.png` 是进阶研究配置弹窗的可见区域，展示服务商、模型与空 Key。源码、设置、模块图谱和方案库均有独立的 `-en.png` 英文截图，验证零 API POST。旧的 `capture-workbench.mjs` 用于中文进阶视图；它会覆盖中文入口四张图，更新进阶素材后须重新运行 `capture-natural-entry.ts`。
+`workbench-source-detail.png` 是 850×450 逻辑像素的桌面 Lean 工作区片段，`workbench-source-mobile.png` 另取手机视口中的 360×450 源码区域，保留草稿尚未提交的状态。桌面模块图谱与方案库分别取 848×530 和 632×395 的实际区域，共用 8:5 比例；手机两图均为 360×650，切换时面板高度不变。源码、模块图谱和方案库均有独立的 `-en.png` 英文截图，由 `bun scripts/capture-advanced-previews.ts` 捕获，验证零 API POST。源码、模块和手机方案库使用 2 倍像素密度，桌面方案库使用 3 倍，以满足其在官网中的显示宽度。它与 `capture-natural-entry.ts` 分别负责自己的素材，可在 `build:web` 后任意顺序运行；旧的 `capture-workbench.mjs` 不属于这套生成流程。
 
 `social-preview.png` 是中文分享卡片，`social-preview-en.png` 是英文卡片，均截取对应语言首页的验收回放窗口；官网入口与产品细节截图也按语言对应。修改设计后运行：
 
@@ -155,7 +155,7 @@ node scripts/capture-promo.mjs
 bun run build:site
 ```
 
-`replay.png` 来自一次真实的预设回放，其公开记录字段保存在 `replay.json`，明确注明没有调用模型、不是官方评测。`archive-preview.png` 是完整桌面档案界面，`archive-preview-mobile.png` 是手机端题目详情，两者都使用 2 倍像素密度。只更新档案截图时运行：
+`replay.png` 来自一次真实的预设回放，其公开记录字段保存在 `replay.json`，明确注明没有调用模型、不是官方评测。首页通过文字链接进入实际档案。需要独立的档案素材时，`capture-archive.mjs` 可生成 2 倍像素密度的桌面 `archive-preview.png` 和手机题目详情 `archive-preview-mobile.png`：
 
 ```bash
 bun run build:site

@@ -41,10 +41,28 @@ const reveal = async locator => {
     assert.notEqual(await ancestor.getAttribute('open'), null, 'The disclosure must expose its content');
   }
 };
+const checkRetinaImage = async (image, label) => {
+  await image.scrollIntoViewIfNeeded();
+  const picture = await image.evaluate(async node => {
+    await node.decode();
+    const bounds = node.getBoundingClientRect();
+    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight,
+      renderedWidth: bounds.width, renderedHeight: bounds.height };
+  });
+  const asset = path.basename(new URL(picture.source).pathname);
+  const png = fs.readFileSync(path.join(site, 'assets', asset));
+  assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.deepEqual([picture.width, picture.height], [png.readUInt32BE(16), png.readUInt32BE(20)],
+    `The browser must load the original PNG dimensions: ${asset}, ${label}`);
+  assert.ok(picture.renderedWidth > 0 && picture.renderedHeight > 0, `Product picture must be visible: ${asset}, ${label}`);
+  assert.ok(picture.width + 1 >= picture.renderedWidth * 2 && picture.height + 1 >= picture.renderedHeight * 2,
+    `Product picture must supply two image pixels per CSS pixel: ${asset}, ${label}; PNG ${picture.width}×${picture.height}, CSS ${picture.renderedWidth}×${picture.renderedHeight}`);
+  return picture;
+};
 const checkWorkbench = async (page, label) => {
   const figure = page.locator('#workbench-preview');
   assert.match(await figure.locator('.workbench-image-link img').getAttribute('alt'), /自然语言|原题|工作台/);
-  assert.equal(await figure.locator('source[srcset*="assets/workbench-mobile.png"]').count(), 1);
+  assert.equal(await figure.locator('source[srcset*="assets/workbench-mobile.png"]').getAttribute('media'), '(max-width: 900px)');
   const screenshot = figure.locator('img[src$="workbench-desktop.png"]');
   assert.equal(await screenshot.getAttribute('src'), 'assets/workbench-desktop.png');
   assert.ok(await screenshot.getAttribute('alt'), 'The workbench screenshot must have descriptive alternative text');
@@ -60,12 +78,8 @@ const checkWorkbench = async (page, label) => {
   assert.ok(image.complete && image.width > 0 && image.height > 0, `The screenshot must load: ${label}`);
   const asset = path.basename(new URL(image.src).pathname);
   assert.ok(['workbench-desktop.png', 'workbench-mobile.png'].includes(asset), `Unexpected screenshot: ${image.src}`);
-  if (image.viewport <= 390) assert.equal(asset, 'workbench-mobile.png', `Mobile srcset must load at ${label}`);
-  if (image.viewport >= 1024) assert.equal(asset, 'workbench-desktop.png', `Desktop screenshot must load at ${label}`);
-  const png = fs.readFileSync(path.join(site, 'assets', asset));
-  assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-  assert.deepEqual({ width: image.width, height: image.height },
-    { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, `Screenshot natural dimensions: ${label}`);
+  assert.equal(asset, `workbench-${image.viewport <= 900 ? 'mobile' : 'desktop'}.png`, `Responsive entry screenshot: ${label}`);
+  await checkRetinaImage(screenshot, label);
   assert.ok(image.visibleWidth >= 200 && image.visibleHeight >= 100, `The actual workbench must remain viewable: ${label}`);
 };
 const checkFeaturedProof = async (page, label) => {
@@ -143,6 +157,7 @@ const checkScreenshotPreview = async (page, width) => {
     return { source: image.currentSrc, width: image.naturalWidth };
   });
   assert.match(preview.source, width <= 600 ? /workbench-full-mobile\.png/ : /workbench-full-desktop\.png/);
+  await checkRetinaImage(dialog.locator('img'), `${width}px full workbench preview`);
   assert.equal(await dialog.locator('.preview-original').getAttribute('href'), new URL(preview.source).pathname.split('/').slice(-2).join('/'));
   assert.ok((await dialog.locator('#preview-description').innerText()).trim(), 'The screenshot dialog retains its accessible description');
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('preview-open')), true);
@@ -185,31 +200,23 @@ const checkScreenshotPreview = async (page, width) => {
     await page.waitForFunction(() => !document.querySelector('#workbench-dialog').open);
   }
 };
-const checkArchivePreview = async (page, width) => {
-  for (const link of await page.locator('.archive-showcase a').all())
-    assert.equal(await link.getAttribute('href'), 'archive.html#proof=annals_equiangular_lines_fixed_angle');
-  assert.ok((await page.locator('.archive-showcase figcaption').innerText()).trim(), 'The archive preview retains its caption');
-  const image = page.locator('.archive-image-link img');
-  await image.scrollIntoViewIfNeeded();
-  const result = await image.evaluate(async node => {
-    await node.decode();
-    const bounds = node.getBoundingClientRect(), parent = node.closest('a').getBoundingClientRect();
-    return { source: node.currentSrc, ratio: node.naturalWidth / node.naturalHeight,
-      renderedRatio: bounds.width / bounds.height, fits: bounds.width <= parent.width + 1 };
-  });
-  assert.match(result.source, width <= 600 ? /archive-preview-mobile-focus\.png/ : /archive-preview\.png/);
-  assert.ok(result.fits && Math.abs(result.ratio - result.renderedRatio) < .01, 'The archive excerpt must fit without stretching or further cropping');
+const checkArchiveEntry = async page => {
+  const footer = page.locator('.archive-footer');
+  const link = footer.locator('a[href="archive.html"]');
+  assert.equal(await link.count(), 1);
+  assert.equal(await link.isVisible(), true, 'The proof records have a visible native archive link');
+  assert.ok((await link.innerText()).trim(), 'The archive link has an accessible label');
+  const provenance = await footer.locator('.proof-provenance').innerText();
+  assert.match(provenance, /DeepScientist/);
+  assert.match(provenance, /原始归属|历史/);
+  assert.equal(await page.locator('[data-accepted-proof]').count(), accepted.length);
 };
 const checkProductImages = async (page, label) => {
-  const images = page.locator('#workbench-preview img, #module-preview-panel img, img[src*="workbench-source-detail"], img[src*="workbench-settings-detail"], .archive-image-link img');
-  assert.ok(await images.count() >= 4, `At least four real product pictures must be present: ${label}`);
+  const images = page.locator('.workbench-image-link img, .source-fragment img, #module-preview-panel img');
+  assert.equal(await images.count(), 3, `The entry, Lean source and selected module view are the three product pictures: ${label}`);
   const sources = new Set();
   for (const image of await images.all()) {
-    const disclosure = image.locator('xpath=ancestor::details');
-    const closed = await disclosure.count() > 0 && await disclosure.getAttribute('open') === null;
-    if (closed) await disclosure.locator('summary').click();
-    // Bring lazy-loaded fragments into view before waiting for their pixels.
-    await image.scrollIntoViewIfNeeded();
+    await checkRetinaImage(image, label);
     const picture = await image.evaluate(async node => {
       await node.decode();
       const bounds = node.getBoundingClientRect(), container = node.closest('a').getBoundingClientRect();
@@ -226,13 +233,16 @@ const checkProductImages = async (page, label) => {
     assert.ok(picture.alt.trim(), `Product picture must have descriptive alternative text: ${picture.source}`);
     assert.ok(picture.fits && Math.abs(picture.ratio - picture.renderedRatio) < .01,
       `Product picture must fit its container without stretching or cropping: ${picture.source}, ${label}`);
-    if (closed) await disclosure.locator('summary').click();
   }
-  assert.ok(sources.size >= 4, `Product pictures must show distinct real views: ${label}`);
+  assert.equal(sources.size, 3, `Product pictures must show three distinct real views: ${label}`);
+  const source = page.locator('.source-fragment img');
+  const device = await page.evaluate(() => innerWidth <= 600 ? 'mobile' : 'detail');
+  assert.equal(path.basename(new URL(await source.evaluate(node => node.currentSrc)).pathname), `workbench-source-${device}.png`);
+  assert.equal(await page.locator('.source-fragment source').getAttribute('media'), '(max-width: 600px)');
 };
 const checkModuleShowcase = async (page, width) => {
   const panel = page.locator('#module-preview-panel');
-  await reveal(panel);
+  assert.equal(await page.locator('.module-media').isVisible(), true);
   let panelHeight;
   for (const id of ['modules', 'library']) {
     const tab = page.locator(`#module-preview-tab-${id}`);
@@ -249,6 +259,7 @@ const checkModuleShowcase = async (page, width) => {
         renderedRatio: bounds.width / bounds.height, height: bounds.height, alt: image.alt };
     });
     assert.match(image.src, new RegExp(`workbench-${id}-${width <= 600 ? 'mobile' : 'desktop'}\\.png$`));
+    await checkRetinaImage(panel.locator('img'), `${width}px module showcase ${id}`);
     assert.match(image.alt, /模块|Mathlib/);
     assert.ok(Math.abs(image.ratio - image.renderedRatio) < .01, 'Module pictures must remain complete without stretching');
     if (panelHeight !== undefined) assert.ok(Math.abs(image.height - panelHeight) < 1, 'Switching module views must preserve the panel size');
@@ -309,7 +320,7 @@ try {
   await checkFeaturedProof(page, '1440px local preview');
   await checkWorkbench(page, '1440px local preview');
   await checkScreenshotPreview(page, 1440);
-  await checkArchivePreview(page, 1440);
+  await checkArchiveEntry(page);
   await checkProductImages(page, '1440px local preview');
   await checkModuleShowcase(page, 1440);
   assert.equal(await page.locator('#demo').count(), 1, 'The replay remains directly linkable');
@@ -322,8 +333,9 @@ try {
   assert.match(await page.locator('.receipt-status').innerText(), new RegExp(replayEvidence.status));
   await reveal(page.locator('.receipt-targets'));
   for (const target of replayEvidence.targets) assert.ok((await page.locator('.receipt-targets').innerText()).includes(target.theorem));
-  assert.match(await page.locator('#demo').innerText(), /预设|示例|回放/);
-  assert.match(await page.locator('#demo').innerText(), /不调用模型|无需调用模型|无模型调用/);
+  assert.equal(await page.locator('.replay-badge').innerText(), '示例证明回放');
+  assert.equal(replayEvidence.source, 'preset-replay');
+  assert.equal(replayEvidence.modelInvoked, false);
   for (const id of ['candidate', 'feedback', 'repair', 'verified']) {
     await page.locator(`#demo-${id}`).click();
     assert.equal(await page.locator(`#demo-${id}`).getAttribute('aria-selected'), 'true');
@@ -384,8 +396,6 @@ try {
   await summary.click();
   assert.equal(await page.locator('.faq-list details').first().getAttribute('open'), '');
   await summary.click();
-  await page.locator('.archive-image-link').scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector('.archive-image-link img').complete);
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: path.join(output, 'landing-desktop.png'), fullPage: true });
   await page.screenshot({ path: path.join(output, 'landing-hero.png') });
@@ -399,7 +409,7 @@ try {
     await checkFeaturedProof(page, `${viewport.width}px homepage`);
     await checkWorkbench(page, `${viewport.width}px homepage`);
     await checkScreenshotPreview(page, viewport.width);
-    await checkArchivePreview(page, viewport.width);
+    await checkArchiveEntry(page);
     await checkProductImages(page, `${viewport.width}px homepage`);
     await checkModuleShowcase(page, viewport.width);
     await checkStart(page);
@@ -426,8 +436,6 @@ try {
     await page.locator('#start').scrollIntoViewIfNeeded();
     await checkWidth(page, `${viewport.width}px start section`);
     await page.locator('#tab-m3').click();
-    await page.locator('.archive-image-link').scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => document.querySelector('.archive-image-link img').complete);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: path.join(output, `landing-${viewport.width}.png`), fullPage: true });
     await page.screenshot({ path: path.join(output, `landing-${viewport.width}-hero.png`) });
@@ -471,11 +479,15 @@ try {
   assert.match(await page.locator('.is-declaration').innerText(), /theorem theorem_1_1/);
   await page.getByRole('link', { name: 'TheoremOS 首页' }).click();
   assert.equal(new URL(page.url()).pathname, new URL(url).pathname);
-  await page.locator('.archive-image-link').click();
+  await page.locator('.archive-footer a[href="archive.html"]').click();
   await page.waitForSelector('#inspector .detail-title');
-  assert.equal(new URL(page.url()).hash, '#proof=annals_equiangular_lines_fixed_angle');
-  assert.equal(await page.locator('#inspector .detail-title').innerText(), 'Equiangular lines');
-  assert.match(await page.locator('#inspector .record-facts').innerText(), /DeepScientist Math \+ GPT-6.1/);
+  assert.equal(new URL(page.url()).pathname, new URL('archive.html', url).pathname);
+  assert.equal(await page.locator('.proof-row').count(), catalog.records.length);
+  assert.equal(await page.locator('#accepted-count').innerText(), String(accepted.length));
+  assert.equal(await page.locator('#verified-count').innerText(), String(catalog.records.filter(record => record.status === 'locally_verified').length));
+  assert.equal(await page.locator('#progress-count').innerText(), String(catalog.records.filter(record => record.status === 'in_progress_not_officially_accepted').length));
+  assert.equal(await page.locator('#inspector .detail-title').innerText(), accepted[0].title);
+  assert.ok((await page.locator('#inspector .record-facts').innerText()).includes(accepted[0].model));
 
   const noJS = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
   trackErrors(noJS);
@@ -484,6 +496,7 @@ try {
   await checkFeaturedProof(noJS, 'JavaScript-disabled homepage');
   await checkWorkbench(noJS, 'JavaScript-disabled homepage');
   await checkProductImages(noJS, 'JavaScript-disabled homepage');
+  await checkArchiveEntry(noJS);
   assert.equal(await noJS.locator('.module-preview-tabs').isVisible(), false);
   assert.equal(await noJS.locator('.workbench-image-link').getAttribute('href'), 'assets/workbench-full-desktop.png');
   assert.ok(fs.existsSync(path.join(site, 'assets/workbench-full-desktop.png')));

@@ -143,7 +143,7 @@ try {
     await assertStage(page, 'verified');
     assert.equal(await page.locator('#replay-next').isDisabled(), true);
     assert.match(await page.locator('#demo').innerText(), /预设|示例|回放/);
-    assert.match(await page.locator('#demo').innerText(), /不调用模型|无需调用模型|无模型调用/);
+    assert.equal(await page.locator('.replay-badge').innerText(), '示例证明回放');
     assert.match(await page.locator('.receipt-status').innerText(), /evaluated_passed/);
     assert.equal(await page.locator('.receipt-evidence').getAttribute('href'), 'assets/replay.json');
     await assertWidth(page);

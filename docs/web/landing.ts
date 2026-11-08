@@ -85,7 +85,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
             { ...settle, opacity: 1, x: 0, stagger: .07 });
           gsap.fromTo(target.querySelector('.component-panel'), { opacity: .4, y: 16 },
             { ...settle, opacity: 1, y: 0, delay: .2 });
-        } else if (target.matches('.product-fragment, .archive-showcase')) {
+        } else if (target.matches('.product-fragment')) {
           gsap.fromTo(target.querySelector('img'), { opacity: .5, scale: .98 },
             { ...settle, opacity: 1, scale: 1, duration: .8 });
           gsap.fromTo(target.querySelector('figcaption'), { opacity: .4, y: 12 },
@@ -102,7 +102,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
       });
     }
   }, { rootMargin: '0px 0px -35px 0px', threshold: .08 });
-  document.querySelectorAll('.section-heading, .audience-grid, .replay-window, .proof-row, .featured-proof, .component-explorer, .product-fragment, .archive-showcase, .record-notes, .start-copy, .start-terminal, .faq-list')
+  document.querySelectorAll('.section-heading, .workflow-steps li, .workbench-preview, .replay-window, .proof-row, .featured-proof, .component-explorer, .product-fragment, .module-media, .archive-footer, .start-copy, .faq-list')
     .forEach(target => observer.observe(target));
   return () => observer.disconnect();
 });

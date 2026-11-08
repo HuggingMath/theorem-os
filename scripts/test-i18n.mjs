@@ -77,26 +77,38 @@ const reveal = async locator => {
     assert.notEqual(await ancestor.getAttribute('open'), null, 'The disclosure must expose its content');
   }
 };
-const checkEnglishWorkbench = async (page, width) => {
-  const image = page.locator('.workbench-image-link img');
+const checkRetinaImage = async (image, label) => {
   await image.scrollIntoViewIfNeeded();
   const picture = await image.evaluate(async node => {
     await node.decode();
-    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
+    const bounds = node.getBoundingClientRect();
+    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight,
+      renderedWidth: bounds.width, renderedHeight: bounds.height };
   });
+  const asset = path.basename(new URL(picture.source).pathname);
+  const png = fs.readFileSync(path.join(site, 'assets', asset));
+  assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.deepEqual([picture.width, picture.height], [png.readUInt32BE(16), png.readUInt32BE(20)],
+    `The browser must load the original PNG dimensions: ${asset}, ${label}`);
+  assert.ok(picture.renderedWidth > 0 && picture.renderedHeight > 0, `Product picture must be visible: ${asset}, ${label}`);
+  assert.ok(picture.width + 1 >= picture.renderedWidth * 2 && picture.height + 1 >= picture.renderedHeight * 2,
+    `Product picture must supply two image pixels per CSS pixel: ${asset}, ${label}; PNG ${picture.width}×${picture.height}, CSS ${picture.renderedWidth}×${picture.renderedHeight}`);
+  assert.ok(Math.abs(picture.width / picture.height - picture.renderedWidth / picture.renderedHeight) < .01,
+    `Product picture must preserve its actual proportions: ${asset}, ${label}`);
+  return picture;
+};
+const checkEnglishWorkbench = async (page, width) => {
+  const image = page.locator('.workbench-image-link img');
+  const picture = await checkRetinaImage(image, `${width}px English entry`);
   assert.equal(path.basename(new URL(picture.source).pathname), `workbench-${width <= 900 ? 'mobile' : 'desktop'}-en.png`);
-  assert.deepEqual([picture.width, picture.height], width <= 900 ? [390, 440] : [1440, 500]);
+  assert.equal(await page.locator('.workbench-image-link source').getAttribute('media'), '(max-width: 900px)');
   assert.match(await image.getAttribute('alt'), /natural.language|problem.*input|workbench/i);
   const dialog = page.locator('#workbench-dialog');
   await page.locator('.workbench-image-link').click();
   assert.equal(await dialog.isVisible(), true);
-  const full = await dialog.locator('img').evaluate(async node => {
-    await node.decode();
-    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
-  });
+  const full = await checkRetinaImage(dialog.locator('img'), `${width}px English full preview`);
   const expected = `workbench-full-${width <= 600 ? 'mobile' : 'desktop'}-en.png`;
   assert.equal(path.basename(new URL(full.source).pathname), expected);
-  assert.deepEqual([full.width, full.height], width <= 600 ? [390, 844] : [1440, 900]);
   for (const selector of ['.workbench-image-link', '.preview-original'])
     assert.equal(path.basename(new URL(await page.locator(selector).getAttribute('href'), page.url()).pathname), expected);
   await page.keyboard.press('Escape');
@@ -104,55 +116,37 @@ const checkEnglishWorkbench = async (page, width) => {
 };
 const checkEnglishAdvancedWorkbench = async (page, width) => {
   const device = width <= 600 ? 'mobile' : 'desktop';
-  await reveal(page.locator('#module-preview-panel'));
+  assert.equal(await page.locator('.module-media').isVisible(), true);
   for (const id of ['modules', 'library']) {
     await page.locator(`[data-module-preview="${id}"]`).click();
     const image = page.locator('#module-preview-panel img');
-    await image.scrollIntoViewIfNeeded();
-    const picture = await image.evaluate(async node => {
-      await node.decode();
-      return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
-    });
+    const picture = await checkRetinaImage(image, `${width}px English ${id}`);
     const expected = `workbench-${id}-${device}-en.png`;
     assert.equal(path.basename(new URL(picture.source).pathname), expected);
-    assert.deepEqual([picture.width, picture.height], device === 'mobile' ? [780, 1688] : [2880, 1800]);
     assert.equal(path.basename(new URL(await page.locator('.module-preview-link').getAttribute('href'), page.url()).pathname), expected);
     assert.match(await image.getAttribute('alt'), /module|strateg|Mathlib/i);
   }
   assert.ok((await page.locator('#module-preview-caption').innerText()).trim(), 'The selected module view retains its caption');
-  await reveal(page.locator('img[src$="workbench-settings-detail-en.png"]'));
-  for (const name of ['source', 'settings']) {
-    const expected = `workbench-${name}-detail-en.png`;
-    const image = page.locator(`img[src$="${expected}"]`);
-    await image.scrollIntoViewIfNeeded();
-    const picture = await image.evaluate(async node => {
-      await node.decode();
-      return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight };
-    });
-    assert.equal(path.basename(new URL(picture.source).pathname), expected);
-    assert.ok(picture.width > 0 && picture.height > 0);
-    assert.equal(path.basename(new URL(await image.locator('..').getAttribute('href'), page.url()).pathname), expected);
-  }
+  const source = page.locator('.source-fragment img');
+  const picture = await checkRetinaImage(source, `${width}px English Lean workspace`);
+  assert.equal(path.basename(new URL(picture.source).pathname), `workbench-source-${device === 'mobile' ? 'mobile' : 'detail'}-en.png`);
+  assert.equal(await page.locator('.source-fragment source').getAttribute('media'), '(max-width: 600px)');
+  assert.equal(await page.locator('.source-fragment a').getAttribute('href'), '../assets/workbench-source-detail-en.png');
+  const images = page.locator('.workbench-image-link img, .source-fragment img, #module-preview-panel img');
+  assert.equal(await images.count(), 3, 'The English homepage shows the entry, Lean source and selected module view');
+  const sources = await images.evaluateAll(nodes => nodes.map(node => node.currentSrc));
+  assert.equal(new Set(sources).size, 3, 'The English product pictures show distinct real views');
 };
-const checkEnglishArchivePreview = async (page, width) => {
-  const figure = page.locator('.archive-showcase');
-  for (const link of await figure.locator('a').all())
-    assert.equal(await link.getAttribute('href'), 'archive.html#proof=annals_equiangular_lines_fixed_angle');
-  assert.ok((await figure.locator('figcaption').innerText()).trim(), 'The English archive preview retains its caption');
-  const image = figure.locator('img');
-  await image.scrollIntoViewIfNeeded();
-  const picture = await image.evaluate(async node => {
-    await node.decode();
-    const box = node.getBoundingClientRect();
-    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight,
-      renderedRatio: box.width / box.height };
-  });
-  const asset = width <= 600 ? 'archive-preview-mobile-focus-en.png' : 'archive-preview-en.png';
-  assert.equal(path.basename(new URL(picture.source).pathname), asset);
-  const png = fs.readFileSync(path.join(site, 'assets', asset));
-  assert.deepEqual([picture.width, picture.height], [png.readUInt32BE(16), png.readUInt32BE(20)]);
-  assert.ok(Math.abs(picture.width / picture.height - picture.renderedRatio) < .01,
-    'The English archive excerpt must retain its actual proportions');
+const checkEnglishArchiveEntry = async page => {
+  const footer = page.locator('.archive-footer');
+  const link = footer.locator('a[href="archive.html"]');
+  assert.equal(await link.count(), 1);
+  assert.equal(await link.isVisible(), true, 'The English proof records have a visible native archive link');
+  assert.ok((await link.innerText()).trim(), 'The English archive link has an accessible label');
+  const provenance = await footer.locator('.proof-provenance').innerText();
+  assert.match(provenance, /DeepScientist/);
+  assert.match(provenance, /histor|original/i);
+  assert.equal(await page.locator('[data-accepted-proof]').count(), catalog.records.filter(record => record.status === 'official_accepted').length);
 };
 const checkEnglishHomepageFacts = async page => {
   const hero = await page.locator('#hero-title').evaluate(node => node.closest('section').innerText);
@@ -207,6 +201,7 @@ try {
     await open(page, `${hosted}en/`, 'landingReady');
     assert.equal(await page.getAttribute('html', 'lang'), 'en');
     await checkEnglishHomepageFacts(page);
+    assert.equal(await page.locator('.replay-badge').innerText(), 'Recorded example');
     assert.equal(await page.locator('[data-umami-event="request-access-hero"]').getAttribute('href'), '#start');
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
     assert.match(await page.locator('#featured-proof').innerText(), /Official Lean-Eval pass/);
@@ -219,14 +214,10 @@ try {
       await page.locator('.featured-source > summary').click();
       assert.equal(await page.locator('.featured-code').isVisible(), true);
       await page.locator('.featured-source > summary').click();
-      const settings = page.locator('img[src$="workbench-settings-detail-en.png"]');
-      await reveal(settings);
-      assert.equal(await settings.isVisible(), true);
-
     }
     await checkEnglishWorkbench(page, width);
     await checkEnglishAdvancedWorkbench(page, width);
-    await checkEnglishArchivePreview(page, width);
+    await checkEnglishArchiveEntry(page);
     for (const id of ['m1', 'm2', 'm4', 'm5']) await page.locator(`[data-component="${id}"]`).click();
     await page.locator('[data-module-preview="library"]').click();
     await page.locator('#replay-next').scrollIntoViewIfNeeded();
@@ -254,11 +245,16 @@ try {
     await page.screenshot({ path: path.join(output, `en-index-${width}.png`), fullPage: true });
     if (width < 900) await page.locator('.menu-toggle').click();
 
-    await page.locator('.archive-image-link').click();
+    await page.locator('.archive-footer a[href="archive.html"]').click();
     await page.waitForSelector('#inspector .detail-title');
-    assert.equal(new URL(page.url()).hash, '#proof=annals_equiangular_lines_fixed_angle');
-    assert.equal(await page.locator('#inspector .detail-title').innerText(), 'Equiangular lines');
-    assert.deepEqual(await cjkIn(page), [], `English preview destination at ${width}px`);
+    assert.equal(new URL(page.url()).pathname, `${base}en/archive.html`);
+    assert.equal(await page.locator('.proof-row').count(), catalog.records.length);
+    assert.equal(await page.locator('#accepted-count').innerText(), String(catalog.records.filter(record => record.status === 'official_accepted').length));
+    assert.equal(await page.locator('#verified-count').innerText(), String(catalog.records.filter(record => record.status === 'locally_verified').length));
+    assert.equal(await page.locator('#progress-count').innerText(), String(catalog.records.filter(record => record.status === 'in_progress_not_officially_accepted').length));
+    const firstAccepted = catalog.records.find(record => record.status === 'official_accepted');
+    assert.equal(await page.locator('#inspector .detail-title').innerText(), firstAccepted.en?.title ?? firstAccepted.title);
+    assert.deepEqual(await cjkIn(page), [], `English archive destination at ${width}px`);
 
     await open(page, `${hosted}en/archive.html#proof=hopf_rinow&tab=evidence`);
     if (width <= 700) await mobileInspectorReady(page);
@@ -359,7 +355,7 @@ try {
     const header = document.querySelector('.site-header').getBoundingClientRect();
     return title.top >= Math.max(0, header.bottom) && title.bottom <= innerHeight;
   });
-  await checkEnglishArchivePreview(noScript, 320);
+  await checkEnglishArchiveEntry(noScript);
   await checkOverflow(noScript, '320px English no-script navigation and archive');
   await noScript.close();
 

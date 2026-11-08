@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="TheoremOS is a browser workspace for mathematical research. Review Lean statements, follow proof attempts and inspect independent verification. Free allowlist beta with your own model API key.">
-  <meta name="theme-color" content="#0f1f10">
+  <meta name="theme-color" content="#faf9f5">
   <meta property="og:title" content="TheoremOS | From problems to Lean proofs">
   <meta property="og:description" content="TheoremOS is a browser workspace for mathematical research. Review Lean statements, follow proof attempts and inspect independent verification. Free allowlist beta with your own model API key.">
   <meta property="og:type" content="website">
@@ -38,7 +38,7 @@
           <p class="hero-terms">Free during beta. Bring your own model API key.</p>
         </div>
         <section class="hero-demo" id="demo" aria-labelledby="demo-title">
-          <h2 id="demo-title">Replay a proof of addition by zero</h2>
+          <h2 id="demo-title">Follow a proof to completion</h2>
           <div class="product-demo" aria-label="TheoremOS recorded proof replay"><!-- research-replay --></div>
         </section>
       </section>
@@ -46,18 +46,17 @@
 
     <section class="workflow-section" id="workbench-preview" aria-labelledby="workflow-title">
       <div class="wrap">
-        <div class="section-heading"><h2 id="workflow-title">Start with your own problem</h2><p class="heading-description">Use natural language, TeX or an existing Lean statement. You check the meaning; an independent Lean process checks the proof.</p></div>
-        <ol class="workflow-steps"><li><h3>State the problem</h3><p>Include the assumptions and goal, then check that the generated Lean statement matches your intent.</p></li><li><h3>Follow each attempt</h3><p>Inspect candidates and diagnostics as the proof is repaired. Track time and token usage along the way.</p></li><li><h3>Keep the results</h3><p>Download Lean source and verification reports, review the record, and continue unfinished work.</p></li></ol>
-        <figure class="workbench-preview">
-        <a class="workbench-image-link" href="../assets/workbench-full-desktop-en.png" aria-label="Enlarge workbench"><picture class="workbench-picture"><source media="(max-width: 900px)" srcset="../assets/workbench-mobile-en.png" width="390" height="440"><img src="../assets/workbench-desktop-en.png" alt="TheoremOS problem input with model settings and separate formalization and proof budgets." width="1440" height="500" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a>
-        <figcaption id="workbench-caption"><span>Natural language, TeX or Lean</span><a href="#start">Request access<i data-lucide="arrow-up-right"></i></a></figcaption>
-      </figure>
-        <details class="workbench-details" data-mobile-disclosure open><summary>Source and model settings<i data-lucide="chevron-down"></i></summary>
-          <div class="product-gallery">
-            <figure class="product-fragment source-fragment"><a href="../assets/workbench-source-detail-en.png" target="_blank" rel="noreferrer" aria-label="Inspect source and diagnostics"><img src="../assets/workbench-source-detail-en.png" alt="The Lean workspace with the original statement and a Mathlib proof draft containing sorry." width="1994" height="1080" loading="lazy"></a><figcaption><h3>Inspect source and diagnostics</h3><p>Use the Lean standard library or a fixed Mathlib environment to inspect the statement, candidates and errors.</p></figcaption></figure>
-            <figure class="product-fragment settings-fragment"><a href="../assets/workbench-settings-detail-en.png" target="_blank" rel="noreferrer" aria-label="Connect your model"><img src="../assets/workbench-settings-detail-en.png" alt="Model settings with the provider address, model, reasoning effort and an empty API key field." width="370" height="814" loading="lazy"></a><figcaption><h3>Connect your model</h3><p>Use an OpenAI or configured gateway key temporarily, or save it encrypted to your account.</p></figcaption></figure>
-          </div>
-        </details>
+        <div class="section-heading"><h2 id="workflow-title">Start with your own problem</h2><p class="heading-description">State the problem, check its meaning, then follow the proof. Keep the original question, candidates and Lean feedback in one workspace.</p></div>
+        <div class="workbench-layout">
+          <ol class="workflow-steps"><li><h3>Start with your question</h3><p>Write the assumptions and goal in natural language, TeX or Lean. Check that the statement says what you mean.</p></li><li><h3>Follow each attempt</h3><p>Read candidates, diagnostics and repairs as they happen. Set the time and token budget for your research.</p></li><li><h3>Keep the whole result</h3><p>Download Lean source and verification reports, or return to the record to continue an unfinished proof.</p></li></ol>
+          <figure class="workbench-preview">
+            <a class="workbench-image-link" href="../assets/workbench-full-desktop-en.png" aria-label="Enlarge the workbench"><picture class="workbench-picture"><source media="(max-width: 900px)" srcset="../assets/workbench-mobile-en.png" width="350" height="520"><img src="../assets/workbench-desktop-en.png" alt="TheoremOS natural-language problem input with an addition-by-zero question, not yet submitted." width="900" height="520" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a>
+          </figure>
+        </div>
+        <figure class="product-fragment source-fragment">
+          <figcaption><h3>Keep the source in sight</h3><p>Open the statement, proof draft and Lean diagnostics. Use the standard library or a fixed Mathlib environment to inspect each change.</p></figcaption>
+          <a href="../assets/workbench-source-detail-en.png" target="_blank" rel="noreferrer" aria-label="Enlarge the Lean workspace"><picture><source media="(max-width: 600px)" srcset="../assets/workbench-source-mobile-en.png" width="360" height="450"><img src="../assets/workbench-source-detail-en.png" alt="An addition-by-zero proof draft in the Lean workspace, not yet submitted for verification." width="850" height="450" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a>
+        </figure>
       </div>
     </section>
 
@@ -65,11 +64,11 @@
       <div class="section-heading proof-heading"><div><h2 id="proofs-title">Inspect the proof and its evidence</h2><p>Read the source, research process and verification record together.</p></div><div class="proof-totals"><a href="archive.html#status=accepted"><strong><!-- accepted-count --></strong><span>Official Lean-Eval passes</span></a><a class="campaign-results" href="archive.html#status=verified"><strong><!-- local-count --></strong><span>OpenAI Math local checks</span></a></div></div>
       <!-- featured-proof -->
       <details class="proof-list"><summary>View all official verification records<i data-lucide="chevron-down"></i></summary><table class="proof-table"><caption class="sr-only">View all official verification records</caption><thead><tr><th scope="col">Problem and original attribution</th><th scope="col">Verification and source</th></tr></thead><tbody><!-- accepted-proofs --></tbody></table></details>
-      <div class="archive-layout"><div class="archive-copy"><h3>A full record for each problem</h3><p>Find a problem and inspect its source, diagnostics and verification report. Official passes, local checks and ongoing work are listed separately.</p><a class="text-link" href="archive.html">Browse the proof archive<i data-lucide="arrow-up-right"></i></a><p class="proof-provenance">The archive includes historical work from DeepScientist and DeepScientist Math, followed by resumed runs and environment migrations. Each record preserves its original attribution, source and official result.</p></div><figure class="archive-showcase"><a class="archive-image-link" href="archive.html#proof=annals_equiangular_lines_fixed_angle" aria-label="Browse the proof archive"><picture><source media="(max-width: 600px)" srcset="../assets/archive-preview-mobile-focus-en.png" width="712" height="1187"><img src="../assets/archive-preview-en.png" alt="Equiangular lines archive showing the problem, original attribution, official acceptance date and source revision." width="1440" height="900" loading="lazy"></picture></a><figcaption><a href="archive.html#proof=annals_equiangular_lines_fixed_angle">Equiangular lines<i data-lucide="arrow-up-right"></i></a></figcaption></figure></div>
+      <div class="archive-footer"><a class="text-link" href="archive.html">Browse all proof records<i data-lucide="arrow-up-right"></i></a><p class="proof-provenance">Historical work from DeepScientist and DeepScientist Math retains its original attribution, source and verification records.</p></div>
     </div></section>
 
     <div class="components-shell"><section class="components-section wrap" id="components" aria-labelledby="components-title">
-      <div class="section-heading"><h2 id="components-title">Study your own proof methods</h2><p class="heading-description">Fix the problem, environment, model and budget. Change research decisions and compare a single agent, independent parallel runs or task collaboration.</p></div>
+      <div class="section-heading"><h2 id="components-title">Compare proof methods</h2><p class="heading-description">Keep the problem, environment, model and budget fixed. Compare different strategies and ways of working together.</p></div>
       <div class="component-layout"><div class="component-explorer">
         <div class="component-tabs" role="tablist" aria-label="Five research components" aria-orientation="vertical">
           <button class="component-tab" type="button" id="tab-m1" role="tab" aria-selected="false" aria-controls="component-panel" tabindex="-1" data-component="m1"><span class="component-number">M1</span><strong>Construction</strong><i data-lucide="arrow-up-right"></i></button>
@@ -82,11 +81,11 @@
           <div class="module-details"><div><h3 id="module-title">Choose the next task</h3><p id="module-description">Select ready tasks and decide whether to continue, retry or stop within route constraints and a shared budget.</p></div><dl><div><dt>Input</dt><dd id="module-input">Research state · candidate operations · shared budget</dd></div><div><dt>Output</dt><dd id="module-output">Next operation · ordered ready tasks</dd></div></dl><p class="module-contract" id="module-kicker">M3 · Search</p></div>
           <div class="independent-check"><i data-lucide="shield-check"></i><span>S3 always verifies the complete original statement independently.</span></div>
         </div>
-      </div><details class="module-disclosure" data-mobile-disclosure open><summary>Module map and strategy library<i data-lucide="chevron-down"></i></summary><figure class="module-showcase" aria-labelledby="module-preview-heading">
+      </div><div class="module-media"><figure class="module-showcase" aria-labelledby="module-preview-heading">
         <div class="module-preview-toolbar"><h3 id="module-preview-heading" class="sr-only">Module map and strategy library</h3><div class="module-preview-tabs" role="tablist" aria-label="Workbench module views" hidden><button type="button" id="module-preview-tab-modules" role="tab" aria-selected="true" aria-controls="module-preview-panel" data-module-preview="modules"><i data-lucide="network"></i>Module map</button><button type="button" id="module-preview-tab-library" role="tab" aria-selected="false" aria-controls="module-preview-panel" tabindex="-1" data-module-preview="library"><i data-lucide="folder-open"></i>Strategy library</button></div></div>
-        <div id="module-preview-panel" role="tabpanel" aria-labelledby="module-preview-tab-modules" tabindex="0"><a class="module-preview-link" href="../assets/workbench-modules-desktop-en.png" target="_blank" rel="noreferrer" aria-label="View the full-size module map screenshot" title="View full-size screenshot"><picture><source media="(max-width: 600px)" srcset="../assets/workbench-modules-mobile-en.png" width="390" height="844"><img src="../assets/workbench-modules-desktop-en.png" alt="Module map: the M1–M5 research decisions connect to the fixed S3 independent verification." width="1440" height="900" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a></div>
-        <figcaption><span id="module-preview-caption" aria-live="polite">Research modules and independent verification</span></figcaption>
-      </figure></details></div>
+        <div id="module-preview-panel" role="tabpanel" aria-labelledby="module-preview-tab-modules" tabindex="0"><a class="module-preview-link" href="../assets/workbench-modules-desktop-en.png" target="_blank" rel="noreferrer" aria-label="View the full-size module map screenshot" title="View full-size screenshot"><picture><source media="(max-width: 600px)" srcset="../assets/workbench-modules-mobile-en.png" width="360" height="650"><img src="../assets/workbench-modules-desktop-en.png" alt="Module map: the M1–M5 research decisions connect to the fixed S3 independent verification." width="848" height="530" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a></div>
+        <figcaption class="sr-only"><span id="module-preview-caption" aria-live="polite">Research modules and independent verification</span></figcaption>
+      </figure></div></div>
       <noscript><p class="no-script-note">Enable JavaScript to switch component descriptions and screenshots.</p></noscript>
     </section></div>
 

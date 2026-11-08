@@ -6,12 +6,11 @@ import { chromium } from 'playwright';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browser = await chromium.launch();
 try {
-  // The captured workbench preview is Chinese; the English card uses the English verification replay.
   const cards = [
-    { locale: 'zh', lang: 'zh-CN', page: 'out/site/index.html', output: 'social-preview.png', tagline: '数学研究工作台',
-      footer: '白名单 Beta · 模型审核陈述 · Lean 独立验收 · 自备 Key', alt: '自然语言入口预览，尚未提交任务' },
-    { locale: 'en', lang: 'en', page: 'out/site/en/index.html', output: 'social-preview-en.png', tagline: 'Mathematics workbench',
-      footer: 'Allowlist beta · Model-reviewed statements · Lean-checked proofs · BYOK', alt: 'Verification replay' },
+    { lang: 'zh-CN', page: 'out/site/index.html', output: 'social-preview.png',
+      description: '数学研究与 Lean 证明工作台', access: '申请内测' },
+    { lang: 'en', page: 'out/site/en/index.html', output: 'social-preview-en.png',
+      description: 'A workspace for mathematical research and Lean proofs', access: 'Request access' },
   ];
   const mark = fs.readFileSync(path.join(root, 'docs/assets/mark.svg')).toString('base64');
   const css = fs.readFileSync(path.join(root, 'out/site/landing.css'), 'utf8');
@@ -19,36 +18,24 @@ try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 630 }, reducedMotion: 'reduce' });
     await page.goto(pathToFileURL(path.join(root, card.page)).href);
     const title = await page.locator('#hero-title').innerHTML();
-    const category = await page.locator('.hero-category').innerText();
-    const description = await page.locator('.hero-description').innerText();
-    let product = fs.readFileSync(path.join(root, 'docs/assets/workbench-desktop.png'));
-    if (card.locale === 'en') {
-      await page.setViewportSize({ width: 1124, height: 900 });
-      await page.evaluate(() => document.fonts.ready);
-      const replay = page.locator('.replay-window');
-      await replay.scrollIntoViewIfNeeded();
-      const box = await replay.boundingBox();
-      product = await page.screenshot({ clip: { x: box.x, y: box.y, width: box.width, height: Math.min(box.height, box.width * 500 / 1440) } });
-    }
-    await page.setViewportSize({ width: 1200, height: 630 });
+    // Share cards use native type and the tutorial's add-zero identity, keeping text crisp at preview size.
     await page.setContent(`<!doctype html><html lang="${card.lang}"><meta charset="utf-8"><style>${css}
-    body{width:1200px;height:630px;overflow:hidden;background:var(--bg);color:var(--ink)}
-    .social{position:relative;height:630px;padding:28px 70px}
-    .social-top{display:flex;align-items:center;justify-content:space-between}
-    .social .brand{font-size:16px;gap:12px}.social .brand img{width:28px;height:28px}
-    .preview{font-size:14px;color:var(--muted)}
-    .social h1{font-size:72px;line-height:1.1;margin:12px 0 7px}
-    .social-category{font-size:22px;line-height:1.5}
-    .social-description{font-size:16px;margin-top:3px;max-width:none}
-    .social-product{position:absolute;left:70px;right:70px;top:225px}
-    .social-product img{width:100%;height:auto}
-    .social-bottom{position:absolute;left:70px;right:70px;bottom:10px;display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
-  </style><body><div class="social"><div class="social-top"><div class="brand"><img src="data:image/svg+xml;base64,${mark}" alt=""><span>${card.tagline}</span></div><span class="preview">v0.1.0 · Research Preview</span></div><h1>${title}</h1><p class="social-category">${category}</p><p class="social-description">${description}</p><div class="social-product"><img src="data:image/png;base64,${product.toString('base64')}" alt="${card.alt}"></div><div class="social-bottom"><span>${card.footer}</span><span>theoremos.top</span></div></div></body></html>`);
+      body{width:1200px;height:630px;overflow:hidden;background:var(--bg);color:var(--ink)}
+      .social{height:630px;padding:48px 60px;display:flex;flex-direction:column;justify-content:space-between}
+      .social-top,.social-bottom{display:flex;align-items:center;justify-content:space-between;gap:40px}
+      .social .brand{font-size:30px;gap:12px}.social .brand img{width:36px;height:36px}
+      .social-domain{font-size:22px}
+      .social-main{display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:center}
+      .social h1{font-size:62px;line-height:1.18;letter-spacing:-.02em}
+      .social-proof{height:276px;background:var(--tool);color:var(--tool-ink);display:flex;align-items:center;justify-content:center;border-radius:var(--radius)}
+      .social-proof p{font-family:var(--serif);font-size:86px;line-height:1.2;white-space:nowrap}
+      .social-description{font-size:20px;max-width:38em}
+      .social-access{font-size:18px;background:var(--accent);color:var(--accent-ink);padding:14px 24px;border-radius:var(--radius);white-space:nowrap}
+    </style><body><div class="social"><div class="social-top"><div class="brand"><img src="data:image/svg+xml;base64,${mark}" alt=""><span>TheoremOS</span></div><span class="social-domain">theoremos.top</span></div><div class="social-main"><h1>${title}</h1><div class="social-proof"><p>n + 0 = n</p></div></div><div class="social-bottom"><p class="social-description">${card.description}</p><span class="social-access">${card.access} ↗</span></div></div></body></html>`);
     await page.evaluate(() => document.fonts.ready);
-    await page.locator('.social-product img').evaluate(image => image.decode());
     await page.screenshot({ path: path.join(root, 'docs/assets', card.output) });
     await page.close();
-    console.log(`Generated docs/assets/${card.output} from the homepage typography.`);
+    console.log(`Generated docs/assets/${card.output} with native typography and no embedded screenshots.`);
   }
 } finally {
   await browser.close();

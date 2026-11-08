@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-/** Capture only the twelve Chinese/English advanced previews after build:web; entry screenshots stay untouched. */
+/** Capture real source, graph and saved-plan panels after build:web; entry screenshots stay untouched. */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
@@ -87,11 +88,59 @@ const localeLabels = {
     rules: [['Prefer algebraic simplification', 'Try ring and linarith first, preserving the original theorem statement.'],
       ['Retrieve matching lemmas', 'Prefer Mathlib lemmas whose types match the current goal.']] },
 } as const;
-const draftSource = 'import Mathlib\ntheorem square_add (x y : ℝ) :\n  (x+y)^2 = x^2+2*x*y+y^2 := by sorry';
-async function captureLocale(locale: keyof typeof localeLabels) {
+const draftSource = 'import Mathlib\n\nexample (n : ℕ) : n + 0 = n := by\n  simp';
+type Bounds = { x: number; y: number; width: number; height: number };
+const captured: object[] = [];
+async function settle(page: Page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+}
+async function bounds(page: Page, selectors: string[]) {
+  return page.evaluate(selectors => {
+    const boxes = selectors.map(selector => document.querySelector(selector)!.getBoundingClientRect());
+    const x = Math.floor(Math.min(...boxes.map(box => box.left)));
+    const y = Math.floor(Math.min(...boxes.map(box => box.top)));
+    return { x, y, width: Math.ceil(Math.max(...boxes.map(box => box.right))) - x,
+      height: Math.ceil(Math.max(...boxes.map(box => box.bottom))) - y };
+  }, selectors);
+}
+async function capturePanel(page: Page, file: string, clip: Bounds, size: { width: number; height: number },
+  density: number, backgroundSelector: string) {
+  assert.ok(clip.width <= size.width && clip.height <= size.height,
+    `${path.basename(file)}: real panel ${clip.width}×${clip.height} must fit ${size.width}×${size.height} without rescaling or cropping`);
+  const image = await page.screenshot({ clip });
+  assert.equal(image.readUInt32BE(16), clip.width * density);
+  assert.equal(image.readUInt32BE(20), clip.height * density);
+  // Pad only with the panel's existing adjacent background; draw the native raster at 1:1 pixel size.
+  const result = await page.evaluate(async ({ source, size, density, backgroundSelector }) => {
+    let element: Element | null = document.querySelector(backgroundSelector);
+    let background = 'transparent';
+    while (element && ['transparent', 'rgba(0, 0, 0, 0)'].includes(background)) {
+      background = getComputedStyle(element).backgroundColor;
+      element = element.parentElement;
+    }
+    const bytes = Uint8Array.from(atob(source), character => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const canvas = document.createElement('canvas');
+    canvas.width = size.width * density; canvas.height = size.height * density;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = background; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, Math.floor((canvas.width - bitmap.width) / 2), Math.floor((canvas.height - bitmap.height) / 2));
+    bitmap.close();
+    return { png: canvas.toDataURL('image/png').split(',')[1]!, background };
+  }, { source: image.toString('base64'), size, density, backgroundSelector });
+  fs.writeFileSync(file, Buffer.from(result.png, 'base64'));
+  captured.push({ file: path.basename(file), logical: size, deviceScaleFactor: density,
+    pixels: { width: size.width * density, height: size.height * density }, nativePanel: clip,
+    viewport: page.viewportSize(), paddingBackground: result.background, rasterRescaled: false });
+}
+async function captureLocale(locale: keyof typeof localeLabels, density: 2 | 3) {
   const labels = localeLabels[locale], suffix = locale === 'en' ? '-en' : '';
   const output = (name: string) => path.join(root, 'docs/assets', `${name}${suffix}.png`);
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2,
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: density,
     reducedMotion: 'reduce', locale: labels.htmlLang });
   await context.addInitScript(({ key, value }) => localStorage.setItem(key, value), { key: localeStorageKey, value: locale });
   await context.route(/^https?:\/\//, async route => {
@@ -106,11 +155,6 @@ async function captureLocale(locale: keyof typeof localeLabels) {
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
   page.on('pageerror', error => errors.push(error.message));
-  const capture = async (name: string) => {
-    await page.evaluate(() => document.fonts.ready);
-    await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
-    await page.screenshot({ path: output(name) });
-  };
   try {
     const geometryChecks = [];
     await page.goto(origin);
@@ -127,39 +171,39 @@ async function captureLocale(locale: keyof typeof localeLabels) {
     if (await page.locator('#dismiss-draft-recovery').isVisible()) await page.locator('#dismiss-draft-recovery').click();
     await showArtifacts(page);
     assert.equal(await page.locator('#draft-preview .preview-status').innerText(), labels.previewStatus);
-    await page.setViewportSize({ width: 1245, height: 667 });
-    const source = page.locator('#draft-preview');
-    await source.evaluate(node => { node.scrollTop = 0; });
-    const sourceDetail = await page.locator('.draft-source-scroll').evaluate(node => ({
-      value: node.querySelector('code')!.textContent,
-      fits: node.scrollHeight <= node.clientHeight + 2 && node.scrollWidth <= node.clientWidth + 2,
-    }));
-    assert.equal(sourceDetail.value, draftSource);
-    assert.ok(sourceDetail.fits, 'The source screenshot must show the complete Lean draft');
-    await page.evaluate(() => document.fonts.ready);
-    await source.screenshot({ path: output('workbench-source-detail') });
-    const sourceBounds = await source.boundingBox();
+    if (density === 2) for (const device of ['desktop', 'mobile'] as const) {
+      await page.setViewportSize({ width: device === 'desktop' ? 1094 : 390, height: 900 });
+      await showArtifacts(page);
+      await page.locator('#draft-preview').evaluate(node => { node.scrollTop = 0; });
+      await settle(page);
+      const sourceDetail = await page.locator('.draft-source-scroll').evaluate(node => ({
+        value: node.querySelector('code')!.textContent,
+        fits: node.scrollWidth <= node.clientWidth + 2,
+      }));
+      assert.equal(sourceDetail.value, draftSource);
+      assert.ok(sourceDetail.fits, 'Every line of the real Lean draft must fit without horizontal scrolling');
+      const preview = (await page.locator('#draft-preview').boundingBox())!;
+      const width = device === 'desktop' ? 850 : 360, height = 450;
+      const clip = { x: Math.round(preview.x + (preview.width - width) / 2), y: Math.floor(preview.y), width, height };
+      const visible = await page.evaluate(clip => {
+        const elements = ['.preview-heading h2', '.preview-status', '#draft-preview-code code'];
+        return elements.every(selector => {
+          const element = document.querySelector(selector)!;
+          const range = document.createRange(); range.selectNodeContents(element);
+          return [...range.getClientRects()].every(box => box.left >= clip.x && box.right <= clip.x + clip.width
+            && box.top >= clip.y && box.bottom <= clip.y + clip.height);
+        });
+      }, clip);
+      assert.ok(visible, `${locale} ${device}: show the real draft badge and every code line`);
+      await page.screenshot({ path: output(device === 'desktop' ? 'workbench-source-detail' : 'workbench-source-mobile'), clip });
+      captured.push({ file: path.basename(output(device === 'desktop' ? 'workbench-source-detail' : 'workbench-source-mobile')),
+        logical: { width, height }, pixels: { width: width * density, height: height * density },
+        deviceScaleFactor: density, viewport: page.viewportSize(), nativePanel: clip, draftSource });
+    }
 
-    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.setViewportSize({ width: 1440, height: 1100 });
     await page.locator('#open-settings').click();
     await page.locator('#run-settings[open]').waitFor();
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.locator('[data-settings-section="settings-connection"]').click();
-    assert.equal(await page.locator('#api-key').inputValue(), '');
-    assert.equal(await page.locator('#api-key').getAttribute('type'), 'password');
-    const settingsVisible = await page.locator('.settings-content').evaluate(node => {
-      const bounds = node.getBoundingClientRect();
-      return ['#provider', '#model', '#effort', '#api-key'].every(selector => {
-        const field = node.querySelector(selector)!, rect = field.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && rect.top >= bounds.top && rect.bottom <= bounds.bottom
-          && rect.left >= bounds.left && rect.right <= bounds.right;
-      });
-    });
-    assert.ok(settingsVisible, 'The connection screenshot must show the provider, model and empty API key');
-    await page.locator('#run-settings').screenshot({ path: output('workbench-settings-detail') });
-    const settingsBounds = await page.locator('#run-settings').boundingBox();
-
-    await page.setViewportSize({ width: 1440, height: 900 });
     await page.locator('[data-settings-section="module-plan"]').click();
     await page.locator('#module-plan-scheduler').selectOption('critical-path');
     await page.locator('#module-plan-context').selectOption('essential');
@@ -181,17 +225,22 @@ async function captureLocale(locale: keyof typeof localeLabels) {
     await page.locator('[data-module-library-notice]').filter({ hasText: labels.saved }).waitFor();
     assert.equal(await page.locator('[data-module-library-count]').innerText(), '1 / 12');
     assert.match(await page.locator('[data-module-library-summary]').innerText(), labels.planSummary);
-    for (const [width, height, device] of [[1440, 900, 'desktop'], [390, 844, 'mobile']] as const) {
-      await page.setViewportSize({ width, height });
-      await page.locator('[data-settings-section="module-plan"]').click();
-      await capture(`workbench-library-${device}`);
-    }
+    const device = density === 3 ? 'desktop' : 'mobile';
+    await page.setViewportSize({ width: device === 'desktop' ? 1440 : 390, height: 1200 });
+    await page.locator('#module-plan-library').evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }));
+    await settle(page);
+    const library = await bounds(page, device === 'desktop' ? ['#module-plan-library']
+      : ['#module-plan-library', '.module-plan-builtins', '.module-plan-fixed']);
+    await capturePanel(page, output(`workbench-library-${device}`), library,
+      device === 'desktop' ? { width: 632, height: 395 } : { width: 360, height: 650 }, density, '#module-plan-library');
+    if (density === 3) return { locale, deviceScaleFactor: density, previews: 1, apiKeyEmpty: true,
+      savedPlan: 'disposable browser localStorage' };
     await closeSettings(page);
     if (await page.locator('#open-draft-preview').isVisible()) await page.locator('#open-draft-preview').click();
     await page.locator('#draft-tab-modules').click();
-    for (const [width, height, device] of [[1440, 900, 'desktop'], [390, 844, 'mobile']] as const) {
+    for (const [width, height, device] of [[1920, 1100, 'desktop'], [390, 1200, 'mobile']] as const) {
       await page.setViewportSize({ width, height });
-      await page.locator('#draft-module-panel').evaluate(node => { node.scrollTop = 0; });
+      await page.locator('#draft-preview').evaluate(node => { node.scrollTop = 0; });
       if (device === 'mobile') {
         await page.locator('.module-view-heading').evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }));
         const coordinator = await page.locator('[data-module-id="M5"]').boundingBox();
@@ -201,21 +250,28 @@ async function captureLocale(locale: keyof typeof localeLabels) {
       }
       assert.equal(await page.locator('#draft-preview .preview-status').innerText(), labels.previewStatus);
       geometryChecks.push(await checkModuleGeometry(page, `${locale} saved-plan preview at ${width}px`));
-      await capture(`workbench-modules-${device}`);
+      await settle(page);
+      const graph = await bounds(page, ['.module-graph > [data-module-id="M5"]', '.module-research',
+        '.module-acceptance-edge', '.module-graph > [data-module-id="S3"]', '.module-legend']);
+      await capturePanel(page, output(`workbench-modules-${device}`), graph,
+        device === 'desktop' ? { width: 848, height: 530 } : { width: 360, height: 650 }, density, '.module-graph');
     }
     assert.equal(await page.locator('#api-key').inputValue(), '');
-    return { locale, previews: 6, sourceBounds, settingsBounds, geometryChecks,
+    return { locale, deviceScaleFactor: density, previews: 5, geometryChecks,
       apiKeyEmpty: true, draftStatus: labels.previewStatus, savedPlan: 'disposable browser localStorage' };
   } finally { await context.close(); }
 }
 try {
   const captures = [];
-  for (const locale of ['zh', 'en'] as const) captures.push(await captureLocale(locale));
+  for (const locale of ['zh', 'en'] as const) {
+    captures.push(await captureLocale(locale, 2));
+    captures.push(await captureLocale(locale, 3));
+  }
   assert.equal(writes, 0, 'Capturing previews must not send any API writes');
   assert.equal(modelInvocations, 0, 'Capturing previews must not invoke a model');
   assert.deepEqual(externalRequests, [], 'Capturing previews must stay on the local origin');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ previews: 12, deviceScaleFactor: 2, captures, writes, modelInvocations,
+  console.log(JSON.stringify({ previews: 12, captures, images: captured, writes, modelInvocations,
     externalRequests, apiRequests, modelInvoked: false, draftUnsubmitted: true, apiKeyEmpty: true }, null, 2));
 } finally {
   await browser.close();
