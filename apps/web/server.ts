@@ -283,23 +283,45 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   };
   /** Ends one browser session. Anonymous records go with it; account records stay with the account. */
   const endSession = (id: string) => {
+    // Revocation must take effect even when deleting persisted records fails.
+    sessions.delete(id);
     for (const stop of runStreams.get(id) ?? []) stop();
-    if (!auth) { conversations.forget(id); formalizations.forget(id); explanations.forget(id); jobs.forget(id); storage.deleteOwner(id); trajectories.forgetOwner(id); }
-    sessions.delete(id); storage.deleteSession(id);
+    let failure: unknown;
+    if (!auth) {
+      conversations.forget(id); formalizations.forget(id); explanations.forget(id);
+      try { jobs.forget(id); } catch (error) { failure = error; }
+      try { storage.deleteOwner(id); } catch (error) { failure ??= error; }
+      trajectories.forgetOwner(id);
+    }
+    try { storage.deleteSession(id); } catch (error) { failure ??= error; }
+    if (failure) throw failure;
+  };
+  const endSessions = (matches: (session: Session) => boolean) => {
+    let failure: unknown;
+    for (const [id, session] of sessions) if (matches(session)) {
+      try { endSession(id); } catch (error) { failure ??= error; }
+    }
+    if (failure) throw failure;
   };
   const prune = () => {
     admission.prune(); quota?.prune();
-    for (const [id, session] of sessions) {
-      // Login-page sessions without an account only need to outlive one sign-in attempt.
-      const ttl = auth && !session.account ? Math.min(config.sessionTtlMs, 60 * 60_000) : config.sessionTtlMs;
-      if (Date.now() - session.touchedAt > ttl) endSession(id);
-    }
+    let failure: unknown;
+    try {
+      endSessions(session => {
+        // Login-page sessions without an account only need to outlive one sign-in attempt.
+        const ttl = auth && !session.account ? Math.min(config.sessionTtlMs, 60 * 60_000) : config.sessionTtlMs;
+        return Date.now() - session.touchedAt > ttl;
+      });
+    } catch (error) { failure = error; }
     for (const [ip, rate] of rates) if (rate.expiresAt <= Date.now()) rates.delete(ip);
     prechecker?.prune();
     explainer.prune();
     auth?.prune();
+    if (failure) throw failure;
   };
-  const maintenance = setInterval(prune, 60_000).unref();
+  const maintenance = setInterval(() => {
+    try { prune(); } catch { console.error('[web_cleanup_failed] background cleanup failed'); }
+  }, 60_000).unref();
   /** The browser session named by the cookie. An address removed from the allowlist, or a deleted account, loses its signed-in sessions. */
   const cookieSession = (request: IncomingMessage) => {
     const cookie = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('theoremos_session='))?.slice(18);
@@ -385,11 +407,20 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           throw new HttpError(403, '会话校验失败，请刷新页面。');
         setSessionCookie(response, session);
         storage.saveSession(session);
+        const requireSession = () => {
+          if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+        };
+        const readBody = async () => {
+          const body = await readJson(request);
+          // A request may still be uploading when another request revokes its session.
+          requireSession();
+          return body;
+        };
         if (url.pathname.startsWith('/api/auth/')) {
           if (!auth) throw new HttpError(404, '当前服务未启用登录。');
           if (url.pathname === '/api/auth/captcha' && request.method === 'POST') { json(response, 200, auth.captcha(ip)); return; }
           if (url.pathname === '/api/auth/code' && request.method === 'POST') {
-            try { json(response, 200, await auth.requestCode(ip, objectBody(await readJson(request)))); }
+            try { json(response, 200, await auth.requestCode(ip, objectBody(await readBody()))); }
             catch (error) {
               if (error instanceof WebAuthError && error.status === 502) {
                 operations.mailFailed(); console.error('[smtp_delivery_failed] verification code delivery failed');
@@ -399,7 +430,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             return;
           }
           if (url.pathname === '/api/auth/verify' && request.method === 'POST') {
-            const account = auth.verifyCode(objectBody(await readJson(request)));
+            const account = auth.verifyCode(objectBody(await readBody()));
             quota?.restore(account.id, account.email);
             // A fresh identifier and CSRF token after login; the pre-login cookie stops working.
             endSession(session.id);
@@ -408,7 +439,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             json(response, 200, { account: { email: account.email }, csrfToken: next.csrf }); return;
           }
           if (url.pathname === '/api/auth/password/login' && request.method === 'POST') {
-            const account = await auth.loginPassword(ip, objectBody(await readJson(request)));
+            const account = await auth.loginPassword(ip, objectBody(await readBody()), requireSession);
             quota?.restore(account.id, account.email);
             endSession(session.id);
             const next = startSession({ id: account.id, email: account.email });
@@ -420,37 +451,40 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (url.pathname === '/api/auth/terms' && request.method === 'POST') {
             if (!session.account) throw new HttpError(401, '请先登录。');
-            auth.acceptTerms(session.account.email, objectBody(await readJson(request)));
+            auth.acceptTerms(session.account.email, objectBody(await readBody()));
             json(response, 200, { ok: true }); return;
           }
           if (url.pathname === '/api/auth/account' && request.method === 'PATCH') {
             if (!session.account) throw new HttpError(401, '请先登录。');
-            const completionEmail = objectBody(await readJson(request)).completionEmail;
+            const completionEmail = objectBody(await readBody()).completionEmail;
             if (typeof completionEmail !== 'boolean') throw new HttpError(400, '设置格式不正确。');
             auth.setCompletionEmail(session.account.email, completionEmail);
             json(response, 200, { completionEmail }); return;
           }
           if (url.pathname === '/api/auth/password' && request.method === 'PATCH') {
             if (!session.account) throw new HttpError(401, '请先登录。');
-            const body = objectBody(await readJson(request));
+            const body = objectBody(await readBody());
             await auth.setPassword(session.account.email, body.password, body.currentPassword,
-              Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()));
+              Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()), requireSession);
             session.passwordResetUntil = undefined;
-            storage.saveSession(session);
-            for (const [id, other] of sessions) if (id !== session.id && other.account?.id === session.account.id) endSession(id);
+            let failure: unknown;
+            try { storage.saveSession(session); } catch (error) { failure = error; }
+            try { endSessions(other => other.id !== session.id && other.account?.id === session.account!.id); }
+            catch (error) { failure ??= error; }
+            if (failure) throw failure;
             json(response, 200, { passwordSet: true }); return;
           }
           if (url.pathname === '/api/auth/account' && request.method === 'DELETE') {
             const account = session.account;
             if (!account) throw new HttpError(401, '请先登录。');
-            const confirmation = objectBody(await readJson(request)).email;
+            const confirmation = objectBody(await readBody()).email;
             if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
             conversations.forget(owner); formalizations.forget(owner); explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
             quota?.forget(account.id, account.email);
             auth.deleteAccount(account.email);
-            for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
+            endSessions(other => other.account?.id === account.id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
           }
           const savedKey = /^\/api\/auth\/keys\/([a-z][a-z0-9-]{0,39})$/u.exec(url.pathname);
@@ -461,10 +495,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
               const provider = config.providers.find(item => item.id === savedKey[1]);
               if (!provider) throw new HttpError(400, '请选择可用的服务商');
-              const body = z.object({ apiKey: inputSchema.shape.apiKey.min(8) }).strict().safeParse(await readJson(request));
+              const body = z.object({ apiKey: inputSchema.shape.apiKey.min(8) }).strict().safeParse(await readBody());
               if (!body.success) throw new HttpError(400, '请填写有效的 API Key。');
-              // Reading the body yields; a logout, suspension or account deletion must prevent a later save.
-              if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
               if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
               vault.save(session.account.id, provider.id, provider.baseUrl, body.data.apiKey);
             } else vault.forget(session.account.id, savedKey[1]);
@@ -487,12 +519,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
                 precheck: prechecker?.counts() ?? { running: 0, queued: 0 }, conversation: explainer.counts() } }); return;
           }
           if (url.pathname === '/api/admin/maintenance' && request.method === 'PUT') {
-            const enabled = objectBody(await readJson(request)).enabled;
+            const enabled = objectBody(await readBody()).enabled;
             if (typeof enabled !== 'boolean') throw new HttpError(400, '请选择是否暂停接单。');
             operations.setMaintenance(enabled); json(response, 200, { maintenance: enabled }); return;
           }
           if (url.pathname === '/api/admin/accounts' && request.method === 'PATCH') {
-            const body = objectBody(await readJson(request));
+            const body = objectBody(await readBody());
             if (typeof body.email !== 'string' || typeof body.suspended !== 'boolean') throw new HttpError(400, '请检查账号与暂停状态。');
             const account = auth.setSuspended(body.email, body.suspended);
             if (body.suspended) {
@@ -503,17 +535,17 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               }
               for (const item of formalizations.list(owner)) formalizations.cancel(owner, item.id);
               for (const item of conversations.list(owner)) conversations.stop(owner, item.id);
-              for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
+              endSessions(other => other.account?.id === account.id);
             }
             json(response, 200, adminOverview(auth, quota)); return;
           }
           if (url.pathname === '/api/admin/allowlist' && ['POST', 'DELETE'].includes(request.method ?? '')) {
-            const email = objectBody(await readJson(request)).email;
+            const email = objectBody(await readBody()).email;
             if (request.method === 'POST') auth.addToAllowlist(email);
             else {
               auth.removeFromAllowlist(email);
               // The removed address is signed out now, not at its next request.
-              for (const [id, other] of sessions) if (other.account && !auth.allowed(other.account.email)) endSession(id);
+              endSessions(other => Boolean(other.account && !auth.allowed(other.account.email)));
             }
             json(response, 200, adminOverview(auth, quota)); return;
           }
@@ -528,7 +560,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         // Body reads and readiness checks yield. Recheck admission immediately before dispatch so a pending
         // submission cannot start work after logout, suspension, account deletion or maintenance activation.
         const admitWork = () => {
-          if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+          requireSession();
           if (auth && session.account && auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
           if (operations.maintenance) throw new HttpError(503, '服务正在维护，暂不接收新任务；已有任务会继续，历史与下载仍可使用。');
           if (!operations.writable()) throw new HttpError(503, '存储空间暂时不足，请稍后重试。');
@@ -537,7 +569,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         const connection = /^\/api\/providers\/([a-z][a-z0-9-]{0,39})\/check$/u.exec(url.pathname);
         if (connection && request.method === 'POST') {
           const provider = config.providers.find(item => item.id === connection[1]);
-          const body = z.object({ apiKey: formalizationSchema.shape.apiKey, model: inputSchema.shape.model }).strict().safeParse(await readJson(request));
+          const body = z.object({ apiKey: formalizationSchema.shape.apiKey, model: inputSchema.shape.model }).strict().safeParse(await readBody());
           if (!provider || !body.success) throw new HttpError(400, '请检查服务商、模型名与 API Key。');
           const key = body.data.apiKey || heldKey(session, provider);
           if (!key) throw new HttpError(400, '请填写 API Key。');
@@ -547,7 +579,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (url.pathname === '/api/conversations') {
           if (request.method === 'GET') { json(response, 200, { conversations: conversations.list(owner) }); return; }
           if (request.method === 'POST') {
-            const parsed = conversationSchema.safeParse(await readJson(request));
+            const parsed = conversationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请选择要讨论的题目。');
             json(response, 201, { conversation: conversations.create(owner, parsed.data) }); return;
           }
@@ -559,8 +591,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!action && request.method === 'GET') { json(response, 200, { conversation: conversations.read(owner, id) }); return; }
           if (!action && request.method === 'PATCH') {
             conversations.read(owner, id);
-            const parsed = z.object({ title: z.string() }).strict().safeParse(await readJson(request));
-            if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+            const parsed = z.object({ title: z.string() }).strict().safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请输入不超过 80 字的对话标题。');
             json(response, 200, { conversation: conversations.rename(owner, id, parsed.data.title) }); return;
           }
@@ -569,14 +600,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (action === 'stop' && request.method === 'POST') { json(response, 200, { conversation: conversations.stop(owner, id) }); return; }
           if (action === 'guidance' && request.method === 'POST') {
-            const parsed = webGuidanceSchema.safeParse(await readJson(request));
+            const parsed = webGuidanceSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
             const conversation = await conversations.guide(owner, id, parsed.data, (runId, guidance) => jobs.command(owner, runId, { type: 'guidance', guidance }));
             json(response, 200, { conversation }); return;
           }
           if (action === 'messages' && request.method === 'POST') {
             const conversation = conversations.read(owner, id);
-            const parsed = conversationMessageSchema.safeParse(await readJson(request));
+            const parsed = conversationMessageSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查问题内容与 API Key。');
             const run = conversation.runId ? jobs.get(owner, conversation.runId) : undefined;
             const formalization = conversation.formalizationId ? formalizations.read(owner, conversation.formalizationId) : undefined;
@@ -609,7 +640,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             json(response, 200, { formalizations: formalizations.list(owner), generation }); return;
           }
           if (request.method === 'POST') {
-            const parsed = formalizationSchema.safeParse(await readJson(request));
+            const parsed = formalizationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查原题、证明环境与 API Key。');
             const provider = parsed.data.providerId ? providers.find(item => item.id === parsed.data.providerId) : defaultProvider;
             if (!provider) throw new HttpError(409, '当前服务没有配置这个题目使用的模型服务。');
@@ -647,7 +678,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (action === 'cancel' && request.method === 'POST') { json(response, 200, { formalization: formalizations.cancel(owner, id) }); return; }
           if (action === 'research' && request.method === 'POST') {
-            const parsed = z.object({ apiKey: formalizationSchema.shape.apiKey }).strict().safeParse(await readJson(request));
+            const parsed = z.object({ apiKey: formalizationSchema.shape.apiKey }).strict().safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查 API Key。');
             const item = formalizations.read(owner, id);
             if (item.runId) { json(response, 200, { formalization: item }); return; }
@@ -666,7 +697,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             return;
           }
           if (action === 'confirm' && request.method === 'POST') {
-            const parsed = z.object({ evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().safeParse(await readJson(request));
+            const parsed = z.object({ evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请提供当前核对版本。');
             json(response, 200, { formalization: formalizations.confirm(owner, id, parsed.data.evidenceSha256) }); return;
           }
@@ -678,7 +709,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (url.pathname === '/api/module-plans') {
           if (request.method === 'GET') { json(response, 200, { plans: registry.listPlans(owner) }); return; }
           if (request.method === 'POST') {
-            json(response, 200, { plan: registry.savePlan(owner, await readJson(request)) }); return;
+            json(response, 200, { plan: registry.savePlan(owner, await readBody()) }); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
@@ -759,7 +790,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         if (url.pathname === '/api/precheck' && request.method === 'POST') {
           if (!prechecker) throw new HttpError(503, '当前服务不提供提交前检查。');
-          const parsed = precheckSchema.safeParse(await readJson(request));
+          const parsed = precheckSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查证明环境与 Lean 源码。');
           // A closed tab or a newer edit stops the compile; a superseded check has no reader left to answer.
           const gone = new AbortController();
@@ -773,7 +804,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           return;
         }
         if (url.pathname === '/api/runs' && request.method === 'POST') {
-          const parsed = inputSchema.safeParse(await readJson(request));
+          const parsed = inputSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
@@ -787,10 +818,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
             throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
           if (!input.planApproval) delete input.planApproval;
-          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
-          if (previous) { json(response, 200, { run: previous, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) }); return; }
-          // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
           const typed = input.apiKey;
+          const submissionKeys = (failed = false) => vault ? { savedKeys: savedKeysFor(session),
+            ...(failed || saveKey && typed && session.account && vault.get(session.account.id, provider.id, provider.baseUrl) !== typed
+              ? { keySaveFailed: true } : {}) } : {};
+          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
+          if (previous) { json(response, 200, { run: previous, ...submissionKeys() }); return; }
+          // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
           if (!typed) {
             const held = heldKey(session, provider);
             if (!held) throw new HttpError(400, '请填写 API Key。');
@@ -799,7 +833,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const readiness = await runner.readiness();
           // Another request can be accepted while readiness is being checked.
           const raced = jobs.replay(owner, input as WebRunInput, provider, requestId);
-          if (raced) { json(response, 200, { run: raced, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) }); return; }
+          if (raced) { json(response, 200, { run: raced, ...submissionKeys() }); return; }
           if (!readiness.ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
           const from = input.continueFrom as WebContinuation | undefined;
           const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
@@ -812,14 +846,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           // Only a new run costs allowance; a replayed request above already returned the run it created.
           admitWork();
           const refund = spend(session, 'runs');
+          let run: WebRun;
           try {
-            const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
+            run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
               approved ? { evidence: approved.evidence, provenance: { id: approved.formalization.id,
                 evidenceSha256: approved.formalization.report!.evidenceSha256, original: approved.formalization.original,
                 confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined);
-            milestone(owner, 'firstRunAt');
-            if (saveKey && typed && vault && session.account) vault.save(session.account.id, provider.id, provider.baseUrl, typed);
-            json(response, 201, { run, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) });
           }
           catch (error) {
             // A submit that never became a run gives the allowance back.
@@ -827,6 +859,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (error instanceof WebStorageError) throw error;
             throw new HttpError(429, error instanceof Error ? error.message : '运行队列已满。');
           }
+          milestone(owner, 'firstRunAt');
+          let keySaveFailed = false;
+          if (saveKey && typed && vault && session.account) {
+            try { vault.save(session.account.id, provider.id, provider.baseUrl, typed); }
+            catch { keySaveFailed = true; }
+          }
+          // The run has been accepted. An optional key save must not reject or refund its work.
+          json(response, 201, { run, ...submissionKeys(keySaveFailed) });
           return;
         }
         const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(.*))?$/.exec(url.pathname);
@@ -859,7 +899,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             json(response, 200, overview); return;
           }
           if (match[2] === 'explanations' && request.method === 'POST') {
-            const parsed = explanationSchema.safeParse(await readJson(request));
+            const parsed = explanationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查讲解的目标定理、语言与 API Key。');
             const generation = explanationGeneration(session, run, isSample);
             if ('reason' in generation) throw new HttpError(409, {
@@ -877,6 +917,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             }
             if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
             admitWork();
+            // The owned run may have been deleted while its body or readiness was awaited.
+            if (!jobs.get(owner, run.id)) throw new HttpError(404, '运行不存在或不属于当前会话。');
             const refund = spend(session, 'explanations');
             try {
               json(response, 201, { explanation: explanations.create(owner, run, { target: parsed.data.target,
@@ -961,7 +1003,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           json(response, 200, { version }); return;
         }
         if (operation === 'explain' && request.method === 'POST') {
-          const parsed = explainSchema.safeParse(await readJson(request));
+          const parsed = explainSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查问题、版本与 API Key。');
           const provider = config.providers.find(item => item.id === run.providerId);
           if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
@@ -1010,21 +1052,21 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           json(response, 200, { receipt }); return;
         }
         if (operation === 'guidance' && request.method === 'POST') {
-          const parsed = webGuidanceSchema.safeParse(await readJson(request));
+          const parsed = webGuidanceSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'guidance', guidance: parsed.data }) }); }
           catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '指导未能提交。'); }
           return;
         }
         if (operation === 'plan-approval' && request.method === 'POST') {
-          const parsed = webPlanApprovalSchema.safeParse(await readJson(request));
+          const parsed = webPlanApprovalSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请重新读取当前计划后再批准。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'plan-approval', approval: parsed.data }) }); }
           catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '计划批准未能提交。'); }
           return;
         }
         if (['edits/preview', 'edits'].includes(operation ?? '') && request.method === 'POST') {
-          const parsed = webPlanProposalSchema.safeParse(await readJson(request));
+          const parsed = webPlanProposalSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '计划草稿格式无效，请保留完整计划与基线版本。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, {
             type: operation === 'edits/preview' ? 'edit-preview' : 'edit', proposal: parsed.data,
@@ -1122,7 +1164,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
-    await Promise.all([jobs.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    const closed = await Promise.allSettled([jobs.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    for (const result of closed) if (result.status === 'rejected') throw result.reason;
   };
   return { server, jobs, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };
 }

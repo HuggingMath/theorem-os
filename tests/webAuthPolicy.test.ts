@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import crypto from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
 import { WebAuth, type WebAuthConfig } from '../apps/web/auth';
 import { WebStorage } from '../apps/web/storage';
 
@@ -16,6 +17,53 @@ function fixture() {
 }
 
 describe('account suspension and terms changes', () => {
+  it.each(['login', 'change'] as const)('rejects a pending password %s authorized against a replaced credential', async operation => {
+    const { auth, login } = fixture();
+    const account = await login(), original = 'original-fixture-password', replacement = 'replacement-fixture-password';
+    await auth.setPassword(account.email, original, undefined, true);
+    const scrypt = crypto.scrypt;
+    let release!: () => void, entered!: () => void;
+    const deriving = new Promise<void>(resolve => { entered = resolve; });
+    const derivation = vi.spyOn(crypto, 'scrypt').mockImplementationOnce((password, salt, length, options, callback) => {
+      scrypt(password, salt, length, options, (error, key) => { release = () => callback(error, key); entered(); });
+    });
+    const pending = operation === 'login'
+      ? auth.loginPassword('local-fixture', { email: account.email, password: original })
+      : auth.setPassword(account.email, 'outdated-fixture-password', original, false);
+    const outcome = pending.then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    try {
+      await deriving;
+      await auth.setPassword(account.email, replacement, undefined, true);
+      release();
+      const result = await outcome;
+      expect(result.error).toMatchObject({ status: operation === 'login' ? 401 : 409 });
+      expect((await auth.loginPassword('local-fixture', { email: account.email, password: replacement })).id).toBe(account.id);
+    } finally { release?.(); derivation.mockRestore(); await outcome; }
+  });
+
+  it.each(['passwords', 'accounts'] as const)('keeps a failed %s deletion retryable without carrying a password into a recreated account', async boundary => {
+    const { auth, storage, login } = fixture();
+    const account = await login();
+    const password = 'test-password-long-enough';
+    await auth.setPassword(account.email, password, undefined, true);
+    const remove = storage.deleteRecord.bind(storage);
+    const deletion = vi.spyOn(storage, 'deleteRecord').mockImplementation(segments => {
+      if (segments[0] === boundary) throw new Error('fixture deletion unavailable');
+      remove(segments);
+    });
+    try {
+      expect(() => auth.deleteAccount(account.email)).toThrow('fixture deletion unavailable');
+      expect(auth.getAccount(account.email)?.id).toBe(account.id);
+      expect((await login()).id).toBe(account.id);
+      if (boundary === 'accounts') expect(auth.hasPassword(account.email)).toBe(false);
+    } finally { deletion.mockRestore(); }
+    auth.deleteAccount(account.email);
+    const recreated = await login();
+    expect(recreated.id).not.toBe(account.id);
+    expect(auth.hasPassword(recreated.email)).toBe(false);
+    await expect(auth.loginPassword('local-fixture', { email: recreated.email, password })).rejects.toMatchObject({ status: 401 });
+  });
+
   it('does not authenticate a recreated account using the previous account password', async () => {
     const { auth, login } = fixture();
     const original = await login();

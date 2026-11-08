@@ -29,7 +29,20 @@ type Explain = { input: WorkerExplanationInput; signal: AbortSignal; send(messag
 class ExplainHttpRunner implements WebRunner {
   runs: { value: WorkerInput; finish(result: WebResult): void }[] = [];
   explains: Explain[] = [];
-  async readiness() { return { ready: true, message: 'Test worker ready' }; }
+  private readinessGate?: { entered(): void; released: Promise<void> };
+  releaseReadiness?: () => void;
+  blockReadiness() {
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const released = new Promise<void>(resolve => { this.releaseReadiness = resolve; });
+    this.readinessGate = { entered, released };
+    return waiting;
+  }
+  async readiness() {
+    const gate = this.readinessGate; this.readinessGate = undefined;
+    if (gate) { gate.entered(); await gate.released; }
+    return { ready: true, message: 'Test worker ready' };
+  }
   async run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     await new Promise<void>((resolve, reject) => {
       this.runs.push({ value, finish: result => { send({ type: 'result', result }); resolve(); } });
@@ -56,12 +69,14 @@ describe('web proof explanation routes', () => {
     const port = (reservation.address() as net.AddressInfo).port;
     await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
     baseUrl = `http://127.0.0.1:${port}`;
-    config = { ...readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: baseUrl }), staticRoot: root };
+    config = { ...readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: baseUrl,
+      THEOREMOS_WEB_DATA_ROOT: path.join(root, 'data') }), staticRoot: root };
     runner = new ExplainHttpRunner();
     service = createWebService(config, runner);
     await new Promise<void>((resolve, reject) => { service.server.once('error', reject); service.server.listen(port, '127.0.0.1', resolve); });
   });
   afterEach(async () => {
+    runner?.releaseReadiness?.();
     await service?.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -165,5 +180,24 @@ describe('web proof explanation routes', () => {
     expect(await generation(failed.id)).toEqual({ available: false, reason: 'not_accepted' });
     expect((await request(`/api/runs/${failed.id}/explanations`, alice, { body: { target: 'target_thm', language: 'zh', apiKey: KEY } })).status).toBe(409);
     expect(runner.explains).toHaveLength(0);
+  });
+
+  it('does not recreate a deleted run when explanation readiness returns after deletion', async () => {
+    const alice = await session(), run = await acceptedRun(alice);
+    const waiting = runner.blockReadiness();
+    const pending = request(`/api/runs/${run.id}/explanations`, alice,
+      { body: { target: 'target_thm', language: 'zh', apiKey: KEY } });
+    await waiting;
+    expect((await request(`/api/runs/${run.id}`, alice, { method: 'DELETE' })).status).toBe(200);
+    runner.releaseReadiness!();
+    const response = await pending;
+    expect(response.status).toBe(404);
+    await response.arrayBuffer();
+    await settle();
+    expect(runner.explains).toHaveLength(0);
+    expect(service.explanations.counts()).toEqual({ running: 0, queued: 0 });
+    expect(service.storage.loadRuns()).toEqual([]);
+    expect(fs.readdirSync(path.join(config.dataRoot!, 'owners')).flatMap(owner =>
+      fs.readdirSync(path.join(config.dataRoot!, 'owners', owner, 'runs')))).not.toContain(run.id);
   });
 });

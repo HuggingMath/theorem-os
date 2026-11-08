@@ -16,6 +16,7 @@ type Answer = (owner: string, call: Omit<WebExplainCall, 'timeoutMs'>, signal: A
 type Pending = { owner: string; id: string; controller: AbortController; done: Promise<void>; flush(): void };
 const directory = (owner: string) => ['owners', mathDigest(owner), 'conversations'];
 const now = () => new Date().toISOString();
+const answerSaveError = '回答未能保存，请在服务恢复后重新发送这个问题。';
 const clip = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit)}\n… (truncated)` : text;
 const titled = (text: string) => text.replace(/\s+/gu, ' ').trim().slice(0, 80);
 // A run started from Lean has no natural-language original: it opens with its request and the source as a Lean block,
@@ -149,10 +150,10 @@ export class WebConversations {
   }
   delete(owner: string, id: string): void {
     this.read(owner, id);
-    this.storage.deleteRecord([...directory(owner), `${id}.json`]);
     // Stream flushes only update an existing reply; deleting first prevents abort handlers and late output from
     // restoring this record. Keep the pending job until provider cleanup finishes before another answer starts.
-    this.pending.get(this.key(owner, id))?.controller.abort();
+    try { this.storage.deleteRecord([...directory(owner), `${id}.json`]); }
+    finally { this.pending.get(this.key(owner, id))?.controller.abort(); }
   }
   send(owner: string, id: string, text: string, provider: Pick<WebExplainCall, 'baseUrl' | 'apiKey' | 'model'>): WebConversation {
     const conversation = this.read(owner, id);
@@ -164,11 +165,11 @@ export class WebConversations {
     const reply: WebConversationMessage = { id: crypto.randomUUID(), role: 'assistant', kind: 'text', text: '', createdAt: at, status: 'pending', replyTo: question.id };
     conversation.messages.push(question, reply); conversation.updatedAt = at; this.save(owner, conversation);
     const controller = new AbortController(), key = this.key(owner, id);
-    const { run, formalization } = this.resourceState(owner, conversation);
     let persistTimer: ReturnType<typeof setTimeout> | undefined, lastSaved = 0;
     // Save by reply ID, never by the snapshot captured before an asynchronous provider call.
     const flush = () => {
       clearTimeout(persistTimer); persistTimer = undefined;
+      if (this.forgotten.has(owner)) return;
       const latest = this.storage.getRecord<WebConversation>([...directory(owner), `${id}.json`]);
       const savedReply = latest?.messages.find(message => message.id === reply.id);
       if (latest && savedReply?.status === 'pending') {
@@ -176,36 +177,55 @@ export class WebConversations {
       }
       lastSaved = Date.now();
     };
+    const checkpoint = () => {
+      try { flush(); }
+      catch {
+        reply.status = 'error'; reply.error = answerSaveError;
+        controller.abort();
+      }
+    };
     const onText = (text: string) => {
       if (controller.signal.aborted || reply.status !== 'pending') return;
       reply.text = text;
-      if (Date.now() - lastSaved >= 250) flush();
-      else persistTimer ??= setTimeout(flush, 250);
+      if (Date.now() - lastSaved >= 250) checkpoint();
+      else persistTimer ??= setTimeout(checkpoint, 250);
     };
     const job: Pending = { owner, id, controller, done: Promise.resolve(), flush };
     this.pending.set(key, job);
     // A stopped request releases the composer immediately. Wait for its provider cleanup before asking again,
     // since the shared explainer permits one active provider request per owner.
-    job.done = Promise.all(previous.map(item => item.done)).then(() => {
+    job.done = Promise.allSettled(previous.map(item => item.done)).then(() => {
       if (controller.signal.aborted) throw new WebExplainError(499, '已停止回答。');
-      return this.answer(owner, { ...provider, instructions: webConversationInstructions, input: conversationInput(conversation, run, formalization), onText }, controller.signal);
+      // Provider cleanup can outlast formalization, research completion or task deletion. Build context when
+      // dispatching the replacement so its evidence and resource association come from the current records.
+      const latest = this.read(owner, id), { run, formalization } = this.resourceState(owner, latest);
+      return this.answer(owner, { ...provider, instructions: webConversationInstructions, input: conversationInput(latest, run, formalization), onText }, controller.signal);
     })
-      .then(answer => { if (controller.signal.aborted) { reply.status = 'interrupted'; reply.error = '已停止回答。'; return; }
-        if (reply.status !== 'pending') return; reply.status = 'complete'; reply.text = answer.answer;
+      .then(answer => { if (reply.status !== 'pending') return;
+        if (controller.signal.aborted) { reply.status = 'interrupted'; reply.error = '已停止回答。'; return; }
+        reply.status = 'complete'; reply.text = answer.answer;
         if (answer.truncated) reply.truncated = true; })
       .catch(error => { if (reply.status !== 'pending') return; reply.status = controller.signal.aborted ? 'interrupted' : 'error';
         reply.error = error instanceof WebExplainError ? error.message : '回答暂时失败，请重新发送这个问题。'; })
       .finally(() => {
         // Reading the conversation may have attached the proof run while this reply was pending. Stopping and
         // sending again may also have appended messages. Only update this reply, never write an old snapshot.
-        flush();
-        if (this.pending.get(key) === job) this.pending.delete(key);
+        try { flush(); }
+        catch (error) {
+          if (reply.status === 'complete') { reply.status = 'error'; reply.error = answerSaveError; delete reply.truncated; }
+          // Re-read before saving an error: a write may have succeeded before reporting failure. Never replace
+          // an already-saved terminal reply. A persistent failure leaves the last checkpoint for restart/stop.
+          try { flush(); } catch { /* An in-progress close() still receives the original failure. */ }
+          throw error;
+        } finally { if (this.pending.get(key) === job) this.pending.delete(key); }
       });
+    // send() has already returned to HTTP. Observe background rejection while leaving close() able to report it.
+    void job.done.catch(() => {});
     return structuredClone(conversation);
   }
   stop(owner: string, id: string): WebConversation {
     const job = this.pending.get(this.key(owner, id));
-    if (job) { job.flush(); job.controller.abort(); }
+    if (job) { try { job.flush(); } finally { job.controller.abort(); } }
     const conversation = this.read(owner, id);
     for (const message of conversation.messages) if (message.kind === 'text' && message.status === 'pending') {
       message.status = 'interrupted'; message.error = '已停止回答。';
@@ -234,7 +254,9 @@ export class WebConversations {
     try { receipt = await send(runId, existing?.guidance?.input ?? input); }
     catch (error) { receipt = { id: input.id, status: 'rejected', reason: error instanceof Error ? error.message : '指导未能提交。' }; }
     const latest = this.read(owner, id), message = latest.messages.find(item => item.guidance?.input.id === input.id)!;
-    this.applyGuidanceReceipt(message, receipt); latest.updatedAt = now(); this.save(owner, latest);
+    // Delivery may advance while the command acknowledgement is returning. Prefer the current owned receipt.
+    this.applyGuidanceReceipt(message, this.resources.commandReceipt?.(owner, runId, input.id) ?? receipt);
+    latest.updatedAt = now(); this.save(owner, latest);
     return latest;
   }
   forget(owner: string) {
@@ -242,7 +264,10 @@ export class WebConversations {
     for (const job of this.pending.values()) if (job.owner === owner) job.controller.abort();
   }
   async close() {
-    for (const job of this.pending.values()) job.controller.abort();
-    await Promise.all([...this.pending.values()].map(job => job.done));
+    const pending = [...this.pending.values()];
+    for (const job of pending) job.controller.abort();
+    const results = await Promise.allSettled(pending.map(job => job.done));
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
   }
 }

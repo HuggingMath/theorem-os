@@ -78,6 +78,10 @@ export class CollaborationView {
     this.planEditor = new TaskPlanEditor(api, observation => this.receive(observation));
     onDetailLevel(level => this.applyLevel(level));
   }
+  clearPlanDrafts() {
+    this.planEditor.dispose();
+    this.planEditor = new TaskPlanEditor(this.api, observation => this.receive(observation));
+  }
   /** readOnly (the sample run) keeps every read but hides archiving; plan and guidance already stay off because it is finished. */
   update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false) {
     this.connected = connected; this.readOnly = readOnly;

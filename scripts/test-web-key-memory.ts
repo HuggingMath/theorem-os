@@ -67,6 +67,8 @@ async function submit(h: Harness, task: string, options: { key?: string; remembe
   for (let attempt = 0; attempt < 100 && h.posted.length === before; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(h.posted.length, before + 1, 'the form submitted once');
   await page.locator('#toast').filter({ hasText: /研究已提交|Research submitted/u }).waitFor();
+  // The toast precedes the attached conversation; finish that navigation before exercising another input mode.
+  await page.waitForURL(url => Boolean(url.searchParams.get('chat')));
   return JSON.parse(h.posted.at(-1)!).apiKey as string;
 }
 
@@ -154,7 +156,7 @@ try {
   await scenario('the option reads in English', async h => {
     const { page } = h; await openSettings(page);
     const text = await page.locator('#settings-connection').innerText();
-    for (const value of ['Remember in this tab', 'Kept only in this tab and cleared when the tab closes']) assert.ok(text.includes(value), `English shows ${value}`);
+    for (const value of ['Remember in this tab', 'Cleared when this tab closes. Used for this provider only.']) assert.ok(text.includes(value), `English shows ${value}`);
     await closeSettings(page);
   }, { locale: 'en' });
 
@@ -170,6 +172,29 @@ try {
     await page.screenshot({ path: path.join(output, `remembered-${width}.png`) }); screenshots.push(`remembered-${width}.png`);
     await closeSettings(page);
   }, { width });
+
+  await scenario('a replacement anonymous session cannot restore the previous owner draft or remembered key after a reload', async h => {
+    const { page, context } = h;
+    await submit(h, 'Owner boundary', { key: credential, remember: true });
+    await newResearch(page);
+    await fillConfig(page, 'source', 'theorem previous_anonymous_owner : True := by sorry');
+    await page.locator('#open-natural-language').click();
+    const draft = 'previous_anonymous_owner_private_natural_draft';
+    await page.locator('#formalize-original').fill(draft);
+    const owner = await page.evaluate(async () => (await (await fetch('/api/session')).json()).draftOwner);
+    await page.reload(); await ready(page);
+    await page.locator('#open-natural-language').click();
+    assert.equal(await page.locator('#formalize-original').inputValue(), draft, 'The same anonymous session keeps its draft');
+    await context.clearCookies();
+    await page.reload(); await ready(page);
+    const next = await page.evaluate(async () => (await (await fetch('/api/session')).json()).draftOwner);
+    assert.notEqual(next, owner, 'The cookie change creates a different anonymous owner');
+    await page.locator('#open-natural-language').click();
+    assert.equal(await page.locator('#formalize-original').inputValue(), '', 'A new anonymous owner starts with a blank natural draft');
+    const stored = await storage(page);
+    assert.equal(stored.tab, null, 'A remembered key belongs only to its original anonymous owner');
+    assert.ok(!stored.session.includes(draft) && !stored.session.includes(credential));
+  });
 
   await writeScenarioReport(path.join(output, 'report.json'), suite, 'passed', undefined, 'local-real-http-key-memory',
     { checks: suite.checks, leanProcesses: 0, screenshots }, { credential });

@@ -34,7 +34,7 @@ import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
-import { OwnedDrafts } from './ownedDrafts';
+import { draftOwnerStorageKey, OwnedDrafts } from './ownedDrafts';
 import { SubmissionIdentity } from './submissionIdentity';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
 import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSelection, revealTheme, selectionBox } from './motion';
@@ -317,11 +317,19 @@ const submissionIdentity = new SubmissionIdentity(ownedDrafts);
 const draftRecovery = new DraftRecovery(() => ownedDrafts);
 const ownerOfSession = (session: WebSession) => session.draftOwner ?? (session.account ? `account:${session.account.email}` : session.csrfToken);
 function clearOwnedDrafts() {
+  chatWorkspace?.bindOwner('');
+  collaborationView.clearPlanDrafts();
   submissionSequence++;
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
   latestDraft = undefined; pendingImport = undefined; taskImportSequence++;
   draftContinuation = undefined; submissionIdentity.clear(); draftRecovery.clear(); ownedDrafts.clear();
   forgetRememberedKey();
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.')
+        || key.startsWith('theorem-os.chat-reading.') || key === entryStorageKey) sessionStorage.removeItem(key);
+    }
+  } catch { /* In-memory drafts are also cleared when browser storage is unavailable. */ }
 }
 
 let taskImportSequence = 0;
@@ -2075,7 +2083,12 @@ function initialize(): Promise<void> {
       }
       const ownerChanged = Boolean(state.session && ownerOfSession(state.session) !== ownerOfSession(session));
       const firstLoad = !state.session || ownerChanged;
-      if (ownerChanged) { clearOwnedDrafts(); state.submitting = false; }
+      let storedOwnerChanged = false;
+      if (!state.session) {
+        try { storedOwnerChanged = sessionStorage.getItem(draftOwnerStorageKey) !== ownerOfSession(session); }
+        catch { /* Unavailable storage cannot restore a previous owner's draft. */ }
+      }
+      if (ownerChanged || storedOwnerChanged) { clearOwnedDrafts(); state.submitting = false; }
       ownedDrafts.bind(ownerOfSession(session));
       if (state.session && state.session.csrfToken !== session.csrfToken) {
         state.runs = []; state.selectedId = ''; state.selectedRun = undefined;
@@ -2085,6 +2098,7 @@ function initialize(): Promise<void> {
         if (!ownerChanged) toast(t('会话已更新，未提交内容已保留'));
       }
       state.session = session;
+      chatWorkspace?.bindOwner(session.account?.email ?? 'anonymous');
       const previousProvider = field('provider').value;
       const providers = session.providers.map(provider => [provider.id, provider.name] as const);
       const keepProvider = session.providers.some(provider => provider.id === previousProvider);
@@ -2247,9 +2261,6 @@ async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonE
     await request();
     try { localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner: state.session && ownerOfSession(state.session), nonce: crypto.randomUUID() })); } catch { /* Other tabs also detect session changes on their next request. */ }
     clearOwnedDrafts();
-    try {
-      for (const key of Object.keys(sessionStorage)) if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.') || key === entryStorageKey) sessionStorage.removeItem(key);
-    } catch { /* Session storage may be unavailable. */ }
     location.replace('login.html');
   }
   catch (error) {
@@ -2455,7 +2466,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     modulePlanEditor.clearDeleted();
     modulePlanLibrary.clearUndo();
     draftRecovery.clear(); renderDraftRecovery();
-    const result = await api<{ run: WebRun; savedKeys?: WebSavedKey[] }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    const result = await api<{ run: WebRun; savedKeys?: WebSavedKey[]; keySaveFailed?: boolean }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
     if (!currentConnection(epoch)) {
       toast(t('研究已提交，连接已变化，请核对运行记录'));
       void poll(); return;
@@ -2478,7 +2489,8 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     chatWorkspace?.useRunKey(run.id, input.apiKey);
     schedulePoll();
     requestRunsRefresh();
-    toast(saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
+    toast(result.keySaveFailed ? t('研究已提交，Key 未能保存，请在设置中重试保存。')
+      : saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
   } catch (error) {
     if (submission !== submissionSequence) return;
     const key = field('api-key').value.trim();

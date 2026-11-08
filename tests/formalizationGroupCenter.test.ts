@@ -40,7 +40,9 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
 
   beforeAll(async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'group-center-native-')));
-    result = await compareFormalizationReference(path.join(root, 'comparison'), input, { env: process.env, timeoutMs: 0 });
+    result = await compareFormalizationReference(path.join(root, 'comparison'), input, {
+      env: process.env, timeoutMs: 0, proofEnvironmentCacheRoot: path.join(root, 'proof-environment-cache'),
+    });
     expect(() => assertFormalizationReferenceResult(input, result)).not.toThrow();
   }, 0);
   afterAll(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });

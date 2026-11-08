@@ -112,6 +112,22 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(alice, route)).status).toBe(404);
   });
 
+  it('retains formalization history and accepts new work after a crash before the initial record was published', async () => {
+    const alice = await client(), owner = alice.cookie.slice('theoremos_session='.length);
+    const orphan = path.join(service.storage.ownerDirectory(owner)!, 'formalizations', 'a'.repeat(8) + '-aaaa-aaaa-aaaa-' + 'a'.repeat(12));
+    fs.mkdirSync(orphan, { recursive: true });
+    // saveRecord creates its directory and writes a temporary file before atomically publishing record.json.
+    fs.writeFileSync(path.join(orphan, 'record.json.abandoned.tmp'), '{"owner":');
+    const restarted = new WebFormalizations(runner, new WebStorage(config.dataRoot!));
+    expect(restarted.list(owner)).toEqual([]);
+    const response = await request(alice, '/api/formalizations');
+    expect(response.status).toBe(200);
+    expect((await response.json()).formalizations).toEqual([]);
+    const created = await create(alice);
+    expect(restarted.list(owner).map(item => item.id)).toEqual([created.id]);
+    expect(fs.readFileSync(path.join(orphan, 'record.json.abandoned.tmp'), 'utf8')).toBe('{"owner":');
+  });
+
   it('keeps the process view with its owner, pages it and removes it with the record', async () => {
     const alice = await client(), bob = await client();
     const value = await create(alice), route = `/api/formalizations/${value.id}`, pending = runner.pending.at(-1)!;

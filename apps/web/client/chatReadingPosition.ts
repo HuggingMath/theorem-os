@@ -16,6 +16,11 @@ export class ChatReadingPosition {
     window.addEventListener('pagehide', () => this.capture());
   }
   private key() { return `theorem-os.chat-reading.${this.scope}.${this.id}`; }
+  bind(scope: string) {
+    this.id = ''; this.scope = scope;
+    this.position = { offset: 0, atBottom: true };
+    this.updateButton();
+  }
   select(id: string) {
     if (id === this.id) return;
     this.capture(); this.id = id;

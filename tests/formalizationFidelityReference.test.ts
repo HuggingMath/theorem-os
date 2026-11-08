@@ -106,7 +106,8 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1' ||
       candidateToReference: { reason: 'not-definitionally-equal' },
       referenceToCandidate: { reason: 'not-definitionally-equal' },
     });
-  }, 65000);
+  // The private cold cache includes sealing Mathlib, mounting it and compiling the query.
+  }, 180000);
 });
 
 // Explicit opt-in, as in the existing native reference suite. These are actual

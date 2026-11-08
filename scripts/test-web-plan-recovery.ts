@@ -134,7 +134,7 @@ async function applied(page: Page, id: string) {
   await page.locator(receipt).getByText(new RegExp(`回执 ${id} · 已应用`)).waitFor();
 }
 function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440) {
-  return webScenario(browser, suite, name, run, {
+  return webScenario<Harness>(browser, suite, name, run, {
     context: { viewport: { width, height: width > 850 ? 1000 : 812 }, reducedMotion: 'reduce' },
     harness: (page, context) => {
       const h: Harness = { page, context, requests: [], runIds: [], calls: [] };
@@ -152,6 +152,44 @@ function scenario(name: string, run: (h: Harness) => Promise<void>, width = 1440
 }
 
 try {
+  for (const width of [1440, 390]) for (const originalState of ['applied', 'pending'] as const)
+    await scenario(`${width}px: correcting invalid JSON creates a fresh draft after an ${originalState} submission`, async h => {
+      const { page } = h, run = await create(h), control = controls.get(run.id)!;
+      control.mode = originalState === 'applied' ? 'applied' : 'unknown';
+      await openPlan(page); await page.locator('[data-plan-objective]').fill('Original submitted JSON proposal'); await preview(page);
+      const original = await proposal(page); await page.locator('[data-plan-apply]').click();
+      await page.locator('[data-plan-objective]:enabled').waitFor();
+      if (originalState === 'applied') await applied(page, original.id);
+      else await page.locator(`${refresh}:enabled`).waitFor();
+      await page.locator('[data-plan-advanced] summary').click();
+      const editor = page.locator('#collab-plan-json');
+      for (const incomplete of ['{', '[]', '{}', 'null']) {
+        await editor.fill(incomplete);
+        assert.equal(await page.locator('[data-plan-preview]').isDisabled(), true, 'incomplete JSON cannot be previewed');
+      }
+      const corrected = { ...structuredClone(original), baseVersion: control.observation.plan!.baseVersion };
+      corrected.tasks.find(task => task.id === 'base')!.objective = 'Corrected newer JSON proposal';
+      await editor.fill(JSON.stringify(corrected, null, 2)); await editor.press('Tab');
+      const newer = await proposal(page), newerText = await json(page);
+      assert.equal(newer.tasks.find(task => task.id === 'base')!.objective, corrected.tasks[0]!.objective);
+      if (originalState === 'pending') {
+        assert.deepEqual(JSON.parse((await page.locator(`${receipt} pre`).textContent())!), original, 'the exact original pending command remains recoverable');
+        hostReceipt(run.id, original, 'rejected');
+        await page.locator(receipt).getByText(new RegExp(`回执 ${original.id} · 已拒绝`)).waitFor();
+        assert.equal(await json(page), newerText, 'the original late receipt cannot change the corrected draft');
+        assert.equal(await page.locator(refresh).isHidden(), true);
+      }
+      await page.locator('[data-plan-preview]').click(); await page.locator('[data-plan-objective]:enabled').waitFor();
+      assert.equal(await page.locator('[data-plan-apply]').isEnabled(), true, 'the corrected draft preview must remain usable instead of showing the original command receipt');
+      assert.notEqual(newer.id, original.id, 'correcting temporary invalid JSON must retire the already submitted command ID');
+      await page.locator(receipt).getByText(new RegExp(`回执 ${newer.id} · 已校验`)).waitFor();
+      control.mode = 'applied'; await page.locator('[data-plan-apply]').click(); await applied(page, newer.id);
+      const sent = edits(h, run.id).map(call => JSON.parse(call.body!) as WebPlanProposal);
+      assert.deepEqual(sent.map(item => item.id), [original.id, newer.id], 'a corrected draft is a separate command, never a replay of the original');
+      assert.equal(sent[1]!.tasks.find(task => task.id === 'base')!.objective, 'Corrected newer JSON proposal');
+      assert.equal(delivered(run.id).length, 2);
+    }, width);
+
   for (const status of ['applied', 'rejected'] as const) await scenario(`live ${status} receipt resolves an unknown command while preserving draft and focus`, async h => {
     const { page } = h, run = await create(h); await openPlan(page);
     await page.locator('[data-plan-objective]').fill(`Original proposal for ${status}`); await preview(page);
@@ -320,23 +358,24 @@ try {
     assert.equal(delivered(run.id).length, 1); assert.equal(await json(page), newerText);
   });
 
-  for (const operation of ['preview', 'readLatest', 'apply'] as const) await scenario(`late run A ${operation} response cannot change run B`, async h => {
+  for (const operation of ['preview', 'rebase', 'readLatest', 'apply'] as const) await scenario(`late run A ${operation} response cannot change run B`, async h => {
     const { page } = h, runA = await create(h), runB = await create(h);
+    const readsPlan = operation === 'readLatest' || operation === 'rebase';
     controls.get(runA.id)!.mode = 'applied'; await select(h, runA.id); await openPlan(page);
     await page.locator('[data-plan-objective]').fill(`Run A ${operation} proposal`);
     if (operation === 'apply') await preview(page);
     const originalA = await json(page), idA = (await proposal(page)).id;
     const received = deferred(), release = deferred(), completed = deferred();
-    const target = `/api/runs/${runA.id}/${operation === 'readLatest' ? 'observation' : operation === 'preview' ? 'edits/preview' : 'edits'}`;
+    const target = `/api/runs/${runA.id}/${readsPlan ? 'observation' : operation === 'preview' ? 'edits/preview' : 'edits'}`;
     h.effect = async route => {
-      if (new URL(route.request().url()).pathname !== target || route.request().method() !== (operation === 'readLatest' ? 'GET' : 'POST')) return false;
+      if (new URL(route.request().url()).pathname !== target || route.request().method() !== (readsPlan ? 'GET' : 'POST')) return false;
       const response = await route.fetch(); assert.equal(response.status(), 200); received.resolve();
       await release.promise; await route.fulfill({ response }); completed.resolve(); return true;
     };
     try {
-      await page.locator(operation === 'readLatest' ? '[data-plan-current]' : operation === 'preview' ? '[data-plan-preview]' : '[data-plan-apply]').click();
+      await page.locator(operation === 'rebase' ? '[data-plan-rebase]' : operation === 'readLatest' ? '[data-plan-current]' : operation === 'preview' ? '[data-plan-preview]' : '[data-plan-apply]').click();
       await received.promise; assert.equal(await page.locator('[data-plan-objective]').isDisabled(), true);
-      if (operation === 'readLatest') {
+      if (readsPlan) {
         const control = controls.get(runA.id)!; control.observation.plan!.baseVersion = 'run-A-newer-plan';
         control.observation.inspection.planVersion = 'run-A-newer-plan'; control.emit(); await poll(page);
         await page.locator('[data-plan-versions]').getByText('run-A-newer-plan', { exact: true }).waitFor();
@@ -351,10 +390,20 @@ try {
       assert.equal(await page.locator('[data-plan-comparison]').textContent(), '', 'A comparison must not appear in B');
       await page.locator('[data-plan-type]').fill('True ∧ True'); const editedB = await json(page);
       await closePlan(page); await select(h, runA.id); await openPlan(page);
-      assert.equal(await json(page), originalA, 'A must retain its own draft after completion');
-      if (operation === 'readLatest') {
+      await page.locator('[data-plan-objective]:enabled').waitFor();
+      if (operation === 'rebase') {
+        const rebased = await proposal(page), original = JSON.parse(originalA) as WebPlanProposal;
+        assert.equal(rebased.baseVersion, 'run-A-newer-plan', 'a late rebase must use the newest observation already saved for A');
+        assert.notEqual(rebased.id, original.id);
+        assert.deepEqual({ ...rebased, id: original.id, baseVersion: original.baseVersion }, original, 'rebasing must retain A full local proposal');
+        await page.locator(receipt).getByText(new RegExp(`回执 ${rebased.id} · 已校验`)).waitFor();
+        assert.equal(await page.locator('[data-plan-apply]').isEnabled(), true, 'the rebased preview must be usable on return');
+      } else assert.equal(await json(page), originalA, 'A must retain its own draft after completion');
+      if (readsPlan) {
         await page.locator('[data-plan-comparison]').getByText('当前服务器计划 · 本地草稿保留', { exact: true }).waitFor();
-        await page.locator('[data-plan-versions]').getByText('run-A-newer-plan', { exact: true }).waitFor();
+        await page.locator('[data-plan-versions]').getByText('run-A-newer-plan', { exact: true }).last().waitFor();
+        const comparison = JSON.parse((await page.locator('[data-plan-comparison] pre').textContent())!);
+        assert.equal(comparison.baseVersion, 'run-A-newer-plan', 'a late read cannot rewind A saved server plan');
       } else {
         await page.locator(receipt).getByText(new RegExp(`回执 ${idA} · ${operation === 'apply' ? '已应用' : '已校验'}`)).waitFor();
         if (operation === 'preview') assert.equal(await page.locator('[data-plan-apply]').isDisabled(), false);

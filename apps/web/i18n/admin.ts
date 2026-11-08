@@ -40,6 +40,7 @@ export const admin: Record<string, string> = {
   "勾选「保存到我的账号」后，下次不用再填。": "Tick \"Save to my account\" and you won't need to enter it next time.",
   "已保存 ····{0}，留空即使用": "Saved ····{0}, leave empty to use it",
   "研究已提交，Key 已保存到你的账号": "Research submitted; key saved to your account",
+  "研究已提交，Key 未能保存，请在设置中重试保存。": "Research submitted; the key could not be saved. Try saving it again in settings.",
   "已删除保存的 API Key": "Saved API key deleted",
   "写下研究任务": "Write the research task",
   "本窗口用量": "Usage this window",

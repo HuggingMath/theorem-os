@@ -68,7 +68,11 @@ export class WebFormalizations {
     }
   }
   list(owner: string): WebFormalization[] {
-    return this.storage.listRecords(directory(owner)).map(id => this.record(owner, id)!.formalization)
+    // A crash before the first atomic record rename may leave only the task directory and a temporary file.
+    return this.storage.listRecords(directory(owner)).flatMap(id => {
+      const record = this.record(owner, id);
+      return record ? [record.formalization] : [];
+    })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   counts() {
@@ -160,13 +164,23 @@ export class WebFormalizations {
       maxTotalTokens: formalization.maxTotalTokens!, maxRounds: webFormalizationLimits.maxRounds,
       maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
     const job: Job = { record: { owner, formalization, provider: { ...provider } }, input, controller: new AbortController(), persistedAt: 0 };
-    this.jobs.set(this.key(owner, id), job); this.persist(job, true);
+    this.jobs.set(this.key(owner, id), job);
+    try { this.persist(job, true); }
+    catch (error) { this.release(job); throw error; }
     queueMicrotask(() => this.pump());
     return formalization;
   }
   cancel(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), job = this.jobs.get(this.key(owner, id));
-    if (job) { this.finish(job, 'cancelled'); this.release(job); job.controller.abort(); this.pump(); }
+    if (job) {
+      try { this.finish(job, 'cancelled'); }
+      finally { this.release(job); job.controller.abort(); this.pump(); }
+    } else if (active(record.formalization)) {
+      // A failed terminal save can leave an active record after its worker has already stopped.
+      const now = new Date().toISOString();
+      Object.assign(record.formalization, { status: 'cancelled', updatedAt: now, finishedAt: now });
+      this.save(record);
+    }
     return record.formalization;
   }
   remove(owner: string, id: string) {
@@ -179,8 +193,14 @@ export class WebFormalizations {
   }
   async close() {
     this.closing = true;
-    for (const job of [...this.jobs.values()]) { this.finish(job, 'error', 'formalization_interrupted'); this.release(job); job.controller.abort(); }
+    let failure: unknown;
+    for (const job of [...this.jobs.values()]) {
+      try { this.finish(job, 'error', 'formalization_interrupted'); }
+      catch (error) { failure ??= error; }
+      finally { this.release(job); job.controller.abort(); }
+    }
     while (this.running) await new Promise(resolve => setTimeout(resolve, 25));
+    if (failure) throw failure;
   }
   private key(owner: string, id: string) { return `${mathDigest(owner)}/${id}`; }
   private current(job: Job) { return this.jobs.get(this.key(job.record.owner, job.record.formalization.id)) === job; }
@@ -202,33 +222,37 @@ export class WebFormalizations {
       if (!job) break;
       this.running++;
       Object.assign(job.record.formalization, { status: 'running', progress: { phase: 'preparing', updatedAt: new Date().toISOString() } });
-      this.persist(job, true);
       void this.execute(job).finally(() => { this.running--; this.pump(); });
     }
   }
   private async execute(job: Job) {
     let result: Extract<WorkerFormalizationMessage, { type: 'result' }> | undefined;
+    let messageError: unknown;
     try {
+      this.persist(job, true);
       if (!this.runner.formalize) throw new Error('formalization_runtime_unavailable');
       await this.runner.formalize(job.input, message => {
-        if (!this.current(job) || !active(job.record.formalization)) return;
-        if (message.type === 'result') { result = message; return; }
-        if (message.type === 'activity') {
-          // Past the per-record limit only the count grows, as with a run's actions.
-          const tally = job.record.formalization.activity ??= { count: 0 };
-          if (tally.count >= webFormalizationActivityLimits.perRecord) tally.dropped = (tally.dropped ?? 0) + 1;
-          else {
-            tally.count++;
-            this.storage.saveRecord([...recordPath(job.record.owner, job.record.formalization.id), 'activity', `${tally.count}.json`],
-              { ...message.activity, sequence: tally.count, at: new Date().toISOString() } satisfies WebFormalizationActivity, true);
+        if (messageError || !this.current(job) || !active(job.record.formalization)) return;
+        try {
+          if (message.type === 'result') { result = message; return; }
+          if (message.type === 'activity') {
+            // Past the per-record limit only the count grows, as with a run's actions.
+            const tally = job.record.formalization.activity ??= { count: 0 };
+            if (tally.count >= webFormalizationActivityLimits.perRecord) tally.dropped = (tally.dropped ?? 0) + 1;
+            else {
+              tally.count++;
+              this.storage.saveRecord([...recordPath(job.record.owner, job.record.formalization.id), 'activity', `${tally.count}.json`],
+                { ...message.activity, sequence: tally.count, at: new Date().toISOString() } satisfies WebFormalizationActivity, true);
+            }
+            this.persist(job);
+            return;
           }
-          this.persist(job);
-          return;
-        }
-        const previous = job.record.formalization.progress, now = new Date().toISOString();
-        job.record.formalization.progress = { ...message.progress, updatedAt: now }; job.record.formalization.updatedAt = now;
-        this.persist(job, previous?.phase !== message.progress.phase);
+          const previous = job.record.formalization.progress, now = new Date().toISOString();
+          job.record.formalization.progress = { ...message.progress, updatedAt: now }; job.record.formalization.updatedAt = now;
+          this.persist(job, previous?.phase !== message.progress.phase);
+        } catch (error) { messageError = error; job.controller.abort(); }
       }, job.controller.signal);
+      if (messageError) throw messageError;
       if (!this.current(job) || !active(job.record.formalization)) return;
       if (!result) throw new Error('formalization_worker_no_result');
       if (result.status !== 'approved') { this.finish(job, result.status, webFormalizationReason.test(result.reason) ? result.reason : 'formalization_failed'); return; }
@@ -243,7 +267,10 @@ export class WebFormalizations {
         catch { job.record.formalization.researchError = 'formalization_research_queue_failed'; }
         this.persist(job, true);
       } else this.finish(job, 'review');
-    } catch (error) { this.finish(job, 'error', reasonOf(error)); }
+    } catch (error) {
+      try { this.finish(job, 'error', reasonOf(messageError ?? error)); }
+      catch { /* A failed final save is interrupted on restart; the worker still releases its slot and key. */ }
+    }
     finally { this.release(job); }
   }
 }

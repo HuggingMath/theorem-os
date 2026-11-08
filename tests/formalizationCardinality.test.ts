@@ -62,7 +62,9 @@ const expectClosedDag = (text: string) => {
 describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean cardinality representation correspondence', () => {
   let root: string, positive: FormalizationReferenceResult;
   const compare = async (name: string, input: FormalizationReferenceInput) => {
-    const result = await compareFormalizationReference(path.join(root, name), input, { env: process.env, timeoutMs: 0 });
+    const result = await compareFormalizationReference(path.join(root, name), input, {
+      env: process.env, timeoutMs: 0, proofEnvironmentCacheRoot: path.join(root, 'proof-environment-cache'),
+    });
     expect(() => assertFormalizationReferenceResult(input, result)).not.toThrow();
     for (const artifact of result.evidence?.artifacts ?? []) {
       const capture = JSON.parse(artifact.text);

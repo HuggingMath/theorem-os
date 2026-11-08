@@ -30,6 +30,7 @@ import { createTaskConnectionCheck } from './taskConnections';
 import { setTaskStatus } from './taskLifecycle';
 import { taskDependencyRecords } from './modules/search';
 import { hasDeterministicLeanFailure } from './proofReuse';
+import { VerificationCheckpointError, withVerificationCheckpoints } from './verificationCheckpoint';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), oid = z.string().regex(/^[a-f0-9]{40,64}$/u);
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u);
@@ -778,6 +779,18 @@ export async function seedSolverContinuation(options: {
     if (!seeded && (git(state.worktree, ['rev-parse', 'HEAD']) !== state.problem.baseCommit ||
         git(state.worktree, ['status', '--porcelain', '--untracked-files=no']) || fs.existsSync(path.join(state.worktree, 'RESEARCH.md'))))
       throw new Error('math_continuation_seed_destination_changed');
+    // Restoring frozen deliveries also resets their worker checkouts. Preserve
+    // new destination work before publishing state or rechecking any sources.
+    for (const candidate of source.frozenCandidates ?? []) {
+      const worker = state.workers!.find(worker => worker.id === candidate.workerId);
+      if (!worker || worker.worktree === state.worktree) continue;
+      const restoredSources = git(worker.worktree, ['ls-tree', '-r', '--name-only', '-z', candidate.snapshotCommit, '--',
+        ...state.problem.ownedFiles.map(file => path.join(state.problem.projectRelative, file)), 'RESEARCH.md']).split('\0').filter(Boolean);
+      if (![state.problem.baseCommit, candidate.snapshotCommit].includes(git(worker.worktree, ['rev-parse', 'HEAD'])) ||
+          git(worker.worktree, ['status', '--porcelain', '--untracked-files=no']) ||
+          restoredSources.length && git(worker.worktree, ['ls-files', '--others', '-z', '--', ...restoredSources]))
+        throw new Error('math_continuation_seed_destination_changed');
+    }
     lease.assertHeld();
     if (!seeded) writeMathJsonDurable(sourceFile, source, 0o400);
     const report: ContinuationSeedReport = { schema: 'theorem-os.continuation-seed.v1', sourceRunId: source.source.runId,
@@ -817,8 +830,8 @@ export async function seedSolverContinuation(options: {
         attempts: 0, status: node.status === 'completed' ? 'completed' : node.status === 'blocked' ? 'blocked' : 'pending',
         ...(node.finding ? { finding: node.finding } : {}) });
       // A timeout only grants more time to the identical tree/items/environment key;
-      // it never restores proof acceptance. Reinitialization reuses these frozen budgets.
-      if (source.verificationCheckpoints) state.verificationCheckpoints = source.verificationCheckpoints.map(record => ({
+      // it never restores proof acceptance. Retries retain this run's later timeout progress.
+      if (!state.continuationDigest && source.verificationCheckpoints) state.verificationCheckpoints = source.verificationCheckpoints.map(record => ({
         key: record.key, timeoutMs: record.timeoutMs, attempts: record.attempts, at: record.at,
         targetCommit: record.targetCommit, receiptIds: [...record.receiptIds],
       }));
@@ -996,10 +1009,14 @@ export async function seedSolverContinuation(options: {
         lease.signal.throwIfAborted(); lease.assertHeld();
         let proofs: TaskProof[];
         try {
-          proofs = await checkTaskProofs(state.problem, state.worktree, batch[0].sourceCommit, batch.map(candidate => candidate.request),
-            env, lease.signal, timeoutMs, state.environmentDigest);
+          proofs = await withVerificationCheckpoints({ environmentDigest: state.environmentDigest,
+            problemReceiptDigest: state.problem.receiptDigest, checkpoints: state.verificationCheckpoints ??= [],
+            save: () => { lease.assertOwned(); writeSolverRunState(stateFile, state); }, emit },
+          () => checkTaskProofs(state.problem, state.worktree, batch[0].sourceCommit, batch.map(candidate => candidate.request),
+            env, lease.signal, timeoutMs, state.environmentDigest));
         } catch (error) {
           lease.signal.throwIfAborted(); lease.assertHeld();
+          if (error instanceof VerificationCheckpointError) throw error;
           if (batch.length > 1 && error instanceof Error && seedBatchFallbacks.has(rejectionCode(error))) {
             for (const candidate of batch) await checkBatch([candidate]);
           } else for (const { node } of batch) { blockCandidate(node, error); completeCandidate(node); }

@@ -684,6 +684,29 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(service.storage.listRecords(['owners'])).toEqual([]);
   });
 
+  it.each(['deleteRun', 'deleteOwner'] as const)('revokes all expired sessions even when %s fails', async method => {
+    config.concurrency = 2;
+    const alice = await session(), bob = await session();
+    const owner = (client: Client) => client.cookie.slice('theoremos_session='.length);
+    for (const client of [alice, bob]) expect((await request('/api/runs', client, { body: input() })).status).toBe(201);
+    await tick();
+    expect(runner.calls).toHaveLength(2);
+    const failure = vi.spyOn(service.storage, method).mockImplementationOnce(() => { throw new Error('fixture deletion unavailable'); });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + config.sessionTtlMs + 1);
+    try {
+      expect((await request('/api/runs', alice)).status).toBe(500);
+      expect(runner.calls.every(call => call.signal.aborted && call.value.input.apiKey === '')).toBe(true);
+      expect(service.storage.listSessions()).toEqual([]);
+      expect(service.jobs.list(owner(alice))).toEqual([]);
+      expect(service.jobs.list(owner(bob))).toEqual([]);
+      if (method === 'deleteRun') expect(service.storage.listRecords(['owners'])).toEqual([]);
+      else expect(service.storage.listRecords(['owners'])).toHaveLength(1);
+      // Restoring the clock must not make a failed cleanup's revoked cookie usable again.
+      clock.mockRestore();
+      for (const client of [alice, bob]) expect((await request('/api/runs', client)).status).toBe(401);
+    } finally { clock.mockRestore(); failure.mockRestore(); }
+  });
+
   it('shares an accepted run only on the owner\'s request and serves the snapshot publicly until revoked', async () => {
     const alice = await session(), bob = await session();
     const { run } = await (await request('/api/runs', alice, { body: input() })).json();

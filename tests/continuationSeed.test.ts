@@ -1330,6 +1330,81 @@ describe('completed advisory research continuation', () => {
 });
 
 describe('bounded continuation verification batches', () => {
+  it('resumes an expired cold-seed check with its destination budget and the same frozen inputs', async () => {
+    const f = fixture();
+    const inherited = { key: mathDigest('unrelated historical verification'), timeoutMs: 7000, attempts: 1,
+      at: 1, targetCommit: f.base, receiptIds: ['old-timeout'] };
+    f.oldState.verificationCheckpoints = [inherited];
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const historical = fs.readFileSync(f.sourceStateFile), limits: number[] = [];
+    const seed = () => seedSolverContinuation({ ...f.options, timeoutMs: 1000 });
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      limits.push(request.timeoutMs!);
+      const batch = freshReceipts(request);
+      return limits.length <= 2 ? { ...batch, status: 'blocked', results: batch.results.map(result => ({ ...result,
+        status: 'blocked', error: 'Lean verification timed out.' })) } : batch;
+    });
+    for (const timeoutMs of [1000, 2000]) {
+      await expect(seed()).rejects.toBeInstanceOf(VerificationCheckpointError);
+      const state = readSolverRunState(f.stateFile);
+      expect(state.phase).toBe('prepared');
+      expect(state.verificationCheckpoints).toHaveLength(2);
+      expect(state.verificationCheckpoints![0]).toEqual(inherited);
+      expect(state.verificationCheckpoints![1]).toMatchObject({ timeoutMs, attempts: timeoutMs === 1000 ? 1 : 2 });
+      expect(state.cooperation!.recheck).toMatchObject({ total: 2, completed: 0 });
+      for (const node of state.cooperation!.tasks) {
+        expect(node.status).toBe('pending'); expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined();
+      }
+      const report = JSON.parse(fs.readFileSync(path.join(f.directory, 'continuation-seed.json'), 'utf8'));
+      expect(report).toMatchObject({ stage: 'interrupted', checked: [], failed: [], evidence: 'advisory-sources-require-recheck' });
+      expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+    }
+    const report = await seed(), state = readSolverRunState(f.stateFile);
+    expect(limits).toEqual([1000, 2000, 4000]);
+    expect(report).toMatchObject({ stage: 'complete', checked: ['first', 'second'], failed: [] });
+    expect(state.cooperation!.tasks.slice(0, 2).every(node => node.status === 'integrated' && node.integratedCheck?.passed)).toBe(true);
+    expect(state.cooperation!.tasks.at(-1)!.status).toBe('pending');
+    expect(state.check).toBeUndefined();
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+    expect(host.dispose).toHaveBeenCalledTimes(3);
+  });
+
+  it('preserves a cold-seed timeout after cancellation and rejects late successful receipts', async () => {
+    const f = fixture(), seed = (signal = f.controller.signal) => seedSolverContinuation({ ...f.options, signal, timeoutMs: 1000 });
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const batch = freshReceipts(request);
+      return { ...batch, status: 'blocked', results: batch.results.map(result => ({ ...result,
+        status: 'blocked', error: 'Formal verification batch deadline exceeded.' })) };
+    });
+    await expect(seed()).rejects.toBeInstanceOf(VerificationCheckpointError);
+    const checkpoint = readSolverRunState(f.stateFile).verificationCheckpoints!;
+    const controller = new AbortController();
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => { controller.abort(); return freshReceipts(request); });
+    await expect(seed(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    const cancelled = readSolverRunState(f.stateFile);
+    expect(cancelled.verificationCheckpoints).toEqual(checkpoint);
+    for (const node of cancelled.cooperation!.tasks) {
+      expect(node.status).toBe('pending'); expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined();
+    }
+    host.verify.mockImplementation(freshReceipts);
+    expect((await seed()).failed).toEqual([]);
+    expect(host.verify.mock.calls.map(([request]) => request.timeoutMs)).toEqual([1000, 2000, 2000]);
+  });
+
+  it('owns cold-seed checkpoints even when called within another run verification context', async () => {
+    const f = fixture(), outer = { environmentDigest: mathDigest('outer-environment'), problemReceiptDigest: mathDigest('outer-problem'),
+      checkpoints: [], save: vi.fn(), emit: vi.fn() };
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const batch = freshReceipts(request);
+      return { ...batch, status: 'blocked', results: batch.results.map(result => ({ ...result,
+        status: 'blocked', error: 'Lean verification timed out.' })) };
+    });
+    await expect(withVerificationCheckpoints(outer,
+      () => seedSolverContinuation({ ...f.options, timeoutMs: 1000 }))).rejects.toBeInstanceOf(VerificationCheckpointError);
+    expect(outer.checkpoints).toEqual([]); expect(outer.save).not.toHaveBeenCalled(); expect(outer.emit).not.toHaveBeenCalled();
+    expect(readSolverRunState(f.stateFile).verificationCheckpoints).toMatchObject([{ timeoutMs: 1000, attempts: 1 }]);
+  });
+
   it('reconsiders a failed old continuation check against canonical source with fresh receipts', async () => {
     const f = fixture(), node = f.oldState.cooperation!.tasks[0]!;
     node.status = 'blocked'; node.feedback = 'math_continuation_seed_helper_not_verified';
@@ -1859,11 +1934,64 @@ describe('continuation of a host-frozen unfinished delivery', () => {
   });
 
   it('repeats prepared seeding with the same frozen source without duplicating execution records', async () => {
-    const f = frozenGoalFixture(); await f.seed();
+    const f = frozenGoalFixture(), worker = f.newState.workers![1]!.worktree;
+    const local = [path.join(worker, '.scratch', 'new-proof.lean'),
+      path.join(worker, f.projectRelative, '.lake', 'build', 'cached.olean')];
+    for (const file of local) {
+      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'Preserved local work\n');
+    }
+    await f.seed();
     const first = readSolverRunState(f.stateFile).cooperation!.proofReadyRecords;
     await f.seed();
     expect(readSolverRunState(f.stateFile).cooperation!.proofReadyRecords).toEqual(first);
+    for (const file of local) expect(fs.readFileSync(file, 'utf8')).toBe('Preserved local work\n');
   });
+
+  it.each([
+    { initialization: 'first', kind: 'uncommitted' },
+    { initialization: 'first', kind: 'committed' },
+    { initialization: 'repeated', kind: 'uncommitted' },
+    { initialization: 'repeated', kind: 'committed' },
+  ] as const)(
+    'does not overwrite $kind destination worker proof work during $initialization frozen initialization', async ({ initialization, kind }) => {
+      const f = frozenGoalFixture();
+      if (initialization === 'repeated') await f.seed();
+      const worker = readSolverRunState(f.stateFile).workers![1]!.worktree;
+      const proof = path.join(worker, f.projectRelative, 'Submission.lean');
+      fs.appendFileSync(proof, '\n-- New destination worker proof work\n');
+      if (kind === 'committed') commit(worker, 'New destination worker proof work');
+      const before = fs.readFileSync(proof), head = git(worker, ['rev-parse', 'HEAD']);
+      const state = fs.readFileSync(f.stateFile), historical = fs.readFileSync(f.sourceStateFile);
+      host.verify.mockClear(); host.prepare.mockClear();
+      const error = await f.seed().then(() => undefined, (error: unknown) => error);
+      expect(fs.readFileSync(proof)).toEqual(before);
+      expect(error).toMatchObject({ message: 'math_continuation_seed_destination_changed' });
+      expect(git(worker, ['rev-parse', 'HEAD'])).toBe(head);
+      expect(fs.readFileSync(f.stateFile)).toEqual(state);
+      expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+      expect(host.verify).not.toHaveBeenCalled(); expect(host.prepare).not.toHaveBeenCalled();
+    });
+
+  it.each(['first', 'repeated'] as const)(
+    'does not overwrite untracked destination proof notes during %s frozen initialization', async initialization => {
+      const f = frozenGoalFixture(), worker = f.newState.workers![1]!.worktree;
+      if (initialization === 'repeated') {
+        await f.seed();
+        git(worker, ['reset', '--hard', f.base]);
+      }
+      const notes = path.join(worker, 'RESEARCH.md'), before = 'New destination proof notes\n';
+      fs.writeFileSync(notes, before);
+      expect(git(worker, ['status', '--porcelain', '--untracked-files=no'])).toBe('');
+      const state = fs.readFileSync(f.stateFile), historical = fs.readFileSync(f.sourceStateFile);
+      host.verify.mockClear(); host.prepare.mockClear();
+      const error = await f.seed().then(() => undefined, (error: unknown) => error);
+      expect(fs.readFileSync(notes, 'utf8')).toBe(before);
+      expect(error).toMatchObject({ message: 'math_continuation_seed_destination_changed' });
+      expect(git(worker, ['rev-parse', 'HEAD'])).toBe(f.base);
+      expect(fs.readFileSync(f.stateFile)).toEqual(state);
+      expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+      expect(host.verify).not.toHaveBeenCalled(); expect(host.prepare).not.toHaveBeenCalled();
+    });
 
   it('keeps a frozen goal advisory when the destination worker can no longer prove goals', async () => {
     const f = frozenGoalFixture();

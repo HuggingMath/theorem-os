@@ -35,7 +35,8 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_AUTH: 'email', THEOREMOS_WEB_SMTP_URL: 'log:',
   THEOREMOS_WEB_ALLOWLIST: 'alice@example.org,bob@example.org', THEOREMOS_WEB_DATA_ROOT: data, THEOREMOS_WEB_KEY_SECRET: '5c'.repeat(32) }), runner,
 { mailer: async message => { mail.push(message); }, captchaAnswer: () => '24680' });
-const mark = (check: string) => console.log(`PASS ${check}`);
+const checks: string[] = [];
+const mark = (check: string) => { checks.push(check); console.log(`PASS ${check}`); };
 
 /** A signed-in browser context, as on a separate device; the login page itself is covered by test:web-login. */
 async function signedIn(browser: Browser, email: string, options: { locale?: 'zh' | 'en'; theme?: 'light' | 'dark'; entry?: 'natural' | 'lean' } = {}) {
@@ -75,6 +76,7 @@ async function submit(page: Page, posted: string[], task: string, key?: string) 
   await page.locator('#settings-submit').click();
   await page.locator('#toast').filter({ hasText: /研究已提交|Research submitted/u }).waitFor();
   assert.equal(posted.length, before + 1, 'the form submitted once');
+  await page.waitForURL(url => Boolean(url.searchParams.get('chat')));
   return JSON.parse(posted.at(-1)!) as { apiKey: string; saveKey?: boolean };
 }
 const required = (page: Page) => page.locator('#api-key').evaluate(input => (input as HTMLInputElement).required);
@@ -210,8 +212,45 @@ try {
   await english.page.screenshot({ path: path.join(output, 'saved-en-dark-1440.png') });
   assert.deepEqual(english.errors, []);
   mark('in English and the dark theme the saved key settings have no Chinese text and pass contrast');
+
+  const chinese = await signedIn(browser, 'bob@example.org', { locale: 'zh' });
+  const saveRecord = service.storage.saveRecord.bind(service.storage);
+  try {
+    service.storage.saveRecord = (segments, value, immutable) => {
+      if (segments[0] === 'keys') throw new Error('Fixture key storage unavailable');
+      saveRecord(segments, value, immutable);
+    };
+    for (const [client, locale] of [[chinese, 'zh'], [english, 'en']] as const) {
+      const before = keys.length;
+      const response = client.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/runs');
+      const sent = await submit(client.page, client.posted, `Accepted despite optional key save failure ${locale}`, replacement);
+      assert.equal(sent.saveKey, true);
+      const accepted = await response;
+      assert.equal(accepted.status(), 201);
+      const body = await accepted.json();
+      assert.equal(body.keySaveFailed, true);
+      await client.page.locator('#toast').filter({ hasText: locale === 'zh'
+        ? '研究已提交，Key 未能保存，请在设置中重试保存。'
+        : 'Research submitted; the key could not be saved. Try saving it again in settings.' }).waitFor();
+      assert.equal(keys.length, before + 1, 'one accepted submission starts one worker');
+      assert.equal(keys.at(-1), replacement);
+      assert.ok(!JSON.stringify(body).includes(replacement), 'the response contains no plaintext credential');
+      assert.ok(!(await stores(client.page)).includes(replacement), 'the failed account save does not store a key in the browser');
+      await openSettings(client.page);
+      assert.equal(await client.page.locator('#api-key').inputValue(), '', 'the accepted submission clears the key');
+      assert.equal(await required(client.page), locale === 'zh', 'the previous saved key is preserved independently');
+      await closeSettings(client.page);
+      assert.deepEqual(client.errors, []);
+      mark(`an accepted ${locale} submission reports a failed optional key save without resubmitting or claiming the key was saved`);
+    }
+  } finally { service.storage.saveRecord = saveRecord; }
+  await chinese.context.close();
   assert.equal(formalizationCalls, 0);
+  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checks, paidModelCalls: false }, null, 2) + '\n');
   console.log('Saved key checks passed: direct main-chat save and replacement without workers, ending only, reload, delete, browser storage, Lean submission, another device, other account, English and dark theme.');
+} catch (error) {
+  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'failed', checks, error: error instanceof Error ? error.message : String(error), paidModelCalls: false }, null, 2) + '\n');
+  throw error;
 } finally {
   await browser?.close();
   await service.close();

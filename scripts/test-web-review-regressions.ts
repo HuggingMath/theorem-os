@@ -9,7 +9,7 @@ import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebPrecheckOutput } from '../apps/web/precheck';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
-import { freePort, ready } from './web-scenario';
+import { freePort, ready, settled } from './web-scenario';
 import { withSettings, showChat, selectHistoryRun, fillConfig } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,7 +32,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 const browser = await chromium.launch({ headless: true });
 const contexts: BrowserContext[] = [];
 const services: ReturnType<typeof createWebService>[] = [];
-async function harness(concurrency: number, queueLimit = 8) {
+async function harness(concurrency: number, queueLimit = 8, formalizationFixture = false) {
   const port = await freePort(), origin = `http://127.0.0.1:${port}`;
   const mail: { to: string; text: string }[] = [];
   const runs = new Map<string, { signal: AbortSignal; send: (m: WorkerMessage) => void; finish: () => void; fail: () => void }>();
@@ -54,6 +54,9 @@ async function harness(concurrency: number, queueLimit = 8) {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
       });
     },
+  };
+  if (formalizationFixture) runner.formalize = async (_value, send) => {
+    send({ type: 'result', status: 'error', reason: 'formalization_local_fixture_finished' });
   };
   const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
     THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_CONCURRENCY: String(concurrency),
@@ -223,13 +226,78 @@ try {
   const changed = await harness(1), owner = await changed.login();
   const stale = await owner.context.newPage(); await stale.goto(changed.origin); await ready(stale);
   await form(stale, 'alice_cookie_switch_private');
+  await stale.locator('#open-natural-language').click();
+  await stale.locator('#formalize-original').fill('alice_chat_cookie_switch_private');
+  await stale.locator('#formalize-settings > summary').click();
+  await stale.locator('#formalize-key').fill(fixtureKey);
+  await stale.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await stale.evaluate(() => window.dispatchEvent(new Event('online')));
+  await ready(stale);
+  await stale.locator('#open-natural-language').click();
+  assert.equal(await stale.locator('#formalize-original').inputValue(), 'alice_chat_cookie_switch_private',
+    'Reconnecting the same owner preserves the natural-language draft');
+  checks.push({ name: 'Same-owner reconnect preserves the natural-language draft', result: 'passed' });
+  await stale.locator('#formalize-key').fill(fixtureKey);
   await changed.login('bob@example.org', owner.context);
   await stale.evaluate(() => window.dispatchEvent(new Event('offline')));
   await stale.evaluate(() => window.dispatchEvent(new Event('online')));
   await ready(stale);
   assert.notEqual(await stale.locator('#task').inputValue(), 'alice_cookie_switch_private');
   assert.ok(!(await stale.evaluate(() => JSON.stringify(sessionStorage))).includes('alice_cookie_switch_private'));
-  checks.push({ name: 'Reconnect detects another-tab identity change and discards private draft', result: 'passed' });
+  assert.equal(await stale.locator('#formalize-key').inputValue(), '', 'An account change clears the natural composer key from memory');
+  await stale.locator('#open-natural-language').click();
+  assert.notEqual(await stale.locator('#formalize-original').inputValue(), 'alice_chat_cookie_switch_private',
+    'A new owner cannot restore the old natural-language draft');
+  assert.ok(!(await stale.evaluate(() => JSON.stringify(sessionStorage))).includes('alice_chat_cookie_switch_private'));
+  await stale.locator('#formalize-original').fill('bob_chat_cookie_switch_private');
+  await stale.reload(); await ready(stale);
+  assert.equal(await stale.locator('#formalize-original').inputValue(), 'bob_chat_cookie_switch_private',
+    'New drafts persist under the new owner');
+  assert.ok(!(await stale.evaluate(() => JSON.stringify(sessionStorage))).includes('alice_chat_cookie_switch_private'));
+  await stale.screenshot({ path: path.join(output, 'account-switch-natural-draft.png') });
+  checks.push({ name: 'Reconnect detects another-tab identity change and discards Lean and natural drafts plus the key; Bob draft survives reload', result: 'passed' });
+
+  const late = await harness(1, 8, true), lateAlice = await late.login();
+  const latePage = await lateAlice.context.newPage(); await latePage.goto(late.origin); await ready(latePage);
+  await latePage.locator('#open-natural-language').click();
+  const aliceText = 'alice_delayed_formalization_private', bobText = 'bob_draft_after_delayed_alice_request';
+  const chatPosts: string[] = [];
+  latePage.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/conversations') chatPosts.push(request.postData() ?? '');
+  });
+  // Hold JSON after the HTTP owner header has already been checked, like a body arriving during an account switch.
+  await latePage.evaluate(original => {
+    const json = Response.prototype.json;
+    Response.prototype.json = async function () {
+      const value = await json.call(this);
+      if (this.url.endsWith('/api/formalizations') && this.status === 201 && value.formalization?.original === original) {
+        await new Promise<void>(resolve => { (window as any).__releaseAliceBody = resolve; });
+      }
+      return value;
+    };
+  }, aliceText);
+  await latePage.locator('#formalize-original').fill(aliceText);
+  await latePage.locator('#formalize-settings > summary').click();
+  await latePage.locator('#formalize-key').fill(fixtureKey);
+  await latePage.locator('#formalize-start:enabled').click();
+  await latePage.waitForFunction(() => Boolean((window as any).__releaseAliceBody));
+  await late.login('bob@example.org', lateAlice.context);
+  await latePage.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await latePage.evaluate(() => window.dispatchEvent(new Event('online')));
+  await ready(latePage);
+  await latePage.locator('#open-natural-language').click();
+  await latePage.locator('#formalize-original').fill(bobText);
+  await latePage.evaluate(() => (window as any).__releaseAliceBody());
+  await settled(latePage);
+  assert.equal(await latePage.locator('#formalize-original').inputValue(), bobText);
+  assert.equal(new URL(latePage.url()).searchParams.get('chat'), null);
+  assert.deepEqual(chatPosts, [], 'An old owner success cannot create a conversation under the new owner');
+  assert.ok(!(await latePage.locator('#research-chat-thread').textContent())?.includes(aliceText));
+  assert.ok(!(await latePage.locator('#chat-history-list').textContent())?.includes(aliceText));
+  assert.ok(!(await latePage.evaluate(() => JSON.stringify(sessionStorage))).includes(aliceText));
+  await latePage.screenshot({ path: path.join(output, 'account-switch-late-success.png') });
+  checks.push({ name: 'Delayed Alice POST success after Bob reconnect cannot restore records, overwrite Bob draft or create a conversation',
+    result: 'passed', oldOwnerFollowupPosts: chatPosts.length });
 
   const expired = await harness(1), expiredAlice = await expired.login();
   const expiredPage = await expiredAlice.context.newPage(); await expiredPage.goto(expired.origin); await ready(expiredPage);

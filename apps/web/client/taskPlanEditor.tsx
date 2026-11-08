@@ -62,6 +62,7 @@ function PlanDialog() {
 /** A local full-plan proposal survives polling, tab switches, and version conflicts. */
 export class TaskPlanEditor {
   private dialog = createElement('dialog', 'collab-plan-dialog');
+  private disposed = false;
   private drafts = new Map<string, PlanDraft>();
   private runId = '';
   private observation?: WebObservation;
@@ -96,7 +97,13 @@ export class TaskPlanEditor {
     this.dialog.querySelector('[data-plan-receipt-refresh]')!.addEventListener('click', () => void this.recover(false));
     this.dialog.querySelector('[data-plan-retry]')!.addEventListener('click', () => void this.recover(true));
   }
+  /** An owner change discards local plans and prevents an old command from recovering with the next owner's session. */
+  dispose() {
+    this.disposed = true; this.runId = ''; this.observation = undefined; this.drafts.clear();
+    this.dialog.close(); this.dialog.remove();
+  }
   update(observation: WebObservation) {
+    if (this.disposed) return;
     const draft = this.drafts.get(observation.webRunId);
     if (!draft || draft.observation && (observation.solverRunId !== draft.observation.solverRunId
       || observation.sequence < draft.observation.sequence)) return;
@@ -118,7 +125,7 @@ export class TaskPlanEditor {
     }
   }
   open(runId: string, observation: WebObservation, taskId: string) {
-    if (!observation.plan) return;
+    if (this.disposed || !observation.plan) return;
     this.runId = runId; this.taskId = taskId;
     if (!this.drafts.has(runId)) this.drafts.set(runId, { text: jsonText({ ...observation.plan, id: commandId() }) });
     this.update(observation);
@@ -137,8 +144,8 @@ export class TaskPlanEditor {
   private saveText() {
     const draft = this.draft();
     if (draft.submitted) {
-      try { const value = JSON.parse(this.advanced.value); value.id = commandId(); this.advanced.value = jsonText(value); } catch { /* Keep invalid local text editable. */ }
-      draft.submitted = false;
+      try { const value = this.parse(); value.id = commandId(); this.advanced.value = jsonText(value); draft.submitted = false; }
+      catch { /* Keep the submitted id retired until the local text is a complete plan again. */ }
     }
     draft.text = this.advanced.value; draft.previewText = undefined; draft.receipt = undefined; draft.error = undefined; draft.notice = undefined;
   }
@@ -369,16 +376,17 @@ export class TaskPlanEditor {
     try {
       if (rebase) proposal = this.parse();
       const { observation } = await this.api<{ observation: WebObservation | null }>(`/api/runs/${encodeURIComponent(runId)}/observation`);
+      if (this.disposed) return;
       if (!observation?.plan) throw new Error(t('尚无可用研究计划'));
       this.receive(runId, observation);
-      const latest = this.runId === runId ? this.observation! : observation;
+      const latest = draft.observation!;
       draft.comparison = latest.plan;
       if (proposal) {
         proposal.baseVersion = latest.plan!.baseVersion; proposal.id = commandId();
         draft.text = jsonText(proposal); draft.previewText = undefined; draft.receipt = undefined; draft.error = undefined; draft.submitted = false;
         if (this.runId === runId) { this.advanced.value = draft.text; this.renderCommon(); }
       }
-    } catch (error) { draft.error = errorText(error); proposal = undefined; }
+    } catch (error) { if (this.disposed) return; draft.error = errorText(error); proposal = undefined; }
     finally { draft.busy = false; if (this.runId === runId) this.renderStatus(); }
     if (proposal) await this.requestPlan(runId, draft, proposal, false);
   }
@@ -405,18 +413,21 @@ export class TaskPlanEditor {
       affectedTaskIds: edit.affectedTasks ?? receipt.affectedTaskIds } : receipt;
   }
   private async requestPlan(runId: string, draft: PlanDraft, proposal: WebPlanProposal, apply: boolean) {
+    if (this.disposed) return;
     const submittedText = draft.text; draft.busy = true; draft.error = undefined; draft.notice = undefined;
     const pending = apply ? { proposal: structuredClone(proposal) } : undefined;
     if (apply) { draft.submitted = true; draft.pending = pending; }
     if (this.runId === runId) this.renderStatus();
     try {
       const { receipt } = await this.api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(runId)}/edits${apply ? '' : '/preview'}`, { method: 'POST', body: JSON.stringify(proposal) });
+      if (this.disposed) return;
       if (receipt.id !== proposal.id) throw new Error(t('命令回执身份不匹配'));
       if (apply) this.recordReceipt(runId, draft, receipt);
       else { if (receipt.observation) this.receive(runId, receipt.observation); draft.receipt = this.observedReceipt(draft, receipt); }
       draft.previewText = apply ? undefined : submittedText;
       if (apply && draft.pending) await this.readReceipt(runId, draft);
     } catch (error) {
+      if (this.disposed) return;
       if (apply && draft.pending !== pending && draft.receipt?.id === proposal.id && draft.receipt.edit) return;
       draft.error = errorText(error); draft.previewText = undefined;
       const status = responseStatus(error);
@@ -428,10 +439,10 @@ export class TaskPlanEditor {
     const pending = draft.pending; if (!pending) return;
     try {
       const { receipt } = await this.api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(pending.proposal.id)}`);
-      if (draft.pending !== pending) return true;
+      if (this.disposed || draft.pending !== pending) return true;
       this.recordReceipt(runId, draft, receipt); return true;
     } catch (error) {
-      if (draft.pending !== pending) return true;
+      if (this.disposed || draft.pending !== pending) return true;
       pending.missing = responseStatus(error) === 404;
       draft.error = errorText(error); return false;
     }

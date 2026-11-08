@@ -23,6 +23,7 @@ export class WebJobs {
   private creations = new Map<string, WebCreation & { runId: string }>();
   private running = 0;
   private closing = false;
+  private closeError?: unknown;
   private commands = new Map<string, { digest: string; promise: Promise<WebCommandResult> }>();
   private readonly versionId = crypto.randomUUID();
   private revisions = new Map<string, number>();
@@ -149,9 +150,12 @@ export class WebJobs {
       const queued = job.run.status === 'queued';
       job.run.status = 'cancelled'; job.run.phase = 'cancelled'; job.run.finishedAt = new Date().toISOString();
       delete job.run.queue;
-      this.event(job.run, 'cancelled', '运行已取消');
-      job.controller.abort();
-      if (queued) { job.input.apiKey = ''; delete job.continuation; delete job.formalization; this.reindex(); }
+      try { this.event(job.run, 'cancelled', '运行已取消'); }
+      finally {
+        job.controller.abort();
+        job.input.apiKey = ''; delete job.continuation; delete job.formalization;
+        if (queued) this.reindex();
+      }
     }
     return job.run;
   }
@@ -166,20 +170,33 @@ export class WebJobs {
   }
   forget(owner: string) {
     let removed = false;
+    let failure: unknown;
     for (const [id, job] of this.jobs) if (job.owner === owner) {
-      this.cancel(owner, id); this.jobs.delete(id); this.storage.deleteRun(owner, id);
+      // Detach before abort: final worker observations must not write a deleted owner's records.
+      this.jobs.delete(id);
+      if (!terminal(job.run)) { job.run.status = 'cancelled'; job.run.phase = 'cancelled'; job.run.finishedAt = new Date().toISOString(); }
+      job.controller.abort();
+      job.input.apiKey = ''; delete job.continuation; delete job.formalization;
       removed = true;
+      try { this.storage.deleteRun(owner, id); }
+      catch (error) { failure ??= error; }
     }
-    if (removed) this.changed(owner);
+    if (removed) { this.reindex(); this.changed(owner); }
+    if (failure) throw failure;
   }
   async close() {
     this.closing = true;
+    this.closeError = undefined;
     for (const timer of this.pendingActions.values()) clearTimeout(timer);
     this.pendingActions.clear();
-    for (const job of this.jobs.values()) this.cancel(job.owner, job.run.id);
+    for (const job of this.jobs.values()) {
+      try { this.cancel(job.owner, job.run.id); }
+      catch (error) { this.closeError ??= error; }
+    }
     while (this.running) await new Promise(resolve => setTimeout(resolve, 25));
     this.jobs.clear();
     this.listeners.clear();
+    if (this.closeError) throw this.closeError;
   }
   private persist(run: WebRun) {
     const job = this.jobs.get(run.id);
@@ -193,7 +210,13 @@ export class WebJobs {
    */
   private actionsChanged(run: WebRun) {
     if (this.pendingActions.has(run.id)) return;
-    const timer = setTimeout(() => { this.pendingActions.delete(run.id); if (this.jobs.get(run.id)?.run === run) this.persist(run); }, 2_000);
+    const timer = setTimeout(() => {
+      this.pendingActions.delete(run.id);
+      const job = this.jobs.get(run.id);
+      if (job?.run !== run) return;
+      try { this.persist(run); }
+      catch { run.error = '运行状态未能保存；服务恢复后请重新查看。'; this.changed(job.owner); }
+    }, 2_000);
     timer.unref?.();
     this.pendingActions.set(run.id, timer);
   }
@@ -257,9 +280,12 @@ export class WebJobs {
       if (pending.digest !== digest) throw new Error('命令 ID 已用于另一份内容，请使用新的 ID。');
       return pending.promise;
     }
+    // The worker clears its input credential on exit, while an already sent command may still be returning.
+    const apiKey = job.input.apiKey;
     const run = async (): Promise<WebCommandResult> => {
       try {
-        const receipt = clean(await this.runner.command!(runId, command), job.input.apiKey);
+        const receipt = clean(await this.runner.command!(runId, command), apiKey);
+        if (this.jobs.get(runId) !== job) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
         if (receipt.id !== id) throw new Error('命令回执身份不匹配。');
         if (command.type === 'edit-preview') receipt.commandDigest = crypto.createHash('sha256')
           .update(canonicalMathJson({ type: 'edit', proposal: command.proposal })).digest('hex');
@@ -267,14 +293,18 @@ export class WebJobs {
         if (job.run.observation) receipt.observation = job.run.observation;
         if (command.type !== 'edit-preview') {
           this.storage.saveCommand(owner, runId, id, { ...receipt, commandDigest: digest });
-          if (command.type === 'plan-approval') {
-            if (receipt.status === 'queued') this.event(job.run, 'plan_approval_queued', '计划批准已提交；运行确认后 Agent 才开始工作，未生效会另行记录。');
-          } else this.event(job.run, command.type === 'guidance' ? 'guidance_queued' : 'human_edit_queued',
-            command.type === 'guidance' ? '数学指导已提交；投递和采纳结果另行记录。' : '计划修改已提交；应用与证明重查结果另行记录。');
+          try {
+            if (command.type === 'plan-approval') {
+              if (receipt.status === 'queued') this.event(job.run, 'plan_approval_queued', '计划批准已提交；运行确认后 Agent 才开始工作，未生效会另行记录。');
+            } else this.event(job.run, command.type === 'guidance' ? 'guidance_queued' : 'human_edit_queued',
+              command.type === 'guidance' ? '数学指导已提交；投递和采纳结果另行记录。' : '计划修改已提交；应用与证明重查结果另行记录。');
+          } catch { job.run.error = '运行状态未能保存；服务恢复后请重新查看。'; this.changed(owner); }
         }
         return command.type === 'edit-preview' ? receipt : this.commandReceipt(owner, runId, id) ?? receipt;
       } catch (error) {
-        const reason = clean(error instanceof Error ? error.message : '命令回执暂不可用。', job.input.apiKey);
+        // Deleted runs/accounts must stay deleted even when a transport fails after removal.
+        if (this.jobs.get(runId) !== job) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
+        const reason = clean(error instanceof Error ? error.message : '命令回执暂不可用。', apiKey);
         if (command.type === 'edit-preview') throw new Error(reason);
         const receipt = { id, status: 'unknown', reason, commandDigest: digest,
           ...(job.run.observation ? { observation: job.run.observation } : {}) };
@@ -290,7 +320,9 @@ export class WebJobs {
     const job = this.jobs.get(id);
     if (!job || job.owner !== owner) throw new Error('运行不存在或不属于当前会话。');
     if (!terminal(job.run) && this.runner.command) {
-      const capture = clean(await this.runner.command(id, { type: 'capture' }), job.input.apiKey);
+      const apiKey = job.input.apiKey;
+      const capture = clean(await this.runner.command(id, { type: 'capture' }), apiKey);
+      if (this.jobs.get(id) !== job) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
       if (capture.observation) this.observe(job, capture.observation);
       if (capture.catalog) job.run.knowledgeCatalogDigest = this.knowledge.importCatalog(owner, capture.catalog).digest;
     }
@@ -321,7 +353,6 @@ export class WebJobs {
       if (!job) break;
       this.running++; job.run.status = 'running'; job.run.phase = 'preparing';
       delete job.run.queue;
-      this.event(job.run, 'preparing', '正在准备独立运行环境');
       void this.execute(job).finally(() => { this.running--; this.pump(); });
     }
     this.reindex();
@@ -339,53 +370,58 @@ export class WebJobs {
   }
   private async execute(job: Job) {
     const key = job.input.apiKey;
+    let messageError: unknown;
     const handle = (raw: WorkerMessage) => {
-      if (this.jobs.get(job.run.id) !== job || terminal(job.run) && !['observation', 'catalog'].includes(raw.type)) return;
-      const message = clean(raw, key);
-      if (message.type === 'progress') {
-        job.run.phase = message.event;
-        this.event(job.run, message.event, message.message, message.details);
-        // The solver asks once per run, when its first plan is accepted; the owner may be away from the page.
-        if (message.event === 'plan_approval_requested')
-          try { this.onPlanWaiting?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }
-      } else if (message.type === 'action') {
-        // Kept apart from the 200-event activity log; past the per-run limit only the count grows.
-        const tally = job.run.actions ??= { count: 0 };
-        if (tally.count >= webAgentActionLimits.perRun) tally.dropped = (tally.dropped ?? 0) + 1;
-        else {
-          tally.count++;
-          this.storage.saveAction(job.owner, job.run.id, { ...message.action, sequence: tally.count, at: new Date().toISOString() });
+      if (messageError || this.jobs.get(job.run.id) !== job || terminal(job.run) && !['observation', 'catalog'].includes(raw.type)) return;
+      try {
+        const message = clean(raw, key);
+        if (message.type === 'progress') {
+          job.run.phase = message.event;
+          this.event(job.run, message.event, message.message, message.details);
+          // The solver asks once per run, when its first plan is accepted; the owner may be away from the page.
+          if (message.event === 'plan_approval_requested')
+            try { this.onPlanWaiting?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }
+        } else if (message.type === 'action') {
+          // Kept apart from the 200-event activity log; past the per-run limit only the count grows.
+          const tally = job.run.actions ??= { count: 0 };
+          if (tally.count >= webAgentActionLimits.perRun) tally.dropped = (tally.dropped ?? 0) + 1;
+          else {
+            tally.count++;
+            this.storage.saveAction(job.owner, job.run.id, { ...message.action, sequence: tally.count, at: new Date().toISOString() });
+          }
+          this.actionsChanged(job.run);
+        } else if (message.type === 'artifact') {
+          if (job.run.result) return;
+          job.run.artifact = message.artifact;
+          job.run.updatedAt = new Date().toISOString();
+          this.persist(job.run);
+        } else if (message.type === 'observation') {
+          this.observe(job, message.observation);
+        } else if (message.type === 'catalog') {
+          try { job.run.knowledgeCatalogDigest = this.knowledge.importCatalog(job.owner, message.catalog).digest; this.persist(job.run); }
+          catch { this.event(job.run, 'archive_failed', '本次知识材料未能保存；已有证明验收状态不变。'); }
+        } else if (message.type === 'result') {
+          job.run.result = message.result;
+          const failure = parseWebFailure(message.result.report.failure);
+          if (failure) job.run.failure = failure;
+          job.run.phase = message.result.status;
+          job.run.updatedAt = new Date().toISOString();
+          this.persist(job.run);
+        } else if (message.type === 'error') {
+          job.run.error = message.message;
+          job.run.failure = message.failure ?? { kind: 'environment' };
+          job.run.updatedAt = new Date().toISOString();
+          this.persist(job.run);
         }
-        this.actionsChanged(job.run);
-      } else if (message.type === 'artifact') {
-        if (job.run.result) return;
-        job.run.artifact = message.artifact;
-        job.run.updatedAt = new Date().toISOString();
-        this.persist(job.run);
-      } else if (message.type === 'observation') {
-        this.observe(job, message.observation);
-      } else if (message.type === 'catalog') {
-        try { job.run.knowledgeCatalogDigest = this.knowledge.importCatalog(job.owner, message.catalog).digest; this.persist(job.run); }
-        catch { this.event(job.run, 'archive_failed', '本次知识材料未能保存；已有证明验收状态不变。'); }
-      } else if (message.type === 'result') {
-        job.run.result = message.result;
-        const failure = parseWebFailure(message.result.report.failure);
-        if (failure) job.run.failure = failure;
-        job.run.phase = message.result.status;
-        job.run.updatedAt = new Date().toISOString();
-        this.persist(job.run);
-      } else if (message.type === 'error') {
-        job.run.error = message.message;
-        job.run.failure = message.failure ?? { kind: 'environment' };
-        job.run.updatedAt = new Date().toISOString();
-        this.persist(job.run);
-      }
+      } catch (error) { messageError = error; job.controller.abort(); }
     };
     try {
+      this.event(job.run, 'preparing', '正在准备独立运行环境');
       await this.runner.run({ id: job.run.id, input: job.input, provider: job.provider,
         ...(job.formalization ? { formalization: job.formalization } : {}),
         ...(job.input.knowledgeDigest ? { knowledgeCatalog: this.knowledge.getCatalog(job.owner, job.input.knowledgeDigest) } : {}),
         ...(job.continuation ? { continuation: job.continuation } : {}) }, handle, job.controller.signal);
+      if (messageError) throw messageError;
       if (!terminal(job.run)) {
         if (!job.run.result) throw new Error(job.run.error || '没有收到运行结果。');
         job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
@@ -400,16 +436,22 @@ export class WebJobs {
     } catch (error) {
       if (!terminal(job.run)) {
         job.run.status = 'error'; job.run.phase = 'error';
-        job.run.error = clean(error instanceof Error ? error.message : '运行失败。', key);
+        const failure = messageError ?? error;
+        job.run.error = clean(failure instanceof Error ? failure.message : '运行失败。', key);
         job.run.failure ??= { kind: 'environment' };
-        this.event(job.run, 'error', job.run.error);
+        try { this.event(job.run, 'error', job.run.error); }
+        catch { /* The final save retries below, after credentials are released. */ }
       }
     } finally {
       job.input.apiKey = '';
       delete job.continuation;
       delete job.formalization;
       job.run.finishedAt ??= new Date().toISOString();
-      this.persist(job.run);
+      try { this.persist(job.run); }
+      catch (error) {
+        if (this.closing) this.closeError ??= error;
+        else { job.run.error = '运行状态未能保存；服务恢复后请重新查看。'; job.run.failure ??= { kind: 'environment' }; }
+      }
       try { this.onFinished?.(job.owner, job.run); } catch { /* Telling the owner never changes the run. */ }
     }
   }

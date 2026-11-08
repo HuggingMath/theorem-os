@@ -48,10 +48,12 @@ export class ChatSession {
   private summaries: WebConversationSummary[] = [];
   private historyLoaded = false;
   private historyFailed = false;
+  private historyRevision = 0;
   private run?: WebRun;
   private formalization?: WebFormalization;
   private capabilities?: WebFormalizationCapabilities;
   private formalizations: WebFormalization[] = [];
+  private capabilitiesRevision = 0;
   private draft = '';
   private environment: 'standard' | 'mathlib' = 'mathlib';
   private effort: 'low' | 'high' | 'max' = 'max';
@@ -75,6 +77,7 @@ export class ChatSession {
   private guidanceVersion?: string;
   private pendingGuidance?: WebGuidanceInput;
   private generation = 0;
+  private ownerRevision = 0;
   private readRevision = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private refreshing = false;
@@ -118,21 +121,48 @@ export class ChatSession {
   get id() { return this.currentId; }
   get runId() { return this.conversation?.runId ?? this.run?.id; }
   get selected() { return this.conversation; }
+  /** An empty scope revokes the current owner while the workbench reconnects. */
+  bindOwner(scope: string) {
+    if (scope === this.options.draftScope) return;
+    const previous = this.options.draftScope;
+    this.ownerRevision++; this.readRevision++; this.historyRevision++; this.capabilitiesRevision++;
+    clearTimeout(this.timer); this.refreshing = false;
+    this.home(true);
+    this.drafts.clear(); this.options.draftScope = scope; this.reading.bind(scope);
+    try {
+      for (const key of Object.keys(sessionStorage)) {
+        if (key.startsWith(`theorem-os.chat-draft.${previous}.`) || key.startsWith(`theorem-os.chat-reading.${previous}.`)) sessionStorage.removeItem(key);
+      }
+    } catch { /* In-memory ownership also resets when storage is unavailable. */ }
+    this.summaries = []; this.historyLoaded = false; this.historyFailed = false;
+    this.capabilities = undefined; this.formalizations = []; this.providerId = ''; this.model = '';
+    this.environment = 'mathlib'; this.effort = 'max'; this.budgets = structuredClone(webFormalizationDefaults);
+    this.keyBusy = false; this.guidanceVersion = undefined;
+    this.lastTaskRefresh = 0; this.lastListRefresh = 0; this.lastActionPoll = 0;
+    this.liveShown.clear(); this.liveSelected.clear(); this.solveCache = undefined;
+    this.draft = scope ? this.restoredDraft('home') : '';
+    this.options.onNavigate('', 'replace'); this.options.onSelection(); this.draw();
+    if (scope) void this.start();
+  }
   private post<T>(url: string, body?: unknown) {
     return this.options.request<T>(url, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   }
   async start(run?: WebRun) {
+    const owner = this.ownerRevision;
     const route = this.currentId;
     const initial = this.loadCapabilities();
     if (route) await this.open(route, 'replace');
     else if (run) await this.openRun(run);
     await initial;
+    if (owner !== this.ownerRevision) return;
     await this.refreshHistory();
-    this.schedule();
+    if (owner === this.ownerRevision) this.schedule();
   }
   private async loadCapabilities() {
+    const revision = ++this.capabilitiesRevision;
     try {
       const data = await this.options.request<{ formalizations: WebFormalization[]; generation: WebFormalizationCapabilities }>('/api/formalizations');
+      if (revision !== this.capabilitiesRevision) return;
       this.capabilities = data.generation; this.formalizations = data.formalizations;
       if (!this.providerId) {
         this.providerId = data.generation.providerId ?? data.generation.providers?.[0]?.id ?? this.options.session()?.providers[0]?.id ?? '';
@@ -142,9 +172,10 @@ export class ChatSession {
       // A conversation that failed to open keeps its own error.
       if (!this.currentId || this.conversation) this.readError = '';
       this.draw();
-    } catch (error) { this.readError = reason(error); this.draw(); }
+    } catch (error) { if (revision === this.capabilitiesRevision) { this.readError = reason(error); this.draw(); } }
   }
   private rememberDraft() {
+    if (!this.options.draftScope) return;
     const id = this.currentId || 'home';
     this.drafts.set(id, this.draft);
     try { sessionStorage.setItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`, this.draft); } catch { /* In-memory draft remains. */ }
@@ -164,12 +195,12 @@ export class ChatSession {
     if (this.keyBusy || !this.options.session()?.account?.keyVault) return;
     const providerId = this.activeProviderId(), key = this.apiKey, generation = this.generation;
     if (method === 'PUT' && !key.trim()) return;
-    const owner = this.options.session()?.draftOwner;
+    const owner = this.options.session()?.draftOwner, ownerRevision = this.ownerRevision;
     this.keyBusy = true; this.keyNotice = ''; this.draw();
     try {
       const { savedKeys } = await this.options.request<{ savedKeys: WebSavedKey[] }>(`/api/auth/keys/${encodeURIComponent(providerId)}`,
         { method, ...(method === 'PUT' ? { body: JSON.stringify({ apiKey: key.trim() }) } : {}) });
-      if (this.options.session()?.draftOwner !== owner) return;
+      if (ownerRevision !== this.ownerRevision || this.options.session()?.draftOwner !== owner) return;
       this.options.onKeysChanged(savedKeys);
       if (generation === this.generation && providerId === this.activeProviderId()) {
         if (this.apiKey === key) this.apiKey = '';
@@ -178,7 +209,7 @@ export class ChatSession {
       }
     } catch (error) {
       if (generation === this.generation && providerId === this.activeProviderId()) this.keyNotice = reason(error);
-    } finally { this.keyBusy = false; this.draw(); }
+    } finally { if (ownerRevision === this.ownerRevision) { this.keyBusy = false; this.draw(); } }
   }
   private activeProviderId() { return this.run?.providerId ?? this.formalization?.providerId ?? this.providerId; }
   private activeModel() { return this.run?.model ?? this.formalization?.model ?? this.model; }
@@ -268,7 +299,7 @@ export class ChatSession {
     if (this.runId === run.id && this.conversation) { this.observe(run); return; }
     if (this.attachRunId === run.id) { this.observe(run); return; }
     this.reading.select('');
-    this.rememberDraft(); const generation = ++this.generation;
+    this.rememberDraft(); const generation = ++this.generation, owner = this.ownerRevision;
     this.currentId = ''; this.conversation = undefined; this.run = run; this.formalization = undefined;
     this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
     this.seed = undefined; this.uncertainSubmission = undefined; this.attachRunId = run.id;
@@ -280,7 +311,8 @@ export class ChatSession {
       if (generation !== this.generation) return;
       this.draft = this.restoredDraft(conversation.id); this.setConversation(conversation);
       this.options.onNavigate(conversation.id, 'replace', true);
-      await this.loadTask(generation); await this.refreshHistory();
+      await this.loadTask(generation);
+      if (owner === this.ownerRevision) await this.refreshHistory();
     } catch (error) { if (generation === this.generation) this.error = reason(error); }
     finally { if (generation === this.generation) { this.loading = false; this.draw(); this.schedule(); } }
   }
@@ -289,14 +321,14 @@ export class ChatSession {
     this.run = run; this.draw();
   }
   private async loadTask(generation: number) {
-    const conversation = this.conversation;
+    const conversation = this.conversation, revision = this.readRevision;
     if (!conversation) return;
     this.lastTaskRefresh = Date.now();
     const [formal, run] = await Promise.allSettled([
       conversation.formalizationId ? this.options.request<{ formalization: WebFormalization }>(`/api/formalizations/${conversation.formalizationId}`) : undefined,
       conversation.runId ? this.options.request<{ run: WebRun }>(`/api/runs/${conversation.runId}`) : undefined,
     ]);
-    if (generation !== this.generation) return;
+    if (generation !== this.generation || revision !== this.readRevision) return;
     const failed = [formal, run].find(result => result.status === 'rejected'
       && !(result.reason && typeof result.reason === 'object' && result.reason.status === 404));
     if (failed?.status === 'rejected') throw failed.reason;
@@ -309,16 +341,19 @@ export class ChatSession {
     this.draw();
   }
   async refreshHistory() {
+    const revision = ++this.historyRevision;
     try {
       const { conversations } = await this.options.request<{ conversations: WebConversationSummary[] }>('/api/conversations');
+      if (revision !== this.historyRevision) return;
       this.summaries = conversations; this.historyLoaded = true; this.historyFailed = false; this.drawHistory();
     } catch {
       // Keep a loaded history on a transient read error; one never loaded says so instead of looking empty.
-      if (!this.historyLoaded) { this.historyFailed = true; this.drawHistory(); }
+      if (revision === this.historyRevision && !this.historyLoaded) { this.historyFailed = true; this.drawHistory(); }
     }
   }
   private schedule() {
     clearTimeout(this.timer);
+    if (!this.options.draftScope) return;
     const pending = this.conversation?.messages.some(message => message.status === 'pending');
     // A completed formalization can overtake the conversation response that first linked it.
     // Keep refreshing until that conversation has also attached the proof run.
@@ -328,8 +363,9 @@ export class ChatSession {
     this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) || unlinkedRun ? 1500 : 30_000);
   }
   async refresh() {
+    if (!this.options.draftScope) return;
     if (this.refreshing || this.submitting || this.startingResearch || document.hidden) { this.schedule(); return; }
-    this.refreshing = true; const generation = this.generation, revision = this.readRevision;
+    this.refreshing = true; const generation = this.generation, revision = this.readRevision, owner = this.ownerRevision;
     try {
       if (this.currentId && !this.loading) {
         const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${this.currentId}`);
@@ -338,17 +374,20 @@ export class ChatSession {
         this.setConversation(conversation);
         if (runChanged || Date.now() - this.lastTaskRefresh >= 1500) await this.loadTask(generation);
       }
+      if (generation !== this.generation) return;
       if (Date.now() - this.lastListRefresh >= 6000) {
         this.lastListRefresh = Date.now();
-        await this.loadCapabilities(); await this.refreshHistory();
+        await this.loadCapabilities();
+        if (owner === this.ownerRevision) await this.refreshHistory();
       }
-    } catch (error) { if (generation === this.generation) { this.readError = reason(error); this.draw(); } }
-    finally { this.refreshing = false; this.schedule(); }
+    } catch (error) { if (generation === this.generation && revision === this.readRevision) { this.readError = reason(error); this.draw(); } }
+    finally { if (owner === this.ownerRevision) { this.refreshing = false; this.schedule(); } }
   }
   private async submit(retryText?: string) {
+    if (!this.options.draftScope) return;
     if (this.guidanceMode && retryText === undefined) { await this.sendGuidance(); return; }
     if (this.loading || this.submitting || !(retryText ?? this.draft).trim()) return;
-    const generation = this.generation, text = this.seed?.original ?? retryText ?? this.draft, conversation = this.conversation, key = this.apiKey;
+    const generation = this.generation, owner = this.ownerRevision, text = this.seed?.original ?? retryText ?? this.draft, conversation = this.conversation, key = this.apiKey;
     if (conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending')) return;
     this.readRevision++; this.submitting = true; this.error = ''; this.draw();
     try {
@@ -375,12 +414,14 @@ export class ChatSession {
           ({ formalization } = await this.post<{ formalization: WebFormalization }>('/api/formalizations', {
             original: text, ...settings, apiKey: key, solve: true,
           }));
+          if (owner !== this.ownerRevision) return;
           const createdId = formalization.id;
           this.formalizations = [formalization, ...this.formalizations.filter(item => item.id !== createdId)];
           if (generation === this.generation) this.seed = formalization;
         }
         ({ conversation: next } = await this.post<{ conversation: WebConversation }>('/api/conversations', { formalizationId: formalization.id }));
       }
+      if (owner !== this.ownerRevision) return;
       // Persist the originating conversation even if the user has already opened a new one.
       void this.refreshHistory();
       if (generation !== this.generation) return;
@@ -392,6 +433,7 @@ export class ChatSession {
       const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
       if (settings) settings.open = false;
       await this.loadTask(generation);
+      if (generation !== this.generation) return;
       this.reading.bottom(); this.focus();
     } catch (error) { if (generation === this.generation) this.error = reason(error); }
     finally { if (generation === this.generation) { this.submitting = false; this.draw(); this.schedule(); } }
@@ -416,7 +458,7 @@ export class ChatSession {
     this.guidanceVersion = this.run?.observation?.inspection.tasks.find(task => task.id === id)?.version;
   }
   private async sendGuidance(retry?: WebGuidanceInput) {
-    const conversation = this.conversation, run = this.run, observation = run?.observation, generation = this.generation;
+    const conversation = this.conversation, run = this.run, observation = run?.observation, generation = this.generation, owner = this.ownerRevision;
     if (!conversation || !run || this.submitting) return;
     const input = retry ?? this.pendingGuidance;
     const task = observation?.inspection.tasks.find(item => item.id === this.guidanceTarget);
@@ -431,6 +473,7 @@ export class ChatSession {
     this.pendingGuidance = guidance; this.readRevision++; this.submitting = true; this.error = ''; this.draw();
     try {
       const { conversation: next } = await this.post<{ conversation: WebConversation }>(`/api/conversations/${conversation.id}/guidance`, guidance);
+      if (owner !== this.ownerRevision) return;
       void this.refreshHistory();
       if (generation !== this.generation) return;
       const message = next.messages.find(item => item.guidance?.input.id === guidance.id);
@@ -440,7 +483,8 @@ export class ChatSession {
         if (this.draft.trim() === guidance.text) this.draft = '';
         this.guidanceMode = false; this.rememberDraft();
       }
-      this.setConversation(next); await this.loadTask(generation); this.reading.bottom();
+      this.setConversation(next); await this.loadTask(generation);
+      if (generation === this.generation) this.reading.bottom();
     } catch (error) { if (generation === this.generation) this.error = reason(error); }
     finally { if (generation === this.generation) { this.submitting = false; this.draw(); this.schedule(); } }
   }
@@ -449,9 +493,15 @@ export class ChatSession {
     if (this.run) { this.options.onCancelRun(this.run); return; }
     const id = this.formalization?.id, generation = this.generation;
     if (!id) return;
+    this.readRevision++;
     try {
       const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${id}/cancel`);
-      if (generation === this.generation) { this.formalization = formalization; this.draw(); }
+      if (generation === this.generation) {
+        this.readRevision++; this.capabilitiesRevision++;
+        this.formalization = formalization;
+        this.formalizations = this.formalizations.map(item => item.id === id ? formalization : item);
+        this.draw();
+      }
     } catch (error) { if (generation === this.generation) { this.error = reason(error); this.draw(); } }
   }
   private drawHistory() {
@@ -462,23 +512,31 @@ export class ChatSession {
       onRefreshRecords: () => void this.loadCapabilities(), onDeleteRecord: id => this.deleteRecord(id) });
   }
   private async renameConversation(id: string, title: string) {
+    const owner = this.ownerRevision;
     try {
       const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${encodeURIComponent(id)}`,
         { method: 'PATCH', body: JSON.stringify({ title }) });
+      if (owner !== this.ownerRevision) return;
+      this.historyRevision++;
       this.summaries = this.summaries.map(item => item.id === id ? { ...item, title: conversation.title, updatedAt: conversation.updatedAt } : item);
       if (this.currentId === id && this.conversation) this.setConversation({ ...this.conversation, title: conversation.title });
       this.drawHistory();
-    } catch (error) { throw new Error(reason(error)); }
+    } catch (error) { if (owner === this.ownerRevision) throw new Error(reason(error)); }
   }
   private async deleteConversation(id: string) {
+    const owner = this.ownerRevision;
     try {
       try { await this.options.request(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
       catch (error) {
+        if (owner !== this.ownerRevision) return;
         // A lost DELETE response is resolved by reading the list before offering another action.
         const { conversations } = await this.options.request<{ conversations: WebConversationSummary[] }>('/api/conversations');
+        if (owner !== this.ownerRevision) return;
         this.summaries = conversations;
         if (conversations.some(item => item.id === id)) throw error;
       }
+      if (owner !== this.ownerRevision) return;
+      this.historyRevision++;
       this.summaries = this.summaries.filter(item => item.id !== id);
       if (this.currentId === id) { this.home(false); this.options.onNavigate('', 'replace'); this.options.onSelection(); }
       this.drafts.delete(id);
@@ -487,20 +545,25 @@ export class ChatSession {
         sessionStorage.removeItem(`theorem-os.chat-reading.${this.options.draftScope}.${id}`);
       } catch { /* Server deletion does not depend on browser storage. */ }
       this.drawHistory();
-    } catch (error) { throw new Error(reason(error)); }
+    } catch (error) { if (owner === this.ownerRevision) throw new Error(reason(error)); }
   }
   private async deleteRecord(id: string) {
+    const owner = this.ownerRevision;
     try {
       try { await this.options.request(`/api/formalizations/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
       catch (error) {
+        if (owner !== this.ownerRevision) return;
         const { formalizations } = await this.options.request<{ formalizations: WebFormalization[] }>('/api/formalizations');
+        if (owner !== this.ownerRevision) return;
         this.formalizations = formalizations;
         if (formalizations.some(item => item.id === id)) throw error;
       }
+      if (owner !== this.ownerRevision) return;
+      this.capabilitiesRevision++;
       this.formalizations = this.formalizations.filter(item => item.id !== id);
       if (this.formalization?.id === id) { this.formalization = undefined; this.draw(); }
       this.drawHistory();
-    } catch (error) { throw new Error(reason(error)); }
+    } catch (error) { if (owner === this.ownerRevision) throw new Error(reason(error)); }
   }
   private openRecords() {
     this.options.onHistory();

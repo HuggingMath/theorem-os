@@ -150,17 +150,17 @@ class CodexRpc {
     });
     // Do not forward provider diagnostics, which can contain credentials or task text.
     this.child.stderr.resume();
-    const fail = (reason: string) => {
-      if (this.failure) return;
-      this.failure = new Error(`math_codex_transport_closed:${reason}`);
-      for (const call of this.pending.values()) { clearTimeout(call.timer); call.reject(this.failure); }
-      this.pending.clear();
-      this.onFailure(this.failure);
-    };
+    const fail = (reason: string) => this.fail(new Error(`math_codex_transport_closed:${reason}`));
     const errorCode = (error: NodeJS.ErrnoException) => /^[A-Z0-9_]{1,32}$/u.test(error.code ?? '') ? error.code : 'unknown';
     this.child.once('error', error => fail(`spawn_error:code=${errorCode(error)}`));
+    // Descendants may retain the pipes after their parent exits. Reap the owned group,
+    // while still draining its buffered usage/completion frames before the close event.
+    this.child.once('exit', () => { void this.close(); });
     this.child.once('close', (code, signal) => fail(`process_exit:code=${code ?? 'none'}:signal=${signal ?? 'none'}`));
     this.child.stdin.on('error', error => fail(`stdin_error:code=${errorCode(error)}`));
+    // EOF ends the response transport even if its process is still alive. Let close
+    // report the actual exit code after draining all frames, rather than racing it.
+    this.child.stdout.once('end', () => { void this.close(); });
     const receive = (line: Buffer) => {
       try {
         const message = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(line)));
@@ -182,7 +182,7 @@ class CodexRpc {
           if (error) call.reject(new Error(`math_codex_rpc_failed:${code}:${call.method}`));
           else call.resolve(result!);
         }
-      } catch { fail('invalid_frame'); void this.close(); }
+      } catch { fail('invalid_frame'); }
     };
     let parts: Buffer[] = [], bytes = 0;
     this.child.stdout.on('data', (chunk: Buffer) => {
@@ -191,7 +191,7 @@ class CodexRpc {
       while (start < chunk.length) {
         const newline = chunk.indexOf(10, start), end = newline < 0 ? chunk.length : newline;
         bytes += end - start;
-        if (bytes > 8 * 1024 * 1024) { parts = []; fail('frame_too_large'); void this.close(); return; }
+        if (bytes > 8 * 1024 * 1024) { parts = []; fail('frame_too_large'); return; }
         parts.push(chunk.subarray(start, end));
         if (newline < 0) break;
         const line = Buffer.concat(parts, bytes); parts = []; bytes = 0;
@@ -202,6 +202,16 @@ class CodexRpc {
     });
   }
 
+  private fail(error: Error): void {
+    if (this.failure) return;
+    this.failure = error;
+    for (const call of this.pending.values()) { clearTimeout(call.timer); call.reject(error); }
+    this.pending.clear();
+    this.onFailure(error);
+    // A lost reply leaves the remote turn's state unknown; no writer may outlive this transport.
+    void this.close();
+  }
+
   private write(message: Json): void {
     if (this.failure) throw this.failure;
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -209,11 +219,12 @@ class CodexRpc {
 
   request(method: string, params: Json): Promise<Json> {
     if (this.failure) return Promise.reject(this.failure);
+    // Continue draining buffered replies and usage, but never dispatch work to a closing writer.
+    if (this.closing) return Promise.reject(new Error('math_codex_transport_closed:closing'));
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`math_codex_rpc_timeout:${method}`));
+        this.fail(new Error(`math_codex_rpc_timeout:${method}`));
       }, 120_000);
       this.pending.set(id, { method, resolve, reject, timer });
       try { this.write({ id, method, params }); }
@@ -231,6 +242,7 @@ class CodexRpc {
 }
 
 export async function createCodexMathSession(options: MathAgentOptions): Promise<MathAgentSession> {
+  options.signal?.throwIfAborted();
   const configFile = path.join(options.profile, 'config.toml');
   const profileConfig = fs.existsSync(configFile) ? parseToml(fs.readFileSync(configFile, 'utf8')) : {};
   const providerId = typeof profileConfig.model_provider === 'string' ? profileConfig.model_provider : undefined;
@@ -355,15 +367,17 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     ...(typeof profileConfig.model_catalog_json === 'string' ? { model_catalog_json: profileConfig.model_catalog_json } : {}),
   } : {};
   let rpc: CodexRpc;
-  try { rpc = new CodexRpc(options.executable, nativeProfile, environment, isolated); }
+  try { options.signal?.throwIfAborted(); rpc = new CodexRpc(options.executable, nativeProfile, environment, isolated); }
   catch (error) { await responsesRelay?.close(); await bridge?.close(); await isolated?.close(); throw error; }
   let closing: Promise<void> | undefined;
   const closeSession = () => closing ??= (async () => {
+    options.signal?.removeEventListener('abort', aborted);
     turnStopping = true; cancelNotifications();
     try { await rpc.close(); } finally {
       try { await responsesRelay?.close(); } finally { try { await bridge?.close(); } finally { await isolated?.close(); } }
     }
   })();
+  const aborted = () => { void closeSession().catch(() => {}); };
   let activeTurn: string | undefined;
   let completion: { resolve: (turn: Json) => void; reject: (error: Error) => void } | undefined;
   const earlyCompletions = new Map<string, Json>();
@@ -477,7 +491,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     }
     if (method === 'turn/completed') {
       const turn = object(params.turn);
-      if (typeof turn.id !== 'string') return;
+      if (typeof turn.id !== 'string' || typeof turn.status !== 'string' ||
+          !['completed', 'interrupted', 'failed'].includes(turn.status)) return;
       if (turn.id === activeTurn && completion) completion.resolve(turn);
       else if (completion && !activeTurn) {
         if (earlyCompletions.size >= 32) earlyCompletions.delete(earlyCompletions.keys().next().value!);
@@ -485,7 +500,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       }
     }
   };
+  options.signal?.addEventListener('abort', aborted, { once: true });
   try {
+    options.signal?.throwIfAborted();
     await rpc.initialize();
     const inherited = profileConfig.mcp_servers;
     const disabled = Object.fromEntries(Object.keys(inherited ?? {}).map(name => [name, { enabled: false }]));
@@ -524,6 +541,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     // A new thread fixes its sandbox now; one that ignored the profile would keep host network and sockets.
     if (!isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
       throw new Error('math_codex_sandbox_profile_mismatch');
+    options.signal?.throwIfAborted();
     return {
       threadId,
       ...(isolated ? { isolationReceipt: isolated.receipt } : {}),
@@ -532,6 +550,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       get lastFailureDiagnostic() { return lastFailureDiagnostic; },
       get lastInputTokens() { return lastInputTokens; },
       run: async (message, messageId, workspace, onStarted) => {
+        options.signal?.throwIfAborted();
         if (transportFailure) throw transportFailure;
         if (completion) throw new Error('math_codex_turn_already_running');
         if (temporaryDirectory) prepareWorkerTemporaryDirectory(options.workspace);
@@ -565,15 +584,24 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
           activeTurn = turnId;
-          onStarted(activeTurn);
           const requestInterruption = () => {
             if (interruptionRequested) return;
             interruptionRequested = true;
             turnStopping = true; cancelNotifications();
             // A cleanup deadline after submission/cancellation is independent of solving budgets.
             interruptDeadline = setTimeout(() => { void closeSession(); }, 10_000);
-            void rpc.request('turn/interrupt', { threadId, turnId: activeTurn }).catch(() => { void closeSession(); });
+            void rpc.request('turn/interrupt', { threadId, turnId: activeTurn }).catch(() => {
+              // A terminal event can precede this reply; a late rejection must not stop the next turn.
+              if (activeTurn === turnId && !turnSettled) void closeSession();
+            });
           };
+          const early = earlyCompletions.get(activeTurn);
+          earlyCompletions.delete(activeTurn);
+          if (early) completion.resolve(early);
+          // An explicit stop can arrive while turn/start still has no remote turn id.
+          // Replay it after acknowledgement unless a terminal event already settled it.
+          if (turnStopping && !turnSettled && !closing) requestInterruption();
+          onStarted(activeTurn);
           if (options.completedOutput) {
             // A file submission ends this role. Admit it only after turn/completed
             // confirms that the writer stopped; the caller then rechecks its digest.
@@ -631,11 +659,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             // Only check sources after turn/completed confirms the writer stopped.
             requestInterruption();
           }, options.turnTimeoutMs);
-          const early = earlyCompletions.get(activeTurn);
-          earlyCompletions.delete(activeTurn);
-          if (early) resolve(early);
           const finished = await done;
           await submissionDrain;
+          options.signal?.throwIfAborted();
           if (typeof finished.status !== 'string') throw new Error('math_codex_turn_status_missing');
           if (finished.status === 'failed' && finished.error) {
             const error = object(finished.error);
@@ -645,7 +671,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           return submitted && finished.status === 'interrupted' ? 'submitted' :
             checkpoint && finished.status === 'interrupted' ? 'checkpoint' : finished.status;
         } catch (error) {
+          // A local evidence failure must stop the remote writer before callers can retry or inspect its files.
+          await closeSession().catch(() => {});
           lastError = error instanceof Error ? error.message : 'math_codex_turn_failed';
+          options.signal?.throwIfAborted();
           throw error;
         } finally {
           cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher);
@@ -658,7 +687,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       },
       interrupt: async () => {
         turnStopping = true; cancelNotifications();
-        if (activeTurn) await rpc.request('turn/interrupt', { threadId, turnId: activeTurn });
+        if (activeTurn && !turnSettled && !closing) await rpc.request('turn/interrupt', { threadId, turnId: activeTurn });
       },
       notify,
       close: closeSession,
@@ -670,5 +699,5 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         return rpc.confirmStopped();
       },
     };
-  } catch (error) { await closeSession(); throw error; }
+  } catch (error) { await closeSession(); options.signal?.throwIfAborted(); throw error; }
 }

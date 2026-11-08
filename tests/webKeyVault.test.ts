@@ -4,7 +4,7 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig, type WebConfig } from '../apps/web/config';
 import { WebKeyVault } from '../apps/web/keyVault';
@@ -267,6 +267,37 @@ describe('saving a key to the account', () => {
     expect((await account(alice))?.savedKeys).toEqual([{ providerId: 'sub2api', ending: '7Q2x' }]);
     await request('/api/runs', alice, input('sk-replacement-key-8888', { saveKey: true }));
     expect((await account(alice))?.savedKeys).toEqual([{ providerId: 'sub2api', ending: '8888' }]);
+  });
+
+  it('keeps an accepted run and its allowance when saving its account key fails, including idempotent replays', async () => {
+    const alice = await login('alice@example.org');
+    const body = input(aliceKey, { saveKey: true, requestId: 'accepted-key-save-failure' });
+    const saveRecord = service.storage.saveRecord.bind(service.storage);
+    const save = vi.spyOn(service.storage, 'saveRecord').mockImplementation((segments, value, immutable) => {
+      if (segments[0] === 'keys') throw new Error(`fixture key save failed ${aliceKey}`);
+      saveRecord(segments, value, immutable);
+    });
+    try {
+      const response = await request('/api/runs', alice, body);
+      expect(response.status).toBe(201);
+      const text = await response.text(), accepted = JSON.parse(text);
+      expect(accepted).toMatchObject({ keySaveFailed: true, savedKeys: [], run: { id: expect.any(String) } });
+      expect(text).not.toContain(aliceKey);
+      await settle();
+      const replay = await request('/api/runs', alice, body);
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toMatchObject({ keySaveFailed: true, run: { id: accepted.run.id } });
+      expect(runner.keys).toEqual([aliceKey]);
+      expect((await (await request('/api/session', alice)).json() as WebSession).quota?.runs.used).toBe(1);
+      save.mockRestore();
+      expect((await request('/api/auth/keys/sub2api', alice, { apiKey: aliceKey }, 'PUT')).status).toBe(200);
+      const saved = await (await request('/api/runs', alice, body)).json();
+      expect(saved.keySaveFailed).toBeUndefined();
+      expect(saved.savedKeys).toEqual([{ providerId: 'sub2api', ending: '7Q2x' }]);
+      expect(saved.run.id).toBe(accepted.run.id);
+      expect(runner.keys).toHaveLength(1);
+      expect(stored()).not.toContain(aliceKey);
+    } finally { save.mockRestore(); }
   });
 
   it('deletes a saved key on request and with the account', async () => {

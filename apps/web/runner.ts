@@ -166,6 +166,7 @@ export class DockerWebRunner implements WebRunner {
         '--entrypoint', 'sh', this.config.workerImage, '-c', script], { timeout: 30_000, maxBuffer: 8_192 });
     } catch (error) { await remove(); throw error; }
     try {
+      signal.throwIfAborted();
       return await new Promise<WebPrecheckOutput>((resolve, reject) => {
         const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
         let output = '', timedOut = false, settled = false;

@@ -104,6 +104,39 @@ if (args[0] === 'start') process.stdin.on('data', () => {}).on('end', () => proc
     }
   });
 
+  it.each(['standard', 'mathlib'] as const)('removes an abandoned %s check without starting it after Docker creation finishes', async environment => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-abandoned-check-'));
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path');
+const root = __dirname, args = process.argv.slice(2), container = path.join(root, 'container');
+fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+if (args[0] === 'create') {
+  fs.writeFileSync(container, 'created');
+  const timer = setInterval(() => { if (fs.existsSync(path.join(root, 'release'))) clearInterval(timer); }, 5);
+} else if (args[0] === 'start') {
+  process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('{}\\n'));
+} else if (args[0] === 'rm') fs.rmSync(container, { force: true });
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    const controller = new AbortController(), reason = new Error('fixture superseded during create');
+    const pending = new DockerWebRunner(readWebConfig({})).check!({ environment,
+      source: 'theorem abandoned : True := by sorry' }, controller.signal);
+    void pending.catch(() => {});
+    try {
+      await expect.poll(() => fs.existsSync(path.join(root, 'container'))).toBe(true);
+      controller.abort(reason);
+      fs.writeFileSync(path.join(root, 'release'), 'release');
+      await expect(pending).rejects.toBe(reason);
+      const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+      expect(calls.map(args => args[0])).toEqual(['create', 'rm']);
+      expect(fs.existsSync(path.join(root, 'container'))).toBe(false);
+    } finally {
+      fs.writeFileSync(path.join(root, 'release'), 'release');
+      controller.abort(reason); await pending.catch(() => {});
+      vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // THEOREMOS_TEST_WORKER_IMAGE=theorem-os-worker:local runs it against a built image.
   it.skipIf(!process.env.THEOREMOS_TEST_WORKER_IMAGE)('cannot read the application from a statement', async () => {
     const runner = new DockerWebRunner({ workerImage: process.env.THEOREMOS_TEST_WORKER_IMAGE! });
