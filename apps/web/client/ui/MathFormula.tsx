@@ -17,7 +17,10 @@ export function MathFormula(props: { source: string; display?: boolean; fallback
       try {
         math.render(source, host, { displayMode: display, throwOnError: true, trust: false,
           strict: 'ignore', maxSize: 20, maxExpand: 1000, output: 'htmlAndMathml' });
-        if (suffix) host.append(suffix);
+        if (suffix) {
+          const bases = host.querySelectorAll('.katex-html > .katex-base');
+          (bases.item(bases.length - 1) ?? host).append(suffix);
+        }
         host.classList.remove('math-source'); host.dataset.mathState = 'ready';
       } catch { host.textContent = fallback + suffix; host.dataset.mathState = 'source'; }
     }, () => { if (!disposed) host.dataset.mathState = 'source'; });

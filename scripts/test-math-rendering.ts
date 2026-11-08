@@ -32,6 +32,10 @@ const suffixCases = [
     id: `${renderer}-${locale}`, renderer, source: suffixSource, suffix: locale === 'zh' ? '。' : '.',
     text: `$${suffixSource}$${locale === 'zh' ? '。' : '.'}`,
   }))),
+  ...(['rich', 'chat'] as const).flatMap(renderer => (['zh', 'en'] as const).map(locale => ({
+    id: `${renderer}-edge-${locale}`, renderer, source: 'x^2+y^2=z^2', suffix: locale === 'zh' ? '。' : '.',
+    text: `$x^2+y^2=z^2$${locale === 'zh' ? '。' : '.'}`,
+  }))),
   { id: 'rich-fallback', renderer: 'rich', source: '\\unknownCommand{x}', suffix: '。', text: '$\\unknownCommand{x}$。' },
   { id: 'chat-fallback', renderer: 'chat', source: '\\unknownCommand{x}', suffix: '.', text: '$\\unknownCommand{x}$.' },
 ];
@@ -181,6 +185,17 @@ try {
       const details = [];
       for (const item of suffixCases.filter(item => !item.id.endsWith('fallback'))) {
         const content = page.locator(`[data-suffix-case="${item.id}"] .suffix-content`);
+        if (item.id.includes('-edge-')) await content.evaluate((root, suffix) => {
+          const walker = document.createTreeWalker(root.querySelector('.katex-html')!, NodeFilter.SHOW_TEXT);
+          let node: Node | null, first: Text | undefined, last: Text | undefined;
+          while ((node = walker.nextNode())) if (node.textContent?.replaceAll(suffix, '').replace(/[\s\u200b]/gu, '')) {
+            first ??= node as Text; last = node as Text;
+          }
+          if (!first || !last) throw new Error('No formula glyphs for the wrap boundary');
+          const range = document.createRange(); range.setStart(first, 0);
+          range.setEnd(last, last.data.endsWith(suffix) ? last.length - suffix.length : last.length);
+          (root as HTMLElement).style.width = `${Math.ceil(range.getBoundingClientRect().width) + 1}px`;
+        }, item.suffix);
         const result = await content.evaluate((root, suffix) => {
           const host = root.querySelector('.math')!, visual = host.querySelector('.katex-html')!;
           const punctuation = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
