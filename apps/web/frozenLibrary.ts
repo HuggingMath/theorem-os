@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack, type LibraryPack } from '../../src/math/libraryPacks';
 import { readLibraryCatalog } from '../../src/solver/libraryCatalog';
+import type { LibraryAccess } from '../../src/solver/libraryAccess';
 
 const bundledCatalog = fileURLToPath(new URL('../../resources/theorem-os-library/release/catalog.json', import.meta.url));
 let current: { key: string; catalog: ReturnType<typeof readLibraryCatalog> } | undefined;
@@ -17,6 +18,15 @@ export function webLibraryCatalog(env: NodeJS.ProcessEnv = process.env) {
   if (catalog.environment !== 'mathlib') throw new Error('web_library_release_changed');
   current = { key, catalog };
   return catalog;
+}
+
+/** The image publishes this pinned metadata/source tree outside the hidden application for agent tools. */
+export function webAgentLibraryAccess(environment: LeanTaskEnvironment, env: NodeJS.ProcessEnv = process.env): LibraryAccess | undefined {
+  if (environment !== 'mathlib') return;
+  const catalog = webLibraryCatalog(env), digest = catalog.identity.catalogDigest;
+  const file = path.resolve(env.THEOREMOS_AGENT_LIBRARY_CATALOG || '/opt/theoremos-library/release/catalog.json');
+  readLibraryCatalog(file, digest);
+  return { file, digest };
 }
 
 /** Build-time compatibility interface; normal task selection reads only its selected source objects. */

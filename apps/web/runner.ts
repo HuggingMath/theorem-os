@@ -53,6 +53,8 @@ export function isWebObservation(value: unknown): value is WebObservation {
       ['id', 'taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest'].every(field => typeof check[field] === 'string'));
 }
 const workerMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('library_restart'), previousSolverRunId: z.string().min(1).max(128),
+    solverRunId: z.string().min(1).max(128), round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
   z.object({ type: z.literal('progress'), event: z.string().min(1).max(100), message: z.string().max(2_000),
     details: z.custom<WebEventDetails>(isWebEventDetails).optional() }).strict(),
   z.object({ type: z.literal('error'), message: z.string().min(1).max(2_000),

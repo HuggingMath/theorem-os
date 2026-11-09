@@ -1576,12 +1576,12 @@ function reportProps(run: WebRun): ReportPanelProps {
   const stuck = summarizeStuck(run);
   const summary = summarizeReport(run), reason = reportReason(summary.reason);
   // A run stopped before any check (a refused Key, say) has nothing to summarize; the verdict says why, the raw report stays folded.
-  if (!reason.text && !reason.code && !stuck && !summary.checks.length && !summary.metrics.length && !summary.identity.length && !run.result.proof)
+  if (!reason.text && !reason.code && !stuck && !summary.checks.length && !summary.metrics.length && !summary.identity.length && !summary.library && !run.result.proof)
     return { kind: 'error', error: JSON.stringify(run.result.report, null, 2) };
   if (state.reportMode === 'json') return { kind: 'json', report: run.result.report };
   return { kind: 'summary', summary: { ...(reason.text ? { reason: reason.text } : {}), ...(reason.code ? { diagnostic: reason.code } : {}),
     checks: summary.checks.map(check => { const why = checkReason(check); return { ...check, ...(why ? { reason: why } : {}) }; }),
-    metrics: summary.metrics.map(readableMetric), identity: summary.identity }, accepted: passed(run), ...(stuck ? { stuck } : {}),
+    metrics: summary.metrics.map(readableMetric), identity: summary.identity, ...(summary.library ? { library: summary.library } : {}) }, accepted: passed(run), ...(stuck ? { stuck } : {}),
     ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`, headings: headingsOf(run.result.proof),
       mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib'),
       ...(isAcceptedRun(run) ? { explainRun: run.id } : {}) } } : {}) };
@@ -1970,15 +1970,29 @@ function disconnected(text: string) {
   renderRuntime(); renderDetail();
 }
 function retainLatestObservation(run: WebRun, previous?: WebRun): WebRun {
-  const observation = previous?.observation;
-  if (!observation || run.observation && run.observation.solverRunId === observation.solverRunId
-    && run.observation.sequence > observation.sequence) return run;
-  return { ...run, observation, updatedAt: run.updatedAt > previous.updatedAt ? run.updatedAt : previous.updatedAt };
+  const before = previous?.solverAttempt ?? (previous?.observation && {
+    solverRunId: previous.observation.solverRunId, round: 0, sequence: previous.observation.sequence });
+  const declared = run.solverAttempt;
+  // Only a host declaration can change the solver behind one Web run. A late list/creation response
+  // must retain that declaration as well as its observation, so it cannot revive a retired round.
+  const accepted = declared && (!before || declared.sequence >= before.sequence &&
+    (declared.round === before.round && declared.solverRunId === before.solverRunId ||
+      declared.round > before.round && declared.solverRunId !== before.solverRunId));
+  const attempt = accepted ? declared : previous?.solverAttempt;
+  const solverRunId = attempt?.solverRunId ?? before?.solverRunId ?? run.observation?.solverRunId;
+  let observation = run.observation?.solverRunId === solverRunId ? run.observation : undefined;
+  const previousObservation = previous?.observation;
+  if (previousObservation && previousObservation.solverRunId === solverRunId &&
+    (!observation || previousObservation.sequence >= observation.sequence)) observation = previousObservation;
+  return { ...run, solverAttempt: attempt, observation,
+    updatedAt: previous && previous.updatedAt > run.updatedAt ? previous.updatedAt : run.updatedAt };
 }
 function receiveRunObservation(observation: WebObservation) {
   const previous = state.runs.find(run => run.id === observation.webRunId);
-  if (!previous || previous.observation && (previous.observation.solverRunId !== observation.solverRunId
-    || previous.observation.sequence >= observation.sequence)) return;
+  const solverRunId = previous?.solverAttempt?.solverRunId ?? previous?.observation?.solverRunId;
+  if (!previous || solverRunId && solverRunId !== observation.solverRunId ||
+    previous.solverAttempt && observation.sequence < previous.solverAttempt.sequence ||
+    previous.observation && previous.observation.sequence >= observation.sequence) return;
   const run = { ...previous, observation,
     updatedAt: previous.updatedAt > observation.observedAt ? previous.updatedAt : observation.observedAt };
   state.runs = state.runs.map(item => item.id === run.id ? run : item);

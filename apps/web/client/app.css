@@ -696,6 +696,8 @@ li.active .stage-clock{color:var(--blue-600)}
 .report-section{padding:20px 0;border-bottom:1px solid var(--line);min-width:0}
 .report-section:last-child{border-bottom:0}
 .report-section h3{font-size:var(--text-xs);color:var(--gray-600);font-weight:600}
+.report-library code{font-size:var(--text-xs);overflow-wrap:anywhere}
+.report-library li+li{margin-top:10px}
 .report-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;padding:19px 0;margin:0;border-bottom:1px solid var(--line)}
 .report-metrics>div{min-width:0}
 .report-metrics dt{font-size:var(--text-xs);color:var(--gray-500)}
@@ -2383,6 +2385,8 @@ summary.route-item-head:focus-visible{outline-offset:-2px}
 .route-found-total{color:var(--gray-500)}
 .route-found-names{display:flex;flex-wrap:wrap;gap:4px;flex-basis:100%}
 .route-found-names code{font-family:var(--mono);font-size:var(--text-xs);padding:0 5px;border-radius:4px;background:var(--gray-50);color:var(--gray-700)}
+.route-library{display:grid;gap:8px;min-width:0}
+.route-library .route-found-query{overflow-wrap:anywhere;min-width:0}
 .route-link{margin:0}
 .route-link code{font-family:var(--mono);font-size:11.5px;overflow-wrap:anywhere}
 @media (max-width:560px){.agent-route-now{grid-column:1}.route-item-head{grid-template-columns:18px minmax(0,1fr)}.route-item-meta{grid-column:2;justify-content:flex-start}.route-item-body{padding-left:12px}}

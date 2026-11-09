@@ -31,7 +31,7 @@ type TaskView = 'graph' | 'list';
 type ScrollPosition = { top: number; left: number };
 // Low enough for "fit" to show a large compact plan whole; card text is then a status overview.
 const minGraphZoom = 0.3;
-type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; routeKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
+type ViewState = { element: HTMLElement; selectedTask: string; selectedVersion?: string; route: string; solverAttempt?: WebRun['solverAttempt']; observation?: WebObservation; loading: boolean; observationError?: string; knowledge: KnowledgeView; guidance: GuidanceComposer; progress: ResearchProgressView; changes: MathematicalChangesView; reviews: ReviewView; navigation: CollaborationNavigation; guidanceReturnTask?: { id: string; version: string }; taskPositions: Record<TaskView, ScrollPosition>; taskListReturn?: { taskId: string; viewport: ScrollPosition; list: ScrollPosition }; archiveBusy: boolean; active: boolean; artifactRequest: number; sourceComparison?: TaskSourceComparison; scrollTop: number; scrollLeft: number; viewport?: HTMLElement; archives: WebArchive[]; taskRenderFrame?: number; taskSearchComposing: boolean; renderKey?: string; routeKey?: string; graphZoom: number; graphLayout?: { key: string; layout: GraphLayout } };
 export const kindLabel: Record<string,string> = { research: t('研究'), sketch: t('草图'), lemma: t('引理'), goal: t('原始目标') };
 /** One status line for a run without a collaboration observation; the sections below need one to show anything. */
 function unobservedText(run: WebRun) {
@@ -91,7 +91,20 @@ export class CollaborationView {
       this.current = undefined; this.run = undefined; return;
     }
     let view = this.views.get(run.id);
+    const before = view?.solverAttempt ?? (view?.observation && {
+      solverRunId: view.observation.solverRunId, round: 0, sequence: view.observation.sequence });
+    if (view && before && run.solverAttempt && run.solverAttempt.solverRunId !== before.solverRunId &&
+      run.solverAttempt.round > before.round && run.solverAttempt.sequence >= before.sequence) {
+      // Sources, reviews and pending editor responses belong to the old frozen problem. Dispose only
+      // this run's surface; callbacks on its detached view cannot replace the next round's content.
+      view.artifactRequest++; view.navigation.disconnect();
+      if (view.taskRenderFrame !== undefined) cancelAnimationFrame(view.taskRenderFrame);
+      this.planEditor.retireRun(run.id);
+      this.views.delete(run.id); view = undefined;
+    }
     if (!view) { view = this.create(run.id); this.views.set(run.id, view); }
+    if (run.solverAttempt && (!view.solverAttempt || run.solverAttempt.solverRunId === view.solverAttempt.solverRunId &&
+      run.solverAttempt.sequence >= view.solverAttempt.sequence)) view.solverAttempt = run.solverAttempt;
     if (this.current !== view) {
       if (this.current?.viewport?.contains(this.current.element)) this.saveTaskReading(this.current);
       this.current?.navigation.disconnect();
@@ -219,8 +232,11 @@ export class CollaborationView {
     return result !== false;
   }
   private receive(observation: WebObservation, notify = true) {
-    const view = this.views.get(observation.webRunId); if (!view || view.observation &&
-      (observation.solverRunId !== view.observation.solverRunId || observation.sequence <= view.observation.sequence)) return;
+    const view = this.views.get(observation.webRunId);
+    const solverRunId = view?.solverAttempt?.solverRunId ?? view?.observation?.solverRunId;
+    if (!view || solverRunId && solverRunId !== observation.solverRunId ||
+      view.solverAttempt && observation.sequence < view.solverAttempt.sequence ||
+      view.observation && observation.sequence <= view.observation.sequence) return;
     view.observation = observation; view.observationError = undefined; this.planEditor.update(observation);
     if (!view.selectedTask || !view.selectedVersion && !observation.inspection.tasks.some(task => task.id === view.selectedTask)) {
       view.selectedTask = observation.inspection.tasks.find(task => task.kind === 'goal')?.id ?? observation.inspection.tasks[0]?.id ?? '';

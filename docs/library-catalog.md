@@ -57,4 +57,26 @@ Web 默认使用 `resources/theorem-os-library/release/catalog.json`。私有 wo
 
 应用尝试 `exact` / `apply`，也可用 `Iff.mp` / `Iff.mpr` 消费双向命题的一侧，通过 `Eq.symm` 应用方向相反的等式，或用一次正向 `rw` 将库结论改写到目标的子表达式中。另有一个显式展开全部参数的 `refine'` 分支，使只出现在前提中的关系或谓词可以由局部假设确定；隐式参数、类实例和其余前提都必须关闭。这些主定理应用方式都可逐项尝试同一候选池中的其他定理来关闭前提或转换后的目标；辅助定理只应用一层，其剩余前提须由局部假设或 `rfl` 关闭，不递归展开。带前提的双向定理先形成显式证明目标，关闭其前提后再处理被转换的一侧，避免内部证明失败阻断后续尝试。重写后的目标和定理前提都必须关闭，每个分支必须关闭全部目标才算成功，总检查预算仍为 30 秒；界面和模型上下文保持最多三条简要推荐。最终证明引用才进入实际使用记录。
 
-后续远端库平台可分发这套目录和按摘要寻址的源码对象。当前交付包含本地目录构建、检索、版本固定、按需读取及 Web 接入；上传、账号、托管和公开分享尚未实现。
+Web 的 Mathlib 解题 agent 还可主动检索整个固定版本，包括本题尚未安装的模块。宿主每回合写入 `LIBRARY.json`，绑定目录摘要、当前题目回执、seed commit 与已冻结模块；agent 使用独立工具：
+
+```bash
+theorem-os library search --worktree WORKTREE --query '数学关键词' --goal 'Lean 目标及局部假设'
+theorem-os library get --worktree WORKTREE --name '完整限定名' --max-bytes 16000
+theorem-os library request --worktree WORKTREE --name '完整限定名' --reason '具体用途及待关闭前提'
+```
+
+搜索结果以 `installed-frozen` / `not-installed` 标明当前安装状态。`get` 按需读取对应源码对象，返回完整模块的有界分页；用 `source.nextOffset` 继续读取，直到 `source.complete`，以保留 section 参数、实例和假设。每页完整 JSON 的 UTF-8 大小受 `--max-bytes` 限制。只允许定位公开声明，类型或结构也可按完整限定名定位；搜索不需要打开源码对象。
+
+Web 的 Agent 活动把 `search`、`get`、`request` 的工具输出显示为库版本、候选声明、安装状态、源码分页和请求状态，复用现有活动存储。源码正文与宿主路径不进入卡片摘要；排队请求不显示为已安装或已引用。源码页的 `complete` 只说明该页已到模块末尾，不表示此前所有页都已读取。
+
+最终报告的 `libraryUsage` 分别列出装入模块数、实际补装轮次，以及独立 S3 验收证明引用的公开声明。引用须绑定全部原始目标、准确提交和声明摘要，并与当前冻结模块及固定目录匹配；历史草稿、其他轮次与模型自报用途不计入。缺失引用信息显示未知，部分覆盖保留已知引用但不给出完整总数。摘要最多保留 64 个不同声明并标出省略数；这项记录不改变验收结果，也不推断检索导致了解题成功。
+
+`request` 最多接受八个声明，写入 `LIBRARY_REQUEST.json` 后，agent 保存源码与 `RESEARCH.md` 并返回。排队本身不会安装模块。宿主验证目录、原题回执、seed 祖先关系、旧库字节、声明冲突及整个安装预算，保留现有模块并补齐请求的传递依赖。有效请求在全部 writer 关闭后令当前运行输出 `library_requested`；同时已有通过的候选仍优先交给验收。无效请求被记录和移除，继续原运行。
+
+库文件属于冻结题目，运行中不会直接改写它们。Web supervisor 用同一份逐字原题、任务文字和已批准形式化证据建立新 bootstrap 与新回执，旧运行和旧回执留存。各 worker 的已保存可变源码、笔记及原续跑附件作为 advisory 材料传入新运行，不继承证明接受状态、不把旧草稿当新原题。附件较多时按种类合并，保留正文摘要及来源；仍受既有附件大小限制。新模块经过启动 Lean 检查，实际应用及完整原题继续走 M2 和独立 S3。
+
+各子运行的 turns、求解时间与 provider 已报告 token 累计消费同一个 Web 请求预算。有限预算耗尽、或有限 token 预算缺少完整用量回执时，不再启动下一轮，不能把剩余的零误传为无限预算。`library-research.json` 保存每轮回执、安装模块、请求及续跑关系；最终 Web report 的用量是所有子运行合计。观察序号跨轮递增，solver 身份切换由宿主显式声明，旧轮的指导引用不能写入新轮。
+
+worker 镜像把完整目录和源码对象发布在 `/opt/theoremos-library/release`，供无法读取应用树的 bundled `library` 工具使用。可用 `THEOREMOS_AGENT_LIBRARY_CATALOG` 指定另一可读副本，摘要必须与宿主选库目录相同。普通 CLI 可通过 `run --library-catalog FILE --library-catalog-sha256 DIGEST` 启用同样的工具；收到 `library_requested` 后由调用方负责建立新冻结续跑，自动监督目前在 Web 实现。
+
+后续远端库平台可分发这套目录和按摘要寻址的源码对象。当前交付包含本地目录构建、检索、版本固定、按需读取、agent 安装请求及 Web 冻结续跑；上传、账号、托管和公开分享尚未实现。

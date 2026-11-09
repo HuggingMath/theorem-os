@@ -35,6 +35,9 @@ import { selectedSub2apiProfile } from '../runtime/sub2api';
 import { copyKnowledgeSnapshot, readKnowledgeCatalog } from './theoremKnowledgeStore';
 import { readInstalledLibrarySnapshot } from './installedLibraryContext';
 import { indexKnowledgeContextSnapshot } from './knowledgeContext';
+import { LibraryInstallationRequested } from './libraryAccess';
+import { readLibraryCatalog } from './libraryCatalog';
+import { readLeanTaskReceipt } from '../math/leanTask';
 import { copyContinuationSnapshot, freezeContinuationInput, readContinuationInput, readContinuationSnapshot,
   type ContinuationSnapshot } from './continuationInput';
 import { seedSolverContinuation } from './continuationSeed';
@@ -57,6 +60,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     'proof-environment-cache-dir': { type: 'string' }, 'startup-only': { type: 'boolean' }, 'check-statement': { type: 'boolean' },
     help: { type: 'boolean' },
     'knowledge-base': { type: 'string' }, 'continuation-manifest': { type: 'string' },
+    'library-catalog': { type: 'string' }, 'library-catalog-sha256': { type: 'string' },
     'continuation-source-run': { type: 'string' },
     method: { type: 'string', default: 'direct' }, workers: { type: 'string', default: '4' },
     'module-plan': { type: 'string' },
@@ -66,6 +70,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   if (values.help) {
     console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--proof-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --prepare-timeout-seconds, --max-run-seconds, --max-turns, --max-turn-seconds, --proof-timeout-seconds or --evaluator-timeout-seconds to disable that limit. Proof checks default to 1800 seconds independently of the solving budget; an expired check saves a resumable checkpoint and the identical candidate gets more time on its next check.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
     console.log('--knowledge-base FILE attaches an immutable saved-theorem catalog. Resume requires the same catalog digest. Historical knowledge never grants proof acceptance.');
+    console.log('--library-catalog FILE --library-catalog-sha256 DIGEST enables agent search/get/request against one pinned release. Installation requests end this frozen run for host-controlled continuation.');
     console.log('--continuation-manifest FILE attaches explicit historical sources and notes without changing the verbatim task file. Resume retains the frozen attachment identity; historical material remains advisory.');
     console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. Use --resume to retry an interrupted zero-turn initialization; combine with --startup-only to retain a prepared checkpoint.');
     console.log('--check-statement also elaborates the target files at startup (theorem bodies may still be sorry) and fails with math_statement_check_failed on a Lean error; statement-diagnostics.json keeps the messages.');
@@ -150,6 +155,11 @@ export async function runSolver(args: string[], root: string, customModules?: So
       readMathBuildManifest(buildFile, root, bundleRoot);
       const task = fs.readFileSync(required('task-file'), 'utf8');
       const problem = readSolverProblem(workspace, values['receipt-file'] || path.join(workspace, 'active-problem.json'));
+      if (Boolean(values['library-catalog']) !== Boolean(values['library-catalog-sha256'])) throw new Error('math_library_catalog_pin_missing');
+      const libraryCatalog = values['library-catalog'] && readLibraryCatalog(values['library-catalog'], values['library-catalog-sha256']);
+      if (libraryCatalog && (problem.kind !== 'lean-task' ||
+          readLeanTaskReceipt(problem.activeProblemPath).environmentDigest !== libraryCatalog.identity.environmentDigest))
+        throw new Error('math_library_catalog_environment_changed');
       const continuationIdentity = { taskDigest: mathDigest(task), problemReceiptDigest: problem.receiptDigest };
       const continuationInput = values['continuation-manifest']
         ? readContinuationInput(values['continuation-manifest'], continuationIdentity) : undefined;
@@ -189,7 +199,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         providerProfile: providerProfile?.profile, providerProfileDigest: providerProfile?.digest,
         environmentDigest: mathDigest(canonicalMathJson(projectMathematicsRuntimeEnvironment(env))),
         evaluatorDigest: mathDigest(values['evaluator-command'] || 'host-default'), model: values.model!, effort: values.effort!,
-        methodDigest: solverMethodDigest(modules, coordination), knowledgeDigest: knowledge?.digest };
+        methodDigest: solverMethodDigest(modules, coordination), knowledgeDigest: knowledge?.digest,
+        libraryCatalogDigest: libraryCatalog ? libraryCatalog.identity.catalogDigest : undefined };
       const moduleConfiguration = solverModuleConfiguration(modules);
       let state: SolverRunState;
       let sourceFeedback: string | undefined;
@@ -386,6 +397,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
           retrievalRoot: corpus?.projectSubdirectory ? workerRoot : workerProject,
           ...(mathTools ? { mathTools } : {}),
           ...(installedLibrary ? { installedLibrary } : {}),
+          ...(libraryCatalog ? { libraryCatalog: { file: path.resolve(values['library-catalog']!), digest: libraryCatalog.identity.catalogDigest } } : {}),
           ...(workerContinuation ? { continuation: workerContinuation } : {}),
           ...(knowledge ? { knowledgeFile, knowledgeDigest: knowledge.digest,
             knowledgeSnapshot } : {}) });
@@ -482,7 +494,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
       if (!ownsRun) { emit('rejected', { reason: error instanceof Error ? error.message : 'math_runtime_error' }); return 1; }
       lease.assertOwned();
       const checkpoint = error instanceof VerificationCheckpointError;
-      const status = controller.signal.aborted || checkpoint ? 'limit_reached' : 'runtime_error';
+      const libraryRequest = error instanceof LibraryInstallationRequested ? error : undefined;
+      const status = controller.signal.aborted || checkpoint ? 'limit_reached' : libraryRequest ? 'library_requested' : 'runtime_error';
       // Initialization owns durable progress before its final in-memory handoff.
       if (continuationSeeding) ownedState = readSolverRunState(stateFile);
       if (ownedState) {
@@ -491,12 +504,15 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (!(preparing && values['continuation-source-run'] && ownedState.phase === 'prepared'))
           ownedState.phase = 'finished';
         if (ownedState.solveStartedAt && !ownedState.solveFinishedAt) ownedState.solveFinishedAt = Date.now();
-        ownedState.error = controller.signal.aborted || checkpoint ? undefined : error instanceof Error ? error.message : 'math_runtime_error';
+        ownedState.error = controller.signal.aborted || checkpoint || libraryRequest ? undefined : error instanceof Error ? error.message : 'math_runtime_error';
         writeSolverRunState(stateFile, ownedState);
       }
       writeMathJsonDurable(output, { schema: 'deepscientist.math.run.v2', status, run_outcome: status,
         reason: controller.signal.aborted ? preparing ? 'math_preparation_stopped' : 'math_run_stopped' : error instanceof Error ? error.message : 'math_runtime_error',
         runId: ownedState?.runId, problemId: ownedState?.problem.contract.problemId, ...runSummary(ownedState),
+        ...(ownedState?.solveStartedAt && ownedState.solveFinishedAt
+          ? { solveWallMs: ownedState.solveFinishedAt - ownedState.solveStartedAt } : {}),
+        ...(libraryRequest ? { libraryRequest: { request: libraryRequest.request, worktree: libraryRequest.worktree } } : {}),
         evaluator: { status: 'skipped' }, stateFile });
       publishedExit = controller.signal.aborted || checkpoint ? 4 : 1;
       emit('finished', { status, output });

@@ -102,6 +102,12 @@ export class TaskPlanEditor {
     this.disposed = true; this.runId = ''; this.observation = undefined; this.drafts.clear();
     this.dialog.close(); this.dialog.remove();
   }
+  /** A new frozen solver round retires only this research's drafts and pending commands. */
+  retireRun(runId: string) {
+    this.drafts.delete(runId);
+    if (this.runId === runId) { this.runId = ''; this.observation = undefined; this.dialog.close(); }
+  }
+  private owns(runId: string, draft: PlanDraft) { return !this.disposed && this.drafts.get(runId) === draft; }
   update(observation: WebObservation) {
     if (this.disposed) return;
     const draft = this.drafts.get(observation.webRunId);
@@ -376,7 +382,7 @@ export class TaskPlanEditor {
     try {
       if (rebase) proposal = this.parse();
       const { observation } = await this.api<{ observation: WebObservation | null }>(`/api/runs/${encodeURIComponent(runId)}/observation`);
-      if (this.disposed) return;
+      if (!this.owns(runId, draft)) return;
       if (!observation?.plan) throw new Error(t('尚无可用研究计划'));
       this.receive(runId, observation);
       const latest = draft.observation!;
@@ -386,18 +392,19 @@ export class TaskPlanEditor {
         draft.text = jsonText(proposal); draft.previewText = undefined; draft.receipt = undefined; draft.error = undefined; draft.submitted = false;
         if (this.runId === runId) { this.advanced.value = draft.text; this.renderCommon(); }
       }
-    } catch (error) { if (this.disposed) return; draft.error = errorText(error); proposal = undefined; }
-    finally { draft.busy = false; if (this.runId === runId) this.renderStatus(); }
+    } catch (error) { if (!this.owns(runId, draft)) return; draft.error = errorText(error); proposal = undefined; }
+    finally { draft.busy = false; if (this.owns(runId, draft) && this.runId === runId) this.renderStatus(); }
     if (proposal) await this.requestPlan(runId, draft, proposal, false);
   }
   private async submit(apply: boolean) {
-    const draft = this.draft(); if (draft.busy || apply && draft.pending) return;
+    const runId = this.runId, draft = this.draft(); if (draft.busy || apply && draft.pending) return;
     try {
       const proposal = this.parse();
       await this.requestPlan(this.runId, draft, proposal, apply);
-    } catch (error) { draft.error = errorText(error); draft.previewText = undefined; this.renderStatus(); }
+    } catch (error) { if (!this.owns(runId, draft)) return; draft.error = errorText(error); draft.previewText = undefined; this.renderStatus(); }
   }
   private recordReceipt(runId: string, draft: PlanDraft, receipt: WebCommandResult) {
+    if (!this.owns(runId, draft)) return;
     if (draft.pending && receipt.id !== draft.pending.proposal.id) throw new Error(t('命令回执身份不匹配'));
     if (receipt.observation) this.receive(runId, receipt.observation);
     draft.receipt = this.observedReceipt(draft, receipt); draft.error = undefined;
@@ -413,36 +420,36 @@ export class TaskPlanEditor {
       affectedTaskIds: edit.affectedTasks ?? receipt.affectedTaskIds } : receipt;
   }
   private async requestPlan(runId: string, draft: PlanDraft, proposal: WebPlanProposal, apply: boolean) {
-    if (this.disposed) return;
+    if (!this.owns(runId, draft)) return;
     const submittedText = draft.text; draft.busy = true; draft.error = undefined; draft.notice = undefined;
     const pending = apply ? { proposal: structuredClone(proposal) } : undefined;
     if (apply) { draft.submitted = true; draft.pending = pending; }
     if (this.runId === runId) this.renderStatus();
     try {
       const { receipt } = await this.api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(runId)}/edits${apply ? '' : '/preview'}`, { method: 'POST', body: JSON.stringify(proposal) });
-      if (this.disposed) return;
+      if (!this.owns(runId, draft)) return;
       if (receipt.id !== proposal.id) throw new Error(t('命令回执身份不匹配'));
       if (apply) this.recordReceipt(runId, draft, receipt);
       else { if (receipt.observation) this.receive(runId, receipt.observation); draft.receipt = this.observedReceipt(draft, receipt); }
       draft.previewText = apply ? undefined : submittedText;
       if (apply && draft.pending) await this.readReceipt(runId, draft);
     } catch (error) {
-      if (this.disposed) return;
+      if (!this.owns(runId, draft)) return;
       if (apply && draft.pending !== pending && draft.receipt?.id === proposal.id && draft.receipt.edit) return;
       draft.error = errorText(error); draft.previewText = undefined;
       const status = responseStatus(error);
       if (apply && typeof status === 'number' && status >= 400 && status < 500) draft.pending = undefined;
       else if (apply && draft.pending) await this.readReceipt(runId, draft);
-    } finally { draft.busy = false; if (this.runId === runId) this.renderStatus(); }
+    } finally { draft.busy = false; if (this.owns(runId, draft) && this.runId === runId) this.renderStatus(); }
   }
   private async readReceipt(runId: string, draft: PlanDraft) {
     const pending = draft.pending; if (!pending) return;
     try {
       const { receipt } = await this.api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(pending.proposal.id)}`);
-      if (this.disposed || draft.pending !== pending) return true;
+      if (!this.owns(runId, draft) || draft.pending !== pending) return true;
       this.recordReceipt(runId, draft, receipt); return true;
     } catch (error) {
-      if (this.disposed || draft.pending !== pending) return true;
+      if (!this.owns(runId, draft) || draft.pending !== pending) return true;
       pending.missing = responseStatus(error) === 404;
       draft.error = errorText(error); return false;
     }
@@ -452,7 +459,7 @@ export class TaskPlanEditor {
     const proposal = draft.pending.proposal; draft.busy = true; this.renderStatus();
     let retry = false;
     try { const found = await this.readReceipt(runId, draft); retry = retryMissing && !found && Boolean(draft.pending?.missing); }
-    finally { draft.busy = false; if (this.runId === runId) this.renderStatus(); }
+    finally { draft.busy = false; if (this.owns(runId, draft) && this.runId === runId) this.renderStatus(); }
     if (retry) await this.requestPlan(runId, draft, proposal, true);
   }
 }

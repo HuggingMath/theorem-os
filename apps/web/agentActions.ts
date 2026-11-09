@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { webAgentActionKinds, webAgentActionLimits as limits, type WebAgentActionBody, type WebAgentActionIntent, type WebAgentFileChange,
-  type WebAgentLeanCheck, type WebAgentLeanSearch } from './shared';
+  type WebAgentLeanCheck, type WebAgentLeanSearch, type WebAgentLibraryAction, type WebAgentLibraryDeclaration } from './shared';
 
 type Item = Record<string, unknown>;
 export type AgentActionContext = {
@@ -93,6 +93,44 @@ function leanSearch(result: Item, mask: (value: string) => string): WebAgentLean
   });
   return found.length ? found : undefined;
 }
+function libraryAction(result: Item, command: string, mask: (value: string) => string): WebAgentLibraryAction | undefined {
+  const operation = /\blibrary\s+(search|get|request)\b/u.exec(command)?.[1];
+  const schema = operation === 'search' ? 'theorem-os.library-search.v1' : operation === 'get' ? 'theorem-os.library-source.v1'
+    : operation === 'request' ? 'theorem-os.library-request-result.v1' : undefined;
+  const identity = object(result.library), id = string(identity?.id), revision = string(identity?.revision), catalogDigest = string(identity?.catalogDigest);
+  if (!schema || result.schema !== schema || !id || !revision || !catalogDigest || !/^[a-f0-9]{64}$/u.test(catalogDigest)) return;
+  const library = { id: clip(mask(id), limits.name).text, revision: clip(mask(revision), limits.name).text, catalogDigest };
+  const declaration = (value: unknown): WebAgentLibraryDeclaration | undefined => {
+    const entry = object(value), name = string(entry?.name), installation = entry?.installation;
+    if (!name || installation !== 'installed-frozen' && installation !== 'not-installed') return;
+    return { name: clip(mask(name), limits.name).text, installation };
+  };
+  const declarations = (value: unknown) => {
+    if (!Array.isArray(value)) return;
+    const entries = value.map(declaration);
+    if (entries.some(entry => !entry)) return;
+    return { entries: (entries as WebAgentLibraryDeclaration[]).slice(0, limits.names), omitted: Math.max(0, entries.length - limits.names) };
+  };
+  if (operation === 'search') {
+    const query = string(result.query), goal = string(result.goal), hits = declarations(result.hits), references = declarations(result.namedReferences);
+    if (query === undefined || !hits || !references) return;
+    return { library, operation, query: clip(mask(query), limits.query).text, ...(goal ? { goal: clip(mask(goal), limits.query).text } : {}),
+      hits: hits.entries, namedReferences: references.entries, ...(hits.omitted ? { omittedHits: hits.omitted } : {}),
+      ...(references.omitted ? { omittedReferences: references.omitted } : {}) };
+  }
+  if (operation === 'get') {
+    const source = object(result.source), offset = count(source?.offset), nextOffset = source?.nextOffset, complete = source?.complete;
+    const entry = declaration({ ...object(result.declaration), installation: result.installation });
+    if (!entry || offset === undefined || typeof complete !== 'boolean' ||
+      (complete ? nextOffset !== null : count(nextOffset) === undefined || (nextOffset as number) <= offset)) return;
+    return { library, operation, declaration: entry, source: { offset, nextOffset: nextOffset as number | null, complete } };
+  }
+  if (operation === 'request') {
+    const entries = declarations(result.declarations), status = result.status;
+    if (!entries?.entries.length || status !== 'queued' && status !== 'already-installed') return;
+    return { library, operation, status, declarations: entries.entries, ...(entries.omitted ? { omittedDeclarations: entries.omitted } : {}) };
+  }
+}
 
 /**
  * One Codex thread item as the run's owner may see it, or undefined for items that are the host's own words
@@ -115,13 +153,14 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
       const outsideCwd = cwd !== undefined && path.relative(path.resolve(context.worktree), path.resolve(cwd)).startsWith('..');
       const rawOutput = (string(item.aggregatedOutput) ?? '').replace(ansi, '').replace(lockLine, '');
       const output = mask(rawOutput);
-      // A finished Lean check or Mathlib search reads as what it found, its JSON only the carrier; the messages and names
-      // shown are masked, so host paths elsewhere in that JSON (Lean's package directories) do not withhold it.
+      // Completed mathematics tools read as bounded reports, their JSON only the carrier. The fields shown are masked;
+      // ignored source text, origins and Lean package directories never enter the structured report.
       const result = !command.hidden && !outsideCwd && phase === 'completed' ? lastJson(output.text) : undefined;
       const masked = (value: string) => mask(value).text;
-      const lean = result && /\bcheck-lean\b/u.test(command.text) ? leanCheck(result, masked) : undefined;
-      const found = result && !lean && /\bsearch-lean\b/u.test(command.text) ? leanSearch(result, masked) : undefined;
-      const withheld = !lean && !found && (command.hidden || output.hidden || outsideCwd);
+      const library = result ? libraryAction(result, command.text, masked) : undefined;
+      const lean = result && !library && /\bcheck-lean\b/u.test(command.text) ? leanCheck(result, masked) : undefined;
+      const found = result && !library && !lean && /\bsearch-lean\b/u.test(command.text) ? leanSearch(result, masked) : undefined;
+      const withheld = !library && !lean && !found && (command.hidden || output.hidden || outsideCwd);
       const shownCommand = clip(command.text.replace(/\b([a-f0-9]{12})[a-f0-9]{52}\b/gu, '$1…'), limits.command);
       const intents = (Array.isArray(item.commandActions) ? item.commandActions : []).flatMap((value): WebAgentActionIntent[] => {
         const action = object(value), kind = string(action?.type);
@@ -136,7 +175,7 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
       const state = status('done');
       return { ...base, kind: 'command', status: state === 'done' && exitCode ? 'failed' : state, command: shownCommand.text,
         ...(intents.length ? { intents } : {}),
-        ...(withheld ? { withheld: true } : lean ? { lean } : found ? { found } : tail.text ? { output: tail.text, ...(tail.clipped ? { outputClipped: true } : {}) } : {}),
+        ...(withheld ? { withheld: true } : library ? { library } : lean ? { lean } : found ? { found } : tail.text ? { output: tail.text, ...(tail.clipped ? { outputClipped: true } : {}) } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}), ...(count(item.durationMs) !== undefined ? { durationMs: count(item.durationMs) } : {}) };
     }
     case 'fileChange': {
@@ -181,7 +220,7 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
 }
 
 const keys = new Set(['workerId', 'itemId', 'phase', 'kind', 'status', 'command', 'intents', 'output', 'outputClipped', 'withheld', 'exitCode',
-  'durationMs', 'lean', 'found', 'changes', 'omittedChanges', 'text', 'textClipped', 'query', 'url', 'tool', 'arguments']);
+  'durationMs', 'lean', 'found', 'library', 'changes', 'omittedChanges', 'text', 'textClipped', 'query', 'url', 'tool', 'arguments']);
 const short = (value: unknown, limit: number) => value === undefined || typeof value === 'string' && value.length <= limit;
 const flag = (value: unknown) => value === undefined || value === true;
 const integer = (value: unknown) => value === undefined || typeof value === 'number' && Number.isSafeInteger(value);
@@ -204,6 +243,31 @@ function isLeanSearch(value: unknown) {
       query.names.length <= limits.names && query.names.every(name => typeof name === 'string' && name.length <= limits.name);
   });
 }
+function isLibraryAction(value: unknown) {
+  const action = object(value), identity = object(action?.library);
+  const requiredText = (value: unknown) => typeof value === 'string' && value.length > 0 && short(value, limits.name);
+  const omitted = (value: unknown) => value === undefined || count(value) !== undefined;
+  const declaration = (value: unknown) => {
+    const item = object(value);
+    return !!item && only(item, ['name', 'installation']) && requiredText(item.name) &&
+      ['installed-frozen', 'not-installed'].includes(item.installation as string);
+  };
+  const declarations = (value: unknown) => Array.isArray(value) && value.length <= limits.names && value.every(declaration);
+  if (!action || !identity || !only(identity, ['id', 'revision', 'catalogDigest']) || !requiredText(identity.id) || !requiredText(identity.revision) ||
+    typeof identity.catalogDigest !== 'string' || !/^[a-f0-9]{64}$/u.test(identity.catalogDigest)) return false;
+  if (action.operation === 'search') return only(action, ['library', 'operation', 'query', 'goal', 'hits', 'namedReferences', 'omittedHits', 'omittedReferences']) &&
+    typeof action.query === 'string' && short(action.query, limits.query) && short(action.goal, limits.query) && declarations(action.hits) &&
+    declarations(action.namedReferences) && omitted(action.omittedHits) && omitted(action.omittedReferences);
+  if (action.operation === 'get') {
+    const source = object(action.source);
+    return only(action, ['library', 'operation', 'declaration', 'source']) && declaration(action.declaration) && !!source &&
+      only(source, ['offset', 'nextOffset', 'complete']) && count(source.offset) !== undefined && typeof source.complete === 'boolean' &&
+      (source.complete ? source.nextOffset === null : count(source.nextOffset) !== undefined && (source.nextOffset as number) > (source.offset as number));
+  }
+  return action.operation === 'request' && only(action, ['library', 'operation', 'status', 'declarations', 'omittedDeclarations']) &&
+    ['queued', 'already-installed'].includes(action.status as string) && declarations(action.declarations) &&
+    (action.declarations as unknown[]).length > 0 && omitted(action.omittedDeclarations);
+}
 
 /** The shape and limits sanitizeAgentItem produces; the server accepts nothing else from a worker. */
 export function isWebAgentActionBody(value: unknown): value is WebAgentActionBody {
@@ -217,6 +281,8 @@ export function isWebAgentActionBody(value: unknown): value is WebAgentActionBod
       !short(action.query, limits.query) || !short(action.url, limits.query) || !short(action.tool, 200) || !short(action.arguments, limits.arguments)) return false;
   if (![action.outputClipped, action.withheld, action.textClipped].every(flag) || ![action.exitCode, action.durationMs, action.omittedChanges].every(integer)) return false;
   if ((action.lean !== undefined && !isWebAgentLeanCheck(action.lean)) || (action.found !== undefined && !isLeanSearch(action.found))) return false;
+  if (action.library !== undefined && (action.kind !== 'command' || action.phase !== 'completed' || !isLibraryAction(action.library) ||
+    [action.lean, action.found, action.output, action.outputClipped, action.withheld].some(value => value !== undefined))) return false;
   if (action.intents !== undefined && (!Array.isArray(action.intents) || action.intents.length > limits.intents || !action.intents.every(intent => {
     const item = object(intent);
     return item && Object.keys(item).every(key => ['type', 'path', 'query'].includes(key)) && ['read', 'list', 'search'].includes(item.type as string) &&

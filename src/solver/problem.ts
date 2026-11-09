@@ -358,7 +358,8 @@ function solverPathsOutsideOwnership(problem: SolverProblem, worktree: string) {
   const changed = new Set([...solverGitPaths(worktree, ['diff', '--name-only', '-z', problem.baseCommit]),
     ...solverGitPaths(worktree, ['diff', '--cached', '--name-only', '-z', problem.baseCommit]), ...untracked]);
   const allowed = new Set([...problem.ownedFiles.map(relative => path.join(problem.projectRelative, relative)),
-    'RESEARCH.md', 'DELIVERIES.jsonl', 'COOPERATION.json', 'CONTEXT-MANIFEST.json', DECLARATION_INDEX_FILE]);
+    'RESEARCH.md', 'DELIVERIES.jsonl', 'COOPERATION.json', 'CONTEXT-MANIFEST.json', DECLARATION_INDEX_FILE,
+    'LIBRARY.json', 'LIBRARY_REQUEST.json']);
   // A worker's own redirect of a Lean or script diagnostic is not proof content and is not committed.
   const diagnosticLog = (relative: string) => !relative.includes('/') && /\.log$/u.test(relative);
   const outside = [...changed].filter(relative => !allowed.has(relative) && !/^DELIVERIES-[a-f0-9]{64}\.jsonl$/u.test(relative) &&
@@ -411,6 +412,7 @@ export function commitSolverSources(problem: SolverProblem, worktree: string): s
   const exclude = path.resolve(worktree, git(worktree, ['rev-parse', '--git-path', 'info/exclude']));
   const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8').split('\n') : [];
   const missing = ['/COOPERATION.json', '/CONTEXT-MANIFEST.json', `/${DECLARATION_INDEX_FILE}`, '/DELIVERIES.jsonl',
+    '/LIBRARY.json', '/LIBRARY_REQUEST.json',
     `/DELIVERIES-${'[a-f0-9]'.repeat(64)}.jsonl`]
     .filter(rule => !existing.includes(rule));
   if (missing.length) {

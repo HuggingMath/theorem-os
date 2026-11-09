@@ -10,7 +10,7 @@ import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mat
 import type { SolverRunState, SolverWorkerState } from './archive';
 import { commitSolverSources, git, solverScratchDigest } from './problem';
 import { CooperativeResearch } from './cooperation';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, taskGroup, type CooperativeAction } from './tasks';
+import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, isFinalCandidateReview, taskGroup, type CooperativeAction } from './tasks';
 import { isStatementAction } from './statementReview';
 import { rememberSolverFailure, solverSourceFeedback } from './feedback';
 import type { SolverModules } from './modules';
@@ -37,6 +37,7 @@ import { captureResearchBasis, researchSourceDigest, type ResearchBasis } from '
 import { writeOwnedDeclarationIndex } from './declarationIndex';
 import { LEAD_MAX_BACKOFF } from './leadWakes';
 import { applyOriginalLibraryTasks } from './libraryApplication';
+import { LibraryInstallationRequested, takeLibraryRequest, writeLibraryAccess, type LibraryAccess } from './libraryAccess';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -104,6 +105,7 @@ export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | und
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
   continuation?: ContinuationSnapshot; mathTools?: MathTools;
   installedLibrary?: KnowledgeContextSnapshot;
+  libraryCatalog?: LibraryAccess;
   knowledgeFile?: string; knowledgeDigest?: string; knowledgeSnapshot?: KnowledgeContextSnapshot };
 
 /** Lead and isolated task workers share one budget; only a full canonical check grants acceptance. */
@@ -210,6 +212,7 @@ export async function runResearchWorkers(input: {
         dispatchDigest: string }>();
       const context = (feedback?: string, previousCheck?: ProofCheck, previousFailures = research.failures,
         assignment?: CooperativeAction) => {
+        if (access.libraryCatalog) writeLibraryAccess(state.problem, worker.worktree, access.libraryCatalog);
         const scoped = cooperation?.contextState(assignment, worker);
         const currentContext = { ...modules.M4.build(state.problem,
           { ...view(), ...(scoped ? { cooperation: scoped } : {}) }, {
@@ -1103,6 +1106,24 @@ export async function runResearchWorkers(input: {
           const lastInputTokens = session?.lastInputTokens;
           const diagnostic = safeFailureDiagnostic(session?.lastFailureDiagnostic);
           const turnError = executionError ?? failureDetail(session?.lastError, undefined, diagnostic);
+          if (access.libraryCatalog && candidate.status !== 'failed') {
+            let request: LibraryInstallationRequested | undefined;
+            try {
+              if (assignment?.kind === 'task' && (isFeasibilityReview(assignment.task) || isFinalCandidateReview(assignment.task)) &&
+                  fs.existsSync(path.join(worker.worktree, 'LIBRARY_REQUEST.json'))) throw new Error('math_library_request_fixed_review');
+              request = takeLibraryRequest(state.problem, worker.worktree, access.libraryCatalog);
+            }
+            catch (error) {
+              emit('library_request_rejected', { reason: error instanceof Error ? error.message : String(error) });
+              fs.rmSync(path.join(worker.worktree, 'LIBRARY_REQUEST.json'), { force: true });
+            }
+            if (request) {
+              await close();
+              if (!sourceFeedback()) commitSolverSources(state.problem, worker.worktree);
+              emit('library_installation_requested', { names: request.request.names, catalogDigest: request.request.catalogDigest });
+              throw request;
+            }
+          }
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
           if (candidate.status === 'failed' || planningCheckpoint) await close();
@@ -1194,11 +1215,12 @@ export async function runResearchWorkers(input: {
         if (!signal.aborted) {
           errors.push(error);
           if (error instanceof VerificationCheckpointError) emit('worker_checkpoint', { reason: error.message, key: error.checkpoint.key });
+          else if (error instanceof LibraryInstallationRequested) emit('worker_checkpoint', { reason: error.message });
           else {
             research.error = error instanceof Error ? error.message : 'math_worker_failed';
             emit('worker_failed', { reason: research.error });
           }
-          if (!parallel || (cooperation && worker.id === input.workers[0].id && research.error !== 'math_model_context_capacity_blocked') ||
+          if (error instanceof LibraryInstallationRequested || !parallel || (cooperation && worker.id === input.workers[0].id && research.error !== 'math_model_context_capacity_blocked') ||
               (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable')) abort();
         }
       } finally {
@@ -1218,7 +1240,8 @@ export async function runResearchWorkers(input: {
       error.message.startsWith('math_writer_stop_unconfirmed:'));
     if (unconfirmedStop) throw unconfirmedStop;
     if (cleanupErrors.length) throw cleanupErrors[0];
-    if (!winner && errors.length) throw errors.find(error => error instanceof VerificationCheckpointError) ?? errors[0];
+    if (!winner && errors.length) throw errors.find(error => error instanceof LibraryInstallationRequested) ??
+      errors.find(error => error instanceof VerificationCheckpointError) ?? errors[0];
     return winner;
   } finally {
     try { await cooperation?.stop(); } finally { input.signal.removeEventListener('abort', abort); }
