@@ -64,6 +64,8 @@ describe('live Lead publication correction feedback', () => {
   };
   const expectCorrection = (message: string, action: Lead, reason: string) => {
     for (const detail of [reason, log(action), action.planVersion!, nonce(action)]) expect(message).toContain(detail);
+    const target = JSON.parse(message.split('current publication target: ')[1].split('. Preserve the log')[0]);
+    expect(target).toEqual({ file: log(action), dispatchNonce: nonce(action), baseVersion: action.planVersion });
     expect(message).toMatch(/append/iu);
     expect(message).toMatch(/complete/iu);
   };

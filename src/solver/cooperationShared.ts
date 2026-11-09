@@ -165,8 +165,7 @@ export function leadPlanPublicationFeedback(action: CooperativeAction | undefine
   if (action?.kind !== 'lead' || !file || !rejection || rejection.baseVersion !== state.planVersion) return;
   return 'Host rejected a Lead publication before accepting it:\n' + JSON.stringify(rejection) + '\n' +
     'Correct the reported error and append a new complete JSON event using the current publication target: ' +
-    JSON.stringify({ file, nonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion,
-      ...(action.planNonce ? { dispatchNonce: action.planNonce } : {}) }) + '. ' +
+    JSON.stringify({ file, dispatchNonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion }) + '. ' +
     'Preserve the log and use the current assignment protocol; a saved rejection may come from an earlier dispatch. ' +
     'Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance.';
 }

@@ -69,12 +69,16 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
   const task: CooperativeTask = { id: 'core', kind: 'lemma', objective: 'Prove the core lemma.',
     dependsOn: [], revision: 0, theoremName: 'core', proofPath: 'Submission.lean', type: 'True' };
   const state = { cooperation: { tasks: existing ? [{ task, status: 'pending', attempts: 0 }] : [] } } as unknown as SolverRunState;
+  const dispatchNonce = existing ? 'revision-dispatch-nonce' : 'initial-dispatch-nonce';
   const context = buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
     taskText: 'Prove the target', retrievalRoot: '/library', frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' },
-    assignment: { kind: 'lead', seedCommit: 'fixed-commit' } });
+    assignment: { kind: 'lead', seedCommit: 'fixed-commit', planVersion: 'current-plan',
+      ...(existing ? { planNonce: dispatchNonce } : { initialPlanNonce: dispatchNonce }) } });
   expect(context.instructions).toContain('Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it.');
   expect(context.instructions).toContain('Delegate unresolved library or mathematical searches as research tasks to eligible Researchers or the Engineer.');
   for (const message of [context.instructions, context.continuationMessage]) {
+    expect(message).toContain(`"dispatchNonce":${JSON.stringify(dispatchNonce)}`);
+    expect(message).toContain('Copy the dispatchNonce and baseVersion fields exactly as shown');
     expect(message).toContain('ready tasks reserved by ownerId to a busy worker');
     expect(message).toContain('Explicitly reassign an unstarted, unassigned task through the plan');
     expect(message).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
