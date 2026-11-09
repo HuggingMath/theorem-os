@@ -192,10 +192,16 @@ try {
     assert.equal(writes.length, 0, 'Choosing a natural-language example only prepares an editable draft');
     await page.locator('#workbench-home').click();
     assert.equal(new URL(page.url()).search, '');
+    const lastExample = researchExamples.find(example => example.id === 'schur-cubic')!;
+    const exampleDraft = locale === 'en' ? lastExample.originalEn : lastExample.original;
+    assert.equal(await page.locator('#formalize-original').inputValue(), exampleDraft, 'Returning home preserves the current draft.');
+    await page.reload(); await page.locator('#formalize-original').waitFor();
+    assert.equal(await page.locator('#formalize-original').inputValue(), exampleDraft, 'The preserved draft survives reload.');
+    await page.locator('#topbar-draft').click();
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     await page.reload(); await page.locator('#formalize-original').waitFor();
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
-    mark(`${locale} ${width}px: the standard-library starter comes first; both simple and Mathlib examples set editable drafts and matching environments`);
+    mark(`${locale} ${width}px: examples set matching environments; home preserves the draft and explicit new chat clears it`);
     await context.close();
   }
   assert.deepEqual(errors, []);

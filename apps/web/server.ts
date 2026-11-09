@@ -280,7 +280,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const origin = new URL(config.publicUrl);
   const secure = origin.protocol === 'https:';
   const setSessionCookie = (response: ServerResponse, session: Session) => {
-    response.setHeader('Set-Cookie', `theoremos_session=${session.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(config.sessionTtlMs / 1000)}${secure ? '; Secure' : ''}`);
+    // Signed-in identity cookies are issued only at login. Server-side idle expiry still governs access.
+    const maxAge = auth && session.account ? 365 * 24 * 60 * 60 : Math.floor(config.sessionTtlMs / 1000);
+    response.setHeader('Set-Cookie', `theoremos_session=${session.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`);
   };
   const clearSessionCookie = (response: ServerResponse) => {
     response.setHeader('Set-Cookie', `theoremos_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`);
@@ -390,8 +392,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const displaced = admission.admit(ip, sessions.values());
             if (displaced) endSession(displaced);
             session = startSession();
-          }
-          setSessionCookie(response, session);
+            setSessionCookie(response, session);
+          } else if (!auth) setSessionCookie(response, session);
           session.touchedAt = Date.now();
           storage.saveSession(session);
           const usage = usageOf(session);
@@ -423,7 +425,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         session.touchedAt = Date.now();
         if (request.method !== 'GET' && !equal(String(request.headers['x-csrf-token'] || ''), session.csrf))
           throw new HttpError(403, '会话校验失败，请刷新页面。');
-        setSessionCookie(response, session);
+        // An earlier response may arrive after another tab logs in. It must not replace the new identity cookie.
+        if (!auth) setSessionCookie(response, session);
         storage.saveSession(session);
         const requireSession = () => {
           if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');

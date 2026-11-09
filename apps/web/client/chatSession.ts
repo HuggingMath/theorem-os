@@ -16,6 +16,7 @@ import { clockTime } from './collaborationUi';
 import type { PlanApprovalProps } from './ui/RunHeader';
 import { decodeChatDraft, encodeChatDraft, type ChatDraft, type ChatDraftSettings } from './chatDraft';
 import { SubmissionIdentity } from './submissionIdentity';
+import { retainLatestRun } from './runSnapshot';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -356,7 +357,7 @@ export class ChatSession {
   }
   observe(run: WebRun) {
     if (this.runId !== run.id) return;
-    this.run = run; this.draw();
+    this.run = retainLatestRun(run, this.run); this.draw();
   }
   private async loadTask(generation: number) {
     const conversation = this.conversation, revision = this.readRevision;
@@ -372,7 +373,8 @@ export class ChatSession {
     if (failed?.status === 'rejected') throw failed.reason;
     this.formalization = formal.status === 'fulfilled' ? formal.value?.formalization : undefined;
     if (this.formalization) this.formalizations = [this.formalization, ...this.formalizations.filter(item => item.id !== this.formalization!.id)];
-    const next = run.status === 'fulfilled' ? run.value?.run : undefined;
+    const received = run.status === 'fulfilled' ? run.value?.run : undefined;
+    const next = received && retainLatestRun(received, this.run);
     const hadRun = this.run;
     this.run = next;
     if (next || hadRun) this.options.onSelection(next);

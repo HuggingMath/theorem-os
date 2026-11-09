@@ -288,7 +288,14 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       const heading = root.querySelector<HTMLElement>(`[data-solution-section-heading="${target.dataset.solutionSection}"]`);
       heading?.focus({ preventScroll: true }); heading?.scrollIntoView({ block: 'start', inline: 'nearest' }); return;
     }
-    if (target.dataset.solutionOpen) { const action = nodesById().get(target.dataset.solutionOpen)?.action; if (action) options.onOpen?.(action.target); return; }
+    if (target.dataset.solutionOpen) {
+      const action = nodesById().get(target.dataset.solutionOpen)?.action;
+      if (action && options.onOpen) {
+        // Evidence lives outside the canvas. Restore its normal layout before opening the reader.
+        expand(false); options.onOpen(action.target);
+      }
+      return;
+    }
     if (target.hasAttribute('data-solution-all')) {
       state.all = !state.all && state.opened.size === 0; state.opened.clear(); drawVisibleSelection();
       root.querySelector<HTMLButtonElement>('[data-solution-all]')?.focus({ preventScroll: true }); return;

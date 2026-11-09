@@ -403,7 +403,10 @@ export class WebResearchAssets {
     const old = this.operation<ResearchAsset>(asset, value.requestId, action); if (old) return old;
     this.revision(asset, value.expectedRevision);
     if (value.version && !asset.versions.includes(value.version)) fail(404, '发布版本不存在。');
-    const selected = value.version ? [value.version] : asset.versions;
+    // An interrupted registration may leave an immutable release outside the version index.
+    const selected = value.version ? [value.version] : [...asset.versions,
+      ...this.storage.listRecords(['research', 'assets', id, 'releases']).filter(file => file.endsWith('.json'))
+        .map(file => this.storedRelease(id, file.slice(0, -5)).version)];
     asset.withdrawn = [...new Set([...asset.withdrawn, ...selected])];
     if (!value.version) asset.visibility = 'private';
     asset.revision++; asset.updatedAt = now();

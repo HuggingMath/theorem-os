@@ -178,6 +178,46 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     } finally { clock.mockRestore(); }
   });
 
+  it('keeps login cookies stable while activity renews server-side idle expiry', async () => {
+    config.sessionTtlMs = 60_000;
+    const bootstrap = await request('/api/session');
+    expect(bootstrap.headers.get('set-cookie')).toMatch(/; Max-Age=60(?:;|$)/u);
+    const anonymous = await bootstrap.json() as WebSession;
+    const visitor: Client = { cookie: bootstrap.headers.get('set-cookie')!.split(';')[0], csrf: anonymous.csrfToken, session: anonymous };
+    await code(visitor, 'alice@example.org');
+    const sent = mail.at(-1)!.text.match(/\b\d{6}\b/u)![0];
+    const verified = await request('/api/auth/verify', visitor, { email: 'alice@example.org', code: sent });
+    expect(verified.status).toBe(200);
+    expect(verified.headers.get('set-cookie')).toMatch(/; Max-Age=31536000(?:;|$)/u);
+    const alice: Client = { cookie: verified.headers.get('set-cookie')!.split(';')[0], csrf: (await verified.json()).csrfToken, session: anonymous };
+    expect(alice.cookie).not.toBe(visitor.cookie);
+    const now = Date.now(), clock = vi.spyOn(Date, 'now');
+    try {
+      for (const elapsed of [45_000, 90_000]) {
+        clock.mockReturnValue(now + elapsed);
+        const checked = await request('/api/session', alice);
+        expect(checked.status).toBe(200);
+        expect(checked.headers.get('set-cookie')).toBeNull();
+        expect((await checked.json()).account.email).toBe('alice@example.org');
+        const reads = await request('/api/runs', alice);
+        expect(reads.status).toBe(200);
+        expect(reads.headers.get('set-cookie')).toBeNull();
+      }
+      const saved = await request('/api/auth/account', alice, { completionEmail: false }, 'PATCH');
+      expect(saved.status).toBe(200);
+      expect(saved.headers.get('set-cookie')).toBeNull();
+      clock.mockReturnValue(now + 150_001);
+      const expired = await request('/api/runs', alice);
+      expect(expired.status).toBe(401);
+      expect(expired.headers.get('set-cookie')).toBeNull();
+      const next = await request('/api/session', alice);
+      expect(next.headers.get('set-cookie')).toMatch(/; Max-Age=60(?:;|$)/u);
+      const signedOut = await next.json();
+      expect(signedOut.account).toBeUndefined();
+      expect(signedOut.csrfToken).not.toBe(alice.csrf);
+    } finally { clock.mockRestore(); }
+  });
+
   it('reads the allowlist file on every login and signs out an address once it is removed', async () => {
     const file = path.join(root, 'data', 'allowlist.txt');
     expect((await code(await session(), 'bob@example.org')).status).toBe(403);

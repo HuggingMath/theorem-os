@@ -62,6 +62,12 @@ html.research-root{height:auto;min-height:100%;overflow:auto}
 .research-facts dt{color:var(--muted)}
 .research-facts dd{margin:0;overflow-wrap:anywhere}
 .research-block-code{white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0 0;padding:15px;border:1px solid var(--line);border-radius:8px;background:var(--paper);font:12px/1.8 var(--mono);max-height:420px;overflow:auto}
+.research-candidate-review{margin-top:12px;min-width:0}
+.research-candidate-review>summary{cursor:pointer;font-size:13px;font-weight:550}
+.research-candidate-review[open]>summary{margin-bottom:12px}
+.research-candidate-review .research-tabs{margin:12px 0}
+.research-candidate-review .collab-source-diff{max-height:420px;overflow:auto;max-width:100%}
+.research-candidate-review .diff-code{white-space:pre-wrap;overflow-wrap:anywhere}
 .research-divider{border:0;border-top:1px solid var(--line);margin:20px 0}
 .research-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 20px}
 .research-tabs button{border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--muted);padding:6px 11px;font:500 12px/1.6 var(--sans)}
@@ -107,6 +113,9 @@ html.research-root{height:auto;min-height:100%;overflow:auto}
 .research-selection{position:sticky;bottom:14px;z-index:15;background:var(--card);border:1px solid var(--gray-300);border-radius:10px;padding:13px 18px;box-shadow:var(--shadow-md);display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:24px}
 .research-selection p{margin:0;font-size:12px;color:var(--muted)}
 .research-loading{max-width:1380px;margin:0 auto;padding:80px 32px;font-size:14px;color:var(--muted)}
+.research-session-pending{visibility:hidden;pointer-events:none}
+.research-session-notice{position:fixed;top:100px;inset-inline:24px;max-width:720px;margin-inline:auto;z-index:25;padding:20px;background:var(--card);border:1px solid var(--line);border-radius:9px;color:var(--muted)}
+.research-session-notice .research-actions{margin-top:14px}
 .research-split{display:grid;grid-template-columns:1fr 1fr;gap:22px}
 .research-count{font-variant-numeric:tabular-nums;font:500 29px/1.2 var(--serif);color:var(--ink);display:block;margin:4px 0}
 .research-rules{display:grid;gap:14px;border:1px solid var(--line);border-radius:8px;padding:16px;min-width:0;margin:0}

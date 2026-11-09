@@ -58,6 +58,102 @@ function setup() {
 }
 
 describe('mathematics publication resolves actual saved source contracts', () => {
+  function saveTaskSource(storage: WebStorage, source: string, name = 'helper') {
+    const saved = observation('web-lemma', source, mathDigest(source));
+    saved.sources[0].taskId = 'helper-task';
+    saved.inspection.tasks = [{ id: 'helper-task', kind: 'lemma', objective: 'Reusable helper', group: 'main',
+      status: 'completed', control: 'active', version: 'task-v1', theorem: name, premises: [], plannedDependencies: [],
+      attempts: 1, proof: { status: 'checked' }, parkedBy: [], parkedRoutes: {} }];
+    storage.saveRun(owner, run('web-lemma', { observation: saved }));
+    return { kind: 'run' as const, runId: 'web-lemma', taskId: 'helper-task', commit: sourceCommit };
+  }
+
+  it('publishes only a selected helper and its transitive declarations while the same-file target remains open', async () => {
+    const { storage, resolver } = setup();
+    const source = 'def value : Nat := 7\nlemma dependency : value = 7 := by rfl\n' +
+      'lemma helper : value = 7 := by exact dependency\ntheorem target : False := by sorry\n' +
+      'lemma unrelated : True := by trivial\n';
+    const reference = saveTaskSource(storage, source);
+    const resolved = await resolver().resolve(owner, reference);
+    expect(resolved.declarations.map(item => item.name)).toEqual(['dependency', 'helper']);
+    expect(resolved.pack.modules[0].source).toContain('def value : Nat := 7');
+    expect(resolved.pack.modules[0].source).not.toMatch(/target|unrelated|sorry/u);
+    expect(storage.listObservations(owner, reference.runId)[0].sources[0].source).toBe(source);
+  });
+
+  it('does not include a completed unrelated target when selecting a helper', async () => {
+    const { storage, resolver } = setup();
+    const reference = saveTaskSource(storage, 'lemma helper : True := by trivial\ntheorem target : True := by exact helper\n');
+    const resolved = await resolver().resolve(owner, reference);
+    expect(resolved.declarations.map(item => item.name)).toEqual(['helper']);
+    expect(resolved.pack.modules[0].source).not.toContain('theorem target');
+  });
+
+  it('keeps attributed lemmas and instances that elaboration can use implicitly', async () => {
+    const { storage, resolver } = setup();
+    const source = 'class HasSeven where\n  n : Nat\ninstance chosenFlag : HasSeven := ⟨7⟩\n' +
+      'def value : Nat := 7\n@[simp] theorem value_eq : value = 7 := by rfl\n' +
+      'theorem helper : value = 7 ∧ HasSeven.n = 7 := by constructor; simp; rfl\n' +
+      'theorem target : False := by sorry\n';
+    const reference = saveTaskSource(storage, source);
+    const resolved = await resolver().resolve(owner, reference);
+    expect(resolved.declarations.map(item => item.name)).toEqual(['value_eq', 'helper']);
+    expect(resolved.pack.modules[0].source).toContain('instance chosenFlag');
+    expect(resolved.pack.modules[0].source).not.toMatch(/target|sorry/u);
+  });
+
+  it.each([['@[simp] ', ''], ['', '@[simp] ']])('isolates same-line attributes on selected and unproved declarations (%s, %s)', async (helperAttribute, targetAttribute) => {
+    const { storage, resolver } = setup();
+    const source = `${helperAttribute}theorem helper : True := by trivial\n${targetAttribute}theorem target : False := by sorry\n`;
+    const reference = saveTaskSource(storage, source);
+    const resolved = await resolver().resolve(owner, reference);
+    expect(resolved.declarations.map(item => item.name)).toEqual(['helper']);
+    expect(resolved.pack.modules[0].source).toContain(`${helperAttribute}theorem helper`);
+    expect(resolved.pack.modules[0].source).not.toMatch(/target|sorry/u);
+  });
+
+  it('selects the exact namespace and keeps declarations needed by a section variable', async () => {
+    const { storage, resolver } = setup();
+    const source = 'namespace Good\ndef Value := Nat\nsection\nvariable (n : Value)\n' +
+      'lemma helper : n = n := by rfl\nend\nend Good\nnamespace Other\n' +
+      '/-- Unfinished namesake. -/\nlemma helper : False := by sorry\nend Other\n';
+    const reference = saveTaskSource(storage, source, 'Good.helper');
+    const resolved = await resolver().resolve(owner, reference);
+    expect(resolved.declarations.map(item => item.name)).toEqual(['Good.helper']);
+    expect(resolved.pack.modules[0].source).toContain('def Value := Nat');
+    expect(resolved.pack.modules[0].source).toContain('variable (n : Value)');
+    expect(resolved.pack.modules[0].source).not.toMatch(/Unfinished|sorry/u);
+  });
+
+  it('uses a historical task version instead of a newer mapping for the same task ID', async () => {
+    const { storage, resolver } = setup();
+    const reference = saveTaskSource(storage, 'lemma helper : True := by trivial\nlemma renamed : False := by sorry\n');
+    const saved = storage.getObservation(owner, reference.runId)!;
+    const newer = { ...structuredClone(saved), sequence: 2 };
+    newer.inspection.tasks[0] = { ...newer.inspection.tasks[0], version: 'task-v2', theorem: 'renamed' };
+    newer.sources = [];
+    storage.saveRun(owner, run(reference.runId, { observation: newer }));
+    const resolved = await resolver().resolve(owner, reference);
+    expect(resolved.declarations.map(item => item.name)).toEqual(['helper']);
+  });
+
+  it('rejects an ambiguous or missing task mapping instead of guessing from the task ID', async () => {
+    const { storage, resolver } = setup();
+    const saved = observation('web-lemma', 'lemma helper : True := by trivial\ntheorem target : True := by trivial\n', mathDigest('fixture'));
+    saved.sources[0].taskId = 'helper-task';
+    storage.saveRun(owner, run('web-lemma', { observation: saved }));
+    await expect(resolver().resolve(owner, { kind: 'run', runId: 'web-lemma', taskId: 'helper-task' })).rejects.toThrow('精确数学声明');
+  });
+
+  it('retains the prohibition on a selected unproved helper or a required unproved dependency', async () => {
+    for (const source of ['lemma helper : True := by sorry\ntheorem target : False := by sorry\n',
+      'lemma dependency : True := by sorry\nlemma helper : True := by exact dependency\n']) {
+      const { storage, resolver } = setup();
+      const reference = saveTaskSource(storage, source);
+      await expect(resolver().resolve(owner, reference)).rejects.toThrow('math_library_pack_forbidden_token');
+    }
+  });
+
   it('recovers the exact reachable owned-file closure before a completed knowledge catalog exists', async () => {
     const { storage, resolver } = setup();
     const main = 'import Dependency\ntheorem target : True := by exact helper\n', dependency = 'lemma helper : True := by trivial\n';

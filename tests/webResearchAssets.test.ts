@@ -468,6 +468,62 @@ describe('shared research assets', () => {
     expect(check).toHaveBeenCalledTimes(1);
   });
 
+  it('withdraws an immutable release whose registration was interrupted and keeps frozen copies after restart', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-withdraw-interrupted-')); directories.push(directory);
+    const storage = new WebStorage(directory), check = vi.fn(mathOptions().validateMathematics!);
+    const assets = setup(mathOptions({ validateMathematics: check }), storage), item = createMath(assets);
+    const original = storage.saveRecord.bind(storage);
+    let interrupted = false;
+    const save = vi.spyOn(storage, 'saveRecord').mockImplementation((segments, value, immutable) => {
+      if (!interrupted && segments.at(-1) === 'asset.json' && (value as { versions: string[] }).versions.includes('v1')) {
+        interrupted = true; throw new Error('interrupted release registration');
+      }
+      original(segments, value, immutable);
+    });
+    const input = { requestId: 'interrupted-release', expectedRevision: item.revision, version: 'v1', license: 'MIT', visibility: 'public' };
+    const queued = await assets.publish('owner-A', item.id, input);
+    expect((await assets.waitForPublication('owner-A', queued.id)).status).toBe('queued');
+    save.mockRestore();
+    expect(assets.get('owner-A', item.id).releases).toEqual([]);
+    const release = assets.release('owner-B', item.id, 'v1'), ref = { assetId: item.id, version: 'v1', digest: release.digest };
+    const frozen = assets.freeze('owner-B', { libraries: [ref] }, 'standard'), before = JSON.stringify(frozen);
+    const fork = assets.fork('owner-B', item.id, { requestId: 'copy-before-withdrawal', version: 'v1' });
+    const current = assets.get('owner-A', item.id);
+    const withdrawal = { requestId: 'withdraw-entire-interrupted', expectedRevision: current.revision };
+    const withdrawn = assets.withdraw('owner-A', item.id, withdrawal);
+    expect(withdrawn.visibility).toBe('private'); expect(withdrawn.releases).toEqual([]);
+    expect(assets.withdraw('owner-A', item.id, withdrawal)).toEqual(withdrawn);
+    expect(assets.publication('owner-A', queued.id)).toMatchObject({ status: 'failed', reason: '发布已撤回。' });
+    for (const viewer of ['public', 'owner-B']) status(() => assets.release(viewer, item.id, 'v1'), 404);
+    status(() => assets.freeze('owner-A', { libraries: [ref] }, 'standard'), 409);
+    expect(assets.release('owner-A', item.id, 'v1').digest).toBe(release.digest);
+    expect(JSON.stringify(frozen)).toBe(before);
+    await assets.close();
+
+    const restarted = setup(mathOptions({ validateMathematics: check }), new WebStorage(directory));
+    for (const viewer of ['public', 'owner-B']) status(() => restarted.release(viewer, item.id, 'v1'), 404);
+    expect((await restarted.publish('owner-A', item.id, input)).status).toBe('failed');
+    expect(check).toHaveBeenCalledTimes(1); expect(JSON.stringify(frozen)).toBe(before);
+    expect((await restarted.preview('owner-B', fork.id)).mathematics?.pack).toEqual(release.mathematics!.pack);
+    const copied = await publish(restarted, restarted.get('owner-B', fork.id), 'owner-B');
+    expect(restarted.release('public', copied.assetId, copied.version).mathematics?.pack).toEqual(release.mathematics!.pack);
+  });
+
+  it('allows a fresh request for the same version after a failed check and a whole-asset withdrawal', async () => {
+    const check = vi.fn(mathOptions().validateMathematics!).mockResolvedValueOnce({ passed: false, receiptRefs: [], reason: 'Try again' });
+    const assets = setup(mathOptions({ validateMathematics: check })), item = createMath(assets);
+    const input = { requestId: 'failed-attempt', expectedRevision: item.revision, version: 'v1', license: 'MIT', visibility: 'public' };
+    const first = await assets.publish('owner-A', item.id, input);
+    expect((await assets.waitForPublication('owner-A', first.id)).status).toBe('failed');
+    const current = assets.get('owner-A', item.id);
+    const withdrawn = assets.withdraw('owner-A', item.id, { requestId: 'withdraw-failed-draft', expectedRevision: current.revision });
+    expect(withdrawn.releases).toEqual([]);
+    expect((await assets.publish('owner-A', item.id, input)).id).toBe(first.id);
+    const second = await assets.publish('owner-A', item.id, { ...input, requestId: 'fresh-attempt', expectedRevision: withdrawn.revision });
+    expect((await assets.waitForPublication('owner-A', second.id)).status).toBe('completed');
+    expect(assets.release('public', item.id, 'v1').version).toBe('v1'); expect(check).toHaveBeenCalledTimes(2);
+  });
+
   it('cancels owned publication work and removes owned records while keeping other accounts and frozen copies', async () => {
     const storage = new WebStorage(), began = deferred<void>();
     let checks = 0;

@@ -45,7 +45,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => { setCreatorMounted(true); setCreating(value => !value); }} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
       : <a class="button" href="login.html">{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>
     {creatorMounted && <div hidden={!creating}><Panel title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
-      <AssetEditor context={context} onSaved={asset => location.assign(libraryHref(asset.id))} /></Panel></div>}
+      <AssetEditor context={context} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(libraryHref(asset.id)); }} /></Panel></div>}
     <div class="research-layout" data-selected={Boolean(selected)}><aside class="research-sidebar"><Panel title={tx('浏览 Library', 'Explore Library')}>
       <div class="research-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => setType(value)}>{nameOf(value)}</button>)}</div>
       <div class="research-form"><Search label={tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={setQuery} /><Field label={tx('按研究领域筛选', 'Filter by research field')} value={area} onInput={setArea} />
@@ -83,6 +83,10 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
   const releaseResult = useResource<Item<ResearchAssetRelease>>(version ? `${base}/library/${enc(asset.id)}/releases/${enc(version)}` : undefined);
   const unavailable = [401, 403, 404].includes(releaseResult.errorStatus ?? 0);
   const release = unavailable ? undefined : releaseResult.data?.item ?? (asset.release?.version === version ? asset.release : undefined);
+  const [forkVersions, setForkVersions] = useState<string[]>([]);
+  useEffect(() => {
+    if (release) setForkVersions(previous => previous.includes(release.version) ? previous : [...previous, release.version]);
+  }, [release?.version]);
   const forPublication = (publication: ResearchPublication) => {
     setPublicationId(publication.id);
     try { sessionStorage.setItem(`theoremos.research.publication.${asset.id}`, publication.id); } catch { /* The publication remains visible in this page. */ }
@@ -117,8 +121,11 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
           <button class="button button-primary" type="button" onClick={useVersion}>{tx('用于新研究', 'Use in new research')}</button>
           <a class="button" href={`${base}/library/${enc(asset.id)}/releases/${enc(release.version)}?download=1`} download>{tx('下载版本', 'Download release')}</a></div>
         <p class="research-field-note">{tx('带入工作台只准备研究配置，由你确认后启动。', 'Opening the workbench prepares a configuration. You choose when to start research.')}</p>
-        <Fork asset={asset} version={release.version} />{asset.editable && <Withdraw asset={asset} version={release.version} refresh={() => { refresh(); releaseResult.refresh(); }} />}
+        {asset.editable && <Withdraw asset={asset} version={release.version} refresh={() => { refresh(); releaseResult.refresh(); }} />}
       </>}
+      {forkVersions.map(forkVersion => <div key={forkVersion} hidden={release?.version !== forkVersion}>
+        <Fork asset={asset} version={forkVersion} />
+      </div>)}
     </Panel></>;
 }
 
@@ -197,7 +204,9 @@ function Publish({ asset, onPublication }: { asset: ResearchAsset; onPublication
     <div class="research-form-row"><Field label={tx('版本号', 'Version')} value={version} onInput={setVersion} required placeholder="v1" />
       <Field label={tx('许可证', 'License')} value={license} onInput={setLicense} required placeholder="MIT / Apache-2.0 / CC-BY-4.0" /></div>
     <label>{tx('发布范围', 'Release visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value)}><option value="private">{tx('仅自己使用', 'Private')}</option><option value="public">{tx('公开分享', 'Public')}</option></select></label>
-    <CheckReview checked={confirmed} disabled={!ready || action.busy} change={checked => setReviewed(checked ? reviewIdentity : '')} /><MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !confirmed}>{action.busy ? tx('正在提交…', 'Submitting…') : tx('发布并检查', 'Publish and validate')}</button>
+    <CheckReview checked={confirmed} disabled={!ready || action.busy} change={checked => setReviewed(checked ? reviewIdentity : '')} /><MutationState action={action} />
+    {action.canRetry && <button class="button" type="button" onClick={() => void action.retry<Item<ResearchPublication>>(result => onPublication(result.item))}>{tx('恢复上次已审阅的发布', 'Recover the previously reviewed publication')}</button>}
+    <button class="button" type="submit" disabled={action.busy || !confirmed}>{action.busy ? tx('正在提交…', 'Submitting…') : tx('发布并检查', 'Publish and validate')}</button>
   </form>;
 }
 function DraftPreview({ preview }: { preview: ResearchAssetPreview }) {

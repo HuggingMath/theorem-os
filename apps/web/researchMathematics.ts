@@ -2,7 +2,7 @@ import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { mathConstructionImports, mathConstructionImportSpans } from '../../src/math/mathConstructionSources';
-import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack, type LibraryPack } from '../../src/math/libraryPacks';
+import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack, selectLibraryDeclarations, type LibraryPack } from '../../src/math/libraryPacks';
 import type { ResearchLibraryPack, ResearchMathSource } from './researchAssetTypes';
 import type { ResolvedResearchMathematics } from './researchAssets';
 import type { WebJobs } from './jobs';
@@ -77,6 +77,24 @@ export function researchMathematics(storage: WebStorage, knowledge: WebKnowledge
           files[module.file] = module.source; origins[module.file] = module.origin;
         }
       } else fail(404, '这个精确版本的源码没有保存，请选择已记录的任务和提交。');
+      if (reference.taskId) {
+        // A task ID identifies a declaration, not every theorem sharing its owned source file.
+        // Resolve the name from the saved task version rather than a later plan for the same ID.
+        const snapshot = observations.find(item => item.sources.some(source => source.taskId === saved!.taskId
+          && source.taskVersion === saved!.taskVersion && source.commit === saved!.commit && source.file === saved!.file)
+          && [...item.inspection.tasks, ...(item.history ?? [])].some(task => task.id === saved!.taskId && task.version === saved!.taskVersion));
+        const task = snapshot && [...snapshot.inspection.tasks, ...(snapshot.history ?? [])]
+          .find(item => item.id === saved!.taskId && item.version === saved!.taskVersion);
+        const planned = snapshot?.inspection.tasks.some(item => item.id === task?.id && item.version === saved!.taskVersion)
+          ? snapshot.plan?.tasks.find(item => item.id === task?.id) : undefined;
+        const available = inspectScopedLeanDeclarations(files[roots[0]]!).filter(item => item.kind === 'theorem');
+        const name = (task?.theorem ?? planned?.theoremName ?? (available.length === 1 ? available[0].qualifiedName : undefined))
+          ?? fail(409, '无法确认这个任务版本的精确数学声明，请选择有完整任务记录的来源。');
+        if (planned?.proofPath && planned.proofPath !== saved!.file)
+          fail(409, '无法确认这个任务版本的精确数学声明，请选择有完整任务记录的来源。');
+        try { files[roots[0]] = selectLibraryDeclarations(files[roots[0]], [name]); }
+        catch { fail(409, '无法唯一确定所选任务的数学声明，请核对任务版本与 Lean 名称。'); }
+      }
       declarations = inspectScopedLeanDeclarations(files[roots[0]]!).filter(item => item.kind === 'theorem')
         .map(item => ({ name: item.qualifiedName, type: item.declarationType, file: roots[0] }));
     }

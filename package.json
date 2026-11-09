@@ -29,6 +29,8 @@
     "test:frontend-round2": "bun scripts/test-web-round2-collaboration.ts && bun scripts/test-web-round2-workbench.ts && bun scripts/test-web-round2-routes.ts && bun scripts/test-web-round2-login.ts",
     "test:frontend-round3": "bun scripts/test-web-round3-approval.ts && bun scripts/test-web-round3-collaboration.ts && bun scripts/test-web-round3-library.ts && bun scripts/test-web-round3-routes.ts && bun scripts/test-web-round3-workbench.ts",
     "test:frontend-round4": "bun scripts/test-web-round4-sharing.ts && bun scripts/test-web-round4-library.ts",
+    "test:frontend-round5": "bun scripts/test-web-round5-workbench.ts && bun scripts/test-web-round5-collaboration.ts && bun scripts/test-web-round5-people.ts && bun scripts/test-web-round5-library.ts",
+    "test:frontend-round6": "bun scripts/test-web-round6-people.ts && bun scripts/test-web-round6-collaboration.ts && bun scripts/test-web-round6-library.ts && bun scripts/test-web-round6-routes.ts",
     "test:web-ui": "bun scripts/test-web-ui.ts",
     "test:web-login": "bun scripts/test-web-login.ts",
     "test:web-failures": "bun scripts/test-web-failures.ts",

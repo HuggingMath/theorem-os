@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
-import type { WebSession } from '../shared';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { locale, mountLocaleSwitch } from '../i18n';
 import { PeoplePage } from './researchPeople';
 import { TheoremsPage } from './researchTheorems';
 import { LibraryPage } from './researchLibrary';
-import { api, base, errorText, ErrorBox, setResearchCsrf, tx, type ResearchContext, type ResearchSession } from './researchShared';
+import { bindResearchSession, clearResearchSession, errorText, ErrorBox, readResearchSession, readResearchWebSession,
+  ResearchSessionChangedError, tx, type ResearchContext } from './researchShared';
+import { webDraftOwner } from './ownedDrafts';
 
 const page = document.body.dataset.researchPage ?? 'people';
 const pageNames = { people: ['数学家', 'Mathematicians'], theorems: ['定理', 'Theorems'], library: ['Library', 'Library'] } as const;
@@ -18,26 +19,79 @@ function Header() {
 }
 export function ResearchApp() {
   const [context, setContext] = useState<ResearchContext>(), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
+  const [checking, setChecking] = useState(true), current = useRef<ResearchContext>();
+  const confirmation = useRef<AbortController>();
+  current.current = context;
+  const changed = useCallback(() => {
+    confirmation.current?.abort(); clearResearchSession(); current.current = undefined;
+    setContext(undefined); setError(''); setAttempt(value => value + 1);
+  }, []);
+  // Install the next owner's API binding only after the previous owner's components have unmounted.
+  useLayoutEffect(() => { if (context) bindResearchSession(context.web, changed); else clearResearchSession(); }, [context, changed]);
+  useEffect(() => () => clearResearchSession(), []);
   useEffect(() => {
     document.documentElement.lang = locale === 'en' ? 'en' : 'zh-CN';
     const label = pageNames[page as keyof typeof pageNames] ?? pageNames.people;
     document.title = `${tx(label[0], label[1])} · TheoremOS`;
     const skip = document.querySelector('.skip-link'); if (skip) skip.textContent = tx('跳到主要内容', 'Skip to main content');
-    let live = true;
-    void (async () => {
+    let live = true, pending: Promise<void> | undefined;
+    const controller = new AbortController();
+    confirmation.current = controller;
+    const read = () => {
+      if (pending) return pending;
+      setChecking(true);
+      pending = (async () => {
+        try {
+          const web = await readResearchWebSession(controller.signal);
+          if (!live || controller.signal.aborted) return;
+          const previous = current.current;
+          if (previous && webDraftOwner(previous.web) === webDraftOwner(web)) {
+            bindResearchSession(web, changed);
+            setContext({ ...previous, web });
+          } else {
+            clearResearchSession(); current.current = undefined; setContext(undefined);
+            const session = await readResearchSession(web, controller.signal);
+            if (!live || controller.signal.aborted) return;
+            setContext({ web, session });
+          }
+          setError('');
+        } catch (cause) {
+          if (live && !controller.signal.aborted) {
+            if (cause instanceof ResearchSessionChangedError) changed();
+            else if (cause instanceof DOMException && cause.name === 'AbortError') setAttempt(value => value + 1);
+            else setError(errorText(cause));
+          }
+        } finally { if (live) { pending = undefined; setChecking(false); } }
+      })();
+      return pending;
+    };
+    const resume = () => { if (!document.hidden) void read(); };
+    const restore = (event: PageTransitionEvent) => { if (event.persisted) resume(); };
+    const accountLeft = (event: StorageEvent) => {
+      if (event.key !== 'theorem-os.web-account-left.v1' || !event.newValue) return;
       try {
-        const web = await api<WebSession>('/api/session');
-        setResearchCsrf(web.csrfToken);
-        const session = await api<ResearchSession>(`${base}/session`);
-        if (!live) return;
-        setResearchCsrf(web.csrfToken); setContext({ web, session }); setError('');
-      } catch (cause) { if (live) setError(errorText(cause)); }
-    })();
-    return () => { live = false; };
-  }, [attempt]);
-  return <><Header />{context ? <main id="main" class="research-shell" tabIndex={-1}>
-    {page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
-  </main> : <main id="main" class="research-loading" tabIndex={-1}>{error ? <><ErrorBox message={error} /><div class="research-actions">
+        const owner: unknown = JSON.parse(event.newValue).owner;
+        if (typeof owner === 'string' && (!current.current || owner === webDraftOwner(current.current.web))) changed();
+      } catch { /* Ignore invalid notifications. */ }
+    };
+    window.addEventListener('focus', resume); document.addEventListener('visibilitychange', resume);
+    window.addEventListener('pageshow', restore); window.addEventListener('storage', accountLeft);
+    const timer = setInterval(resume, 15000);
+    void read();
+    return () => {
+      live = false; controller.abort(); clearInterval(timer);
+      if (confirmation.current === controller) confirmation.current = undefined;
+      window.removeEventListener('focus', resume); document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('pageshow', restore); window.removeEventListener('storage', accountLeft);
+    };
+  }, [attempt, changed]);
+  const unavailable = Boolean(error) || !context;
+  return <><Header /><main id="main" class={context ? 'research-shell' : 'research-loading'} tabIndex={-1} aria-busy={checking}>
+    {context && <div class={unavailable ? 'research-session-pending' : undefined} aria-hidden={unavailable} inert={unavailable} key={webDraftOwner(context.web)}>
+      {page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
+    </div>}
+    {unavailable && <div class="research-session-notice">{error ? <><ErrorBox message={error} /><div class="research-actions">
     <button class="button" type="button" onClick={() => setAttempt(value => value + 1)}>{tx('重新连接', 'Reconnect')}</button>
-    <a class="button" href="login.html">{tx('登录', 'Sign in')}</a></div></> : <p role="status">{tx('正在读取研究空间…', 'Loading the research space…')}</p>}</main>}</>;
+    <a class="button" href="login.html">{tx('登录', 'Sign in')}</a></div></> : <p role="status">{tx('正在读取研究空间…', 'Loading the research space…')}</p>}</div>}
+  </main></>;
 }

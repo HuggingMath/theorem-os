@@ -108,6 +108,36 @@ describe('research projects and collaboration permissions', () => {
     errorStatus(() => projects.submitFeedback('public', current.id, { requestId: 'anonymous', kind: 'discussion', text: 'Hi' }), 401);
   });
 
+  it('lets an outside discussion author revisit a private submission without exposing members or revoked-member discussions', () => {
+    const { projects, project } = fixture(true);
+    let current = projects.update(alice, project.id, { requestId: 'outside-readable-project', expectedRevision: project.revision, visibility: 'public' });
+    const input = { requestId: 'outside-private-discussion', kind: 'discussion', text: 'Private suggestion from a visitor', visibility: 'members',
+      statementVersionId: project.versions[0].id };
+    const comment = projects.submitFeedback(carol, project.id, input);
+    expect(comment.authorReadable).toBe(true); expect(comment.visibility).toBe('members');
+    expect(projects.feedback(carol, project.id, comment.id)).toEqual(comment);
+    expect(projects.submitFeedback(carol, project.id, input)).toEqual(comment);
+    expect(projects.detail(carol, project.id).feedback).toEqual([comment]);
+    expect(projects.detail('public', project.id).feedback).toEqual([]);
+    expect(projects.detail('another-visitor', project.id).feedback).toEqual([]);
+    expect(projects.feedback(alice, project.id, comment.id)).toEqual(comment);
+    const memberComment = projects.submitFeedback(bob, project.id, { requestId: 'member-private-discussion', kind: 'discussion',
+      text: 'Private member discussion', visibility: 'members' });
+    expect(memberComment.authorReadable).toBeUndefined();
+    current = projects.detail(alice, project.id);
+    current = projects.setMember(alice, project.id, projects.identity(bob), { requestId: 'revoke-member-discussion', expectedRevision: current.revision, role: null });
+    errorStatus(() => projects.feedback(bob, project.id, memberComment.id), 404);
+    errorStatus(() => projects.feedback(bob, project.id, comment.id), 404);
+    const decision = projects.decideFeedback(alice, project.id, comment.id, { requestId: 'outside-comment-decision', expectedRevision: comment.revision,
+      status: 'needs-info', reason: 'Please give a precise supporting argument.' });
+    expect(projects.feedback(carol, project.id, comment.id).decision).toEqual(decision.decision);
+    const activity = projects.detail(carol, project.id).activity.find(item => item.feedbackId === comment.id && item.type === 'feedback-created');
+    expect(activity?.statementVersionId).toBe(comment.statementVersionId);
+    current = projects.detail(alice, project.id);
+    projects.update(alice, project.id, { requestId: 'hide-outside-readable-project', expectedRevision: current.revision, visibility: 'members' });
+    errorStatus(() => projects.feedback(carol, project.id, comment.id), 404);
+  });
+
   it('checks trusted run ownership and exact statement source before binding', () => {
     const { projects, storage, project } = fixture();
     errorStatus(() => projects.bindRun(bob, project.id, { requestId: 'steal-run', expectedRevision: project.revision,
@@ -538,6 +568,48 @@ describe('durable feedback, decisions and host receipts', () => {
     expect(updated.assignments).toHaveLength(1); expect(updated.assignments[0].author.id).toBe(projects.identity(bob));
     expect(storage.getRun(alice, 'run-a')).toEqual(before);
   });
+
+  it('releases the original saved human claim after the task contract changes without changing runtime state', () => {
+    const { projects, storage, project, target } = fixture(true);
+    const feedback = projects.submitFeedback(bob, project.id, { requestId: 'claim-feedback', kind: 'guidance', text: 'I will investigate this task',
+      target, recipient: { kind: 'task', id: target.taskRef!.id } });
+    const claimed = projects.assignTask(bob, project.id, { requestId: 'claim-before-change',
+      expectedRevision: projects.detail(bob, project.id).revision, target, status: 'claimed', feedbackId: feedback.id });
+    const originalClaim = claimed.assignments[0], changed = observation();
+    changed.sequence = 2; changed.snapshot.stateDigest = 'b'.repeat(64); changed.inspection.tasks[0].version = 'task-v2';
+    storage.saveRun(alice, run('run-a', changed));
+    const before = storage.getRun(alice, 'run-a');
+    const restarted = new WebResearchProjects(storage);
+    const released = restarted.assignTask(bob, project.id, { requestId: 'release-after-change', expectedRevision: claimed.revision,
+      target: originalClaim.target, status: 'released', feedbackId: feedback.id });
+    expect(released.assignments).toEqual([{ ...originalClaim, status: 'released', updatedAt: expect.any(String) }]);
+    expect(storage.getRun(alice, 'run-a')).toEqual(before);
+    expect(new WebResearchProjects(new WebStorage(storage.root)).detail(bob, project.id).assignments).toEqual(released.assignments);
+  });
+
+  it('keeps historical claim releases scoped to the saved author, full target, revision and current project permissions', () => {
+    const { projects, storage, project, target } = fixture();
+    let current = projects.assignTask(bob, project.id, { requestId: 'historical-claim', expectedRevision: project.revision, target, status: 'claimed' });
+    const changed = observation(); changed.sequence = 2; changed.snapshot.stateDigest = 'b'.repeat(64); changed.inspection.tasks[0].version = 'task-v2';
+    storage.saveRun(alice, run('run-a', changed));
+    const release = { expectedRevision: current.revision, target, status: 'released' };
+    errorStatus(() => projects.assignTask(alice, project.id, { ...release, requestId: 'another-author' }), 409);
+    for (const status of ['claimed', 'submitted']) errorStatus(() => projects.assignTask(bob, project.id,
+      { ...release, requestId: 'stale-' + status, status }), 409);
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'changed-observation',
+      target: { ...target, observationRef: { ...target.observationRef, stateDigest: 'c'.repeat(64) } } }), 409);
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'changed-statement',
+      target: { ...target, statementVersionId: 'another-statement' } }), 409);
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'stale-revision', expectedRevision: current.revision - 1 }), 409);
+    current = projects.setMember(alice, project.id, projects.identity(bob),
+      { requestId: 'reader-after-claim', expectedRevision: current.revision, role: 'reader' });
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'reader-release', expectedRevision: current.revision }), 403);
+    current = projects.setMember(alice, project.id, projects.identity(bob),
+      { requestId: 'revoke-after-claim', expectedRevision: current.revision, role: null });
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'revoked-release', expectedRevision: current.revision }), 404);
+    expect(projects.detail(alice, project.id).assignments).toHaveLength(1);
+    expect(projects.detail(alice, project.id).assignments[0].status).toBe('claimed');
+  });
 });
 
 describe('contribution discovery, notifications and cleanup', () => {
@@ -593,6 +665,22 @@ describe('contribution discovery, notifications and cleanup', () => {
     expect(projects.profile('public', projects.identity(alice)).contributions.filter(item => item.assetId === 'shared-lemma')).toHaveLength(1);
     projects.forgetAssetContributions(alice, 'shared-lemma');
     expect(projects.feed('public').items.some(item => item.assetId === 'shared-lemma')).toBe(false);
+  });
+
+  it('removes only the withdrawn release from author contributions and discovery after restart', () => {
+    const { projects, directory } = fixture(true);
+    const publication = { assetId: 'shared-lemma', digest, title: 'Useful lemma', kind: 'mathematics' as const, visibility: 'public' as const };
+    for (const version of ['v1', 'v2']) projects.recordAssetContribution(alice, { ...publication, requestId: `publish-${version}`, version });
+    projects.recordAssetContribution(alice, { ...publication, requestId: 'publish-other', assetId: 'other-lemma', version: 'v1' });
+    projects.forgetAssetContributions(alice, 'shared-lemma', 'v1');
+    const restored = new WebResearchProjects(new WebStorage(directory));
+    const versions = (owner: string) => restored.profile(owner, restored.identity(alice)).contributions
+      .filter(item => item.assetId === 'shared-lemma').map(item => item.assetVersion);
+    expect(versions('public')).toEqual(['v2']); expect(versions(alice)).toEqual(['v2']);
+    expect(restored.feed(bob).items.filter(item => item.assetId === 'shared-lemma').map(item => item.assetVersion)).toEqual(['v2']);
+    restored.forgetAssetContributions(alice, 'shared-lemma');
+    expect(versions('public')).toEqual([]);
+    expect(restored.feed('public').items.some(item => item.assetId === 'other-lemma')).toBe(true);
   });
 
   it('cleans deleted owners without deleting another owner project or exposing deleted shared runs', () => {
