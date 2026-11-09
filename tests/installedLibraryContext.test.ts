@@ -402,6 +402,37 @@ describe('installed library retrieval in actual task context', () => {
       library: f.library, taskText: 'Use Frozen.Arithmetic.add_comm.', environmentDigest })).toEqual([]);
   });
 
+  it('keeps complete pinned knowledge and library reads available to a fixed reviewer without proof-writing instructions', () => {
+    const f = fixture(), history = { ...f.library, digest: mathDigest('review-historical-catalog') };
+    const assignment: CooperativeAction = { kind: 'review', seedCommit: f.problem.baseCommit,
+      sourceDigest: mathDigest('fixed-review-candidate') };
+    const context = finalizeResearchDispatch(buildResearchContext(f.problem, { ...f.state, knowledgeDigest: history.digest }, {
+      ...f.access, assignment, knowledgeFile: path.join(f.root, 'historical.json'), knowledgeDigest: history.digest,
+      knowledgeSnapshot: history, libraryCatalog: { file: path.join(f.root, 'library-catalog.json'), digest: f.library.digest },
+    }), { continuation: true });
+    expect(context.instructions).toContain('knowledge get --catalog');
+    expect(context.instructions).toContain('knowledge source --catalog');
+    expect(context.instructions).toContain(path.join(f.root, 'historical.json'));
+    expect(context.instructions).toContain(history.digest);
+    expect(context.instructions).toContain("--field 'FIELD_NAME' --offset OFFSET");
+    expect(context.instructions).toContain('following nextOffset until truncated:false');
+    expect(context.instructions).toContain('library search --worktree');
+    expect(context.instructions).toContain('library get --worktree');
+    expect(context.instructions).toContain('Follow source.nextOffset with --offset until source.complete is true');
+    expect(context.instructions).toContain('Do not adapt, import or redeclare them during review');
+    expect(context.instructions).toContain('do not import, request or copy modules during review');
+    expect(context.instructions).not.toContain('library request --worktree');
+    expect(context.instructions).not.toContain('adapt only needed declarations');
+    expect(context.instructions).not.toContain('You may add explicit Mathlib.* imports');
+    expect(context.instructions).not.toContain('Add helpers in owned modules');
+    expect(context.instructions.split('\n').find(line => line.startsWith('Edit only ')))
+      .toBe(`Edit only ${path.join(f.receipt.workspaceRoot, 'RESEARCH.md')}.`);
+    expect(context.instructions).toContain('Your verdict does not replace host checks or the independent S3');
+    expect(context.assignment).toEqual(assignment);
+    expect(packets(context.message)).toEqual([]);
+    expect(context.continuationMessage).toBeUndefined();
+  });
+
   it('keeps candidate and adaptation hints out of real final-candidate reviews, including continuations', () => {
     const f = fixture(), task = { ...f.record.task, kind: 'research' as const, reviewScope: 'final-candidate' as const };
     const action: CooperativeAction = { ...f.action, kind: 'task', task,

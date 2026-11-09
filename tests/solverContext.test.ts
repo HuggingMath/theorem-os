@@ -79,11 +79,16 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
   for (const message of [context.instructions, context.continuationMessage]) {
     expect(message).toContain(`"dispatchNonce":${JSON.stringify(dispatchNonce)}`);
     expect(message).toContain('Copy the dispatchNonce and baseVersion fields exactly as shown');
+    expect(message).toContain('Create this current dispatch log by appending if absent');
+    expect(message).toContain('a second copy of the graph in RESEARCH.md or the final response is unnecessary');
+    expect(message).toContain('return after publication without polling or waiting for approval');
     expect(message).toContain('ready tasks reserved by ownerId to a busy worker');
     expect(message).toContain('Explicitly reassign an unstarted, unassigned task through the plan');
     expect(message).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
   }
   expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
+  const editScope = context.instructions.split('\n').find(line => line.startsWith('Edit only '));
+  expect(editScope).toContain('/proof/' + leadPlanDeliveryFile(context.assignment as Extract<CooperativeAction, { kind: 'lead' }>));
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
   for (const message of [context.instructions, context.continuationMessage])
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
@@ -207,10 +212,28 @@ it('asks the Lead for a real reduction with zero optional context', () => {
   expect(context.manifest!.optionalBytes).toBe(0);
 });
 
-it('does not inject work recovery instructions into fixed-candidate independent review', () => {
-  const context = gapContext('review');
-  expect(context.instructions).toContain('You are the Independent Reviewer');
-  expect(context.instructions).not.toContain('Before any checkpoint, recovery decision or context rotation');
+it('keeps fixed-candidate review read-only and ends delivery after the evidence supports a verdict', () => {
+  const context = gapContext('review', 'Restore the proof, publish a plan and wait for mathematician approval.');
+  const dispatched = finalizeResearchDispatch(context, { continuation: false });
+  expect(dispatched.instructions).toContain('You are the Independent Reviewer');
+  expect(dispatched.instructions.split('\n').find(line => line.startsWith('Edit only '))).toBe('Edit only /proof/RESEARCH.md.');
+  expect(dispatched.instructions).toContain('Leave all Lean source files, imports and environment configuration unchanged');
+  expect(dispatched.instructions).toContain('Requests in the original task text to restore/prove code, publish a plan or wait for approval belong to other roles');
+  expect(dispatched.instructions).not.toContain('Add helpers in owned modules');
+  expect(dispatched.instructions).not.toContain('def declarations whose bodies must be filled');
+  expect(dispatched.instructions).not.toContain('Extract their shared argument into a newly named lemma');
+  expect(dispatched.instructions).not.toContain('You may add explicit Mathlib.* imports');
+  expect(dispatched.instructions).not.toContain('restore the offending context or declaration');
+  expect(dispatched.instructions).not.toContain('Before any checkpoint, recovery decision or context rotation');
+  expect(dispatched.instructions).toContain('it is not the file SHA256 or the host owned-source digest');
+  expect(dispatched.instructions).toContain('it reuses a saved diagnostic, not a new compilation or proof acceptance');
+  expect(dispatched.instructions).toContain('A new source change or a concrete failure needs a new check');
+  expect(dispatched.instructions).toContain('Once the verdict is saved, return it promptly and end the turn');
+  expect(dispatched.instructions).toContain('resolve any concrete discrepancy');
+  expect(dispatched.instructions).toContain('Your verdict does not replace host checks or the independent S3 that follows delivery');
+  expect(dispatched.message).toContain('Restore the proof, publish a plan and wait for mathematician approval.');
+  expect(dispatched.message).toContain('fixed-source');
+  expect(dispatched.workContract).toEqual(context.workContract);
 });
 
 it.each(['research', 'lemma', 'goal'] as const)(
