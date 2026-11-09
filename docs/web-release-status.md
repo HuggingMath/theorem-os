@@ -6,7 +6,9 @@
 
 G01–G09 修复已与数学协作功能一起上线，包括等待计划确认暂停证明计时、Lean Key 默认临时使用、从保存版本继续、完整已保存档案导出及中英文使用说明同步。新增[数学家](https://app.theoremos.top/people.html)、[定理](https://app.theoremos.top/theorems.html)和[Library](https://app.theoremos.top/library.html)界面，支持版本绑定的人工干预、贡献追踪、数学库与个性化 Agent / Skill 的固定版本分享和复用。
 
-23:07 将依赖下载源从故障的 npmmirror 切换至官方 npm，修复恢复工作流安装阶段的大量 HTTP 500；版本和完整性摘要不变，空目录、独立缓存的冻结安装通过。云端恢复结果继续记录在[统一发布记录](frontend-round7-release-20261109.md)。
+23:34 的 [CI 恢复工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42641284975)六项全部成功：Web 与两组 Lean 验证、Web / Worker 镜像发布及最终成对摘要归档。新增会话测试和第七轮 40 个浏览器场景已在云端通过；GHCR 镜像对应 `e417091324dabf7a64b9b07b21d28517cb511879`。这次只修正测试连接和下载源，生产继续运行 `e5c8caf`。详见[统一发布记录](frontend-round7-release-20261109.md)。
+
+23:07 将依赖下载源从故障的 npmmirror 切换至官方 npm，修复恢复工作流安装阶段的大量 HTTP 500；版本和完整性摘要不变，空目录、独立缓存的冻结安装通过。
 
 23:02 已修复第七轮云端新增测试的连接复用问题：服务重启后测试客户端误用旧连接，导致 `UND_ERR_SOCKET`。两组云端 solver 已通过，其余 Web 验证和第五、六轮浏览器均成功；失败发生在第七轮浏览器启动前。测试按现有惯例关闭连接，Node 22.23.4 下 12 项相关检查、重启场景十次连续运行和类型检查通过。线上产品版本保持上述 `e5c8caf`。
 
@@ -47,6 +49,7 @@ G01–G09 修复已与数学协作功能一起上线，包括等待计划确认�
 
 | 目录 | 入口 |
 | --- | --- |
+| `theoremos-frontend-round7-ci-recovery-20261109` | `README.md`、`verification.json`、`local-verification.json`、`registry-change.json`、`cloud-final-status.json`、`image-release/image-release.json`、`image-release-verification.json` |
 | `theoremos-frontend-round7-release-20261109` | `README.md`、`verification.json`、`local-verification.json`、`merge-result.json`、`images/pair-verification.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json`、`ci-status.json` |
 | `theoremos-frontend-round5-fixes-20261109` | `README.md`、`verification.json`、`local-verification.json`、`images/worker-final-verification.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json` |
 | `theoremos-frontend-round4-integration-20261109` | `README.md`、`verification.json`、`local-verification.json`、`final-image-lean-tests.json`、`images/worker-final-verification.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json` |

@@ -2,6 +2,8 @@
 
 21:26（北京时间）已将源码 `e5c8cafb1c181cd5f739f9544c4db33cdfaae82d` 的 Web / Worker 成对发布至 <https://app.theoremos.top/>。最终源码已快进合并并推送 `main`，保留 `release/frontend-round7-20261109` 与 `fix/frontend-round7` 分支。隔离预检、维护排空、私有备份与 checksum 恢复、切换及公网版本、静态文件核验通过，维护关闭。
 
+23:34 的 [CI 恢复工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42641284975)已全部成功：源码 `e417091324dabf7a64b9b07b21d28517cb511879` 的 Web 验证、Lean 4.33.0 / 4.34.1 验证、Web / Worker 镜像发布及最终 release 共六项通过。第七轮会话和 40 个浏览器场景已在云端完整执行。GHCR 两张镜像均以完整源码 SHA 标记，`image-release-e417091324dabf7a64b9b07b21d28517cb511879` 归档中的摘要与构建推送日志一致。这次收尾只修正测试连接与下载源，产品源码、依赖版本和完整性摘要不变；线上仍运行上述 `e5c8caf`。
+
 本次一并上线第六轮、第七轮修复及已有 CI 失败的修正：
 
 - 登录后的普通响应不再重写身份 Cookie；匿名引导改用独立 Cookie，迟到的匿名响应不会覆盖新登录。现有登录与旧匿名会话继续兼容。
@@ -25,6 +27,8 @@ CI 修复提交 `e76b6ef` 的[云端工作流](https://github.com/HuggingMath/th
 23:02 的后续修复按现有 HTTP 重启测试惯例，为该文件的请求 helper 设置 `Connection: close`，保留 Cookie 顺序、CSRF、登录优先级及重启持久化的全部断言。Node 22.23.4 下两文件 12 项检查、同一重启场景十次连续运行和根类型检查通过；这些重复运行不计为十项不同用例。此次只修改测试与记录，线上产品版本仍为 `e5c8caf`。修复后的云端结果继续记录在 `/home/lzh/workspace/outputs/theoremos-frontend-round7-ci-recovery-20261109/`。
 
 23:07 继续处理[恢复工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42640720171)的依赖安装失败：npmmirror 对大量下载同时返回 HTTP 500。`.npmrc` 与锁文件的 109 处注册源地址改用官方 npm，所有版本、依赖和完整性摘要逐字保持一致；空目录和独立缓存的 `bun install --frozen-lockfile` 成功安装 59 个包，锁文件没有改写。没有变更产品源码或升级依赖。
+
+恢复证据位于 `/home/lzh/workspace/outputs/theoremos-frontend-round7-ci-recovery-20261109/`：`verification.json`、`cloud-final-status.json`、三份 `final-verify` / `final-solver` 日志、`final-publish-web.log`、`final-publish-worker.log`、`final-release.log`、`image-release/image-release.json` 和 `image-release-verification.json`。原失败及依赖安装失败的日志继续保留，没有用成功运行覆盖历史结果。
 
 完整本机证据位于 `/home/lzh/workspace/outputs/theoremos-frontend-round7-release-20261109/`：
 
