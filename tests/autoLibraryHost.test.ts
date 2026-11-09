@@ -12,6 +12,8 @@ import { prepareAutoLibraryBuild, readAutoLibraryRequest, runAutoLibraryBuild } 
 import { autoLibrary } from '../scripts/mathematics/autoLibrary';
 import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
 import { temporaryDirectory } from './helpers/files';
+import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
+import { readAuthorizedKnowledgeCatalog } from '../src/solver/theoremKnowledgeAuthorization';
 
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 let directory: string, fixture: ReturnType<typeof writeLibraryHostFixture>;
@@ -64,6 +66,17 @@ function prepare() {
 }
 
 describe('host-authorized Auto composition', () => {
+  it('indexes an authorized Auto composition without promoting its declarations to release replay evidence', () => {
+    const item = approve(record()), base = effective(), selected = select([item]);
+    bootstrapAutoLibraryTask(workspace(), { source: challenge, task: 'Prove target.', environment: 'openai-math', libraryPack: selected.pack! },
+      { binding: base.binding, provenance: { records: [item] } });
+    const file = path.join(directory, 'auto-knowledge.json');
+    expect(prepareLibraryKnowledge(workspace(), file)).toMatchObject({ entries: 3, libraryModules: 3 });
+    const catalog = readAuthorizedKnowledgeCatalog(file, workspace());
+    expect(catalog.base.entries.find(entry => entry.name === 'TheoremOS.Auto.Checked.t')!.libraryMetadata).toBeUndefined();
+    expect(catalog.base.entries.filter(entry => entry.libraryMetadata)).toHaveLength(2);
+    expect(catalog.base.libraryAuthorization!.binding.autoComposition).toBeDefined();
+  });
   it('installs authenticated additions with the effective base and rejects a raw base override', () => {
     const item = approve(record());
     const selected = select([item]);

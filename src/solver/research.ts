@@ -102,6 +102,7 @@ export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | und
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
   continuation?: ContinuationSnapshot; mathTools?: MathTools;
+  assertKnowledgeCurrent?: () => void;
   knowledgeFile?: string; knowledgeDigest?: string; knowledgeSnapshot?: KnowledgeContextSnapshot };
 
 /** Lead and isolated task workers share one budget; only a full canonical check grants acceptance. */
@@ -208,6 +209,7 @@ export async function runResearchWorkers(input: {
         dispatchDigest: string }>();
       const context = (feedback?: string, previousCheck?: ProofCheck, previousFailures = research.failures,
         assignment?: CooperativeAction) => {
+        access.assertKnowledgeCurrent?.();
         const scoped = cooperation?.contextState(assignment, worker);
         const currentContext = { ...modules.M4.build(state.problem,
           { ...view(), ...(scoped ? { cooperation: scoped } : {}) }, {

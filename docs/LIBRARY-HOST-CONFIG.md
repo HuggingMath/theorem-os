@@ -32,7 +32,55 @@ The ordinary task bootstrap (including its CLI and ordinary Web callers) and hel
 
 The initial Git commit and receipt bind the release, policy, effective set, complete dependency identity, and configuration file's raw SHA256. Resume and the held-out official gate re-resolve from the current host setting. Removing the setting, changing configuration bytes (even whitespace or unrelated task mappings), changing release artifacts, or changing the destination dependency identity invalidates the old binding. Recreate tasks after an intentional policy update. Receipt fields cannot choose an alternative configuration.
 
-Without this host setting, existing legacy flows remain available. Old receipts cannot claim a host-approved release, and enabling host policy rejects unbound old tasks. Knowledge-index filtering, campaign integration and production Web container mounts are separate migration work. The ordinary Web function uses the shared resolver, but configuring the supervisor alone does not configure a container: its trusted bootstrap process needs its own protected, read-only host files and setting.
+Without this host setting, existing legacy flows remain available. Old receipts cannot claim a host-approved release, and enabling host policy rejects unbound old tasks. Campaign integration and production Web container mounts remain deployment work. The ordinary Web function uses the shared resolver, but configuring the supervisor alone does not configure a container: its trusted bootstrap process needs its own protected, read-only host files and setting.
+
+## Installed knowledge authorization
+
+With host configuration enabled, `prepareLibraryKnowledge` reconstructs a catalogue
+from the verified task receipt, current EffectivePack and exact installed module
+bytes. Ordinary and held-out tasks (including an explicit `--receipt-file`) use the
+same authorization. Only installed library modules and their frozen Lean project
+configuration enter source contexts. Task proof bodies and full-release catalogues
+remain absent. An empty allowed set produces an authorized empty catalogue.
+
+```bash
+bun scripts/mathematics/prepareLibraryKnowledge.ts --workspace /absolute/task \
+  --output /absolute/fresh/catalog.json
+bun bin/math.ts knowledge stats --catalog /absolute/fresh/catalog.json \
+  --workspace /absolute/task
+```
+
+Packed catalogues retain `libraryAuthorization`: generator version, complete
+EffectivePack binding, task receipt digest and installed-file-set digest. Entries
+carry `libraryMetadata` only when matched to the authorized release declarations;
+legacy statuses remain `unknown`, and Auto declarations acquire no base-release
+replay claim. The catalogue remains lexical, recorded evidence requiring fresh
+checking. Existing declaration-discovery limitations are unchanged.
+
+`readAuthorizedKnowledgeCatalog` reconstructs the expected catalogue before
+returning any counts, search metadata or source objects. It compares all metadata,
+contexts and blobs, including unreferenced blobs. A recomputed catalogue hash or
+copied authorization field cannot approve additional text, provenance or sources.
+Changed policy, configuration, receipt, module bytes or dependency identity rejects
+reuse. Source objects are re-read even after prior searches populated caches.
+
+The run entry point validates `--knowledge-base` before startup and completed-run
+resume, again before worker copies, and before each worker context is built.
+Worker copies retain the exact manifest and authorization, with the pinned digest
+used by their knowledge commands. Host configuration is not passed to model
+children. Keep the full release and host registry outside their filesystem view.
+Host CLI search/get/source/finding/dependencies/consumers/stats require `--workspace`
+under host configuration and share this authorization before returning results.
+
+Historical state files, free-text findings, Auto build application hints and
+continuation attachments do not yet have independent authorization of their full
+content and visibility history. Configured preparation rejects these inputs before
+reading or exporting them; configured runs reject continuation imports. Host CLI
+archive build/enrich/pack paths are also rejected. Matching a declaration name,
+module hash or parent policy alone cannot authenticate arbitrary historical prose.
+Already authorized Auto modules themselves remain searchable. Supporting historical
+advice requires a separate authenticated content/provenance contract; it is not
+silently admitted by this migration. Unconfigured legacy workflows remain unchanged.
 
 ## Historical three-file releases
 

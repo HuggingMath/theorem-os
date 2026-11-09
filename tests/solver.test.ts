@@ -39,6 +39,9 @@ import { readKnowledgeCatalog, writePackedKnowledge } from '../src/solver/theore
 import { buildRunInspection } from '../src/solver/inspection';
 import { createTaskConnectionCheck } from '../src/solver/taskConnections';
 import { deferred } from './helpers/async';
+import { bootstrapLeanTask, leanTaskId } from '../src/math/leanTask';
+import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
+import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn(), officialGate: vi.fn(), build: vi.fn(), delay: vi.fn(),
   prepare: vi.fn(), freeze: vi.fn(), readiness: vi.fn(), connectivity: vi.fn(), packages: undefined as string | undefined }));
@@ -387,6 +390,53 @@ describe('isolated solver and host acceptance', () => {
         sourceDigest: 'a'.repeat(64), receiptIds: ['historical-receipt'] },
     }]));
   }
+
+  function hostedKnowledgeFixture() {
+    const source = 'import Mathlib\ntheorem hosted_goal : True := by sorry\n';
+    const hostFixture = writeLibraryHostFixture(path.join(directory, 'host'), [
+      { taskId: leanTaskId(source), selection: { mode: 'mapped', exclusionKeys: ['FixtureTask'] } }]);
+    vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', hostFixture.configPath);
+    const hostedWorkspace = path.join(directory, 'hosted-task');
+    const receipt = bootstrapLeanTask(hostedWorkspace, { source, task: 'prove', environment: 'openai-math' });
+    host.packages = path.join(directory, 'hosted-packages'); fs.mkdirSync(host.packages);
+    const catalog = prepareLibraryKnowledge(hostedWorkspace, path.join(directory, 'authorized.json'));
+    if (!catalog.enabled) throw new Error('expected catalog');
+    return { ...hostFixture, receipt, catalog, hostedArgs: args.map(value => value === workspace ? hostedWorkspace : value) };
+  }
+
+  it('copies only authorized knowledge on hosted startup and rejects policy drift before resume', async () => {
+    const f = hostedKnowledgeFixture();
+    const hostedArgs = [...f.hostedArgs, '--workers', '4', '--startup-only', '--knowledge-base', f.catalog.file];
+    expect(await runSolver(hostedArgs, directory)).toBe(0);
+    expect(host.createSession).not.toHaveBeenCalled();
+    const state = readSolverRunState(output + '.runtime/state.json');
+    for (const worker of state.workers!) {
+      const copy = path.join(worker.worktree, state.problem.projectRelative, '.lake/theorem-knowledge.json');
+      const loaded = readKnowledgeCatalog(copy, f.catalog.sha256);
+      expect(loaded.base.libraryAuthorization!.binding).toEqual(f.receipt.libraryBinding);
+      expect(loaded.base.entries).toHaveLength(2);
+    }
+    fs.appendFileSync(f.configPath, ' ');
+    expect(await runSolver([...hostedArgs, '--resume'], directory)).toBe(1);
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rejects raw historical catalogs and continuation attachments before starting a hosted worker', async () => {
+    const f = hostedKnowledgeFixture(), raw = knowledgeFixture();
+    expect(await runSolver([...f.hostedArgs, '--startup-only', '--knowledge-base', raw.file], directory)).toBe(1);
+    expect(await runSolver([...f.hostedArgs, '--continuation-manifest', '/missing'], directory)).toBe(1);
+    expect(await runSolver([...f.hostedArgs, '--continuation-source-run', '/missing'], directory)).toBe(1);
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rejects host policy changes during preparation before copying knowledge to a worker', async () => {
+    const f = hostedKnowledgeFixture();
+    host.connectivity.mockImplementation(async () => {
+      fs.appendFileSync(f.configPath, ' '); return { status: 'reachable', httpStatus: 401 };
+    });
+    expect(await runSolver([...f.hostedArgs, '--startup-only', '--knowledge-base', f.catalog.file], directory)).toBe(1);
+    expect(host.createSession).not.toHaveBeenCalled();
+    const state = readSolverRunState(output + '.runtime/state.json');
+    expect(fs.existsSync(path.join(state.worktree, state.problem.projectRelative, '.lake/theorem-knowledge.json'))).toBe(false);
+  });
 
   it.each(['v1', 'v2'] as const)('prepares identical read-only %s knowledge snapshots for all four workers without opening a model', async format => {
     const catalog = knowledgeFixture('knowledge.json', 'True', format);

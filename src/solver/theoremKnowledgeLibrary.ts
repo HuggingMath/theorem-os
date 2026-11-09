@@ -11,6 +11,8 @@ import { buildTheoremKnowledge, theoremKnowledgeStats, type KnowledgeCandidate }
 import { readKnowledgeCatalog, writePackedKnowledge } from './theoremKnowledgeStore';
 import { importKnowledgeRuns } from './theoremKnowledgeRuns';
 import { readLibraryApplicationHints } from './libraryKnowledgeApplications';
+import { libraryHostConfigPath } from '../math/libraryHostConfig';
+import { prepareAuthorizedLibraryKnowledge } from './theoremKnowledgeAuthorization';
 
 const configurationFiles = new Set(['lean-toolchain', 'lakefile.toml', 'lakefile.lean', 'lake-manifest.json']);
 
@@ -27,6 +29,7 @@ function libraryDescription(file: string, header: string): string {
 }
 
 export type PrepareLibraryKnowledgeOptions = {
+  receiptFile?: string;
   /** Explicit stable checkpoints selected by the caller; refreshes require a new output path. */
   stateFiles?: readonly string[];
   /** Settled build directories, or snapshots containing request/state/base-pack and published round records. */
@@ -35,7 +38,8 @@ export type PrepareLibraryKnowledgeOptions = {
 
 /** Index the selected frozen library and explicit historical evidence; never scan unrelated runs or solutions. */
 export function prepareLibraryKnowledge(workspaceInput: string, outputInput: string, options: PrepareLibraryKnowledgeOptions = {}) {
-  const workspace = fs.realpathSync(workspaceInput), receiptFile = path.join(workspace, 'active-problem.json');
+  if (libraryHostConfigPath()) return prepareAuthorizedLibraryKnowledge(workspaceInput, outputInput, options);
+  const workspace = fs.realpathSync(workspaceInput), receiptFile = options.receiptFile ?? path.join(workspace, 'active-problem.json');
   const receipt = readLeanTaskReceipt(receiptFile), pack = receipt.libraryPack;
 
   const receiptBytes = readMathFile(receiptFile, 4 * LEAN_TASK_SOURCE_MAX_BYTES).bytes;

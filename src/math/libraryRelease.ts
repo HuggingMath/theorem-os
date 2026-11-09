@@ -42,7 +42,7 @@ const verificationSchema = z.object({ schema: z.literal('theorem-os.library-veri
 }).strict();
 const referenceSchema = z.object({ file: z.literal('verification.json'), sha256: hash, pointer: z.literal('/replay/coverage'),
   scope: z.literal('declaration-set'), declaration_set_sha256: hash }).strict();
-const declarationSchema = z.object({ schema: z.literal('theorem-os.declaration-metadata.v1'), id: z.string().min(1),
+export const declarationSchema = z.object({ schema: z.literal('theorem-os.declaration-metadata.v1'), id: z.string().min(1),
   name: z.string().min(1), kind: z.enum(['def', 'abbrev', 'theorem', 'lemma', 'structure', 'class', 'inductive', 'instance']),
   kernel_kind: kernelKind.nullable(), proof_system: z.literal('lean4'),
   source: z.object({ repository: z.literal('theorem-os-library'), commit, file: sourceFile, module: sourceModule, sha256: hash }).strict(),

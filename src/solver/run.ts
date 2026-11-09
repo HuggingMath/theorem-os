@@ -31,7 +31,8 @@ import { buildTokenBudget } from './usageBudget';
 import { selectedDeepSeekProfile } from '../runtime/deepseek';
 import { selectedWestlakeProfile } from '../runtime/westlake';
 import { selectedSub2apiProfile } from '../runtime/sub2api';
-import { copyKnowledgeSnapshot, readKnowledgeCatalog } from './theoremKnowledgeStore';
+import { copyKnowledgeSnapshot } from './theoremKnowledgeStore';
+import { readAuthorizedKnowledgeCatalog } from './theoremKnowledgeAuthorization';
 import { copyContinuationSnapshot, freezeContinuationInput, readContinuationInput, readContinuationSnapshot,
   type ContinuationSnapshot } from './continuationInput';
 import { seedSolverContinuation } from './continuationSeed';
@@ -147,6 +148,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
       readMathBuildManifest(buildFile, root, bundleRoot);
       const task = fs.readFileSync(required('task-file'), 'utf8');
       const problem = readSolverProblem(workspace, values['receipt-file'] || path.join(workspace, 'active-problem.json'));
+      if (problem.libraryBinding?.hostConfiguration && (values['continuation-manifest'] || values['continuation-source-run']))
+        throw new Error('library_knowledge_history_unauthorized');
       const continuationIdentity = { taskDigest: mathDigest(task), problemReceiptDigest: problem.receiptDigest };
       const continuationInput = values['continuation-manifest']
         ? readContinuationInput(values['continuation-manifest'], continuationIdentity) : undefined;
@@ -181,7 +184,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const westlakeProfile = modules.M1.open === directSolverModules.M1.open && !sub2apiProfile ? selectedWestlakeProfile(profile) : undefined;
       const providerProfile = modules.M1.open === directSolverModules.M1.open
         ? selectedDeepSeekProfile(profile) ?? sub2apiProfile ?? westlakeProfile : undefined;
-      const knowledge = values['knowledge-base'] ? readKnowledgeCatalog(values['knowledge-base']) : undefined;
+      const knowledge = values['knowledge-base'] ? readAuthorizedKnowledgeCatalog(values['knowledge-base'], workspace,
+        values['receipt-file'] || path.join(workspace, 'active-problem.json')) : undefined;
       const identity = { taskDigest: mathDigest(task), buildDigest: mathDigest(fs.readFileSync(buildFile)),
         providerProfile: providerProfile?.profile, providerProfileDigest: providerProfile?.digest,
         environmentDigest: mathDigest(canonicalMathJson(projectMathematicsRuntimeEnvironment(env))),
@@ -367,6 +371,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         const workerContinuation = continuation && copyContinuationSnapshot(continuation, workerProject);
         let knowledgeFile: string | undefined;
         if (knowledge) {
+          if (knowledge.base.libraryAuthorization) readAuthorizedKnowledgeCatalog(values['knowledge-base']!, workspace,
+            values['receipt-file'] || path.join(workspace, 'active-problem.json'), knowledge.digest);
           knowledgeFile = path.join(workerProject, '.lake', 'theorem-knowledge.json');
           copyKnowledgeSnapshot(knowledge, values['knowledge-base']!, knowledgeFile);
         }
@@ -379,6 +385,10 @@ export async function runSolver(args: string[], root: string, customModules?: So
           ...(mathTools ? { mathTools } : {}),
           ...(workerContinuation ? { continuation: workerContinuation } : {}),
           ...(knowledge ? { knowledgeFile, knowledgeDigest: knowledge.digest,
+            ...(knowledge.base.libraryAuthorization ? { assertKnowledgeCurrent: () => {
+              readAuthorizedKnowledgeCatalog(knowledgeFile!, workspace,
+                values['receipt-file'] || path.join(workspace, 'active-problem.json'), knowledge.digest);
+            } } : {}),
             knowledgeSnapshot: { digest: knowledge.digest, base: { entries: knowledge.base.entries, evidence: knowledge.base.evidence,
               contexts: knowledge.base.contexts, routeFindings: knowledge.base.routeFindings } } } : {}) });
       };

@@ -8,6 +8,8 @@ import { knowledgeSearchGroup, knowledgeVersionSummary } from './theoremKnowledg
 import { buildKnowledgeRouteFindings, knowledgeRouteFindingSchema, validateKnowledgeRouteFindings,
   type KnowledgeRouteFindingCandidate } from './theoremKnowledgeFindings';
 import { knowledgeApplicationHintSchema } from './theoremKnowledgeApplicationHints';
+import { effectiveLibraryBindingSchema } from '../math/libraryEffectivePack';
+import { declarationSchema as libraryDeclarationMetadataSchema } from '../math/libraryRelease';
 
 export { searchTheoremKnowledge, searchTheoremKnowledgeBatch, searchTheoremKnowledgeRequests } from './theoremKnowledgeSearch';
 export type { KnowledgeSearchOptions, KnowledgeSearchRequest } from './theoremKnowledgeSearch';
@@ -19,6 +21,11 @@ export type { KnowledgeRouteFinding, KnowledgeRouteFindingCandidate, KnowledgeRo
   KnowledgeRouteFindingSearchOptions, KnowledgeRouteFindingSearchRequest } from './theoremKnowledgeFindings';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
+export const libraryKnowledgeAuthorizationSchema = z.object({
+  schema: z.literal('theorem-os.library-knowledge-authorization.v1'),
+  generator: z.literal('installed-library-knowledge-v1'), binding: effectiveLibraryBindingSchema,
+  problemReceiptDigest: hash, installedFilesSha256: hash,
+}).strict();
 const reference = z.object({ file: z.string(), name: z.string() }).strict();
 const statementContext = z.object({
   type: z.string().min(1).refine(value => Buffer.byteLength(value) <= 24000),
@@ -54,6 +61,7 @@ const theorem = z.object({
   description: z.string(), premises: z.array(z.string()),
   elaboration: knowledgeElaborationSchema.optional(),
   applicationHints: z.array(knowledgeApplicationHintSchema).max(64).optional(),
+  libraryMetadata: libraryDeclarationMetadataSchema.optional(),
   dependencies: z.object({ statement: z.array(reference), proof: z.array(reference),
     tasks: z.array(z.object({ taskId: z.string(), taskDigest: z.string() }).strict()),
     coverage: z.enum(['recorded', 'unavailable']),
@@ -66,6 +74,7 @@ const schema = z.object({
   evidence: z.literal('recorded-not-replayed'), requiresFreshCheck: z.literal(true),
   entries: z.array(theoremKnowledgeEntrySchema), contexts: z.record(hash, z.record(z.string(), hash)), sources: z.record(hash, z.string()),
   routeFindings: z.array(knowledgeRouteFindingSchema).optional(),
+  libraryAuthorization: libraryKnowledgeAuthorizationSchema.optional(),
 }).strict();
 
 export type KnowledgeProvenance = z.infer<typeof provenance>;

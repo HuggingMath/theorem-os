@@ -11,6 +11,8 @@ import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import { KERNEL_COMPUTE_LIBRARY } from '../src/math/kernelComputeLibrary';
 import type { LibraryPack } from '../src/math/libraryPacks';
 import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
+import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
+import { readAuthorizedKnowledgeCatalog } from '../src/solver/theoremKnowledgeAuthorization';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { canonicalLibraryJson } from '../src/math/libraryRelease';
 
@@ -128,6 +130,16 @@ describe('Lean-Eval bootstrap without planning state', () => {
     expect(() => readLeanEvalBootstrapReceipt(receipt.activeProblemPath)).toThrow(/binding_changed/);
     await expect(runLeanEvalOfficialGate({ ...result, receipt: tampered })).rejects.toThrow(/binding_changed/);
     expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('authorizes the held-out knowledge catalog through the same installed-set checks', async () => {
+    const { result } = await bootstrapWithHostLibrary();
+    const file = path.join(directory, 'host-knowledge.json');
+    const prepared = prepareLibraryKnowledge(result.receipt.workspaceRoot, file, { receiptFile: result.receipt.activeProblemPath });
+    expect(prepared).toMatchObject({ enabled: true, entries: 2 });
+    const catalog = readAuthorizedKnowledgeCatalog(file, result.receipt.workspaceRoot, result.receipt.activeProblemPath);
+    expect(catalog.base.libraryAuthorization!.binding).toEqual(result.receipt.libraryBinding);
+    expect(catalog.base.entries.map(item => item.name).sort()).toEqual(['TheoremOS.Fixture.d', 'TheoremOS.Fixture.e']);
   });
 
   it('rechecks current host policy on held-out resume and direct gate, and blocks raw pack overrides', async () => {
