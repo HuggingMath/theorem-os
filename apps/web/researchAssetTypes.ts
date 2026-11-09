@@ -113,3 +113,10 @@ export type FrozenResearchConfiguration = {
   libraryPack?: ResearchLibraryPack;
   digest: string;
 };
+
+export type ResearchLibraryUse = ResearchReleaseRef & {
+  runId: string; projectId?: string; theorem?: string;
+  status: 'checked-reference'; evidence: 'recorded-not-replayed'; proofStatus: string;
+  references: { name: string; file: string }[]; checkRefs: string[];
+} & ({ scope: 'task'; taskId: string; taskVersion: string }
+  | { scope: 'original-proof'; theorem: string; proofPath: string; commit: string; sourceDigest: string });

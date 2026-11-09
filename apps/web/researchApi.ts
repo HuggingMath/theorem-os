@@ -7,12 +7,13 @@ import { WebResearchProjects } from './researchProjects';
 import { WebResearchAssets } from './researchAssets';
 import { researchMathematics } from './researchMathematics';
 import { selectWebLibraryPack } from './frozenLibrary';
+import { acceptedResearchLibraryUses } from './researchLibraryUsage';
 import { WebStorage, WebStorageError } from './storage';
 import type { WebJobs } from './jobs';
 import type { WebKnowledgeService } from './knowledgeService';
 import type { WebRunner } from './runner';
 import type { ResearchFeedback, ResearchQuery } from './researchProjectTypes';
-import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchMathDraft } from './researchAssetTypes';
+import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchMathDraft } from './researchAssetTypes';
 import type { WebRun } from './shared';
 import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
 import { leanDiagnostics } from './precheck';
@@ -85,7 +86,7 @@ export class WebResearchApi {
     if (project.permissions.member) for (const binding of project.runs) this.projects.syncRunObservation(viewer, id, binding.runId);
     return this.projects.detail(viewer, id);
   }
-  private uses(viewer: string, release: ResearchAssetRelease) {
+  private uses(viewer: string, release: ResearchAssetRelease): ResearchLibraryUse[] {
     if (!release.mathematics) return [];
     const candidates = new Map<string, { run: WebRun; projectId?: string }>();
     if (viewer !== 'public') for (const run of this.jobs.list(viewer)) candidates.set(run.id, { run });
@@ -103,21 +104,26 @@ export class WebResearchApi {
       if (page.items.length < 100) break;
     }
     const modules = new Map(release.mathematics.pack.modules.map(module => [module.file, mathDigest(module.source)]));
-    return [...candidates.values()].flatMap(({ run, projectId }) => (run.observation?.inspection.tasks ?? []).flatMap(task => {
-      const refs = task.proof.actualReferences;
-      if (!refs || refs.sourceCommit !== task.proof.commit) return [];
-      const matches = refs.proof.filter(reference => modules.has(reference.file) &&
-        refs.inputs.some(input => input.file === reference.file && input.digest === modules.get(reference.file)) &&
-        release.mathematics!.declarations.some(declaration => declaration.name === reference.name && declaration.file === reference.file));
-      const checks = run.observation!.checks.filter(check => check.taskId === task.id && check.taskVersion === task.version
-        && check.commit === refs.sourceCommit && check.sourceDigest === task.proof.sourceDigest
-        && check.environmentDigest === refs.environmentDigest && check.record.passed === true);
-      if (!matches.length || !checks.length) return [];
-      return [{ assetId: release.assetId, version: release.version, digest: release.digest, runId: run.id,
-        ...(projectId ? { projectId } : {}), taskId: task.id, taskVersion: task.version, theorem: task.theorem,
-        status: 'checked-reference', evidence: 'recorded-not-replayed', proofStatus: task.proof.status,
-        references: matches, checkRefs: checks.map(check => check.id) }];
-    }));
+    return [...candidates.values()].flatMap(({ run, projectId }) => {
+      const taskUses: ResearchLibraryUse[] = (run.observation?.inspection.tasks ?? []).flatMap(task => {
+        const refs = task.proof.actualReferences;
+        if (!refs || refs.sourceCommit !== task.proof.commit) return [];
+        const matches = refs.proof.filter(reference => modules.has(reference.file) &&
+          refs.inputs.some(input => input.file === reference.file && input.digest === modules.get(reference.file)) &&
+          release.mathematics!.declarations.some(declaration => declaration.name === reference.name && declaration.file === reference.file));
+        const checks = run.observation!.checks.filter(check => check.taskId === task.id && check.taskVersion === task.version
+          && check.commit === refs.sourceCommit && check.sourceDigest === task.proof.sourceDigest
+          && check.environmentDigest === refs.environmentDigest && check.record.passed === true);
+        if (!matches.length || !checks.length) return [];
+        return [{ assetId: release.assetId, version: release.version, digest: release.digest, runId: run.id,
+          ...(projectId ? { projectId } : {}), taskId: task.id, taskVersion: task.version, theorem: task.theorem,
+          scope: 'task' as const, status: 'checked-reference' as const, evidence: 'recorded-not-replayed' as const, proofStatus: task.proof.status,
+          references: matches, checkRefs: checks.map(check => check.id) }];
+      });
+      const originalUses = acceptedResearchLibraryUses(run, release).filter(use => !taskUses.some(task => task.theorem === use.theorem))
+        .map(use => ({ ...use, ...(projectId ? { projectId } : {}) }));
+      return [...taskUses, ...originalUses];
+    });
   }
   private dispatch(viewer: string, projectId: string, feedback: ResearchFeedback): Promise<ResearchFeedback> | ResearchFeedback {
     if (feedback.kind === 'discussion') return feedback;

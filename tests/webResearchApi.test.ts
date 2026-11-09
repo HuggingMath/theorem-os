@@ -7,7 +7,7 @@ import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebCommand, WebCommandResult, WebGuidanceRecord, WebObservation } from '../apps/web/collaboration';
-import type { WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
+import type { WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import type { WebPrecheckRunner } from '../apps/web/precheck';
 import type { ResearchAsset, ResearchAssetRelease, ResearchPublication } from '../apps/web/researchAssetTypes';
 import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
@@ -53,6 +53,7 @@ class ResearchFixtureRunner implements WebRunner {
   beforeCheck?: () => void;
   private observations = new Map<string, WebObservation>();
   private sends = new Map<string, (message: WorkerMessage) => void>();
+  private completions = new Map<string, () => void>();
   async readiness() { return { ready: true, message: 'Disposable fixture' }; }
   async run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     this.calls.push(structuredClone(value)); this.sends.set(value.id, send);
@@ -60,8 +61,13 @@ class ResearchFixtureRunner implements WebRunner {
     send({ type: 'progress', event: 'solve_started', message: 'PRIVATE_WORKER_LOG' });
     send({ type: 'observation', observation: structuredClone(observed) });
     await new Promise<void>(resolve => {
+      this.completions.set(value.id, resolve);
       if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true });
     });
+  }
+  finish(runId: string, result: WebResult) {
+    this.sends.get(runId)!({ type: 'result', result });
+    this.completions.get(runId)!();
   }
   check: WebPrecheckRunner = async value => {
     this.checks.push(structuredClone(value));
@@ -545,6 +551,41 @@ describe('collaborative research through the actual HTTP service', () => {
       observed.inspection.tasks[0].proof.actualReferences!.inputs[0].digest = mathDigest(module.source); observed.checks[0].taskVersion = 'obsolete-task';
     });
     expect((await (await request(carol, usageRoute)).json()).items).toEqual([]);
+  });
+
+  it('shows independently accepted original-proof library uses without a cooperative task and keeps them private', async () => {
+    const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
+    const { run } = await projectWithRun(alice, bob);
+    const asset = await createAsset(alice, 'mathematics', 'IndependentUsage', { source: { kind: 'run', runId: run.id, taskId: 'target', commit } });
+    const release = await publish(alice, asset);
+    const consumer = await newRun(carol, { workers: 1, coordination: 'independent',
+      researchSelection: { libraries: [{ assetId: asset.id, version: release.version }] } });
+    const stored = service.jobs.get(carol.owner, consumer.id)!, declaration = release.mathematics!.declarations.find(item => item.name === 'helper')!;
+    const targetHash = mathDigest('original target declaration');
+    runner.update(consumer.id, observed => {
+      observed.inspection.tasks = [];
+      observed.inspection.problem.targets[0]!.declarationHash = targetHash;
+      observed.inspection.configuration.workers = 1;
+      observed.inspection.configuration.coordination = 'independent';
+    });
+    runner.finish(consumer.id, { status: 'evaluated_passed', proof, report: { status: 'evaluated_passed',
+      runId: stored.observation!.solverRunId, problemId: stored.observation!.inspection.problem.id, solution_commit: commit,
+      evaluator: { status: 'passed', method: 'host-lean-kernel-all-targets', verification: { passed: true, commit, sourceDigest,
+        verification: { schema: 'deepscientist.mathematics.verification-batch/v1', status: 'kernel_verified', targetCommit: commit,
+          results: [{ status: 'kernel_verified', targetCommit: commit, claim: 'statement', theoremName: 'target', proofPath: 'Main.lean',
+            sourceDeclarationHash: targetHash, receiptId: 'independent-original-receipt',
+            declarationReferences: { statement: [], proof: [{ name: declaration.name, file: declaration.file }] } }] } } } } });
+    await vi.waitFor(() => expect(stored.status).toBe('completed'));
+    const route = `/api/research/library/${asset.id}/releases/${release.version}/uses`;
+    const uses = (await (await request(carol, route)).json()).items;
+    expect(uses).toMatchObject([{ scope: 'original-proof', runId: consumer.id, theorem: 'target', commit,
+      references: [{ name: declaration.name, file: declaration.file }], checkRefs: ['independent-original-receipt'] }]);
+    expect(uses[0]).not.toHaveProperty('taskId'); expect(uses[0]).not.toHaveProperty('taskVersion');
+    expect((await (await request(alice, route)).json()).items).toEqual([]);
+    expect((await (await request(bob, route)).json()).items).toEqual([]);
+    expect((await (await request(undefined, route)).json()).items).toEqual([]);
+    stored.result!.status = 'proof_ready';
+    expect((await (await request(carol, route)).json()).items).toEqual([]);
   });
 
   it('freezes shared Skill, Agent and mathematics into the third user worker input and retains it after updates or withdrawal', async () => {

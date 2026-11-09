@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetContent, ResearchAssetRelease, ResearchConfigurationSelection, ResearchPublication, ResearchReleaseRef, ResearchVerifiedMathematics } from '../researchAssetTypes';
+import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetContent, ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef, ResearchVerifiedMathematics } from '../researchAssetTypes';
 import type { ResearcherProfile } from '../researchProjectTypes';
 import { AssetEditor } from './researchAssetEditor';
 import { RichProse } from './richText';
@@ -140,11 +140,17 @@ function ReleaseContent({ release }: { release: ResearchAssetRelease }) {
 
 function ActualUses({ release }: { release: ResearchAssetRelease }) {
   const [open, setOpen] = useState(false);
-  const uses = useResource<Items<{ runId: string; projectId?: string; taskId: string; taskVersion: string; theorem?: string; proofStatus: string; checkRefs: string[] }>>(
+  const uses = useResource<Items<ResearchLibraryUse>>(
     open ? `${base}/library/${enc(release.assetId)}/releases/${enc(release.version)}/uses` : undefined);
   return <details onToggle={event => setOpen(event.currentTarget.open)}><summary>{tx('查看已检查的实际引用', 'View checked uses')}</summary><ErrorBox message={uses.error} />
-    {uses.data?.items.map((use, index) => <article class="research-event" key={`${use.runId}:${use.taskVersion}:${index}`}><a href={use.projectId ? `${theoremHref(use.projectId, use.runId)}&task=${enc(use.taskId)}` : `./?run=${enc(use.runId)}`}>
-      {use.theorem ?? use.taskId} · {use.taskVersion.slice(0, 12)}</a><p class="research-status">{tx('该任务的证明状态：', 'Task proof status: ')}<State value={use.proofStatus} /></p><Tags values={use.checkRefs} /></article>)}
+    {uses.data?.items.map((use, index) => {
+      const original = use.scope === 'original-proof', identity = original ? use.commit : use.taskVersion;
+      const href = original || !use.projectId ? `./?run=${enc(use.runId)}` : `${theoremHref(use.projectId, use.runId)}&task=${enc(use.taskId)}`;
+      return <article class="research-event" key={`${use.runId}:${identity}:${index}`}><a href={href}>
+        {use.theorem ?? (!original ? use.taskId : '')} · {identity.slice(0, 12)}</a>
+        <p class="research-status">{original ? tx('原题已通过独立验收', 'Original problem independently verified') : <>{tx('该任务的证明状态：', 'Task proof status: ')}<State value={use.proofStatus} /></>}</p>
+        {use.references?.length > 0 && <Tags values={use.references.map(reference => reference.name)} />}<Tags values={use.checkRefs} /></article>;
+    })}
     {uses.data && !uses.data.items.length && <Empty>{tx('当前可见范围内尚无通过检查的实际引用记录。', 'No checked uses within your visible research yet.')}</Empty>}
   </details>;
 }
