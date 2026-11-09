@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { buildResearchContext } from '../src/solver/modules/context';
+import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import type { SolverProblem } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
 import type { DeliveryReceipt } from '../src/solver/deliveryReceipts';
@@ -120,6 +120,28 @@ it.each(['lemma', 'goal', 'lead', 'research'] as const)(
       expect(context.instructions).toContain('confirmed shutdown');
     }
   });
+
+it.each(['lemma', 'goal'] as const)('keeps Lead planning requests out of a dispatched %s proof', kind => {
+  const request = 'Prove the target. Publish a minimal executable plan promptly and wait for mathematician approval.';
+  const context = gapContext(kind, request);
+  const deliveryFile = assignmentDeliveryFile((context.assignment as Extract<CooperativeAction, { kind: 'task' }>).assignment);
+  for (const continuation of [false, true]) {
+    const dispatched = finalizeResearchDispatch(context, { continuation });
+    expect(dispatched.instructions).toContain('plan approval belong to the Lead and host');
+    expect(dispatched.instructions).toContain('before dispatching typed proof work');
+    expect(dispatched.instructions).toContain('do not start another planning or approval cycle');
+    expect(dispatched.instructions).toContain(`append JSON to ${deliveryFile}`);
+    expect(dispatched.instructions).toContain('create it by appending if absent');
+    expect(dispatched.message).toContain(JSON.stringify(context.assignment));
+    expect(dispatched.workContract).toEqual(context.workContract);
+    expect(dispatched.manifest!.usedBytes).toBeLessThanOrEqual(dispatched.manifest!.maxBytes);
+  }
+  expect(context.message).toContain(request);
+  const lead = gapContext('lead', request);
+  expect(lead.instructions).toContain('You are the Lead.');
+  expect(lead.instructions).toContain('Once a complete plan has useful executable work');
+  expect(lead.instructions).not.toContain('do not start another planning or approval cycle');
+});
 
 it('retains the full original-problem responsibility without a cooperative assignment', () => {
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
