@@ -53,7 +53,7 @@ export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: Arch
   const retained = (at: string, id?: string) => (id && earlierIds.has(id)) || (run.startedAt && at < run.startedAt);
   const stamp = (at: string, id?: string) => `<time datetime="${html(at)}">${date(at)} UTC</time>${retained(at, id) ? `<span class="workflow-retained">${text(locale, '较早保存的记录', 'Earlier saved record')}</span>` : ''}`;
   const deliveryEntry = (delivery: Delivery) => {
-    const node = delivery.taskId ? `task:${delivery.taskId}` : delivery.kind === 'review' ? 'review' : 'problem';
+    const node = run.tasks.some(task => task.id === delivery.taskId) ? `task:${delivery.taskId}` : delivery.kind === 'review' ? 'review' : 'problem';
     const kind = { research: text(locale, '研究发现', 'Research finding'), progress: text(locale, '保存研究进展', 'Research progress'),
       proof: text(locale, '证明候选', 'Proof candidate'), failure: text(locale, '尝试受阻', 'Attempt blocked'), review: text(locale, '审阅意见', 'Review') }[delivery.kind] ?? delivery.kind;
     return `<li class="workflow-record" data-workflow-entry="delivery:${html(delivery.id)}" data-workflow-kind="${html(delivery.kind)}" data-tone="${roadmapTone(delivery.status)}">
@@ -64,7 +64,7 @@ export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: Arch
     </li>`;
   };
   const checkEntry = (check: Check) => {
-    const node = check.scope === 'original' ? 'original' : check.taskId ? `task:${check.taskId}` : 'problem';
+    const node = check.scope === 'original' ? 'original' : run.tasks.some(task => task.id === check.taskId) ? `task:${check.taskId}` : 'problem';
     const before = (run.checks ?? []).filter(item => item.id !== check.id && item.at < check.at && item.taskId === check.taskId && item.scope === check.scope)
       .sort((a, b) => b.at.localeCompare(a.at)).find(item => item.sourceDigest && check.sourceDigest &&
         process.sources?.[item.sourceDigest]?.path === process.sources?.[check.sourceDigest]?.path);

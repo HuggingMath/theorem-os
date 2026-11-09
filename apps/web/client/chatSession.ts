@@ -663,6 +663,7 @@ export class ChatSession {
     const editedSubmission = newProblem && !!this.seed && this.draft !== this.seed.original;
     const pendingSubmission = newProblem && this.submissionIdentity.unresolved;
     const busyFormalization = newProblem && !this.seed && !pendingSubmission && this.formalizations.some(item => running(item));
+    const unavailable = newProblem && !pendingSubmission && this.capabilities?.available === false;
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
     const solve = this.solve();
     // A task that just started opens its workspace once; one the reader closed stays closed until they open it again.
@@ -764,6 +765,11 @@ export class ChatSession {
             : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('指导会交给研究组参考，送达状态会显示在对话中。')
         : this.options.session()?.maintenance ? t('工作台正在维护，暂不开始新任务或回答；已有记录仍可查看和下载。')
         : busyFormalization ? t("上一道题正在形式化，你可以先写下一条消息。")
+        : unavailable ? this.capabilities?.reason === 'provider'
+          ? t('当前服务未配置自然语言解题的模型，请联系管理员；也可切换到 Lean 输入。')
+          : this.options.session()?.runtime.ready
+            ? t('当前服务暂不支持自然语言解题，可切换到 Lean 输入。')
+            : t('运行环境暂未就绪，原题会保留；恢复后可继续发送。')
         : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导研究」。') : undefined,
       onEnvironment: value => { this.environment = value; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.rememberDraft(); this.draw(); },
       onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },

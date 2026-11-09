@@ -12,7 +12,7 @@ export type TaskDraft = {
   task: string;
   maxTurns: string;
   maxRunSeconds: string;
-  /** Empty means no token cap. Older drafts omit it. */
+  /** In units of 10,000 tokens. Empty means no token cap. Older drafts omit it. */
   maxTotalTokens?: string;
   workers: string;
   effort: WebEffort;
@@ -113,10 +113,10 @@ function validatedDraft(value: unknown): TaskDraft {
   };
 }
 
-function archiveBudget(run: Record<string, unknown>, key: string): string {
+function archiveBudget(run: Record<string, unknown>, key: string, divisor = 1): string {
   const value = own(run, key);
   if (typeof value !== 'number' || !Number.isFinite(value)) invalid();
-  return String(value);
+  return String(value / divisor);
 }
 
 export function encodeTaskDraft(draft: TaskDraft): string {
@@ -133,7 +133,7 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
     return validatedDraft({
       providerId: own(run, 'providerId'), model: own(run, 'model'), source: own(run, 'source'), task: own(run, 'task'),
       maxTurns: archiveBudget(run, 'maxTurns'), maxRunSeconds: archiveBudget(run, 'maxRunSeconds'), workers: archiveBudget(run, 'workers'),
-      ...(Object.hasOwn(run, 'maxTotalTokens') ? { maxTotalTokens: archiveBudget(run, 'maxTotalTokens') } : {}),
+      ...(Object.hasOwn(run, 'maxTotalTokens') ? { maxTotalTokens: archiveBudget(run, 'maxTotalTokens', 10_000) } : {}),
       effort: own(run, 'effort'), environment: own(run, 'environment'), coordination: own(run, 'coordination'), templateId: '',
       ...(Object.hasOwn(run, 'planApproval') ? { planApproval: run.planApproval } : {}),
       ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),

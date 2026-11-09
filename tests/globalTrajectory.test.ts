@@ -132,7 +132,7 @@ describe('the complete archived research workflow', () => {
           if (note) { expect(body).toContain(escaped(note)); expect(body).toContain('class="workflow-full-text"'); notes++; }
           expect(body).toContain('data-global-run="' + selected.runId + '"');
           expect(body).toContain('data-global-step="delivery:' + delivery.id + '"');
-          expect(body).toContain('data-global-node="' + (delivery.taskId ? 'task:' + delivery.taskId : delivery.kind === 'review' ? 'review' : 'problem') + '"');
+          expect(body).toContain('data-global-node="' + (selected.tasks.some(task => task.id === delivery.taskId) ? 'task:' + delivery.taskId : delivery.kind === 'review' ? 'review' : 'problem') + '"');
           const retained = older.has(delivery.id) || !!selected.startedAt && delivery.at < selected.startedAt;
           expect(body.includes('class="workflow-retained"'), context + '/' + delivery.id + ': inherited marker').toBe(retained);
           if (retained) retainedRows++;
@@ -141,7 +141,7 @@ describe('the complete archived research workflow', () => {
           const body = map.get('check:' + check.id)!;
           expect(body).toContain('data-global-run="' + selected.runId + '"');
           expect(body).toContain('data-global-step="check:' + check.id + '"');
-          expect(body).toContain('data-global-node="' + (check.scope === 'original' ? 'original' : check.taskId ? 'task:' + check.taskId : 'problem') + '"');
+          expect(body).toContain('data-global-node="' + (check.scope === 'original' ? 'original' : selected.tasks.some(task => task.id === check.taskId) ? 'task:' + check.taskId : 'problem') + '"');
           expect(body.includes('class="workflow-retained"')).toBe(!!selected.startedAt && check.at < selected.startedAt);
         }
         if (locale === 'zh') { runs++; deliveryRows += selected.deliveries?.length ?? 0; checkRows += selected.checks?.length ?? 0; }

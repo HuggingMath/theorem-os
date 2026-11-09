@@ -26,7 +26,11 @@ export const roadmapTone = (status: string) => ['integrated', 'completed', 'veri
 
 /** Solid arrows are exactly the recorded task dependencies. Dotted arrows describe research stages. */
 export function buildArchiveRoadmap(record: ArchiveIndexRecord, run: Run, locale: Locale): ArchiveRoadmap {
-  const nodes: ArchiveRoadmapNode[] = [{ id: 'problem', kind: 'problem', title: text(locale, '原题', 'Original problem'), status: '', checkIds: [], deliveryIds: [] }];
+  const known = new Set(run.tasks.map(task => task.id));
+  // Records outlive task-plan revisions; keep their original identities accessible from the problem.
+  const nodes: ArchiveRoadmapNode[] = [{ id: 'problem', kind: 'problem', title: text(locale, '原题', 'Original problem'), status: '',
+    checkIds: (run.checks ?? []).filter(check => check.scope === 'task' && !known.has(check.taskId ?? '')).map(check => check.id),
+    deliveryIds: (run.deliveries ?? []).filter(delivery => delivery.kind !== 'review' && !known.has(delivery.taskId ?? '')).map(delivery => delivery.id) }];
   const edges: ArchiveRoadmap['edges'] = [];
   const edits = run.events.filter(event => event.kind === 'plan-edit');
   if (edits.length) {
@@ -34,7 +38,6 @@ export function buildArchiveRoadmap(record: ArchiveIndexRecord, run: Run, locale
       stepId: `event:${run.events.indexOf(edits.at(-1)!)}`, checkIds: [], deliveryIds: [] });
     edges.push({ from: 'problem', to: 'plan', kind: 'flow' });
   }
-  const known = new Set(run.tasks.map(task => task.id));
   for (const task of run.tasks) {
     const checks = (run.checks ?? []).filter(check => check.scope === 'task' && check.taskId === task.id);
     const deliveries = (run.deliveries ?? []).filter(delivery => delivery.taskId === task.id);

@@ -68,6 +68,10 @@ jobs:
         run: bun run test:frontend-round6
       - name: Verify delayed session responses and draft recovery
         run: bunx vitest run --maxWorkers=4 tests/webSessionCookies.test.ts tests/webResearchSession.test.ts && bun run test:frontend-round7
+      - name: Verify archive budgets, saved keys, plan approvals and historical record navigation
+        run: bunx vitest run --maxWorkers=4 tests/webDraft.test.ts tests/webLongRun.test.ts tests/researchPlanApproval.test.ts tests/archiveRecordNavigation.test.ts tests/globalTrajectory.test.ts && bun run test:frontend-round8
+      - name: Verify historical guidance, mobile controls and native route search input
+        run: bun run test:frontend-round9
 
   verify-solver:
     runs-on: ubuntu-latest

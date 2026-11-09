@@ -1324,6 +1324,11 @@ textarea.expanded-source:focus-visible{outline-width:1px;outline-offset:-1px}
  */
 @media(max-height:480px){
   .run-monitor{display:none}
+  /* Find/replace and the footer must not collapse the code to a clipped padding strip. */
+  .source-editor{overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+  .source-editor .editor-source-surface{flex:1 0 132px;min-height:132px}
+  .source-editor .editor-review{flex:1 0 auto}
+  .source-editor .editor-review .diff-scroll{flex:0 0 132px;min-height:132px}
   .composer{overflow-y:auto}
   .composer>.chat-scroll{flex:none;overflow:visible;mask-image:none}
   .run-detail{overflow-y:auto}

@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { WebObservation } from '../collaboration';
+import type { WebObservation, WebPlanApproval } from '../collaboration';
 import type { ResearchFeedback, ResearchFeedbackInput, ResearchProjectDetail, ResearchRunBinding } from '../researchProjectTypes';
 import { api, base, enc, ErrorBox, errorText, ResearchHttpError, tx, type Item, type Items } from './researchShared';
 
 type ApprovalInput = Extract<ResearchFeedbackInput, { kind: 'plan-approval' }>;
 type Attempt = { input: ApprovalInput; rejected: boolean; retryable: boolean; recorded?: boolean };
+
+export function canApproveProjectPlan(binding: Pick<ResearchRunBinding, 'status' | 'permissions'>, approval: WebPlanApproval | undefined): boolean {
+  return Boolean(binding.permissions.approve && binding.status === 'running' && approval?.status === 'pending' &&
+    approval.planVersion && !approval.leadRevising);
+}
 
 /** The server record survives navigation and retains the exact fields sent by this approval form. */
 function savedApproval(project: ResearchProjectDetail, selfId: string, binding: ResearchRunBinding, observation: WebObservation): Attempt | undefined {
@@ -31,6 +36,7 @@ export function ProjectPlanApproval({ project, selfId, binding, observation, ref
   const [pending, setPendingState] = useState<Attempt | undefined>(() => savedApproval(project, selfId, binding, observation));
   const pendingRef = useRef(pending), lock = useRef(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const canApprove = canApproveProjectPlan(binding, approval);
   const setPending = (attempt: Attempt | undefined) => { pendingRef.current = attempt; setPendingState(attempt); };
   const current = (attempt: Attempt) => pendingRef.current?.input.requestId === attempt.input.requestId;
   const resolve = (attempt: Attempt, record: ResearchFeedback) => {
@@ -79,7 +85,8 @@ export function ProjectPlanApproval({ project, selfId, binding, observation, ref
     refresh();
   }
   async function submit(retry = false) {
-    if (lock.current || retry && !pendingRef.current?.retryable || !retry && (pendingRef.current || approval?.status !== 'pending' || !approval.planVersion)) return;
+    if (lock.current || !canApproveProjectPlan(binding, approval) ||
+      retry && !pendingRef.current?.retryable || !retry && pendingRef.current) return;
     const attempt = pendingRef.current ?? { input: { requestId: crypto.randomUUID(), kind: 'plan-approval' as const,
       text: tx('批准已核对的研究计划', 'Approve the reviewed research plan'), planVersion: approval!.planVersion!,
       target: { runId: binding.runId, statementVersionId: binding.statementVersionId,
@@ -93,20 +100,23 @@ export function ProjectPlanApproval({ project, selfId, binding, observation, ref
     lock.current = true; setBusy(true); setError('');
     try { await readResult(attempt, attempt.rejected); refresh(); } finally { lock.current = false; setBusy(false); }
   }
+  const reviewCurrent = () => {
+    if (lock.current || !canApprove) return;
+    setPending(undefined); setError(''); setNotice(tx('请核对当前计划，再点击批准。', 'Review the current plan, then choose Approve.'));
+  };
   if (approval?.status !== 'pending' && !pending) return null;
   return <div class="research-publication" data-project-plan-approval data-approval-request-id={pending?.input.requestId}>
     <p class="research-status">{tx('等待批准计划：', 'Plan awaiting approval: ')}<code>{approval?.planVersion}</code></p>
+    {approval?.leadRevising && <p class="research-status" role="status" data-approval-revising>{tx('正在按你的意见修改计划。完成后，请核对新计划再批准。', 'The plan is being revised from your feedback. Review it when the changes are ready, then approve it.')}</p>}
     {pending && <p class="research-field-note">{tx('原批准版本：', 'Original approval version: ')}<code>{pending.input.planVersion}</code></p>}
     {pending?.rejected ? <><p class="research-status">{tx('原批准未生效。请核对当前计划，再提交新的批准。', 'The original approval failed. Review the current plan before approving it again.')}</p>
-      {approval?.status === 'pending' && <button class="button" type="button" disabled={busy} data-approval-review-current onClick={() => {
-        setPending(undefined); setError(''); setNotice(tx('请核对当前计划，再点击批准。', 'Review the current plan, then choose Approve.'));
-      }}>{tx('改为核对当前计划', 'Review the current plan')}</button>}</>
+      {approval?.status === 'pending' && <button class="button" type="button" disabled={busy || !canApprove} data-approval-review-current onClick={reviewCurrent}>{tx('改为核对当前计划', 'Review the current plan')}</button>}</>
       : pending ? <><p class="research-status">{pending.recorded
         ? tx('批准已记录，等待运行确认。', 'Approval recorded. Waiting for the run to confirm it.')
         : tx('原批准结果尚待核对，当前计划不会替换原提交。', 'The original approval is unconfirmed. Its submitted version is retained.')}</p>
         <button class="button" type="button" disabled={busy} data-approval-check onClick={() => void check()}>{tx('核对原批准记录', 'Check original approval')}</button>
-        {pending.retryable && <button class="button" type="button" disabled={busy} data-approval-retry onClick={() => void submit(true)}>{tx('重试原计划批准', 'Retry the original approval')}</button>}</>
-        : <button class="button" type="button" disabled={busy || !approval?.planVersion} onClick={() => void submit()}>{tx('批准此版本并继续研究', 'Approve this version and continue')}</button>}
+        {pending.retryable && <button class="button" type="button" disabled={busy || !canApprove} data-approval-retry onClick={() => void submit(true)}>{tx('重试原计划批准', 'Retry the original approval')}</button>}</>
+        : <button class="button" type="button" disabled={busy || !canApprove} onClick={() => void submit()}>{tx('批准此版本并继续研究', 'Approve this version and continue')}</button>}
     <ErrorBox message={error} />{notice && <p class="research-status" role="status">{notice}</p>}
   </div>;
 }

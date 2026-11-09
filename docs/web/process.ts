@@ -175,9 +175,9 @@ function taskBrowser(run: Run, selection: ProcessSelection, locale: Locale): str
 function roadmap(record: ArchiveIndexRecord, process: ArchiveProcess, run: Run, steps: Step[], selection: ProcessSelection, locale: Locale): string {
   const model = buildArchiveRoadmap(record, run, locale);
   const requested = steps.find(step => step.id === selection.step);
-  const nodeId = selection.node || (selection.task ? `task:${selection.task}` : requested?.taskId ? `task:${requested.taskId}`
-    : requested?.kind === 'acceptance' ? 'acceptance' : requested?.check?.scope === 'original' ? 'original' : 'problem');
-  const node = model.nodes.find(node => node.id === nodeId) ?? model.nodes[0]!;
+  const nodeId = selection.node || (selection.task ? `task:${selection.task}` : '');
+  const node = model.nodes.find(node => node.id === nodeId) ?? model.nodes.find(node => requested && (node.stepId === requested.id
+    || node.checkIds.includes(requested.check?.id ?? '') || node.deliveryIds.includes(requested.delivery?.id ?? ''))) ?? model.nodes[0]!;
   selection.node = node.id;
   const task = run.tasks.find(task => task.id === node.taskId);
   const related = steps.filter(step => task ? step.taskId === task.id : node.kind === 'plan' ? step.kind === 'plan'

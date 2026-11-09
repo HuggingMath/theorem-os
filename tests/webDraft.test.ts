@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { decodeTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftSchema, taskDraftStorageKey, type TaskDraft } from '../apps/web/client/draft';
+import { tokenCap } from '../apps/web/client/submission';
 
 const encoder = new TextEncoder();
 const maximumFileBytes = 16 * 1024 * 1024;
@@ -36,6 +37,31 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(decodeTaskDraft(archive())).toEqual(draft({ templateId: '' }));
     expect(decodeTaskDraft(archive())).not.toHaveProperty('status');
     expect(decodeTaskDraft(archive())).not.toHaveProperty('result');
+  });
+
+  describe.each(['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'])('%s token budgets', schema => {
+    it.each([
+      [10_000, '1'], [20_000, '2'], [15_000, '1.5'], [10_003, '1.0003'],
+      [12_345_678, '1234.5678'], [100_000_000, '10000'],
+    ])('round trips %i archived tokens through editable units and a saved draft', (tokens, units) => {
+      const imported = decodeTaskDraft({ schema, run: { ...archive().run, maxTotalTokens: tokens } });
+      expect(imported).toEqual(draft({ templateId: '', maxTotalTokens: units }));
+      const restored = decodeTaskDraft(JSON.parse(encodeTaskDraft(imported)));
+      expect(restored).toEqual(imported);
+      expect(tokenCap(restored.maxTotalTokens!, 100_000_000)).toBe(tokens);
+    });
+
+    it('keeps an archive without a token cap unlimited after saving its draft', () => {
+      const imported = decodeTaskDraft({ ...archive(), schema });
+      const restored = decodeTaskDraft(JSON.parse(encodeTaskDraft(imported)));
+      expect(restored).not.toHaveProperty('maxTotalTokens');
+      expect(tokenCap(restored.maxTotalTokens ?? '', 100_000_000)).toBeUndefined();
+    });
+  });
+
+  it.each(['', '1', '2', '35', '1.5', '1.0003'])('preserves ordinary draft token units unchanged: %j', units => {
+    const original = draft({ maxTotalTokens: units });
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
   });
   it('imports a full process archive as a draft without restoring evidence, results or an owner-bound continuation', () => {
     const bundle = { ...archive(), schema: 'theorem-os.web-archive.v1',

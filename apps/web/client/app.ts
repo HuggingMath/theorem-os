@@ -446,16 +446,31 @@ class ApiError extends Error {
 }
 type ApiInit = RequestInit & { timeoutMs?: number };
 const sameSession = (session: WebSession | undefined) => session?.draftOwner === state.session?.draftOwner && session?.csrfToken === state.session?.csrfToken;
+let keyChangeSession: WebSession | undefined, keyChangeTail: Promise<void> = Promise.resolve();
 function api<T>(url: string, init?: ApiInit): Promise<T>;
 function api<T>(url: string, init: ApiInit, etag: (value: string | null) => void): Promise<T | undefined>;
 async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
   const requestSession = state.session, requestOwner = requestSession?.draftOwner;
+  // Both input modes update the same saved-key metadata. Send their changes in order, including runs
+  // whose response carries that metadata, so a slow deletion cannot replace a later saved key.
+  const keyChange = Boolean(requestSession?.account?.keyVault && (
+    url.startsWith('/api/auth/keys/') && (init.method === 'PUT' || init.method === 'DELETE')
+    || url === '/api/runs' && init.method === 'POST'));
+  let finishKeyChange: (() => void) | undefined;
+  if (keyChange) {
+    if (!sameSession(keyChangeSession)) { keyChangeSession = requestSession; keyChangeTail = Promise.resolve(); }
+    const previous = keyChangeTail;
+    keyChangeTail = new Promise<void>(resolve => { finishKeyChange = resolve; });
+    await previous;
+  }
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
   const signals = [timeout.signal];
   if (!init.method || init.method === 'GET') signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
   try {
+    // A queued change still belongs to the identity that requested it, even after another tab logs in.
+    if (keyChange && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
     // fetch rejects with a TypeError when the server cannot be reached; its text ("Failed to fetch") means nothing to a reader.
     const response = await fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.any(signals),
       headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
@@ -488,6 +503,7 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
     throw error;
   } finally {
     clearTimeout(timer);
+    finishKeyChange?.();
   }
 }
 const message = (error: unknown) => error instanceof Error ? error.message : t('请求失败，请重试');

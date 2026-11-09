@@ -220,7 +220,9 @@ export class CollaborationView {
       else if (button.hasAttribute('data-collab-deliveries-task')) { view.progress.showForTask(view.selectedTask); view.navigation.go('deliveries'); }
       else if (button.hasAttribute('data-collab-changes-task')) { view.changes.showForTask(view.selectedTask); view.navigation.go('changes'); }
       else if (button.hasAttribute('data-collab-reviews-task')) { view.reviews.showForTask(view.selectedTask); view.navigation.go('reviews'); }
-      else if (button.hasAttribute('data-collab-guide-task')) this.provideGuidance(view, () => view.guidance.guide('task', view.selectedTask));
+      else if (button.hasAttribute('data-collab-guide-task')) {
+        if (this.canGuideTask(view)) this.provideGuidance(view, () => view.guidance.guide('task', view.selectedTask));
+      }
       else if (button.dataset.collabGuideWorker) this.provideGuidance(view, () => view.guidance.guide('worker', button.dataset.collabGuideWorker!));
       else if (button.hasAttribute('data-collab-return')) {
         const task = view.guidanceReturnTask, selected = this.selectedTaskRecord(view)?.task;
@@ -374,6 +376,11 @@ export class CollaborationView {
   private selectedTaskRecord(view: ViewState) {
     const record = view.observation && recordedTask(view.observation, view.selectedTask, view.selectedVersion);
     return view.selectedVersion === undefined || record?.task.version === view.selectedVersion ? record : undefined;
+  }
+  private canGuideTask(view: ViewState): boolean {
+    const record = this.selectedTaskRecord(view);
+    return !this.readOnly && this.permissions.guidance !== false && this.connected && view.active &&
+      Boolean(record && !record.historical);
   }
   private selectTask(view: ViewState, id: string, version?: string, reveal = false) {
     const changed = view.selectedTask !== id || view.selectedVersion !== version;
@@ -677,7 +684,7 @@ export class CollaborationView {
     const observation = view.observation, record = this.selectedTaskRecord(view), task = record?.task;
     const current = observation?.inspection.tasks.find(task => task.id === view.selectedTask);
     const guide = view.element.querySelector<HTMLButtonElement>('[data-collab-guide-task]')!;
-    guide.disabled = !task || Boolean(record?.historical);
+    guide.disabled = !this.canGuideTask(view);
     const root = view.element.querySelector<HTMLElement>('[data-collab-inspector]')!;
     if (!observation || !task) {
       renderTaskInspector(root, view.selectedVersion !== undefined ? { mode: 'missing', id: view.selectedTask, version: view.selectedVersion, hasCurrent: Boolean(current) } : { mode: 'empty' });
@@ -767,7 +774,8 @@ export class CollaborationView {
     view.element.querySelector<HTMLElement>('.collab-observation-line')!.hidden = !observationText;
     view.guidance.update(view.observation, view.active&&!this.readOnly&&this.permissions.guidance!==false, this.connected);
     const canGuide=!this.readOnly&&this.permissions.guidance!==false;
-    for(const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-guide-task],[data-collab-guide-worker],[data-collab-nav-guide]')) button.disabled=!canGuide||!this.connected||!view.active;
+    for(const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-guide-worker],[data-collab-nav-guide]')) button.disabled=!canGuide||!this.connected||!view.active;
+    view.element.querySelector<HTMLButtonElement>('[data-collab-guide-task]')!.disabled = !this.canGuideTask(view);
     view.navigation.update(view.observation, this.connected, view.archives.length);
   }
   /** One artifact at a time; keyed by request, so a new read remounts the heading for focus. */

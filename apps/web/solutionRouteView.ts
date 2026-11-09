@@ -80,6 +80,7 @@ export function solutionRouteLayout(model: SolutionRoute, nodes: readonly Soluti
 export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, options: Options = {}) {
   let model = initial, lastInitial = initial.initial, destroyed = false;
   let expanded = false, previousOverflow = '';
+  let composingSearch: HTMLInputElement | undefined, pendingSearchUpdate: SolutionRoute | undefined;
   let state = memory(initial);
   const signal = new AbortController();
   const word = (zh: string, en: string) => model.locale === 'en' ? en : zh;
@@ -328,13 +329,28 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     if (!input.matches('[data-solution-reader-select]')) return;
     select(input.value, true); root.querySelector<HTMLElement>('[data-solution-reader-select]')?.focus({ preventScroll: true });
   }, { signal: signal.signal });
-  root.addEventListener('input', event => {
-    const input = event.target as HTMLInputElement; if (!input.matches('[data-solution-search]')) return;
+  function search(input: HTMLInputElement, pending?: SolutionRoute) {
+    if (state.query === input.value && !pending) return;
     const selection = { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection };
-    state.query = input.value; state.left = 0; state.top = 0; draw();
+    state.query = input.value; state.left = 0; state.top = 0;
+    if (pending) controller.update(pending); else draw();
     revealSearchResult();
     const next = root.querySelector<HTMLInputElement>('[data-solution-search]')!; next.focus({ preventScroll: true });
     next.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);
+  }
+  root.addEventListener('compositionstart', event => {
+    const input = event.target as HTMLInputElement;
+    if (input.matches('[data-solution-search]')) composingSearch = input;
+  }, { signal: signal.signal });
+  root.addEventListener('compositionend', event => {
+    const input = event.target as HTMLInputElement; if (!input.matches('[data-solution-search]')) return;
+    const pending = pendingSearchUpdate; composingSearch = undefined; pendingSearchUpdate = undefined;
+    search(input, pending);
+  }, { signal: signal.signal });
+  root.addEventListener('input', event => {
+    const input = event.target as HTMLInputElement; if (!input.matches('[data-solution-search]')) return;
+    if ((event as InputEvent).isComposing || input === composingSearch) return;
+    search(input);
   }, { signal: signal.signal });
   root.addEventListener('scroll', event => {
     const viewport = event.target as HTMLElement;
@@ -342,6 +358,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     state.left = viewport.scrollLeft; state.top = viewport.scrollTop;
   }, { capture: true, signal: signal.signal });
   root.addEventListener('keydown', event => {
+    if (event.isComposing) return;
     if (expanded && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); expand(false); return; }
     if (expanded && event.key === 'Tab') {
       const focusable = [...root.querySelectorAll<HTMLElement>('button,input,select,summary,[tabindex="0"]')].filter(element => !element.hasAttribute('disabled') && element.getClientRects().length);
@@ -372,10 +389,13 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
   const stop = () => { if (drag) delete drag.viewport.dataset.dragging; drag = undefined; };
   root.addEventListener('pointerup', stop, { signal: signal.signal }); root.addEventListener('pointercancel', stop, { signal: signal.signal });
   draw();
-  return {
+  const controller = {
     select,
     update(next: SolutionRoute) {
       if (destroyed) return;
+      // Keep the native IME composition range intact while the same route refreshes.
+      if (composingSearch?.isConnected && next.id === model.id) { pendingSearchUpdate = next; return; }
+      composingSearch = undefined; pendingSearchUpdate = undefined;
       const previous = model, previousInitial = lastInitial;
       model = next; lastInitial = next.initial;
       if (previous.id !== next.id) state = memory(next);
@@ -409,4 +429,5 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       root.removeAttribute('role'); root.removeAttribute('aria-modal'); root.removeAttribute('aria-label');
       delete root.dataset.solutionExpanded; delete root.dataset.solutionReading; root.innerHTML = ''; },
   };
+  return controller;
 }

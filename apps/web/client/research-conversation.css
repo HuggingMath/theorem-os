@@ -191,6 +191,8 @@ body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:au
 .chat-examples summary{display:inline-block;cursor:pointer;list-style:none;padding:4px 10px}
 .chat-examples summary::-webkit-details-marker{display:none}
 #natural-research .chat-examples select{margin-top:10px;display:block;width:100%;max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);padding:10px;font-size:13px;color:var(--ink)}
+#chat-history-list{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.run-history:has(.chat-task-history[open]) #chat-history-list{max-height:50%}
 .chat-history{padding:8px 0 16px}
 .chat-history-heading{margin:0;padding:8px 12px;color:var(--muted);font-size:11px;font-weight:500}
 .chat-history-item{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;min-width:0;font-size:13px;color:var(--ink);text-decoration:none}
@@ -266,7 +268,7 @@ body[data-view=draft][data-output-open=true] .research-output-close{display:bloc
   body[data-chat-empty=true] #research-conversation-panel{padding-bottom:8vh}
 }
 
-.chat-task-history{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+.chat-task-history{flex-shrink:0;margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
 /* Open, the proof tasks take the rest of the column and their run list scrolls inside it, as the docked history did before. */
 .chat-task-history[open],.chat-task-history[open]::details-content{display:flex;flex-direction:column;flex:1;min-height:0}
 .chat-task-history>summary{padding:10px 12px;cursor:pointer;color:var(--muted);font-size:12px}
