@@ -23,7 +23,8 @@ export async function checkpointVerification(request: MathematicsVerifierBatchRe
   verify: (request: MathematicsVerifierBatchRequest & { targetCommit: string }) => Promise<MathematicsVerifierBatchResult>): Promise<MathematicsVerifierBatchResult> {
   const current = context.getStore();
   if (!current || request.timeoutMs === Infinity) return verify(request);
-  const key = mathDigest(canonicalMathJson({ schema: 'theorem-os.verification-checkpoint.v1',
+  // Legacy keys could include lease-handshake failures mislabeled as proof timeouts.
+  const key = mathDigest(canonicalMathJson({ schema: 'theorem-os.verification-checkpoint.v2',
     tree: git(request.projectRoot, ['rev-parse', `${request.targetCommit}^{tree}`]), items: request.items,
     environmentDigest: current.environmentDigest, problemReceiptDigest: current.problemReceiptDigest }));
   const previous = current.checkpoints.find(record => record.key === key);
@@ -39,9 +40,13 @@ export async function checkpointVerification(request: MathematicsVerifierBatchRe
   finally { clearInterval(heartbeat); }
   const expired = result.results.some(receipt => receipt.status === 'blocked' &&
     /^(?:Lean verification timed out\.|Formal verification batch deadline exceeded\.?)$/u.test(receipt.error ?? ''));
+  const diagnostics = result.results.filter(receipt => receipt.status !== 'kernel_verified').slice(0, 8).map(receipt => ({
+    receiptId: receipt.receiptId, status: receipt.status, error: receipt.error?.slice(0, 1024),
+    stderrPreview: receipt.stderrPreview?.slice(0, 1024), cleanupError: receipt.cleanupError?.slice(0, 1024),
+  }));
   // Unconfirmed process cleanup must keep the existing infrastructure failure path.
   if (!expired || result.results.some(receipt => receipt.cleanupError || receipt.status === 'unavailable')) {
-    current.emit('verification_finished', { ...details, status: result.status, elapsedMs: Date.now() - startedAt });
+    current.emit('verification_finished', { ...details, status: result.status, elapsedMs: Date.now() - startedAt, diagnostics });
     return result;
   }
   const checkpoint: VerificationCheckpoint = { key, timeoutMs, attempts: (previous?.attempts ?? 0) + 1,
@@ -49,6 +54,6 @@ export async function checkpointVerification(request: MathematicsVerifierBatchRe
   if (previous) Object.assign(previous, checkpoint);
   else { current.checkpoints.push(checkpoint); if (current.checkpoints.length > 32) current.checkpoints.shift(); }
   current.save();
-  current.emit('verification_checkpoint', { ...checkpoint, elapsedMs: Date.now() - startedAt });
+  current.emit('verification_checkpoint', { ...checkpoint, elapsedMs: Date.now() - startedAt, diagnostics });
   throw new VerificationCheckpointError(checkpoint);
 }

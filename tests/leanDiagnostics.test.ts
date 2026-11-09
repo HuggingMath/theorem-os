@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bindLeanPackages, prepareLeanDiagnosticOverrides, runLeanDiagnostics } from '../src/math/leanDiagnostics';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { parseLeanReferences } from '../src/math/leanReferences';
+import { MathProofEnvironmentLeaseTimeoutError } from '../src/math/mathProofEnvironment';
 
 const { run, lease, readiness, environment } = vi.hoisted(() => ({ run: vi.fn(), lease: vi.fn(), readiness: vi.fn(), environment: vi.fn() }));
 vi.mock('../src/math/verifier', () => ({ runMathematicsSandboxedCommand: run,
   formalVerificationToolIdentity: () => 'a'.repeat(64) }));
-vi.mock('../src/math/mathProofEnvironment', () => ({
+vi.mock('../src/math/mathProofEnvironment', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/math/mathProofEnvironment')>(),
   MATH_PROOF_ENVIRONMENT_SANDBOX_ENV: 'DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SANDBOX',
   acquireMathProofEnvironmentLease: lease,
   resolveMathProofEnvironment: environment,
@@ -223,6 +225,19 @@ describe('bounded local Lean diagnostics', () => {
     expect(result.timedOut).toBe(true);
     expect(fs.existsSync(marker)).toBe(false);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each(['handshake', 'operation-deadline'] as const)('preserves the worker lease timeout origin: %s', async kind => {
+    const failure = new MathProofEnvironmentLeaseTimeoutError(kind, `Proof environment lease ${kind} timed out.`);
+    lease.mockRejectedValueOnce(failure);
+    const pending = runLeanDiagnostics({ projectRoot: root, files: ['Submission.lean'], timeoutMs: 1_800_000,
+      env: { DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SANDBOX: 'host-bound-mapping' } });
+    if (kind === 'handshake') await expect(pending).rejects.toBe(failure);
+    else expect(await pending).toMatchObject({ exitCode: null, timedOut: true });
+    expect(readiness).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.lake/lean-diagnostics-latest.json'), 'utf8')))
+      .toMatchObject({ exitCode: null, timedOut: kind === 'operation-deadline' });
   });
 
   it.each(['timeout', 'abort'])('stops the worker compiler and its children on %s', async reason => {

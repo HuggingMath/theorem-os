@@ -9,6 +9,8 @@ import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
 import { taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import path from 'node:path';
+import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
+import { git } from '../src/solver/problem';
 
 describe('resumable verification scheduling', () => {
   let example: ReturnType<typeof localExample>, request: MathematicsVerifierBatchRequest & { targetCommit: string };
@@ -49,6 +51,20 @@ describe('resumable verification scheduling', () => {
         expect(bound.timeoutMs).toBe(1000); return verifiedBatch(bound, { sessionId: 'changed' });
       }), environment);
     }
+  });
+
+  it('does not inherit the allowance of legacy keys that could misclassify handshake failures', async () => {
+    const key = mathDigest(canonicalMathJson({ schema: 'theorem-os.verification-checkpoint.v1',
+      tree: git(request.projectRoot, ['rev-parse', `${request.targetCommit}^{tree}`]), items: request.items,
+      environmentDigest: 'environment', problemReceiptDigest: example.problem.receiptDigest }));
+    const legacy = { key, timeoutMs: 1_800_000, attempts: 1, at: 1,
+      targetCommit: request.targetCommit, receiptIds: ['legacy-timeout'] };
+    checkpoints.push(legacy);
+    await run(() => checkpointVerification(request, async input => {
+      expect(input.timeoutMs).toBe(request.timeoutMs);
+      return verifiedBatch(input, { sessionId: 'fixed-classification' });
+    }));
+    expect(checkpoints).toEqual([legacy]);
   });
 
   it('leaves source failures and unconfirmed cleanup on their original failure paths', async () => {

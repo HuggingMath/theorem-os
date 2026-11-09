@@ -6,7 +6,8 @@ import { assertMathCanonicalPath } from './paths';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from './mathRuntimeIo';
 import { runMathematicsSandboxedCommand } from './verifier';
 import { resolveMathematicsRuntimeEnvironment } from './mathRuntimeEnvironment';
-import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_SANDBOX_ENV, resolveMathProofEnvironment } from './mathProofEnvironment';
+import { acquireMathProofEnvironmentLease, MathProofEnvironmentLeaseTimeoutError,
+  MATH_PROOF_ENVIRONMENT_SANDBOX_ENV, resolveMathProofEnvironment } from './mathProofEnvironment';
 import { checkResolvedLeanToolchainReadiness } from './leanToolchainReadiness';
 import { parseLeanDiagnosticOutput, renderLeanDiagnosticOutput } from './leanDiagnosticMessages';
 import type { LeanDiagnosticArtifactReference, LeanDiagnosticMessage } from './leanTypes';
@@ -27,7 +28,7 @@ async function runWorkerLean(project: string, module: { file: string; sourceRoot
   let lease;
   try { lease = await acquireMathProofEnvironmentLease(project, env, signal, deadlineAt); }
   catch (error) {
-    if (signal?.aborted || (error instanceof Error && error.name === 'TimeoutError')) return stopped();
+    if (signal?.aborted || (error instanceof MathProofEnvironmentLeaseTimeoutError && error.kind === 'operation-deadline')) return stopped();
     throw error;
   }
   if (!lease) throw new Error('math_diagnostics_worker_environment_missing');
@@ -249,7 +250,9 @@ export async function runLeanDiagnostics(input: {
   return finish({ exitCode: 0, timedOut: false, stdout, stderr, phases, ...summary() });
   } catch (error) {
     try {
-      finish({ exitCode: null, timedOut: error instanceof Error && error.name === 'TimeoutError', aborted: input.signal?.aborted });
+      finish({ exitCode: null, timedOut: error instanceof MathProofEnvironmentLeaseTimeoutError
+        ? error.kind === 'operation-deadline' : error instanceof Error && error.name === 'TimeoutError',
+      aborted: input.signal?.aborted, stderr: error instanceof Error ? error.message : String(error) });
     } catch { /* Retaining advisory metadata must not replace the original compilation or filesystem error. */ }
     throw error;
   }
