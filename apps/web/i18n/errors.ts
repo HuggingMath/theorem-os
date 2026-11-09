@@ -232,6 +232,7 @@ export const errors: Record<string, string> = {
   '请求 ID 已用于另一份资产内容。': 'This request ID was already used for different asset content.',
   '此资产的修改记录已达上限，请派生新资产。': 'This asset has reached its edit limit. Create a fork to continue.',
   '资产已更新，请刷新后重试。当前版本：{0}': 'The asset has changed. Refresh and try again. Current revision: {0}',
+  '发布内容已改变，请重新预览并审阅后发布。': 'The release contents have changed. Preview and review them again before publishing.',
   '资产创建请求冲突。': 'The asset creation request conflicts with an earlier request.',
   '所选版本已经撤回，请选择其他版本。': 'The selected version was withdrawn. Choose another version.',
   '资产版本摘要不匹配。': 'The asset version digest does not match.',

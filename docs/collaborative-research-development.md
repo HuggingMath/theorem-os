@@ -361,6 +361,7 @@ type ResearchFeedback = FeedbackSubmission & {
 | `GET /api/research/theorems/:id/activity?after=N` | 定理事件与贡献时间线 |
 | `GET/POST /api/research/library` | 搜索可见资产，或创建数学成果、Agent、Skill 草稿 |
 | `GET/PATCH /api/research/library/:assetId` | 读取资产或修改本人草稿 |
+| `GET /api/research/library/:assetId/preview` | 预览完整发布内容与 `previewDigest`；数学派生使用本人已复制的固定包 |
 | `POST /api/research/library/:assetId/publish` | 固定草稿并启动发布；返回发布请求 ID |
 | `GET /api/research/publications/:id` | 发布的排队、校验、失败或完成状态 |
 | `GET /api/research/library/:assetId/releases/:version` | 固定版本、摘要、依赖和可下载内容 |
@@ -371,6 +372,8 @@ type ResearchFeedback = FeedbackSubmission & {
 同一路径的反馈提交按 `kind` 分别校验 payload。`discussion` 仅要求有权向定理提交建议，目标运行及观测均非必需；其他类型按具体运行授权校验。正文、接收方和长度继续遵守既有 Web 指导限制，计划使用既有计划 schema，候选源码使用现有上传与源码大小限制。附件不接受任意容器路径或 shell 命令。
 
 所有新增写请求带 `requestId`，对可变资源的更新再带 `expectedRevision`。响应包含资源 ID、最新 revision 与状态；长操作返回 `202` 和可查询 ID。未知执行结果先读状态，不建立新的请求 ID 重做。
+
+Library 页面发布时同时提交已审阅的 `previewDigest`。服务端核对当前内容，发生变化返回 `409`；核对通过的数学源码包随发布请求保存，排队、检查和重启恢复均使用这一份包。运行更新不会替换已固定的发布内容。已有不带摘要的直接发布客户端保持兼容；页面的审阅保证以提交预览摘要为准。
 
 新增接口的错误约定：不可见资源返回 `404`；可见但无操作权限返回 `403`；版本或幂等内容冲突返回 `409`，同时返回可读取的当前版本；输入校验失败返回 `400`。冲突不会清空浏览器草稿。
 

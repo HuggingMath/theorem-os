@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebResearchAssets, type ResearchAssetOptions } from '../apps/web/researchAssets';
-import type { ResearchAsset, ResearchReleaseRef } from '../apps/web/researchAssetTypes';
+import type { ResearchAsset, ResearchMathSource, ResearchReleaseRef } from '../apps/web/researchAssetTypes';
 import { WebStorage, WebStorageError } from '../apps/web/storage';
 import { defaultResearchModulePlan } from '../src/solver/modules/policy';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
@@ -48,7 +48,7 @@ const mathOptions = (extra: Partial<ResearchAssetOptions> = {}): ResearchAssetOp
   async validateMathematics() { return { passed: true, receiptRefs: ['host-check-001'] }; },
   ...extra,
 });
-const createMath = (assets: WebResearchAssets, requestId = 'math-one', selected = source) => assets.create('owner-A', {
+const createMath = (assets: WebResearchAssets, requestId = 'math-one', selected: ResearchMathSource = source) => assets.create('owner-A', {
   requestId, type: 'mathematics', name: 'Natural addition', content: { source: selected },
 });
 const status = (call: () => unknown, code: number) => {
@@ -226,10 +226,144 @@ describe('shared research assets', () => {
     const assets = setup({ resolveMathematics: resolve, validateMathematics: check });
     const ref = await publish(assets, createMath(assets));
     const fork = assets.fork('owner-B', ref.assetId, { requestId: 'math-fork', version: ref.version });
-    const forkRef = await publish(assets, fork, 'owner-B');
+    const original = assets.get('owner-A', ref.assetId);
+    assets.withdraw('owner-A', ref.assetId, { requestId: 'withdraw-original', expectedRevision: original.revision, version: ref.version });
+    const preview = await assets.preview('owner-B', fork.id);
+    expect(preview.mathematics?.pack).toEqual(assets.release('owner-A', ref.assetId, ref.version).mathematics?.pack);
+    const queued = await assets.publish('owner-B', fork.id, { requestId: 'publish-fork', expectedRevision: fork.revision,
+      version: 'v1', license: 'MIT', visibility: 'public', previewDigest: preview.previewDigest });
+    const settled = await assets.waitForPublication('owner-B', queued.id), forkRef = settled.release!;
+    expect(settled.status).toBe('completed');
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(check).toHaveBeenCalledTimes(2);
     expect(assets.release('public', forkRef.assetId, forkRef.version).derivedFrom).toEqual(ref);
+  });
+
+  it('provides stable owned tool previews and rejects an unreviewed digest without queuing a publication', async () => {
+    const assets = setup(), item = createSkill(assets);
+    const preview = await assets.preview('owner-A', item.id);
+    expect(preview.previewDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(await assets.preview('owner-A', item.id)).toEqual(preview);
+    await expect(assets.preview('owner-B', item.id)).rejects.toMatchObject({ status: 404 });
+    const input = { requestId: 'reviewed-tool', expectedRevision: item.revision, license: 'MIT', visibility: 'public' };
+    await expect(assets.publish('owner-A', item.id, { ...input, previewDigest: 'f'.repeat(64) })).rejects.toMatchObject({ status: 409 });
+    expect(assets.get('owner-A', item.id).revision).toBe(item.revision);
+    const queued = await assets.publish('owner-A', item.id, { ...input, previewDigest: preview.previewDigest });
+    expect((await assets.waitForPublication('owner-A', queued.id)).status).toBe('completed');
+    await expect(assets.preview('owner-B', item.id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('rejects changed mathematics before queuing and validates exactly the newly reviewed package', async () => {
+    let material = await mathOptions().resolveMathematics!('owner-A', source);
+    const resolve = vi.fn(async () => structuredClone(material)), check = vi.fn(mathOptions().validateMathematics!);
+    const assets = setup(mathOptions({ resolveMathematics: resolve, validateMathematics: check })),
+      item = createMath(assets, 'live-mathematics', { kind: 'run', runId: 'run-A' });
+    const preview = await assets.preview('owner-A', item.id);
+    material.pack.modules[0].source += '\n-- new private research note\n';
+    const input = { requestId: 'reviewed-mathematics', expectedRevision: item.revision, version: 'v1', license: 'MIT', visibility: 'public' };
+    await expect(assets.publish('owner-A', item.id, { ...input, previewDigest: preview.previewDigest }))
+      .rejects.toMatchObject({ status: 409, message: '发布内容已改变，请重新预览并审阅后发布。' });
+    expect(check).not.toHaveBeenCalled(); expect(assets.get('owner-A', item.id).revision).toBe(item.revision);
+    const latest = await assets.preview('owner-A', item.id);
+    expect(latest.previewDigest).not.toBe(preview.previewDigest);
+    const queued = await assets.publish('owner-A', item.id, { ...input, previewDigest: latest.previewDigest });
+    const callsAtQueue = resolve.mock.calls.length;
+    material.pack.modules[0].source += '\n-- later unseen change\n';
+    const completed = await assets.waitForPublication('owner-A', queued.id);
+    expect(completed.status).toBe('completed'); expect(resolve).toHaveBeenCalledTimes(callsAtQueue);
+    expect(check.mock.calls[0][0].pack).toEqual(latest.mathematics!.pack);
+    expect(assets.release('public', item.id, 'v1').mathematics?.pack).toEqual(latest.mathematics!.pack);
+    await expect(assets.publish('owner-A', item.id, { ...input, previewDigest: latest.previewDigest })).resolves.toMatchObject({ id: queued.id });
+    expect(check).toHaveBeenCalledTimes(1);
+    await expect(assets.publish('owner-A', item.id, { ...input, previewDigest: preview.previewDigest })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('rechecks draft revisions after asynchronous preview resolution without overwriting concurrent edits', async () => {
+    const material = await mathOptions().resolveMathematics!('owner-A', source), blocked = deferred<typeof material>();
+    const resolve = vi.fn(async () => structuredClone(material));
+    const assets = setup(mathOptions({ resolveMathematics: resolve })), item = createMath(assets);
+    const preview = await assets.preview('owner-A', item.id);
+    resolve.mockImplementationOnce(() => blocked.promise);
+    const pending = assets.publish('owner-A', item.id, { requestId: 'racing-edit', expectedRevision: item.revision,
+      license: 'MIT', visibility: 'public', previewDigest: preview.previewDigest });
+    const edited = assets.update('owner-A', item.id, { requestId: 'concurrent-edit', expectedRevision: item.revision, name: 'Keep this edit' });
+    blocked.resolve(material);
+    await expect(pending).rejects.toMatchObject({ status: 409 });
+    expect(assets.get('owner-A', item.id)).toMatchObject({ name: 'Keep this edit', revision: edited.revision, releases: [] });
+  });
+
+  it('deduplicates concurrent reviewed publications after resolving their previews', async () => {
+    const material = await mathOptions().resolveMathematics!('owner-A', source), blocked = deferred<typeof material>();
+    const resolve = vi.fn(async () => structuredClone(material)), check = vi.fn(mathOptions().validateMathematics!);
+    const assets = setup(mathOptions({ resolveMathematics: resolve, validateMathematics: check })), item = createMath(assets);
+    const preview = await assets.preview('owner-A', item.id);
+    resolve.mockImplementationOnce(() => blocked.promise);
+    const input = { requestId: 'racing-retry', expectedRevision: item.revision, license: 'MIT', visibility: 'public', previewDigest: preview.previewDigest };
+    const slow = assets.publish('owner-A', item.id, input), fast = await assets.publish('owner-A', item.id, input);
+    blocked.resolve(material);
+    expect((await slow).id).toBe(fast.id);
+    expect((await assets.waitForPublication('owner-A', fast.id)).status).toBe('completed');
+    expect(check).toHaveBeenCalledTimes(1); expect(assets.get('owner-A', item.id).releases).toHaveLength(1);
+  });
+
+  it('keeps reviewed mathematics fixed while waiting for a validation slot', async () => {
+    const material = await mathOptions().resolveMathematics!('owner-A', source), began = deferred<void>();
+    const gates: ReturnType<typeof deferred<void>>[] = [], checked: typeof material[] = [];
+    const assets = setup(mathOptions({ async resolveMathematics() { return structuredClone(material); },
+      async validateMathematics(value, signal) {
+        checked.push(structuredClone(value));
+        if (checked.length <= 2) {
+          const gate = deferred<void>(); gates.push(gate);
+          const abort = () => gate.reject(signal.reason);
+          signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+          if (checked.length === 2) began.resolve();
+          try { await gate.promise; } finally { signal.removeEventListener('abort', abort); }
+        }
+        return { passed: true, receiptRefs: ['queued-reviewed-check'] };
+      } }));
+    for (let index = 0; index < 2; index++) {
+      const blocker = createMath(assets, `blocker-${index}`);
+      await assets.publish('owner-A', blocker.id, { requestId: 'publish-blocker', expectedRevision: blocker.revision,
+        license: 'MIT', visibility: 'private' });
+    }
+    await began.promise;
+    const item = createMath(assets, 'queued-reviewed', { kind: 'run', runId: 'run-A' });
+    const preview = await assets.preview('owner-A', item.id);
+    const queued = await assets.publish('owner-A', item.id, { requestId: 'publish-reviewed-queue', expectedRevision: item.revision,
+      version: 'v1', license: 'MIT', visibility: 'public', previewDigest: preview.previewDigest });
+    expect(assets.publication('owner-A', queued.id).status).toBe('queued');
+    material.pack.modules[0].source += '\n-- Private source added after publication was queued\n';
+    for (const gate of gates) gate.resolve();
+    expect((await assets.waitForPublication('owner-A', queued.id)).status).toBe('completed');
+    expect(checked[2].pack).toEqual(preview.mathematics!.pack);
+    expect(assets.release('public', item.id, 'v1').mathematics?.pack).toEqual(preview.mathematics!.pack);
+  });
+
+  it('resumes a reviewed publication from its saved package without resolving changed sources again', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-reviewed-assets-')); directories.push(directory);
+    const began = deferred<void>();
+    const first = setup(mathOptions({ async validateMathematics(_material, signal) {
+      began.resolve();
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        if (signal.aborted) reject(signal.reason);
+      });
+      return { passed: true, receiptRefs: ['unreachable'] };
+    } }), new WebStorage(directory));
+    const item = createMath(first), preview = await first.preview('owner-A', item.id);
+    const input = { requestId: 'reviewed-restart', expectedRevision: item.revision, version: 'v1', license: 'MIT',
+      visibility: 'public', previewDigest: preview.previewDigest };
+    const queued = await first.publish('owner-A', item.id, input);
+    await began.promise; await first.close();
+    const resolve = vi.fn(async () => { throw new Error('The original source is now unavailable'); });
+    const check = vi.fn(mathOptions().validateMathematics!);
+    const second = setup(mathOptions({ resolveMathematics: resolve, validateMathematics: check }), new WebStorage(directory));
+    expect((await second.waitForPublication('owner-A', queued.id)).status).toBe('completed');
+    expect(resolve).not.toHaveBeenCalled(); expect(check.mock.calls[0][0].pack).toEqual(preview.mathematics!.pack);
+    expect(second.release('public', item.id, 'v1').mathematics?.pack).toEqual(preview.mathematics!.pack);
+    expect((await second.publish('owner-A', item.id, input)).id).toBe(queued.id);
+    expect(resolve).not.toHaveBeenCalled(); expect(check).toHaveBeenCalledTimes(1);
   });
 
   it('resumes interrupted publication checks from persisted frozen drafts after restart', async () => {

@@ -87,6 +87,12 @@ export type ResearchAsset = {
   createdAt: string;
   updatedAt: string;
 };
+export type ResearchAssetPreview = {
+  type: ResearchAssetKind; name: string; description: string; revision: number; previewDigest: string;
+  content?: ResearchAssetContent;
+  mathematics?: Pick<ResearchVerifiedMathematics, 'pack' | 'environment' | 'environmentDigest' | 'declarations'>;
+  validation: 'not-run';
+};
 export type ResearchPublication = {
   id: string;
   assetId: string;

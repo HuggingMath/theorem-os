@@ -9,7 +9,7 @@ import { DockerWebRunner, type WebRunner } from '../apps/web/runner';
 import type { WebCommand, WebCommandResult, WebGuidanceRecord, WebObservation } from '../apps/web/collaboration';
 import type { WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import type { WebPrecheckRunner } from '../apps/web/precheck';
-import type { ResearchAsset, ResearchAssetRelease, ResearchPublication } from '../apps/web/researchAssetTypes';
+import type { ResearchAsset, ResearchAssetPreview, ResearchAssetRelease, ResearchPublication } from '../apps/web/researchAssetTypes';
 import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
@@ -470,6 +470,65 @@ describe('collaborative research through the actual HTTP service', () => {
       expect((await request(carol, route + `/runs/${run.id}/${suffix}`)).status).toBe(403);
     const anonymous = await request(undefined, route + `/runs/${run.id}/observation`);
     expect(anonymous.status).toBe(200); expect(JSON.stringify(await anonymous.json())).not.toContain('PRIVATE_WORKER_LOG');
+  });
+
+  it('rejects stale mathematical previews and publishes the exact refreshed package through HTTP', async () => {
+    const alice = await client('Alice'), run = await newRun(alice);
+    const asset = await createAsset(alice, 'mathematics', 'ReviewedMath', { source: { kind: 'run', runId: run.id, taskId: 'target' } });
+    const route = `/api/research/library/${asset.id}`;
+    const preview = await item<ResearchAssetPreview>(alice, route + '/preview');
+    expect(preview.previewDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect((await item<ResearchAssetPreview>(alice, route + '/preview')).previewDigest).toBe(preview.previewDigest);
+    const updatedSource = '-- New material requires a refreshed preview\n' + proof;
+    runner.update(run.id, observed => {
+      observed.sources[0] = { ...observed.sources[0], commit: 'b'.repeat(40), source: updatedSource,
+        sourceDigest: mathDigest(canonicalMathJson([['Main.lean', mathDigest(updatedSource)]])) };
+    });
+    const input = { requestId: 'reviewed-http-publish', expectedRevision: asset.revision, version: 'v1', license: 'MIT', visibility: 'public' };
+    const stale = await request(alice, route + '/publish', { ...input, previewDigest: preview.previewDigest });
+    expect(stale.status).toBe(409); expect((await stale.json()).error).toBe('发布内容已改变，请重新预览并审阅后发布。');
+    expect(runner.checks).toHaveLength(0); expect((await item<ResearchAsset>(alice, route)).revision).toBe(asset.revision);
+    const latest = await item<ResearchAssetPreview>(alice, route + '/preview');
+    expect(latest.previewDigest).not.toBe(preview.previewDigest);
+    runner.beforeCheck = () => runner.update(run.id, observed => {
+      observed.sources[0] = { ...observed.sources[0], commit: 'c'.repeat(40), source: '-- Later unreviewed material\n' + proof };
+    });
+    const reviewedInput = { ...input, previewDigest: latest.previewDigest };
+    const publication = await item<ResearchPublication>(alice, route + '/publish', reviewedInput, 'POST', 202);
+    let settled = publication;
+    for (let attempt = 0; attempt < 20 && !['completed', 'failed'].includes(settled.status); attempt++)
+      settled = await item(alice, `/api/research/publications/${publication.id}`);
+    expect(settled.status, settled.reason).toBe('completed');
+    const download = await request(undefined, route + '/releases/v1?download=1');
+    expect(download.status).toBe(200); const release: ResearchAssetRelease = await download.json();
+    expect(release.mathematics?.pack).toEqual(latest.mathematics!.pack);
+    expect(JSON.stringify(release)).not.toContain('Later unreviewed material');
+    expect(runner.checks[0].libraryPack).toEqual(latest.mathematics!.pack);
+    const replay = await item<ResearchPublication>(alice, route + '/publish', reviewedInput, 'POST', 202);
+    expect(replay.id).toBe(publication.id); expect(runner.checks).toHaveLength(1);
+  });
+
+  it('previews and republishes a copied mathematical fork without access to the original run', async () => {
+    const alice = await client('Alice'), bob = await client('Bob'), run = await newRun(alice);
+    const asset = await createAsset(alice, 'mathematics', 'OriginalSharedMath', { source: { kind: 'run', runId: run.id, taskId: 'target', commit } });
+    const originalRelease = await publish(alice, asset);
+    const fork = await item<ResearchAsset>(bob, `/api/research/library/${asset.id}/fork`, { requestId: 'copy-mathematics', version: originalRelease.version }, 'POST', 201);
+    expect((await request(bob, `/api/runs/${run.id}`)).status).toBe(404);
+    const route = `/api/research/library/${fork.id}`, preview = await item<ResearchAssetPreview>(bob, route + '/preview');
+    expect(preview.mathematics?.pack).toEqual(originalRelease.mathematics!.pack);
+    const current = await item<ResearchAsset>(alice, `/api/research/library/${asset.id}`);
+    await item(alice, `/api/research/library/${asset.id}/withdraw`, { requestId: 'withdraw-copied-original', expectedRevision: current.revision, version: originalRelease.version });
+    expect((await item<ResearchAssetPreview>(bob, route + '/preview')).previewDigest).toBe(preview.previewDigest);
+    expect((await request(alice, route + '/preview')).status).toBe(404);
+    const publication = await item<ResearchPublication>(bob, route + '/publish', { requestId: 'publish-copied-math',
+      expectedRevision: fork.revision, version: 'v1', license: 'MIT', visibility: 'public', previewDigest: preview.previewDigest }, 'POST', 202);
+    let settled = publication;
+    for (let attempt = 0; attempt < 20 && !['completed', 'failed'].includes(settled.status); attempt++)
+      settled = await item(bob, `/api/research/publications/${publication.id}`);
+    expect(settled.status, settled.reason).toBe('completed');
+    const release = await item<ResearchAssetRelease>(alice, route + '/releases/v1');
+    expect(release.mathematics?.pack).toEqual(preview.mathematics!.pack);
+    expect(release.derivedFrom?.digest).toBe(originalRelease.digest); expect(runner.checks).toHaveLength(2);
   });
 
   it('checks human candidates independently and publishes a rechecked immutable mathematics pack', async () => {

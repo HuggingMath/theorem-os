@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetContent, ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef, ResearchVerifiedMathematics } from '../researchAssetTypes';
+import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetPreview, ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef } from '../researchAssetTypes';
 import type { ResearcherProfile } from '../researchProjectTypes';
 import { AssetEditor } from './researchAssetEditor';
 import { RichProse } from './richText';
 import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
 import type { WebEnvironment } from '../shared';
-import { api, base, enc, Empty, ErrorBox, Field, libraryHref, MutationState, nameOf, Panel, personHref, Search, stamp, State, Tags, theoremHref, tx,
+import { api, base, enc, Empty, ErrorBox, errorText, Field, libraryHref, MutationState, nameOf, Panel, personHref, Search, stamp, State, Tags, theoremHref, tx,
   useMutation, useResource, type Item, type Items, type ResearchContext } from './researchShared';
 
 const selectionDrafts = new OwnedDrafts(() => sessionStorage);
@@ -69,8 +69,20 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
       try { return sessionStorage.getItem(`theoremos.research.publication.${asset.id}`) ?? ''; } catch { return ''; }
     });
   const [editorMounted, setEditorMounted] = useState(false);
+  const [loadedDraft, setLoadedDraft] = useState<ResearchAsset>(), [loadingDraft, setLoadingDraft] = useState(false), [draftError, setDraftError] = useState('');
+  const draftLock = useRef(false), editorAsset = loadedDraft && loadedDraft.revision > asset.revision ? loadedDraft : asset;
+  const loadDraft = async () => {
+    if (draftLock.current) return;
+    draftLock.current = true; setLoadingDraft(true); setDraftError('');
+    try {
+      const { item } = await api<Item<ResearchAsset>>(`${base}/library/${enc(asset.id)}`);
+      setLoadedDraft(item); setEditorKey(value => value + 1); refresh();
+    } catch (cause) { setDraftError(errorText(cause)); }
+    finally { draftLock.current = false; setLoadingDraft(false); }
+  };
   const releaseResult = useResource<Item<ResearchAssetRelease>>(version ? `${base}/library/${enc(asset.id)}/releases/${enc(version)}` : undefined);
-  const release = releaseResult.data?.item ?? (asset.release?.version === version ? asset.release : undefined);
+  const unavailable = [401, 403, 404].includes(releaseResult.errorStatus ?? 0);
+  const release = unavailable ? undefined : releaseResult.data?.item ?? (asset.release?.version === version ? asset.release : undefined);
   const forPublication = (publication: ResearchPublication) => {
     setPublicationId(publication.id);
     try { sessionStorage.setItem(`theoremos.research.publication.${asset.id}`, publication.id); } catch { /* The publication remains visible in this page. */ }
@@ -86,8 +98,9 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
     <div class="research-description"><RichProse text={asset.description || tx('暂无用途说明。', 'No description yet.')} /></div>
     <dl class="research-facts"><div><dt>{tx('资产 ID', 'Asset ID')}</dt><dd>{asset.id}</dd></div>{asset.derivedFrom && <div><dt>{tx('派生来源', 'Derived from')}</dt><dd><a href={libraryHref(asset.derivedFrom.assetId, asset.derivedFrom.version)}>{asset.derivedFrom.assetId}@{asset.derivedFrom.version}</a></dd></div>}</dl>
     {asset.editable && !asset.release && <p class="research-status">{tx('当前为个人草稿。发布检查完成后，才能作为固定版本使用。', 'This is a draft. Publish and complete validation before using it as a fixed version.')}</p>}
-  </Panel>{editorMounted && <div hidden={!editing}><Panel title={tx('编辑草稿', 'Edit draft')} actions={<button class="text-button" type="button" onClick={() => setEditorKey(value => value + 1)}>{tx('载入最新草稿', 'Load latest draft')}</button>}>
-    <AssetEditor key={editorKey} asset={asset} context={context} onSaved={() => { refresh(); }} /></Panel></div>}
+  </Panel>{editorMounted && <div hidden={!editing}><Panel title={tx('编辑草稿', 'Edit draft')} actions={<button class="text-button" type="button" disabled={loadingDraft} onClick={() => void loadDraft()}>{tx('载入最新草稿', 'Load latest draft')}</button>}>
+    <ErrorBox message={draftError} /><AssetEditor key={editorKey} asset={editorAsset} context={context} disabled={loadingDraft}
+      onSaved={item => { setLoadedDraft(item); refresh(); }} /></Panel></div>}
     {asset.editable && <Panel title={tx('发布固定版本', 'Publish a fixed version')} note={tx('发布前请审阅草稿；只有你选择公开的版本会进入共享目录。', 'Review the draft before publishing. Only versions you make public appear in the shared directory.')}>
       <Publish asset={asset} onPublication={forPublication} />{publicationId && <Publication key={publicationId} id={publicationId} completed={published} />}
     </Panel>}
@@ -96,7 +109,8 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
         setVersion(event.currentTarget.value); const next = new URL(location.href); next.searchParams.set('version', event.currentTarget.value); history.replaceState(null, '', next);
       }}>{asset.releases.filter(item => !item.withdrawn || asset.editable).map(item => <option key={item.version} value={item.version}>{item.version} · {item.license} · {stamp(item.createdAt)}{item.withdrawn ? ` · ${tx('已撤回', 'Withdrawn')}` : ''}</option>)}</select></label>
       : <Empty>{tx('尚无已发布版本。', 'No published versions yet.')}</Empty>}
-      <ErrorBox message={releaseResult.error} />{release && <><div class="research-item-meta"><span>{release.license}</span><State value={release.visibility} /><time dateTime={release.createdAt}>{stamp(release.createdAt)}</time></div>
+      <ErrorBox message={releaseResult.error} />{releaseResult.error && <button class="text-button" type="button" onClick={releaseResult.refresh}>{tx('重新读取版本', 'Reload release')}</button>}
+      {release && <><div class="research-item-meta"><span>{release.license}</span><State value={release.visibility} /><time dateTime={release.createdAt}>{stamp(release.createdAt)}</time></div>
         <ReleaseContent release={release} /><h3>{tx('固定身份', 'Fixed identity')}</h3><dl class="research-facts"><div><dt>{tx('版本', 'Version')}</dt><dd>{release.version}</dd></div><div><dt>{tx('内容摘要', 'Content digest')}</dt><dd>{release.digest}</dd></div></dl>
         <div class="research-actions"><button class="button" type="button" aria-pressed={selection.some(ref => ref.assetId === asset.id && ref.version === release.version)} onClick={() => choose({ assetId: asset.id, version: release.version })}>
           {selection.some(ref => ref.assetId === asset.id && ref.version === release.version) ? tx('已加入配置选择', 'In configuration selection') : tx('加入配置选择', 'Add to configuration')}</button>
@@ -161,25 +175,32 @@ function Dependencies({ refs }: { refs: ResearchReleaseRef[] }) {
 }
 
 function Publish({ asset, onPublication }: { asset: ResearchAsset; onPublication: (publication: ResearchPublication) => void }) {
-  const [version, setVersion] = useState(`v${asset.releases.length + 1}`), [license, setLicense] = useState(''), [visibility, setVisibility] = useState('private'), [reviewed, setReviewed] = useState(false), action = useMutation();
-  const [showPreview, setShowPreview] = useState(false);
-  const preview = useResource<Item<AssetPreview>>(showPreview ? `${base}/library/${enc(asset.id)}/preview?revision=${asset.revision}` : undefined);
-  const ready = preview.data?.item.revision === asset.revision && !preview.error;
-  useEffect(() => setReviewed(false), [asset.revision]);
-  return <form class="research-form" onSubmit={event => { event.preventDefault(); if (!reviewed || !ready) return; void action.run<Item<ResearchPublication>>('POST', `${base}/library/${enc(asset.id)}/publish`,
-    { expectedRevision: asset.revision, version, license: license.trim(), visibility }, result => onPublication(result.item)); }}>
-    <button type="button" class="button" onClick={() => { setShowPreview(true); if (showPreview) preview.refresh(); }}>{tx('预览将公开的内容', 'Preview release contents')}</button>
-    <ErrorBox message={preview.error} />{showPreview && preview.loading && <p class="research-status" role="status">{tx('正在准备完整内容与依赖…', 'Preparing contents and dependencies…')}</p>}
-    {preview.data && <DraftPreview preview={preview.data.item} />}
+  const [version, setVersion] = useState(`v${asset.releases.length + 1}`), [license, setLicense] = useState(''), [visibility, setVisibility] = useState('private'), [reviewed, setReviewed] = useState(''), action = useMutation();
+  const [preview, setPreview] = useState<ResearchAssetPreview>(), [previewBusy, setPreviewBusy] = useState(false), [previewError, setPreviewError] = useState('');
+  const previewLock = useRef(false);
+  const ready = Boolean(preview?.previewDigest && preview.revision === asset.revision && !previewBusy && !previewError);
+  const reviewIdentity = JSON.stringify([preview?.previewDigest, asset.revision, visibility]), confirmed = ready && reviewed === reviewIdentity;
+  const loadPreview = async () => {
+    if (previewLock.current) return;
+    previewLock.current = true; setPreviewBusy(true); setPreviewError(''); setReviewed(''); setPreview(undefined);
+    try {
+      const { item } = await api<Item<ResearchAssetPreview>>(`${base}/library/${enc(asset.id)}/preview?revision=${asset.revision}`);
+      setPreview(item);
+    } catch (cause) { setPreviewError(errorText(cause)); }
+    finally { previewLock.current = false; setPreviewBusy(false); }
+  };
+  return <form class="research-form" onSubmit={event => { event.preventDefault(); if (!confirmed || !preview) return; setReviewed(''); void action.run<Item<ResearchPublication>>('POST', `${base}/library/${enc(asset.id)}/publish`,
+    { expectedRevision: asset.revision, previewDigest: preview.previewDigest, version, license: license.trim(), visibility }, result => onPublication(result.item)); }}>
+    <button type="button" class="button" disabled={previewBusy || action.busy} onClick={() => void loadPreview()}>{tx('预览将公开的内容', 'Preview release contents')}</button>
+    <ErrorBox message={previewError} />{previewBusy && <p class="research-status" role="status">{tx('正在准备完整内容与依赖…', 'Preparing contents and dependencies…')}</p>}
+    {preview && <DraftPreview preview={preview} />}
     <div class="research-form-row"><Field label={tx('版本号', 'Version')} value={version} onInput={setVersion} required placeholder="v1" />
       <Field label={tx('许可证', 'License')} value={license} onInput={setLicense} required placeholder="MIT / Apache-2.0 / CC-BY-4.0" /></div>
     <label>{tx('发布范围', 'Release visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value)}><option value="private">{tx('仅自己使用', 'Private')}</option><option value="public">{tx('公开分享', 'Public')}</option></select></label>
-    <CheckReview checked={reviewed} change={setReviewed} /><MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !reviewed || !ready}>{action.busy ? tx('正在提交…', 'Submitting…') : tx('发布并检查', 'Publish and validate')}</button>
+    <CheckReview checked={confirmed} disabled={!ready || action.busy} change={checked => setReviewed(checked ? reviewIdentity : '')} /><MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !confirmed}>{action.busy ? tx('正在提交…', 'Submitting…') : tx('发布并检查', 'Publish and validate')}</button>
   </form>;
 }
-type AssetPreview = { type: ResearchAsset['type']; name: string; revision: number; content?: ResearchAssetContent;
-  mathematics?: Pick<ResearchVerifiedMathematics, 'pack' | 'environment' | 'environmentDigest' | 'declarations'>; validation: 'not-run' };
-function DraftPreview({ preview }: { preview: AssetPreview }) {
+function DraftPreview({ preview }: { preview: ResearchAssetPreview }) {
   return <section class="research-draft-preview" aria-label={tx('发布内容预览', 'Release preview')}><h3>{preview.name}</h3>
     {preview.mathematics ? <><p class="research-status">{tx('证明环境：', 'Environment: ')}{preview.mathematics.environment}</p>
       {preview.mathematics.declarations.map(declaration => <div key={`${declaration.file}:${declaration.name}`}><h3>{declaration.name}</h3><pre class="research-block-code">{declaration.type}</pre></div>)}
@@ -188,8 +209,8 @@ function DraftPreview({ preview }: { preview: AssetPreview }) {
       : <pre class="research-block-code">{JSON.stringify(preview.content, null, 2)}</pre>}
   </section>;
 }
-function CheckReview({ checked, change }: { checked: boolean; change: (value: boolean) => void }) {
-  return <label class="research-check"><input type="checkbox" checked={checked} onChange={event => change(event.currentTarget.checked)} />{tx('我已审阅保存的草稿及发布范围', 'I reviewed the saved draft and release visibility')}</label>;
+function CheckReview({ checked, disabled, change }: { checked: boolean; disabled: boolean; change: (value: boolean) => void }) {
+  return <label class="research-check"><input type="checkbox" checked={checked} disabled={disabled} onChange={event => change(event.currentTarget.checked)} />{tx('我已审阅保存的草稿及发布范围', 'I reviewed the saved draft and release visibility')}</label>;
 }
 function Publication({ id, completed }: { id: string; completed: (publication: ResearchPublication) => void }) {
   const [polling, setPolling] = useState(true), called = useRef(false), onCompleted = useRef(completed); onCompleted.current = completed;

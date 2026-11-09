@@ -4,7 +4,7 @@ import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack, type LibraryPack } from '../../src/math/libraryPacks';
 import { defaultResearchModulePlan, researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
-import type { FrozenResearchConfiguration, ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind,
+import type { FrozenResearchConfiguration, ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchAssetPreview,
   ResearchAssetRelease, ResearchConfigurationSelection, ResearchMathDeclaration, ResearchMathDraft, ResearchMathSource, ResearchPublication,
   ResearchLibraryPack, ResearchReleaseRef, ResearchSkillDraft, ResearchVerifiedMathematics } from './researchAssetTypes';
 
@@ -56,7 +56,7 @@ const updateSchema = z.object({ requestId: key, expectedRevision: z.number().int
   description: z.string().max(4000).optional(), area: z.string().trim().max(120).optional(),
   visibility: z.enum(['private', 'public']).optional(), content: z.unknown().optional() }).strict();
 const publishSchema = z.object({ requestId: key, expectedRevision: z.number().int().positive(), version: version.optional(),
-  license: z.string().trim().min(1).max(120), visibility: z.enum(['private', 'public']) }).strict();
+  license: z.string().trim().min(1).max(120), visibility: z.enum(['private', 'public']), previewDigest: digest.optional() }).strict();
 const forkSchema = z.object({ requestId: key, version, name: short.optional() }).strict();
 const withdrawSchema = z.object({ requestId: key, expectedRevision: z.number().int().positive(), version: version.optional() }).strict();
 const selectionSchema = z.object({ agent: refSchema.optional(), skills: refs.optional(), libraries: refs.optional() }).strict();
@@ -84,7 +84,7 @@ type StoredAsset = {
   createdAt: string; updatedAt: string; operations: Record<string, Operation>;
 };
 type StoredPublication = { owner: string; view: ResearchPublication; snapshot: StoredAsset; license: string;
-  visibility: 'private' | 'public'; requestId: string; operationDigest: string };
+  visibility: 'private' | 'public'; requestId: string; operationDigest: string; mathematics?: ResolvedResearchMathematics };
 type PendingPublication = { controller: AbortController; promise: Promise<void>; resolve: () => void; running: boolean };
 
 /** Asset drafts, immutable releases and frozen research inputs, independent of account-wide run access. */
@@ -199,22 +199,58 @@ export class WebResearchAssets {
     if (type && release.type !== type) fail(400, `此位置需要 ${type} 类型的资产。`);
     return { ref: { assetId: release.assetId, version: release.version, digest: release.digest }, release };
   }
+  private async draftMathematics(owner: string, asset: StoredAsset): Promise<NonNullable<ResearchAssetPreview['mathematics']>> {
+    const draft = parsed(mathSchema, asset.draft) as ResearchMathDraft;
+    const inherited = asset.forkMathematics && canonicalMathJson(asset.forkMathematics.source) === canonicalMathJson(draft.source)
+      ? asset.forkMathematics : undefined;
+    if (!inherited && !this.options.resolveMathematics) fail(503, '数学成果验证能力不可用。');
+    const resolved = inherited ?? await this.options.resolveMathematics!(owner, draft.source);
+    return copy({ pack: resolved.pack as ResearchLibraryPack, environment: resolved.environment, environmentDigest: resolved.environmentDigest,
+      declarations: resolved.declarations });
+  }
+  private async draftPreview(owner: string, asset: StoredAsset): Promise<ResearchAssetPreview> {
+    const mathematics = asset.type === 'mathematics' ? await this.draftMathematics(owner, asset) : undefined;
+    const preview = { type: asset.type, name: asset.name, description: asset.description, revision: asset.revision,
+      ...(mathematics ? { mathematics } : { content: copy(asset.draft) }), validation: 'not-run' as const };
+    return { ...preview, previewDigest: mathDigest(canonicalMathJson({ assetId: asset.id, area: asset.area,
+      draft: asset.draft, ...preview })) };
+  }
+  async preview(owner: string, id: string): Promise<ResearchAssetPreview> {
+    const asset = this.stored(id);
+    this.view(asset, owner);
+    if (asset.owner !== owner) fail(403, '只有作者可以预览发布草稿。');
+    return this.draftPreview(owner, asset);
+  }
   async publish(owner: string, id: string, input: unknown): Promise<ResearchPublication> {
-    const value = parsed(publishSchema, input), asset = this.owned(owner, id), action = { action: 'publish', value };
-    const old = this.operation<ResearchPublication>(asset, value.requestId, action); if (old) return this.publication(owner, old.id);
-    if (this.closed) fail(503, '资产发布正在关闭，请稍后重试。');
+    const value = parsed(publishSchema, input), action = { action: 'publish', value };
+    let asset = this.owned(owner, id);
     const publicationId = `publication_${mathDigest(`${owner}\0${id}\0${value.requestId}`).slice(0, 32)}`;
     const operationDigest = mathDigest(canonicalMathJson(action));
-    const prior = this.storage.getRecord<StoredPublication>(publicationPath(publicationId));
-    if (prior) {
+    const previous = () => {
+      const old = this.operation<ResearchPublication>(asset, value.requestId, action);
+      if (old) return this.publication(owner, old.id);
+      if (this.closed) fail(503, '资产发布正在关闭，请稍后重试。');
+      const prior = this.storage.getRecord<StoredPublication>(publicationPath(publicationId));
+      if (!prior) return;
       if (prior.owner !== owner || prior.operationDigest !== operationDigest) fail(409, '请求 ID 已用于另一份资产内容。');
       this.rememberPublication(prior);
       this.schedule(publicationId);
       return copy(prior.view);
-    }
+    };
+    const old = previous(); if (old) return old;
     this.revision(asset, value.expectedRevision);
     if (asset.type === 'mathematics' && (!this.options.resolveMathematics || !this.options.validateMathematics))
       fail(503, '当前服务未配置数学成果来源解析和独立 Lean 验证，暂不能发布数学库。');
+    let mathematics: ResolvedResearchMathematics | undefined;
+    if (value.previewDigest) {
+      const preview = await this.draftPreview(owner, asset);
+      // Resolving sources can yield to another request. Recheck ownership, retries and revision before writing.
+      asset = this.owned(owner, id);
+      const raced = previous(); if (raced) return raced;
+      this.revision(asset, value.expectedRevision);
+      if (preview.previewDigest !== value.previewDigest) fail(409, '发布内容已改变，请重新预览并审阅后发布。');
+      mathematics = preview.mathematics as ResolvedResearchMathematics | undefined;
+    }
     const rev = value.version ?? `v${asset.versions.length + 1}`;
     if (asset.versions.includes(rev) || this.storage.listRecords(['research', 'publications']).some(file => {
       const saved = this.storage.getRecord<StoredPublication>(['research', 'publications', file]);
@@ -224,7 +260,7 @@ export class WebResearchAssets {
       status: 'queued', createdAt: time, updatedAt: time };
     if (Object.keys(asset.operations).length >= 1024) fail(409, '此资产的修改记录已达上限，请派生新资产。');
     const record: StoredPublication = { owner, view: publication, snapshot: copy(asset), license: value.license,
-      visibility: value.visibility, requestId: value.requestId, operationDigest };
+      visibility: value.visibility, requestId: value.requestId, operationDigest, ...(mathematics ? { mathematics } : {}) };
     // The durable queue entry is also the publication intent if the following asset write is interrupted.
     this.storage.saveRecord(publicationPath(publicationId), record, true);
     this.rememberPublication(record);
@@ -293,9 +329,7 @@ export class WebResearchAssets {
       if (asset.type === 'mathematics') {
         const draft = parsed(mathSchema, asset.draft) as ResearchMathDraft;
         if (!this.options.resolveMathematics || !this.options.validateMathematics) fail(503, '数学成果验证能力不可用。');
-        const inherited = asset.forkMathematics && canonicalMathJson(asset.forkMathematics.source) === canonicalMathJson(draft.source)
-          ? asset.forkMathematics : undefined;
-        const resolved = inherited ?? await this.options.resolveMathematics(record.owner, draft.source);
+        const resolved = record.mathematics ?? await this.draftMathematics(record.owner, asset);
         const pack = parseLibraryPack(resolved.pack) as ResearchLibraryPack, env = parsed(environment, resolved.environment);
         if (pack.requires?.length) fail(400, '共享数学库必须包含完整依赖，不能引用发布包外的本地文件。');
         if (resolved.environmentDigest !== getLeanTaskEnvironment(env).dependencyDigest) fail(409, '数学成果的环境摘要与平台固定环境不匹配。');

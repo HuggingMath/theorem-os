@@ -14,7 +14,7 @@ function parseRefs(text: string): ResearchReleaseRef[] {
     return { assetId: line.slice(0, divider).trim(), version: line.slice(divider + 1).trim() };
   });
 }
-export function AssetEditor({ asset, context, onSaved }: { asset?: ResearchAsset; context: ResearchContext; onSaved: (asset: ResearchAsset) => void }) {
+export function AssetEditor({ asset, context, onSaved, disabled = false }: { asset?: ResearchAsset; context: ResearchContext; onSaved: (asset: ResearchAsset) => void; disabled?: boolean }) {
   const initial = asset?.draft ?? asset?.release?.content;
   const [kind, setKind] = useState<ResearchAssetKind>(asset?.type ?? 'mathematics'), [name, setName] = useState(asset?.name ?? ''),
     [description, setDescription] = useState(asset?.description ?? ''), [area, setArea] = useState(asset?.area ?? ''), [visibility, setVisibility] = useState(asset?.visibility ?? 'private'),
@@ -38,6 +38,7 @@ export function AssetEditor({ asset, context, onSaved }: { asset?: ResearchAsset
     : kind === 'agent' ? { ...agent, skills: parseRefs(agentSkills), libraries: parseRefs(agentLibraries) }
     : { ...skill, steps: lines(steps), inputs: lines(inputs), outputs: lines(outputs), examples: lines(examples), dependencies: parseRefs(dependencies) };
   const save = () => {
+    if (disabled) return;
     let draft: ResearchAssetContent;
     try { draft = content(); } catch (cause) { action.setError(cause instanceof Error ? cause.message : String(cause)); return; }
     void action.run<Item<ResearchAsset>>(asset ? 'PATCH' : 'POST', `${base}/library${asset ? `/${enc(asset.id)}` : ''}`,
@@ -90,7 +91,7 @@ export function AssetEditor({ asset, context, onSaved }: { asset?: ResearchAsset
         <Field label={tx('示例，每行一个', 'Examples, one per line')} value={examples} onInput={setExamples} multiline rows={3} />
       </>}
     {asset && asset.revision !== revision && <p class="research-status">{tx('服务器上的草稿已更新。当前输入仍保留；点击「载入最新草稿」可更新。', 'The saved draft has changed. Your input is preserved; choose “Load latest draft” to update it.')}</p>}
-    <MutationState action={action} /><button type="submit" class="button button-primary" disabled={action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : asset ? tx('保存草稿', 'Save draft') : tx('创建私有草稿', 'Create draft')}</button>
+    <MutationState action={action} /><button type="submit" class="button button-primary" disabled={disabled || action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : asset ? tx('保存草稿', 'Save draft') : tx('创建私有草稿', 'Create draft')}</button>
   </form>;
 }
 

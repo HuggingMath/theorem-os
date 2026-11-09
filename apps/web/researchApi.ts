@@ -12,7 +12,7 @@ import type { WebJobs } from './jobs';
 import type { WebKnowledgeService } from './knowledgeService';
 import type { WebRunner } from './runner';
 import type { ResearchFeedback, ResearchQuery } from './researchProjectTypes';
-import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchMathDraft } from './researchAssetTypes';
+import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse } from './researchAssetTypes';
 import type { WebRun } from './shared';
 import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
 import { leanDiagnostics } from './precheck';
@@ -48,10 +48,9 @@ export class WebResearchApi {
   readonly assets: WebResearchAssets;
   private pendingProofs = new Map<string, Promise<ResearchFeedback>>();
   private controller = new AbortController();
-  private mathematics: ReturnType<typeof researchMathematics>;
   constructor(private storage: WebStorage, private jobs: WebJobs, knowledge: WebKnowledgeService, private runner: WebRunner) {
     this.projects = new WebResearchProjects(storage);
-    const mathematics = this.mathematics = researchMathematics(storage, knowledge, jobs, runner);
+    const mathematics = researchMathematics(storage, knowledge, jobs, runner);
     this.assets = new WebResearchAssets(storage, { identity: owner => this.projects.identity(owner),
       resolveMathematics: mathematics.resolve, validateMathematics: mathematics.validate });
   }
@@ -237,11 +236,7 @@ export class WebResearchApi {
       if (!action && method === 'GET') return item(this.assets.get(viewer, id));
       if (!action && method === 'PATCH') return item(this.assets.update(viewer, id, await body()));
       if (action === 'preview' && method === 'GET') {
-        const asset = this.assets.get(viewer, id);
-        if (!asset.editable || !asset.draft) fail(403, '只有作者可以预览发布草稿。');
-        const mathematics = asset.type === 'mathematics' ? await this.mathematics.resolve(viewer, (asset.draft as ResearchMathDraft).source) : undefined;
-        return item({ type: asset.type, name: asset.name, description: asset.description, revision: asset.revision,
-          ...(mathematics ? { mathematics, validation: 'not-run' } : { content: asset.draft }) });
+        return item(await this.assets.preview(viewer, id));
       }
       if (action === 'publish' && method === 'POST') {
         const publication = await this.assets.publish(viewer, id, await body());

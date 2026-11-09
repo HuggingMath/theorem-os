@@ -34,7 +34,7 @@ export const errorText = (error: unknown) => error instanceof Error ? error.mess
 
 /** Retain the last successful view during refreshes; forms keep their own local draft. */
 export function useResource<T>(url: string | undefined, interval = 0) {
-  const [value, setValue] = useState<{ url?: string; data?: T; error?: string; loading: boolean }>({ loading: Boolean(url) });
+  const [value, setValue] = useState<{ url?: string; data?: T; error?: string; errorStatus?: number; loading: boolean }>({ loading: Boolean(url) });
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision(value => value + 1), []);
   useEffect(() => {
@@ -48,14 +48,15 @@ export function useResource<T>(url: string | undefined, interval = 0) {
         if (live) setValue({ url, data, loading: false });
       } catch (error) {
         const unavailable = error instanceof ResearchHttpError && [401, 403, 404].includes(error.status);
-        if (live) setValue(previous => ({ url, data: previous.url === url && !unavailable ? previous.data : undefined, error: errorText(error), loading: false }));
+        if (live) setValue(previous => ({ url, data: previous.url === url && !unavailable ? previous.data : undefined,
+          error: errorText(error), errorStatus: error instanceof ResearchHttpError ? error.status : undefined, loading: false }));
       }
       if (live && interval) timer = setTimeout(() => void read(), interval);
     };
     void read();
     return () => { live = false; controller.abort(); clearTimeout(timer); };
   }, [url, revision, interval]);
-  return { data: value.url === url ? value.data : undefined, error: value.url === url ? value.error : undefined,
+  return { data: value.url === url ? value.data : undefined, error: value.url === url ? value.error : undefined, errorStatus: value.url === url ? value.errorStatus : undefined,
     loading: value.url !== url ? Boolean(url) : value.loading, refresh };
 }
 

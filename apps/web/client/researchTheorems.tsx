@@ -252,13 +252,22 @@ function HumanParticipation({ project, selfId, binding, observation, refresh }: 
 }
 
 function RunSharing({ project, binding, refresh }: { project: ResearchProjectDetail; binding: ResearchRunBinding; refresh: () => void }) {
-  const [exposure, setExposure] = useState(binding.exposure), [grants, setGrants] = useState(binding.grants), action = useMutation();
-  return <details><summary>{tx('调整此运行的共享与授权', 'Edit run sharing and permissions')}</summary><form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', `${base}/theorems/${enc(project.id)}/runs`,
-    { runId: binding.runId, statementVersionId: binding.statementVersionId, exposure, grants, expectedRevision: project.revision }, refresh); }}>
+  const [exposure, setExposure] = useState(binding.exposure), [grants, setGrants] = useState(binding.grants),
+    [revision, setRevision] = useState(project.revision), action = useMutation();
+  const stale = revision < project.revision;
+  return <details><summary>{tx('调整此运行的共享与授权', 'Edit run sharing and permissions')}</summary><form class="research-form" onSubmit={event => {
+    event.preventDefault(); if (stale) return; void action.run<Item<ResearchProjectDetail>>('POST', `${base}/theorems/${enc(project.id)}/runs`,
+      { runId: binding.runId, statementVersionId: binding.statementVersionId, exposure, grants, expectedRevision: revision }, result => {
+        setRevision(result.item.revision); refresh();
+      }); }}>
     <label>{tx('可见范围', 'Visibility')}<select value={exposure} onChange={event => setExposure(event.currentTarget.value as 'members' | 'public')}><option value="members">{tx('项目成员', 'Project members')}</option><option value="public">{tx('公开概况与分享结果', 'Public summary and shared results')}</option></select></label>
     {(Object.keys(grants) as (keyof typeof grants)[]).map(key => <Check key={key} label={nameOf(({ guidance: 'guidance', edit: 'plan-edit', approve: 'plan-approval', proof: 'proof-submission' })[key])}
-      checked={grants[key]} onChange={value => setGrants(previous => ({ ...previous, [key]: value }))} />)}<MutationState action={action} />
-    <button class="button" type="submit" disabled={action.busy}>{tx('保存运行授权', 'Save run permissions')}</button></form></details>;
+      checked={grants[key]} onChange={value => setGrants(previous => ({ ...previous, [key]: value }))} />)}
+    {stale && <p class="research-status" role="status">{tx('项目已有更新。当前输入已保留，请载入最新授权并核对后保存。', 'The project has changed. Your input is preserved. Load and review the latest permissions before saving.')} <button class="text-button" type="button" disabled={action.busy} onClick={() => {
+      setExposure(binding.exposure); setGrants(binding.grants); setRevision(project.revision); action.setError(''); action.setMessage('');
+    }}>{tx('载入最新授权', 'Load latest permissions')}</button></p>}
+    <MutationState action={action} />
+    <button class="button" type="submit" disabled={action.busy || stale}>{tx('保存运行授权', 'Save run permissions')}</button></form></details>;
 }
 
 function PublicProof({ share }: { share: WebShareSnapshot }) {
