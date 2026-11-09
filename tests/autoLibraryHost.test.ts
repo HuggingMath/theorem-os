@@ -146,6 +146,38 @@ describe('host-authorized Auto composition', () => {
       '--challenge-id', 'parent', '--environment', 'openai-math', '--output', path.join(directory, 'missing-workspace.json')]))
       .rejects.toThrow('--workspace is required');
   });
+  it('recovers publication after interrupted writes and never replaces a different authorization', () => {
+    const original = fs.writeFileSync;
+    const write = vi.spyOn(fs, 'writeFileSync').mockImplementation(((file: any, data: any, ...args: any[]) => {
+      if (typeof file === 'number') {
+        original(file, String(data).slice(0, 8));
+        throw Object.assign(new Error('injected short write'), { code: 'ENOSPC' });
+      }
+      return (original as any)(file, data, ...args);
+    }) as any);
+    expect(() => hostAutoEvidence('records', 'fault', { complete: true }, workspace(), true)).toThrow('injected');
+    write.mockRestore();
+    expect(hostAutoEvidence('records', 'fault', { complete: true }, workspace())).toBe(false);
+    expect(hostAutoEvidence('records', 'fault', { complete: true }, workspace(), true)).toBe(true);
+    expect(() => hostAutoEvidence('records', 'fault', { complete: false }, workspace(), true)).toThrow('authorization_changed');
+    expect(hostAutoEvidence('records', 'fault', { complete: true }, workspace())).toBe(true);
+  });
+  it('keeps an identical concurrent publication and rejects a different winner', () => {
+    const rename = fs.renameSync;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      fs.cpSync(from.toString(), to.toString(), { recursive: true });
+      return rename(from, to);
+    });
+    expect(hostAutoEvidence('records', 'race', { complete: true }, workspace(), true)).toBe(true);
+    spy.mockRestore();
+    const changed = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      fs.mkdirSync(to.toString());
+      fs.writeFileSync(path.join(to.toString(), 'entry.json'), canonicalLibraryJson({ complete: false }));
+      return rename(from, to);
+    });
+    expect(() => hostAutoEvidence('records', 'race-other', { complete: true }, workspace(), true)).toThrow('authorization_changed');
+    changed.mockRestore();
+  });
   it('does not allow a registry inside the task tree or a task inside the registry', () => {
     fixture.config.autoLibraryDirectory = path.join(workspace(), 'registry');
     fs.writeFileSync(fixture.configPath, canonicalLibraryJson(fixture.config));

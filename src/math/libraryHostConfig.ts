@@ -5,7 +5,7 @@ import { inspectAutoLibrarySource, autoLibraryFile } from './autoLibrary';
 import { inspectScopedLeanDeclarations } from './leanSource';
 import { z } from 'zod';
 import { assertMathCanonicalPath } from './paths';
-import { mathDigest, readMathFile } from './mathRuntimeIo';
+import { mathDigest, readMathFile, syncMathDirectory } from './mathRuntimeIo';
 import { canonicalLibraryJson, libraryUnicodeCompare, parseLibraryJson, validateLibraryRelease,
   type LibraryReleaseArtifacts } from './libraryRelease';
 import { effectiveLibraryBindingSchema, libraryTaskPolicySchema, resolveEffectiveLibraryPack, type EffectiveLibraryBinding,
@@ -130,7 +130,7 @@ function registryFile(config: LibraryHostConfig, workspace: string, kind: 'tasks
     if (!relative || relative === '.' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)))
       throw new Error('library_auto_registry_workspace_overlap');
   }
-  return path.join(directory, kind, mathDigest(key) + '.json');
+  return path.join(directory, kind, mathDigest(key), 'entry.json');
 }
 function registryConfig(workspace: string): LibraryHostConfig {
   const configPath = libraryHostConfigPath();
@@ -139,15 +139,36 @@ function registryConfig(workspace: string): LibraryHostConfig {
 }
 function writeRegistry(file: string, workspace: string, value: unknown): void {
   assertMathCanonicalPath(file);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const bytes = canonicalLibraryJson(value);
-  // Exclusive creation makes concurrent identical authorization idempotent without replacement races.
-  try { fs.writeFileSync(file, bytes, { flag: 'wx', mode: 0o400 }); }
-  catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
+  const destination = path.dirname(file), parent = path.dirname(destination), bytes = canonicalLibraryJson(value);
+  const compareExisting = () => {
     if (hostFile(file, workspace, 64 * 1024 * 1024).toString() !== bytes) throw new Error('library_auto_authorization_changed');
+    syncMathDirectory(parent);
+  };
+  if (fs.existsSync(file)) return compareExisting();
+  const created = fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  if (created) {
+    for (let directory = parent; ; directory = path.dirname(directory)) {
+      syncMathDirectory(directory);
+      if (directory === path.dirname(created)) break;
+    }
   }
+  const temporary = fs.mkdtempSync(path.join(parent, '.pending-'));
+  try {
+    const descriptor = fs.openSync(path.join(temporary, 'entry.json'), 'wx', 0o400);
+    try { fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); }
+    finally { fs.closeSync(descriptor); }
+    syncMathDirectory(temporary);
+    // Renaming a complete nonempty directory is atomic and cannot replace another nonempty entry.
+    // Readers always see a single-link regular file; interrupted staging directories are never selected.
+    try { fs.renameSync(temporary, destination); }
+    catch (cause) {
+      if (!['EEXIST', 'ENOTEMPTY'].includes((cause as NodeJS.ErrnoException).code ?? '')) throw cause;
+      compareExisting();
+    }
+    syncMathDirectory(parent);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
+
 function derivedPack(parent: EffectiveLibraryPack, entry: z.infer<typeof derivedSchema>): EffectiveLibraryPack {
   const pack = entry.pack === null ? null : parseLibraryPack(entry.pack);
   validateAutoComposition(parent, pack);
