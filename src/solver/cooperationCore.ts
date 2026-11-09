@@ -646,11 +646,15 @@ export abstract class CooperationCore {
       this.archive.planApproval = { ...this.archive.planApproval, requestedAt: Date.now(), requestedVersion: this.archive.planVersion };
       this.input.emit('plan_approval_requested', { planVersion: this.archive.planVersion });
     }
-    this.input.onPlanApprovalWaiting?.(pending && !this.stopping && !this.failure && !this.input.signal.aborted &&
+    const waiting = pending && !this.stopping && !this.failure && !this.input.signal.aborted &&
       this.liveWorkers.has(this.lead.id) && !this.active.size && !this.reservedTurns.size &&
       !this.preparingTaskTypes.size && !this.preparingStatements && !this.planSynchronizations.size &&
       !this.leadDeliveries.size && !this.deliveryChecks.size && !this.proofPublications.size &&
-      !this.proofDeliveryChecks.size && !this.checkingTaskInputs.size && !this.integrationQueueDepth);
+      !this.proofDeliveryChecks.size && !this.checkingTaskInputs.size && !this.integrationQueueDepth;
+    // A planning checkpoint may close every model session. Keep the CLI alive to receive approval
+    // while its execution timer is paused, using the existing input poller.
+    if (waiting) this.timer?.ref(); else this.timer?.unref();
+    this.input.onPlanApprovalWaiting?.(waiting);
   }
   protected cancelStaleTaskTypes() {
     for (const pending of this.preparingTaskTypes.values())

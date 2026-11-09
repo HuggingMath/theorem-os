@@ -229,6 +229,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
     }); }, 200);
     this.timer.unref();
+    this.refreshPlanApproval();
   }
   async stop() {
     this.stopping = true;
