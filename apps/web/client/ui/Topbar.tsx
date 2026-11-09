@@ -29,6 +29,7 @@ function Topbar(props: TopbarProps) {
       <span class="live-pill-detail mono">{live.detail}</span>
     </button>}
     <div class="topbar-actions">
+      <nav class="research-space-links" aria-label={t('研究空间')}><a href="people.html">{t('数学家')}</a><a href="theorems.html">{t('定理')}</a><a href="library.html">Library</a></nav>
       <a id="open-classics" class="classics-link" href={classicLibraryUrl} target="_blank" rel="noopener" title={t('经典题库')} aria-label={t('经典题库')}><Icon name="book-open" /><span>{t('经典题库')}</span></a>
       <button type="button" class="palette-trigger icon-button" onClick={props.onPalette} aria-label={t('打开命令面板')} title={`${t('打开命令面板')} (${props.mac ? '⌘K' : 'Ctrl K'})`}
         aria-haspopup="dialog" aria-keyshortcuts={props.mac ? 'Meta+K' : 'Control+K'}><Icon name="search" /></button>

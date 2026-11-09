@@ -10,7 +10,7 @@ import { localModuleFile, mathConstructionImports } from '../math/mathConstructi
 import { limitMathOutput } from '../math/mathProcess';
 import { canonicalMathJson, mathDigest, readMathText, syncMathDirectory, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
-import { libraryKnowledgeCandidates } from './theoremKnowledgeLibrary';
+import { libraryKnowledgeCandidates } from './libraryKnowledgeCandidates';
 import type { TheoremKnowledgeEntry } from './theoremKnowledge';
 import { createTheoremKnowledgeSearchIndex, knowledgeTypeExpression } from './theoremKnowledgeSearch';
 

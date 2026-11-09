@@ -12,7 +12,9 @@ import { isWebFormalizationActivityBody } from './formalizationActivityValidatio
 import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
-import { validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
+import { allowedKnowledgeFile, validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
+import { MAX_LIBRARY_PACK_BYTES, MAX_LIBRARY_PACK_MODULES, MAX_LIBRARY_MODULE_BYTES, parseLibraryPack } from '../../src/math/libraryPacks';
+import { mathConstructionImports } from '../../src/math/mathConstructionSources';
 import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizationInput,
   type WorkerFormalizationMessage } from './formalizationTypes';
 
@@ -151,19 +153,65 @@ export class DockerWebRunner implements WebRunner {
    * Compiles the statement as one file in a throwaway container: no network, no workspace, read-only image, a few
    * seconds of CPU. The source travels over stdin. Mathlib checks read the image's prebuilt packages directly.
    */
-  check: WebPrecheckRunner = async ({ environment, source }, signal) => {
+  check: WebPrecheckRunner = async ({ environment, source, libraryPack, sourceFile = 'Submission.lean', dependencySources = [] }, signal) => {
     signal.throwIfAborted();
     const name = `theoremos-check-${crypto.randomUUID()}`;
     const mathlib = environment === 'mathlib';
     const memory = mathlib ? '6g' : '2g';
-    const script = 'cat > /tmp/Submission.lean && ' + (mathlib
+    // A pack is validated before any of its paths reach the container. Compile dependencies first,
+    // then the submitted source, under the same pinned environment as an ordinary statement check.
+    const pack = libraryPack && parseLibraryPack(libraryPack);
+    if (pack?.requires?.length) throw new Error('math_library_pack_external_requirements_unavailable');
+    const packed = (pack?.modules ?? []) as { file: string; source: string }[];
+    const validFile = (file: string) => file.length <= 512 && allowedKnowledgeFile(file) && file.endsWith('.lean') && file !== 'lakefile.lean';
+    if (!validFile(sourceFile)) throw new Error('web_check_source_path_invalid');
+    const modules = new Map<string, { file: string; source: string }>();
+    let bytes = 0;
+    for (const item of [...packed, ...dependencySources]) {
+      if (!validFile(item.file) || item.file === sourceFile) throw new Error('web_check_dependency_path_invalid');
+      const name = item.file.slice(0, -5).replaceAll('/', '.'), previous = modules.get(name);
+      if (previous) {
+        if (previous.source !== item.source) throw new Error('web_check_dependency_conflict');
+        continue;
+      }
+      bytes += Buffer.byteLength(item.source);
+      if (modules.size >= MAX_LIBRARY_PACK_MODULES || Buffer.byteLength(item.source) > MAX_LIBRARY_MODULE_BYTES || bytes > MAX_LIBRARY_PACK_BYTES)
+        throw new Error('web_check_dependencies_too_large');
+      if (item.source.includes('\0') || Buffer.from(item.source).toString('utf8') !== item.source) throw new Error('web_check_dependency_source_invalid');
+      modules.set(name, item);
+    }
+    const ordered: { file: string; source: string }[] = [], visited = new Set<string>(), visiting = new Set<string>();
+    const visit = (name: string) => {
+      if (visited.has(name)) return;
+      if (visiting.has(name) || name === sourceFile.slice(0, -5).replaceAll('/', '.')) throw new Error('web_check_dependency_cycle');
+      const item = modules.get(name);
+      if (!item) return;
+      visiting.add(name);
+      for (const dependency of mathConstructionImports(item.source)) visit(dependency);
+      visiting.delete(name); visited.add(name); ordered.push(item);
+    };
+    // Published packs are checked in full. Mutable owned files are only compiled when this candidate imports them.
+    for (const item of packed) visit(item.file.slice(0, -5).replaceAll('/', '.'));
+    for (const name of mathConstructionImports(source)) visit(name);
+    const withFiles = Boolean(pack || dependencySources.length || sourceFile !== 'Submission.lean');
+    const compilePack = `const fs=require("node:fs"); const p=JSON.parse(await Bun.stdin.text());
+      process.chdir("/tmp");
+      for(const m of p.modules){fs.mkdirSync(require("node:path").dirname(m.file),{recursive:true});fs.writeFileSync(m.file,m.source);
+        const r=Bun.spawnSync(["lean","--json","-o",m.file.slice(0,-5)+".olean",m.file],{stdout:"inherit",stderr:"inherit"});if(r.exitCode!==0)process.exit(r.exitCode??1);}
+      fs.mkdirSync(require("node:path").dirname(p.sourceFile),{recursive:true});fs.writeFileSync(p.sourceFile,p.source);
+      process.exit(Bun.spawnSync(["lean","--json",p.sourceFile],{stdout:"inherit",stderr:"inherit"}).exitCode??1);`;
+    const pathSetup = mathlib
       ? 'LP=/opt/theoremos-library/.lake/build/lib/lean; for d in /opt/theoremos-mathlib/.lake/packages/*/.lake/build/lib/lean; do LP="$LP:$d"; done; LEAN_PATH="$LP" '
-      : '') + 'exec lean --json /tmp/Submission.lean';
+      : '';
+    const script = withFiles
+      ? (mathlib ? pathSetup.replace('LEAN_PATH="$LP" ', 'export LEAN_PATH="/tmp:$LP"; ') : 'export LEAN_PATH=/tmp; ')
+        + "exec bun -e '" + compilePack + "'"
+      : 'cat > /tmp/Submission.lean && ' + pathSetup + 'exec lean --json /tmp/Submission.lean';
     const remove = () => execute('docker', ['rm', '--force', name], { timeout: 15_000 }).then(() => {}, () => {});
     try {
       await execute('docker', ['create', '--interactive', '--pull=never', '--name', name, '--network=none', '--log-driver=none',
         '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--cpus=2', `--memory=${memory}`, `--memory-swap=${memory}`,
-        '--pids-limit=128', '--ulimit', 'nofile=1024:1024', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777',
+        '--pids-limit=128', '--ulimit', 'nofile=1024:1024', '--tmpfs', `/tmp:rw,noexec,nosuid,nodev,size=${withFiles ? 134217728 : 16777216},mode=1777`,
         ...webPrivateImagePaths.flatMap(hidden => ['--tmpfs', `${hidden}:ro,noexec,nosuid,nodev,size=4096,mode=0555`]),
         '--entrypoint', 'sh', this.config.workerImage, '-c', script], { timeout: 30_000, maxBuffer: 8_192 });
     } catch (error) { await remove(); throw error; }
@@ -189,7 +237,7 @@ export class DockerWebRunner implements WebRunner {
         child.stdin.on('error', () => {});
         child.once('error', error => finish(undefined, error));
         child.once('close', code => finish({ output, exitCode: code, timedOut }));
-        child.stdin.end(source);
+        child.stdin.end(withFiles ? JSON.stringify({ source, sourceFile, modules: ordered }) : source);
       });
     } finally { await remove(); }
   };

@@ -49,9 +49,9 @@ export type { ReviewRecord, HumanEditRecord, InitialPlanPublication, Cooperation
 
 /** Lead plans; workers claim distinct ready obligations; only checked source enters the canonical proof. */
 export class CooperativeResearch extends CooperationInputs {
-  private guidancePulse?: Promise<void>;
   private humanGuidanceCheckpoint(stopped = false): Promise<void> {
-    return this.guidancePulse ??= deliverHumanGuidance({
+    if (this.guidancePulse) return this.guidancePulse;
+    const pending = deliverHumanGuidance({
       stateFile: path.join(path.dirname(this.lead.worktree), 'state.json'), state: this.input.state, stopped,
       recipients: () => [...this.active].flatMap(([workerId, active]) => {
         const worker = this.input.workers.find(item => item.id === workerId);
@@ -59,6 +59,7 @@ export class CooperativeResearch extends CooperationInputs {
         const action = active.action;
         return [{ workerId, role: worker.role,
           ...(action.kind === 'task' ? { taskRef: { id: action.task.id, version: action.assignment.taskDigest } } : {}),
+          ...(action.kind === 'lead' && action.planVersion ? { planVersion: action.planVersion } : {}),
           current: () => !this.stopping && !this.input.signal.aborted && this.active.get(workerId) === active &&
             !active.cancelled && this.current(action), notify: message => active.notify(message, { requireTurn: true }) }];
       }),
@@ -72,7 +73,9 @@ export class CooperativeResearch extends CooperationInputs {
     }).catch(error => {
       if (error instanceof Error && error.message === 'math_runtime_lease_busy') return;
       this.input.emit('human_guidance_unavailable', { reason: error instanceof Error ? error.message : 'math_guidance_unavailable' });
-    }).finally(() => { this.guidancePulse = undefined; });
+    }).finally(() => { if (this.guidancePulse === pending) this.guidancePulse = undefined; });
+    this.guidancePulse = pending;
+    return pending;
   }
   /**
    * Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. A small team gets
@@ -1029,7 +1032,15 @@ export class CooperativeResearch extends CooperationInputs {
         record.status === 'awaiting-decision' && record.outcome ? [{ checkId: record.id, outcomeDeliveryId: record.outcome.deliveryId }] : []));
     const searchScope = action?.kind === 'task' ? this.proofSearchScope(action) : undefined;
     const searchRecord = searchScope && this.archive.proofSearchRecords?.[searchScope.taskId];
-    return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView,
+    const guidance = checkpointWorkerId ? readHumanGuidance(path.join(path.dirname(this.lead.worktree), 'state.json'), this.input.state.runId)
+      .filter(item => {
+        if (item.status !== 'delivered' || !item.deliveredTo?.includes(checkpointWorkerId)) return false;
+        const target = item.deliveredScope?.taskRef ?? item.taskRef;
+        return target ? task?.id === target.id && digest(task) === target.version : !task &&
+          (!item.deliveredScope?.planVersion || item.deliveredScope.planVersion ===
+            (action?.kind === 'lead' ? action.planVersion ?? this.archive.planVersion : this.archive.planVersion));
+      }) : undefined;
+    return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView, humanGuidance: guidance,
       researchDecisions: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.researchDecisions : undefined,
       ...(action?.kind === 'lead' && this.presentedResearchInputs.has(action) ? {
         leadResearchInputIds: this.presentedResearchInputs.get(action)!.shown.map(record => record.id),
@@ -1205,6 +1216,11 @@ export class CooperativeResearch extends CooperationInputs {
   async deliver(worker: ResearchWorker, action: CooperativeAction, commit: string, recovering = false,
     recoveryKind: 'checkpoint' | 'request-failure' | 'scheduling-checkpoint' = 'checkpoint'): Promise<{ check?: ProofCheck; checkWhole: boolean; savedPlan?: boolean }> {
     if (isStatementAction(action)) return this.deliverStatement(worker, action);
+    // Optional handling decisions are metadata; malformed/forged ones cannot change mathematical delivery acceptance.
+    let response: any;
+    try { response = block(worker.worktree, action.kind === 'lead' ? 'math-plan' : action.kind === 'review' ? 'math-review' : 'math-result', {}, 'summary'); }
+    catch { /* Saved proof work and ordinary Markdown still follow their existing delivery protocols. */ }
+    await this.retainGuidanceDecisions(worker, action, response?.guidanceDecisions);
     if (action.kind === 'review') {
       const review = this.archive.review;
       if (!review || !this.current(action) || review.workerId !== worker.id) {

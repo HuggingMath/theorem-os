@@ -5,7 +5,7 @@ export const legal: Record<string, string> = {
   "使用条款 · TheoremOS": "Terms of Use · TheoremOS",
   "隐私说明 · TheoremOS": "Privacy Notice · TheoremOS",
   "版本 2026-11-07 · 适用于在线工作台 app.theoremos.top": "Version 2026-11-07 · applies to the workbench at app.theoremos.top",
-  "更新于 2026-11-08 · 适用于在线工作台 app.theoremos.top": "Updated 2026-11-08 · applies to the workbench at app.theoremos.top",
+  "更新于 2026-11-09 · 适用于在线工作台 app.theoremos.top": "Updated 2026-11-09 · applies to the workbench at app.theoremos.top",
   "这份条款约定你使用 TheoremOS 在线工作台时双方的关系。登录或使用工作台即表示你同意这份条款；不同意请不要登录。":
     "These terms set out the relationship between you and us when you use the TheoremOS workbench. By signing in or using the workbench you agree to them; if you do not agree, please do not sign in.",
   "这份说明讲工作台保存哪些数据、为什么保存、谁能看到，以及你怎样删除它们。":
@@ -54,10 +54,14 @@ export const legal: Record<string, string> = {
     "We may suspend or delete accounts that exceed the allowance, get around limits or interfere with other people's use.",
 
   "三、题目与运行记录": "3. Problems and run records",
-  "原题、Lean 源码、对话、运行过程、候选证明和验收结果按账号隔离，其他用户不能读取。为完成任务，相关内容会发送到你选择的模型服务商，由其政策决定处理与保留。服务运营方可为维护、备份和排障访问服务器保存的数据。":
-    "Problems, Lean source, conversations, activity, candidate proofs and results are isolated by account and inaccessible to other users. Relevant content is sent to your selected model provider to perform the task, subject to its processing and retention policies. The service operator can access stored server data for maintenance, backups and troubleshooting.",
-  "运行时的 Lean 检查、Agent 动作和形式化过程保存在你的账号目录下，只用于给你显示过程记录。":
-    "Lean checks, Agent actions and formalization activity from a run are kept under your account and used only to show you the process record.",
+  "原题、Lean 源码、对话、运行过程、候选证明和验收结果默认按账号隔离。你可以将指定运行绑定到定理项目，让项目成员按授权查看研究过程、提交指导、修改或批准计划、提交候选证明；项目成员不能访问你的其他账号资源。撤销成员或运行授权后，后续访问和操作会重新核对权限。":
+    "Problems, Lean source, conversations, activity, candidate proofs and results are private to your account by default. You can bind a specific run to a theorem project and grant members permission to view its research, send guidance, edit or approve plans, or submit proof candidates. Members cannot access your other account resources. Access and operations check current membership and run permissions, including after revocation.",
+  "数学家资料、定理、讨论和 Library 资产分别设置可见范围。公开定理的非成员只能查看公开讨论、项目摘要及主动公开的已验收结果；不会获得内部路线、运行日志或命令权限。公开资料中的贡献按查看者当前权限筛选，邮箱和模型密钥不进入公开资料。":
+    "Profiles, theorems, discussions and Library assets have separate visibility settings. Non-members of public theorems can see public discussions, project summaries and explicitly shared accepted results. Internal routes, run logs and commands remain restricted. Contributions are filtered by the viewer's current access. Public profiles exclude email and model keys.",
+  "运行时的 Lean 检查、Agent 动作和形式化过程保存在你的账号目录下。为完成任务，相关内容会发送到你选择的模型服务商，由其政策决定处理与保留。服务运营方可为维护、备份和排障访问服务器保存的数据。":
+    "Lean checks, Agent actions and formalization activity are stored under your account. Relevant content is sent to your selected model provider to perform the task, subject to its processing and retention policies. The operator can access stored server data for maintenance, backups and troubleshooting.",
+  "发布数学成果、Agent 或 Skill 前，可预览将分享的源码、必要依赖或配置，并选择私用或公开、填写许可证。发布资产不会连带公开原运行、私有讨论或模型连接。其他人可以使用固定版本或复制派生；撤回后停止新的公开发现和下载，已进入其他运行或派生草稿的固定副本继续保留。":
+    "Before publishing mathematics, an Agent or a Skill, you can preview the source, required dependencies or configuration, choose private or public use, and set a license. Publishing an asset does not expose its original run, private discussions or model connection. Others can use fixed versions or create forks. Withdrawal stops new public discovery and downloads; fixed copies already in runs or forked drafts remain available there.",
   "分享链接由你主动创建，任何持有链接的人可查看 Lean 原题、证明、验收结论、模型、环境及耗时与用量，以及自然语言原题、确认方式、形式化回译和对应关系（如有）。分享页不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话；撤销后链接失效。":
     "You create share links explicitly. Anyone with a link can read the Lean problem, proof, acceptance result, model, environment, duration and usage, plus the natural-language problem, confirmation method, back-translation and formalization correspondences when available. Shares exclude keys, email, provider addresses, run logs and Agent conversations. Revoking a link disables it.",
   "产品内的管理员面板只展示账号资料、状态与用量，不提供其他账号题目、证明或对话的读取入口；这不限制服务运营方对服务器的维护权限。":
@@ -76,8 +80,8 @@ export const legal: Record<string, string> = {
   "四、保存期限与删除": "4. Retention and deletion",
   "运行记录、归档和知识库保留在你的账号下，直到你删除它们或删除账号。":
     "Run records, archives and knowledge stay under your account until you delete them or delete the account.",
-  "删除账号会立即删除在线账号记录、密码、Key、运行记录、分享链接、归档、知识库与模块方案。为防止删号重建刷新额度，仅保留不含邮箱、账号 ID 或内容的服务器 HMAC 标识、本窗口用量与截止时间，到原额度窗口结束后自动删除，默认最长 24 小时。":
-    "Deleting an account immediately removes its live account record, password, keys, runs, shares, archives, knowledge and module plans. To prevent resetting allowances by recreating an account, only a server HMAC identifier, current-window usage and expiry remain, with no email, account ID or content. They expire at the original window end, within 24 hours by default.",
+  "删除账号会立即删除在线账号记录、密码、Key、运行记录、分享链接、归档、知识库与模块方案，并清理数学家资料、自有定理、成员授权、关注和公开反馈投影，以及自有 Library 发布物。他人此前明确复制的资产和运行内固定副本不会被远程改写，也不会因此获得你原账号的数据。为防止删号重建刷新额度，仅保留不含邮箱、账号 ID 或内容的服务器 HMAC 标识、本窗口用量与截止时间，到原额度窗口结束后自动删除，默认最长 24 小时。":
+    "Deleting an account removes its live record, password, keys, runs, shares, archives, knowledge and module plans, and clears its profile, owned theorems, memberships, follows, public feedback projections and Library publications. Assets explicitly copied earlier by others and fixed run copies are not remotely rewritten; they do not grant access to your original account. To prevent resetting allowances by recreating an account, only a server HMAC identifier, current-window usage and expiry remain, without email, account ID or content. They expire at the original window end, within 24 hours by default.",
   "服务运行日志只记录请求状态和错误，不记录题目内容与 Key。":
     "Service logs record request status and errors only, not problem text or keys.",
 

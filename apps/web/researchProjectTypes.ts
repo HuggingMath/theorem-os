@@ -1,0 +1,108 @@
+/** Shared research projections. Account IDs, owner keys and model connections never belong in these types. */
+import type { WebCommand, WebGuidanceInput, WebPlanProposal } from './collaboration';
+import type { WebEnvironment, WebRunStatus } from './shared';
+
+export type ResearchVisibility = 'private' | 'members' | 'public';
+export type ResearchMemberRole = 'collaborator' | 'reader';
+export type ResearchAuthor = { id: string; displayName: string };
+export type ResearcherProfile = ResearchAuthor & {
+  fields: string[]; bio: string; links: string[]; visibility: 'private' | 'public';
+  revision: number; createdAt: string; updatedAt: string;
+  following?: boolean;
+};
+export type ResearchMutation = { requestId: string; expectedRevision?: number };
+export type ResearchProfileInput = ResearchMutation & {
+  displayName: string; fields?: string[]; bio?: string; links?: string[]; visibility?: 'private' | 'public';
+};
+export type ResearchProjectInput = ResearchMutation & {
+  title: string; description?: string; fields?: string[]; visibility?: ResearchVisibility;
+};
+export type ResearchProjectUpdate = ResearchMutation & Partial<Omit<ResearchProjectInput, keyof ResearchMutation>>;
+export type ResearchStatementInput = ResearchMutation & {
+  statement: string; source: string; environment: WebEnvironment; assumptions?: string[];
+  targets?: { theoremName: string; proofPath: string }[]; environmentDigest?: string;
+  formalizationId?: string; confirmation?: { confirmed: boolean; note?: string };
+};
+export type ResearchStatementVersion = Omit<ResearchStatementInput, keyof ResearchMutation> & {
+  id: string; author: ResearchAuthor; sourceDigest: string; createdAt: string;
+};
+export type ResearchRunGrants = { guidance: boolean; edit: boolean; approve: boolean; proof: boolean };
+export type ResearchRunPermission = 'read' | keyof ResearchRunGrants;
+export type ResearchRunBindingInput = ResearchMutation & {
+  runId: string; statementVersionId: string; exposure?: 'members' | 'public'; grants?: Partial<ResearchRunGrants>;
+};
+export type ResearchRunBinding = {
+  runId: string; statementVersionId: string; owner: ResearchAuthor; exposure: 'members' | 'public';
+  grants: ResearchRunGrants; createdAt: string; status: WebRunStatus; title: string;
+  permissions: ResearchRunGrants & { read: boolean; manage: boolean };
+};
+export type ResearchFeedbackTarget = {
+  runId: string; statementVersionId: string;
+  observationRef: { sequence: number; stateDigest: string }; taskRef?: { id: string; version: string };
+};
+type FeedbackBase = ResearchMutation & { text: string; visibility?: 'members' | 'public'; sourceFeedbackId?: string };
+export type ResearchFeedbackInput = FeedbackBase & (
+  | { kind: 'discussion'; statementVersionId?: string }
+  | { kind: 'guidance'; target: ResearchFeedbackTarget; recipient: WebGuidanceInput['recipient'] }
+  | { kind: 'plan-edit' | 'route-control'; target: ResearchFeedbackTarget; proposal: Omit<WebPlanProposal, 'id'> }
+  | { kind: 'plan-approval'; target: ResearchFeedbackTarget; planVersion: string }
+  | { kind: 'proof-submission'; target: ResearchFeedbackTarget; source: string;
+      base: { commit: string; sourceDigest: string; environmentDigest: string; file: string } }
+);
+export type ResearchFeedbackDecisionInput = ResearchMutation & {
+  status: 'accepted' | 'declined' | 'needs-info'; reason: string;
+  evidenceRefs?: string[]; planVersion?: string; taskRefs?: { id: string; version: string }[];
+};
+export type ResearchFeedback = {
+  id: string; requestId: string; projectId: string; author: ResearchAuthor;
+  kind: ResearchFeedbackInput['kind']; text: string; visibility: 'members' | 'public';
+  sourceFeedbackId?: string;
+  statementVersionId?: string; target?: ResearchFeedbackTarget;
+  /** Typed payload retained for review and stable command retries. It contains no owner or connection. */
+  payload?: Omit<Extract<ResearchFeedbackInput, { kind: 'guidance' }>, keyof FeedbackBase | 'kind' | 'target'>
+    | { proposal: Omit<WebPlanProposal, 'id'> } | { planVersion: string }
+    | { source: string; base: { commit: string; sourceDigest: string; environmentDigest: string; file: string } };
+  delivery: { status: 'not-sent' | 'queued' | 'delivered' | 'deferred' | 'failed' | 'unknown';
+    commandId?: string; reason?: string };
+  decision: { status: 'pending' | 'accepted' | 'declined' | 'needs-info' | 'not-recorded';
+    actor?: ResearchAuthor & { kind: 'human' | 'agent' }; reason?: string; evidenceRefs: string[];
+    decidedAt?: string; sourceTaskRef?: { id: string; version: string }; sourcePlanVersion?: string };
+  execution: { status: 'not-started' | 'running' | 'completed' | 'failed' | 'superseded';
+    planVersion?: string; taskRefs: { id: string; version: string }[]; resultRefs: string[] };
+  proofCheck?: ResearchProofResult;
+  revision: number; createdAt: string; updatedAt: string;
+};
+export type ResearchContribution = {
+  id: string; author: ResearchAuthor; projectId?: string; kind: string; summary: string;
+  feedbackId?: string; statementVersionId?: string; runId?: string; evidenceRefs: string[]; createdAt: string;
+  assetId?: string; assetVersion?: string;
+};
+export type ResearchActivity = {
+  id: string; sequence: number; projectId?: string; actor: ResearchAuthor; type: string; summary: string;
+  feedbackId?: string; statementVersionId?: string; runId?: string; createdAt: string;
+  assetId?: string; assetVersion?: string;
+};
+export type ResearchProjectSummary = {
+  id: string; title: string; description: string; fields: string[]; visibility: ResearchVisibility;
+  owner: ResearchAuthor; members: { researcherId: string; role: ResearchMemberRole }[];
+  currentStatementVersionId?: string; revision: number; createdAt: string; updatedAt: string;
+  permissions: { manage: boolean; edit: boolean; discuss: boolean; member: boolean };
+  following?: boolean;
+};
+export type ResearchProjectDetail = ResearchProjectSummary & {
+  versions: ResearchStatementVersion[]; runs: ResearchRunBinding[]; feedback: ResearchFeedback[];
+  activity: ResearchActivity[]; contributions: ResearchContribution[];
+  assignments: ResearchHumanAssignment[];
+};
+export type ResearchQuery = { q?: string; field?: string; author?: string; offset?: number; limit?: number; after?: number };
+export type ResearchPage<T> = { items: T[]; total: number; nextOffset?: number };
+export type ResearchNotification = ResearchActivity & { read: boolean };
+export type ResearchCommand = Exclude<WebCommand, { type: 'capture' }>;
+export type ResearchProofResult = {
+  status: 'checked' | 'failed' | 'superseded'; sourceDigest: string; environmentDigest: string;
+  receiptId: string; reason?: string;
+};
+export type ResearchHumanAssignment = {
+  id: string; author: ResearchAuthor; target: ResearchFeedbackTarget; status: 'claimed' | 'released' | 'submitted';
+  feedbackId?: string; createdAt: string; updatedAt: string;
+};

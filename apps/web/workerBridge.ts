@@ -117,10 +117,14 @@ function sourceProjection(state: SolverRunState, directory: string) {
       const selected = snapshot(commit), file = node.task.proofPath;
       if (!file || !Object.hasOwn(selected.files, file) || expectedDigest && selected.digest !== expectedDigest)
         throw new Error('web_bridge_source_identity_mismatch');
-      const source = selected.files[file], bytes = Buffer.byteLength(source);
+      const source = selected.files[file], dependencySources = Object.entries(selected.files)
+        .filter(([dependency]) => dependency !== file && dependency.endsWith('.lean'))
+        .map(([file, source]) => ({ file, source }));
+      const bytes = Buffer.byteLength(source) + dependencySources.reduce((sum, dependency) => sum + Buffer.byteLength(dependency.source), 0);
       if (sourceBytes + bytes > maxSourcesBytes) { sourcePartial = true; return; }
       sources.push({ taskId: node.task.id, taskVersion: version, commit, sourceDigest: selected.digest,
-        environmentDigest: state.environmentDigest, file, source, scope: 'owned-file' });
+        environmentDigest: state.environmentDigest, file, source, scope: 'owned-file',
+        ...(dependencySources.length ? { dependencySources } : {}) });
       sourceBytes += bytes; sourceIds.add(key);
     } catch { sourcePartial = true; }
   };
@@ -318,7 +322,9 @@ export async function handleWebWorkerCommand(value: unknown, options: { activeRu
       const reason = error instanceof Error ? error.message : '';
       if (['web_guidance_observation_unknown', 'math_guidance_invalid', 'math_guidance_id_conflict',
         'math_guidance_run_inactive', 'math_guidance_task_superseded', 'math_guidance_worker_missing',
-        'math_guidance_lead_missing', 'math_guidance_limit'].includes(reason)) return { id: command.guidance.id, status: 'rejected', reason };
+        'math_guidance_lead_missing', 'math_guidance_limit', 'math_guidance_candidate_environment_changed',
+        'math_guidance_candidate_file_mismatch', 'math_guidance_candidate_base_mismatch'].includes(reason))
+        return { id: command.guidance.id, status: 'rejected', reason };
       throw error;
     }
   }

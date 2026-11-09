@@ -82,6 +82,36 @@ describe('statement check container', () => {
   const leak = '#eval show IO Unit from do\n  let text ← IO.FS.readFile "/opt/theorem-os/LICENSE"\n  throw (IO.userError (text.take 200).toString)\n' +
     'theorem t : True := trivial\n';
 
+  it('compiles only reachable host-selected dependencies in their original module paths', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-candidate-context-'));
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path'), args = process.argv.slice(2);
+fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+if (args[0] === 'start') {
+  let input = ''; process.stdin.on('data', chunk => input += chunk).on('end', () => fs.writeFileSync(path.join(__dirname, 'input.json'), input));
+}
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    try {
+      const runner = new DockerWebRunner(readWebConfig({}));
+      const input = { environment: 'standard' as const, sourceFile: 'Tasks/Target.lean',
+        source: 'import Local.Middle\ntheorem target : True := by exact helper\n', dependencySources: [
+          { file: 'Local/Middle.lean', source: 'import Local.Base\nlemma helper : True := by exact base\n' },
+          { file: 'Local/Base.lean', source: 'lemma base : True := by trivial\n' },
+          { file: 'Unrelated.lean', source: 'theorem unrelated : False := by sorry\n' },
+        ] };
+      await runner.check(input, new AbortController().signal);
+      const received = JSON.parse(fs.readFileSync(path.join(root, 'input.json'), 'utf8'));
+      expect(received.sourceFile).toBe(input.sourceFile); expect(received.source).toBe(input.source);
+      expect(received.modules).toEqual([input.dependencySources[1], input.dependencySources[0]]);
+      await expect(runner.check({ ...input, dependencySources: [{ file: '../outside.lean', source: '' }] },
+        new AbortController().signal)).rejects.toThrow('web_check_dependency_path_invalid');
+      const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+      expect(calls.map(args => args[0])).toEqual(['create', 'start', 'rm']);
+      expect(calls[0]).toContain('--network=none'); expect(calls[0]).toContain('--read-only');
+    } finally { vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it.each(['standard', 'mathlib'] as const)('covers the image\'s own code and build state (%s)', async environment => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-check-'));
     fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}

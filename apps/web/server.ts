@@ -8,9 +8,9 @@ import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEffort, type WebEnvironment,
+import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEffort,
   type WebExplanationLanguage, type WebExplanationOverview, type WebProvider, type WebRun, type WebRunInput, type WebSession, workbenchReturn } from './shared';
-import { researchModulePlanSchema } from '../../src/solver/modules/policy';
+import { researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
 import { WebModuleRegistry } from './moduleRegistry';
@@ -39,6 +39,11 @@ import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { formalizationDigest } from '../../src/math/formalization';
 import { WebConversations } from './conversations';
 import { webConversationLimits } from './conversationTypes';
+import { WebResearchApi, researchSelectionSchema } from './researchApi';
+import { combineWebLibraryPacks } from './formalizationSeed';
+import { selectWebLibraryPack } from './frozenLibrary';
+import type { ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
+import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 
 const inputSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
@@ -56,6 +61,7 @@ const inputSchema = z.object({
   coordination: z.enum(['cooperative', 'independent']),
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
+  researchSelection: researchSelectionSchema.optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).nullable().optional(),
   formalizationId: z.string().uuid().optional(),
   // Names a version of one of the account's runs; its saved file is looked up here, never taken from the request.
@@ -75,6 +81,7 @@ const precheckSchema = z.object({
   checkScope: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
   environment: z.enum(['standard', 'mathlib']),
   source: z.string().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
+  researchSelection: researchSelectionSchema.optional(),
 }).strict();
 const explanationLanguage = z.enum(['zh', 'en']);
 const explanationSchema = z.object({
@@ -245,6 +252,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     onFinished: (owner, run) => { if (mailsCompletion(run)) mailOwner(owner, run, 'completion', completionMail); },
     onPlanWaiting: (owner, run) => mailOwner(owner, run, 'plan approval', planApprovalMail) });
   const trajectories = new WebTrajectories(storage);
+  const research = new WebResearchApi(storage, jobs, knowledge, runner);
   const explanations = new WebExplanations(runner, storage);
   const formalizations = new WebFormalizations(runner, storage, webFormalizationLimits, (owner, formalization, evidence, input) => {
     const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom);
@@ -290,6 +298,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     let failure: unknown;
     if (!auth) {
       conversations.forget(id); formalizations.forget(id); explanations.forget(id);
+      research.projects.forgetOwner(id);
+      void research.assets.deleteOwner(id).catch(() => console.error('[web_cleanup_failed] research cleanup failed'));
       try { jobs.forget(id); } catch (error) { failure = error; }
       try { storage.deleteOwner(id); } catch (error) { failure ??= error; }
       trajectories.forgetOwner(id);
@@ -401,6 +411,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (owner) body.runs = { runs: jobs.list(owner), version: jobs.version(owner) };
           json(response, 200, body); return;
         }
+        if (!session && request.method === 'GET' && url.pathname.startsWith('/api/research/')) {
+          const denied = (): never => { throw new HttpError(401, '请先登录。'); };
+          const result = await research.handle(url, 'GET', undefined, async () => denied(), denied);
+          if (result.filename) response.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+          json(response, result.status, result.body); return;
+        }
         if (session) response.setHeader('X-Theoremos-Owner', crypto.createHash('sha256').update(ownerOf(session) || session.id).digest('hex'));
         if (!session) throw new HttpError(401, '会话已过期，请刷新页面。');
         session.touchedAt = Date.now();
@@ -482,6 +498,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
+            research.projects.forgetOwner(owner); await research.assets.deleteOwner(owner);
             conversations.forget(owner); formalizations.forget(owner); explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
             quota?.forget(account.id, account.email);
             auth.deleteAccount(account.email);
@@ -553,6 +570,17 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           throw new HttpError(405, '请求方法不受支持。');
         }
         const owner = ownerOf(session);
+        if (url.pathname.startsWith('/api/research/')) {
+          const writable = () => {
+            requireSession();
+            if (!owner) throw new HttpError(401, '请先登录。');
+            if (auth && session.account && auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+            if (operations.maintenance || !operations.writable()) throw new HttpError(503, '服务暂不接收研究修改，请稍后重试。');
+          };
+          const result = await research.handle(url, request.method ?? 'GET', owner, readBody, writable);
+          if (result.filename) response.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+          json(response, result.status, result.body); return;
+        }
         if (!owner) throw new HttpError(401, '请先登录。');
         const newWork = request.method === 'POST' && (['/api/runs', '/api/formalizations', '/api/precheck'].includes(url.pathname)
           || /^\/api\/conversations\/[^/]+\/messages$/u.test(url.pathname)
@@ -798,7 +826,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const gone = new AbortController();
           response.once('close', () => { if (!response.writableFinished) gone.abort(new PrecheckSuperseded()); });
           admitWork();
-          try { json(response, 200, { precheck: await prechecker.check(owner, parsed.data as { environment: WebEnvironment; source: string }, gone.signal) }); }
+          const frozen = parsed.data.researchSelection ? research.assets.freeze(owner,
+            parsed.data.researchSelection as ResearchConfigurationSelection, parsed.data.environment) : undefined;
+          const libraryPack = frozen ? combineWebLibraryPacks(frozen.libraryPack,
+            selectWebLibraryPack({ source: parsed.data.source!, task: '', environment: parsed.data.environment })) : undefined;
+          try { json(response, 200, { precheck: await prechecker.check(owner, { ...parsed.data,
+            ...(libraryPack ? { libraryPack } : {}) } as Parameters<WebPrechecker['check']>[1], gone.signal) }); }
           catch (error) {
             if (error instanceof PrecheckSuperseded) { if (!response.destroyed) json(response, 409, { error: '检查已被更新的版本取代。' }); return; }
             throw error;
@@ -826,6 +859,19 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               ? { keySaveFailed: true } : {}) } : {};
           const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
           if (previous) { json(response, 200, { run: previous, ...submissionKeys() }); return; }
+          const frozenResearch = input.researchSelection
+            ? research.assets.freeze(owner, input.researchSelection as ResearchConfigurationSelection, input.environment,
+              input.researchSelection.agent ? undefined : input.modulePlan as ResearchModulePlan | undefined) : undefined;
+          if (frozenResearch && input.researchSelection?.agent && input.modulePlan
+              && JSON.stringify(input.modulePlan) !== JSON.stringify(frozenResearch.modulePlan))
+            throw new HttpError(409, '所选 Agent 的方案与当前自定义方案不同，请清除自定义方案后重新提交。');
+          if (frozenResearch) {
+            // Freeze the exact combined source pack once. The worker and future evidence reads use this copy.
+            const libraryPack = combineWebLibraryPacks(selectWebLibraryPack(input as WebRunInput), frozenResearch.libraryPack);
+            if (libraryPack) frozenResearch.libraryPack = libraryPack as ResearchLibraryPack;
+            const { digest: _digest, ...configuration } = frozenResearch;
+            frozenResearch.digest = mathDigest(canonicalMathJson(configuration));
+          }
           // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
           if (!typed) {
             const held = heldKey(session, provider);
@@ -853,7 +899,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
               approved ? { evidence: approved.evidence, provenance: { id: approved.formalization.id,
                 evidenceSha256: approved.formalization.report!.evidenceSha256, original: approved.formalization.original,
-                confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined);
+                confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined,
+              frozenResearch);
           }
           catch (error) {
             // A submit that never became a run gives the allowance back.
@@ -1166,10 +1213,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
-    const closed = await Promise.allSettled([jobs.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    const closed = await Promise.allSettled([jobs.close(), research.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
     for (const result of closed) if (result.status === 'rejected') throw result.reason;
   };
-  return { server, jobs, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };
+  return { server, jobs, research, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

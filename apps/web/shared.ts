@@ -62,6 +62,8 @@ export type WebRunInput = {
   continueFrom?: WebContinuation;
   /** Owned verified evidence, accepted manually or through an explicitly requested automatic solve workflow. */
   formalizationId?: string;
+  /** References only. The server resolves and freezes all contents before starting work. */
+  researchSelection?: import('./researchAssetTypes').ResearchConfigurationSelection;
 };
 /**
  * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
@@ -137,6 +139,7 @@ export type WebRun = {
   archives?: WebArchive[];
   knowledgeCatalogDigest?: string;
   moduleConfiguration?: WebFrozenModuleConfiguration;
+  researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   events: WebEvent[];
   /** How many Agent actions are stored (read them from /actions) and how many arrived past the per-run limit. */
   actions?: { count: number; dropped?: number };
@@ -205,6 +208,7 @@ export type WebProofOutlineDeclaration = {
 export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
 export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown;
+  researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   /** Validated server-side artifact; never supplied directly by the browser. */
   formalization?: unknown;
   /** The saved file of `input.continueFrom`, read by the server from the account's own run. */
