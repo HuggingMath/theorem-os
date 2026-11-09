@@ -1239,6 +1239,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (action.kind !== 'task') {
       const pending = this.deliverLead(worker, action, commit, recovering, recoveryKind);
       this.leadDeliveries.add(pending);
+      this.refreshPlanApproval();
       try { return await pending; } finally { this.leadDeliveries.delete(pending); this.wake(); }
     }
     const node = this.node(action.task.id);
@@ -1386,8 +1387,8 @@ export class CooperativeResearch extends CooperationInputs {
   waitForTurn(maxTurns: number): Promise<void> | undefined {
     return this.input.state.turns >= maxTurns && this.reservedTurns.size ? this.wait() : undefined;
   }
-  reserveTurn(worker: ResearchWorker) { this.reservedTurns.add(worker.id); }
-  settleTurn(worker: ResearchWorker) { if (this.reservedTurns.delete(worker.id)) this.wake(); }
+  reserveTurn(worker: ResearchWorker) { this.reservedTurns.add(worker.id); this.refreshPlanApproval(); }
+  settleTurn(worker: ResearchWorker) { if (this.reservedTurns.delete(worker.id)) { this.refreshPlanApproval(); this.wake(); } }
   release(worker: ResearchWorker, action: CooperativeAction) {
     if (action.kind === 'task' && this.current(action)) {
       const node = this.node(action.task.id);

@@ -190,9 +190,9 @@ describe('workbench phase and elapsed-time presentation', () => {
     const approved = approval({ status: 'approved', approvedAt: Date.parse(at(1_800)) });
     expect(stalledMinutes(approved, Date.parse(at(1_800 + 9 * 60)))).toBeUndefined();
     expect(stalledMinutes(approved, Date.parse(at(1_800 + 10 * 60)))).toBe(10);
-    // The budget ran out before anyone approved: the guide says so instead of blaming the Agents.
+    // A run stopped before approval keeps its saved plan and research available.
     const expired = { ...pending, status: 'error', failure: { kind: 'time_limit' } } as unknown as WebRun;
-    expect(resultDescription(expired)).toContain('研究计划直到解题时间用完都没有批准');
+    expect(resultDescription(expired)).toContain('这次运行在计划批准前结束');
   });
 });
 

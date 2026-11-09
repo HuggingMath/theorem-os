@@ -41,6 +41,15 @@ const libraryUsage = (proof: Record<string, unknown> = {}) => ({
 });
 
 describe('web report summaries from structured worker fields', () => {
+  it('shows execution time separately from the human approval wait', () => {
+    const summary = summarizeReport(run({ ...fixture(), solveWallMs: 600_200, solveExecutionMs: 200, solveWaitingMs: 600_000 }));
+    expect(summary.metrics).toContainEqual({ label: '求解耗时', value: '0.2 秒' });
+    expect(summary.metrics).toContainEqual({ label: '等待确认', value: '600 秒' });
+    const legacy = summarizeReport(run(fixture()));
+    expect(legacy.metrics).toContainEqual({ label: '求解耗时', value: '26.302 秒' });
+    expect(legacy.metrics.some(metric => metric.label === '等待确认')).toBe(false);
+  });
+
   it('summarizes the real host-final report shape without merging candidate and final targets', () => {
     const summary = summarizeReport(run(fixture()));
     expect(summary.checks.map(check => check.id)).toEqual(['candidate', 'evaluation']);

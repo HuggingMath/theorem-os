@@ -200,7 +200,7 @@ try {
   mark('the option reaches the worker');
   // The waiting plan: the banner says what is asked and why nothing runs, and the run reads as waiting everywhere.
   assert.equal(await page.locator('#run-approval-heading').innerText(), '研究计划等你批准');
-  assert.match(await banner(page).innerText(), /Lead 把题目拆成了 2 项任务。批准后 Agent 才开始工作[\s\S]*等待批准的时间也计入解题预算/u);
+  assert.match(await banner(page).innerText(), /Lead 把题目拆成了 2 项任务。批准后 Agent 才开始工作[\s\S]*等待确认不计入证明预算/u);
   assert.equal(await page.locator('.detail-statusline [data-status]').innerText(), '等你批准计划');
   assert.match(await page.locator('#detail-panel').innerText(), /Lead 已经拟好研究计划，等你批准后 Agent 才开始工作/u);
   // The history sits folded under 证明任务 beside the chat.
@@ -214,6 +214,14 @@ try {
     [(row as HTMLElement).dataset.goalState, row.querySelector('.badge')?.textContent])), [['planned', '等计划批准'], ['planned', '等计划批准']]);
   await shot(page, 'pending-1440.png');
   mark('a waiting plan shows the approval banner, status and result text');
+
+  // Returning to the page keeps the same pending run and does not create another solver execution.
+  const countBeforeReturn = started.length;
+  await page.reload(); await ready(page); await showArtifacts(page); await banner(page).waitFor();
+  assert.equal(started.length, countBeforeReturn, 'returning to a pending plan starts no new run');
+  assert.equal(await page.locator('.detail-heading[data-run]').getAttribute('data-run'), first);
+  assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isEnabled(), true);
+  mark('returning to a pending plan keeps the same run ready to approve');
 
   // Its other actions lead to the plan, its editor and a note to the Lead; the banner stays above every tab.
   await page.locator('[data-run-approval] [data-action="show-plan"]').click();

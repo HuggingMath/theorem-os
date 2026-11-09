@@ -148,7 +148,7 @@ function ApprovalBanner({ approval, connected }: { approval: PlanApprovalProps; 
       <h3 id="run-approval-heading">{approval.revising ? t('Lead 正在按你的留言修改计划') : t('研究计划等你批准')}</h3>
       <p>{approval.revising ? t('修改完成后可以再看一遍再批准。')
         : t('Lead 把题目拆成了 {0} 项任务。批准后 Agent 才开始工作；也可以先改计划，或给 Lead 留言让它修改。', approval.tasks)}</p>
-      <p class="run-approval-note">{t('等待批准的时间也计入解题预算。')}</p>
+      <p class="run-approval-note">{t('等待确认不计入证明预算；拟定和修改计划正常计时。')}</p>
       {approval.error && <p class="run-approval-error" role="alert">{approval.error}</p>}
       <div class="run-approval-actions">
         <button type="button" class="button button-primary" data-action="approve-plan" disabled={!connected || approval.busy || approval.revising}>

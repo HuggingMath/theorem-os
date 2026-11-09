@@ -105,6 +105,8 @@ export type SolverRunState = {
   dispatchCounts?: Partial<Record<'planning' | 'research' | 'proof' | 'review', number>>;
   solveStartedAt?: number;
   solveFinishedAt?: number;
+  /** Wall time excluded from this solve's execution allowance while waiting for human approval. */
+  solveWaitingMs?: number;
   verificationCheckpoints?: VerificationCheckpoint[];
   usage?: Record<string, unknown>;
   usageBeforeThread?: Record<string, unknown>;
@@ -180,7 +182,7 @@ const check = z.object({ commit: z.string().min(1), sourceDigest: z.string().min
     targetCommit: z.string().optional(), results: z.array(record) }).passthrough() }).passthrough();
 const research = z.object({ worktree: z.string().min(1), phase, turns: count, threadId: z.string().optional(),
   dispatchCounts: z.object({ planning: count.optional(), research: count.optional(), proof: count.optional(), review: count.optional() }).optional(),
-  solveStartedAt: count.optional(), solveFinishedAt: count.optional(),
+  solveStartedAt: count.optional(), solveFinishedAt: count.optional(), solveWaitingMs: count.optional(),
   previousThreadIds: z.array(z.string()).optional(), lastInputTokens: count.optional(), check: check.optional(),
   lastActivity: z.object({ at: count, event: z.string().min(1).max(64), itemType: z.string().max(64).optional() }).optional(),
   lastFailure: z.object({ at: count, reason: z.string(), taskId: z.string().optional(),

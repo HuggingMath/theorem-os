@@ -166,10 +166,12 @@ export function summarizeReport(run: WebRun): ReportSummary {
       ...(evaluationReason ? { reason: evaluationReason } : {}), ...evaluationTargets });
   }
   const metrics: ReportSummary['metrics'] = [];
-  const turns = nonnegativeInteger(report?.turns), solveWallMs = nonnegative(report?.solveWallMs);
+  const turns = nonnegativeInteger(report?.turns), solveMs = nonnegative(report?.solveExecutionMs) ?? nonnegative(report?.solveWallMs);
   const totalTokens = nonnegativeInteger(object(report?.usage)?.totalTokens);
   if (turns !== undefined) metrics.push({ label: t('研究轮次'), value: String(turns) });
-  if (solveWallMs !== undefined) metrics.push({ label: t('求解耗时'), value: t('{0} 秒', solveWallMs / 1_000) });
+  if (solveMs !== undefined) metrics.push({ label: t('求解耗时'), value: t('{0} 秒', solveMs / 1_000) });
+  const waitingMs = nonnegative(report?.solveWaitingMs);
+  if (waitingMs) metrics.push({ label: t('等待确认'), value: t('{0} 秒', waitingMs / 1_000) });
   if (totalTokens !== undefined) metrics.push({ label: t('总 Token'), value: String(totalTokens) });
   const environment = object(report?.environment);
   const identity: ReportSummary['identity'] = [];

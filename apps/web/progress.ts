@@ -41,6 +41,8 @@ const descriptions: Record<string, string> = {
   plan_approval_requested: '研究计划等待你批准，Agent 暂不开始工作', plan_approved: '研究计划已批准，Agent 开始工作',
   plan_approval_rejected: '计划批准未生效，请看当前计划后再批准', plan_approval_revision: 'Lead 正在按你的留言修改计划',
   plan_approval_unanswered: '运行结束时研究计划仍未批准',
+  plan_approval_wait_started: '等待你确认计划，证明预算已暂停',
+  plan_approval_wait_ended: '继续本次研究，证明预算恢复计时',
   // Lead planning and the goal path.
   initial_plan_published: '初始研究计划已发布', plan_published: '研究计划已发布',
   initial_plan_rejected: '初始研究计划未通过校验', plan_publication_rejected: '研究计划发布未通过校验',

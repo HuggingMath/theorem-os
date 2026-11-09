@@ -71,7 +71,8 @@ function PlanDecision(props: ChatThreadProps) {
   return <section class="chat-decision" data-chat-plan-decision data-waiting={Boolean(approval)} aria-labelledby="chat-plan-decision-heading">
     <header><Icon name="git-branch" /><h3 id="chat-plan-decision-heading">{approval ? approval.revising ? t('正在按你的意见修改计划') : t('研究计划，等你决定')
       : !plan && run.planApproval ? t('正在拟定研究计划') : t('你可以调整这次研究')}</h3></header>
-    <p class="chat-decision-next">{approval ? t('先核对任务与依赖，批准后再执行。等待确认计入本次证明预算。')
+    <p class="chat-decision-next">{approval ? approval.revising ? t('正在按你的指导修改计划，修改期间计入执行预算。完成后等你确认。')
+      : t('先核对任务与依赖。等待确认不计入证明预算，批准后继续本次研究。')
       : approved ? t('初始计划已由你批准。后续仍可修改任务、依赖和研究方向。')
         : run.planApproval && !plan ? t('计划拟好后会停下来，等你确认。') : t('修改任务会更新研究计划；指导意见会发送给研究组。')}</p>
     {plan && <ol class="chat-decision-tasks">{plan.tasks.slice(0, 4).map(task => <li key={task.id}>

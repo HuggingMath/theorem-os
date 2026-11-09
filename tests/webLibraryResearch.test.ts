@@ -77,6 +77,17 @@ function finishRound(f: Fixture, round: WebLibraryRound, names?: string[], used:
 }
 
 describe('Web library research supervision without provider calls', () => {
+  it('carries execution time across library rounds without charging idle human approval time', async () => {
+    const f = fixture({ maxRunSeconds: 12 }), limits: number[] = [];
+    const result = await runWebLibraryResearch({ ...f, run: async round => {
+      limits.push(round.limits.maxRunSeconds);
+      const completed = finishRound(f, round, round.round === 0 ? ['Research.desired'] : undefined,
+        { solveWallMs: round.round === 0 ? 600_000 : 1_000 });
+      writeMathJsonDurable(round.output, { ...completed.raw, solveExecutionMs: 1_000 });
+    } });
+    expect(limits).toEqual([12, 11]);
+    expect(result.raw).toMatchObject({ solveWallMs: 601_000, solveExecutionMs: 2_000, solveWaitingMs: 599_000 });
+  });
   it('installs the requested dependency closure in a new receipt and retains drafts, notes and original continuation as advisory material', async () => {
     const f = fixture(), original = readSolverProblem(f.seed.workspaceRoot, f.seed.activeProblemPath);
     const receiptBefore = fs.readFileSync(f.seed.activeProblemPath), taskBefore = readMathText(f.seed.taskFile);

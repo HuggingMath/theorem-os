@@ -19,7 +19,7 @@ export const release: Record<string, string> = {
   '留空使用管理员 Key。': 'Leave blank to use the admin key.',
   '关闭标签页后清除，限当前服务商使用。': 'Cleared when this tab closes. Used for this provider only.',
   '模型费用由所选服务商收取。': 'Model calls are billed by your provider.',
-  '需要任务协作及至少 2 个 Agent。等待批准也计入预算。': 'Requires task collaboration and at least 2 Agents. Waiting for approval counts toward the budget.',
+  '需要任务协作及至少 2 个 Agent。等待确认不计入证明预算。': 'Requires task collaboration and at least 2 Agents. Waiting for approval pauses the proof budget.',
   '最多 {0} 分钟，全部 Agent 合计 {1} 轮。': 'Up to {0} min and {1} turns across all Agents.',
   '根据最近 {0} 次 {1} 运行，预计约 {2} Token。': 'Estimated at about {2} tokens from your last {0} runs with {1}.',
   '按已报告用量在 {0} Token 停止，在途请求可能超额；不代表金额封顶。': 'Stops at {0} reported tokens. Requests in progress may exceed the cap; it is not a spending limit.',

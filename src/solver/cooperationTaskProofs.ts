@@ -544,6 +544,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       let finish!: () => void;
       const checking = new Promise<void>(resolve => { finish = resolve; });
       this.checkingTaskInputs.set(candidate.id, checking);
+      this.refreshPlanApproval();
       const reserveRepair = () => {
         const node = this.node(task.id);
         return node?.assignment === assignment && digest(node.task) === candidate.taskDigest && (incompleteDelivery || node.attempts === 1)
@@ -563,7 +564,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         }
         throw error;
       } finally {
-        this.checkingTaskInputs.delete(candidate.id); finish();
+        this.checkingTaskInputs.delete(candidate.id); finish(); this.wake();
       }
     }
     const tasks = taskGraph.map(node => ({ ...node }));
@@ -910,10 +911,13 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
           });
         })();
         this.proofDeliveryChecks.add(pending);
+        this.refreshPlanApproval();
         void pending.then(() => {
           this.proofDeliveryChecks.delete(pending!); this.proofDeliveryAnnotations.delete(publication);
+          this.wake();
         }, () => {
           this.proofDeliveryChecks.delete(pending!); this.proofDeliveryAnnotations.delete(publication);
+          this.wake();
         });
         return pending;
       };

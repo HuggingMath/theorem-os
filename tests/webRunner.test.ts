@@ -7,6 +7,62 @@ import { DockerWebRunner, parseWorkerMessage, webPrivateImagePaths } from '../ap
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 
 describe('Docker web runner', () => {
+  it.each(['approve', 'cancel'] as const)('keeps the same container beyond the outer deadline while awaiting a person, then handles %s', async decision => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-approval-'));
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path');
+const args = process.argv.slice(2), root = __dirname;
+fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+async function main() {
+  if (args[0] === 'create') fs.writeFileSync(path.join(root, 'container'), 'waiting');
+  else if (args[0] === 'start') {
+    for await (const _chunk of process.stdin) {}
+    process.stdout.write(JSON.stringify({ type: 'progress', event: 'plan_approval_wait_started', message: 'Waiting' }) + '\\n');
+    while (!fs.existsSync(path.join(root, 'approve'))) await new Promise(resolve => setTimeout(resolve, 10));
+    process.stdout.write(JSON.stringify({ type: 'progress', event: 'plan_approval_wait_ended', message: 'Approved' }) + '\\n');
+    process.stdout.write(JSON.stringify({ type: 'result', result: { status: 'incomplete', proof: '', report: {} } }) + '\\n');
+  } else if (args[0] === 'rm') fs.rmSync(path.join(root, 'container'), { force: true });
+  else process.exit(1);
+}
+main().catch(() => process.exit(1));
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let complete: Promise<void> | undefined;
+    const controller = new AbortController();
+    try {
+      const config = readWebConfig({}), request: WorkerInput = {
+        id: 'approval-wait-fixture', provider: config.providers[0], input: { ...webDefaults,
+          providerId: config.providers[0].id, apiKey: 'sk-offline-fixture', source: 'theorem goal : True := by sorry',
+          task: 'Offline human review fixture', maxRunSeconds: 1, workers: 2, planApproval: true },
+      };
+      let waiting!: () => void;
+      const ready = new Promise<void>(resolve => { waiting = resolve; }), messages: WorkerMessage[] = [];
+      complete = new DockerWebRunner(config).run(request, message => {
+        messages.push(message);
+        if (message.type === 'progress' && message.event === 'plan_approval_wait_started') waiting();
+      }, controller.signal);
+      await Promise.race([ready, complete.then(() => { throw new Error('fixture_stopped_before_wait'); })]);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(fs.existsSync(path.join(root, 'container'))).toBe(true);
+      expect(fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8')).not.toContain('"rm"');
+      if (decision === 'approve') fs.writeFileSync(path.join(root, 'approve'), 'approved');
+      else controller.abort(new Error('owner_cancelled'));
+      await complete;
+      const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(calls.filter(args => args[0] === 'create')).toHaveLength(1);
+      expect(calls.filter(args => args[0] === 'start')).toHaveLength(1);
+      expect(fs.existsSync(path.join(root, 'container'))).toBe(false);
+      expect(messages.map(message => message.type === 'progress' ? message.event : message.type)).toEqual(decision === 'approve'
+        ? ['plan_approval_wait_started', 'plan_approval_wait_ended', 'result'] : ['plan_approval_wait_started']);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      fs.writeFileSync(path.join(root, 'approve'), 'cleanup');
+      controller.abort(); await complete?.catch(() => {});
+      vi.useRealTimers(); vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('routes the default sub2api request through private stdin and removes its container', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-runner-'));
     fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}

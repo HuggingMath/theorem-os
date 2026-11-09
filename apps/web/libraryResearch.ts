@@ -99,7 +99,7 @@ export async function runWebLibraryResearch(options: {
     for (const item of input.manifest.attachments) materials.set(item.sha256, {
       text: input.contents.get(item.sha256)!, kind: item.kind, provenance: item.provenance });
   }
-  let turns = 0, solveWallMs = 0;
+  let turns = 0, solveWallMs = 0, solveExecutionMs = 0;
   const records: (SolverRunState | SolverWorkerState)[] = [];
   const rounds: { round: number; runId?: string; problemReceiptDigest: string; previousSolverRunId?: string;
     status: unknown; turns: number; solveWallMs: number; requestedNames?: string[]; installedModules: string[];
@@ -115,14 +115,16 @@ export async function runWebLibraryResearch(options: {
     const usedTurns = typeof raw.turns === 'number' && Number.isSafeInteger(raw.turns) && raw.turns >= 0 ? raw.turns : state?.turns ?? 0;
     const usedMs = typeof raw.solveWallMs === 'number' && Number.isSafeInteger(raw.solveWallMs) && raw.solveWallMs >= 0
       ? raw.solveWallMs : state?.solveStartedAt && state.solveFinishedAt ? state.solveFinishedAt - state.solveStartedAt : 0;
-    turns += usedTurns; solveWallMs += usedMs;
+    const executedMs = typeof raw.solveExecutionMs === 'number' && Number.isSafeInteger(raw.solveExecutionMs) && raw.solveExecutionMs >= 0
+      ? raw.solveExecutionMs : Math.max(0, usedMs - (state?.solveWaitingMs ?? 0));
+    turns += usedTurns; solveWallMs += usedMs; solveExecutionMs += executedMs;
     if (state) records.push(...(state.workers?.length ? state.workers : [state]));
     rounds.push({ round: current.round, runId: state?.runId, problemReceiptDigest: problem.receiptDigest,
       previousSolverRunId: current.previousSolverRunId, status: raw.status, turns: usedTurns, solveWallMs: usedMs,
       requestedNames: current.requestedNames, installedModules: Object.keys(problem.frozenFiles ?? {}).sort() });
     const tokenBudget = buildTokenBudget(allowance.maxTotalTokens, records);
     const finish = (result = raw) => {
-      const report: Record<string, unknown> = { ...result, turns, solveWallMs,
+      const report: Record<string, unknown> = { ...result, turns, solveWallMs, solveExecutionMs, solveWaitingMs: solveWallMs - solveExecutionMs,
         ...(state ? { usage: aggregateUsage(records), tokenBudget } : {}),
         ...(options.libraryCatalog ? { libraryUsage: summarizeWebLibraryUsage(problem, options.libraryCatalog, result, current.round) } : {}),
         libraryResearch: { schema: 'theorem-os.library-research.v1', rounds } };
@@ -139,7 +141,7 @@ export async function runWebLibraryResearch(options: {
     const next = requestedLibraryPack(problem, value.request, options.libraryCatalog, value.worktree);
     Object.assign(rounds.at(-1)!, { libraryRequest: next.request, librarySelection: next.selection });
     const limits: Limits = { maxTurns: allowance.maxTurns ? Math.max(0, allowance.maxTurns - turns) : 0,
-      maxRunSeconds: allowance.maxRunSeconds ? Math.max(0, Math.floor(allowance.maxRunSeconds - solveWallMs / 1000)) : 0,
+      maxRunSeconds: allowance.maxRunSeconds ? Math.max(0, Math.floor(allowance.maxRunSeconds - solveExecutionMs / 1000)) : 0,
       maxTotalTokens: allowance.maxTotalTokens ? Math.max(0, allowance.maxTotalTokens - (tokenBudget.reportedTotalTokens ?? 0)) : 0 };
     // Zero means unlimited to runSolver. Never pass an exhausted finite allowance as zero.
     const reason = allowance.maxTurns && !limits.maxTurns ? 'math_turn_limit_reached' :
@@ -156,7 +158,7 @@ export async function runWebLibraryResearch(options: {
         readMathText(seed.taskFile) !== readMathText(options.seed.taskFile)) throw new Error('math_library_request_original_changed');
     const continuationFile = writeResearchContinuation(directory, seed, materials);
     writeMathJsonDurable(path.join(options.directory, 'library-research.json'), { schema: 'theorem-os.library-research.v1',
-      rounds, turns, solveWallMs, tokenBudget, pending: { round, previousSolverRunId: state.runId,
+      rounds, turns, solveWallMs, solveExecutionMs, tokenBudget, pending: { round, previousSolverRunId: state.runId,
         problemReceiptDigest: continued.receiptDigest, selection: next.selection, request: next.request } });
     current = { round, seed, output: path.join(directory, 'result.json'), limits, continuationFile,
       libraryCatalog: options.libraryCatalog, previousSolverRunId: state.runId, requestedNames: next.request.names };

@@ -27,18 +27,18 @@ function expectedRejection(error: unknown, expected: ReadonlySet<string>): Error
 
 /** Integration of checked task proofs into the canonical commit and their rechecks. */
 export abstract class CooperationIntegration extends CooperationTaskProofs {
-  private integrationQueueDepth = 0;
   protected queueIntegration<T>(operation: () => Promise<T>, worker?: ResearchWorker, task?: CooperativeTask): Promise<T> {
     const queuedAt = Date.now();
     const waiting = this.integrationQueueDepth++ > 0 && worker && task;
     if (waiting) this.recordDispatchWait(worker, { stage: 'integration-queue', candidateCount: 1, omittedCandidates: 0,
       candidates: [{ taskId: task.id, taskDigest: digest(task), reason: 'integration-queue' }] });
+    this.refreshPlanApproval();
     const pending = this.integrationQueue.then(async () => {
       if (waiting) { this.clearDispatchWait(worker, 'selected'); this.changed(); }
       this.input.signal.throwIfAborted();
       this.input.emit('integration_queue_started', { waitedMs: Date.now() - queuedAt });
       return await operation();
-    }).finally(() => { this.integrationQueueDepth--; });
+    }).finally(() => { this.integrationQueueDepth--; this.wake(); });
     this.integrationQueue = pending.then(() => {}, () => {});
     return pending;
   }
@@ -93,6 +93,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
     if (this.planSynchronization) return this.planSynchronization;
     const pending = this.synchronizePlan();
     this.planSynchronization = pending; this.planSynchronizations.add(pending);
+    this.refreshPlanApproval();
     void pending.catch(error => {
       if (!this.input.signal.aborted) { this.failure = error instanceof Error ? error : new Error(String(error)); this.changed(); }
     }).finally(() => {

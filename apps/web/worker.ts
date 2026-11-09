@@ -118,7 +118,8 @@ export function readWebResultProof(options: {
 export function webIncompleteReason(raw: Record<string, unknown>, input: Pick<WorkerInput['input'], 'maxTurns' | 'maxRunSeconds'>) {
   if (raw.status !== 'incomplete' || raw.reason) return;
   if (typeof raw.turns === 'number' && raw.turns >= input.maxTurns) return 'math_turn_limit_reached';
-  if (typeof raw.solveWallMs === 'number' && raw.solveWallMs >= input.maxRunSeconds * 1_000) return 'math_run_stopped';
+  const elapsed = raw.solveExecutionMs ?? raw.solveWallMs;
+  if (typeof elapsed === 'number' && elapsed >= input.maxRunSeconds * 1_000) return 'math_run_stopped';
   return 'math_research_routes_exhausted';
 }
 
@@ -310,7 +311,7 @@ async function main() {
     clearInterval(observationTimer);
     const raw = completed.raw;
     const report = Object.fromEntries(['schema', 'runId', 'problemId', 'status', 'solution_commit',
-      'solver_ready_receipt_valid', 'completion_signal_valid', 'evaluator', 'turns', 'solveWallMs', 'usage',
+      'solver_ready_receipt_valid', 'completion_signal_valid', 'evaluator', 'turns', 'solveWallMs', 'solveExecutionMs', 'solveWaitingMs', 'usage',
       'winningWorker', 'workers', 'reason', 'tokenBudget', 'libraryResearch', 'libraryUsage'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
     const failure = classifyWebResult(raw);
     if (failure) report.failure = failure;

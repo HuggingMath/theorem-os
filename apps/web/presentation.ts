@@ -208,9 +208,9 @@ export function failureGuide(run: WebRun): FailureGuide | undefined {
   if (kind) {
     if (kind === 'time_limit' && preparationStopped(run)) return preparationGuide(run);
     const guide = kind === 'time_limit' ? timeGuide(run) : guides[kind], detail = run.failure?.reason && reasonDetails[run.failure.reason];
-    // The budget ran out while the plan still waited for its owner: say so rather than blame the Agents.
+    // A stop before approval can include planning/revision work, or a historical run whose wait used its old budget.
     const unapproved = kind === 'time_limit' && run.observation?.inspection.planApproval?.status === 'pending'
-      && t('研究计划直到解题时间用完都没有批准，Agent 还没有开始工作。可以重新运行并在计划出来后及时批准，或者不勾选「先审计划」。');
+      && t('这次运行在计划批准前结束，已保存的计划与研究材料仍可查看。');
     const text = unapproved || detail;
     return { ...guide, kind, ...(text ? { detail: text } : {}) };
   }

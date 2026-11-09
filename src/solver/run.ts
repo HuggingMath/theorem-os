@@ -32,6 +32,7 @@ import { buildTokenBudget } from './usageBudget';
 import { selectedDeepSeekProfile } from '../runtime/deepseek';
 import { selectedWestlakeProfile } from '../runtime/westlake';
 import { selectedSub2apiProfile } from '../runtime/sub2api';
+import { ExecutionDeadline } from '../runtime/executionDeadline';
 import { copyKnowledgeSnapshot, readKnowledgeCatalog } from './theoremKnowledgeStore';
 import { readInstalledLibrarySnapshot } from './installedLibraryContext';
 import { indexKnowledgeContextSnapshot } from './knowledgeContext';
@@ -133,6 +134,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   const preparationStarted = Date.now();
   let preparing = true;
   let deadline = Infinity;
+  let executionClock: ExecutionDeadline | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined = Number.isFinite(preparationMs) ? setTimeout(abort, preparationMs) : undefined;
   let ownedState: SolverRunState | undefined;
   let proofEnvironment: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
@@ -447,18 +449,31 @@ export async function runSolver(args: string[], root: string, customModules?: So
       preparing = false;
       state.solveStartedAt = Date.now();
       state.solveFinishedAt = undefined;
+      state.solveWaitingMs = 0;
       deadline = state.solveStartedAt + maxRunMs;
-      timer = Number.isFinite(maxRunMs) ? setTimeout(abort, maxRunMs) : undefined;
+      timer = undefined;
+      executionClock = new ExecutionDeadline(maxRunMs, abort);
+      const executionBudget = {
+        remainingMs: () => executionClock!.remainingMs(),
+        setWaiting: (waiting: boolean) => {
+          const previous = executionClock!.waiting;
+          executionClock!.setWaiting(waiting);
+          state.solveWaitingMs = executionClock!.waitingMs();
+          if (previous !== executionClock!.waiting) emit(executionClock!.waiting ? 'plan_approval_wait_started' : 'plan_approval_wait_ended');
+        },
+      };
       emit('solve_started', { budgetMs: maxRunMs, maxTurnMs });
       const winner = await withVerificationCheckpoints({ environmentDigest: state.environmentDigest,
         problemReceiptDigest: state.problem.receiptDigest, checkpoints: state.verificationCheckpoints ??= [], save, emit },
         () => runResearchWorkers({ state, workers, access: workerAccess, modules, root, buildFile, taskText: task,
         executable: values.codex || process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex',
         profile,
-        signal, deadline, maxTurns, maxTurnMs, maxTotalTokens, proofTimeoutMs,
+        signal, deadline, executionBudget, maxTurns, maxTurnMs, maxTotalTokens, proofTimeoutMs,
         freshContinuationChecks, save, emit }));
       clearTimeout(timer);
       timer = undefined;
+      executionClock.stop();
+      state.solveWaitingMs = executionClock.waitingMs();
       state.solveFinishedAt = Date.now();
       let evaluation: Record<string, unknown> = { status: 'skipped', reason: 'proof_incomplete' };
       if (winner?.check.passed) {
@@ -478,7 +493,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         evaluator: evaluation, ...runSummary(state),
         ...(status === 'runtime_error' && typeof evaluation.reason === 'string' ? { reason: evaluation.reason } : {}),
         ...(status === 'limit_reached' && state.tokenBudget?.reason ? { reason: state.tokenBudget.reason } : {}),
-        solveWallMs: state.solveFinishedAt - state.solveStartedAt, stateFile, winningWorker: state.winningWorker };
+        solveWallMs: state.solveFinishedAt - state.solveStartedAt, solveExecutionMs: executionClock.executionMs(),
+        solveWaitingMs: state.solveWaitingMs, stateFile, winningWorker: state.winningWorker };
       writeMathJsonDurable(output, result);
       emit('finished', { status, output });
       return status === 'evaluated_passed' ? 0 : status === 'evaluated_failed' ? 2 : status === 'runtime_error' ? 1 : 4;
@@ -495,6 +511,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
       lease.assertOwned();
       const checkpoint = error instanceof VerificationCheckpointError;
       const libraryRequest = error instanceof LibraryInstallationRequested ? error : undefined;
+      executionClock?.stop();
       const status = controller.signal.aborted || checkpoint ? 'limit_reached' : libraryRequest ? 'library_requested' : 'runtime_error';
       // Initialization owns durable progress before its final in-memory handoff.
       if (continuationSeeding) ownedState = readSolverRunState(stateFile);
@@ -504,6 +521,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (!(preparing && values['continuation-source-run'] && ownedState.phase === 'prepared'))
           ownedState.phase = 'finished';
         if (ownedState.solveStartedAt && !ownedState.solveFinishedAt) ownedState.solveFinishedAt = Date.now();
+        if (executionClock) ownedState.solveWaitingMs = executionClock.waitingMs();
         ownedState.error = controller.signal.aborted || checkpoint || libraryRequest ? undefined : error instanceof Error ? error.message : 'math_runtime_error';
         writeSolverRunState(stateFile, ownedState);
       }
@@ -512,6 +530,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         runId: ownedState?.runId, problemId: ownedState?.problem.contract.problemId, ...runSummary(ownedState),
         ...(ownedState?.solveStartedAt && ownedState.solveFinishedAt
           ? { solveWallMs: ownedState.solveFinishedAt - ownedState.solveStartedAt } : {}),
+        ...(executionClock ? { solveExecutionMs: executionClock.executionMs(), solveWaitingMs: executionClock.waitingMs() } : {}),
         ...(libraryRequest ? { libraryRequest: { request: libraryRequest.request, worktree: libraryRequest.worktree } } : {}),
         evaluator: { status: 'skipped' }, stateFile });
       publishedExit = controller.signal.aborted || checkpoint ? 4 : 1;
@@ -527,6 +546,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     emit('rejected', { reason: error instanceof Error ? error.message : 'math_runtime_error' });
     return controller.signal.aborted ? 4 : 1;
   } finally {
+    executionClock?.stop();
     clearTimeout(timer);
     process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort);
   }

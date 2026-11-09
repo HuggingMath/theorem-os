@@ -13,6 +13,7 @@ import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
 import { validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
+import { ExecutionDeadline } from '../../src/runtime/executionDeadline';
 import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizationInput,
   type WorkerFormalizationMessage } from './formalizationTypes';
 
@@ -255,11 +256,11 @@ export class DockerWebRunner implements WebRunner {
         });
       })();
       const abort = () => { void stop(); };
-      const timer = setTimeout(abort, (input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000);
+      const watchdog = new ExecutionDeadline((input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000, abort);
       signal.addEventListener('abort', abort, { once: true });
       const finish = async (error?: Error) => {
         if (finished) return;
-        finished = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+        finished = true; watchdog.stop(); signal.removeEventListener('abort', abort);
         if (error || signal.aborted) await stop();
         await stopping;
         if (error) reject(error); else resolve();
@@ -274,6 +275,10 @@ export class DockerWebRunner implements WebRunner {
           const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
           const message = parseWorkerMessage(line);
           if (message) {
+            if (input.input.planApproval && message.type === 'progress') {
+              if (message.event === 'plan_approval_wait_started') watchdog.setWaiting(true);
+              else if (message.event === 'plan_approval_wait_ended') watchdog.setWaiting(false);
+            }
             if (message.type === 'result') receivedResult = true;
             onMessage(message);
           }

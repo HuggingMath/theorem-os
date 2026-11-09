@@ -2,6 +2,7 @@ import type { WebAgentActionBody, WebAgentLeanCheck, WebEnvironment, WebFormaliz
 
 export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 2_000_000,
   maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 1, recordsPerOwner: 20 });
+/** Execution time includes planning/revisions; idle time waiting for human plan approval is excluded. */
 export type WebResearchBudget = { maxRunSeconds: number; maxTurns: number; maxTotalTokens: number };
 export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 600, maxTotalTokens: 400_000,
   research: Object.freeze({ maxRunSeconds: 300, maxTurns: 5, maxTotalTokens: 200_000 }) });

@@ -113,6 +113,7 @@ export async function runResearchWorkers(input: {
   state: SolverRunState; workers: readonly ResearchWorker[]; access: ReadonlyMap<string, WorkerAccess>;
   modules: SolverModules; root: string; buildFile: string; taskText: string; executable: string; profile: string;
   signal: AbortSignal; deadline: number; maxTurns: number; maxTurnMs: number; maxTotalTokens: number; proofTimeoutMs?: number;
+  executionBudget?: { remainingMs(): number; setWaiting(waiting: boolean): void };
   freshContinuationChecks?: readonly TaskProof[]; goalProgressReviewMs?: number;
   save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
 }): Promise<{ worktree: string; check: ProofCheck } | undefined> {
@@ -143,7 +144,8 @@ export async function runResearchWorkers(input: {
   const abort = () => controller.abort();
   input.signal.addEventListener('abort', abort, { once: true });
   if (input.signal.aborted) abort();
-  const budget = () => ({ maxTurns: input.maxTurns, remainingMs: Math.max(0, input.deadline - Date.now()), aborted: signal.aborted });
+  const budget = () => ({ maxTurns: input.maxTurns,
+    remainingMs: input.executionBudget?.remainingMs() ?? Math.max(0, input.deadline - Date.now()), aborted: signal.aborted });
   let winner: { worktree: string; check: ProofCheck } | undefined;
   let verificationQueue = Promise.resolve();
   const exclusiveCheck = async <T>(check: () => Promise<T>): Promise<T> => {
@@ -158,6 +160,7 @@ export async function runResearchWorkers(input: {
       // A finite solving deadline still permits frontier recovery while budget remains.
       // The caller's abort timer and dispatch admission enforce the time limit.
       continuousResearch: input.maxTurns === Infinity,
+      onPlanApprovalWaiting: waiting => input.executionBudget?.setWaiting(waiting),
       modelDispatchAllowed: dispatchAllowed }) : undefined;
   const updateUsage = () => {
     if (parallel) state.usage = aggregateUsage(state.workers!);

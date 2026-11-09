@@ -125,11 +125,13 @@ export abstract class CooperationInputs extends CooperationPlanning {
       if (active?.action.kind !== 'task') continue;
       const check = this.readWorkerDeliveries(worker, active.action, cursors);
       this.deliveryChecks.set(worker.id, check);
+      this.refreshPlanApproval();
       void check.catch(error => {
         this.input.emit('cooperation_poll_failed', { reason: error instanceof Error ? error.message : 'unknown' });
         if (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
       }).finally(() => {
         if (this.deliveryChecks.get(worker.id) === check) this.deliveryChecks.delete(worker.id);
+        this.wake();
       }).catch(() => {});
     }
     return new Map(this.deliveryChecks);

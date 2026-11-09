@@ -63,9 +63,9 @@ describe('completion mail content', () => {
     expect(text(preparation)).toContain('解题没有开始');
     expect(text(preparation)).not.toContain('提高解题预算');
     expect(completionMail(preparation, 'https://app.theoremos.top').subject).toContain('证明环境准备超时');
-    // The owner was mailed when the plan was ready; the stop mail says the wait is what used the time.
+    // A stopped pending plan remains inspectable; planning/revisions and historical runs can end before approval.
     const unapproved = ended({ status: 'limit_reached' }, { observation: { inspection: { planApproval: { status: 'pending' } } } as unknown as WebRun['observation'] });
-    expect(text(unapproved)).toContain('研究计划直到解题时间用完都没有批准');
+    expect(text(unapproved)).toContain('这次运行在计划批准前结束');
     expect(text(unapproved)).not.toMatch(/secret_source|Prove it|sk-/u);
   });
 
@@ -97,7 +97,8 @@ describe('completion mail content', () => {
     const mail = planApprovalMail(run({ status: 'running', phase: 'plan_approval_requested', finishedAt: undefined }), 'https://app.theoremos.top');
     expect(mail.subject).toBe('TheoremOS · 研究计划等你批准：Infinitely many primes');
     expect(mail.text).toContain('https://app.theoremos.top/?run=0f0e-run');
-    expect(mail.text).toContain('计入解题预算');
+    expect(mail.text).toContain('等待确认不计入证明预算');
+    expect(mail.text).toContain('continue this run');
     expect(mail.text).toContain('Email me when research ends');
     expect(mail.text).not.toMatch(/secret_source|Prove it|sk-/u);
   });

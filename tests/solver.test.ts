@@ -39,6 +39,7 @@ import { readKnowledgeCatalog, writePackedKnowledge } from '../src/solver/theore
 import { buildRunInspection } from '../src/solver/inspection';
 import { createTaskConnectionCheck } from '../src/solver/taskConnections';
 import { deferred } from './helpers/async';
+import { planApprovalLog } from '../src/solver/planApproval';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn(), officialGate: vi.fn(), build: vi.fn(), delay: vi.fn(),
   prepare: vi.fn(), freeze: vi.fn(), readiness: vi.fn(), connectivity: vi.fn(), packages: undefined as string | undefined }));
@@ -6214,6 +6215,68 @@ describe('isolated solver and host acceptance', () => {
     });
     expect(await runSolver([...args, '--max-run-seconds', '1', '--evaluator-timeout-seconds', '10'], directory)).toBe(0);
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'evaluated_passed', solveWallMs: 900 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps a pending human plan alive beyond its execution allowance and accepts the original run after approval', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(CooperativeResearch.prototype, 'start').mockImplementation(() => {});
+    let cooperative: CooperativeResearch | undefined;
+    const activate = CooperativeResearch.prototype.activate;
+    vi.spyOn(CooperativeResearch.prototype, 'activate').mockImplementation(function (this: CooperativeResearch, ...inputs) {
+      cooperative = this; return activate.apply(this, inputs);
+    });
+    const waiting = deferred();
+    vi.mocked(console.log).mockImplementation(line => {
+      if (typeof line === 'string' && JSON.parse(line).event === 'plan_approval_wait_started') waiting.resolve();
+    });
+    configureCooperation(async (action, options) => {
+      if (action.kind === 'lead') await vi.advanceTimersByTimeAsync(200);
+      finishAssignment(action, options); return 'completed';
+    });
+    const completion = runSolver([...args, '--workers', '4', '--max-turns', '10', '--max-run-seconds', '1', '--plan-approval'], directory);
+    await Promise.race([waiting.promise, completion.then(code => { throw new Error(`fixture_finished_before_approval:${code}`); })]);
+    const stateFile = `${output}.runtime/state.json`, pending = readSolverRunState(stateFile);
+    expect(pending.cooperation!.planApproval!.approvedAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fs.existsSync(output)).toBe(false);
+    expect(host.officialGate).not.toHaveBeenCalled();
+    fs.appendFileSync(planApprovalLog(stateFile), JSON.stringify({ id: 'owner', planVersion: pending.cooperation!.planVersion }) + '\n');
+    await cooperative!.pulse();
+    expect(await completion).toBe(0);
+    const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(result).toMatchObject({ runId: pending.runId, status: 'evaluated_passed', solveExecutionMs: 200,
+      solveWaitingMs: 600_000, solveWallMs: 600_200 });
+    const accepted = readSolverRunState(stateFile);
+    expect(accepted.problem.receiptDigest).toBe(pending.problem.receiptDigest);
+    expect(accepted.cooperation!.planApproval).toMatchObject({ approvedId: 'owner' });
+    expect(accepted.solveWaitingMs).toBe(600_000);
+    expect(host.officialGate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['SIGINT', 'SIGTERM'] as const)('still stops a human approval wait on %s and preserves its checkpoint', async interrupt => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(CooperativeResearch.prototype, 'start').mockImplementation(() => {});
+    const waiting = deferred();
+    vi.mocked(console.log).mockImplementation(line => {
+      if (typeof line === 'string' && JSON.parse(line).event === 'plan_approval_wait_started') waiting.resolve();
+    });
+    configureCooperation(async (action, options) => {
+      if (action.kind === 'lead') await vi.advanceTimersByTimeAsync(200);
+      finishAssignment(action, options); return 'completed';
+    });
+    const completion = runSolver([...args, '--workers', '4', '--max-turns', '10', '--max-run-seconds', '1', '--plan-approval'], directory);
+    await Promise.race([waiting.promise, completion.then(code => { throw new Error(`fixture_finished_before_approval:${code}`); })]);
+    const stateFile = `${output}.runtime/state.json`, pending = readSolverRunState(stateFile);
+    await vi.advanceTimersByTimeAsync(600_000);
+    process.emit(interrupt);
+    expect(await completion).toBe(4);
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ runId: pending.runId,
+      status: 'limit_reached', reason: 'math_run_stopped', solveExecutionMs: 200, solveWaitingMs: 600_000 });
+    expect(readSolverRunState(stateFile)).toMatchObject({ runId: pending.runId, phase: 'finished',
+      cooperation: { planApproval: { requestedVersion: pending.cooperation!.planVersion } } });
+    expect(host.officialGate).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 
