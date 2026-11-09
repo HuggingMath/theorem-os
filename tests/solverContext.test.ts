@@ -152,6 +152,23 @@ it.each(['lemma', 'goal'] as const)('keeps Lead planning requests out of a dispa
   expect(lead.instructions).not.toContain('do not start another planning or approval cycle');
 });
 
+it.each(['lemma', 'goal'] as const)('delivers a completed %s without requiring a separate advisory observation', kind => {
+  const context = gapContext(kind);
+  for (const continuation of [false, true]) {
+    const dispatched = finalizeResearchDispatch(context, { continuation });
+    expect(dispatched.instructions).toContain('Once the assigned proof is complete and saved, use the ready delivery protocol above and return');
+    expect(dispatched.instructions).toContain('no separate research observation is required');
+    expect(dispatched.instructions).not.toContain('Publish a single research observation promptly');
+    expect(dispatched.instructions).toContain('only for a substantive intermediate finding or gap');
+    expect(dispatched.instructions).toContain('theorem-os research-observe --worktree');
+    expect(dispatched.instructions).toContain('--finding FINDING_FILE');
+    expect(dispatched.instructions).toContain('Save the finding object shown above in the JSON file FINDING_FILE');
+    expect(dispatched.instructions).toContain('When supporting Lean code is saved but the assigned declaration is still unproved');
+    expect(dispatched.instructions).toContain('append {"kind":"ready","summary":"saved proof"}, stop editing and return');
+    expect(dispatched.instructions).toContain('after turn settlement and confirmed shutdown');
+  }
+});
+
 it('retains the full original-problem responsibility without a cooperative assignment', () => {
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
     baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
@@ -165,11 +182,13 @@ it('retains the full original-problem responsibility without a cooperative assig
 
 it('asks researchers to save scoped negative evidence and publish a schema-valid gap decision promptly', () => {
   const context = gapContext('research');
+  expect(context.instructions).toContain('Publish a single research observation promptly with theorem-os research-observe');
+  expect(context.instructions).not.toContain('no separate research observation is required');
   expect(context.instructions).toContain('Save a scoped negative library result or a classification gap in worktree-root RESEARCH.md as soon as it is established');
   expect(context.instructions).toContain('pinned library/environment version, searched paths, queries or method, exact result');
   expect(context.instructions).toContain('A scoped search failure is not proof of global absence');
   expect(context.instructions).toContain('needsDecision:true, conclusion:"inconclusive"');
-  const encoded = context.instructions.split('Publish a finding during proof work with ')[1].split('. Inline the full finding;')[0];
+  const encoded = context.instructions.split('To share an advisory finding or an unresolved proof gap, append ')[1].split('. Inline the full finding;')[0];
   const publication = JSON.parse(encoded);
   expect(publication.kind).toBe('research');
   const finding = parseMathResponse(JSON.stringify(publication.finding), 'math-result', { taskId: 'frontier' }, 'summary');
