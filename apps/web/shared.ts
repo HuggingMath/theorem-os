@@ -131,6 +131,8 @@ export type WebRun = {
   continueFrom?: WebContinuation;
   formalizationId?: string;
   formalization?: { id: string; evidenceSha256: string; original: string; confirmedAt: string; confirmation?: 'automatic' | 'manual' };
+  /** Host-declared solver attempt; observation sequences continue across library restarts. */
+  solverAttempt?: { solverRunId: string; round: number; sequence: number };
   observation?: WebObservation;
   archives?: WebArchive[];
   knowledgeCatalogDigest?: string;
@@ -211,7 +213,8 @@ export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvide
  * One thing an Agent did inside its session, as Codex reported it: a command with the end of its output, a file
  * change with its diff, its reasoning, a message or plan, a search or a tool call. The worker writes these after
  * removing credentials and the host's own paths; `withheld` means a command touched host files, so only the command
- * itself is kept. Lean checks and Mathlib searches keep what they reported (`lean`, `found`) in place of their JSON.
+ * itself is kept. Lean checks, Mathlib searches and library tools keep bounded reports (`lean`, `found`, `library`)
+ * in place of their JSON; a tool report never means the proof applied a declaration or passed acceptance.
  * `sequence` and `at` are the server's, so actions order with the run's events.
  */
 export const webAgentActionKinds = ['command', 'edit', 'reasoning', 'message', 'plan', 'search', 'tool', 'compaction'] as const;
@@ -226,11 +229,19 @@ export type WebAgentLeanCheck = {
 };
 /** What `math search-lean` found, per query: how many matches and the first declaration names. */
 export type WebAgentLeanSearch = { query: string; total: number; names: string[] }[];
+/** A library tool's own report. Installation and queued requests say nothing about proof applicability or acceptance. */
+export type WebAgentLibraryDeclaration = { name: string; installation: 'installed-frozen' | 'not-installed' };
+export type WebAgentLibraryAction = { library: { id: string; revision: string; catalogDigest: string } } & (
+  | { operation: 'search'; query: string; goal?: string; hits: WebAgentLibraryDeclaration[]; namedReferences: WebAgentLibraryDeclaration[];
+      omittedHits?: number; omittedReferences?: number }
+  | { operation: 'get'; declaration: WebAgentLibraryDeclaration; source: { offset: number; nextOffset: number | null; complete: boolean } }
+  | { operation: 'request'; status: 'queued' | 'already-installed'; declarations: WebAgentLibraryDeclaration[]; omittedDeclarations?: number }
+);
 export type WebAgentActionBody = {
   workerId: string; itemId: string; phase: 'started' | 'completed'; kind: WebAgentActionKind;
   status: 'running' | 'done' | 'failed' | 'declined';
   command?: string; intents?: WebAgentActionIntent[]; output?: string; outputClipped?: boolean; withheld?: boolean;
-  exitCode?: number; durationMs?: number; lean?: WebAgentLeanCheck; found?: WebAgentLeanSearch;
+  exitCode?: number; durationMs?: number; lean?: WebAgentLeanCheck; found?: WebAgentLeanSearch; library?: WebAgentLibraryAction;
   changes?: WebAgentFileChange[]; omittedChanges?: number;
   text?: string; textClipped?: boolean;
   query?: string; url?: string; tool?: string; arguments?: string;
@@ -244,6 +255,7 @@ export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
   | { type: 'action'; action: WebAgentActionBody }
   | { type: 'artifact'; artifact: WebArtifact }
+  | { type: 'library_restart'; previousSolverRunId: string; solverRunId: string; round: number }
   | { type: 'observation'; observation: WebObservation }
   | { type: 'catalog'; catalog: unknown }
   | { type: 'result'; result: WebResult }

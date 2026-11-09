@@ -24,6 +24,8 @@ import { webArtifactMaxBytes, webPreparationSeconds, type WebAgentActionBody, ty
 import { sanitizeAgentItem } from './agentActions';
 import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './workerBridge';
 import { webByokModuleIdentity } from './webModuleIdentity';
+import { webAgentLibraryAccess } from './frozenLibrary';
+import { runWebLibraryResearch } from './libraryResearch';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 type WebWorkerState = {
@@ -216,9 +218,9 @@ async function main() {
     JSON.stringify(message).replaceAll(JSON.stringify(key).slice(1, -1), '[REDACTED]') + '\n');
   const workspaceRoot = process.env.THEOREMOS_WORKER_ROOT || '/work';
   const directory = fs.mkdtempSync(path.join(workspaceRoot, 'run-'));
-  const output = path.join(directory, 'result.json');
+  let output = path.join(directory, 'result.json');
   writeWebActiveRun({ webRunId: request.id, directory, output }, path.join(workspaceRoot, 'active-run.json'));
-  const bridge = createWebWorkerBridge({ webRunId: request.id, directory, output, apiKey: key, onMessage: send });
+  let bridge = createWebWorkerBridge({ webRunId: request.id, directory, output, apiKey: key, onMessage: send });
   const profile = path.join(directory, 'codex');
   prepareWebProviderProfile(profile, request);
   fs.mkdirSync(process.env.HOME || '/work/home', { recursive: true, mode: 0o700 });
@@ -264,12 +266,7 @@ async function main() {
     }
     const continuationFile = request.continuation && writeWebContinuation(directory, request.continuation,
       { taskFile, workspace: receipt.workspaceRoot, receiptFile: receipt.activeProblemPath });
-    sampleArtifact = createWebArtifactSampler({ directory, output, workers: request.input.workers,
-      source: request.input.source, apiKey: key, onArtifact: artifact => {
-        latestArtifact = artifact;
-        send({ type: 'artifact', artifact });
-      } });
-    artifactTimer = setInterval(sampleArtifact, 1_500);
+    artifactTimer = setInterval(() => sampleArtifact?.(), 1_500);
     observationTimer = setInterval(() => { void capture(); }, 1_500);
     const buildState = path.dirname(path.dirname(path.dirname(buildIndex.buildManifestRef)));
     const tools = process.env.THEOREMOS_WORKER_AGENT_TOOLS || webAgentToolsDefault;
@@ -280,26 +277,41 @@ async function main() {
       // the Codex profile and the solver's state. An Agent's own worktree inside the run directory is shown relative.
       hidden: [root, buildState, buildFile, directory, path.join(workspaceRoot, 'active-run.json')] },
       { tools, hiddenRoots: [root, buildState] });
-    await runSolver(['--workspace', receipt.workspaceRoot, '--task-file', taskFile, '--output', output,
-      '--receipt-file', receipt.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
+    const completed = await runWebLibraryResearch({ directory, request, seed: receipt, output, continuationFile,
+      libraryCatalog: webAgentLibraryAccess(environment.id), run: async round => {
+      output = round.output;
+      writeWebActiveRun({ webRunId: request.id, directory, output }, path.join(workspaceRoot, 'active-run.json'));
+      bridge = createWebWorkerBridge({ webRunId: request.id, directory, output, apiKey: key, onMessage: send,
+        ...(round.previousSolverRunId ? { libraryRestart: { previousSolverRunId: round.previousSolverRunId, round: round.round } } : {}) });
+      sampleArtifact = createWebArtifactSampler({ directory, output, workers: request.input.workers,
+        source: request.input.source, apiKey: key, onArtifact: artifact => {
+          latestArtifact = artifact;
+          send({ type: 'artifact', artifact });
+        } });
+      if (round.round) send({ type: 'progress', event: 'library_continuation_started',
+        message: `已装入请求的库依赖，保留原题与研究材料，开始第 ${round.round + 1} 轮。` });
+      await runSolver(['--workspace', round.seed.workspaceRoot, '--task-file', round.seed.taskFile, '--output', output,
+      '--receipt-file', round.seed.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
       '--model', request.input.model, '--effort', request.input.effort, '--workers', String(request.input.workers),
-      '--coordination', request.input.coordination, '--max-turns', String(request.input.maxTurns),
+      '--coordination', request.input.coordination, '--max-turns', String(round.limits.maxTurns),
       ...(request.input.planApproval ? ['--plan-approval'] : []),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
-      ...(continuationFile ? ['--continuation-manifest', continuationFile] : []),
-      '--max-run-seconds', String(request.input.maxRunSeconds), '--max-turn-seconds', '120',
-      ...(request.input.maxTotalTokens ? ['--max-total-tokens', String(request.input.maxTotalTokens)] : []),
+      ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),
+      ...(round.libraryCatalog ? ['--library-catalog', round.libraryCatalog.file, '--library-catalog-sha256', round.libraryCatalog.digest] : []),
+      '--max-run-seconds', String(round.limits.maxRunSeconds), '--max-turn-seconds', '120',
+      ...(round.limits.maxTotalTokens ? ['--max-total-tokens', String(round.limits.maxTotalTokens)] : []),
       '--prepare-timeout-seconds', String(webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
       '--evaluator-timeout-seconds', '120'], root, modules);
-    sampleArtifact();
+      sampleArtifact();
+      await capturePending;
+      await capture(true);
+    } });
     clearInterval(artifactTimer);
     clearInterval(observationTimer);
-    await capturePending;
-    await capture(true);
-    const raw = readMathJson(output) as Record<string, unknown>;
+    const raw = completed.raw;
     const report = Object.fromEntries(['schema', 'runId', 'problemId', 'status', 'solution_commit',
       'solver_ready_receipt_valid', 'completion_signal_valid', 'evaluator', 'turns', 'solveWallMs', 'usage',
-      'winningWorker', 'workers', 'reason', 'tokenBudget'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
+      'winningWorker', 'workers', 'reason', 'tokenBudget', 'libraryResearch', 'libraryUsage'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
     const failure = classifyWebResult(raw);
     if (failure) report.failure = failure;
     const stopReason = webIncompleteReason(raw, request.input);
@@ -318,7 +330,7 @@ async function main() {
               : (field.endsWith('Preview') ? withoutCheckMarkers(result[field]) : result[field]).slice(0, 2_000)])
             .filter(([, value]) => value !== ''))) };
     }
-    const proof = readWebResultProof({ directory, workspace: receipt.workspaceRoot, status: raw.status,
+    const proof = readWebResultProof({ directory, workspace: completed.seed.workspaceRoot, status: raw.status,
       winningWorker: raw.winningWorker, state, artifact: latestArtifact });
     send({ type: 'result', result: { status: String(raw.status || 'runtime_error'), proof, report } });
   } catch (error) {

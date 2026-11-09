@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createWebWorkerBridge, freezeWebKnowledge, handleWebWorkerCommand } from '../apps/web/workerBridge';
+import { createWebWorkerBridge, freezeWebKnowledge, handleWebWorkerCommand, writeWebActiveRun } from '../apps/web/workerBridge';
+import { writeSolverRunState } from '../src/solver/archive';
 import { exportRunPlan } from '../src/solver/inspection';
 import { taskVersion } from '../src/solver/tasks';
 import { readKnowledgeCatalog } from '../src/solver/theoremKnowledgeStore';
@@ -39,6 +40,85 @@ describe('isolated Web worker bridge', () => {
     f.state.turns++; f.save();
     expect((await bridge.capture()).observation.sequence).toBe(2);
     expect(messages.filter(message => message.type === 'catalog')).toHaveLength(1);
+  });
+
+  it('continues observation sequences across a host-authorized library round and retires old guidance references', async () => {
+    const f = fixture(), messages: WorkerMessage[] = [];
+    const options = { webRunId: 'web-fixture', directory: f.directory, onMessage: (message: WorkerMessage) => messages.push(message) };
+    const original = createWebWorkerBridge({ ...options, output: f.output });
+    await original.capture(); f.state.turns++; f.save();
+    const before = (await original.capture()).observation;
+    expect(before.sequence).toBe(2);
+
+    const output = path.join(f.directory, 'rounds', '1', 'result.json');
+    fs.mkdirSync(`${output}.runtime`, { recursive: true });
+    writeSolverRunState(`${output}.runtime/state.json`, { ...f.state, runId: 'solver-next' });
+    const next = createWebWorkerBridge({ ...options, output,
+      libraryRestart: { previousSolverRunId: f.state.runId, round: 1 } });
+    const start = messages.length, captured = await next.capture();
+    const roundMessages = messages.slice(start);
+    expect(roundMessages[0]).toEqual({ type: 'library_restart', previousSolverRunId: f.state.runId,
+      solverRunId: 'solver-next', round: 1 });
+    expect(roundMessages.findIndex(message => message.type === 'observation')).toBeGreaterThan(0);
+    expect(captured.observation).toMatchObject({ solverRunId: 'solver-next', sequence: 3, acceptance: 'not-assessed' });
+    expect((await next.capture()).observation.sequence).toBe(3);
+    expect(messages.filter(message => message.type === 'library_restart')).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(f.directory, 'web-bridge.json'), 'utf8'))).toMatchObject({
+      solverRunId: 'solver-next', libraryRound: 1, sequence: 3,
+      observations: [{ sequence: 3, stateDigest: captured.observation.snapshot.stateDigest }] });
+
+    writeWebActiveRun({ ...options, output }, f.activeRunFile);
+    const commandOptions = { activeRunFile: f.activeRunFile };
+    expect((await handleWebWorkerCommand({ type: 'capture' }, commandOptions)).observation)
+      .toMatchObject({ solverRunId: 'solver-next', sequence: 3 });
+    const guidance = { id: 'old-round-direction', recipient: { kind: 'task', id: 'goal' },
+      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Inspect the intermediate implication.',
+      observationRef: { sequence: before.sequence, stateDigest: before.snapshot.stateDigest } };
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, commandOptions)).toMatchObject({
+      status: 'rejected', reason: 'web_guidance_observation_unknown' });
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'new-round-direction',
+      observationRef: { sequence: captured.observation.sequence, stateDigest: captured.observation.snapshot.stateDigest } } }, commandOptions))
+      .toMatchObject({ status: 'queued' });
+    await expect(original.capture({ force: true })).rejects.toThrow('web_bridge_run_identity_changed');
+  });
+
+  it('rejects a different solver without the exact previous identity and next library round', async () => {
+    const f = fixture(), options = { webRunId: 'web-fixture', directory: f.directory };
+    await createWebWorkerBridge({ ...options, output: f.output }).capture();
+    const output = path.join(f.directory, 'rounds', '1', 'result.json');
+    fs.mkdirSync(`${output}.runtime`, { recursive: true });
+    writeSolverRunState(`${output}.runtime/state.json`, { ...f.state, runId: 'solver-next' });
+    const metaFile = path.join(f.directory, 'web-bridge.json'), before = fs.readFileSync(metaFile);
+    for (const libraryRestart of [undefined,
+      { previousSolverRunId: 'unrelated-solver', round: 1 },
+      { previousSolverRunId: f.state.runId, round: 2 },
+      { previousSolverRunId: 'solver-next', round: 1 }]) {
+      await expect(createWebWorkerBridge({ ...options, output, libraryRestart }).capture())
+        .rejects.toThrow('web_bridge_run_identity_changed');
+      expect(fs.readFileSync(metaFile)).toEqual(before);
+    }
+    const restarted = createWebWorkerBridge({ ...options, output,
+      libraryRestart: { previousSolverRunId: f.state.runId, round: 1 } });
+    expect((await restarted.capture()).observation.sequence).toBe(2);
+    const thirdOutput = path.join(f.directory, 'rounds', '2', 'result.json');
+    fs.mkdirSync(`${thirdOutput}.runtime`, { recursive: true });
+    writeSolverRunState(`${thirdOutput}.runtime/state.json`, { ...f.state, runId: 'solver-third' });
+    expect((await createWebWorkerBridge({ ...options, output: thirdOutput,
+      libraryRestart: { previousSolverRunId: 'solver-next', round: 2 } }).capture()).observation)
+      .toMatchObject({ solverRunId: 'solver-third', sequence: 3 });
+    await expect(restarted.capture()).rejects.toThrow('web_bridge_run_identity_changed');
+  });
+
+  it('binds the first observed round directly when the previous round never wrote bridge metadata', async () => {
+    const f = fixture(), messages: WorkerMessage[] = [], output = path.join(f.directory, 'rounds', '1', 'result.json');
+    fs.mkdirSync(`${output}.runtime`, { recursive: true });
+    writeSolverRunState(`${output}.runtime/state.json`, { ...f.state, runId: 'solver-next' });
+    const options = { webRunId: 'web-fixture', directory: f.directory, output, onMessage: (message: WorkerMessage) => messages.push(message) };
+    const captured = await createWebWorkerBridge({ ...options,
+      libraryRestart: { previousSolverRunId: f.state.runId, round: 1 } }).capture();
+    expect(captured.observation).toMatchObject({ solverRunId: 'solver-next', sequence: 1 });
+    expect(messages.filter(message => message.type === 'library_restart')).toEqual([]);
+    expect((await createWebWorkerBridge(options).capture()).observation.sequence).toBe(1);
   });
 
   it('previews control changes without changing state and queues the same full versioned plan once', async () => {

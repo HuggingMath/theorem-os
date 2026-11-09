@@ -20,6 +20,11 @@ const context: AgentActionContext = { workerId: 'engineer', worktree: own, tool:
 const done = (item: Record<string, unknown>) => sanitizeAgentItem('completed', { id: 'item-1', status: 'completed', ...item }, context);
 const checkResult = (exitCode: number, messages: unknown[]) => JSON.stringify({ exitCode, timedOut: false, stdout: `${app}/.lake/packages/mathlib`,
   messages, omittedMessages: 0 });
+const library = { id: 'theorem-os-standard', revision: 'standard-v1', catalogDigest: 'a'.repeat(64), environmentDigest: 'b'.repeat(64) };
+const libraryDeclaration = (name = 'Tutorial.zero_add', installation = 'not-installed') => ({ name, file: 'Submission/Library/Tutorial.lean',
+  import: 'Submission.Library.Tutorial', sourceDigest: 'c'.repeat(64), installation, origin: { file: `${app}/library/Tutorial.lean` } });
+const libraryCommand = (operation: string, result: unknown, extra: Record<string, unknown> = {}) => done({ type: 'commandExecution', exitCode: 0,
+  cwd: own, command: `bun '${tools}' library ${operation}`, aggregatedOutput: JSON.stringify(result), ...extra });
 
 describe('Agent actions as the run owner sees them', () => {
   test('a Lean check reads as its messages, errors first, with host paths masked', () => {
@@ -53,6 +58,76 @@ describe('Agent actions as the run owner sees them', () => {
       { query: 'add_comm', total: 0, names: [] }] });
     expect(action).not.toHaveProperty('output');
     expect(isWebAgentActionBody(action)).toBe(true);
+  });
+
+  test('library searches report candidates and exact release identity without source or origin paths', () => {
+    const action = libraryCommand('search', { schema: 'theorem-os.library-search.v1', library, query: 'zero_add', goal: '0 + n = n',
+      hits: [libraryDeclaration(), libraryDeclaration('Tutorial.add_zero', 'installed-frozen')], namedReferences: [libraryDeclaration()] })!;
+    expect(action).toMatchObject({ command: 'math library search', library: {
+      library: { id: library.id, revision: library.revision, catalogDigest: library.catalogDigest }, operation: 'search', query: 'zero_add', goal: '0 + n = n',
+      hits: [{ name: 'Tutorial.zero_add', installation: 'not-installed' }, { name: 'Tutorial.add_zero', installation: 'installed-frozen' }],
+      namedReferences: [{ name: 'Tutorial.zero_add', installation: 'not-installed' }] } });
+    expect(action).not.toHaveProperty('output'); expect(action).not.toHaveProperty('lean');
+    expect(JSON.stringify(action)).not.toContain(app);
+    expect(isWebAgentActionBody(action)).toBe(true);
+    const many = libraryCommand('search', { schema: 'theorem-os.library-search.v1', library, query: key + 'q'.repeat(500),
+      hits: Array.from({ length: 12 }, (_, i) => libraryDeclaration(`Tutorial.${i}.${'n'.repeat(300)}`)), namedReferences: [] })!;
+    expect(many.library).toMatchObject({ omittedHits: 4, hits: expect.arrayContaining([{ name: expect.any(String), installation: 'not-installed' }]) });
+    expect(many.library!.operation === 'search' && many.library.query.length).toBe(webAgentActionLimits.query);
+    expect(many.library!.operation === 'search' && many.library.hits[0]!.name.length).toBe(webAgentActionLimits.name);
+    expect(JSON.stringify(many)).not.toContain(key); expect(isWebAgentActionBody(many)).toBe(true);
+  });
+
+  test('library source reads report the current page without claiming the entire source was read', () => {
+    for (const [offset, nextOffset, complete] of [[0, 2048, false], [2048, null, true]] as const) {
+      const action = libraryCommand('get', { schema: 'theorem-os.library-source.v1', library, declaration: libraryDeclaration(), installation: 'not-installed',
+        source: { text: `private source ${key} ${app}/library/Tutorial.lean`, offset, nextOffset, complete, note: 'Read every page' } })!;
+      expect(action.library).toEqual({ library: { id: library.id, revision: library.revision, catalogDigest: library.catalogDigest }, operation: 'get',
+        declaration: { name: 'Tutorial.zero_add', installation: 'not-installed' }, source: { offset, nextOffset, complete } });
+      expect(action).not.toHaveProperty('output'); expect(action).not.toHaveProperty('lean');
+      expect(JSON.stringify(action)).not.toMatch(/private source|\/opt\/|sk-agent/u);
+      expect(isWebAgentActionBody(action)).toBe(true);
+    }
+  });
+
+  test('library requests preserve queued versus already installed as tool reports', () => {
+    for (const status of ['queued', 'already-installed']) {
+      const installation = status === 'queued' ? 'not-installed' : 'installed-frozen';
+      const action = libraryCommand('request', { schema: 'theorem-os.library-request-result.v1', library, status,
+        declarations: [libraryDeclaration('Tutorial.zero_add', installation)], requestDigest: 'd'.repeat(64), nextStep: 'Save and return' })!;
+      expect(action.library).toMatchObject({ operation: 'request', status, declarations: [{ name: 'Tutorial.zero_add', installation }] });
+      expect(action).not.toHaveProperty('lean'); expect(action).not.toHaveProperty('output'); expect(isWebAgentActionBody(action)).toBe(true);
+    }
+  });
+
+  test('library summaries require the matching command and schema and retain host read restrictions', () => {
+    const result = { schema: 'theorem-os.library-search.v1', library, query: 'zero_add', hits: [libraryDeclaration()], namedReferences: [] };
+    for (const action of [libraryCommand('get', result), libraryCommand('search', { ...result, schema: 'theorem-os.library-search.v2' }),
+      libraryCommand('search', { ...result, hits: [libraryDeclaration('Tutorial.zero_add', 'applied')] }),
+      libraryCommand('search', result, { command: 'echo result' }), libraryCommand('search', result, { cwd: '/tmp' }),
+      libraryCommand('search', result, { command: `cat ${app}/catalog.json; math library search` })]) expect(action).not.toHaveProperty('library');
+    expect(libraryCommand('search', result, { cwd: '/tmp' })).toMatchObject({ withheld: true });
+    expect(libraryCommand('search', result, { command: `cat ${app}/catalog.json; math library search` })).toMatchObject({ withheld: true });
+    for (const source of [{ offset: -1, nextOffset: 10, complete: false }, { offset: 10, nextOffset: 10, complete: false },
+      { offset: 10, nextOffset: 20, complete: true }, { offset: 10, nextOffset: null, complete: false }])
+      expect(libraryCommand('get', { schema: 'theorem-os.library-source.v1', library, declaration: libraryDeclaration(), installation: 'not-installed', source }))
+        .not.toHaveProperty('library');
+  });
+
+  test('the worker protocol rejects malformed, oversized or extra library summary fields', () => {
+    const search = libraryCommand('search', { schema: 'theorem-os.library-search.v1', library, query: 'zero_add', hits: [libraryDeclaration()], namedReferences: [] })!;
+    const valid = search.library!;
+    for (const summary of [{ ...valid, extra: true }, { ...valid, operation: 'apply' }, { ...valid, library: { ...library } },
+      { ...valid, library: { ...valid.library, catalogDigest: 'not-a-digest' } }, { ...valid, query: 'q'.repeat(webAgentActionLimits.query + 1) },
+      { ...valid, hits: Array.from({ length: 9 }, () => ({ name: 'T.x', installation: 'not-installed' })) },
+      { ...valid, hits: [{ name: 'T.x', installation: 'applied' }] }, { ...valid, hits: [{ name: 'T.x', installation: 'not-installed', origin: '/opt/private' }] },
+      { ...valid, omittedHits: -1 }, { ...valid, operation: 'get', source: { offset: 0, nextOffset: null, complete: true, text: 'source' } },
+      { library: valid.library, operation: 'request', status: 'passed', declarations: [{ name: 'T.x', installation: 'installed-frozen' }] }])
+      expect(isWebAgentActionBody({ ...search, library: summary })).toBe(false);
+    expect(isWebAgentActionBody({ ...search, phase: 'started' })).toBe(false);
+    expect(isWebAgentActionBody({ ...search, kind: 'message' })).toBe(false);
+    expect(isWebAgentActionBody({ ...search, output: 'raw library source' })).toBe(false);
+    expect(isWebAgentActionBody({ ...search, withheld: true })).toBe(false);
   });
 
   test('a command that touches host files keeps only the command, with those paths hidden', () => {

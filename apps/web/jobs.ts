@@ -230,10 +230,22 @@ export class WebJobs {
       for (const listener of this.listeners.get(owner) ?? []) listener(version);
     });
   }
+  private libraryRestart(job: Job, message: Extract<WorkerMessage, { type: 'library_restart' }>) {
+    const current = job.run.solverAttempt ?? (job.run.observation && {
+      solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
+    if (!current || current.solverRunId !== message.previousSolverRunId ||
+        message.solverRunId === message.previousSolverRunId || !Number.isSafeInteger(message.round) ||
+        message.round <= current.round) return;
+    job.run.solverAttempt = { solverRunId: message.solverRunId, round: message.round, sequence: current.sequence };
+    delete job.run.observation;
+    this.persist(job.run);
+  }
   private observe(job: Job, observation: WebObservation) {
+    const current = job.run.solverAttempt ?? (job.run.observation && {
+      solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
     if (observation.webRunId !== job.run.id || observation.snapshot.runId !== observation.solverRunId ||
-        job.run.observation && (job.run.observation.solverRunId !== observation.solverRunId ||
-          job.run.observation.sequence >= observation.sequence)) return;
+        current && (current.solverRunId !== observation.solverRunId || current.sequence >= observation.sequence)) return;
+    job.run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
     job.run.observation = observation;
     job.run.updatedAt = observation.observedAt;
     this.persist(job.run);
@@ -395,6 +407,8 @@ export class WebJobs {
           job.run.artifact = message.artifact;
           job.run.updatedAt = new Date().toISOString();
           this.persist(job.run);
+        } else if (message.type === 'library_restart') {
+          this.libraryRestart(job, message);
         } else if (message.type === 'observation') {
           this.observe(job, message.observation);
         } else if (message.type === 'catalog') {

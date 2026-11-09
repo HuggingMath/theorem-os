@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebJobs } from '../apps/web/jobs';
 import type { WebRunner } from '../apps/web/runner';
+import type { WebObservation } from '../apps/web/collaboration';
 import type { WebProvider, WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge, type KnowledgeCandidate } from '../src/solver/theoremKnowledge';
@@ -20,6 +21,14 @@ const result = (proof = 'theorem example : True := by trivial'): WebResult => ({
   status: 'evaluated_passed', proof, report: { acceptance: 'kernel_verified' },
 });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+const observation = (webRunId: string, solverRunId: string, sequence: number): WebObservation => {
+  const snapshot = { schema: 'theoremos.run-observation.v1', runId: solverRunId,
+    stateDigest: mathDigest(`${solverRunId}:${sequence}`), resultDigest: null };
+  return { schema: 'theorem-os.web-observation.v1', webRunId, solverRunId, sequence,
+    observedAt: new Date(1_800_000_000_000 + sequence).toISOString(), evidence: 'recorded-not-replayed', acceptance: 'not-assessed',
+    snapshot, inspection: { runId: solverRunId, snapshot, tasks: [], workers: [], edits: [] } as unknown as WebObservation['inspection'],
+    plan: null, sources: [], checks: [], guidance: [], coverage: { sources: 'recorded', checks: 'recorded' } };
+};
 
 type Call = { input: WorkerInput; signal: AbortSignal; send(message: WorkerMessage): void;
   finish(value?: WebResult): void; end(): void; fail(error: Error): void };
@@ -52,6 +61,57 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     return { runner, jobs };
   };
   afterEach(async () => { await Promise.all(queues.splice(0).map(jobs => jobs.close())); });
+
+  it('accepts only host-declared solver transitions and preserves observation history without granting acceptance', async () => {
+    const { jobs, runner } = setup(), run = jobs.create('owner', input(), provider);
+    await tick();
+    const send = runner.calls[0].send;
+    send({ type: 'observation', observation: observation(run.id, 'solver-first', 1) });
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 2) });
+    expect(run.observation?.solverRunId).toBe('solver-first');
+    // Runs saved before solverAttempt existed must retain the same identity guard.
+    delete run.solverAttempt;
+    for (const message of [
+      { previousSolverRunId: 'unrelated-solver', solverRunId: 'solver-next', round: 1 },
+      { previousSolverRunId: 'solver-first', solverRunId: 'solver-first', round: 1 },
+      { previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 0 },
+    ]) send({ type: 'library_restart', ...message });
+    expect(run.observation?.solverRunId).toBe('solver-first');
+
+    send({ type: 'library_restart', previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 1 });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-next', round: 1, sequence: 1 });
+    expect(run.observation).toBeUndefined();
+    expect(run.status).toBe('running'); expect(run.result).toBeUndefined();
+    for (const candidate of [observation(run.id, 'solver-first', 2), observation(run.id, 'unrelated-solver', 2),
+      observation(run.id, 'solver-next', 1)]) send({ type: 'observation', observation: candidate });
+    expect(run.observation).toBeUndefined();
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 2) });
+    expect(run.observation).toMatchObject({ solverRunId: 'solver-next', sequence: 2, acceptance: 'not-assessed' });
+    send({ type: 'library_restart', previousSolverRunId: 'solver-next', solverRunId: 'solver-third', round: 1 });
+    expect(run.observation?.solverRunId).toBe('solver-next');
+    send({ type: 'library_restart', previousSolverRunId: 'solver-next', solverRunId: 'solver-third', round: 2 });
+    send({ type: 'observation', observation: observation(run.id, 'solver-third', 3) });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-third', round: 2, sequence: 3 });
+    expect(jobs.storage.listObservations('owner', run.id).map(item => [item.solverRunId, item.sequence]))
+      .toEqual([['solver-first', 1], ['solver-next', 2], ['solver-third', 3]]);
+    expect(run.result).toBeUndefined();
+    runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
+  });
+
+  it('binds the first observed solver directly when an earlier library round had no observation', async () => {
+    const { jobs, runner } = setup(), run = jobs.create('owner', input(), provider);
+    await tick();
+    const send = runner.calls[0].send;
+    send({ type: 'library_restart', previousSolverRunId: 'unobserved-solver', solverRunId: 'solver-next', round: 1 });
+    expect(run.solverAttempt).toBeUndefined();
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 1) });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-next', round: 0, sequence: 1 });
+    send({ type: 'library_restart', previousSolverRunId: 'solver-next', solverRunId: 'solver-third', round: 2 });
+    send({ type: 'observation', observation: observation(run.id, 'solver-third', 2) });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-third', round: 2, sequence: 2 });
+    expect(run.status).toBe('running'); expect(run.result).toBeUndefined();
+    runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
+  });
 
   it('starts queued jobs in order, respects concurrency and rejects excess active work', async () => {
     const { jobs, runner } = setup(2, 4);

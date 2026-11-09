@@ -41,15 +41,30 @@ function observation(id: string): WebObservation {
       workers: [{ id: 'lead', role: 'lead', phase: 'proving', task: 'original', turns: 1, dispatchWait: { status: 'unknown' } }],
       statementReviews: [], edits: [] }, sources: [], checks: [], guidance: [], coverage: { sources: 'recorded', checks: 'recorded' } };
 }
-type Control = { observation: WebObservation; emit(): void; finish(): void };
+type Control = { observation: WebObservation; round: number; emit(): void; restart(): void; finish(): void };
 const controls = new Map<string, Control>();
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: 'Local live-sync fixture; no model or Lean' }; },
   async run(input, send, signal) {
     await new Promise<void>(resolve => {
-      const control: Control = { observation: observation(input.id), finish: resolve, emit() {
+      const control: Control = { observation: observation(input.id), round: 0, finish: resolve, emit() {
         this.observation.sequence++; this.observation.observedAt = now();
         send({ type: 'observation', observation: structuredClone(this.observation) });
+      }, restart() {
+        const previousSolverRunId = this.observation.solverRunId;
+        const solverRunId = `${previousSolverRunId}-library-${++this.round}`;
+        this.observation = structuredClone(this.observation);
+        this.observation.solverRunId = solverRunId;
+        this.observation.snapshot.runId = solverRunId;
+        this.observation.snapshot.stateDigest = String(this.round + 2).repeat(64);
+        this.observation.inspection.runId = solverRunId;
+        this.observation.inspection.snapshot = this.observation.snapshot;
+        this.observation.inspection.planVersion = `plan-library-${this.round}`;
+        this.observation.plan!.baseVersion = this.observation.inspection.planVersion;
+        this.observation.inspection.tasks[0]!.version = `original-library-${this.round}`;
+        this.observation.inspection.tasks[0]!.owner = `library-owner-${this.round}`;
+        send({ type: 'library_restart', previousSolverRunId, solverRunId, round: this.round });
+        this.emit();
       } };
       controls.set(input.id, control); signal.addEventListener('abort', () => resolve(), { once: true }); control.emit();
     });
@@ -168,6 +183,97 @@ try {
     } finally { release.resolve(); }
   });
 
+  await scenario('host library rounds rebind snapshots and ignore old reads without clearing another research draft', async h => {
+    const { page } = h; await live(page);
+    const other = await create(h);
+    await page.locator('[data-collab-nav-guide]').click(); await page.locator(text).fill('Other research guidance stays editable');
+    await page.locator('[data-collab-plan]').click();
+    await page.locator('[data-plan-objective]').fill('Other research plan remains local');
+    const otherPlan = await page.locator('#collab-plan-json').inputValue();
+    await page.locator('[data-plan-close]').click();
+    const run = await create(h), control = controls.get(run.id)!;
+    const previous = structuredClone(control.observation);
+    const sourceHeld = deferred(), observationHeld = deferred(), previewHeld = deferred();
+    const release = deferred(), oldResponses = [deferred(), deferred(), deferred()];
+    let firstSource = true, firstObservation = true, firstPreview = true, unexpected = false;
+    const previews: { id: string; baseVersion: string }[] = [];
+    let guidance: { observationRef: { sequence: number; stateDigest: string }; taskRef?: { id: string; version: string } } | undefined;
+    h.effect = async route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === `/api/runs/${run.id}/tasks/original/source` && firstSource) {
+        firstSource = false; sourceHeld.resolve(); await release.promise;
+        await route.fulfill({ json: { source: { taskId: 'original', taskVersion: 'original-v1', commit: 'a'.repeat(40),
+          sourceDigest: 'b'.repeat(64), environmentDigest: 'e'.repeat(64), file: 'Submission.lean', scope: 'owned-file',
+          source: '-- RETIRED_LIBRARY_SOURCE\ntheorem original : True := by sorry\n' } } });
+        oldResponses[0]!.resolve(); return true;
+      }
+      if (pathname === `/api/runs/${run.id}/observation`) {
+        if (firstObservation) {
+          firstObservation = false; observationHeld.resolve(); await release.promise;
+          await route.fulfill({ json: { observation: previous } }); oldResponses[1]!.resolve(); return true;
+        }
+        if (unexpected) {
+          unexpected = false;
+          const forged = structuredClone(control.observation);
+          forged.solverRunId = 'not-declared-by-host'; forged.snapshot.runId = forged.solverRunId;
+          forged.inspection.runId = forged.solverRunId; forged.sequence += 100;
+          forged.inspection.tasks[0]!.owner = 'undeclared-owner';
+          await route.fulfill({ json: { observation: forged } }); return true;
+        }
+      }
+      if (pathname === `/api/runs/${run.id}/edits/preview`) {
+        const proposal = route.request().postDataJSON() as { id: string; baseVersion: string };
+        previews.push(proposal);
+        const observed = structuredClone(control.observation);
+        if (firstPreview) { firstPreview = false; previewHeld.resolve(); await release.promise; }
+        await route.fulfill({ json: { receipt: { id: proposal.id, status: 'validated', observation: observed } } });
+        if (observed.solverRunId === previous.solverRunId) oldResponses[2]!.resolve();
+        return true;
+      }
+      if (pathname === `/api/runs/${run.id}/guidance`) {
+        const submitted = route.request().postDataJSON(); guidance = submitted;
+        await route.fulfill({ json: { receipt: { id: submitted.id, status: 'queued', observation: control.observation } } }); return true;
+      }
+      return false;
+    };
+    try {
+      await page.locator('[data-collab-source="original"]').click(); await sourceHeld.promise;
+      await page.locator('[data-collab-plan]').click(); await page.locator('[data-plan-preview]').click(); await previewHeld.promise;
+      await page.locator('[data-plan-close]').click();
+      await page.locator('[data-collab-refresh]').click(); await observationHeld.promise;
+      control.restart(); await sequence(page, control.observation.sequence, 1500);
+      assert.match(await page.locator('.collab-graph [data-collab-task="original"]').innerText(), /library-owner-1/);
+      assert.equal(await page.locator('[data-collab-artifact]').textContent(), '', 'the new frozen round has no old source pane');
+      await page.locator('[data-collab-plan]').click();
+      assert.equal(JSON.parse(await page.locator('#collab-plan-json').inputValue()).baseVersion, 'plan-library-1');
+      await page.locator('[data-plan-objective]').fill('New library round preview');
+      await page.locator('[data-plan-preview]').click(); await page.locator('[data-plan-apply]:enabled').waitFor();
+      const newPlan = await page.locator('#collab-plan-json').inputValue();
+      release.resolve(); await Promise.all(oldResponses.map(value => value.promise)); await settled(page);
+      assert.equal(await page.locator('#collab-plan-json').inputValue(), newPlan, 'an old preview cannot overwrite the new editor');
+      assert.equal(await page.locator('[data-plan-apply]').isEnabled(), true);
+      assert.equal(previews[0]!.baseVersion, 'plan-v1'); assert.equal(previews[1]!.baseVersion, 'plan-library-1');
+      await page.locator('[data-plan-close]').click();
+      assert.equal(await page.locator('[data-collab-artifact]').textContent(), '', 'the old source response stays retired');
+      await sequence(page, control.observation.sequence);
+      unexpected = true; await page.locator('[data-collab-refresh]').click(); await settled(page);
+      await sequence(page, control.observation.sequence);
+      assert.equal((await page.locator('.collab-surface').innerText()).includes('undeclared-owner'), false);
+      await page.locator('[data-collab-guide-task]').click(); await page.locator(text).fill('Apply the new library identity');
+      await page.locator('[data-collab-guidance-form] button[type="submit"]').click();
+      await page.waitForFunction(() => document.querySelector('[data-guidance-notice]')?.textContent?.includes('排队中'));
+      assert.deepEqual(guidance?.observationRef, { sequence: control.observation.sequence, stateDigest: control.observation.snapshot.stateDigest });
+      assert.deepEqual(guidance?.taskRef, { id: 'original', version: 'original-library-1' });
+      control.restart(); await sequence(page, control.observation.sequence, 1500);
+      assert.match(await page.locator('.collab-graph [data-collab-task="original"]').innerText(), /library-owner-2/);
+      await collaboration(page, other.id); await page.locator('[data-collab-nav-guide]').click();
+      assert.equal(await page.locator(text).inputValue(), 'Other research guidance stays editable');
+      await page.locator('[data-collab-plan]').click();
+      assert.equal(await page.locator('#collab-plan-json').inputValue(), otherPlan, 'only the restarted research loses its old frozen plan');
+      await page.locator('[data-plan-close]').click();
+    } finally { release.resolve(); }
+  });
+
   await scenario('two tabs in the same session receive changes and cancellation without manual refresh', async h => {
     await live(h.page); const run = await create(h), control = controls.get(run.id)!;
     const other = await h.context.newPage();
@@ -231,7 +337,7 @@ try {
     assert.equal(h.requests.filter(runtimeWrite).length, writes);
   });
 
-  await scenario('a delayed creation response keeps the newer run already received through the stream', async h => {
+  await scenario('a delayed creation response keeps the newer library round already received through the stream', async h => {
     const { page } = h; await live(page);
     await fillConfig(page, 'source', input.source); await page.locator('#task').fill('Create a run with a delayed response');
     await fillConfig(page, 'api-key', input.apiKey);
@@ -248,6 +354,7 @@ try {
       const control = controls.get(createdId)!;
       const streamed = page.waitForResponse(async response => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'GET'
         && response.status() === 200 && (await response.text()).includes('ahead-of-post-response'));
+      control.restart();
       control.observation.inspection.tasks[0]!.owner = 'ahead-of-post-response'; control.emit();
       await streamed; await page.locator(`#run-list [data-run-id="${createdId}"]`).waitFor({ state: 'attached' });
       assert.equal(await page.locator('body[data-view="draft"]').count(), 1, 'the run must not replace the composer before its response');

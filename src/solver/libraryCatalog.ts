@@ -187,10 +187,11 @@ export function readLibraryCatalog(file: string, expectedDigest?: string) {
       throw new Error(`math_library_catalog_source_changed: ${file}`);
     return { file, source, origin: structuredClone(module.origin) };
   };
-  const select = (input: { source: string; task: string; environmentDigest: string; rootLimit?: number }): LibrarySelection => {
+  const select = (input: { source: string; task: string; environmentDigest: string; rootLimit?: number; automatic?: boolean;
+    requiredFiles?: readonly string[] }): LibrarySelection => {
     if (input.environmentDigest !== manifest.environmentDigest) throw new Error('math_library_catalog_environment_changed');
-    const rootLimit = input.rootLimit ?? 4;
-    if (!Number.isInteger(rootLimit) || rootLimit < 1 || rootLimit > 32) throw new Error('math_library_catalog_root_limit');
+    const rootLimit = input.automatic === false ? 0 : input.rootLimit ?? 4;
+    if (!Number.isInteger(rootLimit) || rootLimit < (input.automatic === false ? 0 : 1) || rootLimit > 32) throw new Error('math_library_catalog_root_limit');
     const owned = inspectScopedLeanDeclarations(input.source), unavailable = new Set<string>();
     const pending = declarationConflictNames(input.source).flatMap(name => declarations.get(name) ?? []);
     for (let cursor = 0; cursor < pending.length; cursor++) {
@@ -220,8 +221,9 @@ export function readLibraryCatalog(file: string, expectedDigest?: string) {
       for (const next of closure) selected.add(next);
       bytes += added; roots.add(file); return true;
     };
-    for (const name of mathConstructionImports(input.source)) if (name.startsWith('Submission.Library.')) {
-      const file = localModuleFile(name);
+    const requiredFiles = [...(input.requiredFiles ?? []),
+      ...mathConstructionImports(input.source).filter(name => name.startsWith('Submission.Library.')).map(localModuleFile)];
+    for (const file of requiredFiles) {
       if (!modules.has(file)) throw new Error(`math_library_catalog_module_missing: ${file}`);
       include(file, true);
     }
@@ -269,6 +271,14 @@ export function readLibraryCatalog(file: string, expectedDigest?: string) {
   return { identity: Object.freeze(identity), environment: manifest.environment, toolchain: manifest.toolchain,
     moduleCount: manifest.modules.length, declarationCount: entries.length,
     moduleFiles: Object.freeze(manifest.modules.map(module => module.file)), readModule, select, materialize,
+    declaration(name: string) {
+      const normalized = name.replace(/^_root_\./u, ''), file = declarations.get(normalized)?.[0];
+      if (!file) throw new Error(`math_library_catalog_declaration_missing: ${normalized}`);
+      const module = modules.get(file)!, entry = module.entries.find(entry => entry.name === normalized);
+      return { name: normalized, file, import: `import ${file.slice(0, -5).replaceAll('/', '.')}`,
+        sourceDigest: module.sha256, origin: structuredClone(module.origin),
+        ...(entry ? { kind: entry.kind, type: entry.type, typeKind: 'source-header' as const } : { kind: 'type' as const }) };
+    },
     search: (requests: Parameters<typeof search.search>[0], options: Parameters<typeof search.search>[1] = {}) =>
       search.search(requests, { ...options, environmentDigest: manifest.environmentDigest }).map((result, index) => ({ ...result,
         schema: 'theorem-os.library-search.v1' as const, library: identity,

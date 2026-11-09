@@ -29,6 +29,11 @@ export type ReportSummary = {
   checks: ReportCheck[];
   metrics: { label: string; value: string }[];
   identity: { label: string; value: string }[];
+  library?: {
+    id: string; revision: string; catalogDigest: string; installedModules: number; installationRounds: number;
+    coverage: 'available' | 'partial' | 'unknown'; referenceCount?: number;
+    references: { name: string; file: string; sourceDigest: string }[]; omittedReferences: number;
+  };
 };
 
 const maximumText = 4_000;
@@ -67,6 +72,28 @@ function nonnegative(value: unknown): number | undefined {
 
 function nonnegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function librarySummary(run: WebRun, value: unknown): ReportSummary['library'] {
+  const usage = object(value), library = object(usage?.library), proof = object(usage?.proof);
+  const id = text(library?.id), revision = text(library?.revision), catalogDigest = text(library?.catalogDigest);
+  const installedModules = nonnegativeInteger(usage?.installedModules), installationRounds = nonnegativeInteger(usage?.installationRounds);
+  if (usage?.schema !== 'theorem-os.web-library-usage.v1' || !id || !revision || !catalogDigest ||
+      !/^[a-f0-9]{64}$/u.test(catalogDigest) || installedModules === undefined || installationRounds === undefined) return;
+  const covered = nonnegativeInteger(proof?.coveredTargets), targets = nonnegativeInteger(proof?.targetCount);
+  const referenceCount = nonnegativeInteger(proof?.referenceCount);
+  const coverage = isAcceptedRun(run) && proof?.scope === 'independently-accepted-original-proofs' &&
+    covered !== undefined && targets !== undefined && covered > 0 && covered <= targets
+    ? proof.coverage === 'available' && covered === targets && referenceCount !== undefined ? 'available' as const :
+      proof.coverage === 'partial' && covered < targets ? 'partial' as const : 'unknown' as const : 'unknown' as const;
+  const references = coverage !== 'unknown' && Array.isArray(proof?.references) ? proof.references.slice(0, 64).flatMap(value => {
+    const entry = object(value), name = text(entry?.name), file = text(entry?.file), sourceDigest = text(entry?.sourceDigest);
+    return name && file && sourceDigest && /^[a-f0-9]{64}$/u.test(sourceDigest) ? [{ name, file, sourceDigest }] : [];
+  }) : [];
+  return { id, revision, catalogDigest, installedModules, installationRounds, coverage,
+    ...(coverage === 'available' ? { referenceCount } : {}), references,
+    omittedReferences: coverage === 'available' ? Math.max(0, referenceCount! - references.length) :
+      coverage === 'partial' ? nonnegativeInteger(proof?.omittedReferences) ?? 0 : 0 };
 }
 
 function status(value: string | undefined, labels: ReadonlyMap<string, Status>): Status {
@@ -156,7 +183,8 @@ export function summarizeReport(run: WebRun): ReportSummary {
     if (content) identity.push({ label: String(label), value: content });
   }
   const reason = text(report?.reason) ?? text(record?.error);
-  return { ...(reason ? { reason } : {}), checks, metrics, identity };
+  const library = librarySummary(run, report?.libraryUsage);
+  return { ...(reason ? { reason } : {}), checks, metrics, identity, ...(library ? { library } : {}) };
 }
 
 /** Lean's three classical axioms; anything else in a target's closure deserves a reader's attention. */

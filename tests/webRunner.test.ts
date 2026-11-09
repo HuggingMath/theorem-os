@@ -149,6 +149,21 @@ if (args[0] === 'create') {
 });
 
 describe('web worker protocol boundary', () => {
+  it('accepts a host-declared library restart with both solver identities and a positive round', () => {
+    const message = { type: 'library_restart', previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 1 };
+    expect(parseWorkerMessage(JSON.stringify(message))).toEqual(message);
+  });
+
+  it.each([
+    {}, { previousSolverRunId: '' }, { solverRunId: '' }, { solverRunId: 'x'.repeat(129) },
+    { round: 0 }, { round: -1 }, { round: 1.5 }, { round: Number.MAX_SAFE_INTEGER + 1 },
+    { round: '1' }, { extra: 'unexpected' },
+  ])('rejects malformed library restart metadata (%#)', overrides => {
+    const message = Object.keys(overrides).length ? { type: 'library_restart', previousSolverRunId: 'solver-first',
+      solverRunId: 'solver-next', round: 1, ...overrides } : { type: 'library_restart' };
+    expect(parseWorkerMessage(JSON.stringify(message))).toBeUndefined();
+  });
+
   it('accepts progress and a structured acceptance result', () => {
     expect(parseWorkerMessage('{"type":"progress","event":"ready","message":"Ready"}'))
       .toEqual({ type: 'progress', event: 'ready', message: 'Ready' });

@@ -364,6 +364,22 @@ function ReportPanel(props: ReportPanelProps) {
     {summary.reason && <section class="report-section report-reason"><h3>{t('运行说明')}</h3><p>{summary.reason}</p></section>}
     {props.stuck && <Stuck {...props.stuck} />}
     {summary.metrics.length > 0 && <dl class="report-metrics">{summary.metrics.map(item => <Fact key={item.label} {...item} />)}</dl>}
+    {summary.library && <section class="report-section report-library" data-report-library>
+      <h3>{t('库调用')}</h3><p><code>{summary.library.id}</code> · {summary.library.revision}</p>
+      <dl class="report-metrics">
+        <Fact label={t('装入模块')} value={String(summary.library.installedModules)} />
+        <Fact label={t('按需补装轮次')} value={String(summary.library.installationRounds)} />
+        <Fact label={t('已记录证明引用')} value={summary.library.referenceCount === undefined ? summary.library.coverage === 'partial' ? t('记录不完整') : t('未记录') : String(summary.library.referenceCount)} />
+      </dl>
+      {summary.library.coverage === 'unknown' ? <p class="result-note">{t('尚无独立验收的库引用记录。')}</p> :
+        summary.library.coverage === 'partial' ? <p class="result-note">{t('部分目标缺少引用记录，以下为已记录引用。')}</p> :
+          summary.library.referenceCount === 0 ? <p class="result-note">{t('独立验收的证明未引用该库的公开声明。')}</p> : null}
+      {summary.library.references.length > 0 && <details class="target-diagnostics"><summary>{t('查看引用的公开声明')}</summary>
+        <ul>{summary.library.references.map(reference => <li key={reference.name}><code title={reference.sourceDigest}>{reference.name}</code><br /><code>{reference.file}</code></li>)}</ul>
+        {summary.library.omittedReferences > 0 && <p class="result-note">{t('另有 {0} 条引用未在此展开。', summary.library.omittedReferences)}</p>}
+      </details>}
+      <details class="target-diagnostics"><summary>{t('库版本凭据')}</summary><code>{summary.library.catalogDigest}</code></details>
+    </section>}
     {props.outline && <section class="report-section report-outline" aria-labelledby="report-outline-heading"><div class="report-check-heading"><h3 id="report-outline-heading">{props.accepted ? t('证明结构') : t('候选证明结构')}</h3></div>
       <div class="outline-body" aria-live="polite"><Outline {...props.outline} /></div></section>}
     {summary.checks.length ? summary.checks.map(check => <Check key={check.id} {...check} />) : <p class="result-note">{t('这次运行没有留下验收记录。')}</p>}

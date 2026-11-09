@@ -75,6 +75,7 @@ export type SolverRunState = {
   moduleConfiguration?: { id: string; versions: Record<string, string> };
   retrievalDigest?: string;
   knowledgeDigest?: string;
+  libraryCatalogDigest?: string;
   continuationDigest?: string;
   knowledgeRetrievals?: { dropped: number; observations: KnowledgeRetrievalObservation[] };
   knowledgeUses?: (KnowledgeUse & { workerId: string; commit: string })[];
@@ -291,6 +292,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   verificationCheckpoints: z.array(z.object({ key: z.string().regex(/^[a-f0-9]{64}$/u), timeoutMs: safeCount,
     attempts: safeCount, at: safeCount, targetCommit: z.string(), receiptIds: z.array(z.string()) }).strict()).max(32).optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  libraryCatalogDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   knowledgeRetrievals: z.object({ dropped: safeCount, observations: z.array(z.object({
     sectionId: z.string(), catalogDigest: z.string(), searchInputDigest: z.string(),
     searchSource: z.enum(['closed-task-type', 'frozen-source-header', 'research-objective', 'residual-goal']).optional(),

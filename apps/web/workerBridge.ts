@@ -22,6 +22,7 @@ const activeRunSchema = z.object({ schema: z.literal('theorem-os.web-active-run.
   webRunId: z.string().min(1).max(128), directory: z.string().min(1), output: z.string().min(1) }).strict();
 type ActiveRun = z.infer<typeof activeRunSchema>;
 const metaSchema = z.object({ schema: z.literal('theorem-os.web-bridge.v1'), webRunId: z.string(), solverRunId: z.string(),
+  libraryRound: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   sequence: z.number().int().nonnegative(), contentDigest: z.string(),
   observations: z.array(z.object({ sequence: z.number().int().nonnegative(), stateDigest: z.string() })),
   catalogKey: z.string().optional(), catalogDigest: z.string().optional(),
@@ -54,10 +55,14 @@ export function freezeWebKnowledge(directory: string, catalog?: unknown): string
   return file;
 }
 
-function bridgeMeta(file: string, webRunId: string, solverRunId: string): BridgeMeta | undefined {
+type LibraryRestart = { previousSolverRunId: string; round: number };
+function bridgeMeta(file: string, webRunId: string, solverRunId: string, restart?: LibraryRestart): BridgeMeta | undefined {
   if (!fs.existsSync(file)) return;
   const value = metaSchema.parse(JSON.parse(readMathText(file, 32 * 1024)));
-  if (value.webRunId !== webRunId || value.solverRunId !== solverRunId) throw new Error('web_bridge_run_identity_changed');
+  if (value.webRunId !== webRunId || (value.solverRunId === solverRunId
+    ? restart && restart.round !== (value.libraryRound ?? 0)
+    : !restart || restart.previousSolverRunId !== value.solverRunId || restart.round !== (value.libraryRound ?? 0) + 1))
+    throw new Error('web_bridge_run_identity_changed');
   return value;
 }
 
@@ -173,15 +178,21 @@ const catalogKey = (state: SolverRunState) => mathDigest(canonicalMathJson({
 
 export function createWebWorkerBridge(options: {
   webRunId: string; output: string; directory: string; apiKey?: string;
+  /** The host authorizes one transition; directory stays fixed while output points at the new round. */
+  libraryRestart?: LibraryRestart;
   onMessage?(message: WorkerMessage): void;
 }) {
   const directory = fs.realpathSync(options.directory), metaFile = path.join(directory, 'web-bridge.json');
   if (!childOf(directory, path.resolve(options.output))) throw new Error('web_bridge_output_outside_run');
+  if (options.libraryRestart && (!Number.isSafeInteger(options.libraryRestart.round) || options.libraryRestart.round < 1 ||
+      !options.libraryRestart.previousSolverRunId)) throw new Error('web_bridge_run_identity_changed');
   async function capture(input: { includeCatalog?: boolean; force?: boolean } = {}) {
     const messages: WorkerMessage[] = [];
     const result = await withMathRuntimeLease({ lockPath: path.join(directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock' }, async lease => {
       const stored = readRunInspection(options.output), { state, stateFile } = stored;
-      const inspection = buildRunInspection(state, stored.result), previous = bridgeMeta(metaFile, options.webRunId, state.runId);
+      if (options.libraryRestart?.previousSolverRunId === state.runId) throw new Error('web_bridge_run_identity_changed');
+      const inspection = buildRunInspection(state, stored.result), previous = bridgeMeta(metaFile, options.webRunId, state.runId, options.libraryRestart);
+      const restarted = Boolean(previous && previous.solverRunId !== state.runId);
       const projection = sourceProjection(state, directory);
       const history = state.cooperation?.history?.length ? buildRunInspection({ ...state,
         cooperation: { ...state.cooperation, tasks: state.cooperation.history.map(node => ({ status: 'pending', attempts: 0, ...node })) as TaskRecord[] } }).tasks : [];
@@ -190,8 +201,10 @@ export function createWebWorkerBridge(options: {
       const payload = { inspection, snapshot: inspection.snapshot, plan, ...projection,
         guidance: readHumanGuidance(stateFile, state.runId), deliveries: state.cooperation?.deliveries ?? [], history };
       const contentDigest = mathDigest(canonicalMathJson(payload));
-      const changed = previous?.contentDigest !== contentDigest;
+      const changed = restarted || previous?.contentDigest !== contentDigest;
       const sequence = (previous?.sequence ?? 0) + Number(changed);
+      if (restarted) messages.push({ type: 'library_restart', previousSolverRunId: previous!.solverRunId,
+        solverRunId: state.runId, round: options.libraryRestart!.round });
       let observation: WebObservation = { schema: 'theorem-os.web-observation.v1', webRunId: options.webRunId,
         solverRunId: state.runId, sequence, observedAt: new Date().toISOString(), evidence: 'recorded-not-replayed',
         acceptance: 'not-assessed', ...payload };
@@ -201,13 +214,14 @@ export function createWebWorkerBridge(options: {
       }
       if (Buffer.byteLength(canonicalMathJson(observation)) > maxMessageBytes) throw new Error('web_observation_too_large');
       const meta: BridgeMeta = { schema: 'theorem-os.web-bridge.v1', webRunId: options.webRunId, solverRunId: state.runId,
-        sequence, contentDigest, observations: [...(previous?.observations ?? []),
+        libraryRound: options.libraryRestart?.round ?? previous?.libraryRound ?? 0,
+        sequence, contentDigest, observations: [...(restarted ? [] : previous?.observations ?? []),
           ...(changed ? [{ sequence, stateDigest: inspection.snapshot.stateDigest }] : [])].slice(-64),
         ...(previous?.catalogKey ? { catalogKey: previous.catalogKey } : {}),
         ...(previous?.catalogDigest ? { catalogDigest: previous.catalogDigest } : {}) };
       let catalog: TheoremKnowledgeBase | undefined;
       const key = catalogKey(state), catalogFile = path.join(directory, 'web-catalog.json');
-      if (key !== previous?.catalogKey) {
+      if (restarted || key !== previous?.catalogKey) {
         try {
           const imported = importKnowledgeRuns([stateFile], { includeFindings: true });
           if (buildRunInspection(readRunInspection(options.output).state).snapshot.stateDigest !== inspection.snapshot.stateDigest)
