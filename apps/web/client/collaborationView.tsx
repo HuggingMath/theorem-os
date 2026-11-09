@@ -750,8 +750,10 @@ export class CollaborationView {
   private renderArchives(view: ViewState, runId: string) {
     renderSection(view.element.querySelector('[data-collab-archives]')!, view.archives.length ? <>{view.archives.map(archive => <article key={archive.id} class="collab-archive" data-collab-archive-id={archive.id}>
       <div class="collab-section-heading"><strong>{observedTime(archive.createdAt)}</strong>
-        <a class="button" data-collab-archive-download href={`/api/runs/${encodeURIComponent(runId)}/archives/${encodeURIComponent(archive.id)}`} download={`theoremos-${runId}-archive.json`}>{t('下载归档包')}</a></div>
-      <Facts facts={[[t('归档 ID'),archive.id],[t('摘要'),archive.digest],[t('源码 / 检查'),`${archive.sources} / ${archive.checks}`],[t('知识目录'),archive.catalogDigest ?? t('无')],[t('事件覆盖'),archive.coverage.events],[t('源码 / 检查覆盖'),`${archive.coverage.sources} / ${archive.coverage.checks}`]]} />
+        <a class="button" data-collab-archive-download href={`/api/runs/${encodeURIComponent(runId)}/archives/${encodeURIComponent(archive.id)}`} download={`theoremos-${runId}-archive.json`}>{t('下载完整研究归档')}</a></div>
+      <Facts facts={[[t('归档 ID'),archive.id],[t('摘要'),archive.digest],[t('源码 / 检查'),`${archive.sources} / ${archive.checks}`],[t('知识目录'),archive.catalogDigest ?? t('无')],
+        [t('事件覆盖'),archive.coverage.events],[t('源码 / 检查覆盖'),`${archive.coverage.sources} / ${archive.coverage.checks}`],
+        [t('观察 / 动作 / 命令覆盖'),`${archive.coverage.observations ?? t('未记录')} / ${archive.coverage.actions ?? t('未记录')} / ${archive.coverage.commands ?? t('未记录')}`]]} />
       <p class="collab-help">{t('历史证据已保存；再次使用需要重新检查。')}</p></article>)}</> : <p class="collab-help">{t('尚无已保存的归档')}</p>);
   }
   private async archive(runId:string,view:ViewState) {

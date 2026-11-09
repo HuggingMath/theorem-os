@@ -172,5 +172,8 @@ export type WebArchive = {
   id: string; runId: string; createdAt: string; digest: string;
   evidence: 'recorded-not-replayed'; requiresFreshCheck: true;
   sources: number; checks: number; catalogDigest?: string;
-  coverage: { events: 'complete' | 'partial'; sources: 'recorded' | 'partial'; checks: 'recorded' | 'partial' };
+  /** Counts and coverage added to full archives; absent on older saved archives. */
+  events?: number; observations?: number; actions?: number; commands?: number; droppedActions?: number;
+  coverage: { events: 'complete' | 'partial'; sources: 'recorded' | 'partial'; checks: 'recorded' | 'partial';
+    observations?: 'complete' | 'partial'; actions?: 'complete' | 'partial'; commands?: 'recorded' };
 };

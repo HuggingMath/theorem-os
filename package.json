@@ -57,6 +57,7 @@
     "test:web-preparation": "bun scripts/test-web-preparation.ts",
     "test:web-recovery": "bun scripts/test-web-recovery.ts",
     "test:web-results": "bun scripts/test-web-results.ts",
+    "test:web-continuation-archive": "bun scripts/test-web-continuation-archive.ts",
     "test:web-drafts": "bun scripts/test-web-drafts.ts",
     "test:web-draft-recovery": "bun scripts/test-web-draft-recovery.ts",
     "test:web-run-monitor": "bun scripts/test-web-run-monitor.ts",

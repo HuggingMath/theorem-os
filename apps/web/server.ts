@@ -1126,11 +1126,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           trajectories.forget(owner, run.id);
           json(response, 200, { deletedId: run.id }); return;
         }
-        if (match[2] === 'download' && request.method === 'GET') {
+        if (['download', 'snapshot'].includes(operation ?? '') && request.method === 'GET') {
           if (!run.result && !['completed', 'cancelled', 'error'].includes(run.status))
             throw new HttpError(409, '运行尚未结束，且结果尚未生成。');
-          response.setHeader('Content-Disposition', `attachment; filename="theoremos-${run.id}.json"`);
-          json(response, 200, { schema: 'theorem-os.web-export.v1', run }); return;
+          response.setHeader('Content-Disposition', `attachment; filename="theoremos-${run.id}${operation === 'snapshot' ? '-snapshot' : ''}.json"`);
+          json(response, 200, operation === 'snapshot' ? { schema: 'theorem-os.web-export.v1', run }
+            : storage.exportRun(owner, run, run.knowledgeCatalogDigest)); return;
         }
         if (!match[2] && request.method === 'GET') { json(response, 200, { run }); return; }
         throw new HttpError(405, '请求方法不受支持。');

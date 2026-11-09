@@ -137,7 +137,6 @@ export const collaboration: Record<string, string> = {
   "任务版本": "Task version",
   "源码摘要": "Source digest",
   "环境摘要": "Environment digest",
-  "下载归档包": "Download archive",
   "归档 ID": "Archive ID",
   "摘要": "Digest",
   "源码 / 检查": "Sources / checks",

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import type { WebObservation } from './collaboration';
+import { webArchive } from './storage';
 import { webAgentActionLimits, webSampleRunId, type WebAgentAction, type WebEvent, type WebRun } from './shared';
 import { recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersion, trajectoryVersionDetail, trajectoryVersionQuery, type TrajectoryIndex } from './trajectory';
 
@@ -35,7 +36,9 @@ export function webSampleResponse(sample: WebSampleFile, operation: string | und
   if (!operation) return { status: 200, body: { run: sample.run } };
   if (operation === 'observation') return { status: 200, body: { observation: latest ?? null } };
   if (operation === 'share') return { status: 200, body: { share: null } };
-  if (operation === 'download') return { status: 200, body: { schema: 'theorem-os.web-export.v1', run: sample.run }, filename: `theoremos-${sample.run.id}.json` };
+  if (operation === 'download') return { status: 200, body: webArchive(sample.run, {
+    observations: sample.observations, events: sample.events, actions: sample.actions ?? [], commands: [] }), filename: `theoremos-${sample.run.id}.json` };
+  if (operation === 'snapshot') return { status: 200, body: { schema: 'theorem-os.web-export.v1', run: sample.run }, filename: `theoremos-${sample.run.id}-snapshot.json` };
   if (operation === 'events') {
     const after = Number(query.get('after') ?? 0);
     if (!Number.isSafeInteger(after) || after < 0) return { status: 400, body: { error: '事件游标无效。' } };

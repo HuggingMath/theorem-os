@@ -86,19 +86,42 @@ describe('durable web evidence and registered research configuration without mod
       store.saveRun('alice', saved);
     }
     saved.observation = observation(2); store.saveRun('alice', saved);
+    store.saveAction('alice', saved.id, { sequence: 1, at: saved.updatedAt, workerId: 'solver', itemId: 'saved-action',
+      phase: 'completed', kind: 'command', command: 'cat Submission.lean', output: 'Recorded command output' });
+    saved.actions = { count: 1 }; store.saveRun('alice', saved);
+    store.saveCommand('alice', saved.id, 'guidance-1', { id: 'guidance-1', status: 'delivered' });
     const archive = store.archiveRun('alice', saved, mathDigest('catalog'));
     const restarted = new WebStorage(root), bundle = restarted.getArchive('alice', saved.id, archive.id)!;
     expect(archive).toMatchObject({ sources: 1, checks: 1, requiresFreshCheck: true,
-      coverage: { events: 'complete', sources: 'partial', checks: 'partial' } });
+      events: 205, observations: 2, actions: 1, commands: 1,
+      coverage: { events: 'complete', observations: 'complete', actions: 'complete', commands: 'recorded', sources: 'partial', checks: 'partial' } });
     expect(bundle.run.status).toBe('cancelled'); expect(bundle.run.result).toBeUndefined();
     expect(bundle.events).toHaveLength(205); expect(restarted.getEvents('alice', saved.id)).toHaveLength(205);
     expect(bundle.observations).toHaveLength(2); expect(bundle.sources[0]?.source).toBe(sourceText);
     expect(bundle.checks[0]?.record).toMatchObject({ passed: true, conditional: true, conditions: ['unproved-precondition'] });
+    expect(bundle.actions).toHaveLength(1); expect(bundle.actions?.[0]?.command).toBe('cat Submission.lean');
+    expect(bundle.commands).toEqual([{ id: 'guidance-1', status: 'delivered' }]);
     expect(restarted.getArchive('bob', saved.id, archive.id)).toBeUndefined();
     expect(() => restarted.archiveRun('bob', saved)).toThrow(/不属于/);
     const partial = { ...run(), id: 'partial-run', observation: undefined, events: saved.events };
     store.saveRun('alice', partial);
     expect(store.archiveRun('alice', partial).coverage.events).toBe('partial');
+  });
+
+  it('reports retained gaps and dropped actions, and exports without creating persistent archives', () => {
+    const store = new WebStorage(root), saved = run();
+    saved.observation = observation(3); saved.actions = { count: 2, dropped: 4 };
+    store.saveRun('alice', saved);
+    store.saveAction('alice', saved.id, { sequence: 2, at: saved.updatedAt, workerId: 'solver', itemId: 'last-action',
+      phase: 'completed', kind: 'reasoning', text: 'Retained reasoning' });
+    const before = store.getRun('alice', saved.id), exported = store.exportRun('alice', saved);
+    expect(exported.summary).toMatchObject({ actions: 1, droppedActions: 4,
+      coverage: { observations: 'partial', actions: 'partial', commands: 'recorded' } });
+    expect(exported.actions?.[0]?.sequence).toBe(2);
+    expect(store.getArchive('alice', saved.id, exported.summary.id)).toBeUndefined();
+    expect(store.getRun('alice', saved.id)).toEqual(before);
+    expect(() => store.exportRun('bob', saved)).toThrow(/不属于/);
+    expect(store.getRun('bob', saved.id)).toBeUndefined();
   });
 
   it('supports the same owner and archive semantics in a disposable memory store', () => {

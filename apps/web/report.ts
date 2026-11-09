@@ -283,8 +283,9 @@ export function groupGoals(goals: readonly GoalRow[]): GoalGroup[] | undefined {
 export type NextStep = { id: 'continue-checked' | 'ask-failed'; label: string; tasks: string[] } | (RecoveryAction & { tasks?: undefined });
 export function nextSteps(run: WebRun, goals?: GoalChecklist): NextStep[] {
   if (run.status === 'queued' || run.status === 'running' || isAcceptedRun(run)) return [];
-  const checked = (goals?.goals ?? []).filter(goal => goal.state === 'checked' && goal.taskId).map(goal => goal.taskId!);
   const tasks = run.observation?.inspection.tasks ?? [];
+  const checked = [...new Set([...(goals?.goals ?? []).filter(goal => goal.state === 'checked' && goal.taskId).map(goal => goal.taskId!),
+    ...tasks.filter(task => task.proof.status === 'checked' && task.control !== 'stopped' && ['goal', 'lemma'].includes(task.kind)).map(task => task.id)])];
   const failed = tasks.filter(task => task.proof.status === 'failed' && task.control !== 'stopped')
     .sort((a, b) => Number(b.kind === 'goal') - Number(a.kind === 'goal')).map(task => task.id);
   const recovery = failureGuide(run)?.actions.filter(action => action.id !== 'report') ?? [{ id: 'retry', label: t('复用配置重新研究') } as RecoveryAction];

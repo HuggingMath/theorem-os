@@ -116,7 +116,10 @@ function RunMenu(props: RunHeaderProps) {
     <summary class="icon-button" aria-label={t('更多操作')} title={t('更多操作')}><Icon name="ellipsis" /></summary>
     <div class="run-menu-panel">
       <button type="button" class="run-menu-item" data-action="show-modules"><Icon name="blocks" />{t('模块方案')}</button>
-      {props.download && <a class="run-menu-item" data-action="download-run" href={props.download} download><Icon name="download" />{t('下载运行档案')}</a>}
+      {props.download && <>
+        <a class="run-menu-item" data-action="download-run" href={props.download} download><Icon name="download" />{t('下载完整研究归档')}</a>
+        <a class="run-menu-item" data-action="download-snapshot" href={props.download.replace(/\/download$/u, '/snapshot')} download><Icon name="download" />{t('下载运行快照')}</a>
+      </>}
       <button type="button" class="run-menu-item" data-action="copy-id"><Icon name="copy" />{t('复制运行 ID')}</button>
       {!props.sample && !props.active && <button type="button" class="run-menu-item danger" data-action="delete-run" disabled={!props.connected || props.deleting}>
         <Icon name="trash-2" />{t('删除运行记录')}</button>}

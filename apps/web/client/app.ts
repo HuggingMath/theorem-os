@@ -733,6 +733,8 @@ function renderComposerSummary() {
   patchText(element('#composer-environment'), environmentName(field('environment').value));
   element('#draft-continuation').hidden = !draftContinuation;
   if (draftContinuation) patchText(element('#draft-continuation-label'), t('从「{0}」继续', draftContinuation.label));
+  element('#settings-continuation').hidden = !draftContinuation;
+  if (draftContinuation) patchText(element('#settings-continuation'), t('带入成果：{0}。原题保持不变，新运行仍需重新通过 Lean 检查与独立验收。', draftContinuation.label));
   element('#draft-formalization').hidden = !draftFormalization;
   element('#confirmed-original').hidden = !draftFormalization;
   element('#creation-mode').textContent = draftFormalization ? t('已确认的自然语言原题') : t('已有 Lean 原题');
@@ -2409,7 +2411,7 @@ function paletteCommands(): PaletteCommand[] {
         run: () => void openSharing(run) },
       Boolean(state.session) && !state.submitting && { id: 'run-reuse', group: t('当前研究'), label: sample ? t('用这道题开始研究') : t('复用任务配置'), icon: 'copy-plus',
         keywords: t('reuse retry again rerun 复用 再试 重新 配置'), run: () => reuseRun(run) },
-      Boolean(run.result || !activeRun(run)) && { id: 'run-download-archive', group: t('当前研究'), label: t('下载运行档案'), icon: 'download', keywords: t('download archive zip run 下载 档案 记录'),
+      Boolean(run.result || !activeRun(run)) && { id: 'run-download-archive', group: t('当前研究'), label: t('下载完整研究归档'), icon: 'download', keywords: t('download archive zip run 下载 档案 记录'),
         run: () => { const link = document.createElement('a'); link.href = downloadUrl(run.id); link.download = ''; document.body.append(link); link.click(); link.remove(); } },
       !sample && activeRun(run) && state.connected && !state.cancelling.has(run.id) && { id: 'run-cancel', group: t('当前研究'), label: t('取消运行'), icon: 'square',
         keywords: t('cancel stop 取消 停止'), run: () => openCancellation(run) },
@@ -2756,8 +2758,8 @@ async function continueChecked(run: WebRun, taskIds: readonly string[], button: 
   try {
     const from = await trajectoryView.checkedContinuation(run, taskIds);
     if (state.selectedId !== run.id) return;
+    if (!from) { toast(t('已检查版本的源码没有保存，无法带入成果。请在路线图中查看已有记录。')); return; }
     reuseRun(run, 'retry', from);
-    if (!from) toast(t('已检查的代码没有保存，已载入原始题目与执行配置，请输入 API Key'));
   } catch (error) {
     toast(t('读取已检查的代码失败：{0}', message(error)));
   } finally { button.disabled = false; }

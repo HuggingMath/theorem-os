@@ -18,6 +18,8 @@ export type StoredWebArchive = {
   sources: WebTaskSource[];
   checks: WebCheckReceipt[];
   events: WebEvent[];
+  /** Older saved archives did not contain the separately stored Agent actions. */
+  actions?: WebAgentAction[];
   commands: WebCommandResult[];
 };
 
@@ -39,6 +41,31 @@ const credentialFields = new Set(['apiKey', 'api_key', 'access_token', 'refresh_
 /** Records accept visible run data only. Credential objects never become restart state. */
 const publicRecord = <T>(value: T): T => JSON.parse(JSON.stringify(value,
   (key, item) => credentialFields.has(key) ? undefined : item));
+
+/** All retained process evidence, with coverage of the recording rather than a claim of fresh proof acceptance. */
+export function webArchive(run: WebRun, records: { observations: WebObservation[]; events: WebEvent[];
+  actions: WebAgentAction[]; commands: WebCommandResult[] }, catalogDigest?: string): StoredWebArchive {
+  const { observations, events, actions, commands } = records;
+  const unique = <T>(items: T[]) => [...new Map(items.map(item => [mathDigest(encoded(item)), item])).values()];
+  const sources = unique(observations.flatMap(item => item.sources)), checks = unique(observations.flatMap(item => item.checks));
+  const complete = (items: { sequence: number }[], expected: number) => items.length === expected
+    && items.every((item, index) => item.sequence === index + 1);
+  const coverage: WebArchive['coverage'] = {
+    events: complete(events, Math.max(run.events.at(-1)?.sequence ?? 0, events.at(-1)?.sequence ?? 0)) ? 'complete' : 'partial',
+    observations: complete(observations, Math.max(run.observation?.sequence ?? 0, observations.at(-1)?.sequence ?? 0)) ? 'complete' : 'partial',
+    actions: complete(actions, run.actions?.count ?? actions.length) && !run.actions?.dropped ? 'complete' : 'partial',
+    commands: 'recorded',
+    sources: observations.length && observations.every(item => item.coverage.sources === 'recorded') ? 'recorded' : 'partial',
+    checks: observations.length && observations.every(item => item.coverage.checks === 'recorded') ? 'recorded' : 'partial',
+  };
+  const identity = { id: crypto.randomUUID(), runId: run.id, createdAt: new Date().toISOString(),
+    evidence: 'recorded-not-replayed' as const, requiresFreshCheck: true as const,
+    events: events.length, observations: observations.length, actions: actions.length, commands: commands.length,
+    droppedActions: run.actions?.dropped ?? 0, sources: sources.length, checks: checks.length, coverage,
+    ...(catalogDigest ? { catalogDigest } : {}) };
+  const payload = publicRecord({ schema: 'theorem-os.web-archive.v1' as const, run, observations, sources, checks, events, actions, commands });
+  return { ...payload, summary: { ...identity, digest: mathDigest(encoded({ ...payload, identity })) } };
+}
 
 /** Optional web-only persistence. An omitted root keeps the same API in memory for disposable fixtures. */
 export class WebStorage {
@@ -270,25 +297,17 @@ export class WebStorage {
     return records;
   }
 
+  exportRun(owner: string, run: WebRun, catalogDigest?: string): StoredWebArchive {
+    if (!this.getRun(owner, run.id)) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
+    return webArchive(run, { observations: this.listObservations(owner, run.id), events: this.listEvents(owner, run.id),
+      actions: this.listActionsAfter(owner, run.id, 0, Number.MAX_SAFE_INTEGER), commands: this.listCommands(owner, run.id) }, catalogDigest);
+  }
   archiveRun(owner: string, run: WebRun, catalogDigest?: string): WebArchive {
     if (!this.getRun(owner, run.id)) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
     this.saveRun(owner, run);
-    const observations = this.listObservations(owner, run.id), events = this.listEvents(owner, run.id);
-    const unique = <T>(items: T[]) => [...new Map(items.map(item => [mathDigest(encoded(item)), item])).values()];
-    const sources = unique(observations.flatMap(item => item.sources)), checks = unique(observations.flatMap(item => item.checks));
-    const last = observations.at(-1);
-    const coverage: WebArchive['coverage'] = {
-      events: events.every((event, index) => event.sequence === index + 1) ? 'complete' : 'partial',
-      sources: last?.coverage.sources ?? 'partial', checks: last?.coverage.checks ?? 'partial',
-    };
-    const identity = { id: crypto.randomUUID(), runId: run.id, createdAt: new Date().toISOString(),
-      evidence: 'recorded-not-replayed' as const, requiresFreshCheck: true as const,
-      sources: sources.length, checks: checks.length, coverage, ...(catalogDigest ? { catalogDigest } : {}) };
-    const payload = publicRecord({ schema: 'theorem-os.web-archive.v1' as const, run, observations, sources, checks, events,
-      commands: this.listCommands(owner, run.id) });
-    const summary: WebArchive = { ...identity, digest: mathDigest(encoded({ ...payload, identity })) };
-    this.saveRecord([...this.runPath(owner, run.id), 'archives', `${summary.id}.json`], { ...payload, summary }, true);
-    return summary;
+    const bundle = this.exportRun(owner, run, catalogDigest);
+    this.saveRecord([...this.runPath(owner, run.id), 'archives', `${bundle.summary.id}.json`], bundle, true);
+    return bundle.summary;
   }
   getArchive(owner: string, runId: string, archiveId: string): StoredWebArchive | undefined {
     if (!/^[a-f0-9-]{36}$/u.test(archiveId)) return undefined;

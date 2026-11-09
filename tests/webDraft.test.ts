@@ -37,6 +37,16 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(decodeTaskDraft(archive())).not.toHaveProperty('status');
     expect(decodeTaskDraft(archive())).not.toHaveProperty('result');
   });
+  it('imports a full process archive as a draft without restoring evidence, results or an owner-bound continuation', () => {
+    const bundle = { ...archive(), schema: 'theorem-os.web-archive.v1',
+      run: { ...archive().run, continueFrom: { runId: 'private-run' } } };
+    const read = vi.fn(() => { throw new Error('archive-evidence-must-not-be-read'); });
+    for (const key of ['summary', 'events', 'observations', 'actions', 'sources', 'checks', 'commands'])
+      Object.defineProperty(bundle, key, { enumerable: true, get: read });
+    expect(decodeTaskDraft(bundle)).toEqual(draft({ templateId: '' }));
+    expect(read).not.toHaveBeenCalled();
+    expect(decodeTaskDraft(bundle)).not.toHaveProperty('continueFrom');
+  });
 
   it('keeps the plan-approval choice only when it is on', () => {
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(draft({ planApproval: true }))))).toEqual(draft({ planApproval: true }));

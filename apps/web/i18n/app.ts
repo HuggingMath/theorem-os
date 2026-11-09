@@ -288,7 +288,6 @@ export const app: Record<string, string> = {
   "复用配置重新研究": "Research again with the same settings",
   "从已检查的代码继续": "Continue from the checked code",
   "问为什么没通过": "Ask why it failed",
-  "已检查的代码没有保存，已载入原始题目与执行配置，请输入 API Key": "The checked code was not saved; the original problem and settings are loaded. Enter your API key.",
   "读取已检查的代码失败：{0}": "Could not read the checked code: {0}",
   "连接中断，恢复后可取消。": "Disconnected; you can cancel once the connection is back.",
   "这次研究已经结束，无需取消。": "This research has already ended; there is nothing to cancel.",

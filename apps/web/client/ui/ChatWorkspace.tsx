@@ -175,7 +175,7 @@ function TaskMessage(props: ChatThreadProps) {
           <a class="button" data-chat-download-kit href={`/api/runs/${encodeURIComponent(run.id)}/verification-kit`} download>{t('下载本地复核包')}</a>
           {props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
         </>}
-        {!accepted && <a class="text-button" href={`/api/runs/${encodeURIComponent(run.id)}/download`} download>{t('下载运行档案')}</a>}
+        <a class="text-button" href={`/api/runs/${encodeURIComponent(run.id)}/download`} download>{t('下载完整研究归档')}</a>
         {props.recovery?.steps.map(step => <button key={step.id} type="button" class="button" data-chat-recovery={step.id}
           onClick={event => props.recovery!.onAction(step.id, event.currentTarget)}>{step.label}</button>)}
       </>}

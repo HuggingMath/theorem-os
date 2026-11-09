@@ -28,7 +28,7 @@ export type TaskDraft = {
   formalization?: { id: string; evidenceSha256: string };
 };
 
-const archiveSchema = 'theorem-os.web-export.v1';
+const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];
 const maximumFileBytes = 16 * 1024 * 1024;
 const encoder = new TextEncoder();
 const editableNumber = /^[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d*)?|\.)?$/;
@@ -128,7 +128,7 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
   try {
     const envelope = object(value), schema = own(envelope, 'schema');
     if (schema === taskDraftSchema) return validatedDraft(own(envelope, 'draft'));
-    if (schema !== archiveSchema) return invalid();
+    if (typeof schema !== 'string' || !archiveSchemas.includes(schema)) return invalid();
     const run = object(own(envelope, 'run'));
     return validatedDraft({
       providerId: own(run, 'providerId'), model: own(run, 'model'), source: own(run, 'source'), task: own(run, 'task'),

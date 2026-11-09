@@ -102,7 +102,6 @@ export const pages: Record<string, string> = {
   "载入任务": "Load task",
   "删除运行记录": "Delete run",
   "记录中的源码、证明和报告将一并删除，无法恢复。已创建的分享链接也会失效。": "The run's source, proof and report will be deleted permanently. Any share links will stop working.",
-  "下载运行档案": "Download run archive",
   "删除记录": "Delete run",
   "取消这次研究？": "Cancel this research?",
   "取消这次研究": "Cancel research",
