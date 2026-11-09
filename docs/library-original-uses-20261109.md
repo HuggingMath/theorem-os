@@ -18,4 +18,8 @@ bun scripts/test-web-round3-library.ts
 
 本轮产物及部署状态位于 `/home/lzh/workspace/outputs/theoremos-library-original-uses-20261109/`。`saved-s3-reuse-projection.json` 与 `browser-report.json` 保存原有证据投影及界面验收结果，`verification.json` 记录实际交付状态。
 
+17:20–17:21（北京时间）已将源码 `d61f6c5a637d41f276d71b0063acef2f9f8b44f5` 的 web / worker 成对发布。786 个源码文件、四个运行包、53 个内置库模块与十个工具核验通过；16 个前端产物与本地浏览器验收构建一致，Brotli 内容一致。隔离预检、维护排空、备份与 checksum 恢复、切换和公网检查通过，维护关闭。`deploy/deployment-record.json` 记录运行镜像与源码，`deploy/cutover.json` 保存实际切换回执；官网本轮未变更。
+
+发布后，数学家、定理和 Library 三页在 1440px 桌面与 390px 手机的六个匿名公网浏览器场景全部通过，页面与公开 API 返回 200，无脚本错误或横向溢出。公网仅执行读取；原题引用的授权与数据行为由上述本地 HTTP、真实保存回执投影和中英文浏览器场景验证。
+
 数学家模拟验收使用旧基线 `c3ab2ba` / `f259d72`。这次只修复确认仍存在的 Library 单 Worker 引用漏项；候选证明的范围检查与集成一致性、指导的明确采纳决定由另一条隔离修复继续处理，不能据此宣称完整真人协作验收通过。
