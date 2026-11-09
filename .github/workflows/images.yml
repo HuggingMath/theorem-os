@@ -66,6 +66,8 @@ jobs:
         run: bun run test:frontend-round5
       - name: Verify session renewal, candidate review and route evidence readers
         run: bun run test:frontend-round6
+      - name: Verify delayed session responses and draft recovery
+        run: bunx vitest run --maxWorkers=4 tests/webSessionCookies.test.ts tests/webResearchSession.test.ts && bun run test:frontend-round7
 
   verify-solver:
     runs-on: ubuntu-latest
