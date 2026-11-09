@@ -449,8 +449,8 @@ export class ChatSession {
       if (owner !== this.ownerRevision) return;
       // Persist the originating conversation even if the user has already opened a new one.
       void this.refreshHistory();
-      if (requestId) this.submissionIdentity.clear(requestId);
       if (generation !== this.generation) return;
+      if (requestId) this.submissionIdentity.clear(requestId);
       if (this.draft === text) this.draft = '';
       if (!conversation) this.rememberDraft();
       this.seed = undefined;
@@ -644,7 +644,8 @@ export class ChatSession {
     const staleTarget = !!this.guidanceTarget && (!task || task.version !== this.guidanceVersion);
     const unresolvedGuidance = !!this.pendingGuidance || this.conversation?.messages.some(message => message.kind === 'guidance' && message.status === 'pending');
     const newProblem = !this.conversation && !this.run;
-    const busyFormalization = newProblem && !this.seed && !this.submissionIdentity.unresolved && this.formalizations.some(item => running(item));
+    const pendingSubmission = newProblem && this.submissionIdentity.unresolved;
+    const busyFormalization = newProblem && !this.seed && !pendingSubmission && this.formalizations.some(item => running(item));
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
     const solve = this.solve();
     // A task that just started opens its workspace once; one the reader closed stays closed until they open it again.
@@ -705,13 +706,13 @@ export class ChatSession {
       input: this.draft, onInput: value => { this.draft = value; this.rememberDraft(); this.draw(); },
       onSubmit: () => void this.submit(), onStop: () => void this.stop(), pending: pending && !this.guidanceMode, submitting: this.submitting,
       disabled: this.loading || Boolean(this.run && this.options.isSample(this.run)) || Boolean(this.currentId && !this.conversation)
-        || !this.guidanceMode && Boolean(this.options.session()?.maintenance)
-        || newProblem && (!this.capabilities?.available || busyFormalization)
+        || !this.guidanceMode && !pendingSubmission && Boolean(this.options.session()?.maintenance)
+        || newProblem && ((!this.capabilities?.available && !pendingSubmission) || busyFormalization)
         || this.guidanceMode && (!canGuide || !this.run?.observation || staleTarget || !!unresolvedGuidance),
       hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
       participation: this.participation, participationLocked: Boolean(this.seed || this.submissionIdentity.unresolved || this.run),
       onParticipation: value => { this.participation = value; this.rememberDraft(); this.draw(); },
-      keyRequired: this.guidanceMode ? false : this.options.keyRequired(this.activeProviderId()),
+      keyRequired: this.guidanceMode || pendingSubmission ? false : this.options.keyRequired(this.activeProviderId()),
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
       onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw(); },
       onModel: value => { this.model = value; this.clearConnection(); this.rememberDraft(); this.draw(); },

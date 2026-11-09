@@ -16,10 +16,10 @@ await fs.mkdir(output, { recursive: true });
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-recovery-'));
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const mail: { text: string }[] = [], formalizations: string[] = [], external: string[] = [], checks: string[] = [];
-let proofCalls = 0, browser: Browser | undefined, page: Page | undefined;
+let proofCalls = 0, runtimeReady = true, browser: Browser | undefined, page: Page | undefined;
 const credential = 'sk-chat-recovery-disposable-secret';
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Local recovery fixture' }; },
+  async readiness() { return { ready: runtimeReady, message: 'Local recovery fixture' }; },
   async run() { proofCalls++; throw new Error('Recovery checks must not start proof research'); },
   async formalize(input, send) {
     formalizations.push(input.id);
@@ -145,11 +145,39 @@ try {
   });
   await page.locator('#formalize-start').click(); await page.locator('.chat-error').waitFor();
   assert.equal(formalizations.length, 2);
-  await page.reload(); await initialized(); await page.locator('#open-settings').click();
-  await page.locator('#formalize-key').fill(credential); await page.locator('#formalize-start').click();
+  runtimeReady = false;
+  await page.reload(); await initialized();
+  assert.equal(await page.locator('#formalize-key').inputValue(), '');
+  assert.equal(await page.locator('#formalize-start').isEnabled(), true);
+  await page.locator('#formalize-start').click();
   await page.waitForURL(url => url.searchParams.has('chat')); await page.locator('[data-chat-confirm-statement]').waitFor();
   assert.equal(formalizations.length, 2);
-  checks.push('G01: a default-budget first send keeps its request identity after draft decoding and refresh');
+  runtimeReady = true;
+  checks.push('G01: default-budget first send recovers its receipt after refresh even without a key or ready worker');
+  await page.unroute('**/api/formalizations');
+  await page.reload(); await initialized();
+  await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill(webFormalizationStatement);
+  await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill(credential);
+  let releaseConversation!: () => void, conversationHeld = false;
+  const gate = new Promise<void>(resolve => { releaseConversation = resolve; });
+  await page.route('**/api/conversations', async route => {
+    if (route.request().method() !== 'POST' || conversationHeld) return route.continue();
+    const response = await route.fetch(); conversationHeld = true; await gate; await route.fulfill({ response });
+  });
+  await page.locator('#formalize-start').click();
+  for (let attempts = 0; !conversationHeld; attempts++) {
+    assert.ok(attempts < 100, 'The conversation response is held');
+    await page.waitForTimeout(30);
+  }
+  await page.locator('[data-chat-sample]').click(); await page.waitForURL(origin + '/?sample');
+  const delivered = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/conversations');
+  releaseConversation(); await delivered;
+  await page.goBack(); await page.waitForURL(origin + '/'); await initialized();
+  assert.equal(await page.locator('#formalize-original').inputValue(), webFormalizationStatement);
+  await page.locator('#formalize-start').click();
+  await page.waitForURL(url => url.searchParams.has('chat')); await page.locator('[data-chat-confirm-statement]').waitFor();
+  assert.equal(formalizations.length, 3);
+  checks.push('G01/G03: a late conversation receipt during sample navigation retains identity and restores the original task on Back');
   await defaultsContext.close();
 
   for (const [width, height] of [[812, 375], [390, 480], [390, 844], [1440, 900]]) {
