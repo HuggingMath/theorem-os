@@ -74,6 +74,21 @@ describe('host-only legacy binding', () => {
     const bytes = encode(binding);
     expect(() => validateLegacyLibraryBinding(originals, bytes, mathDigest(bytes))).toThrow();
   });
+  it('accepts the historical axiom ordering but rejects duplicates or additional axioms', () => {
+    const { originals, bytes, policy } = fixture();
+    expect(JSON.parse(originals['verification.json'].toString()).replay.nanoda.permittedAxioms)
+      .toEqual(['propext', 'Classical.choice', 'Quot.sound']);
+    expect(() => validateLegacyLibraryBinding(originals, bytes, policy.manifestSha256)).not.toThrow();
+    for (const extra of ['propext', 'sorryAx']) {
+      const { originals, binding } = fixture();
+      const verification = JSON.parse(originals['verification.json'].toString());
+      verification.replay.nanoda.permittedAxioms.push(extra);
+      originals['verification.json'] = encode(verification);
+      binding.artifacts['verification.json'] = { bytes: originals['verification.json'].length, sha256: mathDigest(originals['verification.json']) };
+      const modified = encode(binding);
+      expect(() => validateLegacyLibraryBinding(originals, modified, mathDigest(modified))).toThrow(/trust_policy/);
+    }
+  });
 });
 
 describe('legacy ordinary task installation and recovery', () => {

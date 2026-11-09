@@ -47,7 +47,9 @@ The disk-backed host reader now selects releases for ordinary and held-out boots
 including the shared ordinary Web function. See [host configuration](LIBRARY-HOST-CONFIG.md)
 for full dependency checks, exact task/benchmark mappings, current-policy resume
 checks and raw-pack rejection. External campaign mapping, production Web container
-configuration, explicit legacy bindings and knowledge catalogue integration remain pending.
+configuration and knowledge catalogue integration remain pending. Host-selected historical
+three-file releases now use `legacy-library-binding.json` and the same EffectivePack filter;
+their receipts retain the approved mapping hash, and aggregate evidence remains `unknown`.
 Auto composition and recovery now preserve the effective base, authenticated record provenance,
 visible source digests and host-authorized child packs; see the Auto section of the host configuration guide. Search/inspect/probe are not enabled here.
 

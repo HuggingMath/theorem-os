@@ -65,7 +65,7 @@ export function validateLegacyLibraryBinding(original: LegacyLibraryArtifacts, b
   requireLegacy(mathDigest(policyBytes) === binding.policy_source.sha256 && same(policy.exclusions, release.exclusions), 'policy_mismatch');
   const verification = summarySchema.parse(parseLibraryJson(original['verification.json']));
   requireLegacy(!Object.hasOwn(verification.replay, 'coverage'), 'coverage_unsupported');
-  requireLegacy(same(verification.replay.nanoda.permittedAxioms, ['Classical.choice', 'Quot.sound', 'propext']), 'trust_policy_mismatch');
+  requireLegacy(same([...verification.replay.nanoda.permittedAxioms].sort(), ['Classical.choice', 'Quot.sound', 'propext']), 'trust_policy_mismatch');
   requireLegacy(same(object(artifacts['verification.json']), { ...verification, environment: binding.environment }), 'verification_mismatch');
   requireLegacy(release.declarations.every(item => item.proof_status === 'unknown' && item.kernel_kind === null &&
     item.verification_refs.length === 0), 'invented_coverage');
