@@ -19,6 +19,7 @@ export const effectiveLibraryBindingSchema = z.object({ schema: z.literal('theor
   taskId: z.string().min(1).max(512), manifestSha256: hash, sourcePackSha256: hash, policySha256: hash,
   environment: libraryReleaseEnvironmentSchema, runtimeEnvironmentDigest: hash,
   effectivePackDigest: hash, moduleSetSha256: hash, declarationSetSha256: hash,
+  autoComposition: z.object({ parentTaskId: z.string().min(1).max(512), parentBindingSha256: hash, provenanceSha256: hash }).strict().optional(),
   hostConfiguration: z.object({ sha256: hash, dependencyLockSha256: hash }).strict().optional(),
 }).strict();
 export type EffectiveLibraryBinding = z.infer<typeof effectiveLibraryBindingSchema>;

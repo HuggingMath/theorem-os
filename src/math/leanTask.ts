@@ -266,3 +266,6 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
   for (const file of ['Submission.lean', ...libraryFiles]) assertRegularFile(path.join(projectRoot, file));
   return parsed as LeanTaskReceipt;
 }
+
+/** Stable formal identity used by host Auto child authorizations. */
+export const leanTaskId = (source: string): string => contractFor(source, 'Host Auto task.').problemId;

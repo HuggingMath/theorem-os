@@ -1,10 +1,14 @@
 import path from 'node:path';
+import fs from 'node:fs';
+import { libraryPackDigest, parseLibraryPack, type LibraryPack } from './libraryPacks';
+import { inspectAutoLibrarySource, autoLibraryFile } from './autoLibrary';
+import { inspectScopedLeanDeclarations } from './leanSource';
 import { z } from 'zod';
 import { assertMathCanonicalPath } from './paths';
 import { mathDigest, readMathFile } from './mathRuntimeIo';
 import { canonicalLibraryJson, libraryUnicodeCompare, parseLibraryJson, validateLibraryRelease,
   type LibraryReleaseArtifacts } from './libraryRelease';
-import { libraryTaskPolicySchema, resolveEffectiveLibraryPack, type EffectiveLibraryBinding,
+import { effectiveLibraryBindingSchema, libraryTaskPolicySchema, resolveEffectiveLibraryPack, type EffectiveLibraryBinding,
   type EffectiveLibraryPack } from './libraryEffectivePack';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -12,6 +16,7 @@ const identitySchema = z.object({ taskId: z.string().min(1).max(512),
   benchmarkCommit: z.string().regex(/^[a-f0-9]{40}$/u).optional() }).strict();
 const configSchema = z.object({ schema: z.literal('theorem-os.library-host-config.v1'),
   releaseDirectory: z.string().min(1), manifestSha256: hash, sourceLakeManifest: z.string().min(1),
+  autoLibraryDirectory: z.string().min(1).optional(),
   tasks: z.array(identitySchema.extend({ selection: libraryTaskPolicySchema.shape.selection }).strict()).min(1).max(10000),
 }).strict();
 export type LibraryHostConfig = z.infer<typeof configSchema>;
@@ -56,6 +61,10 @@ function hostFile(file: string, workspace: string, limit: number): Buffer {
 /** All configuration paths are absolute and must stay outside the solver workspace. No unmapped fallback. */
 export function resolveHostLibrary(task: LibraryHostTaskIdentity, target: LibraryHostTarget, workspace: string,
   configPath = libraryHostConfigPath()): EffectiveLibraryPack | undefined {
+  return resolveConfiguredLibrary(task, target, workspace, configPath, false);
+}
+function resolveConfiguredLibrary(task: LibraryHostTaskIdentity, target: LibraryHostTarget, workspace: string,
+  configPath: string | undefined, parentOnly: boolean): EffectiveLibraryPack | undefined {
   if (configPath === undefined) return undefined;
   identitySchema.parse(task);
   const bytes = hostFile(configPath, workspace, 2 * 1024 * 1024);
@@ -63,6 +72,18 @@ export function resolveHostLibrary(task: LibraryHostTaskIdentity, target: Librar
   const keys = config.tasks.map(({ selection: _selection, ...identity }) => canonicalLibraryJson(identity));
   if (new Set(keys).size !== keys.length) throw new Error('library_host_task_duplicate');
   const index = keys.indexOf(canonicalLibraryJson(task));
+  const authorization = !parentOnly && config.autoLibraryDirectory && !task.benchmarkCommit
+    ? registryFile(config, workspace, 'tasks', path.resolve(workspace)) : undefined;
+  if (authorization && fs.existsSync(authorization)) {
+    const entry = derivedSchema.parse(parseLibraryJson(hostFile(authorization, workspace, 64 * 1024 * 1024)));
+    if (entry.taskId !== task.taskId || entry.workspace !== path.resolve(workspace)) throw new Error('library_auto_task_changed');
+    // Parents must be explicitly mapped: derived authorizations cannot form a recursive chain.
+    if (!config.tasks.some(item => item.taskId === entry.parent.taskId && item.benchmarkCommit === entry.parent.benchmarkCommit))
+      throw new Error('library_host_task_unmapped');
+    const parent = resolveConfiguredLibrary(entry.parent, target, workspace, configPath, true)!;
+    if (canonicalLibraryJson(parent.binding) !== canonicalLibraryJson(entry.parentBinding)) throw new Error('library_host_binding_changed');
+    return derivedPack(parent, entry);
+  }
   if (index < 0) throw new Error('library_host_task_unmapped');
   const limits = { 'pack.json': 40 * 1024 * 1024, 'library.json': 8 * 1024 * 1024,
     'verification.json': 32 * 1024 * 1024, 'declaration-metadata.jsonl': 32 * 1024 * 1024,
@@ -91,4 +112,91 @@ export function assertHostLibraryCurrent(binding: EffectiveLibraryBinding | unde
   if ((binding?.hostConfiguration || effective) &&
       canonicalLibraryJson(binding ?? null) !== canonicalLibraryJson(effective?.binding ?? null))
     throw new Error('library_host_binding_changed');
+}
+
+
+const derivedSchema = z.object({ schema: z.literal('theorem-os.auto-library-authorization.v1'),
+  taskId: z.string().min(1).max(512), workspace: z.string().min(1), parent: identitySchema,
+  parentBinding: effectiveLibraryBindingSchema, pack: z.unknown(), provenanceSha256: hash,
+}).strict();
+
+/** The registry is host storage, never mounted in planner/solver workspaces. Entries are immutable. */
+function registryFile(config: LibraryHostConfig, workspace: string, kind: 'tasks' | 'records' | 'builds', key: string): string {
+  const directory = config.autoLibraryDirectory;
+  if (!directory || !path.isAbsolute(directory)) throw new Error('library_auto_registry_required');
+  assertMathCanonicalPath(directory);
+  for (const [root, child] of [[workspace, directory], [directory, workspace]]) {
+    const relative = path.relative(path.resolve(root!), path.resolve(child!));
+    if (!relative || relative === '.' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)))
+      throw new Error('library_auto_registry_workspace_overlap');
+  }
+  return path.join(directory, kind, mathDigest(key) + '.json');
+}
+function registryConfig(workspace: string): LibraryHostConfig {
+  const configPath = libraryHostConfigPath();
+  if (!configPath) throw new Error('library_auto_host_required');
+  return configSchema.parse(parseLibraryJson(hostFile(configPath, workspace, 2 * 1024 * 1024)));
+}
+function writeRegistry(file: string, workspace: string, value: unknown): void {
+  assertMathCanonicalPath(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const bytes = canonicalLibraryJson(value);
+  // Exclusive creation makes concurrent identical authorization idempotent without replacement races.
+  try { fs.writeFileSync(file, bytes, { flag: 'wx', mode: 0o400 }); }
+  catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
+    if (hostFile(file, workspace, 64 * 1024 * 1024).toString() !== bytes) throw new Error('library_auto_authorization_changed');
+  }
+}
+function derivedPack(parent: EffectiveLibraryPack, entry: z.infer<typeof derivedSchema>): EffectiveLibraryPack {
+  const pack = entry.pack === null ? null : parseLibraryPack(entry.pack);
+  validateAutoComposition(parent, pack);
+  const modules = (pack?.modules ?? []).map(item => ({ file: item.file, module: item.file.slice(0, -5).replaceAll('/', '.'),
+    sha256: mathDigest(item.source) })).sort((a, b) => libraryUnicodeCompare(a.file, b.file));
+  const declarations = (pack?.modules ?? []).flatMap(item => inspectScopedLeanDeclarations(item.source)
+    .map(declaration => ({ name: declaration.qualifiedName, module: item.file.slice(0, -5).replaceAll('/', '.') })));
+  return { pack, modules, declarations: parent.declarations.filter(item => modules.some(module => module.file === item.installed_file)),
+    binding: { ...parent.binding, taskId: entry.taskId, effectivePackDigest: pack ? libraryPackDigest(pack) : mathDigest('null'),
+      moduleSetSha256: mathDigest(canonicalLibraryJson(modules)), declarationSetSha256: mathDigest(canonicalLibraryJson(declarations)),
+      autoComposition: { parentTaskId: entry.parent.taskId, parentBindingSha256: mathDigest(canonicalLibraryJson(parent.binding)),
+        provenanceSha256: entry.provenanceSha256 } } };
+}
+
+function validateAutoComposition(parent: EffectiveLibraryPack, pack: LibraryPack | null): void {
+  if (pack?.requires?.length) throw new Error('library_auto_external_requirement');
+  const originals = new Map((parent.pack?.modules ?? []).map(item => [item.file, item]));
+  const libraryModules = new Set((pack?.modules ?? []).map(item => item.file.slice(0, -5).replaceAll('/', '.')));
+  for (const item of pack?.modules ?? []) {
+    const original = originals.get(item.file);
+    if (original) {
+      if (canonicalLibraryJson(original) !== canonicalLibraryJson(item)) throw new Error('library_auto_base_changed');
+    } else {
+      const name = path.basename(item.file, '.lean');
+      if (item.file !== autoLibraryFile(name) || item.origin.kind !== 'run' ||
+          inspectAutoLibrarySource({ name, source: item.source, libraryModules, allowSorry: false }).length)
+        throw new Error('library_auto_addition_invalid');
+    }
+  }
+}
+
+/** Host-only: freeze the exact child pack after the Auto composition gates, never from task input. */
+export function authorizeHostAutoTask(input: { parent: LibraryHostTaskIdentity; binding: EffectiveLibraryBinding;
+  target: LibraryHostTarget; workspace: string; taskId: string; pack?: LibraryPack; provenance: unknown }): void {
+  const parent = resolveConfiguredLibrary(input.parent, input.target, input.workspace, libraryHostConfigPath(), true);
+  if (!parent || canonicalLibraryJson(parent.binding) !== canonicalLibraryJson(input.binding)) throw new Error('library_host_binding_changed');
+  const config = registryConfig(input.workspace);
+  if (input.taskId !== input.parent.taskId && config.tasks.some(item => item.taskId === input.taskId && !item.benchmarkCommit)) throw new Error('library_auto_task_mapping_conflict');
+  const entry = derivedSchema.parse({ schema: 'theorem-os.auto-library-authorization.v1', taskId: input.taskId,
+    workspace: path.resolve(input.workspace), parent: input.parent, parentBinding: input.binding,
+    pack: input.pack ? parseLibraryPack(input.pack) : null, provenanceSha256: mathDigest(canonicalLibraryJson(input.provenance)) });
+  validateAutoComposition(parent, entry.pack === null ? null : parseLibraryPack(entry.pack));
+  writeRegistry(registryFile(config, input.workspace, 'tasks', entry.workspace), input.workspace, entry);
+}
+
+/** Authenticate host-created build requests and verified pool records independently of editable JSON copies. */
+export function hostAutoEvidence(kind: 'records' | 'builds', key: string, value: unknown, workspace: string, write = false): boolean {
+  const file = registryFile(registryConfig(workspace), workspace, kind, key);
+  if (write) writeRegistry(file, workspace, value);
+  if (!fs.existsSync(file)) return false;
+  return hostFile(file, workspace, 64 * 1024 * 1024).toString() === canonicalLibraryJson(value);
 }

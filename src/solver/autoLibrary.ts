@@ -10,7 +10,11 @@ import { AUTO_LIBRARY_RECORD_SCHEMA, autoLibraryFile, autoLibraryPackFor, autoLi
 import { AUTO_LIBRARY_PLANNER_INSTRUCTIONS, autoLibraryLeanFeedback, autoLibraryModuleSummary, autoLibraryPlanJsonSchema,
   autoLibraryPlannerInput, autoLibraryPlanProblems, autoLibraryPlanSchema, autoLibraryProverTask, autoLibraryRejectionFeedback,
 } from '../math/autoLibraryPlanner';
-import { bootstrapLeanTask, LEAN_TASK_DESCRIPTION_MAX_LENGTH, LEAN_TASK_SOURCE_MAX_BYTES } from '../math/leanTask';
+import { readLeanTaskReceipt, LEAN_TASK_DESCRIPTION_MAX_LENGTH, LEAN_TASK_SOURCE_MAX_BYTES } from '../math/leanTask';
+import { bootstrapAutoLibraryTask, resolveAutoLibraryBase } from '../math/autoLibraryHost';
+import { effectiveLibraryBindingSchema, type EffectiveLibraryPack } from '../math/libraryEffectivePack';
+import { hostAutoEvidence, libraryHostConfigPath } from '../math/libraryHostConfig';
+import { canonicalLibraryJson } from '../math/libraryRelease';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { inspectScopedLeanDeclarations } from '../math/leanSource';
 import { extractRunLibraryModules, LIBRARY_PACK_SCHEMA, libraryPackDigest, mergeLibraryPacks, parseLibraryPack,
@@ -40,6 +44,7 @@ const requestSchema = z.object({
   task: z.string().max(LEAN_TASK_DESCRIPTION_MAX_LENGTH), environment: z.string().min(1).max(64), environmentDigest: hash,
   definitionTargets: z.array(z.string().min(1).max(512)).max(1024).optional(),
   pool: z.string().min(1).max(4096), basePackDigest: hash.nullable(),
+  libraryBinding: effectiveLibraryBindingSchema.optional(),
   buildManifestRef: z.string().min(1).max(4096), buildDigest: hash,
   planner: z.object({ model: z.string().min(1).max(128), effort: z.string().min(1).max(32), profile: z.string().min(1).max(4096),
     executable: z.string().min(1).max(4096) }).strict(),
@@ -54,7 +59,7 @@ export type AutoLibraryRequest = z.infer<typeof requestSchema>;
 
 /** Freeze one build: the triggering challenge, environment, hand library, pool, models and limits. */
 export function prepareAutoLibraryBuild(directoryInput: string, rootInput: string,
-  input: Omit<AutoLibraryRequest, 'schema' | 'buildId' | 'environmentDigest' | 'basePackDigest' | 'buildDigest'> & { basePack?: LibraryPack }): AutoLibraryRequest {
+  input: Omit<AutoLibraryRequest, 'schema' | 'buildId' | 'environmentDigest' | 'basePackDigest' | 'buildDigest' | 'libraryBinding'> & { basePack?: LibraryPack }): AutoLibraryRequest {
   const directory = path.resolve(directoryInput), root = path.resolve(rootInput);
   assertMathCanonicalPath(directory);
   if (isMathPathWithin(root, directory) || isMathPathWithin(directory, root)) throw new Error('auto_library_directory_must_be_external');
@@ -64,9 +69,13 @@ export function prepareAutoLibraryBuild(directoryInput: string, rootInput: strin
   readMathBuildManifest(buildManifestRef, root, path.join(root, 'out/main'));
   assertMathCanonicalPath(pool);
   if (isMathPathWithin(directory, pool) || isMathPathWithin(pool, directory)) throw new Error('auto_library_pool_must_be_separate');
-  const { basePack: baseInput, ...rest } = input, basePack = baseInput && parseLibraryPack(baseInput);
+  const { basePack: baseInput, ...rest } = input;
+  if (libraryHostConfigPath() && baseInput) throw new Error('library_host_sources_conflict');
+  const effective = resolveAutoLibraryBase(input.challengeId, environment.id, directory);
+  const basePack = effective ? effective.pack ?? undefined : baseInput && parseLibraryPack(baseInput);
   const request = requestSchema.parse({ ...rest, schema: 'theorem-os.auto-library-build.v1', buildId: crypto.randomUUID(),
     environment: environment.id, environmentDigest: environment.dependencyDigest, pool, buildManifestRef,
+    ...(effective ? { libraryBinding: effective.binding } : {}),
     buildDigest: mathDigest(readMathText(buildManifestRef, 8_000_000)), basePackDigest: basePack ? libraryPackDigest(basePack) : null });
   if (request.definitionTargets) {
     const definitions = new Set(inspectScopedLeanDeclarations(request.challengeSource)
@@ -76,20 +85,29 @@ export function prepareAutoLibraryBuild(directoryInput: string, rootInput: strin
   }
   if (request.demand && request.demand.challengeDigest !== mathDigest(request.challengeSource))
     throw new Error('auto_library_demand_challenge_changed');
+  if (effective) hostAutoEvidence('builds', directory, request, directory, true);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (basePack) writeMathJsonDurable(path.join(directory, 'base-pack.json'), basePack, 0o400);
   writeMathJsonDurable(path.join(directory, 'request.json'), request, 0o400);
   return request;
 }
 
-export function readAutoLibraryRequest(directory: string): { request: AutoLibraryRequest; basePack?: LibraryPack } {
+export function readAutoLibraryRequest(directoryInput: string): { request: AutoLibraryRequest; basePack?: LibraryPack; effective?: EffectiveLibraryPack } {
+  const directory = path.resolve(directoryInput);
   const request = requestSchema.parse(JSON.parse(readMathText(path.join(directory, 'request.json'), 4 * LEAN_TASK_SOURCE_MAX_BYTES)));
   if (getLeanTaskEnvironment(request.environment as LeanTaskEnvironment).dependencyDigest !== request.environmentDigest)
     throw new Error('auto_library_environment_changed');
-  if (request.basePackDigest === null) return { request };
-  const basePack = parseLibraryPack(JSON.parse(readMathText(path.join(directory, 'base-pack.json'), 64 * 1024 * 1024)));
-  if (libraryPackDigest(basePack) !== request.basePackDigest) throw new Error('auto_library_base_pack_changed');
-  return { request, basePack };
+  const effective = resolveAutoLibraryBase(request.challengeId, request.environment, directory);
+  if (request.libraryBinding || effective) {
+    if (!effective || canonicalLibraryJson(request.libraryBinding ?? null) !== canonicalLibraryJson(effective.binding) ||
+        !hostAutoEvidence('builds', directory, request, directory)) throw new Error('auto_library_host_binding_changed');
+  }
+  const basePack = request.basePackDigest === null ? undefined :
+    parseLibraryPack(JSON.parse(readMathText(path.join(directory, 'base-pack.json'), 64 * 1024 * 1024)));
+  if ((basePack ? libraryPackDigest(basePack) : null) !== request.basePackDigest ||
+      (effective && (basePack ? libraryPackDigest(basePack) : mathDigest('null')) !== effective.binding.effectivePackDigest))
+    throw new Error('auto_library_base_pack_changed');
+  return { request, ...(basePack ? { basePack } : {}), ...(effective ? { effective } : {}) };
 }
 
 const accounting = z.object({ startedTurns: limit, reportedTurns: limit, pending: z.boolean(), incomplete: z.boolean() }).strict();
@@ -103,6 +121,7 @@ const sessionSchema = z.object({
 const outcome = z.enum(['rejected', 'none', 'statement_failed', 'no_progress', 'verify_failed', 'published']);
 const roundSchema = z.object({
   round: z.number().int().positive(), phase: z.enum(['plan', 'check', 'prove', 'extract', 'verify', 'publish', 'done']),
+  poolDigests: z.record(hash).optional(),
   pool: z.array(z.string()).max(4096), taken: z.array(z.string()).max(4096), name: z.string().optional(),
   // Read earlier saved rounds without weakening the strict contract for a newly submitted plan.
   plan: autoLibraryPlanSchema.extend({ target: autoLibraryPlanSchema.shape.target.default(null),
@@ -239,7 +258,7 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
   const state: State = readAutoLibraryState(directory) ?? { schema: 'theorem-os.auto-library-state.v1', requestDigest: context.requestDigest,
     status: 'running', modules: [], sessions: [], elapsedMs: 0 };
   if (state.requestDigest !== context.requestDigest) throw new Error('auto_library_resume_identity_changed');
-  if (state.status !== 'running' && state.status !== 'stopped') return summarize(directory, state);
+  const terminalStatus = state.status !== 'running' && state.status !== 'stopped' ? state.status : undefined;
   if (state.activeSince !== undefined) state.elapsedMs += Math.max(0, Date.now() - state.activeSince);
   delete state.activeSince; delete state.error; state.status = 'running';
   for (const session of state.sessions) initializeUsageAccounting(session);
@@ -272,8 +291,30 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
     return found;
   };
   // The pack a round works against: the hand library plus the pool snapshot taken when the round opened.
-  const roundPack = (round: Round) => autoLibraryPackFor({ base: basePack, records: records(round.pool),
-    environmentDigest: environment.dependencyDigest, challengeSource: request.challengeSource }).pack;
+  const currentSelection = (pool: readonly AutoLibraryRecord[]) => {
+    const current = readAutoLibraryRequest(directory);
+    if (mathDigest(canonicalMathJson(current.request)) !== context.requestDigest) throw new Error('auto_library_resume_identity_changed');
+    return autoLibraryPackFor({ ...(current.effective ? { effective: current.effective,
+      authenticated: (record: AutoLibraryRecord) => hostAutoEvidence('records', mathDigest(canonicalLibraryJson(record)), record, directory) } : { base: basePack }),
+      records: pool, environmentDigest: environment.dependencyDigest, challengeSource: request.challengeSource });
+  };
+  const roundPack = (round: Round) => {
+    const pool = records(round.pool);
+    if ((request.libraryBinding && !round.poolDigests) || (round.poolDigests &&
+        canonicalLibraryJson(round.poolDigests) !== canonicalLibraryJson(Object.fromEntries(pool.map(record =>
+          [record.name, mathDigest(canonicalLibraryJson(record))]))))) throw new Error('auto_library_pool_changed');
+    const selected = currentSelection(pool);
+    if (canonicalLibraryJson([...selected.included].sort()) !== canonicalLibraryJson([...round.pool].sort()))
+      throw new Error('auto_library_pool_changed');
+    return selected.pack;
+  };
+  if (terminalStatus) {
+    for (const module of state.modules) for (const round of module.rounds) roundPack(round);
+    state.status = terminalStatus;
+    return summarize(directory, state);
+  }
+  const hostContext = (round: Round) => request.libraryBinding ? { binding: request.libraryBinding,
+    provenance: { requestDigest: context.requestDigest, poolDigests: round.poolDigests } } : undefined;
   // The pack modules a source imports, transitively: what its proof project installs.
   const closurePack = (pack: LibraryPack | undefined, source: string): LibraryPack | undefined => {
     const files = new Set(libraryImportClosure(pack, source));
@@ -421,8 +462,8 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       fs.mkdirSync(proveDirectory, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(proveDirectory, 'task.md'), autoLibraryProverTask(name) + '\n', { mode: 0o400, flag: 'wx' });
       try {
-        bootstrapLeanTask(path.join(proveDirectory, 'workspace'), { source: spec, task: autoLibraryProverTask(name),
-          environment: request.environment as LeanTaskEnvironment, ...(pack ? { libraryPack: pack } : {}) });
+        bootstrapAutoLibraryTask(path.join(proveDirectory, 'workspace'), { source: spec, task: autoLibraryProverTask(name),
+          environment: request.environment as LeanTaskEnvironment, ...(pack ? { libraryPack: pack } : {}) }, hostContext(round));
       } catch (cause) {
         return finish(module, round, 'rejected', autoLibraryRejectionFeedback([`the statement could not be set up as a proof task: ${errorText(cause)}`]));
       }
@@ -501,6 +542,9 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
   // The module as a frozen library file of a fresh project: the startup recheck compiles it and rejects sorry.
   const verify = async (module: Module, round: Round) => {
     const name = round.name!, item = extracted(module, round), pack = closurePack(roundPack(round), item.source);
+    if (inspectAutoLibrarySource({ name, source: item.source, allowSorry: false,
+      libraryModules: new Set((pack?.modules ?? []).map(item => item.file.slice(0, -5).replaceAll('/', '.'))) }).length)
+      throw new Error('auto_library_extracted_source_invalid');
     const roundDirectory = path.join(directory, 'modules', String(module.index), `round-${round.round}`);
     if (!round.verify || !fs.existsSync(path.join(roundDirectory, round.verify, 'workspace', 'active-problem.json'))) {
       round.verify = `verify-${crypto.randomUUID().slice(0, 8)}`; save();
@@ -509,8 +553,8 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       fs.writeFileSync(path.join(verifyDirectory, 'task.md'), task + '\n', { mode: 0o400, flag: 'wx' });
       const own: LibraryPack = { schema: LIBRARY_PACK_SCHEMA, modules: [{ file: autoLibraryFile(name), source: item.source, origin: item.origin }] };
       try {
-        bootstrapLeanTask(path.join(verifyDirectory, 'workspace'), { source: 'theorem auto_library_installed : True := trivial\n', task,
-          environment: request.environment as LeanTaskEnvironment, libraryPack: pack ? mergeLibraryPacks([pack, own]) : parseLibraryPack(own) });
+        bootstrapAutoLibraryTask(path.join(verifyDirectory, 'workspace'), { source: 'theorem auto_library_installed : True := trivial\n', task,
+          environment: request.environment as LeanTaskEnvironment, libraryPack: pack ? mergeLibraryPacks([pack, own]) : parseLibraryPack(own) }, hostContext(round));
       } catch (cause) {
         return finish(module, round, 'verify_failed', autoLibraryRejectionFeedback([`the proved module could not be installed: ${errorText(cause)}`]));
       }
@@ -532,7 +576,7 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       const own: LibraryPack = { schema: LIBRARY_PACK_SCHEMA, modules: [{ file: autoLibraryFile(name), source: item.source, origin: item.origin }] };
       const consumerDirectory = path.join(roundDirectory, 'consumer-application');
       round.applicationCheck = await checkAutoLibraryApplication({
-        workspace: consumerDirectory, source: request.challengeSource,
+        workspace: consumerDirectory, source: request.challengeSource, host: hostContext(round),
         definitionTargets: request.definitionTargets,
         environment: request.environment as LeanTaskEnvironment, pack: pack ? mergeLibraryPacks([pack, own]) : parseLibraryPack(own),
         moduleName: name, selected: { declaration: round.plan.consumerApplication.declaration!,
@@ -558,12 +602,16 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       const requires = libraryImportClosure(pack, item.source).map(file =>
         ({ file, digest: mathDigest(pack!.modules.find(entry => entry.file === file)!.source) }));
       // Every round of this and earlier modules handed its pack to the planner and its closure to the prover.
-      const visible = [...new Set(state.modules.filter(entry => entry.index <= module.index).flatMap(entry => entry.rounds)
-        .flatMap(entry => (roundPack(entry)?.modules ?? []).map(file => file.file)))].sort();
+      const visibleModules = state.modules.filter(entry => entry.index <= module.index).flatMap(entry => entry.rounds)
+        .flatMap(entry => roundPack(entry)?.modules ?? []);
+      const visible = [...new Set(visibleModules.map(item => item.file))].sort();
       const proverState = readJson(path.join(roundDirectory, round.prove!, 'result.json.runtime', 'state.json')) as { runId?: unknown } | undefined;
       record = parseAutoLibraryRecord({ schema: AUTO_LIBRARY_RECORD_SCHEMA, name, file: autoLibraryFile(name), source: item.source,
         sourceDigest: mathDigest(item.source), summary: plan.summary, sources: plan.sources, theorems: autoLibraryTheorems(item.source), requires,
-        visible, environment: { id: request.environment, digest: request.environmentDigest },
+        visible, ...(request.libraryBinding ? { provenance: { binding: request.libraryBinding, visible: visible.map(file => {
+          const source = visibleModules.find(item => item.file === file)!.source;
+          return { file, digest: mathDigest(source) };
+        }) } } : {}), environment: { id: request.environment, digest: request.environmentDigest },
         trigger: { challengeId: request.challengeId, challengeDigest: mathDigest(request.challengeSource), taskDigest: mathDigest(request.task) },
         cost: { plannerTokens: plannerTokens(state.sessions.filter(session => session.module === module.index)),
           proverTokens: proverTokens(module.rounds), wallMs: Math.max(0, Math.round(elapsed() - module.openedAtMs)), rounds: module.rounds.length },
@@ -574,6 +622,28 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
           dropped: (item.origin.dropped ?? []).filter(entry => entry.reason !== 'original') },
         buildId: request.buildId, buildDigest: request.buildDigest, publishedAt: new Date().toISOString() });
       writeMathJsonDurable(recordFile, record, 0o400);
+    }
+    const currentPack = roundPack(round); // Recheck after awaited compilation, including cached publication.
+    const item = extracted(module, round);
+    const visibleModules = state.modules.filter(entry => entry.index <= module.index).flatMap(entry => entry.rounds)
+      .flatMap(entry => roundPack(entry)?.modules ?? []);
+    const visible = [...new Set(visibleModules.map(item => item.file))].sort();
+    const requires = libraryImportClosure(currentPack, item.source).map(file =>
+      ({ file, digest: mathDigest(currentPack!.modules.find(entry => entry.file === file)!.source) }));
+    if (record.name !== name || record.source !== item.source || record.buildId !== request.buildId ||
+        canonicalLibraryJson(record.requires) !== canonicalLibraryJson(requires) ||
+        canonicalLibraryJson(record.visible) !== canonicalLibraryJson(visible)) throw new Error('auto_library_publication_changed');
+    if (request.libraryBinding) {
+      const receipt = readLeanTaskReceipt(path.join(roundDirectory, round.verify!, 'workspace', 'active-problem.json'));
+      if (receipt.libraryPack?.files[record.file] !== record.sourceDigest ||
+          canonicalLibraryJson(record.provenance?.visible) !== canonicalLibraryJson(visible.map(file =>
+            ({ file, digest: mathDigest(visibleModules.find(item => item.file === file)!.source) }))))
+        throw new Error('auto_library_publication_changed');
+    }
+    if (request.libraryBinding) {
+      if (!record.provenance || canonicalLibraryJson(record.provenance.binding) !== canonicalLibraryJson(request.libraryBinding))
+        throw new Error('auto_library_record_provenance_changed');
+      hostAutoEvidence('records', mathDigest(canonicalLibraryJson(record)), record, directory, true);
     }
     await publishAutoLibraryRecord(request.pool, record);
     module.published = name;
@@ -598,11 +668,13 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       let round = last?.phase === 'done' || !last ? undefined : last;
       if (!round) {
         checkLimits();
-        const pool = autoLibraryPackFor({ base: basePack, records: readAutoLibraryPool(request.pool),
-          environmentDigest: environment.dependencyDigest, challengeSource: request.challengeSource }).included;
-        round = { round: module.rounds.length + 1, phase: 'plan', pool, taken: takenAutoLibraryNames(request.pool, request.buildId) };
+        const candidates = readAutoLibraryPool(request.pool), pool = currentSelection(candidates).included;
+        const poolDigests = Object.fromEntries(candidates.filter(record => pool.includes(record.name)).map(record =>
+          [record.name, mathDigest(canonicalLibraryJson(record))]));
+        round = { round: module.rounds.length + 1, phase: 'plan', pool, poolDigests, taken: takenAutoLibraryNames(request.pool, request.buildId) };
         module.rounds.push(round); save(); event('auto_library_round_started', { module: module.index, round: round.round });
       }
+      roundPack(round); // Every resumed phase revalidates the frozen pool and current host policy.
       const step = { plan, check, prove, extract, verify, publish }[round.phase as Exclude<Round['phase'], 'done'>];
       await step(module, round);
     }

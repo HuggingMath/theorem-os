@@ -47,8 +47,9 @@ The disk-backed host reader now selects releases for ordinary and held-out boots
 including the shared ordinary Web function. See [host configuration](LIBRARY-HOST-CONFIG.md)
 for full dependency checks, exact task/benchmark mappings, current-policy resume
 checks and raw-pack rejection. External campaign mapping, production Web container
-configuration, explicit legacy bindings, Auto-library composition/resume and knowledge
-catalogue integration remain pending. Search/inspect/probe are not enabled here.
+configuration, explicit legacy bindings and knowledge catalogue integration remain pending.
+Auto composition and recovery now preserve the effective base, authenticated record provenance,
+visible source digests and host-authorized child packs; see the Auto section of the host configuration guide. Search/inspect/probe are not enabled here.
 
 Tests use a Python-generated **synthetic** release under
 `tests/fixtures/library-release`, with fabricated replay records. They cover byte and

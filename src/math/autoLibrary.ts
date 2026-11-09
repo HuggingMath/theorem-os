@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { effectiveLibraryBindingSchema, type EffectiveLibraryPack } from './libraryEffectivePack';
+import { canonicalLibraryJson } from './libraryRelease';
 import { inspectLeanDeclarationRegions, inspectLeanDeclarations, inspectScopedLeanDeclarations } from './leanSource';
 import { maskLeanCommentsAndStrings } from './leanSyntax';
 import { LIBRARY_PACK_SCHEMA, MAX_LIBRARY_MODULE_BYTES, libraryDeclarationConflict, libraryForbiddenToken, mergeLibraryPacks,
@@ -15,7 +17,7 @@ import { knowledgeUseSchema } from '../solver/knowledgeUsage';
  * Auto-library modules are Lean modules the solving system writes for itself before it solves a problem. A planner
  * states definitions and theorems (theorem bodies `sorry`), a solver run proves them, and the host keeps only what
  * Lean accepted without gaps as a frozen library file. Published modules join an append-only pool that any later
- * problem may install. They are not excluded per challenge: every record names the problem that triggered it and
+ * problem may install when its policy permits. Every record names the problem that triggered it and
  * what it cost, and a solution that imports one reports it. A record also lists the library files its build could
  * read, and a problem installs it only when all of them are installed there too, so a module never carries a hand
  * module a problem excludes into that problem, not even restated.
@@ -156,6 +158,9 @@ const recordSchema = z.object({
   requires: z.array(z.object({ file: z.string().min(1).max(512), digest: hash }).strict()).max(256),
   /** Library files the planner or prover of the build could read, sorted. */
   visible: z.array(z.string().min(1).max(512)).max(4096),
+  provenance: z.object({ binding: effectiveLibraryBindingSchema,
+    visible: z.array(z.object({ file: z.string().min(1).max(512), digest: hash }).strict()).max(4096),
+  }).strict().optional(),
   environment: z.object({ id: z.string().min(1).max(64), digest: hash }).strict(),
   trigger: z.object({ challengeId: z.string().min(1).max(256), challengeDigest: hash, taskDigest: hash }).strict(),
   cost: z.object({ plannerTokens: tokens, proverTokens: tokens, wallMs: z.number().int().nonnegative(),
@@ -170,6 +175,9 @@ const recordSchema = z.object({
   if (record.sourceDigest !== mathDigest(record.source)) context.addIssue({ code: 'custom', path: ['sourceDigest'], message: 'does not match the source' });
   if (record.visible.some((file, index) => index > 0 && record.visible[index - 1]! >= file) || record.visible.includes(record.file))
     context.addIssue({ code: 'custom', path: ['visible'], message: 'must be sorted, unique and exclude the module itself' });
+  if (record.provenance && (canonicalLibraryJson(record.provenance.visible.map(item => item.file)) !== canonicalLibraryJson(record.visible) ||
+      record.requires.some(item => record.provenance!.visible.find(visible => visible.file === item.file)?.digest !== item.digest)))
+    context.addIssue({ code: 'custom', path: ['provenance'], message: 'must bind every visible and required source' });
   else if (record.requires.some(item => !record.visible.includes(item.file)))
     context.addIssue({ code: 'custom', path: ['visible'], message: 'must contain every required file' });
 });
@@ -261,7 +269,7 @@ export async function publishAutoLibraryRecord(poolInput: string, value: AutoLib
 }
 
 export type AutoLibrarySkip = { name: string;
-  reason: 'environment' | 'file_present' | 'requirement_missing' | 'visibility' | 'declaration_conflict' };
+  reason: 'environment' | 'file_present' | 'requirement_missing' | 'visibility' | 'declaration_conflict' | 'provenance' | 'source' };
 
 /**
  * A destination pack: `base` (the hand library after its exclusions) plus every pool record built for the same
@@ -269,12 +277,23 @@ export type AutoLibrarySkip = { name: string;
  * file missing here (an excluded hand module, or a pool module skipped here) and whose declarations the challenge
  * does not repeat. Records join in publication order, so a record can require an earlier one.
  */
-export function autoLibraryPackFor(input: { base?: LibraryPack; records: readonly AutoLibraryRecord[]; environmentDigest: string;
+export function autoLibraryPackFor(input: { base?: LibraryPack; effective?: EffectiveLibraryPack;
+  authenticated?: (record: AutoLibraryRecord) => boolean; records: readonly AutoLibraryRecord[]; environmentDigest: string;
   challengeSource: string }): { pack?: LibraryPack; included: string[]; skipped: AutoLibrarySkip[] } {
-  const installed = new Map((input.base?.modules ?? []).map(module => [module.file, mathDigest(module.source)]));
+  if (input.effective && input.base) throw new Error('auto_library_base_sources_conflict');
+  const base = input.effective ? input.effective.pack ?? undefined : input.base;
+  if (input.effective && input.effective.binding.runtimeEnvironmentDigest !== input.environmentDigest) throw new Error('auto_library_environment_changed');
+  const installed = new Map((base?.modules ?? []).map(module => [module.file, mathDigest(module.source)]));
   const modules: LibraryPackModule[] = [], included: string[] = [], skipped: AutoLibrarySkip[] = [];
   for (const record of input.records) {
     const skip = (reason: AutoLibrarySkip['reason']) => skipped.push({ name: record.name, reason });
+    if (input.effective && (!record.provenance ||
+        canonicalLibraryJson(record.provenance.binding) !== canonicalLibraryJson(input.effective.binding) ||
+        !input.authenticated?.(record))) { skip('provenance'); continue; }
+    if (record.provenance?.visible.some(item => installed.get(item.file) !== item.digest)) { skip('visibility'); continue; }
+    if (input.effective && (inspectAutoLibrarySource({ name: record.name, source: record.source, allowSorry: false,
+        libraryModules: new Set([...installed.keys()].map(moduleName)) }).length ||
+        canonicalLibraryJson(autoLibraryTheorems(record.source)) !== canonicalLibraryJson(record.theorems))) { skip('source'); continue; }
     if (record.environment.digest !== input.environmentDigest) { skip('environment'); continue; }
     if (installed.has(record.file)) { skip('file_present'); continue; }
     if (record.requires.some(item => installed.get(item.file) !== item.digest)) { skip('requirement_missing'); continue; }
@@ -287,9 +306,9 @@ export function autoLibraryPackFor(input: { base?: LibraryPack; records: readonl
       ...(record.prover.environmentDigest ? { environmentDigest: record.prover.environmentDigest } : {}),
       ...(record.prover.dropped.length ? { dropped: record.prover.dropped } : {}) } });
   }
-  if (!modules.length) return { pack: input.base, included, skipped };
+  if (!modules.length) return { pack: base, included, skipped };
   const added: LibraryPack = { schema: LIBRARY_PACK_SCHEMA, modules };
-  return { pack: input.base ? mergeLibraryPacks([input.base, added]) : parseLibraryPack(added), included, skipped };
+  return { pack: base ? mergeLibraryPacks([base, added]) : parseLibraryPack(added), included, skipped };
 }
 
 type SourceModules = Pick<LibraryPack, 'modules'>;
