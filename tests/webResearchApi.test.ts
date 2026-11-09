@@ -586,6 +586,18 @@ describe('collaborative research through the actual HTTP service', () => {
     expect((await (await request(undefined, route)).json()).items).toEqual([]);
     stored.result!.status = 'proof_ready';
     expect((await (await request(carol, route)).json()).items).toEqual([]);
+    stored.result!.status = 'evaluated_passed';
+    let project = await item<ResearchProjectDetail>(carol, '/api/research/theorems',
+      { requestId: 'independent-project', title: 'Shared original proof', visibility: 'public' }, 'POST', 201);
+    const projectRoute = `/api/research/theorems/${project.id}`;
+    project = await item(carol, `${projectRoute}/members/${bob.researcherId}`,
+      { requestId: 'independent-member', expectedRevision: project.revision, role: 'reader' }, 'PUT');
+    project = await item(carol, `${projectRoute}/versions`, { requestId: 'independent-statement', expectedRevision: project.revision,
+      statement: 'Prove True', source: stored.source, environment: 'standard' }, 'POST', 201);
+    await item(carol, `${projectRoute}/runs`, { requestId: 'independent-binding', expectedRevision: project.revision,
+      runId: consumer.id, statementVersionId: project.versions[0]!.id, exposure: 'public' }, 'POST', 201);
+    expect((await (await request(bob, route)).json()).items).toMatchObject([{ scope: 'original-proof', projectId: project.id, runId: consumer.id }]);
+    expect((await (await request(undefined, route)).json()).items).toEqual([]);
   });
 
   it('freezes shared Skill, Agent and mathematics into the third user worker input and retains it after updates or withdrawal', async () => {

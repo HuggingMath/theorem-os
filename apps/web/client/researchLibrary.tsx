@@ -145,7 +145,7 @@ function ActualUses({ release }: { release: ResearchAssetRelease }) {
   return <details onToggle={event => setOpen(event.currentTarget.open)}><summary>{tx('查看已检查的实际引用', 'View checked uses')}</summary><ErrorBox message={uses.error} />
     {uses.data?.items.map((use, index) => {
       const original = use.scope === 'original-proof', identity = original ? use.commit : use.taskVersion;
-      const href = original || !use.projectId ? `./?run=${enc(use.runId)}` : `${theoremHref(use.projectId, use.runId)}&task=${enc(use.taskId)}`;
+      const href = use.projectId ? `${theoremHref(use.projectId, use.runId)}${original ? '' : `&task=${enc(use.taskId)}`}` : `./?run=${enc(use.runId)}`;
       return <article class="research-event" key={`${use.runId}:${identity}:${index}`}><a href={href}>
         {use.theorem ?? (!original ? use.taskId : '')} · {identity.slice(0, 12)}</a>
         <p class="research-status">{original ? tx('原题已通过独立验收', 'Original problem independently verified') : <>{tx('该任务的证明状态：', 'Task proof status: ')}<State value={use.proofStatus} /></>}</p>
