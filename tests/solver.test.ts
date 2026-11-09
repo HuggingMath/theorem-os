@@ -138,6 +138,8 @@ describe('isolated solver and host acceptance', () => {
     directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'math-solver-test-')));
     // Offline verifier fixtures must not inherit the developer's math.env or toolchain.
     vi.stubEnv('DEEPSCIENTIST_MATH_ENV_FILE', path.join(directory, 'math.env'));
+    vi.stubEnv('DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST', undefined);
+    vi.stubEnv('DEEPSCIENTIST_MATH_PANTOGRAPH_SHA256', undefined);
     workspace = path.join(directory, 'public'); project = path.join(workspace, 'generated', 'p');
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(`${workspace}.source`);
@@ -407,7 +409,7 @@ describe('isolated solver and host acceptance', () => {
   it('copies only authorized knowledge on hosted startup and rejects policy drift before resume', async () => {
     const f = hostedKnowledgeFixture();
     const hostedArgs = [...f.hostedArgs, '--workers', '4', '--startup-only', '--knowledge-base', f.catalog.file];
-    expect(await runSolver(hostedArgs, directory)).toBe(0);
+    expect(await runSolver(hostedArgs, directory), vi.mocked(console.log).mock.calls.flat().join('\n')).toBe(0);
     expect(host.createSession).not.toHaveBeenCalled();
     const state = readSolverRunState(output + '.runtime/state.json');
     for (const worker of state.workers!) {
