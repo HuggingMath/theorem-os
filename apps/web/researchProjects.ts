@@ -718,10 +718,10 @@ export class WebResearchProjects {
     } else existing.visibility = input.visibility;
     this.remember(state, viewer, 'asset-published', input, input.assetId); this.storage.saveRecord(this.ownerPath(viewer), state);
   }
-  forgetAssetContributions(viewer: string, assetId: string) {
+  forgetAssetContributions(viewer: string, assetId: string, version?: string) {
     this.authenticated(viewer); parse(id, assetId);
     const state = this.ownerState(viewer);
-    state.assetContributions = (state.assetContributions ?? []).filter(asset => asset.assetId !== assetId);
+    state.assetContributions = (state.assetContributions ?? []).filter(asset => asset.assetId !== assetId || version !== undefined && asset.version !== version);
     this.storage.saveRecord(this.ownerPath(viewer), state);
   }
 

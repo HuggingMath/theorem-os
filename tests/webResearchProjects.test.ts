@@ -637,6 +637,22 @@ describe('contribution discovery, notifications and cleanup', () => {
     expect(projects.feed('public').items.some(item => item.assetId === 'shared-lemma')).toBe(false);
   });
 
+  it('removes only the withdrawn release from author contributions and discovery after restart', () => {
+    const { projects, directory } = fixture(true);
+    const publication = { assetId: 'shared-lemma', digest, title: 'Useful lemma', kind: 'mathematics' as const, visibility: 'public' as const };
+    for (const version of ['v1', 'v2']) projects.recordAssetContribution(alice, { ...publication, requestId: `publish-${version}`, version });
+    projects.recordAssetContribution(alice, { ...publication, requestId: 'publish-other', assetId: 'other-lemma', version: 'v1' });
+    projects.forgetAssetContributions(alice, 'shared-lemma', 'v1');
+    const restored = new WebResearchProjects(new WebStorage(directory));
+    const versions = (owner: string) => restored.profile(owner, restored.identity(alice)).contributions
+      .filter(item => item.assetId === 'shared-lemma').map(item => item.assetVersion);
+    expect(versions('public')).toEqual(['v2']); expect(versions(alice)).toEqual(['v2']);
+    expect(restored.feed(bob).items.filter(item => item.assetId === 'shared-lemma').map(item => item.assetVersion)).toEqual(['v2']);
+    restored.forgetAssetContributions(alice, 'shared-lemma');
+    expect(versions('public')).toEqual([]);
+    expect(restored.feed('public').items.some(item => item.assetId === 'other-lemma')).toBe(true);
+  });
+
   it('cleans deleted owners without deleting another owner project or exposing deleted shared runs', () => {
     const { projects, storage, project } = fixture();
     const unrelated = projects.create(carol, { requestId: 'unrelated-project', title: 'Unrelated private project' });

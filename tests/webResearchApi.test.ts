@@ -177,6 +177,31 @@ describe('collaborative research through the actual HTTP service', () => {
     return item(client, `/api/research/library/${asset.id}/releases/${version}`);
   }
 
+  it('retains active release contributions for both version withdrawal routes and clears all on whole withdrawal', async () => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    let asset = await createAsset(alice, 'skill', 'people-contribution', { instructions: 'A reusable proof step',
+      steps: [], inputs: [], outputs: [], slots: ['M1'], roles: [], mode: 'append', dependencies: [], examples: [] });
+    const route = `/api/research/library/${asset.id}`, profile = `/api/research/people/${alice.researcherId}`;
+    for (const version of ['v1', 'v2', 'v3']) {
+      asset = await item(alice, route); await publish(alice, asset, version);
+    }
+    const versions = async () => (await item(bob, profile)).contributions.filter((entry: any) => entry.assetId === asset.id)
+      .map((entry: any) => entry.assetVersion);
+    expect(await versions()).toEqual(['v1', 'v2', 'v3']);
+    asset = await item(alice, route);
+    await item(alice, route + '/releases/v1/withdraw', { requestId: 'withdraw-v1', expectedRevision: asset.revision });
+    expect(await versions()).toEqual(['v2', 'v3']);
+    expect((await request(bob, route + '/releases/v3')).status).toBe(200);
+    asset = await item(alice, route);
+    await item(alice, route + '/withdraw', { requestId: 'withdraw-v2', expectedRevision: asset.revision, version: 'v2' });
+    expect(await versions()).toEqual(['v3']);
+    expect((await (await request(bob, '/api/research/feed')).json()).items.filter((entry: any) => entry.assetId === asset.id)
+      .map((entry: any) => entry.assetVersion)).toEqual(['v3']);
+    asset = await item(alice, route);
+    await item(alice, route + '/withdraw', { requestId: 'withdraw-all', expectedRevision: asset.revision });
+    expect(await versions()).toEqual([]);
+  });
+
   it('keeps exact task assignments private while retaining member and run-owner access', async () => {
     const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
     const { project, run, route } = await projectWithRun(alice, bob, 'public');

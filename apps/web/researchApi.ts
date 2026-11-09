@@ -246,8 +246,9 @@ export class WebResearchApi {
       }
       if (action === 'fork' && method === 'POST') return item(this.assets.fork(viewer, id, await body()), 201);
       if (action === 'withdraw' && method === 'POST') {
-        const asset = this.assets.withdraw(viewer, id, await body());
-        this.projects.forgetAssetContributions(viewer, id);
+        const input = await body();
+        const asset = this.assets.withdraw(viewer, id, input);
+        this.projects.forgetAssetContributions(viewer, id, (input as { version?: string }).version);
         return item(asset);
       }
       if (action === 'releases' && ref && method === 'GET') {
@@ -262,7 +263,7 @@ export class WebResearchApi {
       if (action === 'releases' && ref && subaction === 'withdraw' && method === 'POST') {
         const input = parse(z.object({ requestId: z.string(), expectedRevision: z.number().int() }).strict(), await body());
         const asset = this.assets.withdraw(viewer, id, { ...input, version: ref });
-        this.projects.forgetAssetContributions(viewer, id);
+        this.projects.forgetAssetContributions(viewer, id, ref);
         return item(asset);
       }
     }

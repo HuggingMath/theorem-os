@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'preact/hooks';
 import type { WebSession } from '../shared';
 import type { ResearcherProfile } from '../researchProjectTypes';
 import { locale, localeTag, localizeMessage } from '../i18n';
+import { webDraftOwner } from './ownedDrafts';
 
 export const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
 export const enc = encodeURIComponent;
@@ -11,24 +12,76 @@ export type ResearchSession = { researcherId: string | null; profile: Researcher
 export type ResearchContext = { session: ResearchSession; web: WebSession };
 export type Item<T> = { item: T };
 export type Items<T> = { items: T[]; total?: number; nextOffset?: number };
-let csrfToken = '';
-export function setResearchCsrf(value: string) { csrfToken = value; }
 export class ResearchHttpError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const method = init.method ?? 'GET';
-  const headers = new Headers(init.headers);
-  headers.set('Accept', 'application/json');
-  if (method !== 'GET' && method !== 'HEAD') headers.set('X-CSRF-Token', csrfToken);
-  if (init.body !== undefined) headers.set('Content-Type', 'application/json');
-  const response = await fetch(url, { ...init, method, headers, credentials: 'same-origin', cache: 'no-store' });
+export class ResearchSessionChangedError extends ResearchHttpError {
+  constructor() { super(tx('会话已更新，正在重新读取研究空间。', 'Your session changed. Reloading the research space.'), 401); }
+}
+type SessionBinding = { owner: string; csrfToken: string; changed: () => void; controller: AbortController };
+let sessionBinding: SessionBinding | undefined;
+export function bindResearchSession(web: WebSession, changed: () => void) {
+  const owner = webDraftOwner(web);
+  if (sessionBinding?.owner === owner) { sessionBinding.csrfToken = web.csrfToken; sessionBinding.changed = changed; }
+  else { clearResearchSession(); sessionBinding = { owner, csrfToken: web.csrfToken, changed, controller: new AbortController() }; }
+}
+export function clearResearchSession() {
+  // Cancel old response headers too: their Set-Cookie must not replace the next account's login.
+  const previous = sessionBinding; sessionBinding = undefined; previous?.controller.abort();
+}
+function currentSession(binding: SessionBinding) {
+  if (sessionBinding !== binding) throw new ResearchSessionChangedError();
+}
+function sessionChanged(binding: SessionBinding): never {
+  if (sessionBinding === binding) { clearResearchSession(); binding.changed(); }
+  throw new ResearchSessionChangedError();
+}
+async function responseBody<T>(response: Response): Promise<T> {
   const payload: unknown = response.status === 204 ? undefined : await response.json().catch(() => undefined);
   if (!response.ok) {
     const error = payload && typeof payload === 'object' && 'error' in payload ? String(payload.error) : tx('请求失败', 'Request failed');
     throw new ResearchHttpError(localizeMessage(error), response.status);
   }
   return payload as T;
+}
+/** Bootstrap reads do not borrow the previous page's owner or CSRF token. */
+export async function readResearchWebSession(signal?: AbortSignal): Promise<WebSession> {
+  return responseBody(await fetch('/api/session', { headers: { Accept: 'application/json' }, signal, credentials: 'same-origin', cache: 'no-store' }));
+}
+export async function readResearchSession(web: WebSession, signal?: AbortSignal): Promise<ResearchSession> {
+  const response = await fetch(`${base}/session`, { headers: { Accept: 'application/json' }, signal, credentials: 'same-origin', cache: 'no-store' });
+  if (response.headers.get('X-Theoremos-Owner') !== webDraftOwner(web)) throw new ResearchSessionChangedError();
+  return responseBody(response);
+}
+async function confirmSession(binding: SessionBinding, signal?: AbortSignal) {
+  const web = await readResearchWebSession(signal);
+  currentSession(binding);
+  if (webDraftOwner(web) !== binding.owner) sessionChanged(binding);
+  binding.csrfToken = web.csrfToken;
+}
+export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const binding = sessionBinding;
+  if (!binding) throw new ResearchSessionChangedError();
+  const signal = init.signal ? AbortSignal.any([binding.controller.signal, init.signal]) : binding.controller.signal;
+  const method = init.method ?? 'GET';
+  const headers = new Headers(init.headers);
+  headers.set('Accept', 'application/json');
+  if (method !== 'GET' && method !== 'HEAD') {
+    // The cookie may have changed in another tab. Never pair a new owner's token with an old form.
+    await confirmSession(binding, signal);
+    headers.set('X-CSRF-Token', binding.csrfToken);
+  }
+  if (init.body !== undefined) headers.set('Content-Type', 'application/json');
+  currentSession(binding);
+  const response = await fetch(url, { ...init, method, headers, signal, credentials: 'same-origin', cache: 'no-store' });
+  currentSession(binding);
+  const owner = response.headers.get('X-Theoremos-Owner');
+  if (owner && owner !== binding.owner) sessionChanged(binding);
+  // A signed-out public read has no owner header. Confirm it before displaying its data in a private page.
+  if (!owner && (response.ok || response.status === 401 || response.status === 403)) await confirmSession(binding, signal);
+  const result = await responseBody<T>(response);
+  currentSession(binding);
+  return result;
 }
 export const errorText = (error: unknown) => error instanceof Error ? error.message : tx('请求失败，请重试。', 'Request failed. Please retry.');
 
