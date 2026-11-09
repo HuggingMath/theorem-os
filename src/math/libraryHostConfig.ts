@@ -10,12 +10,15 @@ import { canonicalLibraryJson, libraryUnicodeCompare, parseLibraryJson, validate
   type LibraryReleaseArtifacts } from './libraryRelease';
 import { effectiveLibraryBindingSchema, libraryTaskPolicySchema, resolveEffectiveLibraryPack, type EffectiveLibraryBinding,
   type EffectiveLibraryPack } from './libraryEffectivePack';
+import { legacyLibraryArtifactLimits, resolveLegacyEffectiveLibraryPack, validateLegacyLibraryBinding,
+  type LegacyLibraryArtifacts } from './libraryLegacyBinding';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const identitySchema = z.object({ taskId: z.string().min(1).max(512),
   benchmarkCommit: z.string().regex(/^[a-f0-9]{40}$/u).optional() }).strict();
 const configSchema = z.object({ schema: z.literal('theorem-os.library-host-config.v1'),
   releaseDirectory: z.string().min(1), manifestSha256: hash, sourceLakeManifest: z.string().min(1),
+  format: z.enum(['release', 'legacy']).optional(),
   autoLibraryDirectory: z.string().min(1).optional(),
   tasks: z.array(identitySchema.extend({ selection: libraryTaskPolicySchema.shape.selection }).strict()).min(1).max(10000),
 }).strict();
@@ -90,9 +93,12 @@ function resolveConfiguredLibrary(task: LibraryHostTaskIdentity, target: Library
     'verification.json': 32 * 1024 * 1024, 'declaration-metadata.jsonl': 32 * 1024 * 1024,
     'search-index-manifest.json': 64 * 1024 };
   if (!path.isAbsolute(config.releaseDirectory)) throw new Error('library_host_config_path_invalid');
-  const artifacts = Object.fromEntries(Object.entries(limits).map(([name, limit]) =>
+  const legacy = config.format === 'legacy';
+  const artifacts = Object.fromEntries(Object.entries(legacy ? legacyLibraryArtifactLimits : limits).map(([name, limit]) =>
     [name, hostFile(path.join(config.releaseDirectory, name), workspace, limit)])) as unknown as LibraryReleaseArtifacts;
-  const release = validateLibraryRelease(artifacts, config.manifestSha256);
+  const legacyBytes = legacy ? hostFile(path.join(config.releaseDirectory, 'legacy-library-binding.json'), workspace, 64 << 20) : undefined;
+  const release = legacyBytes ? validateLegacyLibraryBinding(artifacts, legacyBytes, config.manifestSha256).release
+    : validateLibraryRelease(artifacts, config.manifestSha256);
   const sourceLock = hostFile(config.sourceLakeManifest, workspace, 2 * 1024 * 1024);
   const dependencyLockSha256 = libraryDependencyLockDigest(sourceLock);
   if (mathDigest(sourceLock) !== release.environment.lake_manifest_sha256 ||
@@ -100,9 +106,11 @@ function resolveConfiguredLibrary(task: LibraryHostTaskIdentity, target: Library
       target.toolchain !== release.environment.toolchain ||
       dependencyLockSha256 !== libraryDependencyLockDigest(Buffer.from(target.lakeManifest)))
     throw new Error('library_host_dependency_mismatch');
-  const effective = resolveEffectiveLibraryPack(artifacts, { schema: 'theorem-os.library-task-policy.v1', taskId: task.taskId,
+  const policy = { schema: 'theorem-os.library-task-policy.v1', taskId: task.taskId,
     manifestSha256: config.manifestSha256, environment: release.environment,
-    runtimeEnvironmentDigest: target.runtimeEnvironmentDigest, selection: config.tasks[index]!.selection });
+    runtimeEnvironmentDigest: target.runtimeEnvironmentDigest, selection: config.tasks[index]!.selection };
+  const effective = legacyBytes ? resolveLegacyEffectiveLibraryPack(artifacts as LegacyLibraryArtifacts, legacyBytes, policy)
+    : resolveEffectiveLibraryPack(artifacts, policy);
   return { ...effective, binding: { ...effective.binding, hostConfiguration: { sha256: mathDigest(bytes), dependencyLockSha256 } } };
 }
 

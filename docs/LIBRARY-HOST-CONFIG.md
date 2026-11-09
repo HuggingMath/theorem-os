@@ -32,7 +32,15 @@ The ordinary task bootstrap (including its CLI and ordinary Web callers) and hel
 
 The initial Git commit and receipt bind the release, policy, effective set, complete dependency identity, and configuration file's raw SHA256. Resume and the held-out official gate re-resolve from the current host setting. Removing the setting, changing configuration bytes (even whitespace or unrelated task mappings), changing release artifacts, or changing the destination dependency identity invalidates the old binding. Recreate tasks after an intentional policy update. Receipt fields cannot choose an alternative configuration.
 
-Without this host setting, existing legacy flows remain available. Old receipts cannot claim a host-approved release, and enabling host policy rejects unbound old tasks. Legacy migration, knowledge-index filtering, campaign integration and production Web container mounts are separate migration work. The ordinary Web function uses the shared resolver, but configuring the supervisor alone does not configure a container: its trusted bootstrap process needs its own protected, read-only host files and setting.
+Without this host setting, existing legacy flows remain available. Old receipts cannot claim a host-approved release, and enabling host policy rejects unbound old tasks. Knowledge-index filtering, campaign integration and production Web container mounts are separate migration work. The ordinary Web function uses the shared resolver, but configuring the supervisor alone does not configure a container: its trusted bootstrap process needs its own protected, read-only host files and setting.
+
+## Historical three-file releases
+
+Set `"format": "legacy"` to select an approved `legacy-library-binding.json` alongside the original `pack.json`, `library.json` and `verification.json`. In this mode `manifestSha256` pins the mapping's exact bytes; `sourceLakeManifest` remains the exact historical source lock. Omitting `format` or selecting `"release"` keeps the five-file path. Unsupported formats fail.
+
+Generate the mapping with Library's `scripts/legacy_binding.py OLD_DIRECTORY --repository GIT_REPO --out NEW_FILE`. The generator compares the retained artifacts to their recorded Git tree, toolchain, lock and exclusion policy, with Git replacements disabled. It never treats the current working tree as historical evidence. Review the provenance and approve the resulting mapping hash independently. No real retained historical release is enabled by the synthetic test fixture.
+
+Runtime authenticates the three original byte streams, source inventory, committed policy and normalized metadata before using the shared EffectivePack filter. Legacy v1 requires successful aggregate replay/control/Sanity summaries but accepts no declaration coverage: every declaration remains `unknown`. It does not convert aggregate counts into proof claims. New coverage-bearing releases use the five-file format. `legacyBindingSha256` is preserved in the receipt and Auto parent bindings; all existing dependency, policy, installed-file and recovery checks still apply. Changing or removing the mapping invalidates recovery. Raw task packs and in-memory overrides remain forbidden under host configuration.
 
 
 ## Auto composition and recovery
