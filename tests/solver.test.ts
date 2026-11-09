@@ -424,7 +424,7 @@ describe('isolated solver and host acceptance', () => {
     const f = hostedKnowledgeFixture(), raw = knowledgeFixture();
     expect(await runSolver([...f.hostedArgs, '--startup-only', '--knowledge-base', raw.file], directory)).toBe(1);
     expect(await runSolver([...f.hostedArgs, '--continuation-manifest', '/missing'], directory)).toBe(1);
-    expect(await runSolver([...f.hostedArgs, '--continuation-source-run', '/missing'], directory)).toBe(1);
+    expect(await runSolver([...f.hostedArgs, '--workers', '2', '--continuation-source-run', '/missing'], directory)).toBe(1);
     expect(host.createSession).not.toHaveBeenCalled();
   });
   it('rejects host policy changes during preparation before copying knowledge to a worker', async () => {
@@ -436,6 +436,15 @@ describe('isolated solver and host acceptance', () => {
     expect(host.createSession).not.toHaveBeenCalled();
     const state = readSolverRunState(output + '.runtime/state.json');
     expect(fs.existsSync(path.join(state.worktree, state.problem.projectRelative, '.lake/theorem-knowledge.json'))).toBe(false);
+  });
+  it('rejects a saved hosted continuation on resume even when no attachment flag is supplied', async () => {
+    const f = hostedKnowledgeFixture(), hostedArgs = [...f.hostedArgs, '--startup-only', '--knowledge-base', f.catalog.file];
+    expect(await runSolver(hostedArgs, directory)).toBe(0);
+    const stateFile = output + '.runtime/state.json', state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    state.continuationDigest = 'a'.repeat(64); fs.writeFileSync(stateFile, JSON.stringify(state));
+    expect(await runSolver([...hostedArgs, '--resume'], directory)).toBe(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('library_knowledge_history_unauthorized'));
+    expect(host.createSession).not.toHaveBeenCalled();
   });
 
   it.each(['v1', 'v2'] as const)('prepares identical read-only %s knowledge snapshots for all four workers without opening a model', async format => {

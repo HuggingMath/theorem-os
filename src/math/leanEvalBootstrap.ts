@@ -748,6 +748,14 @@ function assertLeanEvalLibraryBinding(receipt: LeanEvalBootstrapReceipt): void {
   if (installedInput('lean-toolchain').toString('utf8').trim() !== target.toolchain ||
       libraryDependencyLockDigest(installedInput('lake-manifest.json')) !==
       libraryDependencyLockDigest(Buffer.from(target.lakeManifest))) throw new Error('library_host_dependency_mismatch');
+  // Configuration is exported as knowledge context: authenticate its complete bytes,
+  // including comments and lockfile fields outside the dependency identity.
+  for (const file of ['lean-toolchain', 'lake-manifest.json', 'lakefile.toml', 'lakefile.lean']) {
+    if (!receipt.trustedFiles.includes(file)) continue;
+    const frozen = mathGitBytes(root, ['--no-replace-objects', 'show', `${base}:${project}/${file}`],
+      { maxBuffer: 2 * 1024 * 1024 + 1, timeout: 30_000 });
+    if (!installedInput(file).equals(frozen)) throw new Error('library_knowledge_configuration_changed');
+  }
   assertHostLibraryCurrent(receipt.libraryBinding, { taskId: receipt.problemId, benchmarkCommit: receipt.benchmarkCommit },
     target, root);
   if (receipt.libraryBinding!.effectivePackDigest !== (receipt.libraryPack?.digest ?? sha256('null')))

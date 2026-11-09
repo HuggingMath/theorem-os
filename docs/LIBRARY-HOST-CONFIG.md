@@ -63,6 +63,9 @@ contexts and blobs, including unreferenced blobs. A recomputed catalogue hash or
 copied authorization field cannot approve additional text, provenance or sources.
 Changed policy, configuration, receipt, module bytes or dependency identity rejects
 reuse. Source objects are re-read even after prior searches populated caches.
+Held-out configuration bytes, including comments and non-dependency lockfile
+fields, must match the original bootstrap commit; a later checkpoint does not
+authorize changed configuration as knowledge context.
 
 The run entry point validates `--knowledge-base` before startup and completed-run
 resume, again before worker copies, and before each worker context is built.
@@ -81,6 +84,9 @@ module hash or parent policy alone cannot authenticate arbitrary historical pros
 Already authorized Auto modules themselves remain searchable. Supporting historical
 advice requires a separate authenticated content/provenance contract; it is not
 silently admitted by this migration. Unconfigured legacy workflows remain unchanged.
+The Web user archive APIs remain personal archive operations, not task-authorized
+queries. Passing their snapshots to a configured solver still requires the task
+authorization above; production Web host configuration deployment remains pending.
 
 ## Historical three-file releases
 

@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapLeanTask, leanTaskId } from '../src/math/leanTask';
 import { mathDigest, canonicalMathJson } from '../src/math/mathRuntimeIo';
+import { canonicalLibraryJson } from '../src/math/libraryRelease';
 import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
 import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
 import { buildAuthorizedLibraryKnowledge, readAuthorizedKnowledgeCatalog } from '../src/solver/theoremKnowledgeAuthorization';
@@ -105,7 +106,7 @@ describe('installed Library knowledge authorization', () => {
     library.exclusions.FixtureTask = library.modules.map((item: any) => item.source_file);
     fs.writeFileSync(libraryFile, canonicalMathJson(library));
     manifest.artifacts['library.json'] = { sha256: mathDigest(fs.readFileSync(libraryFile)), bytes: fs.statSync(libraryFile).size };
-    manifest.exclusions_sha256 = mathDigest(canonicalMathJson(library.exclusions));
+    manifest.exclusions_sha256 = mathDigest(canonicalLibraryJson(library.exclusions));
     fs.writeFileSync(manifestFile, canonicalMathJson(manifest));
     fs.writeFileSync(f.configPath, canonicalMathJson({ ...f.config, manifestSha256: mathDigest(fs.readFileSync(manifestFile)) }));
     const workspace = path.join(root, 'empty'); bootstrapLeanTask(workspace, { source, task: 'prove', environment: 'openai-math' });

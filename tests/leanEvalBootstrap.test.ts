@@ -142,6 +142,27 @@ describe('Lean-Eval bootstrap without planning state', () => {
     expect(catalog.base.entries.map(item => item.name).sort()).toEqual(['TheoremOS.Fixture.d', 'TheoremOS.Fixture.e']);
   });
 
+  it.each(['lakefile.toml', 'lakefile.lean', 'lean-toolchain', 'lake-manifest.json'])(
+    'rejects changed held-out %s bytes before preparing or reading knowledge', async configuration => {
+      if (configuration === 'lakefile.lean')
+        fs.writeFileSync(path.join(repositoryRoot, 'generated/p/lakefile.lean'), 'import Lake\nopen Lake DSL\npackage p\n');
+      const { result } = await bootstrapWithHostLibrary(), receipt = result.receipt;
+      const file = path.join(directory, 'host-knowledge.json');
+      prepareLibraryKnowledge(receipt.workspaceRoot, file, { receiptFile: receipt.activeProblemPath });
+      fs.appendFileSync(path.join(receipt.projectRoot, configuration), configuration === 'lakefile.lean'
+        ? '\n-- excluded proof text\n' : configuration === 'lakefile.toml' ? '\n# excluded proof text\n' : ' ');
+      // A later checkpoint must not replace the original configuration baseline.
+      execFileSync('git', ['-C', receipt.workspaceRoot, 'add', path.join(receipt.projectRoot, configuration)]);
+      execFileSync('git', ['-C', receipt.workspaceRoot, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost',
+        'commit', '--quiet', '-m', 'changed configuration']);
+      expect(() => readAuthorizedKnowledgeCatalog(file, receipt.workspaceRoot, receipt.activeProblemPath))
+        .toThrow('library_knowledge_configuration_changed');
+      const fresh = path.join(directory, 'fresh-knowledge.json');
+      expect(() => prepareLibraryKnowledge(receipt.workspaceRoot, fresh, { receiptFile: receipt.activeProblemPath }))
+        .toThrow('library_knowledge_configuration_changed');
+      expect(fs.existsSync(fresh)).toBe(false);
+    });
+
   it('rechecks current host policy on held-out resume and direct gate, and blocks raw pack overrides', async () => {
     const { result, configPath } = await bootstrapWithHostLibrary();
     await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [],
