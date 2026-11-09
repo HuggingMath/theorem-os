@@ -117,6 +117,11 @@ async function openClassics(page: Page, english = false) {
   return archive;
 }
 
+async function processReady(page: Page) {
+  await page.locator('.global-workflow').waitFor();
+  await page.locator('[data-solution-route-state="ready"]').waitFor();
+}
+
 async function inspectAll(page: Page, label: string) {
   currentCheck = `${label}: every proof, process and acceptance`;
   for (const record of catalog.records) {
@@ -131,6 +136,11 @@ async function inspectAll(page: Page, label: string) {
     assert.ok((await page.locator('.source-facts').innerText()).includes(submission.sha256));
     assert.ok((await page.locator('.source-code').innerText()).length > 0);
     await page.getByRole('tab', { name: '路线与轨迹', exact: true }).click();
+    await processReady(page);
+    const history = page.locator('.global-history-panel');
+    assert.equal(await history.evaluate(element => (element as HTMLDetailsElement).open), false,
+      'The selected route is shown before recorded runs are expanded');
+    await history.locator(':scope > summary').click();
     await page.locator('.global-run-lane').first().waitFor();
     assert.equal(await page.locator('.global-run-lane').count(), record.process!.runs.length);
     assert.equal(await page.locator('.global-run-lane[data-final="true"]').getAttribute('data-global-run-id'), record.campaign!.runId);
@@ -192,7 +202,15 @@ try {
     await page.goto(`${origin}/classics/archive.html#proof=${example.id}&tab=process&status=verified&mode=roadmap`);
     const panel = page.locator('.process-research-evidence').first();
     await panel.locator('summary').click();
-    const text = await panel.innerText();
+    const text = await panel.evaluate(element => {
+      const prose = element.cloneNode(true) as HTMLElement;
+      for (const formula of prose.querySelectorAll<HTMLElement>('.math:not(.math-source)')) {
+        const suffix = [...formula.querySelectorAll('.katex-html > .katex-base')].flatMap(base => [...base.childNodes])
+          .filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent ?? '').join('');
+        formula.replaceWith(document.createTextNode(formula.title + suffix));
+      }
+      return prose.textContent ?? '';
+    });
     for (const fact of ['Nat.add_zero', 'Fixture.bridge', 'fixture-original-goal', '∀ n : ℕ, n + 0 = n',
       '局部表达式检查通过', '已安装: FixtureBridge', 'fixture-engineer', '未知：没有保存记录']) assert.ok(text.includes(fact), fact);
     assert.equal(await panel.locator('img').count(), 0, 'Reference text must be rendered as text');
@@ -206,10 +224,10 @@ try {
   currentCheck = 'Totient helper sources, process deep link and complete downloads';
   activePage = aliceArchive;
   await aliceArchive.goto(`${origin}/classics/archive.html#proof=${example.id}&tab=process&status=verified`);
-  await aliceArchive.locator('.global-run-lane').first().waitFor();
+  await processReady(aliceArchive);
   const deepLink = aliceArchive.url();
   await aliceArchive.reload();
-  await aliceArchive.locator('.global-run-lane').first().waitFor();
+  await processReady(aliceArchive);
   assert.equal(aliceArchive.url(), deepLink);
   assert.equal(await aliceArchive.getByRole('tab', { name: '路线与轨迹', exact: true }).getAttribute('aria-selected'), 'true');
   const downloadReady = aliceArchive.waitForEvent('download');
@@ -227,11 +245,11 @@ try {
   currentCheck = 'Language switching keeps the shared archive available';
   await aliceArchive.locator('.lang-link').click();
   await aliceArchive.waitForURL(`${origin}/classics/en/archive.html*`);
-  await aliceArchive.locator('.archive-process').waitFor();
+  await processReady(aliceArchive);
   assert.deepEqual(await idsOnPage(aliceArchive), expectedIds);
   assert.equal(await aliceArchive.locator('.global-run-lane[data-final="true"]').getAttribute('data-global-run-id'), example.campaign!.runId);
   await aliceArchive.getByRole('tab', { name: 'Routes and trajectory', exact: true }).click();
-  await aliceArchive.locator('.global-run-lane').first().waitFor();
+  await processReady(aliceArchive);
   assert.equal(await aliceArchive.getByRole('tab', { name: 'Routes and trajectory', exact: true }).getAttribute('aria-selected'), 'true');
   await aliceArchive.getByRole('tab', { name: 'Evidence', exact: true }).click();
   const englishEvidence = aliceArchive.locator('.campaign-evidence a').filter({ hasText: 'verification.json' });
@@ -260,7 +278,7 @@ try {
   for (const [archive, english] of [[aliceArchive, true], [bobArchive, false]] as const) {
     await archive.setViewportSize({ width: 320, height: 760 });
     await archive.goto(`${origin}/classics/${english ? 'en/' : ''}archive.html#proof=${example.id}&tab=process&status=verified`);
-    await archive.locator('.global-run-lane').first().waitFor();
+    await processReady(archive);
     await archive.locator('#inspector').scrollIntoViewIfNeeded();
     await noOverflow(archive, `${english ? 'English' : 'Chinese'} classic process at 320 pixels`);
     await archive.screenshot({ path: path.join(output, `classic-process-${english ? 'en' : 'zh'}-320.png`), fullPage: true });
@@ -341,7 +359,7 @@ try {
     assert.equal(body.includes(privateId) || body.includes(privateTask) || body.includes(credential), false);
   }
   await aliceArchive.reload();
-  await aliceArchive.locator('.global-run-lane').first().waitFor();
+  await processReady(aliceArchive);
   assert.deepEqual(await idsOnPage(aliceArchive), expectedIds);
   assert.equal(runnerCalls, 1, 'Only the explicitly submitted private test run may call the fixture runner');
   mark('Shared classics stay identical while Bob cannot list, open or download Alice’s private run, trajectory or source');

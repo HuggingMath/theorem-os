@@ -5,11 +5,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Browser, BrowserContext, Page } from 'playwright';
+import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import { compareSources } from '../apps/web/client/sourceDiff';
+import { proseSegments, type ProseSegment } from '../apps/web/client/explainText';
 import { processMessage, readableProcessText } from '../docs/web/processText';
 import type { ProofWalkthrough } from '../docs/web/proofWalkthroughTypes';
 import type { ArchiveCatalog, ArchiveProcess, ArchiveRecord } from '../docs/web/types';
@@ -84,6 +85,25 @@ const entry = (page: Page, id: string) => page.locator('.global-workflow ' + att
 const stage = (page: Page, name: string) => page.locator('.global-workflow ' + attr('data-workflow-stage', name));
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const byTime = <T extends { at: string }>(values: T[]) => values.slice().sort((a, b) => a.at.localeCompare(b.at));
+// MathML, its TeX annotation and the visual glyphs describe one formula; compare its retained source only once.
+const proseTexts = (locator: Locator) => locator.evaluateAll(elements => elements.map(element => {
+  const prose = element.cloneNode(true) as HTMLElement;
+  for (const formula of prose.querySelectorAll<HTMLElement>('.math:not(.math-source)')) {
+    const suffix = [...formula.querySelectorAll('.katex-html > .katex-base')].flatMap(base => [...base.childNodes])
+      .filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent ?? '').join('');
+    formula.replaceWith(document.createTextNode(formula.title + suffix));
+  }
+  return prose.textContent ?? '';
+}));
+const proseText = async (locator: Locator) => (await proseTexts(locator))[0];
+const expectedProse = (text: string): string => {
+  const segments = proseSegments(text);
+  const math = (items: readonly ProseSegment[]): boolean => items.some(segment => segment.kind === 'math' || segment.kind === 'display'
+    || segment.kind === 'strong' && math(proseSegments(segment.text)));
+  const content = (items: readonly ProseSegment[]): string => items.map(segment =>
+    segment.kind === 'strong' ? content(proseSegments(segment.text)) : segment.text).join('');
+  return math(segments) ? content(segments) : text;
+};
 const assetVersions = Object.fromEntries(await Promise.all(['site.js', 'process.css'].map(async file =>
   [file, digest(await fs.readFile(path.join(staticRoot, 'classics', file))).slice(0, 16)])));
 const processAssetVersions = Object.fromEntries(await Promise.all(catalog.records.map(async record =>
@@ -121,6 +141,7 @@ async function global(page: Page, record: ArchiveRecord, run = finalRun(record))
   await page.locator('.process-global-trajectory').waitFor(); await settled(page);
   await page.locator(attr('data-solution-route-record', record.id) + attr('data-solution-route-run', run.runId)
     + '[data-solution-route-state="ready"]').waitFor();
+  await page.waitForFunction(() => !document.querySelector('#inspector .math[data-math-state="loading"]'));
   assert.equal(hash(page).get('proof'), record.id);
   assert.equal(hash(page).get('tab'), 'process'); assert.equal(hash(page).get('mode'), 'global');
   assert.equal(hash(page).get('run') ?? record.campaign!.runId, run.runId);
@@ -134,7 +155,6 @@ async function global(page: Page, record: ArchiveRecord, run = finalRun(record))
   assert.equal(await page.locator('.global-history [aria-pressed="true"]').count(), 1);
   assert.equal(await page.locator('.catalog').isVisible(), false);
 }
-const enteredPages = new WeakSet<Page>();
 async function enter(page: Page, record: ArchiveRecord, locale: string, explicit = false) {
   const url = ordinary(locale);
   assert.equal(new URLSearchParams(new URL(url).hash.slice(1)).has('proof'), false);
@@ -142,12 +162,9 @@ async function enter(page: Page, record: ArchiveRecord, locale: string, explicit
   await page.evaluate(() => document.fonts.ready); await settled(page);
   assert.equal(await page.locator('.catalog').isVisible(), true);
   assert.equal(await page.locator('[data-solution-route-state]').count(), 0);
-  if (!enteredPages.has(page)) {
-    assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(resource =>
-      new URL(resource.name).pathname.endsWith('/data/solution-route.js'))), false,
-    'A fresh catalog page must defer the route renderer until a problem route is opened');
-    enteredPages.add(page);
-  }
+  assert.equal(await page.locator('.solution-route').count(), 0, 'The catalog must not mount a problem route before one is opened');
+  assert.equal(await page.locator('[data-global-select][aria-pressed="true"], [data-solution-node][aria-pressed="true"]').count(), 0,
+    'Loading shared prose typesetting must not select a problem run or route node');
   await page.locator(explicit ? '.row-route-open' + attr('data-proof-route', record.id) : '.proof-row' + attr('data-proof-id', record.id)).click();
   await global(page, record);
 }
@@ -720,7 +737,14 @@ async function verifyAssets(page: Page) {
 }
 async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, locale: 'zh' | 'en') {
   await global(page, record, run);
-  const actual = await page.locator('.global-workflow').evaluate(workflow => ({
+  const actual = await page.locator('.global-workflow').evaluate(element => {
+    const workflow = element.cloneNode(true) as HTMLElement;
+    for (const formula of workflow.querySelectorAll<HTMLElement>('.math:not(.math-source)')) {
+      const suffix = [...formula.querySelectorAll('.katex-html > .katex-base')].flatMap(base => [...base.childNodes])
+        .filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent ?? '').join('');
+      formula.replaceWith(document.createTextNode(formula.title + suffix));
+    }
+    return {
     stages: [...workflow.querySelectorAll<HTMLElement>('[data-workflow-stage]')].map(section => section.dataset.workflowStage),
     objectives: [...workflow.querySelectorAll<HTMLElement>('[data-workflow-task]')].map(row => {
       const body = row.querySelector('dd')!.cloneNode(true) as HTMLElement;
@@ -738,14 +762,15 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
     })),
     taskNodes: [...workflow.querySelectorAll<HTMLElement>('.process-roadmap button[data-process-node^="task:"]')].map(node => node.dataset.processNode),
     edges: [...workflow.querySelectorAll<SVGElement>('.process-roadmap path[data-map-edge][data-kind="dependency"]')].map(edge => edge.dataset.from + '->' + edge.dataset.to).sort(),
-  }));
+    };
+  });
   const walkthrough = record.process?.walkthrough?.runId === run.runId ? record.process.walkthrough : undefined;
   assert.deepEqual(actual.stages, walkthrough ? ['research', 'plan', 'implementation', 'review'] : ['plan', 'research', 'implementation', 'review']);
   assert.equal(await page.locator('[data-proof-walkthrough]').count(), Number(Boolean(walkthrough)));
   if (walkthrough) {
     assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), record.campaign!.proofSha256);
     assert.equal(await page.locator('[data-proof-derivation]').count(), walkthrough.steps.length);
-    assert.equal(await page.locator('.proof-walkthrough-strategy').textContent(), walkthrough.strategy[locale]);
+    assert.equal(await proseText(page.locator('.proof-walkthrough-strategy')), expectedProse(walkthrough.strategy[locale]));
     assert.deepEqual(await page.locator('[data-proof-overview-stage]').evaluateAll(buttons => buttons.map(button => ({
       steps: (button as HTMLElement).dataset.proofOverviewSteps!.split(' '),
       target: (button as HTMLElement).dataset.globalScroll,
@@ -764,11 +789,11 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
     record.id + ': proof arrows must preserve every actual dependency without adding sequential edges');
     for (const step of walkthrough.steps) {
       const row = page.locator(attr('data-proof-derivation', step.id));
-      assert.equal(await row.locator('.proof-walkthrough-claim > p').textContent(), step.claim[locale]);
-      assert.equal(await row.locator('.proof-walkthrough-explanation > p').textContent(), step.because[locale]);
-      assert.equal(await row.locator('.proof-walkthrough-next > p').textContent(), step.next[locale]);
-      assert.deepEqual(await row.locator('.proof-walkthrough-statement').allTextContents(), step.derivation.map(line => line.statement[locale]));
-      assert.deepEqual(await row.locator('.proof-walkthrough-justification').allTextContents(), step.derivation.map(line => line.reason[locale]));
+      assert.equal(await proseText(row.locator('.proof-walkthrough-claim > p')), expectedProse(step.claim[locale]));
+      assert.equal(await proseText(row.locator('.proof-walkthrough-explanation > p')), expectedProse(step.because[locale]));
+      assert.equal(await proseText(row.locator('.proof-walkthrough-next > p')), expectedProse(step.next[locale]));
+      assert.deepEqual(await proseTexts(row.locator('.proof-walkthrough-statement')), step.derivation.map(line => expectedProse(line.statement[locale])));
+      assert.deepEqual(await proseTexts(row.locator('.proof-walkthrough-justification')), step.derivation.map(line => expectedProse(line.reason[locale])));
       assert.deepEqual(await row.locator('[data-proof-dependency]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofDependency)), step.dependsOn);
       assert.equal(await row.locator('[data-proof-figure]').count(), Number(Boolean(step.figure)));
       if (step.figure) assert.equal(await row.locator('[data-proof-figure]').getAttribute('data-proof-figure'), step.figure);
@@ -784,7 +809,7 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
   const expected = [...expectedPlan, ...(run.deliveries ?? []).map(delivery => 'delivery:' + delivery.id), ...(run.checks ?? []).map(check => 'check:' + check.id)].sort();
   assert.deepEqual(actual.entries.map(row => row.id).sort(), expected, record.id + ': every actual delivery and check appears exactly once');
   assert.equal(new Set(actual.entries.map(row => row.id)).size, actual.entries.length, 'No repeated or synthesized workflow entries');
-  assert.deepEqual(actual.objectives, run.tasks.map(task => ({ id: task.id, objective: readableProcessText(task.objective, Number.MAX_SAFE_INTEGER) })), 'All complete task objectives must remain available');
+  assert.deepEqual(actual.objectives, run.tasks.map(task => ({ id: task.id, objective: expectedProse(readableProcessText(task.objective, Number.MAX_SAFE_INTEGER)) })), 'All complete task objectives must remain available');
   assert.deepEqual(actual.taskNodes.slice().sort(), run.tasks.map(task => 'task:' + task.id).sort());
   const taskIds = new Set(run.tasks.map(task => task.id));
   const edges = [...new Set(run.tasks.flatMap(task => task.dependencies.filter(id => taskIds.has(id)).map(id => 'task:' + id + '->task:' + task.id)))].sort();
@@ -801,10 +826,10 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
     const row = actual.entries.find(row => row.id === 'delivery:' + delivery.id)!;
     const full = processMessage(delivery.summary, locale), note = workflowNote(delivery.id, locale);
     assert.equal(row.time, delivery.at);
-    assert.equal(row.full ?? row.preview, full, delivery.id + ': complete saved prose must be readable');
-    if (note) assert.equal(row.preview, note, 'Curated Chinese note must retain an accessible original');
-    else if (full.length > 720) assert.equal(row.preview, full.slice(0, 720).trimEnd() + '…');
-    else assert.equal(row.preview, full);
+    assert.equal(row.full ?? row.preview, expectedProse(full), delivery.id + ': complete saved prose must be readable');
+    if (note) assert.equal(row.preview, expectedProse(note), 'Curated Chinese note must retain an accessible original');
+    else if (full.length > 720) assert.equal(row.preview, expectedProse(full.slice(0, 720).trimEnd() + '…'));
+    else assert.equal(row.preview, expectedProse(full));
     assert.equal(row.retained, older.has(delivery.id) || !!run.startedAt && delivery.at < run.startedAt);
     assert.deepEqual(row.link, { run: run.runId, node: delivery.taskId ? 'task:' + delivery.taskId : delivery.kind === 'review' ? 'review' : 'problem', step: 'delivery:' + delivery.id });
   }
@@ -961,7 +986,7 @@ try {
       assert.equal(await objectives.getAttribute('open'), ''); assert.equal(page.url(), location);
       const task = finalRun(triangle).tasks.find(task => task.status === 'integrated')!;
       const objective = objectives.locator(attr('data-workflow-task', task.id));
-      assert.ok((await objective.locator('dd').textContent())!.includes(readableProcessText(task.objective, Number.MAX_SAFE_INTEGER)));
+      assert.ok((await proseText(objective.locator('dd'))).includes(expectedProse(readableProcessText(task.objective, Number.MAX_SAFE_INTEGER))));
       await objective.locator('dt > button').press('Enter'); await page.locator('.process-map-inspector').waitFor();
       assert.equal(hash(page).get('mode'), 'roadmap'); assert.equal(hash(page).get('run'), triangle.campaign!.runId);
       assert.equal(hash(page).get('node'), 'task:' + task.id);
@@ -982,9 +1007,9 @@ try {
       assert.equal(await raw.count(), 1);
       const beforeExpansion = page.url(); await raw.locator('summary').focus(); await raw.locator('summary').press('Enter');
       assert.equal(await raw.getAttribute('open'), ''); assert.equal(page.url(), beforeExpansion);
-      assert.equal(await raw.locator('.workflow-prose').textContent(), fullText);
+      assert.equal(await proseText(raw.locator('.workflow-prose')), expectedProse(fullText));
       assert.equal(await raw.locator('.workflow-prose').isVisible(), true);
-      if (locale === 'zh') assert.equal(await noteRow.locator(':scope > .workflow-prose').textContent(), workflowNote(noteDelivery.id, locale));
+      if (locale === 'zh') assert.equal(await proseText(noteRow.locator(':scope > .workflow-prose')), expectedProse(workflowNote(noteDelivery.id, locale)!));
       await shot(page, 'workflow-' + locale + '-' + width + '-research-original.png');
       await noteRow.locator('.workflow-record-link').click(); await page.locator('#process-step-detail').waitFor();
       assert.equal(hash(page).get('run'), triangle.campaign!.runId); assert.equal(hash(page).get('step'), 'delivery:' + noteDelivery.id);
