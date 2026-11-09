@@ -188,7 +188,14 @@ try {
       assert.equal(await page.locator('[data-solution-inspector] .solution-route-section').count(), 4);
       assert.ok(await page.locator('[data-solution-inspector] .solution-route-prose > p').count() > 20);
       assert.equal(await page.locator('[data-solution-inspector] pre').count(), 1);
+      await page.waitForFunction(() => !document.querySelector('[data-math-state="loading"]'));
       await page.locator('[data-solution-section="2"]').click();
+      assert.equal(await page.locator('[data-solution-section-heading="2"]').evaluate(element => document.activeElement === element), true);
+      const readingTop = await page.locator('[data-solution-section-heading="2"]').evaluate(element => element.getBoundingClientRect().top);
+      await page.evaluate(() => (window as any).routeFixture.update());
+      await page.waitForFunction(() => !document.querySelector('[data-math-state="loading"]'));
+      const readingAfter = await page.locator('[data-solution-section-heading="2"]').evaluate(element => element.getBoundingClientRect().top);
+      assert.ok(Math.abs(readingAfter - readingTop) < 3, `polling must keep the visible reading position: ${readingTop} → ${readingAfter}`);
       assert.equal(await page.locator('[data-solution-section-heading="2"]').evaluate(element => document.activeElement === element), true);
       await page.locator('[data-solution-reader-select]').selectOption('normalize');
       assert.equal(await selected(page), 'normalize');
@@ -198,6 +205,8 @@ try {
       assert.equal(await page.locator('.solution-route-summary').count(), 1, 'code section must remain distinct from its summary');
       assert.equal(await page.locator('.solution-route-section pre').count(), 1);
       await page.locator('[data-solution-reader-select]').selectOption('bound');
+      await page.evaluate(() => (window as any).routeFixture.update());
+      assert.equal(await page.locator('[data-solution-reader-select]').evaluate(element => document.activeElement === element), true);
       await page.locator('[data-solution-expand]').click();
       assert.equal(await page.locator('#route').getAttribute('role'), 'dialog');
       const scroll = await page.locator('.solution-route-workspace').evaluate(workspace => {
