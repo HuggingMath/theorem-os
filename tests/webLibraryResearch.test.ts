@@ -38,7 +38,7 @@ const pack: LibraryPack = { schema: LIBRARY_PACK_SCHEMA, modules: Object.entries
 })) };
 const source = 'namespace Original\ntheorem goal : True := by sorry\nend Original\n';
 
-function fixture(input: Partial<WebRunInput> = {}, formalization?: unknown) {
+function fixture(input: Partial<WebRunInput> = {}, formalization?: unknown, libraryPack?: LibraryPack) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'web-library-research-'))); roots.push(root);
   const libraryCatalog = writeLibraryCatalog(path.join(root, 'release'), { id: 'fixture/research', revision: 'v1',
     environment: 'mathlib', packs: [pack] });
@@ -50,7 +50,7 @@ function fixture(input: Partial<WebRunInput> = {}, formalization?: unknown) {
       task: 'Prove the frozen original and preserve all of its declarations.', environment: 'mathlib',
       workers: 1, maxTurns: 10, maxRunSeconds: 120, maxTotalTokens: 1000, ...input },
     ...(formalization ? { formalization } : {}) };
-  const seed = prepareWebProblem(directory, request, { libraryPack: { ...pack, modules: [pack.modules[0]!] } });
+  const seed = prepareWebProblem(directory, request, { libraryPack: libraryPack ?? { ...pack, modules: [pack.modules[0]!] } });
   return { root, directory, request, seed, output: path.join(directory, 'result.json'),
     libraryCatalog: { file: libraryCatalog.file, digest: libraryCatalog.digest } };
 }
@@ -77,6 +77,31 @@ function finishRound(f: Fixture, round: WebLibraryRound, names?: string[], used:
 }
 
 describe('Web library research supervision without provider calls', () => {
+  it('keeps the exact shared pack and original imports through repeated built-in library installations', async () => {
+    const shared = 'Submission/Library/Shared/Result.lean', sharedSource = 'namespace Shared\nlemma result : True := by trivial\nend Shared\n';
+    const frozenPack: LibraryPack = { ...pack, modules: [pack.modules[0]!, { file: shared, source: sharedSource,
+      origin: { kind: 'run', runId: 'shared-publisher', commit: 'a'.repeat(40), file: 'Result.lean' } }] };
+    const originalSource = 'import Submission.Library.Shared.Result\n' + source;
+    const f = fixture({ source: originalSource }, undefined, frozenPack), rounds: WebLibraryRound[] = [];
+    const original = readSolverProblem(f.seed.workspaceRoot, f.seed.activeProblemPath), receipt = fs.readFileSync(f.seed.activeProblemPath);
+    const result = await runWebLibraryResearch({ ...f, run: async round => {
+      rounds.push(round);
+      const problem = readSolverProblem(round.seed.workspaceRoot, round.seed.activeProblemPath);
+      expect(problem.contract).toEqual(original.contract);
+      expect(problem.targets).toEqual(original.targets);
+      expect(problem.frozenFiles?.[shared]).toBe(mathDigest(sharedSource));
+      expect(readMathText(path.join(problem.workspace, problem.projectRelative, shared))).toBe(sharedSource);
+      expect(readMathText(path.join(problem.workspace, problem.projectRelative, 'Submission.lean'))).toBe(originalSource);
+      if (round.round > 0) expect(problem.frozenFiles?.[feature]).toBe(mathDigest(sources[feature]));
+      finishRound(f, round, round.round === 0 ? ['Research.desired'] : round.round === 1 ? ['Research.final_hint'] : undefined);
+    } });
+    expect(rounds).toHaveLength(3);
+    expect(readSolverProblem(result.seed.workspaceRoot, result.seed.activeProblemPath).frozenFiles)
+      .toEqual(Object.fromEntries([initial, base, feature, extra, shared].map(file => [file, mathDigest(file === shared ? sharedSource : sources[file])])));
+    expect(fs.readFileSync(f.seed.activeProblemPath)).toEqual(receipt);
+    expect(result.raw.status).toBe('incomplete');
+  });
+
   it('carries execution time across library rounds without charging idle human approval time', async () => {
     const f = fixture({ maxRunSeconds: 12 }), limits: number[] = [];
     const result = await runWebLibraryResearch({ ...f, run: async round => {

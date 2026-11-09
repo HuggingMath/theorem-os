@@ -68,6 +68,18 @@ describe('versioned library catalog consumption', () => {
     expect(() => f.catalog.materialize(selection)).toThrow('math_library_catalog_source_changed');
   });
 
+  it('allows only host-retained imports outside the catalog and still rejects unknown imports', () => {
+    const f = fixture(), shared = 'Submission/Library/Shared/Result.lean';
+    const source = 'module\npublic import Submission.Library.Shared.Result\n' + challenge;
+    const input = { source, task: '', automatic: false, environmentDigest: environment.dependencyDigest, requiredFiles: [arithmetic] };
+    expect(() => f.catalog.select(input)).toThrow('math_library_catalog_module_missing');
+    const retainedSources = { [shared]: 'namespace Shared\nlemma result : True := by trivial\nend Shared\n' };
+    expect(f.catalog.select({ ...input, retainedSources }).modules.map(module => module.file)).toEqual([arithmetic, base]);
+    expect(() => f.catalog.select({ ...input, retainedSources,
+      source: source.replace('Submission.Library.Shared.Result', 'Submission.Library.Shared.Unknown') }))
+      .toThrow('math_library_catalog_module_missing');
+  });
+
   it('excludes declaration conflicts and their consumers before selecting modules', () => {
     const f = fixture();
     const selection = f.catalog.select({ source: 'namespace Demo\ndef seed : Nat := 4\nend Demo\n' + challenge,

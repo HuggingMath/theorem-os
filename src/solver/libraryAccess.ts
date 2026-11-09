@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { libraryDeclarationConflict } from '../math/libraryPacks';
+import { LIBRARY_PACK_SCHEMA, libraryDeclarationConflict, parseLibraryPack } from '../math/libraryPacks';
 import { canonicalMathJson, mathDigest, readMathText, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import { readLibraryCatalog } from './libraryCatalog';
-import { git, type SolverProblem } from './problem';
+import { committedSource, git, type SolverProblem } from './problem';
 import { largestFittingPage, splitsSurrogate } from './textPage';
 
 export const LIBRARY_ACCESS_FILE = 'LIBRARY.json';
@@ -84,15 +84,30 @@ export function requestedLibraryPack(problem: SolverProblem, requestInput: unkno
   git(worktree, ['merge-base', '--is-ancestor', problem.baseCommit, request.seedCommit]);
   git(worktree, ['merge-base', '--is-ancestor', request.seedCommit, 'HEAD']);
   const requested = request.names.map(name => catalog.declaration(name));
-  for (const [file, digest] of Object.entries(problem.frozenFiles ?? {}))
-    if (mathDigest(catalog.readModule(file).source) !== digest) throw new Error('math_library_request_existing_module_changed');
+  const catalogFiles = new Set(catalog.moduleFiles), requiredFiles: string[] = [], retainedSources: Record<string, string> = {};
+  for (const [file, digest] of Object.entries(problem.frozenFiles ?? {})) {
+    if (catalogFiles.has(file)) {
+      if (mathDigest(catalog.readModule(file).source) !== digest) throw new Error('math_library_request_existing_module_changed');
+      requiredFiles.push(file);
+    } else {
+      // Shared releases are not objects in the built-in catalog. Only the frozen seed, never a worker's
+      // current files, supplies their bytes to the next problem and its independent library checks.
+      const source = committedSource(worktree, problem.baseCommit, path.posix.join(problem.projectRelative, file));
+      if (mathDigest(source) !== digest) throw new Error('math_library_request_existing_module_changed');
+      retainedSources[file] = source;
+    }
+  }
   if (requested.every(item => problem.frozenFiles?.[item.file] === item.sourceDigest))
     throw new Error('math_library_request_already_installed');
   // Keep module/prelude visibility and original imports intact when checking declaration conflicts.
   const selection = catalog.select({ source: problem.contract.formalStatement, task: '',
     environmentDigest: catalog.identity.environmentDigest, automatic: false,
-    requiredFiles: [...Object.keys(problem.frozenFiles ?? {}), ...requested.map(item => item.file)] });
-  const pack = catalog.materialize(selection)!;
+    retainedSources, requiredFiles: [...requiredFiles, ...requested.map(item => item.file)] });
+  const selected = catalog.materialize(selection)!;
+  const pack = parseLibraryPack({ schema: LIBRARY_PACK_SCHEMA, modules: [...selected.modules,
+    ...Object.entries(retainedSources).map(([file, source]) => ({ file, source,
+      origin: { kind: 'upstream', repository: problem.workspace, commit: problem.baseCommit,
+        file: path.posix.join(problem.projectRelative, file) } }))] });
   const conflict = libraryDeclarationConflict(Object.fromEntries(pack.modules.map(module => [module.file, module.source])),
     { 'Submission.lean': problem.contract.formalStatement });
   if (conflict) throw new Error(`math_library_catalog_declaration_conflict: ${conflict.libraryFile}`);

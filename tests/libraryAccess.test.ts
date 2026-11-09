@@ -41,7 +41,7 @@ function sourcePack(files: Record<string, string>): LibraryPack {
     origin: { kind: 'upstream', repository: 'offline-access-fixture', commit: 'a'.repeat(40), file: path.basename(file) } })) };
 }
 
-function fixture(options: { packs?: LibraryPack[]; frozen?: string[]; source?: string } = {}) {
+function fixture(options: { packs?: LibraryPack[]; frozen?: string[]; frozenPack?: LibraryPack; source?: string } = {}) {
   const root = temporaryDirectory('library-access-'); roots.push(root);
   const packs = options.packs ?? [sourcePack(sources)];
   const built = writeLibraryCatalog(path.join(root, 'release'), {
@@ -50,8 +50,8 @@ function fixture(options: { packs?: LibraryPack[]; frozen?: string[]; source?: s
   const allModules = new Map(packs.flatMap(pack => pack.modules).map(module => [module.file, module]));
   const frozen = options.frozen ?? [foundation, installed];
   const receipt = bootstrapLeanTask(path.join(root, 'workspace'), { source: options.source ?? challenge,
-    task: 'Prove the original target.', ...(frozen.length ? {
-      libraryPack: { schema: LIBRARY_PACK_SCHEMA, modules: frozen.map(file => allModules.get(file)!) },
+    task: 'Prove the original target.', ...(options.frozenPack || frozen.length ? {
+      libraryPack: options.frozenPack ?? { schema: LIBRARY_PACK_SCHEMA, modules: frozen.map(file => allModules.get(file)!) },
     } : {}) });
   const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
   const access = { file: built.file, digest: built.digest }, worktree = receipt.workspaceRoot;
@@ -180,6 +180,48 @@ describe('agent access to the complete pinned library', () => {
 });
 
 describe('host validation of requested frozen continuations', () => {
+  it('retains shared modules from the exact seed while extending a catalog pack with their original imports intact', () => {
+    const sharedBase = 'Submission/Library/Shared/Base.lean', shared = 'Submission/Library/Shared/Result.lean';
+    const sharedSources = {
+      [sharedBase]: 'import Submission.Library.Access.Installed\nnamespace Shared\nlemma base : True := by trivial\nend Shared\n',
+      [shared]: 'import Submission.Library.Shared.Base\nnamespace Shared\nlemma result : True := by exact base\nend Shared\n-- 原始共享源码 🙂\n',
+    };
+    const f = fixture({ frozenPack: sourcePack({ [foundation]: sources[foundation], [installed]: sources[installed], ...sharedSources }),
+      source: 'module\npublic import Submission.Library.Shared.Result\n' + challenge });
+    // A mutable working copy must never become the source of a new frozen problem.
+    fs.appendFileSync(path.join(f.receipt.projectRoot, shared), '-- later working copy\n');
+    const before = frozenState(f);
+    f.library.request(['Access.all_hold'], 'Extend the built-in library without replacing the selected shared library.');
+    const result = requestedLibraryPack(f.problem, requestValue(f), f.access, f.worktree);
+    expect(result.selection.modules.map(module => module.file)).toEqual([foundation, installed, requested, support].sort());
+    expect(result.pack.modules.map(module => module.file).sort()).toEqual([foundation, installed, requested, support, sharedBase, shared].sort());
+    for (const [file, source] of Object.entries(sharedSources)) {
+      const module = result.pack.modules.find(module => module.file === file)!;
+      expect(module.source).toBe(source);
+      expect(mathDigest(module.source)).toBe(f.problem.frozenFiles![file]);
+      expect(module.origin).toMatchObject({ commit: f.problem.baseCommit, file: path.posix.join(f.problem.projectRelative, file) });
+    }
+    expect(frozenState(f)).toEqual(before);
+  });
+
+  it('rejects a retained shared source whose bytes do not match the trusted frozen identity', () => {
+    const shared = 'Submission/Library/Shared/Result.lean';
+    const f = fixture({ frozenPack: sourcePack({ [shared]: 'lemma shared : True := by trivial\n' }) });
+    f.library.request(['Access.all_hold'], 'Request a new catalog declaration.');
+    expect(() => requestedLibraryPack({ ...f.problem, frozenFiles: { [shared]: 'b'.repeat(64) } }, requestValue(f), f.access, f.worktree))
+      .toThrow('math_library_request_existing_module_changed');
+  });
+
+  it.each([
+    'namespace Access\nlemma all_hold : True := by trivial\nend Access\n',
+    'namespace Access\nstructure Box where\n  value : Nat\nend Access\n',
+  ])('rejects a catalog extension that redeclares a retained shared name: %s', sharedSource => {
+    const shared = 'Submission/Library/Shared/Conflicting.lean';
+    const f = fixture({ frozenPack: sourcePack({ [shared]: sharedSource }) });
+    f.library.request(['Access.all_hold', 'Access.Box'], 'The new catalog modules must not collide with the shared pack.');
+    expect(() => requestedLibraryPack(f.problem, requestValue(f), f.access, f.worktree)).toThrow('math_library_catalog_declaration_conflict');
+  });
+
   it('retains the complete old pack, adds the requested dependency closure, and does not select unrelated goal matches', () => {
     const f = fixture(), before = frozenState(f);
     f.library.request(['Access.all_hold'], 'Use the quantified declaration.');
@@ -264,7 +306,7 @@ describe('host validation of requested frozen continuations', () => {
     expect(frozenState(f)).toEqual(before);
   });
 
-  it('rejects a catalog whose version changes or omits an existing frozen module', () => {
+  it('rejects changed catalog bytes and retains frozen modules absent from the next catalog', () => {
     const f = fixture(), before = frozenState(f);
     f.library.request(['Access.all_hold'], 'Need the quantified declaration.');
     const request = requestValue(f);
@@ -274,8 +316,8 @@ describe('host validation of requested frozen continuations', () => {
       .toThrow('math_library_request_existing_module_changed');
     const missing = writeLibraryCatalog(path.join(f.root, 'missing-release'), { id: 'fixture/full-library', revision: 'v3',
       environment: 'standard', packs: [sourcePack(Object.fromEntries(Object.entries(sources).filter(([file]) => file !== installed)))] });
-    expect(() => requestedLibraryPack(f.problem, { ...request, catalogDigest: missing.digest }, { file: missing.file, digest: missing.digest }, f.worktree))
-      .toThrow('math_library_catalog_module_missing');
+    const retained = requestedLibraryPack(f.problem, { ...request, catalogDigest: missing.digest }, { file: missing.file, digest: missing.digest }, f.worktree);
+    expect(retained.pack.modules.find(module => module.file === installed)?.source).toBe(sources[installed]);
     expect(frozenState(f)).toEqual(before);
   });
 
@@ -298,7 +340,7 @@ describe('host validation of requested frozen continuations', () => {
     expect(frozenState(f)).toEqual(before);
   });
 
-  it('counts retained modules as well as the new dependency closure toward the installation limit', () => {
+  it.each(['catalog', 'shared'] as const)('counts retained %s modules as well as the new dependency closure toward the installation limit', origin => {
     const dependencies = Object.fromEntries(Array.from({ length: MAX_LIBRARY_PACK_MODULES - 2 }, (_, i) => [
       `Submission/Library/AccessBudget/D${i}.lean`, `namespace AccessBudget.D${i}\ndef value : Nat := 0\nend AccessBudget.D${i}\n`,
     ]));
@@ -306,7 +348,8 @@ describe('host validation of requested frozen continuations', () => {
     const budgetPack = sourcePack({ ...dependencies, [entry]: Object.keys(dependencies)
       .map(file => `import ${file.slice(0, -5).replaceAll('/', '.')}\n`).join('') +
       'namespace AccessBudget\ntheorem entry : True := trivial\nend AccessBudget\n' });
-    const f = fixture({ packs: [sourcePack({ [foundation]: sources[foundation], [installed]: sources[installed] }), budgetPack] });
+    const oldPack = sourcePack({ [foundation]: sources[foundation], [installed]: sources[installed] });
+    const f = fixture({ packs: origin === 'catalog' ? [oldPack, budgetPack] : [budgetPack], frozenPack: oldPack });
     const before = frozenState(f);
     const catalog = readLibraryCatalog(f.access.file, f.access.digest);
     expect(catalog.select({ source: 'import Submission.Library.AccessBudget.Entry\n', task: '', automatic: false,

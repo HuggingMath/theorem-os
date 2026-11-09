@@ -188,19 +188,23 @@ export function readLibraryCatalog(file: string, expectedDigest?: string) {
     return { file, source, origin: structuredClone(module.origin) };
   };
   const select = (input: { source: string; task: string; environmentDigest: string; rootLimit?: number; automatic?: boolean;
-    requiredFiles?: readonly string[] }): LibrarySelection => {
+    requiredFiles?: readonly string[];
+    /** Additional modules whose exact frozen bytes the host checked against the current problem. */
+    retainedSources?: Readonly<Record<string, string>> }): LibrarySelection => {
     if (input.environmentDigest !== manifest.environmentDigest) throw new Error('math_library_catalog_environment_changed');
     const rootLimit = input.automatic === false ? 0 : input.rootLimit ?? 4;
     if (!Number.isInteger(rootLimit) || rootLimit < (input.automatic === false ? 0 : 1) || rootLimit > 32) throw new Error('math_library_catalog_root_limit');
     const owned = inspectScopedLeanDeclarations(input.source), unavailable = new Set<string>();
-    const pending = declarationConflictNames(input.source).flatMap(name => declarations.get(name) ?? []);
+    const retainedSources = input.retainedSources ?? {};
+    const pending = [input.source, ...Object.values(retainedSources)]
+      .flatMap(source => declarationConflictNames(source).flatMap(name => declarations.get(name) ?? []));
     for (let cursor = 0; cursor < pending.length; cursor++) {
       const file = pending[cursor]!;
       if (unavailable.has(file)) continue;
       unavailable.add(file); pending.push(...(dependents.get(file) ?? []));
     }
     const selected = new Set<string>(), roots = new Set<string>(), omitted: LibrarySelection['omitted'][number][] = [];
-    let bytes = 0;
+    let bytes = Object.values(retainedSources).reduce((sum, source) => sum + Buffer.byteLength(source), 0);
     const include = (file: string, required = false) => {
       if (unavailable.has(file)) {
         if (required) throw new Error(`math_library_catalog_declaration_conflict: ${file}`);
@@ -213,7 +217,7 @@ export function readLibraryCatalog(file: string, expectedDigest?: string) {
         closure.add(next); queue.push(...modules.get(next)!.imports);
       }
       const added = [...closure].reduce((sum, file) => sum + modules.get(file)!.bytes, 0);
-      if (selected.size + closure.size > MAX_LIBRARY_PACK_MODULES || bytes + added > MAX_LIBRARY_PACK_BYTES) {
+      if (Object.keys(retainedSources).length + selected.size + closure.size > MAX_LIBRARY_PACK_MODULES || bytes + added > MAX_LIBRARY_PACK_BYTES) {
         if (required) throw new Error(`math_library_catalog_installation_budget: ${file}`);
         if (omitted.length < 32) omitted.push({ file, reason: 'installation-budget' });
         return false;
@@ -224,7 +228,10 @@ export function readLibraryCatalog(file: string, expectedDigest?: string) {
     const requiredFiles = [...(input.requiredFiles ?? []),
       ...mathConstructionImports(input.source).filter(name => name.startsWith('Submission.Library.')).map(localModuleFile)];
     for (const file of requiredFiles) {
-      if (!modules.has(file)) throw new Error(`math_library_catalog_module_missing: ${file}`);
+      if (!modules.has(file)) {
+        if (Object.hasOwn(retainedSources, file)) continue;
+        throw new Error(`math_library_catalog_module_missing: ${file}`);
+      }
       include(file, true);
     }
     let automatic = 0;
