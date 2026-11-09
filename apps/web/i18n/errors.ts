@@ -18,6 +18,7 @@ export const errors: Record<string, string> = {
   "提交请求标识无效或不一致。": "The submission request IDs are invalid or do not match.",
   "同一提交请求不能使用不同的题目或配置。": "The same submission request cannot use a different problem or configuration.",
   "这次提交对应的运行已删除，请发起新研究。": "The run for this submission was deleted. Start a new research run.",
+  "这次提交对应的形式化已删除，请发起新研究。": "The formalization for this submission was deleted. Start a new research task.",
   "自动证明运行环境尚未就绪。": "The automatic proof service is not ready yet.",
   "Lean 原题或环境已改变，请重新形式化确认，或作为普通 Lean 题目创建。": "The Lean problem or environment has changed. Formalize and confirm it again, or create a regular Lean problem.",
   "继续研究必须保留原运行的形式化来源。": "Continuing research must keep the original run's formalization source.",
