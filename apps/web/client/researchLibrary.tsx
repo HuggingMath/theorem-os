@@ -214,8 +214,9 @@ function Withdraw({ asset, version, refresh }: { asset: ResearchAsset; version: 
 
 function Selection({ selection, remove, clear, assets }: { selection: ResearchReleaseRef[]; remove: (ref: ResearchReleaseRef) => void; clear: () => void; assets: ResearchAsset[] }) {
   const [environment, setEnvironment] = useState<WebEnvironment>('mathlib'), [busy, setBusy] = useState(false), [error, setError] = useState(''), [validated, setValidated] = useState<FrozenResearchConfiguration>();
-  const signature = JSON.stringify(selection);
-  useEffect(() => { setValidated(undefined); setError(''); }, [signature, environment]);
+  const signature = JSON.stringify([selection, environment]), currentSignature = useRef(signature);
+  currentSignature.current = signature;
+  useEffect(() => { setValidated(undefined); setError(''); }, [signature]);
   const validate = async () => {
     setBusy(true); setError(''); setValidated(undefined);
     try {
@@ -227,8 +228,8 @@ function Selection({ selection, remove, clear, assets }: { selection: ResearchRe
         else if (item.type === 'skill') config.skills!.push(ref); else config.libraries!.push(ref);
       }
       const result = await api<Item<FrozenResearchConfiguration>>(`${base}/configuration`, { method: 'POST', body: JSON.stringify({ environment, selection: config }) });
-      setValidated(result.item);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      if (currentSignature.current === signature) setValidated(result.item);
+    } catch (cause) { if (currentSignature.current === signature) setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   };
   const open = () => {

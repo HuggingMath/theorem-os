@@ -85,9 +85,32 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
   const word = (zh: string, en: string) => model.locale === 'en' ? en : zh;
   const detailScroller = () => {
     const workspace = root.querySelector<HTMLElement>('.solution-route-workspace');
-    return expanded && workspace && getComputedStyle(workspace).overflowY === 'auto'
-      ? workspace : root.querySelector<HTMLElement>('[data-solution-inspector]');
+    if (expanded && workspace && getComputedStyle(workspace).overflowY === 'auto') return workspace;
+    const inspector = root.querySelector<HTMLElement>('[data-solution-inspector]');
+    if (!inspector || getComputedStyle(inspector).overflowY !== 'visible') return inspector;
+    // Inline reading follows the page or workbench pane rather than the detail element.
+    for (let parent = inspector.parentElement; parent; parent = parent.parentElement)
+      if (/(auto|scroll)/u.test(getComputedStyle(parent).overflowY)) return parent;
+    return document.scrollingElement as HTMLElement;
   };
+  const detailAnchors = () => [...root.querySelectorAll<HTMLElement>('[data-solution-heading], [data-solution-section-heading], .solution-route-records li')];
+  const scrollportTop = (scroller: HTMLElement) => scroller === document.scrollingElement ? 0
+    : Math.max(0, scroller.getBoundingClientRect().top + scroller.clientTop);
+  function detailPosition() {
+    const scroller = detailScroller();
+    if (!scroller) return;
+    const top = scrollportTop(scroller), anchors = detailAnchors();
+    const index = Math.max(0, anchors.findLastIndex(anchor => anchor.getBoundingClientRect().top <= top));
+    return { top: scroller.scrollTop, index, offset: anchors[index] ? anchors[index].getBoundingClientRect().top - top : 0 };
+  }
+  function restoreDetailPosition(position: ReturnType<typeof detailPosition>) {
+    const scroller = detailScroller();
+    if (!position || !scroller) return;
+    if (!expanded && scroller !== document.scrollingElement) scroller.scrollIntoView({ block: 'nearest' });
+    const anchor = detailAnchors()[position.index];
+    if (anchor) scroller.scrollTop += anchor.getBoundingClientRect().top - scrollportTop(scroller) - position.offset;
+    else scroller.scrollTop = position.top;
+  }
   const nodesById = () => new Map(model.nodes.map(node => [node.id, node]));
   const related = (id: string, incoming: boolean) => model.edges.filter(edge => incoming ? edge.to === id : edge.from === id)
     .map(edge => ({ edge, node: model.nodes.find(node => node.id === (incoming ? edge.from : edge.to))! })).filter(item => item.node);
@@ -232,10 +255,13 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
   }
   function expand(value: boolean) {
     if (value === expanded) return;
+    const position = detailPosition();
     expanded = value;
     if (expanded) { previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'; }
     else document.body.style.overflow = previousOverflow;
-    draw(); root.querySelector<HTMLButtonElement>('[data-solution-expand]')?.focus({ preventScroll: true });
+    draw(); restoreDetailPosition(position);
+    if (!state.reading) revealSearchResult();
+    root.querySelector<HTMLButtonElement>('[data-solution-expand]')?.focus({ preventScroll: true });
   }
   function drawVisibleSelection() {
     const previous = state.selected;
@@ -299,7 +325,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     const input = event.target as HTMLInputElement; if (!input.matches('[data-solution-search]')) return;
     const selection = { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection };
     state.query = input.value; state.left = 0; state.top = 0; draw();
-    if (state.query.trim()) revealSearchResult();
+    revealSearchResult();
     const next = root.querySelector<HTMLInputElement>('[data-solution-search]')!; next.focus({ preventScroll: true });
     next.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);
   }, { signal: signal.signal });

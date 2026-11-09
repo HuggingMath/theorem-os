@@ -1,5 +1,10 @@
 /** The natural-language entry, its model connection, budgets and acceptance results. */
 export const release: Record<string, string> = {
+  '研究空间': 'Research space',
+  '数学家': 'Mathematicians',
+  '反馈': 'Feedback',
+  '{0} 条反馈 · {1} 条需要关注': '{0} feedback · {1} need attention',
+  '；': '; ',
   '草稿基准已过期': 'Outdated draft base',
   '草稿基准：': 'Draft base: ',
   '任务或源码已有更新。旧基准和你的编辑已保留，请先核对最新基准。': 'The task or source has changed. Your original base and edits are preserved. Review the latest base before submitting.',

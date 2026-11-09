@@ -13,6 +13,7 @@ export const app: Record<string, string> = {
   "核对并重试原提交": "Check and retry the original submission",
   "返回讨论": "Back to discussion",
   "新对话": "New chat",
+  "等你确认题意": "Confirm the statement",
   "回到首页": "Back to home",
   "返回对话": "Back to chat",
   "正在连接，连接后即可发送。": "Connecting. You can send once connected.",

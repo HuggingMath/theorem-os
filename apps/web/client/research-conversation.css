@@ -195,6 +195,11 @@ body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:au
 .chat-history-heading{margin:0;padding:8px 12px;color:var(--muted);font-size:11px;font-weight:500}
 .chat-history-item{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;min-width:0;font-size:13px;color:var(--ink);text-decoration:none}
 .chat-history-item>span:first-child{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-history-copy{display:grid;gap:3px;flex:1}
+.chat-history-copy>span:first-child{overflow:hidden;text-overflow:ellipsis}
+.chat-history-decision{color:var(--blue-700);font-size:11px;line-height:1.6;white-space:normal}
+.chat-history-waiting{margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.chat-history-waiting>.chat-history-heading{color:var(--blue-700)}
 .chat-history-item .spinner{flex-shrink:0;width:13px;height:13px;margin-left:auto}
 .chat-history-item:hover,.chat-history-item[aria-current=page]{background:var(--gray-100)}
 .chat-history-empty{padding:8px 12px;margin:0;color:var(--muted);font-size:12px;line-height:1.7}

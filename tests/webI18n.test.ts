@@ -23,7 +23,7 @@ describe('workbench English dictionary', () => {
   const { keys, stray } = requiredKeys();
   const placeholders = (text: string) => [...text.matchAll(/\{(\d+)\}/gu)].map(match => match[1]).sort().join(',');
 
-  it('covers every Chinese interface string, with no Chinese text outside t()', () => {
+  it('covers every interface string through a dictionary entry or an inline language pair', () => {
     expect(stray).toEqual([]);
     expect([...keys].filter(([key]) => !Object.hasOwn(en, key)).map(([key, where]) => `${where} ${key}`)).toEqual([]);
   });
@@ -92,6 +92,10 @@ describe('server error messages in an English browser', () => {
     expect(localizeMessage('已达到 20 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。'))
       .toBe('You have reached the limit of 20 run records. Download the archives you need, delete finished records and try again.');
     expect(localizeMessage('模型服务返回错误（HTTP 502）。')).toBe('The model provider returned an error (HTTP 502).');
+    expect(localizeMessage('任务版本已改变，请重新核对。')).toBe('The task version has changed. Review it again.');
+    expect(localizeMessage('资产已更新，请刷新后重试。当前版本：12')).toBe('The asset has changed. Refresh and try again. Current revision: 12');
+    expect(localizeMessage('数学库模块内容冲突：Main.lean')).toBe('Conflicting mathematics module content: Main.lean');
+    expect(localizeMessage('公开访问只提供已分享的研究结果。')).toBe('Public access provides shared research results only.');
     // Text that is not an error key, such as an Agent's own words, stays as written.
     expect(localizeMessage('证明在第 3 步卡住了。')).toBe('证明在第 3 步卡住了。');
     expect(localizeMessage('')).toBe('');

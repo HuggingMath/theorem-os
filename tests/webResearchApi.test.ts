@@ -170,6 +170,147 @@ describe('collaborative research through the actual HTTP service', () => {
     return item(client, `/api/research/library/${asset.id}/releases/${version}`);
   }
 
+  it('keeps exact task assignments private while retaining member and run-owner access', async () => {
+    const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
+    const { project, run, route } = await projectWithRun(alice, bob, 'public');
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const target = { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
+      observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } };
+    const feedback = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'private-assignment-feedback',
+      kind: 'guidance', text: 'Private work on this exact task', visibility: 'members', target,
+      recipient: { kind: 'task', id: 'target' } }, 'POST', 201);
+    let current = await item<ResearchProjectDetail>(alice, route);
+    current = await item(bob, route + '/assignments', { requestId: 'submit-assignment', expectedRevision: current.revision,
+      target, status: 'submitted', feedbackId: feedback.id });
+    const memberAssignment = current.assignments[0];
+    expect(memberAssignment).toMatchObject({ target, feedbackId: feedback.id, author: { id: bob.researcherId } });
+
+    const ownedRun = await newRun(bob, { source: project.versions[0].source });
+    current = await item(bob, route + '/runs', { requestId: 'bind-owned-run', expectedRevision: current.revision,
+      runId: ownedRun.id, statementVersionId: project.versions[0].id, exposure: 'public' }, 'POST', 201);
+    const ownedObservation = service.jobs.get(bob.owner, ownedRun.id)!.observation!;
+    current = await item(bob, route + '/assignments', { requestId: 'claim-owned-task', expectedRevision: current.revision,
+      target: { ...target, runId: ownedRun.id, observationRef: { sequence: ownedObservation.sequence, stateDigest: ownedObservation.snapshot.stateDigest } },
+      status: 'claimed' });
+    const ownedAssignment = current.assignments.find(assignment => assignment.target.runId === ownedRun.id)!;
+    expect((await item<ResearchProjectDetail>(alice, route)).assignments).toEqual(current.assignments);
+    expect(current.assignments).toHaveLength(2);
+
+    for (const viewer of [undefined, carol]) {
+      const response = await request(viewer, route);
+      expect(response.status).toBe(200);
+      const projected: ResearchProjectDetail = (await response.json()).item;
+      expect(projected.runs).toHaveLength(2);
+      expect(projected.assignments).toEqual([]); expect(projected.feedback).toEqual([]);
+      for (const secret of [memberAssignment.id, ownedAssignment.id, feedback.id, target.taskRef.version, target.observationRef.stateDigest])
+        expect(JSON.stringify(projected)).not.toContain(secret);
+      expect((await request(viewer, route + `/feedback/${feedback.id}`)).status).toBe(404);
+    }
+    current = await item(alice, route + `/members/${bob.researcherId}`, { requestId: 'revoke-assignee',
+      expectedRevision: current.revision, role: null }, 'PUT');
+    expect(current.assignments).toHaveLength(2);
+    const revoked = await item<ResearchProjectDetail>(bob, route);
+    expect(revoked.permissions.member).toBe(false);
+    expect(revoked.assignments).toEqual([ownedAssignment]);
+    expect((await request(bob, route + `/feedback/${feedback.id}`)).status).toBe(404);
+  });
+
+  it.each([
+    ['guidance', 'guidance'], ['plan-edit', 'edit'], ['route-control', 'edit'],
+    ['plan-approval', 'approve'], ['proof-submission', 'proof'],
+  ] as const)('enforces the actual decision grant for %s, including historical targets and retries', async (kind, permission) => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    const { project, run, route } = await projectWithRun(alice, bob);
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const target = { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
+      observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } };
+    const payload = kind === 'guidance' ? { recipient: { kind: 'task', id: 'target' } }
+      : kind === 'plan-approval' ? { planVersion: observed.inspection.planVersion }
+      : kind === 'proof-submission' ? { source: proof, base: { commit, sourceDigest, environmentDigest, file: 'Main.lean' } }
+      : { proposal: { schema: 'deepscientist.math.plan-edit.v1', baseVersion: observed.inspection.planVersion, tasks: observed.plan!.tasks } };
+    const submitted = await item<ResearchFeedback>(bob, route + '/feedback',
+      { requestId: `decision-${kind}`, kind, text: 'A contribution to review', target, ...payload }, 'POST', 201);
+    expect(submitted.kind).toBe(kind);
+    let current = await item<ResearchProjectDetail>(bob, route);
+    expect(current.permissions.manage).toBe(false); expect(current.runs[0].permissions.manage).toBe(false);
+    expect(current.feedback.some(feedback => feedback.id === submitted.id)).toBe(true);
+    expect((await item<ResearchFeedback>(bob, route + `/feedback/${submitted.id}`)).id).toBe(submitted.id);
+    const list = await request(bob, route + '/feedback');
+    expect(list.status).toBe(200); expect((await list.json()).items[0].id).toBe(submitted.id);
+
+    current = await item(alice, route + '/runs', { requestId: 'revoke-required-grant', expectedRevision: current.revision,
+      runId: run.id, statementVersionId: target.statementVersionId,
+      grants: { guidance: true, edit: true, approve: true, proof: true, [permission]: false } }, 'POST', 201);
+    let feedback = await item<ResearchFeedback>(bob, route + `/feedback/${submitted.id}`);
+    const denied = await item<ResearchProjectDetail>(bob, route);
+    expect(denied.permissions.edit).toBe(true); expect(denied.runs[0].permissions[permission]).toBe(false);
+    const deniedList = await request(bob, route + '/feedback');
+    expect(deniedList.status).toBe(200); expect((await deniedList.json()).items[0].id).toBe(submitted.id);
+    expect((await request(bob, route + `/feedback/${feedback.id}/decision`, { requestId: 'denied-decision',
+      expectedRevision: feedback.revision, status: 'accepted', reason: 'Missing required run grant' })).status).toBe(403);
+
+    runner.update(run.id, next => { next.inspection.tasks[0].version = 'task-v2'; });
+    current = await item(alice, route + '/runs', { requestId: 'grant-only-required-operation', expectedRevision: current.revision,
+      runId: run.id, statementVersionId: target.statementVersionId,
+      grants: { guidance: false, edit: false, approve: false, proof: false, [permission]: true } }, 'POST', 201);
+    feedback = await item<ResearchFeedback>(bob, route + `/feedback/${submitted.id}`);
+    expect(feedback.target?.taskRef?.version).toBe('task-v1');
+    const decision = { requestId: 'accepted-decision', expectedRevision: feedback.revision, status: 'accepted', reason: 'Reviewed the original contribution' };
+    const accepted = await item<ResearchFeedback>(bob, route + `/feedback/${feedback.id}/decision`, decision);
+    expect(accepted.decision.status).toBe('accepted'); expect(accepted.decision.actor?.id).toBe(bob.researcherId);
+    current = await item(alice, route);
+    await item(alice, route + '/runs', { requestId: 'revoke-after-decision', expectedRevision: current.revision,
+      runId: run.id, statementVersionId: target.statementVersionId, grants: {} }, 'POST', 201);
+    const replay = await item<ResearchFeedback>(bob, route + `/feedback/${feedback.id}/decision`, decision);
+    expect(replay.decision).toEqual(accepted.decision);
+    expect((await request(bob, route + `/feedback/${feedback.id}/decision`, { ...decision, requestId: 'fresh-revoked-decision',
+      expectedRevision: replay.revision })).status).toBe(403);
+  });
+
+  it('requires project edit as well as the run grant even for project and run managers', async () => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    const { project, route } = await projectWithRun(alice, bob);
+    const run = await newRun(bob, { source: project.versions[0].source });
+    let current = await item<ResearchProjectDetail>(bob, route + '/runs', { requestId: 'bind-ungranted-run', expectedRevision: project.revision,
+      runId: run.id, statementVersionId: project.versions[0].id }, 'POST', 201);
+    const observed = service.jobs.get(bob.owner, run.id)!.observation!;
+    const feedback = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'owner-guidance', kind: 'guidance',
+      text: 'A run owner contribution', recipient: { kind: 'task', id: 'target' },
+      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } } }, 'POST', 201);
+    expect(feedback.delivery.status).toBe('delivered');
+    current = await item(alice, route);
+    expect(current.permissions.manage).toBe(true);
+    expect(current.runs.find(binding => binding.runId === run.id)?.permissions.guidance).toBe(false);
+    const decision = { requestId: 'manager-decision', expectedRevision: feedback.revision, status: 'accepted', reason: 'Review contribution' };
+    expect((await request(alice, route + `/feedback/${feedback.id}/decision`, decision)).status).toBe(403);
+    await item(alice, route + `/members/${bob.researcherId}`, { requestId: 'run-owner-as-reader', expectedRevision: current.revision, role: 'reader' }, 'PUT');
+    const reader = await item<ResearchProjectDetail>(bob, route);
+    expect(reader.permissions.edit).toBe(false);
+    expect(reader.runs.find(binding => binding.runId === run.id)?.permissions.manage).toBe(true);
+    expect((await item<ResearchFeedback>(bob, route + `/feedback/${feedback.id}`)).id).toBe(feedback.id);
+    expect((await request(bob, route + `/feedback/${feedback.id}/decision`, decision)).status).toBe(403);
+  });
+
+  it('authorizes discussion decisions from project edit without requiring a run grant', async () => {
+    const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
+    const { project, run, route } = await projectWithRun(alice, bob, 'public');
+    await item(alice, route + '/runs', { requestId: 'no-discussion-run-grants', expectedRevision: project.revision,
+      runId: run.id, statementVersionId: project.versions[0].id, exposure: 'public', grants: {} }, 'POST', 201);
+    const feedback = await item<ResearchFeedback>(carol, route + '/feedback', { requestId: 'public-discussion',
+      kind: 'discussion', text: 'A public suggestion' }, 'POST', 201);
+    const anonymous = await request(undefined, route + `/feedback/${feedback.id}`);
+    expect(anonymous.status).toBe(200); expect((await anonymous.json()).item.id).toBe(feedback.id);
+    const decision = { requestId: 'discussion-decision', expectedRevision: feedback.revision, status: 'accepted', reason: 'A helpful suggestion' };
+    expect((await request(carol, route + `/feedback/${feedback.id}/decision`, decision)).status).toBe(403);
+    const accepted = await item<ResearchFeedback>(bob, route + `/feedback/${feedback.id}/decision`, decision);
+    expect(accepted.decision.status).toBe('accepted'); expect(accepted.decision.actor?.id).toBe(bob.researcherId);
+    expect((await item<ResearchFeedback>(alice, route + `/feedback/${feedback.id}`)).decision).toEqual(accepted.decision);
+    expect((await item<ResearchFeedback>(carol, route + `/feedback/${feedback.id}`)).decision).toEqual(accepted.decision);
+    expect((await request(carol, route + `/feedback/${feedback.id}/decision`, { ...decision,
+      requestId: 'outsider-discussion-decision', expectedRevision: accepted.revision })).status).toBe(403);
+  });
+
   it('authorizes a collaborator guidance proxy, persists feedback, deduplicates retries and revokes access', async () => {
     const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
     const { project, run, route } = await projectWithRun(alice, bob);

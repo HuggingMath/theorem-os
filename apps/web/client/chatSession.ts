@@ -271,11 +271,14 @@ export class ChatSession {
         const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${item.id}/confirm`,
           { evidenceSha256: item.report!.evidenceSha256 });
         if (generation !== this.generation) return;
-        this.formalization = formalization; this.draw();
+        this.formalization = formalization;
+        this.formalizations = this.formalizations.map(record => record.id === formalization.id ? formalization : record);
+        this.draw();
       }
       const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${item.id}/research`, { apiKey: this.apiKey });
       if (generation !== this.generation) return;
       this.formalization = formalization;
+      this.formalizations = this.formalizations.map(record => record.id === formalization.id ? formalization : record);
       if (this.conversation) {
         const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${this.currentId}`);
         if (generation !== this.generation) return;

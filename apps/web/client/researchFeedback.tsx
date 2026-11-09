@@ -93,7 +93,8 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
   selfId: string; runId?: string;
   feedback: ResearchFeedback; project: ResearchProjectDetail; refresh: () => void; hidden: boolean; onOpenTask: OpenFeedbackTask; onRevealFeedback: (id: string) => void;
 }) {
-  const canDecide = project.permissions.manage || Boolean(feedback.target && project.runs.find(item => item.runId === feedback.target!.runId)?.permissions.manage);
+  const permission = feedback.kind === 'guidance' ? 'guidance' : feedback.kind === 'plan-approval' ? 'approve' : feedback.kind === 'proof-submission' ? 'proof' : 'edit';
+  const canDecide = project.permissions.edit && (!feedback.target || Boolean(project.runs.find(item => item.runId === feedback.target!.runId)?.permissions[permission]));
   const source = feedback.sourceFeedbackId && project.feedback.find(item => item.id === feedback.sourceFeedbackId);
   const forwarded = project.feedback.filter(item => item.sourceFeedbackId === feedback.id);
   const canForward = feedback.kind === 'discussion' && Boolean(selfId) && project.runs.some(run => run.permissions.guidance && run.status === 'running');

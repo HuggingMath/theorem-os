@@ -27,6 +27,7 @@
     "test:web-review-regressions": "bun scripts/test-web-review-regressions.ts",
     "test:frontend-audit": "bun scripts/test-web-audit-workbench.ts && bun scripts/test-web-audit-library.ts && bun scripts/test-frontend-audit-layout.ts",
     "test:frontend-round2": "bun scripts/test-web-round2-collaboration.ts && bun scripts/test-web-round2-workbench.ts && bun scripts/test-web-round2-routes.ts && bun scripts/test-web-round2-login.ts",
+    "test:frontend-round3": "bun scripts/test-web-round3-approval.ts && bun scripts/test-web-round3-collaboration.ts && bun scripts/test-web-round3-library.ts && bun scripts/test-web-round3-routes.ts && bun scripts/test-web-round3-workbench.ts",
     "test:web-ui": "bun scripts/test-web-ui.ts",
     "test:web-login": "bun scripts/test-web-login.ts",
     "test:web-failures": "bun scripts/test-web-failures.ts",

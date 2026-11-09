@@ -412,6 +412,15 @@ function ChatHistory(props: ChatHistoryProps) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const matching = items.filter(item => item.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const decisions = new Map<string, string>();
+  for (const item of matching) {
+    if (item.runId || !item.formalizationId) continue;
+    const record = props.records.find(record => record.id === item.formalizationId);
+    // The index omits the report; its recorded lifecycle identifies the pending human action.
+    if (!record?.humanReview || record.runId) continue;
+    if (record.status === 'review') decisions.set(item.id, t('等你确认题意'));
+    else if (record.status === 'confirmed') decisions.set(item.id, t('继续拟定研究计划'));
+  }
   const edit = (id: string, action: 'rename' | 'delete' | 'record', title: string) => { setEditing({ id, action, title }); setError(''); setNotice(''); };
   const apply = async () => {
     if (!editing || busy) return;
@@ -432,16 +441,25 @@ function ChatHistory(props: ChatHistoryProps) {
       <button type="button" class="text-button" disabled={busy} onClick={() => { setEditing(undefined); setError(''); }}>{t('取消')}</button></div>
     {error && <p class="chat-history-error" role="alert">{error}</p>}
   </form>;
+  const rows = (entries: WebConversationSummary[]) => entries.map(item => <div key={item.id} class="chat-history-row" data-chat-row={item.id}>
+    <div class="chat-history-line"><a href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
+      onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}>
+      <span class="chat-history-copy"><span translate={false}>{item.title}</span>{decisions.has(item.id) && <span class="chat-history-decision" data-chat-awaiting>{decisions.get(item.id)}</span>}</span>
+      {item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>
+      <button type="button" class="icon-button" data-chat-rename disabled={busy} aria-label={t('重命名对话')} title={t('重命名对话')} onClick={() => edit(item.id, 'rename', item.title)}><Icon name="square-pen" /></button>
+      <button type="button" class="icon-button" data-chat-delete disabled={busy} aria-label={t('删除对话')} title={t('删除对话')} onClick={() => edit(item.id, 'delete', item.title)}><Icon name="trash-2" /></button></div>
+    {confirmation(item.id)}
+  </div>);
   return <nav class="chat-history" aria-label={t("对话历史")}>
     <p class="chat-history-heading">{t("对话")}</p>
     <label class="chat-history-search"><span class="sr-only">{t('搜索对话标题')}</span><Icon name="search" /><input type="search" data-chat-search placeholder={t('搜索对话标题')} value={query} onInput={event => setQuery(event.currentTarget.value)} /></label>
-    {items.length ? matching.length ? matching.map(item => <div key={item.id} class="chat-history-row" data-chat-row={item.id}>
-      <div class="chat-history-line"><a href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
-        onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}><span translate={false}>{item.title}</span>{item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>
-        <button type="button" class="icon-button" data-chat-rename disabled={busy} aria-label={t('重命名对话')} title={t('重命名对话')} onClick={() => edit(item.id, 'rename', item.title)}><Icon name="square-pen" /></button>
-        <button type="button" class="icon-button" data-chat-delete disabled={busy} aria-label={t('删除对话')} title={t('删除对话')} onClick={() => edit(item.id, 'delete', item.title)}><Icon name="trash-2" /></button></div>
-      {confirmation(item.id)}
-    </div>) : <p class="chat-history-empty">{t('没有匹配的对话')}</p>
+    {items.length ? matching.length ? <>
+      {!!decisions.size && <section class="chat-history-waiting" data-chat-waiting aria-label={t('等你处理')}>
+        <p class="chat-history-heading">{t('等你处理')} <span>{decisions.size}</span></p>
+        {rows(matching.filter(item => decisions.has(item.id)))}
+      </section>}
+      {rows(matching.filter(item => !decisions.has(item.id)))}
+    </> : <p class="chat-history-empty">{t('没有匹配的对话')}</p>
       : failed ? <p class="chat-history-empty" role="alert">{t("对话列表暂时没有加载出来。")}<button type="button" class="text-button" data-chat-history-retry onClick={onRetry}>{t("重试")}</button></p>
       : <p class="chat-history-empty">{t("新对话会保存在这里")}</p>}
     <details id="chat-problem-records" class="chat-problem-records" onToggle={event => { if (event.currentTarget.open) props.onRefreshRecords(); }}>

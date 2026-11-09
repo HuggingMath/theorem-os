@@ -1,7 +1,7 @@
 import { Fragment, render } from 'preact';
 import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { compactGraphMetrics, graphMetrics } from '../taskGraphLayout';
-import { locale, t } from '../../i18n';
+import { t } from '../../i18n';
 
 export type TaskCard = { id: string; version: string; kind: string; kindLabel: string; state: string; stateLabel: string;
   /** The task's theorem as a reader knows it, or its id; `owner` is the Agent's name. */ name: string;
@@ -33,8 +33,8 @@ function Card({ card, graph, compact, x, y, dimmed, onHover }: { card: TaskCard;
     onPointerEnter={onHover && (() => onHover(card.id))} onPointerLeave={leave} onFocus={onHover && (() => onHover(card.id))} onBlur={leave}>
     <span class="collab-task-top"><span class="collab-task-kind">{card.kindLabel}{card.feedback && card.feedback.total > 0 &&
       <span class="collab-task-feedback" data-task-feedback={card.feedback.total} data-feedback-attention={card.feedback.attention > 0}
-        title={locale === 'en' ? `${card.feedback.total} feedback · ${card.feedback.attention} need attention` : `${card.feedback.total} 条反馈 · ${card.feedback.attention} 条需要关注`}>
-        {locale === 'en' ? 'Feedback' : '反馈'} {card.feedback.total}{card.feedback.attention > 0 ? ' · !' : ''}</span>}</span><span class="collab-task-state">{card.stateLabel}</span></span>
+        title={t('{0} 条反馈 · {1} 条需要关注', card.feedback.total, card.feedback.attention)}>
+        {t('反馈')} {card.feedback.total}{card.feedback.attention > 0 ? ' · !' : ''}</span>}</span><span class="collab-task-state">{card.stateLabel}</span></span>
     <strong title={!compact && card.name !== card.id ? card.id : undefined}>{card.name}</strong><span class="collab-task-objective">{card.objective}</span><small>{card.owner} · {card.proofLabel}</small>
     {card.tokens && <>
       <span class="collab-task-tokens" title={card.tokens.detail ? t('Token {0}：{1}', card.tokens.label, card.tokens.detail) : undefined}>{card.tokens.label}</span>

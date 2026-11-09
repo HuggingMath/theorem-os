@@ -68,7 +68,7 @@ export class ResearchSelection {
   }
   private render() {
     this.panel.replaceChildren(); const title = document.createElement('strong'); title.textContent = t('本次研究使用的 Library 版本');
-    const list = document.createElement('p'); list.textContent = this.releases.length ? this.releases.map(release => `${release.name} · ${release.version}`).join('；') : this.refs.map(ref => `${ref.assetId} · ${ref.version}`).join('；');
+    const list = document.createElement('p'); list.textContent = (this.releases.length ? this.releases.map(release => `${release.name} · ${release.version}`) : this.refs.map(ref => `${ref.assetId} · ${ref.version}`)).join(t('；'));
     const link = document.createElement('a'); link.href = 'library.html'; link.textContent = t('查看 Library');
     const clear = document.createElement('button'); clear.type = 'button'; clear.className = 'text-button'; clear.textContent = t('清除选择'); clear.addEventListener('click', () => this.clear());
     this.panel.append(title, list, link, clear);

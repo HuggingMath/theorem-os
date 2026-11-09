@@ -47,7 +47,8 @@ export function useResource<T>(url: string | undefined, interval = 0) {
         const data = await api<T>(url, { signal: controller.signal });
         if (live) setValue({ url, data, loading: false });
       } catch (error) {
-        if (live) setValue(previous => ({ url, data: previous.url === url ? previous.data : undefined, error: errorText(error), loading: false }));
+        const unavailable = error instanceof ResearchHttpError && [401, 403, 404].includes(error.status);
+        if (live) setValue(previous => ({ url, data: previous.url === url && !unavailable ? previous.data : undefined, error: errorText(error), loading: false }));
       }
       if (live && interval) timer = setTimeout(() => void read(), interval);
     };

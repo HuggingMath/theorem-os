@@ -263,7 +263,9 @@ export class WebResearchProjects {
       runs: stored.bindings.flatMap(binding => { const view = this.bindingView(viewer, stored, binding); return view ? [view] : []; }),
       feedback, activity: this.activities(viewer, stored), assignments: (stored.assignments ?? []).filter(assignment => {
         const binding = stored.bindings.find(binding => binding.runId === assignment.target.runId);
-        return binding && this.bindingView(viewer, stored, binding);
+        // Assignment targets contain the same precise task/observation identities as the private runtime view.
+        return binding && (this.access(viewer, stored).member || viewer === binding.runOwner) && this.bindingView(viewer, stored, binding)
+          && (!assignment.feedbackId || feedback.some(item => item.id === assignment.feedbackId));
       }),
       contributions: stored.contributions.filter(contribution =>
         (!contribution.feedbackId || feedback.some(item => item.id === contribution.feedbackId)) &&

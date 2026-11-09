@@ -8,6 +8,7 @@ import type { WebApi } from './collaborationUi';
 import { CollaborationView, type CollaborationTaskSelection } from './collaborationView';
 import { FeedbackWorkspace, TaskFeedbackContext, type FeedbackFocus, type OpenFeedbackTask } from './researchFeedback';
 import { taskFeedbackAnnotations } from './researchFeedbackModel';
+import { ProjectPlanApproval } from './researchPlanApproval';
 import { RichProse } from './richText';
 import { api, base, Check, enc, Empty, ErrorBox, Field, FollowButton, lines, MutationState, nameOf, Panel, personHref, Search,
   stamp, State, Tags, theoremHref, tx, useMutation, useResource, words, type Item, type Items, type ResearchContext } from './researchShared';
@@ -30,7 +31,9 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
         {directory.data?.nextOffset !== undefined && <button class="text-button" type="button" onClick={() => setOffset(directory.data!.nextOffset!)}>{tx('下一页', 'Next')}</button>}</div>
     </Panel><Panel title={tx('建立研究题目', 'Create a research project')}>{context.session.authenticated ? <details open={!selected}><summary>{tx('新建定理', 'New theorem')}</summary><CreateProject /></details>
       : <a class="button" href="login.html">{tx('登录后创建定理', 'Sign in to create a theorem')}</a>}</Panel></aside>
-      <div class="research-content"><ErrorBox message={detail.error} />{detail.data ? <Project key={selected} project={detail.data.item} context={context} refresh={detail.refresh} /> :
+      <div class="research-content"><ErrorBox message={detail.error} />{detail.data ? <Project key={selected} project={detail.data.item} context={context} refresh={detail.refresh} /> : detail.error ?
+        <Panel title={tx('无法打开此定理', 'Unable to open theorem')}><Empty>{tx('可重新读取，或从目录选择其他定理。', 'Try again or choose another theorem from the directory.')}</Empty>
+          <button class="button" type="button" data-theorem-detail-retry disabled={detail.loading} aria-busy={detail.loading} onClick={detail.refresh}>{tx('重新读取', 'Try again')}</button></Panel> :
         <Panel title={selected ? tx('正在读取定理…', 'Loading theorem…') : tx('选择一道定理', 'Choose a theorem')}><Empty>{selected ? tx('正在读取陈述和研究记录。', 'Loading the statement and research records.') : tx('从目录打开研究，或创建一个定理并添加首个陈述版本。', 'Open a project from the directory, or create a theorem and add its first statement version.')}</Empty></Panel>}</div></div></>;
 }
 
@@ -215,30 +218,17 @@ function RunResearch({ project, selfId, binding, refreshProject, task, requested
     const key = JSON.stringify([taskId, taskVersion, requested?.request]);
     if (taskId && latest && taskShown.current !== key && view.current.showTask(binding.runId, taskId, taskVersion)) taskShown.current = key;
   }, [observation.data, observation.error, latest, binding.permissions, project.feedback, requestedTask]);
-  return <><ErrorBox message={observation.error} />{observation.error && <p class="research-status">{tx('当前展示上一次成功读取的观测；恢复连接后会继续更新。', 'Showing the last successful observation. Updates resume after reconnection.')}</p>}
+  return <><ErrorBox message={observation.error} />{observation.error && observation.data?.run && latest && <p class="research-status">{tx('当前展示上一次成功读取的观测；恢复连接后会继续更新。', 'Showing the last successful observation. Updates resume after reconnection.')}</p>}
     {observation.data?.run && latest && <TaskFeedbackContext project={project} runId={binding.runId} task={task} onBrowse={onBrowseTask} />}
-    <div class="research-collaboration" ref={root} tabIndex={0} role="region" hidden={Boolean(observation.data && !observation.data.run)} aria-label={tx('运行路线与协作', 'Research routes and collaboration')} />
+    <div class="research-collaboration" ref={root} tabIndex={0} role="region" hidden={!observation.data?.run} aria-label={tx('运行路线与协作', 'Research routes and collaboration')} />
     {!observation.data && !observation.error && <p class="research-status" role="status">{tx('正在读取路线…', 'Loading research routes…')}</p>}
     {observation.data && !observation.data.run && <><p class="research-status">{observation.data.summary?.title} · <State value={observation.data.summary?.status ?? binding.status} /></p>
       {observation.data.share ? <PublicProof share={observation.data.share} /> : <Empty>{tx('当前只展示公开运行概况，尚无已公开的验收证明。', 'The public run summary is available. No accepted proof has been shared yet.')}</Empty>}</>}
-    {observation.data?.run && latest && <>{binding.permissions.approve && <PlanApproval projectId={projectId} binding={binding} observation={latest} refresh={refreshProject} />}
+    {observation.data?.run && latest && <>{binding.permissions.approve && <ProjectPlanApproval project={project} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} />}
       <HumanParticipation project={project} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} />
       {binding.permissions.proof && <ProofSubmission projectId={projectId} binding={binding} observation={latest} refresh={refreshProject} />}</>}
     {binding.permissions.manage && project.permissions.edit && <RunSharing project={project} binding={binding} refresh={refreshProject} />}
   </>;
-}
-
-function PlanApproval({ projectId, binding, observation, refresh }: { projectId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void }) {
-  const approval = observation.inspection.planApproval, action = useMutation();
-  const [pending, setPending] = useState<Record<string, unknown>>();
-  if (approval?.status !== 'pending' && !pending) return null;
-  const submit = () => {
-    const input = pending ?? { kind: 'plan-approval', text: tx('批准已核对的研究计划', 'Approve the reviewed research plan'), planVersion: approval?.planVersion,
-      target: { runId: binding.runId, statementVersionId: binding.statementVersionId, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } } };
-    setPending(input); void action.run('POST', `${base}/theorems/${enc(projectId)}/feedback`, input, () => { setPending(undefined); refresh(); });
-  };
-  return <div class="research-publication"><p class="research-status">{tx('等待批准计划：', 'Plan awaiting approval: ')}{approval?.planVersion}</p>
-    <button class="button" type="button" disabled={action.busy} onClick={submit}>{action.error ? tx('重试原计划批准', 'Retry the original approval') : tx('批准此版本并继续研究', 'Approve this version and continue')}</button><MutationState action={action} /></div>;
 }
 
 function HumanParticipation({ project, selfId, binding, observation, refresh }: { project: ResearchProjectDetail; selfId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void }) {
@@ -251,6 +241,7 @@ function HumanParticipation({ project, selfId, binding, observation, refresh }: 
       { target, status, ...(feedbackId ? { feedbackId } : {}), expectedRevision: project.revision }, refresh); }}>
       <label>{tx('任务与版本', 'Task and version')}<select required value={target?.taskRef ? `${target.taskRef.id}@${target.taskRef.version}` : ''} onChange={event => {
         const selected = observation.inspection.tasks.find(task => `${task.id}@${task.version}` === event.currentTarget.value);
+        setFeedbackId('');
         setTarget(selected ? { runId: binding.runId, statementVersionId: binding.statementVersionId, taskRef: { id: selected.id, version: selected.version }, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } } : undefined);
       }}><option value="">{tx('选择精确任务版本', 'Choose an exact task version')}</option>{observation.inspection.tasks.map(task => <option key={`${task.id}@${task.version}`} value={`${task.id}@${task.version}`}>{task.theorem ?? task.id} · {task.version.slice(0, 12)}</option>)}</select></label>
       <label>{tx('参与状态', 'Participation status')}<select value={status} onChange={event => setStatus(event.currentTarget.value)}><option value="claimed">{tx('认领', 'Claim')}</option><option value="released">{tx('释放认领', 'Release claim')}</option><option value="submitted">{tx('记录提交', 'Record submission')}</option></select></label>
