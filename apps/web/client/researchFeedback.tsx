@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail } from '../researchProjectTypes';
+import { localizeMessage } from '../i18n';
 import { RichProse } from './richText';
 import { DiscussionGuidance } from './researchDiscussionGuidance';
 import { feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
@@ -120,7 +121,7 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
     {feedback.execution.planVersion && <p class="research-status">{tx('对应计划：', 'Plan: ')}{feedback.execution.planVersion}</p>}
     {feedback.target && feedback.execution.taskRefs.length > 0 && <div class="research-actions research-feedback-results">{feedback.execution.taskRefs.map(task =>
       <TaskLink key={`${task.id}:${task.version}`} projectId={project.id} target={feedback.target!} task={task} execution onOpenTask={onOpenTask} />)}</div>}
-    {feedback.proofCheck && <p class="research-status">{tx('独立候选检查：', 'Independent candidate check: ')}<State value={feedback.proofCheck.status} /> · {feedback.proofCheck.receiptId}{feedback.proofCheck.reason ? ` · ${feedback.proofCheck.reason}` : ''}</p>}
+    {feedback.proofCheck && <p class="research-status">{tx('独立候选检查：', 'Independent candidate check: ')}<State value={feedback.proofCheck.status} /> · {feedback.proofCheck.receiptId}{feedback.proofCheck.reason ? ` · ${localizeMessage(feedback.proofCheck.reason)}` : ''}</p>}
     {(feedback.decision.evidenceRefs.length > 0 || feedback.execution.resultRefs.length > 0) && <details><summary>{tx('结果与证据引用', 'Result and evidence references')}</summary><Tags values={[...new Set([...feedback.decision.evidenceRefs, ...feedback.execution.resultRefs])]} /></details>}
     {canDecide && <details><summary>{tx('记录采纳决定', 'Record an adoption decision')}</summary><Decision projectId={project.id} feedback={feedback} refresh={refresh} /></details>}
     {(canForward || opened) && <details data-forward-discussion onToggle={event => { if (event.currentTarget.open) setOpened(true); }}><summary>{tx('转为运行指导', 'Forward to a run')}</summary>

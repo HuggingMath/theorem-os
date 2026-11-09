@@ -95,6 +95,10 @@ describe('server error messages in an English browser', () => {
     expect(localizeMessage('任务版本已改变，请重新核对。')).toBe('The task version has changed. Review it again.');
     expect(localizeMessage('资产已更新，请刷新后重试。当前版本：12')).toBe('The asset has changed. Refresh and try again. Current revision: 12');
     expect(localizeMessage('发布内容已改变，请重新预览并审阅后发布。')).toBe('The release contents have changed. Preview and review them again before publishing.');
+    expect(localizeMessage('候选证明改变了非目标原始声明 Safe.goal 的证明，请保留基础源码中的完整声明。'))
+      .toBe('The candidate changed the proof of another original declaration, Safe.goal. Keep that declaration unchanged from the base source.');
+    expect(localizeMessage('候选任务的精确声明或文件已改变，请刷新后重新选择。'))
+      .toBe('The candidate task declaration or file has changed. Refresh and select it again.');
     expect(localizeMessage('数学库模块内容冲突：Main.lean')).toBe('Conflicting mathematics module content: Main.lean');
     expect(localizeMessage('公开访问只提供已分享的研究结果。')).toBe('Public access provides shared research results only.');
     // Text that is not an error key, such as an Agent's own words, stays as written.
