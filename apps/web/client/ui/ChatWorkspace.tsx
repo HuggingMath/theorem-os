@@ -272,6 +272,7 @@ export type ChatComposerProps = {
   keyManagement?: { busy: boolean; ending?: string; notice?: string; onSave(): void; onDelete(): void };
   onGuidance?(): void;
   participation: 'guided' | 'automatic'; onParticipation(value: 'guided' | 'automatic'): void; participationLocked: boolean;
+  submissionRecovery?: { busy: boolean; onRecover(): void; onPrepareEdited(): void };
   guidance?: { target: string; targets: { id: string; label: string }[]; onTarget(id: string): void; onCancel(): void; onConfirmTarget?(): void };
 };
 
@@ -381,6 +382,14 @@ function ChatComposer(props: ChatComposerProps) {
           : <button id="formalize-start" type="submit" class="chat-send" disabled={!canSend} aria-label={props.guidance ? t('发送研究指导') : t("发送")} title={props.guidance ? t('发送研究指导') : t("发送")}>{props.submitting ? <span class="spinner" /> : <Icon name="arrow-up" />}</button>}</div>
       </div>
     </form>
+    {props.submissionRecovery && <div class="chat-send-status" data-chat-submission-recovery role="status">
+      <p>{t('原任务已创建，对话连接尚未恢复。修改后的题目已保留，尚未发送。')}</p>
+      <button type="button" class="button" data-chat-recover-submission disabled={props.submissionRecovery.busy}
+        onClick={props.submissionRecovery.onRecover}>{t('恢复原任务')}</button>{' '}
+      <button type="button" class="button" data-chat-prepare-edited disabled={props.submissionRecovery.busy}
+        onClick={props.submissionRecovery.onPrepareEdited}>{t('保留修改，另起新题')}</button>
+      <p>{t('另起新题会先恢复原任务记录，再准备修改后的题目；再次发送才会启动。')}</p>
+    </div>}
     {!props.hasConversation && <p class="chat-budget-summary" data-chat-budget>{t('形式化 {0} 分钟 / {1} Token；证明 {2} 分钟 / {3} Token。',
       props.budgets.maxRunSeconds / 60, formatTokens(props.budgets.maxTotalTokens), props.budgets.research.maxRunSeconds / 60, formatTokens(props.budgets.research.maxTotalTokens))}
       {' '}{t('模型费用由所选服务商收取。')}</p>}

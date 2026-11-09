@@ -117,19 +117,20 @@ function sourceRoute(record: RouteRecord, process: ArchiveProcess, run: Run | un
   const ids = new Set(files.flatMap(file => file.declarations.map(declaration => declaration.id)));
   for (const file of files) {
     const code = fileCode(file, process), lines = code.split('\n');
+    const sourceName = process.sources?.[file.sha256]?.path ?? file.name;
     const check = run?.checks?.filter(item => item.sourceDigest === file.sha256).sort((a, b) => a.at.localeCompare(b.at)).at(-1);
-    const actionTarget = JSON.stringify({ ...(run ? { run: run.runId } : {}),
-      ...(check ? { node: check.scope === 'original' ? 'original' : check.taskId ? `task:${check.taskId}` : 'problem', step: `check:${check.id}`, code: 'source' } : {}),
-      sourceName: file.name, sourceDigest: file.sha256 });
-    const action = { label: text(locale, '打开对应源码', 'Open the corresponding source'), target: actionTarget };
+    const action = (line?: number, endLine?: number) => ({ label: text(locale, '打开对应源码', 'Open the corresponding source'),
+      target: JSON.stringify({ ...(run ? { run: run.runId } : {}),
+        ...(check ? { node: check.scope === 'original' ? 'original' : check.taskId ? `task:${check.taskId}` : 'problem', step: `check:${check.id}`, code: 'source' } : {}),
+        sourceName, sourceDigest: file.sha256, ...(line ? { sourceLine: line, sourceEndLine: endLine ?? line } : {}) }) });
     const fileId = `source:${file.sha256}`;
     nodes.push({ id: fileId, kind: 'proof', title: file.name, status: 'recorded',
       summary: text(locale, `${file.declarations.length} 个声明 · ${file.declarations.reduce((sum, item) => sum + item.steps.length, 0)} 个源码步骤`,
         `${file.declarations.length} declarations · ${file.declarations.reduce((sum, item) => sum + item.steps.length, 0)} source steps`),
-      source: { name: file.name, sha256: file.sha256, ...(check?.commit ? { commit: check.commit } : {}) },
+      source: { name: sourceName, sha256: file.sha256, ...(check?.commit ? { commit: check.commit } : {}) },
       sections: [{ title: 'SHA-256', text: file.sha256, code: true },
         ...(check ? [{ title: text(locale, '对应的检查结果', 'Corresponding check result'), text: check.status }] : []),
-        ...(!file.declarations.length ? [{ title: text(locale, '保存的源码', 'Saved source'), text: code, code: true }] : [])], action });
+        ...(!file.declarations.length ? [{ title: text(locale, '保存的源码', 'Saved source'), text: code, code: true }] : [])], action: action() });
     edges.push({ from: 'problem', to: fileId, kind: 'evidence' });
     const groupSize = 80, grouped = file.declarations.length > groupSize;
     if (grouped) for (let start = 0; start < file.declarations.length; start += groupSize) {
@@ -138,8 +139,8 @@ function sourceRoute(record: RouteRecord, process: ArchiveProcess, run: Run | un
       nodes.push({ id: groupId, parentId: fileId, kind: 'group', status: 'recorded',
         title: text(locale, `声明 ${start + 1}–${start + members.length}`, `Declarations ${start + 1}–${start + members.length}`),
         summary: `${first.name} … ${last.name}`,
-        source: { name: file.name, sha256: file.sha256, line: first.line, endLine: last.endLine },
-        sections: [{ title: text(locale, '声明范围', 'Declaration range'), text: `${first.name}\n…\n${last.name}`, code: true }], action });
+        source: { name: sourceName, sha256: file.sha256, line: first.line, endLine: last.endLine },
+        sections: [{ title: text(locale, '声明范围', 'Declaration range'), text: `${first.name}\n…\n${last.name}`, code: true }], action: action(first.line, last.endLine) });
       edges.push({ from: fileId, to: groupId, kind: 'evidence' });
     }
     for (const [declarationIndex, declaration] of file.declarations.entries()) {
@@ -147,19 +148,19 @@ function sourceRoute(record: RouteRecord, process: ArchiveProcess, run: Run | un
       const references = declaration.references.filter(id => ids.has(id));
       nodes.push({ id: declaration.id, kind: 'declaration', title: declaration.name, status: 'recorded', summary: declaration.type,
         ...(parentId ? { parentId } : {}),
-        source: { name: file.name, sha256: file.sha256, line: declaration.line, endLine: declaration.endLine },
+        source: { name: sourceName, sha256: file.sha256, line: declaration.line, endLine: declaration.endLine },
         sections: [{ title: text(locale, '声明类型', 'Declaration type'), text: declaration.type, code: true },
           { title: text(locale, '对应源码', 'Corresponding source'), text: lines.slice(declaration.line - 1, declaration.endLine).join('\n'), code: true },
           ...(references.length ? [{ title: text(locale, '源码中的引用', 'References in the source'),
-            text: text(locale, '连线表示这段源码写到了相应声明的名字。', 'An edge means this source text mentions the named declaration.') }] : [])], action });
+            text: text(locale, '连线表示这段源码写到了相应声明的名字。', 'An edge means this source text mentions the named declaration.') }] : [])], action: action(declaration.line, declaration.endLine) });
       edges.push({ from: parentId ?? fileId, to: declaration.id, kind: 'evidence' });
       for (const reference of references) edges.push({ from: reference, to: declaration.id, kind: 'reference' });
       for (const [index, step] of declaration.steps.entries()) {
         nodes.push({ id: step.id, kind: 'derivation', parentId: declaration.id, title: text(locale, `源码步骤 ${index + 1}`, `Source step ${index + 1}`),
           status: 'recorded', summary: `${file.name}:${step.line}–${step.endLine}`,
-          source: { name: file.name, sha256: file.sha256, line: step.line, endLine: step.endLine },
+          source: { name: sourceName, sha256: file.sha256, line: step.line, endLine: step.endLine },
           sections: [{ title: text(locale, '源码步骤', 'Source step'), text: step.code, code: true },
-            { title: text(locale, '阅读顺序', 'Reading order'), text: text(locale, '步骤按原始源码先后排列，连线表示源码阅读顺序。', 'Steps follow the original source; connecting arrows show source reading order.') }], action });
+            { title: text(locale, '阅读顺序', 'Reading order'), text: text(locale, '步骤按原始源码先后排列，连线表示源码阅读顺序。', 'Steps follow the original source; connecting arrows show source reading order.') }], action: action(step.line, step.endLine) });
         edges.push({ from: index ? declaration.steps[index - 1].id : declaration.id, to: step.id, kind: index ? 'sequence' : 'evidence' });
       }
     }
@@ -186,7 +187,9 @@ function explanationRoute(record: RouteRecord, process: ArchiveProcess, run: Run
       ...step.derivation.map((line, index) => ({ title: text(locale, `推导 ${index + 1}`, `Derivation ${index + 1}`), text: `${localized(line.statement)}\n${localized(line.reason)}` })),
       { title: text(locale, '接到下一步', 'Connection to the next step'), text: localized(step.next) },
       { title: text(locale, '对应源码', 'Corresponding source'), text: source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).join('\n'), code: true }],
-    ...(check ? { action: { label: text(locale, '打开已检查源码', 'Open the checked source'), target: target(run, 'original', `check:${check.id}`, 'source') } } : {}) }));
+    ...(check ? { action: { label: text(locale, '打开已检查源码', 'Open the checked source'), target: JSON.stringify({ run: run.runId,
+      node: 'original', step: `check:${check.id}`, code: 'source', sourceName: step.evidence.source.name,
+      sourceDigest: walkthrough.proofSha256, sourceLine: step.evidence.source.line, sourceEndLine: step.evidence.source.endLine }) } } : {}) }));
   return { schema: 'theoremos.solution-route.v1', id: `${record.id}:explanation:${run.runId}`, title: text(locale, '逐步证明讲解', 'Step-by-step proof explanation'), locale,
     basis: 'explanation', nodes, edges: walkthrough.steps.flatMap(step => step.dependsOn.map(from => ({ from, to: step.id, kind: 'dependency' as const }))), initial: nodes[0]?.id };
 }

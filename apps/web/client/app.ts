@@ -3087,7 +3087,8 @@ async function loadSourceFile(file: File) {
   } catch (error) {
     if (revision !== sourceRevision) return;
     element('#source-error').textContent = message(error); element('#source-error').hidden = false;
-    openSettings('source');
+    if (researchEntry === 'natural') toast(message(error));
+    else openSettings('source');
   }
 }
 // The browser opens a file dropped anywhere it is not handled, in place of the workbench and its draft; here it is the

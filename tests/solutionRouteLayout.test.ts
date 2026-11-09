@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { solutionRouteLayout } from '../apps/web/solutionRouteView';
+import { solutionRouteLayout, visibleSolutionRouteSelection } from '../apps/web/solutionRouteView';
 import type { SolutionRoute, SolutionRouteNode } from '../apps/web/solutionRoute';
 
 const node = (id: string, parentId?: string): SolutionRouteNode => ({ id, kind: 'task', title: id, status: 'recorded', ...(parentId ? { parentId } : {}) });
@@ -8,6 +8,20 @@ const route = (nodes: SolutionRouteNode[], edges: SolutionRoute['edges'] = []): 
 });
 
 describe('shared solution route layout', () => {
+  it('keeps a folded child on the nearest visible ancestor so previous and next retain their place', () => {
+    const model = route([node('problem'), node('before'), node('task'), node('declaration', 'task'), node('step', 'declaration'), node('after')]);
+    const partial = model.nodes.filter(item => item.id !== 'step');
+    expect(visibleSolutionRouteSelection(model, partial, 'step')).toBe('declaration');
+    const collapsed = model.nodes.filter(item => !item.parentId);
+    const selected = visibleSolutionRouteSelection(model, collapsed, 'step');
+    expect(selected).toBe('task');
+    const at = collapsed.findIndex(item => item.id === selected);
+    expect(collapsed[at - 1].id).toBe('before');
+    expect(collapsed[at + 1].id).toBe('after');
+    expect(visibleSolutionRouteSelection(model, collapsed, 'after')).toBe('after');
+    expect(visibleSolutionRouteSelection(model, [], 'step')).toBe('step');
+  });
+
   it('keeps parallel branches aligned and nests every proof block under its declaration without overlap', () => {
     const model = route([node('problem'), node('left'), node('right'), node('finish'), node('declaration', 'left'),
       node('proof-a', 'declaration'), node('proof-b', 'declaration'), node('check', 'left')], [

@@ -16,6 +16,18 @@ const kindNames = {
   en: { problem: 'Problem', plan: 'Plan', task: 'Mathematical task', finding: 'Research', attempt: 'Proof attempt', check: 'Check', decision: 'Human decision', proof: 'Complete proof', review: 'Review', acceptance: 'Independent acceptance', outcome: 'Run outcome', declaration: 'Declaration', derivation: 'Derivation step', group: 'Source group' },
 };
 
+/** A folded record keeps its place at the nearest ancestor that remains in the graph. */
+export function visibleSolutionRouteSelection(model: SolutionRoute, visible: readonly SolutionRouteNode[], selected: string): string {
+  const ids = new Set(visible.map(node => node.id)), byId = new Map(model.nodes.map(node => [node.id, node]));
+  const visited = new Set<string>();
+  let id: string | undefined = selected;
+  while (id && !visited.has(id)) {
+    if (ids.has(id)) return id;
+    visited.add(id); id = byId.get(id)?.parentId;
+  }
+  return visible[0]?.id ?? selected;
+}
+
 /** All main nodes keep their dependency ranks; the recorded work expands beneath its owning node. */
 export function solutionRouteLayout(model: SolutionRoute, nodes: readonly SolutionRouteNode[]) {
   const present = new Set(nodes.map(node => node.id));
@@ -225,9 +237,16 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     else document.body.style.overflow = previousOverflow;
     draw(); root.querySelector<HTMLButtonElement>('[data-solution-expand]')?.focus({ preventScroll: true });
   }
+  function drawVisibleSelection() {
+    const previous = state.selected;
+    if (!state.reading) state.selected = visibleSolutionRouteSelection(model, shown(), state.selected);
+    draw();
+    if (!state.reading) revealSearchResult();
+    if (previous !== state.selected) options.onSelect?.(state.selected);
+  }
   function reading(value: boolean) {
     if (value === state.reading) return;
-    state.reading = value; draw();
+    state.reading = value; drawVisibleSelection();
     if (value) root.querySelector<HTMLElement>('[data-solution-heading]')?.focus({ preventScroll: true });
     else {
       revealSearchResult();
@@ -245,14 +264,14 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     }
     if (target.dataset.solutionOpen) { const action = nodesById().get(target.dataset.solutionOpen)?.action; if (action) options.onOpen?.(action.target); return; }
     if (target.hasAttribute('data-solution-all')) {
-      state.all = !state.all && state.opened.size === 0; state.opened.clear(); draw();
+      state.all = !state.all && state.opened.size === 0; state.opened.clear(); drawVisibleSelection();
       root.querySelector<HTMLButtonElement>('[data-solution-all]')?.focus({ preventScroll: true }); return;
     }
     if (target.dataset.solutionChildren) {
       const id = target.dataset.solutionChildren;
       if (state.all) { state.all = false; state.opened = new Set(model.nodes.flatMap(node => node.parentId ? [node.parentId] : [])); }
       if (state.opened.has(id)) state.opened.delete(id); else state.opened.add(id);
-      draw(); root.querySelector<HTMLButtonElement>('[data-solution-children]')?.focus({ preventScroll: true }); return;
+      drawVisibleSelection(); root.querySelector<HTMLButtonElement>('[data-solution-children]')?.focus({ preventScroll: true }); return;
     }
     if (target.hasAttribute('data-solution-expand')) { expand(!expanded); return; }
     const zoom = target.dataset.solutionZoom;
@@ -266,7 +285,8 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       draw(); root.querySelector<HTMLButtonElement>(`[data-solution-zoom="${zoom}"]`)?.focus({ preventScroll: true }); return;
     }
     if (target.dataset.solutionStep) {
-      const nodes = state.reading ? model.nodes : shown(), at = nodes.findIndex(node => node.id === state.selected);
+      const nodes = state.reading ? model.nodes : shown();
+      const selected = visibleSolutionRouteSelection(model, nodes, state.selected), at = nodes.findIndex(node => node.id === selected);
       select(nodes[Math.max(0, Math.min(nodes.length - 1, at + (target.dataset.solutionStep === 'next' ? 1 : -1)))]?.id ?? '', true);
     }
   }, { signal: signal.signal });

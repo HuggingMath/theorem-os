@@ -3228,7 +3228,7 @@ button.formal-lean{vertical-align:top}
 }
 /* The shared research space stays accessible beside the existing execution controls. */
 .research-space-links { display: flex; align-items: center; gap: 14px; font-size: 12px; white-space: nowrap; }
-.research-space-links a { color: var(--muted, #73766b); text-decoration: none; }
+.research-space-links a { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; color: var(--muted, #73766b); text-decoration: none; }
 .research-space-links a:hover { color: var(--ink, #282e24); }
 .composer-research-selection { padding: 14px 18px; border-bottom: 1px solid var(--line, #dedfd5); background: var(--panel, #f2f3ed); font-size: 12px; }
 .composer-research-selection p { margin: 5px 0; }

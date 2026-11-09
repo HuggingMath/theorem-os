@@ -44,7 +44,8 @@ describe('universal archive solution routes', () => {
         expect(node.source?.sha256).toBe(hash(proof));
         const excerpt = node.sections!.find(section => section.code && section.text.includes(':= by'));
         if (node.title !== 'NewProblem.seed') expect(excerpt?.text).toContain(node.title.split('.').at(-1));
-        expect(JSON.parse(node.action!.target)).toMatchObject({ run: 'accepted-run', step: 'check:final-check', sourceDigest: hash(proof), code: 'source' });
+        expect(JSON.parse(node.action!.target)).toMatchObject({ run: 'accepted-run', step: 'check:final-check',
+          sourceName: node.source!.name, sourceDigest: hash(proof), sourceLine: node.source!.line, sourceEndLine: node.source!.endLine, code: 'source' });
       }
     }
     expect(process.sourceRoute!.files[0]).not.toHaveProperty('code');
@@ -81,8 +82,8 @@ describe('universal archive solution routes', () => {
       checks: [{ id: 'failed-1', at: '2026-11-07T08:02:00Z', scope: 'task', taskId: 'b', status: 'failed', receiptIds: [], sourceDigest: hash(failedCode), diagnostics: 'error: first unsuccessful version\nunsolved goals' },
         { id: 'failed-2', at: '2026-11-07T08:03:00Z', scope: 'task', taskId: 'b', status: 'failed', receiptIds: [], sourceDigest: hash(oldCode), diagnostics: 'error: second unsuccessful version\na different goal remains' }] };
     process.runs.unshift(history);
-    process.sources![hash(oldCode)] = { path: 'Submission.lean', code: oldCode, sha256: hash(oldCode) };
-    process.sources![hash(failedCode)] = { path: 'Submission.lean', code: failedCode, sha256: hash(failedCode) };
+    process.sources![hash(oldCode)] = { path: 'Submission/Library/Historical.lean', code: oldCode, sha256: hash(oldCode) };
+    process.sources![hash(failedCode)] = { path: 'Submission/Library/Historical.lean', code: failedCode, sha256: hash(failedCode) };
     const prepared = withArchiveSourceRoute(value), routes = archiveSolutionRoutes(prepared, prepared.process!, history, 'en');
     const saved = routes[0], structure = routes[1];
     expect(saved.edges.filter(edge => edge.kind === 'dependency')).toEqual([{ from: 'task:a', to: 'task:b', kind: 'dependency' }]);
@@ -100,6 +101,9 @@ describe('universal archive solution routes', () => {
     expect(saved.nodes.find(node => node.id === 'end')?.summary).toBe(history.reason);
     expect(structure.nodes.filter(node => node.kind === 'declaration').map(node => node.title)).toEqual(['Historical.old_goal']);
     expect(structure.nodes.filter(node => node.source).every(node => node.source!.sha256 === hash(oldCode))).toBe(true);
+    for (const node of structure.nodes.filter(node => node.source?.line))
+      expect(JSON.parse(node.action!.target)).toMatchObject({ run: 'history', node: 'task:b', step: 'check:failed-2', code: 'source',
+        sourceName: 'Submission/Library/Historical.lean', sourceDigest: hash(oldCode), sourceLine: node.source!.line, sourceEndLine: node.source!.endLine });
     expect(structure.nodes.some(node => node.title === 'NewProblem.finish')).toBe(false);
     const final = archiveSolutionRoutes(prepared, prepared.process!, process.runs.at(-1), 'en')[0];
     expect(final.nodes.find(node => node.kind === 'acceptance')?.sections?.some(section => section.text === hash(proof))).toBe(true);
@@ -171,6 +175,8 @@ describe('universal archive solution routes', () => {
       expect(node.sections![0]).toEqual({ title: 'Source step', text: steps[index].code, code: true });
       expect(node.sections![1].text).toContain('source reading order');
       expect(node.source).toMatchObject({ sha256: hash(code), line: steps[index].line, endLine: steps[index].endLine });
+      expect(JSON.parse(node.action!.target)).toEqual({ sourceName: 'Submission.lean', sourceDigest: hash(code),
+        sourceLine: steps[index].line, sourceEndLine: steps[index].endLine });
     }
   });
 
@@ -199,6 +205,8 @@ describe('universal archive solution routes', () => {
     expect(groups.every(node => node.parentId === `source:${file.sha256}`)).toBe(true);
     expect(declarations.every(node => groups.some(group => group.id === node.parentId))).toBe(true);
     expect(groups.map(group => declarations.filter(node => node.parentId === group.id).length)).toEqual([80, 2]);
+    for (const group of groups) expect(JSON.parse(group.action!.target)).toEqual({ sourceName: file.name, sourceDigest: file.sha256,
+      sourceLine: group.source!.line, sourceEndLine: group.source!.endLine });
     expect(steps).toHaveLength(83);
     const theorem = declarations.find(node => node.title === 'many_helpers')!, helper = declarations.find(node => node.title === 'helper_80')!;
     expect(steps.filter(node => node.parentId === theorem.id)).toHaveLength(2);
@@ -216,8 +224,15 @@ describe('universal archive solution routes', () => {
     for (const value of catalog.records) {
       expect(value.process?.sourceRoute?.files.length, value.id).toBeGreaterThan(0);
       expect(value.processSummary, value.id).toBeDefined();
-      const source = archiveSolutionRoutes(value, value.process!, undefined, 'en').find(route => route.basis === 'source')!;
+      const routes = archiveSolutionRoutes(value, value.process!, undefined, 'en');
+      const source = routes.find(route => route.basis === 'source')!;
       expect(source.nodes.some(node => node.source), value.id).toBe(true);
+      for (const route of routes.filter(item => item.basis === 'source' || item.basis === 'explanation')) {
+        for (const node of route.nodes.filter(item => item.source?.line && item.action)) {
+          expect(JSON.parse(node.action!.target), `${value.id}: ${node.id}`).toMatchObject({ sourceName: node.source!.name,
+            sourceDigest: node.source!.sha256, sourceLine: node.source!.line, sourceEndLine: node.source!.endLine });
+        }
+      }
     }
     for (const value of nonCampaign) {
       expect(value.process!.runs, value.id).toEqual([]);

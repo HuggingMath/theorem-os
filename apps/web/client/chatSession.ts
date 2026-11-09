@@ -418,11 +418,14 @@ export class ChatSession {
     } catch (error) { if (generation === this.generation && revision === this.readRevision) { this.readError = reason(error); this.draw(); } }
     finally { if (owner === this.ownerRevision) { this.refreshing = false; this.schedule(); } }
   }
-  private async submit(retryText?: string) {
+  private async submit(retryText?: string, prepareEditedProblem = false) {
     if (!this.options.draftScope) return;
     if (this.guidanceMode && retryText === undefined) { await this.sendGuidance(); return; }
     if (this.loading || this.submitting || !(retryText ?? this.draft).trim()) return;
-    const generation = this.generation, owner = this.ownerRevision, text = this.seed?.original ?? retryText ?? this.draft, conversation = this.conversation, key = this.apiKey;
+    // A received task can be reattached without starting it again. Editing its original instead needs an explicit choice.
+    if (this.seed && retryText === undefined && this.draft !== this.seed.original) { this.draw(); return; }
+    const generation = this.generation, owner = this.ownerRevision, seed = this.seed,
+      text = seed?.original ?? retryText ?? this.draft, conversation = this.conversation, key = this.apiKey;
     if (conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending')) return;
     this.readRevision++; this.submitting = true; this.error = ''; this.draw();
     try {
@@ -434,10 +437,10 @@ export class ChatSession {
         const settings = { providerId: this.providerId, model: this.model.trim(), environment: this.environment, effort: this.effort, ...this.budgets,
           ...(this.participation === 'guided' ? { humanReview: true } : {}) };
         const input = { original: text, ...settings, apiKey: key, solve: true };
-        requestId = await this.submissionIdentity.prepare(input);
-        if (owner !== this.ownerRevision) return;
-        let formalization = this.seed;
+        let formalization = seed;
         if (!formalization) {
+          requestId = await this.submissionIdentity.prepare(input);
+          if (owner !== this.ownerRevision) return;
           ({ formalization } = await this.post<{ formalization: WebFormalization }>('/api/formalizations', { ...input, requestId }));
           if (owner !== this.ownerRevision) return;
           const createdId = formalization.id;
@@ -451,8 +454,12 @@ export class ChatSession {
       void this.refreshHistory();
       if (generation !== this.generation) return;
       if (requestId) this.submissionIdentity.clear(requestId);
+      else if (seed) this.submissionIdentity.clear();
+      const editedProblem = Boolean(seed && this.draft !== text);
       if (this.draft === text) this.draft = '';
       if (!conversation) this.rememberDraft();
+      // Changes made while recovering the old task belong to the next problem, not to that task's discussion.
+      if (editedProblem) this.draft = '';
       this.seed = undefined;
       this.setConversation(next); this.rememberDraft();
       this.options.onNavigate(next.id, conversation ? 'replace' : 'push');
@@ -460,6 +467,10 @@ export class ChatSession {
       if (settings) settings.open = false;
       await this.loadTask(generation);
       if (generation !== this.generation) return;
+      if (prepareEditedProblem && editedProblem) {
+        this.home(false); this.options.onNavigate('', 'push'); this.options.onSelection(); this.focus(); this.schedule();
+        return;
+      }
       this.reading.bottom(); this.focus();
     } catch (error) { if (generation === this.generation) this.error = reason(error); }
     finally { if (generation === this.generation) { this.submitting = false; this.draw(); this.schedule(); } }
@@ -644,6 +655,7 @@ export class ChatSession {
     const staleTarget = !!this.guidanceTarget && (!task || task.version !== this.guidanceVersion);
     const unresolvedGuidance = !!this.pendingGuidance || this.conversation?.messages.some(message => message.kind === 'guidance' && message.status === 'pending');
     const newProblem = !this.conversation && !this.run;
+    const editedSubmission = newProblem && !!this.seed && this.draft !== this.seed.original;
     const pendingSubmission = newProblem && this.submissionIdentity.unresolved;
     const busyFormalization = newProblem && !this.seed && !pendingSubmission && this.formalizations.some(item => running(item));
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
@@ -690,11 +702,12 @@ export class ChatSession {
         const original = this.formalization?.original ?? this.run?.formalization?.original ?? this.conversation?.messages.find(message => message.role === 'user')?.text ?? '';
         this.home(); this.options.onNavigate('', 'push'); this.options.onSelection(); this.fillOriginal(original);
       },
-      onRetry: () => {
+      onRetry: editedSubmission ? undefined : () => {
         if (this.pendingGuidance) void this.sendGuidance(this.pendingGuidance);
         else if (this.currentId && !this.conversation) { const id = this.currentId; this.currentId = ''; void this.open(id, 'replace'); }
-        else if (this.seed || this.submissionIdentity.unresolved) void this.submit();
         else if (this.run && !this.conversation) { const run = this.run; this.attachRunId = ''; void this.openRun(run); }
+        else if (this.seed) void this.submit(this.seed.original);
+        else if (!this.conversation && !this.run && this.submissionIdentity.unresolved) void this.submit();
         else if (this.conversation?.messages.at(-1)?.status === 'error') {
           const last = this.conversation.messages.at(-1)!;
           const question = this.conversation.messages.find(message => message.id === last.replyTo);
@@ -706,10 +719,14 @@ export class ChatSession {
       input: this.draft, onInput: value => { this.draft = value; this.rememberDraft(); this.draw(); },
       onSubmit: () => void this.submit(), onStop: () => void this.stop(), pending: pending && !this.guidanceMode, submitting: this.submitting,
       disabled: this.loading || Boolean(this.run && this.options.isSample(this.run)) || Boolean(this.currentId && !this.conversation)
+        || editedSubmission
         || !this.guidanceMode && !pendingSubmission && Boolean(this.options.session()?.maintenance)
         || newProblem && ((!this.capabilities?.available && !pendingSubmission) || busyFormalization)
         || this.guidanceMode && (!canGuide || !this.run?.observation || staleTarget || !!unresolvedGuidance),
       hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
+      ...(editedSubmission ? { submissionRecovery: { busy: this.submitting,
+        onRecover: () => void this.submit(this.seed!.original),
+        onPrepareEdited: () => void this.submit(this.seed!.original, true) } } : {}),
       participation: this.participation, participationLocked: Boolean(this.seed || this.submissionIdentity.unresolved || this.run),
       onParticipation: value => { this.participation = value; this.rememberDraft(); this.draw(); },
       keyRequired: this.guidanceMode || pendingSubmission ? false : this.options.keyRequired(this.activeProviderId()),

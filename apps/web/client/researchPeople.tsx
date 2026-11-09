@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
 import type { ResearchActivity, ResearchContribution, ResearcherProfile, ResearchProjectSummary } from '../researchProjectTypes';
+import { t } from '../i18n';
 import { RichProse } from './richText';
 import { base, enc, Empty, ErrorBox, Field, FollowButton, libraryHref, MutationState, nameOf, Panel, personHref,
   Search, stamp, Tags, theoremHref, tx, useMutation, useResource, words, lines, type Item, type Items, type ResearchContext } from './researchShared';
@@ -60,16 +61,34 @@ function ProfileEditor({ profile, refresh }: { profile: ProfileView; refresh: ()
   const [draft, setDraft] = useState<ResearcherProfile>(profile), action = useMutation();
   const [fields, setFields] = useState(profile.fields.join(', ')), [links, setLinks] = useState(profile.links.join('\n'));
   const update = <K extends keyof ResearcherProfile>(key: K, value: ResearcherProfile[K]) => setDraft(previous => ({ ...previous, [key]: value }));
-  return <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run<Item<ResearcherProfile>>('PUT', `${base}/profile`,
-    { displayName: draft.displayName.trim(), fields: words(fields), bio: draft.bio, links: lines(links), visibility: draft.visibility, expectedRevision: draft.revision }, result => { setDraft(result.item); refresh(); }); }}>
+  const newer = profile.revision > draft.revision;
+  const save = async () => {
+    if (newer) return;
+    await action.run<Item<ResearcherProfile>>('PUT', `${base}/profile`,
+      { displayName: draft.displayName.trim(), fields: words(fields), bio: draft.bio, links: lines(links), visibility: draft.visibility, expectedRevision: draft.revision },
+      result => setDraft(current => ({ ...current, revision: result.item.revision, updatedAt: result.item.updatedAt })));
+    refresh();
+  };
+  return <form class="research-form" onSubmit={event => { event.preventDefault(); void save(); }}>
     <Field label={tx('显示名', 'Display name')} value={draft.displayName} onInput={value => update('displayName', value)} required maxLength={80} />
     <Field label={tx('研究领域，用逗号分隔', 'Research fields, separated by commas')} value={fields} onInput={setFields} />
     <Field label={tx('简介', 'Biography')} value={draft.bio} onInput={value => update('bio', value)} multiline rows={4} maxLength={4000} />
     <Field label={tx('公开链接，每行一个', 'Public links, one per line')} value={links} onInput={setLinks} multiline rows={2} />
     <label>{tx('资料可见范围', 'Profile visibility')}<select value={draft.visibility} onChange={event => update('visibility', event.currentTarget.value as ResearcherProfile['visibility'])}>
       <option value="private">{tx('仅自己', 'Private')}</option><option value="public">{tx('公开', 'Public')}</option></select></label>
-    {profile.revision !== draft.revision && <p class="research-status">{tx('资料已有新版本；可重新载入后编辑。', 'A newer profile exists. Reload it before continuing.')} <button class="text-button" type="button" onClick={() => { setDraft(profile); setFields(profile.fields.join(', ')); setLinks(profile.links.join('\n')); }}>{tx('载入最新资料', 'Load latest profile')}</button></p>}
-    <MutationState action={action} /><button class="button button-primary" type="submit" disabled={action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : tx('保存资料', 'Save profile')}</button>
+    {newer && <section class="research-publication" aria-label={t('核对最新资料')}><p class="research-status">{t('资料已在其他页面更新。你的编辑仍保留，请核对后选择如何继续。')}</p>
+      <dl class="research-facts"><div><dt>{t('最新显示名')}</dt><dd>{profile.displayName}</dd></div>
+        <div><dt>{t('最新研究领域')}</dt><dd>{profile.fields.join(', ') || '—'}</dd></div>
+        <div><dt>{t('最新简介')}</dt><dd>{profile.bio || '—'}</dd></div>
+        <div><dt>{t('最新公开链接')}</dt><dd>{profile.links.join('\n') || '—'}</dd></div>
+        <div><dt>{t('最新可见范围')}</dt><dd>{nameOf(profile.visibility)}</dd></div></dl>
+      <div class="research-actions"><button class="button" type="button" disabled={action.busy} onClick={() => { setDraft(current => ({ ...current, revision: profile.revision })); action.setError(''); }}>
+        {t('已核对，保留我的编辑')}</button>
+        <button class="button" type="button" disabled={action.busy} onClick={() => { setDraft(profile); setFields(profile.fields.join(', ')); setLinks(profile.links.join('\n')); action.setError(''); }}>
+          {t('使用最新资料替换当前编辑')}</button></div>
+      <p class="research-field-note">{t('保留编辑后仍需点击保存，确认提交你的资料。')}</p></section>}
+    {action.error && !newer && <button class="text-button" type="button" onClick={refresh}>{t('读取最新资料，保留编辑')}</button>}
+    <MutationState action={action} /><button class="button button-primary" type="submit" disabled={action.busy || newer}>{action.busy ? tx('正在保存…', 'Saving…') : tx('保存资料', 'Save profile')}</button>
   </form>;
 }
 

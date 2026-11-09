@@ -3,6 +3,7 @@ import type { ResearchFeedbackTarget, ResearchProjectDetail, ResearchProjectSumm
 import type { WebRun } from '../shared';
 import type { WebShareSnapshot } from '../share';
 import type { WebObservation } from '../collaboration';
+import { t } from '../i18n';
 import type { WebApi } from './collaborationUi';
 import { CollaborationView, type CollaborationTaskSelection } from './collaborationView';
 import { FeedbackWorkspace, TaskFeedbackContext, type FeedbackFocus, type OpenFeedbackTask } from './researchFeedback';
@@ -278,31 +279,46 @@ function PublicProof({ share }: { share: WebShareSnapshot }) {
 }
 
 function ProofSubmission({ projectId, binding, observation, refresh }: { projectId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void }) {
-  const [choice, setChoice] = useState(''), [source, setSource] = useState(''), [text, setText] = useState(''), action = useMutation();
+  const [source, setSource] = useState(''), [text, setText] = useState(''), [edited, setEdited] = useState(false), action = useMutation();
   const [baseSource, setBaseSource] = useState<WebObservation['sources'][number]>(), [baseObservation, setBaseObservation] = useState<{ sequence: number; stateDigest: string }>();
-  const pick = (index: string) => {
-    setChoice(index); const selected = index === '' ? undefined : observation.sources[Number(index)]; setBaseSource(selected); setSource(selected?.source ?? '');
+  const identity = (item: WebObservation['sources'][number]) => JSON.stringify([item.taskId, item.taskVersion, item.file, item.commit, item.sourceDigest, item.environmentDigest]);
+  const sources = observation.sources.filter(item => observation.inspection.tasks.some(task => task.id === item.taskId && task.version === item.taskVersion));
+  const choice = baseSource ? identity(baseSource) : '', stale = Boolean(baseSource && !sources.some(item => identity(item) === choice));
+  const latest = baseSource && sources.find(item => item.taskId === baseSource.taskId && item.file === baseSource.file);
+  const pick = (value: string) => {
+    const selected = sources.find(item => identity(item) === value); setBaseSource(selected);
+    if (!edited) setSource(selected?.source ?? '');
     setBaseObservation({ sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest });
+    action.setError(''); action.setMessage('');
   };
   return <details><summary>{tx('提交候选证明', 'Submit a candidate proof')}</summary><form class="research-form" onSubmit={event => {
-    event.preventDefault(); if (!baseSource || !baseObservation) return;
+    event.preventDefault(); if (!baseSource || !baseObservation || stale) return;
     void action.run('POST', `${base}/theorems/${enc(projectId)}/feedback`, { kind: 'proof-submission', text,
       target: { runId: binding.runId, statementVersionId: binding.statementVersionId, observationRef: baseObservation, taskRef: { id: baseSource.taskId, version: baseSource.taskVersion } },
       source, base: { commit: baseSource.commit, sourceDigest: baseSource.sourceDigest, environmentDigest: baseSource.environmentDigest, file: baseSource.file } }, refresh);
-  }}><label>{tx('选择带有源码快照的任务', 'Select a task with a source snapshot')}<select required value={choice} onChange={event => pick(event.currentTarget.value)}>
-    <option value="">{tx('选择任务', 'Choose a task')}</option>{observation.sources.map((item, index) => <option key={`${item.taskId}:${item.taskVersion}:${index}`} value={index}>{item.taskId} · {item.file} · {item.taskVersion.slice(0, 12)}</option>)}</select></label>
-    <Field label={tx('修改后的候选源码', 'Edited candidate source')} value={source} onInput={setSource} multiline code rows={10} required />
+  }}><label>{tx('选择带有源码快照的任务', 'Select a task with a source snapshot')}<select required value={choice} disabled={action.busy} onChange={event => pick(event.currentTarget.value)}>
+    <option value="">{tx('选择任务', 'Choose a task')}</option>{stale && baseSource && <option value={choice}>{baseSource.taskId} · {baseSource.file} · {baseSource.taskVersion} · {t('草稿基准已过期')}</option>}
+    {sources.map(item => <option key={identity(item)} value={identity(item)}>{item.taskId} · {item.file} · {item.taskVersion}</option>)}</select></label>
+    {baseSource && <p class="research-field-note">{t('草稿基准：')}{baseSource.taskId} · {baseSource.taskVersion} · {baseSource.file} · {baseSource.commit.slice(0, 12)}</p>}
+    {stale && <div class="research-status" role="status"><p>{t('任务或源码已有更新。旧基准和你的编辑已保留，请先核对最新基准。')}</p>
+      {latest ? <button class="button" type="button" disabled={action.busy} onClick={() => pick(identity(latest))}>{t('更新到最新基准，保留编辑')}</button>
+        : <p>{t('此任务暂时没有当前版本的源码快照。')}</p>}</div>}
+    <Field label={tx('修改后的候选源码', 'Edited candidate source')} value={source} onInput={value => { setEdited(true); setSource(value); }} multiline code rows={10} required />
+    {edited && <p class="research-field-note">{t('切换基准会保留你编辑的源码，请核对其是否适用于所选任务版本。')}</p>}
     <Field label={tx('修改说明', 'Change description')} value={text} onInput={setText} multiline rows={2} required />
     <p class="research-field-note">{tx('候选将在隔离环境检查；检查结果和采纳记录分别展示。', 'The candidate is checked in isolation. Check results and adoption records are shown separately.')}</p>
-    <MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !baseSource}>{tx('提交检查', 'Submit for checking')}</button>
+    <MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !baseSource || stale}>{tx('提交检查', 'Submit for checking')}</button>
   </form></details>;
 }
 
 function Discussion({ project, version, refresh }: { project: ResearchProjectDetail; version?: ResearchStatementVersion; refresh: () => void }) {
   const [text, setText] = useState(''), [visibility, setVisibility] = useState('members'), action = useMutation();
-  return <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback`,
-    { kind: 'discussion', text, visibility, ...(version ? { statementVersionId: version.id } : {}) }, () => { setText(''); refresh(); }); }}>
-    <Field label={tx('讨论内容', 'Discussion')} value={text} onInput={setText} multiline required rows={3} maxLength={16000} />
+  return <form class="research-form" onSubmit={event => { event.preventDefault();
+    if (text.length > 4000) { action.setError(t('讨论最多 4000 字符，请缩短后保存。')); return; }
+    void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback`,
+    { kind: 'discussion', text, visibility, ...(version ? { statementVersionId: version.id } : {}) }, () => { setText(current => current === text ? '' : current); refresh(); }); }}>
+    <Field label={tx('讨论内容', 'Discussion')} value={text} onInput={setText} multiline required rows={3} maxLength={4000}
+      note={`${t('最多 4000 字符。')} ${text.length} / 4000`} />
     <div class="research-actions"><label>{tx('可见范围', 'Visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value)}><option value="members">{tx('项目成员', 'Members')}</option>
       {project.visibility === 'public' && <option value="public">{tx('公开', 'Public')}</option>}</select></label><button class="button" type="submit" disabled={action.busy}>{tx('保存讨论', 'Save discussion')}</button></div><MutationState action={action} />
   </form>;
