@@ -3460,7 +3460,7 @@ window.addEventListener('popstate', () => {
   else if (!id && !location.search) {
     chooseEntry('natural'); startDraft(false, 'replace');
     void naturalPage?.then(() => {
-      if (!currentRun() && !location.search) chatWorkspace?.home(true);
+      if (!currentRun() && !location.search) chatWorkspace?.home(false);
     });
   }
   else renderDetail();

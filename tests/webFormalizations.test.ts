@@ -130,6 +130,38 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(fs.readFileSync(path.join(orphan, 'record.json.abandoned.tmp'), 'utf8')).toBe('{"owner":');
   });
 
+  it('replays a lost formalization receipt before admission, survives restart, and retains deletion identity', async () => {
+    const alice = await client(), bob = await client(), requestId = 'natural-receipt-loss';
+    const input = { ...body, requestId, solve: true, humanReview: true };
+    const responses = await Promise.all([request(alice, '/api/formalizations', input), request(alice, '/api/formalizations', input)]);
+    expect(responses.map(response => response.status).sort()).toEqual([200, 201]);
+    const receipts = await Promise.all(responses.map(response => response.json()));
+    const value = receipts[0].formalization as WebFormalization;
+    expect(receipts[1].formalization.id).toBe(value.id);
+    await settle(); expect(runner.inputs).toHaveLength(1);
+    expect((await request(alice, '/api/formalizations', { ...input, apiKey: '' })).status).toBe(200);
+    expect((await request(alice, '/api/formalizations', { ...input, original: 'Changed statement' })).status).toBe(409);
+    expect((await request(bob, `/api/formalizations/${value.id}`)).status).toBe(404);
+    const other = await request(bob, '/api/formalizations', input);
+    expect(other.status).toBe(201); expect((await other.json()).formalization.id).not.toBe(value.id);
+    const pending = runner.pending[0]!;
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) });
+    pending.resolve(); await settle();
+    await service.close();
+    runner = new Runner(); service = createWebService(config, runner, { sample: null });
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    runner.ready = false;
+    const replay = await request(alice, '/api/formalizations', { ...input, apiKey: '' });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).formalization).toMatchObject({ id: value.id, status: 'review' });
+    expect(runner.inputs).toHaveLength(0);
+    expect((await request(alice, `/api/formalizations/${value.id}`, undefined, 'DELETE')).status).toBe(200);
+    expect((await request(alice, '/api/formalizations', input)).status).toBe(410);
+    const persisted = fs.readdirSync(config.dataRoot!, { recursive: true }).filter(file => String(file).endsWith('.json'))
+      .map(file => fs.readFileSync(path.join(config.dataRoot!, String(file)), 'utf8')).join('\n');
+    expect(persisted).not.toContain(KEY);
+  });
+
   it('keeps the process view with its owner, pages it and removes it with the record', async () => {
     const alice = await client(), bob = await client();
     const value = await create(alice), route = `/api/formalizations/${value.id}`, pending = runner.pending.at(-1)!;

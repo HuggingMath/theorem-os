@@ -101,4 +101,25 @@ describe('admission after asynchronous readiness', () => {
       });
     });
   }
+
+  it('charges one formalization for concurrent receipts and subsequent retries', async () => {
+    const client = await login('alice@example.org'), account = service.auth!.getAccount('alice@example.org')!;
+    const { route, body } = submissions[0]!;
+    const input = { ...body, requestId: 'one-logical-formalization' };
+    const waiting = runner.blockReadiness();
+    const delayed = request(route, client, input);
+    await waiting;
+    const accepted = await request(route, client, input);
+    expect(accepted.status).toBe(201);
+    const first = await accepted.json();
+    runner.release!();
+    const replay = await delayed;
+    expect(replay.status).toBe(200); expect((await replay.json()).formalization.id).toBe(first.formalization.id);
+    for (let retry = 0; retry < 3; retry++) {
+      const receipt = await request(route, client, { ...input, apiKey: '' });
+      expect(receipt.status).toBe(200); expect((await receipt.json()).formalization.id).toBe(first.formalization.id);
+    }
+    expect(runner.calls.formalize).toBe(1);
+    expect(new WebQuota(service.storage, config.quota).view(account.id).formalizations.used).toBe(1);
+  });
 });

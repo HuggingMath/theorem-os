@@ -83,6 +83,7 @@ const explanationSchema = z.object({
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
 }).strict();
 const formalizationSchema = z.object({
+  requestId: inputSchema.shape.requestId,
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
   environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('max'),
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
@@ -649,7 +650,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const model = parsed.data.model ?? providerModel(provider);
             if (provider.id === SUB2API_PROVIDER.id && model !== SUB2API_PROVIDER.defaultModel)
               throw new HttpError(400, 'Sub2API 形式化目前支持 deepseek-flash 模型。');
-            if (!runner.formalize || !(await runner.readiness()).ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
+            const previous = formalizations.replay(owner, parsed.data as WebFormalizationRequest, provider, model);
+            if (previous) { json(response, 200, { formalization: previous }); return; }
+            const ready = Boolean(runner.formalize) && (await runner.readiness()).ready;
+            // Readiness yields to concurrent requests; replay again before spending quota.
+            const raced = formalizations.replay(owner, parsed.data as WebFormalizationRequest, provider, model);
+            if (raced) { json(response, 200, { formalization: raced }); return; }
+            if (!ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
             // A confirmed formalization starts its proof through jobs.create itself, so it costs this kind only.

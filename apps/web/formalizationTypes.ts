@@ -24,8 +24,8 @@ export type WebFormalizationCapabilities = { available: boolean; reason?: 'provi
   providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
   defaults?: typeof webFormalizationDefaults };
 export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean; humanReview?: boolean;
-  providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
-export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
+  requestId?: string; providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
+export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number };
 /**
  * The roles of one formalization round (src/solver/formalization.ts): plan reads the problem, generate writes the Lean

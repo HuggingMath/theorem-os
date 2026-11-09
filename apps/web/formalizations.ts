@@ -1,16 +1,16 @@
 import crypto from 'node:crypto';
 import { assertFormalizationEvidence, formalizationDigest, formalizationEvidenceSchema, type FormalizationEvidence } from '../../src/math/formalization';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { mathDigest } from '../../src/math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { webLimits } from './config';
 import { formalizationReport } from './formalizationReport';
 import { webFormalizationActivityLimits, webFormalizationDefaults, webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization,
   type WebFormalizationActivity, type WebFormalizationRequest, type WorkerFormalizationInput, type WorkerFormalizationMessage } from './formalizationTypes';
 import type { WebRunner } from './runner';
 import type { WebProvider } from './shared';
-import { WebStorage, WebStorageError } from './storage';
+import { WebStorage, WebStorageError, type WebCreation } from './storage';
 
-type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string; provider?: WebProvider };
+type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string; provider?: WebProvider; creation?: WebCreation };
 type Job = { record: Record; input: WorkerFormalizationInput; controller: AbortController; persistedAt: number };
 type StartResearch = (owner: string, formalization: WebFormalization, evidence: FormalizationEvidence, input: WorkerFormalizationInput) => string;
 const active = (value: WebFormalization) => value.status === 'queued' || value.status === 'running';
@@ -145,7 +145,32 @@ export class WebFormalizations {
       throw error;
     } finally { input.apiKey = ''; }
   }
+  private creation(request: WebFormalizationRequest, provider: WebProvider, model: string): WebCreation | undefined {
+    if (!request.requestId) return;
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(request.requestId)) throw new WebStorageError(400, '提交请求标识无效。');
+    return { schema: 'theorem-os.web-creation.v1', requestId: request.requestId, digest: mathDigest(canonicalMathJson({
+      original: request.original, environment: request.environment, effort: request.effort, model,
+      provider: { id: provider.id, baseUrl: provider.baseUrl }, solve: Boolean(request.solve), humanReview: Boolean(request.humanReview),
+      maxRunSeconds: request.maxRunSeconds ?? webFormalizationDefaults.maxRunSeconds,
+      maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
+      research: { ...webFormalizationDefaults.research, ...request.research },
+    })) };
+  }
+  /** A receipt can be recovered before readiness, credentials, queue or quota admission. */
+  replay(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization | undefined {
+    const expected = this.creation(request, provider, model);
+    if (!expected) return;
+    const record = this.storage.listRecords(directory(owner)).map(id => this.record(owner, id))
+      .find(item => item?.owner === owner && item.creation?.requestId === expected.requestId);
+    const previous = record?.creation ?? this.storage.getRecord<WebCreation>(['owners', mathDigest(owner), 'deleted-formalization-requests', `${mathDigest(expected.requestId)}.json`]);
+    if (!previous) return;
+    if (previous.digest !== expected.digest) throw new WebStorageError(409, '同一提交请求不能使用不同的题目或配置。');
+    if (!record) throw new WebStorageError(410, '这次提交对应的形式化已删除，请发起新研究。');
+    return this.read(owner, record.formalization.id);
+  }
   create(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization {
+    const previous = this.replay(owner, request, provider, model);
+    if (previous) return previous;
     if (this.closing) throw new WebStorageError(503, '服务正在停止，请稍后重试。');
     if (request.humanReview && !request.solve) throw new WebStorageError(400, '人工审核模式需要启用证明研究。');
     if (request.solve && !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
@@ -164,7 +189,8 @@ export class WebFormalizations {
       apiKey: request.apiKey, id, model, provider, maxRunSeconds: formalization.maxRunSeconds!,
       maxTotalTokens: formalization.maxTotalTokens!, maxRounds: webFormalizationLimits.maxRounds,
       maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
-    const job: Job = { record: { owner, formalization, provider: { ...provider } }, input, controller: new AbortController(), persistedAt: 0 };
+    const creation = this.creation(request, provider, model);
+    const job: Job = { record: { owner, formalization, provider: { ...provider }, ...(creation ? { creation } : {}) }, input, controller: new AbortController(), persistedAt: 0 };
     this.jobs.set(this.key(owner, id), job);
     try { this.persist(job, true); }
     catch (error) { this.release(job); throw error; }
@@ -187,6 +213,7 @@ export class WebFormalizations {
   remove(owner: string, id: string) {
     const record = this.required(owner, id);
     if (active(record.formalization)) throw new WebStorageError(409, '请先取消进行中的形式化任务。');
+    if (record.creation) this.storage.saveRecord(['owners', mathDigest(owner), 'deleted-formalization-requests', `${mathDigest(record.creation.requestId)}.json`], record.creation, true);
     this.storage.deleteRecord(recordPath(owner, id));
   }
   forget(owner: string) {
