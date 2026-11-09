@@ -31,8 +31,8 @@ export const guide: Record<string, string> = {
   "填写所选服务商的 API Key。OpenAI 提供创建 Key 的链接；网关账号与 Key 请向该网关管理员获取。可以先点「检查 Key 与模型」，此操作只读取模型列表，不调用模型；不支持模型列表的服务需在发送时确认。":
     "Enter the selected provider’s API key. OpenAI has a link to create one; ask the gateway administrator for a gateway account and key. “Check key and model” reads the model list without calling a model. Providers without that endpoint are checked when you send.",
   "设定预算并发送": "Set a budget and send",
-  "形式化与证明各有时间和 Token 预算，发送前可在「设置」调整。默认「共同推进」会等你确认题意、批准初始计划，再展开证明；「自动推进」通过模型核对后直接开始。费用由模型服务商收取，进行中的请求可能超过设定用量。":
-    "Set separate time and token budgets for formalization and proof in Settings. Work together is the default: confirm the statement and approve the initial plan before proving begins. Run automatically starts after model review. Your model provider bills usage; requests already in progress can exceed the limit.",
+  "形式化与证明各有时间和 Token 预算，发送前可在「设置」调整。默认「共同推进」由你确认题意，再由 2 个 Agent 拟定初始计划，等你批准后展开证明；「自动推进」由 1 个 Agent 在模型核对后直接开始。费用由模型服务商收取，进行中的请求可能超过设定用量。":
+    "Set separate time and token budgets for formalization and proof in Settings. Work together is the default: you confirm the statement, then 2 Agents draft an initial plan and wait for your approval before proving. Run automatically uses 1 Agent and starts after model review. Your model provider bills usage; requests already in progress can exceed the limit.",
   "左栏是研究记录，打开一次运行后，右侧有结果、路线图、协作、源码和活动五个标签页。运行中随时可以点右上角的「取消运行」停下。":
     "The left column lists your research runs. Open one and the right side has five tabs: Result, Roadmap, Collaboration, Source and Activity. Stop a run at any time with \"Cancel run\" at the top right.",
   "谁在做哪个子任务、在等什么。从分区导航查看任务、原意与 Lean、Agent、指导和知识；详细视图还包含任务合同、交付、变更和归档记录。":
@@ -42,7 +42,7 @@ export const guide: Record<string, string> = {
   "查看原题、引理、任务依赖和当前进展。点开节点可查看具体命题、尝试和 Lean 反馈，打开某一步的代码，或从保留的版本继续研究。运行中的记录会随观察更新。":
     "See the original problem, lemmas, task dependencies and current progress. Open a node for its statement, attempts and Lean feedback, then read a step's code or continue from a saved version. Records update as new observations arrive during a run.",
   "原始题目和当前证明，可以切换查看与原题的差异。": "The original problem and the current proof, with a view of the differences from the original.",
-  "按时间排列的完整事件记录。": "Every event in time order.",
+  "按时间查看已保存的事件；下载运行档案可查看记录的覆盖范围。": "View saved events in time order. Download the run archive to see its coverage.",
   "在「结果」里开启「结束时通知我」后，页面保持打开时可收到研究结束或计划待批准的浏览器提醒。关闭页面后研究仍会在服务器继续；已启用账号邮件的用户会收到邮件，也可以回来查看研究记录。手机上用顶部的「编写 / 预览」切换输入框和 Lean 工作区。":
     "Turn on \"Notify me when done\" in Result to receive browser alerts while the page stays open, when research ends or a plan awaits approval. Research continues on the server after you close the page; accounts with email notifications enabled receive email, or you can return to the run history. On a phone, use Compose / Preview at the top to switch between the input and the Lean workspace.",
   "在「协作」的「原意与 Lean」分区选择一份声明审阅，查看数学原意、Lean 形式声明、独立回译和审阅结论。研究进行中就能查看已记录的审阅；没有记录时会显示空态。声明审阅通过后，完整证明仍需独立验收。":
@@ -55,8 +55,8 @@ export const guide: Record<string, string> = {
   "证明讲解目前仅支持使用 Sub2API 与 deepseek-flash 的已验收运行，服务也需提供讲解运行环境；不支持时页面会说明原因。示例运行可以打开对照页，但没有预生成讲解，也不能生成。":
     "Proof explanations currently require an accepted run using Sub2API and deepseek-flash, with an explanation runtime provided by the service. The page explains why generation is unavailable when these conditions are not met. Sample runs can open the comparison page, but have no pre-generated explanations and cannot generate them.",
   "审阅研究计划": "Review the research plan",
-  "「共同推进」使用 2 个 Agent，初始计划直接显示在对话中。你可以查看全部任务、修改任务与依赖，再批准开始证明；等待也计入证明预算。后续修改计划会继续生效，不会每次重新等待批准。Lean 入口也可在执行配置中勾选「先审计划再开始」。":
-    "Work together uses 2 Agents and shows the initial plan in the conversation. Review all tasks, edit tasks and dependencies, then approve the plan to start proving. Waiting counts toward the proof budget. Later edits update the plan without another approval gate. The Lean entry also offers Review plan before starting under Execution.",
+  "「共同推进」使用 2 个 Agent，初始计划直接显示在对话中。你可以查看全部任务、修改任务与依赖，再批准开始证明。拟定和修改计划计入证明预算；纯等待你审阅或批准时暂停证明计时，不调用模型，批准后继续同一次运行，关闭再打开页面也无需重建。后续修改计划会继续生效，不会每次重新等待批准。Lean 入口也可在执行配置中勾选「先审计划再开始」。":
+    "Work together uses 2 Agents and shows the initial plan in the conversation. Review tasks and dependencies, request changes, then approve the plan to start proving. Drafting and revisions consume the proof budget. Pure waiting for your review or approval pauses the proof timer without model calls. Approval continues the same run, even after closing and reopening the page. Later edits update the plan without another approval gate. The Lean entry also offers Review plan before starting under Execution.",
   "运行中在对话输入框选择「指导研究」，给负责人或具体任务发送方法建议，并查看送达回执。指导供 Agent 参考；「讨论思路」用于交流想法，不会改动运行计划。协作区还可向具体 Agent 留言、引用代码与检查记录。":
     "During a run, choose Guide research in the chat composer to suggest methods to the lead or a task, then check delivery receipts. Agents consider this guidance. Discuss ideas is for exploring the problem and does not change the running plan. In Collaboration, you can also address an Agent and reference code and checks.",
   "归档与知识": "Archives and knowledge",
@@ -79,11 +79,11 @@ export const guide: Record<string, string> = {
   "验收通过的运行可以创建只读分享链接，公开 Lean 原题、证明和验收结论，以及自然语言原题、确认方式、形式化回译和对应关系（如有）。链接不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话，可以随时停止分享。":
     "An accepted run can get a read-only share link showing the Lean problem, proof and acceptance result, plus the natural-language problem, confirmation method, back-translation and formalization correspondences when available. It excludes API keys, email, provider addresses, run logs and Agent conversations. You can stop sharing at any time.",
   "继续研究": "Keep researching",
-  "形式化已完成、证明队列未能接收时，点「继续证明」使用已有陈述，不重新生成形式化。已有运行可用「复用任务配置」或「从这一版继续」新建研究；新运行仍需重新检查和验收。":
-    "If formalization finished but the proof queue could not accept it, choose “Continue proof” to reuse the statement without formalizing again. Existing runs can start a new task through “Reuse task settings” or “Continue from this version”; new runs still require fresh checks and acceptance.",
+  "形式化已完成、证明队列未能接收时，点「继续证明」使用已有陈述，不重新生成形式化。已有运行可用「复用任务配置」新建草稿；「从这一版继续」以所选保存版本的源码与摘要新建研究，保留冻结原题。新运行仍需 Lean 检查与独立验收。":
+    "If formalization finished but the proof queue could not accept it, choose “Continue proof” to reuse the statement without formalizing again. “Reuse task settings” creates a new draft. “Continue from this version” starts a new run from the selected saved source and digest while retaining the frozen original problem. The new run needs Lean checks and independent acceptance.",
   "保存与搬运": "Save and move work",
-  "「新建研究」右上角可导出任务草稿，或导入草稿和运行档案 JSON；导入档案会提取原题与配置，不会恢复整次历史记录。「更多操作」可下载运行档案。草稿和档案不携带 API Key，使用前请确认模型连接。":
-    "At the top right of New research, export a draft or import a draft or run archive JSON. Importing an archive extracts its original problem and settings; it does not restore the full historical run. Download a run archive from More actions. Drafts and archives contain no API key, so check the model connection before use.",
+  "「新建研究」右上角可导出任务草稿，或导入草稿和运行档案 JSON；导入档案只提取原题与配置，不恢复服务器上的历史运行。「更多操作」默认下载已保存的完整运行档案，含事件、观察、动作、源码、检查、命令与覆盖范围说明；存储上限或旧版本缺失的记录会明确列出。草稿和档案不携带 API Key，使用前请确认模型连接。":
+    "At the top right of New research, export a draft or import a draft or run archive JSON. Importing extracts only the problem and settings, without restoring historical server runs. More actions downloads the full saved archive by default: events, observations, actions, sources, checks, commands and coverage. Storage limits and records absent from older versions are stated explicitly. Drafts and archives contain no API key, so check the model connection before use.",
   "左栏列出全部运行，可以搜索、按状态筛选；不需要的记录在运行详情的「更多操作」里删除。":
     "The left column lists every run, where you can search and filter by status; delete a record you no longer need from More actions in its details.",
   "Mac 上用 ⌘ 代替 Ctrl。编辑器快捷键在源码编辑器里使用。": "On a Mac use ⌘ instead of Ctrl. Editor shortcuts work inside the source editor.",
@@ -93,8 +93,8 @@ export const guide: Record<string, string> = {
   "跳转到指定行号。": "Go to a line number.",
   "减少 / 增加缩进。": "Decrease / increase indentation.",
   "关闭当前弹窗或查找栏。": "Close the current dialog or find bar.",
-  "服务器用 Key 访问你选择的服务商，费用计入你的 API 账户。Key 默认仅本次使用，未保存的 Key 刷新后清空。登录后可在自然语言「设置」或 Lean「模型连接」中主动加密保存、替换或删除；界面只显示已保存 Key 的末四位。Key 不进入草稿、运行档案或分享链接。":
-    "The server uses your key with the selected provider, which bills your API account. Keys are temporary by default; unsaved keys clear on refresh. After signing in, use natural-language Settings or Lean Model connection to save an encrypted key to your account, replace it or delete it. Only the last four characters are shown. Keys never enter drafts, run archives or share links.",
+  "服务器用 Key 访问你选择的服务商，费用计入你的 API 账户。新填 Key 默认临时使用，刷新后清空。启用账号保存时，需在自然语言「设置」主动点击「保存到我的账号」，或在 Lean「模型连接」勾选默认不选中的同名保存框后提交，才会加密保存或替换。已保存 Key 只显示末四位，可在设置中删除，不进入草稿、运行档案或分享链接。":
+    "The server uses your key with the selected provider, which bills your API account. Newly entered keys are temporary by default and clear on refresh. When account storage is enabled, explicitly click Save to my account in natural-language Settings or select the unchecked checkbox in Lean Model connection before submitting to save or replace an encrypted key. Saved keys show only their last four characters and can be deleted in Settings. Keys never enter drafts, run archives or share links.",
   "登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。":
     "When you sign in, records belong to your email account, and the account page can delete the account with all its records. Without sign-in, records belong only to the current browser session.",
   "未提交的草稿自动保存在当前标签页，刷新后可恢复，不会同步到账号。需要长期保留或换设备时，请导出任务草稿。":

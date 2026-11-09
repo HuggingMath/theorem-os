@@ -42,8 +42,8 @@ export const legal: Record<string, string> = {
     "API keys are never written to logs or run records, and never appear in share links.",
   "Key 默认仅本次使用。未保存到账号的 Key 只用于本次任务及当前对话，存在于当前页面内存、服务器执行输入和隔离运行容器中；不写入持久记录，刷新页面后需重新填写。":
     "Keys are temporary by default. Unsaved keys are used for this task and the current conversation. They remain in page memory, server execution inputs and isolated worker containers, never persisted records. Refreshing the page clears the input.",
-  "登录后，可在自然语言「设置」或 Lean「模型连接」中主动保存、替换或删除账号 Key。保存时使用 AES-256-GCM 加密存放在服务器；界面只显示末四位。服务器需在调用时解密 Key，服务运营方负责保护加密密钥。":
-    "After signing in, use natural-language Settings or Lean Model connection to save a key to your account, replace it or delete it. Saved keys are encrypted with AES-256-GCM on the server; only the last four characters are shown. The server decrypts keys when making calls, and the operator is responsible for protecting the encryption key.",
+  "登录后，若服务已启用账号保存，可在自然语言「设置」主动点击「保存到我的账号」，或在 Lean「模型连接」勾选默认不选中的同名保存框后提交，才会保存或替换账号 Key；也可在设置中删除。保存时使用 AES-256-GCM 加密存放在服务器；界面只显示末四位。服务器需在调用时解密 Key，服务运营方负责保护加密密钥。":
+    "When account storage is enabled, explicitly click Save to my account in natural-language Settings or select the unchecked checkbox in Lean Model connection before submitting to save or replace an account key. You can also delete it in Settings. Saved keys are encrypted with AES-256-GCM on the server; only the last four characters are shown. The server decrypts keys when making calls, and the operator is responsible for protecting the encryption key.",
 
   "三、合理使用": "3. Acceptable use",
   "不要用工作台提交违法内容、侵犯他人权利的内容，或试图让服务替你访问你无权访问的系统。":

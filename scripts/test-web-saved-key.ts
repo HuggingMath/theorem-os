@@ -65,7 +65,7 @@ async function signedIn(browser: Browser, email: string, options: { locale?: 'zh
   } else await ready(page);
   return { context, page, errors, posted };
 }
-async function submit(page: Page, posted: string[], task: string, key?: string) {
+async function submit(page: Page, posted: string[], task: string, key?: string, saveKey?: boolean) {
   const before = posted.length;
   await newResearch(page);
   // New research starts without a source.
@@ -73,6 +73,7 @@ async function submit(page: Page, posted: string[], task: string, key?: string) 
   await page.locator('#task').fill(task);
   await openSettings(page);
   if (key !== undefined) await page.locator('#api-key').fill(key);
+  if (saveKey !== undefined) await page.locator('#save-key').setChecked(saveKey);
   await page.locator('#settings-submit').click();
   await page.locator('#toast').filter({ hasText: /研究已提交|Research submitted/u }).waitFor();
   assert.equal(posted.length, before + 1, 'the form submitted once');
@@ -146,13 +147,29 @@ try {
 
   const first = await signedIn(browser, 'alice@example.org');
   await openSettings(first.page);
-  assert.equal(await first.page.locator('#save-key').isChecked(), true, 'saving is not on by default');
+  assert.equal(await first.page.locator('#save-key').isChecked(), false, 'saving requires an explicit choice');
   assert.equal(await first.page.locator('#key-save-note').isVisible(), true);
   assert.equal(await first.page.locator('#key-memory-row').isHidden(), true, 'the tab-only memory still shows');
   assert.equal(await first.page.locator('#delete-saved-key').isHidden(), true);
   assert.equal(await required(first.page), true);
+  await first.page.screenshot({ path: path.join(output, 'temporary-default-1440.png') });
   await closeSettings(first.page);
-  const sent = await submit(first.page, first.posted, 'Save it', credential);
+  const temporary = await submit(first.page, first.posted, 'Use once', credential);
+  assert.equal(temporary.apiKey, credential); assert.equal(temporary.saveKey, undefined);
+  assert.equal((await (await first.context.request.get(`${origin}/api/session`)).json()).account.savedKeys, undefined);
+  assert.deepEqual(await fs.readdir(path.join(data, 'keys')), []);
+  await first.page.reload();
+  await ready(first.page);
+  await openSettings(first.page);
+  assert.equal(await first.page.locator('#save-key').isChecked(), false);
+  assert.equal(await first.page.locator('#api-key').inputValue(), '');
+  assert.equal(await first.page.locator('#saved-key-note').isHidden(), true);
+  assert.equal(await required(first.page), true);
+  assert.ok(!(await stores(first.page)).includes(credential), 'temporary use leaves no key in browser storage');
+  await closeSettings(first.page);
+  mark('Lean uses a newly entered key once by default; submission and reload leave no saved account key');
+
+  const sent = await submit(first.page, first.posted, 'Save it', credential, true);
   assert.equal(sent.apiKey, credential); assert.equal(sent.saveKey, true);
   await first.page.locator('#toast').filter({ hasText: 'Key 已保存到你的账号' }).waitFor();
   await openSettings(first.page);
@@ -165,7 +182,7 @@ try {
   assert.deepEqual(await audit(first.page, { scope: '#settings-connection' }), [], 'Connection settings accessibility');
   await first.page.locator('#key-save-note').scrollIntoViewIfNeeded();
   await first.page.screenshot({ path: path.join(output, 'saved-1440.png') });
-  mark('ticked by default, the key is saved to the account on submission, the field empties and shows only the last four characters');
+  mark('opting in saves the key to the account on submission, empties the field and shows only the last four characters');
 
   await first.page.reload();
   await ready(first.page);
@@ -176,7 +193,7 @@ try {
   assert.match(await second.page.locator('#saved-key-note').innerText(), /K9z4/u, 'another device does not see the saved key');
   await closeSettings(second.page);
   assert.equal((await submit(second.page, second.posted, 'Another device')).apiKey, '');
-  assert.deepEqual(keys, [credential, credential, credential], 'the runs did not get the saved key');
+  assert.deepEqual(keys, [credential, credential, credential, credential], 'the runs did not get the supplied or saved key');
   assert.ok(!(await second.page.content()).includes(credential) && !(await stores(second.page)).includes(credential));
   mark('after a reload and on another device the key field may stay empty and runs use the saved key, which never reaches the page');
 
@@ -201,7 +218,7 @@ try {
   await Promise.all([first.context.close(), second.context.close(), bob.context.close()]);
 
   const english = await signedIn(browser, 'alice@example.org', { locale: 'en', theme: 'dark' });
-  await submit(english.page, english.posted, 'English', credential);
+  await submit(english.page, english.posted, 'English', credential, true);
   await openSettings(english.page);
   await settled(english.page);
   const texts = await english.page.locator('#settings-connection').evaluate(section => [...section.querySelectorAll('label, p, button, input')]
@@ -223,7 +240,7 @@ try {
     for (const [client, locale] of [[chinese, 'zh'], [english, 'en']] as const) {
       const before = keys.length;
       const response = client.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/runs');
-      const sent = await submit(client.page, client.posted, `Accepted despite optional key save failure ${locale}`, replacement);
+      const sent = await submit(client.page, client.posted, `Accepted despite optional key save failure ${locale}`, replacement, true);
       assert.equal(sent.saveKey, true);
       const accepted = await response;
       assert.equal(accepted.status(), 201);
