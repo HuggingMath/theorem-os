@@ -196,6 +196,7 @@ export async function deliverHumanGuidance(input: {
             await recipient.notify(`Human research guidance ${record.id}${record.taskRef ? ` for ${record.taskRef.id}@${record.taskRef.version}` : ''}:\n` +
               record.text + attachment + '\nThis is advisory input. Preserve the frozen original problem and task contracts. Any mathematical plan change must use the ordinary versioned planning protocol; this message is never proof acceptance. ' +
               'Report your decision in guidanceDecisions:[{guidanceId:"' + record.id + '",status:"accepted"|"declined"|"needs-info",reason:"specific reason",evidenceRefs:[]}], in your normal JSON delivery or RESEARCH.md response. ' +
+              (recipient.role === 'lead' ? 'Save this decision with the smallest useful math-plan revision and return before further searches. Delegate open searches, or report needs-info with the exact missing premise. ' : '') +
               'You may later add task, plan or applied-edit evidenceRefs with the same status and reason; the host retains prior references and validates each addition.');
             record.status = 'delivered'; record.deliveredTo = [recipient.workerId]; delete record.reason;
             record.deliveredScope = { ...(recipient.taskRef ? { taskRef: recipient.taskRef } : {}),

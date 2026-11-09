@@ -10,7 +10,7 @@ export type PlanApprovalRecord = {
   requestedAt?: number; requestedVersion?: string;
   approvedId?: string; approvedVersion?: string; approvedAt?: number;
   rejections?: { id: string; reason: string; planVersion?: string; at: number }[];
-  /** Lead guidance already answered by a revision turn while the plan waited. */
+  /** Lead guidance dispatched for revision while the plan waited; dispatch is not a handling decision. */
   guidanceIds?: string[];
   /** When the latest such revision turn was dispatched. */
   revisionAt?: number;

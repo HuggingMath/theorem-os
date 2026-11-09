@@ -19,7 +19,7 @@ import { finalizeResearchDispatch, type ContextBundle } from './modules/context'
 import type { KnowledgeContextSnapshot } from './knowledgeContext';
 import { researchTaskRole, type ResearchWorker } from './modules/organization';
 import type { ResearchOperation } from './modules/value';
-import { runResearchTurn, type ResearchCandidate } from './modules/execution';
+import { completedGuidanceDecisions, runResearchTurn, type ResearchCandidate } from './modules/execution';
 import { planResearchCooldown, recoverableResearchFailure, researchFailureDetail, researchFailureReason } from './modules/search';
 import { aggregateUsage, buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed } from './usageBudget';
 import { ResearchUsage } from './researchUsage';
@@ -1068,11 +1068,13 @@ export async function runResearchWorkers(input: {
             break;
           }
           let candidate: ResearchCandidate | undefined;
+          let executedTurnId: string | undefined;
           let executionError: string | undefined;
           const turnSession = session!;
           try {
             try {
               candidate = await modelTurn(started => modules.M1.execute(state.problem, currentContext, operation, worker, turnSession, signal, turnId => {
+                executedTurnId = turnId;
                 if (!continuation && assignment?.kind === 'task' && contextBasis && cooperation!.current(assignment)) {
                   assignment.assignment.researchBasis = contextBasis.publishedBasis;
                   save();
@@ -1127,6 +1129,12 @@ export async function runResearchWorkers(input: {
               throw request;
             }
           }
+          if (candidate.worktree !== worker.worktree || candidate.problemReceiptDigest !== state.problem.receiptDigest ||
+              candidate.operation !== action.operation || candidate.provenance.workerId !== worker.id)
+            throw new Error('math_candidate_identity_changed');
+          if (assignment && cooperation && candidate.provenance.threadId === turnSession.threadId)
+            await cooperation.deliverCompletedGuidance(worker, assignment,
+              completedGuidanceDecisions(turnSession, executedTurnId, candidate.status));
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
           if (candidate.status === 'failed' || planningCheckpoint) await close();
@@ -1138,9 +1146,6 @@ export async function runResearchWorkers(input: {
             await rotateSession('context');
             continue;
           }
-          if (candidate.worktree !== worker.worktree || candidate.problemReceiptDigest !== state.problem.receiptDigest ||
-              candidate.operation !== action.operation || candidate.provenance.workerId !== worker.id)
-            throw new Error('math_candidate_identity_changed');
           research.lastInputTokens = lastInputTokens ?? research.lastInputTokens;
           research.candidate = candidate;
           const turn = cooperation && assignment && candidate.status === 'interrupted' ? 'checkpoint' : candidate.status;
