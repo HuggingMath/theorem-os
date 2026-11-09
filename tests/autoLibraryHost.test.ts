@@ -178,6 +178,25 @@ describe('host-authorized Auto composition', () => {
     expect(() => hostAutoEvidence('records', 'race-other', { complete: true }, workspace(), true)).toThrow('authorization_changed');
     changed.mockRestore();
   });
+  it('reads pre-atomic authorizations and detects conflicts between both storage layouts', () => {
+    const kind = path.join(fixture.config.autoLibraryDirectory!, 'records'); fs.mkdirSync(kind, { recursive: true });
+    const legacy = path.join(kind, mathDigest('legacy') + '.json');
+    fs.writeFileSync(legacy, canonicalLibraryJson({ complete: true }), { mode: 0o400 });
+    expect(hostAutoEvidence('records', 'legacy', { complete: true }, workspace())).toBe(true);
+    expect(hostAutoEvidence('records', 'legacy', { complete: true }, workspace(), true)).toBe(true);
+    expect(() => hostAutoEvidence('records', 'legacy', { complete: false }, workspace(), true)).toThrow('authorization_changed');
+    fs.mkdirSync(path.join(kind, mathDigest('legacy')));
+    fs.writeFileSync(path.join(kind, mathDigest('legacy'), 'entry.json'), canonicalLibraryJson({ complete: false }));
+    expect(() => hostAutoEvidence('records', 'legacy', { complete: true }, workspace())).toThrow('authorization_changed');
+  });
+  it('resumes a child whose authorization uses the original registry layout', () => {
+    const base = effective();
+    const receipt = bootstrapAutoLibraryTask(workspace(), { source: challenge, task: 'Prove target.', environment: 'openai-math', libraryPack: base.pack! },
+      { binding: base.binding, provenance: {} });
+    const entry = path.join(fixture.config.autoLibraryDirectory!, 'tasks', mathDigest(workspace()));
+    fs.renameSync(path.join(entry, 'entry.json'), entry + '.json'); fs.rmdirSync(entry);
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
+  });
   it('does not allow a registry inside the task tree or a task inside the registry', () => {
     fixture.config.autoLibraryDirectory = path.join(workspace(), 'registry');
     fs.writeFileSync(fixture.configPath, canonicalLibraryJson(fixture.config));

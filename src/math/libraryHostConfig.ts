@@ -74,8 +74,9 @@ function resolveConfiguredLibrary(task: LibraryHostTaskIdentity, target: Library
   const index = keys.indexOf(canonicalLibraryJson(task));
   const authorization = !parentOnly && config.autoLibraryDirectory && !task.benchmarkCommit
     ? registryFile(config, workspace, 'tasks', path.resolve(workspace)) : undefined;
-  if (authorization && fs.existsSync(authorization)) {
-    const entry = derivedSchema.parse(parseLibraryJson(hostFile(authorization, workspace, 64 * 1024 * 1024)));
+  const authorizationBytes = authorization ? registryEntryBytes(authorization, workspace) : undefined;
+  if (authorizationBytes) {
+    const entry = derivedSchema.parse(parseLibraryJson(authorizationBytes));
     if (entry.taskId !== task.taskId || entry.workspace !== path.resolve(workspace)) throw new Error('library_auto_task_changed');
     // Parents must be explicitly mapped: derived authorizations cannot form a recursive chain.
     if (!config.tasks.some(item => item.taskId === entry.parent.taskId && item.benchmarkCommit === entry.parent.benchmarkCommit))
@@ -137,14 +138,24 @@ function registryConfig(workspace: string): LibraryHostConfig {
   if (!configPath) throw new Error('library_auto_host_required');
   return configSchema.parse(parseLibraryJson(hostFile(configPath, workspace, 2 * 1024 * 1024)));
 }
+/** Read valid pre-atomic entries too; two layouts must never disagree about an authorization. */
+function registryEntryBytes(file: string, workspace: string): Buffer | undefined {
+  const legacy = path.dirname(file) + '.json';
+  assertMathCanonicalPath(file); assertMathCanonicalPath(legacy);
+  const current = fs.existsSync(file) ? hostFile(file, workspace, 64 * 1024 * 1024) : undefined;
+  const previous = fs.existsSync(legacy) ? hostFile(legacy, workspace, 64 * 1024 * 1024) : undefined;
+  if (current && previous && !current.equals(previous)) throw new Error('library_auto_authorization_changed');
+  return current ?? previous;
+}
+
 function writeRegistry(file: string, workspace: string, value: unknown): void {
   assertMathCanonicalPath(file);
   const destination = path.dirname(file), parent = path.dirname(destination), bytes = canonicalLibraryJson(value);
   const compareExisting = () => {
-    if (hostFile(file, workspace, 64 * 1024 * 1024).toString() !== bytes) throw new Error('library_auto_authorization_changed');
+    if (registryEntryBytes(file, workspace)?.toString() !== bytes) throw new Error('library_auto_authorization_changed');
     syncMathDirectory(parent);
   };
-  if (fs.existsSync(file)) return compareExisting();
+  if (registryEntryBytes(file, workspace)) return compareExisting();
   const created = fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
   if (created) {
     for (let directory = parent; ; directory = path.dirname(directory)) {
@@ -158,6 +169,7 @@ function writeRegistry(file: string, workspace: string, value: unknown): void {
     try { fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); }
     finally { fs.closeSync(descriptor); }
     syncMathDirectory(temporary);
+    if (registryEntryBytes(file, workspace)) return compareExisting();
     // Renaming a complete nonempty directory is atomic and cannot replace another nonempty entry.
     // Readers always see a single-link regular file; interrupted staging directories are never selected.
     try { fs.renameSync(temporary, destination); }
@@ -165,7 +177,7 @@ function writeRegistry(file: string, workspace: string, value: unknown): void {
       if (!['EEXIST', 'ENOTEMPTY'].includes((cause as NodeJS.ErrnoException).code ?? '')) throw cause;
       compareExisting();
     }
-    syncMathDirectory(parent);
+    compareExisting();
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
 
@@ -218,6 +230,5 @@ export function authorizeHostAutoTask(input: { parent: LibraryHostTaskIdentity; 
 export function hostAutoEvidence(kind: 'records' | 'builds', key: string, value: unknown, workspace: string, write = false): boolean {
   const file = registryFile(registryConfig(workspace), workspace, kind, key);
   if (write) writeRegistry(file, workspace, value);
-  if (!fs.existsSync(file)) return false;
-  return hostFile(file, workspace, 64 * 1024 * 1024).toString() === canonicalLibraryJson(value);
+  return registryEntryBytes(file, workspace)?.toString() === canonicalLibraryJson(value);
 }
