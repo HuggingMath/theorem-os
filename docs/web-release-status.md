@@ -2,9 +2,11 @@
 
 工作台已在 <https://app.theoremos.top/> 上线，当前保持邮箱登录、白名单 Beta。自然语言首次链路和本机运维已经验收；陌生用户试用与外部运维交付仍未验收，当前没有公开放量的验收结论。
 
-2026-11-09 17:20–17:21（北京时间）Library 原题引用修复发布后，在线 web / worker 同为 `d61f6c5a637d41f276d71b0063acef2f9f8b44f5`，公开网站仓库仍为 `5bf25667c76fdacd4d6aee1e4f5f154aeef4f872`（Cloudflare 版本 `13d14c5a-02b6-4ed7-893a-c97a27cb97d8`）；宿主运维命令此前记录独立安装为 `cfb49a2eafbc22c23298978f100f4cdf1c2f4577`，本轮未重新核对。文档提交与已发布版本分别记录，不把最新仓库提交自动当成线上版本。
+2026-11-09 17:53（北京时间）第四轮前端与候选证明修复发布后，在线 web / worker 同为 `518e08674807014d215ee9dbb0e19b1e0152c358`，公开网站仓库仍为 `5bf25667c76fdacd4d6aee1e4f5f154aeef4f872`（Cloudflare 版本 `13d14c5a-02b6-4ed7-893a-c97a27cb97d8`）；宿主运维命令此前记录独立安装为 `cfb49a2eafbc22c23298978f100f4cdf1c2f4577`，本轮未重新核对。文档提交与已发布版本分别记录，不把最新仓库提交自动当成线上版本。
 
 G01–G09 修复已与数学协作功能一起上线，包括等待计划确认暂停证明计时、Lean Key 默认临时使用、从保存版本继续、完整已保存档案导出及中英文使用说明同步。新增[数学家](https://app.theoremos.top/people.html)、[定理](https://app.theoremos.top/theorems.html)和[Library](https://app.theoremos.top/library.html)界面，支持版本绑定的人工干预、贡献追踪、数学库与个性化 Agent / Skill 的固定版本分享和复用。
+
+17:53 发布完成第四轮五项修复：共享授权绑定编辑基准，草稿冲突后真正读取最新数据，明确不可访问的版本停止提供旧操作，数学发布绑定已审阅的完整包，合法派生使用已复制包预览。同时补齐局部候选目标检查、精确执行事实与非法路径原因，以及对应英文与字体。联合验证覆盖 350 个不同单测用例，旧词典失败经 14 项受影响检查修正；最终镜像七项真实 Lean / HTTP→Lean、双类型、双构建及 17 项本地浏览器通过。791 个源码文件、四个运行包、53 个库模块、十个工具和 16 个前端产物核验通过；备份恢复、成对切换、公网版本与静态核验、六个匿名桌面及手机浏览器场景通过，维护关闭。未追加付费模型调用，新的三身份业务验收另行进行。详见[第四轮统一发布记录](frontend-round4-20261109.md)。
 
 17:20–17:21 发布补齐 Library 的单 Worker 原题验收引用：实际引用页读取保存的独立 Lean 回执，显示真实引用的公开声明和原始检查凭证，运行所有者与项目成员分别返回有权访问的运行页面。四文件 46 项单测、18 项 HTTP 场景、根目录和 Web 类型检查、构建、三个新增中英文与窄屏场景及三个既有 Library 场景通过；复用了真实保存回执，没有追加模型或 Lean 调用。786 个镜像源码文件、四个运行包、53 个库模块和十个工具核验通过，16 个前端产物与本地验收构建一致；备份恢复、成对切换、公网核验和六个匿名桌面与手机浏览器场景通过，维护关闭。本轮不修改官网。详见[原题引用修复记录](library-original-uses-20261109.md)。
 
@@ -37,6 +39,7 @@ G01–G09 修复已与数学协作功能一起上线，包括等待计划确认�
 
 | 目录 | 入口 |
 | --- | --- |
+| `theoremos-frontend-round4-integration-20261109` | `README.md`、`verification.json`、`local-verification.json`、`final-image-lean-tests.json`、`images/worker-final-verification.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json` |
 | `theoremos-library-original-uses-20261109` | `README.md`、`verification.json`、`saved-s3-reuse-projection.json`、`browser-report.json`、`images/worker-final-verification.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json` |
 | `theoremos-frontend-round3-fixes-20261109` | `README.md`、`verification.json`、`images/worker-final-verification.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json`、`production-browser/routes-and-site.json`、`site-deploy/public-verification.json` |
 | `theoremos-first-use-20261107` | `release-completion.md`、`acceptance-results.md`、`cost-methodology.md`、`deploy/cutover.json` |
