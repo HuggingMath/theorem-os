@@ -379,8 +379,9 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       const previous = model, previousInitial = lastInitial;
       model = next; lastInitial = next.initial;
       if (previous.id !== next.id) state = memory(next);
-      if (next.initial !== previousInitial && next.initial && next.nodes.some(node => node.id === next.initial)) state.selected = next.initial;
-      if (!next.nodes.some(node => node.id === state.selected)) state.selected = next.initial ?? next.nodes[0]?.id ?? '';
+      // A changed initial navigates within one route; another route restores its own reading position.
+      if (previous.id === next.id && next.initial !== previousInitial && next.initial && next.nodes.some(node => node.id === next.initial)) state.selected = next.initial;
+      if (!next.nodes.some(node => node.id === state.selected)) state.selected = next.nodes.find(node => node.id === next.initial)?.id ?? next.nodes[0]?.id ?? '';
       const active = root.contains(document.activeElement) ? document.activeElement as HTMLElement : undefined;
       const focus = active?.dataset.solutionNode, searchFocused = active?.matches('[data-solution-search]');
       const controlAttribute = active?.getAttributeNames().find(name => name.startsWith('data-solution-'));

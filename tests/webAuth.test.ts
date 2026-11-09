@@ -188,7 +188,7 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     const sent = mail.at(-1)!.text.match(/\b\d{6}\b/u)![0];
     const verified = await request('/api/auth/verify', visitor, { email: 'alice@example.org', code: sent });
     expect(verified.status).toBe(200);
-    expect(verified.headers.get('set-cookie')).toMatch(/; Max-Age=31536000(?:;|$)/u);
+    expect(verified.headers.getSetCookie()[0]).toMatch(/; Max-Age=31536000(?:;|$)/u);
     const alice: Client = { cookie: verified.headers.get('set-cookie')!.split(';')[0], csrf: (await verified.json()).csrfToken, session: anonymous };
     expect(alice.cookie).not.toBe(visitor.cookie);
     const now = Date.now(), clock = vi.spyOn(Date, 'now');
@@ -400,7 +400,7 @@ describe('email login with captcha, allowlist and account-owned records', () => 
       expect(response.status).toBe(401);
       await response.arrayBuffer();
       expect(service.auth!.hasPassword('alice@example.org')).toBe(operation === 'login');
-      expect(service.storage.listSessions().some(stored => stored.id === client.cookie.slice('theoremos_session='.length))).toBe(false);
+      expect(service.storage.listSessions().some(stored => stored.id === client.cookie.slice(client.cookie.indexOf('=') + 1))).toBe(false);
     } finally { release?.(); derivation.mockRestore(); await pending; }
   });
 });

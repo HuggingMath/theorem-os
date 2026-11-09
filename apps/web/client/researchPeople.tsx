@@ -62,6 +62,13 @@ function ProfileEditor({ profile, refresh }: { profile: ProfileView; refresh: ()
   const [fields, setFields] = useState(profile.fields.join(', ')), [links, setLinks] = useState(profile.links.join('\n'));
   const update = <K extends keyof ResearcherProfile>(key: K, value: ResearcherProfile[K]) => setDraft(previous => ({ ...previous, [key]: value }));
   const newer = profile.revision > draft.revision;
+  const keepEditing = () => {
+    const alreadySaved = profile.displayName === draft.displayName.trim() && profile.bio === draft.bio && profile.visibility === draft.visibility &&
+      JSON.stringify(profile.fields) === JSON.stringify(words(fields)) && JSON.stringify(profile.links) === JSON.stringify(lines(links));
+    // The unchanged saved intent can recover its original receipt; replacing a reviewed newer edit is a new submission.
+    if (alreadySaved) action.setError(''); else action.reset();
+    setDraft(current => ({ ...current, revision: profile.revision }));
+  };
   const save = async () => {
     if (newer) return;
     await action.run<Item<ResearcherProfile>>('PUT', `${base}/profile`,
@@ -82,9 +89,9 @@ function ProfileEditor({ profile, refresh }: { profile: ProfileView; refresh: ()
         <div><dt>{t('最新简介')}</dt><dd>{profile.bio || '—'}</dd></div>
         <div><dt>{t('最新公开链接')}</dt><dd>{profile.links.join('\n') || '—'}</dd></div>
         <div><dt>{t('最新可见范围')}</dt><dd>{nameOf(profile.visibility)}</dd></div></dl>
-      <div class="research-actions"><button class="button" type="button" disabled={action.busy} onClick={() => { setDraft(current => ({ ...current, revision: profile.revision })); action.setError(''); }}>
+      <div class="research-actions"><button class="button" type="button" disabled={action.busy} onClick={keepEditing}>
         {t('已核对，保留我的编辑')}</button>
-        <button class="button" type="button" disabled={action.busy} onClick={() => { setDraft(profile); setFields(profile.fields.join(', ')); setLinks(profile.links.join('\n')); action.setError(''); }}>
+        <button class="button" type="button" disabled={action.busy} onClick={() => { setDraft(profile); setFields(profile.fields.join(', ')); setLinks(profile.links.join('\n')); action.reset(); }}>
           {t('使用最新资料替换当前编辑')}</button></div>
       <p class="research-field-note">{t('保留编辑后仍需点击保存，确认提交你的资料。')}</p></section>}
     {action.error && !newer && <button class="text-button" type="button" onClick={refresh}>{t('读取最新资料，保留编辑')}</button>}

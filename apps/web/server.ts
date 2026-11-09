@@ -279,13 +279,21 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const runStreams = new Map<string, Set<() => void>>();
   const origin = new URL(config.publicUrl);
   const secure = origin.protocol === 'https:';
+  const sessionCookie = 'theoremos_session', bootstrapCookie = 'theoremos_bootstrap';
+  const cookieValue = (name: string, value: string, maxAge: number) =>
+    `${name}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
   const setSessionCookie = (response: ServerResponse, session: Session) => {
-    // Signed-in identity cookies are issued only at login. Server-side idle expiry still governs access.
-    const maxAge = auth && session.account ? 365 * 24 * 60 * 60 : Math.floor(config.sessionTtlMs / 1000);
-    response.setHeader('Set-Cookie', `theoremos_session=${session.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`);
+    // A delayed anonymous bootstrap must not replace an identity established by another tab.
+    // Keep the existing signed-in cookie name so persisted browser sessions continue to work.
+    const anonymous = auth && !session.account;
+    const maxAge = auth && session.account ? 365 * 24 * 60 * 60
+      : Math.floor((anonymous ? Math.min(config.sessionTtlMs, 60 * 60_000) : config.sessionTtlMs) / 1000);
+    const value = cookieValue(anonymous ? bootstrapCookie : sessionCookie, session.id, maxAge);
+    response.setHeader('Set-Cookie', auth && session.account ? [value, cookieValue(bootstrapCookie, '', 0)] : value);
   };
   const clearSessionCookie = (response: ServerResponse) => {
-    response.setHeader('Set-Cookie', `theoremos_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`);
+    const value = cookieValue(sessionCookie, '', 0);
+    response.setHeader('Set-Cookie', auth ? [value, cookieValue(bootstrapCookie, '', 0)] : value);
   };
   const startSession = (account?: Session['account'], verifiedByEmail = false) => {
     const session: Session = { id: crypto.randomBytes(32).toString('hex'), csrf: crypto.randomBytes(32).toString('hex'), touchedAt: Date.now(),
@@ -338,12 +346,20 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   }, 60_000).unref();
   /** The browser session named by the cookie. An address removed from the allowlist, or a deleted account, loses its signed-in sessions. */
   const cookieSession = (request: IncomingMessage) => {
-    const cookie = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('theoremos_session='))?.slice(18);
-    const session = cookie ? sessions.get(cookie) : undefined;
-    if (session?.account && auth && !(auth.allowed(session.account.email) && auth.getAccount(session.account.email)?.id === session.account.id)) {
-      endSession(session.id); return undefined;
+    const cookies = request.headers.cookie?.split(';').map(value => value.trim()) ?? [];
+    const read = (name: string) => {
+      const value = cookies.find(value => value.startsWith(`${name}=`))?.slice(name.length + 1);
+      return value ? sessions.get(value) : undefined;
+    };
+    let session = read(sessionCookie);
+    if (!auth) return session;
+    if (session?.account && !(auth.allowed(session.account.email) && auth.getAccount(session.account.email)?.id === session.account.id)) {
+      endSession(session.id); session = undefined;
     }
-    return session;
+    if (session?.account) return session;
+    const bootstrap = read(bootstrapCookie);
+    // Accept legacy anonymous cookies until their normal expiry; bootstrap cookies never authenticate.
+    return bootstrap && !bootstrap.account ? bootstrap : session;
   };
   const server = http.createServer(async (request, response) => {
     const encoding = acceptedEncoding(request.headers['accept-encoding']);

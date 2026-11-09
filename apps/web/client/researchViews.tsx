@@ -19,12 +19,12 @@ function Header() {
 }
 export function ResearchApp() {
   const [context, setContext] = useState<ResearchContext>(), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
-  const [checking, setChecking] = useState(true), current = useRef<ResearchContext>();
+  const [checking, setChecking] = useState(true), [verifyingOwner, setVerifyingOwner] = useState(false), current = useRef<ResearchContext>();
   const confirmation = useRef<AbortController>();
   current.current = context;
   const changed = useCallback(() => {
     confirmation.current?.abort(); clearResearchSession(); current.current = undefined;
-    setContext(undefined); setError(''); setAttempt(value => value + 1);
+    setContext(undefined); setVerifyingOwner(false); setError(''); setAttempt(value => value + 1);
   }, []);
   // Install the next owner's API binding only after the previous owner's components have unmounted.
   useLayoutEffect(() => { if (context) bindResearchSession(context.web, changed); else clearResearchSession(); }, [context, changed]);
@@ -42,23 +42,27 @@ export function ResearchApp() {
       setChecking(true);
       pending = (async () => {
         try {
-          const web = await readResearchWebSession(controller.signal);
-          if (!live || controller.signal.aborted) return;
-          const previous = current.current;
-          if (previous && webDraftOwner(previous.web) === webDraftOwner(web)) {
-            bindResearchSession(web, changed);
-            setContext({ ...previous, web });
-          } else {
-            clearResearchSession(); current.current = undefined; setContext(undefined);
-            const session = await readResearchSession(web, controller.signal);
+          // A delayed bootstrap may describe an anonymous session while the browser has already signed in.
+          // Verify the complete pair before replacing an owner's components, with one fresh read on mismatch.
+          for (let check = 0; check < 2; check++) {
+            const web = await readResearchWebSession(controller.signal);
             if (!live || controller.signal.aborted) return;
-            setContext({ web, session });
+            const previous = current.current;
+            if (previous && webDraftOwner(previous.web) === webDraftOwner(web)) {
+              bindResearchSession(web, changed); setContext({ ...previous, web });
+            } else {
+              if (previous) setVerifyingOwner(true);
+              let session: ResearchContext['session'];
+              try { session = await readResearchSession(web, controller.signal); }
+              catch (cause) { if (check === 0 && cause instanceof ResearchSessionChangedError) continue; throw cause; }
+              if (!live || controller.signal.aborted) return;
+              clearResearchSession(); current.current = undefined; setContext({ web, session });
+            }
+            setVerifyingOwner(false); setError(''); return;
           }
-          setError('');
         } catch (cause) {
           if (live && !controller.signal.aborted) {
-            if (cause instanceof ResearchSessionChangedError) changed();
-            else if (cause instanceof DOMException && cause.name === 'AbortError') setAttempt(value => value + 1);
+            if (cause instanceof DOMException && cause.name === 'AbortError') setAttempt(value => value + 1);
             else setError(errorText(cause));
           }
         } finally { if (live) { pending = undefined; setChecking(false); } }
@@ -85,7 +89,7 @@ export function ResearchApp() {
       window.removeEventListener('pageshow', restore); window.removeEventListener('storage', accountLeft);
     };
   }, [attempt, changed]);
-  const unavailable = Boolean(error) || !context;
+  const unavailable = Boolean(error) || !context || verifyingOwner;
   return <><Header /><main id="main" class={context ? 'research-shell' : 'research-loading'} tabIndex={-1} aria-busy={checking}>
     {context && <div class={unavailable ? 'research-session-pending' : undefined} aria-hidden={unavailable} inert={unavailable} key={webDraftOwner(context.web)}>
       {page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}

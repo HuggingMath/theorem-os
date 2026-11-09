@@ -56,7 +56,7 @@ export function AssetEditor({ asset, context, onSaved, disabled = false }: { ass
         onSaved(result.item, newerInput);
       });
   };
-  return <form class="research-form" onSubmit={event => { event.preventDefault(); save(); }}>
+  return <form class="research-form" onSubmit={event => { event.preventDefault(); save(); }}><fieldset class="research-form research-editor-fields" disabled={disabled}>
     {!savedAsset && <label>{tx('内容类型', 'Content type')}<select value={kind} disabled={action.busy} onChange={event => setKind(event.currentTarget.value as ResearchAssetKind)}>
       <option value="mathematics">{tx('数学成果', 'Mathematics')}</option><option value="agent">Agent</option><option value="skill">Skill</option></select></label>}
     <Field label={tx('名称', 'Name')} value={name} onInput={setName} required maxLength={160} />
@@ -102,7 +102,7 @@ export function AssetEditor({ asset, context, onSaved, disabled = false }: { ass
       </>}
     {asset && asset.revision !== revision && <p class="research-status">{tx('服务器上的草稿已更新。当前输入仍保留；点击「载入最新草稿」可更新。', 'The saved draft has changed. Your input is preserved; choose “Load latest draft” to update it.')}</p>}
     <MutationState action={action} /><button type="submit" class="button button-primary" disabled={disabled || action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : savedAsset ? tx('保存草稿', 'Save draft') : tx('创建私有草稿', 'Create draft')}</button>
-  </form>;
+  </fieldset></form>;
 }
 
 function MathSourceEditor({ source, onChange, entryIds, setEntryIds }: { source: ResearchMathSource; onChange: (source: ResearchMathSource) => void; entryIds: string; setEntryIds: (value: string) => void }) {
