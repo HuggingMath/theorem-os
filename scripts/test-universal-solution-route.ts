@@ -26,6 +26,9 @@ function fixture(locale: 'zh' | 'en'): SolutionRouteInput {
     `推导 ${i + 1}：由非负性和归一化条件，先固定有限指标集，再对每个项应用局部估计。必须保留分母严格为正这一条件，才能把当前不等式交给下一个求和步骤。`,
     `Derivation ${i + 1}: Fix a finite index set using nonnegativity and normalization, then apply the local estimate term by term. Keep the denominator strictly positive so the next summation step can use this inequality.`)).join('\n\n')
     + '\n\nresearch-marker-terminus: bound-body-only.\n\n' + t('因此得到 $a_n \\le \\frac{1}{n+1}$，将它代入有限和即可接到合并任务。', 'Thus $a_n \\le \\frac{1}{n+1}$, which feeds directly into the finite-sum assembly task.');
+  const normalized = t('把原变量化成可逐项估计的形式。', 'Put the variables in a form suitable for a termwise bound.');
+  const fixedSource = 'theorem local_bound (hpos : 0 < denominator) : term ≤ bound := by\n  exact reciprocal_bound hpos';
+  const longSource = Array.from({ length: 64 }, (_, index) => `-- saved source line ${index + 1}: $literal$ remains code`).join('\n');
   return {
     id: `unseen-finite-estimate-${locale}`, title: t('有限和估计：完整研究路线', 'Finite sum estimate: complete research route'), locale,
     goal: node('goal', 'problem', '从约束推出有限和上界', 'Derive the finite-sum bound', {
@@ -33,9 +36,13 @@ function fixture(locale: 'zh' | 'en'): SolutionRouteInput {
       sections: [{ title: t('已知条件与待证结论', 'Assumptions and goal'), text: t('先分别归一化和证明局部界，再合并得到有限和估计。所有过程均保留原始记录。', 'Normalize and prove the local bound separately, then assemble the finite-sum estimate. Every original record remains available.') }],
     }),
     tasks: [
-      { ...node('normalize', 'task', '归一化并检查正性', 'Normalize and establish positivity', { summary: t('把原变量化成可逐项估计的形式。', 'Put the variables in a form suitable for a termwise bound.') }), dependencies: [] },
+      { ...node('normalize', 'task', '归一化并检查正性', 'Normalize and establish positivity', { summary: `  ${normalized}\n`,
+        sections: [{ title: t('归一化目标', 'Normalization goal'), text: normalized }] }), dependencies: [] },
       { ...node('bound', 'task', '证明每一项的局部界', 'Prove the termwise local bound', { summary: t('先处理分母，再应用单调性；失败尝试已修订。', 'Handle the denominator before monotonicity; the failed attempt was revised.'),
-        sections: [{ title: t('完整推导与下一步接口', 'Full derivation and what the next step uses'), text: longResearch }] }), dependencies: [] },
+        sections: [{ title: t('完整推导与下一步接口', 'Full derivation and what the next step uses'), text: longResearch },
+          { title: t('局部结论', 'Local conclusion'), text: t('得到 $a_n \\le \\frac{1}{n+1}$。', 'Obtain $a_n \\le \\frac{1}{n+1}$.') },
+          { title: t('送给下一步的条件', 'Conditions supplied to the next step'), text: t('逐项界和正性均已保留。\n\n下一步对有限指标集求和。', 'The pointwise bound and positivity are retained.\n\nThe next step sums over the finite index set.') },
+          { title: t('保存的代码', 'Saved code'), text: longSource, code: true }] }), dependencies: [] },
       { ...node('assemble', 'task', '把两条支路合并为有限和', 'Combine both branches into the finite sum', { summary: t('同时使用归一化条件和局部界，不省略求和条件。', 'Use normalization and the local bound together, retaining the summation conditions.'),
         sections: [{ title: t('怎样连接前后两步', 'How this connects the preceding and following steps'), text: t('归一化任务提供正性，局部界任务提供逐项不等式。应用有限和单调性，得到主定理，随后送交独立验收。', 'Normalization supplies positivity; the bound task supplies the pointwise inequality. Finite-sum monotonicity yields the theorem for independent acceptance.') }],
       }), dependencies: ['normalize', 'bound'] },
@@ -46,7 +53,7 @@ function fixture(locale: 'zh' | 'en'): SolutionRouteInput {
       node('attempt-failed', 'attempt', '直接取倒数的第一次尝试', 'First attempt: take reciprocals directly', { parentId: 'bound', status: 'failed', at: '2026-11-09T01:02:00Z', summary: t('未显式给出分母的正性。', 'Strict positivity of the denominator was missing.') }),
       node('check-failed', 'check', '检查指出缺少正性前提', 'Check identifies the missing positivity hypothesis', { parentId: 'bound', status: 'failed', at: '2026-11-09T01:03:00Z', sections: [{ title: t('检查诊断', 'Check diagnosis'), text: 'unsolved goals\n⊢ 0 < denominator', code: true }] }),
       node('human-choice', 'decision', '选择补充正性引理后继续', 'Choose to add a positivity lemma before continuing', { parentId: 'bound', status: 'human', at: '2026-11-09T01:04:00Z', sections: [{ title: t('人的决定及其影响', 'Human decision and its effect'), text: t('审核者选择保留当前路线，要求先复用归一化支路的正性结论；后续证明依照这一决定修订。', 'The reviewer kept this approach and required reuse of positivity from the normalization branch; the next proof was revised accordingly.') }] }),
-      node('attempt-fixed', 'attempt', '加入正性前提并修订证明', 'Revise the proof with explicit positivity', { parentId: 'bound', at: '2026-11-09T01:05:00Z', source: { name: 'Submission.lean', sha256: 'e'.repeat(64), commit: 'fixture-immutable-source', line: 12, endLine: 18 }, action: { label: t('查看该次源码', 'Read this source revision'), target: 'source:immutable:attempt-fixed' }, sections: [{ title: t('修订后的源码', 'Revised source'), text: 'theorem local_bound (hpos : 0 < denominator) : term ≤ bound := by\n  exact reciprocal_bound hpos', code: true }] }),
+      node('attempt-fixed', 'attempt', '加入正性前提并修订证明', 'Revise the proof with explicit positivity', { parentId: 'bound', at: '2026-11-09T01:05:00Z', summary: fixedSource, source: { name: 'Submission.lean', sha256: 'e'.repeat(64), commit: 'fixture-immutable-source', line: 12, endLine: 18 }, action: { label: t('查看该次源码', 'Read this source revision'), target: 'source:immutable:attempt-fixed' }, sections: [{ title: t('修订后的源码', 'Revised source'), text: fixedSource, code: true }] }),
       node('check-passed', 'check', '修订版本通过局部检查', 'Revised version passes the local check', { parentId: 'bound', at: '2026-11-09T01:06:00Z', summary: 'kernel_verified: fixture receipt' }),
       node('proof-step', 'derivation', '证明块：先把正性送入取倒数引理', 'Proof block: supply positivity to the reciprocal lemma', { parentId: 'attempt-fixed', sections: [{ title: t('对应证明块', 'Corresponding proof block'), text: 'have hreciprocal := reciprocal_bound hpos\nexact hreciprocal', code: true }] }),
       node('proof-step-explanation', 'finding', '这段代码为什么能够接到下一步', 'Why this block supplies the next step', { parentId: 'proof-step', summary: 'nested-body-search-marker', sections: [{ title: t('代码与推导的联系', 'Connection between the code and the derivation'), text: t('前一步给出严格正性，取倒数引理将它转为所需局部界 $u \\le v$；主任务随后对这一界逐项求和。', 'The preceding step gives strict positivity. The reciprocal lemma turns it into the local bound $u \\le v$, which the main task sums term by term.') }] }),
@@ -74,7 +81,7 @@ const bundle = await build({
 });
 await fs.writeFile(path.join(temporary, 'fixture.js'), bundle.outputFiles[0]!.contents);
 
-const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/route.css"><style>.fixture-shell{max-width:1240px;margin:0 auto;padding:24px}.fixture-shell>p{margin-bottom:12px;color:#777568}@media(max-width:520px){.fixture-shell{padding:12px}}</style></head><body><div class="fixture-shell"><p>TheoremOS · Universal route interaction fixture</p><div id="route"></div></div><script src="/fixture.js"></script></body></html>`;
+const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/route.css"><link rel="stylesheet" href="/math.css"><style>.fixture-shell{max-width:1240px;margin:0 auto;padding:24px}.fixture-shell>p{margin-bottom:12px;color:#777568}@media(max-width:520px){.fixture-shell{padding:12px}}</style></head><body><div class="fixture-shell"><p>TheoremOS · Universal route interaction fixture</p><div id="route"></div></div><script src="/fixture.js"></script></body></html>`;
 const server = createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://fixture').pathname);
@@ -88,8 +95,9 @@ const server = createServer(async (req, res) => {
       const mime: Record<string, string> = { '.html': 'text/html;charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png' };
       res.writeHead(200, { 'content-type': mime[path.extname(file)] ?? 'text/plain' }); res.end(data); return;
     }
-    const mappings: Record<string, string> = { '/fixture.js': path.join(temporary, 'fixture.js'), '/site.css': path.join(root, 'docs/site.css'), '/route.css': path.join(root, 'apps/web/solutionRoute.css') };
-    const file = mappings[pathname] ?? (pathname.startsWith('/assets/fonts/') ? path.join(root, 'docs', pathname) : undefined);
+    const mappings: Record<string, string> = { '/fixture.js': path.join(temporary, 'fixture.js'), '/site.css': path.join(root, 'docs/site.css'), '/route.css': path.join(root, 'apps/web/solutionRoute.css'), '/math.css': path.join(root, 'apps/web/math.css'), '/math.js': path.join(root, 'out/web/math.js') };
+    const file = mappings[pathname] ?? (pathname.startsWith('/assets/fonts/') ? path.join(root, 'docs', pathname)
+      : pathname.startsWith('/assets/katex/') ? path.join(root, 'out/web', pathname) : undefined);
     if (!file || (pathname.includes('..'))) { res.writeHead(404); res.end(); return; }
     const data = await fs.readFile(file);
     res.writeHead(200, { 'content-type': file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'font/woff2' }); res.end(data);
@@ -170,6 +178,42 @@ try {
     await check('Dependency and next-step buttons navigate to the actual connected steps', async () => {
       await page.locator('[data-solution-select="assemble"]').click(); assert.equal(await selected(page), 'assemble');
       await page.locator('[data-solution-select="normalize"]').click(); assert.equal(await selected(page), 'normalize');
+    });
+    await check('Reading mode keeps every section, removes only duplicate summaries and returns to the map', async () => {
+      await page.locator('[data-solution-node="bound"]').click();
+      await page.locator('.solution-route-read').click();
+      assert.equal(await page.locator('.solution-route').getAttribute('data-solution-reading'), 'true');
+      assert.equal(await page.locator('.solution-route-viewport').isVisible(), false);
+      assert.equal(await page.locator('[data-solution-section]').count(), 4);
+      assert.equal(await page.locator('[data-solution-inspector] .solution-route-section').count(), 4);
+      assert.ok(await page.locator('[data-solution-inspector] .solution-route-prose > p').count() > 20);
+      assert.equal(await page.locator('[data-solution-inspector] pre').count(), 1);
+      await page.locator('[data-solution-section="2"]').click();
+      assert.equal(await page.locator('[data-solution-section-heading="2"]').evaluate(element => document.activeElement === element), true);
+      await page.locator('[data-solution-reader-select]').selectOption('normalize');
+      assert.equal(await selected(page), 'normalize');
+      assert.equal(await page.locator('.solution-route-summary').count(), 0);
+      assert.equal(await page.locator('.solution-route-section').count(), 1);
+      await page.locator('[data-solution-reader-select]').selectOption('attempt-fixed');
+      assert.equal(await page.locator('.solution-route-summary').count(), 1, 'code section must remain distinct from its summary');
+      assert.equal(await page.locator('.solution-route-section pre').count(), 1);
+      await page.locator('[data-solution-reader-select]').selectOption('bound');
+      await page.locator('[data-solution-expand]').click();
+      assert.equal(await page.locator('#route').getAttribute('role'), 'dialog');
+      const scroll = await page.locator('.solution-route-workspace').evaluate(workspace => {
+        workspace.scrollTop = 500;
+        return { client: workspace.clientHeight, scroll: workspace.scrollHeight, top: workspace.scrollTop };
+      });
+      assert.ok(scroll.scroll > scroll.client && scroll.top > 0, JSON.stringify(scroll));
+      await page.evaluate(() => (window as any).routeFixture.update());
+      assert.equal(await page.locator('.solution-route').getAttribute('data-solution-reading'), 'true');
+      assert.ok(await page.locator('.solution-route-workspace').evaluate(workspace => workspace.scrollTop > 0));
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('[data-solution-expanded="false"]').count(), 1);
+      await page.locator('[data-solution-view="map"]').click();
+      assert.equal(await page.locator('.solution-route').getAttribute('data-solution-reading'), 'false');
+      assert.equal(await selected(page), 'bound');
+      if (await page.locator('[data-solution-all]').getAttribute('aria-pressed') === 'true') await page.locator('[data-solution-all]').click();
     });
     await check('Expand and collapse expose failed attempts, revision, checks and human decision', async () => {
       await page.locator('[data-solution-all]').click(); assert.equal(await page.locator('[data-solution-node]').count(), 17);

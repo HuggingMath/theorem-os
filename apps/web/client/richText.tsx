@@ -35,6 +35,23 @@ export function Rich(props: { text: string; links?: readonly RichLink[]; marks?:
       title={link.title} {...link.attributes}>{content(runs)}</span>;
   })}</>;
 }
+
+/** Route prose in paragraphs; only blank lines outside complete formulas, code and bold start a new paragraph. */
+export function RichProse({ text }: { text: string }) {
+  const paragraphs: ProseSegment[][] = [[]];
+  for (const segment of proseSegments(text)) {
+    if (segment.kind !== 'text') { paragraphs.at(-1)!.push(segment); continue; }
+    const parts = segment.text.split(/\r?\n(?:[^\S\r\n]*\r?\n)+/u);
+    parts.forEach((part, index) => {
+      if (index) paragraphs.push([]);
+      if (part) paragraphs.at(-1)!.push({ kind: 'text', text: part });
+    });
+  }
+  return <div class="solution-route-prose">{paragraphs
+    .filter(paragraph => paragraph.some(segment => segment.kind !== 'text' || segment.text.trim()))
+    .map((segments, index) => <p key={index}><Segments segments={segments} /></p>)}</div>;
+}
+
 function Segments({ segments }: { segments: readonly ProseSegment[] }) {
   return <>{segments.map((segment, index) => {
     if (segment.kind === 'code') return <code key={index} class="explain-code" translate={false}>{segment.text}</code>;
