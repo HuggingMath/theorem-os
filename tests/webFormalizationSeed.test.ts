@@ -87,8 +87,12 @@ describe('confirmed formalization handoff to a frozen proof problem', () => {
     expect(receipt.contract.formalStatement).toBe(request.source);
     expect(receipt.contract.informalStatement).toBe(request.task);
     expect(receipt.environment).toBe(request.environment);
-    expect(fs.readFileSync(seed.taskFile, 'utf8')).toBe(request.task +
-      '\nPreserve all original declarations. Prove every target in generated/problem/Submission.lean.\n');
+    const task = fs.readFileSync(seed.taskFile, 'utf8');
+    expect(task).toContain(request.task);
+    expect(task).toContain('Overall run objective: prove every original target');
+    expect(task).toContain('In cooperative mode, complete only your current assignment');
+    expect(task).toContain('preserve other original goal proofs, including existing sorry placeholders');
+    expect(task).toContain('the host integrates checked tasks and verifies all targets');
     expect(fs.existsSync(path.join(destination, 'formalized'))).toBe(false);
   });
 

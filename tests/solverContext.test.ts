@@ -85,7 +85,7 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
 });
 
-const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => {
+const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review', taskText = 'Prove the target') => {
   const formal = 'theorem target : True := by sorry';
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'],
     declarations: { 'Submission.lean': [{ name: 'target', header: 'target : True' }] }, targets: [],
@@ -99,9 +99,38 @@ const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => 
     kind === 'review' ? { kind, seedCommit: 'fixed-commit', sourceDigest: 'fixed-source' } :
       { kind: 'task', task, assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'worker', seedCommit: 'fixed-commit' } };
   return buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
-    taskText: 'Prove the target', retrievalRoot: '/library', maxOptionalContextBytes: 0,
+    taskText, retrievalRoot: '/library', maxOptionalContextBytes: 0,
     frozenContexts: { 'Submission.lean': formal }, assignment: action });
 };
+
+it.each(['lemma', 'goal', 'lead', 'research'] as const)(
+  'scopes the %s prompt to its assignment while keeping the whole problem as background', kind => {
+    const taskText = 'Prove every target in generated/problem/Submission.lean.';
+    const context = gapContext(kind, taskText);
+    expect(context.instructions.startsWith('Carry out only your current cooperative assignment.')).toBe(true);
+    expect(context.instructions).toContain('task text describe the overall research objective');
+    expect(context.instructions).toContain('The host integrates checked work and verifies every original target.');
+    expect(context.instructions).not.toContain('You prove the original mathematical problem in Lean.');
+    expect(context.message).toContain(taskText);
+    expect(context.message).toContain('theorem target : True := by sorry');
+    if (kind === 'lemma') {
+      expect(context.instructions).toContain('every original goal proof exactly as it appears in assignment.seedCommit, including existing sorry placeholders');
+      expect(context.instructions).toContain('A preserved placeholder in another declaration does not block delivery of your completed helper.');
+      expect(context.instructions).toContain('Proofs you submit for acceptance must not use sorry');
+      expect(context.instructions).toContain('confirmed shutdown');
+    }
+  });
+
+it('retains the full original-problem responsibility without a cooperative assignment', () => {
+  const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
+    baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
+  const context = buildResearchContext(problem, {} as SolverRunState, { root: '/runtime', worktree: '/proof', environment: {},
+    taskText: 'Prove every target in generated/problem/Submission.lean.', retrievalRoot: '/library',
+    frozenContexts: { 'Submission.lean': 'theorem target : True := by sorry' } });
+  expect(context.instructions.startsWith('You prove the original mathematical problem in Lean.')).toBe(true);
+  expect(context.instructions).not.toContain('Carry out only your current cooperative assignment.');
+  expect(context.message).toContain('Prove every target in generated/problem/Submission.lean.');
+});
 
 it('asks researchers to save scoped negative evidence and publish a schema-valid gap decision promptly', () => {
   const context = gapContext('research');
