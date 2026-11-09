@@ -12,6 +12,7 @@ import { KERNEL_COMPUTE_LIBRARY } from '../src/math/kernelComputeLibrary';
 import type { LibraryPack } from '../src/math/libraryPacks';
 import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
+import { canonicalLibraryJson } from '../src/math/libraryRelease';
 
 const host = vi.hoisted(() => ({ commit: '', catalog: {} as unknown, verify: vi.fn(), compare: vi.fn() }));
 vi.mock('../src/math/leanEvalCatalogAdapter', async importOriginal => ({
@@ -100,7 +101,7 @@ describe('Lean-Eval bootstrap without planning state', () => {
   });
   afterEach(() => { vi.unstubAllEnvs(); fs.rmSync(directory, { recursive: true, force: true }); });
 
-  async function bootstrapWithHostLibrary() {
+  async function bootstrapWithHostLibrary(largeModule = false) {
     const environment = getLeanTaskEnvironment('openai-math');
     fs.writeFileSync(path.join(repositoryRoot, 'generated/p/lean-toolchain'), `${environment.toolchain}\n`);
     fs.writeFileSync(path.join(repositoryRoot, 'lake-manifest.json'), environment.files['lake-manifest.json']!);
@@ -109,7 +110,7 @@ describe('Lean-Eval bootstrap without planning state', () => {
     host.commit = git('rev-parse', 'HEAD');
     host.catalog = { ...(host.catalog as object), benchmarkCommit: host.commit };
     const fixture = writeLibraryHostFixture(directory, [{ taskId: 'p', benchmarkCommit: host.commit,
-      selection: { mode: 'mapped', exclusionKeys: ['FixtureTask'] } }]);
+      selection: { mode: 'mapped', exclusionKeys: ['FixtureTask'] } }], largeModule);
     vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', fixture.configPath);
     const result = await bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [],
       workspaceRoot: path.join(directory, 'host-solver') });
@@ -148,6 +149,30 @@ describe('Lean-Eval bootstrap without planning state', () => {
     fs.appendFileSync(path.join(result.receipt.projectRoot, file), '\n-- changed after bootstrap\n');
     await expect(runLeanEvalOfficialGate(result)).rejects.toThrow(/binding_changed/);
     expect(host.verify).not.toHaveBeenCalled();
+  });
+  it('authenticates module hashes even when the receipt and initial Git commit are rewritten together', async () => {
+    const { result } = await bootstrapWithHostLibrary();
+    const receipt = structuredClone(result.receipt);
+    const file = Object.keys(receipt.libraryPack!.files)[0]!;
+    const modulePath = path.join(receipt.projectRoot, file);
+    fs.appendFileSync(modulePath, '\n-- substituted library content\n');
+    (receipt.libraryPack!.files as Record<string, string>)[file] = crypto.createHash('sha256').update(fs.readFileSync(modulePath)).digest('hex');
+    const workspace = receipt.workspaceRoot;
+    execFileSync('git', ['-C', workspace, 'add', '--', `generated/p/${file}`]);
+    const message = 'Public Lean-Eval solver baseline\n\n' + canonicalLibraryJson({ problemId: receipt.problemId,
+      benchmarkCommit: receipt.benchmarkCommit, libraryPack: receipt.libraryPack, libraryBinding: receipt.libraryBinding });
+    execFileSync('git', ['-C', workspace, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost',
+      'commit', '--amend', '--quiet', '-m', message]);
+    fs.writeFileSync(receipt.activeProblemPath, JSON.stringify(receipt));
+    expect(() => readLeanEvalBootstrapReceipt(receipt.activeProblemPath)).toThrow(/module_set_changed/);
+    await expect(runLeanEvalOfficialGate({ ...result, receipt })).rejects.toThrow(/module_set_changed/);
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+  it('restores and submits an approved module above 2 MiB within the shared library limit', async () => {
+    const { result } = await bootstrapWithHostLibrary(true);
+    expect(readLeanEvalBootstrapReceipt(result.receipt.activeProblemPath)).toEqual(result.receipt);
+    const commit = commitLeanEvalSubmission(result);
+    expect((await runLeanEvalOfficialGate(result, { commit })).comparison.status).toBe('official_verified');
   });
   it('rejects drift of the installed held-out dependency lock on resume', async () => {
     const { result } = await bootstrapWithHostLibrary();

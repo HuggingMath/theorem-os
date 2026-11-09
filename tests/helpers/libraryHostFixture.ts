@@ -7,7 +7,7 @@ import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import type { LibraryHostConfig } from '../../src/math/libraryHostConfig';
 
 /** Synthetic serialization fixture, never release or kernel evidence. */
-export function writeLibraryHostFixture(root: string, tasks: LibraryHostConfig['tasks']) {
+export function writeLibraryHostFixture(root: string, tasks: LibraryHostConfig['tasks'], largeModule = false) {
   const source = fileURLToPath(new URL('../fixtures/library-release/', import.meta.url));
   const releaseDirectory = path.join(root, 'release');
   fs.mkdirSync(releaseDirectory, { recursive: true });
@@ -26,6 +26,29 @@ export function writeLibraryHostFixture(root: string, tasks: LibraryHostConfig['
     fs.writeFileSync(path.join(releaseDirectory, name), bytes);
   }
   const metadataPath = path.join(releaseDirectory, 'declaration-metadata.jsonl');
+  if (largeModule) {
+    const read = (name: string) => JSON.parse(fs.readFileSync(path.join(releaseDirectory, name), 'utf8'));
+    const write = (name: string, value: unknown) => fs.writeFileSync(path.join(releaseDirectory, name), encode(value));
+    const pack = read('pack.json'), library = read('library.json'), verification = read('verification.json');
+    const manifest = read('search-index-manifest.json');
+    const module = pack.modules.at(-1), record = library.modules.at(-1);
+    // E imports only Mathlib, so its installed and original source bytes are identical.
+    module.source += '\n-- ' + 'x'.repeat(2 * 1024 * 1024) + '\n';
+    record.sha256 = record.source_sha256 = mathDigest(module.source);
+    const coverage = verification.replay.coverage;
+    coverage.modules.find((item: { module: string }) => item.module === 'TheoremOS.Fixture.E').source_sha256 = record.source_sha256;
+    coverage.module_set_sha256 = mathDigest(canonicalLibraryJson(coverage.modules));
+    manifest.module_set.sha256 = mathDigest(canonicalLibraryJson(library.modules.map(({ file, module, sha256 }:
+      { file: string; module: string; sha256: string }) => ({ file, module, sha256 }))));
+    const rows = fs.readFileSync(metadataPath, 'utf8').trimEnd().split('\n').map(line => {
+      const item = JSON.parse(line);
+      if (item.source.module === 'TheoremOS.Fixture.E') item.source.sha256 = record.source_sha256;
+      return encode(item);
+    });
+    fs.writeFileSync(metadataPath, rows.join(''));
+    write('pack.json', pack); write('library.json', library); write('verification.json', verification);
+    write('search-index-manifest.json', manifest);
+  }
   const verificationDigest = mathDigest(fs.readFileSync(path.join(releaseDirectory, 'verification.json')));
   const declarations = fs.readFileSync(metadataPath, 'utf8').trimEnd().split('\n').map(line => {
     const item = JSON.parse(line);

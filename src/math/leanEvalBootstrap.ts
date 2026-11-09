@@ -22,9 +22,9 @@ import { mathGitBytes, mathGitText } from './mathGit';
 import { resolveLeanEvalSubmissionName } from "./leanEvalSubmission";
 import { certificateSlotFiles, certificateSlotSource, MAX_CERTIFICATE_SLOTS } from './certificateSlots';
 import { MAX_THEORY_MODULES, theoryModuleFiles, theoryModuleSource } from './theoryModules';
-import { installLibraryPack, isLibraryPackFile, libraryPackDigest, parseLibraryPack, type LibraryPack } from './libraryPacks';
+import { installLibraryPack, isLibraryPackFile, libraryPackDigest, MAX_LIBRARY_MODULE_BYTES, parseLibraryPack, type LibraryPack } from './libraryPacks';
 import { z } from 'zod';
-import { canonicalLibraryJson } from './libraryRelease';
+import { canonicalLibraryJson, libraryUnicodeCompare } from './libraryRelease';
 import { effectiveLibraryBindingSchema, type EffectiveLibraryBinding } from './libraryEffectivePack';
 import { assertHostLibraryCurrent, libraryDependencyLockDigest, libraryHostConfigPath, resolveHostLibrary } from './libraryHostConfig';
 
@@ -752,6 +752,10 @@ function assertLeanEvalLibraryBinding(receipt: LeanEvalBootstrapReceipt): void {
     target, root);
   if (receipt.libraryBinding!.effectivePackDigest !== (receipt.libraryPack?.digest ?? sha256('null')))
     throw new Error('lean_eval_library_binding_changed');
+  const modules = Object.keys(receipt.libraryPack?.files ?? {}).sort(libraryUnicodeCompare).map(file => ({
+    file, module: file.slice(0, -5).replaceAll('/', '.'), sha256: receipt.libraryPack!.files[file] }));
+  if (sha256(canonicalLibraryJson(modules)) !== receipt.libraryBinding!.moduleSetSha256)
+    throw new Error('lean_eval_library_module_set_changed');
   if (canonicalLibraryJson(receipt.solverOwnedFiles.filter(isLibraryPackFile).toSorted()) !==
       canonicalLibraryJson(Object.keys(receipt.libraryPack?.files ?? {}).sort()))
     throw new Error('lean_eval_library_binding_changed');
@@ -759,8 +763,8 @@ function assertLeanEvalLibraryBinding(receipt: LeanEvalBootstrapReceipt): void {
     const installed = path.join(receipt.projectRoot, file);
     assertMathCanonicalPath(installed);
     const bytes = mathGitBytes(root, ['--no-replace-objects', 'show', `${base}:${project}/${file}`],
-      { maxBuffer: 2 * 1024 * 1024, timeout: 30_000 });
-    if (sha256(bytes) !== digest || sha256(readMathFile(installed, 2 * 1024 * 1024).bytes) !== digest)
+      { maxBuffer: MAX_LIBRARY_MODULE_BYTES + 1, timeout: 30_000 });
+    if (sha256(bytes) !== digest || sha256(readMathFile(installed, MAX_LIBRARY_MODULE_BYTES).bytes) !== digest)
       throw new Error('lean_eval_library_binding_changed');
   }
 }
@@ -1026,7 +1030,7 @@ const assertSubmissionCommitDelta = (bootstrapped: LeanEvalBootstrapResult, targ
     const relative = `${generatedPrefix}${file}`;
     const entry = git(verifierRoot, ['--no-replace-objects', 'ls-tree', targetCommit, '--', relative]);
     const bytes = mathGitBytes(verifierRoot, ['--no-replace-objects', 'show', `${targetCommit}:${relative}`],
-      { maxBuffer: 2 * 1024 * 1024, timeout: 30_000 });
+      { maxBuffer: MAX_LIBRARY_MODULE_BYTES + 1, timeout: 30_000 });
     if (!entry.startsWith('100644 blob ') || sha256(bytes) !== digest) throw new Error('lean_eval_library_submission_changed');
   }
 };
