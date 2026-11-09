@@ -1,6 +1,8 @@
 # 第三轮前端修复 · 2026-11-09
 
-本轮候选位于 `codex/frontend-round3-20261109`，基线为 `c3ab2ba384723fd609b36e5172efeddaeaf4973e`。本记录描述独立工作树的修复；尚未合入 main 或部署。
+本轮 11 类修复已合入并推送 main。工作台于北京时间 16:48 完成成对镜像切换，官网于 16:50 发布，维护已关闭。
+
+工作台 Web / Worker 源码为 `916ec0bfe67e566e6c49aa28a56dee2afabbbd31`，公开网站仓库为 `5bf25667c76fdacd4d6aee1e4f5f154aeef4f872`，Cloudflare 版本为 `13d14c5a-02b6-4ed7-893a-c97a27cb97d8`。本记录及发布状态的文档提交与运行源码分别记录。
 
 ## 修复内容
 
@@ -38,4 +40,17 @@ bun run typecheck:web
 bun run test:site
 ```
 
-本轮日志与浏览器证据位于 `out/frontend-round3/`，交付报告汇总到 `/home/lzh/workspace/outputs/theoremos-frontend-round3-fixes-20261109/`。发布状态以该目录的 `verification.json` 为准；本地检查通过不代表已经上线。
+## 发布验收
+
+| 检查 | 结果 |
+| --- | --- |
+| 英文与字体 | 3547 个必需翻译键，缺失与残留均为零；七个新增字形及既有字体轴、名称通过核验。 |
+| 镜像身份 | 785 个源码文件与提交逐字节一致，四个运行包、53 个内置库模块、十个独立工具通过断网只读核验。 |
+| 前端产物 | 15 个最终前端文件与本地验收构建一致，相关 Brotli 文件解压后与原文件一致。 |
+| 工作台切换 | 维护、无取消排空、私有备份与 checksum 恢复、隔离预检及公网检查通过；正式回执 `clean=true`，维护关闭。 |
+| 官网发布 | 仅更新路线图脚本和两份字体；其余 634 个静态文件、27 道题档案及证明数据保持一致。Worker 代码和设置核对一致。 |
+| 公网验收 | 研究页桌面 / 手机六项，中英文官网、短视口菜单和两站源码定位八项通过；无页面脚本错误、溢出或业务写请求。16 个官网 URL 与发布文件一致。 |
+
+浏览器与协议验收使用受控本地服务或匿名公网读取。本轮未调用真实模型、编译 Lean、发送邮件或向生产提交研究任务。
+
+本轮日志与浏览器证据位于 `out/frontend-round3/`，完整交付记录在 `/home/lzh/workspace/outputs/theoremos-frontend-round3-fixes-20261109/`。入口为 `verification.json`，对应 `images/worker-final-verification.json`、`images/frontend-built-identity.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json`、`production-browser/routes-and-site.json` 和 `site-deploy/public-verification.json`。

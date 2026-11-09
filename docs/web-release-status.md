@@ -2,9 +2,11 @@
 
 工作台已在 <https://app.theoremos.top/> 上线，当前保持邮箱登录、白名单 Beta。自然语言首次链路和本机运维已经验收；陌生用户试用与外部运维交付仍未验收，当前没有公开放量的验收结论。
 
-2026-11-09 14:24–14:25（北京时间）前端修复发布后，在线 web / worker 同为 `f259d72de247accbd09818c825ede6da8fa2d415`，公开网站仓库为 `2306fd217b4657e8a28c062837c1ad6ef34cc03c`（Cloudflare 版本 `42c6f3ae-e872-4382-a9ec-0722770da27e`）；宿主运维命令此前记录独立安装为 `cfb49a2eafbc22c23298978f100f4cdf1c2f4577`，本轮未重新核对。文档提交与已发布版本分别记录，不把最新仓库提交自动当成线上版本。
+2026-11-09 16:48–16:50（北京时间）第三轮前端修复发布后，在线 web / worker 同为 `916ec0bfe67e566e6c49aa28a56dee2afabbbd31`，公开网站仓库为 `5bf25667c76fdacd4d6aee1e4f5f154aeef4f872`（Cloudflare 版本 `13d14c5a-02b6-4ed7-893a-c97a27cb97d8`）；宿主运维命令此前记录独立安装为 `cfb49a2eafbc22c23298978f100f4cdf1c2f4577`，本轮未重新核对。文档提交与已发布版本分别记录，不把最新仓库提交自动当成线上版本。
 
 G01–G09 修复已与数学协作功能一起上线，包括等待计划确认暂停证明计时、Lean Key 默认临时使用、从保存版本继续、完整已保存档案导出及中英文使用说明同步。新增[数学家](https://app.theoremos.top/people.html)、[定理](https://app.theoremos.top/theorems.html)和[Library](https://app.theoremos.top/library.html)界面，支持版本绑定的人工干预、贡献追踪、数学库与个性化 Agent / Skill 的固定版本分享和复用。
+
+16:48–16:50 发布完成第三轮 11 类修复：路线清搜索和展开后保留选中步骤，详情重开保留阅读段落，历史对话提示待人工处理，计划冲突和不确定批准保留原请求身份并支持刷新恢复，Library 校验不再使用过期响应，切换任务清空旧反馈，撤权后隐藏受限资料，采纳入口与运行授权一致，公开概况过滤精确 assignment，并补齐英文和七个字体字形。72 项单测、两套类型检查、官网五组检查、新增及既有浏览器回归和独立协作验收通过。785 个镜像源码文件、四个运行包、53 个库模块与十个工具核验通过，15 个前端产物与本地验收构建一致；备份恢复、成对切换、公网 14 个浏览器场景及官网 16 个 URL 检查通过，维护关闭。官网只更新三份前端文件，27 道题档案与证明数据保持一致。详见[第三轮前端修复记录](frontend-round3-20261109.md)。
 
 14:24–14:25 发布完成前两轮的 10 项和 11 项前端修复，包含编辑保留、候选版本确认、资料冲突恢复、任务重试、源码精确定位、路线前后导航及登录步骤恢复。最终回归还补齐窄屏顶栏、会话返回时保留登录方式和表单提示的无障碍关联。16 项聚焦单测、第二轮 21 场景、完整登录与官网检查通过；Field 补丁的十个兼容场景及既有有效回归证据保留。最终镜像 779 个源码文件、四个运行包、53 个内置库模块与十个工具核验通过；11 个前端文件与本地验收构建一致。成对切换、备份恢复、公网浏览器 14 项及官网静态 URL 14 项通过，维护关闭。详见[前端修复发布记录](frontend-release-20261109.md)。
 
@@ -33,6 +35,7 @@ G01–G09 修复已与数学协作功能一起上线，包括等待计划确认�
 
 | 目录 | 入口 |
 | --- | --- |
+| `theoremos-frontend-round3-fixes-20261109` | `README.md`、`verification.json`、`images/worker-final-verification.json`、`deploy/cutover.json`、`deploy/deployment-record.json`、`production-browser/report.json`、`production-browser/routes-and-site.json`、`site-deploy/public-verification.json` |
 | `theoremos-first-use-20261107` | `release-completion.md`、`acceptance-results.md`、`cost-methodology.md`、`deploy/cutover.json` |
 | `theoremos-operations-20261107` | `completion.md`、`ci-status.json`、`application-restore-drill.json`、`timers-observation.json` |
 | `theoremos-trial-ready-20261108` | `release-status.md`、`trial-kit.zip`、`trial-kit/README.md`、`fixture-generation.json`、`mail-dns.json` |
