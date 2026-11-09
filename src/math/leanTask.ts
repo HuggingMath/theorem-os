@@ -11,6 +11,8 @@ import { installLibraryPack, isLibraryPackFile, libraryDeclarationConflict, libr
 import { mathConstructionImports } from './mathConstructionSources';
 import { mathGitBytes, mathGitText } from './mathGit';
 import { assertMathCanonicalPath } from './paths';
+import { effectiveLibraryBindingSchema, resolveEffectiveLibraryPack, type LibraryTaskPolicy } from './libraryEffectivePack';
+import { canonicalLibraryJson, libraryUnicodeCompare, type LibraryReleaseArtifacts } from './libraryRelease';
 
 export const LEAN_TASK_SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 /** Declarations, and so definition targets, per statement. */
@@ -41,11 +43,13 @@ const receiptSchema = z.object({
   contract: z.record(z.unknown()), trustedFiles: z.array(z.string()), solverOwnedFiles: z.array(z.string()),
   publicObligations: z.array(obligationSchema), declarations: z.array(declarationSchema),
   libraryPack: libraryPackSchema.optional(),
+  libraryBinding: effectiveLibraryBindingSchema.optional(),
 }).strict();
 const seedSchema = z.object({
   schema: z.literal('theorem-os.lean-task-seed.v1'), task: inputSchema.shape.task, sourceHash: hash,
   environment: inputSchema.shape.environment, environmentDigest: hash.optional(),
   definitionTargets: inputSchema.shape.definitionTargets, libraryPack: libraryPackSchema.optional(),
+  libraryBinding: effectiveLibraryBindingSchema.optional(),
 }).strict();
 
 export type LeanTaskReceipt = Omit<z.infer<typeof receiptSchema>, 'contract'> & { contract: MathProblemContract };
@@ -131,10 +135,19 @@ function assertRegularFile(file: string): void {
 }
 
 /** Prepare untrusted text without running Lean, Lake, a model, or a source-provided command. */
-export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): LeanTaskReceipt {
+export function bootstrapLeanTask(workspace: string, input: LeanTaskInput,
+  hostLibrary?: Readonly<{ artifacts: LibraryReleaseArtifacts; policy: LibraryTaskPolicy }>): LeanTaskReceipt {
   const inspected = inspectInput(input);
   const environment = getLeanTaskEnvironment(inspected.environment ?? 'standard');
-  const libraryPack = inspected.libraryPack === undefined ? undefined : inspectLibraryPack(inspected.libraryPack, inspected.source);
+  if (hostLibrary && inspected.libraryPack !== undefined) throw new Error('lean_task_library_sources_conflict');
+  const effective = hostLibrary && resolveEffectiveLibraryPack(hostLibrary.artifacts, hostLibrary.policy);
+  const libraryBinding = effective?.binding;
+  if (libraryBinding && (libraryBinding.taskId !== contractFor(inspected.source, inspected.task).problemId ||
+      libraryBinding.runtimeEnvironmentDigest !== environment.dependencyDigest ||
+      libraryBinding.environment.toolchain !== environment.toolchain || libraryBinding.environment.mathlib !== environment.mathlibRevision))
+    throw new Error('lean_task_library_binding_mismatch');
+  const selectedPack = effective ? effective.pack : inspected.libraryPack;
+  const libraryPack = selectedPack == null ? undefined : inspectLibraryPack(selectedPack, inspected.source);
   workspace = path.resolve(workspace);
   assertMathCanonicalPath(workspace);
   if (fs.existsSync(workspace)) throw new Error('Lean task workspace already exists; use a new directory.');
@@ -151,7 +164,7 @@ export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): Lean
   const message = seedPrefix + canonicalMathJson({ schema: 'theorem-os.lean-task-seed.v1', task: inspected.task,
     sourceHash: mathDigest(inspected.source), environment: environment.id, environmentDigest: environment.dependencyDigest,
     ...(inspected.definitionTargets ? { definitionTargets: inspected.definitionTargets } : {}),
-    ...(library ? { libraryPack: library } : {}) });
+    ...(library ? { libraryPack: library } : {}), ...(libraryBinding ? { libraryBinding } : {}) });
   gitText(workspace, ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=TheoremOS', '-c', 'user.email=theoremos@localhost',
     'commit', '--no-gpg-sign', '--quiet', '--cleanup=verbatim', '-m', message]);
   fs.appendFileSync(path.join(workspace, '.git/info/exclude'), '\n/active-problem.json\n**/.lake/\n');
@@ -161,7 +174,7 @@ export function bootstrapLeanTask(workspace: string, input: LeanTaskInput): Lean
     contract: contractFor(inspected.source, inspected.task),
     trustedFiles: Object.keys(sources), solverOwnedFiles: ['Submission.lean', ...Object.keys(library?.files ?? {}).sort()],
     publicObligations: inspected.publicObligations, declarations: inspected.declarations,
-    ...(library ? { libraryPack: library } : {}) };
+    ...(library ? { libraryPack: library } : {}), ...(libraryBinding ? { libraryBinding } : {}) };
   writeMathJsonDurable(receipt.activeProblemPath, receipt);
   return receipt;
 }
@@ -199,6 +212,18 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
   if (canonicalMathJson(parsed.libraryPack ?? null) !== canonicalMathJson(seed.libraryPack ?? null) ||
       (seed.libraryPack && (!libraryFiles.length || libraryFiles.some(file => !isLibraryPackFile(file)))))
     throw new Error('lean_task_identity_changed');
+  if (canonicalMathJson(parsed.libraryBinding ?? null) !== canonicalMathJson(seed.libraryBinding ?? null))
+    throw new Error('lean_task_identity_changed');
+  if (seed.libraryBinding) {
+    const binding = seed.libraryBinding;
+    const modules = libraryFiles.toSorted(libraryUnicodeCompare).map(file => ({ file,
+      module: file.slice(0, -5).replaceAll('/', '.'), sha256: seed.libraryPack!.files[file] }));
+    if (binding.taskId !== parsed.contract.problemId || binding.runtimeEnvironmentDigest !== environment.dependencyDigest ||
+        binding.environment.toolchain !== environment.toolchain || binding.environment.mathlib !== environment.mathlibRevision ||
+        binding.effectivePackDigest !== (seed.libraryPack?.digest ?? mathDigest('null')) ||
+        binding.moduleSetSha256 !== mathDigest(canonicalLibraryJson(modules)))
+      throw new Error('lean_task_library_binding_mismatch');
+  }
   const entries = gitText(workspace, ['ls-tree', '-r', '-z', parsed.baseCommit]).split('\0').filter(Boolean);
   const expectedFiles = [...Object.keys(trustedSources('', environment.id)), 'Submission.lean', ...libraryFiles].map(relative => `${projectRelative}/${relative}`).sort();
   const actualFiles = entries.map(entry => {
