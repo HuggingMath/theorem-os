@@ -142,7 +142,14 @@ function draw() {
     ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), chosen: state.chosen,
     ...(step ? { step } : {}),
     ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
-    ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now() });
+    ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now(),
+    onRouteOpen: target => {
+      const match = /^(section|step):(\d+)(?::(\d+))?$/u.exec(target);
+      if (!match || !explained) return;
+      const section = Number(match[2]), step = match[3] === undefined ? undefined : Number(match[3]);
+      if (!explained.sections[section] || step !== undefined && !explained.sections[section]!.steps[step]) return;
+      select({ section, ...(step === undefined ? {} : { step }) }, 'lean');
+    } });
   $('#explain-split').dataset.pane = state.pane;
   markLean(explained);
   // The heading exists only while a dialog is drawn, so the name points at it only then.
@@ -286,6 +293,8 @@ function follow(from: 'lean' | 'prose') {
   if (from !== driver || !state.sync || narrow() || performance.now() < holdUntil || frame) return;
   frame = requestAnimationFrame(() => {
     frame = 0;
+    // A new selection can start a reveal after this sync frame was queued.
+    if (performance.now() < holdUntil) return;
     const explained = currentDocument();
     if (!explained || !leanRows.length) return;
     if (from === 'prose') alignLean(explained); else alignProse(explained);

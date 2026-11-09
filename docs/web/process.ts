@@ -202,7 +202,7 @@ function roadmap(record: ArchiveIndexRecord, process: ArchiveProcess, run: Run, 
 
 export function renderArchiveProcess(record: ArchiveIndexRecord, process: ArchiveProcess, selection: ProcessSelection, locale: Locale, researchEvidence = ''): string {
   const run = selectedProcessRun(process, record, selection);
-  if (!run) return `<p class="process-empty">${choose(locale, '没有保存运行记录。', 'No run records were saved.')}</p>`;
+  if (!run) return `<div class="archive-process" data-process-layout="global"><div class="process-view-toolbar"><h4>${choose(locale, '证明源码路线', 'Proof source route')}</h4></div>${renderGlobalTrajectory(record, process, locale, value => processStatus(value, locale))}</div>`;
   const steps = stepsFor(run, record, locale);
   const filtered = steps.filter(step => (!selection.task || step.taskId === selection.task || ['acceptance', 'start', 'end'].includes(step.kind))
     && (selection.filter === 'all' || selection.filter === 'checks' && ['check', 'acceptance'].includes(step.kind)

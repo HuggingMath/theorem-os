@@ -16,7 +16,9 @@ const catalog = buildSiteCatalog(root, revision);
 const output = path.join(root, 'out/site');
 fs.mkdirSync(output, { recursive: true });
 await buildArchive(root, output, catalog);
-fs.copyFileSync(path.join(root, 'docs/process.css'), path.join(output, 'process.css'));
+fs.writeFileSync(path.join(output, 'process.css'), fs.readFileSync(path.join(root, 'docs/process.css'), 'utf8')
+  + '\n' + fs.readFileSync(path.join(root, 'apps/web/solutionRoute.css'), 'utf8')
+  + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
 const archiveVersions = archiveAssetVersions(output);
 await build({
   entryPoints: [path.join(root, 'docs/web/landing.ts')], outfile: path.join(output, 'landing.js'),

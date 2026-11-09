@@ -13,17 +13,20 @@ const output = path.join(root, 'out/web');
 const reports = path.join(root, 'out/web-report');
 fs.mkdirSync(output, { recursive: true });
 fs.mkdirSync(reports, { recursive: true });
-const bundle = (entry: string, directory: string, format?: 'esm') =>
+const bundle = (entry: string, directory: string) =>
   build({ entryPoints: [path.join(root, `apps/web/client/${entry}.ts`)], outfile: path.join(directory, `${entry}.js`),
     bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
-    jsx: 'automatic', jsxImportSource: 'preact', external: ['/math.js'], ...format ? { format } : {} });
+    jsx: 'automatic', jsxImportSource: 'preact', format: 'iife' });
 for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'legal', 'explain', 'formalize']) await bundle(entry, output);
-// KaTeX, imported by the chat when a formula first appears.
-await bundle('math', output, 'esm');
+// One classic script supports lazy formulas in online pages and self-contained offline reports.
+await bundle('math', output);
 await bundle('formalization', reports);
 fs.copyFileSync(path.join(root, 'apps/web/client/formalization.html'), path.join(reports, 'formalization.html'));
 for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['terms.html', 'terms.html'], ['privacy.html', 'privacy.html'], ['explain.html', 'explain.html'], ['app.css', 'app.css'], ['formalize.html', 'formalize.html'], ['formalize.css', 'formalize.css'], ['research-conversation.css', 'research-conversation.css']])
-  fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
+  if (source === 'app.css') fs.writeFileSync(path.join(output, destination), fs.readFileSync(path.join(root, 'apps/web/client', source), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/solutionRoute.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
+  else fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
 const fonts = ['InterVariable-latin.woff2', 'Inter-LICENSE.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
   'NotoSerifSC-ui.woff2', 'NotoSerifSC-ui-extra.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-ui-extra.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];

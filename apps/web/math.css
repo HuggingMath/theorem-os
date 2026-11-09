@@ -1,0 +1,11 @@
+/* KaTeX handles mathematical spacing and line breaks; wide indivisible expressions scroll inside their own box. */
+.math { display:inline-block; max-width:100%; vertical-align:middle; white-space:normal; overflow-x:auto; overflow-y:hidden; padding:2px 1px; margin:-2px -1px; line-height:1.5; text-indent:0; scrollbar-width:thin; overflow-wrap:normal; }
+.math > .katex { font-size:1.08em; }
+.math .katex-html { white-space:normal; }
+.math-display { display:block; margin:12px 0; padding:8px 2px; }
+.math-display > .katex-display { margin:0; }
+.math-display > .katex-display > .katex { text-align:center; }
+.math-source { display:inline; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--mono,monospace); font-size:.9em; color:inherit; }
+.solution-route-node .math,.solution-route-record-preview .math { vertical-align:baseline; }
+.solution-route-node .math-display { display:inline-block; padding:2px 1px; margin:-2px -1px; }
+@media print { .math { overflow:visible; } }

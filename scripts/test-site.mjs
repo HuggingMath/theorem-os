@@ -97,7 +97,9 @@ try {
   const titles = await page.locator('.row-title').allTextContents();
   assert.deepEqual(titles, [...titles].sort((a, b) => a.localeCompare(b, 'en')));
   await page.locator('[data-proof-id="annals_rademacher_enflo_type"]').click();
-  await page.keyboard.press('Enter');
+  await page.locator('[data-solution-route-state="ready"]').waitFor();
+  assert.equal(await page.locator('.solution-route').getAttribute('data-solution-route-basis'), 'source');
+  await page.locator('[data-action="back-list"]').first().click();
   await page.keyboard.press('ArrowDown');
   assert.notEqual(await page.locator('.proof-row.is-selected').getAttribute('data-proof-id'), 'annals_rademacher_enflo_type');
   await page.locator('[data-proof-id="annals_rademacher_enflo_type"]').click();
@@ -161,12 +163,20 @@ try {
     await page.getByRole('searchbox').fill('');
     await page.locator('[data-proof-id="hopf_rinow"]').click();
     if (viewport.width <= 700) {
-      assert.equal(await page.locator('#inspector').evaluate(element => document.activeElement === element), true);
-      assert.ok(Math.abs(await page.locator('#inspector').evaluate(element => element.getBoundingClientRect().top)) <= 1);
+      await page.locator('[data-solution-route-state="ready"]').waitFor();
+      assert.equal(await page.locator('.process-view-toolbar h4').evaluate(element => document.activeElement === element), true);
+      assert.ok(await page.locator('.process-view-toolbar').evaluate(element =>
+        Math.abs(element.getBoundingClientRect().top - parseFloat(getComputedStyle(element).scrollMarginTop)) <= 1),
+      'The route heading must reach its configured scroll clearance');
+      assert.ok(await page.locator('[data-solution-node]').first().evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth;
+      }), 'The first route node must be visible after opening the mobile source route');
       await page.locator('[data-action="back-list"]').first().click();
       assert.equal(await page.locator('[data-proof-id="hopf_rinow"]').evaluate(element => document.activeElement === element), true);
       await page.keyboard.press('Enter');
-      assert.equal(await page.locator('#inspector').evaluate(element => document.activeElement === element), true);
+      await page.locator('[data-solution-route-state="ready"]').waitFor();
+      assert.equal(await page.locator('.process-view-toolbar h4').evaluate(element => document.activeElement === element), true);
     }
     await page.getByRole('tab', { name: 'Lean 源码' }).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Source overflow at ${viewport.width}px`);

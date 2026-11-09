@@ -5,6 +5,7 @@ import { buildArchiveRoadmap, renderArchiveRoadmap, roadmapTone } from './proces
 import { processMessage, readableProcessText } from './processText';
 import { workflowNote } from './workflowNotes';
 import { renderProofWalkthrough, selectedProofWalkthrough } from './proofWalkthrough';
+import { renderArchiveSolutionRoute } from './archiveSolutionRoute';
 
 type Run = ArchiveProcess['runs'][number];
 type Check = NonNullable<Run['checks']>[number];
@@ -40,7 +41,7 @@ export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: Arch
   statusLabel: (value: string | undefined) => string, options: { run?: string; acceptance?: string; evidence?: string } = {}): string {
   const run = process.runs.find(item => item.runId === options.run)
     ?? process.runs.find(item => item.runId === record.campaign?.runId) ?? process.runs.at(-1);
-  if (!run) return '';
+  if (!run) return renderArchiveSolutionRoute(record);
   const walkthrough = selectedProofWalkthrough(record, process, run);
   const index = process.runs.indexOf(run), final = run.runId === record.campaign?.runId;
   const sharedSources = index ? retainedTaskSources(process.runs[index - 1]!, run) : 0;
@@ -104,6 +105,7 @@ export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: Arch
     <article class="global-workflow" data-global-selected-run="${html(run.runId)}"><header class="global-workflow-heading"><div><h5>${text(locale, `第 ${index + 1} 轮`, `Run ${index + 1}`)}</h5><span data-tone="${final ? 'passed' : roadmapTone(run.resultStatus ?? run.phase)}">${html(final ? text(locale, '本地验收通过', 'Locally accepted') : statusLabel(run.resultStatus ?? run.phase))}</span></div>
       <details class="global-history-panel"><summary>${text(locale, '历次运行', 'Recorded runs')}<span>${process.runs.length}</span></summary><div class="global-history-content"><p>${date(run.startedAt)}${run.startedAt ? ' UTC' : ''}${sharedSources ? ` · ${text(locale, `${sharedSources} 份检查源码与前轮相同`, `${sharedSources} checked sources match the previous run`)}` : ''}</p><nav class="global-history" aria-label="${text(locale, '历次运行', 'Recorded runs')}"><ol class="global-run-lanes">${process.runs.map((item, i) => `<li class="global-run-lane" data-global-run-id="${html(item.runId)}" data-final="${item.runId === record.campaign?.runId}"><button data-global-select="${html(item.runId)}" aria-pressed="${item === run}"><span>${text(locale, `第 ${i + 1} 轮`, `Run ${i + 1}`)}</span><strong>${html(shortStatus(item))}</strong>${icon('arrow-right')}</button></li>`).join('')}</ol></nav></div></details>
     </header>
+      ${renderArchiveSolutionRoute(record, run)}
       <nav class="global-workflow-stages" aria-label="${text(locale, '研究流程阶段', 'Workflow stages')}">${[
         ...stages,
         ['global-implementation', text(locale, '证明与检查', 'Proofs and checks')], ['global-review', text(locale, '审阅与验收', 'Review and acceptance')],

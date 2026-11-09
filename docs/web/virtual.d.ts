@@ -7,3 +7,9 @@ declare module 'virtual:proof-figures' {
   const version: string;
   export default version;
 }
+
+declare module 'virtual:solution-route' {
+  const version: string;
+  export default version;
+}
+declare module 'virtual:math' { const version: string; export default version; }

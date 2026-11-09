@@ -11,25 +11,48 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
   const data = path.join(output, 'data');
   fs.rmSync(data, { recursive: true, force: true });
   for (const directory of ['sources', 'process', 'proofs']) fs.mkdirSync(path.join(data, directory), { recursive: true });
+  const math = path.join(data, 'math.js');
+  await build({ entryPoints: [path.join(root, 'apps/web/client/math.ts')], outfile: math,
+    bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, legalComments: 'eof' });
+  const mathVersion = createHash('sha256').update(fs.readFileSync(math)).digest('hex').slice(0, 16);
+  fs.mkdirSync(path.join(output, 'assets/katex'), { recursive: true });
+  fs.cpSync(path.join(root, 'node_modules/katex/dist/fonts'), path.join(output, 'assets/katex/fonts'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'node_modules/katex/dist/katex.min.css'), path.join(output, 'assets/katex/katex.min.css'));
+  fs.mkdirSync(path.join(output, 'assets/licenses'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'node_modules/katex/LICENSE'), path.join(output, 'assets/licenses/katex-LICENSE.txt'));
   const figures = path.join(data, 'proof-figures.js');
   await build({
     entryPoints: [path.join(root, 'docs/web/proofFigureRuntime.ts')], outfile: figures,
     bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, charset: 'utf8', legalComments: 'eof',
   });
   const figuresVersion = createHash('sha256').update(fs.readFileSync(figures)).digest('hex').slice(0, 16);
+  const routes = path.join(data, 'solution-route.js');
+  await build({
+    entryPoints: [path.join(root, 'docs/web/solutionRouteRuntime.ts')], outfile: routes,
+    bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, charset: 'utf8', legalComments: 'eof',
+  });
+  const routesVersion = createHash('sha256').update(fs.readFileSync(routes)).digest('hex').slice(0, 16);
   await build({
     entryPoints: [path.join(root, 'docs/web/app.ts')], outfile: path.join(output, 'site.js'),
     bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, charset: 'utf8', legalComments: 'eof',
     plugins: [{ name: 'public-archive', setup(builder) {
-      builder.onResolve({ filter: /^virtual:(archive|proof-figures)$/ }, args => ({ path: args.path, namespace: 'public-archive' }));
+      builder.onResolve({ filter: /^virtual:(archive|proof-figures|solution-route|math)$/ }, args => ({ path: args.path, namespace: 'public-archive' }));
       builder.onLoad({ filter: /.*/, namespace: 'public-archive' }, args => ({
-        contents: JSON.stringify(args.path === 'virtual:archive' ? archiveIndex(catalog) : figuresVersion), loader: 'json',
+        contents: JSON.stringify(args.path === 'virtual:archive' ? archiveIndex(catalog) : args.path === 'virtual:proof-figures' ? figuresVersion : args.path === 'virtual:math' ? mathVersion : routesVersion), loader: 'json',
       }));
     } }],
   });
-  fs.writeFileSync(path.join(data, 'catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
+  // The complete original records remain portable. Derived route indexes load per problem instead of
+  // duplicating every historical source index in the aggregate catalog (and exceeding static asset limits).
+  const portable = { ...catalog, records: catalog.records.map(record => {
+    if (!record.process) return record;
+    const { sourceRoute: _sourceRoute, ...process } = record.process;
+    return { ...record, process };
+  }) };
+  fs.writeFileSync(path.join(data, 'catalog.json'), JSON.stringify(portable, null, 2) + '\n');
   for (const record of catalog.records) {
     fs.writeFileSync(path.join(data, 'sources', `${record.id}.js`), archiveSourceScript(record));
+    if (record.process) fs.writeFileSync(path.join(data, 'process', `${record.id}.js`), archiveProcessScript(record));
     if (!record.campaign) continue;
     const proofs = path.join(data, 'proofs', record.id);
     fs.mkdirSync(proofs, { recursive: true });
@@ -40,7 +63,6 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
     }
     for (const name of ['process.json', 'verification.json']) fs.copyFileSync(
       path.join(root, 'research/openai-math', record.campaign.target, name), path.join(proofs, name));
-    fs.writeFileSync(path.join(data, 'process', `${record.id}.js`), archiveProcessScript(record));
   }
 }
 

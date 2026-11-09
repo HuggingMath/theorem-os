@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, mathPieces, parseMath, proseAt, proseSegments, quotePieces, quoteRange, refLines, stepAtLine, wholeQuotes, type MathNode } from '../apps/web/client/explainText';
+import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, proseAt, proseSegments, quotePieces, quoteRange, refLines, stepAtLine, wholeQuotes } from '../apps/web/client/explainText';
 import type { WebExplanationDocument, WebExplanationSection } from '../apps/web/shared';
 
-// The explanation page's pure helpers: Lean line split, line ↔ step mapping, estimate, prose and TeX reading.
+// The explanation page's pure helpers: Lean lines, step mapping, estimates and source-preserving prose segments.
 const section = (name: string, start: number, end: number, steps: Omit<WebExplanationSection['steps'][number], 'reviews'>[],
   extra: { target?: boolean; signatureEnd?: number; unexplained?: number[] } = {}): WebExplanationSection =>
   ({ name, kind: extra.target ? 'theorem' : 'definition', target: extra.target ?? false, title: name, statement: '', lines: { start, end },
@@ -109,6 +109,61 @@ describe('prose segments', () => {
     expect(proseSegments('$a \\$ b$ ``x ` y``')).toEqual([{ kind: 'math', text: 'a \\$ b' }, { kind: 'text', text: ' ' }, { kind: 'code', text: 'x ` y' }]);
     expect(proseSegments('**')).toEqual([{ kind: 'text', text: '**' }]);
   });
+
+  it('reads complete legacy integral and braced-script expressions without changing their source', () => {
+    const integral = '∫_{Bₙ}F≥c(5rₙ/4)⁻²·π(rₙ/4)²=cπ/25>0';
+    expect(proseSegments(`${integral}；故 ∫_D F≥Σₙcπ/25=∞。`)).toEqual([
+      { kind: 'math', text: integral }, { kind: 'text', text: '；故 ' },
+      { kind: 'math', text: '∫_D F≥Σₙcπ/25=∞' }, { kind: 'text', text: '。' },
+    ]);
+    expect(proseSegments('We use M_{n+1}=F_n/(b*lam)^n, then stop.')).toEqual([
+      { kind: 'text', text: 'We use ' }, { kind: 'math', text: 'M_{n+1}=F_n/(b*lam)^n' }, { kind: 'text', text: ', then stop.' },
+    ]);
+    expect(proseSegments('∑_{vₖ³=a}vₖ=0。')).toEqual([{ kind: 'math', text: '∑_{vₖ³=a}vₖ=0' }, { kind: 'text', text: '。' }]);
+    const cauchySchwarz = '(EₚX−E_qX)²≤[Σᵧ|p−q|]·[Σᵧ|p−q|(X−c)²]≤2TV(p,q)·[Eₚ(X−c)²+E_q(X−c)²]';
+    expect(proseSegments(`${cauchySchwarz}。`)).toEqual([{ kind: 'math', text: cauchySchwarz }, { kind: 'text', text: '。' }]);
+  });
+
+  it('recognizes bare TeX commands, keeping following prose out of the formula', () => {
+    expect(proseSegments('先用 \\frac{a}{b} 得到 x≤y，再用 \\sum_{k=0}^{n} a_k。')).toEqual([
+      { kind: 'text', text: '先用 ' }, { kind: 'math', text: '\\frac{a}{b}' }, { kind: 'text', text: ' 得到 ' },
+      { kind: 'math', text: 'x≤y' }, { kind: 'text', text: '，再用 ' }, { kind: 'math', text: '\\sum_{k=0}^{n} a_k' },
+      { kind: 'text', text: '。' },
+    ]);
+    expect(proseSegments('Use \\left(\\frac{a}{b}\\right)^2 and \\text{对任意 n} x^{2}.')).toEqual([
+      { kind: 'text', text: 'Use ' }, { kind: 'math', text: '\\left(\\frac{a}{b}\\right)^2' }, { kind: 'text', text: ' and ' },
+      { kind: 'math', text: '\\text{对任意 n} x^{2}' }, { kind: 'text', text: '.' },
+    ]);
+  });
+
+  it.each([
+    'initial_goal_3 OAI.ThreeState.regular_supercritical source_digest',
+    'apps/web/source_digest.ts results/openai-math/abc123/Submission.lean',
+    '/tmp/M_{n+1}.lean M_{n+1}.lean a_{n}/proof.lean https://example.com/x^{2}',
+    'C:\\frac{a}{b} \\Users\\math\\proof.lean',
+    'commit a4c1fbf 7a6a6b5211777352a3945870e66a68c5276e23c5',
+    'Sₙ₊₁=Σ_children(Nₙ−Tₙ/3)=Σ_children Sₙ。',
+    'x^{2}+Σ_children x_i and e^(s/2)',
+    'x∈{0,1} and 1{i=1}−1/3',
+    'Normal English prose, sin and cos, files and commit messages.',
+  ])('leaves identifiers, paths and ambiguous notation as text: %s', text => {
+    expect(proseSegments(text)).toEqual([{ kind: 'text', text }]);
+  });
+
+  it.each(['$x^{2}', '$$\\frac{1}{2}', '$$x$', '\\(x^{2}', '\\[\\sum_{k=0}^{n}a_k'])('keeps an unfinished explicit formula entirely as source: %s', text => {
+    expect(proseSegments(text)).toEqual([{ kind: 'text', text }]);
+  });
+
+  it('preserves escaped dollars, code and bold before considering bare expressions', () => {
+    expect(proseSegments('价格 \\$5，$x^{2}$；`∫_{Bₙ}F` 与 ``\\frac{a}{b} $x$`` **x^{2}**。')).toEqual([
+      { kind: 'text', text: '价格 $5，' }, { kind: 'math', text: 'x^{2}' }, { kind: 'text', text: '；' },
+      { kind: 'code', text: '∫_{Bₙ}F' }, { kind: 'text', text: ' 与 ' }, { kind: 'code', text: '\\frac{a}{b} $x$' },
+      { kind: 'text', text: ' ' }, { kind: 'strong', text: 'x^{2}' }, { kind: 'text', text: '。' },
+    ]);
+    expect(proseSegments('$x^{2} `still code` \\frac{a}{b}')).toEqual([
+      { kind: 'text', text: '$x^{2} ' }, { kind: 'code', text: 'still code' }, { kind: 'text', text: ' \\frac{a}{b}' },
+    ]);
+  });
 });
 
 describe('linked prose', () => {
@@ -153,6 +208,35 @@ describe('linked prose', () => {
       { segments: [{ kind: 'text', text: '自然' }], link: 0, marked: true },
       { segments: [{ kind: 'math', text: 'n + 0 = n' }], marked: true }]);
     expect(runs.filter(run => run.link === 0).map(run => run.segments[0]!.text)).toEqual(['自然', '数']);
+  });
+
+  it('keeps raw UTF-16 link and mark ranges when a legacy expression follows a non-BMP character', () => {
+    const integral = '∫_{Bₙ}F≥cπ/25', recurrence = 'M_{n+1}=F_n/(b*lam)^n';
+    const text = `🧠 由 ${integral} 得到 ${recurrence}。`;
+    const inside = text.indexOf('Bₙ'), marked = text.indexOf('π'), recurrenceAt = text.indexOf(recurrence);
+    expect(text.indexOf(integral)).toBe(5);
+    const runs = linkedProse(text, [{ start: inside, end: inside + 1 }, { start: recurrenceAt + 4, end: recurrenceAt + 5 }],
+      [{ start: marked, end: marked + 1 }]);
+    expect(runs.filter(run => run.link !== undefined)).toEqual([
+      { segments: [{ kind: 'math', text: integral }], link: 0, marked: true },
+      { segments: [{ kind: 'math', text: recurrence }], link: 1 },
+    ]);
+    expect(flatten(runs)).toEqual(proseSegments(text));
+    expect(quoteRange(text, inside, inside + 1)).toEqual({ start: 5, end: 5 + integral.length });
+  });
+
+  it('keeps a phrase and its bare formula in one link and still splits plain identifier marks precisely', () => {
+    const formula = 'M_{n+1}=F_n/(b*lam)^n', text = `由 ${formula} 得到 source_digest`;
+    const identifier = text.indexOf('source_digest');
+    const runs = linkedProse(text, [{ start: 0, end: text.indexOf('n+1') + 1 }, { start: identifier, end: text.length }],
+      [{ start: identifier + 7, end: identifier + 10 }]);
+    expect(runs[0]).toEqual({ segments: [{ kind: 'text', text: '由 ' }, { kind: 'math', text: formula }], link: 0 });
+    expect(runs.filter(run => run.link === 1)).toEqual([
+      { segments: [{ kind: 'text', text: 'source_' }], link: 1 },
+      { segments: [{ kind: 'text', text: 'dig' }], link: 1, marked: true },
+      { segments: [{ kind: 'text', text: 'est' }], link: 1 },
+    ]);
+    expect(flatten(runs)).toEqual(proseSegments(text));
   });
 });
 
@@ -284,61 +368,5 @@ describe('whole quotes', () => {
     expect(coversAll('Prove that\n x = y.', 'Prove that x = y')).toBe(true);
     expect(coversAll('Prove that x = y.', 'that x = y')).toBe(false);
     expect(coversAll('Prove that x = y.', 'Prove that x = z')).toBe(false);
-  });
-});
-
-// A compact spelling of the parsed tree: [style], <role>, _{sub}, ^{sup}, frac{}{} (!bar when barless), table<open><close>.
-const show = (node: MathNode | undefined): string => {
-  if (!node) return '<fail>';
-  switch (node.type) {
-    case 'text': return `${node.text}${node.style ? `[${node.style}]` : ''}${node.role ? `<${node.role}>` : ''}`;
-    case 'row': return `(${node.children.map(show).join(' ')})${node.style ? `[${node.style}]` : ''}`;
-    case 'script': return `${show(node.base)}${node.sub ? `_{${show(node.sub)}}` : ''}${node.sup ? `^{${show(node.sup)}}` : ''}`;
-    case 'frac': return `frac{${show(node.top)}}{${show(node.bottom)}}${node.bar ? '' : '!bar'}`;
-    case 'sqrt': return `sqrt${node.index ? `[${show(node.index)}]` : ''}{${show(node.body)}}`;
-    case 'accent': return `accent(${show(node.body)}${node.mark})`;
-    case 'line': return `${node.position}line(${show(node.body)})`;
-    case 'stack': return `stack(${show(node.base)}|${show(node.note)})`;
-    case 'table': return `table${node.open}${node.close}:${node.rows.map(row => row.map(show).join(' & ')).join(' \\\\ ')}`;
-  }
-};
-
-describe('TeX reader', () => {
-  it.each([
-    ['x^2 + y_{i,j} \\le \\frac{1}{2}', '(x[italic]^{2[roman]} +<op> y[italic]_{(i[italic] ,<punct> j[italic])} ≤[roman]<op> frac{(1[roman])}{(2[roman])})'],
-    ["f'(x) = \\sum_{k=0}^{n} \\binom{n}{k}", '(f[italic]^{′[roman]} ([roman] x[italic] )[roman] =<op> ∑[roman]<big>_{(k[italic] =<op> 0[roman])}^{(n[italic])} (([roman] frac{(n[italic])}{(k[italic])}!bar )[roman]))'],
-    ['\\mathbb{R}^n \\to \\mathcal{F}', '(ℝ[roman]^{n[italic]} →[roman]<op> ℱ[roman])'],
-    ['\\sqrt[3]{x} \\ne \\hat{a}', '(sqrt[(3[roman])]{(x[italic])} ≠[roman]<op> a\u0302[italic])'],
-    ['\\text{对所有 } n \\in \\mathbb{N}, \\ n \\ge 0', '(对所有 [text] n[italic] ∈[roman]<op> ℕ[roman] ,<punct>   n[italic] ≥[roman]<op> 0[roman])'],
-    ['\\not\\in \\not= \\not\\perp', '(∉[roman]<op> ≠[roman]<op> ⊥̸[roman]<op>)'],
-    ['\\begin{cases} 1 & n = 0 \\\\ n & \\text{otherwise} \\end{cases}', '(table{:1[roman] & (n[italic] =<op> 0[roman]) \\\\ n[italic] & otherwise[text])'],
-    ['\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}', '(table():a[italic] & b[italic] \\\\ c[italic] & d[italic])'],
-    ['\\left( a \\right) \\operatorname{card} S', '(([roman] a[italic] )[roman] card[roman]<fn> S[italic])'],
-    ['\\{x \\mid x > 0\\}', '({[roman] x[italic] ∣[roman]<op> x[italic] ><op> 0[roman] }[roman])'],
-    ['\\overline{AB} \\cdot \\vec{v}', '(overline((AB[italic])) ⋅[roman]<op> v⃗[italic])'],
-    ['\\unknown{x}', '(\\unknown[roman] (x[italic]))'],
-  ])('reads %s', (source, tree) => expect(show(parseMath(source))).toBe(tree));
-
-  it('reads ordinary nesting', () => {
-    expect(parseMath(`${'\\frac{'.repeat(10)}a${'}{b}'.repeat(10)}`)).toBeDefined();
-  });
-
-  it.each([
-    ['a + b = c', ['a+', 'b=', 'c']],
-    ['-a = b', ['−a=', 'b']],
-    ['a := -b', ['a:=−b']],
-    ['f(a + b) = c, d', ['f(a+b)=', 'c,', 'd']],
-    ['\\{x \\mid x > 0\\} \\subseteq \\mathbb{N}', ['{x∣x>0}⊆', 'ℕ']],
-    ['\\left( a + b \\right)^2 = \\sum_{k} x_k', ['(a+b)2=', '∑kxk']],
-    ['x', ['x']],
-  ])('lets %s wrap only after a relation, operator or comma between operands outside brackets', (source, pieces) => {
-    const flat = (node: MathNode): string => node.type === 'text' ? node.text : node.type === 'row' ? node.children.map(flat).join('')
-      : node.type === 'script' ? [node.base, node.sub, node.sup].map(part => part ? flat(part) : '').join('') : '';
-    expect(mathPieces(parseMath(source)!).map(piece => piece.map(flat).join(''))).toEqual(pieces);
-  });
-
-  it('gives up on malformed, unbalanced or oversized input so the page shows the source', () => {
-    for (const source of ['x^{', '\\frac{1}', 'a}', '\\begin{cases} 1 \\end{pmatrix}', `${'{'.repeat(60)}x${'}'.repeat(60)}`, `${'\\hat'.repeat(60)}a`, 'x'.repeat(4001)])
-      expect(parseMath(source), source).toBeUndefined();
   });
 });

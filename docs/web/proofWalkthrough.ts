@@ -10,7 +10,7 @@ const label = (value: Localized, locale: Locale) => locale === 'en' ? value.en :
 const text = (locale: Locale, zh: string, en: string) => locale === 'en' ? en : zh;
 const stepId = (id: string) => `proof-derivation-${id}`;
 
-export function selectedProofWalkthrough(record: ArchiveIndexRecord, process: ArchiveProcess, run: Run): ProofWalkthrough | undefined {
+export function selectedProofWalkthrough(record: Pick<ArchiveIndexRecord, 'id' | 'campaign'>, process: ArchiveProcess, run: Run): ProofWalkthrough | undefined {
   const walkthrough = process.walkthrough;
   return walkthrough?.recordId === record.id && walkthrough.runId === run.runId && walkthrough.runId === record.campaign?.runId
     && walkthrough.proofSha256 === record.campaign.proofSha256 && process.sources?.[walkthrough.proofSha256] ? walkthrough : undefined;

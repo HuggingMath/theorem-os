@@ -2,6 +2,7 @@ import { isAdvisoryTask as advisory } from './tasks';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { mathGitResult } from '../math/mathGit';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { projectMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions } from '../math/leanSource';
@@ -17,8 +18,8 @@ import { captureDeliveryArtifacts, diagnoseUnbackedLeanClaims, validateDeliveryA
 import { validateLemmaRequests } from './taskProposals';
 import { routeBlockerBasis, type BlockerBasis } from './routeControl';
 import { attributeTaskReferences } from './taskReferenceAttribution';
-import { captureObligationSnapshot } from './obligationProgress';
 import { checkpointCandidate } from './researchEvidence';
+import { researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest } from './researchCheckpoints';
 import { inspectKnowledgeUses, type KnowledgeUse } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
 import { bindMathematicalGap, mathematicalGaps } from './mathematicalGaps';
@@ -28,7 +29,7 @@ import { taskConnectionCheckCurrent, taskInputsMissingFromSeed } from './taskCon
 import { hasLeanResourceLimitFailure, hasLeanSourceDiagnostic } from './proofReuse';
 import { assumableLemma, taskReferenceDependencies, assignmentDeliveryFile, markTaskReferences, markTaskAcceptance, hasTaskAcceptance, type CooperativeTask,
   type TaskAssignment, type TaskRecord, type CooperativeAction } from './tasks';
-import { digest, FailedTaskInput, bounded, deliveryInputFields } from './cooperationShared';
+import { digest, FailedTaskInput, bounded } from './cooperationShared';
 import { CooperationStatements } from './cooperationStatements';
 import { prepareResearchDelivery, ResearchAdmissionError, type ResearchSubmission } from './researchAdmission';
 import { settleResearch } from './researchRecords';
@@ -53,31 +54,16 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   abstract interrupted(worker: ResearchWorker, action: CooperativeAction): void;
   abstract rejected(action: CooperativeAction, feedback: string, commit?: string, incomplete?: boolean): void;
   private checkpointInputDigest(task: CooperativeTask, workerId: string) {
-    const versions = this.taskVersions();
-    const deliveries = [...new Set((this.archive.deliveries ?? []).filter(record => record.producer !== workerId &&
-      this.deliveryVisible(record, task, versions)).map(record => canonicalMathJson(deliveryInputFields(record))))].sort();
-    return mathDigest(canonicalMathJson({ taskDigest: digest(task), environmentDigest: this.input.state.environmentDigest,
-      problemReceiptDigest: this.input.state.problem.receiptDigest,
-      sourceDigest: ownedSourceDigest(this.input.state.problem, this.lead.worktree, this.archive.canonicalCommit!),
-      dependencies: captureObligationSnapshot(this.dependencies(task), { environmentDigest: this.input.state.environmentDigest }).digest,
-      deliveries }));
+    return researchCheckpointInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
+      environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest,
+      problem: this.input.state.problem, worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit! });
   }
   private checkpointLocalInputDigest(task: CooperativeTask, workerId: string) {
-    const dependencies = this.dependencies(task), relevant = new Set([task.id, ...dependencies.map(node => node.task.id)]);
-    const versions = this.taskVersions();
-    const deliveries = [...new Set((this.archive.deliveries ?? []).filter(record => record.producer !== workerId &&
-      this.deliveryVisible(record, task, versions) && (relevant.has(record.taskId ?? '') ||
-        record.dependencies.some(reference => reference.taskId === task.id))).map(record => canonicalMathJson({
-      ...deliveryInputFields(record), findingDigest: record.findingDigest,
-    })))].sort();
-    return mathDigest(canonicalMathJson({ taskDigest: digest(task),
-      basis: routeBlockerBasis(task, this.archive.tasks, this.input.state.environmentDigest, this.input.state.problem.receiptDigest),
-      dependencies: captureObligationSnapshot(dependencies, { environmentDigest: this.input.state.environmentDigest }).digest,
-      deliveries }));
+    return researchCheckpointLocalInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
+      environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest });
   }
   private checkpointOutputDigest(worktree: string, commit: string) {
-    return mathDigest(canonicalMathJson({ sourceDigest: ownedSourceDigest(this.input.state.problem, worktree, commit),
-      notesBlob: git(worktree, ['ls-tree', '--format=%(objectname)', commit, '--', 'RESEARCH.md']) }));
+    return researchCheckpointOutputDigest(this.input.state.problem, worktree, commit);
   }
   private leanSourceDigest(worktree: string, commit: string) {
     const key = `${worktree}\0${commit}`, cached = this.leanSourceDigests.get(key);
@@ -298,9 +284,20 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   }
   protected researchWorkspaceChanged(worker: ResearchWorker, node: TaskRecord) {
     const session = this.input.state.workers?.find(record => record.id === worker.id);
-    if (session?.sessionTaskId) return session.sessionTaskId !== node.task.id ||
-      Boolean(session.sessionTaskVersion && session.sessionTaskVersion !== digest(node.task));
-    if (session?.sessionStatementReview || session?.sessionRole && session.sessionRole !== 'researcher') return true;
+    if (session?.sessionTaskId && (session.sessionTaskId !== node.task.id ||
+        session.sessionTaskVersion && session.sessionTaskVersion !== digest(node.task))) return true;
+    if (!session?.sessionTaskId &&
+        (session?.sessionStatementReview || session?.sessionRole && session.sessionRole !== 'researcher')) return true;
+    // Restoring another task's draft can move HEAD behind this assignment's seed.
+    // Session metadata alone does not establish ownership of the current checkout.
+    if (node.assignment) {
+      const ancestry = mathGitResult(worker.worktree, ['merge-base', '--is-ancestor', node.assignment.seedCommit, 'HEAD'],
+        { maxBuffer: 4096 });
+      if (ancestry.error) throw ancestry.error;
+      if (ancestry.status === 1) return true;
+      if (ancestry.status !== 0) throw new Error('math_research_workspace_unavailable');
+    }
+    if (session?.sessionTaskId) return false;
     const checkpoint = this.archive.researchCheckpoints?.[node.task.id];
     return Boolean(checkpoint && checkpoint.outputDigest !==
       this.checkpointOutputDigest(worker.worktree, git(worker.worktree, ['rev-parse', 'HEAD'])));
@@ -321,9 +318,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
           throw new Error('math_research_draft_output_changed');
         captureDeliveryArtifacts({ problem, worktree: checkout, commit: draft.commit, assignment });
         return { notes: git(checkout, ['ls-tree', '--format=%(objectname)', draft.commit, '--', 'RESEARCH.md'])
-          ? committedSource(checkout, draft.commit, 'RESEARCH.md') : '',
-          sources: new Map(problem.ownedFiles.map(file => [file,
-            committedSource(checkout, draft.commit, `${problem.projectRelative}/${file}`)])),
+          ? committedSource(checkout, draft.commit, 'RESEARCH.md') : undefined,
           canonicalSourceDigest: ownedSourceDigest(problem, checkout, draft.canonicalCommit ?? draft.seedCommit) };
       });
       if (!this.archive.tasks.includes(node) || node.assignment !== assignment || digest(node.task) !== draft.taskDigest ||
@@ -340,9 +335,14 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '');
         const seedCommit = this.seed(worker, this.archive.canonicalCommit!, node.task);
         node.assignment = { ...assignment, assignmentId: crypto.randomUUID(), seedCommit, canonicalCommit: this.archive.canonicalCommit };
-      } else for (const [file, source] of saved.sources)
-        fs.writeFileSync(path.join(worker.worktree, problem.projectRelative, file), source);
-      fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), saved.notes);
+      } else {
+        // Restore the validated snapshot so its frozen seed remains an ancestor.
+        git(worker.worktree, ['reset', '--hard', draft.commit]);
+      }
+      // Preserve the distinction between missing notes and an empty tracked file.
+      const notesFile = path.join(worker.worktree, 'RESEARCH.md');
+      if (saved.notes === undefined) fs.rmSync(notesFile, { force: true });
+      else fs.writeFileSync(notesFile, saved.notes);
       const commit = commitSolverSources(problem, worker.worktree);
       this.preserveResearchDraft(worker, { kind: 'task', task: node.task, assignment: node.assignment! }, commit,
         captureDeliveryArtifacts({ problem, worktree: worker.worktree, commit, assignment: node.assignment! }));

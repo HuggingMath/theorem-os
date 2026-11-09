@@ -39,16 +39,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (call.method === 'initialize') result({});
   if (call.method === 'thread/start' || call.method === 'thread/resume') {
     settings = call.params;
-    if (settings.developerInstructions === 'startup-crash') return process.exit(27);
-    if (settings.developerInstructions === 'mutate-profile') {
+    const fixtureInstruction = settings.developerInstructions.split(String.fromCharCode(10))[0];
+    if (fixtureInstruction === 'startup-crash') return process.exit(27);
+    if (fixtureInstruction === 'mutate-profile') {
       const config = process.env.CODEX_HOME + '/config.toml';
       fs.writeFileSync(config + '.updated', fs.readFileSync(config, 'utf8') + '\\n[projects.fixture]\\ntrust_level = "trusted"\\n');
       fs.renameSync(config + '.updated', config);
     }
-    result({ thread: { id: settings.developerInstructions === 'wrong-thread' ? 'wrong-thread' : settings.threadId || 'thread-fixture' },
-      model: settings.developerInstructions === 'mismatch' ? 'wrong-model' : settings.model,
-      modelProvider: settings.developerInstructions === 'wrong-provider' ? 'wrong-provider' : settings.config.model_provider,
-      ...(settings.developerInstructions === 'ignore-permissions' ? {} : { activePermissionProfile: { id: settings.config.default_permissions } }),
+    result({ thread: { id: fixtureInstruction === 'wrong-thread' ? 'wrong-thread' : settings.threadId || 'thread-fixture' },
+      model: fixtureInstruction === 'mismatch' ? 'wrong-model' : settings.model,
+      modelProvider: fixtureInstruction === 'wrong-provider' ? 'wrong-provider' : settings.config.model_provider,
+      ...(fixtureInstruction === 'ignore-permissions' ? {} : { activePermissionProfile: { id: settings.config.default_permissions } }),
       approvalPolicy: settings.approvalPolicy, reasoningEffort: settings.config.model_reasoning_effort });
   }
   if (call.method === 'mcpServerStatus/list') result({ data: Object.keys(settings.config.mcp_servers)
@@ -57,6 +58,33 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (call.method === 'turn/start') {
     turn = { id: call.params.clientUserMessageId, status: 'inProgress' };
     const message = call.params.input[0].text;
+    const notify = (method, extra, threadId = settings.threadId || 'thread-fixture') => send({ method,
+      params: { threadId, turnId: turn.id, ...extra } });
+    const foreignOutput = () => {
+      notify('item/completed', { turnId: 'previous-turn', item: { id: 'old-answer', type: 'agentMessage', text: 'old output' } });
+      notify('item/completed', { turnId: 'previous-turn', item: { id: 'old-file', type: 'fileChange', changes: [] } });
+      notify('item/started', { item: { id: 'other-command', type: 'commandExecution' } }, 'other-thread');
+    };
+    if (message === 'output:internal') {
+      for (const type of ['userMessage', 'reasoning', 'contextCompaction', 'plan'])
+        notify('item/completed', { item: { id: type, type, text: 'internal context' } });
+      notify('item/completed', { item: { id: 'blank-answer', type: 'agentMessage', text: '  ' } });
+      notify('item/reasoning/textDelta', { delta: 'private reasoning' });
+      notify('item/agentMessage/delta', { delta: '  ' });
+    }
+    if (message === 'output:foreign') foreignOutput();
+    if (message === 'output:agent-item')
+      notify('item/completed', { item: { id: 'answer', type: 'agentMessage', text: 'Proof saved.' } });
+    if (message === 'output:agent-delta') notify('item/agentMessage/delta', { delta: 'Proof saved.' });
+    if (message === 'output:command-delta') notify('item/commandExecution/outputDelta', { itemId: 'tool', delta: 'saved' });
+    if (['output:tool', 'output:file', 'output:completion-items'].includes(message)) {
+      const file = message.slice(7) + '-proof.lean';
+      fs.writeFileSync(path.join(settings.cwd, file), 'example : True := by trivial');
+      const item = message === 'output:tool' ? { id: 'writer', type: 'commandExecution', exitCode: 0 } :
+        { id: 'writer', type: 'fileChange', changes: [{ path: file, kind: { type: 'add' } }] };
+      if (message === 'output:completion-items') turn.items = [item];
+      else notify('item/completed', { item });
+    }
     if (message === 'temporary-file') {
       const temporaryDirectory = settings.config['shell_environment_policy.set']?.TMPDIR || process.env.TMPDIR;
       fs.writeFileSync(path.join(temporaryDirectory, call.params.clientUserMessageId + '.txt'), 'temporary fixture');
@@ -71,7 +99,6 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (message === 'noise') for (let i = 0; i < 100; i++) send({ method: 'turn/completed', params: {
       threadId: settings.threadId || 'thread-fixture', turn: { id: 'unrelated-' + i, status: 'failed' } } });
     if (message === 'activity') {
-      const notify = (method, extra, threadId = settings.threadId || 'thread-fixture') => send({ method, params: { threadId, ...extra } });
       notify('item/started', { item: { id: 'unrelated', type: 'commandExecution', command: 'secret' } }, 'other-thread');
       notify('item/started', { item: { id: 'tool', type: 'commandExecution', command: 'secret' } });
       for (let i = 0; i < 100; i++) notify('item/commandExecution/outputDelta', { itemId: 'tool', delta: 'secret output' });
@@ -82,7 +109,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       for (let i = 0; i < 100; i++) notify('item/reasoning/textDelta', { delta: 'private reasoning' });
     }
     if (message !== 'wait') {
-      send({ method: 'thread/tokenUsage/updated', params: { threadId: settings.threadId || 'thread-fixture', tokenUsage: { total: { totalTokens: 21 }, last: { inputTokens: 12345 } } } });
+      send({ method: 'thread/tokenUsage/updated', params: { threadId: settings.threadId || 'thread-fixture', tokenUsage: {
+        total: process.env.THEOREM_OS_FIXTURE_ZERO_USAGE === '1' ? { totalTokens: 0, outputTokens: 0 } : { totalTokens: 21 },
+        last: { inputTokens: 12345 } } } });
       const structured = {
         'public-failure': process.env.THEOREM_OS_FIXTURE_PUBLIC_FAILURE_ERROR
           ? JSON.parse(process.env.THEOREM_OS_FIXTURE_PUBLIC_FAILURE_ERROR) : undefined,
@@ -100,10 +129,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         'structured-multiple': { message: 'private provider diagnostic', codexErrorInfo: { unauthorized: {}, private: {} } },
       }[message];
       const failed = Boolean(structured) || ['rate-limit', 'late-rate-limit', 'stream-disconnected'].includes(message);
-      const complete = () => send({ method: 'turn/completed', params: { threadId: settings.threadId || 'thread-fixture', turn: { ...turn,
-        status: failed ? 'failed' : 'completed', ...(failed ? { error: structured || { message: message === 'stream-disconnected'
-          ? 'stream disconnected before completion: error sending request' : 'Concurrency limit exceeded for account' } } : {}) } } });
-      if (message === 'late-rate-limit') setImmediate(complete);
+      if (!failed && message !== 'activity' && !message.startsWith('output:'))
+        notify('item/completed', { item: { id: 'answer', type: 'agentMessage', text: 'Fixture response.' } });
+      const complete = () => {
+        if (message === 'output:late-agent')
+          notify('item/completed', { item: { id: 'answer', type: 'agentMessage', text: 'Proof saved.' } });
+        if (message === 'output:late-foreign') foreignOutput();
+        send({ method: 'turn/completed', params: { threadId: settings.threadId || 'thread-fixture', turn: { ...turn,
+          status: failed ? 'failed' : 'completed', ...(failed ? { error: structured || { message: message === 'stream-disconnected'
+            ? 'stream disconnected before completion: error sending request' : 'Concurrency limit exceeded for account' } } : {}) } } });
+      };
+      if (['late-rate-limit', 'output:late-agent', 'output:late-foreign'].includes(message)) setImmediate(complete);
       else complete();
     }
     result({ turn });
@@ -234,6 +270,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       .map(line => JSON.parse(line)).find(call => call.method === 'thread/resume');
     expect(resume.params.config).toMatchObject({ allow_login_shell: false, 'features.shell_snapshot': false,
       'shell_environment_policy.experimental_use_profile': false });
+    expect(resume.params.developerInstructions).toContain(selected.instructions);
+    expect(resume.params.developerInstructions).toContain('"login": false');
     expect(await session.run('proof', 'resumed-turn', root, () => {})).toBe('completed');
     expect(profileDigest(profile)).toBe(digest);
   });
@@ -288,6 +326,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       'features.apps': false, 'features.plugins': false,
     });
     const start = calls.find(call => call.method === 'thread/start').params;
+    expect(start.config.allow_login_shell).toBe(false);
+    expect(start.developerInstructions).toContain(options.instructions);
+    expect(start.developerInstructions).toContain('"login": false');
     expect(start.config.mcp_servers.unrelated).toEqual({ enabled: false });
     expect(Object.keys(start.config.mcp_servers)).toEqual(['unrelated']);
     expect(calls.some(call => call.method === 'mcpServerStatus/list')).toBe(false);
@@ -353,6 +394,35 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(items).toEqual([['started', { id: 'tool', type: 'commandExecution', command: 'secret' }],
       ['completed', { id: 'tool', type: 'commandExecution', aggregatedOutput: 'secret' }]]);
   });
+
+  it.each(['output:empty', 'output:internal', 'output:foreign', 'output:late-foreign'])(
+    'routes %s through request recovery without reusing output from an earlier turn', async message => {
+      const proof = path.join(root, 'Submission.lean');
+      fs.writeFileSync(proof, 'example : True := by sorry');
+      session = await createCodexMathSession(options);
+      expect(await session.run('proof', 'previous-turn', root, () => {})).toBe('completed');
+      expect(await session.run(message, 'empty-turn', root, () => {})).toBe('failed');
+      expect(session.lastError).toBe('upstream request failed: completed turn had no assistant output or tool operation');
+      expect(session.lastFailureDiagnostic).toEqual({ code: 'other', reason: 'upstream_request_failed' });
+      expect(fs.readFileSync(proof, 'utf8')).toBe('example : True := by sorry');
+      expect(await session.run('proof', 'recovered-turn', root, () => {})).toBe('completed');
+      expect(session.lastError).toBeUndefined();
+      expect(session.lastFailureDiagnostic).toBeUndefined();
+    });
+
+  it.each(['output:agent-item', 'output:agent-delta', 'output:late-agent', 'output:command-delta',
+    'output:tool', 'output:file', 'output:completion-items'])(
+    'accepts %s even when the provider reports zero output tokens and there is no final message', async message => {
+      vi.stubEnv('THEOREM_OS_FIXTURE_ZERO_USAGE', '1');
+      session = await createCodexMathSession(options);
+      expect(await session.run(message, 'output-turn', root, () => {})).toBe('completed');
+      expect(options.onUsage).toHaveBeenCalledWith({ totalTokens: 0, outputTokens: 0 }, {});
+      expect(session.lastError).toBeUndefined();
+      expect(session.lastFailureDiagnostic).toBeUndefined();
+      if (['output:tool', 'output:file', 'output:completion-items'].includes(message))
+        expect(fs.readFileSync(path.join(root, message.slice(7) + '-proof.lean'), 'utf8'))
+          .toBe('example : True := by trivial');
+    });
 
   it('rejects an invalid proof environment before launching the app-server', async () => {
     await expect(createCodexMathSession({ ...options, proofProjectRoot: root,

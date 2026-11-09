@@ -81,6 +81,28 @@ export const versionDeliveryKey = (taskId: string, commit: string) => `${taskId}
 // own Lean outcome already says it.
 const hostProofNote = 'Fixed declaration checked; unresolved lemma assumptions remain obligations.';
 
+/** A commit may be submitted again after a task revision. Receipts bind its explanation to the check that used it. */
+export function proofDeliveryLookup(deliveries: Iterable<TrajectoryDelivery>) {
+  const byVersion = new Map<string, TrajectoryDelivery[]>();
+  for (const delivery of deliveries) if (delivery.kind === 'proof' && delivery.taskId && delivery.commit) {
+    const key = versionDeliveryKey(delivery.taskId, delivery.commit), candidates = byVersion.get(key) ?? [];
+    candidates.push(delivery); byVersion.set(key, candidates);
+  }
+  return (taskId: string, ref?: TrajectoryRef): TrajectoryDelivery | undefined => {
+    if (!ref) return;
+    const candidates = byVersion.get(versionDeliveryKey(taskId, ref.version.commit)) ?? [];
+    const receipts = new Set(ref.check?.receiptIds ?? []);
+    const matches = receipts.size ? candidates.filter(delivery =>
+      delivery.evidence?.verification.results.some(result => receipts.has(result.receiptId))) : [];
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1 || candidates.length !== 1) return;
+    const candidate = candidates[0]!;
+    // Older saved submissions may lack receipt links. A unique version is usable only without conflicting evidence.
+    if (receipts.size && candidate.evidence?.verification.results.length) return;
+    return candidate;
+  };
+}
+
 /**
  * The run as mathematical steps, oldest first: reading the problem, the plan and its revisions, each Agent's attempt at
  * each task with its Lean outcome and the version it checked, human edits and guidance, reviews, the assembled proof
@@ -115,10 +137,11 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     for (let position = firstAt(at + 1) - 1; position >= 0; position--) if (slots[position]!.version.taskId === taskId) return slots[position];
   };
   const refOf = (slot: Slot | undefined): TrajectoryRef | undefined => slot && { version: slot.version, check: slot.check };
-  const notes = new Map<string, string>();
-  for (const delivery of data.deliveries.values()) if (delivery.kind === 'proof' && delivery.taskId && delivery.commit && delivery.summary && delivery.summary !== hostProofNote)
-    notes.set(versionDeliveryKey(delivery.taskId, delivery.commit), delivery.summary);
-  const noteOf = (taskId: string, ref?: TrajectoryRef) => ref && notes.get(versionDeliveryKey(taskId, ref.version.commit));
+  const deliveryFor = proofDeliveryLookup(data.deliveries.values());
+  const noteOf = (taskId: string, ref?: TrajectoryRef) => {
+    const summary = deliveryFor(taskId, ref)?.summary;
+    return summary && summary !== hostProofNote ? summary : undefined;
+  };
   const lead = data.context.workers.find(worker => worker.role === 'lead')?.id;
 
   const steps: TrajectoryStep[] = [];
@@ -230,12 +253,10 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
   inputs.sort((a, b) => a.at - b.at || a.order - b.order || a.sequence - b.sequence);
   for (const item of inputs) item.run();
 
-  // Checked versions that no event accounts for (their events rotated out, or were never recorded) are attempts too.
-  const accounted = new Set(slots.filter(slot => slot.used).map(slot => slot.version.key));
-  for (const step of steps) if ((step.kind === 'attempt' || step.kind === 'proof') && step.ref) accounted.add(step.ref.version.key);
-  for (const version of data.versions.values()) {
-    const check = version.checks[0];
-    if (accounted.has(version.key) || !check) continue;
+  // Every unconsumed check is an attempt of its own, even when the same commit was checked more than once.
+  // Assembly, integration and rechecks already consumed their slots; reusing a receipt does not consume a new check.
+  for (const { version, check, used } of slots) {
+    if (used) continue;
     steps.push({ kind: 'attempt', at: check.at, taskId: version.taskId, workerId: owners.get(version.taskId), number: 0,
       outcome: check.passed ? 'passed' : 'failed', ref: { version, check }, reused: false, integrated: false, note: noteOf(version.taskId, { version, check }) });
   }

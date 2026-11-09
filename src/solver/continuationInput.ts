@@ -7,7 +7,8 @@ import { assertMathCanonicalPath } from '../math/paths';
 import type { ContextSection } from './contextCompiler';
 import { largestFittingPage, splitsSurrogate } from './textPage';
 
-const maxAttachmentBytes = 16_000_000, maxTotalBytes = 64_000_000, maxManifestBytes = 1_000_000;
+export const MAX_CONTINUATION_ATTACHMENT_BYTES = 16_000_000;
+const maxTotalBytes = 64_000_000, maxManifestBytes = 1_000_000;
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const provenance = z.object({
   source: z.string().min(1).max(1000).optional(),
@@ -21,7 +22,7 @@ const attachment = z.object({
   id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u),
   kind: z.enum(continuationAttachmentKinds),
   path: z.string().min(1).max(4096).refine(value => !value.includes('\0')),
-  bytes: z.number().int().min(0).max(maxAttachmentBytes), sha256: digest, provenance,
+  bytes: z.number().int().min(0).max(MAX_CONTINUATION_ATTACHMENT_BYTES), sha256: digest, provenance,
 }).strict();
 const identity = { taskDigest: digest, problemReceiptDigest: digest };
 const inputSchema = z.object({ schema: z.literal('theorem-os.continuation-input.v1'), ...identity,

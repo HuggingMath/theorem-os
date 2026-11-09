@@ -15,7 +15,8 @@ if (process.env.FIXTURE_EXIT?.startsWith('shutdown-')) process.on('SIGTERM', () 
 });
 if (process.env.FIXTURE_EXIT === 'complete-on-term') process.on('SIGTERM', () => {
   send({ method: 'thread/tokenUsage/updated', params: { threadId: 'lifecycle-thread', turnId: turn.id, tokenUsage: { total: { totalTokens: 7 } } } });
-  send({ method: 'turn/completed', params: { threadId: 'lifecycle-thread', turn: { ...turn, status: 'completed' } } });
+  send({ method: 'turn/completed', params: { threadId: 'lifecycle-thread', turn: { ...turn, status: 'completed',
+    items: [{ id: 'final-' + turn.id, type: 'agentMessage', text: 'Completed before shutdown.' }] } } });
   setImmediate(() => process.exit(0));
 });
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -38,7 +39,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       }
       reply({ turn });
       send({ method: 'thread/tokenUsage/updated', params: { threadId: 'lifecycle-thread', turnId: turn.id, tokenUsage: { total: { totalTokens: 7 } } } });
-      send({ method: 'turn/completed', params: { threadId: 'lifecycle-thread', turn: { ...turn, status: 'completed' } } });
+      send({ method: 'turn/completed', params: { threadId: 'lifecycle-thread', turn: { ...turn, status: 'completed',
+        items: [{ id: 'final-' + turn.id, type: 'agentMessage', text: 'Completed before shutdown.' }] } } });
       if (process.env.FIXTURE_EXIT === 'shutdown-eof') process.stdout.end();
       return;
     }
@@ -51,7 +53,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (process.env.FIXTURE_EXIT === 'buffered') {
       reply({ turn });
       send({ method: 'thread/tokenUsage/updated', params: { threadId: 'lifecycle-thread', turnId: turn.id, tokenUsage: { total: { totalTokens: 7 } } } });
-      send({ method: 'turn/completed', params: { threadId: 'lifecycle-thread', turn: { ...turn, status: 'completed' } } });
+      send({ method: 'turn/completed', params: { threadId: 'lifecycle-thread', turn: { ...turn, status: 'completed',
+        items: [{ id: 'final-' + turn.id, type: 'agentMessage', text: 'Completed before shutdown.' }] } } });
       process.exit(0);
     }
     return reply({ turn });

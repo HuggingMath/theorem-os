@@ -17,7 +17,8 @@ const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const record = (event, extra = {}) => fs.appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event, ...extra }) + '\n');
 const finish = status => {
   if (finished) return; finished = true;
-  send({ method: 'turn/completed', params: { threadId: 'notice-thread', turn: { id: turn, status } } });
+  send({ method: 'turn/completed', params: { threadId: 'notice-thread', turn: { id: turn, status,
+    ...(status === 'completed' ? { items: [{ id: 'final-' + turn, type: 'agentMessage', text: 'Completed fixture turn.' }] } : {}) } } });
 };
 const request = async () => {
   controller = new AbortController();
