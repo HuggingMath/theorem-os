@@ -13,7 +13,7 @@ import * as knowledgeApplications from '../src/solver/knowledgeApplications';
 import { buildResearchContext, finalizeResearchDispatch, type ContextAccess } from '../src/solver/modules/context';
 import { readSolverProblem } from '../src/solver/problem';
 import { libraryKnowledgeCandidates } from '../src/solver/theoremKnowledgeLibrary';
-import { taskVersion, type CooperativeAction, type TaskRecord } from '../src/solver/tasks';
+import { leadPlanDeliveryFile, taskVersion, type CooperativeAction, type TaskRecord } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
 
 const roots: string[] = [];
@@ -400,6 +400,43 @@ describe('installed library retrieval in actual task context', () => {
     const action = { kind } as CooperativeAction;
     expect(installedLibraryContextSections({ problem: f.problem, cooperation: f.state.cooperation, action,
       library: f.library, taskText: 'Use Frozen.Arithmetic.add_comm.', environmentDigest })).toEqual([]);
+  });
+
+  it.each([false, true])('keeps complete read-only library and knowledge retrieval in Lead planning (continuation=%s)', continuation => {
+    const f = fixture(), history = { ...f.library, digest: mathDigest('lead-historical-catalog') };
+    const assignment: Extract<CooperativeAction, { kind: 'lead' }> = { kind: 'lead', seedCommit: f.problem.baseCommit,
+      planVersion: 'current-plan', planNonce: 'lead-dispatch' };
+    const context = finalizeResearchDispatch(buildResearchContext(f.problem, { ...f.state, knowledgeDigest: history.digest }, {
+      ...f.access, assignment, knowledgeFile: path.join(f.root, 'historical.json'), knowledgeDigest: history.digest,
+      knowledgeSnapshot: history, libraryCatalog: { file: path.join(f.root, 'library-catalog.json'), digest: f.library.digest },
+    }), { continuation });
+    expect(context.instructions).toContain('knowledge search --catalog');
+    expect(context.instructions).toContain('knowledge get --catalog');
+    expect(context.instructions).toContain('knowledge dependencies --catalog');
+    expect(context.instructions).toContain('knowledge consumers --catalog');
+    expect(context.instructions).toContain('knowledge source --catalog');
+    expect(context.instructions).toContain(path.join(f.root, 'historical.json'));
+    expect(context.instructions).toContain(history.digest);
+    expect(context.instructions).toContain("--field 'FIELD_NAME' --offset OFFSET");
+    expect(context.instructions).toContain('following nextOffset until truncated:false');
+    expect(context.instructions).toContain('library search --worktree');
+    expect(context.instructions).toContain('library get --worktree');
+    expect(context.instructions).toContain('Follow source.nextOffset with --offset until source.complete is true');
+    expect(context.instructions).toContain('Do not adapt, import or redeclare them during planning');
+    expect(context.instructions).toContain('do not import, request or copy modules during planning');
+    expect(context.instructions).toContain('assigned workers perform source adaptation and Lean application checks');
+    expect(context.instructions).toContain('respect the frozen assumptions');
+    expect(context.instructions).toContain('intended consumer and exact remaining inference');
+    for (const writableAdvice of ['library request --worktree', 'adapt only needed declarations',
+      'You may add explicit Mathlib.* imports', 'Add helpers in owned modules', 'check-lean --workspace',
+      'add application:{expression:']) expect(context.instructions).not.toContain(writableAdvice);
+    expect(context.instructions.split('\n').find(line => line.startsWith('Edit only ')))
+      .toBe(`Edit only ${path.join(f.receipt.workspaceRoot, 'RESEARCH.md')}, ${path.join(f.receipt.workspaceRoot, leadPlanDeliveryFile(assignment)!)}.`);
+    expect(packets(context.message)).toHaveLength(1);
+    expect(packets(context.message)[0].candidates[0]).toMatchObject({ name: 'Frozen.Arithmetic.add_comm',
+      import: 'import Submission.Library.Arithmetic.Commutativity', check: '#check Frozen.Arithmetic.add_comm' });
+    expect(context.assignment).toEqual(assignment);
+    expect(context.workContract).toMatchObject({ stage: 'route-planning', sourcePolicy: 'host-checks-any-source-repair' });
   });
 
   it('keeps complete pinned knowledge and library reads available to a fixed reviewer without proof-writing instructions', () => {

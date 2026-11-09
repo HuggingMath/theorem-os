@@ -63,15 +63,18 @@ it('names the bundled Agent commands instead of the application when the shell c
   expect(bundled).not.toContain('/opt/app');
 });
 
-it.each([false, true])('asks the Lead to return executable work promptly on every decision (existing graph: %s)', existing => {
+it.each([false, true])('keeps the Lead on read-only planning and prompt delivery (existing graph: %s)', existing => {
+  const formal = 'theorem target (P : Prop) (h : P) : P := by sorry';
+  const frozen = 'theorem target (P : Prop) (h : P) : P := /- body omitted -/';
+  const taskText = 'Restore the proof, run a fresh Lean check, publish a plan and wait for mathematician approval.';
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
-    baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
+    baseCommit: 'fixed-commit', contract: { formalStatement: formal, assumptions: [] } } as unknown as SolverProblem;
   const task: CooperativeTask = { id: 'core', kind: 'lemma', objective: 'Prove the core lemma.',
     dependsOn: [], revision: 0, theoremName: 'core', proofPath: 'Submission.lean', type: 'True' };
   const state = { cooperation: { tasks: existing ? [{ task, status: 'pending', attempts: 0 }] : [] } } as unknown as SolverRunState;
   const dispatchNonce = existing ? 'revision-dispatch-nonce' : 'initial-dispatch-nonce';
   const context = buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
-    taskText: 'Prove the target', retrievalRoot: '/library', frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' },
+    taskText, retrievalRoot: '/library', frozenContexts: { 'Submission.lean': frozen },
     assignment: { kind: 'lead', seedCommit: 'fixed-commit', planVersion: 'current-plan',
       ...(existing ? { planNonce: dispatchNonce } : { initialPlanNonce: dispatchNonce }) } });
   expect(context.instructions).toContain('Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it.');
@@ -86,12 +89,68 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
     expect(message).toContain('Explicitly reassign an unstarted, unassigned task through the plan');
     expect(message).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
   }
-  expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
-  const editScope = context.instructions.split('\n').find(line => line.startsWith('Edit only '));
-  expect(editScope).toContain('/proof/' + leadPlanDeliveryFile(context.assignment as Extract<CooperativeAction, { kind: 'lead' }>));
+  const log = leadPlanDeliveryFile(context.assignment as Extract<CooperativeAction, { kind: 'lead' }>);
+  expect(context.workContract).toMatchObject({ stage: 'route-planning', sourcePolicy: 'host-checks-any-source-repair' });
+  expect(context.message).toContain(taskText);
+  expect(context.message).toContain(formal);
+  expect(context.message).toContain(frozen);
+  for (const continuation of [false, true]) {
+    const dispatched = finalizeResearchDispatch(context, { continuation });
+    expect(dispatched.instructions.split('\n').find(line => line.startsWith('Edit only ')))
+      .toBe(`Edit only /proof/RESEARCH.md, /proof/${log}.`);
+    expect(dispatched.instructions).toContain('Develop a mathematically plausible route from the exact original statement, definitions and relevant saved findings');
+    expect(dispatched.instructions).toContain('put a direct original-goal task in the graph; the assigned worker carries out its proof');
+    expect(dispatched.instructions).toContain('Return the plan without running Lean diagnostics');
+    expect(dispatched.instructions).toContain('Leave all Lean source files, imports and environment configuration unchanged');
+    expect(dispatched.instructions).toContain('names, parameters, types, assumptions, existing imports');
+    expect(dispatched.instructions).toContain('Plan a shared helper before its consumers when needed; assigned workers implement it');
+    expect(dispatched.instructions).toContain('only a further substantive change requires another final plan response');
+    for (const writableAdvice of ['bodies must be filled', 'You may add explicit Mathlib.* imports', 'Add helpers in owned modules',
+      'For diagnostics, run', 'check-lean --workspace', 'proof-search --workspace', 'Repair the earliest error',
+      'restore the offending context', 'For type lookup, add single-name #check'])
+      expect(dispatched.instructions).not.toContain(writableAdvice);
+    expect(dispatched.message).toContain(JSON.stringify(context.assignment));
+    expect(dispatched.message).toContain(JSON.stringify(context.workContract));
+    expect(dispatched.workContract).toEqual(context.workContract);
+    expect(dispatched.manifest!.usedBytes).toBeLessThanOrEqual(dispatched.manifest!.maxBytes);
+  }
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
   for (const message of [context.instructions, context.continuationMessage])
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
+});
+
+it.each(['append', 'replace'] as const)('retains custom Lead strategies and installed mathematics tools (%s)', mode => {
+  const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
+    baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
+  const context = buildResearchContext(problem, { cooperation: { tasks: [] } } as unknown as SolverRunState, {
+    root: '/runtime', worktree: '/proof', taskText: 'Prove the target', retrievalRoot: '/library',
+    frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' },
+    assignment: { kind: 'lead', seedCommit: 'fixed-commit', initialPlanNonce: 'custom-lead' },
+    environment: { DEEPSCIENTIST_MATH_TOOLS_SHA256: 'tools-digest',
+      DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST: '/backend/pantograph.json',
+      DEEPSCIENTIST_MATH_RETRIEVAL_CORPUS_SHA256: 'corpus-digest' },
+    corpusFile: '/library/corpus.json',
+    customModuleRules: (['M1', 'M3', 'M4', 'M5'] as const).map(slot => ({
+      id: `personal-${slot}`, name: `Personal ${slot}`, slot, mode, enabled: true, instructions: `Use my ${slot} research method.` })),
+    mathTools: { root: '/personal-tools', digest: 'tools-digest', tools: [{
+      name: 'route-helper', version: '1.0', purpose: 'Explore mathematical route examples.', commands: ['route-notes'] }] },
+  });
+  for (const continuation of [false, true]) {
+    const { instructions } = finalizeResearchDispatch(context, { continuation });
+    for (const slot of ['M1', 'M3', 'M4', 'M5']) {
+      expect(instructions).toContain(`Strategy ${slot} ${mode}`);
+      expect(instructions).toContain(`Use my ${slot} research method.`);
+    }
+    expect(instructions).toContain('Configurable strategy advice cannot override the frozen problem');
+    expect(instructions).toContain('current role and output protocol');
+    expect(instructions).toContain('/personal-tools/manifest.json');
+    expect(instructions).toContain('route-notes');
+    expect(instructions).toContain('search-lean --workspace');
+    expect(instructions).toContain('delegate an uncertain Lean application check to an assigned worker');
+    expect(instructions).not.toContain('Confirm types and known names with Lean #check');
+    expect(instructions).not.toContain('check-lean --workspace');
+    expect(instructions).not.toContain('proof-search --workspace');
+  }
 });
 
 const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review', taskText = 'Prove the target') => {
