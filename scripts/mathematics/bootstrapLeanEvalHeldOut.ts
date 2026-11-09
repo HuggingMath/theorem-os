@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { bootstrapLeanEvalProblem } from "../../src/math/leanEvalBootstrap";
 import { classifyLeanEvalHeldOutFamily } from "../../src/math/leanEvalHeldOutEvaluation";
 import { readLibraryPack } from '../../src/math/libraryPacks';
+import { libraryHostConfigPath } from '../../src/math/libraryHostConfig';
 import { resolveMathematicsRuntimeEnvironment } from "../../src/math/mathRuntimeEnvironment";
 
 async function main(): Promise<void> {
@@ -18,11 +19,13 @@ async function main(): Promise<void> {
       'Usage: bun scripts/mathematics/bootstrapLeanEvalHeldOut.ts --repo DIR --problem ID --workspace DIR [--receipt FILE] [--certificate-slots N] [--theory-modules M] [--library-pack FILE]\n' +
       'N > 0 adds solver-owned Submission/Certificates/Kernel.lean (KernelCompute library) and N empty PartNN.lean modules for kernel-certificate.\n' +
       'M > 0 adds M solver-owned Submission/Theory/TNN.lean modules (empty namespace Submission.Theory) for a reusable theory library.\n' +
-      'FILE is a theorem-os library-pack JSON: its Submission/Library modules are installed byte-frozen and rechecked in Lean before each run.'
+      'THEOREMOS_LIBRARY_HOST_CONFIG selects a host-owned pinned release and exact problem/benchmark policy.\n' +
+      '--library-pack is a legacy input and is rejected when host policy is configured.'
     );
     return;
   }
   const runtime = resolveMathematicsRuntimeEnvironment();
+  if (libraryHostConfigPath() && flags.has('library-pack')) throw new Error('library_host_sources_conflict');
   const evaluationMode = flags.get('evaluation-mode') ?? 'official';
   if (!['official', 'benchmark'].includes(evaluationMode)) throw new Error('Invalid --evaluation-mode');
   const slots = flags.get('certificate-slots') ?? '0';

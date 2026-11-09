@@ -13,6 +13,7 @@ import { mathGitBytes, mathGitText } from './mathGit';
 import { assertMathCanonicalPath } from './paths';
 import { effectiveLibraryBindingSchema, resolveEffectiveLibraryPack, type LibraryTaskPolicy } from './libraryEffectivePack';
 import { canonicalLibraryJson, libraryUnicodeCompare, type LibraryReleaseArtifacts } from './libraryRelease';
+import { assertHostLibraryCurrent, libraryHostConfigPath, resolveHostLibrary } from './libraryHostConfig';
 
 export const LEAN_TASK_SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 /** Declarations, and so definition targets, per statement. */
@@ -139,8 +140,13 @@ export function bootstrapLeanTask(workspace: string, input: LeanTaskInput,
   hostLibrary?: Readonly<{ artifacts: LibraryReleaseArtifacts; policy: LibraryTaskPolicy }>): LeanTaskReceipt {
   const inspected = inspectInput(input);
   const environment = getLeanTaskEnvironment(inspected.environment ?? 'standard');
+  if (libraryHostConfigPath() && (hostLibrary || inspected.libraryPack !== undefined))
+    throw new Error('library_host_sources_conflict');
   if (hostLibrary && inspected.libraryPack !== undefined) throw new Error('lean_task_library_sources_conflict');
-  const effective = hostLibrary && resolveEffectiveLibraryPack(hostLibrary.artifacts, hostLibrary.policy);
+  const effective = resolveHostLibrary({ taskId: contractFor(inspected.source, inspected.task).problemId },
+    { toolchain: environment.toolchain, lakeManifest: environment.files['lake-manifest.json']!,
+      runtimeEnvironmentDigest: environment.dependencyDigest }, workspace)
+    ?? (hostLibrary && resolveEffectiveLibraryPack(hostLibrary.artifacts, hostLibrary.policy));
   const libraryBinding = effective?.binding;
   if (libraryBinding && (libraryBinding.taskId !== contractFor(inspected.source, inspected.task).problemId ||
       libraryBinding.runtimeEnvironmentDigest !== environment.dependencyDigest ||
@@ -214,6 +220,9 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
     throw new Error('lean_task_identity_changed');
   if (canonicalMathJson(parsed.libraryBinding ?? null) !== canonicalMathJson(seed.libraryBinding ?? null))
     throw new Error('lean_task_identity_changed');
+  assertHostLibraryCurrent(seed.libraryBinding, { taskId: z.string().parse(parsed.contract.problemId) },
+    { toolchain: environment.toolchain, lakeManifest: environment.files['lake-manifest.json']!,
+      runtimeEnvironmentDigest: environment.dependencyDigest }, workspace);
   if (seed.libraryBinding) {
     const binding = seed.libraryBinding;
     const modules = libraryFiles.toSorted(libraryUnicodeCompare).map(file => ({ file,

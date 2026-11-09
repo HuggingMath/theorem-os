@@ -77,7 +77,7 @@ const same = (a: unknown, b: unknown) => canonicalLibraryJson(a) === canonicalLi
 const setDigest = (value: unknown) => mathDigest(canonicalLibraryJson(value));
 const moduleName = (file: string) => file.slice(0, -5).replaceAll('/', '.');
 
-function parseJson(bytes: Uint8Array): unknown {
+export function parseLibraryJson(bytes: Uint8Array): unknown {
   // Bound decoding, reject duplicate keys (including escaped spellings), then use the platform parser.
   const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   let offset = 0;
@@ -115,6 +115,8 @@ function parseJson(bytes: Uint8Array): unknown {
   value(0); space(); requireBinding(offset === text.length, 'invalid_json');
   return JSON.parse(text);
 }
+
+const parseJson = parseLibraryJson;
 
 /** Host-only consumer. The expected digest must come from trusted release selection, never an Agent query. */
 export function validateLibraryRelease(artifacts: LibraryReleaseArtifacts, expectedManifestSha256: string): ValidatedLibraryRelease {

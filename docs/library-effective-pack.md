@@ -43,9 +43,12 @@ formal statement payload; it is independent of the free-text task description.
 
 This is an M1 implementation slice. Raw code-pack compatibility remains available;
 it does not acquire release evidence or task authorization through this change.
-Explicit legacy bindings, held-out bootstrap, CLI/Web host selection, Auto-library
-composition/resume, and knowledge catalogue integration still need migration to the
-same contract before M1 is complete. Search/inspect/probe are not enabled here.
+The disk-backed host reader now selects releases for ordinary and held-out bootstraps,
+including the shared ordinary Web function. See [host configuration](LIBRARY-HOST-CONFIG.md)
+for full dependency checks, exact task/benchmark mappings, current-policy resume
+checks and raw-pack rejection. External campaign mapping, production Web container
+configuration, explicit legacy bindings, Auto-library composition/resume and knowledge
+catalogue integration remain pending. Search/inspect/probe are not enabled here.
 
 Tests use a Python-generated **synthetic** release under
 `tests/fixtures/library-release`, with fabricated replay records. They cover byte and

@@ -4,12 +4,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { assertLeanEvalBootstrapEligibility, bootstrapLeanEvalProblem, readLeanEvalBootstrapReceipt, runLeanEvalOfficialGate,
+import { assertLeanEvalBootstrapEligibility, bootstrapLeanEvalProblem, commitLeanEvalSubmission, readLeanEvalBootstrapReceipt, runLeanEvalOfficialGate,
   runPersistedLeanEvalOfficialGate, type LeanEvalBootstrapResult } from '../src/math/leanEvalBootstrap';
 import { LEAN_EVAL_LEADERBOARD_URL, type LeanEvalCatalogProblem } from '../src/math/leanEvalCatalogAdapter';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import { KERNEL_COMPUTE_LIBRARY } from '../src/math/kernelComputeLibrary';
 import type { LibraryPack } from '../src/math/libraryPacks';
+import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
+import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 
 const host = vi.hoisted(() => ({ commit: '', catalog: {} as unknown, verify: vi.fn(), compare: vi.fn() }));
 vi.mock('../src/math/leanEvalCatalogAdapter', async importOriginal => ({
@@ -96,7 +98,79 @@ describe('Lean-Eval bootstrap without planning state', () => {
     fs.writeFileSync(proof, fs.readFileSync(proof, 'utf8').replace('by sorry', 'by exact 0')
       .replace('by sorry', 'by trivial').replace('by sorry', 'by rfl'));
   });
-  afterEach(() => { fs.rmSync(directory, { recursive: true, force: true }); });
+  afterEach(() => { vi.unstubAllEnvs(); fs.rmSync(directory, { recursive: true, force: true }); });
+
+  async function bootstrapWithHostLibrary() {
+    const environment = getLeanTaskEnvironment('openai-math');
+    fs.writeFileSync(path.join(repositoryRoot, 'generated/p/lean-toolchain'), `${environment.toolchain}\n`);
+    fs.writeFileSync(path.join(repositoryRoot, 'lake-manifest.json'), environment.files['lake-manifest.json']!);
+    git('add', '.');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '--quiet', '-m', 'pinned environment');
+    host.commit = git('rev-parse', 'HEAD');
+    host.catalog = { ...(host.catalog as object), benchmarkCommit: host.commit };
+    const fixture = writeLibraryHostFixture(directory, [{ taskId: 'p', benchmarkCommit: host.commit,
+      selection: { mode: 'mapped', exclusionKeys: ['FixtureTask'] } }]);
+    vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', fixture.configPath);
+    const result = await bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [],
+      workspaceRoot: path.join(directory, 'host-solver') });
+    return { ...fixture, result };
+  }
+
+  it('installs the same filtered held-out release and freezes its binding independently of the receipt', async () => {
+    const { result } = await bootstrapWithHostLibrary();
+    const receipt = result.receipt;
+    expect(Object.keys(receipt.libraryPack!.files)).toHaveLength(2);
+    expect(receipt.libraryBinding!.hostConfiguration).toBeDefined();
+    expect(readLeanEvalBootstrapReceipt(receipt.activeProblemPath)).toEqual(receipt);
+    const { libraryBinding: _binding, ...tampered } = receipt;
+    fs.writeFileSync(receipt.activeProblemPath, JSON.stringify(tampered));
+    expect(() => readLeanEvalBootstrapReceipt(receipt.activeProblemPath)).toThrow(/binding_changed/);
+    await expect(runLeanEvalOfficialGate({ ...result, receipt: tampered })).rejects.toThrow(/binding_changed/);
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('rechecks current host policy on held-out resume and direct gate, and blocks raw pack overrides', async () => {
+    const { result, configPath } = await bootstrapWithHostLibrary();
+    await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', credits: [],
+      workspaceRoot: path.join(directory, 'raw-solver'), libraryPack: {} as never })).rejects.toThrow(/sources_conflict/);
+    expect(fs.existsSync(path.join(directory, 'raw-solver'))).toBe(false);
+    fs.appendFileSync(configPath, ' ');
+    expect(() => readLeanEvalBootstrapReceipt(result.receipt.activeProblemPath)).toThrow(/binding_changed/);
+    await expect(runLeanEvalOfficialGate(result)).rejects.toThrow(/binding_changed/);
+    vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', undefined);
+    expect(() => readLeanEvalBootstrapReceipt(result.receipt.activeProblemPath)).toThrow(/binding_changed/);
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('rejects edits to an installed release module before the direct gate', async () => {
+    const { result } = await bootstrapWithHostLibrary();
+    const file = Object.keys(result.receipt.libraryPack!.files)[0]!;
+    fs.appendFileSync(path.join(result.receipt.projectRoot, file), '\n-- changed after bootstrap\n');
+    await expect(runLeanEvalOfficialGate(result)).rejects.toThrow(/binding_changed/);
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+  it('rejects drift of the installed held-out dependency lock on resume', async () => {
+    const { result } = await bootstrapWithHostLibrary();
+    const file = path.join(result.receipt.projectRoot, 'lake-manifest.json');
+    const lock = JSON.parse(fs.readFileSync(file, 'utf8')); lock.packages[0].rev = '0'.repeat(40);
+    fs.writeFileSync(file, JSON.stringify(lock));
+    expect(() => readLeanEvalBootstrapReceipt(result.receipt.activeProblemPath)).toThrow(/dependency_mismatch/);
+  });
+  it('checks release bytes in an explicitly supplied submission commit', async () => {
+    const { result } = await bootstrapWithHostLibrary();
+    const commit = commitLeanEvalSubmission(result);
+    expect((await runLeanEvalOfficialGate(result, { commit })).comparison.status).toBe('official_verified');
+    host.verify.mockClear(); host.compare.mockClear();
+    const verifier = result.receipt.verifierProjectRoot!;
+    const file = Object.keys(result.receipt.libraryPack!.files)[0]!;
+    fs.appendFileSync(path.join(verifier, 'generated/p', file), '\n-- altered submitted module\n');
+    execFileSync('git', ['-C', verifier, 'add', '--', `generated/p/${file}`]);
+    execFileSync('git', ['-C', verifier, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost',
+      'commit', '--quiet', '-m', 'altered library']);
+    const targetCommit = execFileSync('git', ['-C', verifier, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    await expect(runLeanEvalOfficialGate(result, { commit: { ...commit, targetCommit } })).rejects.toThrow(/submission_changed/);
+    expect(host.verify).not.toHaveBeenCalled(); expect(host.compare).not.toHaveBeenCalled();
+  });
 
   function makeOfficialReceipt(base = bootstrapped.receipt) {
     const leaderboard = { credits: [], generatedAt: 1 };
@@ -341,7 +415,7 @@ describe('Lean-Eval bootstrap without planning state', () => {
     const receipt = JSON.parse(fs.readFileSync(options.activeProblemPath, 'utf8'));
     const { libraryPack: _recorded, ...unpacked } = receipt;
     fs.writeFileSync(options.activeProblemPath, JSON.stringify(unpacked));
-    await expect(runPersistedLeanEvalOfficialGate(options)).rejects.toThrow('file ownership');
+    await expect(runPersistedLeanEvalOfficialGate(options)).rejects.toThrow('lean_eval_library_binding_changed');
     fs.writeFileSync(options.activeProblemPath, JSON.stringify({ ...receipt,
       solverOwnedFiles: receipt.solverOwnedFiles.filter((file: string) => file !== lib) }));
     expect(() => readLeanEvalBootstrapReceipt(options.activeProblemPath)).toThrow('does not own its library modules');
