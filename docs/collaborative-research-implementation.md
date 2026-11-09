@@ -134,3 +134,21 @@ bun scripts/build.ts --state-root /home/lzh/workspace/scratch/theorem-os/collabo
 | 线上浏览器 | 三个匿名页面的桌面与 390px 手机布局共六项通过，页面/API 均 200，无脚本错误、溢出或写请求；四项通过后曾遇到 Chromium 网络变化错误，仅补验剩余两项后通过 |
 
 证据目录为 `/home/lzh/workspace/outputs/theoremos-route-feedback-20261109/`。`browser/report.json`、`collaboration/report.json`、`task-browser/report.json` 保存 16 个浏览器场景；`interfaces/receipt.json` 与 `focused-review.md` 保存接口核验及本轮评审修正；`deploy/cutover.json` 和 `deployment-record.json` 固定正式切换与干净源码镜像身份。本轮使用可丢弃 HTTP 会话和模拟 Worker，没有调用真实模型，没有改动独立数学 campaign、控制器或 next-runtime。
+
+## 9. 从讨论建议转为运行指导
+
+2026-11-09 14:02（北京时间），源码 `3e5b4995bac5dd72f97d8e67014f68e818b17302` 已合入并推送 main，成对发布 Web / Worker。定理页的讨论记录新增“转为运行指导”：有权限的数学家可选择正在运行的研究及 Lead 或具体任务，补充指导内容并选择可见范围。原讨论保留原作者和正文，新指导记录实际投递人；原讨论列出关联指导，指导提供作者及原文预览，双方可互相定位，继续阅读投递、采纳和执行记录。
+
+任务指导固定选择时的任务版本，观测升版后保留草稿并要求明确核对；任务移除或运行结束后不能新投递。成员来源只允许成员范围，公开指导同时要求来源、项目和运行均可公开；来源预览和反向列表只使用当前权限下可见的反馈记录。
+
+每次投递单独保留原请求标识、来源、内容、范围及精确目标。响应丢失时先读取反馈列表，同时匹配作者、来源和请求标识；已保存但投递尚不明确的记录继续查询，未送达的请求按原内容和标识重试。HTTP 拒绝也先查询，确认没有保存才允许核对后新投递。等待期间继续编辑的草稿与原请求分别保留，回执不会清掉新写内容。此流程复用现有后端接口及持久化命令回执。
+
+| 检查 | 本轮结果 |
+| --- | --- |
+| 单测 | 项目、HTTP API 和反馈模型共 3 文件、45 项通过；新增成员来源保护、权限与变版拒绝、未知执行结果幂等恢复 |
+| 类型与构建 | 根目录与 Web 服务/客户端/预览 TypeScript、完整 Web 构建通过 |
+| 浏览器 | 3 个新转投场景和 3 个既有研究页回归通过；三身份署名与可见范围、任务改版确认、两类丢包恢复、原 ID/正文重试、新草稿保留、桌面与手机英文 |
+| 最终镜像 | 772 个源文件与固定 Git blobs 相符；四个运行包、53 个内置库模块、十个工具核验通过；七个前端文件与本地验收构建摘要一致 |
+| 发布与公网 | 维护、排空、私有备份及 checksum 恢复、成对切换和健康/就绪/页面/API/静态摘要检查通过；维护关闭，三个匿名页面的桌面与 390px 手机布局六项通过，无页面脚本错误、溢出或写请求 |
+
+功能源码为 `apps/web/client/researchDiscussionGuidance.tsx`，验收脚本为 `scripts/test-web-discussion-guidance.ts`。本轮证据位于 `/home/lzh/workspace/outputs/theoremos-discussion-guidance-20261109/`，入口为 `README.md` 与 `verification.json`。浏览器使用真实本地 HTTP、临时研究身份及模拟 Runner；未调用真实模型、未重新进行 Lean 编译或整题 S3 验收，原有 solver 回归结果保留为历史证据。独立数学 campaign、控制器和 next-runtime 保持各自会话所有权。
