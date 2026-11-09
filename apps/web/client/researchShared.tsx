@@ -91,11 +91,13 @@ export function Field({ label, value, onInput, multiline, code, rows, required, 
   label: string; value: string; onInput: (value: string) => void; multiline?: boolean; code?: boolean; rows?: number;
   required?: boolean; placeholder?: string; note?: string; maxLength?: number; type?: string;
 }) {
-  return <label class="research-field">{label}{multiline
+  const id = useId(), titleId = `${id}-title`, noteId = note ? `${id}-note` : undefined;
+  return <label class="research-field"><span id={titleId}>{label}</span>{multiline
     ? <textarea value={value} onInput={event => onInput(event.currentTarget.value)} rows={rows ?? 4} required={required}
-      class={code ? 'research-code' : undefined} spellcheck={!code} placeholder={placeholder} maxLength={maxLength} />
-    : <input type={type} value={value} onInput={event => onInput(event.currentTarget.value)} required={required} placeholder={placeholder} maxLength={maxLength} />}
-    {note && <span class="research-field-note">{note}</span>}</label>;
+      aria-labelledby={titleId} aria-describedby={noteId} class={code ? 'research-code' : undefined} spellcheck={!code} placeholder={placeholder} maxLength={maxLength} />
+    : <input type={type} value={value} onInput={event => onInput(event.currentTarget.value)} aria-labelledby={titleId} aria-describedby={noteId}
+      required={required} placeholder={placeholder} maxLength={maxLength} />}
+    {note && <span id={noteId} class="research-field-note">{note}</span>}</label>;
 }
 export function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return <label class="research-check"><input type="checkbox" checked={checked} onChange={event => onChange(event.currentTarget.checked)} />{label}</label>;
