@@ -155,13 +155,24 @@ export class WebConversations {
     try { this.storage.deleteRecord([...directory(owner), `${id}.json`]); }
     finally { this.pending.get(this.key(owner, id))?.controller.abort(); }
   }
-  send(owner: string, id: string, text: string, provider: Pick<WebExplainCall, 'baseUrl' | 'apiKey' | 'model'>): WebConversation {
+  /** Recover acceptance before requiring credentials or starting another provider call. */
+  messageReceipt(owner: string, id: string, requestId: string | undefined, text: string): WebConversation | undefined {
+    if (!requestId) return;
+    const conversation = this.read(owner, id), question = conversation.messages.find(message => message.role === 'user' && message.kind === 'text' && message.requestId === requestId);
+    if (!question) return;
+    if (question.text !== text.trim()) throw new WebStorageError(409, '发送编号已用于另一条问题，请重新发送。');
+    return conversation;
+  }
+  send(owner: string, id: string, text: string, provider: Pick<WebExplainCall, 'baseUrl' | 'apiKey' | 'model'>, requestId?: string): WebConversation {
+    const accepted = this.messageReceipt(owner, id, requestId, text);
+    if (accepted) return accepted;
     const conversation = this.read(owner, id);
     if (!text.trim() || text.length > webConversationLimits.question) throw new WebStorageError(400, '请输入不超过 4000 字的问题。');
     const previous = [...this.pending.values()].filter(item => item.owner === owner);
     if (previous.some(item => !item.controller.signal.aborted)) throw new WebStorageError(409, '上一个问题还在回答，请先等它结束或停止。');
     if (conversation.messages.length >= webConversationLimits.messages) throw new WebStorageError(429, '这段对话已达到消息上限，请新建对话。');
-    const at = now(), question: WebConversationMessage = { id: crypto.randomUUID(), role: 'user', kind: 'text', text: text.trim(), createdAt: at, status: 'complete' };
+    const at = now(), question: WebConversationMessage = { id: crypto.randomUUID(), role: 'user', kind: 'text', text: text.trim(), createdAt: at, status: 'complete',
+      ...(requestId ? { requestId } : {}) };
     const reply: WebConversationMessage = { id: crypto.randomUUID(), role: 'assistant', kind: 'text', text: '', createdAt: at, status: 'pending', replyTo: question.id };
     conversation.messages.push(question, reply); conversation.updatedAt = at; this.save(owner, conversation);
     const controller = new AbortController(), key = this.key(owner, id);

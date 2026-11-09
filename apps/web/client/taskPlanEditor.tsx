@@ -1,4 +1,5 @@
 import type { WebObservation, WebPlanProposal, WebCommandResult, WebPlanTask, WebPlanGroup } from '../collaboration';
+import type { WebRun } from '../shared';
 import { render } from 'preact';
 import { commandId, createElement, errorText, jsonText, editStatusLabel, type WebApi } from './collaborationUi';
 import { Code, renderOptions, renderSection } from './ui/Section';
@@ -8,12 +9,21 @@ type PlanDraft = { text: string; receipt?: WebCommandResult; previewText?: strin
   busy?: boolean; observation?: WebObservation; comparison?: WebObservation['plan']; pending?: { proposal: WebPlanProposal; missing?: boolean } };
 const responseStatus = (error: unknown) => error && typeof error === 'object' && 'status' in error ? error.status : undefined;
 const scheduling = () => <><option value="active">{t('继续')}</option><option value="paused">{t('暂停')}</option><option value="stopped">{t('停止')}</option></>;
+type PlanEditorAccess = { runId?: string; status?: WebRun['status']; connected: boolean; readOnly: boolean; edit?: boolean };
+export function planEditUnavailableReason(access: PlanEditorAccess): string | undefined {
+  if (!access.runId) return t('当前未打开此运行。草稿已保留。');
+  if (access.readOnly) return t('当前仅可查看计划。草稿已保留。');
+  if (access.edit === false) return t('当前没有此运行的计划编辑权限。草稿已保留。');
+  if (!access.connected) return t('连接中断，暂时无法预览或提交计划。草稿已保留。');
+  if (access.status === 'queued') return t('运行尚未开始，暂时无法修改计划。草稿已保留。');
+  if (access.status !== 'running') return t('运行已结束，无法再修改计划。草稿已保留。');
+}
 
 /** The dialog skeleton; form fields stay uncontrolled because partially typed lists must survive re-parsing the plan. */
 function PlanDialog() {
   return <>
     <header class="collab-dialog-heading"><div><span class="collab-eyebrow">{t('研究计划')}</span><h2>{t('调整下一步工作')}</h2></div><button type="button" class="icon-button" data-plan-close aria-label={t('关闭计划编辑器')}>×</button></header>
-    <div class="collab-plan-content"><p class="collab-help">{t('计划包含全部任务与路线。提交应用后，受影响证明的重新检查会单独报告。')}</p><div data-plan-versions></div>
+    <div class="collab-plan-content"><p class="collab-help">{t('计划包含全部任务与路线。提交应用后，受影响证明的重新检查会单独报告。')}</p><div data-plan-availability role="status" aria-live="polite"></div><div data-plan-versions></div>
       <div class="collab-plan-common">
         <label class="collab-span-all">{t('任务')}<select data-plan-task aria-label={t('编辑的任务')}></select></label>
         <label>{t('任务类型')}<select data-plan-kind aria-label={t('任务类型')}><option value="research">{t('研究')}</option><option value="sketch">{t('证明草图')}</option><option value="lemma">{t('引理')}</option><option value="goal" disabled>{t('原始目标')}</option></select></label>
@@ -69,6 +79,8 @@ export class TaskPlanEditor {
   private taskId = '';
   private groupId = '';
   private routeId = '';
+  private access = new Map<string, { reason?: string }>();
+  private shownRunId?: string;
   private advanced: HTMLTextAreaElement;
   constructor(private api: WebApi, private observed: (observation: WebObservation) => void) {
     this.dialog.setAttribute('aria-label', t('编辑完整研究计划'));
@@ -108,6 +120,31 @@ export class TaskPlanEditor {
     if (this.runId === runId) { this.runId = ''; this.observation = undefined; this.dialog.close(); }
   }
   private owns(runId: string, draft: PlanDraft) { return !this.disposed && this.drafts.get(runId) === draft; }
+  /** Polling can revoke operations while this dialog and its local draft remain open. */
+  updateAccess(access: PlanEditorAccess) {
+    if (this.disposed) return;
+    let changed = this.shownRunId !== access.runId;
+    this.shownRunId = access.runId;
+    if (access.runId) {
+      const reason = planEditUnavailableReason(access), previous = this.access.get(access.runId);
+      if (!previous || previous.reason !== reason) {
+        this.access.set(access.runId, { reason }); changed = true;
+        const draft = this.drafts.get(access.runId);
+        if (draft) {
+          draft.previewText = undefined;
+          if (!reason && previous?.reason) draft.notice = t('现在可以继续调整计划。请重新预览后提交。');
+        }
+      }
+    }
+    if (changed && this.dialog.open && this.drafts.has(this.runId)) this.renderStatus();
+  }
+  private editUnavailableReason(runId = this.runId) {
+    const access = this.access.get(runId);
+    return access ? access.reason : t('当前未打开此运行。草稿已保留。');
+  }
+  private currentEditUnavailableReason() {
+    return this.shownRunId !== this.runId ? t('当前未打开此运行。草稿已保留。') : this.editUnavailableReason();
+  }
   update(observation: WebObservation) {
     if (this.disposed) return;
     const draft = this.drafts.get(observation.webRunId);
@@ -337,7 +374,8 @@ export class TaskPlanEditor {
       {latest && latest !== base && <strong>{t('版本已变化 · 本地修改已保留')}</strong>}</div>);
   }
   private renderStatus() {
-    const draft = this.draft(), receipt = draft.receipt;
+    const draft = this.draft(), receipt = draft.receipt, unavailable = this.currentEditUnavailableReason();
+    renderSection(this.dialog.querySelector('[data-plan-availability]')!, unavailable ? <p class="collab-notice">{unavailable}</p> : null);
     renderSection(this.dialog.querySelector('[data-plan-receipt]')!, <>
       {draft.error && <p class="collab-error">{draft.error}</p>}
       {draft.notice && <p class="collab-help">{draft.notice}</p>}
@@ -365,8 +403,10 @@ export class TaskPlanEditor {
     for (const control of this.dialog.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-plan-route-fields] input,[data-plan-route-fields] select')) control.disabled ||= !hasRoute;
     this.dialog.querySelector<HTMLButtonElement>('[data-plan-remove-route]')!.disabled ||= !hasRoute;
     const invalidField = Boolean(this.dialog.querySelector('input:invalid'));
-    this.dialog.querySelector<HTMLButtonElement>('[data-plan-preview]')!.disabled ||= !plan || invalidField;
-    this.dialog.querySelector<HTMLButtonElement>('[data-plan-apply]')!.disabled = Boolean(draft.busy || draft.pending || !plan || invalidField) || !receipt || draft.previewText !== draft.text || !['validated', 'previewed', 'ready'].includes(receipt.status);
+    this.dialog.querySelector<HTMLButtonElement>('[data-plan-preview]')!.disabled ||= Boolean(unavailable) || !plan || invalidField;
+    this.dialog.querySelector<HTMLButtonElement>('[data-plan-rebase]')!.disabled ||= Boolean(unavailable);
+    this.dialog.querySelector<HTMLButtonElement>('[data-plan-retry]')!.disabled ||= Boolean(unavailable);
+    this.dialog.querySelector<HTMLButtonElement>('[data-plan-apply]')!.disabled = Boolean(unavailable || draft.busy || draft.pending || !plan || invalidField) || !receipt || draft.previewText !== draft.text || !['validated', 'previewed', 'ready'].includes(receipt.status);
     this.dialog.querySelector<HTMLButtonElement>('[data-plan-receipt-refresh]')!.hidden = !draft.pending;
     this.dialog.querySelector<HTMLButtonElement>('[data-plan-retry]')!.hidden = !draft.pending?.missing;
     this.renderVersions();
@@ -377,7 +417,7 @@ export class TaskPlanEditor {
     this.observed(observation);
   }
   private async readLatest(rebase: boolean) {
-    const runId = this.runId, draft = this.draft(); if (draft.busy) return;
+    const runId = this.runId, draft = this.draft(), access = this.access.get(runId); if (draft.busy || rebase && this.currentEditUnavailableReason()) return;
     let proposal: WebPlanProposal | undefined; draft.busy = true; this.renderStatus();
     try {
       if (rebase) proposal = this.parse();
@@ -387,17 +427,17 @@ export class TaskPlanEditor {
       this.receive(runId, observation);
       const latest = draft.observation!;
       draft.comparison = latest.plan;
-      if (proposal) {
+      if (proposal && access === this.access.get(runId)) {
         proposal.baseVersion = latest.plan!.baseVersion; proposal.id = commandId();
         draft.text = jsonText(proposal); draft.previewText = undefined; draft.receipt = undefined; draft.error = undefined; draft.submitted = false;
         if (this.runId === runId) { this.advanced.value = draft.text; this.renderCommon(); }
-      }
+      } else proposal = undefined;
     } catch (error) { if (!this.owns(runId, draft)) return; draft.error = errorText(error); proposal = undefined; }
     finally { draft.busy = false; if (this.owns(runId, draft) && this.runId === runId) this.renderStatus(); }
     if (proposal) await this.requestPlan(runId, draft, proposal, false);
   }
   private async submit(apply: boolean) {
-    const runId = this.runId, draft = this.draft(); if (draft.busy || apply && draft.pending) return;
+    const runId = this.runId, draft = this.draft(); if (draft.busy || this.currentEditUnavailableReason() || apply && draft.pending) return;
     try {
       const proposal = this.parse();
       await this.requestPlan(this.runId, draft, proposal, apply);
@@ -420,7 +460,8 @@ export class TaskPlanEditor {
       affectedTaskIds: edit.affectedTasks ?? receipt.affectedTaskIds } : receipt;
   }
   private async requestPlan(runId: string, draft: PlanDraft, proposal: WebPlanProposal, apply: boolean) {
-    if (!this.owns(runId, draft)) return;
+    if (!this.owns(runId, draft) || this.editUnavailableReason(runId)) return;
+    const access = this.access.get(runId);
     const submittedText = draft.text; draft.busy = true; draft.error = undefined; draft.notice = undefined;
     const pending = apply ? { proposal: structuredClone(proposal) } : undefined;
     if (apply) { draft.submitted = true; draft.pending = pending; }
@@ -431,7 +472,7 @@ export class TaskPlanEditor {
       if (receipt.id !== proposal.id) throw new Error(t('命令回执身份不匹配'));
       if (apply) this.recordReceipt(runId, draft, receipt);
       else { if (receipt.observation) this.receive(runId, receipt.observation); draft.receipt = this.observedReceipt(draft, receipt); }
-      draft.previewText = apply ? undefined : submittedText;
+      draft.previewText = apply || access !== this.access.get(runId) ? undefined : submittedText;
       if (apply && draft.pending) await this.readReceipt(runId, draft);
     } catch (error) {
       if (!this.owns(runId, draft)) return;
@@ -455,7 +496,7 @@ export class TaskPlanEditor {
     }
   }
   private async recover(retryMissing: boolean) {
-    const runId = this.runId, draft = this.draft(); if (draft.busy || !draft.pending) return;
+    const runId = this.runId, draft = this.draft(); if (draft.busy || !draft.pending || retryMissing && this.currentEditUnavailableReason()) return;
     const proposal = draft.pending.proposal; draft.busy = true; this.renderStatus();
     let retry = false;
     try { const found = await this.readReceipt(runId, draft); retry = retryMissing && !found && Boolean(draft.pending?.missing); }

@@ -1,5 +1,12 @@
 /** The collaboration tab: tasks, inspector, agents, progress, mathematical changes, reviews, knowledge and guidance. */
 export const collaboration: Record<string, string> = {
+  "当前未打开此运行。草稿已保留。": "This run is not open. Your draft has been kept.",
+  "当前仅可查看计划。草稿已保留。": "This plan is read-only. Your draft has been kept.",
+  "当前没有此运行的计划编辑权限。草稿已保留。": "You no longer have permission to edit this run's plan. Your draft has been kept.",
+  "连接中断，暂时无法预览或提交计划。草稿已保留。": "The connection was lost. Preview and submission are unavailable; your draft has been kept.",
+  "运行尚未开始，暂时无法修改计划。草稿已保留。": "The run has not started yet. Your draft has been kept until the plan can be edited.",
+  "运行已结束，无法再修改计划。草稿已保留。": "The run has ended and its plan can no longer be changed. Your draft has been kept.",
+  "现在可以继续调整计划。请重新预览后提交。": "You can edit the plan again. Preview it before submitting.",
   "研究": "Research",
   "草图": "Sketch",
   "引理": "Lemma",

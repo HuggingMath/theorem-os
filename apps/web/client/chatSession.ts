@@ -1,4 +1,4 @@
-import type { WebConversation, WebConversationMessage, WebConversationSummary } from '../conversationTypes';
+import type { WebConversation, WebConversationMessage, WebConversationRequest, WebConversationSummary } from '../conversationTypes';
 import type { WebGuidanceInput } from '../collaboration';
 import { webFormalizationDefaults, webFormalizationLimits, type WebFormalization, type WebFormalizationCapabilities } from '../formalizationTypes';
 import type { WebRun, WebSavedKey, WebSession } from '../shared';
@@ -14,7 +14,7 @@ import { nextSteps, summarizeGoals } from '../report';
 import type { ChatArtifactKind } from './chatArtifactNavigation';
 import { clockTime } from './collaborationUi';
 import type { PlanApprovalProps } from './ui/RunHeader';
-import { decodeChatDraft, encodeChatDraft, type ChatDraft, type ChatDraftSettings } from './chatDraft';
+import { decodeChatDraft, encodeChatDraft, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage } from './chatDraft';
 import { SubmissionIdentity } from './submissionIdentity';
 import { retainLatestRun } from './runSnapshot';
 
@@ -83,9 +83,12 @@ export class ChatSession {
   // A failed read shows until a later read succeeds; a failed send, stop or guidance keeps `error` until the next action.
   private readError = '';
   private guidanceMode = false;
+  private guidanceRunId = '';
   private guidanceTarget = '';
   private guidanceVersion?: string;
   private pendingGuidance?: WebGuidanceInput;
+  private pendingMessage?: ChatPendingMessage;
+  private messageErrorId = '';
   private generation = 0;
   private ownerRevision = 0;
   private readRevision = 0;
@@ -195,7 +198,10 @@ export class ChatSession {
     const id = this.currentId || 'home';
     const settings: ChatDraftSettings = { providerId: this.providerId, model: this.model, environment: this.environment,
       effort: this.effort, participation: this.participation, ...structuredClone(this.budgets) };
-    const draft = { text: this.draft, settings };
+    const draft: ChatDraft = { text: this.draft, settings,
+      ...(this.guidanceMode && this.guidanceRunId ? { guidance: { runId: this.guidanceRunId,
+        ...(this.guidanceTarget && this.guidanceVersion ? { taskRef: { id: this.guidanceTarget, version: this.guidanceVersion } } : {}) } } : {}),
+      ...(this.pendingMessage ? { pendingMessage: { ...this.pendingMessage } } : {}) };
     this.drafts.set(id, draft); this.hasDraftSettings = true;
     try { sessionStorage.setItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`, encodeChatDraft(draft)); } catch { /* In-memory draft remains. */ }
   }
@@ -210,6 +216,12 @@ export class ChatSession {
       Object.assign(this, { providerId, model, environment, effort, participation });
       this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
     }
+    this.guidanceMode = Boolean(draft?.guidance);
+    this.guidanceRunId = draft?.guidance?.runId ?? '';
+    this.guidanceTarget = draft?.guidance?.taskRef?.id ?? '';
+    this.guidanceVersion = draft?.guidance?.taskRef?.version;
+    this.pendingMessage = draft?.pendingMessage ? { ...draft.pendingMessage } : undefined;
+    this.messageErrorId = '';
     return draft?.text ?? '';
   }
   private providers(): ChatProvider[] {
@@ -292,9 +304,10 @@ export class ChatSession {
     this.reading.select('');
     this.rememberDraft(); this.generation++; this.currentId = ''; this.conversation = undefined;
     this.run = undefined; this.formalization = undefined; this.seed = undefined;
-    this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
+    this.guidanceMode = false; this.guidanceRunId = ''; this.pendingGuidance = undefined; this.guidanceTarget = ''; this.guidanceVersion = undefined;
     this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.keyNotice = ''; this.startingResearch = false; this.clearConnection();
     this.draft = reset ? '' : this.restoredDraft('home');
+    if (reset) { this.pendingMessage = undefined; this.messageErrorId = ''; }
     if (reset) { this.submissionIdentity.clear(); this.rememberDraft(); }
     document.body.dataset.chatArtifact = '';
     document.body.dataset.outputOpen = 'false';
@@ -306,6 +319,14 @@ export class ChatSession {
   private setConversation(conversation: WebConversation) {
     this.reading.select(conversation.id);
     this.conversation = conversation; this.currentId = conversation.id; this.readError = ''; this.options.onConversation();
+    const message = this.pendingMessage;
+    if (message && conversation.messages.some(item => item.role === 'user' && item.kind === 'text' && item.requestId === message.requestId)) {
+      // The receipt can arrive through a refresh after the POST response was lost. Only consume its own draft.
+      this.pendingMessage = undefined;
+      if (!this.guidanceMode && this.draft === message.text) this.draft = '';
+      if (this.messageErrorId === message.requestId) { this.error = ''; this.messageErrorId = ''; }
+      this.rememberDraft();
+    }
     const pending = this.pendingGuidance;
     const status = pending && conversation.messages.find(message => message.guidance?.input.id === pending.id)?.guidance?.receipt?.status;
     if (pending && status && status !== 'unknown') {
@@ -321,7 +342,7 @@ export class ChatSession {
     this.reading.select(id);
     this.rememberDraft(); const generation = ++this.generation;
     this.currentId = id; this.conversation = undefined; this.run = undefined; this.formalization = undefined;
-    this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
+    this.guidanceMode = false; this.guidanceRunId = ''; this.pendingGuidance = undefined; this.guidanceTarget = ''; this.guidanceVersion = undefined;
     this.seed = undefined; this.attachRunId = '';
     this.loading = true; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.keyNotice = ''; this.startingResearch = false; this.clearConnection();
     this.draft = this.restoredDraft(id);
@@ -340,7 +361,8 @@ export class ChatSession {
     this.reading.select('');
     this.rememberDraft(); const generation = ++this.generation, owner = this.ownerRevision;
     this.currentId = ''; this.conversation = undefined; this.run = run; this.formalization = undefined;
-    this.guidanceMode = false; this.pendingGuidance = undefined; this.guidanceTarget = '';
+    this.guidanceMode = false; this.guidanceRunId = ''; this.pendingGuidance = undefined; this.guidanceTarget = ''; this.guidanceVersion = undefined;
+    this.pendingMessage = undefined; this.messageErrorId = '';
     this.seed = undefined; this.attachRunId = run.id;
     this.loading = !this.options.isSample(run); this.error = ''; this.readError = ''; this.draft = ''; this.apiKey = ''; this.keyNotice = ''; this.submitting = false; this.startingResearch = false; this.clearConnection();
     this.draw();
@@ -426,18 +448,21 @@ export class ChatSession {
   private async submit(retryText?: string, prepareEditedProblem = false) {
     if (!this.options.draftScope) return;
     if (this.guidanceMode && retryText === undefined) { await this.sendGuidance(); return; }
-    if (this.loading || this.submitting || !(retryText ?? this.draft).trim()) return;
+    if (this.loading || this.submitting || !(this.pendingMessage?.text ?? retryText ?? this.draft).trim()) return;
     // A received task can be reattached without starting it again. Editing its original instead needs an explicit choice.
     if (this.seed && retryText === undefined && this.draft !== this.seed.original) { this.draw(); return; }
-    const generation = this.generation, owner = this.ownerRevision, seed = this.seed,
-      text = seed?.original ?? retryText ?? this.draft, conversation = this.conversation, key = this.apiKey;
+    const generation = this.generation, owner = this.ownerRevision, seed = this.seed, conversation = this.conversation, key = this.apiKey;
+    const message = conversation ? this.pendingMessage ?? { requestId: crypto.randomUUID(), text: retryText ?? this.draft } : undefined;
+    const text = seed?.original ?? message?.text ?? retryText ?? this.draft;
     if (conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending')) return;
     this.readRevision++; this.submitting = true; this.error = ''; this.draw();
     try {
       let next: WebConversation;
       let requestId: string | undefined;
       if (conversation) {
-        ({ conversation: next } = await this.post<{ conversation: WebConversation }>(`/api/conversations/${conversation.id}/messages`, { text, apiKey: key }));
+        this.pendingMessage = message; this.messageErrorId = ''; this.rememberDraft();
+        const input: WebConversationRequest = { text, apiKey: key, requestId: message!.requestId };
+        ({ conversation: next } = await this.post<{ conversation: WebConversation }>(`/api/conversations/${conversation.id}/messages`, input));
       } else {
         const settings = { providerId: this.providerId, model: this.model.trim(), environment: this.environment, effort: this.effort, ...this.budgets,
           ...(this.participation === 'guided' ? { humanReview: true } : {}) };
@@ -461,7 +486,7 @@ export class ChatSession {
       if (requestId) this.submissionIdentity.clear(requestId);
       else if (seed) this.submissionIdentity.clear();
       const editedProblem = Boolean(seed && this.draft !== text);
-      if (this.draft === text) this.draft = '';
+      if (!conversation && this.draft === text) this.draft = '';
       if (!conversation) this.rememberDraft();
       // Changes made while recovering the old task belong to the next problem, not to that task's discussion.
       if (editedProblem) this.draft = '';
@@ -477,7 +502,19 @@ export class ChatSession {
         return;
       }
       this.reading.bottom(); this.focus();
-    } catch (error) { if (generation === this.generation) this.error = reason(error); }
+    } catch (error) {
+      if (generation === this.generation) {
+        this.error = reason(error);
+        if (message) {
+          this.messageErrorId = message.requestId;
+          // A definitive refusal did not accept this send. Let the reader correct its draft or key.
+          const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
+          if (typeof status === 'number' && status >= 400 && status < 500 && this.pendingMessage?.requestId === message.requestId) {
+            this.pendingMessage = undefined; this.messageErrorId = ''; this.rememberDraft();
+          }
+        }
+      }
+    }
     finally { if (generation === this.generation) { this.submitting = false; this.draw(); this.schedule(); } }
   }
   private async stop() {
@@ -492,10 +529,12 @@ export class ChatSession {
   }
   private beginGuidance(text?: string, taskId = '') {
     this.guidanceMode = true; this.selectGuidanceTarget(taskId);
-    if (text !== undefined) { this.draft = text; this.rememberDraft(); }
+    if (text !== undefined) this.draft = text;
+    this.rememberDraft();
     this.error = ''; this.draw(); this.focus();
   }
   private selectGuidanceTarget(id: string) {
+    this.guidanceRunId = this.run?.id ?? '';
     this.guidanceTarget = id;
     this.guidanceVersion = this.run?.observation?.inspection.tasks.find(task => task.id === id)?.version;
   }
@@ -505,6 +544,9 @@ export class ChatSession {
     const input = retry ?? this.pendingGuidance;
     const task = observation?.inspection.tasks.find(item => item.id === this.guidanceTarget);
     if (!input && (!this.draft.trim() || !observation || run.status !== 'running')) return;
+    if (!input && this.guidanceRunId !== run.id) {
+      this.error = t('指导关联的研究已变化，请重新选择指导对象。'); this.draw(); return;
+    }
     if (!input && this.guidanceTarget && (!task || task.version !== this.guidanceVersion)) {
       this.error = t('任务版本已变化，请核对指导内容，再确认当前任务版本。'); this.draw(); return;
     }
@@ -658,6 +700,7 @@ export class ChatSession {
     const canGuide = canDecide && !!this.conversation && this.run?.status === 'running' && !!this.run.observation?.plan;
     const task = this.run?.observation?.inspection.tasks.find(item => item.id === this.guidanceTarget);
     const staleTarget = !!this.guidanceTarget && (!task || task.version !== this.guidanceVersion);
+    const guidanceRunChanged = this.guidanceMode && this.guidanceRunId !== this.run?.id;
     const unresolvedGuidance = !!this.pendingGuidance || this.conversation?.messages.some(message => message.kind === 'guidance' && message.status === 'pending');
     const newProblem = !this.conversation && !this.run;
     const editedSubmission = newProblem && !!this.seed && this.draft !== this.seed.original;
@@ -710,6 +753,7 @@ export class ChatSession {
       },
       onRetry: editedSubmission ? undefined : () => {
         if (this.pendingGuidance) void this.sendGuidance(this.pendingGuidance);
+        else if (this.pendingMessage && this.conversation) void this.submit(this.pendingMessage.text);
         else if (this.currentId && !this.conversation) { const id = this.currentId; this.currentId = ''; void this.open(id, 'replace'); }
         else if (this.run && !this.conversation) { const run = this.run; this.attachRunId = ''; void this.openRun(run); }
         else if (this.seed) void this.submit(this.seed.original);
@@ -726,16 +770,16 @@ export class ChatSession {
       onSubmit: () => void this.submit(), onStop: () => void this.stop(), pending: pending && !this.guidanceMode, submitting: this.submitting,
       disabled: this.loading || Boolean(this.run && this.options.isSample(this.run)) || Boolean(this.currentId && !this.conversation)
         || editedSubmission
-        || !this.guidanceMode && !pendingSubmission && Boolean(this.options.session()?.maintenance)
+        || !this.guidanceMode && !pendingSubmission && !this.pendingMessage && Boolean(this.options.session()?.maintenance)
         || newProblem && ((!this.capabilities?.available && !pendingSubmission) || busyFormalization)
-        || this.guidanceMode && (!canGuide || !this.run?.observation || staleTarget || !!unresolvedGuidance),
+        || this.guidanceMode && (!canGuide || !this.run?.observation || guidanceRunChanged || staleTarget || !!unresolvedGuidance),
       hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
       ...(editedSubmission ? { submissionRecovery: { busy: this.submitting,
         onRecover: () => void this.submit(this.seed!.original),
         onPrepareEdited: () => void this.submit(this.seed!.original, true) } } : {}),
       participation: this.participation, participationLocked: Boolean(this.seed || this.submissionIdentity.unresolved || this.run),
       onParticipation: value => { this.participation = value; this.rememberDraft(); this.draw(); },
-      keyRequired: this.guidanceMode || pendingSubmission ? false : this.options.keyRequired(this.activeProviderId()),
+      keyRequired: this.guidanceMode || pendingSubmission || this.pendingMessage ? false : this.options.keyRequired(this.activeProviderId()),
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
       onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw(); },
       onModel: value => { this.model = value; this.clearConnection(); this.rememberDraft(); this.draw(); },
@@ -755,14 +799,16 @@ export class ChatSession {
       ...(canGuide ? { onGuidance: () => this.beginGuidance() } : {}),
       ...(this.guidanceMode ? { guidance: { target: this.guidanceTarget,
         targets: (this.run?.observation?.inspection.tasks ?? []).map(item => ({ id: item.id, label: item.theorem || item.objective || item.id })),
-        onTarget: (id: string) => { this.selectGuidanceTarget(id); this.draw(); },
-        onCancel: () => { this.guidanceMode = false; this.draw(); this.focus(); },
-        ...(staleTarget && task ? { onConfirmTarget: () => { this.selectGuidanceTarget(task.id); this.error = ''; this.draw(); } } : {}),
+        onTarget: (id: string) => { this.selectGuidanceTarget(id); this.rememberDraft(); this.draw(); },
+        onCancel: () => { this.guidanceMode = false; this.rememberDraft(); this.draw(); this.focus(); },
+        ...(staleTarget && task ? { onConfirmTarget: () => { this.selectGuidanceTarget(task.id); this.error = ''; this.rememberDraft(); this.draw(); } } : {}),
       } } : {}),
       sendStatus: this.guidanceMode ? unresolvedGuidance ? t('先核对上一条研究指导的回执。')
+        : guidanceRunChanged ? t('指导关联的研究已变化，请重新选择指导对象。')
         : staleTarget ? t('任务版本已变化，请核对指导内容，再确认当前任务版本。')
           : !canGuide ? t('运行尚未开始或已结束，暂时无法发送指导。')
             : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('指导会交给研究组参考，送达状态会显示在对话中。')
+        : this.pendingMessage ? t('上一条问题的发送结果尚未确认，重试会先核对原问题；新输入会保留。')
         : this.options.session()?.maintenance ? t('工作台正在维护，暂不开始新任务或回答；已有记录仍可查看和下载。')
         : busyFormalization ? t("上一道题正在形式化，你可以先写下一条消息。")
         : unavailable ? this.capabilities?.reason === 'provider'

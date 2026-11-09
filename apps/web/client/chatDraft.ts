@@ -1,13 +1,29 @@
 import type { WebFormalizationRequest } from '../formalizationTypes';
+import { webConversationLimits } from '../conversationTypes';
 
 const schema = 'theorem-os.chat-draft.v1';
 export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
   'providerId' | 'model' | 'environment' | 'effort' | 'maxRunSeconds' | 'maxTotalTokens' | 'research'>> & {
     participation: 'guided' | 'automatic';
   };
-export type ChatDraft = { text: string; settings?: ChatDraftSettings };
+export type ChatGuidanceDraft = { runId: string; taskRef?: { id: string; version: string } };
+export type ChatPendingMessage = { requestId: string; text: string };
+export type ChatDraft = { text: string; settings?: ChatDraftSettings; guidance?: ChatGuidanceDraft; pendingMessage?: ChatPendingMessage };
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const budget = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const reference = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512;
+
+function guidance(value: unknown): ChatGuidanceDraft | undefined {
+  if (!record(value) || !reference(value.runId)) return;
+  if (value.taskRef === undefined) return { runId: value.runId };
+  if (!record(value.taskRef) || !reference(value.taskRef.id) || !reference(value.taskRef.version)) return;
+  return { runId: value.runId, taskRef: { id: value.taskRef.id, version: value.taskRef.version } };
+}
+function pendingMessage(value: unknown): ChatPendingMessage | undefined {
+  if (!record(value) || typeof value.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(value.requestId)
+    || typeof value.text !== 'string' || !value.text.trim() || value.text.trim().length > webConversationLimits.question) return;
+  return { requestId: value.requestId, text: value.text };
+}
 
 function settings(value: unknown): ChatDraftSettings | undefined {
   if (!record(value) || typeof value.providerId !== 'string' || typeof value.model !== 'string'
@@ -22,7 +38,9 @@ function settings(value: unknown): ChatDraftSettings | undefined {
 }
 
 export function encodeChatDraft(draft: ChatDraft): string {
-  return JSON.stringify({ schema, text: draft.text, ...(draft.settings ? { settings: settings(draft.settings) } : {}) });
+  return JSON.stringify({ schema, text: draft.text, ...(draft.settings ? { settings: settings(draft.settings) } : {}),
+    ...(draft.guidance ? { guidance: guidance(draft.guidance) } : {}),
+    ...(draft.pendingMessage ? { pendingMessage: pendingMessage(draft.pendingMessage) } : {}) });
 }
 
 export function decodeChatDraft(raw: string): ChatDraft {
@@ -30,7 +48,9 @@ export function decodeChatDraft(raw: string): ChatDraft {
     const value: unknown = JSON.parse(raw);
     if (record(value) && value.schema === schema && typeof value.text === 'string') {
       const restored = settings(value.settings);
-      return { text: value.text, ...(restored ? { settings: restored } : {}) };
+      const restoredGuidance = guidance(value.guidance), pending = pendingMessage(value.pendingMessage);
+      return { text: value.text, ...(restored ? { settings: restored } : {}),
+        ...(restoredGuidance ? { guidance: restoredGuidance } : {}), ...(pending ? { pendingMessage: pending } : {}) };
     }
   } catch { /* Before this schema a draft was the exact original text. */ }
   return { text: raw };

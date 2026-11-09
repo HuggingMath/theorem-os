@@ -104,6 +104,7 @@ const formalizationSchema = z.object({
 const conversationSchema = z.object({ formalizationId: z.string().uuid().optional(), runId: z.string().uuid().optional() })
   .strict().refine(value => Boolean(value.formalizationId || value.runId));
 const conversationMessageSchema = z.object({ text: z.string().trim().min(1).max(webConversationLimits.question),
+  requestId: inputSchema.shape.requestId,
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default('') }).strict();
 // Explanation roles accept only these Codex efforts (src/runtime/sub2api.ts).
 const explanationEffort = (effort: WebEffort): 'low' | 'high' | 'max' =>
@@ -603,7 +604,6 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         if (!owner) throw new HttpError(401, '请先登录。');
         const newWork = request.method === 'POST' && (['/api/runs', '/api/formalizations', '/api/precheck'].includes(url.pathname)
-          || /^\/api\/conversations\/[^/]+\/messages$/u.test(url.pathname)
           || /^\/api\/runs\/[^/]+\/(?:explain|explanations)$/u.test(url.pathname)
           || /^\/api\/formalizations\/[^/]+\/research$/u.test(url.pathname));
         // Body reads and readiness checks yield. Recheck admission immediately before dispatch so a pending
@@ -658,6 +658,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const conversation = conversations.read(owner, id);
             const parsed = conversationMessageSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查问题内容与 API Key。');
+            const accepted = conversations.messageReceipt(owner, id, parsed.data.requestId, parsed.data.text);
+            if (accepted) { json(response, 202, { conversation: accepted }); return; }
             const run = conversation.runId ? jobs.get(owner, conversation.runId) : undefined;
             const formalization = conversation.formalizationId ? formalizations.read(owner, conversation.formalizationId) : undefined;
             const provider = config.providers.find(item => item.id === (run?.providerId ?? formalization?.providerId ?? SUB2API_PROVIDER.id));
@@ -666,7 +668,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
             const model = run?.model ?? formalization?.model ?? providerModel(provider);
             admitWork();
-            json(response, 202, { conversation: conversations.send(owner, id, parsed.data.text, { baseUrl: provider.baseUrl, apiKey, model }) }); return;
+            json(response, 202, { conversation: conversations.send(owner, id, parsed.data.text, { baseUrl: provider.baseUrl, apiKey, model }, parsed.data.requestId) }); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }

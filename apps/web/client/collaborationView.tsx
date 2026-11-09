@@ -97,11 +97,13 @@ export class CollaborationView {
   clearPlanDrafts() {
     this.planEditor.dispose();
     this.planEditor = new TaskPlanEditor(this.api, observation => this.receive(observation));
+    this.planEditor.updateAccess({ runId: this.run?.id, status: this.run?.status, connected: this.connected, readOnly: this.readOnly, edit: this.permissions.edit });
   }
   /** Optional per-operation grants support a shared running view as well as the finished sample. */
   update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false,
     permissions: { guidance?: boolean; edit?: boolean; approve?: boolean; archive?: boolean } = {}) {
     this.connected = connected; this.readOnly = readOnly; this.permissions = permissions;
+    this.planEditor.updateAccess({ runId: container ? run?.id : undefined, status: run?.status, connected, readOnly, edit: permissions.edit });
     if (!container || !run) {
       if (this.current?.viewport?.contains(this.current.element)) { this.current.scrollTop = this.current.viewport.scrollTop; this.current.scrollLeft = this.current.viewport.scrollLeft; this.saveTaskReading(this.current); }
       this.current?.navigation.disconnect();

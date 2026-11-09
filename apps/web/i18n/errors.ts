@@ -1,5 +1,6 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  "发送编号已用于另一条问题，请重新发送。": "This send ID belongs to a different question. Please send again.",
   "请先完成原题形式化与审核。": "Finish formalizing and reviewing the original problem first.",
   "模型服务地址已改变，请创建新任务。": "The provider address has changed. Create a new task.",
   "请选择是否暂停接单。": "Choose whether to pause new tasks.",

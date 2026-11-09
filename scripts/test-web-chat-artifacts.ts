@@ -107,7 +107,21 @@ try {
     await page.locator('#detail-panel[data-tab="trajectory"]').waitFor();
     const node = page.locator('[data-roadmap-node="task:goal_2"]');
     await page.locator('[data-roadmap-node="task:goal_2"][aria-pressed="true"]').waitFor();
-    assert.match(await node.innerText(), /Tutorial\.zero_add/u);
+    // The shared route graph uses a short node title; the selected task details retain the full Lean identity.
+    const detail = page.locator('.roadmap-detail'), leanName = page.locator('[data-solution-inspector] .solution-route-section')
+      .filter({ hasText: 'Lean 名称' }).locator('code');
+    await detail.locator('header h4').waitFor();
+    const task = controls.get(run.id)!.observation.inspection.tasks.find(task => task.id === 'goal_2')!;
+    await fs.writeFile(path.join(output, `task-identity-${width}.json`), JSON.stringify({
+      runId: run.id, selectedNode: { html: await node.evaluate(element => element.outerHTML), title: await node.getAttribute('title') },
+      detail: await detail.innerHTML(), inspector: await page.locator('[data-solution-inspector]').innerHTML(),
+      observation: { sequence: controls.get(run.id)!.observation.sequence, task },
+    }, null, 2) + '\n');
+    assert.equal(await node.getAttribute('data-solution-node'), 'task:goal_2');
+    assert.match(await node.innerText(), /zero_add/u);
+    assert.equal(task.theorem, 'Tutorial.zero_add');
+    assert.equal(await detail.locator('header h4').innerText(), task.theorem);
+    assert.equal(await leanName.innerText(), task.theorem);
     assert.match(await page.locator('.roadmap-detail-summary').innerText(), /0 \+ n = n/u);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), 'false',
       'Recorded partial task checks never mark an active run accepted');

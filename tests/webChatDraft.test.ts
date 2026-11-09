@@ -14,6 +14,26 @@ it('retains exact draft text and selected budgets while projecting out credentia
   for (const text of ['plain original', '{"a":"valid JSON original"}', '  \ntext\n']) expect(decodeChatDraft(text)).toEqual({ text });
 });
 
+it('restores guidance to the exact run and task version together with an independently pending question', () => {
+  const draft = { text: '新的指导草稿', settings, guidance: { runId: 'run-a', taskRef: { id: 'goal', version: 'goal-v1' }, apiKey: 'secret-guidance-key' },
+    pendingMessage: { requestId: 'send-1', text: '原来尚未确认的问题', apiKey: 'secret-message-key' } };
+  const encoded = encodeChatDraft(draft);
+  expect(encoded).not.toContain('secret');
+  expect(decodeChatDraft(encoded)).toEqual({ text: draft.text, settings,
+    guidance: { runId: 'run-a', taskRef: { id: 'goal', version: 'goal-v1' } }, pendingMessage: { requestId: 'send-1', text: draft.pendingMessage.text } });
+  expect(decodeChatDraft(encodeChatDraft({ text: 'lead guidance', guidance: { runId: 'run-a' } })))
+    .toEqual({ text: 'lead guidance', guidance: { runId: 'run-a' } });
+});
+
+it('discards incomplete task references and invalid pending sends without losing the typed draft', () => {
+  for (const guidance of [{ runId: '' }, { runId: 'run-a', taskRef: { id: 'goal' } }, { runId: 'run-a', taskRef: { id: 'goal', version: 1 } }]) {
+    expect(decodeChatDraft(JSON.stringify({ schema: 'theorem-os.chat-draft.v1', text: '保留', guidance }))).toEqual({ text: '保留' });
+  }
+  for (const pendingMessage of [{ requestId: 'bad/id', text: 'old' }, { requestId: 'send-1', text: '' }, { requestId: 'send-1', text: 'x'.repeat(4001) }]) {
+    expect(decodeChatDraft(JSON.stringify({ schema: 'theorem-os.chat-draft.v1', text: '保留', pendingMessage }))).toEqual({ text: '保留' });
+  }
+});
+
 it('recovers a natural submission across refresh without retaining the key or statement in its identity', async () => {
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null,

@@ -72,6 +72,8 @@ jobs:
         run: bunx vitest run --maxWorkers=4 tests/webDraft.test.ts tests/webLongRun.test.ts tests/researchPlanApproval.test.ts tests/archiveRecordNavigation.test.ts tests/globalTrajectory.test.ts && bun run test:frontend-round8
       - name: Verify historical guidance, mobile controls and native route search input
         run: bun run test:frontend-round9
+      - name: Verify recovered guidance, message receipts, math readers and source links
+        run: bunx vitest run --maxWorkers=4 tests/webChatDraft.test.ts tests/webConversations.test.ts tests/archiveSourceLocation.test.ts tests/taskPlanEditorAccess.test.ts && bun run test:frontend-round10
 
   verify-solver:
     runs-on: ubuntu-latest

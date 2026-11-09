@@ -1,5 +1,7 @@
 /** The workbench shell: composer, settings, run list, overview, source and report views, dialogs and toasts. */
 export const app: Record<string, string> = {
+  "指导关联的研究已变化，请重新选择指导对象。": "The research linked to this guidance has changed. Please select its recipient again.",
+  "上一条问题的发送结果尚未确认，重试会先核对原问题；新输入会保留。": "The previous question's delivery is unconfirmed. Retry checks that send first and keeps your newer draft.",
   "指导回执身份不匹配。": "The guidance receipt does not match this submission.",
   "关联的证明任务不存在。": "The associated proof task was not found.",
   "代码": "Code",

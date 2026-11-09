@@ -12,6 +12,7 @@ import type { SolveProcess } from '../solveProcess';
 import { formalizationReasonText } from '../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
+import { Rich } from '../richText';
 import { Elapsed, SolveProcessView } from './SolveProcess';
 import type { PlanApprovalProps } from './RunHeader';
 import type { ChatArtifactKind } from '../chatArtifactNavigation';
@@ -51,7 +52,7 @@ function StatementDecision(props: ChatThreadProps) {
   return <section class="chat-decision" data-chat-statement-decision aria-labelledby="chat-statement-decision-heading">
     <header><Icon name="languages" /><h3 id="chat-statement-decision-heading">{item.status === 'review' ? t('先确认：这是不是你要证明的题目？') : t('题意已由你确认')}</h3></header>
     <div class="chat-decision-mathematics" translate={false}><ChatMessageContent text={report.backtranslation.mathematics} /></div>
-    {!!report.backtranslation.assumptions.length && <ul class="chat-decision-assumptions">{report.backtranslation.assumptions.map((assumption, index) => <li key={index} translate={false}>{assumption}</li>)}</ul>}
+    {!!report.backtranslation.assumptions.length && <ul class="chat-decision-assumptions">{report.backtranslation.assumptions.map((assumption, index) => <li key={index} translate={false}><Rich text={assumption} /></li>)}</ul>}
     <p class="chat-decision-next">{t('确认后，2 个 Agent 会拟定研究计划，等你批准再展开证明。')}</p>
     <div class="chat-task-actions">
       <button type="button" class="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" />{t('核对原题与 Lean')}</button>
@@ -497,19 +498,19 @@ function ChatOriginal({ formalization, run }: ChatOriginalProps) {
     {(report || run?.formalization) && <p class="chat-statement-verdict">{statementConfirmation(formalization?.confirmation ?? run?.formalization?.confirmation)}
       {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}</p>}
     <div class="chat-original-columns">
-      <section><h3>{t("自然语言原题")}</h3><div class="chat-message-text" translate={false}>{original ?? t("此题直接从 Lean 陈述开始。")}</div></section>
+      <section><h3>{t("自然语言原题")}</h3><div class="chat-message-text" translate={false}><Rich text={original ?? t("此题直接从 Lean 陈述开始。")} /></div></section>
       <section><h3>{t("Lean 陈述")}</h3>{source ? <pre tabIndex={0} translate={false}><code>{source}</code></pre> : <p>{t("陈述尚未生成。")}</p>}</section>
     </div>
     {report && <>
-      <section class="chat-backtranslation"><h3>{t("独立回译")}</h3><p class="chat-message-text" translate={false}>{report.backtranslation.mathematics}</p>
-        {!!report.backtranslation.assumptions.length && <><h4>{t("假设")}</h4><ul>{report.backtranslation.assumptions.map((value, index) => <li key={index} translate={false}>{value}</li>)}</ul></>}
-        {!!report.backtranslation.definitions.length && <><h4>{t("定义")}</h4><ul>{report.backtranslation.definitions.map((value, index) => <li key={index} translate={false}>{value}</li>)}</ul></>}
+      <section class="chat-backtranslation"><h3>{t("独立回译")}</h3><p class="chat-message-text" translate={false}><Rich text={report.backtranslation.mathematics} /></p>
+        {!!report.backtranslation.assumptions.length && <><h4>{t("假设")}</h4><ul>{report.backtranslation.assumptions.map((value, index) => <li key={index} translate={false}><Rich text={value} /></li>)}</ul></>}
+        {!!report.backtranslation.definitions.length && <><h4>{t("定义")}</h4><ul>{report.backtranslation.definitions.map((value, index) => <li key={index} translate={false}><Rich text={value} /></li>)}</ul></>}
       </section>
       <section class="chat-correspondences"><h3>{t("具体对应关系")}</h3>
         {report.correspondences.length ? report.correspondences.map((item, index) => <article key={index} data-relation={item.relation}>
           <header><strong>{aspects[item.aspect]}</strong><span>{relations[item.relation]}</span></header>
-          <div class="chat-original-columns"><blockquote translate={false}>{item.original}</blockquote><pre tabIndex={0} translate={false}><code>{item.leanText}</code></pre></div>
-          {item.explanations.map((explanation, n) => <p key={n} translate={false}>{explanation}</p>)}
+          <div class="chat-original-columns"><blockquote translate={false}><Rich text={item.original} /></blockquote><pre tabIndex={0} translate={false}><code>{item.leanText}</code></pre></div>
+          {item.explanations.map((explanation, n) => <p key={n} translate={false}><Rich text={explanation} /></p>)}
         </article>) : <p>{t("本次报告未记录逐项对应关系。")}</p>}
       </section>
     </>}

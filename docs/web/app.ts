@@ -16,6 +16,7 @@ import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
 import { mountProofReading } from './proofReading';
 import { mountProofFigures } from './proofFigures';
 import { mountArchiveSolutionRoutes, typesetArchiveProse } from './solutionRouteClient';
+import { readSourceLocation, verifiedSourceLocation, writeSourceLocation, type SourceLocation } from './sourceLocation';
 
 const iconSet = {
   ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
@@ -106,7 +107,6 @@ const strings = {
 const records = catalog.records.map(record => localizeRecord(record, locale));
 type ArchiveRecord = ArchiveIndexRecord;
 type ArchiveSource = ArchiveIndexSource & { code: string };
-type SourceLocation = { recordId: string; name: string; sha256: string; line: number; endLine: number };
 let sourceLocation: SourceLocation | undefined;
 
 declare global { interface Window { theoremosSources?: Record<string, Record<string, string>>; theoremosProcesses?: Record<string, ArchiveProcess> } }
@@ -183,6 +183,7 @@ const state = {
 const selectedRecord = () => records.find(record => record.id === state.selected);
 let processSelection = emptyProcessSelection();
 let processRecordId = '';
+const sourceContext = (record: ArchiveRecord) => ({ record, tab: state.tab, ...processSelection, process: window.theoremosProcesses?.[record.id] });
 
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -194,13 +195,16 @@ function readLocation() {
   const id = params.get('proof');
   state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
   if (id && !params.has('tab') && selectedRecord()?.processSummary) state.tab = 'process';
-  state.sourceName = ''; sourceLocation = undefined;
+  state.sourceName = '';
   processRecordId = state.selected;
   processSelection = { ...emptyProcessSelection(), run: params.get('run') ?? '', task: params.get('task') ?? '', step: params.get('step') ?? '',
     code: params.get('code') === 'source' ? 'source' : params.get('code') === 'diff' ? 'diff' : 'closed',
     view: params.get('mode') === 'steps' ? 'steps' : params.get('mode') === 'roadmap' ? 'roadmap'
       : params.get('mode') === 'global' ? 'global' : ['run', 'node', 'task', 'step'].some(key => params.has(key)) ? 'roadmap' : 'global', node: params.get('node') ?? '',
     filter: params.get('filter') === 'checks' ? 'checks' : params.get('filter') === 'decisions' ? 'decisions' : 'all' };
+  sourceLocation = id === state.selected ? readSourceLocation(params) : undefined;
+  const record = selectedRecord();
+  if (record && state.tab === 'source') state.sourceName = verifiedSourceLocation(sourceLocation, sourceContext(record))?.name ?? '';
   return id === state.selected ? id : undefined;
 }
 
@@ -224,6 +228,8 @@ function writeLocation(push = false) {
         if (processSelection.code !== 'closed') params.set('code', processSelection.code);
       }
     }
+    const record = selectedRecord();
+    if (record && (state.tab !== 'process' || processSelection.view !== 'global')) writeSourceLocation(params, sourceLocation, sourceContext(record));
   }
   const url = `#${params.toString() || 'view=archive'}`;
   if (push) history.pushState(null, '', url);
@@ -393,6 +399,7 @@ function processView(record: ArchiveRecord): string {
       icons();
       writeLocation();
       revealProcessStep();
+      revealCheckedSource(record);
       if (!failed && revealProcessAfterLoad) { revealProcessAfterLoad = false; revealProcessContent(); }
     };
     void loadProcess(record).then(() => refresh(false), () => refresh(true));
@@ -453,7 +460,7 @@ function renderInspector(record?: ArchiveRecord) {
     <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>
     <div class="archive-access"><p>${strings.accessPrompt}</p><div class="archive-access-actions"><a class="inline-link" href="index.html#start">${strings.requestAccess}${icon('arrow-up-right')}</a>${backToList}</div></div>`;
   if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => revealSource(record));
-  if (state.tab === 'process') revealProcessStep();
+  if (state.tab === 'process') { revealProcessStep(); revealCheckedSource(record); }
 }
 
 function showLoadedSource(record: ArchiveRecord, failed = false) {
@@ -487,16 +494,15 @@ function revealSource(record: ArchiveRecord) {
   if (state.tab !== 'source' || selectedRecord() !== record) return;
   const source = currentSource(record), panel = document.querySelector<HTMLElement>('.source-code');
   if (!panel) return;
-  const location = sourceLocation?.recordId === record.id && sourceLocation.name === source.name && sourceLocation.sha256 === source.sha256
-    ? sourceLocation : undefined;
+  const location = verifiedSourceLocation(sourceLocation, sourceContext(record));
   const line = location?.line ?? Math.max(1, source.code.split('\n').findIndex(value => record.declaration && value.startsWith(record.declaration)) + 1);
   revealSourceRange(panel, line, location?.endLine ?? line);
   if (location) { panel.focus({ preventScroll: true }); panel.scrollIntoView({ block: 'nearest' }); }
 }
 
 function revealCheckedSource(record: ArchiveRecord, focus = false) {
-  const location = sourceLocation;
-  if (state.tab !== 'process' || selectedRecord() !== record || location?.recordId !== record.id || processSelection.code !== 'source') return;
+  const location = verifiedSourceLocation(sourceLocation, sourceContext(record));
+  if (state.tab !== 'process' || selectedRecord() !== record || !location) return;
   const process = window.theoremosProcesses?.[record.id], run = process?.runs.find(item => item.runId === processSelection.run);
   const check = run?.checks?.find(item => `check:${item.id}` === processSelection.step);
   const source = check?.sourceDigest && process?.sources?.[check.sourceDigest];
@@ -512,7 +518,7 @@ function revealCheckedSource(record: ArchiveRecord, focus = false) {
 }
 
 function jumpToDeclaration(record: ArchiveRecord) {
-  sourceLocation = undefined; revealSource(record);
+  sourceLocation = undefined; revealSource(record); writeLocation();
 }
 
 function render() {
@@ -555,7 +561,10 @@ function restoreLocation() {
     // processView renders the loaded process or its failure message before revealing it.
     const ready = state.tab === 'process' && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
     void ready.then(() => document.fonts.ready).then(() => {
-      if (state.selected === requested) revealRecord();
+      if (state.selected === requested) {
+        revealRecord();
+        if (record) revealCheckedSource(record, true);
+      }
     });
   }
 }
@@ -612,16 +621,15 @@ document.addEventListener('theoremos-solution-open', event => {
     run = process?.runs.find(candidate => candidate.checks?.some(item => item.sourceDigest === detail.sourceDigest));
     check = run?.checks?.find(candidate => candidate.sourceDigest === detail.sourceDigest);
   }
-  const archiveSource = record.sources.find(source => source.name === detail.sourceName && source.sha256 === detail.sourceDigest);
-  const checkedSource = check?.sourceDigest === detail.sourceDigest && detail.sourceDigest && process?.sources?.[detail.sourceDigest];
   const line = detail.sourceLine, endLine = detail.sourceEndLine ?? line;
-  sourceLocation = detail.sourceName && detail.sourceDigest && Number.isInteger(line) && line! > 0 && Number.isInteger(endLine) && endLine! >= line!
-    && (archiveSource || checkedSource && checkedSource.path === detail.sourceName && checkedSource.sha256 === detail.sourceDigest)
-    ? { recordId: record.id, name: detail.sourceName, sha256: detail.sourceDigest, line: line!, endLine: endLine! } : undefined;
+  sourceLocation = undefined;
+  const location = detail.sourceName && detail.sourceDigest && line !== undefined && endLine !== undefined
+    ? { recordId: record.id, name: detail.sourceName, sha256: detail.sourceDigest, line, endLine } : undefined;
   if (run && (detail.node || check)) {
     processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: run.runId,
       node: detail.node ?? (check!.scope === 'original' ? 'original' : check!.taskId ? `task:${check!.taskId}` : 'problem'),
       step: detail.step ?? (check ? `check:${check.id}` : ''), code: detail.code === 'source' || check && detail.sourceDigest ? 'source' : 'closed' };
+    if (location) sourceLocation = verifiedSourceLocation({ ...location, tab: 'process', run: processSelection.run, step: processSelection.step }, sourceContext(record));
     refreshProcess(record);
     const panel = document.querySelector<HTMLElement>('#process-step-detail, #process-map-inspector');
     panel?.setAttribute('tabindex', '-1'); panel?.focus({ preventScroll: true }); panel?.scrollIntoView({ block: 'start' });
@@ -630,6 +638,7 @@ document.addEventListener('theoremos-solution-open', event => {
   }
   if (detail.sourceName && record.sources.some(source => source.name === detail.sourceName && (!detail.sourceDigest || source.sha256 === detail.sourceDigest))) {
     state.sourceName = detail.sourceName; state.tab = 'source';
+    if (location) sourceLocation = verifiedSourceLocation({ ...location, tab: 'source' }, sourceContext(record));
     renderInspector(record); icons(); writeLocation();
     document.querySelector<HTMLElement>('#tab-source')?.focus({ preventScroll: true });
   }
@@ -771,6 +780,7 @@ element('#inspector').addEventListener('change', event => {
   sourceLocation = undefined;
   renderInspector(selectedRecord());
   icons();
+  writeLocation();
   element('#source-file').focus({ preventScroll: true });
 });
 document.addEventListener('keydown', event => {

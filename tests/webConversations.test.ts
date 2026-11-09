@@ -417,6 +417,58 @@ describe('conversation guidance persists the original command and its real recei
 });
 
 describe('persistent conversations use saved owned task context', () => {
+  it('recovers the same accepted send during answering, after completion and after restart without calling the provider again', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-message-receipt-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    let finish!: (answer: { answer: string }) => void;
+    const answer = vi.fn(async () => new Promise<{ answer: string }>(resolve => { finish = resolve; }));
+    const { service, run, storage, resources } = fixture(new WebStorage(root), answer);
+    cleanups.push(async () => { finish?.({ answer: 'cleanup' }); await service.close(); });
+    const conversation = service.create('alice', { runId: run.id });
+    const first = service.send('alice', conversation.id, '  请解释原问题  ', call, 'send-original'); await tick();
+    const duplicate = service.send('alice', conversation.id, '请解释原问题', call, 'send-original');
+    expect(duplicate.messages.map(message => message.id)).toEqual(first.messages.map(message => message.id));
+    expect(duplicate.messages.at(-1)).toMatchObject({ status: 'pending' }); expect(answer).toHaveBeenCalledTimes(1);
+    expect(() => service.send('alice', conversation.id, '另一条内容', call, 'send-original')).toThrow('另一条问题');
+    expect(() => service.messageReceipt('bob', conversation.id, 'send-original', '请解释原问题')).toThrow('不存在');
+    finish({ answer: '已保存回答' }); await tick();
+    expect(service.send('alice', conversation.id, '请解释原问题', call, 'send-original').messages.at(-1)).toMatchObject({ text: '已保存回答', status: 'complete' });
+    expect(answer).toHaveBeenCalledTimes(1);
+    const restartedAnswer = vi.fn(async () => ({ answer: '不应调用' }));
+    const restarted = new WebConversations(new WebStorage(root), resources, restartedAnswer);
+    expect(restarted.send('alice', conversation.id, '请解释原问题', call, 'send-original').messages.at(-1)).toMatchObject({ text: '已保存回答' });
+    expect(restartedAnswer).not.toHaveBeenCalled();
+    expect(JSON.stringify(storedConversation(storage, conversation.id))).not.toContain(key);
+    await restarted.close();
+  });
+
+  it('allows identical questions as new explicit sends and preserves no-ID callers', async () => {
+    const { service, run, calls } = fixture();
+    const conversation = service.create('alice', { runId: run.id });
+    for (const requestId of ['first', 'second', undefined, undefined]) {
+      service.send('alice', conversation.id, '相同问题', call, requestId); await tick();
+    }
+    expect(calls).toHaveLength(4);
+    const questions = service.read('alice', conversation.id).messages.filter(message => message.role === 'user' && message.text === '相同问题');
+    expect(questions).toHaveLength(4); expect(new Set(questions.map(message => message.id)).size).toBe(4);
+    expect(questions.map(message => message.requestId)).toEqual(['first', 'second', undefined, undefined]);
+    await service.close();
+  });
+
+  it('returns the saved interruption for the original send after restart instead of starting another answer', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-message-restart-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    let finish!: (answer: { answer: string }) => void;
+    const { service, run, resources } = fixture(new WebStorage(root), async () => new Promise(resolve => { finish = resolve; }));
+    cleanups.push(async () => { finish?.({ answer: 'cleanup' }); await service.close(); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '中断前的问题', call, 'interrupted-send'); await tick();
+    const answer = vi.fn(async () => ({ answer: '不应自动重答' }));
+    const restarted = new WebConversations(new WebStorage(root), resources, answer);
+    expect(restarted.send('alice', conversation.id, '中断前的问题', call, 'interrupted-send').messages.at(-1)).toMatchObject({ status: 'interrupted' });
+    expect(answer).not.toHaveBeenCalled(); await restarted.close();
+  });
+
   it('uses the newly associated research and current formalization when a replacement waits for old provider cleanup', async () => {
     let finish!: (answer: { answer: string }) => void;
     const inputs: WebExplainCall[] = [];
@@ -652,6 +704,27 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     expect(saved.messages.at(-1)).toMatchObject({ status: 'complete', text: '来自本地模拟服务的回答。' });
     expect(seen[0]?.instructions).toBe(webConversationInstructions);
     expect(JSON.stringify(seen[0]?.input)).toContain(run.source);
+    const identified = { text: '按发送身份恢复', apiKey: key, requestId: 'http-send-1' };
+    for (const requestId of ['', 'bad/id', 'x'.repeat(129)]) expect((await fetch(route + '/messages', {
+      method: 'POST', headers, body: JSON.stringify({ ...identified, requestId }) })).status).toBe(400);
+    const identifiedResponse = await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify(identified) });
+    expect(identifiedResponse.status).toBe(202);
+    const identifiedFirst = (await identifiedResponse.json() as { conversation: WebConversation }).conversation;
+    // Acceptance can be recovered without the key even after maintenance begins. It dispatches no new answer.
+    service.storage.saveRecord(['operations', 'maintenance.json'], { enabled: true });
+    const recovered = await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ ...identified, apiKey: '' }) });
+    expect(recovered.status).toBe(202);
+    expect((await recovered.json() as { conversation: WebConversation }).conversation.messages.map(message => message.id))
+      .toEqual(identifiedFirst.messages.map(message => message.id));
+    expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ ...identified, text: '不能更换原内容' }) })).status).toBe(409);
+    expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ ...identified, requestId: 'http-send-new' }) })).status).toBe(503);
+    service.storage.saveRecord(['operations', 'maintenance.json'], { enabled: false });
+    for (let i = 0; i < 100; i++) {
+      saved = (await (await fetch(route, { headers })).json() as { conversation: WebConversation }).conversation;
+      if (saved.messages.at(-1)?.status === 'complete') break;
+      await tick();
+    }
+    expect(seen).toHaveLength(2);
     const other = await fetch(`${base}/api/session`), otherCookie = other.headers.get('set-cookie')!.split(';')[0]!;
     expect((await fetch(route, { headers: { Cookie: otherCookie } })).status).toBe(404);
     const otherSession = await other.json() as WebSession;
@@ -682,7 +755,7 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     const reopened = await fetch(`${base}/api/conversations`, { method: 'POST', headers, body: JSON.stringify({ runId: run.id }) });
     expect(reopened.status).toBe(201);
     expect((await reopened.json() as { conversation: WebConversation }).conversation.id).not.toBe(conversation.id);
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(2);
   });
 
   it('refuses a rename after logout while its body is still arriving', async () => {
