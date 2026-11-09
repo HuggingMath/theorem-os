@@ -30,6 +30,7 @@ import { CollaborationView } from './collaborationView';
 import type { CollaborationSection } from './collaborationNavigation';
 import { TrajectoryView, type ExplainKey } from './trajectoryView';
 import { RunUpdates } from './runUpdates';
+import { retainLatestRun } from './runSnapshot';
 import type { WebCommandResult, WebObservation } from '../collaboration';
 import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
@@ -165,7 +166,8 @@ async function loadNaturalResearch() {
       // Arrow keys in the phone history open each run in turn; its conversation arriving must not close the list.
       if (!attached) closeHistoryDialog();
     },
-    onSelection: run => {
+    onSelection: received => {
+      const run = received && retainLatestRun(received, state.runs.find(item => item.id === received.id));
       const changed = currentRun()?.id !== run?.id;
       // A known run is refreshed where it stands, so the history keeps its order; a new one joins at the top.
       if (run) state.runs = state.runs.some(item => item.id === run.id) ? state.runs.map(item => item.id === run.id ? run : item) : [run, ...state.runs];
@@ -1975,24 +1977,6 @@ function disconnected(text: string) {
   element('#runs-error').hidden = false;
   renderRuntime(); renderDetail();
 }
-function retainLatestObservation(run: WebRun, previous?: WebRun): WebRun {
-  const before = previous?.solverAttempt ?? (previous?.observation && {
-    solverRunId: previous.observation.solverRunId, round: 0, sequence: previous.observation.sequence });
-  const declared = run.solverAttempt;
-  // Only a host declaration can change the solver behind one Web run. A late list/creation response
-  // must retain that declaration as well as its observation, so it cannot revive a retired round.
-  const accepted = declared && (!before || declared.sequence >= before.sequence &&
-    (declared.round === before.round && declared.solverRunId === before.solverRunId ||
-      declared.round > before.round && declared.solverRunId !== before.solverRunId));
-  const attempt = accepted ? declared : previous?.solverAttempt;
-  const solverRunId = attempt?.solverRunId ?? before?.solverRunId ?? run.observation?.solverRunId;
-  let observation = run.observation?.solverRunId === solverRunId ? run.observation : undefined;
-  const previousObservation = previous?.observation;
-  if (previousObservation && previousObservation.solverRunId === solverRunId &&
-    (!observation || previousObservation.sequence >= observation.sequence)) observation = previousObservation;
-  return { ...run, solverAttempt: attempt, observation,
-    updatedAt: previous && previous.updatedAt > run.updatedAt ? previous.updatedAt : run.updatedAt };
-}
 function receiveRunObservation(observation: WebObservation) {
   const previous = state.runs.find(run => run.id === observation.webRunId);
   const solverRunId = previous?.solverAttempt?.solverRunId ?? previous?.observation?.solverRunId;
@@ -2020,7 +2004,7 @@ async function refreshRuns(epoch: number, force = false, listed?: WebSession['ru
   if (!result) return;
   const previous = state.runs;
   const byId = new Map(previous.map(run => [run.id, run]));
-  state.runs = result.runs.map(run => retainLatestObservation(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  state.runs = result.runs.map(run => retainLatestRun(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   // The first list is the history as it stands; only later ones bring arrivals.
   if (state.resumed) for (const run of state.runs) if (!byId.has(run.id)) arrivals.add(run.id);
   const resume = state.resumed ? undefined : readResume(() => localStorage);
@@ -2599,7 +2583,7 @@ async function cancelRun(id: string) {
     state.listGeneration++;
     const previous = state.runs.slice();
     const index = state.runs.findIndex(item => item.id === run.id);
-    const updated = retainLatestObservation(result.run, state.runs[index]);
+    const updated = retainLatestRun(result.run, state.runs[index]);
     if (index >= 0) state.runs[index] = updated;
     if (state.selectedId === run.id) state.selectedRun = updated;
     rememberFinishedRuns(previous);
