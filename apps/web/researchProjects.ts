@@ -680,15 +680,20 @@ export class WebResearchProjects {
     const operation = 'assignment';
     if (this.request(stored, viewer, operation, input)) return this.detail(viewer, projectId);
     this.compare(stored.project.revision, input.expectedRevision);
-    this.validateTarget(viewer, stored, input.target, 'read');
     if (!input.target.taskRef) throw new WebStorageError(400, '认领必须绑定精确任务版本。');
+    const assignments = stored.assignments ??= [], self = this.identity(viewer);
+    const previous = assignments.find(assignment => assignment.author.id === self && assignment.target.runId === input.target.runId &&
+      canonicalMathJson(assignment.target.taskRef) === canonicalMathJson(input.target.taskRef));
+    if (input.status === 'released' && previous && canonicalMathJson(previous.target) === canonicalMathJson(input.target)) {
+      // Releasing a saved claim closes that historical assignment. It does not act on the current task contract.
+      const resolved = this.resolveBinding(viewer, projectId, input.target.runId, 'read');
+      if (resolved.binding.statementVersionId !== input.target.statementVersionId)
+        throw new WebStorageError(409, '陈述版本与运行不一致。');
+    } else this.validateTarget(viewer, stored, input.target, 'read');
     if (input.feedbackId && !stored.feedback.some(feedback => feedback.id === input.feedbackId &&
       feedback.author.id === this.identity(viewer) && feedback.target?.runId === input.target.runId &&
       canonicalMathJson(feedback.target.taskRef) === canonicalMathJson(input.target.taskRef)))
       throw new WebStorageError(400, '提交物与认领任务不一致。');
-    const assignments = stored.assignments ??= [], self = this.identity(viewer);
-    const previous = assignments.find(assignment => assignment.author.id === self && assignment.target.runId === input.target.runId &&
-      canonicalMathJson(assignment.target.taskRef) === canonicalMathJson(input.target.taskRef));
     const at = now(), record: ResearchHumanAssignment = { id: previous?.id ?? crypto.randomUUID(), author: this.author(viewer),
       target: input.target, status: input.status, feedbackId: input.feedbackId, createdAt: previous?.createdAt ?? at, updatedAt: at };
     if (previous) assignments[assignments.indexOf(previous)] = record; else assignments.push(record);

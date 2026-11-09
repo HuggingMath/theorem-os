@@ -138,6 +138,7 @@ function StatementEditor({ project, onSaved }: { project: ResearchProjectDetail;
     [assumptions, setAssumptions] = useState(''), [targets, setTargets] = useState(''), [confirmed, setConfirmed] = useState(false),
     [formalizationId, setFormalizationId] = useState<string>(), [environmentDigest, setEnvironmentDigest] = useState<string>(), [importedRun, setImportedRun] = useState(''), action = useMutation();
   const ownRuns = useResource<{ runs: WebRun[] }>('/api/runs');
+  const draftRevision = useRef(0);
   const clearOrigin = () => { setImportedRun(''); setFormalizationId(undefined); setEnvironmentDigest(undefined); setConfirmed(false); };
   const importRun = (id: string) => {
     if (!id) { clearOrigin(); return; }
@@ -147,13 +148,16 @@ function StatementEditor({ project, onSaved }: { project: ResearchProjectDetail;
     setAssumptions(run.observation?.inspection.problem.assumptions.join('\n') ?? '');
     setTargets(run.observation?.inspection.problem.targets.map(target => `${target.theoremName} | ${target.proofPath}`).join('\n') ?? ''); setConfirmed(false);
   };
-  return <form class="research-form" onSubmit={event => { event.preventDefault();
+  return <form class="research-form" onInput={() => { draftRevision.current++; }} onSubmit={event => { event.preventDefault();
+    const submittedDraftRevision = draftRevision.current;
     const parsedTargets = lines(targets).map(value => { const [theoremName = '', proofPath = 'Main.lean'] = value.split('|').map(item => item.trim()); return { theoremName, proofPath }; });
     void action.run<Item<ResearchProjectDetail>>('POST', `${base}/theorems/${enc(project.id)}/versions`,
       { statement, source, environment, assumptions: lines(assumptions), ...(parsedTargets.length ? { targets: parsedTargets } : {}), ...(formalizationId ? { formalizationId } : {}),
         ...(environmentDigest ? { environmentDigest } : {}), confirmation: { confirmed }, expectedRevision: project.revision },
       result => { const added = result.item.versions.find(item => item.id === result.item.currentStatementVersionId); if (!added) return;
-        setStatement(''); setSource(''); setAssumptions(''); setTargets(''); clearOrigin(); onSaved(added); });
+        if (draftRevision.current === submittedDraftRevision) { setStatement(''); setSource(''); setAssumptions(''); setTargets(''); clearOrigin(); }
+        else action.setMessage(tx('陈述版本已保存，期间的新编辑已保留。', 'Statement version saved. Your newer edits are preserved.'));
+        onSaved(added); });
   }}><label>{tx('从我的已有运行导入原题（可选）', 'Import the statement from one of my runs (optional)')}<select value={importedRun} onChange={event => importRun(event.currentTarget.value)}>
     <option value="">{tx('直接填写新陈述', 'Write a new statement')}</option>{ownRuns.data?.runs.map(run => <option key={run.id} value={run.id}>{run.title} · {nameOf(run.status)}</option>)}</select></label><ErrorBox message={ownRuns.error} />
     <Field label={tx('自然语言 / TeX 原题', 'Original statement / TeX')} value={statement} onInput={value => { setStatement(value); setConfirmed(false); }} multiline required rows={4} />
@@ -234,10 +238,13 @@ function RunResearch({ project, selfId, binding, refreshProject, task, requested
 function HumanParticipation({ project, selfId, binding, observation, refresh }: { project: ResearchProjectDetail; selfId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void }) {
   const [target, setTarget] = useState<ResearchFeedbackTarget>(), [status, setStatus] = useState('claimed'), [feedbackId, setFeedbackId] = useState(''), action = useMutation();
   const assignments = project.assignments.filter(item => item.target.runId === binding.runId);
+  const targetAvailable = Boolean(target?.taskRef && observation.inspection.tasks.some(task => task.id === target.taskRef!.id && task.version === target.taskRef!.version));
   return <details><summary>{tx('人类参与者与任务认领', 'Human participation and task claims')}</summary>
-    {assignments.map(item => <div class="research-event" key={item.id}><a href={personHref(item.author.id)}>{item.author.displayName}</a><p>{item.target.taskRef?.id} · {item.target.taskRef?.version.slice(0, 12)} · {item.status === 'claimed' ? tx('已认领', 'Claimed') : item.status === 'released' ? tx('已释放', 'Released') : tx('已提交', 'Submitted')}</p></div>)}
+    {assignments.map(item => <div class="research-event" key={item.id} data-human-assignment-id={item.id}><a href={personHref(item.author.id)}>{item.author.displayName}</a><p>{item.target.taskRef?.id} · {item.target.taskRef?.version.slice(0, 12)} · {item.status === 'claimed' ? tx('已认领', 'Claimed') : item.status === 'released' ? tx('已释放', 'Released') : tx('已提交', 'Submitted')}</p>
+      {project.permissions.edit && item.author.id === selfId && item.status === 'claimed' && <button type="button" class="text-button" disabled={action.busy} onClick={() => void action.run('POST', `${base}/theorems/${enc(project.id)}/assignments`,
+        { target: item.target, status: 'released', ...(item.feedbackId ? { feedbackId: item.feedbackId } : {}), expectedRevision: project.revision }, refresh)}>{tx('释放此认领', 'Release this claim')}</button>}</div>)}
     {!assignments.length && <Empty>{tx('尚无人认领此运行的任务。', 'No human task claims for this run yet.')}</Empty>}
-    {project.permissions.edit && <form class="research-form" onSubmit={event => { event.preventDefault(); if (!target) return; void action.run('POST', `${base}/theorems/${enc(project.id)}/assignments`,
+    {project.permissions.edit && <form class="research-form" onSubmit={event => { event.preventDefault(); if (!target || !targetAvailable) return; void action.run('POST', `${base}/theorems/${enc(project.id)}/assignments`,
       { target, status, ...(feedbackId ? { feedbackId } : {}), expectedRevision: project.revision }, refresh); }}>
       <label>{tx('任务与版本', 'Task and version')}<select required value={target?.taskRef ? `${target.taskRef.id}@${target.taskRef.version}` : ''} onChange={event => {
         const selected = observation.inspection.tasks.find(task => `${task.id}@${task.version}` === event.currentTarget.value);
@@ -247,7 +254,8 @@ function HumanParticipation({ project, selfId, binding, observation, refresh }: 
       <label>{tx('参与状态', 'Participation status')}<select value={status} onChange={event => setStatus(event.currentTarget.value)}><option value="claimed">{tx('认领', 'Claim')}</option><option value="released">{tx('释放认领', 'Release claim')}</option><option value="submitted">{tx('记录提交', 'Record submission')}</option></select></label>
       <label>{tx('关联本人反馈（可选）', 'Link my feedback (optional)')}<select value={feedbackId} onChange={event => setFeedbackId(event.currentTarget.value)}><option value="">{tx('不关联', 'No link')}</option>
         {project.feedback.filter(item => item.author.id === selfId && item.target?.runId === binding.runId && item.target?.taskRef?.id === target?.taskRef?.id && item.target?.taskRef?.version === target?.taskRef?.version).map(item => <option key={item.id} value={item.id}>{nameOf(item.kind)} · {item.text.slice(0, 60)}</option>)}</select></label>
-      <MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !target}>{tx('保存参与状态', 'Save participation')}</button>
+      {target && !targetAvailable && <p class="research-status">{tx('任务版本已更新，请重新选择。已有认领可在上方直接释放。', 'The task version changed. Choose again, or release an existing claim above.')}</p>}
+      <MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !targetAvailable}>{tx('保存参与状态', 'Save participation')}</button>
     </form>}</details>;
 }
 

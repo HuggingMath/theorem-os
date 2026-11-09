@@ -538,6 +538,48 @@ describe('durable feedback, decisions and host receipts', () => {
     expect(updated.assignments).toHaveLength(1); expect(updated.assignments[0].author.id).toBe(projects.identity(bob));
     expect(storage.getRun(alice, 'run-a')).toEqual(before);
   });
+
+  it('releases the original saved human claim after the task contract changes without changing runtime state', () => {
+    const { projects, storage, project, target } = fixture(true);
+    const feedback = projects.submitFeedback(bob, project.id, { requestId: 'claim-feedback', kind: 'guidance', text: 'I will investigate this task',
+      target, recipient: { kind: 'task', id: target.taskRef!.id } });
+    const claimed = projects.assignTask(bob, project.id, { requestId: 'claim-before-change',
+      expectedRevision: projects.detail(bob, project.id).revision, target, status: 'claimed', feedbackId: feedback.id });
+    const originalClaim = claimed.assignments[0], changed = observation();
+    changed.sequence = 2; changed.snapshot.stateDigest = 'b'.repeat(64); changed.inspection.tasks[0].version = 'task-v2';
+    storage.saveRun(alice, run('run-a', changed));
+    const before = storage.getRun(alice, 'run-a');
+    const restarted = new WebResearchProjects(storage);
+    const released = restarted.assignTask(bob, project.id, { requestId: 'release-after-change', expectedRevision: claimed.revision,
+      target: originalClaim.target, status: 'released', feedbackId: feedback.id });
+    expect(released.assignments).toEqual([{ ...originalClaim, status: 'released', updatedAt: expect.any(String) }]);
+    expect(storage.getRun(alice, 'run-a')).toEqual(before);
+    expect(new WebResearchProjects(new WebStorage(storage.root)).detail(bob, project.id).assignments).toEqual(released.assignments);
+  });
+
+  it('keeps historical claim releases scoped to the saved author, full target, revision and current project permissions', () => {
+    const { projects, storage, project, target } = fixture();
+    let current = projects.assignTask(bob, project.id, { requestId: 'historical-claim', expectedRevision: project.revision, target, status: 'claimed' });
+    const changed = observation(); changed.sequence = 2; changed.snapshot.stateDigest = 'b'.repeat(64); changed.inspection.tasks[0].version = 'task-v2';
+    storage.saveRun(alice, run('run-a', changed));
+    const release = { expectedRevision: current.revision, target, status: 'released' };
+    errorStatus(() => projects.assignTask(alice, project.id, { ...release, requestId: 'another-author' }), 409);
+    for (const status of ['claimed', 'submitted']) errorStatus(() => projects.assignTask(bob, project.id,
+      { ...release, requestId: 'stale-' + status, status }), 409);
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'changed-observation',
+      target: { ...target, observationRef: { ...target.observationRef, stateDigest: 'c'.repeat(64) } } }), 409);
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'changed-statement',
+      target: { ...target, statementVersionId: 'another-statement' } }), 409);
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'stale-revision', expectedRevision: current.revision - 1 }), 409);
+    current = projects.setMember(alice, project.id, projects.identity(bob),
+      { requestId: 'reader-after-claim', expectedRevision: current.revision, role: 'reader' });
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'reader-release', expectedRevision: current.revision }), 403);
+    current = projects.setMember(alice, project.id, projects.identity(bob),
+      { requestId: 'revoke-after-claim', expectedRevision: current.revision, role: null });
+    errorStatus(() => projects.assignTask(bob, project.id, { ...release, requestId: 'revoked-release', expectedRevision: current.revision }), 404);
+    expect(projects.detail(alice, project.id).assignments).toHaveLength(1);
+    expect(projects.detail(alice, project.id).assignments[0].status).toBe('claimed');
+  });
 });
 
 describe('contribution discovery, notifications and cleanup', () => {
