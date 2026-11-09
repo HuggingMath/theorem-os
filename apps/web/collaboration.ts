@@ -126,6 +126,8 @@ export type WebDelivery = {
 export type WebTaskSource = {
   taskId: string; taskVersion: string; commit: string; sourceDigest: string;
   environmentDigest: string; file: string; source: string; scope: 'owned-file';
+  /** Host-projected owned Lean files from this same immutable snapshot. */
+  dependencySources?: { file: string; source: string }[];
 };
 export type WebCheckReceipt = {
   id: string; taskId: string; taskVersion: string; commit: string;
@@ -135,12 +137,21 @@ export type WebGuidanceInput = {
   id: string;
   recipient: { kind: 'lead' | 'task' | 'worker'; id?: string };
   taskRef?: { id: string; version: string };
+  candidate?: {
+    source: string; file: string; sourceDigest: string; baseCommit: string; baseSourceDigest: string;
+    environmentDigest: string; taskRef: { id: string; version: string };
+  };
   text: string;
   observationRef: { sequence: number; stateDigest: string };
 };
 export type WebGuidanceRecord = WebGuidanceInput & {
   status: 'queued' | 'delivered' | 'deferred' | 'failed';
   createdAt: string; updatedAt: string; deliveredTo?: string[]; reason?: string;
+  decision?: {
+    guidanceId: string; status: 'accepted' | 'declined' | 'needs-info'; reason: string;
+    evidenceRefs: ({ kind: 'edit'; id: string } | { kind: 'task'; id: string; version: string } | { kind: 'plan'; version: string })[];
+    workerId: string; decidedAt: string; sourceTaskRef?: { id: string; version: string }; sourcePlanVersion?: string;
+  };
 };
 export type WebObservation = {
   schema: 'theorem-os.web-observation.v1';

@@ -9,6 +9,9 @@ import type { WebRunInput } from '../apps/web/shared';
 import { formalizationDigest, readFormalizationArtifact, type FormalizationEvidence } from '../src/math/formalization';
 import { readLeanTaskReceipt } from '../src/math/leanTask';
 import { readSolverProblem } from '../src/solver/problem';
+import { LIBRARY_PACK_SCHEMA, libraryPackDigest } from '../src/math/libraryPacks';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { defaultResearchModulePlan } from '../src/solver/modules/policy';
 import { approvedFormalization } from './helpers/approvedFormalizationFixture';
 
 describe('confirmed formalization handoff to a frozen proof problem', () => {
@@ -87,5 +90,25 @@ describe('confirmed formalization handoff to a frozen proof problem', () => {
     expect(fs.readFileSync(seed.taskFile, 'utf8')).toBe(request.task +
       '\nPreserve all original declarations. Prove every target in generated/problem/Submission.lean.\n');
     expect(fs.existsSync(path.join(destination, 'formalized'))).toBe(false);
+  });
+
+  it('installs the exact selected Library snapshot into the native worker problem', () => {
+    const destination = directory(), request = input(); delete request.formalizationId;
+    const file = 'Submission/Library/Pinned.lean', source = 'theorem pinned_fact : True := by trivial\n';
+    const libraryPack = { schema: LIBRARY_PACK_SCHEMA, modules: [{ file, source,
+      origin: { kind: 'run' as const, runId: 'original-publisher', commit: 'a'.repeat(40), file: 'Shared.lean' } }] };
+    request.source = 'import Submission.Library.Pinned\ntheorem consumer : True := by sorry\n';
+    const seed = prepareWebProblem(destination, { input: request, researchConfiguration: {
+      schema: 'theorem-os.research-configuration.v1', environment: request.environment!,
+      modulePlan: defaultResearchModulePlan(), preferences: {}, skills: [], libraries: [], libraryPack,
+      digest: mathDigest(JSON.stringify(libraryPack)),
+    } });
+    const receipt = readLeanTaskReceipt(seed.activeProblemPath);
+    expect(fs.readFileSync(path.join(receipt.projectRoot, file), 'utf8')).toBe(source);
+    expect(receipt.libraryPack?.digest).toBe(libraryPackDigest(libraryPack));
+    expect(receipt.libraryPack?.files[file]).toBe(mathDigest(source));
+    const problem = readSolverProblem(seed.workspaceRoot, seed.activeProblemPath);
+    expect(problem.frozenFiles[file]).toBe(mathDigest(source));
+    expect(problem.targets.map(target => target.theoremName)).toEqual(['consumer']);
   });
 });

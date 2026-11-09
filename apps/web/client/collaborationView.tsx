@@ -70,21 +70,33 @@ export class CollaborationView {
   private current?: ViewState;
   private connected = false;
   private readOnly = false;
+  private permissions: { guidance?: boolean; edit?: boolean; approve?: boolean; archive?: boolean } = {};
   private planEditor: TaskPlanEditor;
   // The workbench-wide choice (./detailLevel): new readers start with the simple layer, and opening any expert section keeps it full.
   private detail = detailLevel();
+  private stopDetail: () => void;
   constructor(private api: WebApi, private observed: (observation: WebObservation) => void, private openReport: () => void = () => undefined,
     private activity = new AgentActivity(url => api(url))) {
     this.planEditor = new TaskPlanEditor(api, observation => this.receive(observation));
-    onDetailLevel(level => this.applyLevel(level));
+    this.stopDetail = onDetailLevel(level => this.applyLevel(level));
+  }
+  dispose() {
+    this.stopDetail(); this.planEditor.dispose();
+    for (const view of this.views.values()) {
+      view.navigation.disconnect(); view.artifactRequest++;
+      if (view.taskRenderFrame !== undefined) cancelAnimationFrame(view.taskRenderFrame);
+      view.element.remove();
+    }
+    this.views.clear(); this.current = undefined; this.run = undefined;
   }
   clearPlanDrafts() {
     this.planEditor.dispose();
     this.planEditor = new TaskPlanEditor(this.api, observation => this.receive(observation));
   }
-  /** readOnly (the sample run) keeps every read but hides archiving; plan and guidance already stay off because it is finished. */
-  update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false) {
-    this.connected = connected; this.readOnly = readOnly;
+  /** Optional per-operation grants support a shared running view as well as the finished sample. */
+  update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false,
+    permissions: { guidance?: boolean; edit?: boolean; approve?: boolean; archive?: boolean } = {}) {
+    this.connected = connected; this.readOnly = readOnly; this.permissions = permissions;
     if (!container || !run) {
       if (this.current?.viewport?.contains(this.current.element)) { this.current.scrollTop = this.current.viewport.scrollTop; this.current.scrollLeft = this.current.viewport.scrollLeft; this.saveTaskReading(this.current); }
       this.current?.navigation.disconnect();
@@ -132,6 +144,7 @@ export class CollaborationView {
     }
     view.renderKey = renderKey;
     this.renderRoute(view, run);
+    this.updateCommands(view);
     if (mounting && view.viewport) {
       const pane = this.taskPane(view, this.taskMode(view)), position = view.taskPositions[this.taskMode(view)];
       pane.scrollTop = position.top; pane.scrollLeft = position.left;
@@ -223,6 +236,7 @@ export class CollaborationView {
     return view;
   }
   private provideGuidance(view: ViewState, action: () => boolean | void): boolean {
+    if (this.readOnly || this.permissions.guidance === false) return false;
     if (view.navigation.remember()) {
       const task = view.observation && recordedTask(view.observation, view.selectedTask, view.selectedVersion)?.task;
       view.guidanceReturnTask = task ? { id: task.id, version: task.version } : undefined;
@@ -693,15 +707,17 @@ export class CollaborationView {
     const refresh = view.element.querySelector<HTMLButtonElement>('[data-collab-refresh]')!;
     refresh.disabled = !this.connected || view.loading;
     refresh.textContent = view.loading ? t('刷新中…') : t('刷新观察'); refresh.setAttribute('aria-busy', String(view.loading));
-    view.element.querySelector<HTMLButtonElement>('[data-collab-plan]')!.disabled=!this.connected||!view.active||!view.observation?.plan;
+    view.element.querySelector<HTMLButtonElement>('[data-collab-plan]')!.disabled=this.readOnly||this.permissions.edit===false||!this.connected||!view.active||!view.observation?.plan;
     const archive = view.element.querySelector<HTMLButtonElement>('[data-collab-archive]')!;
-    archive.disabled=!this.connected||!view.observation||view.archiveBusy; archive.hidden=this.readOnly;
+    archive.disabled=!this.connected||!view.observation||view.archiveBusy; archive.hidden=this.readOnly||this.permissions.archive===false;
     archive.textContent = view.archiveBusy ? t('归档中…') : t('归档知识'); archive.setAttribute('aria-busy', String(view.archiveBusy));
     const observation = view.observation;
     const observationText = view.observationError ?? (observation ? t('观察 #{0} · {1} · 历史记录未重新运行 Lean · 源码{2} · 检查{3}', observation.sequence, observedTime(observation.observedAt), coverageLabel(observation.coverage.sources), coverageLabel(observation.coverage.checks)) : '');
     view.element.querySelector('[data-collab-observation]')!.textContent = observationText;
     view.element.querySelector<HTMLElement>('.collab-observation-line')!.hidden = !observationText;
-    view.guidance.update(view.observation, view.active, this.connected);
+    view.guidance.update(view.observation, view.active&&!this.readOnly&&this.permissions.guidance!==false, this.connected);
+    const canGuide=!this.readOnly&&this.permissions.guidance!==false;
+    for(const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-guide-task],[data-collab-guide-worker],[data-collab-nav-guide]')) button.disabled=!canGuide||!this.connected||!view.active;
     view.navigation.update(view.observation, this.connected, view.archives.length);
   }
   /** One artifact at a time; keyed by request, so a new read remounts the heading for focus. */

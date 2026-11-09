@@ -5,6 +5,7 @@ import {
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import { workbenchReturn } from '../shared';
+import { ResearchSelection } from './researchSelection';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../share';
@@ -393,14 +394,16 @@ const editorReview = new EditorReview(element<HTMLDialogElement>('#source-editor
 const validationShown = new Set<SubmissionField>();
 const checkScope = crypto.randomUUID();
 const sourceCheck = new SourceCheck({
-  input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value }),
+  input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value,
+    ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}) }),
   enabled: () => Boolean(researchEntry === 'lean' && state.session?.precheck && state.connected && state.session.runtime.ready
     && new TextEncoder().encode(field('source').value).length <= state.session.limits.maxSourceBytes),
   post: async (input, signal) => (await api<{ precheck: WebPrecheck }>('/api/precheck',
-    { method: 'POST', body: JSON.stringify({ ...input, checkScope }), signal, timeoutMs: 120_000 })).precheck,
+    { method: 'POST', body: JSON.stringify({ ...input, checkScope, ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}) }), signal, timeoutMs: 120_000 })).precheck,
   message: error => message(error),
   render: () => { renderSourceCheckView(); renderPreparation(); },
 });
+const researchSelection = new ResearchSelection(api, () => { sourceCheck.schedule(); saveDraft(); });
 function renderSourceCheckView() {
   renderSourceCheck(element('#source-check'), element('#source-check-status'), {
     check: sourceCheck, onJump: jumpToSourceDiagnostic, onRecheck: () => { void sourceCheck.run(); },
@@ -2143,6 +2146,22 @@ function initialize(): Promise<void> {
       if (!currentConnection(epoch)) return;
       state.connected = true; state.lost = false;
       if (formalizationLink) await openFormalizedDraft(formalizationLink);
+      await researchSelection.load((configuration, imports) => {
+        field('environment').value = configuration.environment;
+        const preferences = configuration.preferences;
+        if (preferences.providerId && session.providers.some(provider => provider.id === preferences.providerId)) field('provider').value = preferences.providerId;
+        if (preferences.model) field('model').value = preferences.model;
+        if (preferences.effort) field('effort').value = preferences.effort;
+        if (preferences.workers) field('workers').value = String(preferences.workers);
+        if (preferences.coordination) element<HTMLInputElement>(`input[name="coordination"][value="${preferences.coordination}"]`).checked = true;
+        if (configuration.agent) modulePlanEditor.setValue(undefined);
+        if (!draftFormalization && imports.length) {
+          const source = field('source').value;
+          const additions = [...new Set(imports)].filter(name => !source.split('\n').some(line => line.trim() === `import ${name}`));
+          if (additions.length) field('source').value = additions.map(name => `import ${name}`).join('\n') + '\n' + source;
+        }
+        providerAddress(); updateEnvironment(); updateCounts();
+      }, field('environment').value as WebEnvironment, () => { chooseEntry('lean'); startDraft(false, 'replace'); });
       setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
       if (currentConnection(epoch)) {
@@ -2476,6 +2495,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(capturedDraft.knowledgeDigest !== undefined ? { knowledgeDigest: capturedDraft.knowledgeDigest } : {}),
       ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
       ...(draftFormalization ? { formalizationId: draftFormalization.id } : {}),
+      ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}),
     };
     const saveKey = Boolean(session.account?.keyVault && input.apiKey && element<HTMLInputElement>('#save-key').checked);
     if (saveKey) input.saveKey = true;

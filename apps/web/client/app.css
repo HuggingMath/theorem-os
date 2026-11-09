@@ -3223,3 +3223,12 @@ button.formal-lean{vertical-align:top}
   .module-plan-toggle input[type=checkbox]:checked{background:Highlight;border-color:Highlight}
   .module-plan-toggle input[type=checkbox]:checked::before{background:HighlightText}
 }
+/* The shared research space stays accessible beside the existing execution controls. */
+.research-space-links { display: flex; align-items: center; gap: 14px; font-size: 12px; white-space: nowrap; }
+.research-space-links a { color: var(--muted, #73766b); text-decoration: none; }
+.research-space-links a:hover { color: var(--ink, #282e24); }
+.composer-research-selection { padding: 14px 18px; border-bottom: 1px solid var(--line, #dedfd5); background: var(--panel, #f2f3ed); font-size: 12px; }
+.composer-research-selection p { margin: 5px 0; }
+.composer-research-selection a { margin-right: 15px; }
+@media (max-width: 780px) { .research-space-links { gap: 9px; font-size: 11px; } .research-space-links a:first-child { display: none; } }
+@media (max-width: 520px) { .research-space-links a:nth-child(2) { display: none; } }

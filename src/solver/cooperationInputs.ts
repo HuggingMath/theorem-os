@@ -18,9 +18,32 @@ import { ResearchAdmissionError } from './researchAdmission';
 import { acceptContextCheckpoint, contextCheckpointRejection, contextCheckpointRejectionFeedback, savedContextCheckpoint } from './contextCheckpoint';
 import { MAX_PLAN_APPROVAL_REJECTIONS, planApprovalInputSchema, planApprovalLog, planApprovalStatus, type PlanApprovalInput } from './planApproval';
 import { latestProofSearchRecord, retainProofSearchCheckpoint } from './proofSearchRecords';
+import { recordHumanGuidanceDecisions } from './humanGuidance';
 
 /** Worker delivery intake. */
 export abstract class CooperationInputs extends CooperationPlanning {
+  protected guidancePulse?: Promise<void>;
+  protected async retainGuidanceDecisions(worker: ResearchWorker, action: CooperativeAction, decisions: unknown) {
+    if (decisions === undefined || isStatementAction(action)) return;
+    const pending = Promise.resolve(this.guidancePulse).then(async () => {
+      try {
+        await recordHumanGuidanceDecisions({ stateFile: path.join(path.dirname(this.lead.worktree), 'state.json'),
+          state: this.input.state, workerId: worker.id, decisions,
+          scope: action.kind === 'task' ? { taskRef: { id: action.task.id, version: action.assignment.taskDigest } }
+            : { planVersion: action.kind === 'lead' ? action.planVersion ?? this.archive.planVersion : this.archive.planVersion },
+          current: () => !this.stopping && !this.input.signal.aborted && this.current(action) &&
+            (action.kind === 'task' ? action.assignment.workerId === worker.id :
+              action.kind === 'review' ? this.archive.review?.workerId === worker.id : worker.id === this.lead.id),
+          onRecord: record => this.input.emit('human_guidance_decided', { id: record.id, decision: record.decision, evidence: 'advisory' }),
+        });
+      } catch (error) {
+        this.input.emit('human_guidance_decision_rejected', { workerId: worker.id,
+          reason: error instanceof Error ? error.message : 'math_guidance_decision_invalid' });
+      }
+    });
+    this.guidancePulse = pending;
+    try { await pending; } finally { if (this.guidancePulse === pending) this.guidancePulse = undefined; }
+  }
   /** A host import has no model writer; retain the normal readiness, snapshot and receipt boundary. */
   freezeImportedProof(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>,
     submissionId: string, commit: string) {
@@ -229,6 +252,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
                   const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
                   await this.acceptPlan(plan, undefined, { action, receipt: { nonce, file,
                     offset: entry.offset, eventDigest, baseVersion: response.baseVersion, acceptedAt: Date.now() } });
+                  await this.retainGuidanceDecisions(this.lead, action, response.guidanceDecisions);
                   this.rememberLeadDecision(action);
                   this.changed();
                   this.input.emit(initial ? 'initial_plan_published' : 'plan_published', { ...this.archive.planPublication,
@@ -354,6 +378,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
     const details = deliveryDetails(value);
     if (!value || typeof value.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/u.test(value.id) ||
         !['progress', 'proof', 'research', 'ready', 'checkpoint'].includes(value.kind) || value.taskId !== action.task.id || value.taskDigest !== action.assignment.taskDigest) throw new Error('math_delivery_invalid');
+    await this.retainGuidanceDecisions(worker, action, value.guidanceDecisions);
     if (value.kind === 'checkpoint') {
       if (!scoped || !this.current(action) || worker.id !== action.assignment.workerId) throw new Error('math_delivery_invalid');
       const research = this.input.state.workers?.find(record => record.id === worker.id) ?? this.input.state;

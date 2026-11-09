@@ -13,6 +13,7 @@ import { WebStorageError } from './storage';
 
 type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebProvider; controller: AbortController;
   formalization?: WorkerInput['formalization'];
+  researchConfiguration?: WorkerInput['researchConfiguration'];
   continuation?: WorkerInput['continuation'] };
 const terminal = (run: WebRun) => ['completed', 'cancelled', 'error'].includes(run.status);
 const clean = <T>(value: T, key: string): T => JSON.parse(key ? JSON.stringify(value).replaceAll(
@@ -103,7 +104,8 @@ export class WebJobs {
   }
   /** `continuation` is the saved file `input.continueFrom` names; it goes to the worker and is not kept with the run. */
   create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation'], requestId?: string,
-    formalization?: { evidence: unknown; provenance: NonNullable<WebRun['formalization']> }): WebRun {
+    formalization?: { evidence: unknown; provenance: NonNullable<WebRun['formalization']> },
+    researchConfiguration?: WorkerInput['researchConfiguration']): WebRun {
     const previous = this.replay(owner, input, provider, requestId);
     if (previous) return previous;
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
@@ -120,6 +122,7 @@ export class WebJobs {
     if (pinnedDigest && !this.knowledge.getCatalog(owner, pinnedDigest))
       throw new WebStorageError(404, '所选知识目录不存在或不属于当前会话。');
     const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard' };
+    if (researchConfiguration) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
     if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
     else delete pinnedInput.knowledgeDigest;
     const { apiKey, knowledgeDigest: _selectedKnowledgeDigest, ...visible } = pinnedInput;
@@ -129,6 +132,7 @@ export class WebJobs {
       title: '', status: 'queued',
       phase: 'queued', createdAt: now, updatedAt: now, timings: {}, events: [], modules: {} };
     if (formalization) run.formalization = formalization.provenance;
+    if (researchConfiguration) run.researchConfiguration = structuredClone(researchConfiguration);
     run.title = (formalization?.provenance.original.trim() || run.task).split('\n')[0].slice(0, 60) || 'Lean 研究';
     run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
     const creation = requestId ? this.creation(input, provider, requestId) : undefined;
@@ -137,6 +141,7 @@ export class WebJobs {
     this.storage.saveRun(owner, run, creation);
     if (creation) this.creations.set(JSON.stringify([owner, requestId]), { ...creation, runId: run.id });
     this.jobs.set(run.id, { owner, input: pinnedInput, provider, run, controller: new AbortController(),
+      ...(researchConfiguration ? { researchConfiguration: structuredClone(researchConfiguration) } : {}),
       ...(formalization ? { formalization: formalization.evidence } : {}),
       ...(continuation ? { continuation } : {}) });
     this.reindex();
@@ -432,6 +437,7 @@ export class WebJobs {
     try {
       this.event(job.run, 'preparing', '正在准备独立运行环境');
       await this.runner.run({ id: job.run.id, input: job.input, provider: job.provider,
+        ...(job.researchConfiguration ? { researchConfiguration: job.researchConfiguration } : {}),
         ...(job.formalization ? { formalization: job.formalization } : {}),
         ...(job.input.knowledgeDigest ? { knowledgeCatalog: this.knowledge.getCatalog(job.owner, job.input.knowledgeDigest) } : {}),
         ...(job.continuation ? { continuation: job.continuation } : {}) }, handle, job.controller.signal);

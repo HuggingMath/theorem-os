@@ -10,6 +10,8 @@ import { WebKnowledgeService } from '../apps/web/knowledgeService';
 import { WebStorage } from '../apps/web/storage';
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 
 const roots: string[] = [];
 const fixture = () => { const value = webWorkerFixture(); roots.push(value.directory); return value; };
@@ -80,6 +82,25 @@ describe('isolated Web worker bridge', () => {
       observationRef: { sequence: captured.observation.sequence, stateDigest: captured.observation.snapshot.stateDigest } } }, commandOptions))
       .toMatchObject({ status: 'queued' });
     await expect(original.capture({ force: true })).rejects.toThrow('web_bridge_run_identity_changed');
+  });
+
+  it('projects dependency sources from the same committed owned snapshot, preserving their paths and bytes', async () => {
+    const f = fixture(), dependency = 'Support/Bridge.lean', dependencySource = '-- 原始字节\nnamespace Support\ntheorem bridge : True := by trivial\nend Support\n';
+    fs.mkdirSync(path.join(f.project, 'Support'));
+    fs.writeFileSync(path.join(f.project, dependency), dependencySource);
+    const source = 'import Support.Bridge\n' + f.source;
+    fs.writeFileSync(path.join(f.project, 'Submission.lean'), source);
+    const commit = f.commit();
+    f.state.problem.ownedFiles = ['Submission.lean', dependency];
+    f.state.cooperation!.canonicalCommit = commit;
+    f.state.cooperation!.tasks[0].integratedCheck = undefined; f.state.cooperation!.history = [];
+    f.save();
+    fs.writeFileSync(path.join(f.project, dependency), 'mutable dependency must not be projected');
+    const result = await handleWebWorkerCommand({ type: 'capture' }, { activeRunFile: f.activeRunFile });
+    const saved = result.observation!.sources.find(item => item.taskId === 'goal')!;
+    expect(saved.source).toBe(source); expect(saved.commit).toBe(commit);
+    expect(saved.dependencySources).toEqual([{ file: dependency, source: dependencySource }]);
+    expect(saved.dependencySources!.some(item => item.file === saved.file)).toBe(false);
   });
 
   it('rejects a different solver without the exact previous identity and next library round', async () => {
@@ -195,6 +216,29 @@ describe('isolated Web worker bridge', () => {
     expect((await handleWebWorkerCommand({ type: 'capture' }, options)).observation!.guidance).toEqual([]);
     fs.writeFileSync(path.join(path.dirname(f.stateFile), 'human-guidance.json'), '{invalid');
     await expect(handleWebWorkerCommand({ type: 'guidance', guidance }, options)).rejects.toThrow();
+  });
+
+  it('passes a validated candidate attachment through the worker command and captures it without editing source', async () => {
+    const f = fixture(), options = { activeRunFile: f.activeRunFile };
+    const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
+    const baseline = observation.sources.find(item => item.taskId === 'goal')!, source = baseline.source.replace('by sorry', 'by trivial');
+    const taskRef = { id: baseline.taskId, version: baseline.taskVersion };
+    const guidance = webGuidanceSchema.parse({ id: 'candidate-direction', recipient: { kind: 'task', id: taskRef.id }, taskRef,
+      text: 'Please assess this independently checked candidate through the ordinary task protocol.',
+      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest },
+      candidate: { source, sourceDigest: mathDigest(source), file: baseline.file, baseCommit: baseline.commit,
+        baseSourceDigest: baseline.sourceDigest, environmentDigest: baseline.environmentDigest, taskRef } });
+    const before = fs.readFileSync(path.join(f.project, baseline.file));
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, options)).toMatchObject({
+      id: guidance.id, status: 'queued', guidance: { candidate: guidance.candidate },
+    });
+    const captured = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
+    expect(captured.guidance[0].candidate).toEqual(guidance.candidate);
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'changed-environment',
+      candidate: { ...guidance.candidate, environmentDigest: '0'.repeat(64) } } }, options)).toMatchObject({
+      status: 'rejected', reason: 'math_guidance_candidate_environment_changed',
+    });
+    expect(fs.readFileSync(path.join(f.project, baseline.file))).toEqual(before);
   });
 
   it('queues a plan approval only for the exact pending version and reports each saved-checkpoint rejection', async () => {

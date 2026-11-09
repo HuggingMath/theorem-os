@@ -22,6 +22,7 @@ import type { ProofSearchRecord } from './proofSearchRecords';
 import type { ResearchRecord } from './researchRecords';
 import type { ResearchDecision } from './researchDecisions';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
+import type { HumanGuidanceRecord } from './humanGuidance';
 import { expandPlanPatch, isPlanPatch, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
 import { applyGoalPathDecisions, type GoalPathDecisions } from './goalPathDecisions';
 import type { GoalPathReview } from './goalPathReview';
@@ -73,6 +74,8 @@ export type FailedTaskInput = { id: string; taskId: string; taskDigest: string; 
   canonicalSourceDigest: string; canonicalTargetDigest: string; feedback: string;
   repair?: { taskId: string; taskDigest: string; workerId: string; pending: boolean; startedAttempt?: number } };
 export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; canonicalCommit?: string; leadSeedCommit?: string; review?: ReviewRecord; error?: string;
+  /** Context-only notes actually delivered to this worker; decisions remain separate from proof state. */
+  humanGuidance?: HumanGuidanceRecord[];
   /** Context-only reverse uses, projected from the full archive without expanding execution visibility. */
   consumerInterfaces?: TaskConsumerProjection;
   /** Scoped advisory history, derived from immutable delivery records. */
