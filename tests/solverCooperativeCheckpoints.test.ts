@@ -791,6 +791,67 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(check).not.toHaveBeenCalled(); expect(state.check).toBeUndefined(); expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each([
+    { initial: true, published: true, approval: false },
+    { initial: true, published: true, approval: true },
+    { initial: true, published: false, approval: false },
+    { initial: false, published: true, approval: false },
+  ])('reminds only unpublished Lead decisions (initial=$initial, published=$published, approval=$approval)', async ({ initial, published, approval }) => {
+    const { state, workers, check, events, controller, run, pulse } = fixture(initial, undefined, initial ? undefined : 'lead');
+    if (approval) state.planApproval = true;
+    const leadStarted = deferred(), peerStarted = deferred();
+    const sessions = new Map<string, { interrupt: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn> }>();
+    let leadAction: Extract<CooperativeAction, { kind: 'lead' }>;
+    const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
+      const id = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID!;
+      const done = deferred<string>();
+      const interrupt = vi.fn(async () => { done.resolve('interrupted'); }), notify = vi.fn(async () => {});
+      sessions.set(id, { interrupt, notify });
+      return { threadId: `published-plan-${id}`, interrupt, notify, close: async () => { done.resolve('interrupted'); },
+        run: async (message, _messageId, _workspace, onStarted) => {
+          const payload = JSON.parse(message);
+          const action: CooperativeAction = payload.assignment ?? payload;
+          onStarted(`published-plan-turn-${id}`);
+          options.onActivity?.({ event: 'reasoning' });
+          if (id === 'solver') {
+            if (action.kind !== 'lead') throw new Error('fixture_expected_lead');
+            leadAction = action; leadStarted.resolve();
+          } else peerStarted.resolve();
+          return done.promise;
+        } };
+    });
+    const completion = run(open); void completion.catch(() => {});
+    await leadStarted.promise;
+    const tasks = initial ? state.problem.targets.map((target, index) => ({
+      id: `goal_${index + 1}`, kind: 'goal', objective: `Prove ${target.theoremName}`, ...target,
+    })) : state.cooperation!.tasks.map(node => ({ ...node.task,
+      ...(node.task.id === 'investigate' ? { status: 'active' } : {}) }));
+    fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(leadAction!)!), JSON.stringify({
+      kind: 'plan', baseVersion: leadAction!.planVersion,
+      dispatchNonce: leadAction!.initialPlanNonce ?? leadAction!.planNonce,
+      summary: 'The original target and its assigned investigation are ready.', tasks: published ? tasks : [],
+    }) + '\n');
+    await pulse(workers[0].id);
+    expect(Boolean(state.cooperation!.planPublication)).toBe(published);
+    if (published && !approval) await peerStarted.promise;
+    if (approval) {
+      expect(state.cooperation!.planApproval?.approvedAt).toBeUndefined();
+      expect(sessions.has(workers[1].id)).toBe(false);
+    }
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const lead = sessions.get('solver')!;
+    expect(lead.notify.mock.calls.some(([message]) => /^Publish the first plan now/u.test(message))).toBe(!published);
+    expect(events.filter(item => item.event === 'cooperative_checkpoint_requested' && item.details?.workerId === 'solver'))
+      .toHaveLength(published ? 0 : 1);
+    expect(lead.interrupt).not.toHaveBeenCalled();
+    // Publication suppresses a stale reminder; it neither ends the live Lead nor accepts a proof.
+    expect(events.some(item => item.event === 'cooperative_checkpoint_interrupted' && item.details?.workerId === 'solver')).toBe(false);
+    expect(state.check).toBeUndefined(); expect(check).not.toHaveBeenCalled();
+    controller.abort(new Error('fixture_complete'));
+    await expect(completion).rejects.toThrow('fixture_complete');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('yields an unfinished Lead plan to original-goal work and leaves the proof writer unlimited', async () => {
     const { state, workers, check, events, controller, run } = fixture(true);
     const leadStarted = deferred(), proofStarted = deferred();

@@ -513,11 +513,13 @@ export async function runResearchWorkers(input: {
           if (noProgressStreak && backoff) emit('cooperative_checkpoint_deferred', { turnId, checkpointAfterMs,
             noProgressStreak, protected: false, reason: 'no-durable-progress' });
           const sendNotice = () => {
-            if (!current() || noticeSent) return;
+            if (!current() || noticeSent || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
             noticeSent = true;
             emit('cooperative_checkpoint_requested', { turnId, checkpointAfterMs, noProgressStreak, protected: false });
             void Promise.resolve().then(() => {
-              if (!current()) return;
+              // An accepted live plan already fulfilled this decision, including while human approval
+              // is pending. Recheck at delivery in case publication raced the queued notification.
+              if (!current() || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
               // A goal turn is never yielded, so its reminder must not promise a checkpoint that will
               // not come: it asks for the durable handoff and leaves the writing turn running.
               return activeSession.notify?.(noticeOnly
