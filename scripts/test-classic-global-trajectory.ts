@@ -774,10 +774,11 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
     assert.deepEqual(await page.locator('[data-proof-overview-stage]').evaluateAll(buttons => buttons.map(button => ({
       steps: (button as HTMLElement).dataset.proofOverviewSteps!.split(' '),
       target: (button as HTMLElement).dataset.globalScroll,
-      title: button.querySelector('strong')!.textContent,
-      summary: button.querySelector('.proof-overview-copy > span')!.textContent,
-    }))), walkthrough.stages.map(stage => ({ steps: stage.stepIds, target: 'proof-derivation-' + stage.stepIds[0],
-      title: stage.title[locale], summary: stage.summary[locale] })));
+    }))), walkthrough.stages.map(stage => ({ steps: stage.stepIds, target: 'proof-derivation-' + stage.stepIds[0] })));
+    assert.deepEqual(await proseTexts(page.locator('[data-proof-overview-stage] strong')),
+      walkthrough.stages.map(stage => expectedProse(stage.title[locale])));
+    assert.deepEqual(await proseTexts(page.locator('[data-proof-overview-stage] .proof-overview-copy > span')),
+      walkthrough.stages.map(stage => expectedProse(stage.summary[locale])));
     const route = page.locator('.proof-walkthrough-route');
     assert.deepEqual(await route.locator('[data-proof-route-step]').evaluateAll(buttons => buttons.map(button => ({
       id: (button as HTMLElement).dataset.proofRouteStep, title: (button as HTMLElement).dataset.proofRouteTitle,
