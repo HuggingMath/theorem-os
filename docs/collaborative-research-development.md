@@ -6,7 +6,7 @@
 
 范围：数学家、定理、Library 三个界面；人工干预与反馈；个性化 Agent、Skill 及选择性分享。
 
-状态：已在独立分支实施并通过本地验收；实现与验证结果见[实现交付记录](collaborative-research-implementation.md)。本文保留原始设计及开发前基线，接口与文件的最终名称以交付记录和源码为准。本轮不涉及生产发布。
+状态：已实现、合入主分支并于 2026-11-09 发布；线上源码为 `25bcf2256d0e0361663a3bd6af31208985ab112e`。实现、验证与发布结果见[实现交付记录](collaborative-research-implementation.md)和[发布状态](web-release-status.md)。本文保留原始设计及开发前基线，接口与文件的最终名称以交付记录和源码为准。
 
 ## 目录
 

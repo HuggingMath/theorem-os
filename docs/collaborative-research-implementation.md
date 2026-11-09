@@ -4,7 +4,7 @@
 
 工作目录：`/home/lzh/workspace/scratch/theorem-os/collaborative-research-20261109`。分支：`codex/collaborative-research-20261109`。固定开发基线：`8a67c59654133c96e07886dc922d11d9b2e2d88e`。
 
-本次交付在独立工作树内完成。其他会话的发布修复、证明运行和共享状态均独立处理；本功能尚未合并、提交或部署。
+开发与下述原始验收在独立工作树内完成。随后在 `collaborative-release-20261109` 集成树合入九项发布修复，补齐共享库与内置库扩展兼容性；源码 `25bcf2256d0e0361663a3bd6af31208985ab112e` 已推送 `main`，并于 2026-11-09 12:37（北京时间）成对发布 Web / Worker。证明 campaign 的运行包与控制器由原会话独立处理。
 
 本地验收通过：17 个相关测试文件、316 项测试通过，1 项需额外镜像的可选检查跳过；根目录与 Web 类型检查、四个运行时 bundle 和 Web 构建通过；三账号浏览器流程和真实 Lean 检查通过。
 
@@ -99,4 +99,12 @@ bun scripts/test-web-research-lean.ts
 bun scripts/build.ts --state-root /home/lzh/workspace/scratch/theorem-os/collaborative-research-20261109-artifacts/runtime-state
 ```
 
-后续与新主分支的合并、冲突处理和发布需在该固定交付结果上另行进行；其他会话的发布补丁没有混入本轮验收。
+以上保留功能开发阶段的固定验收；它没有混入其他会话的发布补丁。后续集成与发布证据位于 `/home/lzh/workspace/outputs/theoremos-collaborative-release-20261109/README.md`。
+
+## 5. 集成与线上发布
+
+集成包含九项发布修复 `3c14c48`、协作功能 `ff2c47a` 和共享库扩展修复 `25bcf22`。两个镜像使用同一完整源码 SHA；Worker 的 768 个源文件与最终 Git blobs 相符，四个运行包、53 个内置库模块及十个独立工具均通过核验。标准 Worker 构建的工具链下载因本地代理不可达失败，最终复用内容未变的固定编译环境并离线重建全部运行包和工具，未复用旧运行代码。
+
+34 个测试文件中 1187 项通过、1 项跳过、1 项为原 `8a67` 基线已有的 RESEARCH.md 删除场景退出码差异；另有 continuation 测试、共享库扩展 67 项测试、最终镜像源码隔离检查通过。两套 TypeScript、运行包与 Web 构建、五组浏览器回归，以及最终 Worker 上的共享库发布、跨账户固定引用和真实 Lean 编译通过。可选镜像隔离检查已补验。
+
+发布执行维护、排空、私有备份和 checksum 恢复，再切换同源镜像。首次尝试因核验请求缺少生产 Host 头自动回滚；修正脚本后的第二次切换成功。公网健康、就绪、前端与三个研究页面、公开 API 和经典证明档案摘要核验通过，维护已关闭。邮箱登录、白名单 Beta、原数据卷与其他配置保持原值；本轮没有调用真实模型。
