@@ -35,7 +35,7 @@ import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
-import { draftOwnerStorageKey, OwnedDrafts } from './ownedDrafts';
+import { draftOwnerStorageKey, OwnedDrafts, webDraftOwner } from './ownedDrafts';
 import { SubmissionIdentity } from './submissionIdentity';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
 import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSelection, revealTheme, selectionBox } from './motion';
@@ -324,9 +324,10 @@ let replacingDraft = false;
 const ownedDrafts = new OwnedDrafts(() => sessionStorage);
 const submissionIdentity = new SubmissionIdentity(ownedDrafts);
 const draftRecovery = new DraftRecovery(() => ownedDrafts);
-const ownerOfSession = (session: WebSession) => session.draftOwner ?? (session.account ? `account:${session.account.email}` : session.csrfToken);
+const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
   chatWorkspace?.bindOwner('');
+  researchSelection.reset();
   collaborationView.clearPlanDrafts();
   submissionSequence++;
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
@@ -403,7 +404,7 @@ const sourceCheck = new SourceCheck({
   message: error => message(error),
   render: () => { renderSourceCheckView(); renderPreparation(); },
 });
-const researchSelection = new ResearchSelection(api, () => { sourceCheck.schedule(); saveDraft(); });
+const researchSelection = new ResearchSelection(api, () => { sourceCheck.schedule(); saveDraft(); }, ownedDrafts);
 function renderSourceCheckView() {
   renderSourceCheck(element('#source-check'), element('#source-check-status'), {
     check: sourceCheck, onJump: jumpToSourceDiagnostic, onRecheck: () => { void sourceCheck.run(); },
@@ -2196,7 +2197,7 @@ function renderShell() {
     history: { docked: historyDocked(), expanded: !historyCollapsed() },
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
-    onHistory: toggleHistory, onDraft: openDraft, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
+    onHistory: toggleHistory, onHome: () => { void openNaturalResearch(); }, onDraft: openDraft, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
     onLive: () => {
       const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
       if (!target) return;
@@ -3080,6 +3081,8 @@ async function loadSourceFile(file: File) {
     const source = await readLeanFile(file, state.session.limits.maxSourceBytes);
     if (revision !== sourceRevision || state.submitting) { toast(t('草稿已变化，未导入文件')); return; }
     replaceDraft('source', () => setCustomSource(source));
+    chooseEntry('lean'); setMobileView('compose');
+    field('source').focus();
     toast(t('Lean 文件已载入'));
   } catch (error) {
     if (revision !== sourceRevision) return;

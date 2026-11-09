@@ -3235,3 +3235,5 @@ button.formal-lean{vertical-align:top}
 .composer-research-selection a { margin-right: 15px; }
 @media (max-width: 780px) { .research-space-links { gap: 9px; font-size: 11px; } .research-space-links a:first-child { display: none; } }
 @media (max-width: 520px) { .research-space-links a:nth-child(2) { display: none; } }
+@media (max-width: 600px) { .topbar .account-trigger { flex: 0 0 34px; padding: 0; justify-content: center; } }
+@media (max-width: 360px) { .topbar { gap: 4px; padding-inline: 8px; } }

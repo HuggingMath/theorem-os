@@ -89,7 +89,7 @@ export function AssetEditor({ asset, context, onSaved }: { asset?: ResearchAsset
         <Field label={tx('依赖，每行：资产 ID@版本', 'Dependencies, one per line: asset ID@version')} value={dependencies} onInput={setDependencies} multiline code rows={2} />
         <Field label={tx('示例，每行一个', 'Examples, one per line')} value={examples} onInput={setExamples} multiline rows={3} />
       </>}
-    {asset && asset.revision !== revision && <p class="research-status">{tx('服务器上的草稿已更新。当前输入仍保留；重新打开编辑器可载入最新版本。', 'The saved draft has changed. Your input is preserved; reopen the editor to load the latest version.')}</p>}
+    {asset && asset.revision !== revision && <p class="research-status">{tx('服务器上的草稿已更新。当前输入仍保留；点击「载入最新草稿」可更新。', 'The saved draft has changed. Your input is preserved; choose “Load latest draft” to update it.')}</p>}
     <MutationState action={action} /><button type="submit" class="button button-primary" disabled={action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : asset ? tx('保存草稿', 'Save draft') : tx('创建私有草稿', 'Create draft')}</button>
   </form>;
 }

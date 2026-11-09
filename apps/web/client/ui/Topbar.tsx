@@ -9,7 +9,7 @@ export type TopbarProps = {
   /** Desktop docks the history beside the run; narrow screens open it as a dialog. */ history: { docked: boolean; expanded: boolean };
   connection: { tone: 'ready' | 'offline'; label: string }; settingsDisabled: boolean;
   live?: TopbarLive; mac: boolean; account?: string;
-  onHistory(): void; onDraft(): void; onSettings(): void; onPalette(): void; onLive(): void; onAccount(): void; onGlossary(): void; onLocale(): void;
+  onHistory(): void; onHome(): void; onDraft(): void; onSettings(): void; onPalette(): void; onLive(): void; onAccount(): void; onGlossary(): void; onLocale(): void;
 };
 
 function Topbar(props: TopbarProps) {
@@ -21,7 +21,7 @@ function Topbar(props: TopbarProps) {
       : <button type="button" id="open-history" class="icon-button" aria-haspopup="dialog" aria-label={t('打开研究记录')} title={t('研究记录')} onClick={props.onHistory}><Icon name="panel-left" /></button>}
     <a id="workbench-home" class="brand" href="./" aria-label={t('回到首页')} onClick={event => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      event.preventDefault(); props.onDraft();
+      event.preventDefault(); props.onHome();
     }}><img src="assets/mark.svg" alt="" width="26" height="26" /><span>Theorem<span class="brand-os">OS</span></span></a>
     <button type="button" id="topbar-draft" class="icon-button" aria-label={t('新对话')} title={t('新对话')} onClick={props.onDraft}><Icon name="square-pen" /></button>
     {live && <button type="button" class="live-pill" data-tone={live.tone} onClick={props.onLive} title={`${live.label} · ${live.detail}`} aria-label={t('查看进行中的研究：{0}', live.label)}>

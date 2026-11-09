@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { OwnedDrafts, submissionStorageKey } from '../apps/web/client/ownedDrafts';
+import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, submissionStorageKey } from '../apps/web/client/ownedDrafts';
 import { taskDraftStorageKey } from '../apps/web/client/draft';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
 import { SubmissionIdentity } from '../apps/web/client/submissionIdentity';
@@ -12,9 +12,10 @@ it('preserves same-owner drafts, rejects unbound and other-owner drafts, and dis
   const raw = storage(), owned = new OwnedDrafts(() => raw);
   raw.setItem(taskDraftStorageKey, 'legacy private source'); owned.bind('alice');
   expect(owned.getItem(taskDraftStorageKey)).toBeNull();
-  for (const key of [taskDraftStorageKey, draftRecoveryStorageKey, submissionStorageKey]) owned.setItem(key, 'alice private source');
+  const privateKeys = [taskDraftStorageKey, draftRecoveryStorageKey, submissionStorageKey, researchSelectionStorageKey, researchEnvironmentStorageKey];
+  for (const key of privateKeys) owned.setItem(key, 'alice private source');
   const refreshed = new OwnedDrafts(() => raw); refreshed.bind('alice');
-  expect(refreshed.getItem(taskDraftStorageKey)).toBe('alice private source');
+  for (const key of privateKeys) expect(refreshed.getItem(key)).toBe('alice private source');
   refreshed.bind('bob');
   expect([...raw.values.values()]).toEqual(['bob']);
   expect(() => owned.setItem(taskDraftStorageKey, 'late Alice pagehide')).toThrow();

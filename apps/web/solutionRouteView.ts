@@ -71,7 +71,11 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
   let state = memory(initial);
   const signal = new AbortController();
   const word = (zh: string, en: string) => model.locale === 'en' ? en : zh;
-  const detailScroller = () => root.querySelector<HTMLElement>(state.reading && expanded ? '.solution-route-workspace' : '[data-solution-inspector]');
+  const detailScroller = () => {
+    const workspace = root.querySelector<HTMLElement>('.solution-route-workspace');
+    return expanded && workspace && getComputedStyle(workspace).overflowY === 'auto'
+      ? workspace : root.querySelector<HTMLElement>('[data-solution-inspector]');
+  };
   const nodesById = () => new Map(model.nodes.map(node => [node.id, node]));
   const related = (id: string, incoming: boolean) => model.edges.filter(edge => incoming ? edge.to === id : edge.from === id)
     .map(edge => ({ edge, node: model.nodes.find(node => node.id === (incoming ? edge.from : edge.to))! })).filter(item => item.node);

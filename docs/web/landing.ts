@@ -205,6 +205,7 @@ for (const node of graphNodes) {
 element('.module-graph').addEventListener('keydown', event => handleTabKeys(event, graphNodes, node => {
   selectComponent(node.dataset.graphComponent as Component);
   node.focus({ preventScroll: true });
+  node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
 }));
 const graphCanvas = element('.module-graph-canvas');
 const graphSvg = graphCanvas.querySelector<SVGSVGElement>('.module-graph-edges')!;

@@ -3,25 +3,34 @@ import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetContent, 
 import type { ResearcherProfile } from '../researchProjectTypes';
 import { AssetEditor } from './researchAssetEditor';
 import { RichProse } from './richText';
+import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
+import type { WebEnvironment } from '../shared';
 import { api, base, enc, Empty, ErrorBox, Field, libraryHref, MutationState, nameOf, Panel, personHref, Search, stamp, State, Tags, theoremHref, tx,
   useMutation, useResource, type Item, type Items, type ResearchContext } from './researchShared';
 
-const selectionKey = 'theoremos.research.selection';
+const selectionDrafts = new OwnedDrafts(() => sessionStorage);
 function rememberedSelection(): ResearchReleaseRef[] {
   try {
-    const value: unknown = JSON.parse(sessionStorage.getItem(selectionKey) ?? '[]');
+    const value: unknown = JSON.parse(selectionDrafts.getItem(researchSelectionStorageKey) ?? '[]');
     return Array.isArray(value) ? value.filter((item): item is ResearchReleaseRef => Boolean(item && typeof item === 'object' && typeof item.assetId === 'string' && typeof item.version === 'string')) : [];
   } catch { return []; }
 }
-function saveSelection(value: ResearchReleaseRef[]) {
-  try { sessionStorage.setItem(selectionKey, JSON.stringify(value.map(({ assetId, version }) => ({ assetId, version })))); return true; }
+function saveSelection(value: ResearchReleaseRef[], environment?: WebEnvironment) {
+  try {
+    selectionDrafts.setItem(researchSelectionStorageKey, JSON.stringify(value.map(({ assetId, version }) => ({ assetId, version }))));
+    if (environment) selectionDrafts.setItem(researchEnvironmentStorageKey, environment);
+    else selectionDrafts.removeItem(researchEnvironmentStorageKey);
+    return true;
+  }
   catch { return false; }
 }
 
 export function LibraryPage({ context }: { context: ResearchContext }) {
+  selectionDrafts.bind(webDraftOwner(context.web));
   const parameters = new URLSearchParams(location.search), selected = parameters.get('entry') ?? '';
   const [query, setQuery] = useState(''), [type, setType] = useState('mathematics'), [area, setArea] = useState(''), [author, setAuthor] = useState(''), [environment, setEnvironment] = useState(''), [mine, setMine] = useState(parameters.get('mine') === '1'),
     [creating, setCreating] = useState(context.session.authenticated && parameters.get('create') === '1'), [selection, setSelection] = useState<ResearchReleaseRef[]>(rememberedSelection), [storageError, setStorageError] = useState('');
+  const [creatorMounted, setCreatorMounted] = useState(creating);
   const directory = useResource<Items<ResearchAsset>>(`${base}/library?q=${enc(query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${mine ? '&mine=1' : ''}`);
   const detail = useResource<Item<ResearchAsset>>(selected ? `${base}/library/${enc(selected)}` : undefined);
   useEffect(() => { if (detail.data) setType(detail.data.item.type); }, [detail.data?.item.id]);
@@ -33,10 +42,10 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   const clear = () => { setSelection([]); saveSelection([]); };
   return <><div class="research-heading"><div><span class="research-eyebrow">TheoremOS / Library</span><h1>{tx('共享成果与研究方法', 'Shared mathematics and research methods')}</h1>
     <p>{tx('发布可检查的数学成果，保存自己的 Agent 和 Skill，并选择固定版本用于新研究。', 'Publish verifiable mathematics, create agents and skills, and choose fixed versions for new research.')}</p></div>
-    <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => setCreating(value => !value)} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
+    <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => { setCreatorMounted(true); setCreating(value => !value); }} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
       : <a class="button" href="login.html">{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>
-    {creating && <Panel title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
-      <AssetEditor context={context} onSaved={asset => location.assign(libraryHref(asset.id))} /></Panel>}
+    {creatorMounted && <div hidden={!creating}><Panel title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
+      <AssetEditor context={context} onSaved={asset => location.assign(libraryHref(asset.id))} /></Panel></div>}
     <div class="research-layout" data-selected={Boolean(selected)}><aside class="research-sidebar"><Panel title={tx('浏览 Library', 'Explore Library')}>
       <div class="research-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => setType(value)}>{nameOf(value)}</button>)}</div>
       <div class="research-form"><Search label={tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={setQuery} /><Field label={tx('按研究领域筛选', 'Filter by research field')} value={area} onInput={setArea} />
@@ -59,6 +68,7 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
     [editorKey, setEditorKey] = useState(0), [publicationId, setPublicationId] = useState(() => {
       try { return sessionStorage.getItem(`theoremos.research.publication.${asset.id}`) ?? ''; } catch { return ''; }
     });
+  const [editorMounted, setEditorMounted] = useState(false);
   const releaseResult = useResource<Item<ResearchAssetRelease>>(version ? `${base}/library/${enc(asset.id)}/releases/${enc(version)}` : undefined);
   const release = releaseResult.data?.item ?? (asset.release?.version === version ? asset.release : undefined);
   const forPublication = (publication: ResearchPublication) => {
@@ -71,13 +81,13 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
     const ref = { assetId: asset.id, version: release.version }, next = [...selection.filter(item => item.assetId !== asset.id), ref];
     saveSelection(next); location.assign(`./?researchAsset=${enc(ref.assetId)}&researchVersion=${enc(ref.version)}`);
   };
-  return <><Panel title={asset.name} actions={asset.editable && <button type="button" class="button" onClick={() => setEditing(value => !value)} aria-expanded={editing}>{editing ? tx('收起编辑器', 'Close editor') : tx('编辑草稿', 'Edit draft')}</button>}>
+  return <><Panel title={asset.name} actions={asset.editable && <button type="button" class="button" onClick={() => { setEditorMounted(true); setEditing(value => !value); }} aria-expanded={editing}>{editing ? tx('收起编辑器', 'Close editor') : tx('编辑草稿', 'Edit draft')}</button>}>
     <div class="research-item-meta"><span>{nameOf(asset.type)}</span><a href={personHref(asset.authorId)}>{author.data?.item.displayName ?? asset.authorId}</a><State value={asset.visibility} /><span>{asset.area}</span><time dateTime={asset.updatedAt}>{stamp(asset.updatedAt)}</time></div>
     <div class="research-description"><RichProse text={asset.description || tx('暂无用途说明。', 'No description yet.')} /></div>
     <dl class="research-facts"><div><dt>{tx('资产 ID', 'Asset ID')}</dt><dd>{asset.id}</dd></div>{asset.derivedFrom && <div><dt>{tx('派生来源', 'Derived from')}</dt><dd><a href={libraryHref(asset.derivedFrom.assetId, asset.derivedFrom.version)}>{asset.derivedFrom.assetId}@{asset.derivedFrom.version}</a></dd></div>}</dl>
     {asset.editable && !asset.release && <p class="research-status">{tx('当前为个人草稿。发布检查完成后，才能作为固定版本使用。', 'This is a draft. Publish and complete validation before using it as a fixed version.')}</p>}
-  </Panel>{editing && <Panel title={tx('编辑草稿', 'Edit draft')} actions={<button class="text-button" type="button" onClick={() => setEditorKey(value => value + 1)}>{tx('载入最新草稿', 'Load latest draft')}</button>}>
-    <AssetEditor key={editorKey} asset={asset} context={context} onSaved={() => { refresh(); }} /></Panel>}
+  </Panel>{editorMounted && <div hidden={!editing}><Panel title={tx('编辑草稿', 'Edit draft')} actions={<button class="text-button" type="button" onClick={() => setEditorKey(value => value + 1)}>{tx('载入最新草稿', 'Load latest draft')}</button>}>
+    <AssetEditor key={editorKey} asset={asset} context={context} onSaved={() => { refresh(); }} /></Panel></div>}
     {asset.editable && <Panel title={tx('发布固定版本', 'Publish a fixed version')} note={tx('发布前请审阅草稿；只有你选择公开的版本会进入共享目录。', 'Review the draft before publishing. Only versions you make public appear in the shared directory.')}>
       <Publish asset={asset} onPublication={forPublication} />{publicationId && <Publication key={publicationId} id={publicationId} completed={published} />}
     </Panel>}
@@ -203,7 +213,7 @@ function Withdraw({ asset, version, refresh }: { asset: ResearchAsset; version: 
 }
 
 function Selection({ selection, remove, clear, assets }: { selection: ResearchReleaseRef[]; remove: (ref: ResearchReleaseRef) => void; clear: () => void; assets: ResearchAsset[] }) {
-  const [environment, setEnvironment] = useState('mathlib'), [busy, setBusy] = useState(false), [error, setError] = useState(''), [validated, setValidated] = useState<FrozenResearchConfiguration>();
+  const [environment, setEnvironment] = useState<WebEnvironment>('mathlib'), [busy, setBusy] = useState(false), [error, setError] = useState(''), [validated, setValidated] = useState<FrozenResearchConfiguration>();
   const signature = JSON.stringify(selection);
   useEffect(() => { setValidated(undefined); setError(''); }, [signature, environment]);
   const validate = async () => {
@@ -222,13 +232,13 @@ function Selection({ selection, remove, clear, assets }: { selection: ResearchRe
     finally { setBusy(false); }
   };
   const open = () => {
-    if (!saveSelection(selection)) { setError(tx('浏览器未能保存组合，请从每个版本的「用于新研究」入口带入。', 'The browser could not save the selection. Use each release’s “Use in new research” action.')); return; }
+    if (!saveSelection(selection, validated?.environment ?? environment)) { setError(tx('浏览器未能保存组合，请从每个版本的「用于新研究」入口带入。', 'The browser could not save the selection. Use each release’s “Use in new research” action.')); return; }
     const first = selection[0]!; location.assign(`./?researchAsset=${enc(first.assetId)}&researchVersion=${enc(first.version)}`);
   };
   return <section class="research-panel research-selection-panel" aria-label={tx('研究配置选择', 'Research configuration selection')}><h2>{tx('研究配置选择', 'Research configuration selection')} ({selection.length})</h2>
     <ul class="research-list">{selection.map(ref => <li class="research-list-item" key={`${ref.assetId}@${ref.version}`}><div class="research-actions"><a href={libraryHref(ref.assetId, ref.version)}>{assets.find(asset => asset.id === ref.assetId)?.name ?? ref.assetId} · {ref.version}</a>
       <button type="button" class="text-button" disabled={busy} onClick={() => remove(ref)}>{tx('移除', 'Remove')}</button></div></li>)}</ul>
-    <div class="research-selection"><div><label class="research-field">{tx('目标环境', 'Target environment')}<select value={environment} disabled={busy} onChange={event => setEnvironment(event.currentTarget.value)}><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>
+    <div class="research-selection"><div><label class="research-field">{tx('目标环境', 'Target environment')}<select value={environment} disabled={busy} onChange={event => setEnvironment(event.currentTarget.value as WebEnvironment)}><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>
       <p>{validated ? tx('组合检查通过，版本与依赖已固定。', 'Configuration checked. Versions and dependencies are fixed.') : tx('检查依赖、环境和研究规则后带入工作台。', 'Check dependencies, environment and research rules before opening the workbench.')}</p></div>
       <div class="research-actions"><button class="button" type="button" disabled={busy} onClick={() => void validate()}>{busy ? tx('正在检查…', 'Checking…') : tx('检查组合', 'Check configuration')}</button>
         <button class="button button-primary" type="button" disabled={busy} onClick={open}>{tx('带入工作台', 'Open in workbench')}</button><button type="button" class="text-button" disabled={busy} onClick={clear}>{tx('清空', 'Clear')}</button></div></div>

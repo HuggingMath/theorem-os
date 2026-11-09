@@ -1,5 +1,12 @@
 /** The natural-language entry, its model connection, budgets and acceptance results. */
 export const release: Record<string, string> = {
+  'Library 研究配置': 'Library research configuration',
+  '正在读取选定的 Library 版本…': 'Loading selected Library versions…',
+  '每次研究只能选择一个 Agent，请在 Library 调整选择。': 'Choose one Agent per run. Adjust your selection in Library.',
+  '所选 Library 版本不可用，请重新选择。': 'The selected Library versions are unavailable. Choose them again.',
+  '本次研究使用的 Library 版本': 'Library versions for this research',
+  '查看 Library': 'View Library',
+  '清除选择': 'Clear selection',
   '下载完整研究归档': 'Download full research archive',
   '下载运行快照': 'Download run snapshot',
   '观察 / 动作 / 命令覆盖': 'Observation / action / command coverage',
