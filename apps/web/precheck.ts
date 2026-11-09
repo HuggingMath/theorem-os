@@ -6,10 +6,13 @@ import type { WebEnvironment, WebPrecheck, WebPrecheckDiagnostic } from './share
 import { libraryPackDigest, type LibraryPack } from '../../src/math/libraryPacks';
 
 /** What the runner reports for one compile of the statement; `output` is Lean's `--json` stream. */
-export type WebPrecheckOutput = { output: string; exitCode: number | null; timedOut: boolean };
+export type WebPrecheckOutput = { output: string; exitCode: number | null; timedOut: boolean;
+  /** Set only after the host's isolated query checked this declaration and its transitive axioms. */
+  checkedTarget?: string };
 export type WebPrecheckRunner = (input: { environment: WebEnvironment; source: string; libraryPack?: LibraryPack;
   /** Host-selected immutable candidate context; ordinary editor checks do not supply files. */
-  sourceFile?: string; dependencySources?: { file: string; source: string }[] }, signal: AbortSignal) => Promise<WebPrecheckOutput>;
+  sourceFile?: string; dependencySources?: { file: string; source: string }[];
+  candidateTarget?: { name: string; expectedType?: string } }, signal: AbortSignal) => Promise<WebPrecheckOutput>;
 
 const maxDiagnostics = 40, maxMessage = 1_500;
 // Lean counts lines from 1 and columns in code points from 0; offsets here are JavaScript string indexes.

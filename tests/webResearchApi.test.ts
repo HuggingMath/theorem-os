@@ -5,7 +5,7 @@ import net from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
-import type { WebRunner } from '../apps/web/runner';
+import { DockerWebRunner, type WebRunner } from '../apps/web/runner';
 import type { WebCommand, WebCommandResult, WebGuidanceRecord, WebObservation } from '../apps/web/collaboration';
 import type { WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import type { WebPrecheckRunner } from '../apps/web/precheck';
@@ -72,7 +72,8 @@ class ResearchFixtureRunner implements WebRunner {
   check: WebPrecheckRunner = async value => {
     this.checks.push(structuredClone(value));
     this.beforeCheck?.();
-    return { output: '', exitCode: 0, timedOut: false };
+    return { output: '', exitCode: 0, timedOut: false,
+      ...(value.candidateTarget ? { checkedTarget: value.candidateTarget.name } : {}) };
   };
   update(runId: string, change: (value: WebObservation) => void) {
     const observed = this.observations.get(runId)!;
@@ -484,6 +485,7 @@ describe('collaborative research through the actual HTTP service', () => {
     const feedback = await item<ResearchFeedback>(bob, route + '/feedback', submitted, 'POST', 201);
     expect(feedback.proofCheck?.status).toBe('checked'); expect(runner.checks.at(-1)?.source).toBe(candidate);
     expect(runner.checks.at(-1)).toMatchObject({ sourceFile: 'Main.lean', dependencySources: observed.sources[0].dependencySources });
+    expect(runner.checks.at(-1)?.candidateTarget).toEqual({ name: 'target' });
     expect(runner.commands).toHaveLength(1);
     expect(runner.commands[0].command).toMatchObject({ type: 'guidance', guidance: { id: feedback.id,
       recipient: { kind: 'task', id: 'target' }, candidate: { source: candidate, sourceDigest: mathDigest(candidate), file: 'Main.lean',
@@ -523,6 +525,99 @@ describe('collaborative research through the actual HTTP service', () => {
     expect(outdated.proofCheck?.status).toBe('superseded'); expect(runner.commands).toHaveLength(0);
     expect(service.jobs.get(alice.owner, run.id)?.source).toBe(original);
   });
+
+  it.each([
+    { label: 'lemma', type: 'True', source: 'lemma helper : True := by trivial', definition: false, checked: true },
+    { label: 'explicit definition', type: 'Nat', source: 'def helper : Nat := 1', definition: true, checked: true },
+    { label: 'definition replacing a proof', type: 'True', source: 'def helper : True := True.intro', definition: false, checked: false },
+  ])('checks a planned $label while preserving another original unfinished proof', async helper => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    const { project, run, route } = await projectWithRun(alice, bob), baseline = `${original}\n`;
+    const baselineDigest = mathDigest(canonicalMathJson([['Main.lean', mathDigest(baseline)]]));
+    runner.update(run.id, observed => {
+      observed.inspection.tasks.push({ ...observed.inspection.tasks[0]!, id: 'helper', kind: 'lemma', version: 'helper-v1',
+        theorem: 'helper', type: helper.type, proof: { status: 'open' } });
+      observed.plan!.tasks.push({ id: 'helper', kind: 'lemma', objective: 'Prove a reusable helper', dependsOn: [], revision: 1,
+        theoremName: 'helper', type: helper.type, proofPath: 'Main.lean', ...(helper.definition ? { declaration: 'definition' } : {}) });
+      observed.sources.push({ ...observed.sources[0]!, taskId: 'helper', taskVersion: 'helper-v1', source: baseline, sourceDigest: baselineDigest });
+    });
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!, source = `${helper.source}\n${baseline}`;
+    runner.check = async value => {
+      runner.checks.push(value);
+      return { output: JSON.stringify({ severity: 'warning', data: "declaration uses 'sorry'" }), exitCode: 0, timedOut: false,
+        ...(value.candidateTarget ? { checkedTarget: value.candidateTarget.name } : {}) };
+    };
+    const feedback = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'partial-helper', kind: 'proof-submission',
+      text: 'Complete the helper only', source,
+      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'helper', version: 'helper-v1' },
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } },
+      base: { commit, sourceDigest: baselineDigest, environmentDigest, file: 'Main.lean' } }, 'POST', 201);
+    expect(feedback.proofCheck?.status).toBe(helper.checked ? 'checked' : 'failed');
+    if (!helper.checked) {
+      expect(feedback.proofCheck?.reason).toContain('定理或引理'); expect(runner.checks).toHaveLength(0); expect(runner.commands).toHaveLength(0);
+      return;
+    }
+    expect(feedback.execution.status).toBe('not-started');
+    expect(runner.checks.at(-1)).toMatchObject({ source, candidateTarget: { name: 'helper', expectedType: helper.type } });
+    expect(runner.commands).toHaveLength(1); expect(runner.commands[0]!.command.type).toBe('guidance');
+    expect(service.jobs.get(alice.owner, run.id)?.result).toBeUndefined();
+  });
+
+  it('rejects a candidate that changes a different original proof before compiling or dispatching', async () => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    const { project, run, route } = await projectWithRun(alice, bob);
+    const baseline = `theorem unrelated : True := by sorry\n${proof}`;
+    const baselineDigest = mathDigest(canonicalMathJson([['Main.lean', mathDigest(baseline)]]));
+    service.jobs.get(alice.owner, run.id)!.source = `theorem unrelated : True := by sorry\n${original}`;
+    runner.update(run.id, observed => { observed.sources[0]!.source = baseline; observed.sources[0]!.sourceDigest = baselineDigest; });
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const result = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'changed-other-original', kind: 'proof-submission',
+      text: 'This complete file changes another goal too', source: baseline.replace('unrelated : True := by sorry', 'unrelated : True := by trivial'),
+      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } },
+      base: { commit, sourceDigest: baselineDigest, environmentDigest, file: 'Main.lean' } }, 'POST', 201);
+    expect(result.proofCheck).toMatchObject({ status: 'failed', reason: expect.stringContaining('非目标原始声明 unrelated') });
+    expect(runner.checks).toHaveLength(0); expect(runner.commands).toHaveLength(0);
+  });
+
+  it('requires the exact target check receipt even when compiling the whole file succeeds', async () => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    const { project, run, route } = await projectWithRun(alice, bob);
+    runner.check = async value => { runner.checks.push(value); return { output: '', exitCode: 0, timedOut: false }; };
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const result = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'missing-target-receipt', kind: 'proof-submission',
+      text: 'Compile without a target receipt', source: proof,
+      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } },
+      base: { commit, sourceDigest, environmentDigest, file: 'Main.lean' } }, 'POST', 201);
+    expect(result.proofCheck?.status).toBe('failed'); expect(runner.checks).toHaveLength(1); expect(runner.commands).toHaveLength(0);
+  });
+
+  it.skipIf(!process.env.THEOREMOS_TEST_WORKER_IMAGE)('submits a partial helper through HTTP and the real isolated Lean check', async () => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    const { project, run, route } = await projectWithRun(alice, bob), baseline = `${original}\n`;
+    const baselineDigest = mathDigest(canonicalMathJson([['Main.lean', mathDigest(baseline)]]));
+    runner.update(run.id, observed => {
+      observed.inspection.tasks.push({ ...observed.inspection.tasks[0]!, id: 'helper', kind: 'lemma', version: 'helper-v1',
+        theorem: 'helper', type: '∀ n : Nat, n = n', proof: { status: 'open' } });
+      observed.plan!.tasks.push({ id: 'helper', kind: 'lemma', objective: 'Prove reflexivity for every natural number', dependsOn: [], revision: 1,
+        theoremName: 'helper', type: '∀ n : Nat, n = n', proofPath: 'Main.lean' });
+      observed.sources.push({ ...observed.sources[0]!, taskId: 'helper', taskVersion: 'helper-v1', source: baseline, sourceDigest: baselineDigest });
+    });
+    const lean = new DockerWebRunner({ workerImage: process.env.THEOREMOS_TEST_WORKER_IMAGE! });
+    runner.check = async (value, signal) => { runner.checks.push(value); return lean.check(value, signal); };
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const feedback = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'real-lean-partial', kind: 'proof-submission',
+      text: 'Check the helper without completing the other original theorem', source: `theorem helper (n : Nat) : n = n := by rfl\n${baseline}`,
+      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'helper', version: 'helper-v1' },
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } },
+      base: { commit, sourceDigest: baselineDigest, environmentDigest, file: 'Main.lean' } }, 'POST', 201);
+    expect(feedback.proofCheck?.status, feedback.proofCheck?.reason).toBe('checked');
+    expect(feedback.delivery.status).toBe('delivered'); expect(feedback.decision.status).toBe('pending');
+    expect(feedback.execution.status).toBe('not-started'); expect(runner.commands).toHaveLength(1);
+    expect(service.jobs.get(alice.owner, run.id)?.source).toBe(original);
+    expect(service.jobs.get(alice.owner, run.id)?.result).toBeUndefined();
+  }, 120_000);
 
   it('records actual library use only for matching source inputs, task checks and viewer permissions', async () => {
     const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');

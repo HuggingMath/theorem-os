@@ -427,17 +427,83 @@ describe('durable feedback, decisions and host receipts', () => {
         sourcePlanVersion: 'plan-v1', evidenceRefs: [{ kind: 'task', id: 'target', version: 'task-v1' }] } }];
     storage.saveRun(alice, run('run-a', observed));
     const delivered = projects.recordCommand(bob, project.id, feedback.id, { id: feedback.id, status: 'delivered', observation: observed });
-    expect(delivered.decision.actor?.kind).toBe('agent'); expect(delivered.execution.status).toBe('running');
+    expect(delivered.decision.actor?.kind).toBe('agent'); expect(delivered.execution.status).toBe('not-started');
     expect(delivered.execution.resultRefs).toContain('candidate-check:candidate-check-1');
     const integrated = structuredClone(observed); integrated.sequence = 3; integrated.snapshot.stateDigest = mathDigest('candidate-integrated');
     integrated.inspection.tasks[0]!.status = 'completed';
-    integrated.inspection.tasks[0]!.proof = { status: 'checked', commit, receiptIds: ['integrated-check'] };
+    const appliedCommit = '2'.repeat(40), appliedDigest = mathDigest('integrated source snapshot');
+    integrated.inspection.tasks[0]!.proof = { status: 'checked', commit: appliedCommit, sourceDigest: appliedDigest, receiptIds: ['integrated-check'] };
+    integrated.sources = [{ ...integrated.sources[0]!, source: candidate, commit: appliedCommit, sourceDigest: appliedDigest }];
+    integrated.checks = [{ id: 'integrated-check', taskId: 'target', taskVersion: 'task-v1', commit: appliedCommit,
+      sourceDigest: appliedDigest, environmentDigest: env, record: { passed: true } }];
     storage.saveRun(alice, run('run-a', integrated)); projects.syncRunObservation(bob, project.id, 'run-a');
     const executed = projects.feedback(bob, project.id, feedback.id);
     expect(executed.execution.status).toBe('completed');
     expect(executed.execution.resultRefs).toEqual(expect.arrayContaining(['candidate-check:candidate-check-1', 'task:target@task-v1', 'check:integrated-check']));
     expect(storage.getRun(alice, 'run-a')?.source).toBe(original.trim()); expect(storage.getRun(alice, 'run-a')?.result).toBeUndefined();
     expect(projects.detail(alice, project.id).contributions.some(item => item.kind === 'candidate-checked')).toBe(true);
+  });
+
+  function appliedCandidate() {
+    const f = fixture(), { projects, project, target, storage } = f;
+    const feedback = projects.submitFeedback(bob, project.id, { requestId: 'candidate-observed', kind: 'proof-submission',
+      text: 'Use this proof', target, source: candidate, base: { commit, sourceDigest: mathDigest(original), environmentDigest: env, file: 'Main.lean' } });
+    projects.recordProofResult(bob, project.id, feedback.id, { status: 'checked', sourceDigest: mathDigest(candidate),
+      environmentDigest: env, receiptId: 'candidate-check-observed' });
+    projects.recordCommand(bob, project.id, feedback.id, { id: feedback.id, status: 'delivered' });
+    const observed = observation(), appliedCommit = '2'.repeat(40), appliedDigest = mathDigest('applied owned files');
+    observed.sequence = 2; observed.snapshot.stateDigest = mathDigest('applied candidate');
+    observed.inspection.tasks[0]!.proof = { status: 'conditional', commit: appliedCommit, sourceDigest: appliedDigest,
+      conditions: [{ taskId: 'helper', taskDigest: 'helper-v1' }] };
+    observed.sources = [{ ...observed.sources[0]!, source: candidate + '\n', commit: appliedCommit, sourceDigest: appliedDigest }];
+    observed.checks = [{ id: 'applied-check', taskId: 'target', taskVersion: 'task-v1', commit: appliedCommit,
+      sourceDigest: appliedDigest, environmentDigest: env, record: { passed: true, conditions: [{ taskId: 'helper', taskDigest: 'helper-v1' }] } }];
+    const sync = () => { storage.saveRun(alice, run('run-a', observed)); projects.syncRunObservation(bob, project.id, 'run-a');
+      return projects.feedback(bob, project.id, feedback.id); };
+    return { ...f, feedback, observed, sync };
+  }
+
+  it('shows a matching checked candidate taking effect while its adoption decision remains pending', () => {
+    const f = appliedCandidate(), conditional = f.sync();
+    expect(conditional.decision.status).toBe('pending');
+    expect(conditional.execution).toMatchObject({ status: 'running', taskRefs: [{ id: 'target', version: 'task-v1' }] });
+    expect(conditional.execution.resultRefs).toEqual(expect.arrayContaining(['candidate-check:candidate-check-observed', 'task:target@task-v1', 'check:applied-check']));
+    f.observed.inspection.tasks[0]!.status = 'completed';
+    f.observed.inspection.tasks[0]!.proof.status = 'checked'; f.observed.inspection.tasks[0]!.proof.conditions = [];
+    f.observed.checks[0]!.record.conditions = []; f.observed.sequence++;
+    const completed = f.sync();
+    expect(completed.execution.status).toBe('completed'); expect(completed.decision.status).toBe('pending');
+    const historical = structuredClone(f.observed.inspection.tasks[0]!);
+    f.observed.inspection.tasks[0]!.version = 'task-v2'; f.observed.history = [historical]; f.observed.sequence++;
+    expect(f.sync().execution).toEqual(completed.execution);
+    expect(f.storage.getRun(alice, 'run-a')?.result).toBeUndefined();
+  });
+
+  it.each([
+    'different proof', 'internal whitespace', 'old commit', 'source version', 'source environment',
+    'receipt task', 'receipt version', 'receipt commit', 'receipt source', 'receipt environment', 'failed receipt', 'no receipt',
+  ])('does not attribute a candidate effect from %s', mismatch => {
+    const f = appliedCandidate(), source = f.observed.sources[0]!, check = f.observed.checks[0]!;
+    if (mismatch === 'different proof') source.source = candidate.replace('trivial', 'exact True.intro');
+    if (mismatch === 'internal whitespace') source.source = candidate.replace('by trivial', 'by  trivial');
+    if (mismatch === 'old commit') { source.commit = commit; check.commit = commit; f.observed.inspection.tasks[0]!.proof.commit = commit; }
+    if (mismatch === 'source version') source.taskVersion = 'task-v2';
+    if (mismatch === 'source environment') source.environmentDigest = digest;
+    if (mismatch === 'receipt task') check.taskId = 'other';
+    if (mismatch === 'receipt version') check.taskVersion = 'task-v2';
+    if (mismatch === 'receipt commit') check.commit = commit;
+    if (mismatch === 'receipt source') check.sourceDigest = digest;
+    if (mismatch === 'receipt environment') check.environmentDigest = digest;
+    if (mismatch === 'failed receipt') check.record.passed = false;
+    if (mismatch === 'no receipt') f.observed.checks = [];
+    const result = f.sync();
+    expect(result.execution.status).toBe('not-started'); expect(result.decision.status).toBe('pending');
+    expect(result.execution.resultRefs).toEqual(['candidate-check:candidate-check-observed']);
+  });
+
+  it('marks a replaced candidate task superseded without borrowing the new version proof', () => {
+    const f = appliedCandidate(); f.observed.inspection.tasks[0]!.version = 'task-v2';
+    expect(f.sync().execution.status).toBe('superseded');
   });
 
   it('retains failed candidate diagnostics without creating a guidance command', () => {

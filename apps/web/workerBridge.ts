@@ -340,7 +340,15 @@ export async function handleWebWorkerCommand(value: unknown, options: { activeRu
       throw error;
     }
   }
-  const impact = previewEdit(state, command.proposal);
+  let impact: ReturnType<typeof previewEdit>;
+  try { impact = previewEdit(state, command.proposal); }
+  catch (error) {
+    // The pure preview rejects invalid plans before the edit queue is opened. Queue failures stay uncertain.
+    const reason = error instanceof Error ? error.message : '';
+    if (/^math_plan_[a-z_]+(?::|$)/u.test(reason))
+      return { id: command.proposal.id, status: 'rejected', reason, baseVersion: command.proposal.baseVersion };
+    throw error;
+  }
   const result = await queueRunEdit(active.output, command.proposal, command.type === 'edit-preview');
   return { ...result, baseVersion: command.proposal.baseVersion, ...impact, commandDigest: mathDigest(canonicalMathJson(command.proposal)) };
 }

@@ -526,6 +526,10 @@ export class WebResearchProjects {
   private observeExecution(record: ResearchFeedback, observation?: WebObservation) {
     if (!observation || record.kind === 'proof-submission' && record.proofCheck?.status !== 'checked') return;
     const previous = record.execution;
+    if (record.kind === 'proof-submission') {
+      this.observeCandidateExecution(record, observation);
+      return;
+    }
     const edit = observation.inspection.edits.find(item => item.id === record.id || record.decision.status === 'accepted' &&
       (record.decision.evidenceRefs.includes(`edit:${item.id}`) || Boolean(item.planVersion && record.decision.evidenceRefs.includes(`plan:${item.planVersion}`))));
     if (edit?.status === 'applied') {
@@ -547,7 +551,7 @@ export class WebResearchProjects {
         resultRefs: [...new Set([...previous.resultRefs, `plan-approval:${record.id}`])] };
       return;
     }
-    if (record.decision.status !== 'accepted' || !['guidance', 'proof-submission'].includes(record.kind)) return;
+    if (record.decision.status !== 'accepted' || record.kind !== 'guidance') return;
     const tasks = new Map([...(observation.history ?? []), ...observation.inspection.tasks]
       .map(task => [`task:${task.id}@${task.version}`, task]));
     const taskRefs = record.decision.evidenceRefs.flatMap(ref => {
@@ -580,6 +584,35 @@ export class WebResearchProjects {
     const linkedTasks = taskRefs.length ? taskRefs : previous.planVersion === planVersion ? previous.taskRefs
       : observation.inspection.planVersion === planVersion ? observation.inspection.tasks.map(task => ({ id: task.id, version: task.version })) : [];
     record.execution = { status, ...(planVersion ? { planVersion } : {}), taskRefs: linkedTasks, resultRefs: [...resultRefs] };
+  }
+  /** A candidate taking effect is a source/check fact; it does not invent an Agent adoption decision. */
+  private observeCandidateExecution(record: ResearchFeedback, observation: WebObservation) {
+    const payload = record.payload, ref = record.target?.taskRef;
+    if (!payload || !('source' in payload) || !ref || record.delivery.status !== 'delivered') return;
+    const task = [...observation.inspection.tasks, ...(observation.history ?? [])]
+      .find(task => task.id === ref.id && task.version === ref.version);
+    if (!task && observation.inspection.tasks.some(task => task.id === ref.id && task.version !== ref.version)) {
+      if (record.execution.status !== 'completed') record.execution.status = 'superseded';
+      return;
+    }
+    if (!task?.proof.commit || !task.proof.sourceDigest || !['checked', 'conditional'].includes(task.proof.status)) return;
+    // Runtime commits may add a final newline. No proof text, indentation or internal whitespace is normalized.
+    const normalized = (source: string) => source.replace(/\n+$/u, '');
+    const source = observation.sources.find(source => source.taskId === ref.id && source.taskVersion === ref.version &&
+      source.file === payload.base.file && source.commit !== payload.base.commit && source.commit === task.proof.commit &&
+      source.sourceDigest === task.proof.sourceDigest && source.environmentDigest === payload.base.environmentDigest &&
+      normalized(source.source) === normalized(payload.source));
+    if (!source) return;
+    const checks = observation.checks.filter(check => check.taskId === ref.id && check.taskVersion === ref.version &&
+      check.commit === source.commit && check.sourceDigest === source.sourceDigest && check.environmentDigest === source.environmentDigest &&
+      check.record.passed === true);
+    if (!checks.length) return;
+    const conditional = task.proof.status === 'conditional' || Boolean(task.proof.conditions?.length) ||
+      checks.some(check => Array.isArray(check.record.conditions) && check.record.conditions.length > 0);
+    const resultRefs = new Set(record.execution.resultRefs);
+    resultRefs.add(`task:${ref.id}@${ref.version}`);
+    for (const check of checks) resultRefs.add(`check:${check.id}`);
+    record.execution = { status: conditional ? 'running' : 'completed', taskRefs: [ref], resultRefs: [...resultRefs] };
   }
   /** Refreshes from server-owned observations. It does not submit commands or infer adoption from temporal proximity. */
   syncRunObservation(viewer: string, projectId: string, runId: string): void {

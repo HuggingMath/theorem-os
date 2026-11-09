@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
-import { maskLeanCommentsAndStrings } from '../../src/math/leanSyntax';
-import { libraryForbiddenToken } from '../../src/math/libraryPacks';
+import { researchCandidateScopeReason } from './researchCandidateScope';
 import { WebResearchProjects } from './researchProjects';
 import { WebResearchAssets } from './researchAssets';
 import { researchMathematics } from './researchMathematics';
@@ -153,24 +152,37 @@ export class WebResearchApi {
       .find(item => item.taskId === submission.target.taskRef?.id && item.taskVersion === submission.target.taskRef.version
         && item.commit === base.commit && item.sourceDigest === base.sourceDigest && item.environmentDigest === base.environmentDigest
         && item.file === base.file) ?? fail(409, '候选证明的基础源码身份已失效。');
-    const signature = (source: string) => inspectScopedLeanDeclarations(source)
-      .map(item => [item.qualifiedName, item.kind, item.declarationType]);
-    const original = signature(baseline.source), candidate = signature(submission.source);
-    let reason: string | undefined;
-    if (original.some(item => !candidate.some(other => canonicalMathJson(item) === canonicalMathJson(other))))
-      reason = '候选证明改变或删除了基础声明，请仅补充证明。';
-    const forbidden = libraryForbiddenToken(maskLeanCommentsAndStrings(submission.source));
-    if (forbidden) reason = `候选证明含未完成证明或不允许的信任扩展：${forbidden.token}`;
     const run = this.jobs.get(submission.runOwner, submission.runId) ?? fail(404, '运行已删除。');
+    const task = run.observation?.inspection.tasks.find(item => item.id === submission.target.taskRef?.id
+      && item.version === submission.target.taskRef.version);
+    const planned = run.observation?.plan?.tasks.find(item => item.id === task?.id);
+    const name = (task?.theorem ?? planned?.theoremName)?.replace(/^_root_\./u, '');
+    const matches = inspectScopedLeanDeclarations(submission.source)
+      .filter(item => item.qualifiedName === name || name && !name.includes('.') && item.name === name);
+    const declaration = matches.length === 1 ? matches[0] : undefined;
+    const candidateTarget = declaration ? { name: declaration.qualifiedName, ...(task?.kind === 'lemma' && (task.type ?? planned?.type)
+      ? { expectedType: task.type ?? planned?.type } : {}) } : undefined;
+    const expectedKind = task?.kind === 'lemma' ? planned?.declaration === 'definition' ? 'definition' : 'theorem'
+      : inspectScopedLeanDeclarations(run.source).find(item => item.qualifiedName === candidateTarget?.name)?.kind ?? 'theorem';
+    let reason = !candidateTarget || !task || !['lemma', 'goal'].includes(task.kind) || planned?.proofPath && planned.proofPath !== base.file
+      ? '候选任务的精确声明或文件已改变，请刷新后重新选择。'
+      : declaration?.kind !== expectedKind ? expectedKind === 'definition' ? '此任务要求定义，请保留计划指定的声明种类。'
+        : '此任务要求定理或引理，请勿用定义替代证明。'
+      : task.kind === 'lemma' && !candidateTarget.expectedType ? '候选辅助声明的计划类型不可用，请刷新后重新选择。'
+      : researchCandidateScopeReason({ originalSource: run.source, baselineSource: baseline.source,
+        candidateSource: submission.source, targetName: candidateTarget.name });
     const result = reason ? undefined : await this.runner.check!({ environment: run.environment, source: submission.source,
       sourceFile: base.file, dependencySources: baseline.dependencySources,
+      candidateTarget,
       libraryPack: run.researchConfiguration?.libraryPack ?? selectWebLibraryPack(run) }, this.controller.signal);
     const diagnostics = result && leanDiagnostics(result.output);
-    const passed = Boolean(result && result.exitCode === 0 && !result.timedOut && !diagnostics?.errors && !diagnostics?.sorries);
+    const passed = Boolean(result && result.exitCode === 0 && !result.timedOut && !diagnostics?.errors
+      && result.checkedTarget === candidateTarget?.name);
     reason ??= passed ? undefined : result?.timedOut ? '候选检查超时。'
       : diagnostics?.diagnostics.find(item => item.severity === 'error')?.message ?? '候选证明未通过独立编译。';
     const receipt = { schema: 'theorem-os.research-candidate-check.v1', sourceDigest, base,
       target: submission.target, environment: run.environment, passed, diagnostics: diagnostics?.diagnostics ?? [],
+      declaration: candidateTarget, scope: 'task-declaration', remainingOriginalSorries: diagnostics?.sorries ?? 0,
       dependencies: (baseline.dependencySources ?? []).map(file => ({ file: file.file, digest: mathDigest(file.source) })),
       ...(reason ? { reason } : {}), checkedAt: new Date().toISOString() };
     const receiptId = mathDigest(canonicalMathJson(receipt));

@@ -6,6 +6,43 @@ import { readWebConfig, webDefaults } from '../apps/web/config';
 import { DockerWebRunner, parseWorkerMessage, webPrivateImagePaths } from '../apps/web/runner';
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 
+function candidateCheckDocker(reply: { severity?: string; wrongMarker?: boolean; plain?: boolean; exitCode: number }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-target-query-'));
+  fs.writeFileSync(path.join(root, 'reply.json'), JSON.stringify(reply));
+  fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path'), root = __dirname, args = process.argv.slice(2);
+fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+async function main() {
+  if (args[0] === 'create') fs.writeFileSync(path.join(root, 'script.txt'), args.at(-1));
+  if (args[0] !== 'start') return;
+  let input = ''; for await (const chunk of process.stdin) input += chunk;
+  const payload = JSON.parse(input), reply = JSON.parse(fs.readFileSync(path.join(root, 'reply.json'), 'utf8'));
+  fs.appendFileSync(path.join(root, 'inputs.jsonl'), input + '\\n');
+  const directory = path.join(root, 'check'); fs.mkdirSync(directory, { recursive: true });
+  const script = fs.readFileSync(path.join(root, 'script.txt'), 'utf8'), prefix = "exec bun -e '";
+  const start = script.indexOf(prefix);
+  if (start < 0 || !script.endsWith("'")) throw new Error('fixture_compile_script_missing');
+  const program = script.slice(start + prefix.length, -1);
+  const bun = { stdin: { text: async () => input }, spawnSync(command) {
+    fs.appendFileSync(path.join(root, 'lean-calls.jsonl'), JSON.stringify(command) + '\\n');
+    if (command.at(-1) !== payload.queryFile) return { exitCode: 0 };
+    const query = fs.readFileSync(payload.queryFile, 'utf8');
+    const marker = query.match(/THEOREMOS_CANDIDATE_TARGET_[a-f0-9]{32}/u)?.[0];
+    if (!marker) throw new Error('fixture_target_marker_missing');
+    const reported = reply.wrongMarker ? marker + '_wrong' : marker;
+    process.stdout.write((reply.plain ? reported : JSON.stringify({ severity: reply.severity, data: reported,
+      pos: { line: 1, column: 0 } })) + '\\n');
+    return { exitCode: reply.exitCode };
+  } };
+  const fakeProcess = { chdir: () => process.chdir(directory), exit: code => { throw { fixtureExit: true, code }; } };
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  await new AsyncFunction('require', 'Bun', 'process', program)(require, bun, fakeProcess);
+}
+main().catch(error => { if (error?.fixtureExit) process.exitCode = error.code; else { process.stderr.write(String(error)); process.exitCode = 97; } });
+`, { mode: 0o700 });
+  return root;
+}
+
 describe('Docker web runner', () => {
   it.each(['approve', 'cancel'] as const)('keeps the same container beyond the outer deadline while awaiting a person, then handles %s', async decision => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-approval-'));
@@ -168,6 +205,53 @@ if (args[0] === 'start') {
     } finally { vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  it.each([
+    ['matching information', { severity: 'information', exitCode: 0 }, true],
+    ['a different marker', { severity: 'information', wrongMarker: true, exitCode: 0 }, false],
+    ['ordinary stdout', { plain: true, exitCode: 0 }, false],
+    ['a warning', { severity: 'warning', exitCode: 0 }, false],
+    ['a nonzero query exit', { severity: 'information', exitCode: 1 }, false],
+  ] as const)('grants checkedTarget only for the host marker in successful Lean information: %s', async (_label, reply, checked) => {
+    const root = candidateCheckDocker(reply); vi.stubEnv('PATH', root);
+    try {
+      const result = await new DockerWebRunner(readWebConfig({})).check({ environment: 'standard',
+        source: 'theorem helper : True := by trivial\n', candidateTarget: { name: 'helper', expectedType: 'True' } }, new AbortController().signal);
+      expect(result.exitCode).toBe(reply.exitCode); expect(result.timedOut).toBe(false);
+      expect(result.checkedTarget).toBe(checked ? 'helper' : undefined);
+    } finally { vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['source', 'dependency'] as const)('checks the target in a fresh independent module without overwriting a fixed user %s path', async fixedPath => {
+    const root = candidateCheckDocker({ severity: 'information', exitCode: 0 }); vi.stubEnv('PATH', root);
+    try {
+      const dependency = { file: fixedPath === 'source' ? 'Support/Context.lean' : 'TheoremOSCandidateCheck.lean',
+        source: 'lemma premise : True := by trivial\n' };
+      const input = { environment: 'standard' as const, sourceFile: fixedPath === 'source' ? 'TheoremOSCandidateCheck.lean' : 'Tasks/Target.lean',
+        source: `import ${dependency.file.slice(0, -5).replaceAll('/', '.')}\nlemma helper : True := by exact premise\n`,
+        dependencySources: [dependency], candidateTarget: { name: 'helper', expectedType: 'True' } };
+      const runner = new DockerWebRunner(readWebConfig({}));
+      for (let attempt = 0; attempt < 2; attempt++)
+        expect((await runner.check(input, new AbortController().signal)).checkedTarget).toBe('helper');
+      const payloads = fs.readFileSync(path.join(root, 'inputs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const leanCalls = fs.readFileSync(path.join(root, 'lean-calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(payloads).toHaveLength(2);
+      expect(new Set(payloads.map(item => item.queryFile)).size).toBe(2);
+      expect(new Set(payloads.map(item => item.query.match(/THEOREMOS_CANDIDATE_TARGET_[a-f0-9]{32}/u)[0])).size).toBe(2);
+      for (const payload of payloads) {
+        expect(payload.source).toBe(input.source); expect(payload.modules).toEqual([dependency]);
+        expect(payload.queryFile).toMatch(/^TheoremOSCandidateCheck[a-f0-9]{32}\.lean$/u);
+        expect([input.sourceFile, dependency.file]).not.toContain(payload.queryFile);
+        expect(payload.query).toContain(`import ${input.sourceFile.slice(0, -5).replaceAll('/', '.')}`);
+        expect(payload.query).not.toContain(input.source);
+        expect(fs.readFileSync(path.join(root, 'check', payload.queryFile), 'utf8')).toBe(payload.query);
+        expect(leanCalls).toContainEqual(['lean', '--json', payload.queryFile]);
+      }
+      expect(fs.readFileSync(path.join(root, 'check', input.sourceFile), 'utf8')).toBe(input.source);
+      expect(fs.readFileSync(path.join(root, 'check', dependency.file), 'utf8')).toBe(dependency.source);
+      expect(leanCalls).toContainEqual(['lean', '--json', '-o', input.sourceFile.slice(0, -5) + '.olean', input.sourceFile]);
+    } finally { vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it.each(['standard', 'mathlib'] as const)('covers the image\'s own code and build state (%s)', async environment => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-check-'));
     fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
@@ -231,6 +315,36 @@ if (args[0] === 'create') {
     expect(output).toContain('/opt/theorem-os/LICENSE');
     expect(output).toContain('no such file');
     expect(output).not.toContain('proprietary');
+  }, 120_000);
+
+  it.skipIf(!process.env.THEOREMOS_TEST_WORKER_IMAGE).each([
+    { label: 'preserves an unrelated original sorry while checking the helper',
+      source: 'theorem odd_sum : True := by sorry\ntheorem helper : True := by trivial\n', expectedType: 'True', checked: true },
+    { label: 'rejects a helper indirectly using sorry through another theorem',
+      source: 'theorem unresolved : False := by sorry\ntheorem bridge : False := by exact unresolved\n' +
+        'theorem helper : True := by exact False.elim bridge\n', expectedType: 'True', checked: false, error: 'sorryAx' },
+    { label: 'rejects a different closed expected type', source: 'theorem helper : True := by trivial\n',
+      expectedType: 'False', checked: false, error: 'different type or additional assumptions' },
+    { label: 'rejects indirect sorry in the imported dependencySources closure',
+      source: 'import Inputs.Middle\ntheorem helper : True := by exact False.elim bridge\n', expectedType: 'True', checked: false, error: 'sorryAx',
+      dependencySources: [
+        { file: 'Inputs/Open.lean', source: 'theorem unresolved : False := by sorry\n' },
+        { file: 'Inputs/Middle.lean', source: 'import Inputs.Open\ntheorem bridge : False := by exact unresolved\n' },
+      ] },
+    { label: 'checks a qualified helper against its closed type in its namespace', name: 'Scoped.helper',
+      source: 'namespace Scoped\nabbrev Index := Nat\ntheorem odd_sum : True := by sorry\n' +
+        'theorem helper : ∀ n : Index, n = n := by intro n; rfl\nend Scoped\n',
+      expectedType: '∀ n : Index, n = n', checked: true },
+    { label: 'checks a definition helper with an explicit Nat type',
+      source: 'theorem odd_sum : True := by sorry\ndef helper : Nat := 7\n', expectedType: 'Nat', checked: true },
+  ])('independently checks candidate target proofs: $label', async ({ source, expectedType, dependencySources, checked, error, name = 'helper' }) => {
+    const runner = new DockerWebRunner({ workerImage: process.env.THEOREMOS_TEST_WORKER_IMAGE! });
+    const result = await runner.check({ environment: 'standard', source, dependencySources,
+      candidateTarget: { name, expectedType } }, new AbortController().signal);
+    expect(result.timedOut).toBe(false);
+    expect(result.checkedTarget).toBe(checked ? name : undefined);
+    if (checked) { expect(result.exitCode).toBe(0); expect(result.output).toContain('sorry'); }
+    else { expect(result.exitCode).not.toBe(0); expect(result.output).toContain(error!); }
   }, 120_000);
 });
 

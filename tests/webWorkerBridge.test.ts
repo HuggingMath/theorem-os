@@ -157,6 +157,31 @@ describe('isolated Web worker bridge', () => {
     await expect(handleWebWorkerCommand({ type: 'edit', proposal: { ...proposal, id: 'stale', baseVersion: 'stale' } }, options)).rejects.toThrow('version_conflict');
   });
 
+  it.each(['edit-preview', 'edit'] as const)('rejects an unowned proofPath in %s with its proposal id and repair details before opening the queue', async type => {
+    const f = fixture(), before = fs.readFileSync(f.stateFile);
+    const proposal = { ...exportRunPlan(f.state), id: 'invalid-proof-path' };
+    proposal.tasks = proposal.tasks.map(task => task.id === 'goal' ? { ...task, proofPath: 'generated/problem/Submission.lean' } : task);
+    const result = await handleWebWorkerCommand({ type, proposal }, { activeRunFile: f.activeRunFile });
+    expect(result).toMatchObject({ id: proposal.id, status: 'rejected', baseVersion: 'plan-v1' });
+    expect(result.reason).toMatch(/^math_plan_invalid_proof_target:/u);
+    expect(result.reason).toContain('"taskId":"goal"');
+    expect(result.reason).toContain('"proofPath":"generated/problem/Submission.lean"');
+    expect(result.reason).toContain('Use an owned proofPath');
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.lock'))).toBe(false);
+  });
+
+  it('keeps malformed edit queue persistence distinct from a rejected proposal', async () => {
+    const f = fixture(), before = fs.readFileSync(f.stateFile);
+    const proposal = { ...exportRunPlan(f.state), id: 'valid-proposal' };
+    const log = path.join(path.dirname(f.stateFile), 'edits.jsonl'), damaged = '{invalid-json}\n';
+    fs.writeFileSync(log, damaged);
+    await expect(handleWebWorkerCommand({ type: 'edit', proposal }, { activeRunFile: f.activeRunFile })).rejects.toThrow(SyntaxError);
+    expect(fs.readFileSync(log, 'utf8')).toBe(damaged);
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+  });
+
   it('allows capture before cancellation and freezes reusable catalog input with its exact digest', async () => {
     const f = fixture();
     const captured = await handleWebWorkerCommand({ type: 'capture' }, { activeRunFile: f.activeRunFile });

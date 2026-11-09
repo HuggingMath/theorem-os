@@ -12,6 +12,7 @@ import { isWebFormalizationActivityBody } from './formalizationActivityValidatio
 import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
+import { candidateTargetQuery, candidateTargetWasChecked } from './candidateTargetCheck';
 import { ExecutionDeadline } from '../../src/runtime/executionDeadline';
 import { allowedKnowledgeFile, validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
 import { MAX_LIBRARY_PACK_BYTES, MAX_LIBRARY_PACK_MODULES, MAX_LIBRARY_MODULE_BYTES, parseLibraryPack } from '../../src/math/libraryPacks';
@@ -154,7 +155,7 @@ export class DockerWebRunner implements WebRunner {
    * Compiles the statement as one file in a throwaway container: no network, no workspace, read-only image, a few
    * seconds of CPU. The source travels over stdin. Mathlib checks read the image's prebuilt packages directly.
    */
-  check: WebPrecheckRunner = async ({ environment, source, libraryPack, sourceFile = 'Submission.lean', dependencySources = [] }, signal) => {
+  check: WebPrecheckRunner = async ({ environment, source, libraryPack, sourceFile = 'Submission.lean', dependencySources = [], candidateTarget }, signal) => {
     signal.throwIfAborted();
     const name = `theoremos-check-${crypto.randomUUID()}`;
     const mathlib = environment === 'mathlib';
@@ -194,13 +195,19 @@ export class DockerWebRunner implements WebRunner {
     // Published packs are checked in full. Mutable owned files are only compiled when this candidate imports them.
     for (const item of packed) visit(item.file.slice(0, -5).replaceAll('/', '.'));
     for (const name of mathConstructionImports(source)) visit(name);
-    const withFiles = Boolean(pack || dependencySources.length || sourceFile !== 'Submission.lean');
+    const marker = candidateTarget && `THEOREMOS_CANDIDATE_TARGET_${crypto.randomBytes(16).toString('hex')}`;
+    const query = candidateTarget && candidateTargetQuery(sourceFile.slice(0, -5).replaceAll('/', '.'), source, candidateTarget, marker!);
+    const queryFile = query && `TheoremOSCandidateCheck${crypto.randomBytes(16).toString('hex')}.lean`;
+    const withFiles = Boolean(pack || dependencySources.length || sourceFile !== 'Submission.lean' || candidateTarget);
     const compilePack = `const fs=require("node:fs"); const p=JSON.parse(await Bun.stdin.text());
       process.chdir("/tmp");
       for(const m of p.modules){fs.mkdirSync(require("node:path").dirname(m.file),{recursive:true});fs.writeFileSync(m.file,m.source);
         const r=Bun.spawnSync(["lean","--json","-o",m.file.slice(0,-5)+".olean",m.file],{stdout:"inherit",stderr:"inherit"});if(r.exitCode!==0)process.exit(r.exitCode??1);}
       fs.mkdirSync(require("node:path").dirname(p.sourceFile),{recursive:true});fs.writeFileSync(p.sourceFile,p.source);
-      process.exit(Bun.spawnSync(["lean","--json",p.sourceFile],{stdout:"inherit",stderr:"inherit"}).exitCode??1);`;
+      const args=["lean","--json",...(p.query?["-o",p.sourceFile.slice(0,-5)+".olean"]:[]),p.sourceFile];
+      const checked=Bun.spawnSync(args,{stdout:"inherit",stderr:"inherit"});if(checked.exitCode!==0)process.exit(checked.exitCode??1);
+      if(p.query){fs.writeFileSync(p.queryFile,p.query);
+        process.exit(Bun.spawnSync(["lean","--json",p.queryFile],{stdout:"inherit",stderr:"inherit"}).exitCode??1);}`;
     const pathSetup = mathlib
       ? 'LP=/opt/theoremos-library/.lake/build/lib/lean; for d in /opt/theoremos-mathlib/.lake/packages/*/.lake/build/lib/lean; do LP="$LP:$d"; done; LEAN_PATH="$LP" '
       : '';
@@ -237,8 +244,9 @@ export class DockerWebRunner implements WebRunner {
         });
         child.stdin.on('error', () => {});
         child.once('error', error => finish(undefined, error));
-        child.once('close', code => finish({ output, exitCode: code, timedOut }));
-        child.stdin.end(withFiles ? JSON.stringify({ source, sourceFile, modules: ordered }) : source);
+        child.once('close', code => finish({ output, exitCode: code, timedOut,
+          ...(candidateTarget && code === 0 && !timedOut && candidateTargetWasChecked(output, marker!) ? { checkedTarget: candidateTarget.name } : {}) }));
+        child.stdin.end(withFiles ? JSON.stringify({ source, sourceFile, modules: ordered, ...(query ? { query, queryFile } : {}) }) : source);
       });
     } finally { await remove(); }
   };
