@@ -1441,6 +1441,9 @@ textarea.expanded-source:focus-visible{outline-width:1px;outline-offset:-1px}
 .collab-or-edge{stroke:var(--amber-600);stroke-dasharray:5 4}
 .collab-task{position:absolute;text-align:left;padding:10px 12px;width:218px;height:104px;overflow:hidden;background:var(--surface,var(--card));border:1px solid var(--gray-200);border-radius:var(--radius-md);color:inherit;box-shadow:0 2px 3px color-mix(in srgb,var(--shade) 6%,transparent);font:inherit;cursor:pointer;transition:border-color .15s,background .15s}
 .collab-task-top{display:flex;justify-content:space-between;color:var(--gray-500);font-size:var(--text-xs);gap:8px}
+.collab-task-kind{display:inline-flex;align-items:center;gap:5px;min-width:0}
+.collab-task-feedback{font-size:10px;line-height:1.4;white-space:nowrap;color:var(--blue-600);background:var(--accent-soft);padding:1px 4px;border-radius:3px}
+.collab-task-feedback[data-feedback-attention=true]{color:var(--amber-700);background:var(--amber-50)}
 .collab-task strong{display:block;font-size:var(--text-xs);font-weight:600}
 .collab-task-objective{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-xs)}
 .collab-task small{font-size:var(--text-xs);color:var(--gray-500)}

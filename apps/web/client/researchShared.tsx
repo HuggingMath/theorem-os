@@ -124,7 +124,9 @@ export const words = (value: string) => value.split(/[,，\n]/u).map(item => ite
 export const lines = (value: string) => value.split(/\r?\n/u).map(item => item.trim()).filter(Boolean);
 export function State({ value }: { value: string }) { return <span class="research-state" data-state={value}>{nameOf(value)}</span>; }
 export function Tags({ values }: { values: string[] }) { return <div class="research-chips">{values.map(value => <span class="research-chip" key={value}>{value}</span>)}</div>; }
-export const theoremHref = (id: string, runId?: string) => `theorems.html?id=${enc(id)}${runId ? `&run=${enc(runId)}` : ''}`;
+export const theoremHref = (id: string, runId?: string, target?: { statementVersionId?: string; taskRef?: { id: string; version: string }; feedbackId?: string }) =>
+  `theorems.html?id=${enc(id)}${runId ? `&run=${enc(runId)}` : ''}${target?.statementVersionId ? `&version=${enc(target.statementVersionId)}` : ''}`
+  + `${target?.taskRef ? `&task=${enc(target.taskRef.id)}&taskVersion=${enc(target.taskRef.version)}` : ''}${target?.feedbackId ? `#feedback-${enc(target.feedbackId)}` : ''}`;
 export const personHref = (id: string) => `people.html?id=${enc(id)}`;
 export const libraryHref = (id: string, version?: string) => `library.html?entry=${enc(id)}${version ? `&version=${enc(version)}` : ''}`;
 export function FollowButton({ kind, id, initial = false }: { kind: 'person' | 'theorem'; id: string; initial?: boolean }) {

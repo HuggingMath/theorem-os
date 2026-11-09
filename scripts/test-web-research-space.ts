@@ -10,7 +10,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WorkerInput, WebRunInput, WorkerMessage } from '../apps/web/shared';
 import type { WebObservation, WebInspection } from '../apps/web/collaboration';
-import type { ResearchProjectDetail, ResearcherProfile } from '../apps/web/researchProjectTypes';
+import type { ResearchFeedback, ResearchProjectDetail, ResearcherProfile } from '../apps/web/researchProjectTypes';
 import type { ResearchAsset, ResearchPublication } from '../apps/web/researchAssetTypes';
 import { closeSettings, openSettings } from './web-ui-controls';
 import { freePort, postRun, preferFullCollaboration, ready, settled, startBrowser, webScenario, writeScenarioReport, type ScenarioSuite } from './web-scenario';
@@ -81,6 +81,18 @@ async function request(page: Page, method: string, pathname: string, action: () 
 }
 async function fit(page: Page, label: string) {
   await settled(page); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `${label} fits the viewport`);
+}
+function reviseLemma(control: Control) {
+  const task = control.observation.inspection.tasks.find(task => task.id === 'lemma')!;
+  control.observation.history = [...(control.observation.history ?? []), structuredClone(task)];
+  task.version = 'lemma-v2'; task.objective = 'Prove the revised supporting fact with explicit assumptions'; task.type = 'True ∧ True';
+  control.observation.inspection.planVersion = 'fixture-plan-v2';
+  control.observation.plan!.baseVersion = 'fixture-plan-v2';
+  Object.assign(control.observation.plan!.tasks.find(task => task.id === 'lemma')!, { revision: 1, objective: task.objective, type: task.type });
+  control.observation.snapshot.stateDigest = hash('d'); control.emit();
+}
+async function visibleFeedback(page: Page) {
+  return page.locator('[data-research-feedback-workspace] article[id^="feedback-"]:visible').evaluateAll(nodes => nodes.map(node => node.id).sort());
 }
 
 try {
@@ -186,6 +198,144 @@ try {
     } finally { await Promise.all(others.map(context => context.close())); }
   }, { context: { viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' }, harness: (page, context) => ({ page, context, requests: [] }),
     routes: { local: 'Research UI fixture must stay local' }, timeout: { label: 'Research collaboration', seconds: 110 }, failure: { fullPage: true } });
+
+  await webScenario(browser, suite, 'exact route versions, retained feedback drafts and observable adoption results', async ({ page }) => {
+    await page.goto(`${origin}/theorems.html`);
+    const project = await http<{ item: ResearchProjectDetail }>(page, 'POST', '/api/research/theorems',
+      { requestId: crypto.randomUUID(), title: 'Versioned feedback fixture', visibility: 'private' });
+    const projectPath = `/api/research/theorems/${project.item.id}`;
+    const versioned = await http<{ item: ResearchProjectDetail }>(page, 'POST', `${projectPath}/versions`, {
+      requestId: crypto.randomUUID(), expectedRevision: project.item.revision, statement: 'Prove True with explicit supporting assumptions.', source, environment: 'standard',
+      targets: [{ theoremName: 'research_fixture', proofPath: 'Main.lean' }], confirmation: { confirmed: true },
+    });
+    const statementVersionId = versioned.item.currentStatementVersionId!;
+    const run = await postRun({ page }, { ...runInput, task: 'Feedback route A' });
+    const otherRun = await postRun({ page }, { ...runInput, task: 'Feedback route B with the same task IDs and versions' });
+    let projectRevision = versioned.item.revision;
+    for (const item of [run, otherRun]) {
+      const bound = await http<{ item: ResearchProjectDetail }>(page, 'POST', `${projectPath}/runs`,
+        { requestId: crypto.randomUUID(), expectedRevision: projectRevision, runId: item.id, statementVersionId, exposure: 'members' });
+      projectRevision = bound.item.revision;
+    }
+    const control = controls.get(run.id)!, otherControl = controls.get(otherRun.id)!;
+    const feedback = async (control: Control, text: string, taskId: string) => {
+      const task = control.observation.inspection.tasks.find(task => task.id === taskId)!;
+      return (await http<{ item: ResearchFeedback }>(page, 'POST', `${projectPath}/feedback`, {
+        requestId: crypto.randomUUID(), kind: 'guidance', text, recipient: { kind: 'task', id: task.id },
+        target: { runId: control.observation.webRunId, statementVersionId, taskRef: { id: task.id, version: task.version },
+          observationRef: { sequence: control.observation.sequence, stateDigest: control.observation.snapshot.stateDigest } },
+      })).item;
+    };
+    const historical = await feedback(control, 'Historical lemma advice: preserve the original assumptions.', 'lemma');
+    reviseLemma(control); reviseLemma(otherControl);
+    const current = await feedback(control, 'Current lemma advice: make the revised hypotheses explicit.', 'lemma');
+    const goal = await feedback(control, 'Goal advice: explain how the supporting fact closes the original statement.', 'goal');
+    const other = await feedback(otherControl, 'Other run advice: do not mix an identically named task into this route.', 'lemma');
+    await http(page, 'POST', `${projectPath}/feedback/${goal.id}/decision`,
+      { requestId: crypto.randomUUID(), status: 'needs-info', reason: 'The goal still needs a dependency explanation.', expectedRevision: goal.revision });
+    const href = (task: string, taskVersion: string) => `${origin}/theorems.html?${new URLSearchParams({
+      id: project.item.id, run: run.id, version: statementVersionId, task, taskVersion })}`;
+    await page.goto(href('lemma', 'lemma-v2')); await page.locator('[data-research-feedback-workspace]').waitFor();
+    await page.locator('[data-inspected-task-version]').filter({ hasText: 'lemma-v2' }).waitFor();
+    const scope = page.locator('[data-feedback-scope]'), status = page.locator('[data-feedback-status]'), search = page.locator('[data-feedback-search]');
+    const article = (item: ResearchFeedback) => page.locator(`article#feedback-${item.id}`);
+    const oldArticle = article(historical), currentArticle = article(current);
+    const expectedAll = [historical, current, goal, other].map(item => `feedback-${item.id}`).sort();
+    assert.equal(await scope.inputValue(), 'all', 'the feedback workspace starts with the whole project');
+    await status.selectOption('all'); assert.deepEqual(await visibleFeedback(page), expectedAll);
+    await oldArticle.getByText('记录采纳决定', { exact: true }).click();
+    const reason = 'Keep the v1 rationale while adopting the explicitly linked v2 execution.';
+    await oldArticle.getByLabel('理由', { exact: true }).fill(reason);
+    const retainedArticle = (await oldArticle.elementHandle())!;
+    await scope.selectOption('task');
+    assert.deepEqual(await visibleFeedback(page), [`feedback-${current.id}`], 'task scope uses both the run ID and the exact selected version');
+    assert.equal(await oldArticle.evaluate(node => node instanceof HTMLElement && node.hidden), true, 'filtering hides the historical article');
+    assert.equal(await retainedArticle.evaluate(node => node.isConnected), true, 'filtering keeps the original feedback article mounted');
+    await search.fill('No matching feedback should replace an existing draft');
+    assert.deepEqual(await visibleFeedback(page), []);
+    await search.fill(''); await scope.selectOption('run');
+    assert.deepEqual(await visibleFeedback(page), [historical, current, goal].map(item => `feedback-${item.id}`).sort(), 'run scope excludes the second run');
+    await status.selectOption('pending');
+    assert.deepEqual(await visibleFeedback(page), [historical, current].map(item => `feedback-${item.id}`).sort());
+    await status.selectOption('attention'); assert.ok((await visibleFeedback(page)).includes(`feedback-${goal.id}`), 'needs-info remains visible as attention');
+    await status.selectOption('all'); await scope.selectOption('all');
+    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === projectPath && response.request().method() === 'GET');
+    control.emit(); await refreshed;
+    assert.equal(await oldArticle.getByLabel('理由', { exact: true }).inputValue(), reason, 'polling and every filter preserve the adoption rationale');
+    assert.equal(await retainedArticle.evaluate((node, id) => node === document.getElementById(id), `feedback-${historical.id}`), true);
+    await oldArticle.getByLabel('证据引用，每行一项').fill('task:lemma@lemma-v2\ntask:goal@goal-v1');
+    const accepted = await request(page, 'POST', `${projectPath}/feedback/${historical.id}/decision`,
+      () => oldArticle.getByRole('button', { name: '保存决定', exact: true }).click());
+    assert.equal(accepted.item.decision.status, 'accepted'); assert.equal(accepted.item.execution.status, 'not-started');
+    await status.selectOption('accepted'); await oldArticle.waitFor({ state: 'visible' });
+    assert.deepEqual(await visibleFeedback(page), [`feedback-${historical.id}`]);
+    await status.selectOption('all'); await scope.selectOption('task');
+    assert.deepEqual(await visibleFeedback(page), [historical, current].map(item => `feedback-${item.id}`).sort(), 'an explicit execution reference can associate the older feedback with v2');
+    const executionLinks = oldArticle.getByText('查看执行节点', { exact: true });
+    assert.equal(await executionLinks.count(), 2, 'both recorded execution nodes can be inspected');
+    for (const link of await executionLinks.all()) {
+      const target = new URL((await link.getAttribute('href'))!, page.url());
+      assert.equal(target.searchParams.get('run'), run.id); assert.equal(target.searchParams.get('version'), statementVersionId);
+      assert.ok(['lemma@lemma-v2', 'goal@goal-v1'].includes(`${target.searchParams.get('task')}@${target.searchParams.get('taskVersion')}`));
+    }
+    await status.selectOption('executing'); assert.deepEqual(await visibleFeedback(page), []);
+    const lemma = control.observation.inspection.tasks.find(task => task.id === 'lemma')!;
+    lemma.status = 'running'; lemma.attempts = 1; control.emit();
+    await oldArticle.waitFor({ state: 'visible' }); assert.deepEqual(await visibleFeedback(page), [`feedback-${historical.id}`]);
+    await status.selectOption('completed'); assert.deepEqual(await visibleFeedback(page), []);
+    for (const task of control.observation.inspection.tasks) { task.status = 'completed'; task.proof = { status: 'checked' }; }
+    control.observation.inspection.progress.openProofTasks = []; control.observation.inspection.progress.checkedProofTasks = 2; control.emit();
+    await oldArticle.waitFor({ state: 'visible' }); assert.deepEqual(await visibleFeedback(page), [`feedback-${historical.id}`]);
+    assert.equal(await currentArticle.evaluate(node => node instanceof HTMLElement && node.hidden), true, 'an unaccepted current suggestion is not completed by nearby task activity');
+    await fit(page, 'feedback desktop'); await page.screenshot({ path: path.join(output, 'feedback-route-desktop.png'), fullPage: true });
+
+    await status.selectOption('all'); await scope.selectOption('all');
+    const timeline = page.locator(`a[href="#feedback-${historical.id}"]`).first(); await timeline.click();
+    assert.equal(new URL(page.url()).hash, `#feedback-${historical.id}`);
+    await oldArticle.getByText('查看对应节点', { exact: true }).click();
+    await page.waitForURL(url => url.searchParams.get('task') === 'lemma' && url.searchParams.get('taskVersion') === 'lemma-v1');
+    assert.equal(new URL(page.url()).searchParams.get('run'), run.id); assert.equal(new URL(page.url()).searchParams.get('version'), statementVersionId);
+    await page.locator('[data-inspected-task-version]').filter({ hasText: 'lemma-v1' }).waitFor();
+    assert.match(await page.locator('[data-task-history-notice]').innerText(), /历史/u);
+    assert.match(await page.locator('[data-collab-inspector] .collab-inspected-objective').innerText(), /Prove a supporting fact/u);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('[data-feedback-task-context]').getByRole('button', { name: '查看此节点反馈', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('[data-feedback-scope]')?.value === 'task');
+    assert.equal(await scope.inputValue(), 'task');
+    assert.deepEqual(await visibleFeedback(page), [`feedback-${historical.id}`], 'historical task scope excludes the current-version suggestion');
+    await fit(page, 'historical feedback mobile'); await page.screenshot({ path: path.join(output, 'feedback-route-mobile.png'), fullPage: true });
+    const executionHref = await oldArticle.getByText('查看执行节点', { exact: true }).evaluateAll(links => links.map(link => link.getAttribute('href')!));
+    const toCurrent = executionHref.find(value => new URL(value, page.url()).searchParams.get('task') === 'lemma')!;
+    await oldArticle.locator(`a[href="${toCurrent}"]`).click();
+    await page.waitForURL(url => url.searchParams.get('taskVersion') === 'lemma-v2');
+    await page.locator('[data-inspected-task-version]').filter({ hasText: 'lemma-v2' }).waitFor();
+    await page.getByRole('button', { name: 'English', exact: true }).click();
+    await page.getByRole('heading', { name: 'Work together on a theorem', exact: true }).waitFor();
+    assert.equal(await page.locator('html').getAttribute('lang'), 'en');
+    await status.selectOption('all'); await scope.selectOption('all');
+    await oldArticle.getByText('View corresponding node', { exact: true }).waitFor();
+    assert.equal(await oldArticle.getByText('View execution node', { exact: true }).count(), 2);
+    assert.ok((await page.locator('[data-feedback-summary]').innerText()).trim());
+    await fit(page, 'English feedback mobile'); await page.screenshot({ path: path.join(output, 'feedback-route-en-mobile.png'), fullPage: true });
+    await page.goto(href('lemma', 'lemma-never-retained'));
+    await page.locator('[data-inspected-task-version]').filter({ hasText: 'lemma-never-retained' }).waitFor();
+    assert.ok((await page.locator('[data-task-history-notice]').innerText()).trim(), 'a missing historical version has an explicit notice');
+    assert.equal(await page.locator('[data-collab-inspector] .collab-inspected-title').count(), 0, 'a missing version never renders the current contract');
+    await fit(page, 'missing historical task mobile'); await page.screenshot({ path: path.join(output, 'feedback-route-missing-mobile.png'), fullPage: true });
+    const unavailableRun = new URL(href('lemma', 'lemma-v1')); unavailableRun.searchParams.set('run', 'run-no-longer-visible');
+    await page.goto(unavailableRun.href);
+    await page.getByText('The selected run is unavailable. Choose a run you can access.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.collab-surface').count(), 0, 'an unavailable run never falls back to another run with the same task');
+    const unavailableStatement = new URL(href('lemma', 'lemma-v1')); unavailableStatement.searchParams.set('version', 'statement-no-longer-visible');
+    await page.goto(unavailableStatement.href);
+    await page.getByText('The selected statement version is unavailable. Choose a version from the list.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.collab-surface').count(), 0, 'an unavailable statement never falls back to another version');
+    await page.goto(href('lemma', 'lemma-v2'));
+    await page.locator('[data-inspected-task-version]').filter({ hasText: 'lemma-v2' }).waitFor();
+    assert.equal(await page.locator('.collab-surface').count(), 1, 'a valid exact link restores the selected run and task version');
+    await retainedArticle.dispose();
+  }, { context: { viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' }, harness: (page, context) => ({ page, context, requests: [] }),
+    routes: { local: 'Route feedback fixture must stay local' }, timeout: { label: 'Route feedback', seconds: 105 }, failure: { fullPage: true } });
 
   await webScenario(browser, suite, '390px layouts, keyboard access and English navigation', async ({ page }) => {
     for (const [name, url, heading] of [

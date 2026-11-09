@@ -27,6 +27,7 @@ import { Code, Detail, Facts, Host, renderOptions, renderSection } from './ui/Se
 import { locale, localizeText, t } from '../i18n';
 
 type Task = WebObservation['inspection']['tasks'][number];
+export type CollaborationTaskSelection = Readonly<{ runId: string; taskId: string; taskVersion: string }>;
 type TaskView = 'graph' | 'list';
 type ScrollPosition = { top: number; left: number };
 // Low enough for "fit" to show a large compact plan whole; card text is then a status overview.
@@ -68,6 +69,9 @@ export class CollaborationView {
   private views = new Map<string, ViewState>();
   private run?: WebRun;
   private current?: ViewState;
+  private taskSelection?: CollaborationTaskSelection;
+  private taskSelectionListeners = new Set<(selection: CollaborationTaskSelection | undefined) => void>();
+  private taskFeedback = new Map<string, Map<string, { total: number; attention: number }>>();
   private connected = false;
   private readOnly = false;
   private permissions: { guidance?: boolean; edit?: boolean; approve?: boolean; archive?: boolean } = {};
@@ -88,6 +92,7 @@ export class CollaborationView {
       view.element.remove();
     }
     this.views.clear(); this.current = undefined; this.run = undefined;
+    this.notifyTaskSelection(); this.taskSelectionListeners.clear(); this.taskFeedback.clear();
   }
   clearPlanDrafts() {
     this.planEditor.dispose();
@@ -100,7 +105,7 @@ export class CollaborationView {
     if (!container || !run) {
       if (this.current?.viewport?.contains(this.current.element)) { this.current.scrollTop = this.current.viewport.scrollTop; this.current.scrollLeft = this.current.viewport.scrollLeft; this.saveTaskReading(this.current); }
       this.current?.navigation.disconnect();
-      this.current = undefined; this.run = undefined; return;
+      this.current = undefined; this.run = undefined; this.notifyTaskSelection(); return;
     }
     let view = this.views.get(run.id);
     const before = view?.solverAttempt ?? (view?.observation && {
@@ -151,6 +156,7 @@ export class CollaborationView {
       view.viewport.scrollTop = view.scrollTop; view.viewport.scrollLeft = view.scrollLeft;
     }
     if (view.viewport && (mounting || rendered)) view.navigation.connect(view.viewport);
+    this.notifyTaskSelection();
   }
   private runRenderKey(run: WebRun, connected: boolean, archiveCount: number) {
     return [run.id, run.status, run.phase, run.result?.status ?? '', isAcceptedRun(run), run.error ?? '', connected,
@@ -217,7 +223,7 @@ export class CollaborationView {
       else if (button.hasAttribute('data-collab-guide-task')) this.provideGuidance(view, () => view.guidance.guide('task', view.selectedTask));
       else if (button.dataset.collabGuideWorker) this.provideGuidance(view, () => view.guidance.guide('worker', button.dataset.collabGuideWorker!));
       else if (button.hasAttribute('data-collab-return')) {
-        const task = view.guidanceReturnTask, selected = view.observation && recordedTask(view.observation, view.selectedTask, view.selectedVersion)?.task;
+        const task = view.guidanceReturnTask, selected = this.selectedTaskRecord(view)?.task;
         if (task && (selected?.id !== task.id || selected.version !== task.version)) this.selectTask(view, task.id, task.version);
         view.navigation.back();
       } else if (button.hasAttribute('data-collab-show-archive')) {
@@ -238,7 +244,7 @@ export class CollaborationView {
   private provideGuidance(view: ViewState, action: () => boolean | void): boolean {
     if (this.readOnly || this.permissions.guidance === false) return false;
     if (view.navigation.remember()) {
-      const task = view.observation && recordedTask(view.observation, view.selectedTask, view.selectedVersion)?.task;
+      const task = this.selectedTaskRecord(view)?.task;
       view.guidanceReturnTask = task ? { id: task.id, version: task.version } : undefined;
     }
     const result = action();
@@ -252,7 +258,7 @@ export class CollaborationView {
       view.solverAttempt && observation.sequence < view.solverAttempt.sequence ||
       view.observation && observation.sequence <= view.observation.sequence) return;
     view.observation = observation; view.observationError = undefined; this.planEditor.update(observation);
-    if (!view.selectedTask || !view.selectedVersion && !observation.inspection.tasks.some(task => task.id === view.selectedTask)) {
+    if (!view.selectedTask || view.selectedVersion === undefined && !observation.inspection.tasks.some(task => task.id === view.selectedTask)) {
       view.selectedTask = observation.inspection.tasks.find(task => task.kind === 'goal')?.id ?? observation.inspection.tasks[0]?.id ?? '';
       view.selectedVersion = undefined;
       view.artifactRequest++; view.sourceComparison = undefined; this.renderArtifact(view, null);
@@ -262,7 +268,7 @@ export class CollaborationView {
       this.render(view, this.run);
       view.renderKey = this.runRenderKey(this.run, this.connected, view.archives.length);
     }
-    if (notify) this.observed(observation);
+    if (notify) { this.notifyTaskSelection(); this.observed(observation); }
   }
   /** Switch every run's surface; a toggle keeps focus on its own button, the footer link hands it to the first expert heading. */
   private setDetail(detail: DetailLevel, origin?: HTMLButtonElement) {
@@ -321,12 +327,53 @@ export class CollaborationView {
     this.planEditor.open(runId, view.observation, view.selectedTask);
     return true;
   }
-  /** Open one task in the inspector, as a click on it in the graph would; false when this run has no such task yet. */
-  showTask(runId: string, taskId: string): boolean {
+  /** Receive the shown task's exact version immediately and whenever that selection changes. */
+  onTaskSelection(listener: (selection: CollaborationTaskSelection | undefined) => void): () => void {
+    this.taskSelectionListeners.add(listener);
+    listener(this.currentTaskSelection());
+    return () => this.taskSelectionListeners.delete(listener);
+  }
+  private currentTaskSelection(): CollaborationTaskSelection | undefined {
+    const view = this.current;
+    if (!this.run || !view?.observation || !view.selectedTask) return undefined;
+    const taskVersion = view.selectedVersion ?? view.observation.inspection.tasks.find(task => task.id === view.selectedTask)?.version;
+    return taskVersion === undefined ? undefined : { runId: this.run.id, taskId: view.selectedTask, taskVersion };
+  }
+  private notifyTaskSelection() {
+    const next = this.currentTaskSelection(), previous = this.taskSelection;
+    if (previous?.runId === next?.runId && previous?.taskId === next?.taskId && previous?.taskVersion === next?.taskVersion) return;
+    this.taskSelection = next;
+    for (const listener of this.taskSelectionListeners) listener(next);
+  }
+  /** Refresh card counts only when feedback changes; each count belongs to one exact task version. */
+  setTaskFeedback(runId: string, feedback: readonly { taskId: string; taskVersion: string; total: number; attention: number }[]): void {
+    const next = new Map(feedback.map(item => [JSON.stringify([item.taskId, item.taskVersion]), { total: item.total, attention: item.attention }]));
+    const previous = this.taskFeedback.get(runId);
+    if (!previous && !next.size || previous?.size === next.size && [...next].every(([key, value]) => {
+      const before = previous.get(key);
+      return before?.total === value.total && before?.attention === value.attention;
+    })) return;
+    this.taskFeedback.set(runId, next);
     const view = this.views.get(runId);
-    if (!view || this.current !== view || !view.observation?.inspection.tasks.some(task => task.id === taskId)) return false;
-    this.selectTask(view, taskId, undefined, true);
+    if (!view?.observation) return;
+    const mode = this.taskMode(view), pane = this.taskPane(view, mode);
+    const top = pane.scrollTop, left = pane.scrollLeft, viewportTop = view.viewport?.scrollTop, viewportLeft = view.viewport?.scrollLeft;
+    this.renderTaskCards(view, this.visibleTasks(view), mode);
+    pane.scrollTop = top; pane.scrollLeft = left;
+    if (view.viewport && viewportTop !== undefined && viewportLeft !== undefined) {
+      view.viewport.scrollTop = viewportTop; view.viewport.scrollLeft = viewportLeft;
+    }
+  }
+  /** Open the current task, or an exact version's inspector (including its missing state); false when the run is not shown. */
+  showTask(runId: string, taskId: string, version?: string): boolean {
+    const view = this.views.get(runId);
+    if (!view || this.current !== view || !view.observation || version === undefined && !view.observation.inspection.tasks.some(task => task.id === taskId)) return false;
+    this.selectTask(view, taskId, version, true);
     return true;
+  }
+  private selectedTaskRecord(view: ViewState) {
+    const record = view.observation && recordedTask(view.observation, view.selectedTask, view.selectedVersion);
+    return view.selectedVersion === undefined || record?.task.version === view.selectedVersion ? record : undefined;
   }
   private selectTask(view: ViewState, id: string, version?: string, reveal = false) {
     const changed = view.selectedTask !== id || view.selectedVersion !== version;
@@ -343,6 +390,7 @@ export class CollaborationView {
       const controls = view.element.querySelector<HTMLElement>('.collab-inspector > .collab-section-heading')!;
       if (heading) { view.navigation.reveal(controls); heading.focus({ preventScroll: true }); }
     }
+    this.notifyTaskSelection();
   }
   private switchTaskView(view: ViewState, mode: TaskView) {
     const map = view.element.querySelector<HTMLElement>('.collab-map')!, previous = map.dataset.taskView as TaskView;
@@ -436,7 +484,7 @@ export class CollaborationView {
   }
   private updateKnowledge(view: ViewState, run: WebRun) {
     const inspection = view.observation?.inspection; if (!inspection) return;
-    const task = view.observation && recordedTask(view.observation, view.selectedTask, view.selectedVersion)?.task;
+    const task = this.selectedTaskRecord(view)?.task;
     view.knowledge.update(run.knowledgeDigest ?? inspection.configuration.knowledgeDigest, run.knowledgeCatalogDigest, {
       environmentDigest: inspection.configuration.environmentDigest, problemId: inspection.problem.id,
       ...(task ? { task: { id: task.id, version: task.version, goal: task.type ?? task.objective } } : {}),
@@ -492,9 +540,9 @@ export class CollaborationView {
   }
   private renderTaskSelection(view: ViewState, tasks: readonly Task[], currentTasks: readonly Task[]) {
     const selectedCurrent = currentTasks.find(task => task.id === view.selectedTask);
-    const historical = Boolean(view.selectedVersion && selectedCurrent?.version !== view.selectedVersion);
+    const historical = view.selectedVersion !== undefined && selectedCurrent?.version !== view.selectedVersion;
     const selection = view.element.querySelector<HTMLElement>('[data-collab-task-selection]')!;
-    selection.hidden = !view.selectedTask || tasks.some(task => task.id === view.selectedTask && (!view.selectedVersion || task.version === view.selectedVersion));
+    selection.hidden = !view.selectedTask || tasks.some(task => task.id === view.selectedTask && (view.selectedVersion === undefined || task.version === view.selectedVersion));
     renderSection(selection, selection.hidden ? null : <>
       <p>{t('检查器仍在查看')} <strong>{view.selectedTask}</strong>{historical ? <> {t('的历史合同')} <code>{view.selectedVersion}</code>{t('{0}。', '')}</> : t('{0}。', t('，该任务不在当前筛选结果中'))}</p>
       <div><button type="button" class="text-button" data-collab-task-inspect-selected data-focus-key="task-inspect-selected">{t('查看所选合同')}</button>
@@ -591,11 +639,13 @@ export class CollaborationView {
   private taskCard(view: ViewState, task: Task, peak: number): TaskCard {
     const state = taskState(task), tokens = totalTokens(task.usage);
     const owner = task.owner && workerNames(view.observation?.inspection.workers).get(task.owner);
+    const feedback = this.taskFeedback.get(view.observation!.webRunId)?.get(JSON.stringify([task.id, task.version]));
     return { id: task.id, version: task.version, kind: task.kind, kindLabel: kindLabel[task.kind] ?? task.kind, state, stateLabel: label(state), objective: localizeText(task.objective),
       name: task.theorem?.split('.').at(-1) || task.id,
       owner: owner || task.owner || t('待分配'), proof: task.proof.status, proofLabel: task.proof.status === 'checked' ? t('已检查') : label(task.proof.status),
       ...(tokens !== undefined ? { tokens: { label: tokenText(tokens), share: peak ? tokens / peak : 0, detail: usageDetail(task.usage!) } } : {}),
-      selected: view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version) };
+      ...(feedback ? { feedback } : {}),
+      selected: view.selectedTask === task.id && (view.selectedVersion === undefined || view.selectedVersion === task.version) };
   }
   private peakTokens(observation: WebObservation) {
     return Math.max(0, ...observation.inspection.tasks.map(task => totalTokens(task.usage) ?? 0));
@@ -614,7 +664,7 @@ export class CollaborationView {
     for (const card of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-task]')) {
       if (card.closest('[data-collab-graph],[data-collab-task-list],[data-collab-agents]')) continue;
       const task = view.observation?.inspection.tasks.find(item => item.id === card.dataset.collabTask);
-      const selected = Boolean(task && view.selectedTask === task.id && (!view.selectedVersion || view.selectedVersion === task.version));
+      const selected = Boolean(task && view.selectedTask === task.id && (view.selectedVersion === undefined || view.selectedVersion === task.version));
       card.classList.toggle('selected', selected); card.setAttribute('aria-pressed', String(selected));
     }
     if (view.observation) {
@@ -624,13 +674,13 @@ export class CollaborationView {
     }
   }
   private renderInspector(view: ViewState) {
-    const observation = view.observation, record = observation && recordedTask(observation, view.selectedTask, view.selectedVersion), task = record?.task;
+    const observation = view.observation, record = this.selectedTaskRecord(view), task = record?.task;
     const current = observation?.inspection.tasks.find(task => task.id === view.selectedTask);
     const guide = view.element.querySelector<HTMLButtonElement>('[data-collab-guide-task]')!;
     guide.disabled = !task || Boolean(record?.historical);
     const root = view.element.querySelector<HTMLElement>('[data-collab-inspector]')!;
     if (!observation || !task) {
-      renderTaskInspector(root, view.selectedVersion ? { mode: 'missing', id: view.selectedTask, version: view.selectedVersion, hasCurrent: Boolean(current) } : { mode: 'empty' });
+      renderTaskInspector(root, view.selectedVersion !== undefined ? { mode: 'missing', id: view.selectedTask, version: view.selectedVersion, hasCurrent: Boolean(current) } : { mode: 'empty' });
       return;
     }
     const historical = record!.historical;

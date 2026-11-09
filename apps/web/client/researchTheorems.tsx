@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail, ResearchProjectSummary, ResearchRunBinding, ResearchStatementVersion, ResearcherProfile } from '../researchProjectTypes';
+import type { ResearchFeedbackTarget, ResearchProjectDetail, ResearchProjectSummary, ResearchRunBinding, ResearchStatementVersion, ResearcherProfile } from '../researchProjectTypes';
 import type { WebRun } from '../shared';
 import type { WebShareSnapshot } from '../share';
 import type { WebObservation } from '../collaboration';
 import type { WebApi } from './collaborationUi';
-import { CollaborationView } from './collaborationView';
+import { CollaborationView, type CollaborationTaskSelection } from './collaborationView';
+import { FeedbackWorkspace, TaskFeedbackContext, type FeedbackFocus, type OpenFeedbackTask } from './researchFeedback';
+import { taskFeedbackAnnotations } from './researchFeedbackModel';
 import { RichProse } from './richText';
 import { api, base, Check, enc, Empty, ErrorBox, Field, FollowButton, lines, MutationState, nameOf, Panel, personHref, Search,
   stamp, State, Tags, theoremHref, tx, useMutation, useResource, words, type Item, type Items, type ResearchContext } from './researchShared';
@@ -52,13 +54,26 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
   const parameters = new URLSearchParams(location.search), initialRun = parameters.get('run') ?? '';
   const [versionChoice, setVersionChoice] = useState(parameters.get('version') ?? project.runs.find(run => run.runId === initialRun)?.statementVersionId ?? project.currentStatementVersionId ?? ''),
     [runChoice, setRunChoice] = useState(initialRun);
-  const version = project.versions.find(item => item.id === versionChoice) ?? project.versions.at(-1);
+  const [taskSelection, setTaskSelection] = useState<CollaborationTaskSelection>(), [taskRequest, setTaskRequest] = useState<(CollaborationTaskSelection & { request: number })>(),
+    [feedbackFocus, setFeedbackFocus] = useState<FeedbackFocus>(), [browseTask, setBrowseTask] = useState(0);
+  const version = versionChoice ? project.versions.find(item => item.id === versionChoice) : project.versions.at(-1);
   const runs = project.runs.filter(run => run.statementVersionId === version?.id);
-  const run = runs.find(item => item.runId === runChoice) ?? runs[0];
+  const run = runChoice ? runs.find(item => item.runId === runChoice) : runs[0];
   const remember = (versionId: string, runId?: string) => {
     const next = new URL(location.href); next.searchParams.set('version', versionId); runId ? next.searchParams.set('run', runId) : next.searchParams.delete('run');
-    next.searchParams.delete('task'); history.replaceState(null, '', next);
+    next.searchParams.delete('task'); next.searchParams.delete('taskVersion'); next.hash = ''; history.replaceState(null, '', next);
+    setTaskRequest(undefined); setTaskSelection(undefined);
   };
+  const openTask: OpenFeedbackTask = (target, task) => {
+    setVersionChoice(target.statementVersionId); setRunChoice(target.runId);
+    setTaskRequest({ runId: target.runId, taskId: task.id, taskVersion: task.version, request: (taskRequest?.request ?? 0) + 1 });
+    history.replaceState(null, '', theoremHref(project.id, target.runId, { statementVersionId: target.statementVersionId, taskRef: task }));
+  };
+  const revealFeedback = (id: string) => {
+    setFeedbackFocus({ id, request: (feedbackFocus?.request ?? 0) + 1 });
+    const next = new URL(location.href); next.hash = `feedback-${enc(id)}`; history.replaceState(null, '', next);
+  };
+  const selectedTask = taskSelection?.runId === run?.runId ? taskSelection : undefined;
   return <><Panel title={project.title} actions={context.session.authenticated ? <FollowButton kind="theorem" id={project.id} initial={project.following} /> : <a class="button" href="login.html">{tx('登录后关注', 'Sign in to follow')}</a>}>
     <div class="research-item-meta"><a href={personHref(project.owner.id)}>{project.owner.displayName}</a><State value={project.visibility} /><span>{stamp(project.updatedAt)}</span></div>
     {project.description && <div class="research-description"><RichProse text={project.description} /></div>}<Tags values={project.fields} />
@@ -72,24 +87,30 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
       {version.assumptions?.length ? <><h3>{tx('前提与假设', 'Assumptions')}</h3><ul>{version.assumptions.map((assumption, index) => <li key={index}><RichProse text={assumption} /></li>)}</ul></> : null}
       <details><summary>{tx('Lean 陈述与来源', 'Lean statement and source')}</summary><pre class="research-block-code">{version.source}</pre><dl class="research-facts"><div><dt>{tx('版本 ID', 'Version ID')}</dt><dd>{version.id}</dd></div>
         <div><dt>{tx('源码摘要', 'Source digest')}</dt><dd>{version.sourceDigest}</dd></div>{version.environmentDigest && <div><dt>{tx('环境摘要', 'Environment digest')}</dt><dd>{version.environmentDigest}</dd></div>}</dl></details></>
-      : <Empty>{tx('尚无陈述版本。请先保存自然语言原题和对应 Lean 源码。', 'No statement version yet. Save the original statement and its Lean source first.')}</Empty>}
+      : <Empty>{project.versions.length ? tx('所选陈述版本不可用。请从版本列表重新选择。', 'The selected statement version is unavailable. Choose a version from the list.')
+        : tx('尚无陈述版本。请先保存自然语言原题和对应 Lean 源码。', 'No statement version yet. Save the original statement and its Lean source first.')}</Empty>}
     {project.permissions.edit && <details><summary>{tx('添加陈述版本', 'Add a statement version')}</summary><StatementEditor project={project} onSaved={item => { setVersionChoice(item.id); setRunChoice(''); remember(item.id); refresh(); }} /></details>}
   </Panel><Panel title={tx('研究运行与路线', 'Research runs and routes')} note={tx('每次运行保留自己的任务图、检查证据和干预记录。', 'Each run retains its task graph, check evidence and intervention records.')}>
     {runs.length > 0 ? <><div class="research-run-tools"><label>{tx('选择研究运行', 'Select research run')}<select value={run?.runId} onChange={event => {
       setRunChoice(event.currentTarget.value); if (version) remember(version.id, event.currentTarget.value);
-    }}>{runs.map(item => <option key={item.runId} value={item.runId}>{item.title} · {nameOf(item.status)} · {item.owner.displayName}</option>)}</select></label>
-      {run && <State value={run.status} />}{run?.permissions.manage && <a class="button" href={`./?run=${enc(run.runId)}`}>{tx('在工作台打开此运行', 'Open this run in the workbench')}</a>}</div>{run && (run.permissions.read || run.exposure === 'public' ? <RunResearch key={`${run.runId}:${run.permissions.read}`} project={project} selfId={context.session.researcherId ?? ''} binding={run} refreshProject={refresh} />
-      : <Empty>{tx('你可以参与题目讨论；此运行尚未授权给你查看。', 'You can join the theorem discussion. This run has not been shared with you.')}</Empty>)}</>
-      : <Empty>{tx('当前陈述尚未关联运行。在工作台创建研究后，选择绑定到此版本。', 'No run is attached to this statement. Create a run in the workbench, then bind it to this version.')}</Empty>}
+    }}>{!run && <option value="">{tx('请选择可用的运行', 'Choose an available run')}</option>}{runs.map(item => <option key={item.runId} value={item.runId}>{item.title} · {nameOf(item.status)} · {item.owner.displayName}</option>)}</select></label>
+      {run && <State value={run.status} />}{run?.permissions.manage && <a class="button" href={`./?run=${enc(run.runId)}`}>{tx('在工作台打开此运行', 'Open this run in the workbench')}</a>}</div>{run && (run.permissions.read || run.exposure === 'public' ? <RunResearch key={`${run.runId}:${run.permissions.read}`} project={project} selfId={context.session.researcherId ?? ''} binding={run} refreshProject={refresh}
+        task={selectedTask} requestedTask={taskRequest} onTaskSelection={setTaskSelection} onBrowseTask={() => setBrowseTask(value => value + 1)} />
+      : <Empty>{tx('你可以参与题目讨论；此运行尚未授权给你查看。', 'You can join the theorem discussion. This run has not been shared with you.')}</Empty>)}
+      {!run && <Empty>{tx('所选运行不可用。请重新选择有权查看的运行。', 'The selected run is unavailable. Choose a run you can access.')}</Empty>}</>
+      : <Empty>{runChoice ? tx('所选运行不可用。请重新选择有权查看的运行。', 'The selected run is unavailable. Choose a run you can access.')
+        : tx('当前陈述尚未关联运行。在工作台创建研究后，选择绑定到此版本。', 'No run is attached to this statement. Create a run in the workbench, then bind it to this version.')}</Empty>}
     {project.permissions.edit && version && <details><summary>{tx('关联我的研究运行', 'Attach one of my runs')}</summary><BindRun project={project} version={version} refresh={refresh} onBound={id => { setRunChoice(id); remember(version.id, id); }} /></details>}
-  </Panel><Panel title={tx('讨论与建议', 'Discussion and suggestions')} note={tx('讨论可独立于运行保存；发送给 Agent 的指导在路线图内提交。', 'Discussions can be saved without a run. Send guidance to agents from the research view.')}>
-    {project.permissions.discuss ? <Discussion project={project} version={version} refresh={refresh} /> : <Empty>{tx('当前账号只有查看权限。', 'This account has read access.')}</Empty>}
-    {project.feedback.slice().reverse().map(feedback => <Feedback key={feedback.id} feedback={feedback} project={project} refresh={refresh} />)}
-    {!project.feedback.length && <Empty>{tx('尚无讨论或干预记录。', 'No discussion or intervention records yet.')}</Empty>}
+  </Panel><Panel title={tx('讨论与人工反馈', 'Discussion and human feedback')} note={tx('按运行和节点查看投递、采纳及执行结果。发送给 Agent 的指导在路线图内提交。', 'Track delivery, decisions and execution by run and node. Send guidance to agents from the research view.')}>
+    <FeedbackWorkspace project={project} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback}>
+      {project.permissions.discuss ? <Discussion project={project} version={version} refresh={refresh} /> : <Empty>{tx('当前账号只有查看权限。', 'This account has read access.')}</Empty>}
+    </FeedbackWorkspace>
   </Panel><Panel title={tx('参与者', 'Participants')}><Members project={project} selfId={context.session.researcherId ?? ''} refresh={refresh} /></Panel>
     <Panel title={tx('研究时间线', 'Research timeline')}>
       {project.activity.slice().reverse().map(activity => <article class="research-event" key={activity.id}><div class="research-item-meta"><a href={personHref(activity.actor.id)}>{activity.actor.displayName}</a><time dateTime={activity.createdAt}>{stamp(activity.createdAt)}</time></div>
-        <p>{activity.summary}</p>{activity.runId && <a class="research-inline-link" href={theoremHref(project.id, activity.runId)}>{tx('打开对应运行', 'Open related run')}</a>}</article>)}
+        <p>{activity.summary}</p><div class="research-actions">{activity.feedbackId && project.feedback.some(item => item.id === activity.feedbackId) && <a class="research-inline-link" href={`#feedback-${enc(activity.feedbackId)}`}
+          onClick={event => { event.preventDefault(); revealFeedback(activity.feedbackId!); }}>{tx('查看相关反馈', 'View related feedback')}</a>}
+        {activity.runId && <a class="research-inline-link" href={theoremHref(project.id, activity.runId, { statementVersionId: activity.statementVersionId })}>{tx('打开对应运行', 'Open related run')}</a>}</div></article>)}
       {!project.activity.length && <Empty>{tx('暂无研究活动。', 'No research activity yet.')}</Empty>}
     </Panel></>;
 }
@@ -160,9 +181,12 @@ function BindRun({ project, version, refresh, onBound }: { project: ResearchProj
   </form>;
 }
 
-function RunResearch({ project, selfId, binding, refreshProject }: { project: ResearchProjectDetail; selfId: string; binding: ResearchRunBinding; refreshProject: () => void }) {
+function RunResearch({ project, selfId, binding, refreshProject, task, requestedTask, onTaskSelection, onBrowseTask }: {
+  project: ResearchProjectDetail; selfId: string; binding: ResearchRunBinding; refreshProject: () => void; task?: CollaborationTaskSelection;
+  requestedTask?: CollaborationTaskSelection & { request: number }; onTaskSelection: (task: CollaborationTaskSelection | undefined) => void; onBrowseTask: () => void;
+}) {
   const projectId = project.id;
-  const root = useRef<HTMLDivElement>(null), view = useRef<CollaborationView>(), taskShown = useRef(false);
+  const root = useRef<HTMLDivElement>(null), view = useRef<CollaborationView>(), taskShown = useRef('');
   const [observed, setObserved] = useState<WebObservation>();
   const observation = useResource<{ run?: WebRun; observation: WebObservation | null; share?: WebShareSnapshot | null; summary?: Pick<WebRun, 'id' | 'title' | 'status'> }>(`${base}/theorems/${enc(projectId)}/runs/${enc(binding.runId)}/observation`, 5000);
   const permissions = useRef({ ...binding.permissions, archive: false }); permissions.current = { ...binding.permissions, archive: false };
@@ -175,17 +199,23 @@ function RunResearch({ project, selfId, binding, refreshProject }: { project: Re
       return result;
     };
     view.current = new CollaborationView(proxy, next => { setObserved(next); onChanged.current(); });
-    return () => { view.current?.dispose(); };
+    const stopSelection = view.current.onTaskSelection(onTaskSelection);
+    return () => { stopSelection(); view.current?.dispose(); };
   }, [projectId, binding.runId]);
   const latest = observed && (!observation.data?.observation || observed.sequence > observation.data.observation.sequence) ? observed : observation.data?.observation;
   useEffect(() => {
     if (!view.current || !observation.data?.run || !root.current) return;
     const run = { ...observation.data.run, archives: [], ...(latest ? { observation: latest } : {}) };
     view.current.update(root.current, run, !observation.error, false, permissions.current);
-    const task = new URLSearchParams(location.search).get('task');
-    if (task && latest && !taskShown.current) taskShown.current = view.current.showTask(binding.runId, task);
-  }, [observation.data, observation.error, latest, binding.permissions]);
+    view.current.setTaskFeedback(binding.runId, taskFeedbackAnnotations(project.feedback, binding.runId));
+    const parameters = new URLSearchParams(location.search), requested = requestedTask?.runId === binding.runId ? requestedTask : undefined;
+    const matchesUrl = parameters.get('run') === binding.runId && (!parameters.has('version') || parameters.get('version') === binding.statementVersionId);
+    const taskId = requested?.taskId ?? (matchesUrl ? parameters.get('task') : null), taskVersion = requested?.taskVersion ?? (matchesUrl ? parameters.get('taskVersion') ?? undefined : undefined);
+    const key = JSON.stringify([taskId, taskVersion, requested?.request]);
+    if (taskId && latest && taskShown.current !== key && view.current.showTask(binding.runId, taskId, taskVersion)) taskShown.current = key;
+  }, [observation.data, observation.error, latest, binding.permissions, project.feedback, requestedTask]);
   return <><ErrorBox message={observation.error} />{observation.error && <p class="research-status">{tx('当前展示上一次成功读取的观测；恢复连接后会继续更新。', 'Showing the last successful observation. Updates resume after reconnection.')}</p>}
+    {observation.data?.run && latest && <TaskFeedbackContext project={project} runId={binding.runId} task={task} onBrowse={onBrowseTask} />}
     <div class="research-collaboration" ref={root} tabIndex={0} role="region" hidden={Boolean(observation.data && !observation.data.run)} aria-label={tx('运行路线与协作', 'Research routes and collaboration')} />
     {!observation.data && !observation.error && <p class="research-status" role="status">{tx('正在读取路线…', 'Loading research routes…')}</p>}
     {observation.data && !observation.data.run && <><p class="research-status">{observation.data.summary?.title} · <State value={observation.data.summary?.status ?? binding.status} /></p>
@@ -275,33 +305,6 @@ function Discussion({ project, version, refresh }: { project: ResearchProjectDet
     <Field label={tx('讨论内容', 'Discussion')} value={text} onInput={setText} multiline required rows={3} maxLength={16000} />
     <div class="research-actions"><label>{tx('可见范围', 'Visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value)}><option value="members">{tx('项目成员', 'Members')}</option>
       {project.visibility === 'public' && <option value="public">{tx('公开', 'Public')}</option>}</select></label><button class="button" type="submit" disabled={action.busy}>{tx('保存讨论', 'Save discussion')}</button></div><MutationState action={action} />
-  </form>;
-}
-
-function Feedback({ feedback, project, refresh }: { feedback: ResearchFeedback; project: ResearchProjectDetail; refresh: () => void }) {
-  const canDecide = project.permissions.manage || Boolean(feedback.target && project.runs.find(item => item.runId === feedback.target!.runId)?.permissions.manage);
-  return <article class="research-event" id={`feedback-${feedback.id}`}><div class="research-item-meta"><a href={personHref(feedback.author.id)}>{feedback.author.displayName}</a><span>{nameOf(feedback.kind)}</span><time dateTime={feedback.createdAt}>{stamp(feedback.createdAt)}</time><State value={feedback.visibility} /></div>
-    <div class="research-description"><RichProse text={feedback.text} /></div><div class="research-feedback-states"><div><span>{tx('投递', 'Delivery')}</span><State value={feedback.delivery.status} />{feedback.delivery.reason && <span>{feedback.delivery.reason}</span>}</div>
-      <div><span>{tx('采纳判断', 'Decision')}</span><State value={feedback.decision.status} />{feedback.decision.reason && <span>{feedback.decision.reason}</span>}{feedback.decision.actor && <span>{feedback.decision.actor.displayName}</span>}</div>
-      <div><span>{tx('执行', 'Execution')}</span><State value={feedback.execution.status} /></div></div>
-    {feedback.target && <div class="research-item-meta"><a href={theoremHref(project.id, feedback.target.runId)}>{tx('对应运行', 'Related run')}</a><span>{tx('观测', 'Observation')} #{feedback.target.observationRef.sequence}</span>{feedback.target.taskRef && <span>{feedback.target.taskRef.id} · {feedback.target.taskRef.version.slice(0, 12)}</span>}</div>}
-    {feedback.execution.planVersion && <p class="research-status">{tx('对应计划：', 'Plan: ')}{feedback.execution.planVersion}</p>}
-    {feedback.proofCheck && <p class="research-status">{tx('独立候选检查：', 'Independent candidate check: ')}<State value={feedback.proofCheck.status} /> · {feedback.proofCheck.receiptId}{feedback.proofCheck.reason ? ` · ${feedback.proofCheck.reason}` : ''}</p>}
-    {(feedback.decision.evidenceRefs.length > 0 || feedback.execution.resultRefs.length > 0) && <details><summary>{tx('结果与证据引用', 'Result and evidence references')}</summary><Tags values={[...feedback.decision.evidenceRefs, ...feedback.execution.resultRefs]} /></details>}
-    {canDecide && <details><summary>{tx('记录采纳决定', 'Record an adoption decision')}</summary><Decision projectId={project.id} feedback={feedback} refresh={refresh} /></details>}
-  </article>;
-}
-
-function Decision({ projectId, feedback, refresh }: { projectId: string; feedback: ResearchFeedback; refresh: () => void }) {
-  const [status, setStatus] = useState('accepted'), [reason, setReason] = useState(''), [evidence, setEvidence] = useState(''), [planVersion, setPlanVersion] = useState(''), action = useMutation();
-  const [revision, setRevision] = useState(feedback.revision);
-  return <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(projectId)}/feedback/${enc(feedback.id)}/decision`,
-    { status, reason, evidenceRefs: lines(evidence), ...(planVersion ? { planVersion } : {}), expectedRevision: revision }, result => { setRevision(result.item.revision); refresh(); }); }}>
-    <label>{tx('决定', 'Decision')}<select value={status} onChange={event => setStatus(event.currentTarget.value)}><option value="accepted">{tx('采纳', 'Accept')}</option><option value="declined">{tx('未采纳', 'Decline')}</option><option value="needs-info">{tx('需要补充', 'Needs information')}</option></select></label>
-    <Field label={tx('理由', 'Reason')} value={reason} onInput={setReason} multiline required rows={2} /><Field label={tx('关联计划版本（可选）', 'Related plan version (optional)')} value={planVersion} onInput={setPlanVersion} />
-    <Field label={tx('证据引用，每行一项', 'Evidence references, one per line')} value={evidence} onInput={setEvidence} multiline rows={2} />
-    {revision !== feedback.revision && <p class="research-status">{tx('反馈状态已有更新，你的草稿已保留。', 'Feedback has changed. Your draft is preserved.')} <button type="button" class="text-button" onClick={() => setRevision(feedback.revision)}>{tx('基于最新反馈提交', 'Use latest feedback revision')}</button></p>}
-    <MutationState action={action} /><button type="submit" class="button" disabled={action.busy}>{tx('保存决定', 'Save decision')}</button>
   </form>;
 }
 
