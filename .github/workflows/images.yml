@@ -56,10 +56,14 @@ jobs:
         run: bunx vitest run --maxWorkers=4 tests/webAuth.test.ts tests/webSignup.test.ts tests/webAuthPolicy.test.ts tests/webQuota.test.ts tests/webAdmission.test.ts tests/webAdmissionRace.test.ts tests/webProviderCheck.test.ts tests/webI18n.test.ts tests/webFonts.test.ts tests/webKeyVault.test.ts tests/webJobs.test.ts tests/webLifecyclePersistence.test.ts tests/webCollaboration.test.ts tests/webConversations.test.ts tests/webExplain.test.ts tests/webPersistence.test.ts tests/webFormalizations.test.ts tests/webExplanation.test.ts tests/webExplanationServer.test.ts tests/webServer.test.ts tests/webRunStream.test.ts tests/webRunner.test.ts tests/webPrecheck.test.ts tests/webOperations.test.ts tests/webOperationsApi.test.ts tests/webOperationsScheduled.test.ts tests/webOperationsMonitor.test.ts
       - name: Verify isolated provider routing and usage accounting without models
         run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexSession.test.ts tests/codexSessionLifecycle.test.ts tests/codexSessionCheckpoint.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/mathProcess.test.ts tests/mathRuntimeLease.test.ts tests/mathRuntimeLeaseProcess.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts tests/formalizationWorkflow.test.ts tests/formalizationLimits.test.ts tests/formalizationFidelityReference.test.ts
+      - name: Verify research recovery, participation and shared run snapshots
+        run: bunx vitest run --maxWorkers=4 tests/webRunSnapshot.test.ts tests/webResearchProjects.test.ts tests/webResearchApi.test.ts tests/webResearchAssets.test.ts tests/webResearchMathematics.test.ts tests/libraryPacks.test.ts tests/leanSource.test.ts
       - run: bun run build && bun run build:web
       - run: bunx playwright install --with-deps chromium
       - name: Verify the browser's login and research flows with local fixtures
         run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-plan-recovery && bun run test:web-plan-ownership && bun run test:web-explain && bun run test:web-explain-recovery
+      - name: Verify research account switching and interrupted frontend operations
+        run: bun run test:frontend-round5
 
   verify-solver:
     runs-on: ubuntu-latest
