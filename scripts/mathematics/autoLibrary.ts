@@ -78,6 +78,7 @@ function pack(flags: ReadonlyMap<string, string>) {
   const workspace = flags.has('workspace') ? externalPath(required(flags, 'workspace')) : path.dirname(output);
   if (libraryHostConfigPath() && flags.has('base-pack')) throw new Error('library_host_sources_conflict');
   if (libraryHostConfigPath() && !flags.has('workspace')) throw new Error('--workspace is required for host-authorized Auto packs');
+  if (libraryHostConfigPath() && fs.existsSync(workspace)) throw new Error('--workspace exists; choose a new workspace');
   const effective = libraryHostConfigPath() ? resolveAutoLibraryBase(required(flags, 'challenge-id'), environment.id, workspace) : undefined;
   const base = flags.has('base-pack') ? readLibraryPack(required(flags, 'base-pack')) : undefined;
   const source = readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES);

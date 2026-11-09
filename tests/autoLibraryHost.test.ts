@@ -140,6 +140,10 @@ describe('host-authorized Auto composition', () => {
     expect(selection.schema).toBe('theorem-os.auto-library-selection.v1');
     const receipt = bootstrapLeanTask(workspace(), { source: challenge, task: 'Prove target.', environment: 'openai-math' });
     expect(receipt.libraryBinding).toEqual(selection.libraryBinding);
+    await expect(autoLibrary(['--phase', 'pack', '--pool', pool, '--challenge-file', challengeFile,
+      '--challenge-id', 'parent', '--environment', 'openai-math', '--workspace', workspace(), '--output', path.join(directory, 'replacement.json')]))
+      .rejects.toThrow('--workspace exists');
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
     expect(() => bootstrapLeanTask(path.join(directory, 'other-destination'), { source: challenge, task: 'Prove target.', environment: 'openai-math' }))
       .toThrow('library_host_task_unmapped');
     await expect(autoLibrary(['--phase', 'pack', '--pool', pool, '--challenge-file', challengeFile,
