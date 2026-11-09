@@ -18,7 +18,7 @@ const relative = z.string().min(1).max(4096).refine(value => !path.isAbsolute(va
   !value.includes('\\') && !value.includes('\0') && value.split('/').every(part => part && part !== '.' && part !== '..'));
 const manifestSchema = z.object({
   schema: z.literal('theorem-os.pantograph-backend.v1'), sourceCommit: z.literal(PANTOGRAPH_SOURCE_COMMIT),
-  toolchain: z.enum(['leanprover/lean4:v4.33.0', 'leanprover/lean4:v4.33.1']), executable: relative,
+  toolchain: z.enum(['leanprover/lean4:v4.33.0', 'leanprover/lean4:v4.33.1', 'leanprover/lean4:v4.34.1']), executable: relative,
   libraryDirectories: z.array(relative).max(16),
   files: z.array(z.object({ path: relative, sha256: hash }).strict()).min(1).max(16384),
 }).strict();

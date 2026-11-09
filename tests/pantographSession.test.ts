@@ -81,16 +81,16 @@ afterEach(async () => {
 });
 
 describe('pinned Pantograph artifact manifest', () => {
-  it('accepts the two pinned build toolchains and rejects unbuilt versions', () => {
+  it('accepts the pinned build toolchains and rejects unbuilt versions', () => {
     const digests = new Set<string>();
-    for (const version of ['4.33.0', '4.33.1']) {
+    for (const version of ['4.33.0', '4.33.1', '4.34.1']) {
       const toolchain = `leanprover/lean4:v${version}`;
       manifest({ toolchain });
       const backend = readPantographBackend(environment())!;
       expect(backend.toolchain).toBe(toolchain);
       digests.add(backend.digest);
     }
-    expect(digests.size).toBe(2);
+    expect(digests.size).toBe(3);
     manifest({ toolchain: 'leanprover/lean4:v4.33.2' });
     expect(() => readPantographBackend(environment())).toThrow();
   });
