@@ -10,7 +10,7 @@ import type { WebCommand, WebCommandResult, WebGuidanceRecord, WebObservation } 
 import type { WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import type { WebPrecheckRunner } from '../apps/web/precheck';
 import type { ResearchAsset, ResearchAssetPreview, ResearchAssetRelease, ResearchPublication } from '../apps/web/researchAssetTypes';
-import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
+import type { ResearchCandidateReview, ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 
@@ -591,6 +591,46 @@ describe('collaborative research through the actual HTTP service', () => {
     const retrieved = await item<ResearchAssetRelease>(bob, `/api/research/library/${asset.id}/releases/1`);
     expect(retrieved.digest).toBe(release.digest);
     expect(JSON.stringify(retrieved)).not.toContain(alice.owner);
+  });
+
+  it('reviews the submitted candidate, exact historical baseline and immutable check without current-task substitution or wider access', async () => {
+    const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
+    const { project, run, route } = await projectWithRun(alice, bob, 'public');
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const candidate = proof.replace('by exact helper', 'by trivial');
+    const submitted = { requestId: 'review-candidate', kind: 'proof-submission', text: 'Review this exact candidate', visibility: 'public',
+      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } }, source: candidate,
+      base: { commit, sourceDigest, environmentDigest, file: 'Main.lean' } };
+    const feedback = await item<ResearchFeedback>(bob, route + '/feedback', submitted, 'POST', 201);
+    const reviewRoute = route + '/feedback/' + feedback.id + '/candidate-review';
+    const initial = await item<ResearchCandidateReview>(alice, reviewRoute);
+    expect(initial.source).toBe(candidate); expect(initial.sourceDigest).toBe(mathDigest(candidate));
+    expect(initial.base).toEqual(submitted.base); expect(initial.target).toEqual(submitted.target);
+    expect(initial.baseline?.source).toBe(proof); expect(initial.baseline?.commit).toBe(commit);
+    expect(initial.check?.receiptId).toBe(feedback.proofCheck?.receiptId);
+    expect(initial.check?.receipt).toMatchObject({ sourceDigest: mathDigest(candidate), base: submitted.base,
+      target: submitted.target, passed: true, declaration: { name: 'target' }, scope: 'task-declaration' });
+    expect(mathDigest(canonicalMathJson(initial.check!.receipt))).toBe(initial.check!.receiptId);
+    expect(JSON.stringify(initial)).not.toContain(alice.owner); expect(JSON.stringify(initial)).not.toContain('PRIVATE_MODEL_SETTING');
+    runner.update(run.id, latest => {
+      latest.inspection.tasks[0].version = 'task-v2';
+      latest.sources[0] = { ...latest.sources[0], taskVersion: 'task-v2', commit: 'b'.repeat(40), sourceDigest: mathDigest('new task source'),
+        source: 'theorem target : True ∧ True := by exact ⟨True.intro, True.intro⟩\n' };
+    });
+    const historical = await item<ResearchCandidateReview>(bob, reviewRoute);
+    expect(historical).toEqual(initial); expect(runner.checks).toHaveLength(1); expect(runner.commands).toHaveLength(1);
+    expect((await request(carol, reviewRoute)).status).toBe(403);
+    expect((await request(undefined, reviewRoute)).status).toBe(403);
+    expect((await item<ResearchFeedback>(carol, route + '/feedback/' + feedback.id)).payload).toEqual(feedback.payload);
+    let current = await item<ResearchProjectDetail>(alice, route);
+    current = await item(alice, route + '/members/' + bob.researcherId, { requestId: 'review-reader', expectedRevision: current.revision, role: 'reader' }, 'PUT');
+    expect((await item<ResearchCandidateReview>(bob, reviewRoute)).source).toBe(candidate);
+    current = await item(alice, route + '/members/' + bob.researcherId, { requestId: 'review-revoked', expectedRevision: current.revision, role: null }, 'PUT');
+    expect((await request(bob, reviewRoute)).status).toBe(403);
+    await item(alice, route, { requestId: 'hide-reviewed-project', expectedRevision: current.revision, visibility: 'members' }, 'PATCH');
+    expect((await request(bob, reviewRoute)).status).toBe(404);
+    expect((await request(carol, reviewRoute)).status).toBe(404);
   });
 
   it('retains failed and superseded candidate checks without sending them to an Agent', async () => {

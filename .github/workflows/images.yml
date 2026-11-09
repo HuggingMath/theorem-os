@@ -64,6 +64,8 @@ jobs:
         run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-plan-recovery && bun run test:web-plan-ownership && bun run test:web-explain && bun run test:web-explain-recovery
       - name: Verify research account switching and interrupted frontend operations
         run: bun run test:frontend-round5
+      - name: Verify session renewal, candidate review and route evidence readers
+        run: bun run test:frontend-round6
 
   verify-solver:
     runs-on: ubuntu-latest

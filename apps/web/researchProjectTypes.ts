@@ -1,6 +1,6 @@
 /** Shared research projections. Account IDs, owner keys and model connections never belong in these types. */
-import type { WebCommand, WebGuidanceInput, WebPlanProposal } from './collaboration';
-import type { WebEnvironment, WebRunStatus } from './shared';
+import type { WebCommand, WebGuidanceInput, WebPlanProposal, WebTaskSource } from './collaboration';
+import type { WebEnvironment, WebPrecheckDiagnostic, WebRunStatus } from './shared';
 
 export type ResearchVisibility = 'private' | 'members' | 'public';
 export type ResearchMemberRole = 'collaborator' | 'reader';
@@ -57,6 +57,8 @@ export type ResearchFeedback = {
   id: string; requestId: string; projectId: string; author: ResearchAuthor;
   kind: ResearchFeedbackInput['kind']; text: string; visibility: 'members' | 'public';
   sourceFeedbackId?: string;
+  /** Non-members can revisit their own private discussion while the project remains readable. */
+  authorReadable?: boolean;
   statementVersionId?: string; target?: ResearchFeedbackTarget;
   /** Typed payload retained for review and stable command retries. It contains no owner or connection. */
   payload?: Omit<Extract<ResearchFeedbackInput, { kind: 'guidance' }>, keyof FeedbackBase | 'kind' | 'target'>
@@ -101,6 +103,19 @@ export type ResearchCommand = Exclude<WebCommand, { type: 'capture' }>;
 export type ResearchProofResult = {
   status: 'checked' | 'failed' | 'superseded'; sourceDigest: string; environmentDigest: string;
   receiptId: string; reason?: string;
+};
+export type ResearchCandidateCheckReceipt = {
+  schema: 'theorem-os.research-candidate-check.v1'; sourceDigest: string;
+  base: Extract<ResearchFeedbackInput, { kind: 'proof-submission' }>['base']; target: ResearchFeedbackTarget;
+  environment: WebEnvironment; passed: boolean; diagnostics: WebPrecheckDiagnostic[];
+  declaration?: { name: string; expectedType?: string }; scope: 'task-declaration'; remainingOriginalSorries: number;
+  dependencies: { file: string; digest: string }[]; reason?: string; checkedAt: string;
+};
+export type ResearchCandidateReview = {
+  feedbackId: string; source: string; sourceDigest: string; target: ResearchFeedbackTarget;
+  base: Extract<ResearchFeedbackInput, { kind: 'proof-submission' }>['base'];
+  baseline: WebTaskSource | null;
+  check: { receiptId: string; receipt: ResearchCandidateCheckReceipt } | null;
 };
 export type ResearchHumanAssignment = {
   id: string; author: ResearchAuthor; target: ResearchFeedbackTarget; status: 'claimed' | 'released' | 'submitted';

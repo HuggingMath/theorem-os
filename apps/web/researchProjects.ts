@@ -175,7 +175,8 @@ export class WebResearchProjects {
   }
   private visibleFeedback(viewer: string, stored: StoredProject): ResearchFeedback[] {
     const member = this.access(viewer, stored).member;
-    return stored.feedback.filter(feedback => member || feedback.visibility === 'public');
+    return stored.feedback.filter(feedback => member || feedback.visibility === 'public' ||
+      viewer !== 'public' && feedback.kind === 'discussion' && feedback.authorReadable && feedback.author.id === this.identity(viewer));
   }
   private activities(viewer: string, stored: StoredProject): ResearchActivity[] {
     const visibleIds = new Set(this.visibleFeedback(viewer, stored).map(feedback => feedback.id));
@@ -410,13 +411,15 @@ export class WebResearchProjects {
     const at = now(), record: ResearchFeedback = { id: feedbackId, requestId: input.requestId, projectId,
       author: this.author(viewer), kind: input.kind, text: input.text,
       visibility: input.visibility ?? (!sourceMembersOnly && input.kind === 'discussion' && stored.project.visibility === 'public' ? 'public' : 'members'),
+      ...(input.kind === 'discussion' && !this.access(viewer, stored).member ? { authorReadable: true } : {}),
       ...(input.sourceFeedbackId ? { sourceFeedbackId: input.sourceFeedbackId } : {}),
       ...(input.kind === 'discussion' ? { statementVersionId: input.statementVersionId } : { target: input.target, payload }),
       delivery: { status: 'not-sent', ...(input.kind === 'discussion' ? {} : { commandId: feedbackId }) },
       decision: { status: 'pending', evidenceRefs: [] },
       execution: { status: 'not-started', taskRefs: [], resultRefs: [] }, revision: 1, createdAt: at, updatedAt: at };
     stored.feedback.push(record);
-    this.event(stored, viewer, 'feedback-created', input.kind === 'discussion' ? '提出讨论建议' : '提交研究反馈', { feedbackId });
+    this.event(stored, viewer, 'feedback-created', input.kind === 'discussion' ? '提出讨论建议' : '提交研究反馈',
+      { feedbackId, ...(input.kind === 'discussion' && input.statementVersionId ? { statementVersionId: input.statementVersionId } : {}) });
     this.contribute(stored, viewer, input.kind, '提出研究建议或候选成果', { feedbackId });
     this.remember(stored, viewer, 'feedback', input, feedbackId); this.save(stored); return clone(record);
   }

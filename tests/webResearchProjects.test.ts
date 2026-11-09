@@ -108,6 +108,36 @@ describe('research projects and collaboration permissions', () => {
     errorStatus(() => projects.submitFeedback('public', current.id, { requestId: 'anonymous', kind: 'discussion', text: 'Hi' }), 401);
   });
 
+  it('lets an outside discussion author revisit a private submission without exposing members or revoked-member discussions', () => {
+    const { projects, project } = fixture(true);
+    let current = projects.update(alice, project.id, { requestId: 'outside-readable-project', expectedRevision: project.revision, visibility: 'public' });
+    const input = { requestId: 'outside-private-discussion', kind: 'discussion', text: 'Private suggestion from a visitor', visibility: 'members',
+      statementVersionId: project.versions[0].id };
+    const comment = projects.submitFeedback(carol, project.id, input);
+    expect(comment.authorReadable).toBe(true); expect(comment.visibility).toBe('members');
+    expect(projects.feedback(carol, project.id, comment.id)).toEqual(comment);
+    expect(projects.submitFeedback(carol, project.id, input)).toEqual(comment);
+    expect(projects.detail(carol, project.id).feedback).toEqual([comment]);
+    expect(projects.detail('public', project.id).feedback).toEqual([]);
+    expect(projects.detail('another-visitor', project.id).feedback).toEqual([]);
+    expect(projects.feedback(alice, project.id, comment.id)).toEqual(comment);
+    const memberComment = projects.submitFeedback(bob, project.id, { requestId: 'member-private-discussion', kind: 'discussion',
+      text: 'Private member discussion', visibility: 'members' });
+    expect(memberComment.authorReadable).toBeUndefined();
+    current = projects.detail(alice, project.id);
+    current = projects.setMember(alice, project.id, projects.identity(bob), { requestId: 'revoke-member-discussion', expectedRevision: current.revision, role: null });
+    errorStatus(() => projects.feedback(bob, project.id, memberComment.id), 404);
+    errorStatus(() => projects.feedback(bob, project.id, comment.id), 404);
+    const decision = projects.decideFeedback(alice, project.id, comment.id, { requestId: 'outside-comment-decision', expectedRevision: comment.revision,
+      status: 'needs-info', reason: 'Please give a precise supporting argument.' });
+    expect(projects.feedback(carol, project.id, comment.id).decision).toEqual(decision.decision);
+    const activity = projects.detail(carol, project.id).activity.find(item => item.feedbackId === comment.id && item.type === 'feedback-created');
+    expect(activity?.statementVersionId).toBe(comment.statementVersionId);
+    current = projects.detail(alice, project.id);
+    projects.update(alice, project.id, { requestId: 'hide-outside-readable-project', expectedRevision: current.revision, visibility: 'members' });
+    errorStatus(() => projects.feedback(carol, project.id, comment.id), 404);
+  });
+
   it('checks trusted run ownership and exact statement source before binding', () => {
     const { projects, storage, project } = fixture();
     errorStatus(() => projects.bindRun(bob, project.id, { requestId: 'steal-run', expectedRevision: project.revision,

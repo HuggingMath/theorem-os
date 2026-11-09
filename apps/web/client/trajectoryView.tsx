@@ -960,7 +960,8 @@ export class TrajectoryView {
       state.panel = undefined;
       this.render();
       const opener = this.root?.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(`${panel.key}-${panel.mode}`)}"]`)
-        ?? this.root?.querySelector<HTMLElement>(`.trajectory-step[data-step="${CSS.escape(panel.key)}"]`);
+        ?? this.root?.querySelector<HTMLElement>(`.trajectory-step[data-step="${CSS.escape(panel.key)}"]`)
+        ?? this.root?.querySelector<HTMLElement>('[data-solution-open]');
       opener?.focus({ preventScroll: true });
     };
     const select = (mode: Mode) => () => { state.panel = { key: panel.key, mode }; this.render(); };

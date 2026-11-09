@@ -77,12 +77,19 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
     setFeedbackFocus({ id, request: (feedbackFocus?.request ?? 0) + 1 });
     const next = new URL(location.href); next.hash = `feedback-${enc(id)}`; history.replaceState(null, '', next);
   };
+  const openStatement = (versionId: string) => {
+    setVersionChoice(versionId); setRunChoice(''); remember(versionId);
+    requestAnimationFrame(() => {
+      const panel = document.getElementById('statement-versions');
+      panel?.scrollIntoView({ block: 'start' }); panel?.querySelector('select')?.focus({ preventScroll: true });
+    });
+  };
   const selectedTask = taskSelection?.runId === run?.runId ? taskSelection : undefined;
   return <><Panel title={project.title} actions={context.session.authenticated ? <FollowButton kind="theorem" id={project.id} initial={project.following} /> : <a class="button" href="login.html">{tx('登录后关注', 'Sign in to follow')}</a>}>
     <div class="research-item-meta"><a href={personHref(project.owner.id)}>{project.owner.displayName}</a><State value={project.visibility} /><span>{stamp(project.updatedAt)}</span></div>
     {project.description && <div class="research-description"><RichProse text={project.description} /></div>}<Tags values={project.fields} />
     {project.permissions.manage && <details><summary>{tx('编辑题目信息', 'Edit project information')}</summary><ProjectEditor project={project} refresh={refresh} /></details>}
-  </Panel><Panel title={tx('陈述版本', 'Statement versions')} note={tx('陈述保存后不可覆盖，每次运行绑定具体版本。', 'Saved statements are immutable. Every run is bound to one version.')}>
+  </Panel><Panel id="statement-versions" title={tx('陈述版本', 'Statement versions')} note={tx('陈述保存后不可覆盖，每次运行绑定具体版本。', 'Saved statements are immutable. Every run is bound to one version.')}>
     {project.versions.length > 0 && <label class="research-field">{tx('当前查看的陈述', 'Statement being viewed')}<select value={version?.id} onChange={event => {
       setVersionChoice(event.currentTarget.value); setRunChoice(''); remember(event.currentTarget.value);
     }}>{project.versions.map((item, index) => <option key={item.id} value={item.id}>{`v${index + 1} · ${item.author.displayName} · ${stamp(item.createdAt)}`}</option>)}</select></label>}
@@ -106,15 +113,20 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
         : tx('当前陈述尚未关联运行。在工作台创建研究后，选择绑定到此版本。', 'No run is attached to this statement. Create a run in the workbench, then bind it to this version.')}</Empty>}
     {project.permissions.edit && version && <details><summary>{tx('关联我的研究运行', 'Attach one of my runs')}</summary><BindRun project={project} version={version} refresh={refresh} onBound={id => { setRunChoice(id); remember(version.id, id); }} /></details>}
   </Panel><Panel title={tx('讨论与人工反馈', 'Discussion and human feedback')} note={tx('按运行和节点查看投递、采纳及执行结果。有权限的成员可将讨论转为运行指导，保留原始建议与投递人。', 'Track delivery, decisions and execution by run and node. Authorized members can forward discussions as run guidance, retaining the original suggestion and sender.')}>
-    <FeedbackWorkspace project={project} selfId={context.session.researcherId ?? ''} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback}>
+    <FeedbackWorkspace project={project} selfId={context.session.researcherId ?? ''} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} onOpenStatement={openStatement} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback}>
       {project.permissions.discuss ? <Discussion project={project} version={version} refresh={refresh} /> : <Empty>{tx('当前账号只有查看权限。', 'This account has read access.')}</Empty>}
     </FeedbackWorkspace>
   </Panel><Panel title={tx('参与者', 'Participants')}><Members project={project} selfId={context.session.researcherId ?? ''} refresh={refresh} /></Panel>
     <Panel title={tx('研究时间线', 'Research timeline')}>
-      {project.activity.slice().reverse().map(activity => <article class="research-event" key={activity.id}><div class="research-item-meta"><a href={personHref(activity.actor.id)}>{activity.actor.displayName}</a><time dateTime={activity.createdAt}>{stamp(activity.createdAt)}</time></div>
+      {project.activity.slice().reverse().map(activity => {
+        const statementId = activity.statementVersionId ?? project.feedback.find(item => item.id === activity.feedbackId)?.statementVersionId;
+        return <article class="research-event" key={activity.id}><div class="research-item-meta"><a href={personHref(activity.actor.id)}>{activity.actor.displayName}</a><time dateTime={activity.createdAt}>{stamp(activity.createdAt)}</time></div>
         <p>{activity.summary}</p><div class="research-actions">{activity.feedbackId && project.feedback.some(item => item.id === activity.feedbackId) && <a class="research-inline-link" href={`#feedback-${enc(activity.feedbackId)}`}
           onClick={event => { event.preventDefault(); revealFeedback(activity.feedbackId!); }}>{tx('查看相关反馈', 'View related feedback')}</a>}
-        {activity.runId && <a class="research-inline-link" href={theoremHref(project.id, activity.runId, { statementVersionId: activity.statementVersionId })}>{tx('打开对应运行', 'Open related run')}</a>}</div></article>)}
+        {activity.runId && <a class="research-inline-link" href={theoremHref(project.id, activity.runId, { statementVersionId: activity.statementVersionId })}>{tx('打开对应运行', 'Open related run')}</a>}
+        {statementId && !activity.runId && <a class="research-inline-link" href={`${theoremHref(project.id, undefined, { statementVersionId: statementId })}#statement-versions`}
+          onClick={event => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); openStatement(statementId); }}>{tx('查看陈述版本', 'View statement version')} · {project.versions.some(item => item.id === statementId) ? `v${project.versions.findIndex(item => item.id === statementId) + 1}` : statementId}</a>}</div></article>;
+      })}
       {!project.activity.length && <Empty>{tx('暂无研究活动。', 'No research activity yet.')}</Empty>}
     </Panel></>;
 }
@@ -327,8 +339,9 @@ function Discussion({ project, version, refresh }: { project: ResearchProjectDet
     { kind: 'discussion', text, visibility, ...(version ? { statementVersionId: version.id } : {}) }, () => { setText(current => current === text ? '' : current); refresh(); }); }}>
     <Field label={tx('讨论内容', 'Discussion')} value={text} onInput={setText} multiline required rows={3} maxLength={4000}
       note={`${t('最多 4000 字符。')} ${text.length} / 4000`} />
-    <div class="research-actions"><label>{tx('可见范围', 'Visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value)}><option value="members">{tx('项目成员', 'Members')}</option>
+    <div class="research-actions"><label>{tx('可见范围', 'Visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value)}><option value="members">{project.permissions.member ? tx('项目成员', 'Members') : tx('项目成员和我', 'Project members and me')}</option>
       {project.visibility === 'public' && <option value="public">{tx('公开', 'Public')}</option>}</select></label><button class="button" type="submit" disabled={action.busy}>{tx('保存讨论', 'Save discussion')}</button></div><MutationState action={action} />
+    {!project.permissions.member && <p class="research-field-note">{tx('选择“项目成员和我”时，你可以回看自己的讨论和处理结果，其他访客不可见。', 'With “Project members and me”, you can revisit your discussion and its handling. Other visitors cannot see it.')}</p>}
   </form>;
 }
 

@@ -11,7 +11,7 @@ import { WebStorage, WebStorageError } from './storage';
 import type { WebJobs } from './jobs';
 import type { WebKnowledgeService } from './knowledgeService';
 import type { WebRunner } from './runner';
-import type { ResearchFeedback, ResearchQuery } from './researchProjectTypes';
+import type { ResearchCandidateCheckReceipt, ResearchCandidateReview, ResearchFeedback, ResearchQuery } from './researchProjectTypes';
 import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse } from './researchAssetTypes';
 import type { WebRun } from './shared';
 import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
@@ -179,7 +179,7 @@ export class WebResearchApi {
       && result.checkedTarget === candidateTarget?.name);
     reason ??= passed ? undefined : result?.timedOut ? '候选检查超时。'
       : diagnostics?.diagnostics.find(item => item.severity === 'error')?.message ?? '候选证明未通过独立编译。';
-    const receipt = { schema: 'theorem-os.research-candidate-check.v1', sourceDigest, base,
+    const receipt: ResearchCandidateCheckReceipt = { schema: 'theorem-os.research-candidate-check.v1', sourceDigest, base,
       target: submission.target, environment: run.environment, passed, diagnostics: diagnostics?.diagnostics ?? [],
       declaration: candidateTarget, scope: 'task-declaration', remainingOriginalSorries: diagnostics?.sorries ?? 0,
       dependencies: (baseline.dependencySources ?? []).map(file => ({ file: file.file, digest: mathDigest(file.source) })),
@@ -188,6 +188,24 @@ export class WebResearchApi {
     this.storage.saveRecord(['research', 'checks', `${receiptId}.json`], receipt, true);
     return this.projects.recordProofResult(viewer, projectId, feedback.id, { status: passed ? 'checked' : 'failed',
       sourceDigest, environmentDigest: base.environmentDigest, receiptId, ...(reason ? { reason } : {}) });
+  }
+  private candidateReview(viewer: string, projectId: string, feedbackId: string): ResearchCandidateReview {
+    const feedback = this.projects.feedback(viewer, projectId, feedbackId), payload = feedback.payload;
+    if (feedback.kind !== 'proof-submission' || !feedback.target || !payload || !('source' in payload))
+      return fail(404, '候选证明不存在。');
+    const resolved = this.projects.resolveBinding(viewer, projectId, feedback.target.runId);
+    if (!this.projects.detail(viewer, projectId).permissions.member && !resolved.binding.permissions.manage)
+      return fail(403, '候选证明的基准与检查详情仅向有权查看运行的成员提供。');
+    const baseline = this.storage.listObservations(resolved.runOwner, feedback.target.runId).flatMap(observation => observation.sources)
+      .find(source => source.taskId === feedback.target!.taskRef?.id && source.taskVersion === feedback.target!.taskRef.version &&
+        source.commit === payload.base.commit && source.sourceDigest === payload.base.sourceDigest &&
+        source.environmentDigest === payload.base.environmentDigest && source.file === payload.base.file) ?? null;
+    const receiptId = feedback.proofCheck?.receiptId;
+    const receipt = receiptId ? this.storage.getRecord<ResearchCandidateCheckReceipt>(['research', 'checks', `${receiptId}.json`]) : undefined;
+    const check = receipt && mathDigest(canonicalMathJson(receipt)) === receiptId && receipt.sourceDigest === mathDigest(payload.source) &&
+      canonicalMathJson(receipt.base) === canonicalMathJson(payload.base) && canonicalMathJson(receipt.target) === canonicalMathJson(feedback.target)
+      ? { receiptId: receiptId!, receipt } : null;
+    return { feedbackId, source: payload.source, sourceDigest: mathDigest(payload.source), target: feedback.target, base: payload.base, baseline, check };
   }
   private recordPublication(owner: string, publicationId: string) {
     const publication = this.assets.publication(owner, publicationId);
@@ -278,6 +296,7 @@ export class WebResearchApi {
       if (action === 'runs' && !ref && method === 'POST') return item(this.projects.bindRun(viewer, id, await body()), 201);
       if (action === 'activity' && method === 'GET') return { status: 200, body: this.projects.activity(viewer, id, query(url)) };
       if (action === 'feedback') {
+        if (ref && subaction === 'candidate-review' && method === 'GET') return item(this.candidateReview(viewer, id, ref));
         if (method === 'GET') { const project = this.refreshProject(viewer, id);
           return ref ? item(this.projects.feedback(viewer, id, ref)) : { status: 200, body: { items: project.feedback } }; }
         if (ref && subaction === 'decision' && method === 'POST') return item(this.projects.decideFeedback(viewer, id, ref, await body()));

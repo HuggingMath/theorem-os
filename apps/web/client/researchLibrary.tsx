@@ -45,7 +45,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => { setCreatorMounted(true); setCreating(value => !value); }} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
       : <a class="button" href="login.html">{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>
     {creatorMounted && <div hidden={!creating}><Panel title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
-      <AssetEditor context={context} onSaved={asset => location.assign(libraryHref(asset.id))} /></Panel></div>}
+      <AssetEditor context={context} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(libraryHref(asset.id)); }} /></Panel></div>}
     <div class="research-layout" data-selected={Boolean(selected)}><aside class="research-sidebar"><Panel title={tx('浏览 Library', 'Explore Library')}>
       <div class="research-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => setType(value)}>{nameOf(value)}</button>)}</div>
       <div class="research-form"><Search label={tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={setQuery} /><Field label={tx('按研究领域筛选', 'Filter by research field')} value={area} onInput={setArea} />

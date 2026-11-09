@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useRef, useState } from 'preact/hooks';
 import type { ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchMathDraft, ResearchMathSource, ResearchReleaseRef, ResearchSkillDraft } from '../researchAssetTypes';
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../../src/solver/modules/policy';
 import type { WebRun } from '../shared';
@@ -14,7 +14,7 @@ function parseRefs(text: string): ResearchReleaseRef[] {
     return { assetId: line.slice(0, divider).trim(), version: line.slice(divider + 1).trim() };
   });
 }
-export function AssetEditor({ asset, context, onSaved, disabled = false }: { asset?: ResearchAsset; context: ResearchContext; onSaved: (asset: ResearchAsset) => void; disabled?: boolean }) {
+export function AssetEditor({ asset, context, onSaved, disabled = false }: { asset?: ResearchAsset; context: ResearchContext; onSaved: (asset: ResearchAsset, newerInput: boolean) => void; disabled?: boolean }) {
   const initial = asset?.draft ?? asset?.release?.content;
   const [kind, setKind] = useState<ResearchAssetKind>(asset?.type ?? 'mathematics'), [name, setName] = useState(asset?.name ?? ''),
     [description, setDescription] = useState(asset?.description ?? ''), [area, setArea] = useState(asset?.area ?? ''), [visibility, setVisibility] = useState(asset?.visibility ?? 'private'),
@@ -30,6 +30,11 @@ export function AssetEditor({ asset, context, onSaved, disabled = false }: { ass
     [outputs, setOutputs] = useState(initial && 'instructions' in initial ? initial.outputs.join('\n') : ''),
     [examples, setExamples] = useState(initial && 'instructions' in initial ? initial.examples.join('\n') : ''),
     [dependencies, setDependencies] = useState(initial && 'instructions' in initial ? refText(initial.dependencies) : '');
+  const [createdAsset, setCreatedAsset] = useState<ResearchAsset>();
+  const savedAsset = asset ?? createdAsset;
+  const currentInput = useRef('');
+  currentInput.current = JSON.stringify([kind, name, description, area, visibility, math, entryIds, agent, agentSkills, agentLibraries,
+    skill, steps, inputs, outputs, examples, dependencies]);
   const action = useMutation();
   const changeAgent = (patch: Partial<ResearchAgentDraft>) => setAgent(previous => ({ ...previous, ...patch }));
   const changePlan = (patch: Partial<ResearchModulePlan>) => changeAgent({ modulePlan: { ...agent.modulePlan, ...patch } });
@@ -41,13 +46,18 @@ export function AssetEditor({ asset, context, onSaved, disabled = false }: { ass
     if (disabled) return;
     let draft: ResearchAssetContent;
     try { draft = content(); } catch (cause) { action.setError(cause instanceof Error ? cause.message : String(cause)); return; }
-    void action.run<Item<ResearchAsset>>(asset ? 'PATCH' : 'POST', `${base}/library${asset ? `/${enc(asset.id)}` : ''}`,
-      { ...(asset ? { expectedRevision: revision } : { type: kind }), name: name.trim(), description, area, visibility, content: draft }, result => {
-        setRevision(result.item.revision); onSaved(result.item);
+    const submittedInput = currentInput.current;
+    void action.run<Item<ResearchAsset>>(savedAsset ? 'PATCH' : 'POST', `${base}/library${savedAsset ? `/${enc(savedAsset.id)}` : ''}`,
+      { ...(savedAsset ? { expectedRevision: revision } : { type: kind }), name: name.trim(), description, area, visibility, content: draft }, result => {
+        const newerInput = currentInput.current !== submittedInput;
+        setRevision(result.item.revision);
+        if (!asset) setCreatedAsset(result.item);
+        if (newerInput) action.setMessage(tx('这一份草稿已保存。等待期间的修改已保留，请继续保存。', 'This draft was saved. Your later edits are still here; save again to include them.'));
+        onSaved(result.item, newerInput);
       });
   };
   return <form class="research-form" onSubmit={event => { event.preventDefault(); save(); }}>
-    {!asset && <label>{tx('内容类型', 'Content type')}<select value={kind} onChange={event => setKind(event.currentTarget.value as ResearchAssetKind)}>
+    {!savedAsset && <label>{tx('内容类型', 'Content type')}<select value={kind} disabled={action.busy} onChange={event => setKind(event.currentTarget.value as ResearchAssetKind)}>
       <option value="mathematics">{tx('数学成果', 'Mathematics')}</option><option value="agent">Agent</option><option value="skill">Skill</option></select></label>}
     <Field label={tx('名称', 'Name')} value={name} onInput={setName} required maxLength={160} />
     <Field label={tx('用途与说明', 'Purpose and description')} value={description} onInput={setDescription} multiline rows={3} />
@@ -91,7 +101,7 @@ export function AssetEditor({ asset, context, onSaved, disabled = false }: { ass
         <Field label={tx('示例，每行一个', 'Examples, one per line')} value={examples} onInput={setExamples} multiline rows={3} />
       </>}
     {asset && asset.revision !== revision && <p class="research-status">{tx('服务器上的草稿已更新。当前输入仍保留；点击「载入最新草稿」可更新。', 'The saved draft has changed. Your input is preserved; choose “Load latest draft” to update it.')}</p>}
-    <MutationState action={action} /><button type="submit" class="button button-primary" disabled={disabled || action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : asset ? tx('保存草稿', 'Save draft') : tx('创建私有草稿', 'Create draft')}</button>
+    <MutationState action={action} /><button type="submit" class="button button-primary" disabled={disabled || action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : savedAsset ? tx('保存草稿', 'Save draft') : tx('创建私有草稿', 'Create draft')}</button>
   </form>;
 }
 

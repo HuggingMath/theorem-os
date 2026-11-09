@@ -22,22 +22,31 @@ type SessionBinding = { owner: string; csrfToken: string; changed: () => void; c
 let sessionBinding: SessionBinding | undefined;
 export function bindResearchSession(web: WebSession, changed: () => void) {
   const owner = webDraftOwner(web);
-  if (sessionBinding?.owner === owner) { sessionBinding.csrfToken = web.csrfToken; sessionBinding.changed = changed; }
+  if (sessionBinding?.owner === owner && sessionBinding.csrfToken === web.csrfToken) sessionBinding.changed = changed;
   else { clearResearchSession(); sessionBinding = { owner, csrfToken: web.csrfToken, changed, controller: new AbortController() }; }
 }
 export function clearResearchSession() {
-  // Cancel old response headers too: their Set-Cookie must not replace the next account's login.
+  // Stop old responses before they can update the next session's view.
   const previous = sessionBinding; sessionBinding = undefined; previous?.controller.abort();
 }
 function currentSession(binding: SessionBinding) {
-  if (sessionBinding !== binding) throw new ResearchSessionChangedError();
+  if (sessionBinding !== binding) {
+    binding.controller.signal.throwIfAborted();
+    throw new ResearchSessionChangedError();
+  }
 }
 function sessionChanged(binding: SessionBinding): never {
   if (sessionBinding === binding) { clearResearchSession(); binding.changed(); }
   throw new ResearchSessionChangedError();
 }
 async function responseBody<T>(response: Response): Promise<T> {
-  const payload: unknown = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+  let payload: unknown;
+  try { payload = response.status === 204 ? undefined : await response.json(); }
+  catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
+    if (response.ok) throw new Error(tx('服务器响应未能完整读取，请重试。当前输入已保留。',
+      'The server response could not be read completely. Please retry. Your input is preserved.'));
+  }
   if (!response.ok) {
     const error = payload && typeof payload === 'object' && 'error' in payload ? String(payload.error) : tx('请求失败', 'Request failed');
     throw new ResearchHttpError(localizeMessage(error), response.status);
@@ -46,7 +55,9 @@ async function responseBody<T>(response: Response): Promise<T> {
 }
 /** Bootstrap reads do not borrow the previous page's owner or CSRF token. */
 export async function readResearchWebSession(signal?: AbortSignal): Promise<WebSession> {
-  return responseBody(await fetch('/api/session', { headers: { Accept: 'application/json' }, signal, credentials: 'same-origin', cache: 'no-store' }));
+  const bound = sessionBinding?.controller.signal;
+  const readSignal = bound ? signal ? AbortSignal.any([bound, signal]) : bound : signal;
+  return responseBody(await fetch('/api/session', { headers: { Accept: 'application/json' }, signal: readSignal, credentials: 'same-origin', cache: 'no-store' }));
 }
 export async function readResearchSession(web: WebSession, signal?: AbortSignal): Promise<ResearchSession> {
   const response = await fetch(`${base}/session`, { headers: { Accept: 'application/json' }, signal, credentials: 'same-origin', cache: 'no-store' });
@@ -57,7 +68,11 @@ async function confirmSession(binding: SessionBinding, signal?: AbortSignal) {
   const web = await readResearchWebSession(signal);
   currentSession(binding);
   if (webDraftOwner(web) !== binding.owner) sessionChanged(binding);
-  binding.csrfToken = web.csrfToken;
+  if (web.csrfToken !== binding.csrfToken) {
+    // Reauthentication keeps the person's draft, but its old session must stop delivering responses.
+    bindResearchSession(web, binding.changed);
+    throw new Error(tx('登录状态已更新，请重试。当前输入已保留。', 'Your sign-in was renewed. Please retry. Your input is preserved.'));
+  }
 }
 export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
   const binding = sessionBinding;
@@ -83,7 +98,9 @@ export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
   currentSession(binding);
   return result;
 }
-export const errorText = (error: unknown) => error instanceof Error ? error.message : tx('请求失败，请重试。', 'Request failed. Please retry.');
+export const errorText = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
+  ? tx('登录状态已更新，请重试。当前输入已保留。', 'Your sign-in was renewed. Please retry. Your input is preserved.')
+  : error instanceof Error ? error.message : tx('请求失败，请重试。', 'Request failed. Please retry.');
 
 /** Retain the last successful view during refreshes; forms keep their own local draft. */
 export function useResource<T>(url: string | undefined, interval = 0) {
@@ -100,6 +117,11 @@ export function useResource<T>(url: string | undefined, interval = 0) {
         const data = await api<T>(url, { signal: controller.signal });
         if (live) setValue({ url, data, loading: false });
       } catch (error) {
+        if (live && !controller.signal.aborted && sessionBinding && (error instanceof ResearchSessionChangedError ||
+          error instanceof DOMException && error.name === 'AbortError')) {
+          // Same-owner reauthentication keeps this component; restore reads cancelled with its old session.
+          void read(); return;
+        }
         const unavailable = error instanceof ResearchHttpError && [401, 403, 404].includes(error.status);
         if (live) setValue(previous => ({ url, data: previous.url === url && !unavailable ? previous.data : undefined,
           error: errorText(error), errorStatus: error instanceof ResearchHttpError ? error.status : undefined, loading: false }));
