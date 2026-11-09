@@ -249,8 +249,9 @@
 .proof-walkthrough-next > button { background: transparent; color: var(--green); font-size: 12px; padding: 4px 0; white-space: nowrap; }
 .proof-walkthrough-outputs { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 14px 0 0 28px; font-size: 11px; line-height: 1.9; }
 .proof-walkthrough-outputs > span { color: var(--muted); }
-.proof-walkthrough-outputs > button { display: inline-flex; gap: 7px; padding: 1px 0; background: transparent; color: #946047; text-align: left; overflow-wrap: anywhere; }
+.proof-walkthrough-outputs > button { display: inline-flex; gap: 7px; max-width: 100%; padding: 1px 0; background: transparent; color: #946047; text-align: left; overflow-wrap: anywhere; }
 .proof-walkthrough-outputs > button > span { font: 10px/2 var(--mono); flex-shrink: 0; }
+.proof-walkthrough-inputs > button > [data-typeset-prose], .proof-walkthrough-outputs > button > [data-typeset-prose] { min-width: 0; flex: 0 1 auto; font: inherit; }
 .proof-walkthrough-source { margin-top: 20px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .proof-walkthrough-source > summary { cursor: pointer; padding: 12px 0; }
 .proof-walkthrough-source > summary > span { display: inline-block; font: 10px/1.8 var(--mono); margin-left: 15px; }
