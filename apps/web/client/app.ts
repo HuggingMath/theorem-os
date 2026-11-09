@@ -445,10 +445,11 @@ class ApiError extends Error {
   constructor(readonly reason: string, readonly status: number) { super(localizeMessage(reason)); }
 }
 type ApiInit = RequestInit & { timeoutMs?: number };
+const sameSession = (session: WebSession | undefined) => session?.draftOwner === state.session?.draftOwner && session?.csrfToken === state.session?.csrfToken;
 function api<T>(url: string, init?: ApiInit): Promise<T>;
 function api<T>(url: string, init: ApiInit, etag: (value: string | null) => void): Promise<T | undefined>;
 async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
-  const requestOwner = state.session?.draftOwner;
+  const requestSession = state.session, requestOwner = requestSession?.draftOwner;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
   const signals = [timeout.signal];
@@ -471,6 +472,8 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
       if (!response.ok) return undefined;
       throw error;
     });
+    // The headers may have arrived before another tab's login; a slow body still belongs to its original session.
+    if (!url.startsWith('/api/session') && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
     if (!response.ok) {
       if (response.status === 428) { saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress()); }
       const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
@@ -2242,19 +2245,20 @@ async function openAdmin() {
   renderAdmin();
 }
 async function changeCompletionEmail(input: HTMLInputElement) {
-  const wanted = input.checked;
+  const wanted = input.checked, session = state.session;
   input.disabled = true;
   try {
     await api('/api/auth/account', { method: 'PATCH', body: JSON.stringify({ completionEmail: wanted }) });
+    if (!sameSession(session)) return;
     if (state.session?.account) state.session.account.completionEmail = wanted;
     toast(wanted ? t('研究结束时会发邮件到登录邮箱') : t('已关闭结束邮件'));
-  } catch (error) { input.checked = !wanted; toast(message(error)); }
+  } catch (error) { if (sameSession(session)) { input.checked = !wanted; toast(message(error)); } }
   finally { input.disabled = false; }
 }
 async function changePassword(event: Event) {
   event.preventDefault();
   const error = element('#account-password-error'), button = element<HTMLButtonElement>('#save-password');
-  const password = field('account-new-password').value, repeat = field('account-repeat-password').value;
+  const password = field('account-new-password').value, repeat = field('account-repeat-password').value, session = state.session;
   error.hidden = true;
   if (password.length < 12 || new TextEncoder().encode(password).length > 256) {
     error.textContent = t('密码至少 12 位且不超过 256 字节。'); error.hidden = false; return;
@@ -2264,14 +2268,15 @@ async function changePassword(event: Event) {
   try {
     await api('/api/auth/password', { method: 'PATCH', body: JSON.stringify({ password,
       currentPassword: field('account-current-password').value }) });
+    if (!sameSession(session)) return;
     if (state.session?.account) { state.session.account.passwordSet = true; state.session.account.passwordResetAllowed = false; }
     element('#account-current-wrap').hidden = false;
     element('#account-password-note').textContent = t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。');
     button.textContent = t('修改密码');
     toast(t('密码已更新；其他设备需要重新登录'));
-  } catch (cause) { error.textContent = message(cause); error.hidden = false; }
+  } catch (cause) { if (sameSession(session)) { error.textContent = message(cause); error.hidden = false; } }
   finally {
-    for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
+    if (sameSession(session)) for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
     button.disabled = false;
   }
 }
@@ -2285,17 +2290,21 @@ async function changeAllowlist(method: 'POST' | 'DELETE', email: string): Promis
   finally { admin.busy = undefined; renderAdmin(); }
 }
 async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonElement) {
+  const session = state.session;
   button.disabled = true; element('#account-error').hidden = true;
   try {
     await request();
+    if (!sameSession(session)) return;
     try { localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner: state.session && ownerOfSession(state.session), nonce: crypto.randomUUID() })); } catch { /* Other tabs also detect session changes on their next request. */ }
     clearOwnedDrafts();
     location.replace('login.html');
   }
   catch (error) {
+    if (!sameSession(session)) return;
     element('#account-error').textContent = message(error); element('#account-error').hidden = false;
     button.disabled = false;
   }
+  finally { if (!sameSession(session)) button.disabled = false; }
 }
 /** The theme itself is applied by theme.js before the first paint; this page only offers the choice. */
 const themeLabels: Record<ThemePreference, string> = { system: t('跟随系统'), light: t('浅色'), dark: t('深色') };

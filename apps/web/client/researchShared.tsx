@@ -159,7 +159,8 @@ export function useMutation() {
     const { method, url, body } = pending.current, { requestId: _requestId, ...input } = body;
     return run<T>(method, url, input, completed);
   }
-  return { busy, error, message, run, retry, canRetry: Boolean(pending.current) && !busy, setMessage, setError };
+  function reset() { pending.current = undefined; setError(''); setMessage(''); }
+  return { busy, error, message, run, retry, reset, canRetry: Boolean(pending.current) && !busy, setMessage, setError };
 }
 export function MutationState({ action }: { action: ReturnType<typeof useMutation> }) {
   return <>{action.error && <ErrorBox message={action.error} />}{action.message && <p class="research-status" role="status">{action.message}</p>}</>;

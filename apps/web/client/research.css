@@ -23,6 +23,7 @@ html.research-root{height:auto;min-height:100%;overflow:auto}
 .research-panel>details>summary{cursor:pointer;font-weight:550;font-size:14px;color:var(--ink)}
 .research-panel>details[open]>summary{margin-bottom:20px}
 .research-form{display:grid;gap:15px;max-width:100%}
+.research-editor-fields{border:0;margin:0;padding:0;min-width:0}
 .research-form label,.research-field{display:grid;gap:6px;font-size:12px;font-weight:500;color:var(--gray-700);min-width:0}
 .research-field-note{font-weight:400;color:var(--muted);font-size:12px;line-height:1.6;margin:0}
 .research-page :is(input:not([type=checkbox]),textarea,select){width:100%;min-width:0;border:1px solid var(--gray-200);border-radius:7px;background:var(--paper);padding:9px 11px;color:var(--ink);font:400 13px/1.6 var(--sans);box-sizing:border-box}
