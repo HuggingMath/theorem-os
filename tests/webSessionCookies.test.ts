@@ -47,8 +47,9 @@ describe('anonymous email bootstrap and signed-in identity cookies', () => {
     await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
   });
   afterEach(async () => { vi.restoreAllMocks(); await service?.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  // A restarted service must not inherit a keep-alive connection from the previous instance.
   const request = (pathname: string, client?: Client, body?: unknown, method = body === undefined ? 'GET' : 'POST') => fetch(origin + pathname, {
-    method, headers: { ...(client ? { Cookie: client.cookie, 'X-CSRF-Token': client.csrf } : {}),
+    method, headers: { Connection: 'close', ...(client ? { Cookie: client.cookie, 'X-CSRF-Token': client.csrf } : {}),
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   async function bootstrap(): Promise<Client> {

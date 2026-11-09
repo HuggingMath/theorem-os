@@ -20,7 +20,9 @@
 
 最终 Worker 的 805 个源码文件、四个运行包、53 个库模块与十个工具核验通过。19 项前端产物与最终本地浏览器验收构建一致，12 对已有 Brotli 产物的摘要和解压内容一致。Web / Worker 的源码 SHA、运行镜像身份及公网 / 容器内 `app.js` 摘要一致。三个页面在桌面及 390px 手机布局的六个匿名公网场景全部通过，没有脚本错误、横向溢出或写请求。
 
-CI 修复提交 `e76b6ef` 的[云端工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42622309018)已通过 `verify`、Lean 4.33.0 和 4.34.1 两组 `verify-solver`，确认此前自然语言流程、翻译和批次顺序失败已修正。最终集成的[新工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42625376413)仍在运行；不能据此宣称最终流水线全绿或 GHCR 发布完成。本次生产使用已核验的本机构建镜像对。
+CI 修复提交 `e76b6ef` 的[云端工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42622309018)已通过 `verify`、Lean 4.33.0 和 4.34.1 两组 `verify-solver`，确认此前自然语言流程、翻译和批次顺序失败已修正。最终集成的[工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42625376413)两组 solver 均成功，Web 在新增会话测试中失败：同端口重启后，测试客户端复用已关闭的 keep-alive 连接，出现 `UND_ERR_SOCKET`；第七轮浏览器步骤因而尚未执行，镜像发布被跳过。本次生产使用已核验的本机构建镜像对。
+
+23:02 的后续修复按现有 HTTP 重启测试惯例，为该文件的请求 helper 设置 `Connection: close`，保留 Cookie 顺序、CSRF、登录优先级及重启持久化的全部断言。Node 22.23.4 下两文件 12 项检查、同一重启场景十次连续运行和根类型检查通过；这些重复运行不计为十项不同用例。此次只修改测试与记录，线上产品版本仍为 `e5c8caf`。修复后的云端结果继续记录在 `/home/lzh/workspace/outputs/theoremos-frontend-round7-ci-recovery-20261109/`。
 
 完整本机证据位于 `/home/lzh/workspace/outputs/theoremos-frontend-round7-release-20261109/`：
 
