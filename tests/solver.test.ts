@@ -2315,15 +2315,59 @@ describe('isolated solver and host acceptance', () => {
       }
       return 'completed';
     });
-    expect(await runSolver([...args, '--workers', '2', '--max-turns', '3'], directory)).toBe(4);
+    const exitCode = await runSolver([...args, '--workers', '2', '--max-turns', '3'], directory);
+    expect(exitCode, fs.readFileSync(output, 'utf8')).toBe(4);
     expect(attempts).toBe(2);
-    // An absent file is never staged, so a deletion leaves the inherited notes in the delivery commit.
-    const notes = mode === 'deleted' ? 'An old route that has not been checked.' : '';
+    // Tracked deletions are checkpointed; both missing-file cases submit no current findings.
     expect(cooperationState().tasks[0]).toMatchObject({ status: 'blocked', attempts: 2,
       feedback: expect.stringContaining(mode === 'deleted' ? 'Replace inherited RESEARCH.md' : 'Write RESEARCH.md') });
     expect(cooperationState().deliveryReceipts).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: 'question',
-      code: 'math_research_delivery_unchanged', submissionDigest: mathDigest(notes) })]));
+      code: 'math_research_delivery_unchanged', submissionDigest: mathDigest('') })]));
     expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('lets a worker replace deleted inherited notes and complete the same research assignment', async () => {
+    const tasks: CooperativeTask[] = [
+      { id: 'question', kind: 'research', objective: 'Find a current proof route', dependsOn: [], revision: 0 },
+      ...planTasks().slice(2).map(task => ({ ...task, dependsOn: task.id === 'first' ? ['question'] : ['first'] })),
+    ];
+    let attempts = 0, seed = '', researchWorkspace = '', seeded = false;
+    const finding = 'The current route uses True.intro for both original targets.';
+    configureCooperation(async (action, options, message) => {
+      if (action.kind === 'lead') {
+        writePlan(options.workspace, tasks);
+        if (!seeded) {
+          seeded = true;
+          for (const worker of JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).workers.slice(1)) {
+            fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'An old route that has not been checked.');
+            commitSolverSources(problem, worker.worktree);
+          }
+        }
+      } else if (action.kind === 'task' && action.task.id === 'question') {
+        if (++attempts === 1) {
+          seed = action.assignment.seedCommit; researchWorkspace = options.workspace;
+          fs.rmSync(path.join(options.workspace, 'RESEARCH.md'));
+        } else {
+          expect(action.assignment.seedCommit).toBe(seed);
+          expect(options.workspace).toBe(researchWorkspace);
+          expect(message).toContain('math_research_delivery_unchanged: Replace inherited RESEARCH.md');
+          expect(cooperationState().deliveries ?? []).toEqual([]);
+          fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), finding);
+        }
+      } else if (action.kind === 'task') {
+        const file = path.join(options.workspace, 'generated/p/Submission.lean');
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(`${action.task.id} : True := by sorry`, `${action.task.id} : True := by trivial`));
+      } else finishAssignment(action, options);
+      return 'completed';
+    });
+    const exitCode = await runSolver([...args, '--workers', '2', '--max-turns', '8'], directory);
+    expect(exitCode, fs.readFileSync(output, 'utf8')).toBe(0);
+    expect(attempts).toBe(2);
+    expect(cooperationState().tasks[0]).toMatchObject({ status: 'completed', attempts: 2 });
+    expect(cooperationState().deliveries.filter((record: any) => record.kind === 'research'))
+      .toMatchObject([{ taskId: 'question', summary: finding }]);
+    expect(host.verify).toHaveBeenCalled();
+    expect(host.officialGate).toHaveBeenCalledOnce();
   });
 
   it('resumes a proof review checkpoint without accepting its saved verdict prematurely', async () => {

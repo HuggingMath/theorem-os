@@ -1281,7 +1281,8 @@ export class CooperativeResearch extends CooperationInputs {
         taskChanges(this.input.state.problem, worker.worktree, commit, node.task, action.assignment);
         const notesBlob = (version: string) => git(worker.worktree, ['ls-tree', '--format=%(objectname)', version, '--', 'RESEARCH.md']);
         const inherited = notesBlob(action.assignment.seedCommit);
-        if (inherited === notesBlob(commit)) {
+        const submitted = notesBlob(commit);
+        if (!submitted || inherited === submitted) {
           unchangedNotesBlob = inherited;
           throw new Error(inherited ? 'math_research_delivery_unchanged: Replace inherited RESEARCH.md with findings for the current task.'
             : 'math_research_delivery_unchanged: Write RESEARCH.md with findings for the current task.');
