@@ -128,6 +128,30 @@ try {
   checks.push('G01: lost formalization and conversation receipts, page refresh and server restart recover one task and one conversation');
   const cookies = await context.cookies(); await context.close();
 
+  // The first send must also recover when no earlier refresh normalized the default budget object's field order.
+  const defaultsContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', locale: 'zh-CN' });
+  await defaultsContext.addCookies(cookies);
+  page = await defaultsContext.newPage(); await page.goto(origin); await initialized();
+  await page.locator('#formalize-original').fill(webFormalizationStatement);
+  await page.locator('#open-settings').click();
+  await page.locator('#formalize-environment').selectOption('standard'); await page.locator('#formalize-key').fill(credential);
+  let defaultRequestId = '', defaultDropped = false;
+  await page.route('**/api/formalizations', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const id = route.request().postDataJSON().requestId;
+    if (defaultDropped) { assert.equal(id, defaultRequestId); return route.continue(); }
+    defaultRequestId = id; defaultDropped = true;
+    const response = await route.fetch(); assert.equal(response.status(), 201); await route.abort('failed');
+  });
+  await page.locator('#formalize-start').click(); await page.locator('.chat-error').waitFor();
+  assert.equal(formalizations.length, 2);
+  await page.reload(); await initialized(); await page.locator('#open-settings').click();
+  await page.locator('#formalize-key').fill(credential); await page.locator('#formalize-start').click();
+  await page.waitForURL(url => url.searchParams.has('chat')); await page.locator('[data-chat-confirm-statement]').waitFor();
+  assert.equal(formalizations.length, 2);
+  checks.push('G01: a default-budget first send keeps its request identity after draft decoding and refresh');
+  await defaultsContext.close();
+
   for (const [width, height] of [[812, 375], [390, 480], [390, 844], [1440, 900]]) {
     const sampleContext = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce', locale: 'zh-CN' });
     await sampleContext.addCookies(cookies);

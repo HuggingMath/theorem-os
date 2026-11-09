@@ -32,3 +32,12 @@ it('retains uncertain submission identity through refresh and credential changes
   expect(await refreshed.prepare({ ...input, task: 'new task' })).not.toBe(id);
   refreshed.clear(); expect(await refreshed.prepare(input)).not.toBe(id);
 });
+it('preserves a pending submission created by the previous client digest format', async () => {
+  const raw = storage();
+  const visible = { task: 'prove t', source: 'theorem t : True := by sorry', model: 'fixture' };
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(visible)));
+  const digest = [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  const requestId = crypto.randomUUID();
+  raw.setItem(submissionStorageKey, JSON.stringify({ requestId, digest }));
+  expect(await new SubmissionIdentity(raw).prepare({ ...visible, apiKey: '' })).toBe(requestId);
+});

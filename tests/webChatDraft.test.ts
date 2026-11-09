@@ -23,6 +23,8 @@ it('recovers a natural submission across refresh without retaining the key or st
   const refreshed = new SubmissionIdentity(storage, 'natural.alice');
   expect(refreshed.unresolved).toBe(true);
   expect(await refreshed.prepare({ ...input, apiKey: '' })).toBe(id);
+  const { maxRunSeconds, maxTotalTokens, maxTurns } = input.research;
+  expect(await refreshed.prepare({ ...input, research: { maxTurns, maxTotalTokens, maxRunSeconds } })).toBe(id);
   expect(JSON.stringify([...values])).not.toContain(input.apiKey);
   expect(JSON.stringify([...values])).not.toContain(input.original);
   expect(await new SubmissionIdentity(storage, 'natural.bob').prepare(input)).not.toBe(id);
