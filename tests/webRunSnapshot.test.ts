@@ -30,6 +30,23 @@ describe('shared workbench run snapshots', () => {
     expect(retainLatestRun(old, completed)).toMatchObject({ status: 'completed', finishedAt: at(3), result: completed.result });
   });
 
+  it.each(['completed', 'cancelled', 'error'] as const)('keeps %s in both arrival orders when timestamps share a millisecond', status => {
+    const active = run();
+    const ended = run({ status, phase: status, finishedAt: at(1), events: [{ sequence: 2, at: at(1), type: status, message: 'Ended' }],
+      ...(status === 'completed' ? { result: { status: 'evaluated_passed', proof: 'theorem original : True := by trivial', report: {} } } : {}) });
+    for (const merged of [retainLatestRun(active, ended), retainLatestRun(ended, active)]) {
+      expect(merged).toMatchObject({ status, finishedAt: at(1), events: ended.events });
+      if (status === 'completed') expect(merged.result).toEqual(ended.result);
+    }
+  });
+
+  it('uses host event order for active phases that share a timestamp', () => {
+    const preparing = run({ phase: 'preparing', events: [{ sequence: 1, at: at(1), type: 'preparing', message: '' }] });
+    const solving = run({ phase: 'solve_started', events: [{ sequence: 2, at: at(1), type: 'solve_started', message: '' }] });
+    expect(retainLatestRun(preparing, solving).phase).toBe('solve_started');
+    expect(retainLatestRun(solving, preparing).phase).toBe('solve_started');
+  });
+
   it('accepts host-declared restarts without carrying the previous solver observation', () => {
     const old = run({ solverAttempt: { solverRunId: 'first', round: 0, sequence: 4 }, observation: observation('first', 4) });
     const restarted = run({ solverAttempt: { solverRunId: 'next', round: 1, sequence: 4 } });

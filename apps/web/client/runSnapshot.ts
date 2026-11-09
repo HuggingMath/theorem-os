@@ -16,6 +16,12 @@ export function retainLatestRun(run: WebRun, previous?: WebRun): WebRun {
   const previousObservation = previous.observation;
   if (previousObservation && previousObservation.solverRunId === solverRunId &&
     (!observation || previousObservation.sequence >= observation.sequence)) observation = previousObservation;
-  const latest = previous.updatedAt > run.updatedAt ? previous : run;
+  // Several host events can share a millisecond. An ended run never becomes active again.
+  const previousEnded = previous.status !== 'queued' && previous.status !== 'running';
+  const incomingEnded = run.status !== 'queued' && run.status !== 'running';
+  const previousEvent = previous.events.at(-1)?.sequence ?? 0, incomingEvent = run.events.at(-1)?.sequence ?? 0;
+  const sameTimeOlder = previous.updatedAt === run.updatedAt && (previousEnded !== incomingEnded
+    ? previousEnded : previousEvent > incomingEvent);
+  const latest = previous.updatedAt > run.updatedAt || sameTimeOlder ? previous : run;
   return { ...latest, solverAttempt: attempt, observation };
 }
