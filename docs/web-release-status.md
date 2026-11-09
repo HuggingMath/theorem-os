@@ -2,11 +2,13 @@
 
 工作台已在 <https://app.theoremos.top/> 上线，当前保持邮箱登录、白名单 Beta。自然语言首次链路和本机运维已经验收；陌生用户试用与外部运维交付仍未验收，当前没有公开放量的验收结论。
 
-2026-11-09 12:37（北京时间）发布后，在线 web / worker 同为 `25bcf2256d0e0361663a3bd6af31208985ab112e`，公开网站仓库为 `e907a19317b9af12848d5b26f06e16c809bf5327`（Cloudflare 版本 `8aac675d-abb0-41cb-962d-8f626ecc0e66`）；宿主运维命令此前记录独立安装为 `cfb49a2eafbc22c23298978f100f4cdf1c2f4577`，本轮未重新核对。文档提交与已发布版本分别记录，不把最新仓库提交自动当成线上版本。
+2026-11-09 13:05（北京时间）修复发布后，在线 web / worker 同为 `3e5d1b37e9787ec343353e7c24074d0e7842e8da`，公开网站仓库为 `e907a19317b9af12848d5b26f06e16c809bf5327`（Cloudflare 版本 `8aac675d-abb0-41cb-962d-8f626ecc0e66`）；宿主运维命令此前记录独立安装为 `cfb49a2eafbc22c23298978f100f4cdf1c2f4577`，本轮未重新核对。文档提交与已发布版本分别记录，不把最新仓库提交自动当成线上版本。
 
 G01–G09 修复已与数学协作功能一起上线，包括等待计划确认暂停证明计时、Lean Key 默认临时使用、从保存版本继续、完整已保存档案导出及中英文使用说明同步。新增[数学家](https://app.theoremos.top/people.html)、[定理](https://app.theoremos.top/theorems.html)和[Library](https://app.theoremos.top/library.html)界面，支持版本绑定的人工干预、贡献追踪、数学库与个性化 Agent / Skill 的固定版本分享和复用。
 
-本轮完成两套类型检查、运行包与 Web 构建、五组浏览器回归和最终 Worker 上的真实 Lean 编译。34 文件单测 1187 项通过、1 项跳过，另有 1 项原 `8a67` 基线已有的 RESEARCH.md 删除场景退出码差异；共享库扩展 67 项和镜像源码隔离检查已另行通过。发布经过维护、排空、私有备份和 checksum 恢复；首次因核验脚本缺少生产 Host 头回滚，修正后的第二次切换与公网健康、就绪、三个页面及公开 API、静态文件摘要均通过。本轮未调用真实模型，原有邮箱登录与白名单 Beta 保持不变。下表保留此前验收的版本和证据范围。
+协作功能首次发布完成两套类型检查、运行包与 Web 构建、五组浏览器回归和最终 Worker 上的真实 Lean 编译。34 文件单测 1187 项通过、1 项跳过，另有 1 项原 `8a67` 基线已有的 RESEARCH.md 删除场景退出码差异；共享库扩展 67 项和镜像源码隔离检查已另行通过。首次切换因核验脚本缺少生产 Host 头回滚，修正后的第二次切换通过。
+
+13:05 的后续发布已解决上述失败：删除研究笔记的交付进入纠正流程，Worker 继续运行；补写新成果后可在同一任务上完成交付。完整 solver 与九个交付、草稿和恢复测试文件共 660 项全部通过，另有 5 项聚焦检查、类型检查和四个运行包构建通过。新镜像的 768 个源码文件、四个运行包、53 个内置库模块及十个独立工具核验通过；六个前端文件与前次浏览器验收版本摘要相同。本次维护、排空、私有备份和 checksum 恢复、成对切换、公网健康、就绪、三个页面及公开 API、静态文件摘要均通过，维护已关闭。这两次发布均未调用真实模型。下表保留此前验收的版本和证据范围。
 
 | 项目 | 已有结果 | 证据范围 |
 | --- | --- | --- |
@@ -28,6 +30,7 @@ G01–G09 修复已与数学协作功能一起上线，包括等待计划确认�
 | `theoremos-trial-ready-20261108` | `release-status.md`、`trial-kit.zip`、`trial-kit/README.md`、`fixture-generation.json`、`mail-dns.json` |
 | `theoremos-vault-restore-20261108` | `completion.md`、`vault-restore-check.json`、`verify-restored-vault.py` |
 | `theoremos-collaborative-release-20261109` | `README.md`、`images/worker-final-verification.json`、`deploy/deployment-record.json`、`deploy/attempt-2/cutover.json` |
+| `theoremos-research-delivery-fix-20261109` | `README.md`、`regressions.log`、`images/worker-final-verification.json`、`deploy/deployment-record.json`、`deploy/cutover.json` |
 
 下一阶段待验收的是：5–10 位首次使用者按[试用协议](web-release-trial.md)完成观察；向明确授权的收件地址核对验证码 / 通知到账、垃圾箱归类和邮件头；接通外部故障告警；配置异地备份并完成异地恢复。用户已确认暂时没有试用者、告警接收渠道和异地目标，这些项保持待办，不重复索取，也不以本机演练替代。
 
