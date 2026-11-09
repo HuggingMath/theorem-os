@@ -219,6 +219,7 @@ export const errors: Record<string, string> = {
   '命令回执身份不一致。': 'The command receipt identity does not match.',
   '此反馈不是候选证明。': 'This feedback is not a candidate proof.',
   '候选证明不存在。': 'Candidate proof not found.',
+  '候选证明的基准与检查详情仅向有权查看运行的成员提供。': 'The candidate baseline and check details are available only to members with access to the run.',
   '检查结果与候选源码或环境不一致。': 'The check result does not match the candidate source or environment.',
   '候选检查回执已经固定。': 'The candidate check receipt is already fixed.',
   '认领必须绑定精确任务版本。': 'A claim must refer to the exact task version.',
