@@ -2,6 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail } from '../researchProjectTypes';
 import { RichProse } from './richText';
+import { DiscussionGuidance } from './researchDiscussionGuidance';
 import { feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
   type FeedbackScope, type FeedbackStatus, type FeedbackTask } from './researchFeedbackModel';
 import { base, enc, Empty, Field, MutationState, nameOf, personHref, stamp, State, Tags, theoremHref, tx, useMutation, lines, type Item } from './researchShared';
@@ -27,7 +28,8 @@ export function TaskFeedbackContext({ project, runId, task, onBrowse }: {
   </div>;
 }
 
-export function FeedbackWorkspace({ project, runId, task, refresh, onOpenTask, focus, browseTask, onRevealFeedback, children }: {
+export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpenTask, focus, browseTask, onRevealFeedback, children }: {
+  selfId: string;
   project: ResearchProjectDetail; runId?: string; task?: FeedbackTask; refresh: () => void; onOpenTask: OpenFeedbackTask;
   focus?: FeedbackFocus; browseTask: number; onRevealFeedback: (id: string) => void; children?: ComponentChildren;
 }) {
@@ -73,7 +75,7 @@ export function FeedbackWorkspace({ project, runId, task, refresh, onOpenTask, f
       {scope === 'task' && currentTask && <> · {currentTask.taskId} · <code>{currentTask.taskVersion}</code></>}</p>
     {children}
     {project.feedback.slice().reverse().map(feedback => <Feedback key={feedback.id} feedback={feedback} project={project} refresh={refresh}
-      hidden={!visibleIds.has(feedback.id)} onOpenTask={onOpenTask} onRevealFeedback={onRevealFeedback} />)}
+      selfId={selfId} runId={runId} hidden={!visibleIds.has(feedback.id)} onOpenTask={onOpenTask} onRevealFeedback={onRevealFeedback} />)}
     {!visible.length && <Empty>{project.feedback.length ? tx('当前范围和条件下没有反馈。', 'No feedback matches this scope and filters.') : tx('尚无讨论或干预记录。', 'No discussion or intervention records yet.')}</Empty>}
   </div>;
 }
@@ -87,13 +89,17 @@ function TaskLink({ projectId, target, task, execution, onOpenTask }: {
     </a>{execution && <span> · {task.id} · {task.version.slice(0, 12)}</span>}</span>;
 }
 
-function Feedback({ feedback, project, refresh, hidden, onOpenTask, onRevealFeedback }: {
+function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTask, onRevealFeedback }: {
+  selfId: string; runId?: string;
   feedback: ResearchFeedback; project: ResearchProjectDetail; refresh: () => void; hidden: boolean; onOpenTask: OpenFeedbackTask; onRevealFeedback: (id: string) => void;
 }) {
   const canDecide = project.permissions.manage || Boolean(feedback.target && project.runs.find(item => item.runId === feedback.target!.runId)?.permissions.manage);
   const source = feedback.sourceFeedbackId && project.feedback.find(item => item.id === feedback.sourceFeedbackId);
+  const forwarded = project.feedback.filter(item => item.sourceFeedbackId === feedback.id);
+  const canForward = feedback.kind === 'discussion' && Boolean(selfId) && project.runs.some(run => run.permissions.guidance && run.status === 'running');
+  const [opened, setOpened] = useState(false);
   return <article class="research-event research-feedback-event" id={`feedback-${feedback.id}`} tabIndex={-1} hidden={hidden}>
-    <div class="research-item-meta"><a href={personHref(feedback.author.id)}>{feedback.author.displayName}</a><span>{nameOf(feedback.kind)}</span><time dateTime={feedback.createdAt}>{stamp(feedback.createdAt)}</time><State value={feedback.visibility} /></div>
+    <div class="research-item-meta">{source && <span>{tx('投递人', 'Forwarded by')}</span>}<a href={personHref(feedback.author.id)}>{feedback.author.displayName}</a><span>{nameOf(feedback.kind)}</span><time dateTime={feedback.createdAt}>{stamp(feedback.createdAt)}</time><State value={feedback.visibility} /></div>
     <div class="research-description"><RichProse text={feedback.text} /></div>
     <ol class="research-feedback-states" aria-label={tx('反馈处理进展', 'Feedback processing progress')}>
       <li><span>{tx('1 · 投递', '1 · Delivery')}</span><State value={feedback.delivery.status} />{feedback.delivery.reason && <span>{feedback.delivery.reason}</span>}</li>
@@ -104,13 +110,20 @@ function Feedback({ feedback, project, refresh, hidden, onOpenTask, onRevealFeed
     {feedback.target && <div class="research-item-meta"><a href={theoremHref(project.id, feedback.target.runId, { statementVersionId: feedback.target.statementVersionId })}>{tx('对应运行', 'Related run')}</a>
       <span>{tx('观测', 'Observation')} #{feedback.target.observationRef.sequence}</span>{feedback.target.taskRef && <><span>{feedback.target.taskRef.id} · {feedback.target.taskRef.version.slice(0, 12)}</span>
         <TaskLink projectId={project.id} target={feedback.target} task={feedback.target.taskRef} onOpenTask={onOpenTask} /></>}</div>}
-    {source && <a class="research-inline-link" href={`#feedback-${enc(source.id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(source.id); }}>{tx('查看原始建议', 'View original suggestion')}</a>}
+    {source && <div class="research-feedback-source" data-feedback-source><span class="research-field-note">{tx('原建议作者：', 'Original author: ')}<a href={personHref(source.author.id)}>{source.author.displayName}</a></span>
+      <a class="research-inline-link" href={`#feedback-${enc(source.id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(source.id); }}>{tx('查看原始建议', 'View original suggestion')}</a>
+      <details><summary>{tx('原始建议内容', 'Original suggestion text')}</summary><div class="research-description"><RichProse text={source.text} /></div></details></div>}
+    {forwarded.length > 0 && <div class="research-feedback-forwards" data-feedback-forwards><p class="research-field-note">{tx('由此建议转投的指导', 'Guidance forwarded from this suggestion')}</p>
+      <ul>{forwarded.map(item => <li key={item.id}><a class="research-inline-link" href={`#feedback-${enc(item.id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(item.id); }}>{tx('查看指导', 'View guidance')}</a>
+        <span> · {item.author.displayName} · {project.runs.find(run => run.runId === item.target?.runId)?.title ?? tx('对应运行', 'Related run')} · {item.target?.taskRef?.id ?? 'Lead'} · </span><State value={item.delivery.status} /></li>)}</ul></div>}
     {feedback.execution.planVersion && <p class="research-status">{tx('对应计划：', 'Plan: ')}{feedback.execution.planVersion}</p>}
     {feedback.target && feedback.execution.taskRefs.length > 0 && <div class="research-actions research-feedback-results">{feedback.execution.taskRefs.map(task =>
       <TaskLink key={`${task.id}:${task.version}`} projectId={project.id} target={feedback.target!} task={task} execution onOpenTask={onOpenTask} />)}</div>}
     {feedback.proofCheck && <p class="research-status">{tx('独立候选检查：', 'Independent candidate check: ')}<State value={feedback.proofCheck.status} /> · {feedback.proofCheck.receiptId}{feedback.proofCheck.reason ? ` · ${feedback.proofCheck.reason}` : ''}</p>}
     {(feedback.decision.evidenceRefs.length > 0 || feedback.execution.resultRefs.length > 0) && <details><summary>{tx('结果与证据引用', 'Result and evidence references')}</summary><Tags values={[...new Set([...feedback.decision.evidenceRefs, ...feedback.execution.resultRefs])]} /></details>}
     {canDecide && <details><summary>{tx('记录采纳决定', 'Record an adoption decision')}</summary><Decision projectId={project.id} feedback={feedback} refresh={refresh} /></details>}
+    {(canForward || opened) && <details data-forward-discussion onToggle={event => { if (event.currentTarget.open) setOpened(true); }}><summary>{tx('转为运行指导', 'Forward to a run')}</summary>
+      {opened && <DiscussionGuidance project={project} source={feedback} selfId={selfId} initialRunId={runId} refresh={refresh} onRevealFeedback={onRevealFeedback} />}</details>}
   </article>;
 }
 

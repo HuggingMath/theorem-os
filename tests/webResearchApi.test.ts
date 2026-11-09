@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
@@ -216,6 +216,51 @@ describe('collaborative research through the actual HTTP service', () => {
     expect((await request(bob, route + `/runs/${run.id}/observation`)).status).toBe(404);
     expect((await request(bob, route + `/runs/${run.id}/guidance`, { ...guidance, id: 'after-revocation' })).status).toBe(404);
     expect(current.id).toBe(project.id); expect(runner.commands).toHaveLength(2);
+  });
+
+  it('recovers a forwarded discussion after an unknown command outcome without sending another command', async () => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    const { project, run, route } = await projectWithRun(alice, bob);
+    const source = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'recovery-discussion',
+      kind: 'discussion', text: 'Try the supporting lemma.', visibility: 'members' }, 'POST', 201);
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const input = { requestId: 'recovery-forward', sourceFeedbackId: source.id, kind: 'guidance', text: source.text,
+      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } },
+      recipient: { kind: 'task', id: 'target' } };
+    vi.spyOn(runner, 'command').mockImplementationOnce(async (runId, command) => {
+      runner.commands.push({ runId, command: structuredClone(command) });
+      throw new Error('Fixture transport closed after submitting the command; outcome is unknown.');
+    });
+    const lostResponse = await request(alice, route + '/feedback', input);
+    expect(lostResponse.status).toBe(201); await lostResponse.body?.cancel();
+
+    const listResponse = await request(alice, route + '/feedback');
+    expect(listResponse.status).toBe(200);
+    const feedback = ((await listResponse.json()).items as ResearchFeedback[]).find(item => item.requestId === input.requestId)!;
+    expect(feedback).toMatchObject({ sourceFeedbackId: source.id, author: { id: alice.researcherId },
+      visibility: 'members', delivery: { status: 'unknown', commandId: feedback.id }, decision: { status: 'pending' } });
+    const saved = await request(alice, route + `/runs/${run.id}/commands/${input.requestId}`);
+    expect(saved.status).toBe(200); expect((await saved.json()).receipt).toMatchObject({ id: input.requestId, status: 'unknown' });
+    const replay = await item<ResearchFeedback>(alice, route + '/feedback', input, 'POST', 201);
+    expect(replay.id).toBe(feedback.id); expect(replay.delivery.status).toBe('unknown'); expect(runner.commands).toHaveLength(1);
+    expect((await request(alice, route + '/feedback', { ...input, text: 'Changed retry content.' })).status).toBe(409);
+    expect(runner.commands).toHaveLength(1);
+
+    runner.update(run.id, next => {
+      next.guidance.push({ id: feedback.id, text: input.text, recipient: { kind: 'task', id: 'target' },
+        taskRef: input.target.taskRef, observationRef: input.target.observationRef, status: 'delivered', createdAt: at, updatedAt: at, deliveredTo: ['lead'] });
+      next.inspection.tasks[0]!.version = 'task-v2';
+    });
+    const recovered = await item<ResearchFeedback>(alice, route + `/feedback/${feedback.id}`);
+    expect(recovered.delivery.status).toBe('delivered'); expect(recovered.decision.status).toBe('pending');
+    const receipt = await request(alice, route + `/runs/${run.id}/commands/${feedback.id}`);
+    expect(receipt.status).toBe(200); expect((await receipt.json()).receipt.status).toBe('delivered');
+    expect((await item<ResearchFeedback>(alice, route + '/feedback', input, 'POST', 201)).id).toBe(feedback.id);
+    expect(runner.commands).toHaveLength(1);
+    expect(await item<ResearchFeedback>(bob, route + `/feedback/${source.id}`)).toEqual(source);
+    const final = await item<ResearchProjectDetail>(alice, route);
+    expect(final.feedback.filter(item => item.sourceFeedbackId === source.id).map(item => item.id)).toEqual([feedback.id]);
   });
 
   it('replays edit and approval proxy requests after observations advance and rejects changed payloads', async () => {

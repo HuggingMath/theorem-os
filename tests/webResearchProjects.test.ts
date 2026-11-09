@@ -248,6 +248,48 @@ describe('durable feedback, decisions and host receipts', () => {
     expect(adopted.decision.evidenceRefs).toEqual(['edit:actual-edit']);
   });
 
+  it('keeps member-only discussion sources private when another researcher forwards them into a public run', () => {
+    const { projects, project, target } = fixture();
+    let current = projects.update(alice, project.id, { requestId: 'public-forward-project', expectedRevision: project.revision, visibility: 'public' });
+    current = projects.bindRun(alice, project.id, { requestId: 'public-forward-run', expectedRevision: current.revision,
+      runId: target.runId, statementVersionId: target.statementVersionId, exposure: 'public' });
+    const source = projects.submitFeedback(bob, project.id, { requestId: 'member-source', kind: 'discussion',
+      text: 'Use the private intermediate argument.', visibility: 'members' });
+    const input = { requestId: 'forward-member-source', kind: 'guidance' as const, sourceFeedbackId: source.id,
+      text: source.text, target, recipient: { kind: 'task' as const, id: 'target' } };
+    errorStatus(() => projects.submitFeedback(alice, project.id, { ...input, visibility: 'public' }), 403);
+    expect(projects.detail(alice, project.id).feedback).toEqual([source]);
+
+    const forwarded = projects.submitFeedback(alice, project.id, input);
+    expect(forwarded).toMatchObject({ sourceFeedbackId: source.id, visibility: 'members', author: { id: projects.identity(alice) } });
+    expect(projects.feedback(bob, project.id, source.id)).toEqual(source);
+    expect(source.author.id).toBe(projects.identity(bob));
+    expect(source.delivery.status).toBe('not-sent');
+    expect(projects.detail('public', project.id).feedback).toEqual([]);
+    errorStatus(() => projects.feedback('public', project.id, forwarded.id), 404);
+  });
+
+  it('requires current guidance permission and an exact current task before storing a forwarded discussion', () => {
+    const { projects, storage, project, target } = fixture();
+    const source = projects.submitFeedback(bob, project.id, { requestId: 'restricted-source', kind: 'discussion', text: 'Try a direct proof.' });
+    const current = projects.detail(alice, project.id);
+    projects.setMember(alice, project.id, projects.identity(bob),
+      { requestId: 'reader-forwarder', expectedRevision: current.revision, role: 'reader' });
+    const input = { requestId: 'forward-restricted-source', sourceFeedbackId: source.id, kind: 'guidance' as const,
+      text: source.text, target, recipient: { kind: 'task' as const, id: 'target' } };
+    errorStatus(() => projects.submitFeedback(bob, project.id, input), 403);
+    expect(projects.detail(alice, project.id).feedback).toEqual([source]);
+
+    const next = observation(); next.sequence = 2; next.snapshot.stateDigest = 'c'.repeat(64);
+    next.inspection.tasks[0]!.version = 'task-v2'; storage.saveRun(alice, run('run-a', next));
+    errorStatus(() => projects.submitFeedback(alice, project.id, input), 409);
+    expect(projects.detail(alice, project.id).feedback).toEqual([source]);
+    const forwarded = projects.submitFeedback(alice, project.id, { ...input, target: { ...target,
+      taskRef: { id: 'target', version: 'task-v2' }, observationRef: { sequence: next.sequence, stateDigest: next.snapshot.stateDigest } } });
+    expect(forwarded.target?.taskRef).toEqual({ id: 'target', version: 'task-v2' });
+    expect(forwarded.sourceFeedbackId).toBe(source.id);
+  });
+
   it('refreshes delivery from host observations without creating another command or adoption record', () => {
     const { projects, storage, project, target } = fixture();
     const feedback = projects.submitFeedback(bob, project.id, { requestId: 'observe-guidance', kind: 'guidance', text: 'Try trivial', target, recipient: { kind: 'lead' } });

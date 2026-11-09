@@ -101,8 +101,8 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
       : <Empty>{runChoice ? tx('所选运行不可用。请重新选择有权查看的运行。', 'The selected run is unavailable. Choose a run you can access.')
         : tx('当前陈述尚未关联运行。在工作台创建研究后，选择绑定到此版本。', 'No run is attached to this statement. Create a run in the workbench, then bind it to this version.')}</Empty>}
     {project.permissions.edit && version && <details><summary>{tx('关联我的研究运行', 'Attach one of my runs')}</summary><BindRun project={project} version={version} refresh={refresh} onBound={id => { setRunChoice(id); remember(version.id, id); }} /></details>}
-  </Panel><Panel title={tx('讨论与人工反馈', 'Discussion and human feedback')} note={tx('按运行和节点查看投递、采纳及执行结果。发送给 Agent 的指导在路线图内提交。', 'Track delivery, decisions and execution by run and node. Send guidance to agents from the research view.')}>
-    <FeedbackWorkspace project={project} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback}>
+  </Panel><Panel title={tx('讨论与人工反馈', 'Discussion and human feedback')} note={tx('按运行和节点查看投递、采纳及执行结果。有权限的成员可将讨论转为运行指导，保留原始建议与投递人。', 'Track delivery, decisions and execution by run and node. Authorized members can forward discussions as run guidance, retaining the original suggestion and sender.')}>
+    <FeedbackWorkspace project={project} selfId={context.session.researcherId ?? ''} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback}>
       {project.permissions.discuss ? <Discussion project={project} version={version} refresh={refresh} /> : <Empty>{tx('当前账号只有查看权限。', 'This account has read access.')}</Empty>}
     </FeedbackWorkspace>
   </Panel><Panel title={tx('参与者', 'Participants')}><Members project={project} selfId={context.session.researcherId ?? ''} refresh={refresh} /></Panel>
