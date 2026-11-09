@@ -146,11 +146,24 @@ const IDENTIFIER = /[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_
 
 /** Extend a removal back over attribute lines and a doc comment attached to the declaration. */
 function attachedStart(source: string, offset: number): number {
+  const onlyAttributes = (line: string) => {
+    let rest = maskLeanCommentsAndStrings(line).trim();
+    while (rest.startsWith('@[')) {
+      let depth = 1, end = 2;
+      for (; end < rest.length && depth; end++) {
+        if (rest[end] === '[') depth++;
+        else if (rest[end] === ']') depth--;
+      }
+      if (depth) return false;
+      rest = rest.slice(end).trim();
+    }
+    return rest.length === 0;
+  };
   let start = source.lastIndexOf('\n', offset - 1) + 1, cursor = start;
   while (cursor > 0) {
     const lineStart = source.lastIndexOf('\n', cursor - 2) + 1, line = source.slice(lineStart, cursor - 1).trim();
     if (!line) { cursor = lineStart; continue; }
-    if (line.startsWith('@[')) start = cursor = lineStart;
+    if (line.startsWith('@[') && onlyAttributes(line)) start = cursor = lineStart;
     else if (line.endsWith('-/')) {
       const open = source.lastIndexOf('/--', cursor - 1);
       if (open < 0 || source.slice(open, cursor - 1).indexOf('-/') !== source.slice(open, cursor - 1).trimEnd().length - 2) break;
@@ -158,6 +171,61 @@ function attachedStart(source: string, offset: number): number {
     } else break;
   }
   return start;
+}
+
+/** Select named declarations and their local source dependencies. Lookup is conservative; the resulting
+ * module still passes the pack trust gate and independent Lean check before it can be published. */
+export function selectLibraryDeclarations(source: string, names: readonly string[]): string {
+  const declarations = inspectScopedLeanDeclarations(source), regions = inspectLeanDeclarationRegions(source);
+  const byName = new Map(declarations.map((item, index) => [item.qualifiedName, index]));
+  const keep = new Set<number>();
+  for (const name of names) {
+    const normalized = name.replace(/^_root_\./u, '');
+    const exact = byName.get(normalized);
+    const matches = exact === undefined ? declarations.flatMap((item, index) => item.name === normalized ? [index] : []) : [exact];
+    if (matches.length !== 1) throw new Error(`math_library_selection_ambiguous: ${name}`);
+    keep.add(matches[0]!);
+  }
+  const masked = maskLeanCommentsAndStrings(source);
+  const references = (text: string, namespace = '') => {
+    for (const token of text.match(IDENTIFIER) ?? []) {
+      const absolute = token.startsWith('_root_.'), name = token.replace(/^_root_\./u, '');
+      const scopes = absolute ? [''] : [...namespace.split('.').map((_, index, parts) => parts.slice(0, parts.length - index).join('.')), ''];
+      let match: number | undefined;
+      for (const scope of scopes) {
+        match = byName.get([scope, name].filter(Boolean).join('.'));
+        if (match !== undefined) break;
+      }
+      if (match !== undefined) keep.add(match);
+      else if (!absolute) {
+        // An `open` or notation may expose another namespace. Retain every matching declaration
+        // when source lookup alone cannot distinguish them; Lean checks the retained context.
+        declarations.forEach((item, index) => { if (item.name === name) keep.add(index); });
+      }
+    }
+  };
+  // Scope commands, variables and notation remain in place and may themselves need local definitions.
+  let context = masked;
+  for (const region of [...regions].reverse())
+    context = context.slice(0, region.startOffset) + ' '.repeat(region.endOffset - region.startOffset) + context.slice(region.endOffset);
+  references(context);
+  declarations.forEach((item, index) => {
+    const prefix = source.slice(attachedStart(source, item.startOffset), item.startOffset);
+    // Instances and attributed lemmas can be consumed implicitly by typeclass search and tactics.
+    // Unproved implicit declarations are omitted; an actual dependency still fails the independent check.
+    if ((item.kind === 'instance' || /@\[/u.test(prefix)) && !PROOF_GAP.test(masked.slice(regions[index]!.bodyOffset, regions[index]!.endOffset))) keep.add(index);
+  });
+  for (const current of keep) {
+    const region = regions[current]!;
+    references(masked.slice(region.startOffset, region.endOffset), declarations[current]!.namespace);
+  }
+  let selected = source;
+  for (let index = regions.length - 1; index >= 0; index--) {
+    if (keep.has(index)) continue;
+    const region = regions[index]!;
+    selected = selected.slice(0, attachedStart(source, region.startOffset)) + selected.slice(region.endOffset);
+  }
+  return selected;
 }
 
 /**

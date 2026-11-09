@@ -63,13 +63,13 @@ export function useResource<T>(url: string | undefined, interval = 0) {
 /** Reuse the request identity if a failed or uncertain request is retried unchanged. */
 export function useMutation() {
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
-  const pending = useRef<{ signature: string; body: Record<string, unknown> }>();
+  const pending = useRef<{ signature: string; method: string; url: string; body: Record<string, unknown> }>();
   const lock = useRef(false);
   async function run<T>(method: string, url: string, input: Record<string, unknown>, completed?: (result: T) => void) {
     if (lock.current) return;
     const { expectedRevision: _revision, ...intent } = input;
     const signature = JSON.stringify([method, url, intent]);
-    if (pending.current?.signature !== signature) pending.current = { signature, body: { ...input, requestId: crypto.randomUUID() } };
+    if (pending.current?.signature !== signature) pending.current = { signature, method, url, body: { ...input, requestId: crypto.randomUUID() } };
     lock.current = true; setBusy(true); setError(''); setMessage('');
     try {
       const result = await api<T>(url, { method, body: JSON.stringify(pending.current.body) });
@@ -79,7 +79,12 @@ export function useMutation() {
     } catch (cause) { if (cause instanceof ResearchHttpError && cause.status < 500) pending.current = undefined; setError(errorText(cause)); return undefined; }
     finally { lock.current = false; setBusy(false); }
   }
-  return { busy, error, message, run, setMessage, setError };
+  function retry<T>(completed?: (result: T) => void) {
+    if (!pending.current) return;
+    const { method, url, body } = pending.current, { requestId: _requestId, ...input } = body;
+    return run<T>(method, url, input, completed);
+  }
+  return { busy, error, message, run, retry, canRetry: Boolean(pending.current) && !busy, setMessage, setError };
 }
 export function MutationState({ action }: { action: ReturnType<typeof useMutation> }) {
   return <>{action.error && <ErrorBox message={action.error} />}{action.message && <p class="research-status" role="status">{action.message}</p>}</>;

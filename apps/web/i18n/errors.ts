@@ -245,6 +245,8 @@ export const errors: Record<string, string> = {
   '共享数学库必须包含完整依赖，不能引用发布包外的本地文件。': 'A shared mathematics library must include all dependencies. It cannot reference local files outside its release package.',
   '数学成果的环境摘要与平台固定环境不匹配。': 'The mathematics environment digest does not match the platform’s fixed environment.',
   '数学声明未对应到发布包模块。': 'A mathematical declaration does not match a module in the release package.',
+  '无法确认这个任务版本的精确数学声明，请选择有完整任务记录的来源。': 'The exact declaration for this task version is unavailable. Choose a source with a complete task record.',
+  '无法唯一确定所选任务的数学声明，请核对任务版本与 Lean 名称。': 'The selected task does not identify a unique declaration. Check the task version and Lean name.',
   '数学成果未通过独立 Lean 验证，未生成发布版本。': 'The mathematics did not pass independent Lean verification. No release was created.',
   'Skill 至少需要一项研究步骤或指令。': 'A Skill needs at least one research step or instruction.',
   '服务中断，恢复后继续发布。': 'The service was interrupted. Publishing will continue after recovery.',

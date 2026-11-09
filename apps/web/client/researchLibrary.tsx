@@ -83,6 +83,10 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
   const releaseResult = useResource<Item<ResearchAssetRelease>>(version ? `${base}/library/${enc(asset.id)}/releases/${enc(version)}` : undefined);
   const unavailable = [401, 403, 404].includes(releaseResult.errorStatus ?? 0);
   const release = unavailable ? undefined : releaseResult.data?.item ?? (asset.release?.version === version ? asset.release : undefined);
+  const [forkVersions, setForkVersions] = useState<string[]>([]);
+  useEffect(() => {
+    if (release) setForkVersions(previous => previous.includes(release.version) ? previous : [...previous, release.version]);
+  }, [release?.version]);
   const forPublication = (publication: ResearchPublication) => {
     setPublicationId(publication.id);
     try { sessionStorage.setItem(`theoremos.research.publication.${asset.id}`, publication.id); } catch { /* The publication remains visible in this page. */ }
@@ -117,8 +121,11 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
           <button class="button button-primary" type="button" onClick={useVersion}>{tx('用于新研究', 'Use in new research')}</button>
           <a class="button" href={`${base}/library/${enc(asset.id)}/releases/${enc(release.version)}?download=1`} download>{tx('下载版本', 'Download release')}</a></div>
         <p class="research-field-note">{tx('带入工作台只准备研究配置，由你确认后启动。', 'Opening the workbench prepares a configuration. You choose when to start research.')}</p>
-        <Fork asset={asset} version={release.version} />{asset.editable && <Withdraw asset={asset} version={release.version} refresh={() => { refresh(); releaseResult.refresh(); }} />}
+        {asset.editable && <Withdraw asset={asset} version={release.version} refresh={() => { refresh(); releaseResult.refresh(); }} />}
       </>}
+      {forkVersions.map(forkVersion => <div key={forkVersion} hidden={release?.version !== forkVersion}>
+        <Fork asset={asset} version={forkVersion} />
+      </div>)}
     </Panel></>;
 }
 
@@ -197,7 +204,9 @@ function Publish({ asset, onPublication }: { asset: ResearchAsset; onPublication
     <div class="research-form-row"><Field label={tx('版本号', 'Version')} value={version} onInput={setVersion} required placeholder="v1" />
       <Field label={tx('许可证', 'License')} value={license} onInput={setLicense} required placeholder="MIT / Apache-2.0 / CC-BY-4.0" /></div>
     <label>{tx('发布范围', 'Release visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value)}><option value="private">{tx('仅自己使用', 'Private')}</option><option value="public">{tx('公开分享', 'Public')}</option></select></label>
-    <CheckReview checked={confirmed} disabled={!ready || action.busy} change={checked => setReviewed(checked ? reviewIdentity : '')} /><MutationState action={action} /><button class="button" type="submit" disabled={action.busy || !confirmed}>{action.busy ? tx('正在提交…', 'Submitting…') : tx('发布并检查', 'Publish and validate')}</button>
+    <CheckReview checked={confirmed} disabled={!ready || action.busy} change={checked => setReviewed(checked ? reviewIdentity : '')} /><MutationState action={action} />
+    {action.canRetry && <button class="button" type="button" onClick={() => void action.retry<Item<ResearchPublication>>(result => onPublication(result.item))}>{tx('恢复上次已审阅的发布', 'Recover the previously reviewed publication')}</button>}
+    <button class="button" type="submit" disabled={action.busy || !confirmed}>{action.busy ? tx('正在提交…', 'Submitting…') : tx('发布并检查', 'Publish and validate')}</button>
   </form>;
 }
 function DraftPreview({ preview }: { preview: ResearchAssetPreview }) {
