@@ -97,6 +97,7 @@ async function loadCaptcha() {
   sendCode.disabled = false;
 }
 async function start() {
+  const revision = stepRevision;
   const session = await call<WebSession>('/api/session');
   if (session.auth !== 'email' || (session.account && !session.termsRequired)) { clearLogin(); location.replace(workbench); return; }
   $('#login-access').hidden = session.signup === 'open' || Boolean(session.termsRequired);
@@ -128,7 +129,8 @@ async function start() {
     : t('请使用已获准的内测邮箱。');
   // The password form waits for the session cookie and CSRF token; sent earlier, it reads as an expired page.
   passwordSubmit.disabled = false;
-  restoreLogin();
+  if (stepRevision === revision) restoreLogin();
+  else rememberLogin();
   await loadCaptcha();
 }
 /** An expired login-page session is replaced; the visitor only has to repeat the current step. */
