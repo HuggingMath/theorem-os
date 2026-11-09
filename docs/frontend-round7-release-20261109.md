@@ -24,6 +24,8 @@ CI 修复提交 `e76b6ef` 的[云端工作流](https://github.com/HuggingMath/th
 
 23:02 的后续修复按现有 HTTP 重启测试惯例，为该文件的请求 helper 设置 `Connection: close`，保留 Cookie 顺序、CSRF、登录优先级及重启持久化的全部断言。Node 22.23.4 下两文件 12 项检查、同一重启场景十次连续运行和根类型检查通过；这些重复运行不计为十项不同用例。此次只修改测试与记录，线上产品版本仍为 `e5c8caf`。修复后的云端结果继续记录在 `/home/lzh/workspace/outputs/theoremos-frontend-round7-ci-recovery-20261109/`。
 
+23:07 继续处理[恢复工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42640720171)的依赖安装失败：npmmirror 对大量下载同时返回 HTTP 500。`.npmrc` 与锁文件的 109 处注册源地址改用官方 npm，所有版本、依赖和完整性摘要逐字保持一致；空目录和独立缓存的 `bun install --frozen-lockfile` 成功安装 59 个包，锁文件没有改写。没有变更产品源码或升级依赖。
+
 完整本机证据位于 `/home/lzh/workspace/outputs/theoremos-frontend-round7-release-20261109/`：
 
 - `local-verification.json` 与 `integration/` 保存最终源码的单测、类型、构建、登录及浏览器结果。
