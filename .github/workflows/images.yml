@@ -121,6 +121,17 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           sudo docker image prune --all --force
           df -h /
+      - name: Prepare namespace sandboxes for native Lean checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces by default.
+          # Allow the verifier to create its isolated namespaces on this disposable CI VM.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user --net --mount --pid --fork --kill-child=SIGKILL /bin/true
+          bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
