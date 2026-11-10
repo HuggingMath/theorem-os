@@ -49,11 +49,14 @@ const original = [
 const firstSolved = original.replace('first (box : Box) : box.value = box.value := by sorry',
   'first (box : Box) : box.value = box.value := by cases box; rfl');
 
-async function fixture(chain = false, notation = false) {
+type NotationBridge = boolean | 'overloaded';
+async function fixture(chain = false, notation: NotationBridge = false) {
   const directory = temporaryDirectory('solver-retained-source-goals-');
   const bridge = (source: string) => notation ? source.replace(
     'def frozen (box : Box) : box.value = box.value := first box',
-    'local notation "frozen" => first\nlocal notation "notationBridge" => frozen') : source;
+    ['local notation "frozen" => first',
+      ...(notation === 'overloaded' ? ['local notation (priority := high) "frozen" => (fun box : Box => Eq.refl (Box.value box))'] : []),
+      'local notation "notationBridge" => frozen'].join('\n')) : source;
   const receipt = bootstrapLeanTask(path.join(directory, 'workspace'), { source: bridge(original), task: 'Prove the original targets.' });
   const workspace = receipt.workspaceRoot, problem = readSolverProblem(workspace, receipt.activeProblemPath);
   const records: TaskRecord[] = ['first', 'second', 'final'].map(name => ({ task: {
@@ -173,6 +176,7 @@ describe.skipIf(!lean)('fresh original source retention before independent kerne
   it.each([
     { mode: 'live', notation: false }, { mode: 'restored', notation: false },
     { mode: 'live', notation: true }, { mode: 'restored', notation: true },
+    { mode: 'live', notation: 'overloaded' }, { mode: 'restored', notation: 'overloaded' },
   ] as const)
   ('integrates a $mode new helper using accepted originals absent from explicit dependencies (notation: $notation)', async ({ mode, notation }) => {
     const f = await fixture(true, notation), node = f.records.find(record => record.task.id === f.helper.id)!;
@@ -240,7 +244,7 @@ describe.skipIf(!lean)('fresh original source retention before independent kerne
     expect(freshlyAccepted({ task, attempts: 0, status: 'integrated', integratedCheck: proof }, taskVersion(task))).toBe(false);
   });
 
-  it.each([false, true].flatMap(notation => (['unaccepted', 'serialized', 'conditional', 'stale-version'] as const)
+  it.each(([false, true, 'overloaded'] as const).flatMap(notation => (['unaccepted', 'serialized', 'conditional', 'stale-version'] as const)
     .map(kind => ({ notation, kind }))))
   ('does not authorize source retention from $kind inputs (notation: $notation)', async ({ kind, notation }) => {
     const f = await fixture(false, notation), proof = f.first.integratedCheck!;
@@ -260,8 +264,9 @@ describe.skipIf(!lean)('fresh original source retention before independent kerne
     expect(f.records.find(node => node.task.id === 'helper')!.integratedCheck).toBeUndefined();
   });
 
-  it.each(['incorrect', 'sorry'] as const)('rejects %s current source despite a previously accepted input', async kind => {
-    const f = await fixture();
+  it.each(([false, 'overloaded'] as const).flatMap(notation => (['incorrect', 'sorry'] as const).map(kind => ({ notation, kind }))))
+  ('rejects $kind current source despite a previously accepted input (notation: $notation)', async ({ kind, notation }) => {
+    const f = await fixture(false, notation);
     const badSource = f.candidateSource.replace('by cases box; rfl', kind === 'sorry' ? 'by sorry' : 'by exact False.elim');
     const commit = f.write(badSource), before = f.nativeChecks.length;
     expect((f.cooperative as any).retainedTaskGoals(f.helper, f.records, f.workspace, commit)).toEqual(['Retained.first']);
