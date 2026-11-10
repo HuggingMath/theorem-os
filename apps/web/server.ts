@@ -20,6 +20,7 @@ import { WebSessionAdmission, WebAdmissionError } from './admission';
 import { WebOperations } from './operations';
 import { checkWebProvider, WebProviderCheckError } from './providerCheck';
 import { shareSnapshot, webShareToken, type WebShareLink } from './share';
+import { productStatus, readProductBuild } from './productStatus';
 import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
 import { PrecheckSuperseded, WebPrechecker } from './precheck';
 import { proofOutline, verificationKit } from './verificationKit';
@@ -187,6 +188,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   options: { mailer?: WebMailer; captchaAnswer?: () => string; sample?: WebSampleFile | null } = {}) {
   const storage = new WebStorage(config.dataRoot);
   const operations = new WebOperations(storage, config.dataRoot);
+  const productBuild = readProductBuild(config.staticRoot);
   const admission = new WebSessionAdmission(Boolean(config.auth));
   // null disables the sample; omitted loads the one shipped with the image.
   const sample = options.sample === undefined ? loadWebSample() : options.sample ?? undefined;
@@ -405,6 +407,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const share = webShareToken.test(shared[1]) ? storage.getShare(shared[1]) : undefined;
           if (!share) throw new HttpError(404, '分享链接不存在或已停止分享。');
           json(response, 200, { share: share.snapshot }); return;
+        }
+        if (url.pathname === '/api/product/status' && request.method === 'GET') {
+          json(response, 200, productStatus({ build: productBuild, commit: config.sourceCommit, maintenance: operations.maintenance,
+            writable: operations.writable(), runtimeReady: (await runner.readiness()).ready })); return;
         }
         let session = cookieSession(request);
         if (request.method === 'GET' && url.pathname === '/api/session') {

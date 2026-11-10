@@ -62,33 +62,51 @@ export function ProblemOrganization({ problem, context }: { problem: Pick<Resear
 }
 
 export function accountDraftHref(draft: ResearchAccountDraft, versionId?: string) {
-  const scope = draft.scope, parameters = new URLSearchParams({ id: scope.projectId, accountDraft: draft.id });
+  const scope = draft.scope, parameters = new URLSearchParams({ ...(scope.projectId ? { id: scope.projectId } : {}), accountDraft: draft.id });
   if (versionId) parameters.set('draftVersion', versionId);
   if (scope.statementVersionId) parameters.set('version', scope.statementVersionId);
   if (scope.runId) parameters.set('run', scope.runId);
   if (scope.taskId) parameters.set('task', scope.taskId);
   if (scope.taskVersion) parameters.set('taskVersion', scope.taskVersion);
+  if (scope.commit) parameters.set('commit', scope.commit);
+  if (['guidance', 'annotation', 'annotation-reply', 'review'].includes(scope.kind) && scope.runId) {
+    parameters.delete('id'); if (scope.projectId) parameters.set('project', scope.projectId); parameters.set('tab', 'route');
+    if (scope.threadId) parameters.set('annotation', scope.threadId);
+    if (scope.sourceFeedbackId) parameters.set('feedback', scope.sourceFeedbackId);
+    return `problem.html?${parameters}`;
+  }
+  if (scope.kind === 'review' && scope.sourceFeedbackId) parameters.set('feedback', scope.sourceFeedbackId);
   if (scope.kind === 'candidate' && scope.sourceFeedbackId) parameters.set('revise', scope.sourceFeedbackId);
   return `theorems.html?${parameters}#${scope.kind === 'candidate' ? 'candidate-composer' : scope.issueId ? `issue-${scope.issueId}` : scope.kind === 'issue' ? 'collaboration-issues' : 'project-feedback'}`;
 }
 
 export function PersonalDraftsPanel({ context, projectId }: { context?: ResearchContext; projectId?: string }) {
   const [items, setItems] = useState<ResearchAccountDraft[]>([]), [account, setAccount] = useState(true), [error, setError] = useState(''), [loading, setLoading] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const reload = async () => {
     setLoading(true);
-    try { const result = await api<{ account: boolean; items: ResearchAccountDraft[] }>(`${base}/personal/drafts${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`);
+    try { const result = await api<{ account: boolean; items: ResearchAccountDraft[] }>(`${base}/personal/drafts?${new URLSearchParams({ status: 'all', ...(projectId ? { projectId } : {}) })}`);
       setItems(result.items); setAccount(result.account); setError(''); } catch (cause) { setError(errorText(cause)); } finally { setLoading(false); }
+  };
+  const visible = items.map(item => ({ ...item, versions: item.versions.filter(version => showArchived || (version.status ?? 'open') === 'open') })).filter(item => item.versions.length);
+  const discard = async (id: string, versionId: string) => {
+    setLoading(true); setError('');
+    try { await api(`${base}/personal/drafts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ requestId: crypto.randomUUID(), versionId, action: 'discard' }) }); await reload(); }
+    catch (cause) { setError(errorText(cause)); } finally { setLoading(false); }
   };
   useEffect(() => { void reload(); }, [context?.session.researcherId, projectId]);
   return <section class="research-personal-drafts" data-personal-drafts-panel><div class="research-section-head"><h3>{tx('账号草稿', 'Account drafts')}</h3>
     <button class="text-button" type="button" disabled={loading} onClick={() => void reload()}>{tx('刷新版本', 'Refresh versions')}</button></div>
     <ErrorBox message={error} />{loading && <p role="status">{tx('正在读取账号草稿…', 'Loading account drafts…')}</p>}
+    {account && <label class="research-check"><input type="checkbox" data-personal-show-archived-drafts checked={showArchived} onChange={event => setShowArchived(event.currentTarget.checked)} />{tx('显示已提交或已丢弃的草稿', 'Show submitted and discarded drafts')}</label>}
     {!account && <p>{tx('登录账号后，可以把编辑中的内容保存到账号，在其他设备继续。', 'Sign in to save work in progress to your account and continue on another device.')}</p>}
-    {items.map(item => <details key={item.id} data-personal-draft={item.id}><summary>{item.versions[0]?.summary}</summary>
+    {visible.map(item => <details key={item.id} data-personal-draft={item.id}><summary>{item.versions[0]?.summary}</summary>
       {item.versions.map(version => <article class="collaboration-draft" key={version.id}><p>{version.deviceName} · {stamp(version.savedAt)} · {tx('版本', 'Version')} {version.revision}</p>
         {version.conflict && <p>{tx('与另一台设备的编辑同时保存，两份内容均保留。', 'Saved alongside another device’s work. Both versions are preserved.')}</p>}
-        <a class="button" href={accountDraftHref(item, version.id)}>{tx('回到编辑器恢复', 'Open the editor to restore')}</a></article>)}</details>)}
-    {account && !items.length && !loading && !error && <p>{tx('还没有保存到账号的草稿。候选、讨论和议题编辑器中都可选择保存。', 'No account drafts yet. Save one from a candidate, discussion or issue editor.')}</p>}
+        {version.status && version.status !== 'open' && <p data-draft-status={version.status}>{version.status === 'submitted' ? tx('已提交并归档', 'Submitted and archived') : tx('已丢弃', 'Discarded')}{version.submission?.href && <> · <a href={version.submission.href}>{tx('查看实际提交记录', 'Open the submitted record')}</a></>}</p>}
+        <a class="button" href={accountDraftHref(item, version.id)}>{tx('回到编辑器恢复', 'Open the editor to restore')}</a>
+        {(version.status ?? 'open') === 'open' && <button class="text-button" type="button" data-personal-discard-account-draft disabled={loading} onClick={() => void discard(item.id, version.id)}>{tx('丢弃这个账号版本', 'Discard this account version')}</button>}</article>)}</details>)}
+    {account && !visible.length && !loading && !error && <p>{tx('没有未完成的账号草稿。编辑器中可保存工作，也可查看已归档版本。', 'No unfinished account drafts. Save work from an editor or show archived versions.')}</p>}
   </section>;
 }
 

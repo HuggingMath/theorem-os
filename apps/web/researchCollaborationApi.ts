@@ -8,6 +8,7 @@ Promise<{ status: number; body: unknown } | undefined> {
   const item = (value: unknown, status = 200) => ({ status, body: { item: value } });
   if (section === 'collaboration' && projectId === 'inbox') {
     if (!action && method === 'GET') return { status: 200, body: projects.collaborationInbox(viewer) };
+    if (action === 'read-all' && method === 'POST') return { status: 200, body: projects.readCollaborationInbox(viewer, await readBody()) };
     if (action && method === 'POST') return { status: 200, body: projects.markCollaborationItem(viewer, action, await readBody()) };
   }
   if (section !== 'theorems' || !projectId) return;

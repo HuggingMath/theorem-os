@@ -8,7 +8,7 @@ import { ProblemPage } from './researchProblem';
 import { bindResearchSession, clearResearchSession, errorText, ErrorBox, readResearchSession, readResearchWebSession,
   ResearchSessionChangedError, tx, type ResearchContext } from './researchShared';
 import { webDraftOwner } from './ownedDrafts';
-import { loginHref, researchNavigation } from '../shared';
+import { loginHref, researchContextHref, researchNavigation } from '../shared';
 
 const page = document.body.dataset.researchPage ?? 'people';
 const pageNames = { workspace: ['我的研究', 'My research'], theorems: ['定理', 'Theorems'], people: ['数学家', 'Mathematicians'], library: ['Library', 'Library'] } as const;
@@ -20,7 +20,7 @@ function Header() {
     <span>Theorem<span class="brand-os">OS</span></span></a><nav class="research-nav" aria-label={tx('研究空间', 'Research space')}>
     <a href={navigation.workbench}>{tx('工作台', 'Workbench')}</a>
     {Object.entries(pageNames).map(([id, label]) => <a key={id} href={navigation[id as keyof typeof pageNames]} aria-current={page === id ? 'page' : undefined}>{tx(label[0], label[1])}</a>)}
-    </nav><button ref={language} type="button" class="text-button locale-switch" /></header>;
+    <a href={researchContextHref("workspace.html?tab=help", location.search)}>{tx('帮助', 'Help')}</a></nav><button ref={language} type="button" class="text-button locale-switch" /></header>;
 }
 export function ResearchApp() {
   const [context, setContext] = useState<ResearchContext>(), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);

@@ -6,7 +6,7 @@ import {
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import { loginHref } from '../shared';
 import { ResearchSelection } from './researchSelection';
-import type { ResearchLibraryAttemptPreparation } from '../researchLibraryTrialTypes';
+import type { ResearchLibraryAttemptPreparation, ResearchLibraryPersonalAttemptPreparation } from '../researchLibraryTrialTypes';
 import { consumeResearchEntry, readResearchEntry } from './researchEntry';
 import { openFrozenTask } from './frozenTaskView';
 import { renderResearchBudgetDraft } from './researchBudgetDraft';
@@ -138,6 +138,7 @@ const productEntrySearch = location.search, productEntry = readResearchEntry(pro
 const productTarget = new URLSearchParams(productEntrySearch);
 let productEntryHandled = false;
 let libraryProposalHandled = false;
+let libraryTrialHandled = false;
 let budgetDraftHandled = false;
 function withAddressLanguage(search: string) {
   const language = new URLSearchParams(location.search).get('lang');
@@ -416,6 +417,7 @@ const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
   document.querySelector('[data-library-proposal-start]')?.remove(); libraryProposalHandled = false;
   problemDraftRevision++; renderResearchProblemDraft(element('#research-problem-draft'));
+  document.querySelector('[data-library-trial-start]')?.remove(); libraryTrialHandled = false;
   document.querySelector('[data-budget-attempt-start]')?.remove(); budgetDraftHandled = false;
   budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
@@ -2104,7 +2106,7 @@ async function openLibraryProposalDraft() {
       if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
         throw new Error(t('草稿已变化，未载入候选。请核对后重新准备。'));
       const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
-        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined };
+        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined, problemBudget: undefined };
       const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (contentIssue) throw new Error(contentIssue.message);
       replaceDraft('reuse', () => applyTaskDraft(draft));
@@ -2117,6 +2119,39 @@ async function openLibraryProposalDraft() {
   };
   retry.addEventListener('click', () => void prepare());
   await prepare();
+}
+async function openLibraryPersonalAttemptDraft() {
+  const trialId = productTarget.get('libraryTrial'), digest = productTarget.get('trialDigest');
+  if (libraryTrialHandled || !trialId || !/^[A-Za-z0-9_-]{1,128}$/u.test(trialId) || !digest || !/^[a-f0-9]{64}$/u.test(digest)) return;
+  libraryTrialHandled = true;
+  const panel = document.createElement('aside'); panel.className = 'composer-research-selection'; panel.dataset.libraryTrialStart = '';
+  const notice = document.createElement('p'); notice.setAttribute('role', 'status');
+  const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button'; retry.hidden = true;
+  retry.textContent = t('重新准备试用草稿'); retry.dataset.retryLibraryTrial = '';
+  const back = document.createElement('a'); back.href = `workspace.html?tab=trials&trial=${encodeURIComponent(trialId)}`;
+  back.textContent = t('查看这次试用的固定记录'); panel.append(notice, retry, back); element('#run-form').prepend(panel);
+  const prepare = async () => {
+    if (!state.session || state.submitting) return;
+    const owner = ownerOfSession(state.session), revision = draftRevision;
+    retry.disabled = true; retry.hidden = true; notice.textContent = t('正在准备候选与固定库版本…');
+    try {
+      const { item } = await api<{ item: ResearchLibraryPersonalAttemptPreparation }>(`/api/research/library-trials/${encodeURIComponent(trialId)}/prepare-attempt?digest=${encodeURIComponent(digest)}`);
+      const selected = await researchSelection.prepare(item.refs, item.environment);
+      if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
+        throw new Error(t('草稿已变化，未载入候选。请核对后重新准备。'));
+      const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
+        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined, problemBudget: undefined };
+      const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
+      if (contentIssue) throw new Error(contentIssue.message);
+      replaceDraft('reuse', () => applyTaskDraft(draft));
+      researchSelection.adopt(selected); formalizationLink = null;
+      chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
+      notice.textContent = t('候选与固定库已载入新尝试草稿。核对模型和预算后，再发送研究任务；原题验收会重新进行。');
+      panel.dataset.libraryTrialReady = 'true';
+    } catch (error) { notice.textContent = message(error); retry.hidden = false; }
+    finally { retry.disabled = false; }
+  };
+  retry.addEventListener('click', () => void prepare()); await prepare();
 }
 async function openBudgetAttemptDraft() {
   const runId = productTarget.get('budgetRun'), projectId = productTarget.get('project') ?? undefined, tokens = Number(productTarget.get('budgetTokens'));
@@ -2373,6 +2408,7 @@ function initialize(): Promise<void> {
         chooseEntry('lean'); startDraft(false, 'replace');
       });
       await openLibraryProposalDraft();
+      await openLibraryPersonalAttemptDraft();
       await openBudgetAttemptDraft();
       if (!productEntryHandled) {
         productEntryHandled = true;

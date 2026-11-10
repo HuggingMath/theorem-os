@@ -378,3 +378,69 @@ describe('Library candidates as reviewed task proposals', () => {
     expect(fixture.runner.run).not.toHaveBeenCalled();
   });
 });
+
+describe('private Library trial history and personal follow-through', () => {
+  it('lists saved prepared/passed/failed trials by run, release and state without leaking them across owners', async () => {
+    const f = setup(), release = await publish(f), prepared = candidate(f, release, alice, 'prepared').draft;
+    const passed = candidate(f, release, alice, 'passed').draft; await f.trials.check(alice, passed.id, checkInput(passed));
+    const failed = candidate(f, release, alice, 'failed').draft;
+    f.outcome(async () => ({ output: '', exitCode: 1, timedOut: false })); await f.trials.check(alice, failed.id, checkInput(failed));
+    expect(f.trials.historyList(alice).items).toHaveLength(3); expect(f.trials.historyList(bob).items).toEqual([]);
+    expect(f.trials.historyList(alice, { status: 'passed' }).items.map(item => item.id)).toEqual([passed.id]);
+    expect(f.trials.historyList(alice, { runId: 'other-run' }).items).toEqual([]);
+    expect(f.trials.historyList(alice, { assetId: release.assetId }).items).toHaveLength(3);
+    const page = f.trials.historyList(alice, { limit: 1 }); expect(page.total).toBe(3); expect(page.nextOffset).toBe(1);
+    expect(f.trials.history(alice, prepared.id)).toMatchObject({ current: true, personalAttempt: false, trial: { status: 'prepared' } });
+  });
+  it('keeps the exact historical source, modules and receipt readable after the task changes while blocking new actions', async () => {
+    const f = setup(), release = await publish(f), { draft } = candidate(f, release), checked = await f.trials.check(alice, draft.id, checkInput(draft));
+    advance(f, value => { value.inspection.tasks[0].version = 'task-v2'; value.sources[0].taskVersion = 'task-v2'; value.sources[0].commit = 'b'.repeat(40); });
+    denied(() => f.trials.get(alice, draft.id), 409);
+    const historical = f.trials.history(alice, draft.id);
+    expect(historical).toMatchObject({ current: false, personalAttempt: false, trial: checked });
+    expect(historical.libraryPack.modules[0].source).toContain('theorem zero'); expect(historical.dependencySources[0].file).toBe('Submission/Base.lean');
+    expect(f.trials.historyList(alice).items[0]).toMatchObject({ id: draft.id, current: false, receiptId: checked.check!.receiptId });
+    await expect(f.trials.check(alice, draft.id, checkInput(draft))).rejects.toMatchObject({ status: 409 });
+    denied(() => f.trials.preparePersonalAttempt(alice, draft.id, draft.digest), 409); expect(f.calls).toHaveLength(1);
+  });
+  it('reauthorizes historical project evidence when grants or membership are removed', async () => {
+    const f = setup(), release = await publish(f), shared = project(f), { draft } = candidate(f, release, bob);
+    await f.trials.check(bob, draft.id, checkInput(draft)); expect(f.trials.historyList(bob).items).toHaveLength(1);
+    denied(() => f.trials.preparePersonalAttempt(bob, draft.id, draft.digest), 403);
+    f.projects.setMember(alice, shared.id, f.projects.identity(bob), { requestId: 'history-revoke', expectedRevision: f.projects.detail(alice, shared.id).revision, role: null });
+    expect(f.trials.historyList(bob).items).toEqual([]); denied(() => f.trials.history(bob, draft.id), 404);
+  });
+  it('lets an author read their withdrawn release history without allowing a new check or attempt', async () => {
+    const f = setup(), release = await publish(f), { draft } = candidate(f, release); await f.trials.check(alice, draft.id, checkInput(draft));
+    f.assets.withdraw(alice, release.assetId, { requestId: 'history-withdraw', expectedRevision: f.assets.get(alice, release.assetId).revision, version: release.version });
+    expect(f.trials.history(alice, draft.id)).toMatchObject({ current: false, personalAttempt: false, trial: { status: 'passed' } });
+    denied(() => f.trials.preparePersonalAttempt(alice, draft.id, draft.digest), 409);
+  });
+  it('prepares a private new-attempt draft from the checked exact source and complete fixed configuration without starting a worker', async () => {
+    const f = setup(), release = await publish(f), { draft } = candidate(f, release), before = structuredClone(f.run);
+    denied(() => f.trials.preparePersonalAttempt(alice, draft.id, draft.digest), 409);
+    await f.trials.check(alice, draft.id, checkInput(draft));
+    const item = f.trials.preparePersonalAttempt(alice, draft.id, draft.digest);
+    expect(item).toMatchObject({ trialId: draft.id, originRunId: f.run.id, source: draft.source, trialDigest: draft.digest, target: draft.target.ref });
+    expect(item.refs).toContainEqual(draft.release); expect(item).not.toHaveProperty('projectId'); expect(item).not.toHaveProperty('feedbackId');
+    const configuration = f.assets.freeze(alice, item.selection, item.environment, item.modulePlan), { digest: _digest, ...content } = configuration;
+    expect(item.configurationDigest).toBe(mathDigest(canonicalMathJson(content))); expect(item.libraryPackDigest).toBe(draft.libraryPackDigest);
+    expect(f.trials.history(alice, draft.id).personalAttempt).toBe(true); expect(f.run).toEqual(before);
+    expect(f.runner.run).not.toHaveBeenCalled(); expect(f.runner.command).not.toHaveBeenCalled(); expect(f.calls).toHaveLength(1);
+    denied(() => f.trials.preparePersonalAttempt(alice, draft.id, 'f'.repeat(64)), 409);
+    denied(() => f.trials.preparePersonalAttempt(bob, draft.id, draft.digest), 404);
+  });
+  it('refuses altered receipts and candidate source before preparing a personal attempt', async () => {
+    const f = setup(), release = await publish(f), { draft } = candidate(f, release); await f.trials.check(alice, draft.id, checkInput(draft));
+    const path = ['owners', mathDigest(alice), 'library-trials', `${draft.id}.json`], saved = f.storage.getRecord<{ draft: ResearchLibraryTrial }>(path)!;
+    saved.draft.check!.receipt.libraryPackDigest = 'f'.repeat(64); f.storage.saveRecord(path, saved);
+    denied(() => f.trials.preparePersonalAttempt(alice, draft.id, draft.digest), 409);
+  });
+  it('exposes history, filtering and personal preparation through the existing Library handler', async () => {
+    const f = setup(), release = await publish(f), { draft } = candidate(f, release); await f.trials.check(alice, draft.id, checkInput(draft));
+    const handler = createResearchLibraryTrialsHandler(f); cleanups.push(() => handler.close());
+    expect(await handler.handle(new URL(`http://fixture/api/research/library-trials?run=${f.run.id}&status=passed`), 'GET', alice, async () => null)).toMatchObject({ status: 200, body: { total: 1 } });
+    expect(await handler.handle(new URL(`http://fixture/api/research/library-trials/${draft.id}/history`), 'GET', alice, async () => null)).toMatchObject({ status: 200, body: { item: { current: true } } });
+    expect(await handler.handle(new URL(`http://fixture/api/research/library-trials/${draft.id}/prepare-attempt?digest=${draft.digest}`), 'GET', alice, async () => null)).toMatchObject({ status: 200, body: { item: { trialId: draft.id } } });
+  });
+});

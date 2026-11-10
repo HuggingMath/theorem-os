@@ -49,3 +49,12 @@ export type ResearchLibraryAttemptPreparation = {
   modulePlan?: ResearchModulePlan;
   target: ResearchLibraryTrialTargetRef; trialDigest: string;
 };
+export type ResearchLibraryPersonalAttemptPreparation = Omit<ResearchLibraryAttemptPreparation, 'projectId' | 'feedbackId'> & { trialId: string; originRunId: string };
+export type ResearchLibraryTrialHistoryItem = Pick<ResearchLibraryTrial, 'id' | 'digest' | 'release' | 'createdAt' | 'status'> & {
+  target: ResearchLibraryTrialTargetRef; runTitle: string; taskTitle: string; declaration: string;
+  current: boolean; reason?: string; receiptId?: string; checkedAt?: string;
+};
+export type ResearchLibraryTrialHistory = {
+  trial: ResearchLibraryTrial; current: boolean; reason?: string; personalAttempt: boolean;
+  libraryPack: ResearchLibraryPack; dependencySources: { file: string; source: string }[];
+};

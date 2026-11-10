@@ -82,7 +82,7 @@ try {
     await page.goto(`${origin}/problem.html?run=${parent.id}&tab=overview`);
     await page.locator('[data-research-changes] .research-empty').waitFor();
     assert.equal(await page.locator('[data-research-change]').count(), 0);
-    await page.locator('.problem-tabs a[href*="tab=route"]').click(); await page.locator('[data-research-journey]').waitFor();
+    await page.locator('.problem-tabs a[href*="tab=route"]').click(); await page.locator('[data-problem-map=global]').click(); await page.locator('[data-research-journey]').waitFor();
     const view = page.locator('[data-research-journey]');
     await page.waitForFunction(() => document.querySelectorAll('[data-research-journey] [data-journey-attempt]').length === 3);
     assert.equal(await view.locator('[data-journey-attempt]').count(), 3);

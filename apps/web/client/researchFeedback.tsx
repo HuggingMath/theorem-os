@@ -35,11 +35,11 @@ export function TaskFeedbackContext({ project, runId, task, onBrowse }: {
   </div>;
 }
 
-export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpenTask, onOpenStatement, focus, browseTask, onRevealFeedback, onOpenIssue, children, initialScope = 'all' }: {
+export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpenTask, onOpenStatement, focus, focusAnnotationId, browseTask, onRevealFeedback, onOpenIssue, children, initialScope = 'all' }: {
   selfId: string;
   project: ResearchProjectDetail; runId?: string; task?: FeedbackTask; refresh: () => void; onOpenTask: OpenFeedbackTask;
   onOpenStatement: (versionId: string) => void;
-  focus?: FeedbackFocus; browseTask: number; onRevealFeedback: (id: string) => void; children?: ComponentChildren;
+  focus?: FeedbackFocus; focusAnnotationId?: string; browseTask: number; onRevealFeedback: (id: string) => void; children?: ComponentChildren;
   onOpenIssue?: (feedback: ResearchFeedback) => void;
   initialScope?: FeedbackScope;
 }) {
@@ -85,7 +85,7 @@ export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpe
       {scope === 'task' && currentTask && <> · {currentTask.taskId} · <code>{currentTask.taskVersion}</code></>}</p>
     {children}
     {project.feedback.slice().reverse().map(feedback => <Feedback key={feedback.id} feedback={feedback} project={project} refresh={refresh}
-      selfId={selfId} runId={runId} hidden={!visibleIds.has(feedback.id)} onOpenTask={onOpenTask} onOpenStatement={onOpenStatement} onRevealFeedback={onRevealFeedback} onOpenIssue={onOpenIssue} />)}
+      selfId={selfId} runId={runId} focusAnnotationId={focusAnnotationId} hidden={!visibleIds.has(feedback.id)} onOpenTask={onOpenTask} onOpenStatement={onOpenStatement} onRevealFeedback={onRevealFeedback} onOpenIssue={onOpenIssue} />)}
     {!visible.length && <Empty>{project.feedback.length ? tx('当前范围和条件下没有反馈。', 'No feedback matches this scope and filters.') : tx('尚无讨论或干预记录。', 'No discussion or intervention records yet.')}</Empty>}
   </div>;
 }
@@ -99,8 +99,8 @@ function TaskLink({ projectId, target, task, execution, onOpenTask }: {
     </a>{execution && <span> · {task.id} · {task.version.slice(0, 12)}</span>}</span>;
 }
 
-function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTask, onOpenStatement, onRevealFeedback, onOpenIssue }: {
-  selfId: string; runId?: string;
+function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTask, onOpenStatement, onRevealFeedback, onOpenIssue, focusAnnotationId }: {
+  selfId: string; runId?: string; focusAnnotationId?: string;
   feedback: ResearchFeedback; project: ResearchProjectDetail; refresh: () => void; hidden: boolean; onOpenTask: OpenFeedbackTask; onRevealFeedback: (id: string) => void;
   onOpenStatement: (versionId: string) => void;
   onOpenIssue?: (feedback: ResearchFeedback) => void;
@@ -154,7 +154,7 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
     {feedback.kind === 'proof-submission' && reviseUrl && feedback.author.id === selfId && !feedback.supersededBy && feedback.continuation?.action !== 'end'
       && project.runs.some(run => run.runId === feedback.target?.runId && (run.status === 'running' || needsNewAttempt && ['completed', 'cancelled', 'error'].includes(run.status)) && run.permissions.proof) && <a class="button" data-revise-candidate href={`${reviseUrl.pathname.split('/').at(-1)}${reviseUrl.search}${reviseUrl.hash}`}>{tx('基于此候选继续修改', 'Continue revising this candidate')}</a>}
     {feedback.kind !== 'guidance' && (feedback.decision.evidenceRefs.length > 0 || feedback.execution.resultRefs.length > 0) && <details><summary>{tx('结果与证据引用', 'Result and evidence references')}</summary><Tags values={[...new Set([...feedback.decision.evidenceRefs, ...feedback.execution.resultRefs])]} /></details>}
-    {selfId && <ResearchReview feedback={feedback} project={project} selfId={selfId} canReview={canReview} refresh={refresh} />}
+    {selfId && <ResearchReview feedback={feedback} project={project} selfId={selfId} canReview={canReview} refresh={refresh} focusAnnotationId={focusAnnotationId} />}
     {canDecide && <details><summary>{tx('记录采纳决定', 'Record an adoption decision')}</summary><Decision projectId={project.id} feedback={feedback} refresh={refresh} /></details>}
     {project.permissions.edit && onOpenIssue && <button class="text-button" type="button" onClick={() => onOpenIssue(feedback)}>{tx('就此反馈发起议题', 'Open an issue from this feedback')}</button>}
     {(canForward || opened) && <details data-forward-discussion onToggle={event => { if (event.currentTarget.open) setOpened(true); }}><summary>{tx('转为运行指导', 'Forward to a run')}</summary>

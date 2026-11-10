@@ -67,6 +67,63 @@ describe('account draft login return', () => {
 });
 
 describe('private cross-device account drafts', () => {
+  it('archives the submitted branch with its actual record and preserves concurrent and later versions', () => {
+    const f = fixture(), statementVersionId = f.project.versions[0].id, sourceDigest = f.project.versions[0].sourceDigest;
+    const scope: ResearchAccountDraftScope = { projectId: f.project.id, kind: 'discussion', statementVersionId };
+    const value = { text: 'First line of reasoning', visibility: 'members', baseline: { statementVersionId, sourceDigest } };
+    const first = f.personal.saveDraft(alice, draftInput(scope, value, 'first'));
+    const parallel = f.personal.saveDraft(alice, draftInput(scope, { ...value, text: 'Phone parallel approach' }, 'parallel', 0, 'phone'));
+    const submitted = f.personal.saveDraft(alice, draftInput(scope, { ...value, text: 'Desktop final argument' }, 'final', first.version.revision));
+    const record = f.projects.submitFeedback(alice, f.project.id, { requestId: 'actual-discussion', kind: 'discussion', text: 'Desktop final argument', statementVersionId });
+    const complete = { requestId: 'archive-final', versionId: submitted.version.id, action: 'submitted', submission: { kind: 'feedback', id: record.id } };
+    f.personal.updateDraft(alice, submitted.draft.id, complete);
+    expect(f.personal.drafts(alice).items[0].versions.map(item => item.id)).toEqual([parallel.version.id]);
+    const archived = f.personal.drafts(alice, undefined, undefined, 'archived').items[0];
+    expect(archived.versions.map(item => item.id)).toEqual([submitted.version.id, first.version.id]);
+    expect(archived.versions.every(item => item.status === 'submitted' && item.submission?.id === record.id && item.submission.href?.endsWith(`#feedback-${record.id}`))).toBe(true);
+    const next = f.personal.saveDraft(alice, draftInput(scope, { ...value, text: 'New work while delivery settles' }, 'later', submitted.version.revision));
+    f.personal.updateDraft(alice, submitted.draft.id, complete);
+    expect(f.personal.drafts(alice).items[0].versions.map(item => item.id)).toEqual([next.version.id, parallel.version.id]);
+    expect(() => f.personal.updateDraft(bob, submitted.draft.id, complete)).toThrow('不存在');
+    f.personal.updateDraft(alice, first.draft.id, { requestId: 'restore-first', versionId: first.version.id, action: 'restore' });
+    f.personal.updateDraft(alice, parallel.draft.id, { requestId: 'discard-phone', versionId: parallel.version.id, action: 'discard' });
+    expect(f.personal.drafts(alice).items[0].versions.map(item => item.id)).toEqual([next.version.id, first.version.id]);
+    expect(f.personal.draft(alice, parallel.draft.id, parallel.version.id).version.status).toBe('discarded');
+    expect(() => f.personal.updateDraft(alice, first.draft.id, { ...complete, requestId: 'missing-record', submission: { kind: 'feedback', id: 'missing' } })).toThrow();
+  });
+  it('keeps private and project guidance and annotation replies scoped to their actual task and thread', () => {
+    const f = fixture(), taskId = f.source.taskId, taskVersion = f.source.taskVersion;
+    const observationRef = { sequence: f.run.observation!.sequence, stateDigest: f.run.observation!.snapshot.stateDigest };
+    const personal: ResearchAccountDraftScope = { kind: 'guidance', runId: f.run.id, taskId, taskVersion };
+    const guidance = f.personal.saveDraft(alice, draftInput(personal, { text: 'Keep the cancellation argument', observationRef }, 'private-guidance'));
+    expect(guidance.draft.scope.projectId).toBeUndefined();
+    expect(() => f.personal.saveDraft(bob, draftInput(personal, { text: 'Foreign run', observationRef }, 'foreign'))).toThrow('运行不可用');
+    const page = f.projects.annotations(alice, undefined, f.run.id, { taskId, taskVersion }), field = page.context.fields[0];
+    const anchor = { kind: 'mathematics' as const, field: field.field, fieldDigest: field.digest, startOffset: 0, endOffset: field.text.length, quote: field.text };
+    const annotationScope: ResearchAccountDraftScope = { kind: 'annotation', runId: f.run.id, taskId, taskVersion };
+    const annotationDraft = f.personal.saveDraft(alice, draftInput(annotationScope, { text: 'Why does this implication follow?', anchor, observationRef }, 'annotation'));
+    const annotation = f.projects.createAnnotation(alice, undefined, f.run.id, { requestId: 'actual-annotation', target: { observationRef, taskRef: { id: taskId, version: taskVersion } }, anchor, text: 'Why does this implication follow?' });
+    f.personal.updateDraft(alice, annotationDraft.draft.id, { requestId: 'complete-annotation', versionId: annotationDraft.version.id, action: 'submitted', submission: { kind: 'annotation', id: annotation.id } });
+    expect(f.personal.draft(alice, annotationDraft.draft.id).version.submission?.href).toContain(`annotation=${annotation.id}`);
+    const replyScope: ResearchAccountDraftScope = { ...annotationScope, kind: 'annotation-reply', threadId: annotation.id };
+    const reply = f.personal.saveDraft(alice, draftInput(replyScope, { text: 'The definition supplies the equality' }, 'reply'));
+    expect(reply.draft.scope.threadId).toBe(annotation.id);
+    expect(() => f.personal.saveDraft(alice, draftInput({ ...replyScope, threadId: 'different-thread' }, { text: 'Wrong thread' }, 'wrong-thread'))).toThrow('线程不可用');
+    expect(() => f.personal.saveDraft(alice, draftInput(annotationScope, { text: 'Keep keys out', observationRef, apiKey: 'private' }, 'key'))).toThrow('格式无效');
+    expect(() => f.personal.saveDraft(alice, draftInput({ ...personal, taskVersion: 'another-version' }, { text: 'Wrong task', observationRef }, 'wrong-task'))).toThrow('任务版本不可用');
+  });
+  it('isolates review comments and author supplements and links only an actual review submission', () => {
+    const f = fixture(), feedback = f.projects.submitFeedback(alice, f.project.id, { requestId: 'review-subject', kind: 'discussion', text: 'A mathematical proposal' });
+    const scope: ResearchAccountDraftScope = { projectId: f.project.id, kind: 'review', sourceFeedbackId: feedback.id, purpose: 'resubmit' };
+    const draft = f.personal.saveDraft(alice, draftInput(scope, { text: 'Additional derivation' }, 'supplement'));
+    f.personal.saveDraft(bob, draftInput({ ...scope, purpose: 'comment' }, { text: 'A separate review concern' }, 'review-comment'));
+    expect(() => f.personal.updateDraft(alice, draft.draft.id, { requestId: 'too-early', versionId: draft.version.id, action: 'submitted', submission: { kind: 'review', id: feedback.id } })).toThrow('尚未保存');
+    const decision = f.projects.decideFeedback(bob, f.project.id, feedback.id, { requestId: 'needs-more', expectedRevision: feedback.revision, status: 'needs-info', reason: 'Explain the last implication' });
+    f.projects.reviewFeedback(alice, f.project.id, feedback.id, { requestId: 'resubmit', expectedRevision: decision.revision, action: 'resubmit', text: 'Additional derivation' });
+    f.personal.updateDraft(alice, draft.draft.id, { requestId: 'completed-review', versionId: draft.version.id, action: 'submitted', submission: { kind: 'review', id: feedback.id } });
+    expect(f.personal.drafts(alice).items).toEqual([]);
+    expect(f.personal.drafts(bob).items).toHaveLength(1);
+  });
   it('saves exact candidate scope and independently restores versioned content only for the same account', () => {
     const f = fixture(), before = canonicalMathJson(f.run), saved = f.personal.saveDraft(alice, draftInput(f.candidateScope, f.candidate));
     expect(saved.draft.scope).toEqual({ ...f.candidateScope, owner: f.projects.identity(alice) }); expect(saved.draft.revision).toBe(1);

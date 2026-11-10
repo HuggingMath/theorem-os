@@ -73,4 +73,21 @@ describe('owner-isolated human drafts', () => {
     expect(store.markAccountRevision(next!, 5)).toBeUndefined();
     expect(store.list<{ source: string }>('alice', 'project-a', 'candidate').some(item => item.value.source === 'new edits during save')).toBe(true);
   });
+  it('keeps private guidance, annotation threads and review purposes separate across tasks and accounts', () => {
+    const { store } = fixture();
+    const personal: ResearchDraftScope = { owner: 'alice', kind: 'guidance', runId: 'run-one', taskId: 'goal', taskVersion: 'v1' };
+    store.save(personal, { text: 'Keep this direction' }, 'Guidance');
+    store.save({ ...personal, taskVersion: 'v2' }, { text: 'Another version' }, 'Next');
+    store.save({ ...personal, owner: 'bob' }, { text: 'Private Bob text' }, 'Bob');
+    expect(store.list('alice', '', 'guidance')).toHaveLength(2);
+    const reply = { ...personal, kind: 'annotation-reply' as const, threadId: 'thread-one' };
+    store.save(reply, { text: 'The first reply' }, 'First');
+    store.save({ ...reply, threadId: 'thread-two' }, { text: 'The second reply' }, 'Second');
+    expect(store.list('alice', '', 'annotation-reply')).toHaveLength(2);
+    const review = { ...scope, kind: 'review' as const, sourceFeedbackId: 'candidate-one' };
+    store.save({ ...review, purpose: 'comment' }, { text: 'Review concern' }, 'Comment');
+    store.save({ ...review, purpose: 'resubmit' }, { text: 'Author response' }, 'Response');
+    expect(store.list('alice', 'project-a', 'review')).toHaveLength(2);
+    expect(JSON.stringify(store.list('alice', '', 'guidance'))).not.toContain('Private Bob text');
+  });
 });

@@ -1,4 +1,5 @@
 import type { ResearchAuthor, ResearchFeedbackTarget, ResearchMemberRole, ResearchWorkContinuation } from './researchProjectTypes';
+import type { ResearchStageReference } from './researchProblemTypes';
 
 export type ResearchInvitation = {
   id: string; projectId: string; kind: 'invitation' | 'application'; author: ResearchAuthor; recipient: ResearchAuthor;
@@ -18,15 +19,19 @@ export type ResearchIssueResolution = { author: ResearchAuthor; text: string; pr
 export type ResearchIssue = {
   id: string; projectId: string; author: ResearchAuthor; title: string; text: string; statementVersionId?: string;
   target?: ResearchFeedbackTarget; sourceFeedbackId?: string; status: 'open' | 'resolved'; replies: ResearchIssueReply[];
+  stageReference?: ResearchStageReference;
   resolution?: ResearchIssueResolution; resolutionHistory?: ResearchIssueResolution[];
   revision: number; createdAt: string; updatedAt: string;
 };
 export type ResearchCollaborationState = { invitations: ResearchInvitation[]; handoffs: ResearchHandoff[]; issues: ResearchIssue[] };
 export type ResearchCollaborationView = ResearchCollaborationState & { projectId: string; revision: number };
 export type ResearchInboxItem = {
-  id: string; kind: 'invitation' | 'application' | 'handoff' | 'claim' | 'review' | 'needs-info' | 'reply' | 'update';
+  id: string; kind: 'invitation' | 'application' | 'handoff' | 'claim' | 'review' | 'needs-info' | 'reply' | 'annotation' | 'update';
+  category: 'decision' | 'reply' | 'progress';
   projectId: string; projectTitle: string; title: string; text?: string; createdAt: string; href: string;
   read: boolean; processed: boolean; resolved: boolean;
   invitation?: ResearchInvitation; handoff?: ResearchHandoff;
+  annotationAction?: 'create' | 'reply' | 'resolve' | 'reopen';
 };
-export type ResearchCollaborationInbox = { items: ResearchInboxItem[]; unread: number; pending: number };
+export type ResearchCollaborationInbox = { items: ResearchInboxItem[]; unread: number; pending: number;
+  counts: Record<ResearchInboxItem['category'], number> };

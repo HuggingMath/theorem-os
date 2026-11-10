@@ -5,7 +5,7 @@ import type { ResearchProblem, ResearchStageConclusion } from '../researchProble
 import type { ResearchFeedback, ResearchFeedbackTarget } from '../researchProjectTypes';
 import { Rich, RichProse } from './richText';
 import { SolutionRouteGraph } from './ui/SolutionRouteGraph';
-import { compareProblemRoutes, problemSolutionRoute } from './researchProblemModel';
+import { compareProblemRoutes, problemSolutionRoute, problemOutcomeLabel } from './researchProblemModel';
 import { base, enc, Empty, ErrorBox, Field, MutationState, Panel, stamp, tx, useMutation, useResource, type Item, type ResearchContext } from './researchShared';
 import { webDraftOwner } from './ownedDrafts';
 import { FeedbackWorkspace, type FeedbackFocus } from './researchFeedback';
@@ -17,8 +17,12 @@ import { ProblemAttention, ProblemDecisionEvidence, ProblemTaskEvidence } from '
 import { problemTaskOwners } from './researchProblemModel';
 import { ProblemOrganization } from './researchPersonal';
 import { ResearchProblemBudget } from './researchBudget';
-import { ResearchJourneyView, ResearchChangesSinceRead } from './researchJourney';
+import { ResearchJourneyView, ResearchJourneyTaskSource, ResearchChangesSinceRead } from './researchJourney';
 import { ResearchInlineActions } from './researchInlineActions';
+import { ProjectFromProblem } from './researchProjectStart';
+import { ResearchOutcomeDelivery } from './researchOutcomeDelivery';
+import { LibraryTrialHistory } from './researchLibraryTrialHistory';
+import { StageProjectReference } from './researchStageReference';
 
 const labels = { overview: ['总览', 'Overview'], route: ['证明路线', 'Proof route'], compare: ['历次尝试', 'Attempts'],
   discussion: ['讨论与决议', 'Discussion'], outcomes: ['用量与成果', 'Usage and outcomes'], stages: ['阶段结论', 'Stage conclusions'], brief: ['简报', 'Brief'] } as const;
@@ -28,12 +32,14 @@ const initial = () => {
   return { run: query.get('run') ?? '', project: query.get('project') ?? '', tab: tab in labels ? tab as Tab : 'overview' as Tab,
     task: query.get('task') ?? '', taskVersion: query.get('taskVersion') ?? '', commit: query.get('commit') ?? '', compare: query.get('compare') ?? '',
     decision: query.get('decision') ?? '', version: query.get('version') ?? '', snapshot: query.get('snapshot') ?? '', changeRecord: query.get('changeRecord') ?? '',
-    feedback: query.get('feedback') ?? (location.hash.startsWith('#feedback-') ? location.hash.slice(10) : '') };
+    feedback: query.get('feedback') ?? (location.hash.startsWith('#feedback-') ? location.hash.slice(10) : ''),
+    map: query.get('map') === 'global' && !query.has('annotation') ? 'global' as const : 'attempt' as const,
+    annotation: query.get('annotation') ?? '', accountDraft: query.get('accountDraft') ?? '', draftVersion: query.get('draftVersion') ?? '' };
 };
 type Selection = ReturnType<typeof initial>;
 const problemUrl = (value: Selection) => {
   const query = new URLSearchParams({ run: value.run, tab: value.tab, lang: locale });
-  for (const field of ['project', 'task', 'taskVersion', 'commit', 'compare', 'decision', 'version', 'feedback', 'snapshot', 'changeRecord'] as const) if (value[field]) query.set(field, value[field]);
+  for (const field of ['project', 'task', 'taskVersion', 'commit', 'compare', 'decision', 'version', 'feedback', 'snapshot', 'changeRecord', 'map', 'annotation', 'accountDraft', 'draftVersion'] as const) if (value[field]) query.set(field, value[field]);
   return `problem.html?${query}${value.tab === 'discussion' && value.feedback ? `#feedback-${encodeURIComponent(value.feedback)}` : value.tab === 'overview' && value.changeRecord ? '#research-changes' : ''}`;
 };
 const briefEndpoint = (run: string, project?: string) => `${base}/workspace/brief/${enc(run)}${project ? `?project=${enc(project)}` : ''}`;
@@ -45,6 +51,8 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
   useResource(endpoint ? `${base}/workspace/problem/${enc(selection.run)}/changes${selection.project ? `?project=${enc(selection.project)}` : ''}` : undefined);
   const resource = useResource<Item<ResearchProblem>>(endpoint, 15_000), problem = resource.data?.item;
   const [focus, setFocus] = useState<FeedbackFocus>(), [issue, setIssue] = useState<{ target?: ResearchFeedbackTarget; sourceFeedbackId?: string; statementVersionId?: string; serial: number }>();
+  const [sourceKey, setSourceKey] = useState('');
+  const [routeFocus, setRouteFocus] = useState<{ token: string; node: string }>();
   const owner = webDraftOwner(context.web), memoryKey = `theoremos.problem-view.v1:${owner}`, restored = useRef(false);
   const current = useRef(selection); current.current = selection;
   const navigate = (next: Partial<Selection>, push = true) => {
@@ -78,13 +86,16 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
     if (selection.commit) link.searchParams.set('commit', selection.commit);
     return link.pathname + link.search;
   })() : undefined;
-  const selectTask = (id: string) => {
+  const selectTask = (id: string, node = `task:${id}`) => {
     const task = problem?.brief.tasks.find(task => task.id === id);
-    if (task) navigate({ task: id, taskVersion: task.version, commit: task.commit ?? '' }, false);
+    if (task) {
+      setRouteFocus({ token: `${selection.run}:${task.id}:${task.version}`, node });
+      navigate({ task: id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false);
+    }
   };
   const runChoice = (run: string) => {
     setFocus(undefined); setIssue(undefined);
-    navigate({ run, task: '', taskVersion: '', commit: '', decision: '', feedback: '', compare: selection.compare === run ? '' : selection.compare });
+    navigate({ run, task: '', taskVersion: '', commit: '', decision: '', feedback: '', annotation: '', accountDraft: '', draftVersion: '', compare: selection.compare === run ? '' : selection.compare });
   };
   const openIssue = (feedback?: ResearchFeedback) => {
     const binding = problem?.project?.runs.find(run => run.runId === selection.run);
@@ -93,6 +104,7 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
     setIssue(previous => ({ target, sourceFeedbackId: feedback?.id, statementVersionId: feedback?.statementVersionId, serial: (previous?.serial ?? 0) + 1 }));
   };
   const revealFeedback = (id: string) => setFocus(previous => ({ id, request: (previous?.request ?? 0) + 1 }));
+  const projectCreated = (project: string) => { navigate({ project }); resource.refresh(); ledger.refresh(); };
   if (!context.session.authenticated) return <Panel title={tx('登录后继续这道题', 'Sign in to continue this problem')}><a class="button" href={`login.html?${new URLSearchParams({ returnTo: 'problem', ...selection, lang: locale })}`}>{tx('登录', 'Sign in')}</a></Panel>;
   return <div class="problem-page" data-problem-page>
     <header class="problem-heading"><div><p class="research-eyebrow">TheoremOS</p><h1>{problem ? <Rich text={problem.brief.title} /> : tx('题目工作区', 'Problem workspace')}</h1></div>
@@ -110,42 +122,54 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
       onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate({ tab: id as Tab }); }}>{tx(label[0], label[1])}</a>)}</nav>
     <div class="problem-content">
     {selection.task && !selected && <p class="research-status" role="status">{tx('选中的任务或源码版本已不在当前路线中。', 'The selected task or source version is no longer in the current route.')} {savedTaskHref && <a href={savedTaskHref}>{tx('查看所选版本', 'Open the selected version')}</a>} · <button type="button" class="text-button" onClick={() => navigate({ task: '', taskVersion: '', commit: '' }, false)}>{tx('回到当前整条路线', 'Return to the current route')}</button></p>}
-    {selection.tab === 'overview' && <><ProblemOrganization problem={problem} context={context} /><ResearchChangesSinceRead key={`${problem.key}:${selection.run}`} runId={selection.run} projectId={problem.project?.id} /><Panel title={tx('这道题研究到哪里了', 'Where the research stands')}>
+    {selection.tab === 'overview' && <><ProblemOrganization problem={problem} context={context} /><ProjectFromProblem problem={problem} onCreated={projectCreated} /><ResearchOutcomeDelivery problem={problem} context={context} onBrief={() => navigate({ tab: 'brief' })} /><ResearchChangesSinceRead key={`${problem.key}:${selection.run}`} runId={selection.run} projectId={problem.project?.id} /><Panel title={tx('这道题研究到哪里了', 'Where the research stands')}>
       <RichProse text={problem.brief.statement} /><div class="problem-summary"><p>{problem.brief.accepted ? tx('Lean 陈述证明通过', 'Lean statement accepted') : tx('原题尚未通过独立验收', 'The problem has not passed independent acceptance')}</p>
       <p>{problem.brief.attempts.length} {tx('次尝试', 'attempts')} · {problem.brief.tasks.length} {tx('个任务', 'tasks')} · {formatTokens(problem.brief.usage.knownTokens)} Token</p></div>
       <div class="research-actions"><button class="button button-primary" type="button" onClick={() => navigate({ tab: 'route' })}>{tx('阅读证明路线', 'Read the proof route')}</button><a class="button" href={problem.brief.runHref}>{tx('继续研究或提供指导', 'Continue research or give guidance')}</a></div>
-      </Panel>{problem.stages.length > 0 && <Panel title={tx('最近一次人工总结', 'Latest human conclusion')}><StageView stage={problem.stages.at(-1)!} /><button class="text-button" type="button" onClick={() => navigate({ tab: 'stages' })}>{tx('查看历次阶段结论', 'View all stage conclusions')}</button></Panel>}
+      </Panel>{problem.stages.length > 0 && <Panel title={tx('最近一次人工总结', 'Latest human conclusion')}><StageView stage={problem.stages.at(-1)!} problem={problem} refresh={resource.refresh} /><button class="text-button" type="button" onClick={() => navigate({ tab: 'stages' })}>{tx('查看历次阶段结论', 'View all stage conclusions')}</button></Panel>}
       <Panel title={tx('现在卡在哪里，下一步由谁处理', 'Blockers, responsibility and next steps')}><ProblemAttention key={`${problem.key}:${problem.brief.selectedRunId}`} problem={problem} selfId={context.session.researcherId ?? undefined}
         onTask={task => navigate({ tab: 'route', task: task.id, taskVersion: task.version, commit: task.commit ?? '' })}
         onFeedback={(id, task) => { navigate({ tab: 'discussion', feedback: id, task: task?.id ?? '', taskVersion: task?.version ?? '', commit: task?.commit ?? '' }); revealFeedback(id); }} /></Panel></>}
-    {selection.tab === 'route' && <><ResearchJourneyView key={`${problem.key}:${selection.run}`} runId={selection.run} projectId={problem.project?.id} /><Panel title={tx('当前尝试的证明路线', 'Proof route for the current attempt')}>
+    {selection.tab === 'route' && <section class="problem-route-workspace" data-problem-route-workspace>
+      <div class="problem-map-switch" role="group" aria-label={tx('路线视图', 'Route view')}>
+        <button type="button" data-problem-map="attempt" aria-pressed={selection.map === 'attempt'} onClick={() => navigate({ map: 'attempt' })}>{tx('当前尝试', 'Current attempt')}</button>
+        <button type="button" data-problem-map="global" aria-pressed={selection.map === 'global'} onClick={() => navigate({ map: 'global' })}>{tx('全局轨迹', 'Research journey')}</button>
+      </div>
+      {selection.map === 'global' ? <ResearchJourneyView runId={selection.run} projectId={problem.project?.id} focusedTask={selected}
+        onAttemptSelection={run => { if (run !== selection.run) runChoice(run); }}
+        onTaskSelection={({ runId, task }) => navigate({ run: runId, task: task.id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false)} />
+        : <Panel title={tx('当前尝试的证明路线', 'Proof route for the current attempt')}>
+
       {problem.brief.decisions.length > 0 && <div class="problem-decision-nav" data-problem-decision-nav><h3>{tx('人工决定', 'Human decisions')}</h3>{problem.brief.decisions.map(item => <button type="button" key={item.id} data-problem-select-decision={item.id} aria-pressed={selection.decision === item.id}
         onClick={() => navigate({ decision: item.id, task: '', taskVersion: '', commit: '' })}>{item.kind === 'plan-edit' ? tx('修改计划', 'Plan edit') : item.kind === 'plan-approval' ? tx('批准计划', 'Plan approval') : <Rich text={item.text} />}</button>)}</div>}
       <div data-problem-route-decision={decision?.id ?? ''}><SolutionRouteGraph model={{ ...problemSolutionRoute(problem.brief, locale), initial: selected ? `task:${selected.id}` : decision ? `decision:${decision.id}` : 'problem' }}
+      selection={selected && routeFocus?.token === `${selection.run}:${selected.id}:${selected.version}` ? routeFocus.node : selected ? `task:${selected.id}` : decision ? `decision:${decision.id}` : 'problem'}
       onSelect={id => { if (id.startsWith('task:')) selectTask(id.slice(5));
-        else if (id.startsWith('check:')) { const task = problem.brief.tasks.find(item => item.checks.some(check => `check:${check.id}` === id)); if (task) selectTask(task.id); }
+        else if (id.startsWith('check:')) { const task = problem.brief.tasks.find(item => item.checks.some(check => `check:${check.id}` === id)); if (task) selectTask(task.id, id); }
         else if (id.startsWith('decision:')) navigate({ decision: id.slice(9), task: '', taskVersion: '', commit: '' }, false);
-        else navigate({ task: '', taskVersion: '', commit: '' }, false); }} onOpen={id => { const task = problem.brief.tasks.find(item => item.id === id); if (task) location.assign(task.href); }} /></div>
+        else navigate({ task: '', taskVersion: '', commit: '' }, false); }} onOpen={id => { const task = problem.brief.tasks.find(item => item.id === id); if (task) { selectTask(id); setSourceKey(`${selection.run}:${task.id}:${task.version}`); } }} /></div>
       {selection.decision && !decision && <p role="status">{tx('当前记录中没有所选人工决定。', 'The selected human decision is absent from this record.')}</p>}
       {decision && <ProblemDecisionEvidence decision={decision} problem={problem} onTask={selectTask} />}
       {selected && <p class="problem-responsibility" data-problem-task-owners>{tx('当前负责', 'Recorded responsibility')}: {problemTaskOwners(problem, selected).map(owner => owner.name).join(' · ') || tx('尚未记录', 'Not assigned in this record')}</p>}
-      {selected && <div class="research-actions"><a class="button" href={selected.href}>{selected.commit ? tx('查看此版本源码', 'Open this source version') : tx('打开任务记录', 'Open task record')}</a><button class="button" type="button" onClick={() => navigate({ tab: 'discussion' })}>{tx('讨论这一步', 'Discuss this step')}</button>
+      {selected && <div class="research-actions">{selected.commit ? <button class="button" type="button" data-problem-open-source onClick={() => setSourceKey(`${selection.run}:${selected.id}:${selected.version}`)}>{tx('查看此版本源码', 'Open this source version')}</button> : <a class="button" href={selected.href}>{tx('打开任务记录', 'Open task record')}</a>}<button class="button" type="button" onClick={() => navigate({ tab: 'discussion' })}>{tx('讨论这一步', 'Discuss this step')}</button>
         {['lemma', 'goal'].includes(selected.kind) && selected.commit && <a class="button" href={`library.html?${new URLSearchParams({ run: selection.run, ...(problem.project ? { project: problem.project.id } : {}), task: selected.id, taskVersion: selected.version, commit: selected.commit })}`}>{tx('为这一步寻找可用引理', 'Find a lemma for this step')}</a>}</div>}
-      <ResearchInlineActions key={`${selection.run}:${selected?.id ?? ''}:${selected?.version ?? ''}`} problem={problem} task={selected} context={context} refresh={resource.refresh}
+      {selected && sourceKey === `${selection.run}:${selected.id}:${selected.version}` && <ResearchJourneyTaskSource runId={selection.run} projectId={problem.project?.id} task={selected} close={() => setSourceKey('')} />}
+      <ResearchInlineActions key={`${selection.run}:${selected?.id ?? ''}:${selected?.version ?? ''}`} problem={problem} task={selected} context={context} refresh={resource.refresh} focusAnnotationId={selection.annotation || undefined}
         onTask={(target, task) => navigate({ run: target.runId, tab: 'route', task: task.id, taskVersion: task.version, commit: '' })} />
-    </Panel></>}
+    </Panel>}
+    </section>}
     {selection.tab === 'compare' && <ProblemComparison problem={problem} selected={selection} choose={id => navigate({ compare: id })} onTask={selectTask} />}
     {selection.tab === 'discussion' && <><Panel title={tx('与这道题有关的对话', 'Conversations about this problem')}>
       {problem.conversations.map(conversation => <details key={conversation.id}><summary><Rich text={conversation.title} /> · {stamp(conversation.updatedAt)}</summary>{conversation.messages.map(message => <article class="problem-message" key={message.id}><p>{message.role === 'user' ? tx('你', 'You') : 'TheoremOS'} · <a href={message.href}>{tx('回到对话', 'Open conversation')}</a></p><RichProse text={message.text} /></article>)}</details>)}
       {!problem.conversations.length && <Empty>{tx('当前账号没有关联这道题的对话。', 'This account has no conversation attached to this problem.')}</Empty>}
     </Panel>{problem.project ? <Panel title={tx('协作讨论与决议', 'Collaboration and decisions')}><FeedbackWorkspace project={problem.project} selfId={context.session.researcherId ?? ''} runId={selection.run}
-      task={selected ? { runId: selection.run, taskId: selected.id, taskVersion: selected.version } : undefined} refresh={resource.refresh} browseTask={0} focus={focus} onRevealFeedback={revealFeedback} onOpenIssue={openIssue}
+      task={selected ? { runId: selection.run, taskId: selected.id, taskVersion: selected.version } : undefined} refresh={resource.refresh} browseTask={0} focus={focus} focusAnnotationId={selection.annotation || undefined} onRevealFeedback={revealFeedback} onOpenIssue={openIssue}
       onOpenTask={(target, task) => navigate({ run: target.runId, tab: 'route', task: task.id, taskVersion: task.version, commit: '' })}
       onOpenStatement={() => navigate({ tab: 'overview' })}>
       {problem.project.permissions.discuss && <Discussion project={problem.project} selfId={context.session.researcherId ?? ''} version={problem.project.versions.find(version => version.id === problem.project!.runs.find(run => run.runId === selection.run)?.statementVersionId)} refresh={resource.refresh} />}
     </FeedbackWorkspace><CollaborationIssues project={problem.project} selfId={context.session.researcherId ?? ''} request={issue} refresh={resource.refresh} onRevealFeedback={revealFeedback} /></Panel>
-      : <Panel title={tx('协作研究', 'Collaborative research')}><p>{tx('将这份运行关联到定理项目后，可在这里共同讨论、评审和记录决议。', 'Attach this run to a theorem project to discuss, review and record decisions here.')}</p><a class="button" href="theorems.html">{tx('选择或创建定理项目', 'Choose or create a theorem project')}</a></Panel>}</>}
-    {selection.tab === 'outcomes' && <><ResearchProblemBudget key={`${problem.key}:${selection.run}`} problem={problem} /><Panel title={tx('用量与研究成果', 'Usage and research outcomes')}><p>{formatTokens(problem.brief.usage.knownTokens)} {tx('已记录 Token', 'recorded tokens')} · {problem.brief.usage.missingEntries} {tx('条记录缺少用量', 'records without usage')}</p>
+      : <Panel title={tx('协作研究', 'Collaborative research')}><p>{tx('将这份运行关联到定理项目后，可在这里共同讨论、评审和记录决议。', 'Attach this run to a theorem project to discuss, review and record decisions here.')}</p><ProjectFromProblem problem={problem} onCreated={projectCreated} /><a class="button" href="theorems.html">{tx('选择或创建定理项目', 'Choose or create a theorem project')}</a></Panel>}</>}
+    {selection.tab === 'outcomes' && <><ResearchOutcomeDelivery problem={problem} context={context} onBrief={() => navigate({ tab: 'brief' })} /><LibraryTrialHistory context={context} runId={selection.run} /><ResearchProblemBudget key={`${problem.key}:${selection.run}`} problem={problem} /><Panel title={tx('用量与研究成果', 'Usage and research outcomes')}><p>{formatTokens(problem.brief.usage.knownTokens)} {tx('已记录 Token', 'recorded tokens')} · {problem.brief.usage.missingEntries} {tx('条记录缺少用量', 'records without usage')}</p>
       <div class="problem-table-scroll"><table class="problem-table"><thead><tr>{[tx('阶段', 'Stage'), tx('模型', 'Model'), 'Token', tx('金额估算', 'Estimated cost')].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{problem.brief.usage.entries.map(entry => <tr key={entry.id}><td><a href={entry.href}>{({ proof: tx('证明研究', 'Proof'), formalization: tx('形式化', 'Formalization'), explanation: tx('讲解', 'Explanation') })[entry.stage]}</a></td><td>{entry.model}</td><td>{entry.tokens === null ? tx('未记录', 'Not recorded') : formatTokens(entry.tokens)}</td><td>{entry.estimate ? `${entry.estimate.currency} ${entry.estimate.amount.toFixed(4)}` : '—'}</td></tr>)}</tbody></table></div>
       <p><a href={`workspace.html?tab=usage&run=${enc(selection.run)}`}>{tx('管理单价与完整账本', 'Manage rates and the complete ledger')}</a></p>
       <h3>{tx('已关联成果', 'Linked outcomes')}</h3>{problem.brief.outcomes.map(outcome => <p key={outcome.href}><a href={outcome.href}><Rich text={outcome.title} /></a><br /><code>{outcome.detail}</code></p>)}
@@ -187,13 +211,13 @@ function ProblemComparison({ problem, selected, choose, onTask }: { problem: Res
   </Panel>;
 }
 
-function StageView({ stage }: { stage: ResearchStageConclusion }) {
+function StageView({ stage, problem, refresh }: { stage: ResearchStageConclusion; problem: ResearchProblem; refresh(): void }) {
   return <article class="problem-stage" data-stage-id={stage.id}><header><h3><Rich text={stage.title} /></h3><time>{stamp(stage.createdAt)}</time></header>
     {[ [tx('已确认的结论', 'Confirmed conclusion'), stage.conclusion], [tx('适用条件与边界', 'Conditions and boundaries'), stage.boundaries], [tx('未解决的问题', 'Unresolved questions'), stage.unresolved], [tx('下一步', 'Next step'), stage.next] ].map(([label, text]) => text && <section key={label}><h4>{label}</h4><RichProse text={text} /></section>)}
-    <details><summary>{tx('定稿时的路线与证据', 'Frozen route and evidence')}</summary><p><code>{stage.evidenceDigest}</code></p><RichProse text={stage.snapshot.statement} /><p>{tx('独立验收记录', 'Recorded acceptance')}: {stage.snapshot.acceptance.status}</p>
+    <details><summary>{tx('定稿时的路线与证据', 'Frozen route and evidence')}</summary><p><code>{stage.evidenceDigest}</code></p><RichProse text={stage.snapshot.statement} /><p>{tx('独立验收记录', 'Recorded acceptance')}: {problemOutcomeLabel(stage.snapshot.acceptance.status, locale)}</p>
       <SolutionRouteGraph model={{ ...problemSolutionRoute(stage.snapshot, locale), id: `stage:${stage.id}` }} onOpen={id => { const task = stage.snapshot.tasks.find(item => item.id === id); if (task) location.assign(task.href); }} />
       {stage.snapshot.tasks.map(task => <p key={task.id}><Rich text={task.title} /> · <code>{task.version}</code>{task.commit && <> · <code>{task.commit}</code></>}{task.checks.map(check => <span key={check.id}> · {check.passed ? tx('检查通过', 'Check passed') : tx('检查未过', 'Check failed')} <code>{check.id}</code></span>)}</p>)}</details>
-    <a href={`problem.html?${new URLSearchParams({ run: stage.snapshot.selectedRunId, tab: 'route', ...(stage.projectId ? { project: stage.projectId } : {}) })}`}>{tx('查看所引用的运行', 'Open the referenced run')}</a>
+    <StageProjectReference stage={stage} project={problem.project} references={problem.collaboration?.issues} refresh={refresh} /><a href={`problem.html?${new URLSearchParams({ run: stage.snapshot.selectedRunId, tab: 'route', ...(stage.projectId ? { project: stage.projectId } : {}) })}`}>{tx('查看所引用的运行', 'Open the referenced run')}</a>
   </article>;
 }
 
@@ -215,5 +239,5 @@ function ProblemStages({ problem, context, refresh }: { problem: ResearchProblem
       <p class="research-status" role="status">{storageNotice || (draft.title || draft.conclusion ? tx('草稿已保存在此浏览器', 'Draft saved in this browser') : tx('定稿后保存在你的账号中', 'Saved to your account when finalized'))}</p>
       {changed && <p role="status">{tx('研究证据已有更新，文字草稿已保留。请核对路线与检查后继续。', 'Research evidence changed. Your text is preserved. Review the route and checks before continuing.')} <button type="button" class="text-button" onClick={() => setDraft(previous => ({ ...previous, evidenceDigest: problem.evidenceDigest }))}>{tx('已核对最新证据', 'I reviewed the latest evidence')}</button></p>}
       <MutationState action={action} /><button type="submit" class="button button-primary" disabled={action.busy || changed}>{tx('保存阶段结论', 'Save stage conclusion')}</button>
-    </form></Panel><Panel title={tx('历次阶段结论', 'Stage conclusion history')}>{problem.stages.slice().reverse().map(stage => <StageView key={stage.id} stage={stage} />)}{!problem.stages.length && <Empty>{tx('还没有人工定稿的阶段结论。', 'No human stage conclusion has been saved yet.')}</Empty>}</Panel></>;
+    </form></Panel><Panel title={tx('历次阶段结论', 'Stage conclusion history')}>{problem.stages.slice().reverse().map(stage => <StageView key={stage.id} stage={stage} problem={problem} refresh={refresh} />)}{!problem.stages.length && <Empty>{tx('还没有人工定稿的阶段结论。', 'No human stage conclusion has been saved yet.')}</Empty>}</Panel></>;
 }

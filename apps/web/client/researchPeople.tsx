@@ -82,7 +82,7 @@ export function PeoplePage({ context }: { context: ResearchContext }) {
         {directory.data?.nextOffset !== undefined && <button type="button" class="text-button" onClick={() => updateDirectory(queryDraft.trim(), field, directory.data!.nextOffset!)}>{tx('下一页', 'Next')}</button>}</div>
     </section> : <div class="research-content"><nav class="research-breadcrumb" aria-label={tx('返回目录', 'Back to directory')}><a href={directoryHref}>← {tx('返回数学家目录', 'Back to mathematicians')}</a></nav>
       <ErrorBox message={profile.error} />{own && profile.data && <section id="profile-updates" class="research-own-overview" data-own-research-overview>
-        <CollaborationInbox context={context} /><Notifications />
+        <CollaborationInbox context={context} />
         <Panel title={tx('继续最近的研究', 'Continue recent research')}>
           {[...profile.data.item.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 2).map(project => <a class="research-list-item" key={project.id} href={theoremHref(project.id)}>{project.title}</a>)}
           {!profile.data.item.projects.length && <p class="research-status">{tx('还没有研究，可以从定理页开始。', 'No projects yet. Start on the theorems page.')}</p>}
@@ -217,13 +217,4 @@ function FeedRow({ event }: { event: FeedEvent }) {
   const href = eventHref(event);
   return <article class="research-event"><div class="research-item-meta"><a href={personHref(event.actor.id)}>{event.actor.displayName}</a><time dateTime={event.createdAt}>{stamp(event.createdAt)}</time>
     {event.read === false && <span class="research-chip">{tx('未读', 'Unread')}</span>}</div><p>{href ? <a href={href}>{event.summary}</a> : event.summary}</p></article>;
-}
-function Notifications() {
-  const notifications = useResource<Items<FeedEvent>>(`${base}/notifications?limit=20`, 15000), action = useMutation();
-  const unread = notifications.data?.items.filter(item => !item.read).length ?? 0;
-  return <Panel title={tx(`需要关注的更新 · ${unread} 条未读`, `Updates for you · ${unread} unread`)} actions={unread > 0 && <button class="text-button" type="button" disabled={action.busy}
-    onClick={() => void action.run('POST', `${base}/notifications/read`, { through: new Date().toISOString() }, notifications.refresh)}>{tx('全部标为已读', 'Mark all as read')}</button>}>
-    <ErrorBox message={notifications.error} /><MutationState action={action} />{notifications.data?.items.map(event => <FeedRow key={event.id} event={event} />)}
-    {notifications.data && !notifications.data.items.length && <Empty>{tx('当前没有需要处理的更新。', 'You are up to date.')}</Empty>}
-  </Panel>;
 }

@@ -4,9 +4,10 @@ export type ResearchDraft<T = unknown> = { schema: 'theorem-os.human-draft.v1'; 
 type DraftStorage = Pick<Storage, 'length' | 'key' | 'getItem' | 'setItem' | 'removeItem'>;
 const prefix = 'theoremos:human-draft:v1:';
 export const researchDraftKey = (scope: ResearchDraftScope) => prefix + encodeURIComponent(JSON.stringify([
-  scope.owner, scope.projectId, scope.kind, scope.statementVersionId ?? '', scope.runId ?? '', scope.taskId ?? '',
+  scope.owner, scope.projectId ?? '', scope.kind, scope.statementVersionId ?? '', scope.runId ?? '', scope.taskId ?? '',
   scope.taskVersion ?? '', scope.commit ?? '', scope.issueId ?? '', scope.issueRevision ?? '', scope.sourceFeedbackId ?? '',
-...(scope.localRevision ? [scope.localRevision] : []),
+  ...(scope.threadId || scope.purpose ? [scope.threadId ?? '', scope.purpose ?? ''] : []),
+  ...(scope.localRevision ? [scope.localRevision] : []),
 ]));
 
 /** Exact owner and frozen source identities are part of the storage key, never inferred at restore time. */
@@ -19,14 +20,14 @@ export class ResearchDraftStore {
       if (!key?.startsWith(prefix)) continue;
       try {
         const item = JSON.parse(this.storage.getItem(key) ?? 'null') as ResearchDraft<T> | null;
-        if (item?.schema === 'theorem-os.human-draft.v1' && item.scope?.owner === owner && item.scope.projectId === projectId
+        if (item?.schema === 'theorem-os.human-draft.v1' && item.scope?.owner === owner && (item.scope.projectId ?? '') === projectId
           && item.scope.kind === kind && typeof item.updatedAt === 'string' && key === researchDraftKey(item.scope)) result.push(item);
       } catch { /* A damaged record does not prevent reading another saved draft. */ }
     }
     return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
   save<T>(scope: ResearchDraftScope, value: T, summary: string, accountRevision?: number): ResearchDraft<T> {
-    if (!scope.owner || !scope.projectId) throw new Error('Draft owner and project are required.');
+    if (!scope.owner || !scope.projectId && !scope.runId) throw new Error('Draft owner and project or run are required.');
     const item: ResearchDraft<T> = { schema: 'theorem-os.human-draft.v1', scope: { ...scope }, value, summary, updatedAt: new Date().toISOString(), ...(accountRevision !== undefined ? { accountRevision } : {}) };
     this.storage.setItem(researchDraftKey(scope), JSON.stringify(item)); return item;
   }

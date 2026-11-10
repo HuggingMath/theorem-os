@@ -6,7 +6,7 @@ import type { WebResearchProjects } from './researchProjects';
 import type { WebResearchWorkspace } from './researchWorkspace';
 import type { WebConversation } from './conversationTypes';
 import type { ResearchBrief } from './researchWorkspaceTypes';
-import type { ResearchProblem, ResearchStageConclusion } from './researchProblemTypes';
+import type { ResearchProblem, ResearchStageConclusion, ResearchStageReference } from './researchProblemTypes';
 import { researchStatementIdentity } from './client/researchOverviewModel';
 
 const stageSchema = z.object({ requestId: z.string().min(1).max(200), evidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -93,7 +93,35 @@ export class WebResearchProblems {
     }
     if (value.evidenceDigest !== result.evidenceDigest) throw new WebStorageError(409, '研究已有变化，请核对最新路线和检查记录后再定稿。');
     const stage: ResearchStageConclusion = { ...value, id: crypto.randomUUID(), createdAt: new Date().toISOString(),
+      author: (() => { const person = this.projects.profile(viewer, this.projects.identity(viewer)); return { id: person.id, displayName: person.displayName || 'Researcher' }; })(),
       snapshot: structuredClone(result.brief), ...(result.project ? { projectId: result.project.id } : {}) };
     this.storage.saveRecord(path, [...saved, stage]); return stage;
+  }
+  referenceStage(viewer: string, runId: string, stageId: string, value: unknown) {
+    const parsed = z.object({ requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), projectId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u),
+      title: z.string().trim().min(1).max(200).optional(), text: z.string().trim().min(1).max(4000).optional() }).strict().safeParse(value);
+    if (!parsed.success) throw new WebStorageError(400, '请选择项目并填写有效的议题内容。');
+    const input = parsed.data, result = this.locate(viewer, runId, input.projectId);
+    if (!result.project?.permissions.edit) throw new WebStorageError(403, '没有修改权限。');
+    const stage = this.stages(viewer, result).find(item => item.id === stageId && item.snapshot.selectedRunId === runId);
+    if (!stage || !this.visible(viewer, stage)) throw new WebStorageError(404, '阶段结论不存在。');
+    const binding = result.project.runs.find(item => item.runId === runId);
+    if (!binding?.permissions.read) throw new WebStorageError(404, '研究记录不存在。');
+    const author = stage.author ?? { id: this.projects.identity(viewer), displayName: 'Researcher' };
+    const snapshot = structuredClone(stage.snapshot);
+    const taskHref = (task: typeof snapshot.tasks[number]) => `problem.html?${new URLSearchParams({ project: input.projectId, run: runId, tab: 'route', task: task.id, taskVersion: task.version, ...(task.commit ? { commit: task.commit } : {}) })}`;
+    snapshot.runHref = `problem.html?${new URLSearchParams({ project: input.projectId, run: runId, tab: 'route' })}`;
+    snapshot.tasks = snapshot.tasks.map(task => ({ ...task, href: taskHref(task) }));
+    for (const decision of snapshot.decisions) for (const evidence of [decision.before, decision.after])
+      if (evidence) evidence.tasks = evidence.tasks.map(task => ({ ...task, href: taskHref(task) }));
+    // Explicitly sharing one stage never carries the author's other attempts or personal usage into a project.
+    snapshot.attempts = []; snapshot.outcomes = []; snapshot.usage = { knownTokens: 0, missingEntries: 0, entries: [] };
+    const reference: ResearchStageReference = { stageId: stage.id, author, createdAt: stage.createdAt, title: stage.title,
+      conclusion: stage.conclusion, boundaries: stage.boundaries, unresolved: stage.unresolved, next: stage.next,
+      evidenceDigest: stage.evidenceDigest, snapshot };
+    // The stored stage is the sole source of the frozen reference; clients cannot supply a replacement snapshot.
+    return this.projects.createIssue(viewer, input.projectId, { requestId: input.requestId,
+      expectedRevision: result.project.revision, title: input.title ?? stage.title,
+      text: input.text ?? '请基于这份阶段结论讨论下一步。', statementVersionId: binding.statementVersionId }, reference);
   }
 }

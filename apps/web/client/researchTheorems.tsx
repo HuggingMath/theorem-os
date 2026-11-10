@@ -206,7 +206,7 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
     {!runs.length && version && <div class="research-actions"><a class="button" data-project-start-research href={context.session.authenticated ? projectProblemDraftHref(project.id, version) : loginHref(projectProblemDraftHref(project.id, version))}>{tx('以此陈述开始研究', 'Research this statement')}</a></div>}
     {project.permissions.edit && version && <details><summary>{tx('关联我的研究运行', 'Attach one of my runs')}</summary><BindRun project={project} version={version} refresh={refresh} onBound={id => { setRunChoice(id); remember(version.id, id); }} /></details>}
   </Panel><Panel id="research-discussion" title={tx('讨论与人工反馈', 'Discussion and human feedback')} note={tx('按运行和节点查看投递、采纳及执行结果。有权限的成员可将讨论转为运行指导，保留原始建议与投递人。', 'Track delivery, decisions and execution by run and node. Authorized members can forward discussions as run guidance, retaining the original suggestion and sender.')}>
-    <FeedbackWorkspace project={project} selfId={context.session.researcherId ?? ''} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} onOpenStatement={openStatement} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback} onOpenIssue={feedback => openIssue(feedback.target, feedback.id, feedback.statementVersionId)}>
+    <FeedbackWorkspace project={project} selfId={context.session.researcherId ?? ''} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} onOpenStatement={openStatement} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback} focusAnnotationId={new URLSearchParams(location.search).get('annotation') ?? undefined} onOpenIssue={feedback => openIssue(feedback.target, feedback.id, feedback.statementVersionId)}>
       {project.permissions.discuss ? <Discussion project={project} selfId={context.session.researcherId ?? ''} version={version} refresh={refresh} /> : <Empty>{tx('当前账号只有查看权限。', 'This account has read access.')}</Empty>}
     </FeedbackWorkspace>
     {project.permissions.member && <CollaborationIssues project={project} selfId={context.session.researcherId ?? ''} request={issueRequest} refresh={refresh} onRevealFeedback={revealFeedback} />}
@@ -456,7 +456,7 @@ export function ProofSubmission({ project, projectId, selfId, binding, observati
     const submittedDraft = drafts.current();
     void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(projectId)}/feedback`, { kind: 'proof-submission', text,
       target: { runId: binding.runId, statementVersionId: binding.statementVersionId, observationRef: baseObservation, taskRef: { id: baseSource.taskId, version: baseSource.taskVersion } },
-      source, base: { commit: baseSource.commit, sourceDigest: baseSource.sourceDigest, environmentDigest: baseSource.environmentDigest, file: baseSource.file }, ...(revisionOf ? { revisionOf } : {}) }, result => { if (submittedDraft) drafts.remove(submittedDraft, true); refresh(); onSaved(result.item.id); });
+      source, base: { commit: baseSource.commit, sourceDigest: baseSource.sourceDigest, environmentDigest: baseSource.environmentDigest, file: baseSource.file }, ...(revisionOf ? { revisionOf } : {}) }, result => { if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'feedback', id: result.item.id }); refresh(); onSaved(result.item.id); });
   }}><label>{tx('选择带有源码快照的任务', 'Select a task with a source snapshot')}<select required value={choice} disabled={action.busy} onChange={event => pick(event.currentTarget.value)}>
     <option value="">{tx('选择任务', 'Choose a task')}</option>{stale && baseSource && <option value={choice}>{baseSource.taskId} · {baseSource.file} · {baseSource.taskVersion} · {t('草稿基准已过期')}</option>}
     {sources.map(item => <option key={identity(item)} value={identity(item)}>{item.taskId} · {item.file} · {item.taskVersion}</option>)}</select></label>
@@ -496,9 +496,9 @@ export function Discussion({ project, selfId, version, refresh }: { project: Res
     if (stale) return;
     if (text.length > 4000) { action.setError(t('讨论最多 4000 字符，请缩短后保存。')); return; }
     const submittedDraft = drafts.current(), submittedGeneration = generation.current;
-    void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback`,
-    { kind: 'discussion', text, visibility, ...(baseline.statementVersionId ? { statementVersionId: baseline.statementVersionId } : {}) }, () => {
-      if (submittedDraft) drafts.remove(submittedDraft, true);
+    void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(project.id)}/feedback`,
+    { kind: 'discussion', text, visibility, ...(baseline.statementVersionId ? { statementVersionId: baseline.statementVersionId } : {}) }, result => {
+      if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'feedback', id: result.item.id });
       if (generation.current === submittedGeneration) { setText(''); generation.current++; }
       refresh();
     }); }}>

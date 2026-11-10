@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
 import { compressible, precompressed } from '../apps/web/staticFiles';
 import { buildWorkbenchClassics } from './build-workbench-classics';
@@ -50,6 +52,26 @@ fs.copyFileSync(path.join(root, 'node_modules/diff/LICENSE'), path.join(output, 
 fs.copyFileSync(path.join(root, 'docs/assets/licenses/gsap-NOTICE.txt'), path.join(output, 'assets/licenses/gsap-NOTICE.txt'));
 fs.copyFileSync(path.join(root, 'LICENSE'), path.join(output, 'LICENSE.txt'));
 const classics = await buildWorkbenchClassics(root, output);
+const buildDigest = crypto.createHash('sha256');
+// Identify the complete shipped frontend, including page text, fonts and classic records.
+// Compression and the derived identity file do not change the content identity.
+for (const name of fs.readdirSync(output, { recursive: true, encoding: 'utf8' }).sort()) {
+  const file = path.join(output, name);
+  if (name === 'build-info.json' || name.endsWith('.br') || !fs.statSync(file).isFile()) continue;
+  buildDigest.update(name).update('\0').update(fs.readFileSync(file)).update('\0');
+}
+const digest = buildDigest.digest('hex');
+let commit: string | undefined, modified = false;
+try {
+  const value = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  if (/^[a-f0-9]{40}$/u.test(value)) commit = value;
+  modified = Boolean(execFileSync('git', ['status', '--porcelain', '--untracked-files=normal', '--', 'apps/web', 'scripts/build-web.ts'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+} catch { /* Container builds may omit Git; the frontend digest still identifies the built bytes. */ }
+fs.writeFileSync(path.join(output, 'build-info.json'), JSON.stringify({ schema: 'theorem-os.web-build.v1', builtAt: new Date().toISOString(), digest, ...(commit ? { commit } : {}), ...(modified ? { modified: true } : {}) }));
+for (const name of fs.readdirSync(output).filter(name => name.endsWith('.html'))) {
+  const file = path.join(output, name), html = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(file, html.replace('</head>', `<meta name="theoremos-build" content="${digest}"></head>`));
+}
 // Brotli at the maximum quality once here, so the server sends the smaller form without paying for it per request.
 for (const file of fs.readdirSync(output, { recursive: true, encoding: 'utf8' }).map(name => path.join(output, name))) {
   if (file.endsWith('.br') || !fs.statSync(file).isFile()) continue;

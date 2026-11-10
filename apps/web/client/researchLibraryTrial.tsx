@@ -3,7 +3,7 @@ import type { ResearchAssetRelease, ResearchCheckedMathExample } from '../resear
 import type { ResearchLibraryTrial, ResearchLibraryTrialTarget } from '../researchLibraryTrialTypes';
 import { localizeMessage } from '../i18n';
 import { Rich, RichProse } from './richText';
-import { LibraryTrialProposal } from './researchLibraryProposal';
+import { LibraryTrialProposal, PersonalTrialAttempt } from './researchLibraryProposal';
 import { CheckedMathExamples } from './researchMathUsage';
 import { base, enc, ErrorBox, Field, MutationState, tx, useMutation, useResource, type Item, type Items, type ResearchContext } from './researchShared';
 
@@ -54,6 +54,7 @@ function TrialForm({ release }: { release: ResearchAssetRelease }) {
   };
   return <><CheckedMathExamples release={release} load={loadExample} /><details class="research-library-trial" open={open} onToggle={event => setOpen(event.currentTarget.open)} data-library-trial>
     <summary>{tx('在研究目标中试用', 'Try on a research goal')}</summary>
+    <p><a class="research-inline-link" href={`workspace.html?${new URLSearchParams({ tab: 'trials', asset: release.assetId })}`}>{tx('查看这个成果的试用记录', 'View your trials with this release')}</a></p>
     <p>{tx('选定任务和声明，写出参数与前提，再填写 Lean 候选调用。审阅完整候选后，由你确认独立检查。', 'Choose a task and declaration, identify its arguments and premises, then write a Lean candidate. Review the complete candidate before confirming an independent check.')}</p>
     {loadedExample && <p role="status" data-math-example-loaded>{tx('已载入示例：', 'Loaded example: ')}{loadedExample} · {tx('请按当前任务调整参数和证明体，再准备检查。', 'Adapt the arguments and proof to the current task, then prepare a check.')}</p>}
     <ErrorBox message={targets.error} />{targets.error && <button class="text-button" type="button" onClick={targets.refresh}>{tx('重新读取目标', 'Reload goals')}</button>}
@@ -103,7 +104,7 @@ function TrialForm({ release }: { release: ResearchAssetRelease }) {
           expectedDigest: draft.digest, confirmed: true,
         }, result => setPrepared({ input, item: result.item }))}>{check.busy ? tx('正在独立检查…', 'Checking independently…') : tx('确认并独立检查', 'Confirm and check independently')}</button></>}
       <MutationState action={check} />{draft.check && <TrialReceipt trial={draft} />}
-      {draft.status === 'passed' && <LibraryTrialProposal key={draft.digest} trial={draft} />}
+      {draft.status === 'passed' && <><PersonalTrialAttempt key={`personal:${draft.digest}`} trial={draft} /><LibraryTrialProposal key={draft.digest} trial={draft} /></>}
       <p class="research-field-note">{tx('试用只检查这份候选目标。原研究的题目、源码、任务状态和完整验收结果均保留原记录。', 'This trial checks the candidate goal. The original problem, source, task status and full acceptance records remain as recorded.')}</p>
     </section>}
   </details></>;

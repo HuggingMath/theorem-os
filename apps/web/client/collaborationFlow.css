@@ -4,6 +4,13 @@
 .collaboration-inbox>header p{color:var(--muted);margin:5px 0 0}
 .collaboration-filter{display:flex;gap:8px;flex-wrap:wrap;margin:15px 0}
 .collaboration-filter [aria-pressed=true]{background:var(--accent-soft);color:var(--blue)}
+.collaboration-more-filter{display:flex;align-items:center;margin:0}
+.collaboration-more-filter select{width:auto;min-height:36px;max-width:100%;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 9px}
+.collaboration-inbox>header>span>.text-button{margin-inline-start:12px}
+.collaboration-message-summary>div{display:flex;gap:12px 24px;flex-wrap:wrap;margin-bottom:10px}
+.collaboration-message-summary>div>a{display:flex;gap:7px;align-items:baseline;text-decoration:none}
+.collaboration-message-summary strong{font-size:22px;font-weight:500}
+.collaboration-message-summary>div>a>span{color:var(--muted);font-size:12px}
 .collaboration-inbox-item,.collaboration-request,.collaboration-issue{padding:16px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
 .collaboration-meta{display:flex;gap:7px 14px;flex-wrap:wrap;color:var(--muted);font-size:12px}
 .collaboration-inbox-copy p,.collaboration-context p{margin:8px 0}
@@ -29,3 +36,9 @@
 .collaboration-review > p { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
 .collaboration-review select { width: 100%; min-width: 0; }
 .collaboration-review .research-form { max-width: 100%; }
+.research-stage-reference-control{margin-block:14px}
+.collaboration-stage-reference{margin:16px 0;padding:14px 18px;border-inline-start:2px solid var(--blue);background:var(--surface);min-width:0}
+.collaboration-stage-reference h5{font-size:14px;margin:0 0 7px}
+.collaboration-stage-reference h6{font-size:12px;color:var(--muted);margin:14px 0 4px}
+.collaboration-stage-reference header p{margin-top:0;color:var(--muted);font-size:12px}
+.collaboration-stage-reference code{overflow-wrap:anywhere;white-space:normal}

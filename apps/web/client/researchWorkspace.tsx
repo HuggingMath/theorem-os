@@ -2,6 +2,7 @@ import { statementConfirmation } from '../presentation';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ResearchBrief, ResearchSearchKind, ResearchSearchResult, ResearchTokenRate, ResearchUsageLedger } from '../researchWorkspaceTypes';
 import type { ResearchBookmarkTarget } from '../researchCollectionTypes';
+import { workbenchReturn } from '../shared';
 import { locale } from '../i18n';
 import { formatTokens, readableDuration } from '../presentation';
 import { Rich, RichProse } from './richText';
@@ -12,13 +13,15 @@ import { downloadResearchFile, researchBriefMarkdown } from './researchBriefExpo
 import { loadMath } from './mathAssets';
 import { ResearchHistoryReader } from './researchHistory';
 import { PersonalDraftsPanel } from './researchPersonal';
+import { LibraryTrialHistory } from './researchLibraryTrialHistory';
+import { ProductStatusPanel } from './productStatus';
 import { base, enc, Empty, ErrorBox, MutationState, nameOf, Panel, State, stamp, tx, useMutation, useResource,
   type Item, type ResearchContext } from './researchShared';
 
 const tabs = {
   inbox: tx('我的待办', 'My inbox'), search: tx('全局搜索', 'Search'), usage: tx('用量账本', 'Usage'),
   brief: tx('研究简报', 'Research briefs'), collections: tx('专题资料夹', 'Collections'),
-  drafts: tx('账号草稿', 'Account drafts'),
+  drafts: tx('账号草稿', 'Account drafts'), trials: tx('Library 试用', 'Library trials'), help: tx('帮助与版本', 'Help and version'),
 } as const;
 type Tab = keyof typeof tabs;
 const readTab = (): Tab => {
@@ -32,31 +35,41 @@ const kinds: Record<ResearchSearchKind, string> = {
 };
 export function WorkspacePage({ context }: { context: ResearchContext }) {
   const [tab, setTab] = useState<Tab>(readTab);
+  const navigation = useRef<HTMLElement>(null);
   useEffect(() => {
     const back = () => setTab(readTab()); window.addEventListener('popstate', back);
     return () => window.removeEventListener('popstate', back);
   }, []);
+  useEffect(() => {
+    const nav = navigation.current, selected = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !selected) return;
+    const bounds = nav.getBoundingClientRect(), current = selected.getBoundingClientRect();
+    if (current.left < bounds.left) nav.scrollLeft += current.left - bounds.left;
+    else if (current.right > bounds.right) nav.scrollLeft += current.right - bounds.right;
+  }, [tab]);
   useEffect(() => { if (location.hash === '#asset-updates') requestAnimationFrame(() => document.getElementById('asset-updates')?.scrollIntoView({ block: 'start' })); }, [tab]);
   const choose = (next: Tab) => {
     const url = new URL(location.href); url.searchParams.set('tab', next); url.hash = '';
     history.pushState(null, '', url); setTab(next);
   };
+  const loginParameters = new URLSearchParams(location.search);
+  loginParameters.set('returnTo', 'workspace'); loginParameters.set('tab', tab); loginParameters.set('lang', locale);
   return <div class="workspace-page" data-workspace-page>
     <header class="workspace-heading"><div><p class="research-eyebrow">TheoremOS</p><h1>{tx('我的研究空间', 'My research space')}</h1>
       <p>{tx('接着处理待办，找回线索，整理研究结果。', 'Pick up a task, find a lead, or bring your research together.')}</p></div>
       <div class="research-actions"><a class="button" href={`practice.html?lang=${locale}`}>{tx('参与演练', 'Try the practice')}</a><a class="button button-primary" href="./">{tx('开始研究', 'Start research')}</a></div>
     </header>
-    <nav class="workspace-tabs" aria-label={tx('个人研究工具', 'Personal research tools')}>
+    <nav ref={navigation} class="workspace-tabs" aria-label={tx('个人研究工具', 'Personal research tools')}>
       {Object.entries(tabs).map(([id, label]) => <a key={id} href={`workspace.html?tab=${id}`} aria-current={tab === id ? 'page' : undefined}
         onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); choose(id as Tab); }}>{label}</a>)}
     </nav>
-    {!context.session.authenticated ? <Panel title={tx('登录后继续你的研究', 'Sign in to continue your research')}>
+    {tab === 'help' ? <ProductStatusPanel /> : !context.session.authenticated ? <Panel title={tx('登录后继续你的研究', 'Sign in to continue your research')}>
       <p>{tx('待办、搜索、用量和资料夹保存在你的账号中。', 'Your inbox, search, usage and collections belong to your account.')}</p>
-      <div class="research-actions"><a class="button button-primary" href={`login.html?returnTo=workspace&tab=${tab}&lang=${locale}`}>{tx('登录', 'Sign in')}</a>
+      <div class="research-actions"><a class="button button-primary" href={`login.html${workbenchReturn(loginParameters.toString())}`}>{tx('登录', 'Sign in')}</a>
         <a href={`practice.html?lang=${locale}`}>{tx('先体验一次完整参与流程', 'Try the participation flow first')}</a></div></Panel>
       : <div class="workspace-content" key={tab}>{tab === 'inbox' ? <><CollaborationInbox context={context} /><AssetUpdatesPanel context={context} /></>
         : tab === 'search' ? <WorkspaceSearch context={context} /> : tab === 'usage' ? <WorkspaceUsage context={context} />
-          : tab === 'brief' ? <WorkspaceBrief context={context} /> : tab === 'drafts' ? <PersonalDraftsPanel context={context} /> : <><SaveIncomingTarget context={context} /><CollectionsPanel context={context} /></>}</div>}
+          : tab === 'brief' ? <WorkspaceBrief context={context} /> : tab === 'drafts' ? <PersonalDraftsPanel context={context} /> : tab === 'trials' ? <LibraryTrialHistory context={context} /> : <><SaveIncomingTarget context={context} /><CollectionsPanel context={context} /></>}</div>}
   </div>;
 }
 function SaveIncomingTarget({ context }: { context: ResearchContext }) {

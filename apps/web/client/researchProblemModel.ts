@@ -5,6 +5,17 @@ import type { ResearchProblem, ResearchRouteComparison } from '../researchProble
 const state = (task: ResearchBriefTask): SolutionRouteStatus => task.checks.some(check => check.passed) ? 'passed'
   : task.proofStatus === 'conditional' ? 'conditional' : task.proofStatus === 'failed' || task.checks.some(check => !check.passed) ? 'failed'
     : ['working', 'running'].includes(task.status) ? 'running' : ['completed', 'integrated', 'done'].includes(task.status) ? 'recorded' : 'pending';
+export function problemOutcomeLabel(value: string, language: 'zh' | 'en'): string {
+  const tx = (zh: string, en: string) => language === 'en' ? en : zh;
+  const labels: Record<string, string> = {
+    evaluated_passed: tx('完整原题验收通过', 'Full problem accepted'), evaluated_failed: tx('验收未通过', 'Acceptance failed'),
+    evaluated_rejected: tx('验收未通过', 'Acceptance failed'), limit_reached: tx('达到预算后结束', 'Stopped at the budget limit'),
+    incomplete: tx('仍有待证步骤', 'Proof steps remain'), 'not-assessed': tx('尚无独立验收记录', 'No independent acceptance recorded'),
+    queued: tx('排队中', 'Queued'), running: tx('研究中', 'Researching'), completed: tx('本次研究已结束', 'This attempt has finished'),
+    cancelled: tx('已取消', 'Cancelled'), error: tx('运行出错', 'Run error'), failed: tx('未能完成', 'Failed to finish'),
+  };
+  return labels[value] ?? value;
+}
 export function problemSolutionRoute(brief: ResearchBrief, language: 'zh' | 'en'): SolutionRoute {
   const tx = (zh: string, en: string) => language === 'en' ? en : zh;
   const model = buildSolutionRoute({ id: `problem:${brief.selectedRunId}`, title: brief.title, locale: language,
@@ -33,8 +44,8 @@ export function problemSolutionRoute(brief: ResearchBrief, language: 'zh' | 'en'
           ...(decision.execution ? [{ title: tx('执行', 'Execution'), text: decision.execution }] : []),
           ...(decision.evidenceRefs.length ? [{ title: tx('引用证据', 'Referenced evidence'), text: decision.evidenceRefs.join('\n'), code: true }] : []) ] }))],
     outcome: { id: 'acceptance', kind: 'acceptance', status: brief.accepted ? 'passed' : 'pending',
-      title: tx('独立验收', 'Independent acceptance'), summary: brief.accepted ? tx('Lean 陈述证明通过', 'Lean statement accepted') : brief.status,
-      sections: [{ title: tx('保存的验收状态', 'Recorded acceptance status'), text: brief.acceptance.status }] },
+      title: tx('独立验收', 'Independent acceptance'), summary: brief.accepted ? tx('Lean 陈述证明通过', 'Lean statement accepted') : problemOutcomeLabel(brief.status, language),
+      sections: [{ title: tx('保存的验收状态', 'Recorded acceptance status'), text: problemOutcomeLabel(brief.acceptance.status, language) }] },
     partial: !brief.tasks.length });
   for (const route of brief.routes) {
     const add = (from: string, to: string, kind: 'dependency' | 'integration') => {

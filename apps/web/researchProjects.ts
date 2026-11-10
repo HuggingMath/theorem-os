@@ -16,6 +16,7 @@ import type {
   ResearchAnnotation, ResearchAnnotationAnchor, ResearchAnnotationContext, ResearchAnnotationPage,
 } from './researchProjectTypes';
 import type { ResearchLibraryCandidateAttachment } from './researchLibraryTrialTypes';
+import type { ResearchStageReference } from './researchProblemTypes';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u);
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -98,7 +99,7 @@ type StoredProject = {
 type AssetContribution = { assetId: string; version: string; visibility: 'private' | 'public';
   contribution: ResearchContribution; activity: ResearchActivity };
 type OwnerState = { owner: string; profile?: ResearcherProfile; follows: { kind: 'person' | 'theorem'; id: string }[];
-  notificationThrough?: string; inbox?: Record<string, { read?: boolean; processed?: boolean }>;
+  notificationThrough?: string; inbox?: Record<string, { read?: boolean; processed?: boolean; revision?: number }>;
   assetContributions?: AssetContribution[]; annotations?: ResearchAnnotation[]; requests: Requests };
 
 /** Owns collaboration facts and permissions. Runtime control remains behind the existing host command protocol. */
@@ -168,7 +169,7 @@ export class WebResearchProjects {
     if (current !== expected) throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
   }
   private event(stored: StoredProject, viewer: string, type: string, summary: string,
-    refs: Pick<ResearchActivity, 'feedbackId' | 'statementVersionId' | 'runId'> = {}) {
+    refs: Pick<ResearchActivity, 'feedbackId' | 'statementVersionId' | 'runId' | 'annotationId'> = {}) {
     const event: ResearchActivity = { id: crypto.randomUUID(), sequence: (stored.activity.at(-1)?.sequence ?? 0) + 1,
       projectId: stored.project.id, actor: this.author(viewer), type, summary, ...refs, createdAt: now() };
     stored.activity.push(event); return event;
@@ -333,12 +334,12 @@ export class WebResearchProjects {
     this.event(stored, viewer, 'membership-updated', input.role ? '更新研究成员' : '撤销研究成员');
     this.remember(stored, viewer, operation, input); this.save(stored); return this.detail(viewer, projectId);
   }
-  addVersion(viewer: string, projectId: string, value: unknown): ResearchProjectDetail {
+  addVersion(viewer: string, projectId: string, value: unknown, options?: { preserveSource?: boolean }): ResearchProjectDetail {
     const stored = this.writable(viewer, projectId), input = parse(versionSchema, value) as ResearchStatementInput;
     if (this.request(stored, viewer, 'version', input)) return this.detail(viewer, projectId);
     this.compare(stored.project.revision, input.expectedRevision);
     const { requestId, expectedRevision: _expected, ...statement } = input;
-    const source = input.formalizationId ? input.source : input.source.trim();
+    const source = input.formalizationId || options?.preserveSource ? input.source : input.source.trim();
     const version: ResearchStatementVersion = { ...statement, source,
       id: `version-${mathDigest(`${this.identity(viewer)}:${requestId}`).slice(0, 32)}`,
       sourceDigest: mathDigest(source), author: this.author(viewer), createdAt: now() };
@@ -631,7 +632,7 @@ export class WebResearchProjects {
       }
     }
     (scope.state.annotations ??= []).push(record);
-    if (scope.stored) this.event(scope.stored, viewer, 'annotation-created', '标注具体推导或源码片段', { runId, ...(input.feedbackId ? { feedbackId: input.feedbackId } : {}) });
+    if (scope.stored) this.event(scope.stored, viewer, 'annotation-created', '标注具体推导或源码片段', { runId, annotationId: record.id, ...(input.feedbackId ? { feedbackId: input.feedbackId } : {}) });
     this.remember(scope.state, viewer, `annotation:${runId}`, input, record.id); scope.save(); return clone(record);
   }
   updateAnnotation(viewer: string, projectId: string | undefined, runId: string, annotationId: string, value: unknown): ResearchAnnotation {
@@ -655,7 +656,11 @@ export class WebResearchProjects {
       if (input.action === 'resolve') record.resolution = { actor: this.author(viewer), ...(input.text ? { text: input.text } : {}), createdAt: at };
       else record.resolution = undefined;
     }
+    record.lastAction = { action: input.action, actor: this.author(viewer), createdAt: at };
     record.revision++; record.updatedAt = at;
+    if (scope.stored) this.event(scope.stored, viewer, `annotation-${input.action === 'reply' ? 'replied' : input.action === 'resolve' ? 'resolved' : 'reopened'}`,
+      input.action === 'reply' ? '回应具体推导或源码批注' : input.action === 'resolve' ? '解决一条片段批注' : '重新打开一条片段批注',
+      { runId, annotationId: record.id, ...(record.feedbackId ? { feedbackId: record.feedbackId } : {}) });
     this.remember(scope.state, viewer, operation, input, record.id); scope.save(); return clone(record);
   }
   addReviewComment(viewer: string, projectId: string, feedbackId: string, value: unknown): ResearchFeedback {
@@ -1267,10 +1272,12 @@ export class WebResearchProjects {
     record.status = input.action === 'accept' ? 'accepted' : input.action === 'decline' ? 'declined' : 'cancelled';
     record.revision++; record.updatedAt = now(); this.remember(stored, viewer, operation, input, record.id); this.save(stored); return clone(record);
   }
-  createIssue(viewer: string, projectId: string, value: unknown): ResearchIssue {
+  createIssue(viewer: string, projectId: string, value: unknown, stageReference?: ResearchStageReference): ResearchIssue {
     const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, title: nonempty(200), text: nonempty(4000),
       target: targetSchema.optional(), statementVersionId: id.optional(), sourceFeedbackId: id.optional() }).strict(), value) as ResearchMutation & { title: string; text: string; target?: ResearchFeedbackTarget; statementVersionId?: string; sourceFeedbackId?: string };
-    const state = this.collaborationState(stored), previous = this.request(stored, viewer, 'issue', input);
+    const { expectedRevision: _expected, ...issueInput } = input;
+    const receiptInput = stageReference ? { ...issueInput, stageReference } : input;
+    const state = this.collaborationState(stored), previous = this.request(stored, viewer, 'issue', receiptInput);
     if (previous) return clone(state.issues.find(item => item.id === previous.resultId)!);
     this.compare(stored.project.revision, input.expectedRevision);
     if (input.target) this.validateIssueTarget(viewer, stored, input.target);
@@ -1285,8 +1292,9 @@ export class WebResearchProjects {
     }
     const at = now(), issue: ResearchIssue = { id: crypto.randomUUID(), projectId, author: this.author(viewer), title: input.title, text: input.text,
       target: input.target, statementVersionId: input.statementVersionId ?? input.target?.statementVersionId, sourceFeedbackId: input.sourceFeedbackId,
+      ...(stageReference ? { stageReference: clone(stageReference) } : {}),
       status: 'open', replies: [], revision: 0, createdAt: at, updatedAt: at };
-    state.issues.push(issue); this.remember(stored, viewer, 'issue', input, issue.id); this.save(stored); return clone(issue);
+    state.issues.push(issue); this.remember(stored, viewer, 'issue', receiptInput, issue.id); this.save(stored); return clone(issue);
   }
   replyIssue(viewer: string, projectId: string, issueId: string, value: unknown): ResearchIssue {
     const stored = this.readable(viewer, projectId), input = parse(z.object({ ...mutation, text: nonempty(4000),
@@ -1320,9 +1328,13 @@ export class WebResearchProjects {
   }
   collaborationInbox(viewer: string): ResearchCollaborationInbox {
     const self = this.authenticated(viewer), owner = this.ownerState(viewer), items: ResearchInboxItem[] = [], projects = this.all();
-    const add = (stored: StoredProject, item: Omit<ResearchInboxItem, 'projectId' | 'projectTitle' | 'read' | 'processed'>) => {
-      const mark = owner.inbox?.[item.id];
-      items.push({ ...item, projectId: stored.project.id, projectTitle: stored.project.title, read: mark?.read ?? false, processed: mark?.processed ?? false });
+    const add = (stored: StoredProject, item: Omit<ResearchInboxItem, 'projectId' | 'projectTitle' | 'read' | 'processed' | 'category'> & Partial<Pick<ResearchInboxItem, 'read' | 'category'>>) => {
+      const saved = owner.inbox?.[item.id], revision = item.invitation?.revision ?? item.handoff?.revision;
+      const mark = saved && (saved.revision === undefined || saved.revision === revision) ? saved : undefined;
+      const category = item.category ?? (item.resolved || ['update', 'claim'].includes(item.kind) ? 'progress'
+        : ['reply', 'needs-info', 'annotation'].includes(item.kind) ? 'reply' : 'decision');
+      items.push({ ...item, category, projectId: stored.project.id, projectTitle: stored.project.title,
+        read: mark?.read ?? item.read ?? false, processed: mark?.processed ?? false });
     };
     const href = (stored: StoredProject, target?: ResearchFeedbackTarget, anchor = '', statementVersionId?: string) => `theorems.html?${new URLSearchParams({ id: stored.project.id,
       ...(target ? { run: target.runId, version: target.statementVersionId, ...(target.taskRef ? { task: target.taskRef.id, taskVersion: target.taskRef.version } : {}) } : statementVersionId ? { version: statementVersionId } : {}) })}${anchor}`;
@@ -1331,12 +1343,16 @@ export class WebResearchProjects {
       for (const invitation of state.invitations) if (invitation.recipient.id === self || invitation.author.id === self) {
         // Pending invitees see only the title, sender and invitation, never private project data or task identities.
         add(stored, { id: `invitation:${invitation.id}`, kind: invitation.kind, title: invitation.note, createdAt: invitation.updatedAt,
+          category: invitation.status === 'pending' && invitation.recipient.id === self ? 'decision' : 'progress',
+          read: invitation.status === 'pending' && invitation.author.id === self,
           resolved: invitation.status !== 'pending', invitation: clone(invitation), href: invitation.status === 'accepted' || access.visible ? href(stored, undefined, '#collaboration-members') : '' });
       }
       if (!access.visible) continue;
       for (const handoff of state.handoffs) if (access.member && (handoff.recipient.id === self || handoff.author.id === self)
         && this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === handoff.target.runId)))
         add(stored, { id: `handoff:${handoff.id}`, kind: 'handoff', title: handoff.note, createdAt: handoff.updatedAt,
+          category: handoff.status === 'pending' && handoff.recipient.id === self ? 'decision' : 'progress',
+          read: handoff.status === 'pending' && handoff.author.id === self,
           handoff: clone(handoff), resolved: handoff.status !== 'pending', href: href(stored, handoff.target, '#collaboration-task-workspace') });
       for (const claim of stored.assignments ?? []) if (access.member && claim.author.id === self && claim.status !== 'released'
         && this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === claim.target.runId)))
@@ -1357,28 +1373,71 @@ export class WebResearchProjects {
           add(stored, { id: `reply:${last.id}`, kind: 'reply', title: issue.title, text: last.text, createdAt: last.createdAt,
             resolved: issue.status === 'resolved', href: href(stored, issue.target, `#issue-${issue.id}`) });
       }
+      const visibleFeedback = this.visibleFeedback(viewer, stored);
+      for (const annotation of stored.annotations ?? []) {
+        if (!this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === annotation.target.runId))) continue;
+        const feedback = annotation.feedbackId ? visibleFeedback.find(item => item.id === annotation.feedbackId) : undefined;
+        if (annotation.feedbackId && !feedback) continue;
+        const lastReply = annotation.replies.at(-1), last: { actor: ResearchAuthor; createdAt: string; action: 'create' | 'reply' | 'resolve' | 'reopen' } = annotation.lastAction ?? (annotation.resolution
+          ? { actor: annotation.resolution.actor, createdAt: annotation.resolution.createdAt, action: 'resolve' }
+          : lastReply ? { actor: lastReply.author, createdAt: lastReply.createdAt, action: 'reply' } : { actor: annotation.author, createdAt: annotation.createdAt, action: 'create' });
+        if (last.actor.id === self) continue;
+        const involved = access.manage || annotation.author.id === self || annotation.replies.some(reply => reply.author.id === self)
+          || feedback?.author.id === self || feedback?.review?.reviewer.id === self || stored.assignments?.some(claim => claim.author.id === self
+            && claim.status === 'claimed' && claim.target.runId === annotation.target.runId
+            && canonicalMathJson(claim.target.taskRef) === canonicalMathJson(annotation.target.taskRef));
+        if (!involved) continue;
+        const query = new URLSearchParams({ project: stored.project.id, run: annotation.target.runId, tab: 'route', annotation: annotation.id,
+          ...(annotation.target.taskRef ? { task: annotation.target.taskRef.id, taskVersion: annotation.target.taskRef.version } : {}),
+          ...(annotation.feedbackId ? { feedback: annotation.feedbackId } : {}) });
+        add(stored, { id: `annotation:${annotation.id}:${annotation.revision}`, kind: 'annotation', annotationAction: last.action, title: annotation.text,
+          text: last.action === 'resolve' ? annotation.resolution?.text : last.action === 'reopen' ? undefined : lastReply?.text,
+          createdAt: last.createdAt, resolved: annotation.status === 'resolved', href: `problem.html?${query}#${annotation.id}` });
+      }
     }
     for (const notification of this.notifications(viewer, { limit: 100 }).items) {
       const stored = projects.find(item => item.project.id === notification.projectId); if (!stored) continue;
       const feedback = stored.feedback.find(item => item.id === notification.feedbackId);
       const linked = new URL(href(stored, feedback?.target, notification.feedbackId ? `#feedback-${notification.feedbackId}` : ''), 'http://localhost');
       if (!feedback?.target && (feedback?.statementVersionId ?? notification.statementVersionId)) linked.searchParams.set('version', (feedback?.statementVersionId ?? notification.statementVersionId)!);
-      add(stored, { id: `update:${notification.id}`, kind: 'update', title: notification.summary, createdAt: notification.createdAt, resolved: false,
-        href: `theorems.html${linked.search}${linked.hash}` });
+      add(stored, { id: `update:${notification.id}`, kind: 'update', title: feedback?.text ?? notification.summary,
+        text: notification.type === 'feedback-decided' ? feedback?.decision.reason : undefined, createdAt: notification.createdAt, resolved: false,
+        read: notification.read, href: `theorems.html${linked.search}${linked.hash}` });
     }
     items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return { items, unread: items.filter(item => !item.read).length, pending: items.filter(item => !item.processed && !item.resolved).length };
+    const actionable = (item: ResearchInboxItem) => !item.processed && !item.resolved && item.category !== 'progress';
+    return { items, unread: items.filter(item => !item.read).length, pending: items.filter(actionable).length,
+      counts: { decision: items.filter(item => item.category === 'decision' && actionable(item)).length,
+        reply: items.filter(item => item.category === 'reply' && actionable(item)).length,
+        progress: items.filter(item => item.category === 'progress' && !item.read).length } };
   }
   markCollaborationItem(viewer: string, itemId: string, value: unknown): ResearchCollaborationInbox {
     const input = parse(z.object({ requestId: id, action: z.enum(['read', 'unread', 'done', 'reopen']) }).strict(), value) as { requestId: string; action: 'read' | 'unread' | 'done' | 'reopen' }, state = this.ownerState(viewer);
     this.authenticated(viewer);
     const operation = `inbox:${itemId}`;
     if (this.request(state, viewer, operation, input)) return this.collaborationInbox(viewer);
-    if (!this.collaborationInbox(viewer).items.some(item => item.id === itemId)) throw new WebStorageError(404, '研究不存在。');
+    const item = this.collaborationInbox(viewer).items.find(item => item.id === itemId);
+    if (!item) throw new WebStorageError(404, '研究不存在。');
     const mark = (state.inbox ??= {})[itemId] ??= {};
+    const revision = item.invitation?.revision ?? item.handoff?.revision;
+    if (mark.revision !== undefined && mark.revision !== revision) { mark.read = false; mark.processed = false; }
+    mark.revision = revision;
     if (input.action === 'read' || input.action === 'unread') mark.read = input.action === 'read';
     else mark.processed = input.action === 'done';
     this.remember(state, viewer, operation, input); this.storage.saveRecord(this.ownerPath(viewer), state);
+    return this.collaborationInbox(viewer);
+  }
+  readCollaborationInbox(viewer: string, value: unknown): ResearchCollaborationInbox {
+    this.authenticated(viewer);
+    const input = parse(z.object({ requestId: id }).strict(), value) as ResearchMutation, state = this.ownerState(viewer);
+    if (!this.request(state, viewer, 'inbox-read-all', input)) {
+      for (const item of this.collaborationInbox(viewer).items) {
+        const mark = (state.inbox ??= {})[item.id] ??= {}, revision = item.invitation?.revision ?? item.handoff?.revision;
+        if (mark.revision !== undefined && mark.revision !== revision) mark.processed = false;
+        mark.read = true; mark.revision = revision;
+      }
+      this.remember(state, viewer, 'inbox-read-all', input); this.storage.saveRecord(this.ownerPath(viewer), state);
+    }
     return this.collaborationInbox(viewer);
   }
   recordAssetContribution(viewer: string, value: unknown) {
@@ -1446,7 +1505,8 @@ export class WebResearchProjects {
         ['feedback-created', 'feedback-decided', 'feedback-updated'].includes(event.type) &&
         (this.access(viewer, project).member || project.feedback.some(feedback => feedback.id === event.feedbackId && feedback.author.id === self))))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-    return this.page(events.map(event => ({ ...event, read: Boolean(state.notificationThrough && event.createdAt <= state.notificationThrough) })), query);
+    return this.page(events.map(event => ({ ...event, read: state.inbox?.[`update:${event.id}`]?.read
+      ?? Boolean(state.notificationThrough && event.createdAt <= state.notificationThrough) })), query);
   }
   readNotifications(viewer: string, value: unknown) {
     this.authenticated(viewer);
@@ -1455,6 +1515,8 @@ export class WebResearchProjects {
       const through = input.through ?? now();
       if (through > now()) throw new WebStorageError(400, '不能标记未来通知。');
       state.notificationThrough = !state.notificationThrough || through > state.notificationThrough ? through : state.notificationThrough;
+      for (const event of this.notifications(viewer, { limit: 100 }).items) if (event.createdAt <= through)
+        ((state.inbox ??= {})[`update:${event.id}`] ??= {}).read = true;
       this.remember(state, viewer, 'notifications-read', input); this.storage.saveRecord(this.ownerPath(viewer), state);
     }
     return { through: state.notificationThrough };
@@ -1471,7 +1533,7 @@ export class WebResearchProjects {
           || feedback.reviewComments?.some(item => item.author.id === researcher) || feedback.candidateDelivery?.approvedBy?.id === researcher
           || feedback.continuation?.actor.id === researcher || feedback.reviewContinuation?.actor.id === researcher
           || feedback.candidateRevision?.parentSnapshot.decision.actor?.id === researcher || feedback.candidateRevision?.parentSnapshot.comments.some(item => item.author.id === researcher)) ||
-        stored.annotations?.some(item => item.author.id === researcher || item.replies.some(reply => reply.author.id === researcher) || item.resolution?.actor.id === researcher) ||
+        stored.annotations?.some(item => item.author.id === researcher || item.replies.some(reply => reply.author.id === researcher) || item.resolution?.actor.id === researcher || item.lastAction?.actor.id === researcher) ||
         (stored.assignments ?? []).some(assignment => assignment.author.id === researcher || assignment.continuation?.actor.id === researcher) ||
         stored.collaboration?.invitations.some(item => item.author.id === researcher || item.recipient.id === researcher) ||
         stored.collaboration?.handoffs.some(item => item.author.id === researcher || item.recipient.id === researcher || item.continuation?.actor.id === researcher) ||
@@ -1490,6 +1552,7 @@ export class WebResearchProjects {
       for (const annotation of stored.annotations ?? []) {
         annotation.replies = annotation.replies.filter(reply => reply.author.id !== researcher);
         if (annotation.resolution?.actor.id === researcher) annotation.resolution = { ...annotation.resolution, actor: deleted, text: undefined };
+        if (annotation.lastAction?.actor.id === researcher) annotation.lastAction = undefined;
       }
       const forgetContinuation = (continuation: ResearchWorkContinuation | undefined) => {
         if (continuation?.actor.id === researcher) { continuation.actor = deleted; continuation.text = ''; }

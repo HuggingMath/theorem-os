@@ -1,15 +1,23 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ResearchFeedback, ResearchProjectDetail, ResearcherProfile } from '../researchProjectTypes';
 import { RichProse } from './richText';
 import { ResearchAnnotations } from './researchAnnotations';
+import { ResearchDraftPicker } from './researchDrafts';
+import { useResearchInputDraft } from './researchInputDraft';
 import { base, enc, ErrorBox, Field, MutationState, stamp, tx, useMutation, useResource, type Items } from './researchShared';
 
-export function ResearchReview({ feedback, project, selfId, canReview, refresh }: {
-  feedback: ResearchFeedback; project: ResearchProjectDetail; selfId: string; canReview: boolean; refresh(): void;
+export function ResearchReview({ feedback, project, selfId, canReview, refresh, focusAnnotationId }: {
+  feedback: ResearchFeedback; project: ResearchProjectDetail; selfId: string; canReview: boolean; refresh(): void; focusAnnotationId?: string;
 }) {
-  const action = useMutation(), [reviewer, setReviewer] = useState(''), [text, setText] = useState('');
-  const commentAction = useMutation(), [commentText, setCommentText] = useState('');
+  const action = useMutation(), [reviewer, setReviewer] = useState('');
+  const scope = { sourceFeedbackId: feedback.id, ...(feedback.target ? { runId: feedback.target.runId, statementVersionId: feedback.target.statementVersionId,
+    ...(feedback.target.taskRef ? { taskId: feedback.target.taskRef.id, taskVersion: feedback.target.taskRef.version } : {}) } : {}) };
+  const supplement = useResearchInputDraft(selfId, project.id, 'review', { ...scope, purpose: 'resubmit' }, { text: '' });
+  const comment = useResearchInputDraft(selfId, project.id, 'review', { ...scope, purpose: 'comment' }, { text: '' });
+  const text = supplement.value.text, commentText = comment.value.text, commentAction = useMutation();
   const [annotationsOpened, setAnnotationsOpened] = useState(false);
+  const annotations = useRef<HTMLDetailsElement>(null);
+  useEffect(() => { if (focusAnnotationId && annotations.current) { annotations.current.open = true; setAnnotationsOpened(true); } }, [focusAnnotationId]);
   const path = `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review`;
   const assigned = feedback.review?.reviewer, canAssign = canReview && (project.permissions.manage || assigned?.id === selfId);
   const canJudge = canReview && feedback.author.id !== selfId && (!assigned || assigned.id === selfId || project.permissions.manage);
@@ -41,15 +49,17 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh }
     {canAssign && <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', path, { action: 'assign', reviewerId: reviewer, expectedRevision: feedback.revision }, refresh); }}>
       <label>{assigned ? tx('移交评审', 'Transfer review') : tx('指定评审人', 'Assign a reviewer')}<select data-reviewer-select value={reviewer} required onChange={event => setReviewer(event.currentTarget.value)}><option value="">{tx('选择有权限的协作者', 'Choose an authorized collaborator')}</option>{people.map(person => <option key={person.id} value={person.id}>{person.displayName}</option>)}</select></label>
       <button class="button" type="submit" disabled={action.busy || !reviewer}>{assigned ? tx('确认移交', 'Confirm transfer') : tx('确认分配', 'Confirm assignment')}</button></form>}
-    {feedback.author.id === selfId && feedback.decision.status === 'needs-info' && <form class="research-form" data-resubmit-review onSubmit={event => { event.preventDefault(); const submitted = text;
-      void action.run('POST', path, { action: 'resubmit', text, expectedRevision: feedback.revision }, () => { setText(current => current === submitted ? '' : current); refresh(); }); }}>
-      <Field label={tx('补充推导、说明或证据', 'Additional reasoning, explanation or evidence')} value={text} onInput={setText} multiline required maxLength={4000} />
+    {feedback.author.id === selfId && feedback.decision.status === 'needs-info' && <form class="research-form" data-resubmit-review onSubmit={event => { event.preventDefault(); const submitted = supplement.drafts.current(), value = supplement.value;
+      void action.run('POST', path, { action: 'resubmit', text, expectedRevision: feedback.revision }, () => { void supplement.complete(submitted, { kind: 'review', id: feedback.id }, value); refresh(); }); }}>
+      <ResearchDraftPicker drafts={supplement.drafts} filter={item => item.scope.sourceFeedbackId === feedback.id && item.scope.purpose === 'resubmit'} onRestore={supplement.restore} />
+      <Field label={tx('补充推导、说明或证据', 'Additional reasoning, explanation or evidence')} value={text} onInput={text => supplement.update({ text })} multiline required maxLength={4000} />
       <button class="button" type="submit" disabled={action.busy}>{tx('补充并重新送审', 'Add information and resubmit')}</button></form>}
     {feedback.reviewComments?.filter(comment => !comment.anchor).map(comment => <div class="candidate-review-comment" key={comment.id} data-candidate-review-comment={comment.id}><p>{comment.author.displayName} · {stamp(comment.createdAt)}</p><RichProse text={comment.text} /></div>)}
-    {project.permissions.member && feedback.kind === 'proof-submission' && feedback.target?.taskRef && <details onToggle={event => { if (event.currentTarget.open) setAnnotationsOpened(true); }}><summary>{tx('对公式或源码作精确评审', 'Review a formula or exact source passage')}</summary>
-      {annotationsOpened && <ResearchAnnotations projectId={project.id} runId={feedback.target.runId} task={feedback.target.taskRef} feedbackId={feedback.id} selfId={selfId} refresh={refresh} />}</details>}
-    {feedback.kind === 'proof-submission' && canJudge && !feedback.supersededBy && <form class="research-form" onSubmit={event => { event.preventDefault(); const submitted = commentText; void commentAction.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review-comments`, { text: commentText, expectedRevision: feedback.revision }, () => { setCommentText(value => value === submitted ? '' : value); refresh(); }); }}>
-      <label>{tx('需要修改或解释的具体一步', 'The specific step to revise or explain')}<textarea data-review-comment value={commentText} required rows={2} maxLength={4000} onInput={event => setCommentText(event.currentTarget.value)} /></label>
+    {project.permissions.member && feedback.kind === 'proof-submission' && feedback.target?.taskRef && <details ref={annotations} onToggle={event => { if (event.currentTarget.open) setAnnotationsOpened(true); }}><summary>{tx('对公式或源码作精确评审', 'Review a formula or exact source passage')}</summary>
+      {annotationsOpened && <ResearchAnnotations projectId={project.id} runId={feedback.target.runId} task={feedback.target.taskRef} feedbackId={feedback.id} selfId={selfId} refresh={refresh} focusAnnotationId={focusAnnotationId} />}</details>}
+    {feedback.kind === 'proof-submission' && canJudge && !feedback.supersededBy && <form class="research-form" onSubmit={event => { event.preventDefault(); const submitted = comment.drafts.current(), value = comment.value; void commentAction.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review-comments`, { text: commentText, expectedRevision: feedback.revision }, () => { void comment.complete(submitted, { kind: 'review', id: feedback.id }, value); refresh(); }); }}>
+      <ResearchDraftPicker drafts={comment.drafts} filter={item => item.scope.sourceFeedbackId === feedback.id && item.scope.purpose === 'comment'} onRestore={comment.restore} />
+      <label>{tx('需要修改或解释的具体一步', 'The specific step to revise or explain')}<textarea data-review-comment value={commentText} required rows={2} maxLength={4000} onInput={event => comment.update({ text: event.currentTarget.value })} /></label>
       <button class="button" type="submit" data-save-review-comment disabled={commentAction.busy}>{tx('添加评审意见', 'Add a review comment')}</button><MutationState action={commentAction} /></form>}
     {Boolean(feedback.reviewHistory?.length || feedback.decisionHistory?.length) && <details data-review-history><summary>{tx('评审流转与补充记录', 'Review history and additional information')}</summary>
       {feedback.reviewHistory?.map((item, i) => <div class="collaboration-resolution" key={i}><p>{item.actor.displayName} · {item.action === 'resubmit' ? tx('补充后重新送审', 'Resubmitted with more information') : item.action === 'claim' ? tx('接下评审', 'Claimed review') : tx('分配评审', 'Assigned review')}{item.reviewer && <> → {item.reviewer.displayName}</>} · {stamp(item.createdAt)}</p>{item.text && <RichProse text={item.text} />}</div>)}

@@ -844,4 +844,7 @@ export const app: Record<string, string> = {
   '草稿已变化，未载入预算规划。请核对后重新准备。': 'The draft changed, so the budget plan was not loaded. Review your edits and prepare it again.',
   '已准备原题、执行配置与本次预算。核对后即可发送研究任务。': 'The original problem, execution settings and token budget are ready. Review them before submitting.',
   '已将项目原题准备为个人尝试。核对模型、Library 和预算后可开始，随后可将新运行关联到项目。': 'The project problem is ready as a personal attempt. Review the model, Library and budget before starting, then link the new run to the project.',
+  "重新准备试用草稿": "Prepare the trial draft again",
+  "查看这次试用的固定记录": "Read this trial’s fixed record",
+  "候选与固定库已载入新尝试草稿。核对模型和预算后，再发送研究任务；原题验收会重新进行。": "The candidate and fixed library are loaded in a new attempt draft. Review the model and budget before sending the task. The original problem will be checked again.",
 };

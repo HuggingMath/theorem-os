@@ -5,16 +5,23 @@ import type { WebJobs } from './jobs';
 import type { WebResearchProjects } from './researchProjects';
 import type { WebResearchProblems } from './researchProblems';
 import type { ResearchPersonalTarget, ResearchPersonalProblem, ResearchAccountDraftScope, ResearchAccountDraft,
-  ResearchAccountDraftVersion, ResearchAccountDraftResult, ResearchDraftKind } from './researchPersonalTypes';
+  ResearchAccountDraftVersion, ResearchAccountDraftResult, ResearchDraftKind, ResearchDraftSubmission } from './researchPersonalTypes';
 import type { ResearchProjectDetail } from './researchProjectTypes';
 import { researchStatementIdentity } from './client/researchOverviewModel';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = (max: number) => z.string().max(max).refine(value => !value.includes('\0'));
 const identifier = text(200).refine(value => value.length > 0), commit = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
-const scopeSchema = z.object({ projectId: key, kind: z.enum(['candidate', 'discussion', 'issue', 'issue-reply']), statementVersionId: key.optional(),
+const draftKinds = z.enum(['candidate', 'discussion', 'issue', 'issue-reply', 'guidance', 'annotation', 'annotation-reply', 'review']);
+const scopeSchema = z.object({ projectId: key.optional(), kind: draftKinds, statementVersionId: key.optional(),
   runId: key.optional(), taskId: identifier.optional(), taskVersion: identifier.optional(), commit: commit.optional(), issueId: key.optional(),
-  issueRevision: z.number().int().nonnegative().optional(), sourceFeedbackId: key.optional() }).strict();
+  issueRevision: z.number().int().nonnegative().optional(), sourceFeedbackId: key.optional(), threadId: key.optional(), purpose: z.enum(['comment', 'resubmit']).optional() }).strict();
+const observationSchema = z.object({ sequence: z.number().int().nonnegative(), stateDigest: hash }).strict();
+const anchorSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('source'), sourceDigest: hash, file: text(512), startLine: z.number().int().positive(), endLine: z.number().int().positive(), quote: text(64_000) }).strict(),
+  z.object({ kind: z.literal('mathematics'), field: z.enum(['objective', 'statement', 'premises', 'derivation', 'finding', 'feedback']), fieldDigest: hash,
+    startOffset: z.number().int().nonnegative(), endOffset: z.number().int().nonnegative(), quote: text(64_000) }).strict(),
+]);
 const targetSchema = z.object({ runId: key, statementVersionId: key, observationRef: z.object({ sequence: z.number().int().nonnegative(), stateDigest: hash }).strict(),
   taskRef: z.object({ id: identifier, version: identifier }).strict().optional() }).strict();
 const sourceSchema = z.object({ taskId: identifier, taskVersion: identifier, commit, sourceDigest: hash, environmentDigest: hash,
@@ -26,10 +33,16 @@ const values = {
   discussion: z.object({ text: text(4000), visibility: z.enum(['members', 'public']), baseline: z.object({ statementVersionId: key.optional(), sourceDigest: hash.optional() }).strict() }).strict(),
   issue: z.object({ title: text(200), text: text(4000), target: targetSchema.optional(), sourceFeedbackId: key.optional(), statementVersionId: key.optional() }).strict(),
   'issue-reply': z.object({ text: text(4000), kind: z.enum(['comment', 'proposal']), replyTo: text(128), proposalId: text(128), feedbackId: text(128), revision: z.number().int().nonnegative() }).strict(),
+  guidance: z.object({ text: text(4000), planVersion: identifier.optional(), observationRef: observationSchema }).strict(),
+  annotation: z.object({ text: text(4000), anchor: anchorSchema.optional(), observationRef: observationSchema }).strict(),
+  'annotation-reply': z.object({ text: text(4000) }).strict(),
+  review: z.object({ text: text(4000) }).strict(),
 };
 const mutation = { requestId: key, expectedRevision: z.number().int().nonnegative() };
 const saveDraftSchema = z.object({ ...mutation, scope: scopeSchema, value: z.unknown(), summary: text(200), deviceId: key,
   deviceName: z.string().trim().min(1).max(80), clientUpdatedAt: z.string().datetime() }).strict();
+const submissionSchema = z.object({ kind: z.enum(['feedback', 'issue', 'issue-reply', 'guidance', 'annotation', 'annotation-reply', 'review']), id: key }).strict();
+const lifecycleSchema = z.object({ requestId: key, versionId: key, action: z.enum(['submitted', 'restore', 'discard']), submission: submissionSchema.optional() }).strict();
 const organizeSchema = z.object({ ...mutation, pinned: z.boolean(), status: z.enum(['active', 'parked', 'archived']),
   tags: z.array(z.string().trim().min(1).max(40)).max(12), nextNote: text(4000) }).strict();
 const fail = (status: number, message: string): never => { throw new WebStorageError(status, message); };
@@ -40,7 +53,7 @@ const digest = (value: unknown) => mathDigest(canonicalMathJson(value));
 const copy = <T>(value: T): T => structuredClone(value);
 type Dependencies = { storage: WebStorage; jobs: WebJobs; projects: WebResearchProjects; problems: WebResearchProblems };
 type StoredDraft = { scope: ResearchAccountDraftScope; id: string; revision: number; versions: ResearchAccountDraftVersion[];
-  requests: Record<string, { digest: string; versionId: string }> };
+  requests: Record<string, { digest: string; versionId: string }>; lifecycleRequests?: Record<string, string> };
 type StoredProblem = { item: ResearchPersonalProblem; requests: Record<string, { digest: string; item: ResearchPersonalProblem }> };
 
 /** Private account state is separate from shared project decisions and mathematical acceptance. */
@@ -53,13 +66,51 @@ export class WebResearchPersonal {
   }
   private draftPath(viewer: string, id: string) { parse(key, id); return [...this.owner(viewer, true), 'drafts', `${id}.json`]; }
   private project(viewer: string, scope: ResearchAccountDraftScope): ResearchProjectDetail {
-    const project = this.deps.projects.detail(viewer, scope.projectId);
+    if (!scope.projectId) fail(400, '这类草稿需要绑定项目。');
+    const project = this.deps.projects.detail(viewer, scope.projectId!);
     if (scope.kind === 'discussion' ? !project.permissions.discuss : scope.kind === 'issue' ? !project.permissions.edit : !project.permissions.member)
       fail(403, '你已没有这个项目的草稿编辑权限。');
     if (scope.statementVersionId && !project.versions.some(item => item.id === scope.statementVersionId)) fail(409, '草稿对应的陈述版本不可用。');
     return project;
   }
   private authorize(viewer: string, scope: ResearchAccountDraftScope, value: unknown) {
+    if (scope.kind === 'review') {
+      if (!scope.projectId || !scope.sourceFeedbackId || !scope.purpose) fail(400, '评审草稿需要保留原反馈与补充类型。');
+      const project = this.deps.projects.detail(viewer, scope.projectId!), feedback = this.deps.projects.feedback(viewer, scope.projectId!, scope.sourceFeedbackId!);
+      if (scope.purpose === 'resubmit' ? feedback.author.id !== this.deps.projects.identity(viewer) : !project.permissions.member) fail(403, '你已没有这份评审草稿的编辑权限。');
+      if (feedback.target?.runId !== scope.runId || feedback.target?.taskRef?.id !== scope.taskId || feedback.target?.taskRef?.version !== scope.taskVersion)
+        fail(409, '评审草稿与反馈任务范围不一致。');
+      return;
+    }
+    if (['guidance', 'annotation', 'annotation-reply'].includes(scope.kind)) {
+      if (!scope.runId) fail(400, '这类草稿需要绑定精确运行。');
+      const resolved = scope.projectId ? this.deps.projects.resolveBinding(viewer, scope.projectId, scope.runId!, 'read') : undefined;
+      const run = resolved?.run ?? this.deps.jobs.get(viewer, scope.runId!) ?? fail(404, '草稿对应的运行不可用。');
+      if (scope.projectId) {
+        const project = this.project(viewer, scope);
+        if (!project.permissions.member || scope.statementVersionId && scope.statementVersionId !== resolved!.binding.statementVersionId) fail(403, '草稿对应的项目范围不可用。');
+        if (scope.kind === 'guidance' && !resolved!.binding.permissions.guidance) fail(403, '你已没有这次运行的指导权限。');
+      } else if (scope.statementVersionId || scope.sourceFeedbackId) fail(400, '反馈草稿需要绑定项目。');
+      const observations = this.deps.storage.listObservations(resolved?.runOwner ?? viewer, scope.runId!);
+      if (run.observation) observations.push(run.observation);
+      if (scope.taskId || scope.taskVersion) {
+        if (!scope.taskId || !scope.taskVersion || !observations.some(item => [...item.inspection.tasks, ...(item.history ?? [])]
+          .some(task => task.id === scope.taskId && task.version === scope.taskVersion))) fail(409, '草稿对应的任务版本不可用。');
+      }
+      const record = value as Record<string, any>;
+      if (scope.kind === 'guidance' || scope.kind === 'annotation') {
+        if (!observations.some(item => item.sequence === record.observationRef.sequence && item.snapshot.stateDigest === record.observationRef.stateDigest))
+          fail(409, '草稿对应的冻结观测不可用。');
+      }
+      if (scope.kind === 'annotation' || scope.kind === 'annotation-reply') {
+        if (!scope.taskId || !scope.taskVersion) fail(400, '批注草稿需要绑定任务版本。');
+        const page = this.deps.projects.annotations(viewer, scope.projectId, scope.runId!, { taskId: scope.taskId!, taskVersion: scope.taskVersion!,
+          ...(scope.sourceFeedbackId ? { feedbackId: scope.sourceFeedbackId } : {}), ...(scope.commit ? { commit: scope.commit } : {}) });
+        if (scope.kind === 'annotation-reply' && (!scope.threadId || !page.items.some(item => item.id === scope.threadId && item.target.taskRef?.version === scope.taskVersion)))
+          fail(409, '回复草稿对应的批注线程不可用。');
+      }
+      return;
+    }
     const project = this.project(viewer, scope), record = value as Record<string, any>;
     if (scope.runId) {
       const resolved = this.deps.projects.resolveBinding(viewer, project.id, scope.runId, scope.kind === 'candidate' ? 'proof' : 'read');
@@ -115,7 +166,7 @@ export class WebResearchPersonal {
     return { id: stored.id, scope: { ...stored.scope, owner: this.deps.projects.identity(viewer) }, revision: stored.revision,
       versions: stored.versions.map(({ value: _value, ...info }) => info).reverse() };
   }
-  drafts(viewer: string, projectId?: string, kind?: ResearchDraftKind) {
+  drafts(viewer: string, projectId?: string, kind?: ResearchDraftKind, status: 'open' | 'archived' | 'all' = 'open') {
     const account = viewer.startsWith('account:');
     if (!account) return { account: false, items: [] as ResearchAccountDraft[] };
     const root = [...this.owner(viewer, true), 'drafts']; if (projectId) parse(key, projectId);
@@ -123,7 +174,9 @@ export class WebResearchPersonal {
       if (!/^[A-Za-z0-9_-]+\.json$/u.test(file)) return [];
       const stored = this.deps.storage.getRecord<StoredDraft>([...root, file]);
       if (!stored || projectId && stored.scope.projectId !== projectId || kind && stored.scope.kind !== kind) return [];
-      try { this.authorize(viewer, stored.scope, stored.versions.at(-1)!.value); return [this.draftView(viewer, stored)]; }
+      try { this.authorize(viewer, stored.scope, stored.versions.at(-1)!.value);
+        const view = this.draftView(viewer, stored); view.versions = view.versions.filter(version => status === 'all' || ((version.status ?? 'open') === 'open') === (status === 'open'));
+        return view.versions.length ? [view] : []; }
       catch (error) { if (error instanceof WebStorageError && [403, 404, 409].includes(error.status)) return []; throw error; }
     }).sort((a, b) => b.versions[0].savedAt.localeCompare(a.versions[0].savedAt));
     return { account: true, items };
@@ -149,6 +202,63 @@ export class WebResearchPersonal {
       summary: input.summary, value, deviceId: input.deviceId, deviceName: input.deviceName, clientUpdatedAt: input.clientUpdatedAt, savedAt: new Date().toISOString() };
     stored.revision++; stored.versions.push(version); stored.requests[input.requestId] = { digest: intent, versionId: version.id };
     this.deps.storage.saveRecord(path, stored); return { draft: this.draftView(viewer, stored), version: copy(version), conflict: version.conflict };
+  }
+  /** Completion follows only the submitted branch; another device's parallel version stays open. */
+  updateDraft(viewer: string, id: string, raw: unknown): ResearchAccountDraftResult {
+    const input = parse(lifecycleSchema, raw), path = this.draftPath(viewer, id);
+    const stored = this.deps.storage.getRecord<StoredDraft>(path) ?? fail(404, '账号草稿不存在。');
+    const version = stored.versions.find(item => item.id === input.versionId) ?? fail(404, '账号草稿版本不存在。');
+    this.authorize(viewer, stored.scope, version.value);
+    const intent = digest(input), previous = stored.lifecycleRequests?.[input.requestId];
+    if (previous) { if (previous !== intent) fail(409, '这个请求已用于另一项草稿操作。'); return this.draft(viewer, id, version.id); }
+    if (input.action === 'submitted') {
+      if (!input.submission) fail(400, '请关联实际提交记录后归档。');
+      const submission = this.submission(viewer, stored.scope, input.submission as Omit<ResearchDraftSubmission, 'href'>);
+      let branch: ResearchAccountDraftVersion | undefined = version;
+      while (branch) {
+        if (!branch.status || branch.status === 'open') { branch.status = 'submitted'; branch.submission = submission; branch.completedAt = new Date().toISOString(); }
+        branch = stored.versions.find(item => item.revision === branch!.baseRevision);
+      }
+    } else if (input.action === 'discard') {
+      version.status = 'discarded'; version.completedAt = new Date().toISOString(); delete version.submission;
+    } else {
+      version.status = 'open'; delete version.completedAt; delete version.submission;
+    }
+    (stored.lifecycleRequests ??= {})[input.requestId] = intent;
+    this.deps.storage.saveRecord(path, stored); return this.draft(viewer, id, version.id);
+  }
+  private submission(viewer: string, scope: ResearchAccountDraftScope, input: Omit<ResearchDraftSubmission, 'href'>): ResearchDraftSubmission {
+    const self = this.deps.projects.identity(viewer), target = new URLSearchParams({ ...(scope.projectId ? { project: scope.projectId } : {}),
+      ...(scope.runId ? { run: scope.runId } : {}), tab: 'route', ...(scope.taskId ? { task: scope.taskId, taskVersion: scope.taskVersion! } : {}) });
+    let href = `problem.html?${target}`;
+    if (input.kind === 'feedback' && scope.projectId && ['candidate', 'discussion', 'guidance'].includes(scope.kind)) {
+      const feedback = this.deps.projects.feedback(viewer, scope.projectId, input.id);
+      const kind = scope.kind === 'candidate' ? 'proof-submission' : scope.kind;
+      if (feedback.author.id !== self || feedback.kind !== kind || scope.runId && feedback.target?.runId !== scope.runId
+        || scope.taskId && (feedback.target?.taskRef?.id !== scope.taskId || feedback.target?.taskRef?.version !== scope.taskVersion)) fail(409, '提交记录与草稿范围不一致。');
+      href = `theorems.html?${new URLSearchParams({ id: scope.projectId, ...(scope.runId ? { run: scope.runId } : {}) })}#feedback-${input.id}`;
+    } else if ((input.kind === 'issue' && scope.kind === 'issue' || input.kind === 'issue-reply' && scope.kind === 'issue-reply') && scope.projectId) {
+      const issue = this.deps.projects.collaboration(viewer, scope.projectId).issues.find(item => item.id === input.id) ?? fail(404, '提交的议题记录不存在。');
+      if (scope.kind === 'issue' ? issue.author.id !== self : issue.id !== scope.issueId || !issue.replies.some(reply => reply.author.id === self)
+        && issue.resolution?.author.id !== self && !issue.resolutionHistory?.some(item => item.author.id === self)) fail(403, '提交记录不属于当前草稿。');
+      href = `theorems.html?${new URLSearchParams({ id: scope.projectId })}#issue-${issue.id}`;
+    } else if (input.kind === 'guidance' && scope.kind === 'guidance' && !scope.projectId && scope.runId) {
+      const receipt = this.deps.storage.getCommand(viewer, scope.runId, input.id);
+      if (!receipt?.guidance || ['unknown', 'failed', 'rejected'].includes(receipt.status)) fail(409, '指导提交尚未确认。');
+    } else if (['annotation', 'annotation-reply'].includes(input.kind) && input.kind === scope.kind && scope.runId && scope.taskId && scope.taskVersion) {
+      const page = this.deps.projects.annotations(viewer, scope.projectId, scope.runId, { taskId: scope.taskId, taskVersion: scope.taskVersion,
+        ...(scope.sourceFeedbackId ? { feedbackId: scope.sourceFeedbackId } : {}), ...(scope.commit ? { commit: scope.commit } : {}) });
+      const annotation = page.items.find(item => item.id === input.id);
+      if (!annotation || annotation.target.taskRef?.version !== scope.taskVersion || (scope.kind === 'annotation' ? annotation.author.id !== self
+        : annotation.id !== scope.threadId || !annotation.replies.some(reply => reply.author.id === self))) fail(409, '批注提交记录与草稿范围不一致。');
+      target.set('annotation', annotation!.id); if (scope.sourceFeedbackId) target.set('feedback', scope.sourceFeedbackId); href = `problem.html?${target}`;
+    } else if (input.kind === 'review' && scope.kind === 'review' && scope.projectId && scope.sourceFeedbackId === input.id) {
+      const feedback = this.deps.projects.feedback(viewer, scope.projectId, input.id);
+      if (scope.purpose === 'resubmit' ? !feedback.reviewHistory?.some(item => item.action === 'resubmit' && item.actor.id === self)
+        : !feedback.reviewComments?.some(item => item.author.id === self)) fail(409, '评审补充记录尚未保存。');
+      target.set('feedback', input.id); href = `problem.html?${target}`;
+    } else fail(400, '提交记录类型与草稿不一致。');
+    return { ...input, href };
   }
   private locate(viewer: string, target: ResearchPersonalTarget) {
     this.owner(viewer); if (target.runId) parse(key, target.runId); if (target.projectId) parse(key, target.projectId);
@@ -202,9 +312,11 @@ export function createResearchPersonalHandler(deps: Dependencies) {
     const item = (value: unknown, status = 200) => ({ status, body: { item: value } });
     if (parts[3] === 'drafts') {
       if (parts.length === 4 && method === 'GET') return { status: 200, body: service.drafts(viewer, url.searchParams.get('projectId') ?? undefined,
-        url.searchParams.has('kind') ? parse(z.enum(['candidate', 'discussion', 'issue', 'issue-reply']), url.searchParams.get('kind')) : undefined) };
+        url.searchParams.has('kind') ? parse(draftKinds, url.searchParams.get('kind')) : undefined,
+        url.searchParams.has('status') ? parse(z.enum(['open', 'archived', 'all']), url.searchParams.get('status')) : 'open') };
       if (parts.length === 4 && method === 'POST') return item(service.saveDraft(viewer, await readBody()), 201);
       if (parts.length === 5 && method === 'GET') return item(service.draft(viewer, parts[4], url.searchParams.get('version') ?? undefined));
+      if (parts.length === 5 && method === 'PATCH') return item(service.updateDraft(viewer, parts[4], await readBody()));
     }
     if (parts[3] === 'problems' && parts.length === 4) {
       const target = { runId: url.searchParams.get('runId') ?? undefined, projectId: url.searchParams.get('projectId') ?? undefined };

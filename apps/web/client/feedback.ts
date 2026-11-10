@@ -15,7 +15,7 @@ export function localizeSiteLinks(root: ParentNode = document) {
   });
 }
 
-/** Browser, system, viewport and language, so a report says where it happened. The page has no version to add. */
+/** Browser, viewport, language and loaded build identity for a reproducible report. */
 export function environmentSummary(agent = navigator.userAgent, width = innerWidth, height = innerHeight) {
   const browser = /Edg\/(\d+)/u.exec(agent) ? `Edge ${/Edg\/(\d+)/u.exec(agent)![1]}`
     : /Firefox\/(\d+)/u.exec(agent) ? `Firefox ${/Firefox\/(\d+)/u.exec(agent)![1]}`
@@ -23,7 +23,8 @@ export function environmentSummary(agent = navigator.userAgent, width = innerWid
     : /Version\/(\d+)[\d.]* .*Safari/u.exec(agent) ? `Safari ${/Version\/(\d+)/u.exec(agent)![1]}` : 'Browser';
   const system = /iPhone|iPad/u.test(agent) ? 'iOS' : /Android/u.test(agent) ? 'Android' : /Mac OS X/u.test(agent) ? 'macOS'
     : /Windows/u.test(agent) ? 'Windows' : /Linux/u.test(agent) ? 'Linux' : 'Other';
-  return `TheoremOS workbench · ${system} · ${browser} · ${width}×${height} · ${locale}`;
+  const build = typeof document !== 'undefined' ? document.querySelector<HTMLMetaElement>('meta[name="theoremos-build"]')?.content : undefined;
+  return `TheoremOS workbench · ${system} · ${browser} · ${width}×${height} · ${locale}${build && /^[a-f0-9]{64}$/u.test(build) ? ` · web ${build.slice(0, 12)}` : ''}`;
 }
 
 /**

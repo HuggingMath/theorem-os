@@ -7,6 +7,7 @@ import { Rich, RichProse } from './richText';
 import { BookmarkControl } from './researchCollections';
 import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
 import { IssueExecution } from './researchIssueExecution';
+import { SharedStageReference } from './researchStageReference';
 import { api, base, enc, ErrorBox, errorText, Field, MutationState, nameOf, personHref, stamp, theoremHref, tx, useMutation,
   useResource, type Item, type Items, type ResearchContext } from './researchShared';
 import type { ResearcherProfile } from '../researchProjectTypes';
@@ -19,12 +20,33 @@ const roleName = (role: string) => role === 'reader' ? tx('只读成员', 'Reade
 const claimStatus = (status: string) => status === 'claimed' ? tx('已认领', 'Claimed') : status === 'submitted' ? tx('已提交候选', 'Candidate submitted') : tx('已释放', 'Released');
 const inboxLabel = (kind: string) => ({ invitation: tx('协作邀请', 'Invitation'), application: tx('加入申请', 'Join request'),
   handoff: tx('任务交接', 'Handoff'), claim: tx('我的认领', 'My claim'), review: tx('待我评审', 'Needs my review'),
-  'needs-info': tx('待我补充', 'Needs my input'), reply: tx('议题回复', 'Issue reply'), update: tx('研究更新', 'Research update') })[kind] ?? kind;
+  'needs-info': tx('待我补充', 'Needs my input'), reply: tx('议题回复', 'Issue reply'), annotation: tx('片段批注', 'Passage comment'), update: tx('研究更新', 'Research update') })[kind] ?? kind;
+
+export function CollaborationMessageSummary({ request = api }: { request?: WebApi } = {}) {
+  const [data, setData] = useState<ResearchCollaborationInbox>(), [error, setError] = useState(''), [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let live = true, timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController(); setData(undefined);
+    const read = async () => {
+      try { const result = await request<ResearchCollaborationInbox>(`${base}/collaboration/inbox`, { signal: controller.signal }); if (live) { setData(result); setError(''); } }
+      catch (cause) { if (live && !controller.signal.aborted) setError(errorText(cause)); }
+      if (live) timer = setTimeout(() => void read(), 15000);
+    };
+    void read(); return () => { live = false; controller.abort(); clearTimeout(timer); };
+  }, [request, revision]);
+  return <div class="collaboration-message-summary" data-inbox-summary>
+    <ErrorBox message={error} />{error && <button class="text-button" type="button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取消息', 'Reload messages')}</button>}
+    {!data && !error && <p role="status">{tx('正在读取待办与消息…', 'Loading decisions and messages…')}</p>}
+    {data && <><div>{(['decision', 'reply', 'progress'] as const).map(category => <a key={category} href={`workspace.html?tab=inbox&inbox=${category}#collaboration-inbox`}>
+      <strong>{data.counts[category]}</strong><span>{category === 'decision' ? tx('待决定', 'Decisions') : category === 'reply' ? tx('待回复', 'Replies') : tx('未读进展', 'Unread progress')}</span></a>)}</div>
+      <a class="research-inline-link" href="workspace.html?tab=inbox&inbox=unread#collaboration-inbox">{tx(`查看全部消息 · ${data.unread} 条未读`, `All messages · ${data.unread} unread`)}</a></>}
+  </div>;
+}
 
 /** A personal view; injected WebApi retains the workbench's existing owner/CSRF boundary. */
 export function CollaborationInbox({ context, request = api }: { context: ResearchContext; request?: WebApi }) {
   const [data, setData] = useState<ResearchCollaborationInbox>(), [error, setError] = useState(''), [revision, setRevision] = useState(0);
-  const [filter, setFilter] = useState('pending'), [busy, setBusy] = useState('');
+  const [filter, setFilter] = useState(() => { const selected = new URLSearchParams(location.search).get('inbox') ?? ''; return ['decision', 'reply', 'progress', 'unread', 'claim', 'processed', 'all'].includes(selected) ? selected : 'pending'; }), [busy, setBusy] = useState('');
   const pending = useRef<{ signature: string; requestId: string }>(), locked = useRef(false), generation = useRef(0), owner = useRef(context.session.researcherId);
   owner.current = context.session.researcherId;
   useEffect(() => { generation.current++; pending.current = undefined; setData(undefined); setBusy(''); return () => { generation.current++; }; }, [context.session.researcherId]);
@@ -54,18 +76,28 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
   }
   const self = context.session.researcherId;
   const items = data?.items.filter(item => filter === 'all' || filter === 'unread' && !item.read || filter === 'processed' && (item.processed || item.resolved)
-    || filter === 'pending' && !item.processed && !item.resolved || filter === 'claim' && item.kind === 'claim') ?? [];
-  return <section class="collaboration-inbox" data-collaboration-inbox aria-label={tx('个人处理中心', 'Personal inbox')}>
-    <header><div><h2>{tx('个人处理中心', 'Personal inbox')}</h2><p>{tx('认领、评审与协作请求，集中在这里继续。', 'Continue your claims, reviews and collaboration requests here.')}</p></div>
-      {data && <span>{tx(`${data.pending} 项待处理 · ${data.unread} 条未读`, `${data.pending} pending · ${data.unread} unread`)}</span>}</header>
-    <div class="collaboration-filter" role="group" aria-label={tx('筛选待办', 'Filter inbox')}>{['pending', 'unread', 'claim', 'processed', 'all'].map(value => <button type="button" class="button" key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
-      {value === 'pending' ? tx('待处理', 'Pending') : value === 'unread' ? tx('未读', 'Unread') : value === 'claim' ? tx('我的认领', 'My claims') : value === 'processed' ? tx('已处理', 'Processed') : tx('全部', 'All')}</button>)}</div>
+    || filter === 'pending' && item.category !== 'progress' && !item.processed && !item.resolved
+    || filter === 'progress' && item.category === 'progress'
+    || ['decision', 'reply'].includes(filter) && item.category === filter && !item.processed && !item.resolved
+    || filter === 'claim' && item.kind === 'claim') ?? [];
+  const label = (value: string) => value === 'pending' ? tx('待我处理', 'Needs me') : value === 'decision' ? tx('待决定', 'Decisions')
+    : value === 'reply' ? tx('待回复', 'Replies') : value === 'progress' ? tx('研究进展', 'Progress') : value === 'unread' ? tx('未读', 'Unread')
+    : value === 'claim' ? tx('我的认领', 'My claims') : value === 'processed' ? tx('已收起或完成', 'Dismissed or completed') : tx('全部', 'All');
+  return <section class="collaboration-inbox" id="collaboration-inbox" data-collaboration-inbox aria-label={tx('个人处理中心', 'Personal inbox')}>
+    <header><div><h2>{tx('个人处理中心', 'Personal inbox')}</h2><p>{tx('需要你决定或回应的事项，与研究进展分开查看。', 'Find decisions and replies here, with research progress in its own view.')}</p></div>
+      {data && <span>{tx(`${data.pending} 项待处理 · ${data.unread} 条未读`, `${data.pending} pending · ${data.unread} unread`)}
+        {data.unread > 0 && <button type="button" class="text-button" data-inbox-read-all disabled={Boolean(busy)} onClick={() => void write(`${base}/collaboration/inbox/read-all`, {}, 'read-all')}>{tx('全部标已读', 'Mark all as read')}</button>}</span>}</header>
+    <div class="collaboration-filter" role="group" aria-label={tx('筛选消息', 'Filter messages')}>{['pending', 'decision', 'reply', 'progress'].map(value => <button type="button" class="button" key={value} data-inbox-filter={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
+      {label(value)}{value !== 'pending' && data?.counts && <> · {data.counts[value as keyof typeof data.counts]}</>}</button>)}
+      <label class="collaboration-more-filter"><span class="sr-only">{tx('其他范围', 'Other views')}</span><select aria-label={tx('其他消息范围', 'Other message views')} value={['unread', 'claim', 'processed', 'all'].includes(filter) ? filter : ''} onChange={event => { if (event.currentTarget.value) setFilter(event.currentTarget.value); }}>
+        <option value="">{tx('其他范围', 'Other views')}</option>{['unread', 'claim', 'processed', 'all'].map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label></div>
     <ErrorBox message={error} />{error && <button type="button" class="text-button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取', 'Try again')}</button>}
     {!data && !error && <p role="status">{tx('正在读取协作事项…', 'Loading collaboration items…')}</p>}
     {items.map(item => {
       const record = item.invitation ?? item.handoff, respond = record && (record.recipient.id === self || record.author.id === self);
       return <article class="collaboration-inbox-item" key={item.id} data-inbox-item={item.id}>
         <div class="collaboration-meta"><span>{inboxLabel(item.kind)}</span><span>{item.projectTitle}</span><time dateTime={item.createdAt}>{stamp(item.createdAt)}</time>
+          {item.annotationAction && <span>{item.annotationAction === 'resolve' ? tx('已解决批注', 'Comment resolved') : item.annotationAction === 'reopen' ? tx('重新打开批注', 'Comment reopened') : item.annotationAction === 'reply' ? tx('有新回应', 'New reply') : tx('有新批注', 'New comment')}</span>}
           {!item.read && <strong>{tx('未读', 'Unread')}</strong>}{(item.processed || item.resolved) && <span>{tx('已处理', 'Processed')}</span>}</div>
         <div class="collaboration-inbox-copy"><RichProse text={item.title} />{item.text && <RichProse text={item.kind === 'claim' ? claimStatus(item.text) : item.text} />}</div>
         {record && <p>{record.author.displayName} → {record.recipient.displayName} · {invitationStatus(record)}{'role' in record && <> · {roleName(record.role)}</>}</p>}
@@ -76,7 +108,7 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
             <button type="button" class="text-button" disabled={Boolean(busy)} onClick={() => void write(`${projectPath(item.projectId)}/${item.handoff ? 'handoffs' : 'invitations'}/${record.id}/respond`, { action: 'decline', expectedRevision: record.revision }, item.id)}>{tx('拒绝', 'Decline')}</button></>
             : <button type="button" class="text-button" disabled={Boolean(busy)} onClick={() => void write(`${projectPath(item.projectId)}/${item.handoff ? 'handoffs' : 'invitations'}/${record.id}/respond`, { action: 'cancel', expectedRevision: record.revision }, item.id)}>{tx('撤回请求', 'Cancel request')}</button>)}
           <button type="button" class="text-button" disabled={Boolean(busy)} onClick={() => void write(`${base}/collaboration/inbox/${enc(item.id)}`, { action: item.read ? 'unread' : 'read' }, item.id)}>{item.read ? tx('标为未读', 'Mark unread') : tx('标为已读', 'Mark read')}</button>
-          {!item.resolved && <button type="button" class="text-button" disabled={Boolean(busy)} onClick={() => void write(`${base}/collaboration/inbox/${enc(item.id)}`, { action: item.processed ? 'reopen' : 'done' }, item.id)}>{item.processed ? tx('重新放回待办', 'Reopen item') : tx('从我的待办收起', 'Dismiss from my inbox')}</button>}
+          {!item.resolved && item.category !== 'progress' && <button type="button" class="text-button" disabled={Boolean(busy)} onClick={() => void write(`${base}/collaboration/inbox/${enc(item.id)}`, { action: item.processed ? 'reopen' : 'done' }, item.id)}>{item.processed ? tx('重新放回待办', 'Reopen item') : tx('从我的待办收起', 'Dismiss from my inbox')}</button>}
         </div>
       </article>;
     })}
@@ -129,8 +161,8 @@ export function CollaborationIssues({ project, selfId, request, refresh, onRevea
     {resource.data?.item.issues.map(issue => <IssueThread key={issue.id} issue={issue} project={project} selfId={selfId} refresh={changed} onRevealFeedback={onRevealFeedback} />)}
     {project.permissions.edit && <details ref={composer}><summary>{sourceFeedbackId ? tx('从这条反馈发起议题', 'Open an issue from this feedback') : tx('发起议题', 'Open an issue')}</summary>
       <ResearchDraftPicker drafts={drafts} onRestore={item => { setTitle(item.value.title); setText(item.value.text); setDraftContext(item.value); action.reset(); }} />
-      <form class="research-form" onSubmit={event => { event.preventDefault(); const submittedDraft = drafts.current(), sentTitle = title, sentText = text; void action.run('POST', `${projectPath(project.id)}/issues`,
-      { title, text, ...(target ? { target } : { statementVersionId: activeContext?.statementVersionId ?? project.currentStatementVersionId }), ...(sourceFeedbackId ? { sourceFeedbackId } : {}), expectedRevision: project.revision }, () => { if (submittedDraft) drafts.remove(submittedDraft, true); setTitle(value => value === sentTitle ? '' : value); setText(value => value === sentText ? '' : value); changed(); }); }}>
+      <form class="research-form" onSubmit={event => { event.preventDefault(); const submittedDraft = drafts.current(), sentTitle = title, sentText = text; void action.run<Item<ResearchIssue>>('POST', `${projectPath(project.id)}/issues`,
+      { title, text, ...(target ? { target } : { statementVersionId: activeContext?.statementVersionId ?? project.currentStatementVersionId }), ...(sourceFeedbackId ? { sourceFeedbackId } : {}), expectedRevision: project.revision }, result => { if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'issue', id: result.item.id }); setTitle(value => value === sentTitle ? '' : value); setText(value => value === sentText ? '' : value); changed(); }); }}>
       <Field label={tx('需要共同决定的问题', 'Question to decide together')} value={title} onInput={value => { setTitle(value); saveDraft({ title: value }); }} required maxLength={200} />
       <Field label={tx('背景、分歧与已有证据', 'Context, alternatives and existing evidence')} value={text} onInput={value => { setText(value); saveDraft({ text: value }); }} required multiline maxLength={4000} />
       {target?.taskRef && <p>{target.taskRef.id} · <code>{target.taskRef.version}</code></p>}
@@ -153,6 +185,7 @@ function IssueThread({ issue, project, selfId, refresh, onRevealFeedback }: { is
   const links = project.feedback.filter(item => !issue.target || item.target?.runId === issue.target.runId && item.target.statementVersionId === issue.target.statementVersionId);
   return <article class="collaboration-issue" id={`issue-${issue.id}`} tabIndex={-1} data-collaboration-issue={issue.id}>
     <div class="collaboration-meta"><span>{issue.author.displayName}</span><span>{issue.status === 'open' ? tx('讨论中', 'Open') : tx('已形成决议', 'Resolved')}</span></div><h4><Rich text={issue.title} /></h4><RichProse text={issue.text} />
+    {issue.stageReference && <SharedStageReference reference={issue.stageReference} />}
     {issue.target && <a href={theoremHref(project.id, issue.target.runId, { statementVersionId: issue.target.statementVersionId, taskRef: issue.target.taskRef })}>{tx('查看议题对应任务', 'View the issue’s task')}</a>}
     {issue.sourceFeedbackId && <a class="research-inline-link" href={`#feedback-${enc(issue.sourceFeedbackId)}`} onClick={event => { event.preventDefault(); onRevealFeedback(issue.sourceFeedbackId!); }}>{tx('查看来源反馈', 'View source feedback')}</a>}
     <ol class="collaboration-replies">{issue.replies.map(reply => <li key={reply.id} id={`reply-${reply.id}`}><div class="collaboration-meta"><a href={personHref(reply.author.id)}>{reply.author.displayName}</a><span>{reply.kind === 'proposal' ? tx('方案', 'Proposal') : tx('回复', 'Reply')}</span><time dateTime={reply.createdAt}>{stamp(reply.createdAt)}</time></div>
@@ -166,7 +199,7 @@ function IssueThread({ issue, project, selfId, refresh, onRevealFeedback }: { is
     {selfId && project.permissions.member && (issue.status === 'open' || project.permissions.edit) && <details onToggle={event => { if (event.currentTarget.open && !text.trim()) setRevision(issue.revision); }}><summary>{issue.status === 'open' ? tx('补充意见或记录决议', 'Reply or record a resolution') : tx('重新讨论', 'Reopen discussion')}</summary>
       <ResearchDraftPicker drafts={drafts} filter={item => item.scope.issueId === issue.id} onRestore={item => { const value = item.value; setText(value.text); setKind(value.kind); setReplyTo(value.replyTo); setProposal(value.proposalId); setFeedback(value.feedbackId); setRevision(value.revision); action.reset(); }} />
       <form class="research-form" onSubmit={event => { event.preventDefault(); if (stale || issue.status !== 'open') return; const submittedDraft = drafts.current(), sentText = text; void action.run<Item<ResearchIssue>>('POST', `${projectPath(project.id)}/issues/${issue.id}/replies`,
-      { kind, text, ...(replyTo ? { replyTo } : {}), feedbackIds: feedbackId ? [feedbackId] : [], expectedRevision: revision }, result => { if (submittedDraft) drafts.remove(submittedDraft, true); setText(value => value === sentText ? '' : value); setReplyTo(''); setRevision(result.item.revision); refresh(); }); }}>
+      { kind, text, ...(replyTo ? { replyTo } : {}), feedbackIds: feedbackId ? [feedbackId] : [], expectedRevision: revision }, result => { if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'issue-reply', id: result.item.id }); setText(value => value === sentText ? '' : value); setReplyTo(''); setRevision(result.item.revision); refresh(); }); }}>
       {issue.status === 'open' && <label>{tx('内容类型', 'Type')}<select value={kind} onChange={event => { setKind(event.currentTarget.value); saveDraft({ kind: event.currentTarget.value }); }}><option value="comment">{tx('意见或疑问', 'Comment or question')}</option><option value="proposal">{tx('提出方案', 'Proposal')}</option></select></label>}
       {replyTo && <p>{tx('正在回复：', 'Replying to: ')}{issue.replies.find(item => item.id === replyTo)?.author.displayName}<button type="button" class="text-button" onClick={() => { setReplyTo(''); saveDraft({ replyTo: '' }); }}>{tx('取消回复关联', 'Clear reply target')}</button></p>}
       <label>{tx('补充内容', 'Your contribution')}<textarea id={`issue-input-${issue.id}`} value={text} required maxLength={4000} rows={3} onInput={event => { setText(event.currentTarget.value); saveDraft({ text: event.currentTarget.value }); }} /></label>
@@ -175,7 +208,7 @@ function IssueThread({ issue, project, selfId, refresh, onRevealFeedback }: { is
       {issue.status === 'open' && <button class="button" type="submit" disabled={action.busy || stale}>{tx('提交意见', 'Post reply')}</button>}
       {project.permissions.edit && <><label>{tx('采用的方案（可选）', 'Selected proposal (optional)')}<select value={proposalId} onChange={event => { setProposal(event.currentTarget.value); saveDraft({ proposalId: event.currentTarget.value }); }}><option value="">{tx('另行记录结论', 'Record a separate conclusion')}</option>{issue.replies.filter(item => item.kind === 'proposal').map(item => <option key={item.id} value={item.id}>{item.text.slice(0, 80)}</option>)}</select></label>
         <button type="button" class="button" disabled={action.busy || stale || !text.trim()} onClick={() => { if (stale) return; const submittedDraft = drafts.current(), sentText = text; void action.run<Item<ResearchIssue>>('POST', `${projectPath(project.id)}/issues/${issue.id}/resolution`,
-          { action: issue.status === 'open' ? 'resolve' : 'reopen', text, ...(proposalId ? { proposalId } : {}), feedbackIds: feedbackId ? [feedbackId] : [], expectedRevision: revision }, result => { if (submittedDraft) drafts.remove(submittedDraft, true); setText(value => value === sentText ? '' : value); setRevision(result.item.revision); refresh(); }); }}>{issue.status === 'open' ? tx('记录决议', 'Record resolution') : tx('重新打开议题', 'Reopen issue')}</button></>}
+          { action: issue.status === 'open' ? 'resolve' : 'reopen', text, ...(proposalId ? { proposalId } : {}), feedbackIds: feedbackId ? [feedbackId] : [], expectedRevision: revision }, result => { if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'issue-reply', id: result.item.id }); setText(value => value === sentText ? '' : value); setRevision(result.item.revision); refresh(); }); }}>{issue.status === 'open' ? tx('记录决议', 'Record resolution') : tx('重新打开议题', 'Reopen issue')}</button></>}
       <MutationState action={action} /></form></details>}
   </article>;
 }

@@ -14,6 +14,7 @@ import { createResearchBudgetsHandler } from './researchBudgets';
 import { createResearchPersonalHandler } from './researchPersonal';
 import { createResearchJourneyHandler } from './researchJourney';
 import { handleResearchAnnotations } from './researchAnnotationsApi';
+import { startResearchProject } from './researchProjectStart';
 import { researchMathematics } from './researchMathematics';
 import { researchMathExampleValidator } from './researchMathExamples';
 import { researchAssetFromRun } from './researchAssetPrefill';
@@ -269,6 +270,8 @@ export class WebResearchApi {
     if (collections) return collections;
     const libraryTrial = await this.libraryTrials.handle(url, method, viewer, body);
     if (libraryTrial) return libraryTrial;
+    if (section === 'workspace' && id === 'problem' && action && ref === 'project' && method === 'POST')
+      return item(startResearchProject(this.jobs, this.projects, viewer, action, await body()), 201);
     if (section === 'workspace' && method === 'GET') {
       if (id === 'search') {
         const parameters = parse(z.object({ q: z.string().trim().max(128),
@@ -284,7 +287,9 @@ export class WebResearchApi {
       if (id === 'brief' && action) return item(this.workspace.brief(viewer, action, url.searchParams.get('project') ?? undefined));
       if (id === 'problem' && action) return item(this.problems.detail(viewer, action, url.searchParams.get('project') ?? undefined));
     }
-    if (section === 'workspace' && id === 'problem' && action && ref === 'stages' && method === 'POST')
+    if (section === 'workspace' && id === 'problem' && action && ref === 'stages' && subaction && parts[5] === 'reference' && parts.length === 6 && method === 'POST')
+      return item(this.problems.referenceStage(viewer, action, subaction, await body()), 201);
+    if (section === 'workspace' && id === 'problem' && action && ref === 'stages' && !subaction && method === 'POST')
       return item(this.problems.saveStage(viewer, action, url.searchParams.get('project') ?? undefined, await body()), 201);
     if (section === 'workspace' && id === 'rates' && method === 'PUT') return item(this.workspace.saveRate(viewer, await body()));
     if (section === 'session' && method === 'GET') return { status: 200, body: { authenticated: Boolean(owner),

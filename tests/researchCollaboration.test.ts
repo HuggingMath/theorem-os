@@ -20,6 +20,38 @@ const errorStatus = (fn: () => unknown, status: number) => {
   try { fn(); throw new Error('Expected a storage error'); }
   catch (error) { expect(error).toBeInstanceOf(WebStorageError); expect((error as WebStorageError).status).toBe(status); }
 };
+
+describe('one collaboration message center', () => {
+  it('keeps sent requests in progress and makes the recipient response unread for the sender', () => {
+    const { projects, project } = fixture();
+    const invitation = projects.invite(alice, project.id, { requestId: 'message-center-invite', recipientId: projects.identity(carol), role: 'reader', note: 'Review the saved route.', expectedRevision: project.revision });
+    const sent = projects.collaborationInbox(alice).items.find(item => item.invitation?.id === invitation.id)!;
+    expect(sent).toMatchObject({ category: 'progress', read: true }); expect(projects.collaborationInbox(alice).pending).toBe(0);
+    expect(projects.collaborationInbox(carol).items[0].category).toBe('decision');
+    projects.markCollaborationItem(alice, sent.id, { requestId: 'read-sent-invitation', action: 'read' });
+    projects.respondInvitation(carol, project.id, invitation.id, { requestId: 'accept-message-center-invitation', action: 'accept', expectedRevision: invitation.revision });
+    expect(projects.collaborationInbox(alice).items.find(item => item.id === sent.id)).toMatchObject({ category: 'progress', read: false, resolved: true });
+  });
+  it('separates decisions, replies and progress, and shares read state with legacy notifications', () => {
+    const { projects, project } = fixture();
+    const feedback = projects.submitFeedback(bob, project.id, { requestId: 'message-center-discussion', kind: 'discussion', text: 'Can we use the direct lemma?', statementVersionId: project.currentStatementVersionId });
+    const initial = projects.collaborationInbox(alice), update = initial.items.find(item => item.kind === 'update')!;
+    expect(update.category).toBe('progress'); expect(initial.counts).toMatchObject({ decision: 1, reply: 0, progress: 1 });
+    expect(initial.pending).toBe(1);
+    projects.markCollaborationItem(alice, update.id, { requestId: 'read-shared-update', action: 'read' });
+    expect(projects.notifications(alice).items.every(item => item.read)).toBe(true);
+    projects.markCollaborationItem(alice, update.id, { requestId: 'unread-shared-update', action: 'unread' });
+    expect(projects.notifications(alice).items.some(item => !item.read)).toBe(true);
+    projects.readNotifications(alice, { requestId: 'read-legacy-update' });
+    expect(projects.collaborationInbox(alice).items.find(item => item.id === update.id)?.read).toBe(true);
+    projects.markCollaborationItem(alice, update.id, { requestId: 'unread-after-all-read', action: 'unread' });
+    projects.readCollaborationInbox(alice, { requestId: 'read-every-message' });
+    expect(projects.notifications(alice).items.every(item => item.read)).toBe(true);
+    expect(projects.collaborationInbox(alice).unread).toBe(0);
+    projects.decideFeedback(alice, project.id, feedback.id, { requestId: 'ask-author-input', status: 'needs-info', reason: 'Explain the last step.', expectedRevision: feedback.revision });
+    expect(projects.collaborationInbox(bob).items.find(item => item.kind === 'needs-info')).toMatchObject({ category: 'reply', resolved: false });
+  });
+});
 function observation(runId = 'run-a', changes: Partial<WebObservation['inspection']> = {}): WebObservation {
   return { schema: 'theorem-os.web-observation.v1', webRunId: runId, solverRunId: 'solver-fixture',
     observedAt: at, sequence: 1, evidence: 'recorded-not-replayed', acceptance: 'not-assessed',
@@ -512,6 +544,30 @@ describe('frozen passage annotations', () => {
     return { requestId, target: { observationRef: context.target.observationRef, taskRef: context.target.taskRef },
       anchor: { kind: 'source', file: 'Main.lean', sourceDigest: mathDigest(original), startLine: 1, endLine: 1, quote: original.trimEnd() }, text: 'Why is the original goal left open?' };
   }
+  it('routes new passage replies to participants, reopens their inbox item, and preserves the exact task link', () => {
+    const context = fixture(true), { projects, project, directory } = context;
+    let annotation = projects.createAnnotation(bob, project.id, 'run-a', sourceInput(context));
+    const first = projects.collaborationInbox(alice).items.find(item => item.kind === 'annotation')!;
+    expect(first).toMatchObject({ category: 'reply', read: false, resolved: false });
+    expect(projects.collaborationInbox(alice).pending).toBe(1);
+    const href = new URL(first.href, 'http://localhost');
+    expect(href.pathname).toBe('/problem.html');
+    expect(Object.fromEntries(href.searchParams)).toMatchObject({ run: 'run-a', project: project.id, task: 'target', taskVersion: 'task-v1', annotation: annotation.id });
+    projects.markCollaborationItem(alice, first.id, { requestId: 'read-passage', action: 'done' });
+    annotation = projects.updateAnnotation(alice, project.id, 'run-a', annotation.id, { requestId: 'answer-passage', action: 'reply', text: 'The next proof closes it.', expectedRevision: annotation.revision });
+    expect(projects.collaborationInbox(bob).items.find(item => item.kind === 'annotation')).toMatchObject({ category: 'reply', text: 'The next proof closes it.', read: false });
+    annotation = projects.updateAnnotation(bob, project.id, 'run-a', annotation.id, { requestId: 'resolve-passage', action: 'resolve', expectedRevision: annotation.revision });
+    const resolved = projects.collaborationInbox(alice).items.find(item => item.kind === 'annotation')!;
+    expect(resolved).toMatchObject({ category: 'progress', resolved: true, read: false, processed: false });
+    expect(resolved.id).not.toBe(first.id); expect(projects.collaborationInbox(alice).pending).toBe(0);
+    projects.updateAnnotation(alice, project.id, 'run-a', annotation.id, { requestId: 'reopen-passage', action: 'reopen', expectedRevision: annotation.revision });
+    const restored = new WebResearchProjects(new WebStorage(directory));
+    expect(restored.collaborationInbox(bob).items.find(item => item.kind === 'annotation')).toMatchObject({ category: 'reply', resolved: false, read: false });
+    projects.createAnnotation(alice, undefined, 'run-a', { ...sourceInput(context, 'private-passage'), text: 'PRIVATE_PASSAGE' });
+    expect(JSON.stringify(restored.collaborationInbox(bob))).not.toContain('PRIVATE_PASSAGE');
+    projects.setMember(alice, project.id, projects.identity(bob), { requestId: 'remove-passage-reader', role: null, expectedRevision: projects.detail(alice, project.id).revision });
+    expect(restored.collaborationInbox(bob).items.filter(item => item.kind === 'annotation')).toEqual([]);
+  });
   it('validates the exact file, digest, line range and quoted text, then persists one immutable anchor', () => {
     const context = fixture(true), { projects, project, directory } = context, input = sourceInput(context);
     for (const anchor of [{ ...input.anchor, file: 'Other.lean' }, { ...input.anchor, sourceDigest: 'f'.repeat(64) },

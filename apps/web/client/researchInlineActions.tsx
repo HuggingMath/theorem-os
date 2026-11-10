@@ -1,4 +1,4 @@
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { WebCommandResult, WebObservation } from '../collaboration';
 import type { WebRun } from '../shared';
 import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail, ResearchRunBinding } from '../researchProjectTypes';
@@ -11,11 +11,15 @@ import { ProofSubmission } from './researchTheorems';
 import { ProjectPlanApproval } from './researchPlanApproval';
 import { DecisionSummary } from './decisionSummary';
 import { ResearchAnnotations } from './researchAnnotations';
+import { ResearchDraftPicker } from './researchDrafts';
+import { useResearchInputDraft } from './researchInputDraft';
+import type { ResearchDraftValues } from '../researchPersonalTypes';
+import type { ResearchDraft } from './researchDraftStore';
 import './researchInlineActions.css';
 
 /** Route-local controls keep the displayed mathematical contract beside every human action. */
-export function ResearchInlineActions({ problem, task, context, refresh, onTask }: { problem: ResearchProblem; task?: ResearchBriefTask; context: ResearchContext; refresh(): void;
-  onTask?(target: ResearchFeedbackTarget, task: { id: string; version: string }): void }) {
+export function ResearchInlineActions({ problem, task, context, refresh, onTask, focusAnnotationId }: { problem: ResearchProblem; task?: ResearchBriefTask; context: ResearchContext; refresh(): void;
+  onTask?(target: ResearchFeedbackTarget, task: { id: string; version: string }): void; focusAnnotationId?: string }) {
   const project = problem.project, runId = problem.brief.selectedRunId, binding = project?.runs.find(binding => binding.runId === runId);
   const root = project ? `${base}/theorems/${enc(project.id)}/runs/${enc(runId)}` : `/api/runs/${enc(runId)}`;
   const resource = useResource<{ run?: WebRun; observation?: WebObservation | null }>(context.session.authenticated && (!project || project.permissions.member) ? `${root}${project ? '/observation' : ''}` : undefined, 5000);
@@ -26,6 +30,13 @@ export function ResearchInlineActions({ problem, task, context, refresh, onTask 
   const [annotationScope, setAnnotationScope] = useState<'project' | 'private'>('project');
   const drawer = useRef<HTMLDialogElement>(null);
   const selfId = context.session.researcherId ?? '';
+  useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    if ((focusAnnotationId || query.has('accountDraft')) && drawer.current && !drawer.current.open) drawer.current.showModal();
+    if (query.get('feedback') && (focusAnnotationId || query.has('accountDraft'))) {
+      setFocus(previous => ({ id: query.get('feedback')!, request: (previous?.request ?? 0) + 1 })); setShowFeedback(true);
+    }
+  }, [focusAnnotationId]);
   if (project && !project.permissions.member) return null;
   return <section class="research-inline-actions" data-research-inline-actions>
     <button type="button" class="button" data-inline-open onClick={() => drawer.current?.showModal()}>{task ? tx('处理这一步：指导、候选与批注', 'Work on this step: guidance, candidates and comments') : tx('审阅路线并参与决定', 'Review the route and take action')}</button>
@@ -42,7 +53,7 @@ export function ResearchInlineActions({ problem, task, context, refresh, onTask 
         <InlineProjectClaim project={project} binding={binding} observation={observation} task={current ? task : undefined} selfId={selfId} refresh={changed} />
         <ProjectPlanApproval project={project} binding={{ ...binding, status: run.status }} observation={observation} selfId={selfId} refresh={changed} />
       </> : !project && <InlinePersonalApproval run={run} observation={observation} root={root} refresh={changed} />}
-      {(!task || current) && (binding?.permissions.guidance ?? !project) && run.status === 'running' && <InlineGuidance project={project} binding={binding} observation={observation} task={task} root={root} refresh={changed}
+      {(!task || current) && (binding?.permissions.guidance ?? !project) && run.status === 'running' && <InlineGuidance selfId={selfId} project={project} binding={binding} observation={observation} task={task} root={root} refresh={changed}
         onSaved={id => { setFocus(previous => ({ id, request: (previous?.request ?? 0) + 1 })); setShowFeedback(true); }} />}
       {project && binding && task && current && binding.permissions.proof && run.status === 'running' && <>
         <button class="button" type="button" data-inline-candidate onClick={() => setOpenedCandidate(value => !value)} aria-expanded={openedCandidate}>{tx('在这里编写候选证明', 'Write a candidate proof here')}</button>
@@ -52,9 +63,9 @@ export function ResearchInlineActions({ problem, task, context, refresh, onTask 
       </>}
     </>}
     {task && <>{project && binding?.permissions.manage && <label>{tx('批注可见范围', 'Annotation visibility')}<select data-inline-annotation-scope value={annotationScope} onChange={event => setAnnotationScope(event.currentTarget.value as typeof annotationScope)}><option value="project">{tx('项目成员', 'Project members')}</option><option value="private">{tx('我的私有批注', 'My private comments')}</option></select></label>}
-      <ResearchAnnotations key={project && annotationScope === 'project' ? project.id : 'personal'} runId={runId} projectId={annotationScope === 'project' ? project?.id : undefined} task={task} commit={task.commit} selfId={selfId} refresh={changed} /></>}
+      <ResearchAnnotations key={project && annotationScope === 'project' ? project.id : 'personal'} runId={runId} projectId={annotationScope === 'project' ? project?.id : undefined} task={task} commit={task.commit} selfId={selfId} refresh={changed} focusAnnotationId={focusAnnotationId} /></>}
     {project && <details open={showFeedback} onToggle={event => setShowFeedback(event.currentTarget.open)}><summary>{tx('在此审阅对应提交与决定', 'Review related submissions and decisions here')}</summary>
-      <FeedbackWorkspace project={project} selfId={selfId} runId={runId} task={task ? { runId, taskId: task.id, taskVersion: task.version } : undefined} initialScope={task ? 'task' : 'run'} refresh={changed} browseTask={0} focus={focus}
+      <FeedbackWorkspace project={project} selfId={selfId} runId={runId} task={task ? { runId, taskId: task.id, taskVersion: task.version } : undefined} initialScope={task ? 'task' : 'run'} refresh={changed} browseTask={0} focus={focus} focusAnnotationId={focusAnnotationId}
         onRevealFeedback={id => setFocus(previous => ({ id, request: (previous?.request ?? 0) + 1 }))} onOpenTask={(target, task) => {
           drawer.current?.close();
           if (onTask) { onTask(target, task); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-inline-open]')?.focus()); }
@@ -75,7 +86,7 @@ function InlineProjectClaim({ project, binding, observation, task, selfId, refre
     {claim ? tx('释放我的认领', 'Release my claim') : tx('由我接着处理这一步', 'Claim this step')}</button><MutationState action={action} /></div>;
 }
 
-function usePersonalCommand(root: string, refresh: () => void) {
+function usePersonalCommand(root: string, refresh: () => void, onSaved?: (receipt: WebCommandResult) => void) {
   const pending = useRef<{ path: string; body: Record<string, unknown> }>(), lock = useRef(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [receipt, setReceipt] = useState<WebCommandResult>();
   const [unconfirmed, setUnconfirmed] = useState(false), [submitted, setSubmitted] = useState<Record<string, unknown>>();
   const send = async (path: string, body: Record<string, unknown>, retry = false) => {
@@ -89,7 +100,8 @@ function usePersonalCommand(root: string, refresh: () => void) {
         catch (cause) { if (!(cause instanceof ResearchHttpError && cause.status === 404)) throw cause; }
       }
       const result = saved ?? (await api<{ receipt: WebCommandResult }>(`${root}/${submission.path}`, { method: 'POST', body: JSON.stringify(submission.body) })).receipt;
-      setReceipt(result); setUnconfirmed(result.status === 'unknown'); if (result.status !== 'unknown') pending.current = undefined; refresh();
+      setReceipt(result); setUnconfirmed(result.status === 'unknown'); if (result.status !== 'unknown') pending.current = undefined;
+      if (!['unknown', 'failed', 'rejected'].includes(result.status)) onSaved?.(result); refresh();
     } catch (cause) {
       setError(errorText(cause)); setUnconfirmed(true);
       if (cause instanceof ResearchHttpError && cause.status >= 400 && cause.status < 500) { pending.current = undefined; setUnconfirmed(false); }
@@ -111,16 +123,26 @@ function InlinePersonalApproval({ run, observation, root, refresh }: { run: WebR
   </section>;
 }
 
-function InlineGuidance({ project, binding, observation, task, root, refresh, onSaved }: { project?: ResearchProjectDetail; binding?: ResearchRunBinding; observation: WebObservation; task?: ResearchBriefTask; root: string; refresh(): void; onSaved(id: string): void }) {
-  const [text, setText] = useState(''), [confirmed, setConfirmed] = useState(''), action = useMutation(), personal = usePersonalCommand(root, refresh);
+function InlineGuidance({ selfId, project, binding, observation, task, root, refresh, onSaved }: { selfId: string; project?: ResearchProjectDetail; binding?: ResearchRunBinding; observation: WebObservation; task?: ResearchBriefTask; root: string; refresh(): void; onSaved(id: string): void }) {
+  const runId = binding?.runId ?? observation.webRunId;
+  const scope = { runId, ...(binding ? { statementVersionId: binding.statementVersionId } : {}), ...(task ? { taskId: task.id, taskVersion: task.version } : {}) };
+  const input = useResearchInputDraft<ResearchDraftValues['guidance']>(selfId, project?.id, 'guidance', scope, { text: '',
+    planVersion: observation.inspection.planVersion, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } });
+  const text = input.value.text, [confirmed, setConfirmed] = useState(''), action = useMutation();
+  const pending = useRef<{ draft?: ResearchDraft<ResearchDraftValues['guidance']>; value: ResearchDraftValues['guidance'] }>();
+  const personal = usePersonalCommand(root, refresh, receipt => { const submitted = pending.current; if (submitted) {
+    void input.complete(submitted.draft, { kind: 'guidance', id: receipt.id }, submitted.value); pending.current = undefined;
+  } });
   const signature = JSON.stringify([task?.id, task?.version, observation.inspection.planVersion]), checked = confirmed === signature;
   const target: ResearchFeedbackTarget | undefined = binding ? { runId: binding.runId, statementVersionId: binding.statementVersionId, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, ...(task ? { taskRef: { id: task.id, version: task.version } } : {}) } : undefined;
   const recipient = task ? { kind: 'task', id: task.id } : { kind: 'lead' }, busy = action.busy || personal.busy;
-  return <details><summary>{task ? tx('对这一步提供指导', 'Give guidance for this step') : tx('向 Lead 提供路线意见', 'Give route guidance to the Lead')}</summary><form class="research-form" onSubmit={event => { event.preventDefault(); if (!checked) return; const submitted = text;
-    if (project && target) void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(project.id)}/feedback`, { kind: 'guidance', target, recipient, text }, result => { setText(value => value === submitted ? '' : value); refresh(); onSaved(result.item.id); });
-    else void personal.send('guidance', { text, recipient, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, ...(task ? { taskRef: { id: task.id, version: task.version } } : {}) });
+  return <details data-inline-guidance open={Boolean(text) || undefined}><summary>{task ? tx('对这一步提供指导', 'Give guidance for this step') : tx('向 Lead 提供路线意见', 'Give route guidance to the Lead')}</summary>
+    <ResearchDraftPicker drafts={input.drafts} filter={item => item.scope.runId === runId && (item.scope.taskId ?? '') === (task?.id ?? '') && (item.scope.taskVersion ?? '') === (task?.version ?? '')} onRestore={item => { input.restore(item); setConfirmed(''); action.reset(); }} />
+    <form class="research-form" onSubmit={event => { event.preventDefault(); if (!checked) return; const submitted = input.drafts.current(), value = input.value;
+    if (project && target) void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(project.id)}/feedback`, { kind: 'guidance', target, recipient, text }, result => { void input.complete(submitted, { kind: 'feedback', id: result.item.id }, value); refresh(); onSaved(result.item.id); });
+    else { pending.current = { draft: submitted, value }; void personal.send('guidance', { text, recipient, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, ...(task ? { taskRef: { id: task.id, version: task.version } } : {}) }); }
   }}><p>{tx('指导对象', 'Recipient')}: {task ? `${task.id} · ${task.version.slice(0, 12)}` : 'Lead'}</p>
-    <Field label={tx('希望怎样改进这一步或路线', 'How should this step or route improve?')} value={text} onInput={setText} multiline required maxLength={4000} />
+    <Field label={tx('希望怎样改进这一步或路线', 'How should this step or route improve?')} value={text} onInput={text => input.update({ text, planVersion: observation.inspection.planVersion, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } })} multiline required maxLength={4000} />
     <label class="research-check"><input type="checkbox" data-inline-confirm-guidance checked={checked} onChange={event => setConfirmed(event.currentTarget.checked ? signature : '')} />{tx('已核对当前命题、前提和指导对象', 'I reviewed the statement, premises and recipient')}</label>
     <button type="submit" class="button" data-inline-send-guidance disabled={busy || !checked || personal.unconfirmed}>{tx('发送这条指导', 'Send this guidance')}</button><MutationState action={action} />
     {!project && <PersonalCommandStatus command={personal} />}

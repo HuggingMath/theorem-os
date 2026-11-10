@@ -220,6 +220,33 @@ describe('one problem workspace', () => {
     expect(f.problems.saveStage(alice, run.id, project.id, input).id).toBe(stage.id);
     expect(f.problems.detail(alice, run.id).stages).toHaveLength(1);
   });
+  it('explicitly references a private conclusion in a project issue, retaining its author and frozen route without private attempts', () => {
+    const f = fixture(), run = recorded(), other = recorded('PRIVATE_UNSHARED_ATTEMPT');
+    run.observation!.inspection.tasks[0].informalProof = 'The frozen stage argument.'; f.save(alice, run); f.save(alice, other);
+    f.projects.saveProfile(alice, { requestId: 'stage-author', expectedRevision: 0, displayName: 'Alice when finalized' });
+    const stage = f.problems.saveStage(alice, run.id, undefined, stageInput(f.problems.detail(alice, run.id).evidenceDigest));
+    let project = f.projects.create(alice, { requestId: 'stage-project', title: 'Shared stage discussion', visibility: 'members' });
+    project = f.projects.setMember(alice, project.id, f.projects.identity(bob), { requestId: 'stage-reader', role: 'reader', expectedRevision: project.revision });
+    project = f.projects.addVersion(alice, project.id, { requestId: 'stage-version', expectedRevision: project.revision, statement: 'Recorded proof', source: run.source, environment: run.environment });
+    project = f.projects.bindRun(alice, project.id, { requestId: 'stage-binding', expectedRevision: project.revision, runId: run.id, statementVersionId: project.versions[0].id });
+    expect(f.projects.collaboration(bob, project.id).issues).toEqual([]);
+    expect(f.problems.detail(bob, run.id, project.id).stages).toEqual([]);
+    const input = { requestId: 'share-stage-once', projectId: project.id, title: 'Choose the next step', text: 'Which open goal should we tackle?' };
+    const issue = f.problems.referenceStage(alice, run.id, stage.id, input);
+    expect(f.problems.referenceStage(alice, run.id, stage.id, input).id).toBe(issue.id);
+    expect(issue.stageReference).toMatchObject({ stageId: stage.id, author: { id: f.projects.identity(alice), displayName: 'Alice when finalized' }, evidenceDigest: stage.evidenceDigest });
+    expect(issue.stageReference!.snapshot.tasks.map(task => [task.id, task.version, task.derivation])).toEqual(stage.snapshot.tasks.map(task => [task.id, task.version, task.derivation]));
+    expect(issue.stageReference!.snapshot.tasks.every(task => task.href.includes(`project=${project.id}`))).toBe(true);
+    expect(issue.stageReference!.snapshot.attempts).toEqual([]);
+    expect(issue.stageReference!.snapshot.usage.entries).toEqual([]);
+    expect(JSON.stringify(issue)).not.toContain('PRIVATE_UNSHARED_ATTEMPT');
+    const changed = structuredClone(run); changed.observation!.sequence++; changed.observation!.inspection.tasks[0].informalProof = 'A later route'; f.save(alice, changed);
+    const visible = f.projects.collaboration(bob, project.id).issues[0];
+    expect(visible.stageReference!.snapshot.tasks[0].derivation).toBe(stage.snapshot.tasks[0].derivation);
+    expect(f.problems.detail(alice, run.id, project.id).stages.map(item => item.id)).toContain(stage.id);
+    expect(() => f.problems.referenceStage(bob, run.id, stage.id, { ...input, requestId: 'reader-share' })).toThrow('没有修改权限');
+    expect(() => f.problems.referenceStage(alice, run.id, stage.id, { ...input, snapshot: {} })).toThrow('有效的议题内容');
+  });
   it('keeps new reads and writes behind the existing session and write gates', async () => {
     const f = fixture(), run = recorded(); f.save(alice, run);
     const runner = { async readiness() { return { ready: true, message: 'fixture' }; } } as WebRunner;
@@ -232,6 +259,15 @@ describe('one problem workspace', () => {
       expect(api.problems.detail(alice, run.id).stages).toEqual([]);
       const saved = await api.handle(new URL(`${url}/stages`), 'POST', alice, async () => stageInput(initial.evidenceDigest), () => {});
       expect(saved.status).toBe(201);
+      const stage = api.problems.detail(alice, run.id).stages[0];
+      let project = f.projects.create(alice, { requestId: 'stage-api-project', title: 'Stage API project', visibility: 'members' });
+      project = f.projects.addVersion(alice, project.id, { requestId: 'stage-api-version', expectedRevision: project.revision, statement: 'Recorded proof', source: run.source, environment: run.environment });
+      project = f.projects.bindRun(alice, project.id, { requestId: 'stage-api-run', expectedRevision: project.revision, runId: run.id, statementVersionId: project.versions[0].id });
+      const referenceUrl = new URL(`${url}/stages/${stage.id}/reference`), referenceInput = { requestId: 'stage-api-reference', projectId: project.id };
+      await expect(api.handle(referenceUrl, 'POST', alice, async () => referenceInput, () => { throw new Error('write gate'); })).rejects.toThrow('write gate');
+      expect(f.projects.collaboration(alice, project.id).issues).toEqual([]);
+      expect((await api.handle(referenceUrl, 'POST', alice, async () => referenceInput, () => {})).status).toBe(201);
+      expect(f.projects.collaboration(alice, project.id).issues[0].stageReference?.stageId).toBe(stage.id);
     } finally { await api.close(); }
   });
 });

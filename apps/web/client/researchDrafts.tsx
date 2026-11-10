@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ResearchDraftStore, researchDraftKey, type ResearchDraft, type ResearchDraftScope } from './researchDraftStore';
-import type { ResearchAccountDraft, ResearchAccountDraftResult } from '../researchPersonalTypes';
+import type { ResearchAccountDraft, ResearchAccountDraftResult, ResearchDraftSubmission } from '../researchPersonalTypes';
 import { api, base, enc, ErrorBox, errorText, stamp, tx } from './researchShared';
 
 export function useResearchDrafts<T>(owner: string, projectId: string, kind: ResearchDraftScope['kind']) {
@@ -11,6 +11,7 @@ export function useResearchDrafts<T>(owner: string, projectId: string, kind: Res
   const [remoteBusy, setRemoteBusy] = useState(false), [notice, setNotice] = useState('');
   const remoteLock = useRef(false), generation = useRef(0);
   const seenRevisions = useRef(new Map<string, number>()), pending = useRef<{ signature: string; body: object }>();
+  const [completion, setCompletion] = useState<{ item: ResearchDraft<T>; submission: Omit<ResearchDraftSubmission, 'href'> }>();
   const store = () => new ResearchDraftStore(localStorage);
   const reload = () => {
     try { setItems(owner ? store().list<T>(owner, projectId, kind) : []); setError(''); }
@@ -19,25 +20,55 @@ export function useResearchDrafts<T>(owner: string, projectId: string, kind: Res
   const reloadAccount = async () => {
     const epoch = generation.current;
     try {
-      const value = await api<{ account: boolean; items: ResearchAccountDraft[] }>(`${base}/personal/drafts?${new URLSearchParams({ projectId, kind })}`);
+      const value = await api<{ account: boolean; items: ResearchAccountDraft[] }>(`${base}/personal/drafts?${new URLSearchParams({ ...(projectId ? { projectId } : {}), kind, status: 'all' })}`);
       if (epoch !== generation.current) return;
-      setAccount(value.account); setRemote(value.items); setRemoteError('');
+      setAccount(value.account); setRemote(value.items.filter(item => (item.scope.projectId ?? '') === projectId)); setRemoteError('');
       value.items.forEach(item => seenRevisions.current.set(researchDraftKey(item.scope), item.revision));
     } catch (cause) { if (epoch === generation.current) setRemoteError(errorText(cause)); }
   };
   useEffect(() => {
-    generation.current++; current.current = undefined; setMemory(undefined); seenRevisions.current.clear(); pending.current = undefined; setRemote([]); setNotice(''); setRemoteBusy(false); reload();
+    generation.current++; current.current = undefined; setMemory(undefined); seenRevisions.current.clear(); pending.current = undefined; setRemote([]); setNotice(''); setRemoteBusy(false); setCompletion(undefined); reload();
     if (owner) void reloadAccount();
     const storageChanged = () => reload(); window.addEventListener('storage', storageChanged);
     return () => { generation.current++; window.removeEventListener('storage', storageChanged); };
   }, [owner, projectId, kind]);
+  const remove = (item: ResearchDraft<T>, unchanged = false) => {
+    try {
+      if (unchanged) store().removeIfUnchanged(item); else store().remove(item.scope);
+      if (current.current && researchDraftKey(current.current.scope) === researchDraftKey(item.scope) && JSON.stringify(current.current) === JSON.stringify(item)) current.current = undefined;
+      setMemory(previous => previous && researchDraftKey(previous.scope) === researchDraftKey(item.scope) && JSON.stringify(previous) === JSON.stringify(item) ? undefined : previous);
+      reload();
+    } catch { setError(tx('未能删除本机草稿，请重试。', 'The local draft could not be removed. Try again.')); }
+  };
+  const complete = async (item: ResearchDraft<T>, submission: Omit<ResearchDraftSubmission, 'href'>) => {
+    const epoch = generation.current;
+    setRemoteError('');
+    try {
+      if (account || item.accountRevision) {
+        const value = await api<{ items: ResearchAccountDraft[] }>(`${base}/personal/drafts?${new URLSearchParams({ ...(projectId ? { projectId } : {}), kind, status: 'all' })}`);
+        const scope = { ...item.scope }; delete scope.localRevision;
+        const draft = value.items.find(entry => researchDraftKey(entry.scope) === researchDraftKey(scope));
+        const version = draft?.versions.find(entry => entry.clientUpdatedAt === item.updatedAt) ?? draft?.versions.find(entry => entry.revision === item.accountRevision);
+        if (draft && version) await api(`${base}/personal/drafts/${enc(draft.id)}`, { method: 'PATCH',
+          body: JSON.stringify({ requestId: `complete_${version.id}_${submission.id}`, versionId: version.id, action: 'submitted', submission }) });
+      }
+      remove(item, true);
+      if (epoch === generation.current) { setCompletion(undefined); setNotice(tx('提交已保存，相关草稿已归档。', 'The submission is saved and its drafts are archived.')); await reloadAccount(); }
+    } catch (cause) {
+      if (epoch === generation.current) { setCompletion({ item, submission }); setRemoteError(tx('提交已经保存，草稿归档尚未完成。请重试归档。', 'The submission is saved. Draft archiving is incomplete; retry archiving.') + ` ${errorText(cause)}`); }
+    }
+  };
   return {
     items: memory && !items.some(item => researchDraftKey(item.scope) === researchDraftKey(memory.scope) && item.updatedAt === memory.updatedAt) ? [memory, ...items] : items,
-    error, owner, projectId, kind, account, remote, remoteError, remoteBusy, notice, reloadAccount,
+    error, owner, projectId, kind, account, remote, remoteError, remoteBusy, notice, reloadAccount, complete, completion,
+    retryCompletion: () => completion && complete(completion.item, completion.submission),
+    read(scope: Omit<ResearchDraftScope, 'owner' | 'projectId' | 'kind'>): ResearchDraft<T> | undefined {
+      try { const target = { ...scope, owner, ...(projectId ? { projectId } : {}), kind }; return store().list<T>(owner, projectId, kind).find(item => researchDraftKey(item.scope) === researchDraftKey(target)); } catch { return; }
+    },
     save(scope: Omit<ResearchDraftScope, 'owner' | 'projectId' | 'kind'>, value: T, summary: string) {
       if (!owner) return;
       const revisionOf = value && typeof value === 'object' && 'revisionOf' in value ? value.revisionOf as { feedbackId?: string } | undefined : undefined;
-      const target = { ...scope, owner, projectId, kind, ...(kind === 'candidate' && revisionOf?.feedbackId ? { sourceFeedbackId: revisionOf.feedbackId } : {}) };
+      const target = { ...scope, owner, ...(projectId ? { projectId } : {}), kind, ...(kind === 'candidate' && revisionOf?.feedbackId ? { sourceFeedbackId: revisionOf.feedbackId } : {}) };
       const local = [current.current, ...items].find(item => item && researchDraftKey(item.scope) === researchDraftKey(target));
       const accountRevision = local ? local.accountRevision ?? 0 : seenRevisions.current.get(researchDraftKey(target)) ?? 0;
       const draft: ResearchDraft<T> = { schema: 'theorem-os.human-draft.v1', scope: target, value, summary, updatedAt: new Date().toISOString(), accountRevision };
@@ -81,25 +112,27 @@ export function useResearchDrafts<T>(owner: string, projectId: string, kind: Res
       remoteLock.current = true; setRemoteBusy(true); setRemoteError(''); const epoch = generation.current;
       try {
         const { item } = await api<{ item: ResearchAccountDraftResult<T> }>(`${base}/personal/drafts/${enc(id)}?version=${enc(versionId)}`);
-        if (epoch !== generation.current || item.draft.scope.owner !== owner || item.draft.scope.projectId !== projectId || item.draft.scope.kind !== kind) return;
+        if (epoch !== generation.current || item.draft.scope.owner !== owner || (item.draft.scope.projectId ?? '') !== projectId || item.draft.scope.kind !== kind) return;
+        if (item.version.status && item.version.status !== 'open') await api(`${base}/personal/drafts/${enc(id)}`, { method: 'PATCH',
+          body: JSON.stringify({ requestId: crypto.randomUUID(), versionId, action: 'restore' }) });
         const draft: ResearchDraft<T> = { schema: 'theorem-os.human-draft.v1', scope: item.draft.scope, value: item.version.value,
-          summary: item.version.summary, updatedAt: item.version.clientUpdatedAt, accountRevision: item.draft.revision };
+          summary: item.version.summary, updatedAt: item.version.clientUpdatedAt, accountRevision: item.version.revision };
         try { current.current = store().restore(draft); reload(); }
         catch { current.current = draft; setError(tx('本机备份不可用；账号版本仍保留，请保留当前页面。', 'A local backup is unavailable. The account version is retained; keep this page open.')); }
         setMemory(current.current); seenRevisions.current.set(researchDraftKey(item.draft.scope), item.draft.revision);
-        return draft;
+        await reloadAccount(); return draft;
       } catch (cause) { if (epoch === generation.current) setRemoteError(errorText(cause)); }
       finally { remoteLock.current = false; if (epoch === generation.current) setRemoteBusy(false); }
     },
     current: () => current.current,
-    remove(item: ResearchDraft<T>, unchanged = false) {
-      try {
-        if (unchanged) store().removeIfUnchanged(item); else store().remove(item.scope);
-        if (current.current && researchDraftKey(current.current.scope) === researchDraftKey(item.scope) && current.current.updatedAt === item.updatedAt) current.current = undefined;
-        setMemory(previous => previous && researchDraftKey(previous.scope) === researchDraftKey(item.scope) && previous.updatedAt === item.updatedAt ? undefined : previous);
-        reload();
-      } catch { setError(tx('未能删除本机草稿，请重试。', 'The local draft could not be removed. Try again.')); }
+    async discardAccount(id: string, versionId: string) {
+      if (remoteLock.current) return;
+      remoteLock.current = true; setRemoteBusy(true); setRemoteError('');
+      try { await api(`${base}/personal/drafts/${enc(id)}`, { method: 'PATCH', body: JSON.stringify({ requestId: crypto.randomUUID(), versionId, action: 'discard' }) }); await reloadAccount(); }
+      catch (cause) { setRemoteError(errorText(cause)); }
+      finally { remoteLock.current = false; setRemoteBusy(false); }
     },
+    remove,
   };
 }
 
@@ -107,13 +140,16 @@ export function ResearchDraftPicker<T>({ drafts, onRestore, filter = () => true 
   drafts: ReturnType<typeof useResearchDrafts<T>>; onRestore(item: ResearchDraft<T>): void; filter?(item: ResearchDraft<T>): boolean;
 }) {
   const root = useRef<HTMLDivElement>(null), revealed = useRef('');
+  const [showArchived, setShowArchived] = useState(false);
   const items = drafts.items.filter(filter);
   const remote = drafts.remote.filter(item => filter({ schema: 'theorem-os.human-draft.v1', scope: item.scope, summary: item.versions[0]?.summary ?? '',
     updatedAt: item.versions[0]?.clientUpdatedAt ?? '', value: (item.scope.kind === 'candidate' && item.scope.sourceFeedbackId ? { revisionOf: { feedbackId: item.scope.sourceFeedbackId } } : {}) as T }));
+  const visible = remote.map(item => ({ ...item, versions: item.versions.filter(version => showArchived || (version.status ?? 'open') === 'open') })).filter(item => item.versions.length);
   const requested = new URLSearchParams(location.search).get('accountDraft'), requestedVersion = new URLSearchParams(location.search).get('draftVersion');
   useEffect(() => {
     if (!requested || !root.current || revealed.current === requested || !remote.some(item => item.id === requested)) return;
     revealed.current = requested;
+    if (remote.find(item => item.id === requested)?.versions.some(version => (!requestedVersion || version.id === requestedVersion) && version.status && version.status !== 'open')) setShowArchived(true);
     const outer = root.current.closest('details'); if (outer) outer.open = true;
     const account = root.current.querySelector<HTMLDetailsElement>('[data-account-drafts]>details'); if (account) account.open = true;
     root.current.scrollIntoView({ block: 'start' });
@@ -125,19 +161,23 @@ export function ResearchDraftPicker<T>({ drafts, onRestore, filter = () => true 
         {drafts.account && <button class="button" type="button" disabled={drafts.remoteBusy} data-save-account-draft onClick={() => void drafts.saveAccount(item)}>{tx('保存到账号', 'Save to account')}</button>}
         <button class="text-button" type="button" data-discard-draft onClick={() => drafts.remove(item)}>{tx('丢弃草稿', 'Discard draft')}</button></div></div>)}</details>}
     <div class="research-account-drafts" data-account-drafts><ErrorBox message={drafts.remoteError} />
+      {drafts.completion && <button class="button" type="button" data-retry-draft-completion onClick={() => void drafts.retryCompletion()}>{tx('重试归档已提交草稿', 'Retry archiving the submitted draft')}</button>}
       {drafts.notice && <p role="status" data-account-draft-notice>{drafts.notice}</p>}
-      {drafts.account && <details onToggle={event => { if (event.currentTarget.open) void drafts.reloadAccount(); }}><summary>{tx(`账号草稿 · ${remote.reduce((sum, item) => sum + item.versions.length, 0)} 个版本`, `Account drafts · ${remote.reduce((sum, item) => sum + item.versions.length, 0)} versions`)}</summary>
+      {drafts.account && <details onToggle={event => { if (event.currentTarget.open) void drafts.reloadAccount(); }}><summary>{tx(`账号草稿 · ${visible.reduce((sum, item) => sum + item.versions.length, 0)} 个版本`, `Account drafts · ${visible.reduce((sum, item) => sum + item.versions.length, 0)} versions`)}</summary>
         <p class="research-field-note">{tx('由你选择保存和恢复。恢复只带回编辑内容，请核对目标与版本后继续。', 'Choose when to save and restore. Restoring loads the editor; review its goal and version before continuing.')}</p>
         <button type="button" class="text-button" disabled={drafts.remoteBusy} onClick={() => void drafts.reloadAccount()}>{tx('刷新账号版本', 'Refresh account versions')}</button>
-        {remote.map(item => <section key={item.id} data-account-draft={item.id}>
+        <label class="research-check"><input type="checkbox" data-show-archived-drafts checked={showArchived} onChange={event => setShowArchived(event.currentTarget.checked)} />{tx('显示已提交或已丢弃的草稿', 'Show submitted and discarded drafts')}</label>
+        {visible.map(item => <section key={item.id} data-account-draft={item.id}>
           {item.scope.taskId && <p><code>{item.scope.taskId} · {item.scope.taskVersion} · {item.scope.commit?.slice(0, 12)}</code></p>}
           {item.versions.map(version => <div class="collaboration-draft" key={version.id} data-account-draft-version={version.id} data-requested={item.id === requested && (!requestedVersion || requestedVersion === version.id)}><strong>{version.summary}</strong>
             <p>{tx('版本', 'Version')} {version.revision} · {version.deviceName} · {stamp(version.savedAt)}</p>
+            {version.status && version.status !== 'open' && <p data-draft-status={version.status}>{version.status === 'submitted' ? tx('已提交并归档', 'Submitted and archived') : tx('已丢弃', 'Discarded')}{version.submission?.href && <> · <a href={version.submission.href}>{tx('查看实际提交记录', 'Open the submitted record')}</a></>}</p>}
             <p class="research-field-note">{tx('本机编辑时间：', 'Edited on device: ')}{stamp(version.clientUpdatedAt)}{version.conflict ? ` · ${tx('与其他设备并行保存，两个版本均保留', 'Saved alongside another device’s version; both are preserved')}` : ''}</p>
             <button type="button" class="button" data-restore-account-draft disabled={drafts.remoteBusy} onClick={() => void drafts.restoreAccount(item.id, version.id).then(restored => { if (restored) onRestore(restored); })}>{tx('恢复这个版本', 'Restore this version')}</button>
+            {(version.status ?? 'open') === 'open' && <button type="button" class="text-button" data-discard-account-draft disabled={drafts.remoteBusy} onClick={() => void drafts.discardAccount(item.id, version.id)}>{tx('丢弃这个账号版本', 'Discard this account version')}</button>}
           </div>)}
         </section>)}
-        {!remote.length && <p>{tx('还没有保存到账号的草稿。先编辑内容，再选择「保存到账号」。', 'No account drafts yet. Edit your work, then choose Save to account.')}</p>}
+        {!visible.length && <p>{tx('没有未完成的账号草稿。可编辑后保存，或查看已归档版本。', 'No unfinished account drafts. Save your edits or show archived versions.')}</p>}
       </details>}
     </div>
   </div>;

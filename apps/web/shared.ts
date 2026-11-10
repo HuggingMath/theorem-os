@@ -441,8 +441,10 @@ export function workbenchReturn(search: string): string {
     retain('run', /^[a-f0-9-]{1,36}$/u); retain('project', recordId);
     retain('task', identity); retain('taskVersion', identity); retain('commit', /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u);
     retain('accountDraft', recordId); retain('draftVersion', recordId);
+    retain('annotation', recordId); retain('feedback', recordId);
     if (destination === 'problem') {
       retain('tab', /^(?:overview|route|compare|discussion|outcomes|stages|brief)$/u);
+      retain('map', /^(?:global|attempt)$/u);
       retain('compare', /^[a-f0-9-]{1,36}$/u);
       retain('decision', identity);
       retain('snapshot', /^[a-f0-9]{64}$/u); retain('changeRecord', identity);
@@ -451,7 +453,9 @@ export function workbenchReturn(search: string): string {
     } else if (destination === 'theorems') {
       retain('id', recordId); retain('version', recordId); retain('revise', recordId);
     } else {
-      retain('tab', /^(?:inbox|search|usage|brief|collections|drafts)$/u);
+      retain('tab', /^(?:inbox|search|usage|brief|collections|drafts|trials|help)$/u);
+      retain('trial', recordId); retain('asset', recordId); retain('status', /^(?:prepared|checking|passed|failed)$/u);
+      retain('inbox', /^(?:all|pending|unread|decision|reply|progress)$/u);
       retain('history', /^[a-f0-9]{64}$/u);
       retain('kind', /^(?:problem|conversation|lemma|route|library|history|decision|stage)$/u);
       const searchQuery = params.get('q'); if (searchQuery && searchQuery.length <= 128) kept.set('q', searchQuery);
@@ -474,6 +478,11 @@ export function workbenchReturn(search: string): string {
     if (/^[a-f0-9-]{1,36}$/u.test(budgetRun) && /^\d{1,13}$/u.test(tokens) && Number(tokens) > 0 && Number(tokens) <= 1e12) {
       kept.set('budgetRun', budgetRun); kept.set('budgetTokens', tokens);
       if (project && /^[A-Za-z0-9_-]{1,128}$/u.test(project)) kept.set('project', project);
+    }
+  } else if (params.has('libraryTrial') && params.has('trialDigest')) {
+    const trial = params.get('libraryTrial')!, digest = params.get('trialDigest')!;
+    if (/^[A-Za-z0-9_-]{1,128}$/u.test(trial) && /^[a-f0-9]{64}$/u.test(digest)) {
+      kept.set('libraryTrial', trial); kept.set('trialDigest', digest);
     }
   } else if (params.has('libraryProposal') && params.has('project')) {
     const proposal = params.get('libraryProposal')!, project = params.get('project')!;

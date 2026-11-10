@@ -1,11 +1,16 @@
 import type { ResearchBrief } from './researchWorkspaceTypes';
-import type { ResearchProjectDetail } from './researchProjectTypes';
+import type { ResearchAuthor, ResearchProjectDetail } from './researchProjectTypes';
 import type { ResearchCollaborationView } from './researchCollaborationTypes';
 
 export type ResearchStageConclusion = {
   id: string; requestId: string; createdAt: string; title: string; conclusion: string; boundaries: string;
   unresolved: string; next: string; evidenceDigest: string;
   snapshot: ResearchBrief; projectId?: string;
+  author?: ResearchAuthor;
+};
+/** An explicitly shared copy of one conclusion and its selected route, without other private attempts or usage. */
+export type ResearchStageReference = Omit<ResearchStageConclusion, 'id' | 'requestId' | 'projectId' | 'author'> & {
+  stageId: string; author: ResearchAuthor;
 };
 export type ResearchProblem = {
   key: string; evidenceDigest: string; brief: ResearchBrief; project?: ResearchProjectDetail;

@@ -3,6 +3,7 @@ import type { ResearchBudgetView } from '../researchBudgetTypes';
 import type { ResearchProblem } from '../researchProblemTypes';
 import { formatTokens } from '../presentation';
 import { base, enc, ErrorBox, MutationState, Panel, tx, useMutation, useResource, type Item } from './researchShared';
+import { ResearchBudgetContinuity } from './researchBudgetContinuity';
 
 export function ResearchBudgetFacts({ value }: { value: ResearchBudgetView }) {
   const { plan, forecast } = value;
@@ -33,7 +34,7 @@ export function ResearchProblemBudget({ problem }: { problem: Pick<ResearchProbl
     && (amount === '' || Number.isFinite(Number(amount)) && Number(amount) >= 0);
   return <Panel title={tx('整道题的预算', 'Budget for the whole problem')}>
     <ErrorBox message={data.error} />{data.error && <button class="button" type="button" onClick={data.refresh}>{tx('重新读取', 'Try again')}</button>}
-    {value && <><ResearchBudgetFacts value={value} /><details data-budget-editor><summary>{tx('设置题目预算', 'Set a problem budget')}</summary>
+    {value && <><ResearchBudgetFacts value={value} /><ResearchBudgetContinuity value={value} endpoint={endpoint} onResolved={data.refresh} /><details data-budget-editor hidden={value.continuity?.status === 'conflict'}><summary>{tx('设置题目预算', 'Set a problem budget')}</summary>
       <form class="research-form" onSubmit={event => { event.preventDefault(); if (!ready) return; void action.run<Item<ResearchBudgetView>>('PUT', endpoint,
         { expectedRevision: expected, tokenLimit: tokenLimit === '' ? null : Number(tokenLimit), amountLimit: amount === '' ? null : Number(amount), currency }, () => { setEditing(false); data.refresh(); }); }}>
         <div class="research-form-row"><label>{tx('整题 Token 预算（可留空）', 'Problem token budget (optional)')}<input type="number" data-budget-token-limit value={tokenLimit} min="0" max="1000000000000" step="1" onInput={event => { setEditing(true); setTokenLimit(event.currentTarget.value); }} /></label>

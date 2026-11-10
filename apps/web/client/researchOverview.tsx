@@ -13,6 +13,7 @@ import { buildResearchOverview, overviewProjectHref, type ResearchOverviewAction
 import { problemEntryHref } from './researchProblemNavigation';
 import type { ResearchPersonalProblem } from '../researchPersonalTypes';
 import { PersonalNextNote, PersonalProblemControl } from './researchPersonal';
+import { CollaborationMessageSummary } from './collaborationFlow';
 
 export type ResearchOverviewProps = {
   owner: string; runs: readonly WebRun[]; conversations: readonly WebConversationSummary[]; formalizations: readonly WebFormalization[];
@@ -83,6 +84,7 @@ export function ResearchOverview(props: ResearchOverviewProps) {
   return <section class="research-overview" data-research-overview aria-label={tx('我的研究', 'My research')}>
     <header class="research-overview-heading"><div><p>{tx('继续研究', 'Continue your research')}</p><h2>{tx('我的研究', 'My research')}</h2></div>
       <a href="theorems.html" class="text-button">{tx('定理与协作者', 'Theorems and collaborators')} ↗</a></header>
+    <CollaborationMessageSummary request={props.request} />
     {model.actions.length > 0 && <section class="research-overview-inbox" data-overview-inbox aria-label={tx('待我处理', 'Needs your attention')}>
       <h3>{tx('待我处理', 'Needs your attention')} <span>{model.actions.length}</span></h3><ul>{model.actions.map(action => <li key={action.id}>
         <a href={action.runId ? problemEntryHref({ runId: action.runId, href: action.href, tab: action.kind === 'feedback' ? 'discussion' : action.kind === 'plan' ? 'route' : undefined }) : action.href}

@@ -57,6 +57,7 @@ export type ResearchAnnotation = {
   feedbackId?: string; reviewCommentId?: string; anchor: ResearchAnnotationAnchor; text: string; status: 'open' | 'resolved';
   replies: { id: string; author: ResearchAuthor; text: string; createdAt: string }[];
   resolution?: { actor: ResearchAuthor; text?: string; createdAt: string };
+  lastAction?: { action: 'reply' | 'resolve' | 'reopen'; actor: ResearchAuthor; createdAt: string };
   revision: number; createdAt: string; updatedAt: string;
 };
 export type ResearchAnnotationView = ResearchAnnotation & { stale: boolean; staleReason?: 'task-changed' | 'source-changed' | 'field-changed' | 'candidate-revised'; canReply: boolean; canResolve: boolean };
@@ -126,6 +127,7 @@ export type ResearchContribution = {
 export type ResearchActivity = {
   id: string; sequence: number; projectId?: string; actor: ResearchAuthor; type: string; summary: string;
   feedbackId?: string; statementVersionId?: string; runId?: string; createdAt: string;
+  annotationId?: string;
   assetId?: string; assetVersion?: string;
 };
 export type ResearchProjectSummary = {

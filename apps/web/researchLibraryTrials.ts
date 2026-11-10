@@ -11,7 +11,8 @@ import type { WebRun } from './shared';
 import type { WebInspectedTask, WebTaskSource } from './collaboration';
 import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
 import type { ResearchLibraryTrial, ResearchLibraryTrialTarget, ResearchLibraryTrialTargetRef, ResearchLibraryTrialReceipt,
-  ResearchLibraryCandidateAttachment, ResearchLibraryProposalTarget, ResearchLibraryAttemptPreparation } from './researchLibraryTrialTypes';
+  ResearchLibraryCandidateAttachment, ResearchLibraryProposalTarget, ResearchLibraryAttemptPreparation, ResearchLibraryPersonalAttemptPreparation,
+  ResearchLibraryTrialHistory, ResearchLibraryTrialHistoryItem } from './researchLibraryTrialTypes';
 import { WebStorage, WebStorageError } from './storage';
 import { selectWebLibraryPack } from './frozenLibrary';
 import { researchCandidateScopeReason } from './researchCandidateScope';
@@ -160,6 +161,46 @@ export class WebResearchLibraryTrials {
     this.exact(viewer, stored.draft.target.ref, release);
     return { ...copy(stored.draft), ...(this.pending.has(`${viewer}:${id}`) ? { status: 'checking' as const } : {}) };
   }
+  history(viewer: string, id: string): ResearchLibraryTrialHistory {
+    const stored = this.deps.storage.getRecord<Stored>(this.path(viewer, id)) ?? fail(404, '试用候选不存在或不属于当前账号。');
+    const trial = copy(stored.draft), ref = trial.target.ref;
+    // History retains its frozen source. Current run/release permission is still required on every read.
+    const release = this.deps.assets.release(viewer, trial.release.assetId, trial.release.version);
+    if (release.digest !== trial.release.digest) fail(409, '成果版本的固定身份已改变，请重新选择。');
+    const binding = ref.projectId ? this.deps.projects.resolveBinding(viewer, ref.projectId, ref.runId, 'proof') : undefined;
+    if (binding && !binding.binding.permissions.manage && !this.deps.projects.detail(viewer, ref.projectId!).permissions.member)
+      fail(403, '只有有候选证明权限的项目成员可以试用任务。');
+    const run = binding?.run ?? this.deps.jobs.get(viewer, ref.runId) ?? fail(404, '研究不存在或不可访问。');
+    const recorded = this.deps.storage.listObservations(binding?.runOwner ?? viewer, ref.runId);
+    if (run.observation) recorded.push(run.observation);
+    if (!recorded.some(observation => observation.sources.some(source => source.taskId === ref.taskId && source.taskVersion === ref.taskVersion
+      && source.commit === ref.commit && source.sourceDigest === ref.sourceDigest && source.environmentDigest === ref.environmentDigest && source.file === ref.file)))
+      fail(404, '试用对应的固定源码记录已不可访问。');
+    let current = true, reason: string | undefined;
+    try { this.get(viewer, id); } catch (error) { if (!(error instanceof WebStorageError && error.status === 409)) throw error; current = false; reason = error.message; }
+    if (this.pending.has(`${viewer}:${id}`)) trial.status = 'checking';
+    return { trial, current, ...(reason ? { reason } : {}), personalAttempt: current && trial.status === 'passed' && Boolean(this.deps.jobs.get(viewer, ref.runId)),
+      libraryPack: copy(stored.libraryPack) as ResearchLibraryPack, dependencySources: copy(stored.dependencySources) };
+  }
+  historyList(viewer: string, raw: unknown = {}): { items: ResearchLibraryTrialHistoryItem[]; total: number; nextOffset?: number } {
+    this.path(viewer, 'history');
+    const filters = parse(z.object({ runId: key.optional(), assetId: key.optional(), status: z.enum(['prepared', 'checking', 'passed', 'failed']).optional(),
+      offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(30) }).strict(), raw);
+    const root = ['owners', mathDigest(viewer), 'library-trials'];
+    const items = this.deps.storage.listRecords(root).flatMap(file => {
+      if (!/^trial_[a-f0-9]{32}\.json$/u.test(file)) return [];
+      const stored = this.deps.storage.getRecord<Stored>([...root, file]); if (!stored || filters.runId && stored.draft.target.ref.runId !== filters.runId || filters.assetId && stored.draft.release.assetId !== filters.assetId) return [];
+      try {
+        const { trial, current, reason } = this.history(viewer, stored.draft.id);
+        if (filters.status && trial.status !== filters.status) return [];
+        return [{ id: trial.id, digest: trial.digest, release: trial.release, target: trial.target.ref, runTitle: trial.target.runTitle,
+          taskTitle: trial.target.taskTitle, declaration: trial.declaration.name, createdAt: trial.createdAt, status: trial.status, current,
+          ...(reason ? { reason } : {}), ...(trial.check ? { receiptId: trial.check.receiptId, checkedAt: trial.check.receipt.checkedAt } : {}) }];
+      } catch (error) { if (error instanceof WebStorageError && [403, 404, 409].includes(error.status)) return []; throw error; }
+    }).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+    return { items: items.slice(filters.offset, filters.offset + filters.limit), total: items.length,
+      ...(filters.offset + filters.limit < items.length ? { nextOffset: filters.offset + filters.limit } : {}) };
+  }
   resolveCandidateAttachment(viewer: string, projectId: string, id: string, expectedDigest: string, shared: true): ResearchLibraryCandidateAttachment {
     if (shared !== true) fail(400, '请明确同意将试用源码、参数、成果版本和检查回执共享给项目成员。');
     parse(key, projectId); parse(hash, expectedDigest);
@@ -221,11 +262,25 @@ export class WebResearchLibraryTrials {
       fail(409, '提案的候选源码与固定检查回执不一致。');
     const release = this.release(viewer, trial.release.assetId, trial.release.version, trial.release.digest);
     this.exact(viewer, { ...trial.target.ref, projectId }, release);
+    return { projectId, feedbackId, ...this.attemptConfiguration(viewer, run, trial, source, attachment!.libraryPack, attachment!.dependencySources) };
+  }
+  preparePersonalAttempt(viewer: string, id: string, digest: string): ResearchLibraryPersonalAttemptPreparation {
+    parse(hash, digest);
+    const trial = this.get(viewer, id), run = this.deps.jobs.get(viewer, trial.target.ref.runId) ?? fail(403, '只有原研究的所有者可以准备个人新尝试。');
+    const stored = this.deps.storage.getRecord<Stored>(this.path(viewer, id))!;
+    if (trial.digest !== digest || trial.status !== 'passed' || !trial.check?.receipt.passed || identity(trial.check.receipt) !== trial.check.receiptId
+      || trial.check.receipt.draftDigest !== trial.digest || trial.check.receipt.sourceDigest !== mathDigest(trial.source)
+      || trial.check.receipt.libraryPackDigest !== libraryPackDigest(stored.libraryPack) || mathDigest(trial.source) !== trial.sourceDigest)
+      fail(409, '只有这份已通过独立检查的固定候选可以准备个人新尝试。');
+    return { trialId: id, originRunId: run.id, ...this.attemptConfiguration(viewer, run, trial, trial.source, stored.libraryPack as ResearchLibraryPack, stored.dependencySources) };
+  }
+  private attemptConfiguration(viewer: string, run: WebRun, trial: ResearchLibraryTrial, source: string, libraryPack: ResearchLibraryPack,
+    dependencySources: { file: string; source: string }[]): Omit<ResearchLibraryAttemptPreparation, 'projectId' | 'feedbackId'> {
     const declarations = inspectScopedLeanDeclarations(source);
     if (inspectScopedLeanDeclarations(run.source).some(original => !declarations.some(item => item.kind === original.kind
       && item.qualifiedName === original.qualifiedName && item.declarationType === original.declarationType)))
       fail(409, '这份候选只包含辅助文件，尚未包含原题的全部声明；请先整合为完整源码再准备新尝试。');
-    const dependencies = new Set(attachment!.dependencySources.filter(item => !attachment!.libraryPack.modules.some(module => module.file === item.file && module.source === item.source))
+    const dependencies = new Set(dependencySources.filter(item => !libraryPack.modules.some(module => module.file === item.file && module.source === item.source))
       .map(item => item.file.slice(0, -5).replaceAll('/', '.')));
     if (mathConstructionImports(source).some(name => dependencies.has(name)))
       fail(409, '这份候选仍依赖尚未发布的多文件源码，请先将必要依赖保存为固定数学库。');
@@ -249,12 +304,12 @@ export class WebResearchLibraryTrials {
       if (old && old.source !== module.source) fail(409, '新尝试的固定模块发生冲突，请重新选择成果。');
       modules.set(module.file, module);
     }
-    if (attachment!.libraryPack.modules.some(module => modules.get(module.file)?.source !== module.source))
+    if (libraryPack.modules.some(module => modules.get(module.file)?.source !== module.source))
       fail(409, '原任务的固定依赖无法由选定成果完整复原，尚不能准备这个新尝试。');
     const pack = parseLibraryPack({ schema: LIBRARY_PACK_SCHEMA, modules: [...modules.values()] });
     configuration.libraryPack = pack as ResearchLibraryPack;
     const { digest: _digest, ...content } = configuration;
-    return { projectId, feedbackId, source, task: run.task, environment: run.environment, selection,
+    return { source, task: run.task, environment: run.environment, selection,
       refs: [...(selection.agent ? [selection.agent] : []), ...(selection.skills ?? []), ...(selection.libraries ?? [])],
       ...(basePlan ? { modulePlan: basePlan } : {}),
       configurationDigest: identity(content), libraryPackDigest: libraryPackDigest(pack), target: trial.target.ref, trialDigest: trial.digest };
@@ -307,6 +362,15 @@ export function createResearchLibraryTrialsHandler(deps: Dependencies) {
         if (parts[6] === 'trials' && method === 'POST') return item(service.prepare(viewer, parts[3], parts[5], await readBody()), 201);
       }
       if (parts[2] !== 'library-trials') return;
+      if (parts.length === 3 && method === 'GET') return { status: 200, body: service.historyList(viewer, {
+        ...(url.searchParams.has('run') ? { runId: url.searchParams.get('run') } : {}),
+        ...(url.searchParams.has('asset') ? { assetId: url.searchParams.get('asset') } : {}),
+        ...(url.searchParams.has('status') ? { status: url.searchParams.get('status') } : {}),
+        ...(url.searchParams.has('offset') ? { offset: Number(url.searchParams.get('offset')) } : {}),
+        ...(url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {}),
+      }) };
+      if (parts.length === 5 && parts[4] === 'history' && method === 'GET') return item(service.history(viewer, parts[3]!));
+      if (parts.length === 5 && parts[4] === 'prepare-attempt' && method === 'GET') return item(service.preparePersonalAttempt(viewer, parts[3]!, url.searchParams.get('digest') ?? ''));
       if (parts.length === 4 && method === 'GET') return item(service.get(viewer, parts[3]!));
       if (parts.length === 5 && parts[4] === 'proposal-targets' && method === 'GET') return { status: 200, body: { items: service.proposalTargets(viewer, parts[3]!) } };
       if (parts.length === 5 && parts[4] === 'check' && method === 'POST') return item(await service.check(viewer, parts[3]!, await readBody()));
