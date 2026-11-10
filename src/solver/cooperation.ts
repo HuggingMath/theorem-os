@@ -8,13 +8,13 @@ import { canonicalMathJson, mathDigest, readMathText, writeMathJsonDurable } fro
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
 import { committedSource, git, originalDeclarationRegions, solverSourceConstraints } from './problem';
 import { solverProofFeedback, solverSourceFeedback } from './feedback';
-import { assessTaskResponsibility, assignSharedResearchTask, independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
+import { assessTaskResponsibility, assignSharedResearchTask, independentFeasibilityWorker, researchWorkerCanNode, type ResearchWorker } from './modules/organization';
 import type { DispatchWaitObservation } from './archive';
 import { CAPACITY_EXPLORATION_FOCUSES, capacityExplorationInput, createCapacityExploration,
   currentCapacityExploration, TIMED_EXPLORATION_FOCUSES, TIMED_EXPLORATION_IDLE_MS, TIMED_EXPLORATION_MIN_REMAINING_MS,
   TIMED_EXPLORATION_UNANSWERED_WAKES, timedExplorationTargets } from './capacityExploration';
 import { hasFreshSolverCheck, proofReceiptsMatch, type ProofCheck } from './modules/evidence';
-import { originalGoalTaskFocus, readyResearchTasks, researchCanAdvance, routeAllowsTask, taskCanStart, taskDependenciesReady, selectedTaskRoute } from './modules/search';
+import { originalGoalTaskFocus, readyResearchTasks, researchCanAdvance, routeAllowsTask, taskCanStart, taskDependenciesReady, selectedTaskRoute, runningTaskDependencies } from './modules/search';
 import { deliveryDetails, reviewVerdict, readMathResponse as block, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
 import { checkTaskProof, ownedSourceDigest, taskChanges } from './cooperativeProof';
 import { assertStatementSnapshot, isStatementAction, resetStatementReview } from './statementReview';
@@ -34,7 +34,7 @@ import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { taskTypePreflightEnvironmentIdentity, typeDiagnosticExcerpt, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
-import { idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
+import { idlePeerEpisode, idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
 import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
@@ -126,16 +126,17 @@ export class CooperativeResearch extends CooperationInputs {
   private explorationTimer?: { at: number; timer: NodeJS.Timeout };
   /**
    * The narrow gate for a team of at most four. This peer has waited at least
-   * TIMED_EXPLORATION_IDLE_MS with nothing it can start; since the last deciding Lead turn the Lead was woken for idle
-   * peers at least twice while this peer was idle, and no Lead turn is running now; and enough solving time remains.
+   * TIMED_EXPLORATION_IDLE_MS with nothing it can start; the Lead was woken at least twice for this same unresolved
+   * peer episode, and no Lead turn is running now; and enough solving time remains.
    * Only the wait itself matures with time, so a peer that is otherwise eligible is re-dispatched when it does.
    */
   private timedExplorationDue(worker: ResearchWorker, budget: DispatchBudget): boolean {
     const scheduling = this.input.state.workers?.find(record => record.id === worker.id)?.scheduling;
-    const wait = scheduling?.wait, wake = this.archive.idlePeerWake;
+    const wait = scheduling?.wait;
+    const wake = scheduling && idlePeerEpisode(this.archive.idlePeerWake, worker.id, scheduling.since);
     if (budget.remainingMs < TIMED_EXPLORATION_MIN_REMAINING_MS || this.active.has(this.lead.id) ||
         scheduling?.status !== 'idle' || !wait || wait.endedAt !== undefined || !NO_WORK_STAGES.has(wait.stage) ||
-        !wake || wake.at <= (this.archive.leadDecisionBasisAt ?? 0) || (wake.count ?? 1) < TIMED_EXPLORATION_UNANSWERED_WAKES ||
+        !wake || wake.count < TIMED_EXPLORATION_UNANSWERED_WAKES ||
         wake.at < scheduling.since) return false;
     const dueAt = scheduling.since + TIMED_EXPLORATION_IDLE_MS, now = Date.now();
     if (dueAt <= now) return true;
@@ -163,21 +164,32 @@ export class CooperativeResearch extends CooperationInputs {
   private idlePeerTimer?: NodeJS.Timeout;
   /**
    * Busy peers never return the Lead's turn, so a peer left without startable work would wait for them. One wake per
-   * idle peer no deciding Lead turn has seen idle: the inbox already lists idle workers, and a turn that decides (or
-   * this wake) moves the basis past them. A turn cut or paused without a decision has not answered them, so a peer
-   * an earlier wake named is re-owed a turn on the Lead's backoff schedule. Nothing running is the ordinary
+   * continuous idle episode, independent of when the Lead last became idle or accepted a plan. Each peer keeps
+   * its own bounded retry schedule until it gets work or waits on a live dependency. Nothing running is the ordinary
    * idle-Lead path, not this one.
    */
   private wakeForIdlePeers() {
     clearTimeout(this.idlePeerTimer); this.idlePeerTimer = undefined;
     if (this.stopping || !this.active.size && !this.proofPublications.size || this.active.has(this.lead.id) || !this.archive.tasks.length) return;
-    const decidedAt = this.archive.leadDecisionBasisAt ?? 0, previous = this.archive.idlePeerWake;
-    const unanswered = previous && previous.at > decidedAt ? previous : undefined;
-    const retry = unanswered && { at: unanswered.at,
-      notBefore: unanswered.at + IDLE_PEER_WAKE_MS * 2 ** Math.min(unanswered.count ?? 1, LEAD_MAX_BACKOFF) };
-    const { due, dueAt } = idlePeersAwaitingLead(this.input.state.workers ?? [], this.lead.id, decidedAt, Date.now(), retry);
+    const workers = this.input.state.workers ?? [], previous = this.archive.idlePeerWake;
+    const episodes: NonNullable<NonNullable<typeof previous>['episodes']> = {};
+    const retries = new Map<string, { since: number; notBefore: number }>();
+    for (const worker of workers) {
+      const scheduling = worker.scheduling;
+      if (worker.id === this.lead.id || scheduling?.status !== 'idle' || !scheduling.wait ||
+          scheduling.wait.endedAt !== undefined || !NO_WORK_STAGES.has(scheduling.wait.stage)) continue;
+      const episode = idlePeerEpisode(previous, worker.id, scheduling.since);
+      if (!episode) continue;
+      episodes[worker.id] = episode;
+      retries.set(worker.id, { since: episode.since,
+        notBefore: episode.at + IDLE_PEER_WAKE_MS * 2 ** Math.min(episode.count, LEAD_MAX_BACKOFF) });
+    }
+    const { due, dueAt } = idlePeersAwaitingLead(workers, this.lead.id, Date.now(), retries);
     if (due.length) {
-      this.archive.idlePeerWake = { at: Date.now(), workerIds: due, ...(unanswered ? { count: (unanswered.count ?? 1) + 1 } : {}) };
+      const at = Date.now();
+      for (const id of due) episodes[id] = { since: workers.find(worker => worker.id === id)!.scheduling!.since,
+        at, count: (episodes[id]?.count ?? 0) + 1 };
+      this.archive.idlePeerWake = { at, workerIds: due, count: Math.max(...due.map(id => episodes[id].count)), episodes };
       this.wakeLead('peers-idle');
       this.input.emit('lead_woken_for_idle_peers', { workerIds: due, idleWakeMs: IDLE_PEER_WAKE_MS });
       this.input.save();
@@ -531,13 +543,29 @@ export class CooperativeResearch extends CooperationInputs {
       return 'capacity-expired';
   }
   private recordTaskWait(worker: ResearchWorker, ranked: readonly TaskRecord[], ready: readonly TaskRecord[]) {
-    const dependencies = !ranked.length ? this.archive.tasks.filter(node =>
+    const owned = this.archive.tasks.filter(node => !['integrated', 'completed'].includes(node.status) &&
+      researchWorkerCanNode(worker, node) && (!node.task.ownerId || node.task.ownerId === worker.id));
+    if (!ranked.length && owned.length && owned.every(node => (node.task.status ?? 'active') !== 'active' ||
+        this.archive.groups?.some(route => route.group.id === taskGroup(node.task) && route.group.status !== 'active'))) {
+      this.recordDispatchWait(worker, { stage: 'route-paused', candidateCount: 0, omittedCandidates: 0, candidates: [] });
+      return;
+    }
+    const dependencies = this.archive.tasks.filter(node =>
       ['pending', 'blocked'].includes(node.status) && assessTaskResponsibility(node, worker, this.responsibility).kind === 'matches' &&
       routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) && !this.synchronizationBlocked(node.task) &&
-      !taskCanStart(node.task, this.archive.tasks, this.archive.groups)) : [];
+      !taskCanStart(node.task, this.archive.tasks, this.archive.groups));
     if (dependencies.length) {
-      this.recordDispatchWait(worker, { stage: 'dependency-blocked', candidateCount: dependencies.length,
-        omittedCandidates: Math.max(0, dependencies.length - 16), candidates: dependencies.slice(0, 16).map(node => ({
+      const active = new Set([...this.active.values()].flatMap(work => work.action.kind === 'task' &&
+        !work.cancelled && this.current(work.action) ? [work.action.task.id] : []));
+      for (const node of this.preparingTaskTypes.keys()) active.add(node.task.id);
+      for (const publication of this.proofPublications.values())
+        if (this.current(publication.action)) active.add(publication.action.task.id);
+      const running = dependencies.map(node => runningTaskDependencies(node, this.archive.tasks, active));
+      const live = running.every(ids => ids && ids.length) ? [...new Set(running.flatMap(ids => ids!))]
+        .map(id => this.node(id)) : undefined;
+      const candidates = live ?? dependencies;
+      this.recordDispatchWait(worker, { stage: live ? 'dependency-running' : 'dependency-blocked', candidateCount: candidates.length,
+        omittedCandidates: Math.max(0, candidates.length - 16), candidates: candidates.slice(0, 16).map(node => ({
           taskId: node.task.id, taskDigest: digest(node.task), reason: 'dependency' })) });
       return;
     }
@@ -605,8 +633,9 @@ export class CooperativeResearch extends CooperationInputs {
     const selectedRoute = selectedTaskRoute(node, this.archive.tasks);
     if (node.assignment && node.alternativeRoutes?.length && node.assignment.routeId !== selectedRoute?.id)
       node.assignment = undefined;
+    const priorAssignment = node.assignment;
     let resuming = node.assignment?.workerId === worker.id;
-    if (resuming && advisory(node.task) &&
+    if (resuming && (advisory(node.task) || this.archive.researchDrafts?.[node.task.id]) &&
         (this.archive.researchDrafts?.[node.task.id]?.suspended || this.researchWorkspaceChanged(worker, node))) {
       const previousAssignment = node.assignment;
       const restored = await this.restoreResearchDraft(worker, node);
@@ -767,7 +796,7 @@ export class CooperativeResearch extends CooperationInputs {
             receiptIds, feedback: feedback! };
         }
         const closeTask = this.input.modules.M2.closeTask;
-        const batteryKey = canonicalMathJson([taskDigest, dependencies, environment]);
+        const batteryKey = canonicalMathJson([taskDigest, dependencies, environment, checked.result.inputDigest]);
         if (closeTask && !canonicalCandidate && leadAccess && workerAccess && checked.result.status === 'elaborated' &&
             checked.result.context && !isDefinitionTask(task) && this.tacticBatteryCandidate(node) && !this.tacticBatteryAttempts.has(batteryKey)) {
           // One host attempt per exact helper contract in this process; a failure is not model feedback.
@@ -792,6 +821,7 @@ export class CooperativeResearch extends CooperationInputs {
           }
           this.input.emit('task_tactic_battery', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
             status: battery.status, reason: battery.reason, durationMs: Date.now() - batteryStarted, ...(checkError ? { checkError } : {}),
+            ...(battery.cacheHit ? { cacheHit: true, cacheKey: battery.cacheKey, originDiagnosticDigest: battery.originDiagnosticDigest } : {}),
             ...(battery.commit ? { commit: battery.commit } : {}), ...(battery.artifact ? { artifact: battery.artifact } : {}),
             ...(battery.vacuous ? { vacuous: true } : {}), ...(proof ? { passed: proof.passed, verificationStatus: proof.verification.status,
               receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
@@ -813,7 +843,8 @@ export class CooperativeResearch extends CooperationInputs {
     node.assignment ??= dispatchAssignment;
     if (!node.assignment.connectionCheck && automaticTaskConnection(node.task, this.archive.tasks, this.archive.groups)) {
       // Upgrading an idle historical assignment keeps its saved draft but supersedes late publications.
-      if (resuming) node.assignment = { ...node.assignment, assignmentId: crypto.randomUUID() };
+      if (resuming && node.assignment === priorAssignment)
+        node.assignment = { ...node.assignment, assignmentId: crypto.randomUUID() };
       node.assignment.connectionCheck = createTaskConnectionCheck(node.task, node.assignment, this.archive.tasks,
         { environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest },
         dependency => committedSource(worker.worktree, node.assignment!.seedCommit,
@@ -1205,7 +1236,7 @@ export class CooperativeResearch extends CooperationInputs {
         if (recovering) {
           this.preserveResearchDraft(worker, action, commit, artifacts);
           if (recoveryKind === 'checkpoint' || recoveryKind === 'scheduling-checkpoint')
-            this.researchCheckpoint(worker, action, commit);
+            await this.researchCheckpoint(worker, action, commit);
           else this.interrupted(worker, action);
           return { checkWhole: false };
         }

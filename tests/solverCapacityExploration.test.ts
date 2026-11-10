@@ -592,20 +592,25 @@ describe('host exploration for spare cooperative capacity', () => {
     it.each([
       { name: 'a peer waiting under 30 minutes', idle: 29 * 60_000 },
       { name: 'one unanswered Lead wake', count: 1 },
-      { name: 'a deciding Lead turn after the last wake', decided: true },
       { name: 'a peer that went idle after the last wake', wakeAgo: 40 * 60_000 },
       { name: 'under 30 minutes of solving time left', remainingMs: 29 * 60_000 },
       { name: 'a finite turn budget', maxTurns: 50 },
-    ] as { name: string; idle?: number; count?: number; decided?: boolean; wakeAgo?: number; remainingMs?: number; maxTurns?: number }[])(
+    ] as { name: string; idle?: number; count?: number; wakeAgo?: number; remainingMs?: number; maxTurns?: number }[])(
       'does not explore with $name', async scenario => {
         const worker = researchers()[0];
         idleFor(worker, scenario.idle ?? 31 * 60_000);
         unanswered(scenario.count ?? 2, Date.now() - (scenario.wakeAgo ?? 5 * 60_000));
-        if (scenario.decided) state.cooperation!.leadDecisionBasisAt = Date.now() - 60_000;
         await waitForCapacity(worker, { maxTurns: scenario.maxTurns ?? Infinity, remainingMs: scenario.remainingMs ?? timedBudget.remainingMs });
         expect(overlays()).toHaveLength(0);
         expect(state.cooperation!.capacityExplorationInputs).toBeUndefined();
       });
+
+    it('keeps an unresolved idle episode eligible after a plan was accepted without executable work', async () => {
+      const worker = researchers()[0];
+      idleFor(worker, 31 * 60_000); unanswered(2);
+      state.cooperation!.leadDecisionBasisAt = Date.now() - 60_000;
+      expect(node((await timedClaim(worker)).task.id).capacityExploration).toMatchObject({ focus: 'decomposition' });
+    });
 
     it('waits for a running Lead turn to end without a decision before exploring', async () => {
       const worker = researchers()[0];

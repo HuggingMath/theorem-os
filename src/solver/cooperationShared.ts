@@ -10,7 +10,6 @@ import { type BlockerBasis, type RouteBlocker } from './routeControl';
 import { type ProofRoute } from './proofRoutes';
 import { type ObligationSnapshot, type ObligationProgressReceipt } from './obligationProgress';
 import { type TaskConsumerProjection } from './taskConsumers';
-import { type CheckpointCandidate } from './researchEvidence';
 import { type ParallelQuestion } from './taskQuestions';
 import { mathematicalGaps } from './mathematicalGaps';
 import type { NextCheckRecord, NextCheckDecision } from './nextCheckContract';
@@ -112,9 +111,9 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   planApproval?: import('./planApproval').PlanApprovalRecord;
   /**
    * Last wake for peers left without work while others run; a peer idle since then can wake the Lead again. `count`
-   * counts consecutive wakes no deciding Lead turn answered; it sets the backoff before the same peers are re-owed.
+   * counts consecutive wakes for unresolved idle episodes. Accepting a plan alone never answers them.
    */
-  idlePeerWake?: { at: number; workerIds: string[]; count?: number };
+  idlePeerWake?: import('./leadInbox').IdlePeerWake;
   /** Inbox basis time of the last Lead turn that decided (accepted or published a plan); undecided turns leave it. */
   leadDecisionBasisAt?: number;
   /**
@@ -137,9 +136,7 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   progressSnapshot?: ObligationSnapshot;
   progressReceipts?: ObligationProgressReceipt[];
   unchangedResearch?: Record<string, { taskDigest: string; notesBlob: string; count: number }>;
-  researchCheckpoints?: Record<string, { taskDigest: string; inputDigest: string; outputDigest: string; count: number;
-    localInputDigest?: string; candidateOutputDigest?: string; unchangedEvidenceCount?: number; candidateStatus?: CheckpointCandidate['status'];
-    paused?: boolean; blockerId?: string }>;
+  researchCheckpoints?: Record<string, import('./researchCheckpoints').ResearchCheckpoint>;
   researchDrafts?: Record<string, { taskDigest: string; workerId: string; assignmentId?: string; seedCommit: string; canonicalCommit?: string;
     commit: string; outputDigest: string; artifacts: DeliveryArtifactManifest; suspended?: boolean }>;
   recheck?: { canonicalCommit: string; total: number; completed: number; taskId?: string };

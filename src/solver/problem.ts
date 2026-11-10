@@ -418,7 +418,8 @@ export function commitSolverSources(problem: SolverProblem, worktree: string): s
     fs.appendFileSync(exclude, `\n${missing.join('\n')}\n`);
   }
   const files = problem.ownedFiles.map(relative => path.join(problem.projectRelative, relative));
-  if (fs.existsSync(path.join(worktree, 'RESEARCH.md'))) files.push('RESEARCH.md');
+  // Restoring a draft may remove tracked notes; commit that absence as well as additions and edits.
+  if (fs.existsSync(path.join(worktree, 'RESEARCH.md')) || git(worktree, ['ls-files', '--', 'RESEARCH.md'])) files.push('RESEARCH.md');
   git(worktree, ['add', '--', ...files]);
   if (git(worktree, ['diff', '--cached', '--name-only']))
     git(worktree, ['-c', 'user.name=DeepScientist Math', '-c', 'user.email=math@localhost', 'commit', '--no-gpg-sign', '--quiet', '-m', 'Checkpoint mathematical proof']);

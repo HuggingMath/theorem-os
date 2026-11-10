@@ -12,6 +12,7 @@ import { MATH_TOOLS_ROOT_ENV, MATH_TOOLS_SHA256_ENV, readMathTools } from '../ma
 import { checkResolvedLeanToolchainReadiness } from '../math/leanToolchainReadiness';
 import { prepareMathProofEnvironment, MATH_PROOF_ENVIRONMENT_ENV } from '../math/mathProofEnvironment';
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
+import { DEFAULT_LEAN_LIBRARY_CACHE_ROOT } from '../math/leanCompilationCache';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { bindLeanPackages, prepareLeanDiagnosticOverrides, runLeanDiagnostics } from '../math/leanDiagnostics';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
@@ -316,7 +317,9 @@ export async function runSolver(args: string[], root: string, customModules?: So
       if (problem.frozenFiles && Object.keys(problem.frozenFiles).length) {
         emit('library_pack_check', { files: Object.keys(problem.frozenFiles).length });
         const library = await runLeanDiagnostics({ projectRoot: project, files: Object.keys(problem.frozenFiles), env, signal,
-          timeoutMs: preparationMs - (Date.now() - preparationStarted), onProgress: file => emit('library_pack_check', { file }) });
+          timeoutMs: preparationMs - (Date.now() - preparationStarted), onProgress: file => emit('library_pack_check', { file }),
+          sharedLibraryCache: { root: DEFAULT_LEAN_LIBRARY_CACHE_ROOT, files: problem.frozenFiles },
+          onSharedCache: (phase, file) => emit('library_pack_cache', { phase, ...(file ? { file } : {}) }) });
         writeMathJsonDurable(path.join(directory, 'library-pack-diagnostics.json'), library);
         const sorry = 'messages' in library && library.messages?.find(message => /declaration uses '?sorry'?/u.test(message.message));
         if (library.exitCode !== 0 || library.timedOut || sorry) {

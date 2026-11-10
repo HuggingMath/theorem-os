@@ -71,8 +71,10 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
   const state = { cooperation: { tasks: existing ? [{ task, status: 'pending', attempts: 0 }] : [] } } as unknown as SolverRunState;
   const context = buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
     taskText: 'Prove the target', retrievalRoot: '/library', frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' },
-    assignment: { kind: 'lead', seedCommit: 'fixed-commit' } });
-  expect(context.instructions).toContain('Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it.');
+    assignment: { kind: 'lead', seedCommit: 'fixed-commit', planVersion: 'current-plan',
+      ...(existing ? { planNonce: 'revision-dispatch' } : { initialPlanNonce: 'initial-dispatch' }) } });
+  expect(context.instructions).toContain('publish the plan or revision through this dispatch\'s delivery protocol and return promptly');
+  expect(context.instructions).toContain('an ordinary RESEARCH.md save remains an unpublished draft');
   expect(context.instructions).toContain('Delegate unresolved library or mathematical searches as research tasks to eligible Researchers or the Engineer.');
   for (const message of [context.instructions, context.continuationMessage]) {
     expect(message).toContain('ready tasks reserved by ownerId to a busy worker');
@@ -81,8 +83,22 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
   }
   expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
-  for (const message of [context.instructions, context.continuationMessage])
+  for (const message of [context.instructions, context.continuationMessage]) {
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
+    expect(message?.includes('it does not need a complete proof decomposition')).toBe(!existing);
+    if (!existing) {
+      expect(message).toContain('Keep original goals independent of advisory research in proof dependencies');
+      expect(message).toContain('never invent a proposition to fill the graph');
+      expect(message).toContain('before further literature searches or proof exploration');
+      expect(message).not.toContain('before choosing a task graph');
+    }
+  }
+  expect(context.continuationMessage?.includes('revise the accepted graph or return it unchanged')).toBe(existing);
+  expect(context.continuationMessage?.includes('No task graph has been accepted')).toBe(!existing);
+  if (!existing) {
+    expect(context.continuationMessage).toContain('"baseVersion":"current-plan"');
+    expect(context.continuationMessage).toContain('Inline the complete valid graph covering every original target exactly once');
+  }
 });
 
 const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => {

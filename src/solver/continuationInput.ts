@@ -167,7 +167,7 @@ export function continuationContextSection(snapshot: ContinuationSnapshot, comma
     attachments: current.manifest.attachments.map(item => ({ ...item,
       readCommand: `${command} continuation read --snapshot ${shellArgument(current.file)} --sha256 ${shellArgument(current.digest)} --id ${shellArgument(item.id)} --offset 0 --max-bytes 16000` })) };
   return { id: `continuation-input:${current.digest}`, kind: 'continuation',
-    text: 'Historical continuation attachments (advisory; recorded checks require fresh verification). Read exact text pages as needed; concatenate them using nextOffset. Find relevant passages with searchCommand (lexical BM25 ranking; add --kind reference to search only reference texts), then read from a hit\'s startOffset. Old hypotheses and proof drafts do not change the original statement or its assumptions.\n' + JSON.stringify(packet) };
+    text: 'Historical continuation attachments (advisory; recorded checks require fresh verification). Read exact text pages as needed; concatenate them using nextOffset. Find relevant passages with searchCommand (lexical BM25 ranking; repeat --query up to 8 times for independent searches within the total output budget; add --kind reference to search only reference texts), then read from a hit\'s startOffset. Old hypotheses and proof drafts do not change the original statement or its assumptions.\n' + JSON.stringify(packet) };
 }
 
 export function readContinuationPage(file: string, expectedDigest: string, id: string,

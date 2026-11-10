@@ -4,7 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const commands = ['check-finite', 'check-lean', 'continuation', 'kernel-certificate', 'knowledge', 'search-lean'];
+const commands = ['check-finite', 'check-lean', 'continuation', 'declarations', 'kernel-certificate', 'knowledge',
+  'proof-search', 'research-observe', 'search-lean'];
 const fixture = path.resolve('examples/finite/old-b1-nine-constraints.json');
 let directory = '';
 let tools = '';
@@ -41,5 +42,15 @@ describe('bundled Agent commands', () => {
     expect(unknown.status).toBe(1);
     for (const command of commands) expect(unknown.stderr + unknown.stdout).toContain(command);
     expect(run('../check-finite').status).toBe(1);
+  });
+
+  it('searches a saved declaration index without source-tree access', () => {
+    const index = path.join(directory, 'DECLARATIONS.jsonl');
+    fs.writeFileSync(index, JSON.stringify({ name: 'Sample.owned', kind: 'theorem', file: 'Submission.lean', line: 3,
+      sorry: false, type: 'owned : True' }) + '\n');
+    const result = run('declarations', 'search', '--index', index, '--query', 'owned');
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ authority: 'lexical-source-index',
+      hits: [{ name: 'Sample.owned', file: 'Submission.lean', line: 3 }] });
   });
 });

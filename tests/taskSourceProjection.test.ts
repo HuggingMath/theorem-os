@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
-import { createTaskSourceProjector } from '../src/solver/cooperativeProof';
+import { createTaskSourceProjector, projectedGoalInputs } from '../src/solver/cooperativeProof';
 import { committedSource, commitSolverSources, readSolverProblem } from '../src/solver/problem';
 import type { CooperativeTask } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
@@ -47,6 +47,47 @@ const fieldSource = [
 ].join('\n');
 
 describe('owned source projection through dot notation', () => {
+  const typedConsumerSource = [
+    'namespace Fixture',
+    'theorem nonneg (n : Nat) : 0 ≤ n := by sorry',
+    'theorem mass (n : Nat) : n = n := by sorry',
+    'def channel (n : Nat) : {m : Nat // m = n} := ⟨n, mass n⟩',
+    'def observationLaw (n : Nat) : Nat := (channel n).val',
+    'theorem headline (n : Nat) : observationLaw n = n := by sorry',
+    'end Fixture', '',
+  ].join('\n');
+
+  it.skipIf(!newestLeanBinary())('removes consumers whose types reference a removed frozen definition', () => {
+    const solved = typedConsumerSource.replace('by sorry', 'by exact Nat.zero_le n')
+      .replace('theorem headline',
+        'theorem observation_helper (n : Nat) : observationLaw n = n := by rfl\n' +
+        'theorem typed_binder (n : Nat) (h : channel n = channel n) : True := by trivial\n' +
+        'theorem shadowed (channel : Nat) : channel = channel := by rfl\n' +
+        'theorem headline');
+    const f = fixture(typedConsumerSource, solved);
+    const projected = f.project(f.task('Fixture.nonneg'), []).get('Submission.lean')!;
+    expect(projected).not.toContain('def channel');
+    expect(projected).not.toContain('def observationLaw');
+    expect(projected).not.toContain('theorem observation_helper');
+    expect(projected).not.toContain('theorem typed_binder');
+    expect(projected).toContain('theorem shadowed (channel : Nat)');
+    leanCheck(f, projected, 'Fixture.nonneg');
+  });
+
+  it.skipIf(!newestLeanBinary())('orders an original goal after the proved originals needed by its type', () => {
+    const f = fixture(typedConsumerSource, typedConsumerSource.replaceAll('by sorry', 'by rfl'));
+    const target = f.task('Fixture.headline'), mass = f.task('Fixture.mass');
+    expect(projectedGoalInputs(f.project, target,
+      [{ task: mass, status: 'pending', attempts: 0 }, { task: target, status: 'pending', attempts: 0 }]))
+      .toEqual([{ task: mass, status: 'pending', attempts: 0 }]);
+    expect(f.project.dependencyHints(target, []).map(hint => hint.path.map(item => item.name)))
+      .toContainEqual(['Fixture.headline', 'Fixture.observationLaw', 'Fixture.channel', 'Fixture.mass']);
+    const projected = f.project(target, ['Fixture.mass']).get('Submission.lean')!;
+    expect(projected).toContain('def channel');
+    expect(projected).toContain('def observationLaw');
+    leanCheck(f, projected, 'Fixture.headline');
+  });
+
   it.skipIf(!newestLeanBinary())('removes unrelated frozen definitions and chained consumers of excluded original fields', () => {
     const f = fixture(fieldSource, fieldSource.replace('fixture_field_star (n : Nat) : n = n := by sorry',
       'fixture_field_star (n : Nat) : n = n := by rfl'));

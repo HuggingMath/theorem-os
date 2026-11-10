@@ -14,13 +14,14 @@ import type { MathematicsVerifierBatchRequest, MathematicsVerifierExecutionOptio
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { captureSolverContinuationSource, seedSolverContinuation } from '../src/solver/continuationSeed';
 import { readContinuationPage, readContinuationSnapshot } from '../src/solver/continuationInput';
-import { committedSource, git, readSolverProblem } from '../src/solver/problem';
+import { committedSource, commitSolverSources, git, readSolverProblem } from '../src/solver/problem';
 import { theoryModuleSource } from '../src/math/theoryModules';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { expandTaskFamilies } from '../src/solver/taskFamilies';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import * as taskProofs from '../src/solver/cooperativeProof';
-import { hasTaskConnectionCheck } from '../src/solver/taskConnections';
+import { hasTaskConnectionCheck, taskConnectionCheckCurrent } from '../src/solver/taskConnections';
+import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
 import { captureResearchBasis, researchSourceDigest, settleResearch } from '../src/solver/researchRecords';
 import { researchSourceTasks, scopedResearchSources } from '../src/solver/researchSources';
 import { bindMathematicalGap } from '../src/solver/mathematicalGaps';
@@ -270,6 +271,123 @@ function cooperationFor(f: ReturnType<typeof fixture>, state: SolverRunState, fr
     freshContinuationChecks, access: new Map(workers.map(worker => [worker.id, { environment, retrievalRoot: f.root }])) });
 }
 
+async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 'lemma' = 'research',
+  notes: string | null = '\ufeffSUSPENDED_ROUTE_FINDING λ\r\n```math\n' +
+    '{"conclusion":"inconclusive","summary":"SUSPENDED_ROUTE_FINDING"}\n```\r\n', sourceDraft = true) {
+  const f = fixture(), state = f.oldState, peer = state.workers![1]!;
+  peer.role = 'engineer'; f.newState.workers![1]!.role = 'engineer';
+  const tasks = state.cooperation!.tasks, goal = tasks.find(node => node.task.id === 'goal')!;
+  goal.status = 'pending'; goal.assignment = undefined;
+  let task: CooperativeTask;
+  if (kind === 'goal' || kind === 'lemma') {
+    for (const [directory, current] of [[f.oldDirectory, state], [f.directory, f.newState]] as const) {
+      const worktree = path.join(directory, 'worktree-3');
+      git(f.workspace, ['worktree', 'add', '--quiet', '--detach', worktree, f.base]);
+      current.workers!.push({ id: 'input-prover', role: 'prover', worktree, phase: 'prepared', turns: 0, dispatchCounts: {} });
+      current.workerCount = current.workers!.length;
+    }
+    const input = tasks.find(node => node.task.id === 'first')!;
+    input.task = { ...input.task, ownerId: 'input-prover' }; input.status = 'pending';
+    input.assignment = undefined; input.integratedCheck = undefined;
+    fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission/Helpers.lean'),
+      helpers.replace('first_helper : True := by trivial', 'first_helper : True := by sorry'));
+    state.cooperation!.canonicalCommit = commit(f.sourceWorktree, 'Unfinished typed connection input');
+    task = kind === 'goal' ? { ...goal.task, ownerId: peer.id } : { id: 'saved_route', kind: 'lemma',
+      objective: 'Apply the unfinished typed input', dependsOn: ['first'], revision: 0, ownerId: peer.id,
+      theoremName: 'Submission.Helpers.saved_route', type: 'True', proofPath: 'Submission/Helpers.lean' };
+    if (kind === 'lemma') {
+      goal.task = { ...goal.task, dependsOn: [task.id], conditional: false };
+      vi.spyOn(TaskTypePreflightCache.prototype, 'check').mockImplementation(async input => ({
+        result: { status: 'unavailable', taskDigest: taskVersion(input.task), inputDigest: mathDigest('fixture-no-lean'),
+          reason: 'fixture-no-lean', evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' }, current: () => true }));
+    }
+  } else {
+    task = { id: 'saved_route', kind, objective: 'Investigate the first route', dependsOn: ['first'], revision: 0,
+      ownerId: peer.id };
+    goal.task = { ...goal.task, dependsOn: [...goal.task.dependsOn, task.id] };
+  }
+  if (kind === 'goal') goal.task = task;
+  else tasks.push({ task, status: 'pending', attempts: 0 });
+  const other: CooperativeTask = { id: 'current_route', kind: 'research', objective: 'Investigate a different route',
+    dependsOn: [], revision: 0, ownerId: peer.id, status: 'paused' };
+  const otherNode = { task: other, status: 'pending' as const, attempts: 0 }; tasks.push(otherNode);
+  const cooperative = cooperationFor(f, state), descriptor = { ...peer, ownedFiles: state.problem.ownedFiles };
+  try {
+    const action = await cooperative.next(descriptor, { maxTurns: Infinity, remainingMs: Infinity });
+    if (action?.kind !== 'task' || action.task.id !== task.id) throw new Error('fixture_expected_saved_task');
+    Object.assign(peer, { sessionRole: 'researcher', sessionTaskId: task.id, sessionTaskVersion: taskVersion(task),
+      sessionAssignmentId: action.assignment.assignmentId });
+    const file = path.join(peer.worktree, f.projectRelative, 'Submission/Helpers.lean');
+    if (sourceDraft) fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('end Submission.Helpers',
+      'lemma suspended_support : True := by\r\n  sorry\r\nend Submission.Helpers'));
+    if (notes === null) fs.rmSync(path.join(peer.worktree, 'RESEARCH.md'), { force: true });
+    else fs.writeFileSync(path.join(peer.worktree, 'RESEARCH.md'), notes);
+    const draftCommit = commitSolverSources(state.problem, peer.worktree), draftSource = fs.readFileSync(file, 'utf8');
+    cooperative.retainContextDraft(descriptor, action, draftCommit, kind === 'goal' || kind === 'lemma' ? 'connection' : 'context');
+    cooperative.interrupted(descriptor, action);
+    const node = tasks.find(node => node.task.id === task.id)!;
+    node.task = { ...node.task, status: 'paused' }; otherNode.task = { ...other, status: 'active' };
+    const current = await cooperative.next(descriptor, { maxTurns: Infinity, remainingMs: Infinity });
+    if (current?.kind !== 'task' || current.task.id !== other.id) throw new Error('fixture_expected_other_task');
+    fs.writeFileSync(path.join(peer.worktree, 'RESEARCH.md'), 'CURRENT_ROUTE_FINDING\n');
+    const currentCommit = commitSolverSources(state.problem, peer.worktree);
+    cooperative.retainContextDraft(descriptor, current, currentCommit);
+    cooperative.interrupted(descriptor, current);
+    Object.assign(peer, { sessionTaskId: other.id, sessionTaskVersion: taskVersion(other),
+      sessionAssignmentId: current.assignment.assignmentId });
+    node.task = { ...node.task, status: 'active' }; otherNode.task = { ...otherNode.task, status: 'paused' };
+    writeSolverRunState(f.sourceStateFile, state); writeSolverRunState(f.stateFile, f.newState);
+    return { ...f, task: node.task, draftCommit, draftSource, draftNotes: notes, draftAssignment: action.assignment,
+      currentCommit };
+  } finally { await cooperative.stop(); }
+}
+
+function taskDraftAttachments(stateFile: string) {
+  const state = readSolverRunState(stateFile), directory = path.dirname(stateFile);
+  const snapshot = readContinuationSnapshot(path.join(directory, 'continuation.json'), state.continuationDigest!);
+  const item = snapshot.manifest.attachments.find(item => item.id === 'seed-task-drafts')!;
+  return JSON.parse(fs.readFileSync(path.join(directory, item.contentPath), 'utf8')) as
+    NonNullable<ReturnType<typeof captureSolverContinuationSource>['taskDrafts']>;
+}
+
+async function researchCheckpointFixture(kind: 'research' | 'sketch' = 'research', count = 3,
+  notes: string | null = 'Unchanged investigation.\n', dependency = false, sourceMetadata = false) {
+  const f = fixture(), state = f.oldState, peer = state.workers![1]!;
+  peer.role = 'engineer'; f.newState.workers![1]!.role = 'engineer';
+  const task: CooperativeTask = { id: 'investigate', kind, objective: 'Investigate the original problem',
+    dependsOn: dependency ? ['input_research'] : [], revision: 0, ownerId: peer.id };
+  state.cooperation!.tasks = [{ task, status: 'pending', attempts: 0 },
+    { task: { ...f.tasks.at(-1)!, dependsOn: [task.id] }, status: 'pending', attempts: 0 }];
+  state.cooperation!.deliveries = [];
+  if (dependency) {
+    state.cooperation!.tasks.push({ task: { id: 'input_research', kind: 'research', objective: 'Find the input condition',
+      dependsOn: [], revision: 0 }, status: 'completed', attempts: 1, finding: 'The saved input condition.' });
+    publishCompletedResearch(state, 'input_research', 'original-input-finding');
+    if (sourceMetadata) Object.assign(state.cooperation!.deliveries![0]!, {
+      sourceUses: [{ kind: 'mathlib', reference: 'Mathlib.Logic.Basic', locator: 'True.intro',
+        assumptions: [], adaptation: 'Check the exact consumer in Lean.',
+        consumer: { taskId: 'goal', taskDigest: taskVersion(state.cooperation!.tasks[1]!.task) },
+        lemmaRequestIds: [], remaining: ['The original goal still requires independent verification.'] }],
+      searchCheckpoint: { path: 'retained-advisory-search.json', digest: mathDigest('retained-advisory-search') },
+    });
+  }
+  const cooperation = cooperationFor(f, state), worker = { ...peer, ownedFiles: state.problem.ownedFiles };
+  try {
+    for (let index = 0; index < count; index++) {
+      const action = await cooperation.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task' || action.task.id !== task.id) throw new Error('fixture_expected_checkpoint_task');
+      Object.assign(peer, { sessionTaskId: task.id, sessionTaskVersion: taskVersion(task),
+        sessionAssignmentId: action.assignment.assignmentId, sessionRole: 'researcher' });
+      if (notes === null) fs.rmSync(path.join(peer.worktree, 'RESEARCH.md'), { force: true });
+      else fs.writeFileSync(path.join(peer.worktree, 'RESEARCH.md'), notes);
+      await cooperation.deliver(worker, action, commitSolverSources(state.problem, peer.worktree), true);
+    }
+    const checkpoint = structuredClone(state.cooperation!.researchCheckpoints![task.id]);
+    writeSolverRunState(f.sourceStateFile, state); writeSolverRunState(f.stateFile, f.newState);
+    return { ...f, task, checkpoint };
+  } finally { await cooperation.stop(); }
+}
+
 function publishCompletedResearch(state: SolverRunState, taskId: string, id: string) {
   const node = state.cooperation!.tasks.find(node => node.task.id === taskId)!;
   const sources = Object.fromEntries(state.problem.ownedFiles.map(file => [file,
@@ -309,12 +427,12 @@ function completedResearchFixture(kind: 'research' | 'sketch' = 'research') {
 
 function nextContinuation(f: ReturnType<typeof fixture>, sourceStateFile: string, name: string) {
   const directory = path.join(f.root, `${name}.json.runtime`); fs.mkdirSync(directory, { mode: 0o700 });
-  for (const part of ['worktree', 'worktree-2'])
-    git(f.workspace, ['worktree', 'add', '--quiet', '--detach', path.join(directory, part), f.base]);
+  for (let index = 0; index < f.newState.workers!.length; index++)
+    git(f.workspace, ['worktree', 'add', '--quiet', '--detach', path.join(directory, index ? `worktree-${index + 1}` : 'worktree'), f.base]);
   const stateFile = path.join(directory, 'state.json');
   writeSolverRunState(stateFile, { ...f.newState, runId: name, worktree: path.join(directory, 'worktree'),
     workers: f.newState.workers!.map((worker, index) => ({ ...worker,
-      worktree: path.join(directory, index ? 'worktree-2' : 'worktree') })) });
+      worktree: path.join(directory, index ? `worktree-${index + 1}` : 'worktree') })) });
   const environmentFile = path.join(directory, 'environment-solver.json');
   fs.writeFileSync(environmentFile, canonicalMathJson(projectMathematicsRuntimeEnvironment({ PATH: '/usr/bin:/bin',
     DEEPSCIENTIST_MATH_ENV_FILE: environmentFile, DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages })), { mode: 0o400 });
@@ -360,6 +478,307 @@ beforeEach(() => {
     stats: { files: 0, bytes: 0, publications: 1 } });
   host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => verifiedBatch(request,
     { sessionId: 'fresh-seed', receipt: 'fresh-seed', checks: true }));
+});
+
+describe('continuation of ordinary research no-progress checkpoints', () => {
+  it.each(['research', 'sketch'] as const)('keeps a paused %s parked through repeated seeding and two more generations', async kind => {
+    const f = await researchCheckpointFixture(kind), historical = fs.readFileSync(f.sourceStateFile);
+    expect(f.checkpoint).toMatchObject({ count: 3, unchangedEvidenceCount: 3, paused: true });
+    await f.seed(); await f.seed();
+    const second = nextContinuation(f, f.stateFile, `paused-${kind}-second`); await second.seed(); await second.seed();
+    const third = nextContinuation(f, second.stateFile, `paused-${kind}-third`); await third.seed(); await third.seed();
+    for (const stateFile of [f.stateFile, second.stateFile, third.stateFile]) {
+      const state = readSolverRunState(stateFile), node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+      expect(state.cooperation!.researchCheckpoints![f.task.id]).toMatchObject(f.checkpoint);
+      expect(node).toMatchObject({ status: 'blocked', feedback: expect.stringContaining('math_research_checkpoint_unchanged'), attempts: 0 });
+      expect(node.assignment!.workerId).toBe('prover-1');
+      expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined(); expect(node.researchCompletion).toBeUndefined();
+      expect(state.cooperation!.blockers!.find(blocker => blocker.id === state.cooperation!.researchCheckpoints![f.task.id].blockerId))
+        .toMatchObject({ status: 'parked', evidenceStatus: 'advisory', mechanism: 'unchanged-research-checkpoint' });
+      expect(state.workers![1]!.threadId).toBeUndefined(); expect(state.workers![1]!.advisoryCheckpoint).toBeUndefined();
+      expect(state.cooperation!.researchDrafts![f.task.id]).toMatchObject({ suspended: true,
+        outputDigest: f.checkpoint.outputDigest, assignmentId: node.assignment!.assignmentId });
+      expect(taskDraftAttachments(stateFile).find(draft => draft.taskId === f.task.id)!.archived).toBeUndefined();
+      // Cold worker initialization is another workspace's output and must not revive the saved task.
+      fs.writeFileSync(path.join(state.workers![1]!.worktree, 'RESEARCH.md'), 'A different responsibility was initialized.');
+      commitSolverSources(state.problem, state.workers![1]!.worktree);
+      const cooperation = cooperationFor(f, state);
+      try { (cooperation as any).refreshResearchCheckpoints(); }
+      finally { await cooperation.stop(); }
+      expect(node.status).toBe('blocked');
+      expect(state.cooperation!.researchCheckpoints![f.task.id]).toMatchObject(f.checkpoint);
+    }
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
+  });
+
+  it.each([null, ''] as const)('retains a two-checkpoint streak and %s notes so the next unchanged slice pauses', async notes => {
+    const f = await researchCheckpointFixture('research', 2, notes);
+    await f.seed(); await f.seed();
+    const state = readSolverRunState(f.stateFile), cooperation = cooperationFor(f, state);
+    const worker = { ...state.workers![1]!, ownedFiles: state.problem.ownedFiles };
+    try {
+      expect(state.cooperation!.researchCheckpoints![f.task.id]).toMatchObject({ count: 2, paused: false });
+      const action = await cooperation.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task' || action.task.id !== f.task.id) throw new Error('fixture_expected_checkpoint_resume');
+      expect(fs.existsSync(path.join(worker.worktree, 'RESEARCH.md'))).toBe(notes !== null);
+      await cooperation.deliver(worker, action, commitSolverSources(state.problem, worker.worktree), true);
+      expect(state.cooperation!.researchCheckpoints![f.task.id]).toMatchObject({ count: 3, paused: true,
+        unchangedEvidenceCount: 3, outputDigest: f.checkpoint.outputDigest });
+      expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.status).toBe('blocked');
+    } finally { await cooperation.stop(); }
+  });
+
+  it.each(['task-version', 'environment', 'saved-output', 'relevant-delivery'] as const)
+    ('reopens a prior pause when %s changes before cold capture', async change => {
+      const f = await researchCheckpointFixture(), state = f.oldState;
+      const node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+      if (change === 'task-version') node.task = { ...node.task, revision: 1 };
+      if (change === 'environment') state.environmentDigest = mathDigest('prior-different-environment');
+      if (change === 'saved-output') {
+        const worker = state.workers![1]!;
+        fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'A new saved task draft.');
+        const commit = commitSolverSources(state.problem, worker.worktree), cooperation = cooperationFor(f, state);
+        try { cooperation.retainContextDraft({ ...worker, ownedFiles: state.problem.ownedFiles },
+          { kind: 'task', task: node.task, assignment: node.assignment! }, commit); }
+        finally { await cooperation.stop(); }
+      }
+      if (change === 'relevant-delivery') state.cooperation!.deliveries!.push({ id: 'new-advice', producer: 'solver',
+        taskId: node.task.id, taskDigest: taskVersion(node.task), kind: 'research', status: 'advisory',
+        statement: '', premises: [], dependencies: [], remainingObligations: [node.task.id],
+        summary: 'New evidence from an independent worker', findingDigest: mathDigest('new-evidence'), evidenceRefs: [], createdAt: 5 });
+      writeSolverRunState(f.sourceStateFile, state);
+      await f.seed(); await f.seed();
+      const seeded = readSolverRunState(f.stateFile);
+      expect(seeded.cooperation!.tasks.find(node => node.task.id === f.task.id)!.status).toBe('pending');
+      expect(seeded.cooperation!.researchCheckpoints?.[f.task.id]).toBeUndefined();
+    });
+
+  it('ignores unrelated advisory deliveries and reopens on a new relevant delivery during live recovery', async () => {
+    const f = await researchCheckpointFixture(), other: CooperativeTask = { id: 'unrelated', kind: 'research',
+      objective: 'A separate investigation', dependsOn: [], revision: 0, status: 'paused' };
+    f.oldState.cooperation!.tasks.push({ task: other, status: 'pending', attempts: 0 });
+    f.oldState.cooperation!.deliveries!.push({ id: 'unrelated-advice', producer: 'solver', taskId: other.id,
+      taskDigest: taskVersion(other), kind: 'research', status: 'advisory', statement: '', premises: [], dependencies: [],
+      remainingObligations: [], summary: 'Unrelated notes changed', findingDigest: mathDigest('unrelated'), evidenceRefs: [], createdAt: 5 });
+    writeSolverRunState(f.sourceStateFile, f.oldState); await f.seed(); await f.seed();
+    const state = readSolverRunState(f.stateFile), cooperation = cooperationFor(f, state);
+    try {
+      expect(state.cooperation!.researchCheckpoints![f.task.id]).toMatchObject(f.checkpoint);
+      state.cooperation!.deliveries!.push({ ...state.cooperation!.deliveries![0]!, id: 'related-advice',
+        taskId: f.task.id, taskDigest: taskVersion(f.task), findingDigest: mathDigest('new-local-evidence') });
+      (cooperation as any).refreshResearchCheckpoints();
+      expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.status).toBe('pending');
+      expect(state.cooperation!.researchCheckpoints![f.task.id]).toBeUndefined();
+    } finally { await cooperation.stop(); }
+  });
+
+  it.each([false, true])('compares effective dependency findings after reconstruction (changed=%s)', async changed => {
+    const f = await researchCheckpointFixture('research', 3, 'Unchanged investigation.', true);
+    if (changed) {
+      f.oldState.cooperation!.tasks.find(node => node.task.id === 'input_research')!.finding = 'A different input condition.';
+      publishCompletedResearch(f.oldState, 'input_research', 'new-input-finding');
+      writeSolverRunState(f.sourceStateFile, f.oldState);
+    }
+    await f.seed(); await f.seed();
+    const state = readSolverRunState(f.stateFile);
+    expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.status).toBe(changed ? 'pending' : 'blocked');
+    if (changed) expect(state.cooperation!.researchCheckpoints?.[f.task.id]).toBeUndefined();
+    else expect(state.cooperation!.researchCheckpoints![f.task.id]).toMatchObject(f.checkpoint);
+  });
+
+  it('retains advisory source metadata without changing a paused task input across continuations', async () => {
+    const f = await researchCheckpointFixture('research', 3, 'Unchanged investigation.', true, true);
+    const metadata = f.oldState.cooperation!.deliveries![0]!;
+    await f.seed(); await f.seed();
+    const second = nextContinuation(f, f.stateFile, 'source-metadata-checkpoint'); await second.seed(); await second.seed();
+    for (const stateFile of [f.stateFile, second.stateFile]) {
+      const state = readSolverRunState(stateFile), input = state.cooperation!.deliveries!.find(delivery => delivery.id === metadata.id)!;
+      expect(input.sourceUses).toEqual(metadata.sourceUses); expect(input.searchCheckpoint).toEqual(metadata.searchCheckpoint);
+      expect(input.status).toBe('advisory'); expect(input.evidence).toBeUndefined();
+      expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.status).toBe('blocked');
+      expect(state.cooperation!.researchCheckpoints![f.task.id]).toMatchObject(f.checkpoint);
+      expect(state.cooperation!.proofSearchRecords).toBeUndefined();
+    }
+  });
+
+  it('loads an older frozen source with no checkpoint field without inventing a pause', async () => {
+    const f = await researchCheckpointFixture(), rename = fs.renameSync;
+    const fail = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(to) === path.join(f.directory, 'continuation.json')) throw new Error('freeze legacy checkpoint fixture');
+      return rename(from, to);
+    });
+    await expect(f.seed()).rejects.toThrow('freeze legacy checkpoint fixture'); fail.mockRestore();
+    const sourceFile = path.join(f.directory, 'continuation-seed-source.json');
+    const source = JSON.parse(fs.readFileSync(sourceFile, 'utf8')); delete source.researchCheckpoints;
+    fs.chmodSync(sourceFile, 0o600); fs.writeFileSync(sourceFile, canonicalMathJson(source)); fs.chmodSync(sourceFile, 0o400);
+    await f.seed(); await f.seed();
+    const state = readSolverRunState(f.stateFile);
+    expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.status).toBe('pending');
+    expect(state.cooperation!.researchCheckpoints).toBeUndefined();
+    expect(state.cooperation!.researchDrafts![f.task.id].outputDigest).toBe(f.checkpoint.outputDigest);
+  });
+});
+
+describe('continuation of per-task saved drafts', () => {
+  it.each(['research', 'sketch'] as const)('restores suspended %s work through successive continuations and normal delivery', async kind => {
+    const f = await suspendedTaskDraftFixture(kind), historicalState = fs.readFileSync(f.sourceStateFile);
+    expect(f.oldState.cooperation!.researchDrafts![f.task.id].suspended).toBe(true);
+    expect(fs.readFileSync(path.join(f.oldState.workers![1]!.worktree, 'RESEARCH.md'), 'utf8')).toBe('CURRENT_ROUTE_FINDING\n');
+    const first = await f.seed(), seeded = readSolverRunState(f.stateFile);
+    const assignment = seeded.cooperation!.tasks.find(node => node.task.id === f.task.id)!.assignment!;
+    expect(assignment.assignmentId).not.toBe(f.draftAssignment.assignmentId);
+    expect(seeded.cooperation!.researchDrafts![f.task.id]).toMatchObject({ commit: f.draftCommit, suspended: true,
+      assignmentId: assignment.assignmentId, seedCommit: f.draftAssignment.seedCommit });
+    expect(Object.keys(seeded.cooperation!.researchDrafts!)).toHaveLength(2);
+    expect(taskDraftAttachments(f.stateFile)).toContainEqual(expect.objectContaining({ taskId: f.task.id,
+      taskDigest: taskVersion(f.task), notes: f.draftNotes, commit: f.draftCommit,
+      seedCommit: f.draftAssignment.seedCommit, canonicalCommit: f.draftAssignment.canonicalCommit,
+      source: expect.objectContaining({ runId: f.oldState.runId, stateFile: f.sourceStateFile }),
+      sources: expect.objectContaining({ 'Submission/Helpers.lean': f.draftSource }) }));
+    expect((await f.seed()).snapshotDigest).toBe(first.snapshotDigest);
+    expect(readSolverRunState(f.stateFile).cooperation!.tasks.find(node => node.task.id === f.task.id)!.assignment).toEqual(assignment);
+    const second = nextContinuation(f, f.stateFile, `saved-${kind}-second`); await second.seed(); await second.seed();
+    const secondState = readSolverRunState(second.stateFile), cooperative = cooperationFor(f, secondState);
+    const worker = secondState.workers![1]!, descriptor = { ...worker, ownedFiles: secondState.problem.ownedFiles };
+    try {
+      await cooperative.restore();
+      const action = await cooperative.next(descriptor, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task') throw new Error('fixture_expected_recovered_task');
+      expect(action.task.id).toBe(f.task.id);
+      expect(fs.readFileSync(path.join(worker.worktree, f.projectRelative, 'Submission/Helpers.lean')))
+        .toEqual(Buffer.from(f.draftSource));
+      expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'))).toEqual(Buffer.from(f.draftNotes!));
+      expect(secondState.cooperation!.tasks.find(node => node.task.id === f.task.id)).toMatchObject({ status: 'running' });
+      expect(secondState.cooperation!.tasks.find(node => node.task.id === f.task.id)!.proof).toBeUndefined();
+      expect(secondState.cooperation!.tasks.find(node => node.task.id === f.task.id)!.researchCompletion).toBeUndefined();
+      cooperative.interrupted(descriptor, action);
+      writeSolverRunState(second.stateFile, secondState);
+    } finally { await cooperative.stop(); }
+    const third = nextContinuation(f, second.stateFile, `saved-${kind}-third`); await third.seed();
+    const thirdState = readSolverRunState(third.stateFile), resumed = cooperationFor(f, thirdState);
+    const peer = { ...thirdState.workers![1]!, ownedFiles: thirdState.problem.ownedFiles };
+    try {
+      await resumed.restore();
+      const action = await resumed.next(peer, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task') throw new Error('fixture_expected_recovered_task');
+      expect(action.task.id).toBe(f.task.id);
+      expect(fs.readFileSync(path.join(peer.worktree, 'RESEARCH.md'))).toEqual(Buffer.from(f.draftNotes!));
+      const context = resumed.contextState(action, peer);
+      action.assignment.researchBasis = captureResearchBasis(action.task, { problemReceiptDigest: thirdState.problem.receiptDigest,
+        environmentDigest: thirdState.environmentDigest, retrievalDigest: thirdState.retrievalDigest, knowledgeDigest: thirdState.knowledgeDigest,
+        sourceDigest: researchSourceDigest(Object.fromEntries(thirdState.problem.ownedFiles.map(file => [file,
+          committedSource(peer.worktree, action.assignment.seedCommit, `${f.projectRelative}/${file}`)]))),
+        tasks: context.tasks, deliveries: context.deliveries });
+      // Finish the advisory report within its ordinary source scope. The unfinished
+      // supporting code remains independently recoverable in the frozen task draft.
+      for (const file of thirdState.problem.ownedFiles) fs.writeFileSync(path.join(peer.worktree, f.projectRelative, file),
+        committedSource(peer.worktree, action.assignment.seedCommit, `${f.projectRelative}/${file}`));
+      await resumed.deliver(peer, action, commitSolverSources(thirdState.problem, peer.worktree));
+      const completed = thirdState.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+      expect(completed.status, completed.feedback).toBe('completed'); expect(completed.researchCompletion).toBeDefined();
+      expect(completed.integratedCheck).toBeUndefined(); expect(thirdState.check).toBeUndefined();
+    } finally { await resumed.stop(); }
+    expect(taskDraftAttachments(third.stateFile).filter(draft => draft.taskId === f.task.id)).toHaveLength(1);
+    expect(taskDraftAttachments(third.stateFile).find(draft => draft.taskId === f.task.id)!.source.runId).toBe(f.oldState.runId);
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historicalState);
+  });
+
+  it.each(['goal', 'lemma'] as const)('recomputes a %s connection assignment and retains its draft across two generations', async kind => {
+    const f = await suspendedTaskDraftFixture(kind); await f.seed();
+    const state = readSolverRunState(f.stateFile), node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+    expect(node.status).toBe('pending'); expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined();
+    expect(taskConnectionCheckCurrent(node.task, node.assignment!, state.cooperation!.tasks,
+      { environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest })).toBe(true);
+    expect(node.assignment!.connectionCheck!.assignmentId).not.toBe(f.draftAssignment.assignmentId);
+    await f.seed();
+    const second = nextContinuation(f, f.stateFile, `saved-${kind}-connection`); await second.seed();
+    const restored = readSolverRunState(second.stateFile), cooperative = cooperationFor(f, restored);
+    const worker = { ...restored.workers![1]!, ownedFiles: restored.problem.ownedFiles };
+    try {
+      await cooperative.restore();
+      const action = await cooperative.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task') throw new Error('fixture_expected_recovered_task');
+      expect(action.task.id).toBe(f.task.id);
+      expect(taskConnectionCheckCurrent(action.task, action.assignment, restored.cooperation!.tasks,
+        { environmentDigest: restored.environmentDigest, problemReceiptDigest: restored.problem.receiptDigest })).toBe(true);
+      expect(restored.cooperation!.researchDrafts![f.task.id].assignmentId).toBe(action.assignment.assignmentId);
+      expect(fs.readFileSync(path.join(worker.worktree, f.projectRelative, 'Submission/Helpers.lean')))
+        .toEqual(Buffer.from(f.draftSource));
+      expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'))).toEqual(Buffer.from(f.draftNotes!));
+      expect(restored.cooperation!.tasks.find(node => node.task.id === f.task.id)!.proof).toBeUndefined();
+      cooperative.interrupted(worker, action); writeSolverRunState(second.stateFile, restored);
+    } finally { await cooperative.stop(); }
+    const third = nextContinuation(f, second.stateFile, `saved-${kind}-connection-again`); await third.seed();
+    expect(readSolverRunState(third.stateFile).cooperation!.researchDrafts![f.task.id]).toMatchObject({ commit: f.draftCommit, suspended: true });
+    expect(taskDraftAttachments(third.stateFile).find(draft => draft.taskId === f.task.id)!.source.runId).toBe(f.oldState.runId);
+  });
+
+  it.each([null, ''])('preserves a notes-only snapshot with notes %j instead of another task workspace', async notes => {
+    const f = await suspendedTaskDraftFixture('research', notes, false); await f.seed();
+    expect(f.oldState.cooperation!.researchDrafts![f.task.id].artifacts.artifacts).toEqual([]);
+    const second = nextContinuation(f, f.stateFile, notes === null ? 'missing-draft-notes' : 'empty-draft-notes'); await second.seed();
+    const state = readSolverRunState(second.stateFile), cooperative = cooperationFor(f, state);
+    const worker = { ...state.workers![1]!, ownedFiles: state.problem.ownedFiles }, noteFile = path.join(worker.worktree, 'RESEARCH.md');
+    fs.writeFileSync(noteFile, 'UNRELATED_WORKSPACE_NOTES'); commitSolverSources(state.problem, worker.worktree);
+    try {
+      await cooperative.restore();
+      const action = await cooperative.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
+      expect(action?.kind === 'task' && action.task.id).toBe(f.task.id);
+      expect(fs.existsSync(noteFile)).toBe(notes !== null);
+      if (notes !== null) expect(fs.readFileSync(noteFile)).toEqual(Buffer.from(notes));
+      expect(taskDraftAttachments(second.stateFile).find(draft => draft.taskId === f.task.id)!.notes).toBe(notes);
+    } finally { await cooperative.stop(); }
+  });
+
+  it.each(['environment', 'task-version'] as const)('keeps a changed %s snapshot advisory through subsequent continuations', async change => {
+    const f = await suspendedTaskDraftFixture(), originalEnvironment = f.newState.environmentDigest;
+    if (change === 'environment') {
+      f.newState.environmentDigest = mathDigest('changed-draft-environment'); writeSolverRunState(f.stateFile, f.newState);
+    } else {
+      const node = f.oldState.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+      node.task = { ...node.task, revision: node.task.revision + 1 }; writeSolverRunState(f.sourceStateFile, f.oldState);
+    }
+    await f.seed();
+    const state = readSolverRunState(f.stateFile), node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+    expect(node.status).toBe('pending'); expect(node.assignment).toBeUndefined();
+    expect(state.cooperation!.researchDrafts?.[f.task.id]).toBeUndefined();
+    expect(taskDraftAttachments(f.stateFile)).toContainEqual(expect.objectContaining({ taskId: f.task.id, notes: f.draftNotes,
+      commit: f.draftCommit, taskDigest: taskVersion(f.task), sources: expect.objectContaining({ 'Submission/Helpers.lean': f.draftSource }) }));
+    f.newState.environmentDigest = originalEnvironment;
+    const second = nextContinuation(f, f.stateFile, `advisory-draft-${change}`); await second.seed();
+    expect(readSolverRunState(second.stateFile).cooperation!.researchDrafts?.[f.task.id]).toBeUndefined();
+    expect(taskDraftAttachments(second.stateFile)).toContainEqual(expect.objectContaining({ taskId: f.task.id,
+      archived: true, notes: f.draftNotes, commit: f.draftCommit }));
+  });
+
+  it('keeps newer canonical proofs while recovering old notes and retaining source evidence', async () => {
+    const f = await suspendedTaskDraftFixture();
+    const canonicalSource = helpers.replace('end Submission.Helpers', 'lemma newer_canonical : True := by trivial\nend Submission.Helpers');
+    fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission/Helpers.lean'), canonicalSource);
+    f.oldState.cooperation!.canonicalCommit = commit(f.sourceWorktree, 'Advance canonical after saved draft');
+    writeSolverRunState(f.sourceStateFile, f.oldState); await f.seed();
+    const state = readSolverRunState(f.stateFile), cooperative = cooperationFor(f, state);
+    const worker = { ...state.workers![1]!, ownedFiles: state.problem.ownedFiles };
+    try {
+      await cooperative.restore();
+      const action = await cooperative.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task') throw new Error('fixture_expected_recovered_task');
+      expect(action.task.id).toBe(f.task.id);
+      const source = fs.readFileSync(path.join(worker.worktree, f.projectRelative, 'Submission/Helpers.lean'), 'utf8');
+      expect(source).toContain('newer_canonical'); expect(source).not.toContain('suspended_support');
+      expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'))).toEqual(Buffer.from(f.draftNotes!));
+      expect(fs.readFileSync(path.join(state.worktree, f.projectRelative, 'Submission/Helpers.lean'), 'utf8')).toBe(canonicalSource);
+      expect(state.cooperation!.deliveries).toContainEqual(expect.objectContaining({ taskId: f.task.id, commit: f.draftCommit,
+        kind: 'progress', status: 'advisory', artifacts: expect.objectContaining({ scope: 'advisory-unverified' }) }));
+      expect(action.assignment.canonicalCommit).toBe(state.cooperation!.canonicalCommit);
+      cooperative.interrupted(worker, action); writeSolverRunState(f.stateFile, state);
+    } finally { await cooperative.stop(); }
+    const second = nextContinuation(f, f.stateFile, 'newer-canonical-draft'); await second.seed();
+    expect(fs.readFileSync(path.join(second.directory, 'worktree', f.projectRelative, 'Submission/Helpers.lean'), 'utf8')).toBe(canonicalSource);
+    expect(taskDraftAttachments(second.stateFile)).toContainEqual(expect.objectContaining({ taskId: f.task.id,
+      commit: f.draftCommit, archived: true, notes: f.draftNotes }));
+    expect(readSolverRunState(second.stateFile).cooperation!.researchDrafts![f.task.id].commit).not.toBe(f.draftCommit);
+  });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
@@ -1603,6 +2022,92 @@ describe('bounded continuation verification batches', () => {
 });
 
 describe('continuation of a host-frozen unfinished delivery', () => {
+  async function lostFrozenAssignmentFixture() {
+    const f = frozenGoalFixture(); await f.seed();
+    const source = readSolverRunState(f.stateFile), node = source.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    const assignment = node.assignment!, ready = source.cooperation!.proofReadyRecords![0]!;
+    source.phase = 'finished'; source.turns = 3;
+    source.verificationCheckpoints = [{ key: mathDigest('timed-out-projected-goal'), timeoutMs: 1_800_000,
+      attempts: 1, at: ready.requestedAt + 1, targetCommit: source.cooperation!.canonicalCommit!, receiptIds: ['timeout-only'] }];
+    delete node.assignment;
+    for (const worker of source.workers!) {
+      worker.phase = 'finished';
+      delete worker.sessionTaskId; delete worker.sessionTaskVersion; delete worker.sessionAssignmentId;
+    }
+    writeSolverRunState(f.stateFile, source); host.verify.mockClear();
+    return { ...f, source, assignment, frozenReady: ready };
+  }
+
+  it('recovers a frozen continuation after its timed-out assignment and worker session were dropped', async () => {
+    const f = await lostFrozenAssignmentFixture(), historical = fs.readFileSync(f.stateFile);
+    expect(f.source.verificationCheckpoints![0]!.targetCommit).not.toBe(f.snapshotCommit);
+    const next = nextContinuation(f, f.stateFile, 'recovered-frozen-goal'), report = await next.seed();
+    await next.seed();
+    const state = readSolverRunState(next.stateFile), node = state.cooperation!.tasks.find(node => node.task.id === 'goal')!;
+    const ready = state.cooperation!.proofReadyRecords![0]!;
+    expect(report.checked).not.toContain('goal');
+    expect(state.cooperation!.proofReadyRecords).toHaveLength(1);
+    expect(node.status).toBe('pending'); expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined();
+    expect(node.assignment!.dependencies).toEqual(f.assignment.dependencies);
+    expect(node.assignment!.assignmentId).not.toBe(f.assignment.assignmentId);
+    expect(ready).toMatchObject({ status: 'frozen', snapshotCommit: f.snapshotCommit, sourceDigest: f.frozenReady.sourceDigest });
+    expect(ready.id).not.toBe(f.frozenReady.id); expect(ready.receiptIds).toBeUndefined();
+    expect(host.verify.mock.calls.some(call => call[0].items.some(item => item.theoremName === 'Submission.original'))).toBe(false);
+    const cooperation = cooperationFor(f, state), worker = state.workers![1]!;
+    await cooperation.restore();
+    const descriptor = { id: worker.id, role: worker.role, worktree: worker.worktree, ownedFiles: state.problem.ownedFiles };
+    const action = await cooperation.next(descriptor, { maxTurns: Infinity, remainingMs: Infinity });
+    const checked = vi.fn();
+    const lifecycle = new WorkerProofLifecycle({ state, research: worker, worker: descriptor, cooperation,
+      close: async () => {}, save: () => {}, emit: () => {}, checked });
+    try {
+      expect(await lifecycle.resumeFrozen(action)).toBe(true);
+      expect(checked).toHaveBeenCalledOnce();
+      expect(ready.status).toBe('checked'); expect(ready.receiptIds?.length).toBeGreaterThan(0);
+      expect(host.verify.mock.calls.some(call => call[0].items.some(item => item.theoremName === 'Submission.original'))).toBe(true);
+    } finally { await cooperation.stop(); }
+    expect(fs.readFileSync(f.stateFile)).toEqual(historical);
+  });
+
+  it.each(['assignment', 'submission', 'ready-id', 'snapshot', 'digest', 'seed', 'task-version', 'environment'] as const)(
+    'rejects a missing-assignment continuation with changed %s identity', async kind => {
+      const f = await lostFrozenAssignmentFixture(), ready = f.source.cooperation!.proofReadyRecords![0]!;
+      if (kind === 'assignment') ready.assignmentKey = 'DELIVERIES-wrong.jsonl';
+      else if (kind === 'submission') ready.submissionId = mathDigest('different-submission');
+      else if (kind === 'ready-id') ready.id = mathDigest('different-ready');
+      else if (kind === 'snapshot') {
+        const worker = f.source.workers![1]!;
+        fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'Different commit with identical owned proof sources.\n');
+        ready.snapshotCommit = commit(worker.worktree, 'Different frozen identity');
+      } else if (kind === 'digest') ready.sourceDigest = '0'.repeat(64);
+      else if (kind === 'seed') ready.seedCommit = f.base;
+      else if (kind === 'task-version') ready.taskDigest = '0'.repeat(64);
+      else ready.environmentDigest = '0'.repeat(64);
+      writeSolverRunState(f.stateFile, f.source);
+      const next = nextContinuation(f, f.stateFile, `changed-frozen-${kind}`);
+      await expect(next.seed()).rejects.toThrow('math_continuation_seed_frozen_identity_changed');
+      expect(host.verify).not.toHaveBeenCalled();
+    });
+
+  it('requires an intact digest-bound frozen attachment to recover a missing assignment', async () => {
+    const f = await lostFrozenAssignmentFixture();
+    const snapshot = readContinuationSnapshot(path.join(f.directory, 'continuation.json'), f.source.continuationDigest!);
+    const attachment = snapshot.manifest.attachments.find(item => item.id === 'frozen-goal')!;
+    const file = path.join(f.directory, attachment.contentPath);
+    fs.chmodSync(file, 0o600); fs.writeFileSync(file, 'x'.repeat(attachment.bytes)); fs.chmodSync(file, 0o400);
+    const next = nextContinuation(f, f.stateFile, 'corrupted-frozen-attachment');
+    await expect(next.seed()).rejects.toThrow('math_continuation_content_changed');
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing assignment without trusted continuation metadata', async () => {
+    const f = frozenGoalFixture();
+    delete f.oldState.cooperation!.tasks.find(node => node.task.id === 'goal')!.assignment;
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await expect(f.seed()).rejects.toThrow('math_continuation_seed_frozen_identity_changed');
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
   it('defers its exact goal snapshot to the ordinary lifecycle without a new model writer', async () => {
     const f = frozenGoalFixture(), historical = fs.readFileSync(f.sourceStateFile);
     const report = await f.seed(), state = readSolverRunState(f.stateFile);

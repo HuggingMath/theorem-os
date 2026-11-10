@@ -132,6 +132,17 @@ describe.skipIf(!lean)('local Lean closed-type preflight', () => {
     expect((await check('undeclaredType')).status).toBe('failed');
   });
 
+  it('requires a quantified term instead of a declaration header for implicit and explicit helper binders', async () => {
+    const header = '{s d : Nat} (a : Fin s → Fin d) : ∀ i : Fin s, a i = a i';
+    const invalid = await check(header);
+    expect(invalid).toMatchObject({ status: 'failed', exitCode: 1, proofAcceptance: 'not-assessed' });
+    expect(invalid.firstBlocking?.message).toMatch(/expected ['"](?:→|->)/u);
+    const corrected = await check('∀ {s d : Nat} (a : Fin s → Fin d), ∀ i : Fin s, a i = a i');
+    expect(corrected.status, corrected.stdout + corrected.stderr).toBe('elaborated');
+    expect(corrected).toMatchObject({ exitCode: 0, proofAcceptance: 'not-assessed' });
+    expect(fs.readFileSync(path.join(root, 'Submission.lean'), 'utf8')).toContain('exact nonexistent_proof');
+  });
+
   it('rejects command injection as a term and leaves the original file untouched', async () => {
     const result = await check('Nat\nrun_cmd IO.FS.writeFile "marker" "bad"');
     expect(result.status).toBe('failed');

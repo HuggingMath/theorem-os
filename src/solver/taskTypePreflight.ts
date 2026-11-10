@@ -130,6 +130,10 @@ export function typeDiagnosticExcerpt(type: string, reason: string): string | un
   const excerpt = `Type text where the parser stopped (<input>:${match[1]}:${column}, 0-based codepoint column): ` +
     `${column > 60 ? '…' : ''}${chars.slice(Math.max(0, column - 60), column).join('')}⟦${token}⟧` +
     `${chars.slice(end, end + 40).join('')}${end + 40 < chars.length ? '…' : ''}`;
+  if (/^\s*[{(]/u.test(type) && /expected\s+['"](?:→|->)/u.test(reason))
+    return `${excerpt}\nThe helper type uses declaration-header binders. Supply a closed type term instead: ` +
+      '`{s d : ℕ} (a : T) : P` becomes `∀ {s d : ℕ} (a : T), P`. ' +
+      'Preserve the binders and conclusion and submit a task revision; the host has not changed this contract.';
   return RESERVED_TERM_TOKENS.has(token)
     ? `${excerpt}\n\`${token}\` is a reserved Lean token, not an identifier; rename that bound variable everywhere in the type.`
     : excerpt;

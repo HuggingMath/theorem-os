@@ -27,7 +27,7 @@ export type DispatchWaitObservation = {
   endedAt?: number;
   planVersion?: string;
   stage: 'm3-no-ready' | 'host-filtered' | 'm5-no-selection' | 'budget-gated' | 'lead-unavailable' |
-    'dependency-blocked' | 'integration-queue' | 'synchronizing' | 'plan-approval';
+    'dependency-blocked' | 'dependency-running' | 'route-paused' | 'integration-queue' | 'synchronizing' | 'plan-approval';
   gate?: 'time-limit' | 'turn-limit' | 'model-disabled';
   candidateCount: number;
   omittedCandidates: number;
@@ -37,7 +37,7 @@ export type DispatchWaitObservation = {
 };
 
 export type SolverWorkerState = Pick<SolverRunState, 'worktree' | 'threadId' | 'previousThreadIds' |
-  'lastInputTokens' | 'lastActivity' | 'lastFailure' | 'recovery' | 'contextOverflow' | 'contextCheckpoint' | 'contextCheckpointBaseline' | 'advisoryCheckpoint' | 'lastContextManifest' | 'phase' | 'turns' | 'dispatchCounts' | 'usage' | 'usageBeforeThread' | 'usageAccounting' | 'requestUsageAccounting' | 'check' | 'candidate' | 'failures' | 'error' | 'writerStopUnconfirmed'> & {
+  'lastInputTokens' | 'lastActivity' | 'lastFailure' | 'recovery' | 'contextOverflow' | 'contextCheckpoint' | 'contextCheckpointBaseline' | 'advisoryCheckpoint' | 'advisoryCheckpoints' | 'lastContextManifest' | 'phase' | 'turns' | 'dispatchCounts' | 'usage' | 'usageBeforeThread' | 'usageAccounting' | 'requestUsageAccounting' | 'check' | 'candidate' | 'failures' | 'error' | 'writerStopUnconfirmed'> & {
   id: string;
   role: ResearchRole;
   sessionRole?: ResearchRole;
@@ -95,8 +95,10 @@ export type SolverRunState = {
     requestId?: string; publishedNotesDigest?: string; publishedAt?: number;
     rejection?: { file: string; offset: number; reason: string } };
   contextCheckpointBaseline?: { threadId: string; notesDigest?: string };
-  /** Scheduling protection for one mathematical responsibility, independent of dispatch nonces. */
-  advisoryCheckpoint?: { scope: string; noProgressStreak: number; contentDigest?: string };
+  /** Current responsibility projection, retained for older archives and Lead pause accounting. */
+  advisoryCheckpoint?: { scope: string; noProgressStreak: number; contentDigest?: string; inputDigest?: string };
+  /** Research scheduling history survives intervening responsibilities; it never grants proof acceptance. */
+  advisoryCheckpoints?: Record<string, { noProgressStreak: number; contentDigest?: string; inputDigest?: string }>;
   lastContextManifest?: ContextManifest;
   phase: 'prepared' | 'running' | 'checking' | 'evaluating' | 'finished';
   turns: number;
@@ -128,7 +130,7 @@ const record = z.record(z.unknown());
 const safeCount = count.max(Number.MAX_SAFE_INTEGER);
 const dispatchWaitObservation = z.object({ observedAt: safeCount, endedAt: safeCount.optional(), planVersion: z.string().optional(),
   stage: z.enum(['m3-no-ready', 'host-filtered', 'm5-no-selection', 'budget-gated', 'lead-unavailable',
-    'dependency-blocked', 'integration-queue', 'synchronizing', 'plan-approval']),
+    'dependency-blocked', 'dependency-running', 'route-paused', 'integration-queue', 'synchronizing', 'plan-approval']),
   gate: z.enum(['time-limit', 'turn-limit', 'model-disabled']).optional(),
   candidateCount: safeCount, omittedCandidates: safeCount,
   candidates: z.array(z.object({ taskId: z.string(), taskDigest: z.string(),
@@ -177,6 +179,8 @@ const check = z.object({ commit: z.string().min(1), sourceDigest: z.string().min
   changes: z.array(z.object({ file: z.string(), name: z.string(), after: z.string() }).passthrough()).optional(),
   verification: z.object({ status: z.enum(['kernel_verified', 'failed', 'blocked', 'unavailable']),
     targetCommit: z.string().optional(), results: z.array(record) }).passthrough() }).passthrough();
+const advisoryCheckpoint = z.object({ noProgressStreak: safeCount,
+  contentDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(), inputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() });
 const research = z.object({ worktree: z.string().min(1), phase, turns: count, threadId: z.string().optional(),
   dispatchCounts: z.object({ planning: count.optional(), research: count.optional(), proof: count.optional(), review: count.optional() }).optional(),
   solveStartedAt: count.optional(), solveFinishedAt: count.optional(),
@@ -197,8 +201,8 @@ const research = z.object({ worktree: z.string().min(1), phase, turns: count, th
       offset: safeCount, reason: z.string().min(1) }).optional() }).optional(),
   contextCheckpointBaseline: z.object({ threadId: z.string().min(1),
     notesDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).optional(),
-  advisoryCheckpoint: z.object({ scope: z.string().regex(/^[a-f0-9]{64}$/u), noProgressStreak: safeCount,
-    contentDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).optional(),
+  advisoryCheckpoint: advisoryCheckpoint.extend({ scope: z.string().regex(/^[a-f0-9]{64}$/u) }).optional(),
+  advisoryCheckpoints: z.record(z.string().regex(/^[a-f0-9]{64}$/u), advisoryCheckpoint).optional(),
   usage: record.optional(), usageBeforeThread: record.optional(), usageAccounting: usageAccounting.optional(),
   requestUsageAccounting: requestUsageAccountingSchema.optional(),
   tokenBudget: tokenBudget.optional(), candidate: record.optional(),
@@ -331,7 +335,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
       rejections: z.array(z.object({ id: z.string(), reason: z.string().max(200), planVersion: z.string().optional(),
         at: safeCount }).strict()).max(16).optional(),
       guidanceIds: z.array(z.string()).max(512).optional(), revisionAt: safeCount.optional() }).strict().optional(),
-    idlePeerWake: z.object({ at: safeCount, workerIds: z.array(z.string()).max(64), count: safeCount.optional() }).strict().optional(),
+    idlePeerWake: z.object({ at: safeCount, workerIds: z.array(z.string()).max(64), count: safeCount.optional(),
+      episodes: z.record(z.object({ since: safeCount, at: safeCount, count: safeCount }).strict()).optional() }).strict().optional(),
     leadDecisionBasisAt: safeCount.optional(),
     goalPathStall: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/u), active: z.boolean(), at: safeCount,
       goalIds: z.array(z.string()), taskIds: z.array(z.string()).max(16), answeredAt: safeCount.optional(),

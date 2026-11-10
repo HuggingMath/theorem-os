@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { readyResearchTasks, researchCanAdvance, taskCanStart, taskDependenciesReady } from '../src/solver/modules/search';
+import { readyResearchTasks, researchCanAdvance, taskCanStart, taskDependenciesReady, runningTaskDependencies } from '../src/solver/modules/search';
 import { invalidatedTaskIds, markTaskReferences, taskProofContractVersion, taskVersion, type TaskRecord } from '../src/solver/tasks';
 
 const node = (id: string, dependsOn: string[] = []): TaskRecord => ({ task: { id, kind: 'lemma', objective: id,
   theoremName: id, type: 'True', proofPath: 'Submission.lean', dependsOn, revision: 0 }, status: 'integrated', attempts: 0 });
 
 describe('dependency readiness', () => {
+  it('names concrete live dependencies and stops treating a wait as productive when any missing premise has no producer', () => {
+    const producer = { ...node('producer'), status: 'running' as const };
+    const bridge = { ...node('bridge', ['producer']), status: 'pending' as const };
+    const consumer = { ...node('consumer', ['bridge', 'checked']), status: 'pending' as const };
+    const tasks = [producer, bridge, node('checked'), consumer];
+    expect(runningTaskDependencies(consumer, tasks, new Set(['producer']))).toEqual(['producer']);
+    expect(runningTaskDependencies(consumer, tasks, new Set())).toBeUndefined();
+    bridge.task = { ...bridge.task, dependsOn: ['producer', 'missing'] };
+    expect(runningTaskDependencies(consumer, tasks, new Set(['producer']))).toBeUndefined();
+    bridge.task = { ...bridge.task, dependsOn: ['consumer'] };
+    expect(runningTaskDependencies(consumer, tasks, new Set(['producer']))).toBeUndefined();
+  });
   it('distinguishes descriptive proof revisions from changed mathematical contracts', () => {
     const original = node('a').task;
     const revised = { ...original, objective: 'A clearer description of the same theorem', revision: 1 };

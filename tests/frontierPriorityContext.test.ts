@@ -179,9 +179,9 @@ it.each([10, 100, 500])('keeps local mandatory route focus bounded across %i alt
   closing.at(-1)!.task = { ...closing.at(-1)!.task, type: 'And True True' };
   const cooperation: CooperationState = { canonicalCommit: seedCommit, tasks: [...inputs, ...closing, goal], proofRoutes };
   const context = contextFor(cooperation, actionFor(active)), focus = packet(context.message);
-  // The bound includes the fixed worker instructions, which grow with new host tools (now ~20.4 KiB in total here);
+  // The bound includes the fixed worker instructions (now ~22.4 KiB including declaration and publication tools);
   // what it guards is that route focus does not grow with the number of alternatives.
-  expect(context.manifest!.mandatoryBytes).toBeLessThan(22 * 1024);
+  expect(context.manifest!.mandatoryBytes).toBeLessThan(23 * 1024);
   const inline = JSON.parse(context.message.split('Context compilation manifest:\n')[1]);
   expect(inline.manifestRef).toBe('CONTEXT-MANIFEST.json');
   expect(inline.contentDigest).toBe(context.manifest!.contentDigest);

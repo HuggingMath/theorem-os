@@ -3,7 +3,7 @@ import { checkedUnconditionally, isAdvisoryTask, isFeasibilityReview, taskGroup,
   type CooperativeTask, type RouteGroup, type TaskRecord, type RouteRecord } from '../tasks';
 import { hasRunningDuplicateQuestion } from '../taskQuestions';
 import { createProofRoutePriority } from '../routePriority';
-import { freshTaskConnection } from '../taskConnections';
+import { freshTaskConnection, taskConnectionCheckCurrent } from '../taskConnections';
 import { capacityExplorationWorkerCanTask } from '../capacityExploration';
 
 export { MAX_RESEARCH_WORKERS } from './moduleIdentity';
@@ -106,8 +106,11 @@ export function assignSharedResearchTask(ready: readonly TaskRecord[], worker: R
   if (planned.length) eligible = planned;
   const first = eligible[0];
   if (!first || eligible.length === 1) return first;
-  if (first.task.kind === 'goal' || !first.attempts && isFeasibilityReview(first.task) ||
-      freshTaskConnection(first, tasks, groups)) return first;
+  // An executable original proof can close the problem. Conditional connection checks
+  // only test an application and may still need unscreened mathematical research.
+  const connection = (node: TaskRecord) => node.assignment
+    ? taskConnectionCheckCurrent(node.task, node.assignment, tasks) : freshTaskConnection(node, tasks, groups);
+  if (first.task.kind === 'goal' && !connection(first) || !first.attempts && isFeasibilityReview(first.task)) return first;
   const proofWorkers = new Set(live.filter(peer => ['researcher', 'prover', 'engineer'].includes(peer.role)).map(peer => peer.id));
   const running = tasks.filter(node => node.status === 'running' && node.assignment &&
     node.assignment.taskId === node.task.id && node.assignment.taskDigest === taskVersion(node.task) &&
@@ -120,6 +123,15 @@ export function assignSharedResearchTask(ready: readonly TaskRecord[], worker: R
   const lastSlot = proofWorkers.size - occupied.size === 1;
   const lastGroupSlot = group && (group.group.maxConcurrent ?? 3) - groupBusy === 1;
   if (!lastSlot && !lastGroupSlot) return first;
+  const connectingGoals = [...running, ...(first.attempts && first.task.kind === 'goal' ? [first] : [])]
+    .filter(node => node.task.kind === 'goal' &&
+    taskGroup(node.task) === taskGroup(first.task) && connection(node));
+  const unscreened = eligible.find(node => isAdvisoryTask(node.task) && !isFeasibilityReview(node.task) &&
+    !node.capacityExploration && !node.attempts && taskGroup(node.task) === taskGroup(first.task) &&
+    connectingGoals.some(goal => node.task.consumerGoalIds?.includes(goal.task.id) &&
+      !running.some(peer => isAdvisoryTask(peer.task) && peer.task.consumerGoalIds?.includes(goal.task.id))));
+  if (unscreened) return unscreened;
+  if (first.task.kind === 'goal' || freshTaskConnection(first, tasks, groups)) return first;
   const checkedInput = (id: string) => checkedUnconditionally(tasks.find(node => node.task.id === id));
   if (first.task.type && taskDependenciesReady(first.task, tasks) &&
       plannedTaskDependencyIds(first, tasks).some(checkedInput)) return first;

@@ -36,6 +36,8 @@ import type { TaskProof } from './cooperativeProof';
 import { captureResearchBasis, researchSourceDigest, type ResearchBasis } from './researchRecords';
 import { writeOwnedDeclarationIndex } from './declarationIndex';
 import { LEAD_MAX_BACKOFF } from './leadWakes';
+import { hasTaskConnectionCheck } from './taskConnections';
+import { DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT } from './tacticBatteryFailureCache';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -46,15 +48,13 @@ const advisoryMaxBackoff = LEAD_MAX_BACKOFF;
 // Provider latency is not mathematical work: the advisory clock starts only at the model's first
 // item, with a hard cap so a turn that never responds still yields a resumable checkpoint.
 const advisoryFirstActivityMs = 15 * 60_000;
-// A goal turn is the only work that can close the problem, so it is never yielded. It still owes a
+// An unconditional goal turn can close the problem, so it is never yielded. It still owes a
 // durable handoff: this is the long cadence of the save-only reminder, which never interrupts it.
 const advisoryGoalNoticeMs = 15 * 60_000;
-// The initial plan is the whole blueprint (Goedel-Architect, arXiv 2606.06468): peers have nothing to
-// run until it exists, and a 2-minute slice ended every observed first plan before it was written.
+// The first graph can be small, but a 2-minute cut discarded initial plans before publication.
+// Keep the long writing slice while asking for executable work early enough for peers to start.
 const advisoryInitialPlanMs = 20 * 60_000;
-// Its reminder comes early: observed Leads spent the whole slice on probes and never published,
-// although a direct goal task plus research questions is already a valid first graph.
-const advisoryInitialPlanNoticeMs = 5 * 60_000;
+const advisoryInitialPlanNoticeMs = 90_000;
 // A plan revision is one decision on new peer evidence, not a search. Observed Lead slices of two to sixteen
 // minutes ended at a checkpoint in 1095 of 1210 turns, and only 22 of those changed the plan.
 // A revision gets one fixed slice that a returned decision normally ends, and an early decide-now reminder.
@@ -88,6 +88,9 @@ export function advisoryCheckpointScope(assignment: CooperativeAction | undefine
   }
   if (assignment?.kind === 'task' && ['research', 'sketch'].includes(assignment.task.kind) && !isFeasibilityReview(assignment.task))
     return mathDigest(canonicalMathJson({ kind: 'task', taskDigest: assignment.assignment.taskDigest }));
+  if (assignment?.kind === 'task' && hasTaskConnectionCheck(assignment.task, assignment.assignment))
+    return mathDigest(canonicalMathJson({ kind: 'connection', taskDigest: assignment.assignment.taskDigest,
+      basisDigest: assignment.assignment.connectionCheck!.basisDigest }));
   // An original goal is the only work that can close the problem, so its writer is never yielded;
   // it still owes a durable handoff, which the notice-only checkpoint asks for without interrupting.
   if (assignment?.kind === 'task' && assignment.task.kind === 'goal')
@@ -97,7 +100,8 @@ export function advisoryCheckpointScope(assignment: CooperativeAction | undefine
 
 /** Proof work is reminded to save notes, but an advisory checkpoint never takes its writer away. */
 export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | undefined): boolean {
-  return assignment?.kind === 'task' && assignment.task.kind === 'goal';
+  return assignment?.kind === 'task' && assignment.task.kind === 'goal' &&
+    !hasTaskConnectionCheck(assignment.task, assignment.assignment);
 }
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
@@ -260,9 +264,11 @@ export async function runResearchWorkers(input: {
       let compactionRestart = false;
       let turnActivity: ((activity: MathAgentActivity) => void) | undefined;
       let turnAssignment: CooperativeAction | undefined;
-      let advisoryTurn: { scope: string; contentDigest?: string } | undefined;
+      let advisoryTurn: { scope: string; contentDigest?: string; inputDigest?: string } | undefined;
       let turnContext: { digest: string; fresh: boolean } | undefined;
-      let dispatchedContext: { threadId: string; responsibility: string; researchInputDigest?: string } | undefined;
+      // A thread can revisit a responsibility after other tasks. Keep only contracts actually
+      // dispatched in this process; a cold resume or provider compaction must send the full context.
+      const dispatchedContexts = new Map<string, { threadId: string; researchInputDigest?: string }>();
       let rebuildContext = false;
       const usage = new ResearchUsage({ state, research, maxTotalTokens: input.maxTotalTokens,
         signal, remainingMs: () => budget().remainingMs, changed: () => { updateUsage(); save(); }, emit });
@@ -309,6 +315,15 @@ export async function runResearchWorkers(input: {
         emit('context_checkpoint_requested', { threadId, reason: 'context-threshold', lastInputTokens });
         save(); return true;
       };
+      const rememberAdvisoryCheckpoint = (checkpoint: NonNullable<SolverRunState['advisoryCheckpoint']>) => {
+        const { scope, ...record } = checkpoint;
+        (research.advisoryCheckpoints ??= {})[scope] = record;
+        research.advisoryCheckpoint = checkpoint;
+      };
+      // Lazily retain the last responsibility from archives written before scoped history existed.
+      if (research.advisoryCheckpoint && !research.advisoryCheckpoints?.[research.advisoryCheckpoint.scope]) {
+        rememberAdvisoryCheckpoint(research.advisoryCheckpoint); save();
+      }
       const recordAdvisoryOutput = (checkpoint: boolean, completed = false) => {
         const previous = research.advisoryCheckpoint;
         if (!advisoryTurn || previous?.scope !== advisoryTurn.scope) return;
@@ -316,14 +331,15 @@ export async function runResearchWorkers(input: {
         const progress = contentDigest !== undefined && contentDigest !== advisoryTurn.contentDigest;
         const noProgressStreak = completed || progress ? 0 : checkpoint
           ? Math.min(Number.MAX_SAFE_INTEGER, previous.noProgressStreak + 1) : previous.noProgressStreak;
-        research.advisoryCheckpoint = { scope: previous.scope, noProgressStreak,
-          contentDigest: contentDigest ?? previous.contentDigest };
+        rememberAdvisoryCheckpoint({ scope: previous.scope, noProgressStreak,
+          contentDigest: contentDigest ?? previous.contentDigest, inputDigest: advisoryTurn.inputDigest });
         if (checkpoint) emit('cooperative_checkpoint_saved', { noProgressStreak, progress,
           protected: false });
         save();
       };
       const modelTurn = async <T>(run: (started: (turnId: string) => void) => Promise<T>,
-        assignment: CooperativeAction | undefined, onStarted: (turnId: string) => void): Promise<T | undefined> => {
+        assignment: CooperativeAction | undefined, onStarted: (turnId: string) => void,
+        inputBasis?: ResearchBasis): Promise<T | undefined> => {
         // No await separates this final admission check from invoking the model request.
         if (!dispatchAllowed() || budget().remainingMs <= 0 || signal.aborted ||
             (assignment && !cooperation!.started(worker, assignment))) return undefined;
@@ -413,6 +429,7 @@ export async function runResearchWorkers(input: {
             }
           }
           if (!current() || activity.itemType !== 'contextCompaction') return;
+          if (activity.event === 'item_started' || activity.event === 'item_completed') dispatchedContexts.clear();
           if (activity.event === 'item_started') {
             if (compactionStartedAt !== undefined) return;
             compactionStartedAt = Date.now();
@@ -482,12 +499,18 @@ export async function runResearchWorkers(input: {
             watchCompaction();
             return;
           }
-          const contentDigest = advisoryContentDigest(), previous = research.advisoryCheckpoint;
+          const contentDigest = advisoryContentDigest();
+          const scopedResearch = assignment?.kind === 'task' && ['research', 'sketch'].includes(assignment.task.kind);
+          // Lead's fixed decision slice and current-slot pause accounting keep their existing semantics.
+          const previous = scopedResearch && research.advisoryCheckpoints?.[advisoryScope]
+            ? { scope: advisoryScope, ...research.advisoryCheckpoints[advisoryScope] } : research.advisoryCheckpoint;
+          const inputDigest = scopedResearch && inputBasis ? mathDigest(canonicalMathJson(inputBasis)) : undefined;
           const noticeOnly = advisoryCheckpointNoticeOnly(assignment);
           const noProgressStreak = noticeOnly ? 0 : previous?.scope === advisoryScope &&
+            (previous.inputDigest === undefined || previous.inputDigest === inputDigest) &&
             (contentDigest === undefined || contentDigest === previous.contentDigest) ? previous.noProgressStreak : 0;
-          research.advisoryCheckpoint = { scope: advisoryScope, contentDigest, noProgressStreak };
-          advisoryTurn = { scope: advisoryScope, contentDigest };
+          rememberAdvisoryCheckpoint({ scope: advisoryScope, contentDigest, inputDigest, noProgressStreak });
+          advisoryTurn = { scope: advisoryScope, contentDigest, inputDigest };
           save();
           // The initial plan gets one long slice and a revision one fixed decision slice; advisory research backs
           // off after unchanged checkpoints, so a worker that keeps returning the same response gets more time.
@@ -516,10 +539,14 @@ export async function runResearchWorkers(input: {
                 ? 'Save the current mathematical argument, the exact unresolved step and useful references in RESEARCH.md now. ' +
                   'This turn keeps running: no checkpoint will interrupt or end it, so save notes incrementally and continue proving.'
                 : initialPlan
-                ? 'Publish the first plan now, before further searches or experiments: append the complete plan JSON line to this ' +
-                  'assignment\'s delivery log as described in your instructions. Peers cannot start until it exists. A direct goal task ' +
-                  'for each original target plus research tasks for the open questions is a valid first plan; later Lead turns revise it. ' +
-                  'Save the current argument in RESEARCH.md as well.'
+                ? cooperation?.initialPlanSnapshot(assignment)
+                  ? 'The first plan is already published. Save the current argument and precise unresolved inference in RESEARCH.md, ' +
+                    'then return promptly; eligible peers can continue the published work and later Lead decisions use their evidence.'
+                  : 'If the first plan is still unpublished, publish it now before further searches or experiments: append the complete ' +
+                    'plan JSON line to this assignment\'s delivery log as described in your instructions. A direct goal task for each ' +
+                    'original target plus research tasks for specific open questions is a valid first plan; later Lead turns refine it. ' +
+                    'If the host accepted it while this notice was waiting, save the current argument and exact uncertainties in ' +
+                    'RESEARCH.md and return promptly. This is a reminder, not an interruption.'
                 : revision
                 ? 'Decide now, before further searches or experiments. If the new deliveries, failures or idle peers call for a change, ' +
                   'save or publish the math-plan revision as your instructions describe and return. If the accepted graph already ' +
@@ -527,7 +554,11 @@ export async function runResearchWorkers(input: {
                   'running it in this turn. This turn yields a scheduling checkpoint at ' + Math.round(checkpointAfterMs / 60_000) +
                   ' minutes; the same thread and saved work remain available.'
                 : 'Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +
-                  'For planning, save or publish the smallest valid complete task graph using this assignment\'s delivery protocol. ' +
+                  'Include exactly one math-result JSON block with a nonempty summary of established facts, conclusion ' +
+                  '(use inconclusive for an unresolved investigation), the exact remaining inference and next step in remainingObligations, ' +
+                  'and any precise typed lemmaRequests. Keep the full argument and references alongside it. ' +
+                  'The host can deliver this partial finding to the Lead while your research task remains unfinished; ' +
+                  'leave checkOutcome for normal completion or the explicit publication protocol. ' +
                   'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
                   'The same thread and saved work will remain available for continuation; this does not end the solving budget.');
             }).catch(() => { if (current()) emit('cooperative_checkpoint_notice_failed'); });
@@ -720,6 +751,7 @@ export async function runResearchWorkers(input: {
               const sessionId = crypto.randomUUID();
               const usageCallbacks = usage.bindSession(sessionId, () => session?.lastInputTokens);
               session = await modules.M1.open({ executable: input.executable, profile: input.profile,
+                hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT],
                 ...(!statement ? { proofProjectRoot: path.join(worker.worktree, state.problem.projectRelative) } : {}),
                 workspace, environment: { ...environment,
                   DEEPSCIENTIST_MATH_WORKER_ID: worker.id, DEEPSCIENTIST_MATH_WORKER_WORKTREE: workspace },
@@ -800,7 +832,7 @@ export async function runResearchWorkers(input: {
         await delay(retry.delayMs, undefined, { signal });
       };
       const rotateSession = async (reason: 'context' | 'responsibility' | 'route' | 'request') => {
-        dispatchedContext = undefined;
+        dispatchedContexts.clear();
         const previous = research.threadId;
         await close();
         if (previous) research.previousThreadIds = [...(research.previousThreadIds ?? []), previous];
@@ -1022,10 +1054,11 @@ export async function runResearchWorkers(input: {
               problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
               workContract: currentContext.workContract, instructions: currentContext.instructions }) : undefined;
           const contextBasis = contextResearchBases.get(currentContext);
+          const dispatchedContext = responsibility === undefined ? undefined : dispatchedContexts.get(responsibility);
           const researchInputsChanged = contextBasis && dispatchedContext?.researchInputDigest !== contextBasis.dispatchDigest;
           const continuation = !researchInputsChanged && responsibility !== undefined && Boolean(research.threadId) &&
             currentContext.continuationMessage !== undefined &&
-            dispatchedContext?.threadId === research.threadId && dispatchedContext?.responsibility === responsibility;
+            dispatchedContext?.threadId === research.threadId;
           Object.assign(currentContext, finalizeResearchDispatch(currentContext, {
             continuation,
             checkpointInstruction: research.threadId && research.contextCheckpoint?.threadId === research.threadId && !currentCheckpointNotesDigest()
@@ -1050,13 +1083,17 @@ export async function runResearchWorkers(input: {
                   assignment.assignment.researchBasis = contextBasis.publishedBasis;
                   save();
                 }
-                dispatchedContext = responsibility === undefined ? undefined : { threadId: turnSession.threadId, responsibility,
-                  researchInputDigest: contextBasis?.dispatchDigest };
+                if (responsibility !== undefined) {
+                  dispatchedContexts.delete(responsibility);
+                  dispatchedContexts.set(responsibility, { threadId: turnSession.threadId,
+                    researchInputDigest: contextBasis?.dispatchDigest });
+                  if (dispatchedContexts.size > 32) dispatchedContexts.delete(dispatchedContexts.keys().next().value!);
+                } else dispatchedContexts.clear();
                 emit('context_dispatched', { mode: continuation ? 'continuation' : 'full', threadId: turnSession.threadId,
                   messageBytes: Buffer.byteLength(currentContext.message), messageDigest: mathDigest(currentContext.message),
                   compiledContentDigest: currentContext.manifest?.contentDigest });
                 started(turnId);
-              }), assignment, onStarted);
+              }), assignment, onStarted, contextBasis?.publishedBasis ?? contextBasis?.basis);
             } catch (error) {
               signal.throwIfAborted();
               executionError = failureDetail(error, turnSession.lastError, turnSession.lastFailureDiagnostic);
@@ -1114,13 +1151,18 @@ export async function runResearchWorkers(input: {
             if (turn === 'failed' || planningCheckpoint) throw new Error(sourceError);
             continue;
           }
-          if (cooperation && assignment?.kind === 'task' && turn === 'checkpoint' && contextSchedulingCheckpoint &&
-              !['research', 'sketch'].includes(assignment.task.kind)) {
-            // Context maintenance is not a proof submission. Preserve the draft without failing an unfinished declaration.
+          if (cooperation && assignment?.kind === 'task' && turn === 'checkpoint' &&
+              !['research', 'sketch'].includes(assignment.task.kind) && (contextSchedulingCheckpoint ||
+                cooperativeCheckpoint && hasTaskConnectionCheck(assignment.task, assignment.assignment))) {
+            // A yielded connection or context handoff is not an unfinished proof submission.
+            // settleTurn above still handles a published ready record through the writer-freeze barrier first.
             const commit = commitSolverSources(state.problem, worker.worktree);
-            cooperation.retainContextDraft(worker, assignment, commit);
+            const reason = contextSchedulingCheckpoint ? 'context' : 'connection';
+            recordAdvisoryOutput(true);
+            cooperation.retainContextDraft(worker, assignment, commit, reason);
             cooperation.interrupted(worker, assignment);
-            emit('context_checkpoint_saved', { threadId: turnSession.threadId, commit });
+            emit(reason === 'context' ? 'context_checkpoint_saved' : 'connection_checkpoint_saved',
+              { threadId: turnSession.threadId, taskId: assignment.task.id, commit });
             save(); continue;
           }
           if (cooperation && assignment && turn === 'failed' &&

@@ -2,18 +2,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readSolverRunState, type SolverRunState } from '../src/solver/archive';
+import { leadResearchInputs } from '../src/solver/contextCompiler';
 import type { CooperativeResearch } from '../src/solver/cooperation';
+import { leadWakePending } from '../src/solver/leadWakes';
+import * as knowledgeApplications from '../src/solver/knowledgeApplications';
 import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
-import { commitSolverSources, git, type SolverProblem } from '../src/solver/problem';
+import { committedSource, commitSolverSources, git, type SolverProblem } from '../src/solver/problem';
 import * as problemSource from '../src/solver/problem';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { taskConnectionCheckCurrent } from '../src/solver/taskConnections';
+import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
+import { captureResearchBasis, researchSourceDigest } from '../src/solver/researchRecords';
 import { cooperativeResearch } from './helpers/cooperation';
+import { deferred } from './helpers/async';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 describe('isolated advisory research drafts', () => {
   let directory: string, problem: SolverProblem, state: SolverRunState, cooperative: CooperativeResearch;
   let lead: ResearchWorker, peer: ResearchWorker, sequence: number;
+  let inputWorkers: ResearchWorker[];
   const instances: CooperativeResearch[] = [];
   const budget = { maxTurns: Infinity, remainingMs: Infinity };
   const notes = () => path.join(peer.worktree, 'RESEARCH.md');
@@ -30,7 +38,7 @@ describe('isolated advisory research drafts', () => {
       theoremName: 'Candidate.bridge', type: 'True', proofPath: 'Submission.lean' }] });
   const saveFinding = () => write(peer, finding(), '```lean\nnamespace Candidate\nlemma probe : True := by trivial\nend Candidate\n```\n');
   const create = (current = state) => {
-    const instance = cooperativeResearch({ state: current, workers: [lead, peer], retrievalRoot: directory,
+    const instance = cooperativeResearch({ state: current, workers: [lead, peer, ...inputWorkers], retrievalRoot: directory,
       modules: { ...directSolverModules, M2: { ...directSolverModules.M2,
         check: async () => { throw new Error('fixture_unexpected_verifier'); },
         checkTask: async () => { throw new Error('fixture_unexpected_verifier'); } } } });
@@ -47,7 +55,8 @@ describe('isolated advisory research drafts', () => {
   const saveDraft = async () => {
     const action = await task(); saveFinding();
     const commit = commitSolverSources(problem, peer.worktree);
-    await cooperative.deliver(peer, action, commit, true);
+    // Isolate draft recovery from the scheduler's partial-publication protocol.
+    await cooperative.deliver(peer, action, commit, true, 'request-failure');
     return { action, commit };
   };
   const edit = async (statuses: Record<string, CooperativeTask['status']>) => {
@@ -56,7 +65,7 @@ describe('isolated advisory research drafts', () => {
       tasks: state.cooperation!.tasks.map(node => ({ ...node.task, status: statuses[node.task.id] ?? node.task.status })),
       groups: state.cooperation!.groups!.map(route => route.group) }) + '\n');
     await cooperative.pulse();
-    expect(state.cooperation!.edits!.at(-1)!.status).toBe('applied');
+    expect(state.cooperation!.edits!.at(-1)!.status, JSON.stringify(state.cooperation!.edits!.at(-1))).toBe('applied');
   };
   const switchTask = async () => {
     await edit({ first_route: 'paused', second_route: 'active' });
@@ -88,8 +97,60 @@ describe('isolated advisory research drafts', () => {
       finally { if (selected) await hook(); }
     });
   };
+  const connectionTask = async (kind: 'goal' | 'lemma') => {
+    const worktree = path.join(directory, 'input_prover');
+    git(lead.worktree, ['worktree', 'add', '--quiet', '--detach', worktree, problem.baseCommit]);
+    const input: ResearchWorker = { id: 'input_prover', role: 'prover', worktree, ownedFiles: problem.ownedFiles };
+    inputWorkers.push(input);
+    state.workers!.push({ ...input, phase: 'running', turns: 0 });
+    node('first_route').task = { ...node('first_route').task, kind: 'lemma', objective: 'Prove the connection input',
+      groupId: 'main', ownerId: input.id, theoremName: 'Tutorial.helper', type: 'True', proofPath: 'Submission.lean' };
+    for (const target of state.cooperation!.tasks.filter(item => item.task.kind === 'goal'))
+      target.task = { ...target.task, status: target.task.id === 'goal_1' ? 'active' : 'paused',
+        groupId: 'main', ownerId: peer.id };
+    if (kind === 'lemma') {
+      const consumer: CooperativeTask = { id: 'consumer', kind: 'lemma', objective: 'Connect the unfinished input',
+        type: 'True', theoremName: 'Tutorial.consumer', proofPath: 'Submission.lean', dependsOn: ['first_route'],
+        groupId: 'main', ownerId: peer.id, revision: 0 };
+      state.cooperation!.tasks.push({ task: consumer, status: 'pending', attempts: 0 });
+      node('goal_1').task = { ...node('goal_1').task, dependsOn: [consumer.id], conditional: false };
+    }
+    write(lead, { tasks: state.cooperation!.tasks.map(item => item.task), groups: state.cooperation!.groups!.map(item => item.group) });
+    cooperative = create(); await cooperative.restore();
+    return kind === 'goal' ? 'goal_1' : 'consumer';
+  };
+  const connectionDraft = async (kind: 'goal' | 'lemma') => {
+    const id = await connectionTask(kind), action = await task();
+    expect(action.task.id).toBe(id);
+    expect(taskConnectionCheckCurrent(action.task, action.assignment, state.cooperation!.tasks,
+      { environmentDigest: state.environmentDigest, problemReceiptDigest: problem.receiptDigest })).toBe(true);
+    const support = 'lemma connection_support : True := by\n  exact Tutorial.helper\n';
+    let draftSource = fs.readFileSync(source(), 'utf8').replace('theorem add_zero', support +
+      (kind === 'lemma' ? 'lemma consumer : True := by\n  have input : True := Tutorial.helper\n  sorry\n' : '') + 'theorem add_zero');
+    if (kind === 'goal') draftSource = draftSource.replace('n + 0 = n := by sorry',
+      'n + 0 = n := by\n  have input : True := Tutorial.helper\n  sorry');
+    const draftNotes = `Connection draft for ${id}: preserve the exact application and the remaining obligation.\n` +
+      '```lean\nlemma probe : True := by exact Tutorial.helper\n```\n';
+    fs.writeFileSync(source(), draftSource); fs.writeFileSync(notes(), draftNotes);
+    const commit = commitSolverSources(problem, peer.worktree);
+    cooperative.retainContextDraft(peer, action, commit, 'connection');
+    cooperative.interrupted(peer, action);
+    expect(node(id).status).toBe('pending');
+    expect(state.cooperation!.researchDrafts![id]).toMatchObject({ commit,
+      assignmentId: action.assignment.assignmentId, taskDigest: taskVersion(action.task) });
+    expect(state.cooperation!.researchCheckpoints?.[id]).toBeUndefined();
+    return { id, action, commit, draftSource, draftNotes };
+  };
+  const switchConnectionTask = async (id: string) => {
+    await edit({ [id]: 'paused', second_route: 'active' });
+    const other = await task(); expect(other.task.id).toBe('second_route');
+    expect(fs.readFileSync(source(), 'utf8')).not.toContain('connection_support');
+    write(peer, { summary: 'SECOND_ROUTE_FINDING', conclusion: 'inconclusive' });
+    await cooperative.deliver(peer, other, commitSolverSources(problem, peer.worktree), true);
+    await edit({ [id]: 'active', second_route: 'paused' });
+  };
   beforeEach(async () => {
-    sequence = 0;
+    sequence = 0; inputWorkers = [];
     const example = localExample('solver-research-drafts-', 'lead');
     ({ directory, problem } = example);
     lead = leadWorker(problem, example.workspace); peer = peerWorker(example, 'researcher');
@@ -107,6 +168,186 @@ describe('isolated advisory research drafts', () => {
   afterEach(async () => {
     for (const instance of instances.splice(0)) await instance.stop();
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it.each(['research', 'sketch'] as const)('delivers a structured %s checkpoint to the Lead without completing its assignment', async kind => {
+    node('first_route').task = { ...node('first_route').task, kind };
+    const action = await task();
+    action.assignment.researchBasis = captureResearchBasis(action.task, { problemReceiptDigest: problem.receiptDigest,
+      environmentDigest: state.environmentDigest, tasks: state.cooperation!.tasks,
+      sourceDigest: researchSourceDigest(Object.fromEntries(problem.ownedFiles.map(file => [file,
+        committedSource(peer.worktree, action.assignment.seedCommit, `${problem.projectRelative}/${file}`)]))) });
+    saveFinding();
+    const fullNotes = fs.readFileSync(notes(), 'utf8');
+    const commit = commitSolverSources(problem, peer.worktree);
+    await cooperative.deliver(peer, action, commit, true, 'scheduling-checkpoint');
+    const [delivery] = state.cooperation!.deliveries!.filter(record => record.kind === 'research');
+    expect(delivery).toMatchObject({ taskId: 'first_route', taskDigest: taskVersion(action.task), commit,
+      summary: 'FIRST_ROUTE_FINDING', lemmaRequests: [{ id: 'bridge' }],
+      artifacts: { scope: 'advisory-unverified', commit }, researchRecord: { complete: false, basis: action.assignment.researchBasis } });
+    expect(JSON.parse(delivery.finding!)).toMatchObject({ needsDecision: true, conclusion: 'supporting' });
+    expect(committedSource(lead.worktree, commit, 'RESEARCH.md')).toBe(fullNotes);
+    expect(fs.readFileSync(notes(), 'utf8')).toBe(fullNotes);
+    expect(node('first_route')).toMatchObject({ status: 'pending', assignment: action.assignment });
+    expect(node('first_route').finding).toBeUndefined();
+    expect(node('first_route').researchCompletion).toBeUndefined();
+    expect(node('first_route').proof).toBeUndefined(); expect(state.check).toBeUndefined();
+    expect(state.cooperation!.researchDrafts!.first_route.commit).toBe(commit);
+    expect(leadWakePending(state.cooperation!.leadWakes!)).toBe(true);
+    const leadAction = await cooperative.next(lead, budget);
+    expect(leadAction?.kind).toBe('lead');
+    expect(cooperative.contextState(leadAction!, lead).leadResearchInputIds).toContain(delivery.id);
+    const resumed = await task();
+    expect(resumed.assignment).toBe(action.assignment);
+    expect(fs.readFileSync(notes(), 'utf8')).toBe(fullNotes);
+  });
+
+  it.each([
+    'The local boundary case is proved; the uniform inference is still unknown.',
+    'Illustrative graph only.\n```json\n{"nodes":["boundary","uniform"]}\n```\n',
+    '```math-result\n{"summary":\n```\n',
+    '```math-plan\n{"tasks":[]}\n```\n',
+  ])('retains an unstructured or unfinished checkpoint without publishing it: %s', async text => {
+    const action = await task(); fs.writeFileSync(notes(), text);
+    const commit = commitSolverSources(problem, peer.worktree);
+    await cooperative.deliver(peer, action, commit, true);
+    expect(state.cooperation!.deliveries ?? []).toEqual([]);
+    expect(node('first_route')).toMatchObject({ status: 'pending', assignment: action.assignment });
+    expect(state.cooperation!.researchDrafts!.first_route.commit).toBe(commit);
+    expect(committedSource(peer.worktree, commit, 'RESEARCH.md')).toBe(text);
+  });
+
+  it('deduplicates the same finding and Lean evidence despite note formatting and offset changes', async () => {
+    const action = await task(); saveFinding();
+    await cooperative.deliver(peer, action, commitSolverSources(problem, peer.worktree), true);
+    const previous = state.cooperation!.deliveries!.filter(record => record.kind === 'research');
+    const wakes = state.cooperation!.leadWakes!.requested;
+    const resumed = await task();
+    const reversed = Object.fromEntries(Object.entries(finding()).reverse());
+    write(peer, reversed, '```lean\nnamespace Candidate\nlemma probe : True := by trivial\nend Candidate\n```\n');
+    fs.writeFileSync(notes(), '# Expanded explanation before the same finding.\n\n' + fs.readFileSync(notes(), 'utf8'));
+    await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree), true);
+    expect(state.cooperation!.deliveries!.filter(record => record.kind === 'research')).toEqual(previous);
+    expect(state.cooperation!.leadWakes!.requested).toBe(wakes);
+    expect(node('first_route').status).toBe('pending');
+  });
+
+  it('keeps checkpoint publications scoped and deduplicated through task switches and process recovery', async () => {
+    const value = { summary: 'Exact boundary established; uniform inference remains open.', conclusion: 'inconclusive',
+      remainingObligations: ['Prove the uniform implication or request a narrower typed helper.'] };
+    const first = await task(); write(peer, value);
+    await cooperative.deliver(peer, first, commitSolverSources(problem, peer.worktree), true);
+    await edit({ first_route: 'paused', second_route: 'active' });
+    const second = await task(); expect(second.task.id).toBe('second_route');
+    expect(fs.readFileSync(notes(), 'utf8')).not.toContain(value.summary);
+    write(peer, value);
+    await cooperative.deliver(peer, second, commitSolverSources(problem, peer.worktree), true);
+    expect(state.cooperation!.deliveries!.filter(record => record.kind === 'research').map(record => record.taskId))
+      .toEqual(['first_route', 'second_route']);
+    await edit({ first_route: 'active', second_route: 'paused' }); await restart();
+    const resumed = await task(); expect(resumed.task.id).toBe('first_route');
+    await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree), true);
+    const records = state.cooperation!.deliveries!.filter(record => record.kind === 'research');
+    expect(records).toHaveLength(2);
+    for (const record of records) expect(JSON.parse(record.finding!)).toMatchObject({ taskId: record.taskId, taskDigest: record.taskDigest });
+    expect(leadResearchInputs(records, new Map(state.cooperation!.tasks.map(node => [node.task.id, node])))).toHaveLength(2);
+    expect(node('first_route').status).toBe('pending');
+  });
+
+  it('rejects a structured finding for another task while preserving its recoverable draft', async () => {
+    const action = await task();
+    write(peer, { taskId: 'second_route', summary: 'Misattributed boundary finding.', conclusion: 'inconclusive' });
+    const commit = commitSolverSources(problem, peer.worktree);
+    await cooperative.deliver(peer, action, commit, true);
+    expect(state.cooperation!.deliveries?.filter(record => record.kind === 'research') ?? []).toEqual([]);
+    expect(state.cooperation!.deliveryReceipts).toContainEqual(expect.objectContaining({ status: 'needs-correction',
+      taskId: 'first_route', issues: [expect.objectContaining({ path: 'taskId' })] }));
+    expect(state.cooperation!.researchDrafts!.first_route.commit).toBe(commit);
+    expect(node('first_route')).toMatchObject({ status: 'pending', assignment: action.assignment });
+  });
+
+  it('delivers an exact gap and partial check finding without prematurely settling the scoped investigation', async () => {
+    const checker: ResearchWorker = { ...peer, id: 'checker', worktree: path.join(directory, 'checker') };
+    git(lead.worktree, ['worktree', 'add', '--quiet', '--detach', checker.worktree, problem.baseCommit]);
+    inputWorkers.push(checker); state.workers!.push({ ...checker, phase: 'running', turns: 0 });
+    cooperative = create(); await cooperative.restore();
+    node('goal_1').task = { ...node('goal_1').task, sharing: 'problem', status: 'paused' };
+    const action = await task();
+    const gap = { consumer: { taskId: 'goal_1', taskDigest: taskVersion(node('goal_1').task) },
+      previousGap: 'The construction needs a uniform estimate.', reduced: 'The boundary case is established.',
+      remaining: 'Prove the estimate for the exact original quantifiers.', evidenceScope: 'The present local argument only.',
+      reconsiderWhen: ['A uniform estimate with its stated assumptions.'],
+      nextCheck: { action: 'construction-check', targetTaskId: 'first_route', objective: 'Check the missing uniform implication.',
+        expectedEvidence: 'An exact local inference or the remaining unsupported hypothesis.' } };
+    write(peer, { summary: 'The precise uniform gap is ready for independent investigation.', conclusion: 'inconclusive', mathematicalGap: gap });
+    await cooperative.deliver(peer, action, commitSolverSources(problem, peer.worktree), true);
+    expect(state.cooperation!.deliveryReceipts ?? []).toEqual([]);
+    expect(state.cooperation!.deliveries!.filter(record => record.kind === 'research')).toHaveLength(1);
+    const record = state.cooperation!.nextChecks![0];
+    expect(record.status).toBe('pending'); expect(node('first_route').status).toBe('pending');
+    expect(cooperative.contextState(undefined, lead).mathematicalGaps).toContainEqual(expect.objectContaining({
+      remaining: gap.remaining, scopeStatus: 'current-contracts', evidence: 'model-reported-advisory' }));
+    const checkTurn = async () => {
+      const next = await cooperative.next(checker, budget);
+      if (next?.kind !== 'task' || next.task.id !== record.taskId) throw new Error('fixture_expected_scoped_check');
+      expect(cooperative.started(checker, next)).toBe(true); return next;
+    };
+    const partial = await checkTurn();
+    write(checker, { summary: 'The uniform estimate is still under investigation.', conclusion: 'inconclusive',
+      remainingObligations: ['Test the exact uniform implication before reporting its outcome.'] });
+    await cooperative.deliver(checker, partial, commitSolverSources(problem, checker.worktree), true);
+    expect(record.status).toBe('pending'); expect(node(record.taskId).status).toBe('pending');
+    expect(state.cooperation!.deliveries!.filter(delivery => delivery.taskId === record.taskId && delivery.kind === 'research')).toHaveLength(1);
+    const resumed = await checkTurn();
+    write(checker, { summary: 'The scoped check result remains inconclusive.', conclusion: 'inconclusive',
+      checkOutcome: { checkId: record.id, summary: 'The current assumptions leave the uniform implication unresolved.',
+        conclusion: 'inconclusive', evidenceRefs: [] } });
+    const outcomeCommit = commitSolverSources(problem, checker.worktree);
+    await cooperative.deliver(checker, resumed, outcomeCommit, true);
+    expect(record.status).toBe('pending'); expect(node(record.taskId).status).toBe('pending');
+    expect(node(record.taskId).researchCompletion).toBeUndefined();
+    expect(state.cooperation!.researchDrafts![record.taskId].commit).toBe(outcomeCommit);
+    expect(state.cooperation!.deliveries!.filter(delivery => delivery.taskId === record.taskId && delivery.kind === 'research')).toHaveLength(1);
+    const completed = await checkTurn();
+    await cooperative.deliver(checker, completed, commitSolverSources(problem, checker.worktree));
+    expect(record.status).toBe('awaiting-decision'); expect(record.outcome?.conclusion).toBe('inconclusive');
+    expect(node(record.taskId).status).toBe('completed'); expect(node('first_route').status).toBe('pending');
+    expect(state.cooperation!.tasks.some(node => node.proof || node.integratedCheck)).toBe(false);
+  });
+
+  it('does not publish or reset an assignment superseded during checkpoint admission checks', async () => {
+    const action = await task(); saveFinding();
+    const entered = deferred(), checked = deferred<[]>();
+    vi.spyOn(knowledgeApplications, 'checkKnowledgeApplications').mockImplementation(() => { entered.resolve(); return checked.promise; });
+    const pending = cooperative.deliver(peer, action, commitSolverSources(problem, peer.worktree), true);
+    await entered.promise;
+    const replacement = { ...action.assignment, assignmentId: 'replacement-research' };
+    node('first_route').assignment = replacement;
+    checked.resolve([]); await pending;
+    expect(state.cooperation!.deliveries ?? []).toEqual([]);
+    expect(node('first_route')).toMatchObject({ status: 'running', assignment: replacement });
+  });
+
+  it('restores an imported draft on a different branch with its original frozen seed ancestry', async () => {
+    fs.writeFileSync(notes(), 'The old assignment inherited these exact input notes.');
+    const seed = commitSolverSources(problem, peer.worktree);
+    const { action, commit } = await saveDraft();
+    expect(action.assignment.seedCommit).toBe(seed);
+    git(peer.worktree, ['reset', '--hard', problem.baseCommit]);
+    fs.writeFileSync(notes(), 'The continuation worker begins on a different branch.');
+    const newHead = commitSolverSources(problem, peer.worktree);
+    expect(() => git(peer.worktree, ['merge-base', '--is-ancestor', seed, newHead])).toThrow();
+    state.cooperation!.researchDrafts!.first_route.suspended = true;
+    await restart();
+    const resumed = await task();
+    expect(resumed.assignment).toMatchObject({ assignmentId: action.assignment.assignmentId, seedCommit: seed });
+    expect(git(peer.worktree, ['rev-parse', 'HEAD'])).toBe(commit);
+    expect(git(peer.worktree, ['merge-base', '--is-ancestor', seed, 'HEAD'])).toBe('');
+    expect(fs.readFileSync(notes(), 'utf8')).toContain('FIRST_ROUTE_FINDING');
+    await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree), true);
+    expect(state.cooperation!.deliveries!.filter(record => record.kind === 'research')).toHaveLength(1);
+    expect(state.cooperation!.researchDrafts!.first_route).toMatchObject({ seedCommit: seed, commit });
+    expect(node('first_route').status).toBe('pending'); expect(state.check).toBeUndefined();
   });
 
   it.each(['research', 'sketch'] as const)('restores a %s draft after another task and process restart', async kind => {
@@ -132,6 +373,139 @@ describe('isolated advisory research drafts', () => {
       .toMatchObject([{ summary: 'FIRST_ROUTE_FINDING', artifacts: { reportedChecks: [{ status: 'passed' }] }, lemmaRequests: [{ id: 'bridge' }] }]);
     expect(pendingProposals()).toHaveLength(1);
     expect(state.cooperation!.tasks.filter(node => node.task.kind === 'goal').every(node => node.status === 'pending')).toBe(true);
+  });
+
+  it.each(['goal', 'lemma'] as const)('restores an unfinished %s connection draft after another task and process restart', async kind => {
+    const { id, action, commit, draftSource, draftNotes } = await connectionDraft(kind);
+    await switchConnectionTask(id); await restart();
+    const resumed = await task();
+    expect(resumed.task.id).toBe(id);
+    expect(resumed.assignment.assignmentId).toBe(action.assignment.assignmentId);
+    expect(resumed.assignment.connectionCheck).toEqual(action.assignment.connectionCheck);
+    expect(taskConnectionCheckCurrent(resumed.task, resumed.assignment, state.cooperation!.tasks,
+      { environmentDigest: state.environmentDigest, problemReceiptDigest: problem.receiptDigest })).toBe(true);
+    expect(fs.readFileSync(source(), 'utf8')).toBe(draftSource);
+    expect(fs.readFileSync(notes(), 'utf8')).toBe(draftNotes);
+    expect(state.cooperation!.researchDrafts![id].suspended).toBeUndefined();
+    expect(state.cooperation!.researchDrafts![id]).toMatchObject({
+      assignmentId: resumed.assignment.assignmentId, seedCommit: resumed.assignment.seedCommit });
+    expect(state.cooperation!.deliveries).toContainEqual(expect.objectContaining({ kind: 'progress', status: 'advisory',
+      taskId: id, commit, artifacts: expect.objectContaining({ scope: 'advisory-unverified' }) }));
+    expect(node(id)).toMatchObject({ status: 'running', attempts: 2 });
+    expect(node(id).proof).toBeUndefined();
+    expect(node(id).integratedCheck).toBeUndefined();
+    expect(pendingProposals()).toEqual([]);
+  });
+
+  it.each(['goal', 'lemma'] as const)('renews a %s connection after canonical changes while retaining its old draft as advisory evidence', async kind => {
+    const { id, action, commit, draftNotes } = await connectionDraft(kind);
+    await switchConnectionTask(id); await advanceCanonical(); await restart();
+    const resumed = await task();
+    expect(resumed.task.id).toBe(id);
+    expect(resumed.assignment.assignmentId).not.toBe(action.assignment.assignmentId);
+    expect(resumed.assignment.seedCommit).not.toBe(action.assignment.seedCommit);
+    expect(resumed.assignment.canonicalCommit).toBe(state.cooperation!.canonicalCommit);
+    expect(resumed.assignment.connectionCheck!.seedCommit).toBe(resumed.assignment.seedCommit);
+    expect(resumed.assignment.connectionCheck!.basisDigest).not.toBe(action.assignment.connectionCheck!.basisDigest);
+    expect(state.cooperation!.researchDrafts![id]).toMatchObject({ assignmentId: resumed.assignment.assignmentId,
+      seedCommit: resumed.assignment.seedCommit, canonicalCommit: resumed.assignment.canonicalCommit });
+    expect(taskConnectionCheckCurrent(resumed.task, resumed.assignment, state.cooperation!.tasks,
+      { environmentDigest: state.environmentDigest, problemReceiptDigest: problem.receiptDigest })).toBe(true);
+    expect(cooperative.current(action)).toBe(false);
+    expect(fs.readFileSync(source(), 'utf8')).toContain('by rfl');
+    expect(fs.readFileSync(source(), 'utf8')).not.toContain('connection_support');
+    expect(fs.readFileSync(notes(), 'utf8')).toBe(draftNotes);
+    expect(state.cooperation!.deliveries).toContainEqual(expect.objectContaining({ kind: 'progress', status: 'advisory',
+      taskId: id, commit, artifacts: expect.objectContaining({ scope: 'advisory-unverified' }), remainingObligations: [id] }));
+    expect(node(id).proof).toBeUndefined();
+    expect(node(id).integratedCheck).toBeUndefined();
+    expect(pendingProposals()).toEqual([]);
+    const canonicalSource = fs.readFileSync(source(), 'utf8');
+
+    // A crash before the next model checkpoint must still retain the restored notes.
+    cooperative.interrupted(peer, resumed);
+    await switchConnectionTask(id); await restart();
+    const recovered = await task();
+    expect(recovered.task.id).toBe(id);
+    expect(recovered.assignment.assignmentId).toBe(resumed.assignment.assignmentId);
+    expect(recovered.assignment.connectionCheck).toEqual(resumed.assignment.connectionCheck);
+    expect(state.cooperation!.researchDrafts![id]).toMatchObject({ assignmentId: recovered.assignment.assignmentId,
+      seedCommit: recovered.assignment.seedCommit });
+    expect(fs.readFileSync(source(), 'utf8')).toBe(canonicalSource);
+    expect(fs.readFileSync(notes(), 'utf8')).toBe(draftNotes);
+  });
+
+  it.each(['missing', 'empty'] as const)('preserves %s notes and checkpoint counts through another task and restart', async presence => {
+    const first = await task();
+    fs.rmSync(notes(), { force: true });
+    if (presence === 'empty') fs.writeFileSync(notes(), '');
+    await cooperative.deliver(peer, first, commitSolverSources(problem, peer.worktree), true);
+    const previous = structuredClone(state.cooperation!.researchCheckpoints!.first_route);
+    expect(previous).toMatchObject({ count: 1, paused: false });
+
+    await switchTask(); await restart();
+    const resumed = await task();
+    expect(resumed.task.id).toBe('first_route');
+    expect(fs.existsSync(notes())).toBe(presence === 'empty');
+    if (presence === 'empty') expect(fs.readFileSync(notes(), 'utf8')).toBe('');
+    expect(state.cooperation!.researchDrafts!.first_route.outputDigest).toBe(previous.outputDigest);
+    await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree), true);
+    expect(state.cooperation!.researchCheckpoints!.first_route)
+      .toMatchObject({ count: 2, unchangedEvidenceCount: 2, paused: false, outputDigest: previous.outputDigest });
+
+    const third = await task();
+    await cooperative.deliver(peer, third, commitSolverSources(problem, peer.worktree), true);
+    expect(node('first_route').status).toBe('blocked');
+    expect(state.cooperation!.researchCheckpoints!.first_route).toMatchObject({ count: 3, paused: true });
+    expect(node('goal_1').integratedCheck).toBeUndefined();
+  });
+
+  it.each(['missing', 'saved'] as const)('keeps a paused task with %s notes parked while its worker awaits another task preflight', async presence => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const action = await task();
+      if (presence === 'saved') fs.writeFileSync(notes(), 'An unchanged saved investigation.');
+      else fs.rmSync(notes(), { force: true });
+      await cooperative.deliver(peer, action, commitSolverSources(problem, peer.worktree), true);
+    }
+    const paused = structuredClone(state.cooperation!.researchCheckpoints!.first_route);
+    expect(node('first_route').status).toBe('blocked');
+    node('second_route').task = { ...node('second_route').task, kind: 'lemma', status: 'active',
+      theoremName: 'Tutorial.second_route', type: 'True', proofPath: 'Submission.lean' };
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    let release!: () => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(TaskTypePreflightCache.prototype, 'check').mockImplementation(async input => {
+      entered(); await waiting;
+      return { current: () => true, result: { status: 'deferred', inputDigest: 'fixture-input',
+        taskDigest: taskVersion(input.task), reason: 'fixture-deferred',
+        evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' } };
+    });
+    const preparation = cooperative.next(peer, budget);
+    await started;
+    try {
+      // The next model session is not installed until after preflight; its old task id is still present.
+      expect(state.workers![1].sessionTaskId).toBe('first_route');
+      expect(node('second_route')).toMatchObject({ status: 'pending', attempts: 0 });
+      expect(node('second_route').assignment).toBeUndefined();
+      expect(state.cooperation!.researchDrafts!.first_route.suspended).toBe(true);
+      expect(fs.readFileSync(notes(), 'utf8')).toBe('');
+      expect(node('first_route').status).toBe('blocked');
+      expect(state.cooperation!.researchCheckpoints!.first_route).toEqual(paused);
+      expect(emit.mock.calls.some(([event]) => event === 'research_checkpoint_reopened')).toBe(false);
+    } finally {
+      release(); await preparation;
+    }
+    expect(node('second_route').status).toBe('running');
+    expect(node('first_route').status).toBe('blocked');
+    expect(node('first_route').attempts).toBe(3);
+
+    // Suspension excludes the other task's output, but a real input change still reopens this investigation.
+    state.environmentDigest = 'new-environment';
+    (cooperative as any).changed();
+    expect(node('first_route').status).toBe('pending');
+    expect(state.cooperation!.researchCheckpoints!.first_route).toBeUndefined();
+    expect(emit).toHaveBeenCalledWith('research_checkpoint_reopened', { taskId: 'first_route', reason: 'new-input' });
   });
 
   it('keeps request failures as saved drafts without increasing mathematical stagnation', async () => {
