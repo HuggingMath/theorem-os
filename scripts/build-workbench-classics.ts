@@ -24,7 +24,7 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
     const english = locale === 'en', workbench = english ? '../../' : '../', home = `https://theoremos.top/${english ? 'en/' : ''}`;
     let page = archiveCounts(fs.readFileSync(path.join(root, 'docs', directory, 'archive.html'), 'utf8'), catalog)
       .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale, 'archive'))
-      .replace('<body>', '<body class="shared-classics">')
+      .replace('<body>', `<body class="shared-classics" data-workbench-root="${workbench}">`)
       .replaceAll('href="index.html"', `href="${workbench}"`)
       .replaceAll('href="index.html#start"', `href="${workbench}"`)
       .replaceAll('href="feedback.html"', `href="${home}feedback.html"`)

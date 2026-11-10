@@ -1,5 +1,5 @@
 import type { WebCheckReceipt, WebTaskSource } from './collaboration';
-import type { ResearchBriefDecision, ResearchBriefTask } from './researchWorkspaceTypes';
+import type { ResearchBrief, ResearchBriefDecision, ResearchBriefTask } from './researchWorkspaceTypes';
 
 export type ResearchJourneySourceRef = {
   runId: string; projectId?: string; taskId: string; taskVersion: string;
@@ -25,6 +25,19 @@ export type ResearchJourney = {
   title: string; attempts: ResearchJourneyAttempt[]; lineage: ResearchJourneyLineage[];
 };
 export type ResearchJourneySource = { ref: ResearchJourneySourceRef; task?: ResearchBriefTask; source: WebTaskSource };
+export type ResearchObservationRef = { sequence: number; stateDigest: string };
+export type ResearchJourneyMoment = ResearchObservationRef & {
+  observedAt: string; planVersion?: string; tasks: number; checks: number;
+  changes: { added: number; changed: number; removed: number; checks: number; human: number };
+};
+export type ResearchJourneyEvolution = {
+  runId: string; moments: ResearchJourneyMoment[];
+  selected?: { moment: ResearchJourneyMoment; brief: ResearchBrief; attempt: ResearchJourneyAttempt };
+};
+export type ResearchJourneyCheck = {
+  receipt: WebCheckReceipt; source?: ResearchJourneySource; previous?: ResearchJourneySource;
+  observation?: ResearchObservationRef;
+};
 
 /** This is a frozen reading record, not a new proof or an inferred human effect. */
 export type ResearchJourneyRecord = {

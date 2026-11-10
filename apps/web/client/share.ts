@@ -2,18 +2,29 @@ import { createIcons, Copy, Download, ShieldCheck } from 'lucide';
 import { h, render } from 'preact';
 import { effortLabels, formatDateTime, readableMetric, statementConfirmation } from '../presentation';
 import { webShareToken, type WebShareSnapshot } from '../shareTypes';
-import { localizeMessage, localizeText, mountLocaleSwitch, t } from '../i18n';
+import { locale, localizeMessage, localizeText, mountLocaleSwitch, t } from '../i18n';
+import type { WebSession } from '../shared';
+import type { SharedProofReading } from '../sharedProofTypes';
 import { localizeSiteLinks } from './feedback';
 import { leanFileName } from './leanOutline';
 import { leanLineTokens } from './sourceText';
 import { Rich } from './richText';
 import { ShareReadingView } from './ShareReadingView';
+import { ShareReceiverActions } from './ShareReceiverActions';
+import { finishShareLoginReturn, shareLoginLink } from './shareContinuation';
+import './shareContinuation.css';
 
 createIcons({ icons: { Copy, Download, ShieldCheck }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
 localizeSiteLinks();
 let view: 'proof' | 'source' = 'proof', snapshot: WebShareSnapshot | undefined, toastTimer: ReturnType<typeof setTimeout> | undefined;
+const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
+const returned = new URLSearchParams(location.search);
+if (returned.has('shareReturn')) {
+  finishShareLoginReturn(location.search); returned.delete('shareReturn');
+  history.replaceState(null, '', `${location.pathname}${returned.size ? `?${returned}` : ''}${location.hash}`);
+}
 
 function toast(text: string) {
   const target = $('#share-toast');
@@ -65,7 +76,7 @@ function showCode() {
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-share-view]'))
     button.setAttribute('aria-pressed', String(button.dataset.shareView === view));
 }
-function show(share: WebShareSnapshot) {
+function show(share: WebShareSnapshot, context: { token?: string; readingId?: string }) {
   snapshot = share;
   document.title = `${share.title} · TheoremOS`;
   prose($('#share-title'), share.title);
@@ -127,20 +138,40 @@ function show(share: WebShareSnapshot) {
   }));
   facts($('#share-identity'), share.identity.map(item => [localizeText(item.label), item.value, true]));
   $('#share-credentials').hidden = !share.identity.length;
-  render(h(ShareReadingView, { share, shareId: location.hash.slice(1) }), $('#share-reading-host'));
+  render(h(ShareReadingView, { share, shareId: context.readingId ?? context.token ?? 'shared-proof' }), $('#share-reading-host'));
+  render(h(ShareReceiverActions, { share, ...context }), $('#share-receiver-host'));
   showCode();
   $('#share-loading').hidden = true;
   $('#share-content').hidden = false;
 }
 async function load() {
   const token = location.hash.slice(1);
+  const readingId = new URLSearchParams(location.search).get('reading');
+  if (!token && readingId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(readingId)) {
+    try {
+      const sessionResponse = await fetch('/api/session', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      const session = await sessionResponse.json() as WebSession;
+      if (!sessionResponse.ok) throw new Error(tx('暂时无法读取登录状态，请稍后重试。', 'Could not read your sign-in status. Please retry.'));
+      if (session.auth === 'email' && (!session.account || session.termsRequired)) {
+        missing(tx('请登录收藏这份分享的账号后继续。', 'Sign in to the account that saved this proof.'));
+        const action = new URLSearchParams(location.search).get('action') === 'prepare' ? 'prepare' : 'bookmark';
+        const link = document.createElement('a'); link.className = 'button'; link.dataset.sharePrivateSignin = '';
+        link.href = shareLoginLink({ readingId, action, language: locale }); link.textContent = tx('登录并继续', 'Sign in and continue');
+        $('#share-missing').append(link); return;
+      }
+      const response = await fetch(`/api/research/shared-proofs/${encodeURIComponent(readingId)}`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      const payload = await response.json() as { item?: SharedProofReading; error?: string };
+      if (!response.ok || !payload.item) { missing(payload.error ? localizeMessage(payload.error) : undefined); return; }
+      show(payload.item.share, { readingId }); return;
+    } catch (cause) { missing(cause instanceof Error ? localizeMessage(cause.message) : t('暂时无法连接服务，请稍后重试。')); return; }
+  }
   if (!webShareToken.test(token)) { missing(t('链接不完整，请向分享者重新获取。')); return; }
   try {
     // No credentials: a share reads the same for everyone, signed in or not.
     const response = await fetch(`/api/share/${token}`, { credentials: 'omit', cache: 'no-store', headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => undefined) as { share?: WebShareSnapshot; error?: string } | undefined;
     if (!response.ok || !payload?.share) { missing(response.status === 404 ? undefined : payload?.error ? localizeMessage(payload.error) : t('暂时无法读取分享内容，请稍后重试。')); return; }
-    show(payload.share);
+    show(payload.share, { token });
   } catch { missing(t('暂时无法连接服务，请稍后重试。')); }
 }
 

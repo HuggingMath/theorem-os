@@ -13,7 +13,7 @@ import type { ThinkingStep } from '../thinkingProcess';
 import { formalizationReasonText, formalizationNextStep } from '../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
-import { Rich } from '../richText';
+import { Rich, RichProse } from '../richText';
 import { Elapsed, SolveProcessView } from './SolveProcess';
 import type { PlanApprovalProps } from './RunHeader';
 import type { ChatArtifactKind } from '../chatArtifactNavigation';
@@ -31,6 +31,7 @@ import { FirstResearchStart } from './FirstResearchStart';
 import type { ChatAnswer } from '../chatAnswer';
 import type { ChatMathematics } from '../chatMathematics';
 import { ChatMathematicalAnswer, ChatMathematicalProgress } from './ChatMathematicalWork';
+import type { ResearchStartCostProps } from '../researchStartCost';
 
 
 export type ChatThreadProps = {
@@ -324,6 +325,7 @@ export type ChatComposerProps = {
   onProvider(value: string): void; onModel(value: string): void;
   budgets: ChatBudgets; budgetLimits: ChatBudgets; onBudget(stage: 'formalization' | 'research', field: 'maxRunSeconds' | 'maxTotalTokens' | 'maxTurns', value: number): void;
   quota?: WebQuotaView;
+  cost?: Pick<ResearchStartCostProps, 'owner' | 'account' | 'request'>;
   checkingConnection: boolean; connection?: { status: 'available' | 'unknown' | 'error'; message: string }; onCheckConnection(): void;
   keyManagement?: { busy: boolean; ending?: string; notice?: string; onSave(): void; onDelete(): void };
   onGuidance?(): void;
@@ -338,6 +340,7 @@ function ChatComposer(props: ChatComposerProps) {
   const [setupStep, setSetupStep] = useState(1);
   const settings = useRef<HTMLDetailsElement>(null);
   const keyInput = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState(false);
   const composing = useRef(false);
   const missingKey = props.keyRequired && !props.apiKey.trim();
   const configureKey = () => {
@@ -388,8 +391,13 @@ function ChatComposer(props: ChatComposerProps) {
         <span role="status" data-chat-quote-count={props.quote.count}>{t('已引用 {0} 条记录', props.quote.count)}</span>
         <button type="button" class="text-button" data-chat-quote-undo disabled={props.submitting} onClick={props.quote.onUndo}>{t('撤回上次引用')}</button>
       </div>}
+      {props.newProblem && <div class="chat-input-view" role="group" aria-label={tx('原题输入视图', 'Problem input view')}>
+        <button type="button" class="text-button" data-input-view="edit" aria-pressed={!preview} onClick={() => { setPreview(false); requestAnimationFrame(() => textarea.current?.focus()); }}>{tx('编辑', 'Edit')}</button>
+        <button type="button" class="text-button" data-input-view="preview" aria-pressed={preview} onClick={() => setPreview(true)}>{tx('预览公式', 'Preview formulas')}</button>
+      </div>}
       <label class="sr-only" for="formalize-original">{props.hasConversation ? t("继续对话") : t("自然语言或 TeX 原题")}</label>
       <textarea ref={textarea} id="formalize-original" rows={3} value={props.input} spellcheck={false}
+        hidden={props.newProblem && preview}
         placeholder={props.guidance ? t('建议证明方法，或指出需要调整的引理…') : props.hasConversation ? t("追问思路、引理或证明细节…") : t("输入你想证明的题目…")}
         onInput={event => props.onInput(event.currentTarget.value)}
         onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
@@ -397,7 +405,11 @@ function ChatComposer(props: ChatComposerProps) {
           if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || composing.current || event.keyCode === 229 || matchMedia('(pointer: coarse)').matches) return;
           event.preventDefault(); if (canSend) props.onSubmit(); else if (missingKey && props.input.trim() && !props.disabled && !props.submitting) configureKey();
         }} />
+      {props.newProblem && preview && <section class="chat-input-preview" data-input-preview tabIndex={0} aria-label={tx('原题公式预览', 'Problem formula preview')}>
+        {props.input.trim() ? <RichProse text={props.input} /> : <p>{tx('先在编辑中写下原题，这里会预览文字和公式。', 'Write a problem in Edit to preview its text and formulas here.')}</p>}
+      </section>}
       {props.newProblem && <FirstResearchStart participation={props.participation} budgets={props.budgets} limits={props.budgetLimits}
+        cost={props.cost && { ...props.cost, providerId: props.providerId, model: props.model }}
         locked={props.submitting || props.participationLocked} quota={props.quota} onBudget={value => {
           props.onBudget('formalization', 'maxRunSeconds', value.maxRunSeconds); props.onBudget('formalization', 'maxTotalTokens', value.maxTotalTokens);
           props.onBudget('research', 'maxRunSeconds', value.research.maxRunSeconds); props.onBudget('research', 'maxTotalTokens', value.research.maxTotalTokens);

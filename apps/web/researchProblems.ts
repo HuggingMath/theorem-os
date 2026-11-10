@@ -8,6 +8,7 @@ import type { WebConversation } from './conversationTypes';
 import type { ResearchBrief } from './researchWorkspaceTypes';
 import type { ResearchProblem, ResearchStageConclusion, ResearchStageReference } from './researchProblemTypes';
 import { researchStatementIdentity } from './client/researchOverviewModel';
+import { researchProblemRunState } from './researchProblemStatus';
 
 const stageSchema = z.object({ requestId: z.string().min(1).max(200), evidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u),
   title: z.string().trim().min(1).max(200), conclusion: z.string().trim().min(1).max(8000),
@@ -37,6 +38,7 @@ export class WebResearchProblems {
     if (!run) throw new WebStorageError(404, '研究记录不存在。');
     const key = mathDigest(project ? `project:${project.id}` : researchStatementIdentity(run));
     return { brief, project, key, evidenceDigest: researchProblemEvidence(brief),
+      runState: researchProblemRunState(run, brief.runHref, Boolean(this.jobs.get(viewer, runId))),
       ...(run.observation ? { observationRef: { sequence: run.observation.sequence, stateDigest: run.observation.snapshot.stateDigest } } : {}) };
   }
   private path(viewer: string, key: string) { return ['owners', mathDigest(viewer), 'stage-conclusions', `${key}.json`]; }

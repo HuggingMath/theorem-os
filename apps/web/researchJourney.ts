@@ -1,17 +1,18 @@
 import { z } from 'zod';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { WebStorage, WebStorageError } from './storage';
-import { researchBriefTask } from './researchProblemEvidence';
+import { researchBriefDecisions, researchBriefTask } from './researchProblemEvidence';
 import type { WebJobs } from './jobs';
 import type { WebResearchProjects } from './researchProjects';
 import type { WebResearchProblems } from './researchProblems';
 import type { WebResearchWorkspace } from './researchWorkspace';
 import type { ResearchProblem } from './researchProblemTypes';
-import type { ResearchBriefTask } from './researchWorkspaceTypes';
+import type { ResearchBrief, ResearchBriefTask } from './researchWorkspaceTypes';
 import type { WebObservation, WebTaskSource } from './collaboration';
 import type { WebRun } from './shared';
 import type { ResearchJourney, ResearchJourneyAttempt, ResearchJourneyLineage, ResearchJourneyRecord, ResearchJourneySource,
-  ResearchJourneySourceRef, ResearchReadReceipt, ResearchUnreadChange, ResearchUnreadChanges } from './researchJourneyTypes';
+  ResearchJourneySourceRef, ResearchReadReceipt, ResearchUnreadChange, ResearchUnreadChanges, ResearchJourneyCheck,
+  ResearchJourneyEvolution, ResearchJourneyMoment, ResearchObservationRef } from './researchJourneyTypes';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const textId = z.string().min(1).max(500), commitId = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
@@ -142,6 +143,73 @@ export class WebResearchJourney {
     return { journey, located, selected };
   }
   journey(viewer: string, runId: string, projectId?: string) { return this.collect(viewer, runId, projectId).journey; }
+  private observations(located: Located) {
+    return [...new Map([...located.observations, ...(located.run.observation ? [located.run.observation] : [])]
+      .map(observation => [`${observation.sequence}:${observation.snapshot.stateDigest}`, observation])).values()]
+      .sort((a, b) => a.sequence - b.sequence);
+  }
+  private at(located: Located, ref: ResearchObservationRef): Located {
+    parse(z.object({ sequence: z.number().int().positive(), stateDigest: hash }).strict(), ref);
+    const observations = this.observations(located), observation = observations.find(item => item.sequence === ref.sequence && item.snapshot.stateDigest === ref.stateDigest)
+      ?? fail(404, '研究记录不存在。');
+    const prefix = observations.filter(item => item.sequence <= ref.sequence);
+    const checks = [...new Map(prefix.flatMap(item => item.checks).map(check => [check.id, check])).values()];
+    const href = (task: { id: string; version: string; commit?: string }) => problemHref(located.run.id, located.projectId,
+      { tab: 'route', task: task.id, taskVersion: task.version, ...(task.commit ? { commit: task.commit } : {}), at: String(ref.sequence), atState: ref.stateDigest });
+    // A reading snapshot has no later acceptance, feedback or usage. Only evidence present at this observation participates.
+    const brief: ResearchBrief = { ...located.problem.brief, environmentDigest: observation.inspection.configuration.environmentDigest,
+      accepted: false, status: 'not-assessed', tasks: observation.inspection.tasks.map(task => researchBriefTask(task, observation, checks, href)),
+      routes: (observation.plan?.proofRoutes ?? []).map(route => ({ id: route.id, prerequisites: [...route.prerequisiteTaskIds], closingTaskId: route.closingTaskId, targetTaskId: route.targetTaskId })),
+      decisions: researchBriefDecisions({ observation, recorded: prefix, commands: [], runId: located.run.id, href }),
+      planApproval: observation.inspection.planApproval, blockers: observation.inspection.mathematics.snapshot.blockers
+        .filter(blocker => observation.inspection.tasks.some(task => task.id === blocker.taskId && task.version === blocker.taskDigest))
+        .map(blocker => ({ id: blocker.id, taskId: blocker.taskId, taskVersion: blocker.taskDigest, mechanism: blocker.mechanism, status: blocker.status, evidenceRefs: [...(blocker.evidenceRefs ?? [])] })),
+      acceptance: { status: 'not-assessed', checks: checks.map(check => ({ id: check.id, taskId: check.taskId, version: check.taskVersion, passed: check.record.passed === true })) },
+      outcomes: [], usage: { knownTokens: 0, missingEntries: 0, entries: [] } };
+    return { ...located, observations: prefix, run: { ...located.run, observation, status: 'running', result: undefined, failure: undefined, error: undefined },
+      problem: { ...located.problem, brief, observationRef: ref } };
+  }
+  evolution(viewer: string, runId: string, projectId?: string, ref?: ResearchObservationRef): ResearchJourneyEvolution {
+    const located = this.locate(viewer, runId, projectId), observations = this.observations(located);
+    let previous: WebObservation | undefined;
+    const moments: ResearchJourneyMoment[] = observations.map(observation => {
+      const before = new Map((previous?.inspection.tasks ?? []).map(task => [task.id, task])), after = new Map(observation.inspection.tasks.map(task => [task.id, task]));
+      const priorChecks = new Set((previous?.checks ?? []).map(check => check.id));
+      const human = (item: WebObservation | undefined) => new Map([...(item?.guidance ?? []).map(value => [value.id, digest(value)] as const),
+        ...(item?.inspection.edits ?? []).map(value => [value.id, digest(value)] as const),
+        ...(item?.inspection.planApproval ? [['plan-approval', digest(item.inspection.planApproval)] as const] : [])]);
+      const priorHuman = human(previous);
+      const comparable = (task: typeof observation.inspection.tasks[number]) => digest({ version: task.version, objective: task.objective,
+        statement: task.informalStatement, premises: task.premises, dependencies: task.plannedDependencies, derivation: task.informalProof,
+        proof: task.proof, status: task.status, finding: task.finding, feedback: task.feedback });
+      const moment = { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest, observedAt: observation.observedAt,
+        planVersion: observation.inspection.planVersion, tasks: after.size, checks: observation.checks.length,
+        changes: { added: [...after.keys()].filter(id => !before.has(id)).length, removed: [...before.keys()].filter(id => !after.has(id)).length,
+          changed: [...after.values()].filter(task => before.has(task.id) && comparable(task) !== comparable(before.get(task.id)!)).length,
+          checks: observation.checks.filter(check => !priorChecks.has(check.id)).length,
+          human: [...human(observation)].filter(([id, value]) => priorHuman.get(id) !== value).length } };
+      previous = observation; return moment;
+    });
+    if (!ref) return { runId, moments };
+    const frozen = this.at(located, ref), moment = moments.find(item => item.sequence === ref.sequence && item.stateDigest === ref.stateDigest)!;
+    return { runId, moments, selected: { moment, brief: frozen.problem.brief, attempt: this.attempt(frozen) } };
+  }
+  check(viewer: string, runId: string, projectId: string | undefined, checkId: string, ref?: ResearchObservationRef): ResearchJourneyCheck {
+    parse(textId, checkId);
+    const current = this.locate(viewer, runId, projectId), located = ref ? this.at(current, ref) : current;
+    const receipts = this.observations(located).flatMap(item => item.checks).filter(check => check.id === checkId);
+    const unique = [...new Map(receipts.map(check => [digest(check), check])).values()];
+    if (unique.length !== 1) fail(404, '研究记录不存在。');
+    const receipt = unique[0]!, candidates = this.sourceCandidates(located, receipt.taskId, receipt.commit).filter(item => sameSource(item.source, { ...receipt, file: item.source.file }));
+    const selected = candidates.length === 1 ? candidates[0] : undefined;
+    const source = selected && { ref: this.sourceRef(located, selected), task: this.exactTask(located, selected), source: selected.source };
+    const earlier = selected ? this.sourceCandidates(located, receipt.taskId).filter(item => item.observation.sequence < selected.observation.sequence
+      && item.source.commit !== receipt.commit && item.source.file === selected.source.file && item.source.environmentDigest === receipt.environmentDigest)
+      .sort((a, b) => b.observation.sequence - a.observation.sequence) : [];
+    const closest = earlier[0], tied = closest && earlier.filter(item => item.observation.sequence === closest.observation.sequence);
+    const previous = closest && tied?.length === 1 ? { ref: this.sourceRef(located, closest), task: this.exactTask(located, closest), source: closest.source } : undefined;
+    return { receipt, ...(source ? { source } : {}), ...(previous ? { previous } : {}), ...(ref ? { observation: ref } : {}) };
+  }
   source(viewer: string, runId: string, projectId: string | undefined, raw: unknown): ResearchJourneySource {
     const ref = parse(z.object({ taskId: textId, taskVersion: textId, commit: commitId, sourceDigest: hash, environmentDigest: hash, file: textId }).strict(), raw) as
       Pick<ResearchJourneySourceRef, 'taskId' | 'taskVersion' | 'commit' | 'sourceDigest' | 'environmentDigest' | 'file'>;
@@ -282,6 +350,10 @@ export function createResearchJourneyHandler(dependencies: Dependencies) {
     const [, , , , runId, section, action] = parts, projectId = url.searchParams.get('project') ?? undefined;
     const item = (value: unknown) => ({ status: 200, body: { item: value } });
     if (parts.length === 6 && method === 'GET') return item(section === 'journey' ? service.journey(viewer, runId!, projectId) : service.changes(viewer, runId!, projectId));
+    const observationRef = () => url.searchParams.has('at') || url.searchParams.has('atState')
+      ? { sequence: Number(url.searchParams.get('at')), stateDigest: url.searchParams.get('atState') ?? '' } : undefined;
+    if (section === 'journey' && action === 'evolution' && parts.length === 7 && method === 'GET') return item(service.evolution(viewer, runId!, projectId, observationRef()));
+    if (section === 'journey' && action === 'check' && parts.length === 7 && method === 'GET') return item(service.check(viewer, runId!, projectId, url.searchParams.get('check') ?? '', observationRef()));
     if (section === 'changes' && action === 'read' && parts.length === 7 && method === 'POST') return item(service.markRead(viewer, runId!, projectId, await readBody()));
     if (section === 'journey' && action === 'source' && parts.length === 7 && method === 'GET') return item(service.source(viewer, runId!, projectId, {
       taskId: url.searchParams.get('task'), taskVersion: url.searchParams.get('taskVersion'), commit: url.searchParams.get('commit'),

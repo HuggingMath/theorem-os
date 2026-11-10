@@ -127,6 +127,16 @@ export function serverKeys() {
     };
     visit(source);
   }
+  // Project event titles are also shown in the activity feed.
+  const projectFile = 'apps/web/researchProjects.ts', projectSource = parse(path.join(root, projectFile));
+  const projectEvents = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(projectSource) === 'this.event') {
+      const title = node.arguments[3];
+      if (title && ts.isStringLiteralLike(title) && han.test(title.text)) keys.set(title.text, projectFile);
+    }
+    ts.forEachChild(node, projectEvents);
+  };
+  projectEvents(projectSource);
   return keys;
 }
 
@@ -139,7 +149,8 @@ export function errorKeys() {
   const keys = new Map<string, string>();
   const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
     'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts', 'apps/web/researchProjects.ts', 'apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchCandidateScope.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchProblems.ts', 'apps/web/researchMathExamples.ts',
-    'apps/web/researchBudgets.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts', 'apps/web/researchProjectStart.ts'];
+    'apps/web/researchBudgets.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts', 'apps/web/researchProjectStart.ts',
+    'apps/web/sharedProofs.ts', 'apps/web/researchCollections.ts', 'apps/web/researchCollaborationApi.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
     const add = (node: ts.Node, text: string) => {
@@ -155,7 +166,7 @@ export function errorKeys() {
     // service's table of provider statuses.
     const visit = (node: ts.Node) => {
       if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(source))) node.arguments?.forEach(collect);
-      else if (['apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts'].includes(relative) && ts.isCallExpression(node) && node.expression.getText(source) === 'fail' && node.arguments[1]) collect(node.arguments[1]);
+      else if (['apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts', 'apps/web/sharedProofs.ts'].includes(relative) && ts.isCallExpression(node) && node.expression.getText(source) === 'fail' && node.arguments[1]) collect(node.arguments[1]);
       else if (relative === 'apps/web/researchLibraryTrials.ts' && ts.isPropertyAssignment(node) && ['incompatibility', 'error'].includes(node.name.getText(source))) collect(node.initializer);
       else if (relative === 'apps/web/researchLibraryTrials.ts' && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reason' && node.initializer) collect(node.initializer);
       else if (relative === 'apps/web/researchAssets.ts' && ts.isPropertyAssignment(node) && node.name.getText(source) === 'reason') collect(node.initializer);

@@ -5,6 +5,7 @@ import {
   ListStart, MessageCircle, Pause, Play, RotateCcw, Search, SearchX, ShieldCheck,
 } from 'lucide';
 import catalog from 'virtual:archive';
+import { archiveStudyDestination } from './archiveDestination';
 import figuresVersion from 'virtual:proof-figures';
 import mathVersion from 'virtual:math';
 import { configureMathAssets } from '../../apps/web/client/mathAssets';
@@ -479,6 +480,7 @@ function renderInspector(record?: ArchiveRecord) {
     ? `<a class="back-to-results" data-theorem-directory-return href="${html(state.returnTo)}">${icon('list-start')}${locale === 'en' ? 'Back to theorems' : '返回定理目录'}</a>`
     : `<button type="button" class="back-to-results" data-action="back-list">${icon('list-start')}${strings.backList}</button>`;
   const title = proofSolutionTitle(record, locale), subtitle = record.campaign ? title !== record.title ? record.title : '' : record.subtitle;
+  const study = archiveStudyDestination(locale, record.id, document.body.dataset.workbenchRoot);
   element('#inspector').innerHTML = `<div class="detail-topline"><span class="detail-topline-label">${icon('files')}${strings.details}</span>${backToList}<div class="detail-actions">${iconButton('copy-link', strings.copyLink, 'link-2')}${iconButton('download-record', strings.downloadRecord, 'download')}</div></div>
     <h2 class="detail-title">${html(title)}</h2>${subtitle ? `<p class="detail-subtitle">${html(subtitle)}</p>` : ''}<p class="detail-id">${record.id}</p>
     <div class="detail-statusline">${statusBadge(record)}<span>${record.campaign ? 'OpenAI Math' : 'Lean-Eval'} · ${html(record.area)}</span></div>
@@ -488,7 +490,7 @@ function renderInspector(record?: ArchiveRecord) {
       ...(record.processSummary ? [['process', strings.tabs.process] as const] : []),
     ] as const).map(([tab, label]) => `<button type="button" role="tab" id="tab-${tab}" aria-controls="detail-panel" aria-selected="${state.tab === tab}" tabindex="${state.tab === tab ? 0 : -1}" data-tab="${tab}">${label}</button>`).join('')}</div>
     <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'reading' ? readingView(record) : state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>
-    <div class="archive-access"><p>${strings.accessPrompt}</p><div class="archive-access-actions"><a class="inline-link" href="index.html#start">${strings.requestAccess}${icon('arrow-up-right')}</a>${backToList}</div></div>`;
+    <div class="archive-access"><p>${strings.accessPrompt}</p><div class="archive-access-actions"><a class="inline-link" data-archive-study href="${html(study.href)}">${html(study.label)}${icon('arrow-up-right')}</a>${backToList}</div></div>`;
   if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => revealSource(record));
   if (state.tab === 'process') { revealProcessStep(); revealCheckedSource(record); }
 }

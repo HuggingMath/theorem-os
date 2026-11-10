@@ -10,9 +10,11 @@ import type { ResearchLibraryAttemptPreparation, ResearchLibraryPersonalAttemptP
 import { consumeResearchEntry, readResearchEntry } from './researchEntry';
 import { openFrozenTask } from './frozenTaskView';
 import { renderResearchBudgetDraft } from './researchBudgetDraft';
+import { renderResearchStartCost } from './researchStartCost';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../shareTypes';
+import type { SharedProofPreparation } from '../sharedProofTypes';
 import { acceptedTitle, acceptedDescription, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
@@ -140,6 +142,8 @@ let productEntryHandled = false;
 let libraryProposalHandled = false;
 let libraryTrialHandled = false;
 let budgetDraftHandled = false;
+let sharedDraftHandled = false;
+let recoveryEntryHandled = false;
 function withAddressLanguage(search: string) {
   const language = new URLSearchParams(location.search).get('lang');
   if (language !== 'zh' && language !== 'en') return search;
@@ -419,6 +423,8 @@ function clearOwnedDrafts() {
   problemDraftRevision++; renderResearchProblemDraft(element('#research-problem-draft'));
   document.querySelector('[data-library-trial-start]')?.remove(); libraryTrialHandled = false;
   document.querySelector('[data-budget-attempt-start]')?.remove(); budgetDraftHandled = false;
+  document.querySelector('[data-shared-proof-start]')?.remove(); sharedDraftHandled = false;
+  recoveryEntryHandled = false;
   budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
   researchSelection.reset();
@@ -862,6 +868,9 @@ function renderComposerSummary() {
   const budgetTokens = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
   renderResearchBudgetDraft(element('#research-budget-draft'), budgetOrigin && budgetOrigin.source === field('source').value && budgetOrigin.environment === field('environment').value
     ? { runId: budgetOrigin.runId, projectId: budgetOrigin.projectId, tokens: budgetTokens ?? 0, providerId: field('provider').value, model: field('model').value.trim() } : undefined, api);
+  renderResearchStartCost(element('#research-run-cost'), state.session && !budgetOrigin ? { owner: ownerOfSession(state.session), account: Boolean(state.session.account),
+    request: api, providerId: field('provider').value, model: field('model').value.trim(), stages: [{ kind: 'proof', tokens: budgetTokens ?? 0 }], locked: state.submitting,
+    onSetTokenLimit: () => openSettings('max-tokens') } : undefined);
   element('#draft-formalization').hidden = !draftFormalization;
   element('#confirmed-original').hidden = !draftFormalization;
   element('#creation-mode').textContent = draftFormalization ? t('已确认的自然语言原题') : t('已有 Lean 原题');
@@ -2120,6 +2129,59 @@ async function openLibraryProposalDraft() {
   retry.addEventListener('click', () => void prepare());
   await prepare();
 }
+async function openSharedProofDraft() {
+  const id = productTarget.get('sharedDraft');
+  if (sharedDraftHandled || !id || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id)) return;
+  sharedDraftHandled = true;
+  const panel = document.createElement('aside'); panel.className = 'composer-research-selection'; panel.dataset.sharedProofStart = '';
+  const notice = document.createElement('p'); notice.setAttribute('role', 'status');
+  const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button'; retry.hidden = true;
+  retry.textContent = t('重新读取分享研究草稿');
+  panel.append(notice, retry); element('#run-form').prepend(panel);
+  const prepare = async () => {
+    if (!state.session || state.submitting) return;
+    const owner = ownerOfSession(state.session), revision = draftRevision;
+    retry.disabled = true; retry.hidden = true; notice.textContent = t('正在读取分享的原题…');
+    try {
+      const { item } = await api<{ item: SharedProofPreparation }>(`/api/research/shared-proofs/preparations/${encodeURIComponent(id)}`);
+      if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
+        throw new Error(t('草稿已变化，未载入分享原题。请核对后重新读取。'));
+      const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
+        templateId: '', modulePlan: undefined, knowledgeDigest: undefined, formalization: undefined, continueFrom: undefined, problemBudget: undefined };
+      const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
+      if (contentIssue) throw new Error(contentIssue.message);
+      replaceDraft('reuse', () => applyTaskDraft(draft)); researchSelection.clear(); formalizationLink = null;
+      chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
+      notice.textContent = t('已载入「{0}」的原题。核对模型与预算后开始自己的研究，结果会重新检查。', item.origin.title);
+      panel.querySelector('a')?.remove();
+      const source = document.createElement('a'); source.href = `share.html?reading=${encodeURIComponent(item.origin.readingId)}`;
+      source.textContent = t('查看来源证明'); panel.append(source); panel.dataset.sharedProofReady = 'true';
+      // A refresh restores the edited draft; it must not import the original a second time.
+      const cleaned = new URL(location.href); cleaned.searchParams.delete('sharedDraft'); history.replaceState(null, '', cleaned);
+    } catch (error) { notice.textContent = message(error); retry.hidden = false; }
+    finally { retry.disabled = false; }
+  };
+  retry.addEventListener('click', () => void prepare()); await prepare();
+}
+function showClassicOrigin() {
+  const id = productTarget.get('fromClassic');
+  if (!id || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id) || document.querySelector('[data-classic-origin]')) return;
+  const panel = document.createElement('aside'); panel.className = 'composer-research-selection'; panel.dataset.classicOrigin = '';
+  const text = document.createElement('p'); text.textContent = t('从经典题库开始自己的研究。可以参照原路线，在下方填写要证明的问题。');
+  const back = document.createElement('a'); back.href = `classics/${locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: id, tab: 'process' })}`;
+  back.textContent = t('返回来源题目'); panel.append(text, back); element('.workbench').before(panel);
+}
+async function openRecoveryEntry() {
+  const id = productTarget.get('run'), action = productTarget.get('recovery');
+  if (recoveryEntryHandled || !id || !action || !/^(?:continue-checked|ask-failed|key|retry|budget|tokens|turns|workers|source|task)$/u.test(action)) return;
+  await naturalPage;
+  const run = currentRun();
+  if (!run || run.id !== id || isSample(run) || !state.runs.some(item => item.id === id)) return;
+  recoveryEntryHandled = true;
+  const cleaned = new URL(location.href); cleaned.searchParams.delete('recovery'); history.replaceState(null, '', cleaned);
+  if (!nextSteps(run, summarizeGoals(run)).some(item => item.id === action)) { toast(t('研究状态已更新，请查看当前可用的后续操作。')); return; }
+  const button = document.createElement('button'); await recoverRun(run, action, button);
+}
 async function openLibraryPersonalAttemptDraft() {
   const trialId = productTarget.get('libraryTrial'), digest = productTarget.get('trialDigest');
   if (libraryTrialHandled || !trialId || !/^[A-Za-z0-9_-]{1,128}$/u.test(trialId) || !digest || !/^[a-f0-9]{64}$/u.test(digest)) return;
@@ -2410,6 +2472,9 @@ function initialize(): Promise<void> {
       await openLibraryProposalDraft();
       await openLibraryPersonalAttemptDraft();
       await openBudgetAttemptDraft();
+      await openSharedProofDraft();
+      showClassicOrigin();
+      await openRecoveryEntry();
       if (!productEntryHandled) {
         productEntryHandled = true;
         if (productEntry) {
@@ -3058,9 +3123,9 @@ const recoveryFields: Record<Exclude<RecoveryAction['id'], 'report'>, string> = 
   retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'workers', source: 'source', task: 'task' };
 /** 提高: twice the run's own limit, up to what a run may ask for. */
 const raised = (value: number, highest: number) => Math.min(highest, Math.max(1, value) * 2);
-function recoverRun(run: WebRun, action: string, button: HTMLButtonElement) {
+async function recoverRun(run: WebRun, action: string, button: HTMLButtonElement) {
   const step = nextSteps(run, summarizeGoals(run)).find(item => item.id === action);
-  if (step?.id === 'continue-checked') void continueChecked(run, step.tasks, button);
+  if (step?.id === 'continue-checked') await continueChecked(run, step.tasks, button);
   else if (step?.id === 'ask-failed') {
     openChatArtifact('roadmap');
     trajectoryView.showStep(run.id, 'failed', step.tasks);

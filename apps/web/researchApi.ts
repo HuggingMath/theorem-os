@@ -291,6 +291,7 @@ export class WebResearchApi {
       return item(this.problems.referenceStage(viewer, action, subaction, await body()), 201);
     if (section === 'workspace' && id === 'problem' && action && ref === 'stages' && !subaction && method === 'POST')
       return item(this.problems.saveStage(viewer, action, url.searchParams.get('project') ?? undefined, await body()), 201);
+    if (section === 'workspace' && id === 'rates' && method === 'GET') return { status: 200, body: { items: this.workspace.rates(viewer) } };
     if (section === 'workspace' && id === 'rates' && method === 'PUT') return item(this.workspace.saveRate(viewer, await body()));
     if (section === 'session' && method === 'GET') return { status: 200, body: { authenticated: Boolean(owner),
       researcherId: owner ? this.projects.identity(owner) : null,

@@ -6,6 +6,16 @@ export type ResearchInvitation = {
   role: ResearchMemberRole; note: string; status: 'pending' | 'accepted' | 'declined' | 'cancelled';
   revision: number; createdAt: string; updatedAt: string;
 };
+/** The capability is returned only to the project owner; one link admits one colleague. */
+export type ResearchInvitationLink = {
+  id: string; projectId: string; token: string; author: ResearchAuthor; role: ResearchMemberRole; note: string;
+  status: 'pending' | 'accepted' | 'revoked'; revision: number; createdAt: string; updatedAt: string;
+  acceptedBy?: ResearchAuthor;
+};
+export type ResearchInvitationLinkPreview = {
+  status: ResearchInvitationLink['status']; available: boolean; canAccept: boolean; member: boolean;
+  revision?: number; project?: { id: string; title: string }; author?: ResearchAuthor; role?: ResearchMemberRole; note?: string;
+};
 export type ResearchHandoff = {
   id: string; projectId: string; author: ResearchAuthor; recipient: ResearchAuthor; target: ResearchFeedbackTarget;
   note: string; feedbackIds: string[]; status: 'pending' | 'accepted' | 'declined' | 'cancelled';
@@ -23,7 +33,8 @@ export type ResearchIssue = {
   resolution?: ResearchIssueResolution; resolutionHistory?: ResearchIssueResolution[];
   revision: number; createdAt: string; updatedAt: string;
 };
-export type ResearchCollaborationState = { invitations: ResearchInvitation[]; handoffs: ResearchHandoff[]; issues: ResearchIssue[] };
+export type ResearchCollaborationState = { invitations: ResearchInvitation[]; handoffs: ResearchHandoff[]; issues: ResearchIssue[];
+  invitationLinks?: ResearchInvitationLink[] };
 export type ResearchCollaborationView = ResearchCollaborationState & { projectId: string; revision: number };
 export type ResearchInboxItem = {
   id: string; kind: 'invitation' | 'application' | 'handoff' | 'claim' | 'review' | 'needs-info' | 'reply' | 'annotation' | 'update';

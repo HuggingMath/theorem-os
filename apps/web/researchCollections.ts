@@ -5,6 +5,7 @@ import type { WebResearchProjects } from './researchProjects';
 import type { WebResearchAssets } from './researchAssets';
 import type { ResearchBookmark, ResearchBookmarkTarget, ResearchCollection, ResearchAssetFollows, ResearchCollectionPreparation } from './researchCollectionTypes';
 import { compareResearchReleases } from './researchReleaseComparison';
+import { WebSharedProofs } from './sharedProofs';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), version = z.string().min(1).max(200), hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const releaseVersion = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u);
@@ -14,6 +15,7 @@ const targetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('task'), runId: key, projectId: key.optional(), taskId: version, taskVersion: version,
     commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u) }).strict(),
   z.object({ kind: z.literal('release'), assetId: key, version: releaseVersion, digest: hash.optional() }).strict(),
+  z.object({ kind: z.literal('share'), shareId: key }).strict(),
 ]);
 const mutation = { requestId: key }, revision = { expectedRevision: z.number().int().positive() };
 const parse = <T extends z.ZodTypeAny>(schema: T, value: unknown): z.output<T> => {
@@ -53,6 +55,10 @@ export class WebResearchCollections {
   }
   private resolve(viewer: string, target: ResearchBookmarkTarget): Pick<ResearchBookmark, 'title' | 'href' | 'assetType'> & { target: ResearchBookmarkTarget } {
     const { storage, projects, assets } = this.dependencies;
+    if (target.kind === 'share') {
+      const reading = new WebSharedProofs(storage).read(viewer, target.shareId);
+      return { target, title: reading.share.title, href: `share.html?${new URLSearchParams({ reading: reading.id })}` };
+    }
     if (target.kind === 'release') {
       const release = assets.release(viewer, target.assetId, target.version);
       if (target.digest && target.digest !== release.digest) fail(409, '收藏的成果摘要与固定版本不一致。');
@@ -178,10 +184,18 @@ export class WebResearchCollections {
 /** Mount after the host's authentication and write guards, alongside the existing research API. */
 export function createResearchCollectionsHandler(dependencies: Dependencies) {
   const service = new WebResearchCollections(dependencies);
+  const sharedProofs = new WebSharedProofs(dependencies.storage);
   return async (url: URL, method: string, viewer: string, readBody: () => Promise<unknown>): Promise<{ status: number; body: unknown } | undefined> => {
     const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     if (parts[0] !== 'api' || parts[1] !== 'research') return;
     const [, , section, id, action, itemId] = parts, item = (body: unknown, status = 200) => ({ status, body: { item: body } });
+    if (section === 'shared-proofs') {
+      if (!id && method === 'POST') return item(sharedProofs.register(viewer, await readBody()), 201);
+      if (id === 'preparations' && action && !itemId && method === 'GET') return item(sharedProofs.prepared(viewer, action));
+      if (id && !action && method === 'GET') return item(sharedProofs.read(viewer, id));
+      if (id && action === 'prepare' && !itemId && method === 'POST') return item(sharedProofs.prepare(viewer, id, await readBody()), 201);
+      return { status: 405, body: { error: '此分享接续操作不支持该请求方式。' } };
+    }
     if (section === 'library' && id && action === 'compare' && method === 'GET') {
       parse(key, id);
       const from = parse(releaseVersion, url.searchParams.get('from')), to = parse(releaseVersion, url.searchParams.get('to'));

@@ -23,6 +23,10 @@ import { ProjectFromProblem } from './researchProjectStart';
 import { ResearchOutcomeDelivery } from './researchOutcomeDelivery';
 import { LibraryTrialHistory } from './researchLibraryTrialHistory';
 import { StageProjectReference } from './researchStageReference';
+import { ProblemRunStatus } from './researchRunStatus';
+import { ResearchCheckDetails } from './researchCheckDetails';
+import { ResearchEvolutionPicker } from './researchEvolution';
+import type { ResearchJourneyEvolution, ResearchObservationRef } from '../researchJourneyTypes';
 
 const labels = { overview: ['总览', 'Overview'], route: ['证明路线', 'Proof route'], compare: ['历次尝试', 'Attempts'],
   discussion: ['讨论与决议', 'Discussion'], outcomes: ['用量与成果', 'Usage and outcomes'], stages: ['阶段结论', 'Stage conclusions'], brief: ['简报', 'Brief'] } as const;
@@ -34,12 +38,13 @@ const initial = () => {
     decision: query.get('decision') ?? '', version: query.get('version') ?? '', snapshot: query.get('snapshot') ?? '', changeRecord: query.get('changeRecord') ?? '',
     feedback: query.get('feedback') ?? (location.hash.startsWith('#feedback-') ? location.hash.slice(10) : ''),
     map: query.get('map') === 'global' && !query.has('annotation') ? 'global' as const : 'attempt' as const,
-    annotation: query.get('annotation') ?? '', accountDraft: query.get('accountDraft') ?? '', draftVersion: query.get('draftVersion') ?? '' };
+    annotation: query.get('annotation') ?? '', accountDraft: query.get('accountDraft') ?? '', draftVersion: query.get('draftVersion') ?? '',
+    at: query.get('at') ?? '', atState: query.get('atState') ?? '' };
 };
 type Selection = ReturnType<typeof initial>;
 const problemUrl = (value: Selection) => {
   const query = new URLSearchParams({ run: value.run, tab: value.tab, lang: locale });
-  for (const field of ['project', 'task', 'taskVersion', 'commit', 'compare', 'decision', 'version', 'feedback', 'snapshot', 'changeRecord', 'map', 'annotation', 'accountDraft', 'draftVersion'] as const) if (value[field]) query.set(field, value[field]);
+  for (const field of ['project', 'task', 'taskVersion', 'commit', 'compare', 'decision', 'version', 'feedback', 'snapshot', 'changeRecord', 'map', 'annotation', 'accountDraft', 'draftVersion', 'at', 'atState'] as const) if (value[field]) query.set(field, value[field]);
   return `problem.html?${query}${value.tab === 'discussion' && value.feedback ? `#feedback-${encodeURIComponent(value.feedback)}` : value.tab === 'overview' && value.changeRecord ? '#research-changes' : ''}`;
 };
 const briefEndpoint = (run: string, project?: string) => `${base}/workspace/brief/${enc(run)}${project ? `?project=${enc(project)}` : ''}`;
@@ -50,8 +55,16 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
   const endpoint = selection.run && context.session.authenticated ? `${base}/workspace/problem/${enc(selection.run)}${selection.project ? `?project=${enc(selection.project)}` : ''}` : undefined;
   useResource(endpoint ? `${base}/workspace/problem/${enc(selection.run)}/changes${selection.project ? `?project=${enc(selection.project)}` : ''}` : undefined);
   const resource = useResource<Item<ResearchProblem>>(endpoint, 15_000), problem = resource.data?.item;
+  const historical = selection.tab === 'route' && Boolean(selection.at || selection.atState);
+  const observation = historical ? { sequence: Number(selection.at), stateDigest: selection.atState } : undefined;
+  const evolutionQuery = new URLSearchParams({ ...(selection.project ? { project: selection.project } : {}), ...(historical ? { at: selection.at, atState: selection.atState } : {}) });
+  const evolution = useResource<Item<ResearchJourneyEvolution>>(endpoint && selection.tab === 'route' ? `${base}/workspace/problem/${enc(selection.run)}/journey/evolution?${evolutionQuery}` : undefined, historical ? 0 : 15_000);
+  const frozen = historical ? evolution.data?.item.selected : undefined;
+  const routeBrief = historical ? frozen?.brief : problem?.brief;
+  const routeProblem = problem && routeBrief ? { ...problem, brief: routeBrief, ...(observation ? { observationRef: observation } : {}) } : undefined;
   const [focus, setFocus] = useState<FeedbackFocus>(), [issue, setIssue] = useState<{ target?: ResearchFeedbackTarget; sourceFeedbackId?: string; statementVersionId?: string; serial: number }>();
   const [sourceKey, setSourceKey] = useState('');
+  const [checkId, setCheckId] = useState(''), [approvalRequest, setApprovalRequest] = useState(0);
   const [routeFocus, setRouteFocus] = useState<{ token: string; node: string }>();
   const owner = webDraftOwner(context.web), memoryKey = `theoremos.problem-view.v1:${owner}`, restored = useRef(false);
   const current = useRef(selection); current.current = selection;
@@ -77,8 +90,11 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
   }, [ledger.data]);
   useEffect(() => { if (!problem) return; try { localStorage.setItem(memoryKey, JSON.stringify(selection)); } catch { /* The address remains shareable within the account. */ } }, [problem?.key, selection, memoryKey]);
   useEffect(() => { if (problem && selection.feedback && selection.tab === 'discussion') setFocus(previous => ({ id: selection.feedback, request: (previous?.request ?? 0) + 1 })); }, [problem?.key, selection.feedback, selection.tab]);
-  const decision = problem?.brief.decisions.find(item => item.id === selection.decision);
-  const selected = problem?.brief.tasks.find(task => task.id === selection.task && (!selection.taskVersion || task.version === selection.taskVersion)
+  useEffect(() => { if (approvalRequest && selection.tab === 'route' && selection.map === 'attempt') {
+    const button = document.querySelector<HTMLButtonElement>('[data-inline-open]'); if (button) { button.click(); setApprovalRequest(0); }
+  } }, [approvalRequest, selection.tab, selection.map, problem?.key]);
+  const decision = routeBrief?.decisions.find(item => item.id === selection.decision);
+  const selected = routeBrief?.tasks.find(task => task.id === selection.task && (!selection.taskVersion || task.version === selection.taskVersion)
     && (!selection.commit || task.commit === selection.commit));
   const savedTaskHref = problem && selection.task ? (() => { const link = new URL(problem.brief.runHref, location.href);
     link.searchParams.set('task', selection.task); link.searchParams.set('view', 'source');
@@ -87,16 +103,23 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
     return link.pathname + link.search;
   })() : undefined;
   const selectTask = (id: string, node = `task:${id}`) => {
-    const task = problem?.brief.tasks.find(task => task.id === id);
+    const task = routeBrief?.tasks.find(task => task.id === id);
     if (task) {
       setRouteFocus({ token: `${selection.run}:${task.id}:${task.version}`, node });
+      setCheckId(node.startsWith('check:') ? node.slice(6) : '');
       navigate({ task: id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false);
     }
   };
   const runChoice = (run: string) => {
     setFocus(undefined); setIssue(undefined);
-    navigate({ run, task: '', taskVersion: '', commit: '', decision: '', feedback: '', annotation: '', accountDraft: '', draftVersion: '', compare: selection.compare === run ? '' : selection.compare });
+    setCheckId(''); setSourceKey('');
+    navigate({ run, at: '', atState: '', task: '', taskVersion: '', commit: '', decision: '', feedback: '', annotation: '', accountDraft: '', draftVersion: '', compare: selection.compare === run ? '' : selection.compare });
   };
+  const chooseMoment = (moment?: ResearchObservationRef) => {
+    setCheckId(''); setSourceKey(''); setRouteFocus(undefined);
+    navigate({ at: moment ? String(moment.sequence) : '', atState: moment?.stateDigest ?? '', task: '', taskVersion: '', commit: '', decision: '', annotation: '', feedback: '' });
+  };
+  const reviewPlan = () => { navigate({ tab: 'route', map: 'attempt', at: '', atState: '', task: '', taskVersion: '', commit: '' }); setApprovalRequest(value => value + 1); };
   const openIssue = (feedback?: ResearchFeedback) => {
     const binding = problem?.project?.runs.find(run => run.runId === selection.run);
     const target = feedback?.target ?? (selected && binding && problem?.observationRef ? { runId: selection.run, statementVersionId: binding.statementVersionId,
@@ -122,41 +145,49 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
       onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate({ tab: id as Tab }); }}>{tx(label[0], label[1])}</a>)}</nav>
     <div class="problem-content">
     {selection.task && !selected && <p class="research-status" role="status">{tx('选中的任务或源码版本已不在当前路线中。', 'The selected task or source version is no longer in the current route.')} {savedTaskHref && <a href={savedTaskHref}>{tx('查看所选版本', 'Open the selected version')}</a>} · <button type="button" class="text-button" onClick={() => navigate({ task: '', taskVersion: '', commit: '' }, false)}>{tx('回到当前整条路线', 'Return to the current route')}</button></p>}
-    {selection.tab === 'overview' && <><ProblemOrganization problem={problem} context={context} /><ProjectFromProblem problem={problem} onCreated={projectCreated} /><ResearchOutcomeDelivery problem={problem} context={context} onBrief={() => navigate({ tab: 'brief' })} /><ResearchChangesSinceRead key={`${problem.key}:${selection.run}`} runId={selection.run} projectId={problem.project?.id} /><Panel title={tx('这道题研究到哪里了', 'Where the research stands')}>
-      <RichProse text={problem.brief.statement} /><div class="problem-summary"><p>{problem.brief.accepted ? tx('Lean 陈述证明通过', 'Lean statement accepted') : tx('原题尚未通过独立验收', 'The problem has not passed independent acceptance')}</p>
-      <p>{problem.brief.attempts.length} {tx('次尝试', 'attempts')} · {problem.brief.tasks.length} {tx('个任务', 'tasks')} · {formatTokens(problem.brief.usage.knownTokens)} Token</p></div>
-      <div class="research-actions"><button class="button button-primary" type="button" onClick={() => navigate({ tab: 'route' })}>{tx('阅读证明路线', 'Read the proof route')}</button><a class="button" href={problem.brief.runHref}>{tx('继续研究或提供指导', 'Continue research or give guidance')}</a></div>
-      </Panel>{problem.stages.length > 0 && <Panel title={tx('最近一次人工总结', 'Latest human conclusion')}><StageView stage={problem.stages.at(-1)!} problem={problem} refresh={resource.refresh} /><button class="text-button" type="button" onClick={() => navigate({ tab: 'stages' })}>{tx('查看历次阶段结论', 'View all stage conclusions')}</button></Panel>}
+    {selection.tab === 'overview' && <><ProblemRunStatus problem={problem} openRoute={() => navigate({ tab: 'route' })} reviewPlan={reviewPlan} />
       <Panel title={tx('现在卡在哪里，下一步由谁处理', 'Blockers, responsibility and next steps')}><ProblemAttention key={`${problem.key}:${problem.brief.selectedRunId}`} problem={problem} selfId={context.session.researcherId ?? undefined}
         onTask={task => navigate({ tab: 'route', task: task.id, taskVersion: task.version, commit: task.commit ?? '' })}
-        onFeedback={(id, task) => { navigate({ tab: 'discussion', feedback: id, task: task?.id ?? '', taskVersion: task?.version ?? '', commit: task?.commit ?? '' }); revealFeedback(id); }} /></Panel></>}
+        onFeedback={(id, task) => { navigate({ tab: 'discussion', feedback: id, task: task?.id ?? '', taskVersion: task?.version ?? '', commit: task?.commit ?? '' }); revealFeedback(id); }} /></Panel>
+      <Panel title={tx('这道题研究到哪里了', 'Where the research stands')}>
+      <RichProse text={problem.brief.statement} /><div class="problem-summary"><p>{problem.brief.accepted ? tx('Lean 陈述证明通过', 'Lean statement accepted') : tx('原题尚未通过独立验收', 'The problem has not passed independent acceptance')}</p>
+      <p>{problem.brief.attempts.length} {tx('次尝试', 'attempts')} · {problem.brief.tasks.length} {tx('个任务', 'tasks')} · {formatTokens(problem.brief.usage.knownTokens)} Token</p></div>
+      {problem.brief.tasks.length > 0 && <div class="research-actions"><button class="button" type="button" onClick={() => navigate({ tab: 'route' })}>{tx('阅读证明路线', 'Read the proof route')}</button></div>}
+      </Panel>{problem.stages.length > 0 && <Panel title={tx('最近一次人工总结', 'Latest human conclusion')}><StageView stage={problem.stages.at(-1)!} problem={problem} refresh={resource.refresh} /><button class="text-button" type="button" onClick={() => navigate({ tab: 'stages' })}>{tx('查看历次阶段结论', 'View all stage conclusions')}</button></Panel>}
+      <ResearchChangesSinceRead key={`${problem.key}:${selection.run}`} runId={selection.run} projectId={problem.project?.id} />
+      <ResearchOutcomeDelivery problem={problem} context={context} onBrief={() => navigate({ tab: 'brief' })} /><ProblemOrganization problem={problem} context={context} /><ProjectFromProblem problem={problem} onCreated={projectCreated} /></>}
     {selection.tab === 'route' && <section class="problem-route-workspace" data-problem-route-workspace>
+      <ResearchEvolutionPicker data={evolution.data?.item} error={evolution.error} loading={evolution.loading} selected={observation} choose={chooseMoment} refresh={evolution.refresh} />
       <div class="problem-map-switch" role="group" aria-label={tx('路线视图', 'Route view')}>
         <button type="button" data-problem-map="attempt" aria-pressed={selection.map === 'attempt'} onClick={() => navigate({ map: 'attempt' })}>{tx('当前尝试', 'Current attempt')}</button>
         <button type="button" data-problem-map="global" aria-pressed={selection.map === 'global'} onClick={() => navigate({ map: 'global' })}>{tx('全局轨迹', 'Research journey')}</button>
       </div>
-      {selection.map === 'global' ? <ResearchJourneyView runId={selection.run} projectId={problem.project?.id} focusedTask={selected}
+      {historical && !frozen && <p role="status">{evolution.error ? tx('所选保存时点暂时无法读取，请重试或回到当前记录。', 'The selected saved moment could not be read. Retry or return to the current record.') : tx('正在读取所选保存时点…', 'Loading the selected saved moment…')} <button type="button" class="text-button" onClick={() => chooseMoment()}>{tx('回到当前记录', 'Return to the current record')}</button></p>}
+      {routeBrief && routeProblem && (selection.map === 'global' ? <ResearchJourneyView runId={selection.run} projectId={problem.project?.id} focusedTask={selected} frozen={frozen}
         onAttemptSelection={run => { if (run !== selection.run) runChoice(run); }}
-        onTaskSelection={({ runId, task }) => navigate({ run: runId, task: task.id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false)} />
+        onTaskSelection={({ runId, task }) => navigate({ run: runId, ...(runId !== selection.run ? { at: '', atState: '' } : {}), task: task.id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false)} />
         : <Panel title={tx('当前尝试的证明路线', 'Proof route for the current attempt')}>
 
-      {problem.brief.decisions.length > 0 && <div class="problem-decision-nav" data-problem-decision-nav><h3>{tx('人工决定', 'Human decisions')}</h3>{problem.brief.decisions.map(item => <button type="button" key={item.id} data-problem-select-decision={item.id} aria-pressed={selection.decision === item.id}
+      {routeBrief.decisions.length > 0 && <div class="problem-decision-nav" data-problem-decision-nav><h3>{tx('人工决定', 'Human decisions')}</h3>{routeBrief.decisions.map(item => <button type="button" key={item.id} data-problem-select-decision={item.id} aria-pressed={selection.decision === item.id}
         onClick={() => navigate({ decision: item.id, task: '', taskVersion: '', commit: '' })}>{item.kind === 'plan-edit' ? tx('修改计划', 'Plan edit') : item.kind === 'plan-approval' ? tx('批准计划', 'Plan approval') : <Rich text={item.text} />}</button>)}</div>}
-      <div data-problem-route-decision={decision?.id ?? ''}><SolutionRouteGraph model={{ ...problemSolutionRoute(problem.brief, locale), initial: selected ? `task:${selected.id}` : decision ? `decision:${decision.id}` : 'problem' }}
+      <div data-problem-route-decision={decision?.id ?? ''}><SolutionRouteGraph model={{ ...problemSolutionRoute(routeBrief, locale), id: `problem:${selection.run}:${selection.atState || 'live'}`, initial: selected ? `task:${selected.id}` : decision ? `decision:${decision.id}` : 'problem' }}
       selection={selected && routeFocus?.token === `${selection.run}:${selected.id}:${selected.version}` ? routeFocus.node : selected ? `task:${selected.id}` : decision ? `decision:${decision.id}` : 'problem'}
       onSelect={id => { if (id.startsWith('task:')) selectTask(id.slice(5));
-        else if (id.startsWith('check:')) { const task = problem.brief.tasks.find(item => item.checks.some(check => `check:${check.id}` === id)); if (task) selectTask(task.id, id); }
+        else if (id.startsWith('check:')) { const task = routeBrief.tasks.find(item => item.checks.some(check => `check:${check.id}` === id)); if (task) selectTask(task.id, id); }
         else if (id.startsWith('decision:')) navigate({ decision: id.slice(9), task: '', taskVersion: '', commit: '' }, false);
-        else navigate({ task: '', taskVersion: '', commit: '' }, false); }} onOpen={id => { const task = problem.brief.tasks.find(item => item.id === id); if (task) { selectTask(id); setSourceKey(`${selection.run}:${task.id}:${task.version}`); } }} /></div>
+        else navigate({ task: '', taskVersion: '', commit: '' }, false); }} onOpen={id => { const task = routeBrief.tasks.find(item => item.id === id); if (task) { selectTask(id); setSourceKey(`${selection.run}:${task.id}:${task.version}`); } }} /></div>
       {selection.decision && !decision && <p role="status">{tx('当前记录中没有所选人工决定。', 'The selected human decision is absent from this record.')}</p>}
-      {decision && <ProblemDecisionEvidence decision={decision} problem={problem} onTask={selectTask} />}
-      {selected && <p class="problem-responsibility" data-problem-task-owners>{tx('当前负责', 'Recorded responsibility')}: {problemTaskOwners(problem, selected).map(owner => owner.name).join(' · ') || tx('尚未记录', 'Not assigned in this record')}</p>}
+      {decision && <ProblemDecisionEvidence decision={decision} problem={routeProblem} onTask={selectTask} />}
+      {selected && <p class="problem-responsibility" data-problem-task-owners>{tx('当前负责', 'Recorded responsibility')}: {(historical ? selected.agents?.map(agent => [agent.role, agent.id].filter(Boolean).join(' · ')) : problemTaskOwners(problem, selected).map(owner => owner.name))?.join(' · ') || tx('尚未记录', 'Not assigned in this record')}</p>}
       {selected && <div class="research-actions">{selected.commit ? <button class="button" type="button" data-problem-open-source onClick={() => setSourceKey(`${selection.run}:${selected.id}:${selected.version}`)}>{tx('查看此版本源码', 'Open this source version')}</button> : <a class="button" href={selected.href}>{tx('打开任务记录', 'Open task record')}</a>}<button class="button" type="button" onClick={() => navigate({ tab: 'discussion' })}>{tx('讨论这一步', 'Discuss this step')}</button>
         {['lemma', 'goal'].includes(selected.kind) && selected.commit && <a class="button" href={`library.html?${new URLSearchParams({ run: selection.run, ...(problem.project ? { project: problem.project.id } : {}), task: selected.id, taskVersion: selected.version, commit: selected.commit })}`}>{tx('为这一步寻找可用引理', 'Find a lemma for this step')}</a>}</div>}
-      {selected && sourceKey === `${selection.run}:${selected.id}:${selected.version}` && <ResearchJourneyTaskSource runId={selection.run} projectId={problem.project?.id} task={selected} close={() => setSourceKey('')} />}
-      <ResearchInlineActions key={`${selection.run}:${selected?.id ?? ''}:${selected?.version ?? ''}`} problem={problem} task={selected} context={context} refresh={resource.refresh} focusAnnotationId={selection.annotation || undefined}
+      {selected && sourceKey === `${selection.run}:${selected.id}:${selected.version}` && <ResearchJourneyTaskSource runId={selection.run} projectId={problem.project?.id} task={selected} observation={observation} close={() => setSourceKey('')} />}
+      {selected && selected.checks.length > 0 && <div class="research-actions">{selected.checks.map(check => <button class="button" type="button" key={check.id} data-problem-open-check={check.id} aria-pressed={checkId === check.id} onClick={() => setCheckId(check.id)}>{check.passed ? tx('查看通过检查的证据', 'Read passing check evidence') : tx('查看检查失败原因', 'Read why this check failed')}</button>)}</div>}
+      {selected?.checks.some(check => check.id === checkId) && <ResearchCheckDetails key={`${checkId}:${selection.atState}`} runId={selection.run} projectId={problem.project?.id} checkId={checkId} observation={observation} close={() => setCheckId('')} />}
+      {historical ? <button type="button" class="button" onClick={() => chooseMoment()}>{tx('回到当前版本参与研究', 'Return to the current version to participate')}</button> : <ResearchInlineActions key={`${selection.run}:${selected?.id ?? ''}:${selected?.version ?? ''}`} problem={problem} task={selected} context={context} refresh={resource.refresh} focusAnnotationId={selection.annotation || undefined}
         onTask={(target, task) => navigate({ run: target.runId, tab: 'route', task: task.id, taskVersion: task.version, commit: '' })} />
-    </Panel>}
+      }
+    </Panel>)}
     </section>}
     {selection.tab === 'compare' && <ProblemComparison problem={problem} selected={selection} choose={id => navigate({ compare: id })} onTask={selectTask} />}
     {selection.tab === 'discussion' && <><Panel title={tx('与这道题有关的对话', 'Conversations about this problem')}>

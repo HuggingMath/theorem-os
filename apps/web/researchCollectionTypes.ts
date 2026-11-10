@@ -4,7 +4,8 @@ export type ResearchBookmarkTarget =
   | { kind: 'theorem'; projectId: string; statementVersionId?: string }
   | { kind: 'run'; runId: string; projectId?: string }
   | { kind: 'task'; runId: string; taskId: string; taskVersion: string; commit: string; projectId?: string }
-  | { kind: 'release'; assetId: string; version: string; digest?: string };
+  | { kind: 'release'; assetId: string; version: string; digest?: string }
+  | { kind: 'share'; shareId: string };
 export type ResearchBookmark = {
   id: string; target: ResearchBookmarkTarget; note: string; createdAt: string; updatedAt: string;
   available: boolean; title?: string; href?: string; assetType?: ResearchAssetKind;

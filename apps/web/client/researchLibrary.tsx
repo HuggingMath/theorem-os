@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetPrefill, ResearchAssetPreview, ResearchAssetRelease, ResearchAssetKind, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef } from '../researchAssetTypes';
 import type { ResearcherProfile } from '../researchProjectTypes';
+import type { ResearchLibraryDiscovery } from '../researchLibraryDiscoveryTypes';
 import { AssetEditor, FixedMathSource } from './researchAssetEditor';
 import { BookmarkControl } from './researchCollections';
 import { AssetFollowControl, ReleaseComparison } from './researchReleaseComparison';
 import { LibraryTrial } from './researchLibraryTrial';
 import { MathUsageDescription } from './researchMathUsage';
 import { InstalledLibraryDirectory, InstalledLibraryModule } from './researchInstalledLibrary';
+import { LibraryDiscoveryContext } from './researchLibraryDiscovery';
+import { discoverySuggestedTerms, matchLibraryDiscovery } from './researchLibraryDiscoveryModel';
 import { RichProse } from './richText';
 import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
 import { loginHref, type WebEnvironment } from '../shared';
@@ -80,6 +83,11 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   const parameters = new URLSearchParams(location.search), selected = parameters.get('entry') ?? '', fromRun = parameters.get('fromRun'),
     installedFile = parameters.get('source') === 'installed' ? parameters.get('module') ?? '' : '', catalogDigest = parameters.get('catalogDigest') ?? '';
   const initialOffset = Number(parameters.get('offset') ?? 0), initialCollection = parameters.get('collection');
+  const hasTarget = ['run', 'task', 'taskVersion', 'commit'].every(key => parameters.has(key));
+  const targetParameters = new URLSearchParams();
+  for (const name of ['run', 'project', 'task', 'taskVersion', 'commit']) if (parameters.has(name)) targetParameters.set(name, parameters.get(name)!);
+  const discovery = useResource<Item<ResearchLibraryDiscovery>>(hasTarget && context.session.authenticated ? `${base}/library-discovery?${targetParameters}` : undefined);
+  const target = discovery.data?.item;
   const legacyOpenAI = initialCollection === 'openai' && !selected && !parameters.get('module');
   useEffect(() => {
     if (!legacyOpenAI) return;
@@ -90,12 +98,12 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   }, [legacyOpenAI]);
   const initialType = parameters.get('type'), hasDirectoryType = useRef(parameters.has('type'));
   const [query, setQuery] = useState(parameters.get('q') ?? ''), [type, setType] = useState<ResearchAssetKind>(initialType === 'agent' || initialType === 'skill' ? initialType : 'mathematics'),
-    [area, setArea] = useState(parameters.get('area') ?? ''), [author, setAuthor] = useState(parameters.get('author') ?? ''), [environment, setEnvironment] = useState(parameters.get('environment') ?? ''), [mine, setMine] = useState(parameters.get('mine') === '1'),
+    [area, setArea] = useState(parameters.get('area') ?? ''), [author, setAuthor] = useState(parameters.get('author') ?? ''), [environment, setEnvironment] = useState(parameters.get('environment') === 'all' ? '' : parameters.get('environment') ?? (hasTarget ? 'target' : '')), [mine, setMine] = useState(parameters.get('mine') === '1'),
     [creating, setCreating] = useState(context.session.authenticated && (parameters.get('create') === '1' || fromRun !== null)), [selection, setSelection] = useState<ResearchReleaseRef[]>(rememberedSelection), [storageError, setStorageError] = useState('');
   const [creatorMounted, setCreatorMounted] = useState(creating), [searchReset, setSearchReset] = useState(0), [offset, setOffset] = useState(Number.isSafeInteger(initialOffset) && initialOffset > 0 ? initialOffset : 0),
-    [collection, setCollection] = useState<MathematicsCollection>(installedFile ? 'lean' : selected || initialCollection === 'shared' ? 'shared' : 'lean');
+    [collection, setCollection] = useState<MathematicsCollection>(installedFile ? 'lean' : selected || initialCollection === 'shared' || hasTarget && !initialCollection ? 'shared' : 'lean');
   const showingAssets = Boolean(selected) || type !== 'mathematics' || collection === 'shared', ownView = mine && showingAssets;
-  const directory = useResource<Items<ResearchAsset>>(!legacyOpenAI && showingAssets ? `${base}/library?q=${enc(query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${mine ? '&mine=1' : ''}` : undefined);
+  const directory = useResource<Items<ResearchAsset>>(!legacyOpenAI && showingAssets ? `${base}/library?q=${enc(hasTarget && type === 'mathematics' ? '' : query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${mine ? '&mine=1' : ''}` : undefined);
   const detail = useResource<Item<ResearchAsset>>(selected ? `${base}/library/${enc(selected)}` : undefined);
   useEffect(() => { if (!hasDirectoryType.current && detail.data) setType(detail.data.item.type); }, [detail.data?.item.id]);
   const filters = new URLSearchParams({ type });
@@ -105,6 +113,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   if (area) filters.set('area', area);
   if (author) filters.set('author', author);
   if (environment) filters.set('environment', environment);
+  else if (hasTarget) filters.set('environment', 'all');
   if (mine) filters.set('mine', '1');
   if (offset) filters.set('offset', String(offset));
   const filterQuery = filters.toString();
@@ -119,7 +128,13 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     history.replaceState(null, '', next);
     rememberLibraryView(currentView, filterOwner);
   }, [filterQuery, legacyOpenAI]);
-  const items = directory.data?.items.filter(item => type !== 'mathematics' || !environment || item.release?.mathematics?.environment === environment) ?? [];
+  const actualEnvironment = environment === 'target' ? target?.environment ?? '' : environment;
+  const candidates = directory.data?.items.filter(item => type !== 'mathematics' || !actualEnvironment || item.release?.mathematics?.environment === actualEnvironment) ?? [];
+  const terms = query.trim() ? query.trim().split(/\s+/u).slice(0, 10) : target ? discoverySuggestedTerms(target) : [];
+  const matches = target && type === 'mathematics' ? candidates.map(asset => matchLibraryDiscovery(asset, target, terms))
+    .filter(match => !query.trim() || match.terms.length).sort((a, b) => b.score - a.score || b.asset.updatedAt.localeCompare(a.asset.updatedAt)) : undefined;
+  const items = matches?.map(match => match.asset) ?? candidates;
+  const search = (value: string) => { setQuery(value); setOffset(0); setSearchReset(current => current + 1); };
   const viewFor = (nextType: ResearchAssetKind, nextCollection: MathematicsCollection, nextMine: boolean) => {
     const target = { type: nextType, collection: nextCollection, mine: nextMine };
     if (viewKey(target) === viewKey(currentView)) return currentView;
@@ -158,6 +173,13 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     <p>{tx('查找可复用的模块、接口和研究工具。', 'Find reusable modules, interfaces and research tools.')}</p></div>
     <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => { setCreatorMounted(true); setCreating(value => !value); }} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
       : <a class="button" href={loginHref(createAddress.pathname + createAddress.search + createAddress.hash)}>{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>
+    {target && <LibraryDiscoveryContext target={target} query={query} chooseQuery={search} />}
+    {hasTarget && !context.session.authenticated && <Panel title={tx('为所选步骤找引理', 'Find a lemma for the selected step')}><p>{tx('登录后读取这个步骤的目标和前提，继续寻找可用成果。', 'Sign in to read this step’s goal and premises and continue finding useful results.')}</p>
+      <a class="button" data-library-discovery-login href={loginHref(location.pathname + location.search + location.hash)}>{tx('登录并回到这一步', 'Sign in and return to this step')}</a></Panel>}
+    {hasTarget && context.session.authenticated && !target && <Panel title={tx('正在定位研究步骤', 'Locating the research step')}><ErrorBox message={discovery.error} />
+      {discovery.loading && <p role="status">{tx('正在读取目标、前提与证明环境…', 'Loading the goal, premises and proof environment…')}</p>}
+      {discovery.error && <div class="research-actions"><button class="button" type="button" onClick={discovery.refresh}>{tx('重新读取这一步', 'Reload this step')}</button>
+        <a class="button" href={`problem.html?${new URLSearchParams({ ...Object.fromEntries(targetParameters), tab: 'route' })}`}>{tx('回到题目核对', 'Return to the problem')}</a></div>}</Panel>}
     {context.session.authenticated && <div class="research-actions"><a class="text-button" href="workspace.html?tab=collections">{tx('我的资料夹', 'My collections')}</a><a class="text-button" href="workspace.html?tab=inbox#asset-updates">{tx('关注更新', 'Release updates')}</a></div>}
     <div class="research-library-controls">
       <nav class="research-section-nav research-directory-grid research-library-type-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => {
@@ -192,15 +214,15 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     </div> : <div class="research-library-browser">
       {showingAssets && <div class="research-library-section-title"><h2>{type === 'mathematics' ? mine ? tx('我的数学库', 'My libraries') : tx('共享数学库', 'Shared libraries') : `${nameOf(type)}${tx('目录', ' directory')}`}</h2>
         <p>{kindDescription(type)}</p></div>}
-      <div class="research-library-searchbar"><Search key={`${type === 'mathematics' ? collection : type}:${searchReset}`} initial={query} label={tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={value => { setQuery(value); setOffset(0); }} />
+      <div class="research-library-searchbar"><Search key={`${type === 'mathematics' ? collection : type}:${searchReset}`} initial={query} label={target && showingAssets ? tx('筛选任一关键词；空格分隔', 'Match any keyword; separate with spaces') : tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={value => { setQuery(value); setOffset(0); }} />
         {type !== 'mathematics' && <Field label={tx('研究领域', 'Research field')} value={area} onInput={value => { setArea(value); setOffset(0); }} placeholder={tx('输入领域', 'Enter a field')} />}
         <details class="research-library-filters" open={Boolean(author || environment)}><summary>{tx('更多筛选', 'More filters')}</summary><div class="research-form research-form-row">
           {type === 'mathematics' && <Field label={tx('研究领域', 'Research field')} value={area} onInput={value => { setArea(value); setOffset(0); }} placeholder={tx('输入领域', 'Enter a field')} />}
           {showingAssets && <Field label={tx('按作者 ID 筛选', 'Filter by author ID')} value={author} onInput={setAuthor} />}
-          {type === 'mathematics' && <label>{tx('按证明环境筛选', 'Filter by proof environment')}<select value={environment} onChange={event => { setEnvironment(event.currentTarget.value); setOffset(0); }}><option value="">{tx('全部环境', 'All environments')}</option><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>}
+          {type === 'mathematics' && <label>{tx('按证明环境筛选', 'Filter by proof environment')}<select data-library-environment value={environment} onChange={event => { setEnvironment(event.currentTarget.value); setOffset(0); }}>{hasTarget && <option value="target">{tx('与当前步骤相同的环境', 'Same environment as this step')}</option>}<option value="">{tx('全部环境', 'All environments')}</option><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>}
         </div></details>
       </div>
-      {type === 'mathematics' && collection === 'lean' ? <InstalledLibraryDirectory query={query} area={area} environment={environment} offset={offset} onOffset={setOffset} onArea={value => { setArea(value); setOffset(0); }} onReset={() => {
+      {type === 'mathematics' && collection === 'lean' ? <InstalledLibraryDirectory query={query} area={area} environment={actualEnvironment} offset={offset} onOffset={setOffset} onArea={value => { setArea(value); setOffset(0); }} onReset={() => {
         setQuery(''); setArea(''); setAuthor(''); setEnvironment(''); setOffset(0); setSearchReset(value => value + 1);
         requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.research-library-searchbar input[type="search"]')?.focus());
       }} onQuery={value => {
@@ -209,9 +231,10 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
         : <><ErrorBox message={directory.error} />{directory.error && <button class="button" type="button" onClick={directory.refresh}>{tx('重新读取共享成果', 'Reload shared resources')}</button>}
           {directory.loading && <p class="research-status" role="status">{tx('正在读取目录…', 'Loading directory…')}</p>}
           {directory.data && <p class="research-status" role="status">{items.length} {tx('项资源', 'resources')}{mine ? ` · ${tx('包含自己的草稿与发布版本', 'Includes your drafts and releases')}` : ''}</p>}
-          <div class="research-directory-grid">{items.map(asset => <DirectoryAsset key={asset.id} asset={asset} mine={mine} href={filteredLibraryHref(asset.id, asset.release?.version, filters)} />)}</div>
+          <div class="research-directory-grid">{items.map(asset => <DirectoryAsset key={asset.id} asset={asset} mine={mine} href={filteredLibraryHref(asset.id, asset.release?.version, filters)} match={matches?.find(item => item.asset.id === asset.id)} />)}</div>
           {directory.data && !items.length && <Empty>{mine ? tx('还没有匹配的个人资源。可以创建草稿，或调整筛选。', 'No matching resources of your own. Create a draft or change the filters.')
             : tx('暂无匹配的共享成果，请调整关键词或领域。', 'No matching shared resources. Try another keyword or field.')}</Empty>}
+          {target && query.trim() && <button class="text-button" type="button" onClick={() => search('')}>{tx('清空检索词，查看环境内全部成果', 'Clear keywords and show all results in this environment')}</button>}
         </>}
       {showingAssets && <p class="research-field-note">{tx('加入配置选择后可检查依赖与环境，再带入工作台。新研究启动前会固定完整版本和依赖。', 'Add fixed versions to your selection, check their dependencies and environment, then open the workbench. Versions and dependencies are frozen before research starts.')}</p>}
     </div>}
@@ -220,7 +243,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   </div>;
 }
 
-function DirectoryAsset({ asset, mine, href }: { asset: ResearchAsset; mine: boolean; href: string }) {
+function DirectoryAsset({ asset, mine, href, match }: { asset: ResearchAsset; mine: boolean; href: string; match?: ReturnType<typeof matchLibraryDiscovery> }) {
   const personalDraft = mine && asset.editable, shown = personalDraft ? asset : asset.release ?? asset, release = asset.release,
     content = personalDraft ? asset.draft ?? release?.content : release?.content ?? asset.draft;
   const details = !personalDraft && release?.mathematics ? [release.mathematics.environment, `${release.mathematics.declarations.length} ${tx('条数学声明', 'declarations')}`]
@@ -231,6 +254,11 @@ function DirectoryAsset({ asset, mine, href }: { asset: ResearchAsset; mine: boo
     <div class="research-card-description"><RichProse text={shown.description || tx('作者尚未补充用途说明。', 'The author has not added a description.')} /></div>
     <div class="research-item-meta"><span>{shown.area || tx('未标注领域', 'No field specified')}</span>{!personalDraft && <span>{release?.version ?? tx('尚无可选版本', 'No selectable release')}</span>}<State value={shown.visibility} /></div>
     {details.length > 0 && <Tags values={details} />}
+    {match && <div class="research-library-match" data-library-match={asset.id}>
+      <span>{match.sameEnvironment ? tx('证明环境相同', 'Same proof environment') : tx('证明环境不同', 'Different proof environment')}</span>
+      {match.terms.length ? <span>{tx('文字匹配：', 'Matching terms: ')}{match.terms.join(' · ')}</span> : <span>{tx('未找到目标词重合', 'No shared goal terms')}</span>}
+      {!!match.declarations.length && <span>{tx('相关声明：', 'Matching declarations: ')}{match.declarations.slice(0, 3).join(' · ')}</span>}
+    </div>}
     <p class="research-status">{release ? personalDraft ? <>{tx('已发布版本：', 'Published version: ')}<a href={href}>{release.name} · {release.version}</a></>
       : tx('已发布固定版本，可查看内容与依赖。', 'A fixed version is published. View its contents and dependencies.')
       : asset.releases.length ? tx('已有版本均已撤回，当前无可选版本。', 'Previous versions are withdrawn. No version is currently selectable.')

@@ -13,6 +13,11 @@
 .research-overview-card{min-width:0;border:1px solid var(--gray-200);border-radius:12px;padding:18px;background:var(--bg)}.research-overview-card h3{margin:12px 0 8px;font-size:16px;font-weight:550;line-height:1.5;overflow-wrap:anywhere}
 .research-overview-card h3 a{color:inherit;text-decoration:none}.research-overview-card h3 a:hover{text-decoration:underline}.research-overview-meta{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:var(--gray-500)}
 .research-overview-summary{margin:0 0 16px;font-size:12px;color:var(--gray-500)}.research-overview-card-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.research-overview-card-actions>span{font-size:12px;color:var(--gray-600)}
+.research-overview .collaboration-message-summary{margin-bottom:20px;text-align:start}
+.research-overview .collaboration-message-summary>div{display:flex;gap:12px 24px;flex-wrap:wrap;margin-bottom:10px}
+.research-overview .collaboration-message-summary>div>a{display:flex;gap:7px;align-items:baseline;text-decoration:none}
+.research-overview .collaboration-message-summary strong{font-size:22px;font-weight:500}
+.research-overview .collaboration-message-summary>div>a>span{color:var(--muted);font-size:12px}
 .research-overview-card .button{font-size:12px}.research-overview-card details{margin-top:16px;border-top:1px solid var(--gray-200);padding-top:12px;font-size:12px}.research-overview-card summary{cursor:pointer;color:var(--gray-600)}
 .research-overview-records li{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding-top:10px}.research-overview-records a{min-width:0;overflow-wrap:anywhere;color:inherit}.research-overview-records span{flex-shrink:0;color:var(--gray-500);font-size:11px}
 .research-overview-note{font-size:13px;color:var(--gray-500);line-height:1.6}.research-overview-error{font-size:13px;color:var(--danger);line-height:1.6}

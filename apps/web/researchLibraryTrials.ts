@@ -10,6 +10,7 @@ import type { WebRunner } from './runner';
 import type { WebRun } from './shared';
 import type { WebInspectedTask, WebTaskSource } from './collaboration';
 import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
+import type { ResearchLibraryDiscovery } from './researchLibraryDiscoveryTypes';
 import type { ResearchLibraryTrial, ResearchLibraryTrialTarget, ResearchLibraryTrialTargetRef, ResearchLibraryTrialReceipt,
   ResearchLibraryCandidateAttachment, ResearchLibraryProposalTarget, ResearchLibraryAttemptPreparation, ResearchLibraryPersonalAttemptPreparation,
   ResearchLibraryTrialHistory, ResearchLibraryTrialHistoryItem } from './researchLibraryTrialTypes';
@@ -49,6 +50,30 @@ export class WebResearchLibraryTrials {
     if (release.type !== 'mathematics' || !release.mathematics) fail(400, '只有已发布的数学成果可以在目标中试用。');
     if (digest && release.digest !== digest) fail(409, '成果版本的固定身份已改变，请重新选择。');
     return release;
+  }
+  discovery(viewer: string, raw: unknown): ResearchLibraryDiscovery {
+    this.path(viewer, 'discovery');
+    const ref = parse(z.object({ runId: key, projectId: key.optional(), taskId: text(200, 1), taskVersion: text(200, 1),
+      commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u) }).strict(), raw) as Pick<ResearchLibraryTrialTargetRef, 'runId' | 'projectId' | 'taskId' | 'taskVersion' | 'commit'>;
+    const binding = ref.projectId ? this.deps.projects.resolveBinding(viewer, ref.projectId, ref.runId) : undefined;
+    if (binding && !binding.binding.permissions.manage && !this.deps.projects.detail(viewer, ref.projectId!).permissions.member)
+      fail(403, '只有项目成员可读取这一步的研究上下文。');
+    const owner = binding?.runOwner ?? viewer, run = binding?.run ?? this.deps.jobs.get(viewer, ref.runId) ?? fail(404, '研究不存在或不可访问。');
+    const observations = [...this.deps.storage.listObservations(owner, run.id), ...(run.observation ? [run.observation] : [])];
+    const sources = observations.flatMap(observation => observation.sources.filter(source => source.taskId === ref.taskId && source.taskVersion === ref.taskVersion && source.commit === ref.commit)
+      .map(source => ({ source, task: [...observation.inspection.tasks, ...(observation.history ?? [])].find(task => task.id === ref.taskId && task.version === ref.taskVersion) })));
+    const exact = [...new Map(sources.map(item => [identity([item.source.taskId, item.source.taskVersion, item.source.commit, item.source.sourceDigest, item.source.environmentDigest, item.source.file]), item])).values()];
+    if (exact.length !== 1 || !exact[0]?.task || !['goal', 'lemma'].includes(exact[0].task.kind))
+      fail(409, '未能定位这个精确步骤。请回到题目重新选择。');
+    const { source, task } = exact[0]!;
+    const latest = observations.slice().reverse().flatMap(observation => observation.sources).find(item => item.taskId === ref.taskId && item.taskVersion === ref.taskVersion);
+    const current = run.observation?.inspection.tasks.some(item => item.id === ref.taskId && item.version === ref.taskVersion) === true
+      && latest?.commit === source.commit && latest?.sourceDigest === source.sourceDigest;
+    return { ref: { ...ref, sourceDigest: source.sourceDigest, environmentDigest: source.environmentDigest, file: source.file },
+      runTitle: run.title, title: task!.theorem ?? task!.objective, objective: task!.objective,
+      statement: task!.informalStatement ?? task!.type ?? task!.objective, type: task!.type ?? '', premises: [...task!.premises],
+      environment: run.environment, current, returnHref: `problem.html?${new URLSearchParams({ run: ref.runId, ...(ref.projectId ? { project: ref.projectId } : {}),
+        tab: 'route', task: ref.taskId, taskVersion: ref.taskVersion, commit: ref.commit })}` };
   }
   private resolve(viewer: string, ref: Pick<ResearchLibraryTrialTargetRef, 'runId' | 'projectId' | 'taskId'>, release: ResearchAssetRelease): Resolved {
     if (!viewer || viewer === 'public') fail(401, '请先登录后试用数学成果。');
@@ -357,6 +382,10 @@ export function createResearchLibraryTrialsHandler(deps: Dependencies) {
     async handle(url: URL, method: string, viewer: string, readBody: () => Promise<unknown>): Promise<{ status: number; body: unknown } | undefined> {
       const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent), item = (value: unknown, status = 200) => ({ status, body: { item: value } });
       if (parts[0] !== 'api' || parts[1] !== 'research') return;
+      if (parts[2] === 'library-discovery' && parts.length === 3 && method === 'GET') return item(service.discovery(viewer, {
+        runId: url.searchParams.get('run') ?? '', taskId: url.searchParams.get('task') ?? '', taskVersion: url.searchParams.get('taskVersion') ?? '',
+        commit: url.searchParams.get('commit') ?? '', ...(url.searchParams.has('project') ? { projectId: url.searchParams.get('project') } : {}),
+      }));
       if (parts[2] === 'library' && parts[3] && parts[4] === 'releases' && parts[5] && parts.length === 7) {
         if (parts[6] === 'trial-targets' && method === 'GET') return { status: 200, body: { items: service.targets(viewer, parts[3], parts[5]) } };
         if (parts[6] === 'trials' && method === 'POST') return item(service.prepare(viewer, parts[3], parts[5], await readBody()), 201);

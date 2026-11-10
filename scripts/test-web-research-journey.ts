@@ -15,7 +15,7 @@ import type { ResearchJourney, ResearchUnreadChanges } from '../apps/web/researc
 import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, startBrowser } from './web-scenario';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/research-depth/journey');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/research-depth/journey');
 await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-journey-ui-'));
 const sample = loadWebSample()!, port = await freePort(), origin = `http://127.0.0.1:${port}`;

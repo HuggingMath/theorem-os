@@ -950,6 +950,7 @@ export class ChatSession {
       onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw(); },
       onModel: value => { this.model = value; this.clearConnection(); this.rememberDraft(); this.draw(); },
       quota: this.options.session()?.quota,
+      cost: { owner: this.options.session()?.draftOwner ?? 'anonymous', account: Boolean(this.options.session()?.account), request: this.options.request },
       budgets: this.budgets, budgetLimits: { maxRunSeconds: this.capabilities?.limits.maxRunSeconds ?? 1800,
         maxTotalTokens: this.capabilities?.limits.maxTotalTokens || 2_000_000,
         research: { maxRunSeconds: this.options.session()?.limits.maxRunSeconds ?? 900, maxTurns: this.options.session()?.limits.maxTurns ?? 20,

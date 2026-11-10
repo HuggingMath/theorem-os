@@ -8,7 +8,8 @@ import { BookmarkControl } from './researchCollections';
 import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
 import { IssueExecution } from './researchIssueExecution';
 import { SharedStageReference } from './researchStageReference';
-import { api, base, enc, ErrorBox, errorText, Field, MutationState, nameOf, personHref, stamp, theoremHref, tx, useMutation,
+import { ProjectInvitationLinks } from './researchInvite';
+import { api, base, enc, ErrorBox, errorText, Field, MutationState, nameOf, personHref, Search, stamp, theoremHref, tx, useMutation,
   useResource, type Item, type Items, type ResearchContext } from './researchShared';
 import type { ResearcherProfile } from '../researchProjectTypes';
 
@@ -118,15 +119,21 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
 
 export function CollaborationMembership({ project, selfId, refresh }: { project: ResearchProjectDetail; selfId: string; refresh(): void }) {
   const resource = useResource<Item<ResearchCollaborationView>>(collaborationPath(project.id), 10000);
-  const directory = useResource<Items<ResearcherProfile>>(project.permissions.manage ? `${base}/people?limit=100` : undefined);
+  const [query, setQuery] = useState(''), [offset, setOffset] = useState(0);
+  const directory = useResource<Items<ResearcherProfile>>(project.permissions.manage ? `${base}/people?limit=20&offset=${offset}&q=${enc(query)}` : undefined);
   const [recipientId, setRecipient] = useState(''), [role, setRole] = useState('collaborator'), [note, setNote] = useState('');
   const action = useMutation(), changed = () => { resource.refresh(); refresh(); };
   const invitations = resource.data?.item.invitations ?? [];
   return <section id="collaboration-members" class="collaboration-members">
+    {project.permissions.manage && <ProjectInvitationLinks project={project} links={resource.data?.item.invitationLinks ?? []} refresh={changed} />}
     {project.permissions.manage ? <details><summary>{tx('邀请同行参与', 'Invite a colleague')}</summary><form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', `${projectPath(project.id)}/invitations`,
       { recipientId, role, note, expectedRevision: project.revision }, changed); }}>
+      <Search label={tx('搜索同事的姓名、简介或领域', 'Search a colleague’s name, biography or field')} onSearch={value => { setQuery(value); setOffset(0); setRecipient(''); }} />
       <label>{tx('选择数学家', 'Choose a mathematician')}<select value={recipientId} required onChange={event => setRecipient(event.currentTarget.value)}><option value="">{tx('从公开数学家目录中选择', 'Choose from public researcher profiles')}</option>
         {directory.data?.items.filter(person => person.id !== project.owner.id && !project.members.some(member => member.researcherId === person.id)).map(person => <option key={person.id} value={person.id}>{person.displayName} · {person.fields.join(' / ')}</option>)}</select></label>
+      <div class="research-actions">{offset > 0 && <button class="text-button" type="button" onClick={() => { setOffset(Math.max(0, offset - 20)); setRecipient(''); }}>{tx('上一页', 'Previous')}</button>}
+        {directory.data?.nextOffset !== undefined && <button class="text-button" type="button" onClick={() => { setOffset(directory.data!.nextOffset!); setRecipient(''); }}>{tx('下一页', 'Next')}</button>}</div>
+      {directory.data && !directory.data.items.length && <p>{tx('没有匹配的公开资料。也可以用邀请链接让同事直接加入。', 'No public profile matches. You can invite your colleague with a link instead.')}</p>}
       <label>{tx('邀请角色', 'Invited role')}<select value={role} onChange={event => setRole(event.currentTarget.value)}><option value="collaborator">{roleName('collaborator')}</option><option value="reader">{roleName('reader')}</option></select></label>
       <Field label={tx('希望共同推进什么', 'What would you like to work on together?')} value={note} onInput={setNote} multiline required maxLength={4000} />
       {project.visibility === 'private' && <p>{tx('对方接受后，此题仅向项目成员开放。', 'After acceptance, this project becomes visible to its members.')}</p>}

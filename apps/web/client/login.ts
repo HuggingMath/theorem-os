@@ -4,6 +4,7 @@ import { localizeMessage, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 import { forgetKey } from './keyMemory';
 import { OwnedDrafts } from './ownedDrafts';
+import { shareLoginDestination } from './shareContinuation';
 
 createIcons({ icons: { LogIn, MailCheck, RefreshCw }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -23,7 +24,7 @@ type CodeChallenge = { email: string; expiresAt: number; resendAt: number };
 const progressKey = 'theorem-os.login-progress.v1';
 let step: LoginStep = 'email', stepRevision = 0, progressOwner = '', challenge: CodeChallenge | undefined;
 // Keep a research page's filters and intended action, or an existing workbench run/chat, through every login method.
-const destination = loginReturn(location.search);
+const destination = shareLoginDestination(location.search) ?? loginReturn(location.search);
 
 /** `message` is what the visitor sees; `reason` keeps the server's own text for the session check. */
 class LoginError extends Error {

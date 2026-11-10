@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { ResearchJourney, ResearchJourneyAttempt, ResearchJourneyRecord, ResearchJourneySource, ResearchJourneySourceRef, ResearchChangeRecordLink, ResearchUnreadChanges } from '../researchJourneyTypes';
+import type { ResearchJourney, ResearchJourneyAttempt, ResearchJourneyRecord, ResearchJourneySource, ResearchJourneySourceRef, ResearchChangeRecordLink, ResearchUnreadChanges, ResearchJourneyEvolution, ResearchObservationRef } from '../researchJourneyTypes';
 import type { SolutionRoute, SolutionRouteNode, SolutionRouteStatus } from '../solutionRoute';
 import type { ResearchBriefTask } from '../researchWorkspaceTypes';
 import { locale, localizeMessage } from '../i18n';
@@ -7,6 +7,7 @@ import { Rich, RichProse } from './richText';
 import { SolutionRouteGraph } from './ui/SolutionRouteGraph';
 import { base, enc, Empty, ErrorBox, MutationState, Panel, stamp, tx, useMutation, useResource, type Item } from './researchShared';
 import './researchJourney.css';
+import { ResearchCheckDetails } from './researchCheckDetails';
 
 type Props = { runId: string; projectId?: string };
 type JourneyFocus = { runId: string; task: ResearchBriefTask };
@@ -120,7 +121,9 @@ function SourceIdentity({ reference }: { reference: ResearchJourneySourceRef }) 
     <dt>Commit</dt><dd><code>{reference.commit}</code></dd><dt>{tx('源码摘要', 'Source digest')}</dt><dd><code>{reference.sourceDigest}</code></dd>
     <dt>{tx('环境摘要', 'Environment digest')}</dt><dd><code>{reference.environmentDigest}</code></dd></dl>;
 }
-function TaskDetail({ attempt, selected, select, open }: { attempt: ResearchJourneyAttempt; selected: string; select(id: string): void; open(ref: ResearchJourneySourceRef): void }) {
+function TaskDetail({ attempt, selected, select, open, observation }: { attempt: ResearchJourneyAttempt; selected: string; select(id: string): void; open(ref: ResearchJourneySourceRef): void; observation?: ResearchObservationRef }) {
+  const [openedCheck, setOpenedCheck] = useState('');
+  useEffect(() => setOpenedCheck(''), [attempt.id, selected, observation?.stateDigest]);
   const item = attempt.tasks.find(item => item.task.id === selected);
   if (!item) return null;
   const { task } = item, related = (ids: string[]) => ids.map(id => {
@@ -137,36 +140,43 @@ function TaskDetail({ attempt, selected, select, open }: { attempt: ResearchJour
     {task.finding && <section><h4>{tx('得到的结论', 'Finding')}</h4><RichProse text={task.finding} /></section>}
     {task.feedback && <section><h4>{tx('反馈与阻碍', 'Feedback and blockers')}</h4><RichProse text={task.feedback} /></section>}
     <section><h4>{tx('这一版本的检查', 'Checks for this version')}</h4>{task.checks.length ? task.checks.map(check => {
-      const receipt = attempt.checks.find(item => item.id === check.id);
-      return <details key={check.id} data-journey-check={check.id}><summary>{check.passed ? tx('检查通过', 'Check passed') : tx('检查未通过', 'Check failed')} · {check.id}</summary>
-        {receipt && <pre tabIndex={0}><code>{JSON.stringify(receipt.record, null, 2)}</code></pre>}</details>;
+      return <details key={check.id} data-journey-check={check.id} open={openedCheck === check.id} onToggle={event => {
+        if (event.currentTarget.open) setOpenedCheck(check.id);
+        else setOpenedCheck(current => current === check.id ? '' : current);
+      }}><summary>{check.passed ? tx('检查通过', 'Check passed') : tx('检查未通过', 'Check failed')} · {check.id}</summary>
+        {openedCheck === check.id && <ResearchCheckDetails runId={attempt.id} projectId={attempt.projectId} checkId={check.id} observation={observation} />}</details>;
     }) : <p>{tx('没有匹配此任务、源码和环境的检查回执。', 'No check receipt matches this task, source and environment.')}</p>}</section>
     <div class="research-actions"><a class="button button-primary" data-journey-participate href={`problem.html?${new URLSearchParams({ run: attempt.id,
-      ...(attempt.projectId ? { project: attempt.projectId } : {}), tab: 'route', task: task.id, taskVersion: task.version, ...(task.commit ? { commit: task.commit } : {}) })}`}>
-      {tx('进入这一步参与研究', 'Participate in this step')} →</a>
+      ...(attempt.projectId ? { project: attempt.projectId } : {}), tab: 'route', task: task.id, ...(!observation ? { taskVersion: task.version, ...(task.commit ? { commit: task.commit } : {}) } : {}) })}`}>
+      {observation ? tx('回到当前记录参与研究', 'Participate in the current record') : tx('进入这一步参与研究', 'Participate in this step')} →</a>
     {item.source ? <button class="button" type="button" data-journey-open-source onClick={() => open(item.source!)}>{tx('查看这一版本源码', 'Read this source version')} →</button>
       : <p class="research-status">{item.sourceStatus === 'ambiguous' ? tx('保存了多个源码身份，无法唯一定位。', 'Multiple source identities were saved; this version cannot be uniquely located.') : tx('这个任务版本没有可读取的源码记录。', 'This task version has no readable source record.')}</p>}
     </div>
   </article>;
 }
 
-export function ResearchJourneyTaskSource({ runId, projectId, task, close }: Props & { task: ResearchBriefTask; close(): void }) {
-  const resource = useResource<Item<ResearchJourney>>(endpoint(runId, projectId, 'journey'));
-  const item = resource.data?.item.attempts.find(attempt => attempt.id === runId)?.tasks.find(item => item.task.id === task.id && item.task.version === task.version && item.task.commit === task.commit);
+export function ResearchJourneyTaskSource({ runId, projectId, task, close, observation }: Props & { task: ResearchBriefTask; close(): void; observation?: ResearchObservationRef }) {
+  const resource = useResource<Item<ResearchJourney>>(observation ? undefined : endpoint(runId, projectId, 'journey'));
+  const historical = useResource<Item<ResearchJourneyEvolution>>(observation ? `${endpoint(runId, projectId, 'journey/evolution')}${projectId ? '&' : '?'}${new URLSearchParams({ at: String(observation.sequence), atState: observation.stateDigest })}` : undefined);
+  const attempt = observation ? historical.data?.item.selected?.attempt : resource.data?.item.attempts.find(attempt => attempt.id === runId);
+  const item = attempt?.tasks.find(item => item.task.id === task.id && item.task.version === task.version && item.task.commit === task.commit);
+  const state = observation ? historical : resource;
   if (item?.source) return <SourceReader key={sourceId(item.source)} reference={item.source} close={close} />;
-  return <section class="journey-source-reader"><ErrorBox message={resource.error} />
-    {resource.error && <button type="button" class="button" onClick={resource.refresh}>{tx('重新读取', 'Try again')}</button>}
-    <p role="status">{resource.loading ? tx('正在定位所选版本…', 'Locating the selected version…') : tx('这个版本没有可读取的固定源码。', 'This version has no readable frozen source.')}</p>
+  return <section class="journey-source-reader"><ErrorBox message={state.error} />
+    {state.error && <button type="button" class="button" onClick={state.refresh}>{tx('重新读取', 'Try again')}</button>}
+    <p role="status">{state.loading ? tx('正在定位所选版本…', 'Locating the selected version…') : tx('这个版本没有可读取的固定源码。', 'This version has no readable frozen source.')}</p>
     <button type="button" class="button" onClick={close}>{tx('关闭源码', 'Close source')}</button></section>;
 }
 
-export function ResearchJourneyView({ runId, projectId, focusedTask, onTaskSelection, onAttemptSelection }: Props & {
+export function ResearchJourneyView({ runId, projectId, focusedTask, onTaskSelection, onAttemptSelection, frozen }: Props & {
   focusedTask?: { id: string; version: string; commit?: string }; onTaskSelection?(value: JourneyFocus): void; onAttemptSelection?(runId: string): void;
+  frozen?: ResearchJourneyEvolution['selected'];
 }) {
-  const resource = useResource<Item<ResearchJourney>>(endpoint(runId, projectId, 'journey'), 15_000), journey = resource.data?.item;
+  const resource = useResource<Item<ResearchJourney>>(endpoint(runId, projectId, 'journey'), 15_000);
+  const journey = useMemo(() => resource.data?.item && (frozen ? { ...resource.data.item, attempts: resource.data.item.attempts.map(attempt => attempt.id === frozen.attempt.id ? frozen.attempt : attempt) } : resource.data.item), [resource.data, frozen]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([runId])), [selection, setSelection] = useState(attemptId(runId));
   const [source, setSource] = useState<ResearchJourneySourceRef>();
-  useEffect(() => { setExpanded(previous => new Set([...previous, runId])); setSelection(focusedTask ? taskId(runId, focusedTask.id) : attemptId(runId)); setSource(undefined); }, [runId, projectId]);
+  useEffect(() => { setExpanded(previous => new Set([...previous, runId])); setSelection(focusedTask ? taskId(runId, focusedTask.id) : attemptId(runId)); setSource(undefined); }, [runId, projectId, frozen?.moment.stateDigest]);
   useEffect(() => { if (focusedTask) { setSelection(taskId(runId, focusedTask.id)); setExpanded(previous => previous.has(runId) ? previous : new Set([...previous, runId])); } }, [runId, focusedTask?.id, focusedTask?.version, focusedTask?.commit]);
   const model = useMemo(() => journey ? researchJourneyModel(journey, locale, expanded) : undefined, [journey, expanded]);
   const chosen = journey?.attempts.find(attempt => selection === attemptId(attempt.id) || attempt.tasks.some(item => taskId(attempt.id, item.task.id) === selection))
@@ -210,7 +220,7 @@ export function ResearchJourneyView({ runId, projectId, focusedTask, onTaskSelec
         {!chosen.tasks.length && <Empty>{tx('这次尝试尚未保存任务路线。', 'No task route was saved for this attempt.')}</Empty>}
         {chosen.tasks.length > 0 && <div class="journey-task-picker" role="group" aria-label={tx('选择解题步骤', 'Select a proof step')}>{chosen.tasks.map(item => <button class="journey-task-button" type="button" key={item.task.id}
           data-journey-task={item.task.id} aria-pressed={selectedTask === item.task.id} onClick={() => chooseTask(chosen, item.task.id)}><Rich text={item.task.title} /><span>{item.task.checks.some(check => check.passed) ? tx('检查通过', 'Checked') : journeyStatus(item.task.proofStatus)}</span></button>)}</div>}
-        {selectedTask && <TaskDetail attempt={chosen} selected={selectedTask} select={id => chooseTask(chosen, id)} open={setSource} />}
+        {selectedTask && <TaskDetail attempt={chosen} selected={selectedTask} select={id => chooseTask(chosen, id)} open={setSource} observation={chosen.id === frozen?.attempt.id ? frozen.moment : undefined} />}
       </section>}
       {source && <SourceReader reference={source} close={() => setSource(undefined)} />}</>}
     </div>

@@ -11,7 +11,10 @@ export function ProblemAttention({ problem, selfId, onTask, onFeedback }: { prob
   const items = problemAttention(problem, locale, selfId), [expanded, setExpanded] = useState(false);
   const visible = expanded ? items : items.slice(0, 5);
   return <div class="problem-attention" data-problem-attention data-problem-attention-count={items.length}>
-    {!items.length && <Empty>{tx('当前记录没有待处理的阻碍、评审或交接。可继续查看完整证明路线。', 'The current record has no pending blockers, reviews or handoffs. Continue with the full proof route.')}</Empty>}
+    {!items.length && <Empty>{problem.runState && !problem.runState.hasTaskRoute
+      ? problem.runState.active ? tx('任务路线尚未生成，请先查看上方运行进度。', 'The task route is not ready yet. Check the run progress above.')
+        : tx('这次尝试尚无任务路线，请根据上方结束原因处理或重新准备。', 'This attempt has no task route. Use the reason above to resolve the issue or prepare another attempt.')
+      : tx('当前记录没有待处理的阻碍、评审或交接。可继续查看完整证明路线。', 'The current record has no pending blockers, reviews or handoffs. Continue with the full proof route.')}</Empty>}
     {visible.map(item => <article key={item.id} data-problem-attention-item={item.id} data-attention-kind={item.kind}>
       <div class="problem-attention-body"><h3><Rich text={item.title} /></h3><RichProse text={item.detail} />
         <p class="problem-responsibility">{tx('当前负责', 'Recorded responsibility')}: {item.owners.length ? item.owners.map((owner, index) => <span key={`${owner.kind}:${owner.id}`}>{index > 0 && ' · '}{owner.kind === 'human'

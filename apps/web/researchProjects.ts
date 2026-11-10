@@ -6,7 +6,7 @@ import type { WebCommandResult, WebGuidanceRecord, WebInspectedTask, WebObservat
 import { webLimits } from './shared';
 import { WebStorage, WebStorageError } from './storage';
 import type { ResearchCollaborationInbox, ResearchCollaborationState, ResearchCollaborationView, ResearchHandoff,
-  ResearchInboxItem, ResearchInvitation, ResearchIssue } from './researchCollaborationTypes';
+  ResearchInboxItem, ResearchInvitation, ResearchInvitationLink, ResearchInvitationLinkPreview, ResearchIssue } from './researchCollaborationTypes';
 import type {
   ResearchActivity, ResearchAuthor, ResearchCommand, ResearchContribution, ResearchFeedback, ResearchFeedbackDecisionInput,
   ResearchFeedbackInput, ResearchFeedbackTarget, ResearchHumanAssignment, ResearchMemberRole, ResearchMutation, ResearchNotification, ResearchPage,
@@ -1178,8 +1178,62 @@ export class WebResearchProjects {
     const stored = this.readable(viewer, projectId), access = this.access(viewer, stored), self = this.identity(viewer), state = this.collaborationState(stored);
     return clone({ projectId, revision: stored.project.revision,
       invitations: state.invitations.filter(item => access.manage || item.author.id === self || item.recipient.id === self),
+      ...(access.manage ? { invitationLinks: state.invitationLinks ?? [] } : {}),
       handoffs: access.member ? state.handoffs.filter(item => this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === item.target.runId)!)) : [],
       issues: access.member ? state.issues : [] });
+  }
+  createInvitationLink(viewer: string, projectId: string, value: unknown): ResearchInvitationLink {
+    const stored = this.writable(viewer, projectId, true), input = parse(z.object({ ...mutation,
+      role: z.enum(['reader', 'collaborator']), note: text(4000).default(''), confirmed: z.literal(true) }).strict(), value) as ResearchMutation & { role: ResearchMemberRole; note: string; confirmed: true };
+    const previous = this.request(stored, viewer, 'invitation-link-create', input), state = this.collaborationState(stored);
+    if (previous) return clone(state.invitationLinks!.find(item => item.id === previous.resultId)!);
+    this.compare(stored.project.revision, input.expectedRevision);
+    const at = now(), link: ResearchInvitationLink = { id: crypto.randomUUID(), projectId, token: crypto.randomBytes(32).toString('base64url'),
+      author: this.author(viewer), role: input.role, note: input.note, status: 'pending', revision: 0, createdAt: at, updatedAt: at };
+    (state.invitationLinks ??= []).push(link); this.remember(stored, viewer, 'invitation-link-create', input, link.id); this.save(stored);
+    return clone(link);
+  }
+  revokeInvitationLink(viewer: string, projectId: string, linkId: string, value: unknown): ResearchInvitationLink {
+    const stored = this.writable(viewer, projectId, true), input = parse(z.object({ ...mutation }).strict(), value) as ResearchMutation;
+    const link = this.collaborationState(stored).invitationLinks?.find(item => item.id === linkId);
+    if (!link) throw new WebStorageError(404, '研究邀请不存在或已失效。');
+    const operation = `invitation-link-revoke:${link.id}`;
+    if (this.request(stored, viewer, operation, input)) return clone(link);
+    this.compare(link.revision, input.expectedRevision);
+    if (link.status !== 'pending') throw new WebStorageError(409, '邀请已处理，请重新读取当前状态。');
+    link.status = 'revoked'; link.revision++; link.updatedAt = now();
+    this.remember(stored, viewer, operation, input, link.id); this.save(stored); return clone(link);
+  }
+  private invitationLink(token: string) {
+    if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) throw new WebStorageError(404, '研究邀请不存在或已失效。');
+    for (const stored of this.all()) {
+      const link = stored.collaboration?.invitationLinks?.find(item => item.token === token);
+      if (link) return { stored, link };
+    }
+    throw new WebStorageError(404, '研究邀请不存在或已失效。');
+  }
+  invitationLinkPreview(viewer: string, token: string): ResearchInvitationLinkPreview {
+    const { stored, link } = this.invitationLink(token), self = viewer !== 'public' ? this.identity(viewer) : undefined;
+    const access = this.access(viewer, stored), member = Boolean(self && access.member && access.visible);
+    if (link.status === 'revoked' || link.status === 'accepted' && (!member || link.acceptedBy?.id !== self && !access.manage))
+      return { status: link.status, available: false, canAccept: false, member: false };
+    return clone({ status: link.status, available: true, canAccept: Boolean(self && !access.member && link.status === 'pending'), member,
+      revision: link.revision, project: { id: stored.project.id, title: stored.project.title }, author: link.author, role: link.role, note: link.note });
+  }
+  acceptInvitationLink(viewer: string, token: string, value: unknown): ResearchInvitationLinkPreview {
+    const self = this.authenticated(viewer), input = parse(z.object({ ...mutation, confirmed: z.literal(true) }).strict(), value) as ResearchMutation & { confirmed: true };
+    const { stored, link } = this.invitationLink(token), operation = `invitation-link-accept:${link.id}`;
+    if (this.request(stored, viewer, operation, input)) return this.invitationLinkPreview(viewer, token);
+    this.compare(link.revision, input.expectedRevision);
+    if (link.status !== 'pending') throw new WebStorageError(409, '邀请已处理，请重新读取当前状态。');
+    if (this.access(viewer, stored).member) throw new WebStorageError(409, '你已经是这个项目的成员。');
+    stored.project.members.push({ researcherId: self, role: link.role });
+    if (stored.project.visibility === 'private') stored.project.visibility = 'members';
+    link.status = 'accepted'; link.acceptedBy = this.author(viewer); link.revision++; link.updatedAt = now();
+    // Joining changes project membership only. Per-run runtime grants remain exactly as set by their owner.
+    this.event(stored, viewer, 'membership-updated', '通过邀请加入研究项目');
+    this.remember(stored, viewer, operation, input, link.id); this.save(stored);
+    return this.invitationLinkPreview(viewer, token);
   }
   invite(viewer: string, projectId: string, value: unknown): ResearchInvitation {
     const stored = this.writable(viewer, projectId, true), input = parse(z.object({ ...mutation, recipientId: id,
@@ -1536,6 +1590,7 @@ export class WebResearchProjects {
         stored.annotations?.some(item => item.author.id === researcher || item.replies.some(reply => reply.author.id === researcher) || item.resolution?.actor.id === researcher || item.lastAction?.actor.id === researcher) ||
         (stored.assignments ?? []).some(assignment => assignment.author.id === researcher || assignment.continuation?.actor.id === researcher) ||
         stored.collaboration?.invitations.some(item => item.author.id === researcher || item.recipient.id === researcher) ||
+        stored.collaboration?.invitationLinks?.some(item => item.acceptedBy?.id === researcher) ||
         stored.collaboration?.handoffs.some(item => item.author.id === researcher || item.recipient.id === researcher || item.continuation?.actor.id === researcher) ||
         stored.collaboration?.issues.some(item => item.author.id === researcher || item.replies.some(reply => reply.author.id === researcher) || item.resolution?.author.id === researcher || item.resolutionHistory?.some(record => record.author.id === researcher)) ||
         stored.versions.some(version => version.author.id === researcher) ||
@@ -1561,6 +1616,7 @@ export class WebResearchProjects {
       if (stored.collaboration) {
         const state = stored.collaboration, retainedFeedback = new Set(stored.feedback.map(item => item.id));
         state.invitations = state.invitations.filter(item => item.author.id !== researcher && item.recipient.id !== researcher);
+        for (const link of state.invitationLinks ?? []) if (link.acceptedBy?.id === researcher) link.acceptedBy = deleted;
         state.handoffs = state.handoffs.filter(item => item.author.id !== researcher && item.recipient.id !== researcher && !removedRuns.has(item.target.runId));
         state.issues = state.issues.filter(item => item.author.id !== researcher && !removedRuns.has(item.target?.runId ?? ''));
         for (const handoff of state.handoffs) {

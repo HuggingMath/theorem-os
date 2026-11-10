@@ -112,7 +112,7 @@ function BookmarkItem({ item, collection, refresh, selected, select }: { item: R
     <div class="research-actions">{item.available && item.assetType === 'mathematics' && <label class="research-bookmark-choice"><input type="checkbox" checked={selected} aria-label={tx('选择此数学成果', 'Select this mathematics release')} onChange={event => select(event.currentTarget.checked)} /></label>}
       {item.available ? <a href={item.href}><Rich text={item.title ?? ''} /></a> : <strong>{tx('原内容已不可访问', 'Original content is unavailable')}</strong>}
       <span class="research-item-meta">{target.kind === 'release' ? target.version : target.kind === 'task' ? `${target.taskVersion.slice(0, 12)} · ${target.commit.slice(0, 12)}`
-        : target.kind === 'theorem' ? target.statementVersionId?.slice(0, 12) : tx('研究记录', 'Research run')}</span></div>
+        : target.kind === 'theorem' ? target.statementVersionId?.slice(0, 12) : target.kind === 'share' ? tx('分享的证明', 'Shared proof') : tx('研究记录', 'Research run')}</span></div>
     {savedNote && <RichProse text={savedNote} />}
     <details><summary>{tx('编辑私人备注与收藏', 'Edit private note and bookmark')}</summary><form class="research-form" onSubmit={event => { event.preventDefault(); const submitted = note;
       void action.run('PATCH', `${base}/collections/${enc(collection.id)}/items/${enc(item.id)}`, { expectedRevision: collection.revision, note }, () => { setSavedNote(submitted); refresh(); }); }}>

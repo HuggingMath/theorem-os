@@ -434,6 +434,12 @@ export type WebAdminOverview = {
 export function workbenchReturn(search: string): string {
   const params = new URLSearchParams(search), kept = new URLSearchParams(), run = params.get('run'), chat = params.get('chat');
   const destination = params.get('returnTo');
+  if (destination === 'invite') {
+    kept.set('returnTo', 'invite');
+    const invite = params.get('invite'); if (invite && /^[A-Za-z0-9_-]{43}$/u.test(invite)) kept.set('invite', invite);
+    const language = params.get('lang'); if (language === 'zh' || language === 'en') kept.set('lang', language);
+    return `?${kept}`;
+  }
   if (destination === 'problem' || destination === 'library' || destination === 'workspace' || destination === 'theorems') {
     kept.set('returnTo', destination);
     const retain = (key: string, pattern: RegExp) => { const value = params.get(key); if (value && pattern.test(value)) kept.set(key, value); };
@@ -448,8 +454,14 @@ export function workbenchReturn(search: string): string {
       retain('compare', /^[a-f0-9-]{1,36}$/u);
       retain('decision', identity);
       retain('snapshot', /^[a-f0-9]{64}$/u); retain('changeRecord', identity);
+      retain('at', /^[1-9]\d{0,12}$/u); retain('atState', /^[a-f0-9]{64}$/u);
     } else if (destination === 'library') {
       retain('entry', recordId); retain('version', identity); retain('trial', recordId);
+      retain('type', /^(?:mathematics|agent|skill)$/u); retain('author', recordId);
+      retain('environment', /^(?:all|target|standard|mathlib)$/u); retain('mine', /^1$/u);
+      for (const [key, limit] of [['q', 128], ['area', 200]] as const) {
+        const value = params.get(key); if (value && value.length <= limit) kept.set(key, value);
+      }
     } else if (destination === 'theorems') {
       retain('id', recordId); retain('version', recordId); retain('revise', recordId);
     } else {
@@ -470,9 +482,13 @@ export function workbenchReturn(search: string): string {
     if (task && /^[A-Za-z0-9_.:-]{1,200}$/u.test(task)) kept.set('task', task);
     if (version && /^[A-Za-z0-9_.:-]{1,200}$/u.test(version)) kept.set('taskVersion', version);
     if (commit && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(commit)) kept.set('commit', commit);
+    const recovery = params.get('recovery');
+    if (recovery && /^(?:continue-checked|ask-failed|key|retry|budget|tokens|turns|workers|source|task)$/u.test(recovery)) kept.set('recovery', recovery);
   } else if (chat && /^[a-f0-9-]{36}$/u.test(chat)) {
     kept.set('chat', chat);
     const message = params.get('message'); if (message && /^[a-f0-9-]{36}$/u.test(message)) kept.set('message', message);
+  } else if (params.has('sharedDraft')) {
+    const id = params.get('sharedDraft')!; if (/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id)) kept.set('sharedDraft', id);
   } else if (params.has('budgetRun')) {
     const budgetRun = params.get('budgetRun')!, tokens = params.get('budgetTokens') ?? '', project = params.get('project');
     if (/^[a-f0-9-]{1,36}$/u.test(budgetRun) && /^\d{1,13}$/u.test(tokens) && Number(tokens) > 0 && Number(tokens) <= 1e12) {
@@ -497,6 +513,10 @@ export function workbenchReturn(search: string): string {
   } else {
     const formalization = params.get('formalization'); if (formalization && /^[a-f0-9-]{36}$/u.test(formalization)) kept.set('formalization', formalization);
   }
+  const classic = params.get('fromClassic');
+  if (classic && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(classic)) kept.set('fromClassic', classic);
+  const shareReturn = params.get('shareReturn');
+  if (shareReturn && /^[a-f0-9-]{36}$/u.test(shareReturn)) kept.set('shareReturn', shareReturn);
   const lang = params.get('lang'); if (lang === 'zh' || lang === 'en') kept.set('lang', lang);
   return kept.size ? `?${kept}` : '';
 }
@@ -504,11 +524,11 @@ export function workbenchReturn(search: string): string {
 export function workbenchDestination(search: string): string {
   const safe = workbenchReturn(search), params = new URLSearchParams(safe);
   const target = params.get('returnTo');
-  if (!target || !['workspace', 'problem', 'library', 'theorems'].includes(target)) return `./${safe}`;
+  if (!target || !['workspace', 'problem', 'library', 'theorems', 'invite'].includes(target)) return `./${safe}`;
   params.delete('returnTo'); return `${target}.html${params.size ? `?${params}` : ''}`;
 }
 
-const appReturnPaths = new Set(['/', '/index.html', '/people.html', '/theorems.html', '/library.html', '/formalize.html', '/formalization.html', '/explain.html', '/workspace.html', '/problem.html', '/practice.html']);
+const appReturnPaths = new Set(['/', '/index.html', '/people.html', '/theorems.html', '/library.html', '/formalize.html', '/formalization.html', '/explain.html', '/workspace.html', '/problem.html', '/practice.html', '/invite.html']);
 /** Only app page paths may receive a login return; query strings and fragments remain exactly as supplied. */
 export function safeAppReturn(value: string | null | undefined): string | undefined {
   if (!value || /[\p{Cc}\\]/u.test(value)) return;
