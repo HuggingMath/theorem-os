@@ -3,18 +3,18 @@ import { firstResearchBudget, firstResearchRemaining } from '../apps/web/client/
 import { webFormalizationDefaults } from '../apps/web/formalizationTypes';
 
 describe('first research preparation', () => {
-  it('keeps both stages token-unlimited under small deployment caps while fitting whole minutes and turns', () => {
+  it('keeps time and tokens unlimited under small deployment caps while fitting turns', () => {
     const limits = { maxRunSeconds: 90, maxTotalTokens: 10_000, research: { maxRunSeconds: 150, maxTotalTokens: 20_000, maxTurns: 2 } };
-    for (const preset of ['trial', 'standard'] as const) expect(firstResearchBudget(preset, limits)).toEqual({ maxRunSeconds: 60, maxTotalTokens: 0,
-      research: { maxRunSeconds: 120, maxTotalTokens: 0, maxTurns: 2 } });
+    for (const preset of ['trial', 'standard'] as const) expect(firstResearchBudget(preset, limits)).toEqual({ maxRunSeconds: 0, maxTotalTokens: 0,
+      research: { maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 2 } });
   });
   it.each([
-    ['trial', 120, 120, 3],
-    ['standard', 600, 300, 5],
-  ] as const)('offers the %s preset with unlimited tokens and its existing time and turn settings', (preset, formalizationSeconds, researchSeconds, maxTurns) => {
+    ['trial', 3],
+    ['standard', 5],
+  ] as const)('offers the %s preset with unlimited time and tokens and its existing turns', (preset, maxTurns) => {
     expect(firstResearchBudget(preset, { maxRunSeconds: 1800, maxTotalTokens: 2_000_000,
-      research: { maxRunSeconds: 900, maxTotalTokens: 2_000_000, maxTurns: 20 } })).toEqual({ maxRunSeconds: formalizationSeconds, maxTotalTokens: 0,
-      research: { maxRunSeconds: researchSeconds, maxTotalTokens: 0, maxTurns } });
+      research: { maxRunSeconds: 900, maxTotalTokens: 2_000_000, maxTurns: 20 } })).toEqual({ maxRunSeconds: 0, maxTotalTokens: 0,
+      research: { maxRunSeconds: 0, maxTotalTokens: 0, maxTurns } });
     expect(webFormalizationDefaults).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, research: { maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 } });
   });
   it('does not imply unlimited capacity when no quota exists, and clamps exhausted capacity to zero', () => {
