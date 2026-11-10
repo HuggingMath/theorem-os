@@ -648,6 +648,7 @@ export class CooperativeResearch extends CooperationInputs {
       this.changed(); return { kind: 'review', seedCommit: review.commit, sourceDigest: review.sourceDigest,
         assignmentId: review.assignmentId };
     }
+    this.refreshConnectionCheckpoints();
     const ranked = this.input.modules.M3.ready(this.archive.tasks, this.archive.groups);
     const ready = ranked.filter(node => !this.taskDispatchBlock(node));
     this.releaseStoppedAssignments(ready, worker);

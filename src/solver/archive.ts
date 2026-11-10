@@ -236,6 +236,8 @@ const taskRecord = z.object({ task, status: z.enum(['pending', 'running', 'block
   pendingValidation: z.object({ id: z.string().min(1), taskDigest: z.string().min(1), canonicalCommit: z.string().min(1),
     environmentDigest: z.string().min(1), problemReceiptDigest: z.string().min(1), proof: z.boolean().optional() }).optional(),
   researchCompletion: researchRecordSchema.optional(),
+  connectionCheckpoint: z.object({ basisDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    inputDigest: z.string().regex(/^[a-f0-9]{64}$/u), outputDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().optional(),
   attempts: count, proof: check.optional(), integratedCheck: check.optional(), assignment: z.object({ taskId: z.string(),
     taskDigest: z.string(), workerId: z.string(), seedCommit: z.string(), assignmentId: z.string().optional(),
     connectionCheck: connectionCheck.optional(), researchBasis: researchBasisSchema.optional(),

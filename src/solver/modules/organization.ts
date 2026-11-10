@@ -1,4 +1,4 @@
-import { originalGoalTaskFocus, plannedTaskDependencyIds, readyResearchTasks, taskDependenciesReady } from './search';
+import { originalGoalTaskFocus, plannedTaskDependencyIds, readyResearchTasks, taskDependenciesReady, taskDependencyRecords } from './search';
 import { checkedUnconditionally, isAdvisoryTask, isFeasibilityReview, taskGroup, taskVersion,
   type CooperativeTask, type RouteGroup, type TaskRecord, type RouteRecord } from '../tasks';
 import { hasRunningDuplicateQuestion } from '../taskQuestions';
@@ -111,6 +111,14 @@ export function assignSharedResearchTask(ready: readonly TaskRecord[], worker: R
   const connection = (node: TaskRecord) => node.assignment
     ? taskConnectionCheckCurrent(node.task, node.assignment, tasks) : freshTaskConnection(node, tasks, groups);
   if (first.task.kind === 'goal' && !connection(first) || !first.attempts && isFeasibilityReview(first.task)) return first;
+  if (first.connectionCheckpoint && first.connectionCheckpoint.basisDigest === first.assignment?.connectionCheck?.basisDigest &&
+      connection(first)) {
+    const inputs = new Set(taskDependencyRecords(first.task, tasks));
+    const priority = createProofRoutePriority(tasks, { groups });
+    const input = eligible.find(node => inputs.has(node) && !isAdvisoryTask(node.task) && node.task.type?.trim() &&
+      taskDependenciesReady(node.task, tasks) && priority.compareTasks(node, first) <= 0);
+    if (input) return input;
+  }
   const proofWorkers = new Set(live.filter(peer => ['researcher', 'prover', 'engineer'].includes(peer.role)).map(peer => peer.id));
   const running = tasks.filter(node => node.status === 'running' && node.assignment &&
     node.assignment.taskId === node.task.id && node.assignment.taskDigest === taskVersion(node.task) &&

@@ -222,6 +222,7 @@ export function knowledgeContextSections(input: {
       candidateLimit: displayLimit, poolLimit, omittedForBytes: 0, candidates,
       ...(residualCoverage ? { residualCoverage, residualSearches: residualDetails } : {}),
       routeFindings };
+    const rankedCandidates = [...candidates];
     let text = title + JSON.stringify(packet);
     while (Buffer.byteLength(text) > maxSectionBytes && residualDetails.length) {
       residualDetails.pop(); residualCoverage!.omittedDetailsForBytes++;
@@ -233,6 +234,17 @@ export function knowledgeContextSections(input: {
     }
     while (Buffer.byteLength(text) > maxSectionBytes && routeFindings.length) {
       routeFindings.pop(); text = title + JSON.stringify(packet);
+    }
+    // Trimming findings can release room after candidates were removed. Refill the ranked
+    // prefix without dropping any of the retained evidence to make candidates fit.
+    for (const candidate of rankedCandidates.slice(candidates.length)) {
+      candidates.push(candidate); packet.omittedForBytes--;
+      const refilledText = title + JSON.stringify(packet);
+      if (Buffer.byteLength(refilledText) > maxSectionBytes) {
+        candidates.pop(); packet.omittedForBytes++;
+        break;
+      }
+      text = refilledText;
     }
     const sectionId = `knowledge:${inputDigest}`;
     const sections: (ContextSection & { knowledge: KnowledgeRetrieval })[] = Buffer.byteLength(text) <= maxSectionBytes

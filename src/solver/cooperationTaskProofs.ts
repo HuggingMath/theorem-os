@@ -81,7 +81,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (this.checkpointOutputDigests.size > 256) this.checkpointOutputDigests.delete(this.checkpointOutputDigests.keys().next().value!);
     return value;
   }
-  private checkpointOutputAdvanced(worker: ResearchWorker, node: TaskRecord, checkpoint: ResearchCheckpoint) {
+  private checkpointOutputAdvanced(worker: ResearchWorker, node: TaskRecord,
+    checkpoint: Pick<ResearchCheckpoint, 'taskDigest' | 'outputDigest'>) {
     const draft = this.archive.researchDrafts?.[node.task.id], assignment = node.assignment;
     // The retained commit supplies the component identities missing from older checkpoint records.
     // A worktree released for another responsibility is not this task's new output.
@@ -350,14 +351,37 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   retainContextDraft(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string,
     reason: 'context' | 'connection' = 'context') {
     if (!this.current(action)) return;
+    const previous = this.archive.researchDrafts?.[action.task.id], assignment = action.assignment;
+    const previousOutput = previous?.taskDigest === assignment.taskDigest && previous.workerId === worker.id &&
+      previous.assignmentId === assignment.assignmentId && previous.seedCommit === assignment.seedCommit &&
+      previous.canonicalCommit === assignment.canonicalCommit ? previous.outputDigest :
+        this.checkpointOutputDigest(worker.worktree, assignment.seedCommit);
     const artifacts = captureDeliveryArtifacts({ problem: this.input.state.problem,
       worktree: worker.worktree, commit, assignment: action.assignment });
     this.preserveResearchDraft(worker, action, commit, artifacts);
+    const node = this.node(action.task.id), outputDigest = this.archive.researchDrafts![action.task.id].outputDigest;
+    node.connectionCheckpoint = reason === 'connection' && assignment.connectionCheck && previousOutput === outputDigest
+      ? { basisDigest: assignment.connectionCheck.basisDigest,
+        inputDigest: this.checkpointInputDigest(action.task, worker.id), outputDigest } : undefined;
     if (!artifacts.artifacts.length || this.archive.deliveries?.some(record => record.producer === worker.id &&
         record.taskId === action.task.id && record.taskDigest === action.assignment.taskDigest && record.commit === commit)) return;
     this.record(worker, action.task, 'progress', 'advisory',
       `Supporting code saved at a ${reason} checkpoint. Inspect the retained commit and exact declarations before adopting typed work; the assigned proof remains unfinished.`,
       { commit, artifacts, remainingObligations: [action.task.id] });
+  }
+  /** New mathematical inputs or durable owned output earn another connection attempt. */
+  protected refreshConnectionCheckpoints() {
+    for (const node of this.archive.tasks) {
+      const checkpoint = node.connectionCheckpoint, assignment = node.assignment;
+      if (!checkpoint || node.status !== 'pending') continue;
+      const worker = this.input.workers.find(worker => worker.id === assignment?.workerId);
+      if (!worker || !assignment || checkpoint.basisDigest !== assignment.connectionCheck?.basisDigest ||
+          !taskConnectionCheckCurrent(node.task, assignment, this.archive.tasks,
+            { environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest }) ||
+          checkpoint.inputDigest !== this.checkpointInputDigest(node.task, worker.id) ||
+          this.checkpointOutputAdvanced(worker, node, { taskDigest: assignment.taskDigest, outputDigest: checkpoint.outputDigest }))
+        node.connectionCheckpoint = undefined;
+    }
   }
   protected suspendResearchDrafts(worker: ResearchWorker, taskId?: string) {
     let changed = false;

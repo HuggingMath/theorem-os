@@ -1411,6 +1411,93 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  function connectionChain() {
+    const run = fixture(), { state, problem } = run;
+    state.cooperation!.tasks.find(node => node.task.id === 'investigate')!.task.status = 'paused';
+    const goal = state.cooperation!.tasks.find(node => node.task.kind === 'goal')!;
+    goal.task = { ...goal.task, status: 'active', conditional: false, dependsOn: ['connection_consumer'] };
+    const plan = parseCooperationPlan(problem, { tasks: [
+      ...state.cooperation!.tasks.map(node => node.task),
+      { id: 'connection_consumer', kind: 'lemma', conditional: true, ownerId: 'researcher',
+        objective: 'Construct the conditional application.', dependsOn: ['connection_bridge'],
+        theoremName: 'connection_consumer', type: 'True', proofPath: problem.targets[0].proofPath },
+      { id: 'connection_bridge', kind: 'lemma', ownerId: 'solver', objective: 'Connect the leaf to the consumer.',
+        dependsOn: ['connection_leaf'], theoremName: 'connection_bridge', type: 'True', proofPath: problem.targets[0].proofPath },
+      { id: 'connection_leaf', kind: 'lemma', ownerId: 'researcher', objective: 'Prove the runnable upstream input.',
+        theoremName: 'connection_leaf', type: 'True', proofPath: problem.targets[0].proofPath },
+    ] });
+    state.cooperation!.tasks.push(...plan.tasks.filter(task => task.id.startsWith('connection_'))
+      .map(task => ({ task, status: 'pending' as const, attempts: 0 })));
+    return run;
+  }
+
+  it('lets an unchanged connection checkpoint dispatch its owned transitive leaf with the consumer draft retained', async () => {
+    const { state, workers, problem, check, controller, events, run } = connectionChain();
+    const held = heldAdvisoryTurns(3, ['connection_consumer', 'connection_leaf']);
+    const completion = run(held.open, 3); void completion.catch(() => {});
+    await held.wait(0, completion);
+    expect(held.actions[0].task.id).toBe('connection_consumer');
+    const notes = 'Saved the conditional application; the upstream finite argument is still missing.\n';
+    fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
+    fs.appendFileSync(path.join(workers[1].worktree, problem.projectRelative, problem.targets[0].proofPath),
+      '\n-- Partial consumer derivation retained across the upstream task.\n');
+    await vi.advanceTimersByTimeAsync(120_000);
+    await held.wait(1, completion);
+    expect(held.actions[1].task.id).toBe('connection_consumer');
+    const consumer = state.cooperation!.tasks.find(node => node.task.id === 'connection_consumer')!;
+    expect(consumer.connectionCheckpoint).toBeUndefined(); // Fresh durable output earns another turn.
+    const assignment = consumer.assignment;
+    await vi.advanceTimersByTimeAsync(120_000);
+    await held.wait(2, completion);
+    expect(held.actions[2].task.id).toBe('connection_leaf');
+    const draft = state.cooperation!.researchDrafts!.connection_consumer;
+    expect(draft.suspended).toBe(true);
+    expect(committedSource(workers[1].worktree, draft.commit, 'RESEARCH.md')).toBe(notes);
+    expect(committedSource(workers[1].worktree, draft.commit, `${problem.projectRelative}/${problem.targets[0].proofPath}`))
+      .toContain('Partial consumer derivation retained');
+    expect(consumer.assignment).toBe(assignment);
+    expect(consumer.connectionCheckpoint?.outputDigest).toBe(draft.outputDigest);
+    expect(events.filter(event => event.event === 'connection_checkpoint_saved')).toHaveLength(2);
+    const saved = path.join(directory, 'connection-yield.json');
+    writeSolverRunState(saved, state);
+    expect(readSolverRunState(saved).cooperation!.tasks.find(node => node.task.id === consumer.task.id)?.connectionCheckpoint)
+      .toEqual(consumer.connectionCheckpoint);
+    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+    expect(check).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['unchanged', 'new-input', 'new-output'] as const)(
+    'restores a saved connection checkpoint and dispatches after %s', async change => {
+      const { state, workers, check, controller, run } = connectionChain();
+      const held = heldAdvisoryTurns(2, ['connection_consumer', 'connection_leaf']);
+      const first = run(held.open, 1); void first.catch(() => {});
+      await held.wait(0, first);
+      await vi.advanceTimersByTimeAsync(120_000); await first;
+      const consumer = state.cooperation!.tasks.find(node => node.task.id === 'connection_consumer')!;
+      expect(consumer.connectionCheckpoint).toBeDefined();
+      if (change === 'new-input') {
+        // Relevant evidence can change without changing a task's statement or connection identity.
+        state.cooperation!.tasks.find(node => node.task.id === 'connection_leaf')!.finding = 'A new finite recurrence is available.';
+        // Persist it as a source-bound canonical input, like newly integrated supporting code.
+        const file = path.join(workers[0].worktree, state.problem.projectRelative, state.problem.targets[0].proofPath);
+        fs.appendFileSync(file, '\n-- New canonical finite-recurrence source.\n');
+        state.cooperation!.canonicalCommit = commitSolverSources(state.problem, workers[0].worktree);
+      }
+      if (change === 'new-output') {
+        fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), 'A newly saved conditional derivation.\n');
+        commitSolverSources(state.problem, workers[1].worktree);
+      }
+      const saved = path.join(directory, 'restored-connection-yield.json');
+      writeSolverRunState(saved, state); Object.assign(state, readSolverRunState(saved));
+      const second = run(held.open, 2); void second.catch(() => {});
+      await held.wait(1, second);
+      expect(held.actions[1].task.id).toBe(change === 'unchanged' ? 'connection_leaf' : 'connection_consumer');
+      if (change !== 'unchanged') expect(state.cooperation!.tasks.find(node => node.task.id === consumer.task.id)?.connectionCheckpoint)
+        .toBeUndefined();
+      controller.abort(new Error('fixture_complete')); await expect(second).rejects.toThrow('fixture_complete');
+      expect(check).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+    });
+
   it('suppresses a stale reminder after the Lead publishes its first graph without interrupting peers', async () => {
     const { state, check, controller, run, pulse } = fixture(true);
     const leadStarted = deferred(), engineerStarted = deferred();

@@ -422,6 +422,40 @@ describe('automatic knowledge context', () => {
       'privateDependencyMarker', 'historical-receipt-marker', '/archive/run-state.json']) expect(result).not.toContain(hidden);
   });
 
+  it.each(['x'.repeat(1200), '界'.repeat(400)])('refills ranked candidates after long findings are trimmed, preserving negative evidence (%#)', padding => {
+    const knowledge = snapshot(saved, entry('Archived.character_alternate'), entry('Archived.character_transport'));
+    const finding = 'The archived boundary case refutes this route under its recorded assumptions.', notes = 'Full historical notes.';
+    knowledge.base.routeFindings = buildKnowledgeRouteFindings([0, 1].map(index => ({
+      evidence: 'recorded-advisory-not-replayed', acceptance: 'not-assessed', conclusion: 'refuted',
+      summary: `The boundary hypothesis is missing (${index}). ${padding}`, finding, notes,
+      scope: { problemId: 'previous-problem', problemReceiptDigest: problem.receiptDigest, environmentDigest,
+        source: { kind: 'research', statement: `Challenge the character bridge ${index}.`, statementKind: 'research-objective', premises: [] },
+        dependencies: [{ kind: 'lemma', statement: exactType, statementKind: 'closed-task-type', premises: [] }] },
+      evidenceRefs: ['RESEARCH.md: boundary case'], obstructions: [], remainingObligations: ['Check the missing hypothesis.'],
+      reconsiderWhen: ['The boundary assumption changes.'], provenance: { source: '/archive/state.json',
+        sourceDigest: mathDigest('archived-state'), runId: 'old-run', taskId: `old-question-${index}`, taskDigest: mathDigest(`old-task-${index}`),
+        groupId: 'main', deliveryId: `old-delivery-${index}`, sourceCommit: seedCommit, findingDigest: mathDigest(finding), notesDigest: mathDigest(notes) },
+    })));
+    const record = node('core'), before = structuredClone(knowledge);
+    const [candidateOnly] = sections(record, { ...knowledge, base: { ...knowledge.base, routeFindings: [] } });
+    const [findingsOnly] = sections(record, { ...knowledge, base: { ...knowledge.base, entries: [] } });
+    const [result] = sections(record, knowledge), value = packet(result!.text);
+    const ranking = packet(candidateOnly!.text).candidates.map((candidate: { id: string }) => candidate.id);
+    expect(ranking).toHaveLength(3);
+    expect(value.candidates.length).toBeGreaterThan(0);
+    expect(value.candidates.length).toBeLessThan(3);
+    expect(value.candidates.map((candidate: { id: string }) => candidate.id)).toEqual(ranking.slice(0, value.candidates.length));
+    expect(value.omittedForBytes).toBe(3 - value.candidates.length);
+    expect(value.routeFindings).toEqual(packet(findingsOnly!.text).routeFindings);
+    expect(value.routeFindings).toHaveLength(1);
+    expect(value.routeFindings[0]).toMatchObject({ conclusion: 'refuted', statementMatch: 'exact-recorded-text', requiresScopeReview: true });
+    expect(result!.knowledge).toMatchObject({ searchCandidateIds: candidateOnly!.knowledge.searchCandidateIds,
+      candidateIds: value.candidates.map((candidate: { id: string }) => candidate.id),
+      routeFindingIds: value.routeFindings.map((item: { id: string }) => item.id) });
+    expect(Buffer.byteLength(result!.text)).toBeLessThanOrEqual(4096);
+    expect(knowledge).toEqual(before);
+  });
+
   it('keeps whole candidate identities and usable previews under a UTF-8 byte budget', () => {
     const longType = 'forall (character : DirichletCharacter Complex 7), ' + '\u03b1'.repeat(900);
     const entries = Array.from({ length: 5 }, (_, index) => entry(`Archived.character_candidate_${index}`, longType));
