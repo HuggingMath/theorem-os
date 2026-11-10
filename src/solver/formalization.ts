@@ -427,6 +427,9 @@ export async function runFormalization(directory: string, root: string, options:
             'This request uses only the Lean standard library. Installed Lean sources are in /opt/lean/src/lean; Mathlib is unavailable and /opt/lean-packages is not mounted.' :
             'Installed Lean sources are in /opt/lean/src/lean; pinned Mathlib and dependencies are in /opt/lean-packages (Mathlib: /opt/lean-packages/mathlib/Mathlib).',
           'Use lean directly to inspect declarations when necessary; LEAN_PATH is already configured. The installed library cache is read-only and does not need Lake setup.',
+          ...(direct && role === 'generate' ? [
+            'For a specific unresolved library API, batch related lookups in one command: /usr/bin/python3 /opt/formalization/library-api.py --name Nat.add_zero --name Nat.succ --query Fin.cast --limit 4. Names are exact and case-sensitive; queries match literal name fragments case-insensitively. The tool uses one pinned Lean process and returns actual closed types, defining modules, class/structure status and direct field projection types. Missing exact names are explicit; query truncation is explicit. It returns no declaration bodies or proofs. Use the returned module as the import location; do not guess import paths. Treat results as library observations, not evidence of mathematical fidelity or proof acceptance.',
+          ] : []),
           'Use these exact library paths when needed. Other tasks, benchmark answers and prior sessions are unavailable.',
           ...(role === 'refute' ? [] : ['This is statement formalization. Do not search for or construct theorem proofs during planning, generation or semantic review.']),
           ...(request.fidelityPolicy && role === 'plan' ? [

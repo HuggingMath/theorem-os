@@ -318,9 +318,10 @@ describe('Lean exact-name metadata in formalization generation', () => {
       expect(generated.input.retrieval).not.toHaveProperty('librarySymbolQueries');
     } else {
       expect(f.request).not.toHaveProperty('retrieval'); expect(generated.input).not.toHaveProperty('retrieval');
-      // Re-pinned when generation learned to keep the source's own claim shape
-      // (explicit equation with its witness, no bundled library relation).
-      expect(mathDigest(generated.config.instructions)).toBe('0b47d9c571654b78f9009d810546e3abd7c0275a0f9f1a3f755022725b879ac8');
+      // Clean 17f964c already includes e9f7a14's same-directory atomic-output
+      // guidance; adding the direct lookup tool must preserve these bytes.
+      expect(generated.config.instructions).not.toContain('/opt/formalization/library-api.py');
+      expect(mathDigest(generated.config.instructions)).toBe('3faf193a9f5736f8d525bac1f5098745ce5d4b66eec52233a18c81e3ed0a4211');
     }
   });
 });

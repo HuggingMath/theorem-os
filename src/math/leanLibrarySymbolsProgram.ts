@@ -9,6 +9,12 @@ export function leanLibrarySymbolCommands(names: readonly string[], environment:
   getLeanTaskEnvironment(environment);
   if (names.some(name => typeof name !== 'string' || !name.length || Buffer.from(name, 'utf8').toString('utf8') !== name))
     throw new Error('lean_library_symbols_names_invalid');
+  return symbolProgram(environment,
+    [`  let requested : List String := [${names.map(value => leanString(value, environment)).join(', ')}]`],
+    '  Lean.Core.liftIOCore <| IO.FS.writeFile ".lake/library-symbols.json" (Lean.toJson reports).compress');
+}
+
+function symbolProgram(environment: LeanTaskEnvironment, requested: string[], result: string): string {
   return [
     'import Lean', ...(environment === 'standard' ? [] : ['import Mathlib']),
     'set_option pp.all true', 'set_option pp.fullNames true', 'set_option pp.explicit true',
@@ -26,7 +32,7 @@ export function leanLibrarySymbolCommands(names: readonly string[], environment:
     '      throwError "Library symbol type export is incomplete"',
     '    pure result',
     '  let env <- Lean.getEnv', '  let mut reports : Array Lean.Json := #[]',
-    `  let requested : List String := [${names.map(value => leanString(value, environment)).join(', ')}]`,
+    ...requested,
     '  for requestedName in requested do',
     '    let name := requestedName.toName',
     '    match env.find? name with',
@@ -50,6 +56,42 @@ export function leanLibrarySymbolCommands(names: readonly string[], environment:
     '      reports := reports.push (Lean.Json.mkObj [("name", Lean.toJson requestedName), ("exists", Lean.toJson true),',
     '        ("module", Lean.toJson moduleName), ("kind", Lean.toJson kind), ("class", Lean.toJson (Lean.isClass env name)),',
     '        ("structure", Lean.toJson (Lean.getStructureInfo? env name).isSome), ("type", Lean.toJson type), ("fields", Lean.toJson fields)])',
-    '  Lean.Core.liftIOCore <| IO.FS.writeFile ".lake/library-symbols.json" (Lean.toJson reports).compress',
+    result,
   ].join('\n') + '\n';
+}
+
+/** Role-local discovery and type inspection, using only the installed Lean environment. */
+export function leanLibraryApiProgram(environment: LeanTaskEnvironment): string {
+  const config = getLeanTaskEnvironment(environment);
+  return symbolProgram(environment, [
+    '  let text <- Lean.Core.liftIOCore <| IO.FS.readFile ".lake/library-api-query.json"',
+    '  let .ok input := Lean.Json.parse text | throwError "Invalid library API query JSON"',
+    '  let .ok names := input.getObjValAs? (Array String) "names" | throwError "Invalid library API names"',
+    '  let .ok queries := input.getObjValAs? (Array String) "queries" | throwError "Invalid library API queries"',
+    '  let .ok limit := input.getObjValAs? Nat "limit" | throwError "Invalid library API limit"',
+    '  let mut requested := names.toList',
+    '  let mut searches : Array Lean.Json := #[]',
+    '  for query in queries do',
+    '    let term := query.toLower',
+    '    let foundNames := env.constants.fold (init := #[]) fun found name _ =>',
+    '      if (name.toString.toLower.splitOn term).length > 1 then found.push name.toString else found',
+    '    let sorted := foundNames.qsort fun a b =>',
+    '      if (a.toLower == term) != (b.toLower == term) then a.toLower == term',
+    '      else if a.length != b.length then a.length < b.length else a < b',
+    '    let selected := sorted.toList.take limit',
+    '    for name in selected do',
+    '      if !requested.contains name then requested := requested ++ [name]',
+    '    searches := searches.push (Lean.Json.mkObj [("query", Lean.toJson query),',
+    '      ("totalMatches", Lean.toJson foundNames.size), ("truncated", Lean.toJson (decide (foundNames.size > limit))),',
+    '      ("names", Lean.toJson selected)])',
+  ], [
+    '  let result := Lean.Json.mkObj [("schema", Lean.toJson "theorem-os.library-api.v1"),',
+    '    ("authority", Lean.toJson "advisory-lean-process"),',
+    `    ("environment", Lean.toJson ${leanString(environment, environment)}),`,
+    `    ("toolchain", Lean.toJson ${leanString(config.toolchain, environment)}),`,
+    `    ("environmentDigest", Lean.toJson ${leanString(config.dependencyDigest, environment)}),`,
+    `    ("mathlibRevision", ${config.mathlibRevision ? 'Lean.toJson ' + leanString(config.mathlibRevision, environment) : 'Lean.Json.null'}),`,
+    '    ("queries", Lean.toJson searches), ("symbols", Lean.toJson reports)]',
+    '  Lean.Core.liftIOCore <| IO.FS.writeFile ".lake/library-api.json" result.compress',
+  ].join('\n'));
 }
