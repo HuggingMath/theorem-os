@@ -77,7 +77,7 @@ function responseUsageObserver(streaming: boolean) {
       ...(!complete ? { missingReason: limited ? 'unknown' : invalid ? 'provider-usage-invalid' :
         failure ?? (terminal ? 'provider-usage-missing' : 'response-not-terminal') } : {}) };
   };
-  return { accept, finish };
+  return { accept, finish, get terminal() { return terminal; } };
 }
 
 class RelayError extends Error {
@@ -411,11 +411,16 @@ export async function startFormalizationRelay(input: {
       while (true) {
         const chunk = await reader.read();
         if (!chunk.done) observer.accept(chunk.value);
-        for (const data of filter(chunk.done ? undefined : chunk.value)) {
+        const forwarded = filter(chunk.done ? undefined : chunk.value);
+        // A Responses terminal event ends generation even if the provider keeps its
+        // HTTP stream open. Flush the redactor's tail so Codex sees that full event,
+        // then settle its usage and cancel the completed transport in finally.
+        if (!chunk.done && observer.terminal) forwarded.push(...filter(undefined));
+        for (const data of forwarded) {
           if (response.destroyed || controller.signal.aborted) throw new Error();
           if (!response.write(data)) await once(response, 'drain', { signal: controller.signal });
         }
-        if (chunk.done) break;
+        if (chunk.done || observer.terminal) break;
       }
       response.end();
     } catch (cause) {
