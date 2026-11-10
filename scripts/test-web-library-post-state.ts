@@ -77,6 +77,11 @@ async function snapshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: true });
   await page.screenshot({ path: path.join(output, `${name}-viewport.png`), fullPage: false });
 }
+async function selectEnvironment(page: Page, value: string) {
+  const filters = page.locator('.research-library-filters');
+  if (!await filters.evaluate(node => (node as HTMLDetailsElement).open)) await filters.locator(':scope > summary').click();
+  await page.locator('[data-library-environment]').selectOption(value);
+}
 async function state(page: Page) {
   return page.evaluate(() => ({ url: location.href, body: document.body.innerText,
     target: (document.querySelector('[data-library-trial] select') as HTMLSelectElement)?.value,
@@ -139,7 +144,7 @@ try {
     assert.equal(new URL(recommendationHref!, origin).searchParams.get('version'), 'v1');
     assert.equal(compatibleControl, 1);
     await snapshot(page, `compatible-history-recommended-${language}`);
-    await page.locator('.research-directory-grid').screenshot({ path: path.join(output, `compatible-history-recommended-${language}-detail.png`) });
+    await page.locator('div.research-directory-grid').screenshot({ path: path.join(output, `compatible-history-recommended-${language}-detail.png`) });
     await recommendation.locator('.research-card-heading').click();
     await page.getByRole('heading', { name: migrated.name, exact: true }).waitFor();
     const releaseSelect = page.getByRole('combobox', { name: tx('查看固定版本', 'View a fixed version'), exact: true });
@@ -153,14 +158,14 @@ try {
     await snapshot(page, `recommended-release-exact-target-${language}`);
     await trialSelect.selectOption(recommendedDetail.target!);
     await page.locator('.research-breadcrumb a').click();
-    await page.locator('[data-library-environment]').selectOption('');
+    await selectEnvironment(page, '');
     const allEnvironments = page.locator('.research-directory-card').filter({ hasText: migrated.name }).locator('.research-card-heading');
     await page.waitForFunction(id => {
       const item = [...document.querySelectorAll<HTMLAnchorElement>('.research-directory-card .research-card-heading')].find(item => item.href.includes(id));
       return item && new URL(item.href).searchParams.get('version') === 'v2';
     }, migrated.id);
     assert.equal(new URL((await allEnvironments.getAttribute('href'))!, origin).searchParams.get('version'), 'v2');
-    await page.locator('[data-library-environment]').selectOption('target');
+    await selectEnvironment(page, 'target');
     await page.locator('.research-directory-card').filter({ hasText: migrated.name }).locator('[data-library-recommended-release="v1"]').waitFor();
     const currentMigrated = fixtures.get(author, migrated.id);
     fixtures.withdraw(author, migrated.id, { requestId: `withdraw-old-${language}`, expectedRevision: currentMigrated.revision, version: 'v1' });
