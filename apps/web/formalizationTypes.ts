@@ -3,7 +3,7 @@ import type { LeanStatementContextProtocol } from '../../src/math/leanStatementS
 import type { FormalizationAuditResult } from '../../src/math/formalizationAuditProtocol';
 
 export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 2_000_000,
-  maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 1, recordsPerOwner: 20 });
+  maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 2, recordsPerOwner: 20 });
 /** Each 0 means unlimited. Execution time includes planning/revisions and excludes human approval waits. */
 export type WebResearchBudget = { maxRunSeconds: number; maxTurns: number; maxTotalTokens: number };
 export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 0, maxTotalTokens: 0,
@@ -20,6 +20,8 @@ export type WebFormalization = {
   status: 'queued' | 'running' | 'review' | 'confirmed' | 'exhausted' | 'cancelled' | 'error';
   createdAt: string; updatedAt: string; finishedAt?: string; confirmedAt?: string; reason?: string;
   progress?: WebFormalizationProgress; report?: WebFormalizationReport;
+  /** Live waiting position, projected on reads; never persisted as execution authority. */
+  queue?: { position: number; ahead: number; running: number; slots: number };
   /** How many process records are stored (read them from /activity) and how many arrived past the limit. */
   activity?: { count: number; dropped?: number };
   /** Authorizes proof research after formalization, with an optional manual statement and plan review. */
