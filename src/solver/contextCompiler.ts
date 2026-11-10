@@ -414,6 +414,16 @@ export function leadResearchInputSection(input: Pick<TaskContextInput, 'cooperat
     });
 }
 
+/** A continued Lead turn must receive the same current host rejection as a fresh turn. */
+export function leadPlanRejectionSection(input: Pick<TaskContextInput, 'action' | 'cooperation' | 'problem'>) {
+  if (input.action?.kind !== 'lead' || !input.cooperation?.error) return;
+  return section('plan-rejection', 'feedback',
+    'Host rejected the proposed plan. Repair this error while preserving every exact original target:', {
+      error: input.cooperation.error, rejection: input.cooperation.planRejection,
+      originalTargets: input.problem.targets.map(({ proofPath, theoremName }) => ({ proofPath, theoremName })),
+    });
+}
+
 function deliveryMatchesFinding(record: DeliveryRecord, node?: TaskRecord): boolean {
   if (record.kind !== 'research' || !node || !present(node.finding)) return false;
   return record.findingDigest === undefined ? record.summary === node.finding : record.findingDigest === mathDigest(node.finding);
@@ -597,11 +607,8 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     const checkpointFeedback = contextCheckpointRejectionFeedback(input.cooperation.contextCheckpointRejection,
       action?.kind === 'task' ? assignmentDeliveryFile(action.assignment) : action && leadPlanDeliveryFile(action));
     if (checkpointFeedback) mandatory.push({ id: 'context-checkpoint-rejection', kind: 'feedback', text: checkpointFeedback });
-    if (action?.kind === 'lead' && input.cooperation.error) mandatory.push(section('plan-rejection', 'feedback',
-      'Host rejected the proposed plan. Repair this error while preserving every exact original target:', {
-        error: input.cooperation.error, rejection: input.cooperation.planRejection,
-        originalTargets: problem.targets.map(({ proofPath, theoremName }) => ({ proofPath, theoremName })),
-      }));
+    const planRejection = leadPlanRejectionSection(input);
+    if (planRejection) mandatory.push(planRejection);
     const visibleGroups = new Set(tasks.map(node => taskGroup(node.task)));
     mandatory.push(section('groups', 'groups', 'Route groups and budgets:',
       input.cooperation.groups?.filter(route => action?.kind !== 'task' || visibleGroups.has(route.group.id)) ?? []));

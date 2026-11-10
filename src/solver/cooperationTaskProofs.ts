@@ -1,4 +1,4 @@
-import { isAdvisoryTask as advisory } from './tasks';
+import { isAdvisoryTask as advisory, isFeasibilityReview } from './tasks';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -19,7 +19,7 @@ import { validateLemmaRequests } from './taskProposals';
 import { routeBlockerBasis, type BlockerBasis } from './routeControl';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { checkpointCandidate } from './researchEvidence';
-import { committedResearchNotesDigest, researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
+import { committedResearchNotesDigest, feasibilityReviewInputDigest, researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
   researchHandoffNotesDigest, UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
 import { savedContextCheckpoint } from './contextCheckpoint';
 import { inspectKnowledgeUses, type KnowledgeUse } from './knowledgeUsage';
@@ -56,6 +56,13 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   protected pendingProofDeliveryRecords = new WeakSet<DeliveryRecord>();
   abstract interrupted(worker: ResearchWorker, action: CooperativeAction): void;
   abstract rejected(action: CooperativeAction, feedback: string, commit?: string, incomplete?: boolean): void;
+  protected feasibilityInputDigest(task: CooperativeTask, workerId: string) {
+    const state = this.input.state;
+    return feasibilityReviewInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
+      problem: state.problem, environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest,
+      retrievalDigest: state.retrievalDigest, knowledgeDigest: state.knowledgeDigest,
+      worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit! });
+  }
   private checkpointInputDigest(task: CooperativeTask, workerId: string) {
     return researchCheckpointInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
       environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest,
@@ -335,7 +342,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     (this.archive.researchDrafts ??= {})[action.task.id] = { taskDigest: action.assignment.taskDigest,
       workerId: worker.id, assignmentId: action.assignment.assignmentId,
       seedCommit: action.assignment.seedCommit, canonicalCommit: action.assignment.canonicalCommit,
-      commit, outputDigest: this.checkpointOutputDigest(worker.worktree, commit), artifacts, handoffNotesDigest };
+      commit, outputDigest: this.checkpointOutputDigest(worker.worktree, commit), artifacts, handoffNotesDigest,
+      ...(isFeasibilityReview(action.task) ? { feasibilityInputDigest: assignment.feasibilityInputDigest } : {}) };
     this.pin(commit);
   }
   /** A scheduling handoff retains code without submitting an unfinished assigned declaration. */
@@ -359,6 +367,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (changed) this.input.save();
   }
   protected researchWorkspaceChanged(worker: ResearchWorker, node: TaskRecord) {
+    if (isFeasibilityReview(node.task) && node.assignment?.feasibilityInputDigest !==
+        this.feasibilityInputDigest(node.task, worker.id)) return true;
     const session = this.input.state.workers?.find(record => record.id === worker.id);
     if (session?.sessionTaskId && (session.sessionTaskId !== node.task.id ||
         session.sessionTaskVersion && session.sessionTaskVersion !== digest(node.task))) return true;
@@ -470,11 +480,26 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (!draft || assignment.workerId !== worker.id) return false;
     const problem = this.input.state.problem;
     try {
+      if (isFeasibilityReview(node.task) && (!draft.feasibilityInputDigest ||
+          draft.feasibilityInputDigest !== assignment.feasibilityInputDigest ||
+          draft.feasibilityInputDigest !== this.feasibilityInputDigest(node.task, worker.id))) {
+        draft.suspended = true;
+        this.input.emit('research_draft_restore_failed', { taskId: node.task.id,
+          reason: 'math_feasibility_draft_input_changed' });
+        this.input.save();
+        return false;
+      }
       const saved = await this.inspectResearchDraft(node, assignment, draft);
       if (!saved || !this.archive.tasks.includes(node) || node.assignment !== assignment || digest(node.task) !== draft.taskDigest ||
           node.status !== 'pending' || assignment.workerId !== worker.id || node.task.ownerId && node.task.ownerId !== worker.id ||
           !independentFeasibilityWorker(node, worker, this.archive.tasks, this.archive.groups) ||
           !taskCanStart(node.task, this.archive.tasks, this.archive.groups) || !routeAllowsTask(node.task, this.archive.tasks, this.archive.groups)) return false;
+      // Snapshot inspection yields; input changes during it still require a fresh review.
+      if (isFeasibilityReview(node.task) && draft.feasibilityInputDigest !== this.feasibilityInputDigest(node.task, worker.id)) {
+        draft.suspended = true;
+        this.input.save();
+        return false;
+      }
       const canonicalChanged = ownedSourceDigest(problem, this.lead.worktree, this.archive.canonicalCommit!) !== saved.canonicalSourceDigest;
       this.suspendResearchDrafts(worker, node.task.id);
       if (canonicalChanged) {
@@ -514,6 +539,15 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     }
   }
   protected async researchCheckpoint(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string) {
+    if (isFeasibilityReview(action.task) && !this.node(action.task.id).nextCheckId) {
+      // A saved independent review is only a handoff, even if its notes contain a provisional result.
+      // Do not publish it, complete the review or apply ordinary research stagnation parking.
+      // Host-scoped next checks retain their explicit partial-finding/outcome protocol below.
+      this.input.emit('feasibility_review_checkpoint_saved', { taskId: action.task.id, workerId: worker.id,
+        commit, inputDigest: action.assignment.feasibilityInputDigest, acceptance: 'not-assessed' });
+      this.interrupted(worker, action);
+      return;
+    }
     const node = this.node(action.task.id), taskDigest = digest(node.task);
     const inputDigest = this.checkpointInputDigest(node.task, worker.id), outputDigest = this.checkpointOutputDigest(worker.worktree, commit);
     const localInputDigest = this.checkpointLocalInputDigest(node.task, worker.id);
@@ -687,7 +721,10 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   }
   protected sourceGoalInputs(task: CooperativeTask, tasks: readonly TaskRecord[], worktree: string, commit: string,
     conditions: readonly CooperativeTask[] = []) {
-    try { return projectedGoalInputs(this.sourceProjector(worktree, commit), task, tasks, conditions); }
+    try { return projectedGoalInputs(this.sourceProjector(worktree, commit), task, tasks, conditions, (sourceTask, error) => {
+      if (sourceTask.id !== task.id) this.input.emit('task_source_input_unavailable', { taskId: task.id,
+        sourceTaskId: sourceTask.id, commit, reason: bounded(error instanceof Error ? error.message : String(error), 2000) });
+    }); }
     catch { return []; } // Missing draft declarations are diagnosed by the actual proof check.
   }
   protected retainedTaskGoals(task: CooperativeTask, tasks: readonly TaskRecord[], worktree: string, commit: string,

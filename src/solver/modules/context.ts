@@ -28,7 +28,7 @@ import { continuationReferenceSection, referenceQuery } from '../continuationSea
 import { knowledgeApplicationContextSections } from '../knowledgeApplications';
 import { installedLibraryContextSections } from '../installedLibraryContext';
 import type { LibraryAccess } from '../libraryAccess';
-import { compileContextSections, compileTaskContext, frozenSourceContext, leadResearchInputSection, TaskContextError,
+import { compileContextSections, compileTaskContext, frozenSourceContext, leadPlanRejectionSection, leadResearchInputSection, TaskContextError,
   type CompiledContext, type ContextManifest, type ContextSection, type TaskContextInput } from '../contextCompiler';
 import type { CustomResearchModule, ResearchModuleSlot } from './policy';
 import { defaultResearchRouteConcurrency, researchTaskRole, type ResearchWorker } from './organization';
@@ -679,13 +679,14 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
           text: 'Original-goal focus (advisory, not proof acceptance):\n' + JSON.stringify(focusPacket) }] : [])] });
   const full = compileFull();
   const researchInputs = action.kind === 'lead' ? leadResearchInputSection(compilation) : undefined;
+  const planRejection = leadPlanRejectionSection(compilation);
   // Goals and diagnostics can change within the same thread; their fresh library candidates are new input.
   const currentLibraryHint = (section: ContextSection) => ['installed-library:', 'knowledge:',
     'knowledge-application:', 'knowledge-application-hints:'].some(prefix => section.id.startsWith(prefix));
   const continuationOptional = (compilation.optional ?? []).filter(section => section.kind === 'feedback' || currentLibraryHint(section));
   const compileContinuation = (checkpointInstruction?: string) => compileContextSections({ instructions,
     mandatory: [...dispatchPrefix(checkpointInstruction), { id: 'same-thread-continuation', kind: 'continuation',
-      text: continuationText! }, ...(researchInputs ? [researchInputs] : []), ...receiptIndex],
+      text: continuationText! }, ...(researchInputs ? [researchInputs] : []), ...(planRejection ? [planRejection] : []), ...receiptIndex],
     optional: [...receiptDetails, ...continuationOptional].sort((a, b) => (a.priority ?? 20) - (b.priority ?? 20)),
     omitted: (compilation.optional ?? []).filter(section => !continuationOptional.includes(section))
       .map(section => ({ id: section.id, kind: section.kind, reason: 'outside-task-scope' as const })),

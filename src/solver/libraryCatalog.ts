@@ -104,6 +104,8 @@ function validateManifest(value: unknown): LibraryCatalogManifest {
 /** Build metadata once for a named, immutable release. Proof bodies live only in content-addressed source objects. */
 export function writeLibraryCatalog(directory: string, input: {
   id: string; revision: string; environment: LeanTaskEnvironment; packs: readonly LibraryPack[];
+  /** Retain a task's separately validated frozen pack when a release has newer bytes at the same paths. */
+  retainedPack?: LibraryPack;
 }) {
   const environment = getLeanTaskEnvironment(input.environment), modules = new Map<string, LibraryPackModule>();
   for (const pack of input.packs) {
@@ -115,6 +117,11 @@ export function writeLibraryCatalog(directory: string, input: {
         throw new Error(`math_library_catalog_module_conflict: ${module.file}`);
       modules.set(module.file, module);
     }
+  }
+  if (input.retainedPack) {
+    const checked = parseLibraryPack(input.retainedPack);
+    if (checked.requires?.length) throw new Error('math_library_catalog_external_requirement');
+    for (const module of checked.modules) modules.set(module.file, module);
   }
   const manifest = validateManifest({ schema: 'theorem-os.library-catalog.v1', id: input.id, revision: input.revision,
     environment: input.environment, environmentDigest: environment.dependencyDigest, toolchain: environment.toolchain,

@@ -90,7 +90,10 @@ export function advisoryCheckpointScope(assignment: CooperativeAction | undefine
       phase: assignment.initialPlanNonce ? 'initial' : 'revision',
       responsibility: assignment.responsibilityDigest }));
   }
-  if (assignment?.kind === 'task' && ['research', 'sketch'].includes(assignment.task.kind) && !isFeasibilityReview(assignment.task))
+  if (assignment?.kind === 'task' && isFeasibilityReview(assignment.task))
+    return mathDigest(canonicalMathJson({ kind: 'feasibility-review', taskDigest: assignment.assignment.taskDigest,
+      workerId: assignment.assignment.workerId, inputDigest: assignment.assignment.feasibilityInputDigest, noticeOnly: true }));
+  if (assignment?.kind === 'task' && ['research', 'sketch'].includes(assignment.task.kind))
     return mathDigest(canonicalMathJson({ kind: 'task', taskDigest: assignment.assignment.taskDigest }));
   if (assignment?.kind === 'task' && hasTaskConnectionCheck(assignment.task, assignment.assignment))
     return mathDigest(canonicalMathJson({ kind: 'connection', taskDigest: assignment.assignment.taskDigest,
@@ -102,10 +105,10 @@ export function advisoryCheckpointScope(assignment: CooperativeAction | undefine
   return undefined;
 }
 
-/** Proof work is reminded to save notes, but an advisory checkpoint never takes its writer away. */
+/** Proof work and independent reviews save notes without a timed scheduling interruption. */
 export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | undefined): boolean {
-  return assignment?.kind === 'task' && assignment.task.kind === 'goal' &&
-    !hasTaskConnectionCheck(assignment.task, assignment.assignment);
+  return assignment?.kind === 'task' && (isFeasibilityReview(assignment.task) || assignment.task.kind === 'goal' &&
+    !hasTaskConnectionCheck(assignment.task, assignment.assignment));
 }
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
@@ -390,7 +393,7 @@ export async function runResearchWorkers(input: {
         const activeSession = session!;
         const advisoryScope = advisoryCheckpointScope(assignment);
         const researchAssignment = assignment?.kind === 'task' &&
-          ['research', 'sketch'].includes(assignment.task.kind) && !isFeasibilityReview(assignment.task) ? assignment : undefined;
+          ['research', 'sketch'].includes(assignment.task.kind) ? assignment : undefined;
         const initialNotesDigest = researchAssignment ? checkpointNotesDigest() : undefined;
         const seedNotesDigest = researchAssignment && committedResearchNotesDigest(worker.worktree, researchAssignment.assignment.seedCommit);
         const retainedDraft = researchAssignment && state.cooperation?.researchDrafts?.[researchAssignment.task.id];
@@ -610,7 +613,13 @@ export async function runResearchWorkers(input: {
               if (!current() || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
               // A goal turn is never yielded, so its reminder must not promise a checkpoint that will
               // not come: it asks for the durable handoff and leaves the writing turn running.
-              return activeSession.notify?.(noticeOnly
+              return activeSession.notify?.(assignment?.kind === 'task' && isFeasibilityReview(assignment.task)
+                ? 'Save this independent review\'s intermediate work in root RESEARCH.md now: the exact inspected inputs, ' +
+                  'methods already tried, exact failed search scope, remaining uncertainties, and complete useful scratch-probe ' +
+                  'code with reproduction commands and observed results. A scratch path alone is not a recoverable probe; ' +
+                  'embed the useful contents in RESEARCH.md. These notes are advisory, not a completed review verdict or proof acceptance. ' +
+                  'This turn keeps running without a timed interruption; save incrementally and continue the independent review.'
+                : noticeOnly
                 ? 'Save the current mathematical argument, the exact unresolved step and useful references in RESEARCH.md now. ' +
                   'This turn keeps running: no checkpoint will interrupt or end it, so save notes incrementally and continue proving.'
                 : initialPlan

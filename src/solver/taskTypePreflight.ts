@@ -147,7 +147,7 @@ function definiteTypeError(message: string): boolean {
   // Lean diagnostic, for example "<input>:1:361: expected ')', ',' or ':'".
   const diagnostic = message.trim().replace(/^<input>:\d+:\d+:\s*/u, '');
   return /^expected\s+['"`]/iu.test(diagnostic) ||
-    /^(?:(?:application\s+)?type mismatch|unknown (?:identifier|constant)|function expected|invalid (?:binder annotation|field(?: notation)?)|unexpected (?:token|identifier|end of input)|expected (?:token|term|type)|requested type must be closed)\b/iu.test(diagnostic);
+    /^(?:(?:application\s+)?type mismatch|unknown (?:identifier|constant)|function expected|invalid (?:binder annotation|field(?: notation)?)|unexpected (?:token|identifier|end of input)|expected (?:token|term|type|end of input)|requested type must be closed)\b/iu.test(diagnostic);
 }
 
 // Checked against Lean v4.34.1: each fails as a bound variable name with "expected '(', '_' or identifier".

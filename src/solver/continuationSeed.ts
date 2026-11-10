@@ -25,7 +25,7 @@ import { goalProgressStateSchema, resetGoalProgressClock } from './goalProgress'
 import { assessTaskResponsibility, researchWorkerCanNode, researchWorkerCanTask } from './modules/organization';
 import { CAPACITY_EXPLORATION_FOCUSES, currentCapacityExploration, plannedTaskRecords, type CapacityExploration } from './capacityExploration';
 import { assertSolverSources, committedSource, commitSolverSources, git, readSolverProblem, withSolverWorktree, type SolverProblem } from './problem';
-import { assignmentDeliveryFile, assumableLemma, isAdvisoryTask, isDefinitionTask, isFinalCandidateReview, parseCooperationPlan, taskGroup, taskVersion, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
+import { assignmentDeliveryFile, assumableLemma, isAdvisoryTask, isDefinitionTask, isFeasibilityReview, isFinalCandidateReview, parseCooperationPlan, taskGroup, taskVersion, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { proofReadyRecord, proofReadyRecordSchema } from './proofReady';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { setTaskStatus } from './taskLifecycle';
@@ -33,7 +33,7 @@ import { taskDependencyRecords } from './modules/search';
 import { hasDeterministicLeanFailure } from './proofReuse';
 import { VerificationCheckpointError, withVerificationCheckpoints } from './verificationCheckpoint';
 import { captureDeliveryArtifacts } from './deliveryArtifacts';
-import { researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
+import { feasibilityReviewInputDigest, researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
   UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
 import { recordRouteBlockers, validateBlockerProposals } from './routeControl';
 
@@ -142,6 +142,7 @@ const savedTaskDraft = z.object({ taskId: id, taskDigest: hash, workerId: id,
   assignmentId: z.string().optional(), seedCommit: oid, canonicalCommit: oid.optional(), commit: oid,
   outputDigest: hash, task: handoffTask.optional(), suspended: z.boolean().optional(), archived: z.literal(true).optional(),
   sources: z.record(z.string()), notes: z.string().nullable(), handoffNotesDigest: hash.optional(),
+  feasibilityInputDigest: hash.optional(),
   source: z.object({ runId: z.string(), stateFile: z.string(), environmentDigest: hash,
     problemReceiptDigest: hash, sourcePolicyDigest: hash }).strict(),
 }).strict();
@@ -482,7 +483,7 @@ function capturedTaskDrafts(state: SolverRunState, stateFile: string, previous: 
     const draft = savedTaskDraft.parse({ taskId, taskDigest: snapshot.taskDigest, workerId: snapshot.workerId,
       assignmentId: prior?.assignmentId ?? snapshot.assignmentId, seedCommit: snapshot.seedCommit,
       canonicalCommit: snapshot.canonicalCommit, commit: snapshot.commit, outputDigest: snapshot.outputDigest,
-      handoffNotesDigest: snapshot.handoffNotesDigest,
+      handoffNotesDigest: snapshot.handoffNotesDigest, feasibilityInputDigest: snapshot.feasibilityInputDigest,
       task, suspended: snapshot.suspended, ...(current ? {} : { archived: true }),
       sources: Object.fromEntries(state.problem.ownedFiles.map(file => [file,
         committedSource(state.worktree, snapshot.commit, `${state.problem.projectRelative}/${file}`)])),
@@ -541,6 +542,7 @@ function taskDraftAssignment(draft: SavedTaskDraft, task: CooperativeTask,
   tasks: readonly TaskRecord[], state: SolverRunState): TaskAssignment {
   const assignment: TaskAssignment = { taskId: draft.taskId, taskDigest: draft.taskDigest, workerId: draft.workerId,
     seedCommit: draft.seedCommit, canonicalCommit: draft.canonicalCommit,
+    feasibilityInputDigest: draft.feasibilityInputDigest,
     assignmentId: mathDigest(canonicalMathJson({ runId: state.runId, draft: { source: draft.source,
       taskId: draft.taskId, taskDigest: draft.taskDigest, workerId: draft.workerId,
       assignmentId: draft.assignmentId, seedCommit: draft.seedCommit, commit: draft.commit } })),
@@ -555,6 +557,12 @@ function taskDraftAssignment(draft: SavedTaskDraft, task: CooperativeTask,
 
 function restorableTaskDraft(draft: SavedTaskDraft, node: TaskRecord, state: SolverRunState) {
   const worker = state.workers!.find(worker => worker.id === draft.workerId);
+  if (isFeasibilityReview(node.task) && (!draft.feasibilityInputDigest ||
+      draft.feasibilityInputDigest !== feasibilityReviewInputDigest({ task: node.task, workerId: draft.workerId,
+        tasks: state.cooperation!.tasks, deliveries: state.cooperation!.deliveries ?? [],
+        problem: state.problem, worktree: state.worktree, canonicalCommit: state.cooperation!.canonicalCommit!,
+        environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest,
+        retrievalDigest: state.retrievalDigest, knowledgeDigest: state.knowledgeDigest }))) return false;
   return !draft.archived && (node.status === 'pending' ||
     pausedResearchCheckpoint(node, state.cooperation!.researchCheckpoints?.[node.task.id])) && !node.alternativeRoutes?.length &&
     draft.taskId === node.task.id && draft.taskDigest === taskVersion(node.task) &&
@@ -1062,13 +1070,18 @@ export async function seedSolverContinuation(options: {
       }
       const project = path.join(state.worktree, state.problem.projectRelative);
       const packages = resolveMathematicsLakePackagesCache(project, staticEnv);
-      if (!packages) throw new Error('math_lake_packages_unavailable');
-      bindLeanPackages(project, packages);
-      const overrides = path.join(project, '.lake', 'package-overrides.json');
-      assertMathCanonicalPath(overrides);
-      fs.rmSync(overrides, { force: true });
+      if (!packages) {
+        const manifestFile = path.join(project, 'lake-manifest.json');
+        const manifest = fs.existsSync(manifestFile) ? readMathJson(manifestFile) as { packages?: unknown } : undefined;
+        if (Array.isArray(manifest?.packages) && manifest.packages.length) throw new Error('math_lake_packages_unavailable');
+      } else {
+        bindLeanPackages(project, packages);
+        const overrides = path.join(project, '.lake', 'package-overrides.json');
+        assertMathCanonicalPath(overrides);
+        fs.rmSync(overrides, { force: true });
+      }
       const timeoutMs = options.timeoutMs ?? 180_000;
-      if (!options.preparedEnvironment) proofEnvironment = await prepareMathProofEnvironment(project, packages, { env: staticEnv, signal: lease.signal,
+      if (packages && !options.preparedEnvironment) proofEnvironment = await prepareMathProofEnvironment(project, packages, { env: staticEnv, signal: lease.signal,
         deadlineAt: Number.isFinite(timeoutMs) ? Date.now() + timeoutMs : undefined,
         cacheRoot: DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT,
         onProgress: phase => emit('continuation_seed_proof_environment', { phase }) });
@@ -1375,7 +1388,7 @@ export async function seedSolverContinuation(options: {
         (state.cooperation.researchDrafts ??= {})[draft.taskId] = { taskDigest: draft.taskDigest, workerId: draft.workerId,
           assignmentId: assignment.assignmentId, seedCommit: draft.seedCommit, canonicalCommit: draft.canonicalCommit,
           commit: draft.commit, outputDigest: draft.outputDigest, artifacts, suspended: true,
-          handoffNotesDigest: draft.handoffNotesDigest };
+          handoffNotesDigest: draft.handoffNotesDigest, feasibilityInputDigest: draft.feasibilityInputDigest };
         emit('continuation_seed_task_draft_pending', { taskId: draft.taskId, workerId: draft.workerId,
           sourceRunId: draft.source.runId, snapshotCommit: draft.commit, acceptance: 'not-assessed' });
       }

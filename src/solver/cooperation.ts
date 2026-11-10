@@ -697,10 +697,14 @@ export class CooperativeResearch extends CooperationInputs {
     }
     this.suspendResearchDrafts(worker, node.task.id);
     const seed = this.archive.canonicalCommit!;
+    // Another reviewer's notes or notes for changed inputs cannot seed a fresh independent verdict.
+    // Their pinned draft remains available as archived advisory evidence.
+    if (!resuming && isFeasibilityReview(node.task)) fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '');
     const scopedSeed = resuming ? seed : this.seed(worker, seed, node.task);
     const dispatchAssignment: TaskAssignment = node.assignment ?? { taskId: node.task.id, taskDigest: digest(node.task), workerId: worker.id,
       seedCommit: scopedSeed, assignmentId: crypto.randomUUID(), canonicalCommit: seed, groupId: taskGroup(node.task),
       routeId: selectedRoute?.id,
+      ...(isFeasibilityReview(node.task) ? { feasibilityInputDigest: this.feasibilityInputDigest(node.task, worker.id) } : {}),
       dependencies: this.dependencies(node.task).map(item => ({ taskId: item.task.id, taskDigest: digest(item.task) })) };
     const canonicalGoal = node.task.kind === 'goal' && this.canonicalTaskCandidate(node, worker, scopedSeed);
     if (node.task.kind === 'lemma' || node.task.kind === 'goal' && (canonicalGoal || this.input.access.get(worker.id)?.installedLibrary)) {

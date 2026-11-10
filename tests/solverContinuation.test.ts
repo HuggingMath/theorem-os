@@ -1097,12 +1097,14 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     }
   });
 
-  it.each(['source', 'environment', 'environment-variable', 'conditions'] as const)(
+  it.each(['source', 'environment', 'environment-variable', 'build', 'evaluator', 'conditions'] as const)(
     'rechecks a failed helper after changed %s', async change => {
       const checkTask = failureChecker();
       await check();
       if (change === 'environment') state.environmentDigest = 'new-environment';
       else if (change === 'environment-variable') (cooperative as any).input.access.get(lead.id).environment.LEAN_PATH = '/updated/lean';
+      else if (change === 'build') state.buildDigest = 'repaired-verifier-build';
+      else if (change === 'evaluator') state.evaluatorDigest = 'repaired-verifier-evaluator';
       else if (change === 'source') {
         addSource('\nlemma candidate : True := by trivial\n');
       }
@@ -1194,6 +1196,36 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
       .rejects.toThrow('math_task_repeated_failed_input'); }
     finally { await resumed.stop(); }
     expect(checkTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('reopens a serialized helper parked by an old verifier and rechecks its saved source', async () => {
+    const checkTask = failureChecker({ stdoutPreview: 'Submission.lean:1:1: error: Unknown identifier `E`' });
+    addSource('\ntheorem question : True := by trivial\n');
+    seed = checkpoint('Saved helper rejected by the old projection.');
+    state.cooperation!.canonicalCommit = seed;
+    record.assignment!.seedCommit = seed;
+    const submission = { id: 'old_projection_failure', kind: 'proof', taskId: record.task.id,
+      taskDigest: action.assignment.taskDigest, commit: seed, summary: 'Saved helper using an original definition.' };
+    await (cooperative as any).receive(researcher, action, submission);
+    const repair = await cooperative.next(researcher, budget);
+    if (repair?.kind !== 'task') throw new Error('expected_local_repair');
+    expect(cooperative.started(researcher, repair)).toBe(true);
+    await (cooperative as any).receive(researcher, action, { ...submission, id: 'old_projection_repeated' });
+    await cooperative.deliver(researcher, action, seed);
+    expect(record.status).toBe('blocked');
+    expect(record.feedback).toContain('math_task_repeated_failed_input');
+    const restored = JSON.parse(JSON.stringify(state)) as SolverRunState;
+    restored.buildDigest = 'repaired-projection-build';
+    const resumed = resume(restored, { access: (cooperative as any).input.access,
+      modules: (cooperative as any).input.modules });
+    try {
+      expect((resumed as any).refreshFailedTaskInputs()).toBe(true);
+      const task = restored.cooperation!.tasks.find(node => node.task.id === record.task.id)!;
+      expect(task.status).toBe('pending'); expect(task.feedback).toBeUndefined();
+      await (resumed as any).check(task.task, task.assignment, directory, seed, [], undefined, true);
+      expect(checkTask).toHaveBeenCalledTimes(2);
+      expect(checkTask.mock.calls[1][2]).toBe(seed);
+    } finally { await resumed.stop(); }
   });
 
   it('binds unchanged repetitions to the task version and inherited notes content', async () => {

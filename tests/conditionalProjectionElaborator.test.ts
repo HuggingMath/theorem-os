@@ -9,7 +9,7 @@ import { newestLeanBinary } from './helpers/lean';
 const roots: string[] = [], lean = newestLeanBinary();
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function compile(declaration: string, dependencies: readonly ConditionalDependency[], options: {
-  name?: string; kind?: string; before?: string; after?: string; expectedType?: string;
+  name?: string; before?: string; after?: string; expectedType?: string; mathlib?: boolean;
 } = {}) {
   if (!lean) throw new Error('Native Lean is required for conditional projection checks.');
   const root = temporaryDirectory('conditional-projection-'); roots.push(root);
@@ -18,11 +18,17 @@ function compile(declaration: string, dependencies: readonly ConditionalDependen
   const mirror = options.expectedType === undefined ? '' : '\nexample : ' +
     conditionalExpectedType(name, options.expectedType, dependencies) + ' := @' + name + '\n';
   const file = path.join(root, 'Projection.lean');
-  fs.writeFileSync(file, 'import Lean\nsyntax \"variables\" : command\nset_option autoImplicit false\n' + projection.prelude + '\n' +
+  fs.writeFileSync(file, (options.mathlib ? 'import Mathlib\n' : '') + 'import Lean\nsyntax \"variables\" : command\nset_option autoImplicit false\n' + projection.prelude + '\n' +
     (options.before ?? '') + projection.source + (options.after ?? '') + mirror + '\n#print axioms ' + name + '\nrun_cmd do\n' +
     dependencies.map(dependency => '  if (← Lean.getEnv).contains ' + JSON.stringify(dependency.theoremName) +
       '.toName then throwError "Conditional dependency leaked"').join('\n') + '\n');
-  const result = spawnSync(lean, [file], { encoding: 'utf8', timeout: 20_000 });
+  const mathlibProject = process.env.THEOREMOS_TEST_MATHLIB_PROJECT?.trim();
+  const packages = mathlibProject && path.join(mathlibProject, '.lake', 'packages');
+  const libraries = options.mathlib && packages ? fs.readdirSync(packages).map(name =>
+    path.join(packages, name, '.lake', 'build', 'lib', 'lean')).filter(directory => fs.existsSync(directory)) : undefined;
+  const result = spawnSync(lean, [file], { encoding: 'utf8', timeout: 30_000,
+    env: libraries ? { ...process.env, LEAN_PATH: libraries.join(path.delimiter) } : process.env });
+  expect(result.error).toBeUndefined();
   return { status: result.status, output: `${result.stdout}${result.stderr}`, source: fs.readFileSync(file, 'utf8') };
 }
 function accepted(result: ReturnType<typeof compile>) {
@@ -34,6 +40,32 @@ function accepted(result: ReturnType<typeof compile>) {
 }
 
 describe.skipIf(!lean)('host conditional projection elaborators', () => {
+  it.each(['theorem', 'lemma'])('normalizes Mathlib %s without leaking its conditional proof assumptions', kind => {
+    accepted(compile(kind + ' target (n : Nat) : n = n := by exact D.refl n',
+      [{ theoremName: 'D.refl', type: '∀ n : Nat, n = n' }],
+      { mathlib: true, expectedType: '∀ n : Nat, n = n' }));
+  });
+
+  it('normalizes a qualified Mathlib lemma while retaining section variables and different universe uses', () => {
+    accepted(compile('lemma target (x : α) (y : β) : x = x ∧ y = y := by exact ⟨D.refl x, D.refl y⟩',
+      [{ theoremName: 'Demo.D.refl', type: '∀ {γ : Type _} (a : γ), a = a' }],
+      { mathlib: true, name: 'Demo.target',
+        before: 'namespace Demo\nuniverse u v\nvariable {α : Type u} {β : Type v}\n', after: '\nend Demo\n',
+        expectedType: '∀ {α β : Type _} (x : α) (y : β), x = x ∧ y = y' }));
+  });
+
+  it('still rejects a wrong host contract after normalizing a Mathlib lemma', () => {
+    const result = compile('lemma target (n : Nat) : n = n := by exact D.refl n',
+      [{ theoremName: 'D.refl', type: '∀ n : Nat, n = n' }], { mathlib: true, expectedType: 'False' });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('Helper declaration has a different type or additional assumptions');
+  });
+
+  it('rejects an anonymous declaration before constructing a conditional proof payload', () => {
+    expect(() => compile('example : True := by trivial', [], { mathlib: true }))
+      .toThrow('math_task_conditional_header_unsupported');
+  });
+
   it('orders dependency contracts and their used instances when a proof occurs in a later type', () => {
     const dependencies = [
       { theoremName: 'D.consumer', type: '∀ {α : Type _} (a : α), D.base a = D.base a' },

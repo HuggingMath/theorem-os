@@ -60,6 +60,19 @@ private def declarationTerm (text : String) : TermElabM Syntax := do
   let parsed ← match Parser.runParserCategory (← getEnv) \`command text with
     | .ok stx => pure stx
     | .error message => throwError "Invalid conditional declaration: {message}"
+  -- Mathlib's lemma is a command macro, not a child of Command.declaration.
+  -- Expand only this supported alias, then apply the same named-declaration checks.
+  let parsed ← if parsed.getKind == \`lemma then do
+    let some expanded ← liftMacroM <| expandMacro? parsed
+      | throwError "Conditional projection requires a named declaration"
+    unless expanded.getKind == \`\`Lean.Parser.Command.declaration &&
+        expanded[1].getKind == \`\`Lean.Parser.Command.theorem &&
+        expanded[1][1] == parsed[1][1] do
+      throwError "Conditional lemma macro changed its declaration identity"
+    pure expanded
+  else pure parsed
+  unless parsed.getKind == \`\`Lean.Parser.Command.declaration do
+    throwError "Conditional projection requires a named declaration"
   let sectionVars := (← read).sectionVars
   let parsed ← parsed.replaceM fun stx => do
     match stx with
@@ -69,7 +82,7 @@ private def declarationTerm (text : String) : TermElabM Syntax := do
         pure (some (.ident info raw name (localInputs.map (fun (name, fields) => .decl name fields) ++ resolved)))
     | _ => pure none
   let declaration := parsed[1]
-  unless [\`\`Lean.Parser.Command.theorem, \`Lean.Parser.Command.lemma, \`\`Lean.Parser.Command.definition, \`\`Lean.Parser.Command.abbrev].contains declaration.getKind do
+  unless [\`\`Lean.Parser.Command.theorem, \`\`Lean.Parser.Command.definition, \`\`Lean.Parser.Command.abbrev].contains declaration.getKind do
     throwError "Conditional projection requires a named declaration"
   unless declaration[3].getKind == \`\`Lean.Parser.Command.declValSimple do
     throwError "Conditional projection requires a proof term"

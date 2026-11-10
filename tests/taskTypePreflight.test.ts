@@ -307,7 +307,8 @@ describe('content-bound typed helper preflight', () => {
   it.each(['Unknown identifier `unboundType`', 'unexpected token ")"; expected term',
     'Function expected at value', 'Requested type must be closed without free variables or metavariables',
     "<input>:1:361: expected ')', ',' or ':'", "expected ')', ',' or ':'",
-    '<input>:2:10: unexpected token ")"; expected term'])
+    '<input>:2:10: unexpected token ")"; expected term',
+    '<input>:1:329: expected end of input', '<input>:1:377: expected end of input', 'expected end of input'])
   ('blocks only an explicit type or parsing error: %s', async message => {
     check.mockImplementation(async () => failure({ firstBlocking: {
       severity: 'error', format: 'lean-json', file: 'TypeDiagnostic.lean', message } }));
@@ -320,7 +321,8 @@ describe('content-bound typed helper preflight', () => {
     'internal exception: unreachable code', 'IO error: failed to read object file',
     'out of memory', 'kernel exception: invalid memory access', 'unsolved goals\n|- True',
     'Type mismatch while reporting an internal error', 'Unknown identifier after a deterministic timeout',
-    "<input>:1:361: expected ')' after an internal exception"])
+    "<input>:1:361: expected ')' after an internal exception",
+    '<input>:1:329: expected end of input after a deterministic timeout'])
   ('defers query-local resource, infrastructure and unclassified errors without caching: %s', async message => {
     check.mockImplementation(async () => failure({ firstBlocking: {
       severity: 'error', format: 'lean-json', file: 'TypeDiagnostic.lean', message } }));

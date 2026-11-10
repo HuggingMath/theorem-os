@@ -7,6 +7,7 @@ import { taskDependencyRecords } from './modules/search';
 import { captureObligationSnapshot } from './obligationProgress';
 import { committedSource, git, type SolverProblem } from './problem';
 import type { CheckpointCandidate } from './researchEvidence';
+import { captureResearchBasis } from './researchRecords';
 import { routeBlockerBasis } from './routeControl';
 import { taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 
@@ -60,6 +61,19 @@ export function researchCheckpointInputDigest(input: CheckpointInput & {
     sourceDigest: ownedSourceDigest(input.problem, input.worktree, input.canonicalCommit),
     dependencies: captureObligationSnapshot(taskDependencyRecords(input.task, input.tasks),
       { environmentDigest: input.environmentDigest }).digest, deliveries }));
+}
+
+/** Intermediate review notes belong to one reviewer and the exact inspected inputs, never a verdict. */
+export function feasibilityReviewInputDigest(input: CheckpointInput & {
+  problem: SolverProblem; worktree: string; canonicalCommit: string;
+  retrievalDigest?: string; knowledgeDigest?: string;
+}) {
+  return mathDigest(canonicalMathJson({ workerId: input.workerId, basis: captureResearchBasis(input.task, {
+    problemReceiptDigest: input.problemReceiptDigest, environmentDigest: input.environmentDigest,
+    retrievalDigest: input.retrievalDigest, knowledgeDigest: input.knowledgeDigest,
+    sourceDigest: ownedSourceDigest(input.problem, input.worktree, input.canonicalCommit),
+    tasks: input.tasks, deliveries: input.deliveries,
+  }) }));
 }
 
 export const researchCheckpointOutputDigest = (problem: SolverProblem, worktree: string, commit: string) =>

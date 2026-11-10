@@ -54,13 +54,14 @@ const commit = (root: string, message: string) => {
   return git(root, ['rev-parse', 'HEAD']);
 };
 
-function fixture(statement = original, goalNames = ['Submission.original']) {
+function fixture(statement = original, goalNames = ['Submission.original'], manifestPackages?: readonly unknown[]) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'continuation-seed-test-'))); roots.push(root);
   const workspace = path.join(root, 'workspace'), projectRelative = 'generated/fixture', project = path.join(workspace, projectRelative);
   fs.mkdirSync(path.join(project, 'Submission'), { recursive: true });
   const trusted = { 'Challenge.lean': 'theorem challenge : True := by trivial\n',
     'config.json': '{"theorem_names":["original"]}\n', 'holes.json': '{"id":"fixture","holes":[{"name":"original"}]}\n',
-    'lean-toolchain': 'leanprover/lean4:v4.31.0\n', 'lakefile.toml': 'name = "fixture"\n[[lean_lib]]\nname = "Submission"\n' };
+    'lean-toolchain': 'leanprover/lean4:v4.31.0\n', 'lakefile.toml': 'name = "fixture"\n[[lean_lib]]\nname = "Submission"\n',
+    ...(manifestPackages === undefined ? {} : { 'lake-manifest.json': JSON.stringify({ packages: manifestPackages }) }) };
   for (const [file, text] of Object.entries(trusted)) fs.writeFileSync(path.join(project, file), text);
   fs.writeFileSync(path.join(project, 'Submission.lean'), statement);
   fs.writeFileSync(path.join(project, 'Submission/Helpers.lean'), emptyHelpers);
@@ -320,7 +321,7 @@ function cooperationFor(f: ReturnType<typeof fixture>, state: SolverRunState, fr
     freshContinuationChecks, access: new Map(workers.map(worker => [worker.id, { environment, retrievalRoot: f.root }])), ...options });
 }
 
-async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 'lemma' = 'research',
+async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 'lemma' | 'feasibility' = 'research',
   notes: string | null = '\ufeffSUSPENDED_ROUTE_FINDING λ\r\n```math\n' +
     '{"conclusion":"inconclusive","summary":"SUSPENDED_ROUTE_FINDING"}\n```\r\n', sourceDraft = true) {
   const f = fixture(), state = f.oldState, peer = state.workers![1]!;
@@ -351,8 +352,9 @@ async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 
           reason: 'fixture-no-lean', evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' }, current: () => true }));
     }
   } else {
-    task = { id: 'saved_route', kind, objective: 'Investigate the first route', dependsOn: ['first'], revision: 0,
-      ownerId: peer.id };
+    task = { id: 'saved_route', kind: kind === 'feasibility' ? 'research' : kind,
+      objective: 'Investigate the first route', dependsOn: kind === 'feasibility' ? [] : ['first'], revision: 0,
+      ownerId: peer.id, ...(kind === 'feasibility' ? { reviewScope: 'feasibility' as const } : {}) };
     goal.task = { ...goal.task, dependsOn: [...goal.task.dependsOn, task.id] };
   }
   if (kind === 'goal') goal.task = task;
@@ -733,6 +735,44 @@ describe('continuation of ordinary research no-progress checkpoints', () => {
 });
 
 describe('continuation of per-task saved drafts', () => {
+  it('restores the same reviewer\'s notes and complete probe across cold continuation without inheriting a verdict', async () => {
+    const notes = '\ufeffReview only: searched the finite case, no uniform estimate found.\r\n' +
+      'Saved .scratch/tmp/Probe1.lean; command: lake env lean .scratch/tmp/Probe1.lean\r\n' +
+      '```lean\r\nexample : True := by trivial\r\n```\r\nObserved: local check succeeds; the main gap remains.\r\n';
+    const f = await suspendedTaskDraftFixture('feasibility', notes, false);
+    await f.seed();
+    const second = nextContinuation(f, f.stateFile, 'feasibility-next'); await second.seed();
+    const state = readSolverRunState(second.stateFile), node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+    expect(node.status).toBe('pending'); expect(node.researchCompletion).toBeUndefined();
+    expect(node.assignment?.feasibilityInputDigest).toBe(f.draftAssignment.feasibilityInputDigest);
+    expect(taskDraftAttachments(second.stateFile)).toContainEqual(expect.objectContaining({ taskId: f.task.id,
+      notes, commit: f.draftCommit, feasibilityInputDigest: f.draftAssignment.feasibilityInputDigest }));
+    const cooperative = cooperationFor(f, state), peer = { ...state.workers![1]!, ownedFiles: state.problem.ownedFiles };
+    try {
+      await cooperative.restore();
+      const action = await cooperative.next(peer, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task') throw new Error('fixture_expected_feasibility_review');
+      expect(action.task.id).toBe(f.task.id);
+      expect(fs.readFileSync(path.join(peer.worktree, 'RESEARCH.md'))).toEqual(Buffer.from(notes));
+      expect(node.finding).toBeUndefined(); expect(node.proof).toBeUndefined(); expect(state.check).toBeUndefined();
+    } finally { await cooperative.stop(); }
+  });
+
+  it('archives feasibility handoff notes when the canonical input changes before cold continuation', async () => {
+    const f = await suspendedTaskDraftFixture('feasibility', 'OLD_REVIEW_NOTES\n', false);
+    fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission/Helpers.lean'),
+      helpers.replace('end Submission.Helpers', 'lemma newer : True := by trivial\nend Submission.Helpers'));
+    f.oldState.cooperation!.canonicalCommit = commit(f.sourceWorktree, 'Advance canonical review input');
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed();
+    const state = readSolverRunState(f.stateFile), node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+    expect(node.assignment).toBeUndefined(); expect(node.status).toBe('pending');
+    expect(state.cooperation!.researchDrafts?.[f.task.id]).toBeUndefined();
+    expect(taskDraftAttachments(f.stateFile)).toContainEqual(expect.objectContaining({ taskId: f.task.id,
+      notes: 'OLD_REVIEW_NOTES\n', commit: f.draftCommit }));
+    expect(node.researchCompletion).toBeUndefined(); expect(node.finding).toBeUndefined();
+  });
+
   it('preserves all 17 UTF-8 drafts above 16 MB through bounded attachments and another ordinary continuation', async () => {
     const f = fixture(), peer = f.oldState.workers![1]!;
     peer.role = 'engineer'; f.newState.workers![1]!.role = 'engineer';
@@ -1114,6 +1154,14 @@ describe('explicit prepared-run continuation initialization', () => {
       expect(host.verify).not.toHaveBeenCalled();
       expect(fs.existsSync(path.join(f.directory, 'continuation-seed-source.json'))).toBe(false);
     });
+
+  it('rejects a missing external package cache before replay checks', async () => {
+    const f = fixture(original, ['Submission.original'], [{ name: 'required-package' }]);
+    host.resolvePackages.mockReturnValue(undefined);
+    await expect(f.seed()).rejects.toThrow('math_lake_packages_unavailable');
+    expect(host.verify).not.toHaveBeenCalled();
+    expect(host.prepare).not.toHaveBeenCalled();
+  });
 
   it('owns a fresh proof environment without changing frozen settings or the static run identity', async () => {
     const f = fixture(), savedEnvironment = fs.readFileSync(f.environmentFile);

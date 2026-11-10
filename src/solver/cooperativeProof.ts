@@ -25,15 +25,24 @@ export { TaskProofCache } from './taskProofCache';
 /** Source observations only order/recover checks; callers must separately establish fresh acceptance.
  * Possible source context is not a plan edge or an unambiguous dependency hint. */
 export function projectedGoalInputs(project: ReturnType<typeof createTaskSourceProjector>, task: CooperativeTask,
-  tasks: readonly TaskRecord[], conditions: readonly CooperativeTask[] = []): TaskRecord[] {
+  tasks: readonly TaskRecord[], conditions: readonly CooperativeTask[] = [],
+  unavailable?: (task: CooperativeTask, error: unknown) => void): TaskRecord[] {
   const found = new Set<TaskRecord>(), visited = new Set<string>(), pending = [task];
   for (const current of pending) {
     if (visited.has(current.id)) continue;
     visited.add(current.id);
     const inputs = current === task ? conditions : [];
-    const roots = [...project.dependencyHints(current, [], inputs)
-      .filter(hint => hint.root.removedBecause === 'excluded-original-target').map(hint => hint.root),
-      ...project.possibleContextGoals(current, [], inputs)];
+    let roots: ProjectionDeclaration[];
+    try {
+      roots = [...project.dependencyHints(current, [], inputs)
+        .filter(hint => hint.root.removedBecause === 'excluded-original-target').map(hint => hint.root),
+        ...project.possibleContextGoals(current, [], inputs)];
+    } catch (error) {
+      // An invalid or missing branch cannot establish more inputs, but must not
+      // discard observations already made for independent source goals.
+      unavailable?.(current, error);
+      continue;
+    }
     for (const root of roots) {
       const matches = tasks.filter(node => node.task.kind === 'goal' && node.task.id !== task.id &&
         node.task.proofPath === root.file && node.task.theoremName?.replace(/^_root_\./u, '') === root.name);
@@ -357,18 +366,20 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     const originalSource = originalTarget ? originals.get(task.proofPath!) : undefined;
     const originalDeclaration = originalSource ? inspectScopedLeanDeclarations(originalSource)
       .find(item => item.qualifiedName === task.theoremName) : undefined;
-    const originalDefinition = Boolean(originalSource && originalDeclaration && /^def\s/u.test(originalSource.slice(originalDeclaration.startOffset)));
+    const originalDefinition = originalSource && originalDeclaration
+      ? /^(def|abbrev)\s/u.exec(originalSource.slice(originalDeclaration.startOffset))?.[1] : undefined;
     const header = declaration.slice(matches[0].startOffset, matches[0].bodyOffset);
     // Only an exact frozen original goal may deliver a definition body; helper targets remain propositions
     // unless the plan explicitly marks the helper as a new definition.
-    const definitionMatches = originalTarget && originalDeclaration && originalDefinition && /^def\s/u.test(header) &&
+    const definitionMatches = originalTarget && originalDeclaration && originalDefinition &&
+      /^(def|abbrev)\s/u.exec(header)?.[1] === originalDefinition &&
       inspectScopedLeanDeclarations(declaration).some(item => item.startOffset === matches[0].startOffset &&
         item.qualifiedName === task.theoremName && item.declarationType === originalDeclaration.declarationType) &&
       hashMathFormalSourceDeclaration(declaration, task.theoremName!) === originalTarget.declarationHash;
     if (isDefinitionTask(task) ? !/^(?:def|abbrev)\s/u.test(header) : originalDefinition ? !definitionMatches : !/^(?:theorem|lemma)\s/u.test(header))
       throw new Error((isDefinitionTask(task) ? 'math_task_requires_definition' : 'math_task_requires_theorem') + location +
         (isDefinitionTask(task) ? 'This task introduces a definition. Save one def with the requested name and type and a complete body, without sorry.' :
-          'Helper targets must be theorems or lemmas. A goal may fill its exact frozen original def, preserving its declaration kind, name, parameters and type.'));
+          'Helper targets must be theorems or lemmas. A goal may fill its exact frozen original def or abbrev, preserving its declaration kind, name, parameters and type.'));
     if (task.kind === 'lemma' && Object.values(problem.declarations).some(items => items.some(item => local(item.name) === local(task.theoremName!))))
       throw new Error('math_task_helper_is_original_declaration');
     const sources = new Map(sourceSnapshot);

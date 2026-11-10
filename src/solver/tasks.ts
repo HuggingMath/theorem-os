@@ -43,6 +43,8 @@ export type TaskConnectionCheck = Readonly<{
 }>;
 export type TaskAssignment = { taskId: string; taskDigest: string; workerId: string; seedCommit: string; assignmentId?: string; groupId?: string; canonicalCommit?: string;
   dependencies?: DeliveryRecord['dependencies']; routeId?: string; connectionCheck?: TaskConnectionCheck;
+  /** Same-reviewer intermediate notes may resume only against these fixed inspection inputs. */
+  feasibilityInputDigest?: string;
   /** Historical seed diagnostic for this assignment; never a model failure or accepted proof. */
   canonicalProbe?: Readonly<{ evidence: 'advisory-canonical-check'; proofAcceptance: 'not-accepted';
     sourceCommit: string; environmentDigest: string; verificationStatus: TaskProof['verification']['status'];

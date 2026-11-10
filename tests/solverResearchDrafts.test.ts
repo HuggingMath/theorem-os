@@ -635,6 +635,71 @@ describe('isolated advisory research drafts', () => {
     expect(pendingProposals()).toEqual([]);
   });
 
+  it('keeps repeated feasibility checkpoints as same-reviewer drafts without publishing or parking them', async () => {
+    node('first_route').task = { ...node('first_route').task, reviewScope: 'feasibility' };
+    const action = await task();
+    const text = 'Search scope: only the finite case; no infinite extension was found.\n' +
+      'Reproduce .scratch/tmp/Probe1.lean with lake env lean .scratch/tmp/Probe1.lean\n' +
+      '```lean\nexample : True := by trivial\n```\n' +
+      '```math-result\n{"conclusion":"supporting","summary":"Provisional observation only"}\n```\n';
+    fs.writeFileSync(notes(), text);
+    for (let i = 0; i < 4; ++i) {
+      const current = i ? await task() : action;
+      await cooperative.deliver(peer, current, commitSolverSources(problem, peer.worktree), true, 'scheduling-checkpoint');
+    }
+    expect(node('first_route').status).toBe('pending');
+    expect(node('first_route').finding).toBeUndefined(); expect(node('first_route').researchCompletion).toBeUndefined();
+    expect(state.cooperation!.researchCheckpoints?.first_route).toBeUndefined();
+    expect(state.cooperation!.deliveries?.some(record => record.kind === 'research') ?? false).toBe(false);
+    const draft = state.cooperation!.researchDrafts!.first_route;
+    await switchTask(); await restart();
+    const resumed = await task();
+    expect(resumed.assignment.assignmentId).toBe(action.assignment.assignmentId);
+    expect(fs.readFileSync(notes())).toEqual(Buffer.from(text));
+    expect(state.cooperation!.researchDrafts!.first_route.feasibilityInputDigest).toBe(draft.feasibilityInputDigest);
+    expect(node('first_route').proof).toBeUndefined(); expect(state.check).toBeUndefined();
+  });
+
+  it.each(['canonical', 'dependency', 'finding'] as const)('starts a fresh review after %s input changes and keeps the old draft archived', async change => {
+    node('first_route').task = { ...node('first_route').task, reviewScope: 'feasibility', dependsOn: ['goal_1'] };
+    node('goal_1').task = { ...node('goal_1').task, sharing: 'problem', status: 'paused', dependsOn: [] };
+    const action = await task(); fs.writeFileSync(notes(), 'OLD_REVIEW_INTERMEDIATE_NOTES\n');
+    const commit = commitSolverSources(problem, peer.worktree);
+    await cooperative.deliver(peer, action, commit, true, 'request-failure');
+    if (change === 'canonical') await advanceCanonical();
+    else if (change === 'dependency') node('goal_1').task = { ...node('goal_1').task, revision: 1 };
+    else node('goal_1').finding = 'New inspected dependency evidence.';
+    const resumed = await task();
+    expect(resumed.assignment.assignmentId).not.toBe(action.assignment.assignmentId);
+    expect(resumed.assignment.feasibilityInputDigest).not.toBe(action.assignment.feasibilityInputDigest);
+    expect(fs.readFileSync(notes(), 'utf8')).toBe('');
+    expect(state.cooperation!.researchDrafts!.first_route).toMatchObject({ commit, suspended: true });
+    expect(committedSource(peer.worktree, commit, 'RESEARCH.md')).toBe('OLD_REVIEW_INTERMEDIATE_NOTES\n');
+    expect(node('first_route').finding).toBeUndefined(); expect(node('first_route').researchCompletion).toBeUndefined();
+  });
+
+  it('starts a new reviewer with fresh notes while retaining the prior reviewer\'s pinned draft', async () => {
+    node('first_route').task = { ...node('first_route').task, reviewScope: 'feasibility' };
+    const action = await task(); fs.writeFileSync(notes(), 'PRIOR_REVIEWER_NOTES\n');
+    const commit = commitSolverSources(problem, peer.worktree);
+    await cooperative.deliver(peer, action, commit, true, 'request-failure');
+    const worktree = path.join(directory, 'new-reviewer');
+    git(lead.worktree, ['worktree', 'add', '--quiet', '--detach', worktree, problem.baseCommit]);
+    const reviewer: ResearchWorker = { id: 'new-reviewer', role: 'researcher', worktree, ownedFiles: problem.ownedFiles };
+    inputWorkers.push(reviewer); state.workers!.push({ ...reviewer, phase: 'running', turns: 0 });
+    fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), 'PRIOR_REVIEWER_NOTES\n');
+    node('first_route').assignment = undefined;
+    state.cooperation!.researchDrafts!.first_route.suspended = true;
+    const next = create(), fresh = await next.next(reviewer, budget);
+    if (fresh?.kind !== 'task') throw new Error('fixture_expected_fresh_reviewer');
+    expect(fresh.task.id).toBe('first_route');
+    expect(fresh.assignment.feasibilityInputDigest).not.toBe(action.assignment.feasibilityInputDigest);
+    expect(fs.readFileSync(path.join(worktree, 'RESEARCH.md'), 'utf8')).toBe('');
+    expect(state.cooperation!.researchDrafts!.first_route).toMatchObject({ commit, workerId: peer.id, suspended: true });
+    expect(committedSource(lead.worktree, commit, 'RESEARCH.md')).toBe('PRIOR_REVIEWER_NOTES\n');
+    expect(node('first_route').finding).toBeUndefined(); expect(node('first_route').researchCompletion).toBeUndefined();
+  });
+
   it('uses canonical source changes that arrive while a snapshot is being read', async () => {
     const { action, commit } = await saveDraft();
     await switchTask();

@@ -615,6 +615,7 @@ export abstract class CooperationCore {
           return [{ workerId: peer.id, ...wait, candidates,
             omittedCandidates: wait.omittedCandidates + wait.candidates.length - candidates.length }];
         }),
+        ...(worker.id === this.lead.id && scoped.error ? { error: scoped.error, planRejection: scoped.planRejection } : {}),
         ...(scoped.planPublicationRejection ? { planPublicationRejection: scoped.planPublicationRejection } : {}),
         ...(scoped.contextCheckpointRejection ? { contextCheckpointRejection: scoped.contextCheckpointRejection } : {}),
         capacityExplorations: scoped.tasks.filter(node => node.capacityExploration).map(node => ({

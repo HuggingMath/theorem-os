@@ -236,6 +236,22 @@ describe.skipIf(!lean)('local Lean closed-type preflight', () => {
     expect(explicit.status, explicit.stdout + explicit.stderr).toBe('elaborated');
   });
 
+  it.each(['(U : Nat) : U = U', '(U : Nat) (h : U = U) : U = U'])
+  ('rejects a declaration-header fragment when the term parser expects end of input: %s', async type => {
+    const task: CooperativeTask = { id: 'helper', kind: 'lemma', objective: 'Prove helper', dependsOn: [], revision: 0,
+      theoremName: 'Geometry.helper', proofPath: 'Submission.lean', type };
+    const input = { task, problem: { targets: [{ theoremName: 'Geometry.original', proofPath: 'Submission.lean' }] } as SolverProblem,
+      projectRoot: root, dependencies: [], environmentDigest: 'test-environment',
+      env: { DEEPSCIENTIST_MATH_ENV_FILE: path.join(root, 'fixture.env') }, timeoutMs: 30_000 };
+    const cache = new TaskTypePreflightCache(), first = await cache.check(input);
+    expect(first.result).toMatchObject({ status: 'invalid', reason: expect.stringContaining('expected end of input'),
+      proofAcceptance: 'not-assessed' });
+    expect(task.type).toBe(type);
+    const commands = run.mock.calls.length;
+    expect((await cache.check(input)).result).toEqual(first.result);
+    expect(run).toHaveBeenCalledTimes(commands);
+  });
+
   it('reports a mismatched index type before proof work', async () => {
     const mismatch = await check('\u2200 (a : Nat \u2192 Nat) (n : Int), a (n + 1) = a n');
     expect(mismatch).toMatchObject({ status: 'failed', exitCode: 1, proofAcceptance: 'not-assessed',

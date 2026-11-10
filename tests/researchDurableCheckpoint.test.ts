@@ -30,7 +30,7 @@ describe('durable advisory research checkpoints', () => {
     controllers.splice(0); running.splice(0);
   });
 
-  function fixture(options: { notes?: string; turns?: number; kind?: 'research' | 'sketch' } = {}) {
+  function fixture(options: { notes?: string; turns?: number; kind?: 'research' | 'sketch'; feasibility?: boolean } = {}) {
     const example = localExample('research-durable-checkpoint-'); roots.push(example.directory);
     const { directory, workspace, problem } = example;
     const workers = [leadWorker(problem, workspace), peerWorker(example, 'researcher')];
@@ -39,7 +39,8 @@ describe('durable advisory research checkpoints', () => {
     const plan = parseCooperationPlan(problem, { tasks: [
       ...problem.targets.map((target, index) => ({ id: `goal_${index + 1}`, kind: 'goal',
         objective: `Prove ${target.theoremName}`, ...target, status: 'paused' })),
-      { id: 'investigate', kind: options.kind ?? 'research', ownerId: 'researcher', objective: 'Resolve the precise missing construction.' },
+      { id: 'investigate', kind: options.kind ?? 'research', ownerId: 'researcher', objective: 'Resolve the precise missing construction.',
+        ...(options.feasibility ? { reviewScope: 'feasibility' } : {}) },
     ] });
     const state = solverState(problem, workspace, { runId: 'durable-research-fixture', phase: 'prepared',
       workers: workers.map(worker => ({ ...worker, phase: 'prepared', turns: 0 })),
@@ -95,9 +96,56 @@ describe('durable advisory research checkpoints', () => {
       await vi.advanceTimersByTimeAsync(sliceMs - 30_000); activity({ event: 'reasoning' });
       await vi.advanceTimersByTimeAsync(30_000);
     };
-    return { state, workers, notesFile, events, check, controller, notify, interrupt, run, tool, activity, reachSlice,
-      wait: (index: number) => started[index].promise, actions };
+    return { state, workers, notesFile, events, check, controller, notify, interrupt, open, run, tool, activity, reachSlice,
+      wait: (index: number) => started[index].promise, settle: (index: number, status: string) => done[index].resolve(status), actions };
   }
+
+  it('reminds an independent reviewer to save reproducible work without yielding, then preserves its context handoff', async () => {
+    const f = fixture({ feasibility: true }), completion = f.run(); await f.wait(0);
+    const schedule = f.events.find(event => event.event === 'cooperative_checkpoint_scheduled')!;
+    expect(schedule.details).toMatchObject({ noticeOnly: true, noProgressStreak: 0 });
+    await vi.advanceTimersByTimeAsync(35 * 60_000);
+    expect(f.notify).toHaveBeenCalledOnce();
+    expect(f.notify.mock.calls[0][0]).toContain('A scratch path alone is not a recoverable probe');
+    expect(f.notify.mock.calls[0][0]).toContain('exact failed search scope');
+    expect(f.interrupt).not.toHaveBeenCalled();
+    const notes = 'Checked only finite independent families; no uniform construction found in the searched declarations.\r\n' +
+      'Probe .scratch/tmp/Probe1.lean, rerun with: lake env lean .scratch/tmp/Probe1.lean\r\n' +
+      '```lean\r\nimport Mathlib\r\n#check Finset.sum_eq_single\r\n```\r\n' +
+      'Observed result: the local probe succeeds; the infinite-family inference remains unproved.\r\n' +
+      '```math-result\n{"summary":"Provisional only","conclusion":"supporting"}\n```\n';
+    f.tool(notes);
+    const research = f.state.workers![1];
+    research.contextCheckpoint = { threadId: research.threadId!, requestedAt: Date.now(), requestId: 'review-handoff' };
+    acceptContextCheckpoint(research, f.workers[1].worktree,
+      { kind: 'checkpoint', requestId: 'review-handoff', notesDigest: mathDigest(notes) });
+    await vi.advanceTimersByTimeAsync(5_000); await expect(completion).resolves.toBeUndefined();
+    const draft = f.state.cooperation!.researchDrafts!.investigate;
+    expect(committedSource(f.workers[1].worktree, draft.commit, 'RESEARCH.md')).toBe(notes);
+    expect(draft).toMatchObject({ handoffNotesDigest: mathDigest(notes),
+      feasibilityInputDigest: f.actions[0].assignment.feasibilityInputDigest });
+    const node = f.state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
+    expect(node.status).toBe('pending'); expect(node.researchCompletion).toBeUndefined();
+    expect(f.state.cooperation!.researchCheckpoints?.investigate).toBeUndefined();
+    expect(f.state.cooperation!.deliveries?.filter(record => record.kind === 'research') ?? []).toEqual([]);
+    expect(f.check).not.toHaveBeenCalled(); expect(f.interrupt).toHaveBeenCalledOnce();
+  });
+
+  it('opens a fresh independent reviewer thread when inspection inputs change between interrupted turns', async () => {
+    const f = fixture({ feasibility: true, turns: 2 }), completion = f.run(); await f.wait(0);
+    f.tool('Old-library review notes; still no verdict.\n');
+    f.state.knowledgeDigest = mathDigest('new inspected library knowledge');
+    f.settle(0, 'interrupted'); await f.wait(1);
+    expect(f.actions[1].assignment.assignmentId).not.toBe(f.actions[0].assignment.assignmentId);
+    expect(f.actions[1].assignment.feasibilityInputDigest).not.toBe(f.actions[0].assignment.feasibilityInputDigest);
+    expect(f.open).toHaveBeenCalledTimes(2);
+    expect(f.open.mock.calls[1][0].threadId).toBeUndefined();
+    expect(f.events).toContainEqual(expect.objectContaining({ event: 'context_restarted',
+      details: expect.objectContaining({ reason: 'responsibility' }) }));
+    expect(fs.readFileSync(f.notesFile, 'utf8')).toBe('');
+    f.settle(1, 'interrupted'); await expect(completion).resolves.toBeUndefined();
+    expect(f.check).not.toHaveBeenCalled();
+  });
 
   it.each([undefined, ' \n\t', 'Inherited notes from a different responsibility.\n'])(
     'keeps a search result open until the current assignment saves notes (seed: %j)', async notes => {
