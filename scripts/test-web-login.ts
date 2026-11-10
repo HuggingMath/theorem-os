@@ -183,22 +183,31 @@ try {
   await ready(page);
 
   // Signed in, the account button joins the top bar; when the bar is full the address truncates, and every other control,
-  // the search button included, keeps a target of at least 24px without overlapping its neighbour.
+  // the search button included, keeps a target of at least 24px. Navigation may wrap into another row.
   for (const width of [1440, 1150, 850, 768, 561, 560, 414, 390, 375, 360, 320]) {
     await page.setViewportSize({ width, height: 760 });
     await settled(page);
     const bar = await page.locator('#topbar').evaluate(topbar => ({ scroll: topbar.scrollWidth, client: topbar.clientWidth,
-      // Closed details can retain descendant rectangles; only rendered controls share this row.
+      // Closed details can retain descendant rectangles; compare only rendered controls.
       controls: [...topbar.querySelectorAll<HTMLElement>('button, a, summary')].filter(control => control.checkVisibility()).map(control => {
         const box = control.getBoundingClientRect();
-        return { name: control.id || control.className.split(' ')[0], left: box.left, right: box.right, width: box.width, height: box.height };
+        return { name: control.id || control.className.split(' ')[0], left: box.left, right: box.right,
+          top: box.top, bottom: box.bottom, width: box.width, height: box.height };
       }).sort((a, b) => a.left - b.left) }));
     assert.ok(bar.scroll <= bar.client, `The signed-in top bar overflows at ${width}px: ${JSON.stringify(bar)}`);
     for (const name of ['palette-trigger', 'open-settings', 'locale-switch', 'open-account'])
       assert.ok(bar.controls.some(control => control.name === name && control.right <= width), `${name} is missing at ${width}px: ${JSON.stringify(bar.controls)}`);
-    for (const control of bar.controls) assert.ok(control.width >= 24 && control.height >= 24, `${control.name} is under 24px at ${width}px: ${JSON.stringify(control)}`);
-    for (const [index, control] of bar.controls.slice(1).entries())
-      assert.ok(control.left >= bar.controls[index].right - 0.5, `${bar.controls[index].name} and ${control.name} overlap at ${width}px: ${JSON.stringify(bar.controls)}`);
+    for (const control of bar.controls) {
+      assert.ok(control.width >= 24 && control.height >= 24, `${control.name} is under 24px at ${width}px: ${JSON.stringify(control)}`);
+      assert.ok(control.left >= -0.5 && control.right <= width + 0.5 && control.top >= -0.5 && control.bottom <= 760.5,
+        `${control.name} leaves the viewport at ${width}px: ${JSON.stringify(control)}`);
+    }
+    for (const [index, control] of bar.controls.entries()) for (const other of bar.controls.slice(index + 1)) {
+      const overlapWidth = Math.min(control.right, other.right) - Math.max(control.left, other.left);
+      const overlapHeight = Math.min(control.bottom, other.bottom) - Math.max(control.top, other.top);
+      assert.ok(overlapWidth <= 0.5 || overlapHeight <= 0.5,
+        `${control.name} and ${other.name} overlap at ${width}px: ${JSON.stringify([control, other])}`);
+    }
     if ([850, 320].includes(width)) {
       await fs.writeFile(path.join(output, `topbar-${width}.json`), JSON.stringify(bar, null, 2) + '\n');
       await page.screenshot({ path: path.join(output, `topbar-${width}.png`) });

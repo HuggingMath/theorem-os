@@ -170,16 +170,33 @@ try {
   await save(owner, 'POST', projectPath + '/issues/' + issue.id + '/resolution', () => ownerIssue.getByRole('button', { name: '记录决议', exact: true }).click());
   checks.push({ name: phase, draftPreserved: true, staleDecisionBlocked: true, explicitRevisionAcknowledgement: true, originalResolutionRetained: true });
 
-  phase = 'inbox-read-vs-processed'; await open(peer, 'workspace.html?tab=inbox');
+  phase = 'inbox-read-vs-processed'; await open(peer, 'workspace.html?tab=inbox&inbox=claim');
   const claim = inbox.locator('[data-inbox-item^="claim:"]'); await claim.waitFor(); const claimKey = (await claim.getAttribute('data-inbox-item'))!;
   await save(peer, 'POST', '/api/research/collaboration/inbox/' + encodeURIComponent(claimKey), () => claim.getByRole('button', { name: '标为已读', exact: true }).click());
-  let claimState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === claimKey)!;
-  assert.equal(claimState.read, true); assert.equal(claimState.processed, false);
-  await save(peer, 'POST', '/api/research/collaboration/inbox/' + encodeURIComponent(claimKey), () => claim.getByRole('button', { name: '从我的待办收起', exact: true }).click());
-  await open(peer, 'workspace.html?tab=inbox'); await inbox.getByRole('button', { name: '已处理', exact: true }).click(); await inbox.locator('[data-inbox-item="' + claimKey + '"]').waitFor();
-  claimState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === claimKey)!; assert.equal(claimState.processed, true);
+  const claimState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === claimKey)!;
+  assert.equal(claimState.read, true); assert.equal(claimState.processed, false); assert.equal(claimState.category, 'progress');
+  assert.equal(await claim.getByRole('button', { name: '从我的待办收起', exact: true }).count(), 0);
   assert.equal(new URL(claimState.href, origin).searchParams.get('taskVersion'), 'goal-v1');
-  checks.push({ name: phase, independentReadState: true, processedPersistedAfterReload: true, preciseTaskLink: true });
+  // Claims record progress; an unresolved reply provides the separate read and dismiss actions.
+  const resolvedIssue = (await http<{ item: { issues: ResearchIssue[] } }>(owner, 'GET', projectPath + '/collaboration')).item.issues.find(item => item.id === issue.id)!;
+  const reopenedIssue = (await http<{ item: ResearchIssue }>(owner, 'POST', projectPath + '/issues/' + issue.id + '/resolution',
+    { requestId: crypto.randomUUID(), expectedRevision: resolvedIssue.revision, action: 'reopen', text: '请核对一处补充边界' })).item;
+  const updatedIssue = (await http<{ item: ResearchIssue }>(owner, 'POST', projectPath + '/issues/' + issue.id + '/replies',
+    { requestId: crypto.randomUUID(), expectedRevision: reopenedIssue.revision, kind: 'comment', text: '补充边界已列出，等待同行核对' })).item;
+  const replyKey = 'reply:' + updatedIssue.replies.at(-1)!.id;
+  await open(peer, 'workspace.html?tab=inbox');
+  const pendingReply = inbox.locator('[data-inbox-item="' + replyKey + '"]'); await pendingReply.waitFor();
+  await save(peer, 'POST', '/api/research/collaboration/inbox/' + encodeURIComponent(replyKey), () => pendingReply.getByRole('button', { name: '标为已读', exact: true }).click());
+  let replyState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === replyKey)!;
+  assert.equal(replyState.read, true); assert.equal(replyState.processed, false); assert.equal(replyState.category, 'reply');
+  await save(peer, 'POST', '/api/research/collaboration/inbox/' + encodeURIComponent(replyKey), () => pendingReply.getByRole('button', { name: '从我的待办收起', exact: true }).click());
+  await open(peer, 'workspace.html?tab=inbox'); await inbox.getByRole('combobox', { name: '其他消息范围', exact: true }).selectOption('processed');
+  await pendingReply.waitFor();
+  replyState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === replyKey)!;
+  assert.equal(replyState.processed, true); assert.equal(new URL(replyState.href, origin).searchParams.get('taskVersion'), 'goal-v1');
+  await http(owner, 'POST', projectPath + '/issues/' + issue.id + '/resolution',
+    { requestId: crypto.randomUUID(), expectedRevision: updatedIssue.revision, action: 'resolve', text: '补充边界已核对，继续采用原方案' });
+  checks.push({ name: phase, claimIsProgress: true, independentReadState: true, processedPersistedAfterReload: true, preciseTaskLink: true });
 
   phase = 'public-application-accept-and-decline'; project = (await http<{ item: ResearchProjectDetail }>(owner, 'GET', projectPath)).item;
   await http(owner, 'PATCH', projectPath, { requestId: crypto.randomUUID(), expectedRevision: project.revision, visibility: 'public' });

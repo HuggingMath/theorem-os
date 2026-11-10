@@ -94,7 +94,12 @@ describe('conditional consumer with an older library import context', () => {
     expect(proof.imports).toEqual([{ file: 'Submission.lean', module }]);
     const projected = createTaskSourceProjector(problem, workers[2].worktree, commit)(consumer.task, [], [producer.task]);
     expect(projections.some(item => item.theorem === 'Original.target' && item.source === projected.get('Submission.lean'))).toBe(true);
-    expect(projections.some(item => item.theorem === 'Original.target' && item.source.includes('(producer : Frozen.value = 0)'))).toBe(true);
+    const conditionalType = /^theorem target : theorem_os_conditional_type% (.+) :=$/mu.exec(projected.get('Submission.lean')!);
+    expect(conditionalType).not.toBeNull();
+    expect(JSON.parse(JSON.parse(conditionalType![1]!))).toEqual({
+      declaration: 'theorem target : True := by trivial\n',
+      dependencies: [{ theoremName: 'Original.producer', type: 'Frozen.value = 0' }],
+    });
     expect(node('consumer').integratedCheck).toMatchObject({ passed: true });
     expect(node('consumer').integratedCheck!.conditions).toBeUndefined();
     expect(committedSource(workspace, state.cooperation!.canonicalCommit!, `${problem.projectRelative}/Submission.lean`))
