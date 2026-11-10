@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -126,6 +127,68 @@ describe.skipIf(process.platform !== 'linux' || !tools)('precompressed proof env
     expect(phases).not.toContain('building_image'); expect(phases).not.toContain('copying_dependencies');
     expect(phases.filter(phase => phase === 'verifying_source')).toHaveLength(2);
     expect(() => environment.verify()).not.toThrow();
+  });
+
+  it('releases uncompressed staging data between checks and publishes one physical image on the same filesystem', async () => {
+    const scratch = path.join(root, 'scratch'); fs.mkdirSync(scratch);
+    vi.spyOn(os, 'tmpdir').mockReturnValue(scratch);
+    const inventory = (directory: string): string[] => fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+      const file = path.join(directory, entry.name);
+      return entry.isDirectory() ? inventory(file) : [file];
+    });
+    const checked: string[] = [];
+    let imageInode: number | undefined;
+    const seed = await build({ onProgress: phase => {
+      if (phase !== 'verifying_image' && phase !== 'verifying_source') return;
+      // At both transitions only the compressed image needs storage. Neither
+      // uncompressed copy may linger into the next full-tree operation.
+      const files = inventory(scratch);
+      expect(files).toHaveLength(1);
+      expect(fs.statSync(files[0]).size).toBeGreaterThan(0);
+      imageInode = fs.statSync(files[0]).ino;
+      checked.push(phase);
+    } });
+    expect(checked).toEqual(['verifying_image', 'verifying_source']);
+    const published = fs.statSync(path.join(output, seed.imageName));
+    expect(published.ino).toBe(imageInode);
+    expect(published.nlink).toBe(1);
+    expect(fs.readdirSync(scratch)).toEqual([]);
+    expect(seed.imageSha256).toBe(mathDigest(fs.readFileSync(path.join(output, seed.imageName))));
+  });
+
+  it('publishes verified image bytes when the output is on another filesystem', async () => {
+    vi.spyOn(fs, 'linkSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('cross-device fixture'), { code: 'EXDEV' });
+    });
+    const seed = await build();
+    const image = path.join(output, seed.imageName);
+    expect(seed.imageSha256).toBe(mathDigest(fs.readFileSync(image)));
+    expect(fs.statSync(image).mode & 0o777).toBe(0o444);
+    expect(readMathProofEnvironmentSeed(manifest, mathProofEnvironmentConfiguration(project))).toBeDefined();
+  });
+
+  it('removes partial publication and staging data after a disk write failure', async () => {
+    const scratch = path.join(root, 'scratch'); fs.mkdirSync(scratch);
+    vi.spyOn(os, 'tmpdir').mockReturnValue(scratch);
+    const write = fs.writeFileSync;
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+      if (file === manifest) throw Object.assign(new Error('disk full fixture'), { code: 'ENOSPC' });
+      return write(file, data, options);
+    });
+    await expect(build()).rejects.toThrow('disk full fixture');
+    expect(fs.existsSync(output)).toBe(false);
+    expect(fs.readdirSync(scratch)).toEqual([]);
+    expect(fs.readFileSync(path.join(packages, 'Public.lean'), 'utf8')).toContain('by trivial');
+  });
+
+  it('preserves an output directory created by another build during verification', async () => {
+    const sentinel = path.join(output, 'other-build');
+    await expect(build({ onProgress: phase => {
+      if (phase !== 'verifying_source') return;
+      fs.mkdirSync(output); fs.writeFileSync(sentinel, 'other build owns this directory');
+    } })).rejects.toThrow();
+    expect(fs.readdirSync(output)).toEqual(['other-build']);
+    expect(fs.readFileSync(sentinel, 'utf8')).toBe('other build owns this directory');
   });
 
   it('seals queryable library sources and metadata without Lake build products, and requires an explicit sources consumer', async () => {

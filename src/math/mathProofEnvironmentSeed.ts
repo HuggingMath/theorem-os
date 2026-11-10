@@ -136,6 +136,9 @@ export async function buildMathProofEnvironmentSeed(projectRoot: string, authori
     phase('building_image');
     await run('mksquashfs', [source, image, '-noappend', '-quiet', '-no-progress', '-processors', '2',
       '-mem', '128M', '-comp', 'lz4']);
+    // The image is now the snapshot. Release its uncompressed input before making
+    // the independent extraction; the authorized source is checked again below.
+    fs.rmSync(source, { recursive: true });
     phase('verifying_image');
     await run('unsquashfs', ['-no-progress', '-processors', '2', '-d', extracted, image]);
     const paths: string[] = [];
@@ -160,6 +163,7 @@ export async function buildMathProofEnvironmentSeed(projectRoot: string, authori
     const mountedMetadata = readLeanProbeSnapshotFile(path.join(extracted, MATH_PROOF_ENVIRONMENT_METADATA), checkpoint);
     if (mountedMetadata.digest !== mathDigest(metadataBytes) || mountedMetadata.mode !== 0o400)
       throw new Error('Proof environment seed metadata changed.');
+    fs.rmSync(extracted, { recursive: true });
     phase('verifying_source');
     if (canonicalMathJson(listLeanProbePackageInputs(authorizedPackagesRoot, checkpoint, options.contents)) !== canonicalMathJson(inputs))
       throw new Error('Proof environment dependency set changed during seed creation.');
@@ -176,9 +180,19 @@ export async function buildMathProofEnvironmentSeed(projectRoot: string, authori
       helperSha256: mathDigest(MATH_SEALED_ENVIRONMENT_HELPER), imageName: 'dependencies.squashfs',
       imageSha256: imageSnapshot.digest, imageBytes: imageSnapshot.bytes, metadata });
     checkpoint();
-    fs.mkdirSync(outputRoot, { recursive: true, mode: 0o700 }); createdOutput = true;
-    fs.copyFileSync(image, path.join(outputRoot, seed.imageName), fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(path.join(outputRoot, seed.imageName), 0o444);
+    fs.mkdirSync(path.dirname(outputRoot), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(outputRoot, { mode: 0o700 }); createdOutput = true;
+    const publishedImage = path.join(outputRoot, seed.imageName);
+    try {
+      // Link without replacing an existing file, then relinquish the temporary
+      // name. Same-filesystem publication needs no second compressed image.
+      fs.linkSync(image, publishedImage);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+      fs.copyFileSync(image, publishedImage, fs.constants.COPYFILE_EXCL);
+    }
+    fs.unlinkSync(image);
+    fs.chmodSync(publishedImage, 0o444);
     fs.writeFileSync(path.join(outputRoot, 'manifest.json'), `${canonicalMathJson(seed)}\n`, { flag: 'wx', mode: 0o444 });
     fs.chmodSync(outputRoot, 0o555);
     return seed;
