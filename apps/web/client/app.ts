@@ -76,7 +76,8 @@ import { classicLibraryUrl } from './classicLibrary';
 import { renderContinuationPreview } from './productFlowView';
 import { relatedResearchRuns, type ContinuationPreview } from './productFlow';
 import type { InstalledLibraryDetail } from '../installedLibraryTypes';
-import { libraryReferenceKeys, libraryReferenceText, readLibraryReference } from './installedLibraryReference';
+import { libraryReferenceKeys, libraryReference, readLibraryReference } from './installedLibraryReference';
+import { readEditedProblemId } from './chatDraft';
 import { clearResearchProblemDraft, loadResearchProblemDraft, readResearchProblemDraft, researchProblemDraftKeys } from './researchProblemDraft';
 import { renderResearchProblemDraft } from './ui/ResearchProblemDraft';
 
@@ -187,16 +188,18 @@ async function loadNaturalResearch() {
     connected: () => state.connected,
     draftScope: state.session ? ownerOfSession(state.session) : '',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
-    onNavigate: (id, mode, attached) => {
+    onNavigate: (id, mode, attached, editedProblem) => {
       chatArtifacts.clear();
       researchEntry = 'natural'; document.body.dataset.entry = 'natural'; placeInputMode();
       if (linkedLibraryReference && (mode === 'push' || linkedLibraryReference.chat !== id)) linkedLibraryReference = undefined;
       if (linkedProblemDraft && (mode === 'push' || id)) dismissProblemDraft();
       const parameters = new URLSearchParams(id ? { chat: id } : {});
+      if (editedProblem) parameters.set('editProblem', editedProblem);
       if (linkedLibraryReference && linkedLibraryReference.chat === id) {
         parameters.set('libraryModule', linkedLibraryReference.file);
         parameters.set('libraryCatalog', linkedLibraryReference.catalogDigest);
         parameters.set('libraryDeclaration', linkedLibraryReference.declaration);
+        if (linkedLibraryReference.editedProblem) parameters.set('editProblem', linkedLibraryReference.editedProblem);
       }
       if (linkedProblemDraft) {
         const original = new URLSearchParams(location.search);
@@ -243,18 +246,18 @@ async function loadNaturalResearch() {
   await chatWorkspace.start(linkedProblemDraft ? undefined : currentRun());
   if (linkedProblemDraft) void showProblemDraft();
   const reference = linkedLibraryReference, workspace = chatWorkspace, session = state.session;
-  if (reference && reference.chat === workspace.id) {
+  if (reference && reference.chat === workspace.id && reference.editedProblem === workspace.editingProblem) {
     try {
       const { item } = await api<{ item: InstalledLibraryDetail }>(`/api/research/library/installed/module?${new URLSearchParams({ file: reference.file, catalogDigest: reference.catalogDigest })}`);
-      if (!sameSession(session) || workspace !== chatWorkspace || workspace.id !== reference.chat) return;
-      if (!workspace.includeLibraryReference(libraryReferenceText(item, reference.declaration))) throw new Error(t('暂时无法加入引用，原有输入已保留。请重新打开此接口。'));
+      if (!sameSession(session) || workspace !== chatWorkspace || workspace.id !== reference.chat || workspace.editingProblem !== reference.editedProblem) return;
+      if (!workspace.includeLibraryReference(libraryReference(item, reference.declaration))) throw new Error(t('暂时无法加入引用，原有输入已保留。请重新打开此接口。'));
       linkedLibraryReference = undefined;
       const next = new URL(location.href);
       for (const key of libraryReferenceKeys) next.searchParams.delete(key);
       history.replaceState(null, '', next);
-      toast(t('已将数学库接口加入输入框，可继续补充题目或发送。'));
+      toast(t('已加入数学库参考，可继续补充题目或发送。'));
     } catch (error) {
-      if (sameSession(session) && workspace === chatWorkspace && workspace.id === reference.chat)
+      if (sameSession(session) && workspace === chatWorkspace && workspace.id === reference.chat && workspace.editingProblem === reference.editedProblem)
         workspace.libraryReferenceFailed(t('引用数学库失败：{0}', message(error)));
     }
   }
@@ -270,7 +273,7 @@ async function showProblemDraft() {
   if (!reference || !workspace || workspace.id) return;
   const revision = ++problemDraftRevision;
   const current = () => revision === problemDraftRevision && linkedProblemDraft === reference && workspace === chatWorkspace && !workspace.id && sameSession(session);
-  const common = { onDismiss: dismissProblemDraft, onRetry: () => void showProblemDraft(), onInclude: () => {} };
+  const common = { onDismiss: dismissProblemDraft, onRetry: () => void showProblemDraft(), onInclude: () => {}, onAppend: () => {} };
   renderResearchProblemDraft(element('#research-problem-draft'), { ...common, loading: true });
   try {
     const candidate = await loadResearchProblemDraft(reference, { json: api, currentHref: location.href, locale, text: async url => {
@@ -279,11 +282,12 @@ async function showProblemDraft() {
       return response.text();
     } });
     if (!current()) return;
-    renderResearchProblemDraft(element('#research-problem-draft'), { ...common, candidate, onInclude: () => {
+    const include = (independent: boolean) => {
       if (!current()) return;
-      if (!workspace.includeProblemDraft(candidate.text, candidate.environment)) { toast(t('暂时无法加入原题，现有草稿已保留。')); return; }
-      dismissProblemDraft(); toast(t('原题已加入草稿，可修改后发送。'));
-    } });
+      if (!workspace.includeProblemDraft(candidate.text, candidate.environment, independent ? candidate.draftId : undefined)) { toast(t('暂时无法加入原题，现有草稿已保留。')); return; }
+      dismissProblemDraft(); toast(independent ? t('已打开独立研究草稿，可修改后发送。') : t('原题已追加到首页草稿，可修改后发送。'));
+    };
+    renderResearchProblemDraft(element('#research-problem-draft'), { ...common, candidate, onInclude: () => include(true), onAppend: () => include(false) });
   } catch (error) {
     if (current()) renderResearchProblemDraft(element('#research-problem-draft'), { ...common, error: message(error) });
   }
@@ -2010,7 +2014,8 @@ let addressMode: 'push' | 'replace' = 'replace';
 function syncAddress() {
   const mode = addressMode; addressMode = 'replace';
   // Until the first list arrives the selection is not known yet, and a ?run= or ?sample link must survive until it is.
-  if (!state.resumed || sampleLink || formalizationLink || linkedLibraryReference || linkedProblemDraft || chatWorkspace?.id || new URLSearchParams(location.search).has('chat') && !chatWorkspace) return;
+  if (!state.resumed || sampleLink || formalizationLink || linkedLibraryReference || linkedProblemDraft || chatWorkspace?.id || chatWorkspace?.editingProblem
+    || (new URLSearchParams(location.search).has('chat') || readEditedProblemId(new URLSearchParams(location.search))) && !chatWorkspace) return;
   const run = currentRun(), search = withAddressLanguage(!run ? '' : isSample(run) ? sampleAddress : `?run=${encodeURIComponent(run.id)}`);
   if (location.search === search) return;
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search + location.hash);
@@ -2535,7 +2540,8 @@ function renderShell() {
     : running.length ? { label: t('{0} 项研究进行中', running.length), detail: '', tone: 'running', count: running.length } : undefined;
   renderTopbar(element('#topbar'), {
     model: researchEntry === 'natural' && !run ? t('默认版配置') : field('model').value || t('模型配置'), mac, live,
-    libraryHref: chatWorkspace?.id ? `library.html?${new URLSearchParams({ workbenchChat: chatWorkspace.id })}` : 'library.html',
+    libraryHref: chatWorkspace?.id ? `library.html?${new URLSearchParams({ workbenchChat: chatWorkspace.id })}`
+      : chatWorkspace?.editingProblem ? `library.html?${new URLSearchParams({ workbenchEdit: chatWorkspace.editingProblem })}` : 'library.html',
     history: { docked: historyDocked(), expanded: !historyCollapsed() },
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
@@ -3838,9 +3844,15 @@ window.addEventListener('popstate', () => {
   if (!state.resumed || state.submitting) return;
   const parameters = new URLSearchParams(location.search); parameters.delete('lang');
   const chatId = parameters.get('chat');
+  const editedProblem = readEditedProblemId(parameters);
   if (chatId) {
     chooseEntry('natural');
     void naturalPage?.then(() => chatWorkspace?.open(chatId, 'replace'));
+    return;
+  }
+  if (editedProblem) {
+    chooseEntry('natural');
+    void naturalPage?.then(() => chatWorkspace?.openEditedProblem(editedProblem, undefined, 'replace'));
     return;
   }
   const id = parameters.get('run') ?? '';

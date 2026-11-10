@@ -98,8 +98,9 @@ function explanationDocument(target: string): WebExplanationDocument {
     sections: [{ name: target, kind: 'theorem', target: true, title: first ? '加法交换律' : '加法右单位元', statement,
       lines: { start: 1, end: 2 }, signature: { start: 1, end: 1 }, unexplained: [], statementReviews: [],
       steps: [{ text: first ? '将自然数 a 和 b 代入加法交换律，得到所需等式。' : '应用自然数加零定理，直接得到目标。',
-        uses: [{ name: first ? 'Nat.add_comm' : 'Nat.add_zero', place: 'step', spans: [] }], lines: [{ start: 2, end: 2 }], reviews: [] }] },
-    { name: 'supporting_identity', kind: 'theorem', target: false, title: '辅助声明', statement: '辅助声明保留在展开项中。',
+        uses: [{ name: first ? 'Nat.add_comm' : 'Nat.add_zero', place: 'step', spans: [] },
+          ...(first ? [{ name: 'supporting_identity', place: 'declaration' as const, spans: [] }] : [])], lines: [{ start: 2, end: 2 }], reviews: [] }] },
+    { name: 'supporting_identity', kind: 'definition', target: false, title: '辅助定义', statement: '辅助定义保留在展开项中。',
       lines: { start: 4, end: 5 }, signature: { start: 4, end: 4 }, unexplained: [], statementReviews: [], steps: [] }],
     metrics: { declarations: 2, steps: 1, citations: 1, excerptCoverage: 1, proofLines: 1, explainedLines: 1, ambiguousExcerpts: 0 },
     model: 'recorded-fixture', effort: 'high', auditors: 2, rounds: 1, tokens: null };
@@ -123,6 +124,16 @@ async function fit(page: Page) {
 async function screenshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(output, name), fullPage: true, timeout: 0 }); screenshots.push(name);
 }
+async function visibleNavigation(page: Page, labels: string[]) {
+  const links = page.locator('#topbar .research-space-links a');
+  assert.deepEqual(await links.allTextContents(), labels);
+  const boxes = await links.evaluateAll(items => items.map(item => {
+    const box = item.getBoundingClientRect();
+    return { width: box.width, height: box.height, left: box.left, right: box.right, top: box.top, bottom: box.bottom, cut: item.scrollWidth > item.clientWidth + 1 };
+  }));
+  for (const box of boxes) assert(box.width > 0 && box.height >= 24 && !box.cut && box.left >= 0 && box.right <= page.viewportSize()!.width
+    && box.top >= 0 && box.bottom <= page.viewportSize()!.height, `navigation label is fully visible: ${JSON.stringify(box)}`);
+}
 async function beforeProcess(page: Page, selector: string) {
   assert.equal(await page.locator(selector).evaluate(element => {
     const process = document.querySelector('[data-solve-process]');
@@ -134,11 +145,11 @@ try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ locale: 'zh-CN', viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
-    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    await context.addInitScript(key => { if (!localStorage.getItem(key)) localStorage.setItem(key, 'zh'); }, localeStorageKey);
     const accepted = run('completed'), missing = run('completed'), working = run('running'), unavailable = run('completed'),
       queued = run('completed'), generating = run('completed'), failed = run('completed'), cancelled = run('completed'), exhausted = run('completed');
     const runs = [accepted, missing, working, unavailable, queued, generating, failed, cancelled, exhausted], conversations = runs.map(conversation);
-    let generated = false;
+    let generated = false, failAcceptedOverview = false;
     let browsingSaved = false;
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
@@ -156,6 +167,9 @@ try {
         if (!endpoint) { await route.fulfill({ json: { run: selectedRun } }); return; }
         if (endpoint === '/explanations') {
           reads.push(url.pathname);
+          if (selectedRun === accepted && failAcceptedOverview) {
+            await route.fulfill({ status: 503, json: { error: '临时读取失败（本地模拟）' } }); return;
+          }
           const fixtureStatus = selectedRun === queued ? 'queued' : selectedRun === generating && !generated ? 'running'
             : selectedRun === failed ? 'error' : selectedRun === cancelled ? 'cancelled' : selectedRun === exhausted ? 'exhausted' : undefined;
           const entries = fixtureStatus ? [{ ...explanation(selectedRun, 'swap_sum'), document: undefined, status: fixtureStatus,
@@ -180,6 +194,8 @@ try {
     const page = active = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/', { timeout: 0 });
+    await page.locator('#topbar .research-space-links').waitFor({ timeout: 0 });
+    await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', 'Library']);
     const participation = page.locator('[data-chat-participation-control]'), input = page.locator('#formalize-original');
     await participation.waitFor({ timeout: 0 });
     assert.equal(await participation.evaluate((element: HTMLDetailsElement) => element.open), false);
@@ -189,8 +205,17 @@ try {
     const inputBox = await input.boundingBox(); assert.ok(inputBox && inputBox.y >= 0 && inputBox.y < 1000, 'the task input is immediately visible');
     await fit(page); await screenshot(page, `${width}-input-first.png`);
     await page.locator('#formalize-settings > summary').click();
+    const advanced = page.locator('[data-chat-advanced-settings]');
+    assert.equal(await advanced.evaluate((node: HTMLDetailsElement) => node.open), false, 'optional settings start collapsed');
+    for (const selector of ['#formalize-provider', '#formalize-model', '#formalize-key', '#check-model-connection'])
+      assert.equal(await page.locator(selector).isVisible(), true, `${selector} is available in primary setup`);
+    for (const selector of ['#formalize-environment', '#formalize-effort', ...budgetInputs])
+      assert.equal(await page.locator(selector).isVisible(), false, `${selector} belongs to optional advanced setup`);
+    await screenshot(page, `${width}-simple-settings.png`);
+    await advanced.locator(':scope > summary').click({ timeout: 0 });
     for (const selector of budgetInputs) { assert.equal(await page.locator(selector).inputValue(), ''); assert.equal(await page.locator(selector).getAttribute('placeholder'), '不限'); }
     await fit(page); await screenshot(page, `${width}-unlimited-settings.png`);
+    await advanced.locator(':scope > summary').click({ timeout: 0 });
     mark(`${width}: visible task input, collapsed guided participation and empty unlimited budgets`);
     await page.locator('#formalize-settings > summary').click();
     const draft = '保留这份题目草稿，在配置 Key 后再发送。';
@@ -215,9 +240,33 @@ try {
     assert.equal(await answer.locator('.chat-answer-uses code').innerText(), 'Nat.add_comm');
     assert.equal(await answer.locator('.chat-answer-support').evaluate((element: HTMLDetailsElement) => element.open), false);
     assert.equal(await answer.locator('[data-chat-answer-select] option').count(), 2);
+    assert.equal(await answer.locator('[data-chat-answer-select] option:checked').innerText(), '加法交换律');
     await beforeProcess(page, '[data-chat-answer]');
     await answer.locator('h3').scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-saved-explanation.png`);
+    await input.fill('保留已写的独立追问。');
+    await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
+    const followup = await input.inputValue();
+    assert.ok(followup.startsWith('保留已写的独立追问。\n\n'));
+    for (const text of ['加法交换律', '第 1 步', '对任意自然数', '将自然数 a 和 b', 'Nat.add_comm', accepted.id]) assert.ok(followup.includes(text));
+    assert.deepEqual(writes, [], 'step questioning prepares a draft without sending it');
+    await answer.locator('[data-chat-answer-use="supporting_identity"]').click();
+    assert.equal(await answer.locator('.chat-answer-support').evaluate((element: HTMLDetailsElement) => element.open), true);
+    assert.match(await answer.locator('.chat-answer-support').innerText(), /辅助定义保留/u);
+    await fit(page); await screenshot(page, `${width}-step-question-and-definition.png`);
+    mark(`${width}: human target title, selected-step question with precise context, existing follow-up preservation and local definition expansion`);
+
+    failAcceptedOverview = true;
+    await answer.locator('[data-chat-answer-refresh]').click();
+    await answer.locator('[data-chat-answer-retry]').waitFor({ timeout: 0 });
+    assert.equal(await answer.locator('[data-chat-answer-document="swap_sum"]').count(), 1);
+    assert.match(await answer.innerText(), /刷新失败，下面保留上次读取的解答/u);
+    await answer.locator('h3').scrollIntoViewIfNeeded();
+    await fit(page); await screenshot(page, `${width}-refresh-preserves-explanation.png`);
+    failAcceptedOverview = false; await answer.locator('[data-chat-answer-retry]').click();
+    await page.waitForFunction(() => !document.querySelector('[data-chat-answer-retry]'), undefined, { timeout: 0 });
+    assert.equal(await answer.locator('[data-chat-answer-document="swap_sum"]').count(), 1);
+    mark(`${width}: transient read failure preserves the readable solution and retry recovers in place`);
     await answer.locator('[data-chat-answer-select]').selectOption('identity_sum');
     await answer.locator('[data-chat-answer-document="identity_sum"]').waitFor({ timeout: 0 });
     assert.match(await answer.innerText(), /零是自然数加法的右单位元/u);
@@ -235,6 +284,39 @@ try {
       assert.equal(await more.locator(selector).isVisible(), true);
     await fit(page); await screenshot(page, `${width}-more-result-actions.png`);
     mark(`${width}: accepted proof stays directly accessible and secondary result actions remain in the collapsed menu`);
+
+    await more.getByRole('button', { name: '修改题目', exact: true }).click();
+    await page.locator('[data-chat-editing-problem]').waitFor({ timeout: 0 });
+    assert.equal(new URL(page.url()).searchParams.get('editProblem'), conversations[0].id);
+    assert.equal(await input.inputValue(), conversations[0].messages[0].text);
+    const edited = '任务 A 的独立修改：请进一步证明交换律的变体。';
+    await input.fill(edited); await page.reload({ timeout: 0 });
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 0 });
+    assert.equal(await page.locator('[data-chat-editing-problem]').count(), 1);
+    await page.locator('[data-chat-return-home]').click();
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, draft, { timeout: 0 });
+    assert.equal(new URL(page.url()).search, '');
+    await page.goBack({ timeout: 0 });
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 0 });
+    await fit(page); await screenshot(page, `${width}-separate-problem-edit.png`);
+    assert.deepEqual(writes, []);
+    mark(`${width}: editing a historical problem preserves the home draft and the separate edit through reload and browser Back`);
+    let libraryLink = page.locator('#topbar a[data-workbench-library]');
+    if (!await libraryLink.isVisible()) {
+      await page.locator('[data-research-mobile-navigation] > summary').click();
+      libraryLink = page.locator('[data-research-mobile-link="library"]');
+    }
+    await libraryLink.click();
+    await page.locator('.research-page .topbar').waitFor({ timeout: 0 });
+    assert.equal(new URL(page.url()).searchParams.get('workbenchEdit'), conversations[0].id);
+    const editReturn = page.locator('.topbar a').filter({ hasText: '工作台' });
+    assert.equal(new URL(await editReturn.getAttribute('href') ?? '', page.url()).searchParams.get('editProblem'), conversations[0].id);
+    await editReturn.click();
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 0 });
+    assert.equal(await page.locator('[data-chat-editing-problem]').count(), 1);
+    await page.locator('[data-chat-return-home]').click();
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, draft, { timeout: 0 });
+    mark(`${width}: Library browsing returns to the separate edited problem and keeps the original home draft intact`);
 
     await page.goto(`${origin}/?chat=${conversations[1].id}`, { timeout: 0 });
     await page.waitForFunction(() => document.querySelector('[data-chat-answer]')?.textContent?.includes('这份验收证明还没有可阅读的讲解。'), undefined, { timeout: 0 });
@@ -299,6 +381,17 @@ try {
     assert.equal(await mathematics.locator('[data-chat-math-finding]').isVisible(), true);
     await screenshot(page, `${width}-mathematical-findings.png`);
     mark(`${width}: checked helpers, current work, blocker and untimestamped finding precede technical process details without claiming whole-proof acceptance`);
+    if (width === 320) {
+      await page.goto(origin + '/', { timeout: 0 }); await input.waitFor({ timeout: 0 });
+      await page.setViewportSize({ width: 640, height: 360 });
+      await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', 'Library']); await fit(page);
+      await screenshot(page, '640-360-visible-navigation.png');
+      await page.setViewportSize({ width: 320, height: 568 });
+      await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), page.locator('#locale-switch').click({ timeout: 0 })]);
+      await input.waitFor({ timeout: 0 }); await visibleNavigation(page, ['Workbench', 'My research', 'Theorem', 'Mathematicians', 'Library']); await fit(page);
+      await screenshot(page, '320-en-visible-navigation.png');
+      mark('visible text navigation fits Chinese 640×360 landscape and English 320px without opening a menu');
+    }
     await context.close(); active = undefined;
   }
   assert.deepEqual(forbiddenCalls, []); assert.deepEqual(external, []); assert.deepEqual(errors, []); assert.deepEqual(writes, []);

@@ -13,6 +13,10 @@ import { CollaborationIssues, CollaborationMembership, CollaborationTaskWorkspac
 import { BookmarkControl } from './researchCollections';
 import { OpenAIProblems, type ProblemSort } from './researchOpenAIProblems';
 import { projectProblemDraftHref } from './researchProblemDraft';
+import { webDraftOwner } from './ownedDrafts';
+import { useResearchProjectDraft } from './researchProjectDraft';
+import { ResearchDraftStore } from './researchDraftStore';
+import { readPeopleReturn, withPeopleReturn } from './researchPeopleReturn';
 import { RichProse } from './richText';
 import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
 import { discussionDraftMatches, type DiscussionDraft } from './researchDiscussionDraft';
@@ -23,6 +27,7 @@ import { api, base, Check, enc, Empty, ErrorBox, Field, FollowButton, lines, Mut
 
 export function TheoremsPage({ context }: { context: ResearchContext }) {
   const parameters = new URLSearchParams(location.search), selected = parameters.get('id') ?? '';
+  const requestedResearcher = parameters.get('addResearcher') ?? '', addResearcher = /^[A-Za-z0-9_-]{1,128}$/u.test(requestedResearcher) ? requestedResearcher : undefined;
   const [collection, setCollection] = useState<'solved' | 'research'>(selected || parameters.get('collection') === 'research' ? 'research' : 'solved');
   const [sort, setSort] = useState<ProblemSort>(parameters.get('sort') === 'title' ? 'title' : 'newest'), [searchReset, setSearchReset] = useState(0);
   const [query, setQuery] = useState(parameters.get('q') ?? ''), [field, setField] = useState(parameters.get('field') ?? ''),
@@ -42,7 +47,8 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
   if (collection === 'solved' && sort !== 'newest') browse.set('sort', sort);
   if (query) browse.set('q', query); if (field) browse.set('field', field); if (offset) browse.set('offset', String(offset));
   const browseHref = researchContextHref(`theorems.html${browse.size ? `?${browse}` : ''}`, location.search);
-  const createHref = `${browseHref}${browse.size ? '&' : '?'}create=1`;
+  const peopleReturn = readPeopleReturn(location.search);
+  const createHref = `${browseHref}${browse.size ? '&' : '?'}create=1${addResearcher ? `&addResearcher=${enc(addResearcher)}` : ''}`;
   useEffect(() => {
     const next = new URL(location.href);
     for (const key of ['collection', 'q', 'field', 'offset', 'sort']) { const value = browse.get(key); value ? next.searchParams.set(key, value) : next.searchParams.delete(key); }
@@ -62,10 +68,12 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
       ? <a class="button button-primary" href={createHref}>{tx('新建定理', 'New theorem')}</a>
       : <button class="button button-primary" type="button" aria-expanded={creating} onClick={() => create(!creating)}>{creating ? tx('返回定理目录', 'Back to theorems') : tx('新建定理', 'New theorem')}</button>
       : <a class="button" href={loginHref(createHref)}>{tx('登录后创建定理', 'Sign in to create a theorem')}</a>}</div></div>
-    {creatorMounted && <div hidden={!creating}><Panel title={tx('研究题目', 'Research question')}><CreateProject /></Panel></div>}
+    {creatorMounted && <div hidden={!creating}><Panel title={tx('研究题目', 'Research question')}><CreateProject addResearcher={addResearcher} /></Panel></div>}
     <div hidden={creating}>{!selected && <nav class="research-section-nav research-theorem-collections" aria-label={tx('定理内容', 'Theorem collections')}>
       {(['solved', 'research'] as const).map(value => <button key={value} type="button" data-theorem-collection={value} aria-pressed={collection === value} onClick={() => changeCollection(value)}>{value === 'solved' ? tx('已解决题目', 'Solved problems') : tx('研究项目', 'Research projects')}</button>)}
-    </nav>}{selected ? <><nav class="research-breadcrumb" aria-label={tx('返回目录', 'Back to directory')}><a href={browseHref}>{tx('返回定理目录', 'Back to theorems')}</a></nav>
+    </nav>}{selected ? <><nav class="research-breadcrumb" aria-label={tx('返回目录', 'Back to directory')}>
+      {peopleReturn && <><a data-research-people-return href={peopleReturn}>{peopleReturn.endsWith('#research-contributions') ? tx('返回贡献记录', 'Back to contributions') : tx('返回更新列表', 'Back to updates')}</a><span aria-hidden="true"> · </span></>}
+      <a href={browseHref}>{tx('返回定理目录', 'Back to theorems')}</a></nav>
       <div class="research-content"><ErrorBox message={detail.error} />{detail.data ? <Project key={selected} project={detail.data.item} context={context} refresh={detail.refresh} /> : detail.error ?
         <Panel title={tx('无法打开此定理', 'Unable to open theorem')}><Empty>{tx('可重新读取，或从目录选择其他定理。', 'Try again or choose another theorem from the directory.')}</Empty>
           <button class="button" type="button" data-theorem-detail-retry disabled={detail.loading} aria-busy={detail.loading} onClick={detail.refresh}>{tx('重新读取', 'Try again')}</button></Panel> :
@@ -103,10 +111,14 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
     </section>}</div></>;
 }
 
-function CreateProject() {
+function CreateProject({ addResearcher }: { addResearcher?: string }) {
   const [title, setTitle] = useState(''), [description, setDescription] = useState(''), [fields, setFields] = useState(''), [visibility, setVisibility] = useState('private'), action = useMutation();
   return <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run<Item<ResearchProjectSummary>>('POST', `${base}/theorems`,
-    { title: title.trim(), description, fields: words(fields), visibility }, result => location.assign(`${theoremHref(result.item.id)}#statement-versions`)); }}>
+    { title: title.trim(), description, fields: words(fields), visibility }, result => {
+      const member = addResearcher && addResearcher !== result.item.owner.id;
+      location.assign(`${theoremHref(result.item.id)}${member ? `&addResearcher=${enc(addResearcher)}#research-members` : '#statement-versions'}`);
+    }); }}>
+    {addResearcher && <p class="research-field-note">{tx('创建后会打开预填的成员表单，确认保存成员后才会添加。', 'After creation, review the prefilled member form and save it to add the collaborator.')}</p>}
     <Field label={tx('定理名称', 'Theorem title')} value={title} onInput={setTitle} required maxLength={200} />
     <Field label={tx('研究描述', 'Research description')} value={description} onInput={setDescription} multiline rows={3} />
     <Field label={tx('领域，用逗号分隔', 'Fields, separated by commas')} value={fields} onInput={setFields} />
@@ -121,6 +133,7 @@ function Visibility({ value, onChange }: { value: string; onChange: (value: stri
 }
 
 function Project({ project, context, refresh }: { project: ResearchProjectDetail; context: ResearchContext; refresh: () => void }) {
+  const draftOwner = webDraftOwner(context.web);
   const parameters = new URLSearchParams(location.search), initialRun = parameters.get('run') ?? '';
   const [versionChoice, setVersionChoice] = useState(parameters.get('version') ?? project.runs.find(run => run.runId === initialRun)?.statementVersionId ?? project.currentStatementVersionId ?? ''),
     [runChoice, setRunChoice] = useState(initialRun);
@@ -139,6 +152,15 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
     });
     return () => cancelAnimationFrame(frame);
   }, [project.id]);
+  useEffect(() => {
+    if (location.hash !== '#research-discussion') return;
+    const frame = requestAnimationFrame(() => {
+      const discussion = document.getElementById('research-discussion');
+      discussion?.scrollIntoView({ block: 'start' });
+      discussion?.querySelector<HTMLElement>('textarea, [data-discussion-login]')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [project.id, context.session.authenticated]);
   const remember = (versionId: string, runId?: string) => {
     const next = new URL(location.href); next.searchParams.set('version', versionId); runId ? next.searchParams.set('run', runId) : next.searchParams.delete('run');
     next.searchParams.delete('task'); next.searchParams.delete('taskVersion'); next.searchParams.delete('commit'); next.hash = ''; history.replaceState(null, '', next);
@@ -147,7 +169,7 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
   const openTask: OpenFeedbackTask = (target, task) => {
     setVersionChoice(target.statementVersionId); setRunChoice(target.runId);
     setTaskRequest({ runId: target.runId, taskId: task.id, taskVersion: task.version, request: (taskRequest?.request ?? 0) + 1 });
-    history.replaceState(null, '', theoremHref(project.id, target.runId, { statementVersionId: target.statementVersionId, taskRef: task }));
+    history.replaceState(null, '', withPeopleReturn(theoremHref(project.id, target.runId, { statementVersionId: target.statementVersionId, taskRef: task }), readPeopleReturn(location.search)));
   };
   const revealFeedback = (id: string) => {
     setFeedbackFocus({ id, request: (feedbackFocus?.request ?? 0) + 1 });
@@ -190,7 +212,7 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
         : tx('尚无陈述版本。请先保存自然语言原题和对应 Lean 源码。', 'No statement version yet. Save the original statement and its Lean source first.')}</Empty>}
     {project.permissions.edit && <details data-project-statement-editor open={!project.versions.length || undefined}><summary>{project.versions.length ? tx('添加陈述版本', 'Add a statement version') : tx('添加第一个陈述', 'Add the first statement')}</summary>
       {!project.versions.length && <p class="research-field-note">{tx('题目已创建。下一步填写自然语言原题和 Lean 陈述，保存后即可开始研究。', 'The project is ready. Add the original problem and Lean statement, then save to begin research.')}</p>}
-      <StatementEditor project={project} onSaved={item => { setVersionChoice(item.id); setRunChoice(''); remember(item.id); refresh(); }} /></details>}
+      <StatementEditor draftOwner={draftOwner} project={project} onSaved={item => { setVersionChoice(item.id); setRunChoice(''); remember(item.id); refresh(); }} /></details>}
   </Panel><Panel id="research-progress" title={tx('研究进展与路线', 'Research progress and routes')} note={tx('查看当前版本的研究运行、任务与检查结果。', 'Explore runs, tasks and check results for this statement version.')}>
     {runs.length > 0 ? <><div class="research-run-tools"><label>{tx('选择研究运行', 'Select research run')}<select value={run?.runId} onChange={event => {
       setRunChoice(event.currentTarget.value); if (version) remember(version.id, event.currentTarget.value);
@@ -207,7 +229,10 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
     {project.permissions.edit && version && <details><summary>{tx('关联我的研究运行', 'Attach one of my runs')}</summary><BindRun project={project} version={version} refresh={refresh} onBound={id => { setRunChoice(id); remember(version.id, id); }} /></details>}
   </Panel><Panel id="research-discussion" title={tx('讨论与人工反馈', 'Discussion and human feedback')} note={tx('按运行和节点查看投递、采纳及执行结果。有权限的成员可将讨论转为运行指导，保留原始建议与投递人。', 'Track delivery, decisions and execution by run and node. Authorized members can forward discussions as run guidance, retaining the original suggestion and sender.')}>
     <FeedbackWorkspace project={project} selfId={context.session.researcherId ?? ''} runId={run?.runId} task={selectedTask} refresh={refresh} onOpenTask={openTask} onOpenStatement={openStatement} focus={feedbackFocus} browseTask={browseTask} onRevealFeedback={revealFeedback} focusAnnotationId={new URLSearchParams(location.search).get('annotation') ?? undefined} onOpenIssue={feedback => openIssue(feedback.target, feedback.id, feedback.statementVersionId)}>
-      {project.permissions.discuss ? <Discussion project={project} selfId={context.session.researcherId ?? ''} version={version} refresh={refresh} /> : <Empty>{tx('当前账号只有查看权限。', 'This account has read access.')}</Empty>}
+      {project.permissions.discuss ? <Discussion project={project} selfId={context.session.researcherId ?? ''} version={version} refresh={refresh} />
+        : context.session.authenticated ? <Empty>{tx('当前账号只有查看权限。', 'This account has read access.')}</Empty>
+          : <Empty>{tx('登录后可以提出问题、补充思路并查看回复。', 'Sign in to ask questions, share ideas and follow replies.')} {' '}
+            <a class="button" data-discussion-login href={loginHref(location.pathname + location.search + '#research-discussion')}>{tx('登录后参与讨论', 'Sign in to join the discussion')}</a></Empty>}
     </FeedbackWorkspace>
     {project.permissions.member && <CollaborationIssues project={project} selfId={context.session.researcherId ?? ''} request={issueRequest} refresh={refresh} onRevealFeedback={revealFeedback} />}
   </Panel><Panel id="research-members" title={tx('参与者', 'Participants')}><CollaborationMembership project={project} selfId={context.session.researcherId ?? ''} refresh={refresh} /><Members project={project} selfId={context.session.researcherId ?? ''} refresh={refresh} /></Panel>
@@ -240,12 +265,16 @@ function ProjectEditor({ project, refresh }: { project: ResearchProjectDetail; r
   </form>;
 }
 
-function StatementEditor({ project, onSaved }: { project: ResearchProjectDetail; onSaved: (item: ResearchStatementVersion) => void }) {
-  const [statement, setStatement] = useState(''), [source, setSource] = useState(''), [environment, setEnvironment] = useState('mathlib'),
-    [assumptions, setAssumptions] = useState(''), [targets, setTargets] = useState(''), [confirmed, setConfirmed] = useState(false),
-    [formalizationId, setFormalizationId] = useState<string>(), [environmentDigest, setEnvironmentDigest] = useState<string>(), [importedRun, setImportedRun] = useState(''), action = useMutation();
+function StatementEditor({ project, onSaved, draftOwner }: { project: ResearchProjectDetail; onSaved: (item: ResearchStatementVersion) => void; draftOwner: string }) {
+  const draft = useResearchProjectDraft({ owner: draftOwner, projectId: project.id }, 'statement');
+  const { statement, source, environment, assumptions, targets, confirmed, formalizationId, environmentDigest, importedRun } = draft.value;
+  const setStatement = (statement: string) => draft.update({ statement }), setSource = (source: string) => draft.update({ source }),
+    setEnvironment = (environment: string) => draft.update({ environment: environment as 'standard' | 'mathlib' }),
+    setAssumptions = (assumptions: string) => draft.update({ assumptions }), setTargets = (targets: string) => draft.update({ targets }),
+    setConfirmed = (confirmed: boolean) => draft.update({ confirmed }), setFormalizationId = (formalizationId?: string) => draft.update({ formalizationId }),
+    setEnvironmentDigest = (environmentDigest?: string) => draft.update({ environmentDigest }), setImportedRun = (importedRun: string) => draft.update({ importedRun });
+  const action = useMutation();
   const ownRuns = useResource<{ runs: WebRun[] }>('/api/runs');
-  const draftRevision = useRef(0);
   const clearOrigin = () => { setImportedRun(''); setFormalizationId(undefined); setEnvironmentDigest(undefined); setConfirmed(false); };
   const importRun = (id: string) => {
     if (!id) { clearOrigin(); return; }
@@ -255,18 +284,18 @@ function StatementEditor({ project, onSaved }: { project: ResearchProjectDetail;
     setAssumptions(run.observation?.inspection.problem.assumptions.join('\n') ?? '');
     setTargets(run.observation?.inspection.problem.targets.map(target => `${target.theoremName} | ${target.proofPath}`).join('\n') ?? ''); setConfirmed(false);
   };
-  return <form class="research-form" onInput={() => { draftRevision.current++; }} onSubmit={event => { event.preventDefault();
-    const submittedDraftRevision = draftRevision.current;
+  return <form class="research-form" data-project-statement-draft onSubmit={event => { event.preventDefault();
+    const submittedDraftRevision = draft.revision;
     const parsedTargets = lines(targets).map(value => { const [theoremName = '', proofPath = 'Main.lean'] = value.split('|').map(item => item.trim()); return { theoremName, proofPath }; });
     void action.run<Item<ResearchProjectDetail>>('POST', `${base}/theorems/${enc(project.id)}/versions`,
       { statement, source, environment, assumptions: lines(assumptions), ...(parsedTargets.length ? { targets: parsedTargets } : {}), ...(formalizationId ? { formalizationId } : {}),
         ...(environmentDigest ? { environmentDigest } : {}), confirmation: { confirmed }, expectedRevision: project.revision },
       result => { const added = result.item.versions.find(item => item.id === result.item.currentStatementVersionId); if (!added) return;
-        if (draftRevision.current === submittedDraftRevision) { setStatement(''); setSource(''); setAssumptions(''); setTargets(''); clearOrigin(); }
-        else action.setMessage(tx('陈述版本已保存，期间的新编辑已保留。', 'Statement version saved. Your newer edits are preserved.'));
+        if (!draft.clearSubmitted(submittedDraftRevision)) action.setMessage(tx('陈述版本已保存，期间的新编辑已保留。', 'Statement version saved. Your newer edits are preserved.'));
         onSaved(added); });
   }}><label>{tx('从我的已有运行导入原题（可选）', 'Import the statement from one of my runs (optional)')}<select value={importedRun} onChange={event => importRun(event.currentTarget.value)}>
     <option value="">{tx('直接填写新陈述', 'Write a new statement')}</option>{ownRuns.data?.runs.map(run => <option key={run.id} value={run.id}>{run.title} · {nameOf(run.status)}</option>)}</select></label><ErrorBox message={ownRuns.error} />
+    <p class="research-field-note" data-project-draft-note>{draft.restored ? tx('已恢复此题目的未发送陈述。', 'Restored your unsent statement for this project.') : tx('未发送内容会在此标签页自动保存。', 'Unsent input is saved automatically in this tab.')}</p>
     <Field label={tx('自然语言 / TeX 原题', 'Original statement / TeX')} value={statement} onInput={value => { setStatement(value); setConfirmed(false); }} multiline required rows={4} />
     <Field label={tx('完整 Lean 源码', 'Complete Lean source')} value={source} onInput={value => { setSource(value); clearOrigin(); }} multiline code required rows={9} />
     <label>{tx('证明环境', 'Proof environment')}<select value={environment} onChange={event => { setEnvironment(event.currentTarget.value); clearOrigin(); }}><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>
@@ -406,13 +435,24 @@ type CandidateDraft = { source: string; text: string; edited: boolean; needsRevi
   revisionOf?: { feedbackId: string; expectedRevision: number; responses: { commentId: string; text: string }[] } };
 export function ProofSubmission({ project, projectId, selfId, binding, observation, refresh, requested, onSaved }: { project: ResearchProjectDetail; projectId: string; selfId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void;
   requested?: { target: ResearchFeedbackTarget; serial: number }; onSaved(id: string): void }) {
-  const [source, setSource] = useState(''), [text, setText] = useState(''), [edited, setEdited] = useState(false), action = useMutation();
-  const [baseSource, setBaseSource] = useState<WebObservation['sources'][number]>(), [baseObservation, setBaseObservation] = useState<{ sequence: number; stateDigest: string }>();
-  const drafts = useResearchDrafts<CandidateDraft>(selfId, projectId, 'candidate'), [needsReview, setNeedsReview] = useState(false);
   const parentId = new URLSearchParams(location.search).get('revise'), parent = project.feedback.find(item => item.id === parentId && item.kind === 'proof-submission' && item.author.id === selfId && item.target?.runId === binding.runId);
-  const [revisionOf, setRevisionOf] = useState<CandidateDraft['revisionOf']>();
+  const completionKey = `theoremos:candidate-draft-completed:${encodeURIComponent(JSON.stringify([selfId, projectId, binding.runId, binding.statementVersionId, parent?.id ?? '']))}`;
+  const [initialDraft] = useState(() => {
+    try { const completedThrough = localStorage.getItem(completionKey) ?? '';
+      return new ResearchDraftStore(localStorage).list<CandidateDraft>(selfId, projectId, 'candidate').find(item =>
+      !item.scope.localRevision && item.updatedAt > completedThrough && item.scope.runId === binding.runId && item.scope.statementVersionId === binding.statementVersionId
+      && (item.value.revisionOf?.feedbackId ?? '') === (parent?.id ?? '')); } catch { return; }
+  });
+  const [source, setSource] = useState(initialDraft?.value.source ?? ''), [text, setText] = useState(initialDraft?.value.text ?? ''),
+    [edited, setEdited] = useState(initialDraft?.value.edited ?? false), action = useMutation();
+  const [baseSource, setBaseSource] = useState<WebObservation['sources'][number] | undefined>(initialDraft?.value.baseSource),
+    [baseObservation, setBaseObservation] = useState<{ sequence: number; stateDigest: string } | undefined>(initialDraft?.value.baseObservation);
+  const drafts = useResearchDrafts<CandidateDraft>(selfId, projectId, 'candidate'), [needsReview, setNeedsReview] = useState(initialDraft?.value.needsReview ?? false);
+  const [revisionOf, setRevisionOf] = useState<CandidateDraft['revisionOf']>(initialDraft?.value.revisionOf), generation = useRef(0);
+  useEffect(() => { if (initialDraft) drafts.restore(initialDraft); }, []);
   const revisionStale = Boolean(parent && revisionOf && revisionOf.expectedRevision !== parent.revision);
   const saveDraft = (next: Partial<CandidateDraft> = {}) => {
+    generation.current++;
     const value = { source, text, edited, needsReview, baseSource, baseObservation, ...(revisionOf ? { revisionOf } : {}), ...next };
     if (value.baseSource && value.baseObservation && (value.edited || value.text.trim())) drafts.save({ runId: binding.runId, statementVersionId: binding.statementVersionId,
       taskId: value.baseSource.taskId, taskVersion: value.baseSource.taskVersion, commit: value.baseSource.commit }, value as CandidateDraft, value.text.slice(0, 80) || value.baseSource.taskId);
@@ -425,13 +465,13 @@ export function ProofSubmission({ project, projectId, selfId, binding, observati
     const selected = sources.find(item => identity(item) === value); setBaseSource(selected);
     const review = Boolean(edited && selected && (!baseSource || identity(selected) !== identity(baseSource))); setNeedsReview(review);
     if (!edited) setSource(selected?.source ?? '');
-    const ref = { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }; setBaseObservation(ref);
+    const ref = selected ? { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } : undefined; setBaseObservation(ref);
     if (selected) saveDraft({ baseSource: selected, baseObservation: ref, source: edited ? source : selected.source, needsReview: review });
     action.setError(''); action.setMessage('');
   };
   const root = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
-    if (!parent || !parent.payload || !('source' in parent.payload)) return;
+    if (!parent || !parent.payload || !('source' in parent.payload) || initialDraft?.value.revisionOf?.feedbackId === parent.id) return;
     const selected = sources.find(item => item.taskId === parent.target?.taskRef?.id);
     if (!selected) return;
     setBaseSource(selected); setBaseObservation({ sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest });
@@ -450,16 +490,28 @@ export function ProofSubmission({ project, projectId, selfId, binding, observati
     <ResearchDraftPicker drafts={drafts} filter={item => item.scope.runId === binding.runId && item.scope.statementVersionId === binding.statementVersionId && (item.value.revisionOf?.feedbackId ?? '') === (parent?.id ?? '')} onRestore={item => {
       const value = item.value; setSource(value.source); setText(value.text); setEdited(value.edited); setBaseSource(value.baseSource); setBaseObservation(value.baseObservation);
       setRevisionOf(value.revisionOf);
-      setNeedsReview(value.needsReview || !sources.some(source => identity(source) === identity(value.baseSource))); action.reset();
-    }} /><form class="research-form" onSubmit={event => {
+      const review = value.needsReview || !sources.some(source => identity(source) === identity(value.baseSource));
+      saveDraft({ ...value, needsReview: review });
+      setNeedsReview(review); action.reset();
+    }} /><form class="research-form" data-project-proof-draft onSubmit={event => {
     event.preventDefault(); if (!baseSource || !baseObservation || stale || needsReview || revisionStale) return;
-    const submittedDraft = drafts.current();
+    const submittedDraft = drafts.current(), submittedGeneration = generation.current;
     void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(projectId)}/feedback`, { kind: 'proof-submission', text,
       target: { runId: binding.runId, statementVersionId: binding.statementVersionId, observationRef: baseObservation, taskRef: { id: baseSource.taskId, version: baseSource.taskVersion } },
-      source, base: { commit: baseSource.commit, sourceDigest: baseSource.sourceDigest, environmentDigest: baseSource.environmentDigest, file: baseSource.file }, ...(revisionOf ? { revisionOf } : {}) }, result => { if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'feedback', id: result.item.id }); refresh(); onSaved(result.item.id); });
+      source, base: { commit: baseSource.commit, sourceDigest: baseSource.sourceDigest, environmentDigest: baseSource.environmentDigest, file: baseSource.file }, ...(revisionOf ? { revisionOf } : {}) }, result => {
+        if (submittedDraft) {
+          // Older baselines stay available in the picker, but completing the active
+          // editor must not make one of those histories reappear on reload.
+          try { if ((localStorage.getItem(completionKey) ?? '') < submittedDraft.updatedAt) localStorage.setItem(completionKey, submittedDraft.updatedAt); } catch { /* Local draft storage reports its own availability. */ }
+          void drafts.complete(submittedDraft, { kind: 'feedback', id: result.item.id });
+        }
+        if (generation.current === submittedGeneration) { setSource(''); setText(''); setEdited(false); setBaseSource(undefined); setBaseObservation(undefined); setNeedsReview(false); setRevisionOf(undefined); generation.current++; }
+        refresh(); onSaved(result.item.id);
+      });
   }}><label>{tx('选择带有源码快照的任务', 'Select a task with a source snapshot')}<select required value={choice} disabled={action.busy} onChange={event => pick(event.currentTarget.value)}>
     <option value="">{tx('选择任务', 'Choose a task')}</option>{stale && baseSource && <option value={choice}>{baseSource.taskId} · {baseSource.file} · {baseSource.taskVersion} · {t('草稿基准已过期')}</option>}
     {sources.map(item => <option key={identity(item)} value={identity(item)}>{item.taskId} · {item.file} · {item.taskVersion}</option>)}</select></label>
+    <p class="research-field-note" data-project-draft-note>{initialDraft ? tx('已恢复此运行的候选草稿和原基准。', 'Restored your candidate draft and original base for this run.') : tx('候选草稿会在此标签页自动保存。', 'Candidate drafts are saved automatically in this tab.')}</p>
     {baseSource && <p class="research-field-note">{t('草稿基准：')}{baseSource.taskId} · {baseSource.taskVersion} · {baseSource.file} · {baseSource.commit.slice(0, 12)}</p>}
     {stale && <div class="research-status" role="status"><p>{t('任务或源码已有更新。旧基准和你的编辑已保留，请先核对最新基准。')}</p>
       {latest ? <button class="button" type="button" disabled={action.busy} onClick={() => pick(identity(latest))}>{t('更新到最新基准，保留编辑')}</button>
@@ -478,15 +530,20 @@ export function ProofSubmission({ project, projectId, selfId, binding, observati
 }
 
 export function Discussion({ project, selfId, version, refresh }: { project: ResearchProjectDetail; selfId: string; version?: ResearchStatementVersion; refresh: () => void }) {
-  const [text, setText] = useState(''), [visibility, setVisibility] = useState<DiscussionDraft['visibility']>('members'), action = useMutation();
+  const [initialDraft] = useState(() => {
+    try { return new ResearchDraftStore(localStorage).list<DiscussionDraft>(selfId, project.id, 'discussion').find(item =>
+      !item.scope.localRevision && item.scope.statementVersionId === version?.id); } catch { return; }
+  });
+  const [text, setText] = useState(initialDraft?.value.text ?? ''), [visibility, setVisibility] = useState<DiscussionDraft['visibility']>(initialDraft?.value.visibility ?? 'members'), action = useMutation();
   const currentBaseline = { statementVersionId: version?.id, sourceDigest: version?.sourceDigest };
-  const [baseline, setBaseline] = useState<DiscussionDraft['baseline']>(currentBaseline), drafts = useResearchDrafts<DiscussionDraft>(selfId, project.id, 'discussion');
+  const [baseline, setBaseline] = useState<DiscussionDraft['baseline']>(initialDraft?.value.baseline ?? currentBaseline), drafts = useResearchDrafts<DiscussionDraft>(selfId, project.id, 'discussion');
+  useEffect(() => { if (initialDraft) drafts.restore(initialDraft); }, []);
   const generation = useRef(0), stale = !discussionDraftMatches({ text, visibility, baseline }, currentBaseline);
   useEffect(() => { if (!text) setBaseline(currentBaseline); }, [version?.id, version?.sourceDigest]);
   const saveDraft = (next: Partial<DiscussionDraft>) => {
     generation.current++;
     const value: DiscussionDraft = { text, visibility, baseline, ...next };
-    if (value.text.trim()) drafts.save({ statementVersionId: value.baseline.statementVersionId }, value, value.text.slice(0, 80));
+    if (value.text.trim() || drafts.current()) drafts.save({ statementVersionId: value.baseline.statementVersionId }, value, value.text.slice(0, 80) || tx('讨论内容', 'Discussion'));
   };
   const versionLabel = (id?: string) => {
     const index = project.versions.findIndex(item => item.id === id);
@@ -503,6 +560,7 @@ export function Discussion({ project, selfId, version, refresh }: { project: Res
       refresh();
     }); }}>
     <ResearchDraftPicker drafts={drafts} onRestore={item => { setText(item.value.text); setVisibility(item.value.visibility); setBaseline(item.value.baseline); generation.current++; action.reset(); }} />
+    <p class="research-field-note" data-project-draft-note>{initialDraft ? tx('已恢复未发送的讨论。', 'Restored your unsent discussion.') : tx('讨论草稿会在此标签页自动保存。', 'Discussion drafts are saved automatically in this tab.')}</p>
     {stale && <div role="status" data-discussion-draft-baseline><p>{tx('草稿基于其他陈述或源码版本，请先核对。', 'This draft uses another statement or source version. Review it before continuing.')}</p>
       <p>{tx('草稿：', 'Draft: ')}{versionLabel(baseline.statementVersionId)} · {tx('当前：', 'Current: ')}{versionLabel(currentBaseline.statementVersionId)}</p>
       <button class="button" type="button" data-confirm-discussion-baseline disabled={action.busy} onClick={() => { setBaseline(currentBaseline); saveDraft({ baseline: currentBaseline }); action.reset(); }}>{tx('已核对，使用当前陈述', 'Reviewed; use the current statement')}</button></div>}
@@ -525,7 +583,8 @@ function Members({ project, selfId, refresh }: { project: ResearchProjectDetail;
     const frame = requestAnimationFrame(() => { memberInput.current?.focus({ preventScroll: true }); memberInput.current?.scrollIntoView({ block: 'center' }); });
     return () => cancelAnimationFrame(frame);
   }, []);
-  const displayName = (id: string) => directory.data?.items.find(item => item.id === id)?.displayName ?? id;
+  const displayName = (id: string) => (project.memberProfiles === undefined
+    ? directory.data?.items.find(item => item.id === id) : project.memberProfiles.find(item => item.id === id))?.displayName ?? id;
   const write = (id: string, memberRole: string | null) => void action.run('PUT', `${base}/theorems/${enc(project.id)}/members/${enc(id)}`,
     { role: memberRole, expectedRevision: project.revision }, () => {
       if (memberRole !== null && id === person) {

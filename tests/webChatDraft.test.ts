@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { decodeChatDraft, encodeChatDraft, type ChatDraftSettings } from '../apps/web/client/chatDraft';
+import { decodeChatDraft, encodeChatDraft, readEditedProblemId, type ChatDraftSettings } from '../apps/web/client/chatDraft';
+import { decodeLibraryReferences, libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from '../apps/web/client/chatReference';
 import { SubmissionIdentity } from '../apps/web/client/submissionIdentity';
 
 const settings: ChatDraftSettings = { providerId: 'openai', model: 'chosen-model', environment: 'standard', effort: 'low',
@@ -32,6 +33,31 @@ it('discards incomplete task references and invalid pending sends without losing
   for (const pendingMessage of [{ requestId: 'bad/id', text: 'old' }, { requestId: 'send-1', text: '' }, { requestId: 'send-1', text: 'x'.repeat(4001) }]) {
     expect(decodeChatDraft(JSON.stringify({ schema: 'theorem-os.chat-draft.v1', text: '保留', pendingMessage }))).toEqual({ text: '保留' });
   }
+});
+
+it('keeps library references separate from exact question text and deduplicates by pinned identity across languages', () => {
+  const reference: ChatLibraryReference = { catalogDigest: 'a'.repeat(64), file: 'Library.lean', declaration: 'Library.bound',
+    title: { zh: '有限求和', en: 'Finite sums' }, summary: { zh: '给出有限和的界。', en: 'Bounds a finite sum.' },
+    expression: '∑ i, w i ≤ c', type: 'theorem bound (w : ι → ℝ) : ∑ i, w i ≤ c', import: 'import Library',
+    source: 'https://example.invalid/library.html?catalogDigest=pinned', conditions: [{ expression: '[Fintype ι]', meaning: { zh: '索引类型有限', en: 'finite index type' } }],
+    context: ['variable {ι : Type*} [Fintype ι]'] };
+  const question = '  Keep this question.\n  ';
+  const stored = encodeChatDraft({ text: question, settings, references: [{ ...reference, apiKey: 'never-save-this-key' } as ChatLibraryReference, reference] });
+  expect(stored).not.toContain('never-save-this-key');
+  const restored = decodeChatDraft(stored); expect(restored.text).toBe(question); expect(restored.references).toEqual([reference]);
+  expect(libraryReferenceId(reference)).toBe(libraryReferenceId({ ...reference, title: { zh: '另一标题', en: 'Another title' } }));
+  for (const language of ['zh', 'en'] as const) {
+    const sent = withLibraryReferences(question, restored.references!, language);
+    expect(sent.startsWith(question)).toBe(true);
+    for (const expected of [reference.type, '[Fintype ι]', reference.source, reference.catalogDigest, `#check @${reference.declaration}`]) expect(sent).toContain(expected);
+  }
+  expect(withLibraryReferences(question, [], 'zh')).toBe(question);
+  expect(decodeLibraryReferences([{ ...reference, source: 'javascript:alert(1)' }])).toEqual([]);
+});
+
+it('recognizes separate edited-problem draft routes without treating arbitrary URL text as a storage key', () => {
+  expect(readEditedProblemId(new URLSearchParams({ editProblem: 'recorded-task-123' }))).toBe('recorded-task-123');
+  expect(readEditedProblemId(new URLSearchParams({ editProblem: '../home' }))).toBe('');
 });
 
 it('recovers a natural submission across refresh without retaining the key or statement in its identity', async () => {

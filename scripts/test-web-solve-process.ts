@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { openAdvancedChatSettings } from './web-ui-controls';
 // The solving process: the checklist under the task's status, and the live workspace beside it on a wide screen.
 // Local fixtures only: a formalization and a run are replayed through a runner. No model, no Lean.
 import assert from 'node:assert/strict';
@@ -79,6 +80,7 @@ async function credentials(page: Page) {
   await page.locator('input[name="chat-participation"][value="automatic"]').check();
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
+  await openAdvancedChatSettings(page);
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');
   await page.locator('#formalize-start:enabled').waitFor();
 }

@@ -114,6 +114,9 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-code-copy-error{padding:10px 14px;margin:0!important;color:var(--red-700);font-size:12px;line-height:1.8}
 @media(max-width:480px){.chat-code-header{padding:8px 10px}.chat-code pre{padding:12px}.chat-message-content :is(h2,h3,h4,h5,h6){margin-top:22px}.chat-math:not(.chat-math-display){display:inline-block;max-width:100%;overflow-x:auto;overflow-y:hidden;vertical-align:middle}.chat-markdown-table :is(th,td){padding:8px 10px}}
 .chat-answer-state{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:13px;margin:12px 0 0}
+.chat-answer-lean-name{font:12px/1.7 var(--mono);color:var(--muted);margin:6px 0 12px;overflow-wrap:anywhere}
+.chat-answer-question{font-size:12px;margin-top:4px}
+.chat-answer-uses a{color:var(--blue);text-decoration:underline;text-underline-offset:3px;font-size:12px}
 .chat-task-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}
 .chat-task-actions:empty{display:none}
 .chat-task-details{margin-top:16px;font-size:13px;color:var(--muted)}
@@ -130,6 +133,23 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 #natural-research .chat-composer{width:100%;min-width:0}
 #natural-research .chat-composer #formalize-form{display:block;margin:0;padding:8px;border:1px solid var(--gray-200);border-radius:22px;background:var(--card);box-shadow:0 4px 20px #00000006}
 #natural-research .chat-composer #formalize-form:focus-within{border-color:var(--gray-400)}
+.chat-editing-problem{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.chat-editing-problem .text-button{font-size:12px}
+.chat-reference-list{display:grid;gap:8px;max-height:220px;overflow-y:auto;margin:4px;padding:4px;scrollbar-width:thin}
+.chat-library-reference{min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--gray-50);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.chat-library-reference-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.chat-library-reference-heading strong{min-width:0;font-size:12px;font-weight:600}
+.chat-library-reference-heading button{display:flex;flex:none;align-items:center;justify-content:center;min-width:28px;min-height:28px;margin:-4px -4px 0 0}
+.chat-library-reference-heading svg{width:14px;height:14px}
+.chat-library-reference p{margin:3px 0 6px;color:var(--muted)}
+.chat-library-reference .chat-reference-expression{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;color:var(--ink);font:11px/1.8 var(--mono);white-space:pre-wrap}
+.chat-library-reference-tools{display:flex;gap:6px 16px;flex-wrap:wrap;align-items:flex-start}
+.chat-library-reference-tools a{color:var(--blue);text-decoration:underline;text-underline-offset:3px}
+.chat-library-reference-tools details{flex:1;min-width:160px}
+.chat-library-reference-tools summary{cursor:pointer;color:var(--muted)}
+.chat-library-reference-tools ul{padding-left:16px;margin:8px 0}
+.chat-library-reference-tools li>code{display:block;font:11px/1.8 var(--mono);white-space:pre-wrap}
+.chat-library-reference-tools pre{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.8 var(--mono);margin:8px 0 0}
 /* Typing in the composer thickens its outline to 2px at 3.6:1 or more against the resting border, page and fill in both themes. */
 #natural-research .chat-composer #formalize-form:has(#formalize-original:focus){border-color:var(--gray-500);box-shadow:0 0 0 1px var(--gray-500),0 4px 20px #00000006}
 #natural-research .chat-composer #formalize-original{display:block;width:100%;min-width:0;min-height:92px;max-height:260px;margin:0;padding:14px 16px 10px;border:0;border-radius:14px;background:transparent;color:var(--ink);font:inherit;font-size:16px;line-height:1.8;resize:none;box-shadow:none;overflow-y:auto}
@@ -229,6 +249,10 @@ body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:au
 .chat-settings-options select{margin-top:8px}
 .chat-settings-fields>label span{color:var(--muted);font-weight:400}
 .chat-settings-options input{margin-top:8px}
+.chat-advanced-settings{border-top:1px solid var(--line);padding-top:8px}
+.chat-advanced-settings>summary{min-height:36px;cursor:pointer;color:var(--ink);font-size:13px}
+.chat-advanced-settings>summary>span{margin-left:10px;font-size:12px;color:var(--muted)}
+.chat-advanced-settings-fields{display:grid;gap:12px;padding-top:12px}
 .chat-budget-fields{border:0;padding:0;margin:4px 0;min-width:0}.chat-budget-fields legend{font-weight:600;padding:0;margin-bottom:10px}
 .chat-connection-check{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.chat-connection-check .button{flex-shrink:0}
 .chat-budget-summary{font-size:12px;line-height:1.65;color:var(--muted);margin:12px 4px 0;max-width:100%}
@@ -604,3 +628,5 @@ body[data-chat-artifact=live] #run-detail{display:none}
   .solve-process,#chat-live-panel .live-code{border:1px solid CanvasText}
   .live-check[aria-current=true]{outline:2px solid Highlight;outline-offset:-2px}
 }
+
+.chat-home-details{margin-top:24px}.chat-home-details>.chat-start-tools{text-align:center}

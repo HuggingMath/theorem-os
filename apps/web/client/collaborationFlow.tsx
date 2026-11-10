@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { researchContextHref } from '../shared';
+import { withPeopleReturn } from './researchPeopleReturn';
 import type { ResearchCollaborationInbox, ResearchCollaborationView, ResearchHandoff, ResearchInvitation, ResearchIssue } from '../researchCollaborationTypes';
 import type { ResearchFeedbackTarget, ResearchProjectDetail, ResearchRunBinding } from '../researchProjectTypes';
 import type { WebObservation, WebTaskSource } from '../collaboration';
@@ -95,6 +97,8 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
     <ErrorBox message={error} />{error && <button type="button" class="text-button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取', 'Try again')}</button>}
     {!data && !error && <p role="status">{tx('正在读取协作事项…', 'Loading collaboration items…')}</p>}
     {items.map(item => {
+      const source = new URL(location.href); source.searchParams.set('inbox', filter); source.hash = 'collaboration-inbox';
+      const href = withPeopleReturn(researchContextHref(item.href, location.search), source.pathname + source.search + source.hash);
       const record = item.invitation ?? item.handoff, respond = record && (record.recipient.id === self || record.author.id === self);
       return <article class="collaboration-inbox-item" key={item.id} data-inbox-item={item.id}>
         <div class="collaboration-meta"><span>{inboxLabel(item.kind)}</span><span>{item.projectTitle}</span><time dateTime={item.createdAt}>{stamp(item.createdAt)}</time>
@@ -102,8 +106,8 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
           {!item.read && <strong>{tx('未读', 'Unread')}</strong>}{(item.processed || item.resolved) && <span>{tx('已处理', 'Processed')}</span>}</div>
         <div class="collaboration-inbox-copy"><RichProse text={item.title} />{item.text && <RichProse text={item.kind === 'claim' ? claimStatus(item.text) : item.text} />}</div>
         {record && <p>{record.author.displayName} → {record.recipient.displayName} · {invitationStatus(record)}{'role' in record && <> · {roleName(record.role)}</>}</p>}
-        <div class="research-actions">{item.href && <a class="button" href={item.href} onClick={event => { if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault();
-          void write(`${base}/collaboration/inbox/${enc(item.id)}`, { action: 'read' }, item.id).then(saved => { if (saved) location.assign(item.href); }); }}>{tx('打开并继续', 'Open and continue')}</a>}
+        <div class="research-actions">{item.href && <a class="button" href={href} onClick={event => { if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault();
+          void write(`${base}/collaboration/inbox/${enc(item.id)}`, { action: 'read' }, item.id).then(saved => { if (saved) location.assign(href); }); }}>{tx('打开并继续', 'Open and continue')}</a>}
           {respond && record.status === 'pending' && (record.recipient.id === self ? <>
             <button type="button" class="button" disabled={Boolean(busy)} onClick={() => void write(`${projectPath(item.projectId)}/${item.handoff ? 'handoffs' : 'invitations'}/${record.id}/respond`, { action: 'accept', expectedRevision: record.revision }, item.id)}>{item.handoff ? tx('确认接手', 'Accept handoff') : tx('接受', 'Accept')}</button>
             <button type="button" class="text-button" disabled={Boolean(busy)} onClick={() => void write(`${projectPath(item.projectId)}/${item.handoff ? 'handoffs' : 'invitations'}/${record.id}/respond`, { action: 'decline', expectedRevision: record.revision }, item.id)}>{tx('拒绝', 'Decline')}</button></>

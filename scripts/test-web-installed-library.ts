@@ -14,6 +14,8 @@ import type { ResearchAsset } from '../apps/web/researchAssetTypes';
 import type { InstalledLibraryDetail, InstalledLibraryDirectory, InstalledLibrarySource } from '../apps/web/installedLibraryTypes';
 import { installedLibraryLabels } from '../apps/web/installedLibraryLabels';
 import { installedLibraryMathematics } from '../apps/web/installedLibraryMathematics';
+import { matchesInstalledLibraryInterface } from '../apps/web/installedLibraryInterfaceSearch';
+import { proseSegments } from '../apps/web/client/explainText';
 import { audit } from './web-a11y';
 import { freePort } from './web-scenario';
 
@@ -116,9 +118,13 @@ async function copyImport(page: Page, target: Locator, name: string, value: stri
 async function firstConclusion(page: Page, check: typeof checks[number]) {
   await page.evaluate(() => scrollTo(0, 0)); await settled(page);
   const geometry = await detail(page).locator('[data-installed-library-conclusion]').first().evaluate(element => {
-    const box = element.getBoundingClientRect(); return { top: box.top, bottom: box.bottom, viewport: innerHeight };
+    const box = element.getBoundingClientRect(), label = element.closest('dd')!.previousElementSibling!;
+    const labelText = document.createRange(); labelText.selectNodeContents(label);
+    return { top: box.top, bottom: box.bottom, viewport: innerHeight,
+      labelRight: labelText.getBoundingClientRect().right, valueLeft: box.left };
   });
   assert(geometry.top >= 0 && geometry.bottom <= geometry.viewport, `the first mathematical conclusion is visible when a phone opens a module: ${JSON.stringify(geometry)}`);
+  assert(geometry.valueLeft - geometry.labelRight >= 4, `the conclusion label stays separate from its expression: ${JSON.stringify(geometry)}`);
   assert.equal(await detail(page).locator('details.research-installed-module-import').evaluate(element => (element as HTMLDetailsElement).open), false);
   await screenshot(page, check, 'module-entry');
   check.assertions.push('A phone module entry shows its first mathematical conclusion before scrolling; module import remains folded and available.');
@@ -359,6 +365,61 @@ async function mathematicalAliasesAndReset(page: Page, check: typeof checks[numb
   await visible(cards(page).first());
 }
 
+async function mathematicalInterfaceMatches(page: Page, check: typeof checks[number], digest: string, en: boolean) {
+  const returnUrl = page.url(), moduleName = 'TheoremOS.Probability.Concentration';
+  for (const [index, q] of [en ? 'nonnegative weights' : '非负权重', en ? 'finite type with an enumeration' : '有限类型及其枚举'].entries()) {
+    phase = `${check.scenario}: whole-library mathematical interface search ${q}`;
+    const scope = index === 0 ? { workbenchChat: crypto.randomUUID() } : { workbenchEdit: 'local-library-search-edit' };
+    const filters = { type: 'mathematics', collection: 'lean', area: 'Probability', q, ...scope };
+    const loaded = responseFor(page, '/api/research/library/installed', { q, area: 'Probability' });
+    await page.goto(`${origin}/library.html?${new URLSearchParams(filters)}`, { waitUntil: 'domcontentloaded', timeout: 0 });
+    const result = await received<InstalledLibraryDirectory>(loaded);
+    assert.equal(result.library.catalogDigest, digest);
+    const module = result.items.find(item => item.name === moduleName); assert(module && module.matchingInterfaces.length > 0);
+    const card = directory(page).locator(`[data-installed-library-module="${module.file}"]`);
+    const match = module.matchingInterfaces[0], link = card.locator(`[data-installed-library-match="${match.name}"]`);
+    await visible(link);
+    const summary = link.locator('..').locator('.solution-route-prose');
+    await visible(summary);
+    const visibleSummary = (await summary.innerText()).replace(/\s+/gu, '');
+    for (const segment of proseSegments(match.summary[en ? 'en' : 'zh'])) {
+      if (segment.kind === 'math' || segment.kind === 'display') {
+        const rendered = summary.locator(`.math[title=${JSON.stringify(segment.text)}][data-math-state="ready"]`);
+        await visible(rendered);
+      } else assert(visibleSummary.includes(segment.text.replace(/\s+/gu, '')),
+        `the matching summary text is visible without expanding import tools: ${segment.text}`);
+    }
+    assert.equal(await card.locator('details.research-installed-module-tools').evaluate(element => (element as HTMLDetailsElement).open), false);
+    const target = new URL(await link.getAttribute('href') ?? '', page.url());
+    assert.equal(target.hash, `#declaration-${encodeURIComponent(match.name)}`);
+    assert.equal(target.searchParams.get('catalogDigest'), digest); assert.equal(target.searchParams.get('interfaceQuery'), q);
+    await screenshot(page, check, `interface-matches-${index}`, card.locator('[data-installed-library-matches]'));
+    const opened = responseFor(page, '/api/research/library/installed/module', { file: module.file, catalogDigest: digest });
+    await link.click({ timeout: 0 });
+    const metadata = (await received<{ item: InstalledLibraryDetail }>(opened)).item;
+    const article = detail(page).locator(`[data-installed-library-declaration="${match.name}"]`);
+    await visible(article);
+    urlFilters(page, { ...filters, interfaceQuery: q, source: 'installed', module: module.file, catalogDigest: digest });
+    assert.equal(new URL(page.url()).hash, target.hash);
+    const local = metadata.module.entries.filter(entry => matchesInstalledLibraryInterface(entry, metadata.module.import, q,
+      metadata.definitions[entry.name], metadata.contexts[entry.name]));
+    assert.equal(module.matchingInterfaceCount, local.length, 'directory and module searches use the same displayed mathematics and conditions');
+    assert.equal(await detail(page).locator('[data-installed-library-declaration]').count(), local.length);
+    if (index === 1) assert((await article.locator('[data-installed-library-scope]').innerText()).includes('Fintype'), 'the matching scope condition remains readable at the destination');
+    const returned = responseFor(page, '/api/research/library/installed', { q, area: 'Probability' });
+    await page.locator('.research-breadcrumb a').click({ timeout: 0 });
+    await received<InstalledLibraryDirectory>(returned); await visible(directory(page));
+    urlFilters(page, filters, ['source', 'module', 'catalogDigest', 'interfaceQuery']);
+    assert.equal(await page.locator('.research-library-searchbar input[type="search"]').inputValue(), q);
+    await visible(directory(page).locator(`[data-installed-library-match="${match.name}"]`));
+  }
+  assert.equal(sourceRequests().length, 0, 'mathematical directory matching and direct links never fetch a full source view');
+  check.assertions.push('Whole-library Chinese/English mathematical meanings and finite-type scope conditions expose matching interface summaries directly; their pinned links filter and jump to the same declarations, and directory return keeps the query and chat/edit identity.');
+  const restored = responseFor(page, '/api/research/library/installed');
+  await page.goto(returnUrl, { waitUntil: 'domcontentloaded', timeout: 0 }); await received<InstalledLibraryDirectory>(restored);
+  await visible(cards(page).first());
+}
+
 try {
   for (const scenario of [{ name: 'zh-1440', locale: 'zh', width: 1440, height: 1000, narrow: false },
     { name: 'en-1440', locale: 'en', width: 1440, height: 1000, narrow: false },
@@ -445,6 +506,7 @@ try {
     urlFilters(page, { collection: 'lean', mine: '1' });
     check.assertions.push('Real repository release: 53 modules and 1964 declarations remain visible with zero published/personal assets.');
     await mathematicalAliasesAndReset(page, check, initial, en);
+    await mathematicalInterfaceMatches(page, check, initial.library.catalogDigest, en);
 
     phase = `${scenario.name}: search real module and theorem names, filter area and environment`;
     const picked = initial.items.find(module => module.preview.length > 0)!; assert(picked, 'catalog includes interface previews');

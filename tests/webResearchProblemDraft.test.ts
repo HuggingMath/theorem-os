@@ -6,6 +6,7 @@ import { campaignRecords } from '../docs/web/campaignCatalog';
 import { archiveIndex } from '../docs/web/catalog';
 import type { ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import { archiveReadingReturn, readProofReadingPosition } from '../docs/web/proofReadingLocation';
+import { proofReadingContexts } from '../docs/web/proofReadingContext';
 import {
   archiveProblemDraftHref, clearResearchProblemDraft, loadResearchProblemDraft, projectProblemDraftHref,
   readResearchProblemDraft, researchProblemDraftHref,
@@ -25,11 +26,71 @@ describe('explicit problem-to-draft handoff', () => {
     const project = { kind: 'project' as const, id: 'project-1', version: 'statement-1', sourceDigest: 'b'.repeat(64) };
     expect(projectProblemDraftHref(project.id, { id: project.version, sourceDigest: project.sourceDigest })).toBe(researchProblemDraftHref(project));
     expect(readResearchProblemDraft(new URL(researchProblemDraftHref(project), currentHref).searchParams)).toEqual(project);
-    const parameters = new URLSearchParams({ chat: 'preserved-chat', libraryModule: 'preserved-reference', archiveProblem: archive.id, archiveSource: archive.sourceDigest, archiveReading: '/classics/archive.html' });
+    const parameters = new URLSearchParams({ chat: 'preserved-chat', libraryModule: 'preserved-reference', archiveProblem: archive.id, archiveSource: archive.sourceDigest, archiveReading: '/classics/archive.html', archiveFocus: 'proof-source-target-1' });
     clearResearchProblemDraft(parameters);
     expect([...parameters]).toEqual([['chat', 'preserved-chat'], ['libraryModule', 'preserved-reference']]);
     expect(readResearchProblemDraft(parameters)).toBeUndefined();
     expect(archiveProblemDraftHref({ id: archive.id, sources: [] }, '../')).toBeUndefined();
+  });
+
+  it('quotes the selected mathematical step from the accepted reading asset while preserving the original problem identity', async () => {
+    const records = campaignRecords(root).records;
+    const record = records.find(record => record.id === 'openai_triangle_face')!, original = record.sources.find(source => source.name === 'Challenge.lean')!;
+    const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records });
+    const context = proofReadingContexts(record, record.process!)!, anchor = Object.keys(context.positions)[1];
+    expect(context.positions[anchor].uses).toEqual(expect.arrayContaining(['OAI.TriangleFace198.not_crosses_inr', 'OAI.TriangleFace198.crosses_inl_iff']));
+    expect(context.positions[anchor].uses).not.toContain('OAI.TriangleFace198.cutMass_triangleVertices');
+    const reading = new URL('/classics/archive.html', currentHref);
+    reading.hash = new URLSearchParams({ proof: record.id, tab: 'reading', reading: anchor, readingSha: context.proofSha256 }).toString();
+    const reference = { kind: 'archive' as const, id: record.id, sourceDigest: original.sha256, focusAnchor: anchor, readingUrl: reading.href };
+    expect(readResearchProblemDraft(new URL(researchProblemDraftHref(reference), currentHref).searchParams)).toEqual(reference);
+    const requests: string[] = [];
+    const reader = { json: async <T,>(url: string) => { requests.push(url); return (url === '/classics/data/index.json' ? index : context) as T; },
+      text: async () => original.code, currentHref, locale: 'zh' as const };
+    const identities: string[] = [];
+    for (const locale of ['zh', 'en'] as const) {
+      const candidate = await loadResearchProblemDraft(reference, { ...reader, locale });
+      identities.push(candidate.draftId);
+      const selected = context.positions[anchor];
+      expect(candidate.focus?.title).toBe(selected.title[locale]);
+      expect(candidate.focus?.text).toContain(selected.claim[locale]);
+      expect(candidate.focus?.text).toContain(selected.derivation![0].statement[locale]);
+      expect(candidate.focus?.uses).toEqual(selected.uses);
+      expect(candidate.text).toContain(candidate.focus!.text);
+      expect(candidate.sourceDigest).toBe(original.sha256); expect(candidate.source).toBe(original.code);
+      expect(new URLSearchParams(new URL(candidate.sourceUrl).hash.slice(1)).get('reading')).toBe(anchor);
+      expect(Buffer.byteLength(candidate.text)).toBeLessThanOrEqual(32_768);
+    }
+    expect(identities[0]).toMatch(/^research-[a-f0-9]{64}$/u);
+    expect(identities[1]).toBe(identities[0]);
+    const whole = await loadResearchProblemDraft({ ...reference, focusAnchor: undefined }, reader);
+    expect(whole.draftId).not.toBe(identities[0]);
+    expect(requests.some(url => url.startsWith(`/classics/data/reading/${record.id}.json`))).toBe(true);
+    await expect(loadResearchProblemDraft({ ...reference, focusAnchor: 'proof-derivation-other' }, reader)).rejects.toThrow('所选步骤与当前验收证明不一致');
+    await expect(loadResearchProblemDraft(reference, { ...reader, json: async <T,>(url: string) => (url === '/classics/data/index.json' ? index : { ...context, proofSha256: 'a'.repeat(64) }) as T })).rejects.toThrow('所选步骤暂不可用');
+  });
+
+  it('quotes source declaration conditions and dependencies rather than URL-supplied text', async () => {
+    const records = campaignRecords(root).records;
+    const record = records.find(record => record.campaign!.target === 'ThreeStateTreeClauses')!, original = record.sources.find(source => source.name === 'Challenge.lean')!;
+    const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records });
+    const context = proofReadingContexts(record, record.process!)!, anchor = 'proof-source-target-1';
+    const reading = new URL('/classics/archive.html', currentHref);
+    reading.hash = new URLSearchParams({ proof: record.id, tab: 'reading', reading: anchor, readingSha: context.proofSha256 }).toString();
+    const candidate = await loadResearchProblemDraft({ kind: 'archive', id: record.id, sourceDigest: original.sha256, readingUrl: reading.href, focusAnchor: anchor }, {
+      json: async <T,>(url: string) => (url === '/classics/data/index.json' ? index : context) as T,
+      text: async () => original.code, currentHref, locale: 'en',
+    });
+    expect(candidate.focus?.text).toContain('hlam : Admissible lam');
+    for (const name of ['Spin', 'Admissible', 'channelWeight']) expect(candidate.focus?.uses).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp('\\.' + name + '$', 'u'))]));
+    const helperAnchor = Object.keys(context.positions).find(key => context.positions[key].title.en.endsWith('.Spin'))!;
+    expect(context.positions[helperAnchor].definition).toBe('abbrev Spin := Fin 3');
+    reading.hash = new URLSearchParams({ proof: record.id, tab: 'reading', reading: helperAnchor, readingSha: context.proofSha256 }).toString();
+    const definition = await loadResearchProblemDraft({ kind: 'archive', id: record.id, sourceDigest: original.sha256, readingUrl: reading.href, focusAnchor: helperAnchor }, {
+      json: async <T,>(url: string) => (url === '/classics/data/index.json' ? index : context) as T,
+      text: async () => original.code, currentHref, locale: 'en',
+    });
+    expect(definition.focus?.text).toContain('```lean\nabbrev Spin := Fin 3\n```');
   });
 
   it('returns to the original accepted reading step and directory without allowing the handoff to choose a different source', async () => {

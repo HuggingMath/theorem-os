@@ -11,6 +11,9 @@ import { renderProofRoute } from '../docs/web/proofRoute';
 import { withArchiveSourceRoute } from '../docs/web/archiveSourceRoute';
 import { proofSolutionTitle, renderProofSolution, theoremDirectoryReturn } from '../docs/web/proofSolution';
 import { localizeRecord } from '../docs/web/site';
+import { proofReadingContexts } from '../docs/web/proofReadingContext';
+import { renderAcceptedTargets } from '../docs/web/proofAcceptance';
+import { sourceMathematics } from '../docs/web/proofSourceMathematics';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const escaped = (value: string) => value.replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -286,11 +289,74 @@ describe('direct reading of the current accepted proof', () => {
         expect(output).toContain('data-global-scroll="proof-source-helper-1"');
         expect(output).toContain('id="proof-source-helper-1"');
       }
+      if (accepted.target === 'ThreeStateTreeClauses') {
+        for (const name of ['Spin', 'Admissible', 'channelWeight']) expect(output).toContain(`data-proof-used-definition="OAI.ThreeState.TreeClauses.${name}"`);
+        const first = declarations[0], used = helpers.filter(helper => helper.kind === 'definition' && first.references.includes(helper.id));
+        expect(used).toHaveLength(3);
+        for (const definition of used) {
+          expect(output).toContain(escaped(source.code.split('\n').slice(definition.line - 1, definition.endLine).join('\n')));
+          expect(output).toContain(`data-global-scroll="proof-source-helper-${helpers.indexOf(definition) + 1}"`);
+        }
+      }
       expect(output).not.toMatch(/<h5[^>]*>(?:证明目标|Proof target) \d/u);
-      expect(output).toContain(locale === 'en' ? 'A step-by-step mathematical explanation is not yet available.' : '此题尚无逐步数学讲解。');
+      const mathematics = sourceMathematics(record, process)!;
+      expect(mathematics).toBeDefined();
+      expect(output).toContain(`data-proof-source-mathematics="${record.id}"`);
+      expect(output.indexOf('data-proof-math-setup')).toBeLessThan(output.indexOf('data-proof-source-reading'));
+      for (const value of [mathematics.setup, ...mathematics.assumptions, ...mathematics.notation,
+        mathematics.relationship, ...mathematics.outline.map(step => step.text)]) expect(output).toContain(escaped(value[locale]));
+      expect([...output.matchAll(/data-proof-math-target="([^"]+)"/gu)].map(match => match[1])).toEqual(accepted.targets);
       expect(output).toContain('data-tab="process"');
       expect(output).toContain('data-tab="source"');
       expect(output).toContain('data-tab="evidence"');
+    }
+  });
+
+  it('keeps source mathematical notes bound to the accepted run, statement, proof and target list', () => {
+    const records = campaignRecords(root).records.filter(record => !record.process?.walkthrough);
+    for (const record of records) {
+      expect(sourceMathematics(record, record.process!)).toBeDefined();
+      for (const change of ['run', 'statement', 'proof', 'targets', 'check'] as const) {
+        const changed = structuredClone(record);
+        if (change === 'run') changed.campaign!.runId = 'another-run';
+        if (change === 'statement') changed.sources.find(source => source.name === 'Challenge.lean')!.sha256 = 'f'.repeat(64);
+        if (change === 'proof') changed.campaign!.proofSha256 = 'f'.repeat(64);
+        if (change === 'targets') changed.campaign!.targets.push('Another.target');
+        if (change === 'check') changed.process!.runs.find(run => run.runId === changed.campaign!.runId)!.checks = [];
+        expect(sourceMathematics(changed, changed.process!), change).toBeUndefined();
+      }
+    }
+  });
+
+  it('publishes only accepted step contexts and keeps target acceptance tied to its original proof', () => {
+    for (const record of campaignRecords(root).records) {
+      const context = proofReadingContexts(record, record.process!)!;
+      expect(context.recordId).toBe(record.id); expect(context.proofSha256).toBe(record.campaign!.proofSha256);
+      expect(context.runId).toBe(record.campaign!.runId); expect(Object.keys(context.positions).length).toBeGreaterThan(0);
+      const unverified = structuredClone(record.process!);
+      unverified.runs.find(run => run.runId === record.campaign!.runId)!.checks = [];
+      expect(proofReadingContexts(record, unverified)).toBeUndefined();
+      for (const locale of ['zh', 'en'] as const) {
+        const acceptance = renderAcceptedTargets(record, locale);
+        expect(acceptance).toContain(`data-accepted-proof="${record.campaign!.proofSha256}"`);
+        expect([...acceptance.matchAll(/data-accepted-target="([^"]+)"/gu)].map(match => match[1])).toEqual(record.campaign!.targets);
+        expect(acceptance).toContain('data-action="view-statement"'); expect(acceptance).toContain('data-tab="reading"');
+        expect(acceptance).not.toContain(record.campaign!.runId);
+      }
+    }
+  });
+
+  it('labels archive step handoffs as new research while preserving their selected-step identity', () => {
+    const records = campaignRecords(root).records;
+    for (const target of ['TriangleFace', 'ThreeStateTreeClauses']) {
+      const record = records.find(record => record.campaign!.target === target)!;
+      for (const locale of ['zh', 'en'] as const) {
+        const output = renderProofSolution(record, record.process!, locale, { workbenchHref: '../' });
+        expect(output).toContain(locale === 'en' ? target === 'TriangleFace' ? 'Research this step' : 'Research this declaration'
+          : target === 'TriangleFace' ? '围绕这一步研究' : '围绕此处研究');
+        expect(output).toContain('archiveFocus=proof-');
+        expect(output).not.toContain(locale === 'en' ? 'Explain this step' : '解释这一步');
+      }
     }
   });
 

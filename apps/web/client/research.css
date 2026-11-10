@@ -392,5 +392,6 @@ button.research-directory-card{font-family:var(--sans);cursor:pointer}
   .research-installed-result-tools{gap:6px 12px}
   .research-own-overview{grid-template-columns:1fr}
   .research-installed-math-facts>div{grid-template-columns:55px minmax(0,1fr);gap:8px}
+  html:lang(en) .research-installed-math-facts>div{grid-template-columns:72px minmax(0,1fr)}
   .research-installed-declaration-actions .text-button{min-height:36px}
 }

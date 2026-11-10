@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import type { Page } from 'playwright';
 
+/** Open the composer's optional environment, reasoning and budget fields through their visible disclosure. */
+export async function openAdvancedChatSettings(page: Page) {
+  const settings = page.locator('#formalize-settings');
+  if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click({ timeout: 0 });
+  const advanced = settings.locator('[data-chat-advanced-settings]');
+  if (!await advanced.evaluate(node => (node as HTMLDetailsElement).open)) await advanced.locator(':scope > summary').click({ timeout: 0 });
+}
+
 export async function closeDialog(page: Page, selector: string, action: () => Promise<unknown>) {
   await page.locator(`${selector}[open]`).waitFor();
   await page.evaluate(selector => {

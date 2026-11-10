@@ -101,7 +101,9 @@ function api(method: string, url: URL) {
   if (pathname === '/api/research/notifications') return reply({ items: [{ id: 'notice-statement', actor: people[0],
     projectId: theorem.id, type: 'statement', summary: 'Updated field-extension statement', createdAt, read: false }], total: 1 });
   if (pathname === '/api/research/feed') return reply({ items: [], total: 0 });
-  if (pathname === '/api/research/collaboration/inbox') return reply({ items: [], unread: 0, pending: 0 });
+  if (pathname === '/api/research/collaboration/inbox') return reply({ items: [{ id: 'notice-statement', kind: 'update', category: 'progress',
+    projectId: theorem.id, projectTitle: theorem.title, title: 'Updated field-extension statement', createdAt, read: false,
+    href: `theorems.html?id=${theorem.id}`, processed: false, resolved: false }], unread: 1, pending: 0, counts: { decision: 0, reply: 0, progress: 1 } });
   if (pathname === '/api/research/personal/drafts') return reply({ items: [], total: 0 });
   if (pathname === '/api/research/asset-follows') return reply({ items: [], updates: [] });
   const collaboration = /^\/api\/research\/theorems\/([^/]+)\/collaboration$/u.exec(pathname);
@@ -250,7 +252,13 @@ async function peopleFlow(page: Page, record: typeof checks[number], en: boolean
   await mine.click({ timeout: 0 }); await visible(page.getByRole('heading', { level: 1, name: self.displayName, exact: true }));
   const ownOverview = page.locator('[data-own-research-overview]');
   await visible(ownOverview);
-  await visible(ownOverview.getByRole('heading', { name: en ? 'Updates for you · 1 unread' : '需要关注的更新 · 1 条未读', exact: true }));
+  await visible(ownOverview.getByRole('heading', { name: en ? 'Personal inbox' : '个人处理中心', exact: true }));
+  const inboxSummary = ownOverview.locator('[data-collaboration-inbox] > header > span');
+  await visible(inboxSummary);
+  assert((await inboxSummary.innerText()).includes(en ? '0 pending · 1 unread' : '0 项待处理 · 1 条未读'));
+  await ownOverview.locator('[data-inbox-filter="progress"]').click();
+  await visible(ownOverview.locator('[data-inbox-item="notice-statement"]'));
+  assert.equal(requests.filter(request => request.method !== 'GET').length, 0, 'reading progress preserves unread state');
   assert(await page.evaluate(() => Boolean(document.querySelector('[data-own-research-overview]')!.compareDocumentPosition(document.querySelector('#research-projects')!) & Node.DOCUMENT_POSITION_FOLLOWING)), 'own updates and recent projects precede profile details');
   await capture(page, record, 'people-own-overview');
   await visible(page.locator('#profile-management'));
@@ -270,7 +278,7 @@ async function peopleFlow(page: Page, record: typeof checks[number], en: boolean
   }
   await health(signedOut); await signedOut.close();
   record.assertions.push('People: real field candidates, clickable tags and trimmed/case-insensitive filters; only manageable projects across pages are offered, the member form is prefilled/focused without any write, and signed-out follow links retain their profile return address.');
-  record.assertions.push('People: visible research previews, unread count and recent projects above own profile, full-width directory, names/fields/biographies, filtered detail/return navigation');
+  record.assertions.push('People: visible research previews, unified inbox unread count and recent projects above own profile, full-width directory, names/fields/biographies, filtered detail/return navigation');
 }
 async function theoremFlow(page: Page, record: typeof checks[number], en: boolean) {
   const heading = page.getByRole('heading', { level: 1, name: en ? 'Theorems' : '定理', exact: true });

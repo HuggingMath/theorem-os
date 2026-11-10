@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { InstalledLibraryDefinition, InstalledLibraryDetail, InstalledLibraryDirectory as LibraryDirectory, InstalledLibraryEntry, InstalledLibraryInfo, InstalledLibrarySource } from '../installedLibraryTypes';
+import type { InstalledLibraryDeclarationContext, InstalledLibraryDefinition, InstalledLibraryDetail, InstalledLibraryDirectory as LibraryDirectory, InstalledLibraryEntry, InstalledLibraryInfo, InstalledLibrarySource } from '../installedLibraryTypes';
 import { installedLibraryLabels } from '../installedLibraryLabels';
 import { installedLibraryQuerySuggestions, matchesInstalledLibraryModuleAlias } from '../installedLibrarySearch';
 import { installedLibraryMathematics } from '../installedLibraryMathematics';
@@ -20,7 +20,7 @@ function moduleTitle(name: string) {
   const labels = installedLibraryLabels(name);
   return labels ? tx(labels.zh.title, labels.en.title) : readableModuleName(name);
 }
-const directoryKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat', 'workbenchRun'] as const;
+const directoryKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat', 'workbenchRun', 'workbenchEdit'] as const;
 function directoryParameters(filters: URLSearchParams) {
   const result = new URLSearchParams();
   for (const key of directoryKeys) {
@@ -80,13 +80,19 @@ export function InstalledLibraryDirectory({ query, area, environment, offset, on
         const labels = installedLibraryLabels(module.name), title = moduleTitle(module.name);
         const describesModule = matchesInstalledLibraryModuleAlias(module.name, query) || [module.name, module.file, labels?.zh.title, labels?.zh.description, labels?.en.title, labels?.en.description]
           .some(value => value && tokens.every(token => value.toLocaleLowerCase().includes(token)));
-        const matched = tokens.length && !describesModule ? module.preview.find(entry => tokens.every(token => `${entry.name} ${entry.type} ${entry.description}`.toLocaleLowerCase().includes(token))) : undefined;
+        const matched = tokens.length && !describesModule ? module.matchingInterfaces[0] : undefined;
         const href = moduleHref(module.file, directory.library.catalogDigest, filters, matched?.name);
         return <article key={module.file} class="research-installed-row" id={moduleAnchor(module.file)} data-installed-library-module={module.file}>
         <div class="research-installed-row-heading"><h3 class="research-installed-title"><a data-installed-library-open={module.name} href={href} aria-label={`${title} · ${module.name}`}>
           <span>{title}</span></a></h3>
           <div class="research-installed-row-meta"><span>{fieldLabel(module.area)}</span><a href={href}>{module.entryCount} {tx('个接口', 'interfaces')} →</a></div></div>
         {labels && <p class="research-installed-module-description">{tx(labels.zh.description, labels.en.description)}</p>}
+        {matched && <div class="research-installed-preview" data-installed-library-matches>
+          <span class="research-installed-preview-label">{tx('匹配的接口', 'Matching interfaces')} · {module.matchingInterfaceCount}</span>
+          {module.matchingInterfaces.map(entry => <div key={entry.name}>
+            <a data-installed-library-match={entry.name} href={moduleHref(module.file, directory.library.catalogDigest, filters, entry.name, { query, kind: '' })}><LeanName name={entry.name} /></a>
+            <div class="research-installed-module-description"><RichProse text={tx(entry.summary.zh, entry.summary.en)} /></div>
+          </div>)}</div>}
         <details class="research-installed-module-tools"><summary>{tx('导入与接口预览', 'Import and interfaces')}</summary>
         <code class="research-installed-module-name">{module.name}</code>
         <div class="research-installed-import-row"><code class="research-installed-import">{module.import}</code><CopyValue value={module.import} name={module.name} /></div>
@@ -123,7 +129,7 @@ export function InstalledLibraryModule({ file, catalogDigest, filters }: { file:
   const interfaceToolbar = useRef<HTMLDivElement>(null), moduleSection = useRef<HTMLElement>(null);
   const source = useResource<Item<InstalledLibrarySource>>(sourceOpen && detail && detailUrl ? `${detailUrl}&view=source` : undefined);
   const entries = detail?.module.entries.filter(entry => (!kind || entry.kind === kind)
-    && matchesInstalledLibraryInterface(entry, detail.module.import, query, detail.definitions[entry.name])) ?? [];
+    && matchesInstalledLibraryInterface(entry, detail.module.import, query, detail.definitions[entry.name], detail.contexts?.[entry.name])) ?? [];
   useEffect(() => {
     if (!detail) return;
     const next = new URL(location.href);
@@ -170,8 +176,9 @@ export function InstalledLibraryModule({ file, catalogDigest, filters }: { file:
           }}>{tx('清除筛选', 'Clear filters')}</button>}</div>
         <div class="research-installed-declarations">{entries.map(entry => <Declaration key={entry.name} entry={entry} moduleImport={detail.module.import}
           definition={detail.definitions[entry.name]}
+          sourceContext={detail.contexts?.[entry.name]}
           href={moduleHref(detail.module.file, detail.library.catalogDigest, filters, entry.name, { query, kind })}
-          referenceHref={libraryReferenceHref(detail.module.file, detail.library.catalogDigest, entry.name, filters.get('workbenchChat'))} />)}</div>
+          referenceHref={libraryReferenceHref(detail.module.file, detail.library.catalogDigest, entry.name, filters.get('workbenchChat'), filters.get('workbenchEdit'))} />)}</div>
         {!entries.length && <Empty>{detail.module.entries.length ? tx('没有匹配的接口，请调整名称或类型筛选。', 'No matching interfaces. Change the name or type filter.') : tx('此模块未列出可检索接口，可查看完整源码。', 'This module lists no searchable interfaces. View its full source below.')}</Empty>}
       </section>
       <Panel title={tx('源码与来源', 'Source and provenance')}>
@@ -224,8 +231,9 @@ function CopyValue({ value, name, kind = 'import' }: { value: string; name: stri
   return <div class="research-installed-copy"><button type="button" class="text-button" data-installed-library-copy={kind} aria-label={`${labels.name}${name}`} disabled={busy} onClick={() => void copy()}>{labels.button}</button>
     {message && <span role="status" data-copy-state={failed ? 'failed' : 'copied'}>{message}</span>}</div>;
 }
-function Declaration({ entry, moduleImport, href, referenceHref, definition }: { entry: InstalledLibraryEntry; moduleImport: string; href: string; referenceHref: string; definition?: InstalledLibraryDefinition }) {
-  const mathematics = installedLibraryMathematics(entry, moduleImport, definition), summary = tx(mathematics.summary.zh, mathematics.summary.en);
+function Declaration({ entry, moduleImport, href, referenceHref, definition, sourceContext }: { entry: InstalledLibraryEntry; moduleImport: string; href: string; referenceHref: string; definition?: InstalledLibraryDefinition; sourceContext?: InstalledLibraryDeclarationContext }) {
+  const mathematics = installedLibraryMathematics(entry, moduleImport, definition, sourceContext), summary = tx(mathematics.summary.zh, mathematics.summary.en);
+  const documentation = definition?.documentation || sourceContext?.documentation;
   const conditions = (items: typeof mathematics.conditions) => <ul class="research-installed-math-conditions">{items.map((condition, index) => <li key={index}>
     <span class="research-installed-math-condition-description">{tx(condition.label.zh, condition.label.en)} · {tx(condition.meaning.zh, condition.meaning.en)}</span>
     <span class="research-installed-math-expression">{condition.expression}</span></li>)}</ul>;
@@ -233,18 +241,19 @@ function Declaration({ entry, moduleImport, href, referenceHref, definition }: {
     <div><h3><a href={href}><LeanName name={entry.name} /></a></h3><span>{entry.kind === 'lemma' ? tx('引理', 'Lemma') : tx('定义', 'Definition')}</span></div>
     <div class="research-installed-math" data-installed-library-mathematics>
       <div class="research-installed-math-summary"><RichProse text={summary} /></div>
-      {definition?.documentation && definition.documentation !== summary && <div class="research-installed-definition-documentation"><RichProse text={definition.documentation} /></div>}
       <dl class="research-installed-math-facts"><div><dt>{entry.kind === 'lemma' ? tx('数学结论', 'Conclusion') : tx('定义正文', 'Definition')}</dt><dd>
         <span class="research-installed-math-expression" data-installed-library-conclusion>{mathematics.expression}</span>
       </dd></div><div><dt>{tx('条件与参数', 'Conditions and inputs')}</dt><dd>
         {mathematics.conditions.length > 0 && conditions(mathematics.conditions)}
         <p class="research-field-note">{tx(mathematics.context.zh, mathematics.context.en)}</p>
-      </dd></div>{mathematics.scopeConditions.length > 0 && <div><dt>{tx('模块参数', 'Module inputs')}</dt><dd>{conditions(mathematics.scopeConditions)}</dd></div>}</dl>
+      </dd></div>{mathematics.scopeConditions.length > 0 && <div><dt>{tx('模块作用域中的参数', 'Parameters in the module scope')}</dt><dd data-installed-library-scope>{conditions(mathematics.scopeConditions)}</dd></div>}</dl>
+      {documentation && documentation !== summary && <div class="research-installed-definition-documentation" data-installed-library-author-documentation>
+        <p class="research-field-note">{tx('作者说明', 'Author notes')}</p><RichProse text={documentation} /></div>}
     </div>
     <details class="research-installed-usage"><summary>{tx('最小 Lean 用法', 'Minimal Lean usage')}</summary><pre class="research-block-code" data-installed-library-usage>{mathematics.usage}</pre></details>
     {definition ? <details class="research-installed-signature research-installed-definition-source"><summary>{tx('原始定义与模块上下文', 'Original definition and module context')} · {tx(`第 ${definition.line} 行`, `Line ${definition.line}`)}</summary>
       <pre class="research-block-code" data-installed-definition-source>{[...definition.context, definition.source].join('\n\n')}</pre></details>
-      : <details class="research-installed-signature"><summary>{tx('原始 Lean 类型', 'Original Lean type')}</summary><pre class="research-block-code" data-installed-library-signature>{entry.type}</pre></details>}
+      : <details class="research-installed-signature"><summary>{tx('原始 Lean 类型与模块上下文', 'Original Lean type and module context')}</summary><pre class="research-block-code" data-installed-library-signature>{[...(sourceContext?.context ?? []), entry.type].join('\n\n')}</pre></details>}
     <div class="research-installed-declaration-actions"><a class="text-button" data-installed-library-reference={entry.name} href={referenceHref}
       aria-label={`${tx('在工作台引用：', 'Reference in workbench: ')}${entry.name}`}>{tx('在工作台引用', 'Reference in workbench')} →</a><CopyValue kind="name" value={entry.name} name={entry.name} />
       <CopyValue kind="link" value={new URL(href, location.href).href} name={entry.name} /></div>

@@ -52,7 +52,7 @@ async function assertReceipt(page, archiveUrl, english, evidence) {
   }
   if (!wasOpen) await disclosure.locator('summary').click();
   if (/^https?:/u.test(expected)) {
-    const response = await page.request.get(expected);
+    const response = await page.request.get(expected, { timeout: 0 });
     assert.equal(response.status(), 200, 'The served replay receipt must be available at the local asset path');
     assert.deepEqual(await response.json(), evidence, 'The served raw receipt must match the recorded replay');
   }

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { openAdvancedChatSettings } from './web-ui-controls';
 // Disposable HTTP services and recorded mathematics evidence only: no external model or Lean process.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -96,6 +97,7 @@ async function eventually(check: () => boolean, description: string) {
 const budgetInputs = ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns'];
 const positiveBudgets = ['4', '120000', '3', '80000', '4'];
 async function blankBudgets(page: Page) {
+  await openAdvancedChatSettings(page);
   for (const selector of budgetInputs) {
     assert.equal(await page.locator(selector).inputValue(), '', `${selector} represents unlimited with a blank value`);
     assert.equal(await page.locator(selector).getAttribute('placeholder'), '不限');
@@ -124,6 +126,7 @@ async function credentials(page: Page) {
   }
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
+  await openAdvancedChatSettings(page);
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');
   await page.locator('#formalize-start:enabled').waitFor();
 }
@@ -792,8 +795,10 @@ try {
       await page.locator('#research-chat-thread .research-conversation-state').filter({ hasText: '关联任务记录已删除' }).waitFor();
       assert.equal(await page.getByText('正在读取任务', { exact: true }).count(), 0, 'A removed record has a terminal state rather than an endless load');
       await page.locator('#research-chat-thread').getByRole('button', { name: '修改题目', exact: true }).click();
-      await page.waitForURL(url => !url.search);
+      await page.waitForURL(url => url.searchParams.get('editProblem') === unlinked.id);
       assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Editing the retained conversation restores the exact original draft');
+      await page.locator('[data-chat-return-home]').click();
+      await page.waitForURL(url => !url.search);
       assert.equal(formalizations.length, started + 2, 'Restoring the draft does not create a statement');
       assert.equal(providerCalls.length, calls, 'History management never invokes the model');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);

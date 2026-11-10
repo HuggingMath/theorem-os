@@ -4,18 +4,19 @@ import { t } from '../../i18n';
 import type { ResearchProblemDraft } from '../researchProblemDraft';
 import { ChatMessageContent } from './ChatMessageContent';
 
-type Props = { loading?: boolean; candidate?: ResearchProblemDraft; error?: string; onInclude(): void; onDismiss(): void; onRetry(): void };
+type Props = { loading?: boolean; candidate?: ResearchProblemDraft; error?: string; onInclude(): void; onAppend(): void; onDismiss(): void; onRetry(): void };
 function ResearchProblemDraftView(props: Props) {
   const [copied, setCopied] = useState(false), [copyError, setCopyError] = useState(false);
   const { candidate } = props;
   return <section class="chat-problem-draft" data-problem-draft-candidate aria-labelledby="problem-draft-heading" aria-busy={props.loading}>
-    <h2 id="problem-draft-heading">{t('从这道题开始研究')}</h2>
+    <h2 id="problem-draft-heading">{candidate?.focus ? t('围绕所选步骤研究') : t('从这道题开始研究')}</h2>
     {props.loading && <p role="status">{t('正在读取固定版本的原题…')}</p>}
     {props.error && <div class="chat-error" role="alert"><p>{props.error}</p><button type="button" class="text-button" onClick={props.onRetry}>{t('重试')}</button></div>}
     {candidate && <>
       <h3 translate={false}>{candidate.title}</h3>
+      {candidate.focus && <div class="chat-problem-draft-focus" data-problem-draft-focus><ChatMessageContent text={candidate.focus.text} /></div>}
       <ChatMessageContent text={candidate.statement} />
-      <p class="chat-problem-draft-help">{t('加入后可在输入框中修改题目，再由你发送。现有草稿会保留。')}</p>
+      <p class="chat-problem-draft-help">{t('默认单独保存这道题的研究草稿，首页问题会保留。已有同题草稿时会恢复你的修改；修改后再由你发送。')}</p>
       {!candidate.sourceIncluded && <p class="chat-problem-draft-help">{t('完整 Lean 原题超过输入框容量，将加入题目说明、全部目标和固定来源。完整源码可在下方展开或复制。')}</p>}
       <a href={candidate.sourceUrl} target="_blank" rel="noopener">{t('查看题目来源')}</a>
       <details class="chat-problem-draft-source"><summary>{t('完整 Lean 原题与版本')}</summary>
@@ -28,7 +29,10 @@ function ResearchProblemDraftView(props: Props) {
       </details>
     </>}
     <div class="chat-task-actions">
-      {candidate && <button type="button" class="button button-primary" data-problem-draft-include onClick={props.onInclude}>{t('加入草稿')}</button>}
+      {candidate && <>
+        <button type="button" class="button button-primary" data-problem-draft-include onClick={props.onInclude}>{t('新建独立研究草稿')}</button>
+        <button type="button" class="text-button" data-problem-draft-append onClick={props.onAppend}>{t('追加到首页草稿')}</button>
+      </>}
       <button type="button" class="text-button" data-problem-draft-dismiss onClick={props.onDismiss}>{t('暂不加入')}</button>
     </div>
   </section>;

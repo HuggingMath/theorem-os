@@ -1,5 +1,13 @@
 export type ProofReadingPosition = { anchor: string; proofSha: string };
 
+/** A follow-up identifies a selected position; it never supplies the quoted mathematics. */
+export function focusedProblemHref(href: string, anchor: string): string {
+  const at = href.indexOf('?'), prefix = at < 0 ? href : href.slice(0, at);
+  const parameters = new URLSearchParams(at < 0 ? '' : href.slice(at + 1));
+  parameters.set('archiveFocus', anchor);
+  return `${prefix}?${parameters}`;
+}
+
 /** A position belongs to the exact accepted source, rather than a historical run. */
 export function readProofReadingPosition(parameters: URLSearchParams): ProofReadingPosition | undefined {
   const anchor = parameters.get('reading') ?? '', proofSha = parameters.get('readingSha') ?? '';

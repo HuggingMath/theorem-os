@@ -59,7 +59,7 @@ function rememberLibraryView(view: LibraryView, owner: string) {
     libraryFilterDrafts.setItem(`theoremos.research.library.filters.type:${view.type}`, value);
   } catch { /* Current filters and URL navigation still work when storage is unavailable. */ }
 }
-const libraryFilterKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat', 'workbenchRun', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit'] as const;
+const libraryFilterKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat', 'workbenchRun', 'workbenchEdit', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit'] as const;
 function filteredLibraryHref(id?: string, version?: string, filters = new URLSearchParams(location.search)) {
   const parameters = new URLSearchParams();
   for (const key of libraryFilterKeys) {
@@ -107,7 +107,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   const detail = useResource<Item<ResearchAsset>>(selected ? `${base}/library/${enc(selected)}` : undefined);
   useEffect(() => { if (!hasDirectoryType.current && detail.data) setType(detail.data.item.type); }, [detail.data?.item.id]);
   const filters = new URLSearchParams({ type });
-  for (const key of ['workbenchChat', 'workbenchRun', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit']) if (parameters.has(key)) filters.set(key, parameters.get(key)!);
+  for (const key of ['workbenchChat', 'workbenchRun', 'workbenchEdit', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit']) if (parameters.has(key)) filters.set(key, parameters.get(key)!);
   if (type === 'mathematics') filters.set('collection', collection);
   if (query) filters.set('q', query);
   if (area) filters.set('area', area);
@@ -156,7 +156,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     for (const key of ['area', 'author', 'environment'] as const) if (view[key]) next.set(key, view[key]);
     if (view.query) next.set('q', view.query);
     if (view.offset) next.set('offset', String(view.offset));
-    for (const key of ['workbenchChat', 'workbenchRun', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit']) if (filters.has(key)) next.set(key, filters.get(key)!);
+    for (const key of ['workbenchChat', 'workbenchRun', 'workbenchEdit', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit']) if (filters.has(key)) next.set(key, filters.get(key)!);
     return filteredLibraryHref(undefined, undefined, next);
   };
   const scopeHref = (value: 'lean' | 'shared' | 'mine') => {

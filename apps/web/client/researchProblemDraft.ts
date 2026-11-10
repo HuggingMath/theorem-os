@@ -2,15 +2,16 @@ import type { ArchiveIndex, ArchiveIndexRecord } from '../../../docs/web/types';
 import type { Locale } from '../../../docs/web/site';
 import type { ResearchProjectDetail, ResearchStatementVersion } from '../researchProjectTypes';
 import type { WebEnvironment } from '../shared';
-import { archiveReadingReturn } from '../../../docs/web/proofReadingLocation';
+import { archiveReadingReturn, readProofReadingPosition } from '../../../docs/web/proofReadingLocation';
+import type { ProofReadingContexts } from '../../../docs/web/proofReadingContext';
 
-export const researchProblemDraftKeys = ['archiveProblem', 'archiveSource', 'archiveReading', 'researchProject', 'statementVersion', 'statementSource'] as const;
+export const researchProblemDraftKeys = ['archiveProblem', 'archiveSource', 'archiveReading', 'archiveFocus', 'researchProject', 'statementVersion', 'statementSource'] as const;
 export type ResearchProblemDraftReference =
-  | { kind: 'archive'; id: string; sourceDigest: string; readingUrl?: string }
+  | { kind: 'archive'; id: string; sourceDigest: string; readingUrl?: string; focusAnchor?: string }
   | { kind: 'project'; id: string; version: string; sourceDigest: string };
 export type ResearchProblemDraft = {
-  title: string; text: string; statement: string; source: string; sourceDigest: string; environment: WebEnvironment;
-  sourceUrl: string; sourceIncluded: boolean;
+  draftId: string; title: string; text: string; statement: string; source: string; sourceDigest: string; environment: WebEnvironment;
+  sourceUrl: string; sourceIncluded: boolean; focus?: { title: string; text: string; uses: string[] };
 };
 type Reader = {
   json: <T>(url: string) => Promise<T>; text: (url: string) => Promise<string>;
@@ -23,7 +24,8 @@ export function readResearchProblemDraft(parameters: URLSearchParams): ResearchP
   if (!researchProblemDraftKeys.some(key => parameters.has(key))) return undefined;
   if (parameters.has('archiveProblem') || parameters.has('archiveSource'))
     return { kind: 'archive', id: parameters.get('archiveProblem') ?? '', sourceDigest: parameters.get('archiveSource') ?? '',
-      ...(parameters.get('archiveReading') ? { readingUrl: parameters.get('archiveReading')! } : {}) };
+      ...(parameters.get('archiveReading') ? { readingUrl: parameters.get('archiveReading')! } : {}),
+      ...(parameters.get('archiveFocus') ? { focusAnchor: parameters.get('archiveFocus')! } : {}) };
   return { kind: 'project', id: parameters.get('researchProject') ?? '', version: parameters.get('statementVersion') ?? '', sourceDigest: parameters.get('statementSource') ?? '' };
 }
 
@@ -36,6 +38,7 @@ export function researchProblemDraftHref(reference: ResearchProblemDraftReferenc
     ? new URLSearchParams({ archiveProblem: reference.id, archiveSource: reference.sourceDigest })
     : new URLSearchParams({ researchProject: reference.id, statementVersion: reference.version, statementSource: reference.sourceDigest });
   if (reference.kind === 'archive' && reference.readingUrl) parameters.set('archiveReading', reference.readingUrl);
+  if (reference.kind === 'archive' && reference.focusAnchor) parameters.set('archiveFocus', reference.focusAnchor);
   return `${workbench}?${parameters}`;
 }
 
@@ -60,6 +63,7 @@ export async function loadResearchProblemDraft(reference: ResearchProblemDraftRe
   if (!identifier.test(reference.id) || !digest.test(reference.sourceDigest) || reference.kind === 'project' && !identifier.test(reference.version))
     return fail(tx('题目来源链接不完整，请返回原题重新选择。', 'The problem source link is incomplete. Return to the problem and choose it again.'));
   let title: string, statement: string, source: string, environment: WebEnvironment, sourceUrl: string, targets: string[], sourceFileUrl = '';
+  let focus: ResearchProblemDraft['focus'];
   if (reference.kind === 'archive') {
     const index = await reader.json<ArchiveIndex>('/classics/data/index.json');
     const record = index.records.find(record => record.id === reference.id && record.status === 'locally_verified' && record.campaign);
@@ -73,6 +77,24 @@ export async function loadResearchProblemDraft(reference: ResearchProblemDraftRe
     sourceUrl = archiveReadingReturn(reference.readingUrl, record.id, reader.currentHref, record.campaign!.proofSha256)
       ?? new URL(`/classics/${reader.locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: record.id, tab: 'reading', status: 'verified' })}`, reader.currentHref).href;
     sourceFileUrl = new URL(`/classics/data/proofs/${encodeURIComponent(record.id)}/Challenge.lean`, reader.currentHref).href;
+    if (reference.focusAnchor) {
+      const position = readProofReadingPosition(new URLSearchParams(new URL(sourceUrl).hash.slice(1)));
+      if (!position || position.anchor !== reference.focusAnchor || position.proofSha !== record.campaign!.proofSha256)
+        return fail(tx('所选步骤与当前验收证明不一致，请返回解答重新选择；现有草稿已保留。', 'The selected step does not match the accepted proof. Choose it again from the solution; your existing draft is preserved.'));
+      const context = await reader.json<ProofReadingContexts>(`/classics/data/reading/${encodeURIComponent(record.id)}.json${record.processSummary?.version ? `?v=${record.processSummary.version}` : ''}`);
+      const selected = context.positions?.[position.anchor];
+      if (context.recordId !== record.id || context.proofSha256 !== position.proofSha || context.runId !== record.campaign!.runId || !selected)
+        return fail(tx('所选步骤暂不可用，请返回解答重新选择；现有草稿已保留。', 'The selected step is unavailable. Choose it again from the solution; your existing draft is preserved.'));
+      const label = (value: { zh: string; en: string }) => value[reader.locale];
+      const definitionFence = '`'.repeat(Math.max(3, ...[...(selected.definition ?? '').matchAll(/`+/gu)].map(match => match[0].length + 1)));
+      const focusText = [tx('围绕下面这一步开展研究，详细说明所用结论如何适用。', 'Research the following step, explaining in detail why each cited result applies.'),
+        label(selected.title), ...(selected.given ? [`${tx('已知：', 'Given: ')}${label(selected.given)}`] : []),
+        `${tx('本步结论：', 'Conclusion: ')}${label(selected.claim)}`,
+        ...(selected.definition ? [`${tx('定义正文：', 'Definition: ')}\n${definitionFence}lean\n${selected.definition}\n${definitionFence}`] : []),
+        ...(selected.derivation?.map((line, index) => `${index + 1}. ${label(line.statement)}\n${label(line.reason)}`) ?? []),
+        ...(selected.uses.length ? [`${tx('用到的结论：', 'Results used: ')}${selected.uses.join(', ')}`] : [])].join('\n\n');
+      focus = { title: label(selected.title), text: focusText, uses: selected.uses };
+    }
   } else {
     const { item: project } = await reader.json<{ item: ResearchProjectDetail }>(`/api/research/theorems/${encodeURIComponent(reference.id)}`);
     const version = project.id === reference.id && project.versions.find(version => version.id === reference.version);
@@ -85,7 +107,7 @@ export async function loadResearchProblemDraft(reference: ResearchProblemDraftRe
   if (await sourceHash(source) !== reference.sourceDigest)
     return fail(tx('原题源码与所选版本不一致，请返回原题重新选择；现有草稿已保留。', 'The statement source does not match the selected version. Choose it again from the problem; your existing draft is preserved.'));
   const fence = '`'.repeat(Math.max(3, ...[...source.matchAll(/`+/gu)].map(match => match[0].length + 1)));
-  const introduction = [title, '', statement, ...(targets.length ? ['', tx('证明目标：', 'Proof targets:'), ...targets] : []), '',
+  const introduction = [title, '', ...(focus ? [focus.text, '', tx('原题背景：', 'Original problem context: ')] : []), statement, ...(targets.length ? ['', tx('证明目标：', 'Proof targets:'), ...targets] : []), '',
     `${tx('题目来源：', 'Problem source: ')}${sourceUrl}`,
     ...(sourceFileUrl ? [`${tx('完整 Lean 原题：', 'Complete Lean statement: ')}${sourceFileUrl}`] : []), `SHA-256: ${reference.sourceDigest}`].join('\n');
   const sourceBlock = `\n\n${fence}lean\n${source}\n${fence}`;
@@ -94,5 +116,9 @@ export async function loadResearchProblemDraft(reference: ResearchProblemDraftRe
   const text = introduction + (sourceIncluded ? sourceBlock : `\n\n${tx(
     '完整 Lean 原题较长，保留在上述来源中；请在此补充你要研究的问题或变体。',
     'The full Lean statement is long and remains at the source above. Add the question or variant you want to research here.')}`);
-  return { title, text, statement, source, sourceDigest: reference.sourceDigest, environment, sourceUrl, sourceIncluded };
+  const identity = reference.kind === 'project' ? [reference.kind, reference.id, reference.version, reference.sourceDigest]
+    : [reference.kind, reference.id, reference.sourceDigest, reference.focusAnchor ?? '',
+      focus ? new URLSearchParams(new URL(sourceUrl).hash.slice(1)).get('readingSha') : ''];
+  const draftId = `research-${await sourceHash(JSON.stringify(identity))}`;
+  return { draftId, title, text, statement, source, sourceDigest: reference.sourceDigest, environment, sourceUrl, sourceIncluded, ...(focus ? { focus } : {}) };
 }

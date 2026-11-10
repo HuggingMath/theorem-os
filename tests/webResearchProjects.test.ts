@@ -80,6 +80,32 @@ describe('research projects and collaboration permissions', () => {
     expect(serialized).not.toContain('apiKey'); expect(serialized).not.toContain('email');
   });
 
+  it('projects current visible member names for collaborators, readers and public visitors without exposing private profiles', () => {
+    const { projects, project } = fixture();
+    let current = projects.update(alice, project.id, { requestId: 'member-name-public', expectedRevision: project.revision, visibility: 'public' });
+    projects.saveProfile(carol, { requestId: 'member-name-private', expectedRevision: 1, displayName: 'Private Carol',
+      bio: 'PRIVATE_MEMBER_BIO', fields: ['PRIVATE_MEMBER_FIELD'], visibility: 'private' });
+    current = projects.setMember(alice, project.id, projects.identity(carol),
+      { requestId: 'member-name-reader', expectedRevision: current.revision, role: 'reader' });
+    const bobName = { id: projects.identity(bob), displayName: 'Bob' };
+    for (const viewer of [alice, bob, 'public']) {
+      const detail = projects.detail(viewer, project.id);
+      expect(detail.memberProfiles).toEqual([bobName]);
+      expect(detail.members).toHaveLength(2);
+      expect(JSON.stringify(detail)).not.toContain('Private Carol');
+      expect(JSON.stringify(detail)).not.toContain('PRIVATE_MEMBER');
+    }
+    expect(projects.detail(carol, project.id).memberProfiles).toEqual([
+      bobName, { id: projects.identity(carol), displayName: 'Private Carol' },
+    ]);
+    expect(projects.detail(carol, project.id).memberProfiles?.every(person => Object.keys(person).sort().join() === 'displayName,id')).toBe(true);
+    projects.saveProfile(bob, { requestId: 'member-name-rename', expectedRevision: 1, displayName: 'Robert', visibility: 'public' });
+    expect(projects.detail('public', project.id).memberProfiles).toEqual([{ ...bobName, displayName: 'Robert' }]);
+    projects.saveProfile(bob, { requestId: 'member-name-hide', expectedRevision: 2, displayName: 'Hidden Robert', visibility: 'private' });
+    expect(projects.detail('public', project.id).memberProfiles).toEqual([]);
+    expect(projects.detail(bob, project.id).memberProfiles).toEqual([{ ...bobName, displayName: 'Hidden Robert' }]);
+  });
+
   it('normalizes directory field filters and offers only fields from visible profiles across pages', () => {
     const { projects } = fixture();
     projects.saveProfile(alice, { requestId: 'alice-fields', expectedRevision: 1, displayName: 'Alice', fields: [' Algebra ', 'Combinatorics'], visibility: 'public' });

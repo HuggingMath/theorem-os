@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { openAdvancedChatSettings } from './web-ui-controls';
 // Statement decisions survive navigation; all jobs and evidence are disposable fixtures, with no model or Lean.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -52,10 +53,11 @@ async function closeOutput(page: Page) {
   if (await page.locator('#close-research-output').isVisible()) await page.locator('#close-research-output').click();
 }
 async function key(page: Page) {
-  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#formalize-settings summary').click();
+  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#formalize-settings > summary').click();
   await page.locator('#formalize-key').fill('sk-round3-disposable-fixture');
+  await openAdvancedChatSettings(page);
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');
-  await page.locator('#formalize-settings summary').click();
+  await page.locator('#formalize-settings > summary').click();
 }
 async function create(page: Page, original: string, approved: boolean) {
   const before = pending.length;

@@ -1,4 +1,4 @@
-import type { InstalledLibraryDefinition, InstalledLibraryEntry } from './installedLibraryTypes';
+import type { InstalledLibraryDeclarationContext, InstalledLibraryDefinition, InstalledLibraryEntry } from './installedLibraryTypes';
 
 type Text = { zh: string; en: string };
 export type InstalledLibraryMathematics = {
@@ -29,6 +29,7 @@ const explanations: Record<string, Text> = {
   'TheoremOS.Combinatorics.FiniteCounting.card_le_sum_fiber_capacity': text('映射落在有限目标集内，且每条纤维受容量约束时，源集合大小不超过总容量。', 'If a map lands in a finite target and each fiber is bounded by its capacity, the source size is at most total capacity.'),
   'TheoremOS.Combinatorics.FiniteCounting.card_le_card_mul_fiber_bound': text('每条纤维至多含 n 个元素时，源集合大小不超过目标集合大小乘 n。', 'If each fiber contains at most n elements, the source size is at most the target size times n.'),
   'TheoremOS.Probability.sum_filter_le_of_subgaussian': text('非负权重满足给定的次高斯指数矩界时，得到非负阈值处的高斯型上尾界。', 'A subgaussian exponential-moment bound for nonnegative weights yields a Gaussian upper-tail bound at nonnegative thresholds.'),
+  'TheoremOS.Probability.sum_filter_le_exp_mul_sum': text('指数 Markov 界：有限组非负权重下，对任意 t≥0，用指数加权和给出事件 Y≥c 的权重上界。', 'Exponential Markov bound: for a finite family of nonnegative weights and any t≥0, an exponential weighted sum bounds the mass of the event Y≥c.'),
   'TheoremOS.Probability.sum_biasedMass_hoeffding': text('在参数 p 的独立随机子集分布中，对加权中心化指示变量之和给出 Hoeffding 上尾界。', 'Under the independent random-subset law with bias p, gives a Hoeffding upper-tail bound for a weighted sum of centered indicators.'),
   'TheoremOS.Combinatorics.LooplessMultigraph.Matching': text('一个完美匹配由有限边集及“每个顶点恰好关联一条选中边”的证明组成。', 'A perfect matching consists of a finite edge set together with a proof that each vertex meets exactly one selected edge.'),
   'TheoremOS.Probability.expectation': text('按有限权重 p 对 X 加权求和，定义期望。', 'Defines expectation as the finite weighted sum of X under p.'),
@@ -198,19 +199,21 @@ function generalConclusion(entry: InstalledLibraryEntry, expression: string): Te
 
 /** Derives visible mathematics from the frozen declaration header without inventing missing section variables. */
 export function installedLibraryMathematics(entry: InstalledLibraryEntry, moduleImport: string,
-  definition?: InstalledLibraryDefinition): InstalledLibraryMathematics {
+  definition?: InstalledLibraryDefinition, sourceContext?: InstalledLibraryDeclarationContext): InstalledLibraryMathematics {
   const colon = topLevelColon(entry.type), header = colon < 0 ? entry.type : entry.type.slice(0, colon);
   const matching = entry.name === 'TheoremOS.Combinatorics.LooplessMultigraph.Matching';
   const expression = definition?.body ?? definitionBodies[entry.name]
     ?? (colon < 0 ? entry.type : entry.type.slice(colon + 1).trim()).replace(/\s+where\s.+$/u, '');
   const conclusion = generalConclusion(entry, expression);
-  const scopeGroups = definition?.context.flatMap(binderGroups).filter(group => group.startsWith('[') || topLevelColon(group.slice(1, -1)) >= 0) ?? [];
-  return { summary: explanations[entry.name] ?? (definition?.documentation ? text(definition.documentation, definition.documentation) : conclusion),
+  const documentation = definition?.documentation || sourceContext?.documentation;
+  const scopeGroups = (sourceContext ?? definition)?.context.flatMap(binderGroups)
+    .filter(group => group.startsWith('[') || topLevelColon(group.slice(1, -1)) >= 0) ?? [];
+  return { summary: explanations[entry.name] ?? (documentation ? text(documentation, documentation) : conclusion),
     conditions: matching ? [{ label: text('参数 G', 'Input G'), expression: 'G : LooplessMultigraph V E',
       meaning: text('顶点类型 V、边类型 E 上的无自环多重图', 'a loopless multigraph on vertex type V and edge type E') }]
       : binderGroups(header).map(condition), conclusion, expression,
     scopeConditions: [...new Set(scopeGroups)].map(condition),
     usage: `${moduleImport}\n\n#check ${entry.name}\n#check @${entry.name}`,
-    context: text('参数与假设沿用所在模块的上下文；#check @ 可展开全部隐式参数。',
-      'Parameters and assumptions also follow the module context; #check @ displays all implicit parameters.') };
+    context: text('同时展示源码中所在模块作用域的参数与假设；作用域可能含未使用的变量，#check @ 可查看 Lean 实际隐式参数。',
+      'The module context shows variables and assumptions in the source scope, which may include unused variables; #check @ displays Lean’s actual implicit parameters.') };
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { openAdvancedChatSettings } from './web-ui-controls';
 // A disposable HTTP service, saved statement evidence and a controlled runner; no model, Docker or Lean.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -175,7 +176,7 @@ async function closeArtifacts(page: Page) {
 async function fillKey(page: Page) {
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-human-decisions-disposable-fixture');
-  if (await page.locator('#formalize-settings').getAttribute('open') !== null) await page.locator('#formalize-settings summary').click();
+  if (await page.locator('#formalize-settings').getAttribute('open') !== null) await page.locator('#formalize-settings > summary').click();
 }
 async function fit(page: Page, selector: string, label: string) {
   await settled(page);
@@ -215,8 +216,9 @@ async function startStatement(page: Page, automatic = false) {
   await page.locator('#formalize-original').fill(webFormalizationStatement);
   await page.locator('[data-chat-configure]').click();
   await page.locator('#formalize-key').fill('sk-human-decisions-disposable-fixture');
+  await openAdvancedChatSettings(page);
   await page.locator('#formalize-environment').selectOption('standard');
-  await page.locator('#formalize-settings summary').click();
+  await page.locator('#formalize-settings > summary').click();
   await page.locator('#formalize-start:enabled').click();
   await eventually(() => formalizations.length === count + 1, 'One statement is formalized');
   const pending = formalizations.at(-1)!;

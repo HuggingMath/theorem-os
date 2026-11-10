@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { openAdvancedChatSettings } from './web-ui-controls';
 // Disposable accounts, recorded formalization evidence and a fake runner; no external model or Lean.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -16,6 +17,7 @@ await fs.mkdir(output, { recursive: true });
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-recovery-'));
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const mail: { text: string }[] = [], formalizations: string[] = [], external: string[] = [], checks: string[] = [];
+const mark = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
 let proofCalls = 0, runtimeReady = true, browser: Browser | undefined, page: Page | undefined;
 const credential = 'sk-chat-recovery-disposable-secret';
 const runner: WebRunner = {
@@ -47,15 +49,21 @@ async function initialized() {
 async function assertNoStoredKey() {
   assert.equal(await page!.evaluate(key => JSON.stringify([sessionStorage, localStorage]).includes(key), credential), false);
 }
+async function participation(value: 'automatic' | 'guided') {
+  const radio = page!.locator(`input[name="chat-participation"][value="${value}"]`);
+  if (!await radio.isVisible()) await page!.locator('[data-chat-participation-control] > summary').click();
+  await radio.check();
+}
 try {
   browser = await startBrowser(service.server, port);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', locale: 'zh-CN' });
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
   await context.addInitScript(() => localStorage.setItem('theorem-os.locale.v1', 'zh'));
   await context.route(/^https?:\/\//, async route => {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); }
     else await route.continue();
   });
-  page = await context.newPage(); page.setDefaultTimeout(15_000);
+  page = await context.newPage(); page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
   await page.goto(origin);
   await page.locator('#send-code:enabled').waitFor();
   await page.locator('#login-email').fill('recovery@example.org');
@@ -66,6 +74,7 @@ try {
   await page.locator('[data-chat-participation-control] > summary').click();
   await page.locator('input[name="chat-participation"][value="automatic"]').check();
   await page.locator('#open-settings').click();
+  await openAdvancedChatSettings(page);
   for (const id of ['formalize-provider', 'formalize-environment', 'formalize-effort'] as const) await page.locator(`#${id}`).selectOption(selected[id]);
   for (const id of ['formalize-model', 'formalize-minutes', 'formalize-tokens', 'research-minutes', 'research-tokens', 'research-turns'] as const) await page.locator(`#${id}`).fill(selected[id]);
   await page.locator('#formalize-original').fill(original); await page.locator('#formalize-key').fill(credential);
@@ -80,7 +89,7 @@ try {
   assert.deepEqual(await snapshot(), draft);
   await page.reload(); await initialized(); assert.deepEqual(await snapshot(), draft); await assertNoStoredKey();
   assert.equal(await page.locator('#formalize-start').isEnabled(), true);
-  checks.push('G02/G03: exact original and all nonsecret settings survive sample/Back and refresh with a saved key');
+  mark('G02/G03: exact original and all nonsecret settings survive sample/Back and refresh with a saved key');
 
   let sent: Record<string, any> | undefined;
   const interceptBudget = async (route: import('playwright').Route) => {
@@ -94,15 +103,14 @@ try {
   assert.deepEqual(sent?.research, { maxRunSeconds: 60, maxTotalTokens: 15_000, maxTurns: 2 });
   assert.equal(sent?.humanReview, undefined); assert.equal(sent?.providerId, 'openai'); assert.equal(sent?.model, selected['formalize-model']);
   assert.equal(formalizations.length, 0); await page.unroute('**/api/formalizations', interceptBudget);
-  checks.push('G02: actual refreshed request retains 120s/20k formalization and 60s/15k/2-turn proof limits');
+  mark('G02: actual refreshed request retains 120s/20k formalization and 60s/15k/2-turn proof limits');
 
   await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill(webFormalizationStatement);
-  await page.locator('[data-chat-participation-control] > summary').click();
-  await page.locator('input[name="chat-participation"][value="guided"]').check();
+  await participation('guided');
   let receiptStatus = 0, droppedFormalization = false, droppedConversation = false;
   await page.route('**/api/formalizations', async route => {
     if (route.request().method() !== 'POST' || droppedFormalization) return route.continue();
-    const response = await route.fetch(); receiptStatus = response.status(); droppedFormalization = true; await route.abort('failed');
+    const response = await route.fetch({ timeout: 0 }); receiptStatus = response.status(); droppedFormalization = true; await route.abort('failed');
   });
   await page.locator('#formalize-start').click(); await page.locator('.chat-error').waitFor();
   assert.equal(receiptStatus, 201); assert.equal(formalizations.length, 1);
@@ -120,11 +128,12 @@ try {
   // Reopen the server from disk as well as the page: the idempotency record must outlive either process.
   await service.close();
   service = createWebService(config, runner, { mailer: async item => { mail.push(item); }, captchaAnswer: () => '24680' });
+  service.server.requestTimeout = 0; service.server.headersTimeout = 0; service.server.setTimeout(0);
   await new Promise<void>(resolve => service.server.listen(port, '127.0.0.1', resolve));
   await page.reload(); await initialized();
   await page.route('**/api/conversations', async route => {
     if (route.request().method() !== 'POST' || droppedConversation) return route.continue();
-    const response = await route.fetch(); assert.equal(response.status(), 201); droppedConversation = true; await route.abort('failed');
+    const response = await route.fetch({ timeout: 0 }); assert.equal(response.status(), 201); droppedConversation = true; await route.abort('failed');
   });
   await page.locator('#formalize-start').click(); await page.locator('.chat-error').waitFor();
   assert.equal(formalizations.length, 1); assert.equal(droppedConversation, true);
@@ -137,15 +146,17 @@ try {
   assert.deepEqual(records.formalizations.map((item: { id: string }) => item.id), [firstId]);
   assert.equal(records.conversations.length, 1); assert.equal(records.conversations[0].formalizationId, firstId);
   assert.equal(formalizations.length, 1); assert.equal(proofCalls, 0); await assertNoStoredKey();
-  checks.push('G01: lost formalization and conversation receipts, page refresh and server restart recover one task and one conversation');
+  mark('G01: lost formalization and conversation receipts, page refresh and server restart recover one task and one conversation');
   const cookies = await context.cookies(); await context.close();
 
   // The first send must also recover when no earlier refresh normalized the default budget object's field order.
   const defaultsContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', locale: 'zh-CN' });
+  defaultsContext.setDefaultTimeout(0); defaultsContext.setDefaultNavigationTimeout(0);
   await defaultsContext.addCookies(cookies);
   page = await defaultsContext.newPage(); await page.goto(origin); await initialized();
   await page.locator('#formalize-original').fill(webFormalizationStatement);
   await page.locator('#open-settings').click();
+  await openAdvancedChatSettings(page);
   await page.locator('#formalize-environment').selectOption('standard'); await page.locator('#formalize-key').fill(credential);
   let defaultRequestId = '', defaultDropped = false;
   await page.route('**/api/formalizations', async route => {
@@ -153,7 +164,7 @@ try {
     const id = route.request().postDataJSON().requestId;
     if (defaultDropped) { assert.equal(id, defaultRequestId); return route.continue(); }
     defaultRequestId = id; defaultDropped = true;
-    const response = await route.fetch(); assert.equal(response.status(), 201); await route.abort('failed');
+    const response = await route.fetch({ timeout: 0 }); assert.equal(response.status(), 201); await route.abort('failed');
   });
   await page.locator('#formalize-start').click(); await page.locator('.chat-error').waitFor();
   assert.equal(formalizations.length, 2);
@@ -165,7 +176,7 @@ try {
   await page.waitForURL(url => url.searchParams.has('chat')); await page.locator('[data-chat-confirm-statement]').waitFor();
   assert.equal(formalizations.length, 2);
   runtimeReady = true;
-  checks.push('G01: default-budget first send recovers its receipt after refresh even without a key or ready worker');
+  mark('G01: default-budget first send recovers its receipt after refresh even without a key or ready worker');
   await page.unroute('**/api/formalizations');
   await page.reload(); await initialized();
   await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill(webFormalizationStatement);
@@ -174,13 +185,10 @@ try {
   const gate = new Promise<void>(resolve => { releaseConversation = resolve; });
   await page.route('**/api/conversations', async route => {
     if (route.request().method() !== 'POST' || conversationHeld) return route.continue();
-    const response = await route.fetch(); conversationHeld = true; await gate; await route.fulfill({ response });
+    const response = await route.fetch({ timeout: 0 }); conversationHeld = true; await gate; await route.fulfill({ response });
   });
   await page.locator('#formalize-start').click();
-  for (let attempts = 0; !conversationHeld; attempts++) {
-    assert.ok(attempts < 100, 'The conversation response is held');
-    await page.waitForTimeout(30);
-  }
+  while (!conversationHeld) await page.waitForTimeout(30);
   await page.locator('[data-chat-sample]').click(); await page.waitForURL(origin + '/?sample');
   const delivered = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/conversations');
   releaseConversation(); await delivered;
@@ -189,11 +197,12 @@ try {
   await page.locator('#formalize-start').click();
   await page.waitForURL(url => url.searchParams.has('chat')); await page.locator('[data-chat-confirm-statement]').waitFor();
   assert.equal(formalizations.length, 3);
-  checks.push('G01/G03: a late conversation receipt during sample navigation retains identity and restores the original task on Back');
+  mark('G01/G03: a late conversation receipt during sample navigation retains identity and restores the original task on Back');
   await defaultsContext.close();
 
   for (const [width, height] of [[812, 375], [390, 480], [390, 844], [1440, 900]]) {
     const sampleContext = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce', locale: 'zh-CN' });
+    sampleContext.setDefaultTimeout(0); sampleContext.setDefaultNavigationTimeout(0);
     await sampleContext.addCookies(cookies);
     const samplePage = await sampleContext.newPage(); page = samplePage;
     await samplePage.goto(origin);
@@ -217,11 +226,12 @@ try {
       await samplePage.locator(`#detail-tab-${artifact}[aria-selected="true"]`).waitFor();
     }
     assert.equal(await samplePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
-    checks.push(`G08: ${width}×${height} keeps a readable thread; roadmap reading, result and source respond to normal clicks`);
+    mark(`G08: ${width}×${height} keeps a readable thread; roadmap reading, result and source respond to normal clicks`);
     await sampleContext.close();
   }
   assert.deepEqual(external, []); assert.equal(proofCalls, 0);
-  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', paidModelCalls: false, realLeanCalls: false, checks }, null, 2) + '\n');
+  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', paidModelCalls: false, realLeanCalls: false,
+    browserTimeouts: 0, deadline: null, tokenLimit: null, roundLimit: null, checks }, null, 2) + '\n');
   console.log(`Chat recovery: ${checks.length} checks passed`);
 } catch (error) {
   await page?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});

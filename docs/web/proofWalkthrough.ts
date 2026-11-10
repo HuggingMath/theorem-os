@@ -3,6 +3,7 @@ import type { Locale } from './site';
 import type { Localized, ProofWalkthrough } from './proofWalkthroughTypes';
 import { archiveRoadmapTaskLabel } from './roadmapLabels';
 import { renderProofRoute } from './proofRoute';
+import { focusedProblemHref } from './proofReadingLocation';
 
 type Run = ArchiveProcess['runs'][number];
 const html = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -61,7 +62,7 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
         <footer class="proof-walkthrough-links"><button class="proof-walkthrough-source-open" ${destination('original', `check:${original.id}`)} data-global-code="source" data-walkthrough-source-check="${html(original.id)}">${text(locale, '打开已检查的完整源码', 'Open the complete checked source')} ↗</button>${(step.evidence.taskIds ?? []).map(id => `<button ${destination(`task:${id}`)}>${html(archiveRoadmapTaskLabel(run.tasks.find(task => task.id === id)!, locale))} ↗</button>`).join('')}${(step.evidence.deliveryIds ?? []).map((id, i) => {
           const delivery = run.deliveries!.find(delivery => delivery.id === id)!;
           return `<button ${destination(delivery.taskId ? `task:${delivery.taskId}` : delivery.kind === 'review' ? 'review' : 'problem', `delivery:${id}`)}>${text(locale, '研究记录', 'Research record')}${(step.evidence.deliveryIds?.length ?? 0) > 1 ? ` ${i + 1}` : ''} ↗</button>`;
-        }).join('')}${checkLinks}${options.linear ? `<button type="button" data-action="copy-link" data-proof-copy-reading="${stepId(step.id)}">${text(locale, '复制此处链接', 'Copy link here')}</button>` : ''}${options.researchHref ? `<a class="proof-reading-research" data-proof-position-research="${stepId(step.id)}" href="${html(options.researchHref)}">${text(locale, '以此题开始研究', 'Research this problem')} ↗</a>` : ''}</footer>
+        }).join('')}${checkLinks}${options.linear ? `<button type="button" data-action="copy-link" data-proof-copy-reading="${stepId(step.id)}">${text(locale, '复制此处链接', 'Copy link here')}</button>` : ''}${options.researchHref ? `<a class="proof-reading-research" data-proof-position-research="${stepId(step.id)}" href="${html(focusedProblemHref(options.researchHref, stepId(step.id)))}">${text(locale, '围绕这一步研究', 'Research this step')} ↗</a>` : ''}</footer>
       </li>`;
     }).join('')}</ol></div>${options.linear ? '' : '</div>'}
   </div>`;

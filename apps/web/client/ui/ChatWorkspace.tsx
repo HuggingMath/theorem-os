@@ -32,6 +32,7 @@ import type { ChatAnswer } from '../chatAnswer';
 import type { ChatMathematics } from '../chatMathematics';
 import { ChatMathematicalAnswer, ChatMathematicalProgress } from './ChatMathematicalWork';
 import type { ResearchStartCostProps } from '../researchStartCost';
+import { libraryReferenceId, type ChatLibraryReference } from '../chatReference';
 
 
 export type ChatThreadProps = {
@@ -48,6 +49,7 @@ export type ChatThreadProps = {
   answer?: ChatAnswer;
   onAnswerRetry?(): void;
   onAnswerTarget?(target: string): void;
+  onAnswerQuestion?(text: string): void;
   onArtifact(kind: ChatArtifactKind, target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
   onShare?(): void;
   recovery?: { steps: NextStep[]; limits?: import('../../shared').WebSession['limits']; onAction(id: string, button: HTMLButtonElement): void };
@@ -211,7 +213,7 @@ function TaskMessage(props: ChatThreadProps) {
     {backgroundReview && <BackgroundReview review={backgroundReview} compact />}
     <StatementDecision {...props} />
     <PlanDecision {...props} />
-    {accepted && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} />}
+    {accepted && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} onQuestion={props.onAnswerQuestion} />}
     {!accepted && props.mathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
     {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
       loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
@@ -254,7 +256,6 @@ function GuidanceReceipt({ message, onGuidanceReceipt, feedback, record, onOpenR
 
 function ChatThread(props: ChatThreadProps) {
   const { conversation, loading, error } = props;
-  const returning = Boolean(props.overview && (props.overview.runs.length || props.overview.conversations.length || props.overview.formalizations.length));
   const errorNotice = error && <div id="formalize-error" class="chat-error" role="alert"><p>{error}</p>
     {props.onRetry && <button type="button" class="text-button" onClick={props.onRetry}>{t("重试")}</button>}
     {props.onManageRecords && <button type="button" class="text-button" data-chat-error-records onClick={props.onManageRecords}>{t('管理题目记录')}</button>}</div>;
@@ -276,18 +277,8 @@ function ChatThread(props: ChatThreadProps) {
     {loading ? <p role="status">{t("正在读取对话…")}</p> : <>
       <h1>{t("今天想证明什么？")}</h1>
       <p>{t('用自然语言或 TeX 写下题目。')}</p>
-      <div class="chat-start-actions">
-        <button type="button" class="button" data-chat-configure onClick={props.onConfigure}><Icon name="sliders-horizontal" />{t('配置模型')}</button>
-        <button type="button" class="button" data-chat-first-example onClick={props.onFirstExample}><Icon name="plus" />{t('试一道简单题')}</button>
-        <a class="button" href="workspace.html">{t('我的研究')}</a>
-      </div>
-      <p class="chat-start-tools"><a href={`workspace.html?tab=search&lang=${locale}`}>{t('搜索全部研究记录')}</a> · <a href={`practice.html?lang=${locale}`}>{t('体验参与决策')}</a></p>
-      {props.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample title={t('无需 API Key')} onClick={props.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('免费浏览')}</span></button>}
-      {props.startGuide && (returning ? <details class="research-returning-guide"><summary>{t('准备一道新题')}</summary><StartGuide {...props.startGuide} onConfigure={props.onConfigure} /></details>
-        : <StartGuide {...props.startGuide} onConfigure={props.onConfigure} />)}
     </>}
     {errorNotice}
-    {props.overview && <ResearchOverview key={props.overview.owner} {...props.overview} />}
   </div>;
   return <div class="chat-messages" data-conversation={conversation.id}>
     {conversation.messages.map(message => <article key={message.id} class={`chat-message chat-message-${message.role}`}
@@ -316,7 +307,10 @@ function ChatThread(props: ChatThreadProps) {
 export type ChatBudgets = { maxRunSeconds: number; maxTotalTokens: number; research: { maxRunSeconds: number; maxTotalTokens: number; maxTurns: number } };
 export type ChatProvider = WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string };
 export type ChatComposerProps = {
+  home?: Pick<ChatThreadProps, 'overview' | 'startGuide' | 'onConfigure' | 'onFirstExample' | 'onSample'>;
   input: string; onInput(value: string): void; onSubmit(): void; onStop(): void;
+  references?: ChatLibraryReference[]; onRemoveReference?(id: string): void;
+  editedProblem?: { research?: boolean; onReturnHome(): void };
   pending: boolean; submitting: boolean; disabled: boolean; hasConversation: boolean; newProblem: boolean; sendStatus?: string;
   environment: 'standard' | 'mathlib'; effort: 'low' | 'high' | 'max'; apiKey: string;
   onEnvironment(value: 'standard' | 'mathlib'): void; onEffort(value: 'low' | 'high' | 'max'): void; onKey(value: string): void;
@@ -376,6 +370,23 @@ function ChatComposer(props: ChatComposerProps) {
   }, [props.input]);
   return <div class="chat-composer">
     <form id="formalize-form" onSubmit={event => { event.preventDefault(); if (canSend) props.onSubmit(); }}>
+      {props.editedProblem && <div class="chat-editing-problem" data-chat-editing-problem><span>{props.editedProblem.research ? t('独立研究草稿 · 单独保存') : t('正在修改题目 · 草稿单独保存')}</span>
+        <button type="button" class="text-button" data-chat-return-home disabled={props.submitting} onClick={props.editedProblem.onReturnHome}>{t('返回首页草稿')}</button></div>}
+      {Boolean(props.references?.length) && <div class="chat-reference-list" role="group" aria-label={t('数学库参考')}>
+        {props.references!.map(reference => <article class="chat-library-reference" key={libraryReferenceId(reference)} data-chat-library-reference={reference.declaration}>
+          <div class="chat-library-reference-heading"><strong translate={false}>{reference.declaration.split('.').at(-1)}</strong>
+            <button type="button" class="text-button" data-chat-remove-reference disabled={props.submitting}
+              aria-label={t('移除参考：{0}', reference.declaration)} onClick={() => props.onRemoveReference?.(libraryReferenceId(reference))}><Icon name="x" /></button></div>
+          <p>{reference.summary[locale]}</p>
+          <p class="chat-reference-expression" translate={false}>{reference.expression}</p>
+          <div class="chat-library-reference-tools"><a data-chat-reference-source href={reference.source}>{t('查看来源')}</a>
+            <details data-chat-reference-details><summary>{t('条件与完整 Lean 类型')}</summary>
+              <p class="chat-reference-context">{t('模块作用域可能包含未使用变量；实际隐式参数可用 #check @ 查看。')}</p>
+              {reference.conditions.length > 0 && <ul>{reference.conditions.map((condition, index) => <li key={index}><span>{condition.meaning[locale]}</span><code>{condition.expression}</code></li>)}</ul>}
+              <pre>{[reference.import, `#check @${reference.declaration}`, ...reference.context, reference.type].join('\n\n')}</pre>
+            </details></div>
+        </article>)}
+      </div>}
       {props.hasConversation && props.onGuidance && <div class="chat-message-destination" role="group" aria-label={t('消息用途')}>
         <button type="button" data-chat-discussion-mode aria-pressed={!props.guidance} disabled={props.submitting} onClick={() => props.guidance?.onCancel()}>{t('讨论思路')}</button>
         <button type="button" data-chat-guidance-mode-open aria-pressed={Boolean(props.guidance)} disabled={props.submitting} onClick={props.onGuidance}>{t('指导研究')}</button>
@@ -480,8 +491,10 @@ function ChatComposer(props: ChatComposerProps) {
             {props.connection && <p class="field-note" id="chat-connection-result" role="status" data-status={props.connection.status}>{props.connection.message}</p>}
             {props.newProblem && <p class="field-note">{tx('这一步只读取模型列表，不调用模型。', 'This check reads the model list and does not call a model.')}</p>}
             </section>
-            <div class="chat-settings-options"><label for="formalize-environment">{t("证明环境")}<select id="formalize-environment" value={props.environment} onChange={event => props.onEnvironment(event.currentTarget.value as ChatComposerProps['environment'])} disabled={props.hasConversation}><option value="standard">{t("标准库")}</option><option value="mathlib">Mathlib</option></select></label>
-              <label for="formalize-effort">{t("推理强度")}<select id="formalize-effort" value={props.effort} onChange={event => props.onEffort(event.currentTarget.value as ChatComposerProps['effort'])} disabled={props.hasConversation}><option value="max">{t("最高")}</option><option value="high">{t("高")}</option><option value="low">{t("低")}</option></select></label></div>
+            <details class="chat-advanced-settings" data-chat-advanced-settings><summary>{t('高级设置')}<span>{t('环境、推理与预算')}</span></summary>
+              <div class="chat-advanced-settings-fields">
+              <div class="chat-settings-options"><label for="formalize-environment">{t("证明环境")}<select id="formalize-environment" value={props.environment} onChange={event => props.onEnvironment(event.currentTarget.value as ChatComposerProps['environment'])} disabled={props.hasConversation}><option value="standard">{t("标准库")}</option><option value="mathlib">Mathlib</option></select></label>
+                <label for="formalize-effort">{t("推理强度")}<select id="formalize-effort" value={props.effort} onChange={event => props.onEffort(event.currentTarget.value as ChatComposerProps['effort'])} disabled={props.hasConversation}><option value="max">{t("最高")}</option><option value="high">{t("高")}</option><option value="low">{t("低")}</option></select></label></div>
             {!props.hasConversation && <>
               <fieldset class="chat-budget-fields"><legend>{t('形式化预算')}</legend><div class="chat-settings-options">
                 <label for="formalize-minutes">{t('最多分钟')}<input id="formalize-minutes" type="number" min={0} max={props.budgetLimits.maxRunSeconds / 60} step={1}
@@ -504,6 +517,8 @@ function ChatComposer(props: ChatComposerProps) {
               </div></fieldset>
               <p class="field-note">{t('按已报告用量停止，在途请求可能超额；Token 上限不代表金额封顶。')}</p>
             </>}
+              </div>
+            </details>
           </div>
         </details>
         {!props.hasConversation && <button class="text-button chat-lean-entry" type="button" onClick={props.onLean}>Lean <Icon name="chevron-right" /></button>}
@@ -528,7 +543,25 @@ function ChatComposer(props: ChatComposerProps) {
       <p>{t('题目已保留，填写 API Key 后即可发送。')}</p>
       <button type="button" class="button" data-chat-configure-key onClick={configureKey}>{t('配置 Key 后开始')}</button>
     </div>}
+    {props.home && <HomeResearchDetails {...props.home} />}
     {props.newProblem && <details class="chat-examples"><summary>{t("试试例题")}</summary><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select></details>}
+  </div>;
+}
+
+function HomeResearchDetails(props: NonNullable<ChatComposerProps['home']>) {
+  const returning = Boolean(props.overview && (props.overview.runs.length || props.overview.conversations.length || props.overview.formalizations.length));
+  return <div class="chat-home-details">
+      <div class="chat-start-actions">
+        <button type="button" class="button" data-chat-configure onClick={props.onConfigure}><Icon name="sliders-horizontal" />{t('配置模型')}</button>
+        <button type="button" class="button" data-chat-first-example onClick={props.onFirstExample}><Icon name="plus" />{t('试一道简单题')}</button>
+        <a class="button" href="workspace.html">{t('我的研究')}</a>
+      </div>
+      <p class="chat-start-tools"><a href={`workspace.html?tab=search&lang=${locale}`}>{t('搜索全部研究记录')}</a> · <a href={`practice.html?lang=${locale}`}>{t('体验参与决策')}</a></p>
+      {props.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample title={t('无需 API Key')} onClick={props.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('免费浏览')}</span></button>}
+
+    {props.startGuide && (returning ? <details class="research-returning-guide"><summary>{t('准备一道新题')}</summary><StartGuide {...props.startGuide} onConfigure={props.onConfigure} /></details>
+      : <StartGuide {...props.startGuide} onConfigure={props.onConfigure} />)}
+    {props.overview && <ResearchOverview key={props.overview.owner} {...props.overview} />}
   </div>;
 }
 

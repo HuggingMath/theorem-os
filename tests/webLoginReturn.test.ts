@@ -47,6 +47,15 @@ describe('same-site app login returns', () => {
 });
 
 describe('navigation retaining the current workbench', () => {
+  it('returns library browsing and login to the separate edited-problem draft', () => {
+    const links = researchNavigation(`?editProblem=${chat}`, 'workbench');
+    expect(links.workbench).toBe('./?editProblem=' + chat);
+    expect(links.library).toBe('library.html?workbenchEdit=' + chat);
+    expect(researchNavigation('?workbenchEdit=' + chat).workbench).toBe('./?editProblem=' + chat);
+    const target = researchContextHref('library.html?module=Library.lean', '?workbenchEdit=' + chat);
+    expect(target).toBe(`library.html?module=Library.lean&workbenchEdit=${chat}`);
+    expect(loginReturn('?' + new URLSearchParams({ returnTo: links.workbench }))).toBe('/?editProblem=' + chat);
+  });
   it.each([{ search: `?chat=${chat}`, origin: 'workbench' as const }, { search: `?workbenchChat=${chat}&q=algebra&field=groups`, origin: 'research' as const }])('propagates conversations on all research pages: %s', ({ search, origin }) => {
     const links = researchNavigation(search, origin);
     expect(links.workbench).toBe('./?chat=' + chat);

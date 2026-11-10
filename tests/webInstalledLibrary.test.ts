@@ -10,8 +10,9 @@ import { installedLibraryDetail, installedLibraryDirectory, installedLibrarySour
 import { installedLibraryLabels } from '../apps/web/installedLibraryLabels';
 import { installedLibraryQuerySuggestions, matchesInstalledLibraryModuleAlias } from '../apps/web/installedLibrarySearch';
 import { installedLibraryMathematics } from '../apps/web/installedLibraryMathematics';
-import { installedLibraryDefinitions } from '../apps/web/installedLibraryDefinitions';
-import { matchesInstalledLibraryInterface } from '../apps/web/installedLibraryInterfaceSearch';
+import { installedLibraryDeclarations, installedLibraryDefinitions } from '../apps/web/installedLibraryDefinitions';
+import { installedLibraryInterfaceSearchText, matchesInstalledLibraryInterface } from '../apps/web/installedLibraryInterfaceSearch';
+import { installedLibrarySearchData } from '../apps/web/installedLibrarySearchData';
 import { WebStorageError } from '../apps/web/storage';
 import type { WebRunner } from '../apps/web/runner';
 import type { InstalledLibraryDetail, InstalledLibraryDirectory, InstalledLibrarySource } from '../apps/web/installedLibraryTypes';
@@ -251,6 +252,61 @@ describe('browsing the installed Lean release without publishing research assets
     expect(matchesInstalledLibraryInterface(hoeffding, concentration.import, '独立 DefinitelyMissingToken')).toBe(false);
   });
 
+  it('finds the same mathematical explanations and source-scope conditions from the whole library and exposes pinned interface matches', async () => {
+    const catalog = webLibraryCatalog(), before = { ...catalog.identity };
+    const detail = installedLibraryDetail('Submission/Library/TheoremOS/Probability/Concentration.lean', catalog.identity.catalogDigest);
+    for (const q of ['非负权重', 'nonnegative weights', '有限类型及其枚举', 'finite type with an enumeration']) {
+      const result = await get<InstalledLibraryDirectory>(`${route}?${new URLSearchParams({ q, area: 'Probability', limit: '100' })}`);
+      const module = result.items.find(item => item.file === detail.module.file);
+      expect(module, q).toBeDefined();
+      const matches = detail.module.entries.filter(entry => matchesInstalledLibraryInterface(entry, detail.module.import, q,
+        detail.definitions[entry.name], detail.contexts[entry.name]));
+      expect(matches.length, q).toBeGreaterThan(0);
+      expect(module!.matchingInterfaceCount, q).toBe(matches.length);
+      expect(module!.matchingInterfaces, q).toEqual(matches.slice(0, 3).map(entry => ({ name: entry.name,
+        summary: installedLibraryMathematics(entry, detail.module.import, detail.definitions[entry.name], detail.contexts[entry.name]).summary })));
+      expect(module!.sha256, q).toBe(detail.module.sha256);
+      expect(result.library, q).toMatchObject({ ...before, moduleCount: 53, declarationCount: 1964 });
+      expect(installedLibraryDirectory({ q: `${q} DefinitelyMissingToken` }).total, q).toBe(0);
+    }
+    expect(catalog.identity).toEqual(before);
+  });
+
+  it('keeps the generated metadata identical to the current display and search text for every pinned interface', () => {
+    const catalog = webLibraryCatalog();
+    expect(installedLibrarySearchData.catalogDigest).toBe(catalog.identity.catalogDigest);
+    expect(Object.keys(installedLibrarySearchData.modules)).toEqual(catalog.moduleFiles);
+    let count = 0;
+    for (const file of catalog.moduleFiles) {
+      const detail = installedLibraryDetail(file, catalog.identity.catalogDigest), indexed = installedLibrarySearchData.modules[file];
+      expect(indexed.sha256).toBe(detail.module.sha256);
+      expect(Object.keys(indexed.entries)).toEqual(detail.module.entries.map(entry => entry.name));
+      for (const entry of detail.module.entries) {
+        expect(indexed.entries[entry.name], entry.name).toEqual({
+          summary: installedLibraryMathematics(entry, detail.module.import, detail.definitions[entry.name], detail.contexts[entry.name]).summary,
+          text: installedLibraryInterfaceSearchText(entry, detail.module.import, detail.definitions[entry.name], detail.contexts[entry.name]),
+        });
+        count++;
+      }
+    }
+    expect(count).toBe(1964);
+  });
+
+  it('uses only the pinned search metadata when the bundled release manifest has no proof source objects', () => {
+    const original = webLibraryCatalog(), file = path.join(root, 'metadata-only-catalog.json');
+    fs.copyFileSync(path.resolve('resources/theorem-os-library/release/catalog.json'), file);
+    vi.stubEnv('THEOREMOS_LIBRARY_CATALOG', file);
+    vi.stubEnv('THEOREMOS_LIBRARY_CATALOG_SHA256', original.identity.catalogDigest);
+    for (const q of ['非负权重', '有限类型及其枚举']) {
+      const result = installedLibraryDirectory({ q, area: 'Probability', limit: 100 });
+      const module = result.items.find(item => item.name === 'TheoremOS.Probability.Concentration');
+      expect(module, q).toBeDefined(); expect(module!.matchingInterfaceCount, q).toBeGreaterThan(0);
+      expect(module!.matchingInterfaces.length, q).toBeGreaterThan(0);
+      expect(() => installedLibraryDetail(module!.file, result.library.catalogDigest)).toThrow('声明与定义源码读取失败');
+    }
+    expect(fs.existsSync(path.join(root, 'objects'))).toBe(false);
+  });
+
   it('projects every definition body and source note from the digest-checked release without changing the catalog', () => {
     const catalog = webLibraryCatalog(), before = { ...catalog.identity };
     let count = 0;
@@ -281,6 +337,53 @@ describe('browsing the installed Lean release without publishing research assets
     expect(mathematics.scopeConditions.map(item => item.expression)).toEqual(['Type*', 'NormedAddCommGroup X', 'NormedSpace ℝ X']);
     expect(matchesInstalledLibraryInterface(entry, module.module.import, 'closed linear subspace', definition)).toBe(true);
     expect(matchesInstalledLibraryInterface(entry, module.module.import, 'FiniteDimensional', definition)).toBe(true);
+  });
+
+  it('exposes source scopes for every pinned interface and the finite index conditions needed to reuse probability lemmas', async () => {
+    const catalog = webLibraryCatalog(), before = { ...catalog.identity };
+    let count = 0;
+    for (const file of catalog.moduleFiles) {
+      const detail = installedLibraryDetail(file, catalog.identity.catalogDigest), source = catalog.readModule(file).source;
+      expect(detail.module.entries).toEqual(catalog.moduleMetadata(file).entries);
+      expect(Object.keys(detail.contexts)).toEqual(detail.module.entries.map(entry => entry.name));
+      for (const entry of detail.module.entries) {
+        const context = detail.contexts[entry.name];
+        expect(source.split('\n')[context.line - 1], entry.name).toContain(entry.type.split(' ')[0]);
+        for (const command of context.context) expect(source, entry.name).toContain(command);
+        if (entry.kind === 'definition') expect(detail.definitions[entry.name]).toMatchObject(context);
+        count++;
+      }
+    }
+    expect(count).toBe(1964); expect(catalog.identity).toEqual(before);
+
+    const { item: detail } = await get<{ item: InstalledLibraryDetail }>(moduleRoute(
+      'Submission/Library/TheoremOS/Probability/Concentration.lean', catalog.identity.catalogDigest));
+    const name = 'TheoremOS.Probability.sum_filter_le_exp_mul_sum';
+    const entry = detail.module.entries.find(item => item.name === name)!, context = detail.contexts[name];
+    expect(context.context).toEqual(['variable {ι : Type*} [Fintype ι]']);
+    expect(context.documentation).toContain('Exponential Markov');
+    expect(detail.definitions[name]).toBeUndefined();
+    const mathematics = installedLibraryMathematics(entry, detail.module.import, undefined, context);
+    expect(mathematics.scopeConditions.map(item => item.expression)).toEqual(['Type*', 'Fintype ι']);
+    expect(mathematics.scopeConditions[1].meaning.en).toBe('finite type with an enumeration');
+    expect(mathematics.context.en).toContain('may include unused variables');
+    expect(mathematics.summary.en).toContain('Exponential Markov');
+    expect(mathematics.summary.zh).toContain('非负权重');
+    for (const q of ['Exponential Markov', '指数 Markov', 'e^{-tc}']) {
+      expect(matchesInstalledLibraryInterface(entry, detail.module.import, q, undefined, context), q).toBe(true);
+      expect(installedLibraryDirectory({ q }).items.some(module => module.file === detail.module.file), q).toBe(true);
+    }
+    const documented = detail.module.entries.find(item => item.name.endsWith('.bernoulli_exp_le'))!;
+    expect(detail.contexts[documented.name].documentation).toContain("Hoeffding's lemma");
+    expect(installedLibraryMathematics(documented, detail.module.import, undefined, detail.contexts[documented.name]).summary.en)
+      .toContain("Hoeffding's lemma for one centred Bernoulli coordinate");
+    expect(matchesInstalledLibraryInterface(entry, detail.module.import, 'finite type', undefined, context)).toBe(true);
+    expect(detail.contexts['TheoremOS.Probability.sum_biasedMass_hoeffding'].context).not.toContain(context.context[0]);
+
+    const moments = installedLibraryDetail('Submission/Library/TheoremOS/Probability/FiniteMoments.lean', catalog.identity.catalogDigest);
+    const affine = moments.module.entries.find(item => item.name.endsWith('.expectation_affine'))!;
+    expect(installedLibraryMathematics(affine, moments.module.import, undefined, moments.contexts[affine.name])
+      .scopeConditions.map(item => item.expression)).toContain('Fintype Ω');
   });
 
   it('keeps scoped variable commands and exact equation/record definitions without borrowing later declarations', () => {
@@ -320,6 +423,32 @@ end Demo
     expect(definitions['Demo.pair'].context).not.toContain('variable (n : Nat)');
   });
 
+  it('keeps theorem source contexts within their scopes without reading commands from proof bodies or later declarations', () => {
+    const source = `namespace Demo
+variable {A : Type*}
+    [Fintype A]
+section Inner
+variable (n : Nat)
+/-- Identity in the inner scope. -/
+theorem inner (a : A) : a = a := by
+  let text := "variable (notAParameter : Nat)"
+  rfl
+end Inner
+variable (m : Nat)
+theorem outer : m = m := by rfl
+end Demo
+`;
+    const entries = [
+      { name: 'Demo.inner', kind: 'lemma' as const, type: 'inner (a : A) : a = a', description: '' },
+      { name: 'Demo.outer', kind: 'lemma' as const, type: 'outer : m = m', description: '' },
+    ];
+    const { contexts, definitions } = installedLibraryDeclarations(source, entries);
+    expect(definitions).toEqual({});
+    expect(contexts['Demo.inner'].context).toEqual(['variable {A : Type*}\n    [Fintype A]', 'variable (n : Nat)']);
+    expect(contexts['Demo.inner'].documentation).toBe('Identity in the inner scope.');
+    expect(contexts['Demo.outer'].context).toEqual(['variable {A : Type*}\n    [Fintype A]', 'variable (m : Nat)']);
+  });
+
   it('rejects a changed definition source object before returning a definition snippet', () => {
     const file = 'Submission/Library/Demo/Identity.lean', source = 'namespace Demo\n/-- Zero. -/\ndef zero : Nat := 0\nend Demo\n';
     const built = writeLibraryCatalog(path.join(root, 'definitions'), { id: 'example/definitions', revision: 'v1', environment: 'mathlib',
@@ -346,7 +475,7 @@ end Demo
     expect((await response.json()).error).toContain('目录读取失败');
   });
 
-  it('browses a configured pinned release without opening its missing source objects', () => {
+  it('browses directory metadata without source objects but rejects incomplete declaration contexts in module details', () => {
     const file = 'Submission/Library/Demo/Identity.lean', source = 'namespace Demo\nlemma identity (n : Nat) : n = n := by rfl\nend Demo\n';
     const built = writeLibraryCatalog(path.join(root, 'release'), { id: 'example/installed', revision: 'v1', environment: 'mathlib',
       packs: [{ schema: LIBRARY_PACK_SCHEMA, modules: [{ file, source,
@@ -359,7 +488,7 @@ end Demo
     expect(directory.items[0].preview[0].name).toBe('Demo.identity');
     expect(installedLibraryDirectory({ q: '尾概率' }).total).toBe(0);
     expect(installedLibraryDirectory({ q: 'Demo.identity' }).items[0].preview[0].name).toBe('Demo.identity');
-    expect(installedLibraryDetail(file, built.digest).module.entries).toHaveLength(1);
+    expect(() => installedLibraryDetail(file, built.digest)).toThrow('声明与定义源码读取失败');
     let error: unknown;
     try { installedLibrarySource(file, built.digest); } catch (cause) { error = cause; }
     expect(error).toBeInstanceOf(WebStorageError);

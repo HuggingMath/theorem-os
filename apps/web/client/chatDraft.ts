@@ -1,5 +1,6 @@
 import type { WebFormalizationRequest, WebResearchBudget } from '../formalizationTypes';
 import { webConversationLimits } from '../conversationTypes';
+import { decodeLibraryReferences, type ChatLibraryReference } from './chatReference';
 
 const schema = 'theorem-os.chat-draft.v1';
 export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
@@ -8,7 +9,11 @@ export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
   };
 export type ChatGuidanceDraft = { runId: string; taskRef?: { id: string; version: string } };
 export type ChatPendingMessage = { requestId: string; text: string };
-export type ChatDraft = { text: string; settings?: ChatDraftSettings; guidance?: ChatGuidanceDraft; pendingMessage?: ChatPendingMessage };
+export type ChatDraft = { text: string; settings?: ChatDraftSettings; guidance?: ChatGuidanceDraft; pendingMessage?: ChatPendingMessage; references?: ChatLibraryReference[] };
+export function readEditedProblemId(parameters: URLSearchParams): string {
+  const id = parameters.get('editProblem') ?? '';
+  return /^[A-Za-z0-9_-]{1,128}$/u.test(id) ? id : '';
+}
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const budget = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const reference = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512;
@@ -38,9 +43,11 @@ function settings(value: unknown): ChatDraftSettings | undefined {
 }
 
 export function encodeChatDraft(draft: ChatDraft): string {
+  const references = decodeLibraryReferences(draft.references);
   return JSON.stringify({ schema, text: draft.text, ...(draft.settings ? { settings: settings(draft.settings) } : {}),
     ...(draft.guidance ? { guidance: guidance(draft.guidance) } : {}),
-    ...(draft.pendingMessage ? { pendingMessage: pendingMessage(draft.pendingMessage) } : {}) });
+    ...(draft.pendingMessage ? { pendingMessage: pendingMessage(draft.pendingMessage) } : {}),
+    ...(references.length ? { references } : {}) });
 }
 
 export function decodeChatDraft(raw: string): ChatDraft {
@@ -48,9 +55,10 @@ export function decodeChatDraft(raw: string): ChatDraft {
     const value: unknown = JSON.parse(raw);
     if (record(value) && value.schema === schema && typeof value.text === 'string') {
       const restored = settings(value.settings);
+      const references = decodeLibraryReferences(value.references);
       const restoredGuidance = guidance(value.guidance), pending = pendingMessage(value.pendingMessage);
       return { text: value.text, ...(restored ? { settings: restored } : {}),
-        ...(restoredGuidance ? { guidance: restoredGuidance } : {}), ...(pending ? { pendingMessage: pending } : {}) };
+        ...(restoredGuidance ? { guidance: restoredGuidance } : {}), ...(pending ? { pendingMessage: pending } : {}), ...(references.length ? { references } : {}) };
     }
   } catch { /* Before this schema a draft was the exact original text. */ }
   return { text: raw };

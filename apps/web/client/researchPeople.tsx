@@ -4,12 +4,18 @@ import { t } from '../i18n';
 import { loginHref, researchContextHref } from '../shared';
 import { RichProse } from './richText';
 import { CollaborationInbox } from './collaborationFlow';
+import { withPeopleReturn } from './researchPeopleReturn';
 import { api, base, enc, Empty, ErrorBox, errorText, Field, FollowButton, libraryHref, MutationState, nameOf, Panel, personHref,
   Search, stamp, Tags, theoremHref, tx, useMutation, useResource, words, lines, type Item, type Items, type ResearchContext } from './researchShared';
 
 type ProfileView = ResearcherProfile & { following?: boolean; projects: ResearchProjectSummary[]; contributions: ResearchContribution[] };
 type FeedEvent = Omit<ResearchActivity, 'projectId'> & { projectId?: string; assetId?: string; assetVersion?: string; read?: boolean };
-const eventHref = (event: FeedEvent) => event.assetId ? libraryHref(event.assetId, event.assetVersion) : event.projectId ? theoremHref(event.projectId, event.runId, { statementVersionId: event.statementVersionId, feedbackId: event.feedbackId }) : undefined;
+function eventHref(event: FeedEvent | ResearchContribution, section: string, search = location.search) {
+  if (event.assetId) return libraryHref(event.assetId, event.assetVersion);
+  if (!event.projectId) return;
+  const href = theoremHref(event.projectId, event.runId, { feedbackId: event.feedbackId, statementVersionId: event.statementVersionId });
+  return withPeopleReturn(`${href}${event.statementVersionId && !event.feedbackId ? '#statement-versions' : ''}`, `${location.pathname}${search}#${section}`);
+}
 function peoplePageHref(query: string, field: string, offset: number, id?: string) {
   const parameters = new URLSearchParams();
   if (id) parameters.set('id', id);
@@ -122,8 +128,8 @@ function Profile({ profile, own, selfId, canFollow, refresh }: { profile: Profil
     {!profile.projects.length && <Empty>{tx('还没有可展示的研究。', 'No research projects to display yet.')}</Empty>}
   </Panel><Panel id="research-contributions" title={tx('贡献与来源', 'Contributions and sources')} note={tx('每条记录都对应实际提交的版本、反馈或产物。', 'Each record points to a submitted version, feedback or artifact.')}>
     {profile.contributions.map(contribution => <article class="research-event" key={contribution.id}><div class="research-item-meta"><span>{nameOf(contribution.kind)}</span><time dateTime={contribution.createdAt}>{stamp(contribution.createdAt)}</time></div>
-      <p>{contribution.assetId ? <a href={libraryHref(contribution.assetId, contribution.assetVersion)}>{contribution.summary}</a>
-        : contribution.projectId ? <a href={theoremHref(contribution.projectId, contribution.runId)}>{contribution.summary}</a> : contribution.summary}</p>{contribution.evidenceRefs.length > 0 && <Tags values={contribution.evidenceRefs} />}</article>)}
+      <p>{eventHref(contribution, 'research-contributions') ? <a data-research-contribution={contribution.id} href={eventHref(contribution, 'research-contributions')}>{contribution.summary}</a>
+        : contribution.summary}</p>{contribution.evidenceRefs.length > 0 && <Tags values={contribution.evidenceRefs} />}</article>)}
     {!profile.contributions.length && <Empty>{tx('尚无贡献记录。你可以在定理页发起题目、修订陈述或提出建议。', 'No contributions recorded yet. Create a theorem, revise its statement or contribute a suggestion.')}</Empty>}
   </Panel>{own && <Panel id="profile-management" title={tx('资料设置', 'Profile settings')}><details><summary>{tx('编辑我的资料', 'Edit my profile')}</summary><ProfileEditor profile={profile} refresh={refresh} /></details></Panel>}</>;
 }
@@ -158,7 +164,7 @@ function ProjectPicker({ selfId, researcherId }: { selfId: string; researcherId:
         {projects.map(project => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
       <p class="research-field-note">{tx('这里只预填成员，保存后才会加入题目。', 'This only prefills the member form. Save there to add the collaborator.')}</p>
       <button class="button" type="submit" disabled={!selected}>{tx('前往成员表单', 'Open member form')}</button></>
-      : <p class="research-status">{tx('还没有可管理的题目。', 'You have no theorems to manage yet.')} <a href={researchContextHref('theorems.html?collection=research&create=1', location.search)}>{tx('创建题目', 'Create a theorem')} →</a></p>)}
+      : <p class="research-status">{tx('还没有可管理的题目。', 'You have no theorems to manage yet.')} <a href={researchContextHref(`theorems.html?${new URLSearchParams({ collection: 'research', create: '1', addResearcher: researcherId })}`, location.search)}>{tx('创建题目', 'Create a theorem')} →</a></p>)}
   </form>;
 }
 
@@ -205,16 +211,17 @@ function ProfileEditor({ profile, refresh }: { profile: ProfileView; refresh: ()
 }
 
 function Feed() {
-  const [field, setField] = useState('');
+  const [field, setField] = useState(new URLSearchParams(location.search).get('feedField') ?? '');
   const feed = useResource<Items<FeedEvent>>(`${base}/feed?field=${enc(field)}&limit=30`, 15000);
-  return <Panel title={tx('同行动态', 'Following feed')} note={tx('你关注的数学家和定理的可见更新。', 'Visible updates from mathematicians and theorems you follow.')}>
+  const source = new URLSearchParams(location.search); field ? source.set('feedField', field) : source.delete('feedField');
+  return <Panel id="research-feed" title={tx('同行动态', 'Following feed')} note={tx('你关注的数学家和定理的可见更新。', 'Visible updates from mathematicians and theorems you follow.')}>
     <Field label={tx('按领域筛选', 'Filter by field')} value={field} onInput={setField} /><ErrorBox message={feed.error} />
-    {feed.data?.items.map(event => <FeedRow key={event.id} event={event} />)}
+    {feed.data?.items.map(event => <FeedRow key={event.id} event={event} section="research-feed" search={`?${source}`} />)}
     {feed.data && !feed.data.items.length && <Empty>{tx('暂时没有动态。关注数学家或定理后，相关进展会出现在这里。', 'No updates yet. Follow researchers or theorems to see their progress here.')}</Empty>}
   </Panel>;
 }
-function FeedRow({ event }: { event: FeedEvent }) {
-  const href = eventHref(event);
-  return <article class="research-event"><div class="research-item-meta"><a href={personHref(event.actor.id)}>{event.actor.displayName}</a><time dateTime={event.createdAt}>{stamp(event.createdAt)}</time>
+function FeedRow({ event, section, search }: { event: FeedEvent; section: string; search?: string }) {
+  const href = eventHref(event, section, search);
+  return <article class="research-event" data-research-feed-event={event.id}><div class="research-item-meta"><a href={personHref(event.actor.id)}>{event.actor.displayName}</a><time dateTime={event.createdAt}>{stamp(event.createdAt)}</time>
     {event.read === false && <span class="research-chip">{tx('未读', 'Unread')}</span>}</div><p>{href ? <a href={href}>{event.summary}</a> : event.summary}</p></article>;
 }

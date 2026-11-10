@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
+import { openAdvancedChatSettings } from './web-ui-controls';
 // Actual loopback HTTP and Chromium; the formalizer only waits for cancellation. No model or Lean calls.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type { Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
@@ -12,6 +14,7 @@ import { freePort, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-chat-cancel-recovery');
 await fs.mkdir(output, { recursive: true });
+const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-cancel-'));
 const controls = new Map<string, AbortSignal>();
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: 'Disposable cancellation fixture' }; },
@@ -23,25 +26,27 @@ const runner: WebRunner = {
 };
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
-  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner, { sample: null });
+  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: dataRoot }), runner, { sample: null });
 const browser = await startBrowser(service.server, port);
 const checks: string[] = [], errors: string[] = [];
 let activePage: Page | undefined;
 try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
     await context.route(/^https?:\/\//, async route => {
       assert.equal(new URL(route.request().url()).origin, origin, 'The fixture cannot contact an external service');
       await route.continue();
     });
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     const writes: string[] = [];
     page.on('request', request => { if (request.method() !== 'GET') writes.push(new URL(request.url()).pathname); });
     await page.goto(origin); await page.locator('#formalize-original').fill('Local cancellation fixture: every natural number equals itself.');
     await page.locator('#open-settings').click();
     await page.locator('#formalize-key').fill('sk-local-cancellation-fixture');
+    await openAdvancedChatSettings(page);
     await page.locator('#formalize-environment').selectOption('standard');
     const created = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/formalizations'));
     await page.locator('#formalize-start:enabled').click();
@@ -91,5 +96,5 @@ try {
     error: error instanceof Error ? error.message : String(error) }, null, 2) + '\n');
   throw error;
 } finally {
-  await browser.close(); await service.close();
+  await browser.close(); await service.close(); await fs.rm(dataRoot, { recursive: true, force: true });
 }

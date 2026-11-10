@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { openAdvancedChatSettings } from './web-ui-controls';
 // Empty-home and advanced-input regressions. Actual chat/task HTTP flows live in test-web-chat-session.ts.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -129,6 +130,7 @@ try {
       await page.locator('#formalize-key').fill('changed-key');
       assert.equal(await page.locator('#chat-connection-result').count(), 0, 'Changing the key invalidates the prior result');
       await page.locator('#formalize-original').fill(original);
+      await openAdvancedChatSettings(page);
       assert.equal(await page.locator('#formalize-start').isEnabled(), true, 'Empty budgets allow submission');
       for (const selector of budgetFields) {
         await page.locator(selector).fill('0');

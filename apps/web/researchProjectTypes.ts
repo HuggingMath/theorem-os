@@ -139,6 +139,8 @@ export type ResearchProjectSummary = {
   candidateDeliveryPolicy?: 'direct' | 'reviewed';
 };
 export type ResearchProjectDetail = ResearchProjectSummary & {
+  /** Names only for members whose profiles are visible to this viewer; no private profile fields. */
+  memberProfiles?: ResearchAuthor[];
   versions: ResearchStatementVersion[]; runs: ResearchRunBinding[]; feedback: ResearchFeedback[];
   activity: ResearchActivity[]; contributions: ResearchContribution[];
   assignments: ResearchHumanAssignment[];

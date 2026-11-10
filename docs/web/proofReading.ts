@@ -20,6 +20,7 @@ function mountReadingLocation(ready: Promise<void>) {
   const position = parameters.get('proof') === proofId ? readProofReadingPosition(parameters) : undefined;
   const requested = position?.proofSha === proofSha ? byId.get(position.anchor) : undefined;
   const abort = new AbortController(), options = { signal: abort.signal };
+  const definitionOrigins = new Map<string, { section: HTMLElement; trigger: HTMLElement; x: number; y: number }>();
   let restoring = Boolean(requested), selected = '', frame = 0;
 
   function updateResearchLink() {
@@ -78,9 +79,31 @@ function mountReadingLocation(ready: Promise<void>) {
     const url = new URL(location.href); url.hash = parameters.toString(); history.replaceState(null, '', url);
   }
   root.addEventListener('click', event => {
+    const back = (event.target as Element).closest<HTMLElement>('[data-proof-definition-return]');
+    if (back) {
+      const origin = definitionOrigins.get(back.dataset.proofDefinitionReturn!);
+      if (origin?.trigger.isConnected) {
+        for (let parent: HTMLElement | null = origin.trigger; parent && parent !== root; parent = parent.parentElement)
+          if (parent instanceof HTMLDetailsElement) parent.open = true;
+        origin.trigger.focus({ preventScroll: true });
+        window.scrollTo({ left: origin.x, top: origin.y, behavior: 'instant' });
+        restoring = false; remember(origin.section);
+      }
+      return;
+    }
     const target = (event.target as Element).closest<HTMLElement>('[data-global-scroll]');
     const section = target?.dataset.globalScroll && byId.get(target.dataset.globalScroll);
-    if (section) { restoring = false; remember(section); }
+    if (section) {
+      if (target?.hasAttribute('data-proof-definition-jump')) {
+        const origin = target.closest<HTMLElement>('[data-proof-source-declaration]');
+        if (origin) {
+          definitionOrigins.set(section.id, { section: origin, trigger: target, x: scrollX, y: scrollY });
+          const back = section.querySelector<HTMLButtonElement>('[data-proof-definition-return]');
+          if (back) back.hidden = false;
+        }
+      }
+      restoring = false; remember(section);
+    }
   }, options);
   window.addEventListener('scroll', schedule, { ...options, passive: true });
   window.addEventListener('resize', schedule, options);

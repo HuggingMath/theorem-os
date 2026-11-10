@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ChatAnswers } from '../apps/web/client/chatAnswer';
+import { ChatAnswers, explanationStepQuestion } from '../apps/web/client/chatAnswer';
 import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, WebRun } from '../apps/web/shared';
 
 const at = '2026-11-10T07:00:00.000Z';
@@ -139,6 +139,62 @@ describe('chat reads existing approved explanations without model or generation 
     answers.refresh(run()); answers.refresh(run()); expect(request).toHaveBeenCalledTimes(2);
     pending.resolve(overview()); await settle();
     expect(value).toMatchObject({ loading: false, document: document('first') }); expect(value.error).toBeUndefined();
+  });
+
+  it('retains an already loaded solution across a transient overview or document read failure', async () => {
+    let failOverview = false, failDocument = false, newer = false;
+    const saved = () => explanation('first', newer ? { updatedAt: '2026-11-10T08:00:00.000Z' } : {});
+    const { answers } = fixture(url => {
+      if (url.endsWith('/explanations')) {
+        if (failOverview) throw new Error('Temporary overview failure');
+        return overview(run(), [saved()]);
+      }
+      if (failDocument) throw new Error('Temporary document failure');
+      return { explanation: saved() };
+    });
+    const value = answers.sync(run())!; await settle(); const readable = value.document;
+    failOverview = true; answers.refresh(run()); await settle();
+    expect(value.document).toBe(readable); expect(value.error).toBe('Temporary overview failure');
+    failOverview = false; newer = true; failDocument = true; answers.refresh(run()); await settle();
+    expect(value.document).toBe(readable); expect(value.error).toBe('Temporary document failure');
+    failDocument = false; answers.refresh(run()); await settle();
+    expect(value.document).toEqual(document('first')); expect(value.error).toBeUndefined();
+  });
+
+  it('discards a previously readable solution when a response identifies a different proof', async () => {
+    let mismatch = false;
+    const { answers } = fixture(url => {
+      if (url.endsWith('/explanations')) {
+        const result = overview(); if (mismatch) result.run.proof = 'a different proof'; return result;
+      }
+      return { explanation: explanation('first') };
+    });
+    const value = answers.sync(run())!; await settle(); expect(value.document).toBeDefined();
+    mismatch = true; answers.refresh(run()); await settle();
+    expect(value.document).toBeUndefined(); expect(value.error).toBeTruthy();
+  });
+
+  it('discards the previous target and rejected item rather than retaining their mathematics', async () => {
+    let badItem = false;
+    const { answers } = fixture(url => url.endsWith('/explanations') ? overview() : {
+      explanation: badItem ? explanation('first', { document: document('another') }) : explanation('first'),
+    });
+    const value = answers.sync(run())!; await settle(); expect(value.document).toBeDefined();
+    badItem = true; answers.select(value.runId, 'second'); await settle();
+    expect(value.document).toBeUndefined(); expect(value.error).toBeTruthy();
+  });
+
+  it('uses verified section titles and quotes the selected step, its statement, citations and source in a follow-up', async () => {
+    const saved = explanation('first');
+    const section = { name: 'first', kind: 'theorem' as const, target: true, title: '加法交换律', statement: 'a + b = b + a',
+      lines: { start: 1, end: 2 }, signature: { start: 1, end: 1 }, unexplained: [], statementReviews: [],
+      steps: [{ text: '代入自然数 a 和 b。', uses: [{ name: 'Nat.add_comm', place: 'step' as const, spans: [] }], lines: [], reviews: [] }] };
+    saved.document!.sections = [section];
+    const { answers } = fixture(url => url.endsWith('/explanations') ? overview() : { explanation: saved });
+    const value = answers.sync(run())!; await settle(); expect(value.targetTitles?.first).toBe('加法交换律');
+    const text = explanationStepQuestion(section, 0, 'https://example.invalid/explain.html?run=accepted-run&target=first', 'zh');
+    for (const expected of [section.title, section.statement, section.steps[0].text, 'Nat.add_comm', 'run=accepted-run', '第 1 步']) expect(text).toContain(expected);
+    expect(explanationStepQuestion(section, 8, 'ignored', 'zh')).toBe('');
   });
 
   it.each(['id', 'proof'] as const)('rejects an overview bound to the wrong %s', async field => {

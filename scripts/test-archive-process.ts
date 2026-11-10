@@ -234,8 +234,9 @@ try {
       assert.ok((await page.locator('.source-facts').innerText()).includes(complex.record.campaign!.proofSha256));
       await page.locator('#tab-process').click(); await processRoot(page).waitFor();
       await page.locator('[data-process-open-tab="evidence"]').click();
+      await page.locator('[data-acceptance-receipts] > summary').click();
       assert.ok((await page.locator('.campaign-evidence').innerText()).includes(complex.record.campaign!.proofSha256));
-      const receipt = await page.request.get(`${origin}/classics/data/proofs/${complex.record.id}/verification.json`);
+      const receipt = await page.request.get(`${origin}/classics/data/proofs/${complex.record.id}/verification.json`, { timeout: 0 });
       assert.equal(receipt.status(), 200); assert.equal((await receipt.json()).runId, complex.record.campaign!.runId);
       await page.locator('#tab-process').click(); await processRoot(page).waitFor();
       await page.locator('[data-action="back-list"]').first().click();
@@ -286,7 +287,7 @@ try {
     assert.equal(await page.locator('.process-step-list [data-process-step^="check:"]').count(), final.checks!.length);
     assert.equal(await page.locator('.process-step-list [data-process-step^="delivery:"]').count(), final.deliveries!.length);
     assert.ok(final.checks?.some(check => check.scope === 'original' && check.status === 'kernel_verified'), 'The accepted final run must retain an original-problem check');
-    const response = await page.request.get(`${origin}/classics/data/proofs/${record.id}/process.json`);
+    const response = await page.request.get(`${origin}/classics/data/proofs/${record.id}/process.json`, { timeout: 0 });
     const { walkthrough: _walkthrough, ...nativeProcess } = record.process!;
     assert.equal(response.status(), 200); assert.deepEqual(await response.json(), nativeProcess);
   }

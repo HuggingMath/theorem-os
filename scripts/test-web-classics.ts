@@ -63,9 +63,9 @@ const noOverflow = async (page: Page, label: string) => {
 };
 const idsOnPage = async (page: Page) => (await page.locator('.proof-row').evaluateAll(rows =>
   rows.map(row => (row as HTMLElement).dataset.proofId!))).sort();
-const readSession = async (page: Page) => (await (await page.request.get(`${origin}/api/session`)).json()) as WebSession;
+const readSession = async (page: Page) => (await (await page.request.get(`${origin}/api/session`, { timeout: 0 })).json()) as WebSession;
 const readRuns = async (page: Page) => {
-  const response = await page.request.get(`${origin}/api/runs`);
+  const response = await page.request.get(`${origin}/api/runs`, { timeout: 0 });
   assert.equal(response.status(), 200);
   return (await response.json()).runs as { id: string; task: string; status: string }[];
 };
@@ -147,6 +147,8 @@ async function inspectAll(page: Page, label: string) {
     assert.equal(await page.locator('.global-run-lane').count(), record.process!.runs.length);
     assert.equal(await page.locator('.global-run-lane[data-final="true"]').getAttribute('data-global-run-id'), record.campaign!.runId);
     await page.getByRole('tab', { name: '验证证据', exact: true }).click();
+    assert.deepEqual(await page.locator('[data-accepted-target]').evaluateAll(elements => elements.map(element => element.getAttribute('data-accepted-target'))), record.campaign!.targets);
+    await page.locator('[data-acceptance-receipts] > summary').click();
     const evidence = await page.locator('.campaign-evidence').innerText();
     assert.ok(evidence.includes(record.campaign!.proofSha256));
     assert.match(evidence, /kernel_verified/u);
@@ -158,11 +160,11 @@ async function inspectAll(page: Page, label: string) {
 
 async function rawDownloads(page: Page, record: ArchiveRecord) {
   const submission = record.sources.find(source => source.name === 'Submission.lean')!;
-  const source = await page.request.get(`${origin}/classics/data/proofs/${record.id}/Submission.lean`);
+  const source = await page.request.get(`${origin}/classics/data/proofs/${record.id}/Submission.lean`, { timeout: 0 });
   assert.equal(source.status(), 200, 'The real workbench server must serve Lean downloads');
   assert.match(source.headers()['content-type'] ?? '', /^text\/plain(?:;|$)/u);
   assert.equal(digest(await source.body()), submission.sha256);
-  const verification = await page.request.get(`${origin}/classics/data/proofs/${record.id}/verification.json`);
+  const verification = await page.request.get(`${origin}/classics/data/proofs/${record.id}/verification.json`, { timeout: 0 });
   assert.equal(verification.status(), 200, 'The real workbench server must serve verification JSON');
   assert.match(verification.headers()['content-type'] ?? '', /^application\/json(?:;|$)/u);
   assert.equal((await verification.json()).runId, record.campaign!.runId);
@@ -335,27 +337,27 @@ try {
   const input: WebRunInput = { providerId: 'openai', apiKey: credential, model: 'fixture-classics', effort: 'low',
     source: 'theorem private_fixture : True := by sorry\n', task: privateTask, environment: 'standard',
     maxTurns: 2, maxRunSeconds: 30, workers: 1, coordination: 'cooperative' };
-  const created = await alice.page.request.post(`${origin}/api/runs`, { headers: { 'X-CSRF-Token': session.csrfToken }, data: input });
+  const created = await alice.page.request.post(`${origin}/api/runs`, { headers: { 'X-CSRF-Token': session.csrfToken }, data: input, timeout: 0 });
   assert.equal(created.status(), 201);
   const privateId = (await created.json()).run.id as string;
   await alice.page.waitForFunction(async id => {
     const response = await fetch(`/api/runs/${id}`);
     return response.ok && ['completed', 'cancelled', 'error'].includes((await response.json()).run.status);
   }, privateId);
-  const owned = await alice.page.request.get(`${origin}/api/runs/${privateId}`);
+  const owned = await alice.page.request.get(`${origin}/api/runs/${privateId}`, { timeout: 0 });
   assert.equal(owned.status(), 200);
   assert.equal((await owned.json()).run.result?.status, 'limit_reached', 'The private fixture must finish before cleanup');
   assert.deepEqual((await readRuns(alice.page)).map(run => run.id), [privateId]);
   assert.deepEqual(await readRuns(bob.page), []);
   for (const operation of ['', '/trajectory', '/tasks/private_fixture/source', '/download']) {
-    const inaccessible = await bob.page.request.get(`${origin}/api/runs/${privateId}${operation}`);
+    const inaccessible = await bob.page.request.get(`${origin}/api/runs/${privateId}${operation}`, { timeout: 0 });
     assert.equal(inaccessible.status(), 404, `Bob must not read Alice's private ${operation || 'run'}`);
     const text = await inaccessible.text();
     assert.equal(text.includes(privateTask), false);
     assert.equal(text.includes(credential), false);
   }
   for (const page of [alice.page, bob.page]) {
-    const response = await page.request.get(`${origin}/classics/data/catalog.json`);
+    const response = await page.request.get(`${origin}/classics/data/catalog.json`, { timeout: 0 });
     assert.equal(response.status(), 200);
     const body = await response.text(), shared = JSON.parse(body) as ArchiveCatalog;
     assert.deepEqual(shared.records.map(record => record.id).sort(), expectedIds);

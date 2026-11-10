@@ -1,25 +1,19 @@
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { leanScopeCommands, maskLeanCommentsAndStrings } from '../../src/math/leanSyntax';
-import type { InstalledLibraryDefinition, InstalledLibraryEntry } from './installedLibraryTypes';
+import type { InstalledLibraryDeclarationContext, InstalledLibraryDefinition, InstalledLibraryEntry } from './installedLibraryTypes';
 
-/** Project definition text from the digest-checked module; the catalog itself stays unchanged. */
-export function installedLibraryDefinitions(source: string, entries: readonly InstalledLibraryEntry[]): Record<string, InstalledLibraryDefinition> {
+/** Project source scopes and definition text from the digest-checked module; the catalog stays unchanged. */
+export function installedLibraryDeclarations(source: string, entries: readonly InstalledLibraryEntry[]) {
   const definitions: Record<string, InstalledLibraryDefinition> = {};
+  const contexts: Record<string, InstalledLibraryDeclarationContext> = {};
   const regions = inspectLeanDeclarationRegions(source), scoped = inspectScopedLeanDeclarations(source);
   const masked = maskLeanCommentsAndStrings(source);
   const commands = [...leanScopeCommands(masked)];
   for (const entry of entries) {
-    if (entry.kind !== 'definition') continue;
     const declaration = scoped.find(item => item.qualifiedName === entry.name);
     const region = declaration && regions.find(item => item.startOffset === declaration.startOffset);
-    if (!declaration || !region) throw new Error(`Definition source is missing: ${entry.name}`);
+    if (!declaration || !region) throw new Error(`Declaration source is missing: ${entry.name}`);
     const start = source.lastIndexOf('\n', region.startOffset - 1) + 1;
-    let bodyStart = region.bodyOffset;
-    // The source inspector treats the first field's := as the boundary of a `where` definition.
-    // Include the complete record construction, including fields without explicit assignments.
-    const header = masked.slice(region.startOffset, bodyStart);
-    const where = /\bwhere\b/u.exec(header);
-    if (where) bodyStart = region.startOffset + where.index;
     const frames: string[][] = [[]];
     for (const command of commands) {
       if (command.index >= region.startOffset) break;
@@ -40,9 +34,22 @@ export function installedLibraryDefinitions(source: string, entries: readonly In
     }
     const before = source.slice(0, start).trimEnd(), docStart = before.lastIndexOf('/--');
     const doc = docStart < 0 ? undefined : /^\/--([\s\S]*?)-\/$/u.exec(before.slice(docStart));
+    const context = { documentation: doc?.[1].trim() ?? '', context: frames.flat(), line: source.slice(0, start).split('\n').length };
+    contexts[entry.name] = context;
+    if (entry.kind !== 'definition') continue;
+    let bodyStart = region.bodyOffset;
+    // The source inspector treats the first field's := as the boundary of a `where` definition.
+    // Include the complete record construction, including fields without explicit assignments.
+    const header = masked.slice(region.startOffset, bodyStart);
+    const where = /\bwhere\b/u.exec(header);
+    if (where) bodyStart = region.startOffset + where.index;
     definitions[entry.name] = { source: source.slice(start, region.endOffset).trimEnd(),
-      body: source.slice(bodyStart, region.endOffset).trim(), documentation: doc?.[1].trim() ?? '',
-      context: frames.flat(), line: source.slice(0, start).split('\n').length };
+      body: source.slice(bodyStart, region.endOffset).trim(), ...context };
   }
-  return definitions;
+  return { definitions, contexts };
+}
+
+/** Definition-only view retained for callers that need bodies. */
+export function installedLibraryDefinitions(source: string, entries: readonly InstalledLibraryEntry[]): Record<string, InstalledLibraryDefinition> {
+  return installedLibraryDeclarations(source, entries.filter(entry => entry.kind === 'definition')).definitions;
 }

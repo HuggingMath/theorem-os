@@ -199,6 +199,9 @@ async function researchDraftFlow(page: Page, check: typeof checks[number], recor
   await composer.fill(previous, { timeout: 0 });
   await page.goto(readingUrl, { waitUntil: 'domcontentloaded', timeout: 0 });
   await visible(page.locator(`[data-proof-solution="${record.id}"]`));
+  if (position) assert((await start().innerText()).includes(en
+    ? position.startsWith('proof-derivation-') ? 'Research this step' : 'Research this declaration'
+    : position.startsWith('proof-derivation-') ? '围绕这一步研究' : '围绕此处研究'), 'the archive action describes research, rather than promising an immediate explanation');
   await start().click({ timeout: 0 });
   const candidate = page.locator('[data-problem-draft-candidate]'); await visible(candidate); await visible(composer);
   assert.equal(await composer.inputValue(), previous, 'opening a problem candidate preserves the exact unsent home draft');
@@ -211,6 +214,17 @@ async function researchDraftFlow(page: Page, check: typeof checks[number], recor
   assert.equal(sourceParameters.get('proof'), record.id); assert.equal(sourceParameters.get('reading'), position);
   assert.equal(sourceParameters.get('return'), readingParameters.get('return'), 'research source retains the original directory return');
   if (position) {
+    assert.equal(await candidate.locator('h2').innerText(), en ? 'Research the selected step' : '围绕所选步骤研究');
+    assert.equal(new URL(page.url()).searchParams.get('archiveFocus'), position, 'the follow-up identifies the selected step without URL-supplied text');
+    await visible(candidate.locator('[data-problem-draft-focus]'));
+    const contextResponse = await page.request.get(`${origin}/classics/data/reading/${record.id}.json`, { timeout: 0 });
+    assert.equal(contextResponse.status(), 200);
+    const contexts = await contextResponse.json();
+    const selected = contexts.positions[position]; assert(selected);
+    const quote = await candidate.locator('[data-problem-draft-focus]').innerText();
+    assert(quote.includes(selected.title[en ? 'en' : 'zh'])); assert(quote.includes(selected.claim[en ? 'en' : 'zh']));
+    if (selected.definition) assert(quote.includes(selected.definition), 'a selected definition includes its body, beyond its declaration name');
+    for (const use of selected.uses) assert(quote.includes(use), 'the step quote carries its used conclusions');
     assert.equal(sourceParameters.get('readingSha'), record.campaign.proofSha256);
     const popupEvent = page.waitForEvent('popup', { timeout: 0 });
     await candidate.getByRole('link', { name: en ? 'View the problem source' : '查看题目来源', exact: true }).click({ timeout: 0 });
@@ -231,13 +245,15 @@ async function researchDraftFlow(page: Page, check: typeof checks[number], recor
   await candidate.locator('[data-problem-draft-include]').click({ timeout: 0 });
   await candidate.waitFor({ state: 'hidden', timeout: 0 });
   const added = await composer.inputValue();
-  assert(added.startsWith(`${previous}\n\n`), 'explicit inclusion appends after the exact prior draft');
+  assert(!added.includes(previous), 'the default independent draft contains this problem without the unrelated home question');
+  const independentId = new URL(page.url()).searchParams.get('editProblem'); assert.match(independentId ?? '', /^research-[a-f0-9]{64}$/u);
+  assert((await page.locator('[data-chat-editing-problem]').innerText()).includes(en ? 'Independent research draft' : '独立研究草稿'));
   assert(added.includes(originalSource), 'this small original statement is included in full after confirmation');
   assert(added.includes(record.files['Challenge.lean']), 'the new editable question retains its original source digest');
   assert(added.includes(sourceHref), 'the included draft retains the precise reading-source URL');
   assert(added.includes(`/classics/data/proofs/${record.id}/Challenge.lean`), 'the draft links to the original statement, separately from accepted proof reading');
   for (const target of record.campaign.targets) assert(added.includes(target), 'every accepted problem target remains part of the new question context');
-  for (const key of ['archiveProblem', 'archiveSource', 'archiveReading']) assert.equal(new URL(page.url()).searchParams.has(key), false, `including clears ${key}`);
+  for (const key of ['archiveProblem', 'archiveSource', 'archiveReading', 'archiveFocus']) assert.equal(new URL(page.url()).searchParams.has(key), false, `including clears ${key}`);
   assert.equal(new URL(page.url()).searchParams.has('run'), false, 'the new draft does not resume the archived accepted run');
   await screenshot(page, check, 'research-draft-included', composer);
   await page.reload({ waitUntil: 'domcontentloaded', timeout: 0 }); await visible(composer);
@@ -246,8 +262,25 @@ async function researchDraftFlow(page: Page, check: typeof checks[number], recor
   assert.equal(await composer.inputValue(), added, 'switching locale preserves the new editable question');
   await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), page.locator('#locale-switch').click({ timeout: 0 })]); await visible(composer);
   assert.equal(await composer.inputValue(), added);
+  const edited = added + (en ? '\n\nKeep my revised research direction.' : '\n\n保留我修改后的研究方向。');
+  await composer.fill(edited, { timeout: 0 });
+  await page.locator('[data-chat-return-home]').click({ timeout: 0 });
+  assert.equal(await composer.inputValue(), previous, 'returning home restores the exact unrelated question');
+  await page.goto(readingUrl, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(page.locator(`[data-proof-solution="${record.id}"]`));
+  await start().click({ timeout: 0 }); await visible(candidate);
+  await candidate.locator('[data-problem-draft-include]').click({ timeout: 0 }); await candidate.waitFor({ state: 'hidden', timeout: 0 });
+  assert.equal(new URL(page.url()).searchParams.get('editProblem'), independentId);
+  assert.equal(await composer.inputValue(), edited, 'reopening the same source and step restores edits instead of replacing them');
+  await page.locator('[data-chat-return-home]').click({ timeout: 0 });
+  assert.equal(await composer.inputValue(), previous);
+  await page.goto(readingUrl, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(page.locator(`[data-proof-solution="${record.id}"]`));
+  await start().click({ timeout: 0 }); await visible(candidate);
+  await candidate.locator('[data-problem-draft-append]').click({ timeout: 0 }); await candidate.waitFor({ state: 'hidden', timeout: 0 });
+  assert((await composer.inputValue()).startsWith(previous + '\n\n'), 'appending requires its own explicit secondary action');
+  assert.equal(new URL(page.url()).searchParams.has('editProblem'), false);
+  await composer.fill(previous, { timeout: 0 });
   await healthy(page);
-  check.assertions.push('Research this problem reads the pinned original Challenge source into a review candidate, preserves the prior home draft until explicit inclusion, appends the full small statement and provenance, survives refresh/language switching, and never sends or creates a run. Dismiss keeps the original input.');
+  check.assertions.push('Research this problem reads the pinned Challenge source into a candidate, creates an independent draft by default, restores its edits on refresh/language/re-entry, and preserves the exact home question. Appending is a separate explicit action. Neither action sends or creates a run.');
   await page.goto(readingUrl, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(page.locator(`[data-proof-solution="${record.id}"]`));
 }
 async function rawDownloads(context: BrowserContext) {
@@ -565,9 +598,30 @@ try {
     for (const target of newest.campaign.targets) {
       assert.equal(await reading.locator(`[data-proof-source-declaration="${target}"] h5`).innerText(), target.split('.').at(-1), 'source headings use real declaration names');
     }
-    const firstCode = reading.locator('[data-proof-source-declaration] [data-proof-source-code]').first();
-    assert(await firstCode.evaluate(element => element.getBoundingClientRect().top < innerHeight && element.getBoundingClientRect().bottom > 0), 'the first viewport starts actual accepted proof code');
+    const setup = reading.locator('[data-proof-math-setup]');
+    await visible(setup);
+    assert((await setup.innerText()).includes(text('后验分布', 'posterior distribution')), 'source reading begins with the mathematical problem before the Lean proofs');
     await screenshot(page, check, 'reading', page.locator('.detail-title'));
+    const localDefinitions = reading.locator('[data-proof-source-declaration]').first().locator('[data-proof-used-definitions]');
+    assert.deepEqual(await localDefinitions.locator('[data-proof-used-definition]').evaluateAll(elements => elements.map(element => element.getAttribute('data-proof-used-definition')).sort()),
+      ['OAI.ThreeState.TreeClauses.Admissible', 'OAI.ThreeState.TreeClauses.Spin', 'OAI.ThreeState.TreeClauses.channelWeight'].sort(), 'the target exposes its actual local definitions');
+    const admissible = localDefinitions.locator('[data-proof-used-definition="OAI.ThreeState.TreeClauses.Admissible"]');
+    await admissible.locator(':scope > summary').click({ timeout: 0 });
+    assert((await admissible.locator('code').last().textContent())!.includes('-(1 / 2 : ℝ) ≤ lam ∧ lam ≤ 1'), 'the complete admissibility definition is readable beside the target');
+    await screenshot(page, check, 'reading-local-definition', admissible);
+    const definitionJump = admissible.locator('[data-proof-definition-jump]');
+    await definitionJump.scrollIntoViewIfNeeded({ timeout: 0 });
+    const originScroll = await page.evaluate(() => scrollY), readingHistory = await page.evaluate(() => window.history.length);
+    await definitionJump.click({ timeout: 0 });
+    const selectedDefinition = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('reading');
+    assert(selectedDefinition?.startsWith('proof-source-helper-'), 'the local definition links to its exact immutable reading position');
+    const definitionReturn = reading.locator(`#${selectedDefinition} [data-proof-definition-return]`);
+    await visible(definitionReturn); await screenshot(page, check, 'reading-definition-return', definitionReturn);
+    await definitionReturn.click({ timeout: 0 });
+    assert(await definitionJump.evaluate(element => element === document.activeElement), 'return restores focus to the exact definition link beside the original target');
+    assert(Math.abs(await page.evaluate(() => scrollY) - originScroll) <= 1, 'return restores the previous reading position');
+    assert.equal(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('reading'), 'proof-source-target-1');
+    assert.equal(await page.evaluate(() => window.history.length), readingHistory, 'reading and returning never add browser history entries');
     const sourceIndex = reading.locator('.proof-source-index');
     await sourceIndex.locator(':scope > summary').click({ timeout: 0 });
     const helperJump = sourceIndex.locator('[data-global-scroll^="proof-source-helper-"]').first();
@@ -647,6 +701,19 @@ try {
       } else {
         assert.equal(await solution.getAttribute('data-proof-solution-mode'), 'source');
         assert.deepEqual(await solution.locator('[data-proof-source-declaration]').evaluateAll(elements => elements.map(element => element.getAttribute('data-proof-source-declaration'))), record.campaign.targets);
+        const mathematics = solution.locator(`[data-proof-source-mathematics="${record.id}"]`);
+        await visible(mathematics.locator('[data-proof-math-setup]'));
+        const notes = mathematics.locator('[data-proof-math-details]');
+        assert.equal(await notes.getAttribute('open'), null, 'full notes start collapsed after a readable mathematical setup');
+        await notes.locator(':scope > summary').click({ timeout: 0 });
+        assert.deepEqual(await notes.locator('[data-proof-math-target]').evaluateAll(elements => elements.map(element => element.getAttribute('data-proof-math-target'))), record.campaign.targets);
+        const prose = await notes.innerText();
+        assert(prose.includes(text('完整假设', 'Full assumptions')));
+        assert(prose.includes(text('核心证明思路', 'Core proof outline')));
+        assert(prose.includes(record.id === newest.id ? 'Aₙ' : 'SameFramedFlag'));
+        await screenshot(page, check, 'source-mathematical-notes', mathematics);
+        await notes.locator('[data-global-scroll="proof-source-target-1"]').first().click({ timeout: 0 });
+        assert(await solution.locator('#proof-source-target-1 h5').evaluate(element => element === document.activeElement), 'mathematical target meaning links to its exact accepted Lean proof');
       }
       if (record.id !== explained.id) await screenshot(page, check, 'reading-historical', page.locator('.detail-title'));
       assert.equal(await page.locator('[data-theorem-directory-return]').count(), 0, 'classic-only entry keeps its original return behavior');
@@ -664,6 +731,16 @@ try {
 
     phase = `${scenario.name}: newest problem evidence link opens its real local acceptance`;
     await page.goto(links.evidence, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(page.locator('.campaign-evidence'));
+    assert.deepEqual(await page.locator('[data-accepted-target]').evaluateAll(elements => elements.map(element => element.getAttribute('data-accepted-target'))), newest.campaign.targets);
+    const receiptDetails = page.locator('[data-acceptance-receipts]');
+    assert.equal(await receiptDetails.getAttribute('open'), null, 'technical receipts begin collapsed, after the original problem and conclusions');
+    assert(await page.locator('[data-acceptance-mathematics]').isVisible());
+    await page.locator('[data-action="view-statement"]').click({ timeout: 0 });
+    await visible(page.locator('.source-code[data-source-name="Challenge.lean"]'));
+    assert.equal(await page.locator('#source-file').inputValue(), 'Challenge.lean', 'acceptance opens the complete original problem');
+    await page.locator('#tab-evidence').click({ timeout: 0 }); await visible(page.locator('[data-acceptance-mathematics]'));
+    await screenshot(page, check, 'evidence-conclusions', page.locator('.detail-title'));
+    await receiptDetails.locator('summary').click({ timeout: 0 });
     const acceptance = await page.locator('.campaign-evidence').innerText();
     for (const token of [newest.campaign.runId, newest.campaign.proofSha256, 'kernel_verified', 'evaluated_passed']) assert(acceptance.includes(token));
     const evidenceLink = page.locator('.campaign-evidence').getByRole('link', { name: 'verification.json', exact: true });

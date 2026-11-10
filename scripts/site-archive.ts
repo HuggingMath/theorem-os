@@ -4,13 +4,14 @@ import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { archiveIndex, archiveSourceScript, archiveProcessScript } from '../docs/web/catalog';
 import type { ArchiveCatalog } from '../docs/web/types';
+import { proofReadingContexts } from '../docs/web/proofReadingContext';
 
 /** The website and the account workbench publish the same checked proof files and lazy research records. */
 export async function buildArchive(root: string, output: string, catalog: ArchiveCatalog) {
   fs.mkdirSync(output, { recursive: true });
   const data = path.join(output, 'data');
   fs.rmSync(data, { recursive: true, force: true });
-  for (const directory of ['sources', 'process', 'proofs']) fs.mkdirSync(path.join(data, directory), { recursive: true });
+  for (const directory of ['sources', 'process', 'proofs', 'reading']) fs.mkdirSync(path.join(data, directory), { recursive: true });
   const math = path.join(data, 'math.js');
   await build({ entryPoints: [path.join(root, 'apps/web/client/math.ts')], outfile: math,
     bundle: true, platform: 'browser', format: 'iife', target: ['es2022'], minify: true, legalComments: 'eof' });
@@ -56,6 +57,8 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
     fs.writeFileSync(path.join(data, 'sources', `${record.id}.js`), archiveSourceScript(record));
     if (record.process) fs.writeFileSync(path.join(data, 'process', `${record.id}.js`), archiveProcessScript(record));
     if (!record.campaign) continue;
+    const reading = record.process && proofReadingContexts(record, record.process);
+    if (reading) fs.writeFileSync(path.join(data, 'reading', `${record.id}.json`), JSON.stringify(reading) + '\n');
     const proofs = path.join(data, 'proofs', record.id);
     fs.mkdirSync(proofs, { recursive: true });
     for (const source of record.sources) {

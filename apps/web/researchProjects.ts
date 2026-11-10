@@ -299,6 +299,11 @@ export class WebResearchProjects {
   detail(viewer: string, projectId: string): ResearchProjectDetail {
     const stored = this.readable(viewer, projectId), feedback = this.visibleFeedback(viewer, stored);
     return clone({ ...this.summary(viewer, stored), versions: stored.versions,
+      memberProfiles: stored.project.members.flatMap(member => {
+        const profile = this.person(member.researcherId)?.profile;
+        return profile && (profile.visibility === 'public' || viewer !== 'public' && profile.id === this.identity(viewer))
+          ? [{ id: profile.id, displayName: profile.displayName }] : [];
+      }),
       runs: stored.bindings.flatMap(binding => { const view = this.bindingView(viewer, stored, binding); return view ? [view] : []; }),
       feedback, activity: this.activities(viewer, stored), assignments: (stored.assignments ?? []).filter(assignment => {
         const binding = stored.bindings.find(binding => binding.runId === assignment.target.runId);

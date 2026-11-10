@@ -17,6 +17,7 @@ import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
 import { mountProofReading, proofReadingLink, revealProofReadingLocation } from './proofReading';
 import { readProofReadingPosition } from './proofReadingLocation';
 import { proofSolutionTitle, renderProofSolution, theoremDirectoryReturn } from './proofSolution';
+import { renderAcceptedTargets } from './proofAcceptance';
 import { mountProofFigures } from './proofFigures';
 import { mountArchiveSolutionRoutes, typesetArchiveProse } from './solutionRouteClient';
 import { readSourceLocation, verifiedSourceLocation, writeSourceLocation, type SourceLocation } from './sourceLocation';
@@ -340,6 +341,8 @@ function evidence(record: ArchiveRecord) {
   if (record.campaign) {
     const entry = record.campaign;
     return `<div class="evidence-entry campaign-evidence"><h3>${strings.nativeEvidence}</h3><p>${strings.nativeScope}</p>
+      ${renderAcceptedTargets(record, locale)}
+      <details class="acceptance-receipts" data-acceptance-receipts><summary>${locale === 'en' ? 'Complete verification receipts and version' : '完整核验凭据与版本'}</summary>
       <dl class="record-facts"><div><dt>Run ID</dt><dd class="mono">${html(entry.runId)}</dd></div>
       <div><dt>Lean</dt><dd class="mono">kernel_verified</dd></div>
       <div><dt>Comparator</dt><dd class="mono">exit ${entry.comparatorExitCode} · evaluated_passed</dd></div>
@@ -347,7 +350,7 @@ function evidence(record: ArchiveRecord) {
       <div><dt>Proof commit</dt><dd class="mono">${html(entry.proofCommit)}</dd></div>
       <div><dt>SHA-256</dt><dd class="mono">${entry.proofSha256}</dd></div>
       <div><dt>Lean receipts</dt><dd class="mono">${entry.kernelReceiptIds.map(html).join('<br>')}</dd></div></dl>
-      ${external(entry.evidenceUrl, 'verification.json', 'button')}</div>
+      </details>${external(entry.evidenceUrl, 'verification.json', 'button')}</div>
       <div class="evidence-entry"><h3>${strings.production}</h3><p>${html(locale === 'en' ? entry.attributionEn ?? entry.attribution : entry.attribution)}</p></div>`;
   }
   if (!record.official) {
@@ -783,6 +786,10 @@ document.addEventListener('click', event => {
     case 'quickstart': state.view = 'quickstart'; writeLocation(true); render(); break;
     case 'reset': state.query = ''; state.filter = 'all'; render(); element('#search').focus(); break;
     case 'copy-link': void copy(proofReadingLink(target.dataset.proofCopyReading)); break;
+    case 'view-statement': if (record) {
+      state.sourceName = 'Challenge.lean'; sourceLocation = undefined; state.tab = 'source';
+      renderInspector(record); icons(); writeLocation(); element('#tab-source').focus({ preventScroll: true });
+    } break;
     case 'copy-hash': void copy(target.dataset.value ?? ''); break;
     case 'jump-declaration': if (record) jumpToDeclaration(record); break;
     case 'copy-source': if (record) void copy(currentSource(record).code); break;

@@ -29,6 +29,13 @@ export type InstalledLibraryModuleSummary = Omit<InstalledLibraryModule, 'entrie
   entryCount: number;
   declarationCount: number;
   preview: InstalledLibraryEntry[];
+  matchingInterfaces: { name: string; summary: { zh: string; en: string } }[];
+  matchingInterfaceCount: number;
+};
+/** Generated from one pinned release; contains searchable display text, never theorem proof bodies. */
+export type InstalledLibrarySearchIndex = {
+  catalogDigest: string;
+  modules: Record<string, { sha256: string; entries: Record<string, { summary: { zh: string; en: string }; text: string }> }>;
 };
 export type InstalledLibraryDirectory = {
   library: InstalledLibraryInfo;
@@ -39,15 +46,19 @@ export type InstalledLibraryDirectory = {
   limit: number;
   nextOffset?: number;
 };
-export type InstalledLibraryDefinition = {
-  source: string;
-  body: string;
+/** Variables written in the declaration's active source scopes, not an elaborated Lean type. */
+export type InstalledLibraryDeclarationContext = {
   documentation: string;
   context: string[];
   line: number;
 };
+export type InstalledLibraryDefinition = InstalledLibraryDeclarationContext & {
+  source: string;
+  body: string;
+};
 export type InstalledLibraryDetail = { library: InstalledLibraryInfo; module: InstalledLibraryModule;
-  definitions: Record<string, InstalledLibraryDefinition> };
+  definitions: Record<string, InstalledLibraryDefinition>;
+  contexts: Record<string, InstalledLibraryDeclarationContext> };
 export type InstalledLibrarySource = {
   library: InstalledLibraryInfo;
   file: string;

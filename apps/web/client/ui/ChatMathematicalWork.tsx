@@ -1,6 +1,6 @@
 import type { WebExplanationPhase, WebExplanationSection } from '../../shared';
-import { t } from '../../i18n';
-import type { ChatAnswer } from '../chatAnswer';
+import { locale, t } from '../../i18n';
+import { explanationStepQuestion, type ChatAnswer } from '../chatAnswer';
 import type { ChatMathematicalTask, ChatMathematics } from '../chatMathematics';
 import { explanationReasonText, explanationUnavailableText } from '../explanationState';
 import { ChatMessageContent } from './ChatMessageContent';
@@ -27,21 +27,33 @@ export function ChatMathematicalProgress({ work, onTask }: { work: ChatMathemati
   </section>;
 }
 
-function AnswerSection({ section }: { section: WebExplanationSection }) {
+function AnswerSection({ section, sections, anchor, source, onQuestion }: { section: WebExplanationSection; sections: WebExplanationSection[];
+  anchor(name: string): string; source: string; onQuestion?(text: string): void }) {
   const content = <>
     {section.statement && <div class="chat-answer-statement"><ChatMessageContent text={section.statement} /></div>}
     {section.steps.length > 0 && <ol class="chat-answer-steps">{section.steps.map((step, index) => <li key={index}>
       <ChatMessageContent text={step.text} />
-      {step.uses.length > 0 && <p class="chat-answer-uses"><span>{t('用到')}</span>{step.uses.map(use => <code key={use.name} translate={false}>{use.name}</code>)}</p>}
+      {step.uses.length > 0 && <p class="chat-answer-uses"><span>{t('用到')}</span>{step.uses.map(use => {
+        const matches = sections.filter(item => item.name === use.name || item.name.split('.').at(-1) === use.name);
+        const local = matches.length === 1 ? matches[0] : undefined;
+        return local ? <a key={use.name} href={`#${anchor(local.name)}`} title={use.name} data-chat-answer-use={local.name} onClick={event => {
+          event.preventDefault();
+          const node = window.document.getElementById(anchor(local.name));
+          if (node instanceof HTMLDetailsElement) node.open = true;
+          node?.scrollIntoView({ block: 'nearest' }); node?.focus({ preventScroll: true });
+        }}>{local.title || local.name}</a> : <code key={use.name} translate={false}>{use.name}</code>;
+      })}</p>}
+      {onQuestion && <button type="button" class="text-button chat-answer-question" data-chat-answer-question={`${section.name}:${index}`}
+        onClick={() => onQuestion(explanationStepQuestion(section, index, source, locale))}>{t('解释这一步')}</button>}
     </li>)}</ol>}
   </>;
-  return section.target ? <section class="chat-answer-target" data-chat-answer-target={section.name}>
+  return section.target ? <section id={anchor(section.name)} tabIndex={-1} class="chat-answer-target" data-chat-answer-target={section.name}>
     <h4 translate={false}>{section.title || section.name}</h4>{content}
-  </section> : <details class="chat-answer-support"><summary translate={false}>{section.title || section.name}</summary>{content}</details>;
+  </section> : <details id={anchor(section.name)} tabIndex={-1} class="chat-answer-support"><summary translate={false}>{section.title || section.name}</summary>{content}</details>;
 }
 
-export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget }: {
-  runId: string; answer?: ChatAnswer; onRetry(): void; onTarget(target: string): void;
+export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQuestion }: {
+  runId: string; answer?: ChatAnswer; onRetry(): void; onTarget(target: string): void; onQuestion?(text: string): void;
 }) {
   const document = answer?.document, targets = answer?.overview?.targets ?? [];
   const explanation = answer?.explanation, generation = answer?.overview?.generation;
@@ -51,18 +63,21 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget }: {
     extracting: t('正在提取证明结构'), writing: t('正在撰写详细解答'), auditing: t('正在核对讲解与证明'),
     revising: t('正在修订讲解'), retrying: t('正在重试生成讲解'), finishing: t('正在保存讲解') };
   const explanationUrl = `explain.html?${new URLSearchParams({ run: runId, ...(answer?.target ? { target: answer.target } : {}) })}`;
+  const anchor = (name: string) => `chat-answer-${encodeURIComponent(runId)}-${encodeURIComponent(answer?.target ?? '')}-${encodeURIComponent(name)}`;
   return <section class="chat-mathematical-answer" data-chat-answer data-chat-answer-status={document ? 'ready' : answer?.error ? 'read-error'
     : answer?.loading ? 'reading' : explanation?.status ?? (generation?.available ? 'missing' : 'unavailable')}
     aria-labelledby="chat-answer-heading" aria-busy={answer?.loading || generating}>
     <h3 id="chat-answer-heading">{t('详细解答')}</h3>
     {targets.length > 1 && <label class="chat-answer-selection">{t('阅读目标')}<select data-chat-answer-select value={answer?.target} onChange={event => onTarget(event.currentTarget.value)}>
-      {targets.map(target => <option key={target.name} value={target.name}>{target.name}</option>)}
+      {targets.map(target => <option key={target.name} value={target.name}>{answer?.targetTitles?.[target.name] || target.name}</option>)}
     </select></label>}
+    {answer?.targetTitles?.[answer.target] && <p class="chat-answer-lean-name" translate={false}>{answer.target}</p>}
     {answer?.loading && !document && <p class="chat-answer-state" role="status"><span class="spinner" />{t('正在读取已有讲解…')}</p>}
-    {answer?.error && <div class="chat-error" role="alert"><p>{answer.error}</p><button type="button" class="text-button" data-chat-answer-retry onClick={onRetry}>{t('重新读取讲解')}</button></div>}
+    {answer?.error && <div class="chat-error" role="alert">{document && <p>{t('刷新失败，下面保留上次读取的解答。')}</p>}<p>{answer.error}</p><button type="button" class="text-button" data-chat-answer-retry onClick={onRetry}>{t('重新读取讲解')}</button></div>}
     {document && <div data-chat-answer-document={document.target}>
       <ChatMessageContent text={document.overview} />
-      {document.sections.map(section => <AnswerSection key={section.name} section={section} />)}
+      {document.sections.map(section => <AnswerSection key={section.name} section={section} sections={document.sections} anchor={anchor}
+        source={`${new URL(explanationUrl, location.href).href}#explain-section-${document.sections.indexOf(section)}`} onQuestion={onQuestion} />)}
     </div>}
     {!document && !answer?.loading && !answer?.error && <>
       {generating ? <div class="chat-answer-generation" role="status"><p class="chat-answer-state"><span class="spinner" />{explanation.status === 'queued'

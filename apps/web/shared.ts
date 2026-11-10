@@ -550,8 +550,10 @@ function researchContext(search: string, origin: 'research' | 'workbench' = 'res
   const params = new URLSearchParams(search), context = new URLSearchParams();
   const chat = params.get('workbenchChat') ?? (origin === 'workbench' ? params.get('chat') : null);
   const run = params.get('workbenchRun') ?? (origin === 'workbench' ? params.get('run') : null);
+  const edit = params.get('workbenchEdit') ?? (origin === 'workbench' ? params.get('editProblem') : null);
   if (chat && /^[a-f0-9-]{36}$/u.test(chat)) context.set('workbenchChat', chat);
   if (run && /^[a-f0-9-]{1,36}$/u.test(run)) context.set('workbenchRun', run);
+  if (edit && /^[A-Za-z0-9_-]{1,128}$/u.test(edit)) context.set('workbenchEdit', edit);
   return context;
 }
 /** Add only the explicit workbench source to an app link, keeping its own target, filters and fragment. */
@@ -570,6 +572,7 @@ export function researchNavigation(search: string, origin: 'research' | 'workben
   const context = researchContext(search, origin);
   const suffix = context.size ? `?${context}` : '';
   const back = context.has('workbenchChat') ? `?${new URLSearchParams({ chat: context.get('workbenchChat')! })}`
-    : context.has('workbenchRun') ? `?${new URLSearchParams({ run: context.get('workbenchRun')! })}` : '';
+    : context.has('workbenchEdit') ? `?${new URLSearchParams({ editProblem: context.get('workbenchEdit')! })}`
+      : context.has('workbenchRun') ? `?${new URLSearchParams({ run: context.get('workbenchRun')! })}` : '';
   return { workbench: `./${back}`, workspace: `workspace.html${suffix}`, theorems: `theorems.html${suffix}`, people: `people.html${suffix}`, library: `library.html${suffix}` };
 }
