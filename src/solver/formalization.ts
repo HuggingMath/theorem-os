@@ -502,19 +502,23 @@ export async function runFormalization(directory: string, root: string, options:
         let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined, stopped = false;
         let receivedTurnUsage = false;
         let completionNoticeSent = false;
+        const sharedStages = direct ? 'generation, host Lean compilation and any required repairs' :
+          'generation, Lean compilation, backtranslation and independent review';
         const remindSubmission = () => {
           const accounting = record.requestUsageAccounting;
-          if (!request.fidelityPolicy || !['plan', 'backtranslate', 'compare'].includes(role) || completionNoticeSent || !session?.notify ||
-              stopped || lease.signal.aborted || accounting?.incomplete || accounting?.pendingRequests ||
+          if (!(direct && role === 'generate' || request.fidelityPolicy && ['plan', 'backtranslate', 'compare'].includes(role)) ||
+              completionNoticeSent || !session?.notify || stopped || lease.signal.aborted || remaining() <= 0 ||
+              accounting?.incomplete || accounting?.pendingRequests ||
               (accounting?.reportedRequests ?? 0) < (role === 'backtranslate' ? 3 : 1) || fs.existsSync(outputFile)) return;
           completionNoticeSent = true;
-          const message = role === 'plan' ?
+          const message = role === 'generate' ?
+            'Move to a complete candidate using the evidence already available. Preserve every required domain, quantifier, hypothesis, conclusion and definition. Make further library queries only for a specific unresolved declaration or mathematical meaning; do not keep exploring alternative encodings or proving the theorem. As soon as the complete statement and coverage are ready, write the smallest faithful schema-valid OUTPUT.json atomically and stop. The host compiles your submission and returns diagnostics for repair. Do not guess missing semantics, truncate the statement or weaken it to meet a budget.' : role === 'plan' ?
             'Finish the statement plan from the evidence already available. Use the smallest inventory covering all source clauses; do not construct proofs or enumerate kernel/typeclass implementation details. Make further library queries only for a specific unresolved mathematical meaning. Record genuine remaining ambiguity in unresolved, and write the complete schema-valid OUTPUT.json atomically.' : role === 'compare' ?
             'Finish your independent semantic review using the supplied frozen snapshot and observations. Cover every required target, domain, quantifier, hypothesis, conclusion and definition affecting the mathematical meaning. Make further queries only for a specific missing meaning; avoid repeatedly checking settled observations or constructing theorem proofs. Preserve your own verdict: unknown or changes_requested is acceptable when evidence is insufficient. Once your assessment is complete, write the complete schema-valid OUTPUT.json atomically, including the required source contract for an approved review. The host will compile and check whole-statement correspondence separately; this reminder gives no semantic verdict.' :
             'Finish the independent backtranslation from the supplied checked snapshot and observations. Cover every target, domain, quantifier, hypothesis, conclusion and definition affecting the mathematical meaning. Do not recompile or rederive observations already supplied. Make further queries only for a specific missing meaning; describe genuine uncertainty in the existing translation fields. Write the complete schema-valid OUTPUT.json atomically.';
           const timeLeft = remaining();
           const budgetReminder = Number.isFinite(timeLeft) ?
-            `\nThe shared pipeline has ${Math.max(0, Math.ceil(timeLeft / 1000))} seconds remaining for generation, Lean compilation, backtranslation and independent review as well as this role.` : '';
+            `\nThe shared pipeline has ${Math.max(0, Math.ceil(timeLeft / 1000))} seconds remaining for ${sharedStages} as well as this role.` : '';
           void session.notify(message + budgetReminder, { waitForRequest: true })
             .then(() => event('formalization_submission_reminded', role))
             .catch(() => event('formalization_submission_reminder_cancelled', role));
@@ -592,8 +596,10 @@ export async function runFormalization(directory: string, root: string, options:
             if (navigation) message += '\nThe following host navigation index copies the snapshot digest, Lean source, complete target types, bindings and omitted-name lists. It is not the complete input or a semantic verdict. Read the required kernel, local-definition and actual-instance observations at the listed INPUT.json paths using the role protocol before judging. Use exact qualified target names in your descriptions rather than ambiguous target numbers.\n'
               + 'BEGIN SNAPSHOT INDEX\n' + navigation + '\nEND SNAPSHOT INDEX';
           }
-          if (request.fidelityPolicy && Number.isFinite(remaining())) message =
-            `The complete formalization pipeline has ${Math.max(0, Math.ceil(remaining() / 1000))} seconds remaining, shared with generation, Lean compilation, backtranslation and independent review. Submit the smallest complete result for your role.\n` + message;
+          if ((request.fidelityPolicy || direct) && Number.isFinite(remaining())) message =
+            `The complete formalization pipeline has ${Math.max(0, Math.ceil(remaining() / 1000))} seconds remaining, shared with ${sharedStages}. ` +
+            (direct ? 'Submit the smallest complete faithful candidate early enough to leave time for host compilation and repairs. Do not drop definitions, quantifiers or conclusions to meet the budget.\n' :
+              'Submit the smallest complete result for your role.\n') + message;
           while (true) {
             lease.signal.throwIfAborted();
             const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
