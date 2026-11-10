@@ -1,6 +1,6 @@
 # 产品流程补全 · 2026-11-10
 
-本轮将八项产品补充接到既有研究流程中，保留官网与工作台原有配色。改动位于 `feat/product-research-flow`，尚未提交、合并 main 或部署。
+本轮将八项产品补充接到既有研究流程中，保留官网与工作台原有配色。产品源码 `9eaf433` 已合并并推送 main，官网与工作台均已部署；实际版本和上线验证见[发布记录](product-flow-release-20261110.md)。以下保留本地实现与验收范围。
 
 | 项目 | 用户入口与行为 |
 | --- | --- |
@@ -40,4 +40,4 @@ Library 的完整证明固定最终验收证明、提交及证明摘要；任务
 - `out/web-decision-flow/report.json`：中英文计划与指导组件、数学公式、精确版本及过期预览验证。
 - `out/product-flow/site/report.json`、`README.md` 及截图：官网导引、键盘确认、退回修改、重置与真实落点。
 
-本轮增加了两个可复用命令 `test:web-product-flow` 与 `test:site-product-flow`。部署状态以之后独立的发布记录为准。
+本轮增加了两个可复用命令 `test:web-product-flow` 与 `test:site-product-flow`。部署状态以[发布记录](product-flow-release-20261110.md)为准。
