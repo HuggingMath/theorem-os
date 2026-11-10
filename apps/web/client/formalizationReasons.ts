@@ -18,3 +18,15 @@ export function formalizationReasonText(reason: string): string {
   };
   return reasons[reason] ?? t('本次生成未完成。');
 }
+
+export function formalizationNextStep(reason: string): string {
+  if (['formalization_token_limit', 'math_total_token_limit', 'formalization_time_limit'].includes(reason))
+    return t('先核对本次用量和预算；如需再试，可重新发送原题。不会自动重试，也不会自动增加预算。');
+  if (['formalization_research_queue_failed', 'formalization_research_interrupted'].includes(reason))
+    return t('保留这份陈述，点击「继续证明」重新进入证明队列。');
+  if (['formalization_runtime_unavailable', 'formalization_interrupted', 'formalization_role_isolation_failed', 'formalization_isolation_failed'].includes(reason))
+    return t('待服务恢复后可重新发送原题；持续失败时请提供错误代码联系管理员。不会自动重试。');
+  if (['formalization_source_too_large', 'formalization_rounds_exhausted'].includes(reason))
+    return t('检查题目范围与表述后重新发送；不会自动重试。');
+  return t('查看错误代码和保留成果，确认原因后再决定是否重新发送；不会自动重试。');
+}

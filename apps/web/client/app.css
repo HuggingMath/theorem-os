@@ -3251,7 +3251,7 @@ button.formal-lean{vertical-align:top}
 @media (max-width: 600px) { .research-mobile-links { position: fixed; top: 60px; left: 12px; right: 12px; min-width: 0; } }
 @media (max-width: 600px) { .topbar .account-trigger { flex: 0 0 34px; padding: 0; justify-content: center; } }
 @media (min-width: 561px) and (max-width: 600px) { .topbar .brand { font-size: 16px; gap: 6px; } .topbar .brand img { width: 23px; height: 23px; } }
-@media (max-width: 360px) { .topbar { gap: 4px; padding-inline: 8px; } .topbar .research-space-links { display: none; } }
+@media (max-width: 360px) { .topbar { gap: 4px; padding-inline: 8px; } .topbar .research-space-links { display: none; } .research-mobile-navigation-toggle { width: 32px; min-height: 32px; } }
 
 /* First research: the connection, decisions and two budgets sit beside the problem. */
 .first-research-start{margin:4px 12px 10px;padding-top:14px;border-top:1px solid var(--line);font-size:13px;line-height:1.7;text-align:left}

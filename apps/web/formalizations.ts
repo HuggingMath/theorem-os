@@ -91,7 +91,7 @@ export class WebFormalizations {
     // A crash before the first atomic record rename may leave only the task directory and a temporary file.
     return this.storage.listRecords(directory(owner)).flatMap(id => {
       const record = this.record(owner, id);
-      return record ? [record.formalization] : [];
+      return record ? [this.view(record.formalization)] : [];
     })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
@@ -102,6 +102,13 @@ export class WebFormalizations {
       ...auditQueued.map(job => job.record.formalization.backgroundReview!.queuedAt)].sort()[0];
     return { running: this.running + this.auditsRunning, queued: queued.length + auditQueued.length,
       ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
+  }
+  private view(value: WebFormalization): WebFormalization {
+    if (value.status !== 'queued') return value;
+    const waiting = [...this.jobs.values()].filter(job => job.record.formalization.status === 'queued');
+    const index = waiting.findIndex(job => job.record.formalization.id === value.id);
+    return index < 0 ? value : { ...value, queue: { position: index + 1, ahead: index,
+      running: this.running, slots: this.limits.concurrency } };
   }
   private record(owner: string, id: string): Record | undefined {
     return this.jobs.get(this.key(owner, id))?.record ?? this.auditJobs.get(this.key(owner, id))?.record
@@ -121,7 +128,7 @@ export class WebFormalizations {
   }
   read(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), value = record.formalization;
-    return value.status === 'review' || value.status === 'confirmed' ? this.withReport(record) : value;
+    return value.status === 'review' || value.status === 'confirmed' ? this.withReport(record) : this.view(value);
   }
   private withReport(record: Record) {
     const evidence = this.evidence(record), value = record.formalization;
@@ -224,7 +231,7 @@ export class WebFormalizations {
     if (request.solve && !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
     if (this.jobs.size >= this.limits.queueLimit) throw new WebStorageError(429, '形式化队列已满，请稍后重试。');
     if ([...this.jobs.values()].filter(job => job.record.owner === owner).length >= this.limits.perOwner)
-      throw new WebStorageError(429, '已有形式化任务正在进行，请等待结束。');
+      throw new WebStorageError(429, '当前账号的形式化队列已满，请等待已有任务结束。');
     if (this.list(owner).length >= this.limits.recordsPerOwner) throw new WebStorageError(429, '形式化记录已满，请先删除不需要的记录。');
     const now = new Date().toISOString(), id = crypto.randomUUID();
     const formalization: WebFormalization = { id, original: request.original, environment: request.environment, model, providerId: provider.id,
@@ -248,7 +255,7 @@ export class WebFormalizations {
     try { this.persist(job, true); }
     catch (error) { this.release(job); throw error; }
     queueMicrotask(() => this.pump());
-    return formalization;
+    return this.view(formalization);
   }
   cancel(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), job = this.jobs.get(this.key(owner, id));
