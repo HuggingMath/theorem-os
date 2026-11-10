@@ -4,7 +4,9 @@ import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { researchCandidateScopeReason } from './researchCandidateScope';
 import { WebResearchProjects } from './researchProjects';
 import { WebResearchAssets } from './researchAssets';
+import { researchOverview } from './researchOverview';
 import { researchMathematics } from './researchMathematics';
+import { researchAssetFromRun } from './researchAssetPrefill';
 import { selectWebLibraryPack } from './frozenLibrary';
 import { acceptedResearchLibraryUses } from './researchLibraryUsage';
 import { WebStorage, WebStorageError } from './storage';
@@ -226,6 +228,7 @@ export class WebResearchApi {
     if (section === 'session' && method === 'GET') return { status: 200, body: { authenticated: Boolean(owner),
       researcherId: owner ? this.projects.identity(owner) : null,
       profile: owner ? this.projects.profile(owner, this.projects.identity(owner)) : null } };
+    if (section === 'overview' && method === 'GET') return { status: 200, body: researchOverview(this.projects, viewer) };
     if (section === 'profile' && method === 'PUT') return item(this.projects.saveProfile(viewer, await body()));
     if (section === 'people' && method === 'GET') {
       if (!id) return { status: 200, body: this.projects.directory(viewer, query(url)) };
@@ -245,6 +248,15 @@ export class WebResearchApi {
     }
     if (section === 'publications' && method === 'GET') return item(this.recordPublication(viewer, id));
     if (section === 'library') {
+      if (id === 'from-run' && !action && method === 'GET') {
+        if (!owner) fail(401, '请先登录。');
+        const parameters = parse(z.object({ runId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u),
+          taskId: z.string().min(1).max(200).optional(), taskVersion: z.string().min(1).max(200).optional(),
+          commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u).optional() }).strict(), {
+          runId: url.searchParams.get('run') ?? '', taskId: url.searchParams.get('task') ?? undefined,
+          taskVersion: url.searchParams.get('taskVersion') ?? undefined, commit: url.searchParams.get('commit') ?? undefined });
+        return item(researchAssetFromRun(this.storage, this.jobs, owner!, { ...parameters, runId: parameters.runId! }));
+      }
       if (!id && method === 'GET') return { status: 200, body: { items: this.assets.list(viewer, {
         type: parse(z.enum(['mathematics', 'agent', 'skill']).optional(), url.searchParams.get('type') ?? undefined),
         query: url.searchParams.get('q') ?? url.searchParams.get('query') ?? undefined,

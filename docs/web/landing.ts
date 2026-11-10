@@ -6,6 +6,7 @@ import {
 import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
 import { initializeReplay } from './replay';
+import { initializeHumanDecision } from './humanDecision';
 import { keepHashOnLanguageSwitch, localeOf, rootOf } from './site';
 
 const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
@@ -292,6 +293,7 @@ narrow.addEventListener('change', () => selectModulePreview(modulePreview));
 selectModulePreview(modulePreview);
 
 initializeReplay(locale);
+initializeHumanDecision(locale);
 reducedMotion.addEventListener('change', () => {
   if (selectionTargets.size) {
     gsap.killTweensOf([...selectionTargets]);

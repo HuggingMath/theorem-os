@@ -16,6 +16,12 @@ import { Rich } from '../richText';
 import { Elapsed, SolveProcessView } from './SolveProcess';
 import type { PlanApprovalProps } from './RunHeader';
 import type { ChatArtifactKind } from '../chatArtifactNavigation';
+import { RecoveryChoices, StartGuide } from '../productFlowView';
+import { ResearchOverview, type ResearchOverviewProps } from '../researchOverview';
+import { DecisionSummary, usePreviousDecisionPlan } from '../decisionSummary';
+import { GuidanceOutcome } from '../guidanceOutcome';
+import type { ResearchFeedback } from '../../researchProjectTypes';
+import type { WebGuidanceRecord } from '../../collaboration';
 
 
 export type ChatThreadProps = {
@@ -30,9 +36,10 @@ export type ChatThreadProps = {
   solve?: { process: SolveProcess; loading?: boolean; failed?: boolean; wide: boolean; time: (at: string) => string; onRetry?(): void; onCheck?(id: string): void };
   onArtifact(kind: ChatArtifactKind, target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
   onShare?(): void;
-  recovery?: { steps: NextStep[]; onAction(id: string, button: HTMLButtonElement): void };
+  recovery?: { steps: NextStep[]; limits?: import('../../shared').WebSession['limits']; onAction(id: string, button: HTMLButtonElement): void };
   onGuidance?(text?: string, taskId?: string): void;
   onGuidanceReceipt?(message: WebConversationMessage): void;
+  guidanceFeedback?: { records: ResearchFeedback[]; loading: boolean; error?: string; onRetry(): void };
   onEditProblem?(): void;
   onCancelTask?(): void;
   onStartResearch?(): void;
@@ -42,6 +49,8 @@ export type ChatThreadProps = {
   onRetry?(): void;
   onConfigure?(): void;
   onFirstExample?(): void;
+  startGuide?: { onTemplate(): void; onLean(): void; ready: boolean };
+  overview?: ResearchOverviewProps;
   onSample?(): void;
   onManageRecords?(): void;
 };
@@ -66,6 +75,7 @@ function StatementDecision(props: ChatThreadProps) {
 
 function PlanDecision(props: ChatThreadProps) {
   const run = props.run, decision = props.planDecision;
+  const previousPlan = usePreviousDecisionPlan(run?.observation?.plan, run?.id ?? '');
   if (!run || !decision) return null;
   const plan = run.observation?.plan, approval = decision.approval;
   const approved = run.observation?.inspection.planApproval?.status === 'approved';
@@ -76,9 +86,8 @@ function PlanDecision(props: ChatThreadProps) {
       : t('先核对任务与依赖。等待确认不计入证明预算，批准后继续本次研究。')
       : approved ? t('初始计划已由你批准。后续仍可修改任务、依赖和研究方向。')
         : run.planApproval && !plan ? t('计划拟好后会停下来，等你确认。') : t('修改任务会更新研究计划；指导意见会发送给研究组。')}</p>
-    {plan && <ol class="chat-decision-tasks">{plan.tasks.slice(0, 4).map(task => <li key={task.id}>
-      <strong translate={false}>{task.theoremName || task.id}</strong><p translate={false}>{task.informalStatement || task.objective}</p>
-    </li>)}</ol>}
+    {plan && <DecisionSummary plan={plan} previousPlan={previousPlan} expectedVersion={approval ? run.observation?.inspection.planApproval?.planVersion : undefined}
+      onOpenTask={id => props.onArtifact('roadmap', { taskId: id })} />}
     {approval?.error && <p class="chat-error" role="alert">{approval.error}</p>}
     <div class="chat-task-actions">
       {plan && <>
@@ -86,7 +95,7 @@ function PlanDecision(props: ChatThreadProps) {
         <button type="button" class="button" data-chat-edit-plan disabled={!decision.connected || approval?.busy || approval?.revising} onClick={decision.onEdit}><Icon name="square-pen" />{t('修改任务与依赖')}</button>
       </>}
       {props.onGuidance && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('调整研究方向')}</button>}
-      {approval && <button type="button" class="button button-primary" data-chat-approve-plan disabled={!decision.connected || approval.busy || approval.revising || !plan} onClick={decision.onApprove}>
+      {approval && <button type="button" class="button button-primary" data-chat-approve-plan disabled={!decision.connected || approval.busy || approval.revising || approval.reviewable === false || !plan} onClick={decision.onApprove}>
         {approval.busy ? t('正在批准') : approval.revising ? t('等待修改完成') : t('批准计划，开始证明')}</button>}
     </div>
   </section>;
@@ -176,16 +185,16 @@ function TaskMessage(props: ChatThreadProps) {
           <a class="button" data-chat-explain href={`explain.html?${new URLSearchParams({ run: run.id })}`} target="_blank" rel="noopener">{t('Lean → 自然语言')}</a>
           <a class="button" data-chat-download-kit href={`/api/runs/${encodeURIComponent(run.id)}/verification-kit`} download>{t('下载本地复核包')}</a>
           {props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
+          {!props.sample && <a class="button" data-save-library href={`library.html?${new URLSearchParams({ create: '1', fromRun: run.id })}`}>{t('保存到我的 Library')}</a>}
         </>}
         <a class="text-button" href={`/api/runs/${encodeURIComponent(run.id)}/download`} download>{t('下载完整研究归档')}</a>
-        {props.recovery?.steps.map(step => <button key={step.id} type="button" class="button" data-chat-recovery={step.id}
-          onClick={event => props.recovery!.onAction(step.id, event.currentTarget)}>{step.label}</button>)}
       </>}
       {props.onStartResearch && !item?.humanReview && <button type="button" class="button button-primary" data-research-continue disabled={props.startingResearch} onClick={props.onStartResearch}>
         {props.startingResearch ? t('正在进入证明队列…') : t('继续证明')}</button>}
       {active && run && props.onGuidance && !props.planDecision && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('调整研究方向')}</button>}
       {!active && !statementDecision && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t("修改题目")}</button>}
     </div>
+    {run && props.recovery && <RecoveryChoices run={run} {...props.recovery} />}
   </div>;
 }
 
@@ -195,7 +204,7 @@ function MessageTaskLinks({ message, ...props }: ChatThreadProps & { message: We
     onClick={() => props.onArtifact('roadmap', { taskId: task.id, messageId: message.id })}><Icon name="network" />{task.theorem || task.objective || task.id}</button>)}</div> : null;
 }
 
-function GuidanceReceipt({ message, onGuidanceReceipt }: { message: WebConversationMessage; onGuidanceReceipt?: ChatThreadProps['onGuidanceReceipt'] }) {
+function GuidanceReceipt({ message, onGuidanceReceipt, feedback, record, onOpenRunTask }: { message: WebConversationMessage; onGuidanceReceipt?: ChatThreadProps['onGuidanceReceipt']; feedback?: ChatThreadProps['guidanceFeedback']; record?: WebGuidanceRecord; onOpenRunTask?:(task:{ id:string; version:string })=>void }) {
   const guidance = message.guidance!;
   const labels: Record<string, string> = { queued: t('排队中'), deferred: t('暂缓'), delivered: t('已送达'), failed: t('失败'), rejected: t('已拒绝'), unknown: t('结果尚未确认') };
   const receipt = guidance.receipt;
@@ -203,11 +212,14 @@ function GuidanceReceipt({ message, onGuidanceReceipt }: { message: WebConversat
     <p><strong>{t('研究指导')}</strong> · {guidance.input.recipient.kind === 'lead' ? t('证明任务负责人') : guidance.input.recipient.id} · {receipt ? labels[receipt.status] ?? receipt.status : t('正在核对回执…')}</p>
     {receipt?.reason && <p>{localizeText(receipt.reason)}</p>}
     {(!receipt || receipt.status === 'unknown') && onGuidanceReceipt && <button class="text-button" type="button" data-chat-guidance-recover onClick={() => onGuidanceReceipt(message)}>{t('核对并重试原提交')}</button>}
+    <GuidanceOutcome guidance={record} onOpenRunTask={onOpenRunTask} feedback={feedback?.records.find(item => item.target?.runId === guidance.runId && (item.id === guidance.input.id || item.requestId === guidance.input.id))} />
+    {feedback?.error && <details><summary>{t('后续记录读取失败')}</summary><p role="alert">{feedback.error} <button type="button" class="text-button" onClick={feedback.onRetry}>{t('重新读取')}</button></p></details>}
   </div>;
 }
 
 function ChatThread(props: ChatThreadProps) {
   const { conversation, loading, error } = props;
+  const returning = Boolean(props.overview && (props.overview.runs.length || props.overview.conversations.length || props.overview.formalizations.length));
   const errorNotice = error && <div id="formalize-error" class="chat-error" role="alert"><p>{error}</p>
     {props.onRetry && <button type="button" class="text-button" onClick={props.onRetry}>{t("重试")}</button>}
     {props.onManageRecords && <button type="button" class="text-button" data-chat-error-records onClick={props.onManageRecords}>{t('管理题目记录')}</button>}</div>;
@@ -234,8 +246,11 @@ function ChatThread(props: ChatThreadProps) {
         <button type="button" class="button" data-chat-first-example onClick={props.onFirstExample}><Icon name="plus" />{t('试一道简单题')}</button>
       </div>
       {props.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample title={t('无需 API Key')} onClick={props.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('免费浏览')}</span></button>}
+      {props.startGuide && (returning ? <details class="research-returning-guide"><summary>{t('准备一道新题')}</summary><StartGuide {...props.startGuide} onConfigure={props.onConfigure} /></details>
+        : <StartGuide {...props.startGuide} onConfigure={props.onConfigure} />)}
     </>}
     {errorNotice}
+    {props.overview && <ResearchOverview key={props.overview.owner} {...props.overview} />}
   </div>;
   return <div class="chat-messages" data-conversation={conversation.id}>
     {conversation.messages.map(message => <article key={message.id} class={`chat-message chat-message-${message.role}`}
@@ -243,7 +258,10 @@ function ChatThread(props: ChatThreadProps) {
       {message.role === 'assistant' && <div class="research-conversation-byline"><img src="assets/mark.svg" alt="" width={24} height={24} /><span>TheoremOS</span></div>}
       {message.kind === 'task' ? <TaskMessage {...props} /> : <>
         {message.text && <ChatMessageContent text={message.text} />}
-        {message.kind === 'guidance' && message.guidance && <GuidanceReceipt message={message} onGuidanceReceipt={props.onGuidanceReceipt} />}
+        {message.kind === 'guidance' && message.guidance && <GuidanceReceipt message={message} onGuidanceReceipt={props.onGuidanceReceipt} feedback={props.guidanceFeedback}
+          record={props.run?.observation?.guidance.find(record => record.id === message.guidance!.input.id)}
+          {...(props.run?.observation?.guidance.find(record => record.id === message.guidance!.input.id)?.decision?.evidenceRefs.every(ref => ref.kind !== 'task' || props.run!.observation!.inspection.tasks.some(task => task.id === ref.id && task.version === ref.version))
+            ? { onOpenRunTask: (task:{id:string;version:string}) => props.onArtifact('roadmap', { taskId: task.id, messageId: message.id }) } : {})} />}
         <MessageTaskLinks {...props} message={message} />
         {message.kind === 'text' && message.status === 'pending' && <p class="chat-answer-state" role="status"><span class="spinner" />{message.text ? t('正在回答…') : t("正在思考…")}</p>}
         {message.status === 'interrupted' && <p class="chat-answer-state">{t("已停止回答")}</p>}

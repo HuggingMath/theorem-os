@@ -12,6 +12,9 @@ import { SideViewer } from './SideViewer';
 import { TermHint } from './TermHint';
 import { shownLines } from '../../presentation';
 import { t } from '../../i18n';
+import type { WebRun, WebSession } from '../../shared';
+import type { NextStep } from '../../report';
+import { RecoveryChoices, RunResearchComparison } from '../productFlowView';
 
 export type Banner = { tone: string; symbol: string; title: string; description: string };
 export type OutlineState = { status: 'loading' } | { status: 'ready'; outline: WebProofOutline } | { status: 'failed'; error: string };
@@ -36,7 +39,9 @@ export type ResultPanelProps = {
     meaning?: string;
     /** The newest progress message while the run is active. */ latest?: { at: string; time: string; message: string };
     /** While Agents work: the page can be closed, and how the reader hears the run has ended. */ away?: string };
-  /** Next steps for a run that ended without an accepted proof (report.ts nextSteps). */ recovery: { id: string; label: string }[];
+  /** Next steps for a run that ended without an accepted proof (report.ts nextSteps). */ recovery: NextStep[];
+  recoveryContext?: { run: WebRun; limits?: WebSession['limits'] };
+  saveLibrary?: string;
   /** Desktop notification preference, offered while the run is active. */ notify?: 'on' | 'off' | 'blocked' | 'unsupported';
   /** Prefilled feedback form for failures on our side, which the visitor cannot fix by changing the run. */ feedback?: string;
   /** The accepted proof or the newest candidate; absent until an Agent captures one. */
@@ -55,7 +60,7 @@ export type ResultPanelProps = {
   /** A declaration's name as the Lean file writes it (leanOutline writtenNames), so a namespace is not repeated on every row. */
   written: (name: string) => string;
 };
-export type CompareProps = { id: string; label: string; comparison: SourceComparison; folded: boolean; onClose: () => void };
+export type CompareProps = { id: string; label: string; comparison?: SourceComparison; research?: { before: WebRun; after: WebRun }; folded: boolean; onClose: () => void };
 /** The run detail tab. Imperative views own their workspace host; the source text and diff navigation are filled in after rendering. */
 export type DetailView = { tab: 'source'; source: SourcePanelProps } | { tab: 'result'; result: ResultPanelProps }
   | { tab: 'events' | 'modules' | 'collaboration' | 'trajectory' };
@@ -133,16 +138,16 @@ function ResultPanel(props: ResultPanelProps) {
 /** The runs continued from this one, so the original says what became of the problem; each opens its run. */
 function Later(props: { runs: NonNullable<ResultPanelProps['later']>; comparing?: string }) {
   return <section class="result-section result-later" aria-labelledby="result-later-heading" data-result-later>
-    <div class="result-section-heading"><h3 id="result-later-heading"><Icon name="git-branch" />{t('后来的运行')}<span class="count">{props.runs.length}</span></h3></div>
+    <div class="result-section-heading"><h3 id="result-later-heading"><Icon name="git-branch" />{t('历次研究')}<span class="count">{props.runs.length}</span></h3></div>
     <ul class="result-later-list">{props.runs.map(run => <li key={run.id}>
       <button type="button" class="result-later-row" data-action="open-continued" data-run-id={run.id}>
-        <span class="result-later-label">{t('基于「{0}」', run.label)}</span>
+        <span class="result-later-label" translate={false}>{run.label}</span>
         <span class={`badge ${run.status.tone}`}><Icon name={run.status.symbol} />{run.status.label}</span>
         <time dateTime={run.createdAt}>{run.time}</time>
       </button>
       {run.comparable && <button type="button" class="text-button result-later-compare" data-action="compare-continued" data-run-id={run.id}
         aria-pressed={props.comparing === run.id} aria-controls={props.comparing === run.id ? 'result-compare' : undefined}
-        title={t('对比这次和后来那次运行的代码')}><Icon name="git-compare" />{t('对比代码')}</button>}</li>)}</ul>
+        title={t('比较两次研究的进展与代码')}><Icon name="git-compare" />{t('比较研究')}</button>}</li>)}</ul>
   </section>;
 }
 /** While the run works the mark breathes; when it ends in front of the reader, the outcome is sealed into it. */
@@ -167,7 +172,7 @@ function ResultDocument(props: ResultPanelProps) {
         {verdict.candidate && <span class="candidate-notice">{t('候选源码已更新 · 尚未验收')}</span>}
         {verdict.away && <p class="result-away" data-result-away>{verdict.away}</p>}
         {(props.recovery.length > 0 || props.notify && props.notify !== 'unsupported' || props.feedback) && <div class="result-verdict-actions">
-          {props.recovery.map(action => <button key={action.id} type="button" class="button recovery-action" data-action="recover" data-recovery={action.id}>
+          {!props.recoveryContext && props.recovery.map(action => <button key={action.id} type="button" class="button recovery-action" data-action="recover" data-recovery={action.id}>
             <Icon name={recoveryIcons[action.id] ?? 'refresh-cw'} />{action.label}</button>)}
           {props.notify && props.notify !== 'unsupported' && <button type="button" class="text-button" data-action="notify" aria-pressed={props.notify === 'on'}>
             <Icon name={props.notify === 'on' ? 'bell-ring' : props.notify === 'blocked' ? 'bell-off' : 'bell'} />{notifyLabels[props.notify]}</button>}
@@ -175,6 +180,8 @@ function ResultDocument(props: ResultPanelProps) {
         </div>}
       </div>
     </section>
+    {props.recoveryContext && <RecoveryChoices {...props.recoveryContext} steps={props.recovery} />}
+    {props.saveLibrary && <a class="button" data-save-library href={props.saveLibrary}>{t('保存到我的 Library')}</a>}
     {props.later && <Later runs={props.later} comparing={props.compare?.id} />}
     {props.goals && <Goals {...props.goals} active={props.active} />}
     {props.proof ? <ProofPreview {...props.proof} open={Boolean(props.viewer)} />
@@ -333,17 +340,18 @@ function ProofViewer(props: NonNullable<ResultPanelProps['proof']> & { onClose: 
 /** 对比代码: what a run continued from this one changed, line by line, beside the result. */
 function CompareViewer(props: CompareProps) {
   const { comparison } = props;
-  const body = comparison.status === 'identical' ? <p class="trajectory-note">{comparison.lineEndingsChanged ? t('仅换行格式不同') : t('两次运行的代码相同')}</p>
+  const body = !comparison ? <p class="trajectory-note">{t('有一版的代码没有保存，无法对比')}</p> : comparison.status === 'identical' ? <p class="trajectory-note">{comparison.lineEndingsChanged ? t('仅换行格式不同') : t('两次运行的代码相同')}</p>
     : comparison.status === 'unavailable' ? <p class="trajectory-note">{t('差异过多，无法生成对比')}</p>
       : <><div class="diff-toolbar"><div class="diff-counts"><span class="diff-count-added" aria-label={t('新增 {0} 行', comparison.added)}>+{comparison.added}</span><span class="diff-count-removed" aria-label={t('删除 {0} 行', comparison.removed)}>-{comparison.removed}</span></div>
         <label class="diff-toggle"><input type="checkbox" data-action="compare-folded" checked={props.folded} /><span>{t('折叠未改动')}</span></label></div>
         <div class="trajectory-diff result-compare-diff" tabIndex={0} aria-label={t('两次运行代码的差异')}><table class="diff-table">
           <caption class="sr-only">{t('这次运行与「{0}」的逐行差异', props.label)}</caption>
-          <thead><tr><th scope="col">{t('这次')}</th><th scope="col">{t('后来')}</th><th scope="col">{t('源码')}</th></tr></thead>
+          <thead><tr><th scope="col">{t('这次')}</th><th scope="col">{t('对照研究')}</th><th scope="col">{t('源码')}</th></tr></thead>
           <tbody><DiffRows rows={comparison.rows} /></tbody></table></div>
         {comparison.omittedLines > 0 && <p class="diff-truncated" role="status">{t('另有 {0} 行未展示', comparison.omittedLines)}</p>}</>;
-  return <SideViewer id="result-compare" title={t('对比代码')} subtitle={t('这次运行的代码 → 基于「{0}」的运行', props.label)} focusKey="result-compare" onClose={props.onClose}
-    actions={<button type="button" class="text-button" data-action="open-continued" data-run-id={props.id}>{t('打开那次运行')}<Icon name="arrow-up-right" /></button>}>{body}</SideViewer>;
+  return <SideViewer id="result-compare" title={t('比较研究')} subtitle={t('与「{0}」的研究记录对照', props.label)} focusKey="result-compare" onClose={props.onClose}
+    actions={<button type="button" class="text-button" data-action="open-continued" data-run-id={props.id}>{t('打开那次运行')}<Icon name="arrow-up-right" /></button>}>
+    {props.research && <RunResearchComparison {...props.research} />}<details open={!props.research}><summary>{t('对比代码')}</summary>{body}</details></SideViewer>;
 }
 
 function ReportPanel(props: ReportPanelProps) {

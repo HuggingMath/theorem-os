@@ -4,6 +4,7 @@ import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { mathConstructionImports, mathConstructionImportSpans } from '../../src/math/mathConstructionSources';
 import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack, selectLibraryDeclarations, type LibraryPack } from '../../src/math/libraryPacks';
 import type { ResearchLibraryPack, ResearchMathSource } from './researchAssetTypes';
+import { acceptedRunAsset, researchAssetFromRun } from './researchAssetPrefill';
 import type { ResolvedResearchMathematics } from './researchAssets';
 import type { WebJobs } from './jobs';
 import type { WebKnowledgeService } from './knowledgeService';
@@ -21,6 +22,8 @@ export function researchMathematics(storage: WebStorage, knowledge: WebKnowledge
     const origins: Record<string, ResearchLibraryPack['modules'][number]['origin']> = {};
     let environment: 'standard' | 'mathlib' | undefined, runId: string | undefined, commit: string | undefined;
     let declarations: ResolvedResearchMathematics['declarations'] = [];
+    let sourceReceiptRefs: string[] | undefined;
+    let sourceEnvironmentDigest: string | undefined;
     if (reference.kind === 'knowledge') {
       const catalog = knowledge.getCatalog(owner, reference.catalogDigest) ?? fail(404, '知识目录不存在。');
       for (const id of reference.entryIds) {
@@ -53,47 +56,68 @@ export function researchMathematics(storage: WebStorage, knowledge: WebKnowledge
     } else {
       const run = jobs.get(owner, reference.runId) ?? fail(404, '运行不存在或不属于你。');
       environment = run.environment; runId = run.id;
-      const observations = storage.listObservations(owner, run.id).reverse();
-      const saved = observations.flatMap(item => item.sources).find(item => (!reference.taskId || item.taskId === reference.taskId)
-        && (!reference.commit || item.commit === reference.commit));
-      if (saved) {
-        commit = saved.commit;
-        const catalog = run.knowledgeCatalogDigest && knowledge.getCatalog(owner, run.knowledgeCatalogDigest);
-        const entry = catalog && catalog.entries.find(item => item.file === saved.file && item.provenance.some(origin =>
-          origin.sourceCommit === saved.commit && (!reference.taskId || origin.taskId === reference.taskId)));
-        if (entry && catalog) for (const [file, digest] of Object.entries(catalog.contexts[entry.contextDigest] ?? {}))
-          if (file.endsWith('.lean') && catalog.sources[digest] !== undefined) files[file] = catalog.sources[digest];
-        for (const source of observations.flatMap(item => item.sources).filter(item => item.commit === commit)) {
-          // sourceDigest identifies the complete owned-file set, not this single projected file.
-          for (const item of [{ file: source.file, source: source.source }, ...(source.dependencySources ?? [])]) {
-            if (files[item.file] !== undefined && files[item.file] !== item.source) fail(409, '目录与运行观测的精确源码不一致。');
-            files[item.file] = item.source;
-          }
-        }
-        roots.push(saved.file);
-        // Dependencies already frozen into this run remain byte-for-byte identical in the publication.
+      if (reference.scope === 'original-proof') {
+        const prefill = acceptedRunAsset(run);
+        if (reference.taskId || reference.taskVersion || reference.commit !== prefill.evidence.commit || reference.proofDigest !== prefill.evidence.proofDigest)
+          fail(409, '保存的完整证明身份与最终验收结果不一致，请重新从结果页保存。');
+        commit = prefill.evidence.commit;
+        sourceReceiptRefs = prefill.evidence.checkRefs;
+        sourceEnvironmentDigest = prefill.evidence.environmentDigest;
+        files['Submission.lean'] = run.result!.proof; roots.push('Submission.lean');
         for (const module of run.researchConfiguration?.libraryPack?.modules ?? []) {
-          if (files[module.file] !== undefined && files[module.file] !== module.source) fail(409, '冻结数学库与记录的源码不一致。');
           files[module.file] = module.source; origins[module.file] = module.origin;
         }
-      } else fail(404, '这个精确版本的源码没有保存，请选择已记录的任务和提交。');
-      if (reference.taskId) {
-        // A task ID identifies a declaration, not every theorem sharing its owned source file.
-        // Resolve the name from the saved task version rather than a later plan for the same ID.
-        const snapshot = observations.find(item => item.sources.some(source => source.taskId === saved!.taskId
-          && source.taskVersion === saved!.taskVersion && source.commit === saved!.commit && source.file === saved!.file)
-          && [...item.inspection.tasks, ...(item.history ?? [])].some(task => task.id === saved!.taskId && task.version === saved!.taskVersion));
-        const task = snapshot && [...snapshot.inspection.tasks, ...(snapshot.history ?? [])]
-          .find(item => item.id === saved!.taskId && item.version === saved!.taskVersion);
-        const planned = snapshot?.inspection.tasks.some(item => item.id === task?.id && item.version === saved!.taskVersion)
-          ? snapshot.plan?.tasks.find(item => item.id === task?.id) : undefined;
-        const available = inspectScopedLeanDeclarations(files[roots[0]]!).filter(item => item.kind === 'theorem');
-        const name = (task?.theorem ?? planned?.theoremName ?? (available.length === 1 ? available[0].qualifiedName : undefined))
-          ?? fail(409, '无法确认这个任务版本的精确数学声明，请选择有完整任务记录的来源。');
-        if (planned?.proofPath && planned.proofPath !== saved!.file)
-          fail(409, '无法确认这个任务版本的精确数学声明，请选择有完整任务记录的来源。');
-        try { files[roots[0]] = selectLibraryDeclarations(files[roots[0]], [name]); }
-        catch { fail(409, '无法唯一确定所选任务的数学声明，请核对任务版本与 Lean 名称。'); }
+      } else {
+        if (reference.scope === 'checked-task') {
+          if (!reference.taskId || !reference.taskVersion || !reference.commit) fail(400, '任务成果需要固定任务版本与源码提交。');
+          const prefill = researchAssetFromRun(storage, jobs, owner,
+            { runId: run.id, taskId: reference.taskId, taskVersion: reference.taskVersion, commit: reference.commit });
+          sourceReceiptRefs = prefill.evidence.checkRefs;
+          sourceEnvironmentDigest = prefill.evidence.environmentDigest;
+        }
+        const observations = storage.listObservations(owner, run.id).reverse();
+        const saved = observations.flatMap(item => item.sources).find(item => (!reference.taskId || item.taskId === reference.taskId)
+          && (!reference.taskVersion || item.taskVersion === reference.taskVersion) && (!reference.commit || item.commit === reference.commit));
+        if (saved) {
+          commit = saved.commit;
+          sourceEnvironmentDigest = saved.environmentDigest;
+          const catalog = run.knowledgeCatalogDigest && knowledge.getCatalog(owner, run.knowledgeCatalogDigest);
+          const entry = catalog && catalog.entries.find(item => item.file === saved.file && item.provenance.some(origin =>
+            origin.sourceCommit === saved.commit && (!reference.taskId || origin.taskId === reference.taskId)));
+          if (entry && catalog) for (const [file, digest] of Object.entries(catalog.contexts[entry.contextDigest] ?? {}))
+            if (file.endsWith('.lean') && catalog.sources[digest] !== undefined) files[file] = catalog.sources[digest];
+          for (const source of observations.flatMap(item => item.sources).filter(item => item.commit === commit)) {
+            // sourceDigest identifies the complete owned-file set, not this single projected file.
+            for (const item of [{ file: source.file, source: source.source }, ...(source.dependencySources ?? [])]) {
+              if (files[item.file] !== undefined && files[item.file] !== item.source) fail(409, '目录与运行观测的精确源码不一致。');
+              files[item.file] = item.source;
+            }
+          }
+          roots.push(saved.file);
+          // Dependencies already frozen into this run remain byte-for-byte identical in the publication.
+          for (const module of run.researchConfiguration?.libraryPack?.modules ?? []) {
+            if (files[module.file] !== undefined && files[module.file] !== module.source) fail(409, '冻结数学库与记录的源码不一致。');
+            files[module.file] = module.source; origins[module.file] = module.origin;
+          }
+        } else fail(404, '这个精确版本的源码没有保存，请选择已记录的任务和提交。');
+        if (reference.taskId) {
+          // A task ID identifies a declaration, not every theorem sharing its owned source file.
+          // Resolve the name from the saved task version rather than a later plan for the same ID.
+          const snapshot = observations.find(item => item.sources.some(source => source.taskId === saved!.taskId
+            && source.taskVersion === saved!.taskVersion && source.commit === saved!.commit && source.file === saved!.file)
+            && [...item.inspection.tasks, ...(item.history ?? [])].some(task => task.id === saved!.taskId && task.version === saved!.taskVersion));
+          const task = snapshot && [...snapshot.inspection.tasks, ...(snapshot.history ?? [])]
+            .find(item => item.id === saved!.taskId && item.version === saved!.taskVersion);
+          const planned = snapshot?.inspection.tasks.some(item => item.id === task?.id && item.version === saved!.taskVersion)
+            ? snapshot.plan?.tasks.find(item => item.id === task?.id) : undefined;
+          const available = inspectScopedLeanDeclarations(files[roots[0]]!).filter(item => item.kind === 'theorem');
+          const name = (task?.theorem ?? planned?.theoremName ?? (available.length === 1 ? available[0].qualifiedName : undefined))
+            ?? fail(409, '无法确认这个任务版本的精确数学声明，请选择有完整任务记录的来源。');
+          if (planned?.proofPath && planned.proofPath !== saved!.file)
+            fail(409, '无法确认这个任务版本的精确数学声明，请选择有完整任务记录的来源。');
+          try { files[roots[0]] = selectLibraryDeclarations(files[roots[0]], [name]); }
+          catch { fail(409, '无法唯一确定所选任务的数学声明，请核对任务版本与 Lean 名称。'); }
+        }
       }
       declarations = inspectScopedLeanDeclarations(files[roots[0]]!).filter(item => item.kind === 'theorem')
         .map(item => ({ name: item.qualifiedName, type: item.declarationType, file: roots[0] }));
@@ -124,13 +148,14 @@ export function researchMathematics(storage: WebStorage, knowledge: WebKnowledge
       }
       return { file: mapping.get(file)!, source, origin: origins[file] ?? { kind: 'run' as const, runId: runId ?? `knowledge-${identity.slice(0, 24)}`,
         commit: commit && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(commit) ? commit : identity,
-        file, environmentDigest: getLeanTaskEnvironment(environment).dependencyDigest } };
+        file, ...(sourceEnvironmentDigest ? { environmentDigest: sourceEnvironmentDigest }
+          : reference.kind === 'run' && reference.scope ? {} : { environmentDigest: getLeanTaskEnvironment(environment).dependencyDigest }) } };
     });
     let pack: LibraryPack;
     try { pack = parseLibraryPack({ schema: LIBRARY_PACK_SCHEMA, modules }); }
     catch (error) { fail(400, error instanceof Error ? error.message : '数学库无法完整打包。'); }
     return { pack: pack!, environment: environment!, environmentDigest: getLeanTaskEnvironment(environment).dependencyDigest,
-      declarations: declarations.map(item => ({ ...item, file: mapping.get(item.file)! })) };
+      declarations: declarations.map(item => ({ ...item, file: mapping.get(item.file)! })), ...(sourceReceiptRefs ? { sourceReceiptRefs } : {}) };
   }
   async function validate(material: ResolvedResearchMathematics, signal: AbortSignal) {
     if (!runner.check) fail(503, '当前运行器不能独立检查数学库。');

@@ -914,6 +914,8 @@ export class TrajectoryView {
    */
   private actions(ctx: Ctx, step: StepOf<'attempt'> | StepOf<'proof'>) {
     const version = step.ref?.version, saved = version?.source !== undefined, own = this.own;
+    const checkedVersion = version && ctx.run.observation?.checks.find(check => check.taskId === version.taskId && check.commit === version.commit
+      && step.ref?.check?.receiptIds.includes(check.id))?.taskVersion;
     const label = step.kind === 'attempt' ? `${ctx.tasks.get(step.taskId) ?? step.taskId} · ${t('第 {0} 次', step.number)}`
       : [step.assembled ? t('组装完整证明') : t('完整证明'), ctx.proofs > 1 && !step.assembled ? t('第 {0} 次', step.number) : ''].filter(Boolean).join(' · ');
     const buttons = [
@@ -925,6 +927,9 @@ export class TrajectoryView {
         data-trajectory-continue title={t('用这道题开一次新运行，把这一版的代码交给每个 Agent 参考')}
         onClick={() => own.start(ctx.run, { runId: ctx.run.id, taskId: version.taskId, commit: version.commit, label: label.slice(0, 200) })}>
         <Icon name="git-branch-plus" />{t('从这一版继续')}</button>,
+      version && saved && own?.allowed(ctx.run) && step.kind === 'attempt' && step.outcome === 'passed' && !step.reused && <a class="text-button" data-save-library
+        href={`library.html?${new URLSearchParams({ create: '1', fromRun: ctx.run.id, task: version.taskId, commit: version.commit, ...(checkedVersion ? { taskVersion: checkedVersion } : {}) })}`}>
+        <Icon name="book-open" />{t('保存到我的 Library')}</a>,
     ].filter(Boolean);
     // While the run goes on, a version may simply not be observed yet.
     const missing = step.kind === 'attempt' && !saved && !live(ctx.run);

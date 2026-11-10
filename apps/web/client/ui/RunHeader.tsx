@@ -23,6 +23,7 @@ export type RunHeaderProps = {
   approval?: PlanApprovalProps;
 };
 export type PlanApprovalProps = {
+  /** The visible plan is the exact version awaiting this decision. */ reviewable?: boolean;
   /** Tasks in the plan waiting for approval. */ tasks: number;
   /** The Lead is revising the plan after a note from the owner; approving waits for the revised version. */ revising: boolean;
   /** The owner's approval was sent and the run has not answered yet. */ busy: boolean;
@@ -151,7 +152,7 @@ function ApprovalBanner({ approval, connected }: { approval: PlanApprovalProps; 
       <p class="run-approval-note">{t('等待确认不计入证明预算；拟定和修改计划正常计时。')}</p>
       {approval.error && <p class="run-approval-error" role="alert">{approval.error}</p>}
       <div class="run-approval-actions">
-        <button type="button" class="button button-primary" data-action="approve-plan" disabled={!connected || approval.busy || approval.revising}>
+        <button type="button" class="button button-primary" data-action="approve-plan" disabled={!connected || approval.busy || approval.revising || approval.reviewable === false}>
           {approval.busy ? <Spinner /> : <Icon name="check" />}{approval.busy ? t('正在批准') : t('批准并开始')}</button>
         <button type="button" class="button" data-action="show-plan"><Icon name="network" />{t('查看计划')}</button>
         <button type="button" class="button" data-action="edit-plan" disabled={!connected || approval.busy}><Icon name="square-pen" />{t('修改计划')}</button>

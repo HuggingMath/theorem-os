@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetPreview, ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef } from '../researchAssetTypes';
+import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetPrefill, ResearchAssetPreview, ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef } from '../researchAssetTypes';
 import type { ResearcherProfile } from '../researchProjectTypes';
-import { AssetEditor } from './researchAssetEditor';
+import { AssetEditor, FixedMathSource } from './researchAssetEditor';
 import { RichProse } from './richText';
 import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
 import type { WebEnvironment } from '../shared';
@@ -27,9 +27,9 @@ function saveSelection(value: ResearchReleaseRef[], environment?: WebEnvironment
 
 export function LibraryPage({ context }: { context: ResearchContext }) {
   selectionDrafts.bind(webDraftOwner(context.web));
-  const parameters = new URLSearchParams(location.search), selected = parameters.get('entry') ?? '';
+  const parameters = new URLSearchParams(location.search), selected = parameters.get('entry') ?? '', fromRun = parameters.get('fromRun');
   const [query, setQuery] = useState(''), [type, setType] = useState('mathematics'), [area, setArea] = useState(''), [author, setAuthor] = useState(''), [environment, setEnvironment] = useState(''), [mine, setMine] = useState(parameters.get('mine') === '1'),
-    [creating, setCreating] = useState(context.session.authenticated && parameters.get('create') === '1'), [selection, setSelection] = useState<ResearchReleaseRef[]>(rememberedSelection), [storageError, setStorageError] = useState('');
+    [creating, setCreating] = useState(context.session.authenticated && (parameters.get('create') === '1' || fromRun !== null)), [selection, setSelection] = useState<ResearchReleaseRef[]>(rememberedSelection), [storageError, setStorageError] = useState('');
   const [creatorMounted, setCreatorMounted] = useState(creating);
   const directory = useResource<Items<ResearchAsset>>(`${base}/library?q=${enc(query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${mine ? '&mine=1' : ''}`);
   const detail = useResource<Item<ResearchAsset>>(selected ? `${base}/library/${enc(selected)}` : undefined);
@@ -45,7 +45,8 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => { setCreatorMounted(true); setCreating(value => !value); }} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
       : <a class="button" href="login.html">{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>
     {creatorMounted && <div hidden={!creating}><Panel title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
-      <AssetEditor context={context} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(libraryHref(asset.id)); }} /></Panel></div>}
+      {fromRun !== null ? <RunAssetCreator context={context} runId={fromRun} parameters={parameters} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(libraryHref(asset.id)); }} />
+        : <AssetEditor context={context} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(libraryHref(asset.id)); }} />}</Panel></div>}
     <div class="research-layout" data-selected={Boolean(selected)}><aside class="research-sidebar"><Panel title={tx('浏览 Library', 'Explore Library')}>
       <div class="research-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => setType(value)}>{nameOf(value)}</button>)}</div>
       <div class="research-form"><Search label={tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={setQuery} /><Field label={tx('按研究领域筛选', 'Filter by research field')} value={area} onInput={setArea} />
@@ -60,6 +61,21 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
         : <Panel title={selected ? tx('正在读取资产…', 'Loading asset…') : tx('选择一项成果或工具', 'Choose mathematics or a research tool')}><Empty>{tx('浏览数学成果、Agent 和 Skill，查看来源与版本，或创建自己的私有草稿。', 'Browse mathematics, agents and skills, inspect their sources and versions, or create a private draft.')}</Empty></Panel>}</div></div>
     <ErrorBox message={storageError} />{selection.length > 0 && <Selection selection={selection} remove={choose} clear={clear} assets={directory.data?.items ?? []} />}
   </>;
+}
+
+function RunAssetCreator({ context, runId, parameters, onSaved }: { context: ResearchContext; runId: string; parameters: URLSearchParams; onSaved: (asset: ResearchAsset, newerInput: boolean) => void }) {
+  const [url] = useState(() => {
+    const query = new URLSearchParams({ run: runId });
+    for (const name of ['task', 'taskVersion', 'commit']) if (parameters.has(name)) query.set(name, parameters.get(name)!);
+    return `${base}/library/from-run?${query}`;
+  });
+  const result = useResource<Item<ResearchAssetPrefill>>(url);
+  return <div data-library-run-creator>
+    {result.loading && !result.data && <p class="research-status" role="status">{tx('正在读取这份证明的来源与检查记录…', 'Loading this proof’s source and check records…')}</p>}
+    <ErrorBox message={result.error} />{result.error && <div class="research-actions"><button type="button" class="button" onClick={result.refresh}>{tx('重新读取成果来源', 'Retry loading source')}</button>
+      <a class="text-button" href={`./?run=${enc(runId)}`}>{tx('返回研究结果', 'Return to research result')}</a></div>}
+    {result.data && <AssetEditor key={url} context={context} prefill={result.data.item} onSaved={onSaved} />}
+  </div>;
 }
 
 function Asset({ asset, context, refresh, selection, choose }: { asset: ResearchAsset; context: ResearchContext; refresh: () => void; selection: ResearchReleaseRef[]; choose: (ref: ResearchReleaseRef) => void }) {
@@ -132,9 +148,11 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
 function ReleaseContent({ release }: { release: ResearchAssetRelease }) {
   if (release.type === 'mathematics' && release.mathematics) {
     const math = release.mathematics;
-    return <><h3>{tx('数学声明', 'Mathematical declarations')}</h3>{math.declarations.map(declaration => <article class="research-event" key={`${declaration.file}:${declaration.name}`}>
+    return <>{math.source.kind === 'run' && math.source.scope && <FixedMathSource source={math.source} />}
+      <h3>{tx('数学声明', 'Mathematical declarations')}</h3>{math.declarations.map(declaration => <article class="research-event" key={`${declaration.file}:${declaration.name}`}>
       <span class="research-item-title">{declaration.name}</span><pre class="research-block-code">{declaration.type}</pre><span class="research-item-meta">{declaration.file}</span></article>)}
       <dl class="research-facts"><div><dt>{tx('环境', 'Environment')}</dt><dd>{math.environment}</dd></div><div><dt>{tx('环境摘要', 'Environment digest')}</dt><dd>{math.environmentDigest}</dd></div><div><dt>{tx('库摘要', 'Pack digest')}</dt><dd>{math.packDigest}</dd></div></dl>
+      {Boolean(math.sourceReceiptRefs?.length) && <><h3>{tx('来源检查回执', 'Source check receipts')}</h3><Tags values={math.sourceReceiptRefs!} /></>}
       <h3>{tx('检查证据', 'Check evidence')}</h3><div class="research-actions">{math.receiptRefs.map(ref => <a class="research-inline-link" key={ref} href={`${base}/library/${enc(release.assetId)}/releases/${enc(release.version)}/checks/${enc(ref)}`} target="_blank" rel="noopener noreferrer">{ref}</a>)}</div><details><summary>{tx('查看完整源码与来源', 'View complete source and provenance')}</summary>
         {math.pack.modules.map(module => <div key={module.file}><h3>{module.file}</h3><pre class="research-block-code">{module.source}</pre><pre class="research-block-code">{JSON.stringify(module.origin, null, 2)}</pre></div>)}</details>
       <p class="research-field-note">{tx('此版本已通过发布检查。在新题目中使用时会重新检查；完整原题仍需独立验收。', 'This version passed publication checks. Reuse checks it again; the complete new problem still requires independent acceptance.')}</p><ActualUses release={release} /></>;
@@ -214,6 +232,7 @@ function DraftPreview({ preview }: { preview: ResearchAssetPreview }) {
     {preview.mathematics ? <><p class="research-status">{tx('证明环境：', 'Environment: ')}{preview.mathematics.environment}</p>
       {preview.mathematics.declarations.map(declaration => <div key={`${declaration.file}:${declaration.name}`}><h3>{declaration.name}</h3><pre class="research-block-code">{declaration.type}</pre></div>)}
       {preview.mathematics.pack.modules.map(module => <details key={module.file} open><summary>{module.file}</summary><pre class="research-block-code">{module.source}</pre></details>)}
+      {Boolean(preview.mathematics.sourceReceiptRefs?.length) && <><h3>{tx('来源检查回执', 'Source check receipts')}</h3><Tags values={preview.mathematics.sourceReceiptRefs!} /></>}
       <p class="research-field-note">{tx('以上包含打包的依赖源码；发布时会进行独立检查。', 'This preview includes packaged dependencies. Publishing runs independent checks.')}</p></>
       : <pre class="research-block-code">{JSON.stringify(preview.content, null, 2)}</pre>}
   </section>;

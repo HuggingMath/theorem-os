@@ -156,9 +156,10 @@ export async function refreshHistory(page: Page) {
 /** Opens a run from the history; it lands on 结果 unless `tab` names another run tab. */
 export async function selectHistoryRun(page: Page, id: string, tab?: string) {
   await openHistory(page);
-  if (historyDocked(page)) await page.locator(`[data-run-id="${id}"]`).click();
-  else await closeDialog(page, '#history-dialog', () => page.locator(`[data-run-id="${id}"]`).click());
-  await page.locator(`[data-run-id="${id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+  const row = page.locator(`.run-history .run-row[data-run-id="${id}"]`);
+  if (historyDocked(page)) await row.click();
+  else await closeDialog(page, '#history-dialog', () => row.click());
+  await page.locator(`.run-history .run-row[data-run-id="${id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
   await showArtifacts(page);
   if (tab) await openTab(page, tab);
 }

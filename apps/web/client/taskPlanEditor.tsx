@@ -3,7 +3,10 @@ import type { WebRun } from '../shared';
 import { render } from 'preact';
 import { commandId, createElement, errorText, jsonText, editStatusLabel, type WebApi } from './collaborationUi';
 import { Code, renderOptions, renderSection } from './ui/Section';
-import { t } from '../i18n';
+import { locale, t } from '../i18n';
+import { DecisionSummary } from './decisionSummary';
+
+const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
 
 type PlanDraft = { text: string; receipt?: WebCommandResult; previewText?: string; error?: string; notice?: string; submitted?: boolean;
   busy?: boolean; observation?: WebObservation; comparison?: WebObservation['plan']; pending?: { proposal: WebPlanProposal; missing?: boolean } };
@@ -375,21 +378,22 @@ export class TaskPlanEditor {
   }
   private renderStatus() {
     const draft = this.draft(), receipt = draft.receipt, unavailable = this.currentEditUnavailableReason();
+    let plan: WebPlanProposal | undefined;
+    try { plan = this.parse(); } catch { /* Invalid JSON stays editable; stale form controls must not overwrite it. */ }
     renderSection(this.dialog.querySelector('[data-plan-availability]')!, unavailable ? <p class="collab-notice">{unavailable}</p> : null);
     renderSection(this.dialog.querySelector('[data-plan-receipt]')!, <>
+      {plan && <DecisionSummary plan={plan} previousPlan={draft.comparison ?? this.observation?.plan} mode="edit"
+        impact={receipt ? { receipt, current: receipt.edit !== undefined || draft.previewText === draft.text } : undefined} />}
       {draft.error && <p class="collab-error">{draft.error}</p>}
       {draft.notice && <p class="collab-help">{draft.notice}</p>}
       {draft.pending && <><p class="collab-notice">{t('提交 {0} 的结果尚未确认，请先核对原命令回执。当前草稿已保留。{1}', draft.pending.proposal.id, draft.pending.missing ? t('尚未找到回执；可重试原提交，重试会保留原命令内容和 ID。') : '')}</p>
         <details key={`pending-${draft.pending.proposal.id}`} class="collab-detail"><summary>{t('待核对的原提交')}</summary><Code value={draft.pending.proposal} /></details></>}
       {receipt && <><p class="collab-notice">{t('回执 {0} · {1}{2}', receipt.id, editStatusLabel(receipt.status) ?? '', receipt.reason ? ` · ${receipt.reason}` : '')}</p>
-        {receipt.changes ? <Code value={receipt.changes} /> : null}
-        {receipt.affectedTaskIds?.length ? <p>{t('受影响任务：{0}', receipt.affectedTaskIds.join(', '))}</p> : null}
+        {receipt.changes ? <details class="collab-detail"><summary>{tx('各项修改记录', 'Recorded changes')}</summary><Code value={receipt.changes} /></details> : null}
         {receipt.edit?.recheck && <div data-plan-recheck><p>{editStatusLabel(receipt.edit.recheck.status)}</p><details class="collab-detail" data-detail-key="plan-recheck"><summary>{t('各任务重新检查记录')}</summary><Code value={receipt.edit.recheck} /></details></div>}</>}
     </>);
     renderSection(this.dialog.querySelector('[data-plan-comparison]')!, draft.comparison ? <details key={draft.comparison.baseVersion} class="collab-detail" open><summary>{t('当前服务器计划 · 本地草稿保留')}</summary><Code value={draft.comparison} /></details> : null);
     for (const control of this.dialog.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input,textarea,select,button:not([data-plan-close])')) control.disabled = Boolean(draft.busy);
-    let plan: WebPlanProposal | undefined;
-    try { plan = this.parse(); } catch { /* Invalid JSON stays editable; stale form controls must not overwrite it. */ }
     if (!plan) for (const control of this.dialog.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('.collab-plan-content input,.collab-plan-content select,.collab-plan-content textarea:not(#collab-plan-json),.collab-plan-content button')) control.disabled = true;
     const task = plan?.tasks.find(task => task?.id === this.taskId), formal = task?.kind === 'lemma' || task?.kind === 'goal';
     this.control('kind').disabled ||= task?.kind === 'goal' || !task;

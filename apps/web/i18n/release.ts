@@ -1,5 +1,14 @@
 /** The natural-language entry, its model connection, budgets and acceptance results. */
 export const release: Record<string, string> = {
+  '保存到我的 Library': 'Save to my Library',
+  '比较研究': 'Compare research',
+  '对照研究': 'Compared run',
+  '与「{0}」的研究记录对照': 'Research records compared with “{0}”',
+  '历次研究': 'Research runs',
+  '比较两次研究的进展与代码': 'Compare progress and code across the two runs',
+  '重新读取': 'Reload',
+  '后续记录读取失败': 'Could not load follow-up records',
+  '准备一道新题': 'Prepare a new problem',
   '研究空间': 'Research space',
   '数学家': 'Mathematicians',
   '反馈': 'Feedback',

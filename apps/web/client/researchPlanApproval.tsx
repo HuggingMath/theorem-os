@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { WebObservation, WebPlanApproval } from '../collaboration';
 import type { ResearchFeedback, ResearchFeedbackInput, ResearchProjectDetail, ResearchRunBinding } from '../researchProjectTypes';
 import { api, base, enc, ErrorBox, errorText, ResearchHttpError, tx, type Item, type Items } from './researchShared';
+import { DecisionSummary, usePreviousDecisionPlan } from './decisionSummary';
 
 type ApprovalInput = Extract<ResearchFeedbackInput, { kind: 'plan-approval' }>;
 type Attempt = { input: ApprovalInput; rejected: boolean; retryable: boolean; recorded?: boolean };
@@ -33,10 +34,11 @@ export function ProjectPlanApproval({ project, selfId, binding, observation, ref
   project: ResearchProjectDetail; selfId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void;
 }) {
   const approval = observation.inspection.planApproval;
+  const previousPlan = usePreviousDecisionPlan(observation.plan, `${project.id}:${binding.runId}`);
   const [pending, setPendingState] = useState<Attempt | undefined>(() => savedApproval(project, selfId, binding, observation));
   const pendingRef = useRef(pending), lock = useRef(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
-  const canApprove = canApproveProjectPlan(binding, approval);
+  const canApprove = canApproveProjectPlan(binding, approval) && observation.plan?.baseVersion === approval?.planVersion;
   const setPending = (attempt: Attempt | undefined) => { pendingRef.current = attempt; setPendingState(attempt); };
   const current = (attempt: Attempt) => pendingRef.current?.input.requestId === attempt.input.requestId;
   const resolve = (attempt: Attempt, record: ResearchFeedback) => {
@@ -85,7 +87,7 @@ export function ProjectPlanApproval({ project, selfId, binding, observation, ref
     refresh();
   }
   async function submit(retry = false) {
-    if (lock.current || !canApproveProjectPlan(binding, approval) ||
+    if (lock.current || !canApprove ||
       retry && !pendingRef.current?.retryable || !retry && pendingRef.current) return;
     const attempt = pendingRef.current ?? { input: { requestId: crypto.randomUUID(), kind: 'plan-approval' as const,
       text: tx('批准已核对的研究计划', 'Approve the reviewed research plan'), planVersion: approval!.planVersion!,
@@ -107,6 +109,7 @@ export function ProjectPlanApproval({ project, selfId, binding, observation, ref
   if (approval?.status !== 'pending' && !pending) return null;
   return <div class="research-publication" data-project-plan-approval data-approval-request-id={pending?.input.requestId}>
     <p class="research-status">{tx('等待批准计划：', 'Plan awaiting approval: ')}<code>{approval?.planVersion}</code></p>
+    <DecisionSummary plan={observation.plan} previousPlan={previousPlan} expectedVersion={approval?.planVersion} />
     {approval?.leadRevising && <p class="research-status" role="status" data-approval-revising>{tx('正在按你的意见修改计划。完成后，请核对新计划再批准。', 'The plan is being revised from your feedback. Review it when the changes are ready, then approve it.')}</p>}
     {pending && <p class="research-field-note">{tx('原批准版本：', 'Original approval version: ')}<code>{pending.input.planVersion}</code></p>}
     {pending?.rejected ? <><p class="research-status">{tx('原批准未生效。请核对当前计划，再提交新的批准。', 'The original approval failed. Review the current plan before approving it again.')}</p>

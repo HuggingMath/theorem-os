@@ -17,6 +17,9 @@ import type { PlanApprovalProps } from './ui/RunHeader';
 import { decodeChatDraft, encodeChatDraft, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage } from './chatDraft';
 import { SubmissionIdentity } from './submissionIdentity';
 import { retainLatestRun } from './runSnapshot';
+import { statementTemplate } from './productFlow';
+import { loadRunGuidanceFeedback } from './runGuidanceFeedback';
+import type { ResearchFeedback } from '../researchProjectTypes';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -26,6 +29,8 @@ type Options = {
   draftScope: string;
   keyRequired(providerId: string): boolean;
   session(): WebSession | undefined;
+  runs(): readonly WebRun[];
+  onOpenRun(id: string): void;
   connected(): boolean;
   onSelection(run?: WebRun): void;
   /** A conversation was opened or replaced; one without a run still names the page. */
@@ -116,6 +121,7 @@ export class ChatSession {
   private solveCache?: { key: string; process: SolveProcess };
   private liveFrame = false;
   private lastActionPoll = 0;
+  private guidanceFeedback = { runId: '', records: [] as ResearchFeedback[], loading: false, error: '', readAt: 0 };
 
   constructor(private readonly options: Options) {
     this.submissionIdentity = new SubmissionIdentity({
@@ -139,6 +145,7 @@ export class ChatSession {
   get id() { return this.currentId; }
   get runId() { return this.conversation?.runId ?? this.run?.id; }
   get selected() { return this.conversation; }
+  updateOverview() { if (!this.conversation && !this.run) this.draw(); }
   /** An empty scope revokes the current owner while the workbench reconnects. */
   bindOwner(scope: string) {
     if (scope === this.options.draftScope) return;
@@ -158,6 +165,7 @@ export class ChatSession {
     this.keyBusy = false; this.guidanceVersion = undefined;
     this.lastTaskRefresh = 0; this.lastListRefresh = 0; this.lastActionPoll = 0;
     this.liveShown.clear(); this.liveSelected.clear(); this.solveCache = undefined;
+    this.guidanceFeedback = { runId: '', records: [], loading: false, error: '', readAt: 0 };
     this.draft = scope ? this.restoredDraft('home') : '';
     this.options.onNavigate('', 'replace'); this.options.onSelection(); this.draw();
     if (scope) void this.start();
@@ -407,7 +415,7 @@ export class ChatSession {
     try {
       const { conversations } = await this.options.request<{ conversations: WebConversationSummary[] }>('/api/conversations');
       if (revision !== this.historyRevision) return;
-      this.summaries = conversations; this.historyLoaded = true; this.historyFailed = false; this.drawHistory();
+      this.summaries = conversations; this.historyLoaded = true; this.historyFailed = false; this.drawHistory(); this.updateOverview();
     } catch {
       // Keep a loaded history on a transient read error; one never loaded says so instead of looking empty.
       if (revision === this.historyRevision && !this.historyLoaded) { this.historyFailed = true; this.drawHistory(); }
@@ -658,6 +666,21 @@ export class ChatSession {
     const example = researchExamples.find(item => item.id === id);
     if (example) { this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
   }
+  private refreshGuidanceFeedback(force = false) {
+    const runId = this.run?.id;
+    if (!runId || this.options.isSample(this.run!) || !this.conversation?.messages.some(message => message.guidance?.runId === runId)) return;
+    if (this.guidanceFeedback.runId === runId && (this.guidanceFeedback.loading || !force && Date.now() - this.guidanceFeedback.readAt < 12_000)) return;
+    const owner = this.ownerRevision;
+    const state: typeof this.guidanceFeedback = { runId, records: this.guidanceFeedback.runId === runId ? this.guidanceFeedback.records : [], loading: true, error: '', readAt: Date.now() };
+    this.guidanceFeedback = state;
+    void loadRunGuidanceFeedback(runId, this.options.request).then(records => {
+      if (owner === this.ownerRevision && this.guidanceFeedback === state) state.records = records;
+    }).catch(error => {
+      if (owner === this.ownerRevision && this.guidanceFeedback === state) state.error = reason(error);
+    }).finally(() => {
+      if (owner === this.ownerRevision && this.guidanceFeedback === state) { state.loading = false; this.draw(); }
+    });
+  }
   /** One more frame at most: a store notifies once per page it reads, and a keystroke redraws on top of that. */
   private redraw() {
     if (this.liveFrame) return;
@@ -694,6 +717,7 @@ export class ChatSession {
       ...(this.wide.matches ? { onCheck: (id: string) => this.openCheck(process, id) } : {}) };
   }
   private draw() {
+    this.refreshGuidanceFeedback();
     const pending = Boolean(this.conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending'));
     const canDecide = !!this.run && ['queued', 'running'].includes(this.run.status) && this.run.coordination === 'cooperative'
       && this.run.workers > 1 && !this.options.isSample(this.run);
@@ -729,12 +753,16 @@ export class ChatSession {
         this.composer.querySelector<HTMLInputElement>(this.options.keyRequired(this.activeProviderId()) ? '#formalize-key' : '#formalize-model')?.focus();
       },
       onFirstExample: () => this.useExample('add-zero'),
+      startGuide: { onTemplate: () => this.fillOriginal(this.draft.trim() ? this.draft : statementTemplate()), onLean: this.options.onLean,
+        ready: !!this.activeModel().trim() && (!this.options.keyRequired(this.activeProviderId()) || !!this.apiKey.trim()) },
+      overview: { owner: this.options.draftScope, runs: this.options.runs(), conversations: this.summaries, formalizations: this.formalizations,
+        request: this.options.request, onOpenRun: this.options.onOpenRun, onOpenConversation: id => void this.open(id) },
       ...(this.options.session()?.sample ? { onSample: this.options.onSample } : {}),
       ...(this.error === t('形式化记录已满，请先删除不需要的记录。') ? { onManageRecords: () => this.openRecords() } : {}),
       onArtifact: (kind, target, auto) => { this.reading.capture(); this.drawOriginal(); this.options.onArtifact(kind, target, auto); },
       ...(this.run && !this.options.isSample(this.run) ? {
         onShare: () => this.options.onShare(this.run!),
-        recovery: { steps: nextSteps(this.run, summarizeGoals(this.run)),
+        recovery: { steps: nextSteps(this.run, summarizeGoals(this.run)), limits: this.options.session()?.limits,
           onAction: (action: string, button: HTMLButtonElement) => this.options.onRecover(this.run!, action, button) },
       } : {}),
       ...(canGuide ? { onGuidance: (text?: string, taskId?: string) => this.beginGuidance(text, taskId) } : {}),
@@ -742,6 +770,8 @@ export class ChatSession {
         onReview: () => this.options.onPlan(this.run!, false), onEdit: () => this.options.onPlan(this.run!, true),
         onApprove: () => this.options.onApprovePlan(this.run!) } } : {}),
       onGuidanceReceipt: message => this.recoverGuidance(message),
+      guidanceFeedback: { ...this.guidanceFeedback, records: this.guidanceFeedback.runId === this.run?.id ? this.guidanceFeedback.records : [],
+        onRetry: () => { this.refreshGuidanceFeedback(true); this.draw(); } },
       ...(this.formalization?.humanReview && this.formalization.status === 'review'
         ? { onConfirmStatement: () => void this.startResearch(true), startingResearch: this.startingResearch } : {}),
       ...(this.formalization?.status === 'confirmed' && !this.formalization.runId && (this.formalization.humanReview || this.formalization.researchError)

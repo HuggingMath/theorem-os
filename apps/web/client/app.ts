@@ -12,7 +12,7 @@ import type { WebShareLink } from '../share';
 import { acceptedTitle, acceptedDescription, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
-import { continuationsOf, filterRuns, ownerFirst, type RunFilter } from './history';
+import { filterRuns, ownerFirst, type RunFilter } from './history';
 import { looksLikeLeanSource, readLeanFile } from './sourceFile';
 import { sourceIndentEdit, type IndentDirection } from './sourceIndent';
 import type { SourceSelection } from './sourceText';
@@ -67,6 +67,8 @@ import type { TermId } from './glossary';
 import { localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
 import { classicLibraryUrl } from './classicLibrary';
+import { renderContinuationPreview } from './productFlowView';
+import { relatedResearchRuns, type ContinuationPreview } from './productFlow';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -153,6 +155,8 @@ async function loadNaturalResearch() {
   chatWorkspace = new ChatSession({
     request: api,
     session: () => state.session,
+    runs: () => state.runs,
+    onOpenRun: id => selectRun(id),
     connected: () => state.connected,
     draftScope: state.session?.account?.email ?? 'anonymous',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
@@ -359,6 +363,7 @@ let draftPreviewSignature = '';
 let draftSourceExpanded = false;
 /** The recorded version the next run starts from (「从这一版继续」); one submission uses it. */
 let draftContinuation: WebContinuation | undefined;
+let continuationPreview: ContinuationPreview | undefined;
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefined;
@@ -760,6 +765,10 @@ function renderComposerSummary() {
   if (draftContinuation) patchText(element('#draft-continuation-label'), t('从「{0}」继续', draftContinuation.label));
   element('#settings-continuation').hidden = !draftContinuation;
   if (draftContinuation) patchText(element('#settings-continuation'), t('带入成果：{0}。原题保持不变，新运行仍需重新通过 Lean 检查与独立验收。', draftContinuation.label));
+  const origin = draftContinuation && state.runs.find(run => run.id === draftContinuation!.runId);
+  const context: ContinuationPreview | undefined = continuationPreview ? { ...continuationPreview, from: draftContinuation }
+    : origin ? { title: origin.title, runId: origin.id, from: draftContinuation, originalSeconds: origin.maxRunSeconds, originalTurns: origin.maxTurns, originalTokens: origin.maxTotalTokens } : undefined;
+  renderContinuationPreview(element('#research-continuation-preview'), context, { seconds: Number(field('max-seconds').value), turns: Number(field('max-turns').value), tokens: Number(field('max-tokens').value) * 10_000 || undefined });
   element('#draft-formalization').hidden = !draftFormalization;
   element('#confirmed-original').hidden = !draftFormalization;
   element('#creation-mode').textContent = draftFormalization ? t('已确认的自然语言原题') : t('已有 Lean 原题');
@@ -949,6 +958,7 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   replacingDraft = true;
   // Another problem or a fresh draft no longer continues the version; editing the statement or reusing a run keeps its own.
   if (reason !== 'edit' && reason !== 'reuse') draftContinuation = undefined;
+  if (reason !== 'edit' && reason !== 'reuse') continuationPreview = undefined;
   if (reason !== 'edit') draftFormalization = undefined;
   try { change(); } finally { replacingDraft = nested; }
   if (track) {
@@ -1003,6 +1013,7 @@ function saveDraft() {
   }
 }
 function applyTaskDraft(draft: TaskDraft) {
+  continuationPreview = undefined;
   modulePlanLibrary.resetSelection();
   clearValidation();
   draftSourceExpanded = false;
@@ -1352,6 +1363,7 @@ function closeHistoryDialog() {
 }
 function renderRunList(force = false) {
   renderRunMonitor();
+  chatWorkspace?.updateOverview();
   // The readiness line warns at the record limit, so it follows the record count too.
   if (recordsFull() !== readinessFull) renderPreparation();
   // Plans waiting for the owner's approval stand in their own group above the rest; nothing in them runs until approved.
@@ -1461,7 +1473,7 @@ function resultProps(run: WebRun): ResultPanelProps {
   const environment = environmentInfo(run.environment);
   const item = (label: string, value: unknown, mono = false) => ({ label, value: String(value), mono });
   const latest = working ? run.events.at(-1) : undefined;
-  const proof = candidateSource(run), goals = summarizeGoals(run), approval = planAwaitingApproval(run), later = continuationsOf(state.runs, run.id);
+  const proof = candidateSource(run), goals = summarizeGoals(run), approval = planAwaitingApproval(run), later = relatedResearchRuns(state.runs, run);
   const compare = compareProps(run, later);
   return {
     // The plan waiting on its owner has nothing running: no spinner, unless the Lead is revising it from their note.
@@ -1470,13 +1482,14 @@ function resultProps(run: WebRun): ResultPanelProps {
       active: working && (!approval || approval.leadRevising), candidate: Boolean(run.artifact && working),
       ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}),
       ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
-    recovery: isSample(run) ? [] : nextSteps(run, goals), ...(working ? { notify: notifyState() } : {}),
+    recovery: isSample(run) ? [] : nextSteps(run, goals), ...(!isSample(run) ? { recoveryContext: { run, limits: state.session?.limits } } : {}), ...(working ? { notify: notifyState() } : {}),
+    ...(!isSample(run) && passed(run) ? { saveLibrary: `library.html?${new URLSearchParams({ create: '1', fromRun: run.id })}` } : {}),
     ...(['environment', 'unknown', 'interrupted'].includes(guide?.kind ?? '') ? { feedback: feedbackUrl({ failure: guide!.kind }) } : {}),
     ...(proof ? { proof: { source: proof, verified: Boolean(run.result?.proof && passed(run)), rejected: isRejectedRun(run),
       ...(passed(run) && run.result?.proof ? { explainRun: run.id } : {}) } } : {}), ...(goals ? { goals } : {}),
     ...(proof && state.proofViewer === run.id ? { viewer: { onClose: closeProofViewer } } : {}),
-    ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom!.label, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
-      comparable: Boolean(proof && candidateSource(item)) })) } : {}),
+    ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom?.label ?? item.title, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
+      comparable: true })) } : {}),
     ...(compare ? { compare } : {}),
     active: working, report: reportProps(run), task: run.formalization?.original ?? run.task,
     // Helpers are declared in the proof, the original targets in both; before a proof exists the problem names them.
@@ -1500,10 +1513,10 @@ function resultProps(run: WebRun): ResultPanelProps {
 function compareProps(run: WebRun, later: readonly WebRun[]): CompareProps | undefined {
   const other = state.compare?.runId === run.id ? later.find(item => item.id === state.compare!.laterId) : undefined;
   const before = candidateSource(run), after = other ? candidateSource(other) : '';
-  if (!other || !before || !after) return;
-  if (runComparison?.before !== before || runComparison.after !== after || runComparison.folded !== state.foldUnchanged)
+  if (!other) return;
+  if (before && after && (runComparison?.before !== before || runComparison.after !== after || runComparison.folded !== state.foldUnchanged))
     runComparison = { before, after, folded: state.foldUnchanged, result: compareSources(before, after, state.foldUnchanged) };
-  return { id: other.id, label: other.continueFrom!.label, comparison: runComparison.result, folded: state.foldUnchanged, onClose: closeCompare };
+  return { id: other.id, label: other.continueFrom?.label ?? other.title, ...(before && after ? { comparison: runComparison!.result } : {}), research: { before: run, after: other }, folded: state.foldUnchanged, onClose: closeCompare };
 }
 function closeCompare() {
   const id = state.compare?.laterId;
@@ -1631,7 +1644,7 @@ function renderPanel(force = false) {
   const content = state.tab === 'source' ? sourceContent(run) : undefined;
   const signature = JSON.stringify([run.id, state.tab, content ? [state.foldUnchanged, content.source, content.props]
     : state.tab === 'result' ? [state.reportMode, run, outlines.get(run.id), notifyState(), state.proofViewer === run.id,
-      continuationsOf(state.runs, run.id).map(item => [item.id, status(item), Boolean(candidateSource(item))]),
+      relatedResearchRuns(state.runs, run).map(item => [item.id, item.updatedAt, status(item), Boolean(candidateSource(item))]),
       state.compare?.runId === run.id ? [state.compare.laterId, state.foldUnchanged, candidateSource(state.runs.find(item => item.id === state.compare!.laterId) ?? run)] : ''] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
   if (!force && signature === state.panelSignature) {
@@ -1848,14 +1861,15 @@ function approvalProps(run: WebRun): RunHeaderProps['approval'] {
   if (!approval || !observation || isSample(run)) return;
   const sent = state.approving.get(run.id), rejected = sent && approval.rejections.find(item => item.id === sent.id);
   const error = sent?.error ?? (rejected ? approvalError(rejected.reason) : undefined);
-  return { tasks: observation.inspection.tasks.length, revising: approval.leadRevising, busy: Boolean(sent && !error), ...(error ? { error } : {}) };
+  return { tasks: observation.inspection.tasks.length, revising: approval.leadRevising, busy: Boolean(sent && !error),
+    reviewable: Boolean(observation.plan && observation.plan.baseVersion === approval.planVersion && observation.plan.baseVersion === observation.inspection.planVersion), ...(error ? { error } : {}) };
 }
 /** Approve the plan as the owner last saw it; the run rejects the approval if the plan has changed since. */
 async function approvePlan(run: WebRun) {
   const pending = planAwaitingApproval(run), planVersion = run.observation?.inspection.planVersion, sent = state.approving.get(run.id);
   // One approval at a time: another is sent only after the last one was rejected or could not be sent.
   const settled = !sent || sent.error !== undefined || pending?.rejections.some(item => item.id === sent.id);
-  if (!state.connected || !pending || pending.leadRevising || !planVersion || !settled) return;
+  if (!state.connected || !pending || pending.leadRevising || !planVersion || !settled || run.observation?.plan?.baseVersion !== planVersion || pending.planVersion !== planVersion) return;
   const approval = { id: commandId(), planVersion };
   state.approving.set(run.id, approval); renderDetail();
   try {
@@ -2801,6 +2815,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
   if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
     draftContinuation = from;
+    continuationPreview = { title: run.title, runId: run.id, from, originalSeconds: run.maxRunSeconds, originalTurns: run.maxTurns, originalTokens: run.maxTotalTokens };
     draftFormalization = run.formalization ? { id: run.formalization.id, evidenceSha256: run.formalization.evidenceSha256,
       source: run.source, environment: run.environment, original: run.formalization.original } : undefined;
     clearValidation();

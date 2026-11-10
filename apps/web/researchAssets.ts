@@ -13,6 +13,7 @@ export type ResolvedResearchMathematics = {
   environment: 'standard' | 'mathlib';
   environmentDigest: string;
   declarations: ResearchMathDeclaration[];
+  sourceReceiptRefs?: string[];
 };
 export type ResearchAssetOptions = {
   identity?: (owner: string) => string;
@@ -34,7 +35,8 @@ const textList = z.array(z.string().max(4000).refine(text => !text.includes('\0'
 const sourceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('knowledge'), catalogDigest: digest, entryIds: z.array(key).min(1).max(64) }).strict(),
   z.object({ kind: z.literal('run'), runId: key, taskId: z.string().min(1).max(200).optional(),
-    commit: z.string().regex(/^[a-f0-9]{7,64}$/u).optional() }).strict(),
+    taskVersion: z.string().min(1).max(200).optional(), commit: z.string().regex(/^[a-f0-9]{7,64}$/u).optional(),
+    scope: z.enum(['original-proof', 'checked-task']).optional(), proofDigest: digest.optional() }).strict(),
 ]);
 const skillSchema = z.object({ instructions: instructions.default(''), steps: textList.default([]),
   inputs: textList.default([]), outputs: textList.default([]),
@@ -206,7 +208,7 @@ export class WebResearchAssets {
     if (!inherited && !this.options.resolveMathematics) fail(503, '数学成果验证能力不可用。');
     const resolved = inherited ?? await this.options.resolveMathematics!(owner, draft.source);
     return copy({ pack: resolved.pack as ResearchLibraryPack, environment: resolved.environment, environmentDigest: resolved.environmentDigest,
-      declarations: resolved.declarations });
+      declarations: resolved.declarations, ...(resolved.sourceReceiptRefs?.length ? { sourceReceiptRefs: resolved.sourceReceiptRefs } : {}) });
   }
   private async draftPreview(owner: string, asset: StoredAsset): Promise<ResearchAssetPreview> {
     const mathematics = asset.type === 'mathematics' ? await this.draftMathematics(owner, asset) : undefined;
@@ -341,7 +343,8 @@ export class WebResearchAssets {
         if (!checked.passed || !checked.receiptRefs?.length || checked.receiptRefs.some(item => typeof item !== 'string' || !item.trim()))
           fail(400, checked.reason || '数学成果未通过独立 Lean 验证，未生成发布版本。');
         mathematics = { environment: env, environmentDigest: resolved.environmentDigest, pack,
-          packDigest: libraryPackDigest(pack), declarations, receiptRefs: [...checked.receiptRefs], source: draft.source };
+          packDigest: libraryPackDigest(pack), declarations, receiptRefs: [...checked.receiptRefs], source: draft.source,
+          ...(resolved.sourceReceiptRefs?.length ? { sourceReceiptRefs: [...resolved.sourceReceiptRefs] } : {}) };
       } else if (asset.type === 'agent') {
         const draft = parsed(agentSchema, asset.draft) as ResearchAgentDraft;
         const agentSkills = draft.skills.map(ref => this.reference(record.owner, ref, 'skill'));

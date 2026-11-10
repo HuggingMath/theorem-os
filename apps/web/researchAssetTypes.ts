@@ -14,7 +14,14 @@ export type ResearchAssetVisibility = 'private' | 'public';
 export type ResearchReleaseRef = { assetId: string; version: string; digest?: string };
 export type ResearchMathSource =
   | { kind: 'knowledge'; catalogDigest: string; entryIds: string[] }
-  | { kind: 'run'; runId: string; taskId?: string; commit?: string };
+  | { kind: 'run'; runId: string; taskId?: string; taskVersion?: string; commit?: string;
+    scope?: 'original-proof' | 'checked-task'; proofDigest?: string };
+export type ResearchAssetPrefill = {
+  name: string; description: string; source: ResearchMathSource; environment: 'standard' | 'mathlib';
+  evidence: { scope: 'original-proof' | 'task'; commit: string; file: string; taskVersion?: string;
+    sourceDigest: string; environmentDigest?: string; dependencyDigest?: string; proofDigest?: string; checkRefs: string[];
+    declarations: ResearchMathDeclaration[] };
+};
 export type ResearchMathDraft = { source: ResearchMathSource };
 export type ResearchSkillDraft = {
   instructions: string;
@@ -47,6 +54,7 @@ export type ResearchVerifiedMathematics = {
   packDigest: string;
   declarations: ResearchMathDeclaration[];
   receiptRefs: string[];
+  sourceReceiptRefs?: string[];
   source: ResearchMathSource;
 };
 export type ResearchAssetRelease = {
@@ -90,7 +98,7 @@ export type ResearchAsset = {
 export type ResearchAssetPreview = {
   type: ResearchAssetKind; name: string; description: string; revision: number; previewDigest: string;
   content?: ResearchAssetContent;
-  mathematics?: Pick<ResearchVerifiedMathematics, 'pack' | 'environment' | 'environmentDigest' | 'declarations'>;
+  mathematics?: Pick<ResearchVerifiedMathematics, 'pack' | 'environment' | 'environmentDigest' | 'declarations' | 'sourceReceiptRefs'>;
   validation: 'not-run';
 };
 export type ResearchPublication = {

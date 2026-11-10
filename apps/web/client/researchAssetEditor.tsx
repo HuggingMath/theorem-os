@@ -1,5 +1,5 @@
 import { useRef, useState } from 'preact/hooks';
-import type { ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchMathDraft, ResearchMathSource, ResearchReleaseRef, ResearchSkillDraft } from '../researchAssetTypes';
+import type { ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchAssetPrefill, ResearchMathDraft, ResearchMathSource, ResearchReleaseRef, ResearchSkillDraft } from '../researchAssetTypes';
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../../src/solver/modules/policy';
 import type { WebRun } from '../shared';
 import { base, Check, enc, Empty, ErrorBox, Field, lines, MutationState, nameOf, Search, tx, useMutation, useResource, type Item, type ResearchContext } from './researchShared';
@@ -14,10 +14,12 @@ function parseRefs(text: string): ResearchReleaseRef[] {
     return { assetId: line.slice(0, divider).trim(), version: line.slice(divider + 1).trim() };
   });
 }
-export function AssetEditor({ asset, context, onSaved, disabled = false }: { asset?: ResearchAsset; context: ResearchContext; onSaved: (asset: ResearchAsset, newerInput: boolean) => void; disabled?: boolean }) {
-  const initial = asset?.draft ?? asset?.release?.content;
-  const [kind, setKind] = useState<ResearchAssetKind>(asset?.type ?? 'mathematics'), [name, setName] = useState(asset?.name ?? ''),
-    [description, setDescription] = useState(asset?.description ?? ''), [area, setArea] = useState(asset?.area ?? ''), [visibility, setVisibility] = useState(asset?.visibility ?? 'private'),
+export function AssetEditor({ asset, prefill, context, onSaved, disabled = false }: { asset?: ResearchAsset; prefill?: ResearchAssetPrefill; context: ResearchContext; onSaved: (asset: ResearchAsset, newerInput: boolean) => void; disabled?: boolean }) {
+  const initial = asset?.draft ?? asset?.release?.content ?? (prefill ? { source: prefill.source } : undefined);
+  const [kind, setKind] = useState<ResearchAssetKind>(asset?.type ?? 'mathematics'), [name, setName] = useState(asset?.name ?? prefill?.name ?? ''),
+    [description, setDescription] = useState(asset?.description ?? (prefill ? prefill.evidence.scope === 'original-proof'
+      ? tx('完整原题已通过独立 Lean 验收。来源与验收回执随成果保留。', 'The original problem passed independent Lean acceptance. The source and acceptance receipts stay with this asset.')
+      : tx('已通过 Lean 检查的任务成果；不代表完整原题已经验收。', 'A task result that passed its Lean check. The original problem still needs separate acceptance.') : '')), [area, setArea] = useState(asset?.area ?? ''), [visibility, setVisibility] = useState(asset?.visibility ?? 'private'),
     [revision, setRevision] = useState(asset?.revision ?? 0);
   const [math, setMath] = useState<ResearchMathSource>(initial && 'source' in initial ? initial.source : { kind: 'run', runId: '' });
   const [entryIds, setEntryIds] = useState(initial && 'source' in initial && initial.source.kind === 'knowledge' ? initial.source.entryIds.join('\n') : '');
@@ -57,14 +59,15 @@ export function AssetEditor({ asset, context, onSaved, disabled = false }: { ass
       });
   };
   return <form class="research-form" onSubmit={event => { event.preventDefault(); save(); }}><fieldset class="research-form research-editor-fields" disabled={disabled}>
-    {!savedAsset && <label>{tx('内容类型', 'Content type')}<select value={kind} disabled={action.busy} onChange={event => setKind(event.currentTarget.value as ResearchAssetKind)}>
+    {!savedAsset && !prefill && <label>{tx('内容类型', 'Content type')}<select value={kind} disabled={action.busy} onChange={event => setKind(event.currentTarget.value as ResearchAssetKind)}>
       <option value="mathematics">{tx('数学成果', 'Mathematics')}</option><option value="agent">Agent</option><option value="skill">Skill</option></select></label>}
     <Field label={tx('名称', 'Name')} value={name} onInput={setName} required maxLength={160} />
     <Field label={tx('用途与说明', 'Purpose and description')} value={description} onInput={setDescription} multiline rows={3} />
     <div class="research-form-row"><Field label={tx('研究领域', 'Research field')} value={area} onInput={setArea} />
       <label>{tx('草稿可见范围', 'Draft visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value as 'private' | 'public')}>
         <option value="private">{tx('仅自己', 'Private')}</option><option value="public">{tx('发布后公开', 'Public when published')}</option></select></label></div>
-    {kind === 'mathematics' ? <><h3>{tx('选择可检查的成果来源', 'Choose a verifiable source')}</h3><MathSourceEditor source={math} onChange={setMath} entryIds={entryIds} setEntryIds={setEntryIds} /></>
+    {kind === 'mathematics' ? <><h3>{tx('选择可检查的成果来源', 'Choose a verifiable source')}</h3>{math.kind === 'run' && math.scope
+      ? <FixedMathSource source={math} prefill={prefill} /> : <MathSourceEditor source={math} onChange={setMath} entryIds={entryIds} setEntryIds={setEntryIds} />}</>
       : kind === 'agent' ? <><h3>{tx('研究配置', 'Research configuration')}</h3><div class="research-form-row"><label>{tx('证明环境', 'Environment')}<select value={agent.environment ?? 'mathlib'} onChange={event => changeAgent({ environment: event.currentTarget.value as 'standard' | 'mathlib' })}>
         <option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label><label>{tx('模型服务商（可选）', 'Provider (optional)')}<select value={agent.providerId ?? ''} onChange={event => changeAgent({ providerId: event.currentTarget.value || undefined })}>
         <option value="">{tx('使用研究工作台设置', 'Use workbench setting')}</option>{context.web.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label></div>
@@ -103,6 +106,26 @@ export function AssetEditor({ asset, context, onSaved, disabled = false }: { ass
     {asset && asset.revision !== revision && <p class="research-status">{tx('服务器上的草稿已更新。当前输入仍保留；点击「载入最新草稿」可更新。', 'The saved draft has changed. Your input is preserved; choose “Load latest draft” to update it.')}</p>}
     <MutationState action={action} /><button type="submit" class="button button-primary" disabled={disabled || action.busy}>{action.busy ? tx('正在保存…', 'Saving…') : savedAsset ? tx('保存草稿', 'Save draft') : tx('创建私有草稿', 'Create draft')}</button>
   </fieldset></form>;
+}
+
+export function FixedMathSource({ source, prefill }: { source: Extract<ResearchMathSource, { kind: 'run' }>; prefill?: ResearchAssetPrefill }) {
+  return <section data-library-prefill={source.scope} class="research-source-evidence">
+    <p class="research-status">{source.scope === 'original-proof' ? tx('保存完整原题的最终验收证明。', 'Save the final accepted proof of the original problem.')
+      : tx('保存这个任务版本的已检查成果。完整原题的验收状态另行记录。', 'Save the checked result of this task version. Original-problem acceptance is recorded separately.')}</p>
+    <dl class="research-facts"><div><dt>{tx('来源运行', 'Source run')}</dt><dd><a href={`./?run=${enc(source.runId)}`}>{source.runId}</a></dd></div>
+      {source.taskId && <div><dt>{tx('任务', 'Task')}</dt><dd>{source.taskId}</dd></div>}
+      {source.taskVersion && <div><dt>{tx('任务版本', 'Task version')}</dt><dd>{source.taskVersion}</dd></div>}
+      <div><dt>{tx('源码提交', 'Source commit')}</dt><dd>{source.commit}</dd></div>
+      {prefill && <><div><dt>{tx('证明环境', 'Proof environment')}</dt><dd>{prefill.environment}</dd></div>
+        <div><dt>{tx('源码文件', 'Source file')}</dt><dd>{prefill.evidence.file}</dd></div></>}
+    </dl>{prefill && <details><summary>{tx('查看声明与来源回执', 'View declarations and source receipts')}</summary>
+      {prefill.evidence.declarations.map(item => <div key={`${item.file}:${item.name}`}><h4>{item.name}</h4><pre class="research-block-code">{item.type}</pre></div>)}
+      <dl class="research-facts"><div><dt>{tx('源码摘要', 'Source digest')}</dt><dd>{prefill.evidence.sourceDigest}</dd></div>
+        {prefill.evidence.environmentDigest && <div><dt>{tx('来源运行环境摘要', 'Source runtime environment digest')}</dt><dd>{prefill.evidence.environmentDigest}</dd></div>}
+        {prefill.evidence.dependencyDigest && <div><dt>{tx('Lean 依赖摘要', 'Lean dependency digest')}</dt><dd>{prefill.evidence.dependencyDigest}</dd></div>}
+        <div><dt>{tx('检查回执', 'Check receipts')}</dt><dd>{prefill.evidence.checkRefs.join('\n')}</dd></div></dl>
+    </details>}
+  </section>;
 }
 
 function MathSourceEditor({ source, onChange, entryIds, setEntryIds }: { source: ResearchMathSource; onChange: (source: ResearchMathSource) => void; entryIds: string; setEntryIds: (value: string) => void }) {

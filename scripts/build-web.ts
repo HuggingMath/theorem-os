@@ -25,6 +25,9 @@ fs.copyFileSync(path.join(root, 'apps/web/client/formalization.html'), path.join
 for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['terms.html', 'terms.html'], ['privacy.html', 'privacy.html'], ['explain.html', 'explain.html'], ['app.css', 'app.css'], ['formalize.html', 'formalize.html'], ['formalize.css', 'formalize.css'], ['research-conversation.css', 'research-conversation.css']])
   if (source === 'app.css') fs.writeFileSync(path.join(output, destination), fs.readFileSync(path.join(root, 'apps/web/client', source), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/solutionRoute.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/productFlow.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/research-overview.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/decisionFlow.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
   else fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
